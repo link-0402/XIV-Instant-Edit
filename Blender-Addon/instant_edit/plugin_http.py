@@ -7,6 +7,15 @@ from urllib.error import HTTPError
 from .context import _value
 
 
+class PluginResponseTooLarge(ValueError):
+    """The peer returned more response data than this bridge accepts."""
+
+    def __init__(self, status: int, body: bytes):
+        self.status = status
+        self.body = body
+        super().__init__("plugin response is too large")
+
+
 def candidate_ports(collection) -> list[int]:
     ports = []
     stored = _value(collection, "callback_port", 0)
@@ -46,5 +55,5 @@ def post_json(
         status = error.code
         body = error.read(max_response_size + 1)
     if len(body) > max_response_size:
-        raise ValueError("plugin response is too large")
+        raise PluginResponseTooLarge(status, body)
     return status, body

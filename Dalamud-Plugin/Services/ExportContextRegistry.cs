@@ -262,7 +262,7 @@ public sealed class ExportContextRegistry : IDisposable
 
         if (callbackPort is < 1 or > 65535)
         {
-            code = "malformed_request";
+            code = "invalid_callback_port";
             return false;
         }
 
@@ -496,7 +496,7 @@ public sealed class ExportContextRegistry : IDisposable
 
             if (!IsSafeId(exportId))
             {
-                code = "malformed_request";
+                code = "invalid_export_id";
                 return false;
             }
 

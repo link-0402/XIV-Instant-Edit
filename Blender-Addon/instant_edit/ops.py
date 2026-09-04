@@ -24,10 +24,11 @@ from .context        import (SCHEMA, VERSION, SUPPORTED_VERSIONS, ContextValidat
                              _value, apply_authoritative_context, clear_context_metadata,
                              context_collections, context_id_for_object, create_collection, tag_object,
                              validate_context)
-from .plugin_http    import post_json
+from .plugin_http    import PluginResponseTooLarge, post_json
 from .material_preview import (cleanup_preview_bundle, discard_preview_data,
                                load_preview_manifest)
 from .cache import create_job, finish_job
+from .diagnostics import record_failure, record_protocol_failure, record_remote_failure
 
 
 MAX_PLUGIN_RESPONSE_SIZE = 64 * 1024
@@ -49,11 +50,86 @@ _material_coverage_generation = 0
 
 
 class PluginResponseError(ValueError):
-    def __init__(self, status: int, code: str, message: str):
+    def __init__(
+        self,
+        status: int | None,
+        code: str,
+        message: str,
+        *,
+        component: str = "dalamud_plugin",
+        operation: str = "request",
+        stage: str = "response_handling",
+        remedy: str = "Update and restart both XIV Instant Edit components, then retry.",
+        diagnostic_id: str = "",
+    ):
         self.status = status
         self.code = code
         self.message = message
-        super().__init__(f"plugin returned HTTP {status} ({code}): {message}")
+        self.component = component
+        self.operation = operation
+        self.stage = stage
+        self.remedy = remedy
+        self.diagnostic_id = diagnostic_id
+        short_id = diagnostic_id[:8] if diagnostic_id else "unavailable"
+        super().__init__(
+            f"XIV Instant Edit {operation.replace('_', ' ')} failed during "
+            f"{stage.replace('_', ' ')}: {message} {remedy} Diagnostic ID: {short_id}."
+        )
+
+
+def _plugin_operation(endpoint: str) -> str:
+    return endpoint.strip("/").replace("/", "_").replace("-", "_") or "request"
+
+
+def _plugin_response_too_large(
+    error: PluginResponseTooLarge, endpoint: str
+) -> PluginResponseError:
+    failure = record_protocol_failure(
+        error.body,
+        error.status,
+        endpoint=endpoint,
+        operation=_plugin_operation(endpoint),
+        code="response_too_large",
+        cause="The Dalamud plugin returned a response larger than the bridge limit.",
+    )
+    return PluginResponseError(
+        error.status,
+        failure["code"],
+        failure["cause"],
+        component=failure["component"],
+        operation=failure["operation"],
+        stage=failure["stage"],
+        remedy=failure["remedy"],
+        diagnostic_id=failure["diagnosticId"],
+    )
+
+
+def _plugin_transport_error(
+    error: BaseException,
+    endpoint: str,
+    cause: str,
+    remedy: str,
+) -> PluginResponseError:
+    failure = record_failure(
+        component="dalamud_plugin",
+        operation=_plugin_operation(endpoint),
+        stage="transport",
+        code="plugin_connection_failed",
+        cause=cause,
+        remedy=remedy,
+        endpoint=endpoint,
+        exception=error,
+    )
+    return PluginResponseError(
+        None,
+        failure["code"],
+        failure["cause"],
+        component=failure["component"],
+        operation=failure["operation"],
+        stage=failure["stage"],
+        remedy=failure["remedy"],
+        diagnostic_id=failure["diagnosticId"],
+    )
 
 
 def _normalize_mashup_material(material_name: str) -> str:
@@ -191,13 +267,23 @@ def _request_material_coverage(callback_port: int, payload: dict) -> bool:
             callback_port, "/material-coverage", payload,
             timeout=3, max_response_size=MAX_PLUGIN_RESPONSE_SIZE)
         if not 200 <= status < 300:
-            raise _plugin_error_from_body(body, status)
-        result = _decode_plugin_response(body, status)
+            raise _plugin_error_from_body(body, status, "/material-coverage")
+        result = _decode_plugin_response(body, status, "/material-coverage")
         available = result.get("available")
         covered = result.get("covered")
         if not isinstance(available, bool) or not isinstance(covered, bool):
             raise ValueError("plugin returned an invalid material coverage response")
         return available and not covered
+    except PluginResponseTooLarge as error:
+        record_protocol_failure(
+            error.body,
+            error.status,
+            endpoint="/material-coverage",
+            operation="material_coverage",
+            code="response_too_large",
+            cause="The Dalamud plugin returned a response larger than the bridge limit.",
+        )
+        return False
     except (URLError, TimeoutError, OSError, ValueError, UnicodeError):
         # Coverage is advisory. An unavailable or older plugin must not alter
         # the ordinary target eligibility or selection behavior.
@@ -395,11 +481,18 @@ def _request_variant_targets(ref) -> list[dict]:
         status, body = post_json(
             ref.callback_port, "/variant-targets", payload,
             timeout=3, max_response_size=MAX_PLUGIN_RESPONSE_SIZE)
+    except PluginResponseTooLarge as error:
+        raise _plugin_response_too_large(error, "/variant-targets") from error
     except (URLError, TimeoutError, OSError) as error:
-        raise ValueError(f"Could not fetch Penumbra variant targets: {error}") from error
+        raise _plugin_transport_error(
+            error,
+            "/variant-targets",
+            "The Dalamud plugin could not be reached while loading variant targets.",
+            "Start XIV Instant Edit in the game and retry.",
+        ) from error
     if not 200 <= status < 300:
-        raise _plugin_error_from_body(body, status)
-    result = _decode_plugin_response(body, status)
+        raise _plugin_error_from_body(body, status, "/variant-targets")
+    result = _decode_plugin_response(body, status, "/variant-targets")
     groups = result.get("groups", [])
     if not isinstance(groups, list):
         raise ValueError("plugin returned invalid Penumbra variant targets")
@@ -1219,45 +1312,84 @@ def build_export_payload(ref, export_id: str, mdl_path: Path, byte_size: int,
     return payload
 
 
-def _plugin_error_from_body(body: bytes, status: int) -> PluginResponseError:
+def _plugin_error_from_body(
+    body: bytes, status: int, endpoint: str = "/plugin"
+) -> PluginResponseError:
+    failure = record_remote_failure(
+        body,
+        status,
+        endpoint=endpoint,
+        default_operation=_plugin_operation(endpoint),
+    )
+    return PluginResponseError(
+        status, failure["code"], failure["cause"],
+        component=failure["component"], operation=failure["operation"],
+        stage=failure["stage"], remedy=failure["remedy"],
+        diagnostic_id=failure["diagnosticId"])
+
+
+def _decode_plugin_response(body: bytes, status: int, endpoint: str = "/plugin") -> dict:
+    if len(body) > MAX_PLUGIN_RESPONSE_SIZE:
+        failure = record_protocol_failure(
+            body, status, endpoint=endpoint,
+            operation=_plugin_operation(endpoint),
+            code="response_too_large",
+            cause="The Dalamud plugin returned a response larger than the bridge limit.")
+        raise PluginResponseError(
+            status, failure["code"], failure["cause"],
+            component=failure["component"], operation=failure["operation"],
+            stage=failure["stage"], remedy=failure["remedy"],
+            diagnostic_id=failure["diagnosticId"])
     try:
         result = json.loads(body.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError):
-        return PluginResponseError(status, "http_error", "plugin returned an invalid response")
-    if not isinstance(result, dict):
-        return PluginResponseError(status, "http_error", "plugin returned an invalid response")
-    return PluginResponseError(
-        status,
-        str(result.get("code", "http_error")),
-        str(result.get("error", result.get("message", "plugin rejected the export"))),
-    )
-
-
-def _decode_plugin_response(body: bytes, status: int) -> dict:
-    if len(body) > MAX_PLUGIN_RESPONSE_SIZE:
-        raise ValueError("plugin response is too large")
-    try:
-        result = json.loads(body.decode("utf-8"))
-    except (UnicodeError, json.JSONDecodeError) as error:
-        raise ValueError("plugin returned an invalid response") from error
-    if not isinstance(result, dict):
-        raise ValueError("plugin returned an invalid response")
-    if not result.get("ok"):
+        failure = record_protocol_failure(
+            body, status, endpoint=endpoint,
+            operation=_plugin_operation(endpoint))
         raise PluginResponseError(
-            status,
-            str(result.get("code", "plugin_error")),
-            str(result.get("error", result.get("message", "unknown plugin error"))),
-        )
+            status, failure["code"], failure["cause"],
+            component=failure["component"], operation=failure["operation"],
+            stage=failure["stage"], remedy=failure["remedy"],
+            diagnostic_id=failure["diagnosticId"])
+    if not isinstance(result, dict):
+        failure = record_protocol_failure(
+            body, status, endpoint=endpoint,
+            operation=_plugin_operation(endpoint))
+        raise PluginResponseError(
+            status, failure["code"], failure["cause"],
+            component=failure["component"], operation=failure["operation"],
+            stage=failure["stage"], remedy=failure["remedy"],
+            diagnostic_id=failure["diagnosticId"])
+    if not result.get("ok"):
+        raise _plugin_error_from_body(json.dumps(result).encode("utf-8"), status, endpoint)
     warnings = result.get("warnings", [])
     if not isinstance(warnings, list) or any(not isinstance(item, str) for item in warnings):
-        raise ValueError("plugin returned invalid warnings")
+        failure = record_protocol_failure(
+            body, status, endpoint=endpoint,
+            operation=_plugin_operation(endpoint),
+            code="invalid_warning_list",
+            cause="The Dalamud plugin returned an invalid warning list.")
+        raise PluginResponseError(
+            status, failure["code"], failure["cause"],
+            component=failure["component"], operation=failure["operation"],
+            stage=failure["stage"], remedy=failure["remedy"],
+            diagnostic_id=failure["diagnosticId"])
     result["warnings"] = [item[:2048] for item in warnings[:64] if item]
     required_external_mods = result.get("requiredExternalMods", [])
     if (
         not isinstance(required_external_mods, list) or
         any(not isinstance(item, str) for item in required_external_mods)
     ):
-        raise ValueError("plugin returned invalid external mod requirements")
+        failure = record_protocol_failure(
+            body, status, endpoint=endpoint,
+            operation=_plugin_operation(endpoint),
+            code="invalid_external_mod_list",
+            cause="The Dalamud plugin returned an invalid external-mod requirement list.")
+        raise PluginResponseError(
+            status, failure["code"], failure["cause"],
+            component=failure["component"], operation=failure["operation"],
+            stage=failure["stage"], remedy=failure["remedy"],
+            diagnostic_id=failure["diagnosticId"])
     result["requiredExternalMods"] = [
         item[:160] for item in required_external_mods[:64] if item
     ]
@@ -1287,14 +1419,16 @@ def _request_export_status(ref, export_id: str) -> tuple[dict | None, bool]:
             ref.callback_port, "/export/status", payload,
             timeout=2, max_response_size=MAX_PLUGIN_RESPONSE_SIZE)
         if status == 202:
-            result = _decode_plugin_response(body, status)
+            result = _decode_plugin_response(body, status, "/export/status")
             return None, result.get("code") == "export_pending"
         if 200 <= status < 300:
-            return _decode_plugin_response(body, status), False
+            return _decode_plugin_response(body, status, "/export/status"), False
         if status != 404:
-            raise _plugin_error_from_body(body, status)
+            raise _plugin_error_from_body(body, status, "/export/status")
     except PluginResponseError:
         raise
+    except PluginResponseTooLarge as error:
+        raise _plugin_response_too_large(error, "/export/status") from error
     except (URLError, TimeoutError, OSError, ValueError, UnicodeError):
         pass
     return None, False
@@ -1322,8 +1456,10 @@ def _send_plugin_export_to(ref, payload: dict, endpoint: str) -> dict:
             ref.callback_port, endpoint, payload,
             timeout=15, max_response_size=MAX_PLUGIN_RESPONSE_SIZE)
         if not 200 <= status < 300:
-            raise _plugin_error_from_body(body, status)
-        return _decode_plugin_response(body, status)
+            raise _plugin_error_from_body(body, status, endpoint)
+        return _decode_plugin_response(body, status, endpoint)
+    except PluginResponseTooLarge as error:
+        raise _plugin_response_too_large(error, endpoint) from error
     except (URLError, TimeoutError, OSError) as error:
         export_id = str(payload.get("exportId", ""))
         if export_id:
@@ -1333,7 +1469,12 @@ def _send_plugin_export_to(ref, payload: dict, endpoint: str) -> dict:
             message = f"plugin response was lost and no receipt was available for export {export_id}"
         else:
             message = "plugin response was lost"
-        raise ValueError(f"{message}: {str(error) or 'connection failed'}") from error
+        raise _plugin_transport_error(
+            error,
+            endpoint,
+            f"The {endpoint.strip('/') or 'plugin'} response was lost before Blender received it.",
+            f"Retry the operation. If it fails again, review the diagnostic report for {message}.",
+        ) from error
 
 
 def _send_plugin_mashup(ref, payload: dict) -> dict:
@@ -1415,10 +1556,17 @@ def _send_plugin_restore(ref, backup_name: str) -> dict:
             ref.callback_port, "/backup/restore", payload,
             timeout=15, max_response_size=MAX_PLUGIN_RESPONSE_SIZE)
         if not 200 <= status < 300:
-            raise _plugin_error_from_body(body, status)
-        return _decode_plugin_response(body, status)
+            raise _plugin_error_from_body(body, status, "/backup/restore")
+        return _decode_plugin_response(body, status, "/backup/restore")
+    except PluginResponseTooLarge as error:
+        raise _plugin_response_too_large(error, "/backup/restore") from error
     except (URLError, TimeoutError, OSError) as error:
-        raise ValueError(str(error) or "invalid plugin response") from error
+        raise _plugin_transport_error(
+            error,
+            "/backup/restore",
+            "The Dalamud plugin could not be reached while restoring the backup.",
+            "Start XIV Instant Edit in the game and retry.",
+        ) from error
 
 
 def restore_quick_backup(context: Context, backup_name: str) -> dict:

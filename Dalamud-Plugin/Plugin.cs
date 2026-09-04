@@ -75,6 +75,7 @@ public sealed class Plugin : IDalamudPlugin
             () => _exportServer.Restart(),
             _pi.UiBuilder,
             textureProvider);
+        _exportServer.ImportFailureReceived += _window.ReportImportFailure;
         _settingsWindow = new SettingsWindow(
             _config,
             SaveConfiguration,
@@ -133,6 +134,7 @@ public sealed class Plugin : IDalamudPlugin
         _pi.UiBuilder.OpenConfigUi -= _settingsWindow.Open;
         _windowSystem.RemoveWindow(_window);
         _window.Dispose();
+        _exportServer.ImportFailureReceived -= _window.ReportImportFailure;
         _exportServer.Dispose();
         _contexts.Dispose();
         _blender.Dispose();

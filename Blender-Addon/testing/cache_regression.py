@@ -42,6 +42,35 @@ def run() -> None:
         assert Path(staged["previewManifestPath"]).is_file()
         assert job.parent == root / "imports"
 
+        try:
+            cache.stage_import({"filePath": str(base / "missing.mdl")})
+        except cache.CacheStagingError as error:
+            assert error.code == "model_file_unavailable" and error.remedy
+        else:
+            raise AssertionError("a missing model did not produce a specific staging failure")
+
+        empty_model = handoff / "empty.mdl"
+        empty_model.write_bytes(b"")
+        try:
+            cache.stage_import({"filePath": str(empty_model)})
+        except cache.CacheStagingError as error:
+            assert error.code == "model_size_unsupported" and error.remedy
+        else:
+            raise AssertionError("an empty model did not produce a specific staging failure")
+
+        unsupported_preview = preview / "unsupported.png"
+        unsupported_preview.write_bytes(b"png")
+        try:
+            cache.stage_import({
+                "filePath": str(model),
+                "previewManifestPath": str(preview / "materials.json"),
+            })
+        except cache.CacheStagingError as error:
+            assert error.code == "preview_file_unsupported" and error.remedy
+        else:
+            raise AssertionError("an unsupported preview file did not produce a specific failure")
+        unsupported_preview.unlink()
+
         foreign = base / "foreign"
         foreign.mkdir()
         (foreign / "keep.txt").write_text("keep", encoding="utf-8")

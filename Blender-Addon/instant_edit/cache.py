@@ -18,11 +18,22 @@ STALE_SECONDS = 24 * 60 * 60
 MAX_MODEL_BYTES = 512 * 1024 * 1024
 MAX_PREVIEW_BYTES = 1024 * 1024 * 1024
 MAX_PREVIEW_FILES = 2048
+MAX_DIAGNOSTIC_REPORTS = 100
+MAX_DIAGNOSTIC_BYTES = 20 * 1024 * 1024
 
 _lock = threading.RLock()
 _base_directory = Path(tempfile.gettempdir())
 _automatic_cleanup = True
 _active_jobs: set[Path] = set()
+
+
+class CacheStagingError(ValueError):
+    def __init__(self, stage: str, code: str, cause: str, remedy: str):
+        self.stage = stage
+        self.code = code
+        self.cause = cause
+        self.remedy = remedy
+        super().__init__(cause)
 
 
 def configure_cache(base_directory: str | Path, automatic_cleanup: bool) -> Path:
@@ -32,9 +43,20 @@ def configure_cache(base_directory: str | Path, automatic_cleanup: bool) -> Path
     if base.exists() and not base.is_dir():
         raise ValueError("cache base path must be a directory")
     with _lock:
+        previous_base = _base_directory
+        previous_cleanup = _automatic_cleanup
         _base_directory = base
         _automatic_cleanup = bool(automatic_cleanup)
-    return ensure_cache_root()
+    try:
+        return ensure_cache_root()
+    except Exception:
+        # Do not leave the process pointed at a broken directory. Otherwise a
+        # later bridge failure can lose its diagnostic report as a secondary
+        # effect of a failed preference update.
+        with _lock:
+            _base_directory = previous_base
+            _automatic_cleanup = previous_cleanup
+        raise
 
 
 def automatic_cleanup_enabled() -> bool:
@@ -69,7 +91,7 @@ def ensure_cache_root() -> Path:
             json.dumps({"schema": CACHE_SCHEMA, "version": CACHE_VERSION}),
             encoding="utf-8",
         )
-    for kind in ("imports", "exports"):
+    for kind in ("imports", "exports", "diagnostics"):
         (root / kind).mkdir(exist_ok=True)
     return root
 
@@ -148,7 +170,7 @@ def _directory_size(path: Path) -> int:
 
 
 def clean_cache(older_than_seconds: float | None = None) -> tuple[int, int]:
-    """Remove only marked UUID job directories and return (jobs, bytes)."""
+    """Remove owned cache jobs/reports and return (items, bytes)."""
     root = ensure_cache_root()
     cutoff = None if older_than_seconds is None else time.time() - older_than_seconds
     removed = 0
@@ -169,23 +191,84 @@ def clean_cache(older_than_seconds: float | None = None) -> tuple[int, int]:
                 removed += 1
             except OSError:
                 continue
+
+    diagnostics = root / "diagnostics"
+    reports = []
+    for candidate in tuple(diagnostics.iterdir()):
+        try:
+            if candidate.is_symlink() or not candidate.is_file() or candidate.suffix.casefold() != ".json":
+                continue
+            uuid.UUID(candidate.stem)
+            stat = candidate.stat()
+            if cutoff is None or stat.st_mtime <= cutoff:
+                bytes_removed += stat.st_size
+                candidate.unlink()
+                removed += 1
+            else:
+                reports.append((stat.st_mtime, stat.st_size, candidate))
+        except (OSError, ValueError):
+            continue
+
+    reports.sort(reverse=True)
+    retained_count = 0
+    retained_bytes = 0
+    for _modified, size, candidate in reports:
+        if retained_count < MAX_DIAGNOSTIC_REPORTS and retained_bytes + size <= MAX_DIAGNOSTIC_BYTES:
+            retained_count += 1
+            retained_bytes += size
+            continue
+        try:
+            candidate.unlink()
+            removed += 1
+            bytes_removed += size
+        except OSError:
+            continue
     return removed, bytes_removed
 
 
 def stage_import(data: dict) -> dict:
     """Copy a validated v1 handoff into the add-on-owned cache before queueing."""
     source_value = Path(data.get("filePath", ""))
-    source_model = source_value.resolve()
-    if source_value.is_symlink() or source_model.suffix.casefold() != ".mdl" or not source_model.is_file():
-        raise ValueError("import file must be a regular .mdl file")
-    model_size = source_model.stat().st_size
+    try:
+        source_model = source_value.resolve()
+        source_is_valid = (
+            not source_value.is_symlink()
+            and source_model.suffix.casefold() == ".mdl"
+            and source_model.is_file()
+        )
+        model_size = source_model.stat().st_size if source_is_valid else 0
+    except OSError as error:
+        raise CacheStagingError(
+            "file_staging", "model_file_unavailable",
+            "Blender could not access the temporary model file.",
+            "Verify Blender and FFXIV run as the same Windows user, then retry the import.") from error
+    if not source_is_valid:
+        raise CacheStagingError(
+            "file_staging", "model_file_unavailable",
+            "Blender could not access the temporary model file.",
+            "Verify Blender and FFXIV run as the same Windows user, then retry the import.")
     if model_size <= 0 or model_size > MAX_MODEL_BYTES:
-        raise ValueError("import model size is outside the supported range")
+        raise CacheStagingError(
+            "file_staging", "model_size_unsupported",
+            "The temporary model file is empty or exceeds the 512 MiB import limit.",
+            "Verify the source model is valid and reduce its size before retrying.")
 
-    job = create_job("imports")
+    try:
+        job = create_job("imports")
+    except (OSError, ValueError) as error:
+        raise CacheStagingError(
+            "file_staging", "cache_unavailable",
+            "Blender could not create an import job in the configured cache.",
+            "Choose a writable cache directory in the add-on preferences, then retry.") from error
     try:
         target_model = job / source_model.name
-        shutil.copyfile(source_model, target_model)
+        try:
+            shutil.copyfile(source_model, target_model)
+        except OSError as error:
+            raise CacheStagingError(
+                "file_staging", "model_copy_failed",
+                "Blender could not copy the temporary model into its configured cache.",
+                "Verify the source file and cache directory are accessible to Blender, then retry.") from error
         result = dict(data)
         result["filePath"] = str(target_model)
         result["cacheJobDirectory"] = str(job)
@@ -193,8 +276,14 @@ def stage_import(data: dict) -> dict:
         manifest_value = data.get("previewManifestPath", "")
         if manifest_value:
             raw_manifest = Path(manifest_value)
-            manifest = raw_manifest.resolve()
-            preview_root = manifest.parent.resolve()
+            try:
+                manifest = raw_manifest.resolve()
+                preview_root = manifest.parent.resolve()
+            except OSError as error:
+                raise CacheStagingError(
+                    "preview_staging", "preview_manifest_unavailable",
+                    "Blender could not access the material preview manifest.",
+                    "Disable material previews or verify the preview handoff is accessible to Blender.") from error
             if (
                 manifest.name != "materials.json"
                 or preview_root.name != "preview"
@@ -202,7 +291,10 @@ def stage_import(data: dict) -> dict:
                 or raw_manifest.is_symlink()
                 or not manifest.is_file()
             ):
-                raise ValueError("preview manifest is not safely contained beside the model")
+                raise CacheStagingError(
+                    "preview_staging", "preview_manifest_invalid",
+                    "The material preview manifest is missing or outside the expected handoff bundle.",
+                    "Disable material previews and retry, or recreate the import with matching plugin and add-on versions.")
 
             target_preview = job / "preview"
             target_preview.mkdir()
@@ -213,24 +305,51 @@ def stage_import(data: dict) -> dict:
                     continue
                 file_count += 1
                 if file_count > MAX_PREVIEW_FILES or source.is_symlink():
-                    raise ValueError("preview bundle contains too many files or a symbolic link")
+                    raise CacheStagingError(
+                        "preview_staging", "preview_bundle_unsafe",
+                        "The material preview bundle contains too many files or a symbolic link.",
+                        "Disable material previews or remove symbolic links from the preview source.")
                 resolved = source.resolve()
                 try:
                     relative = resolved.relative_to(preview_root)
                 except ValueError as error:
-                    raise ValueError("preview bundle escapes its source directory") from error
+                    raise CacheStagingError(
+                        "preview_staging", "preview_bundle_unsafe",
+                        "The material preview bundle contains a file outside its source directory.",
+                        "Disable material previews and retry the import.") from error
                 if resolved.suffix.casefold() not in {".json", ".rgba"}:
-                    raise ValueError("preview bundle contains an unsupported file")
-                size = resolved.stat().st_size
+                    raise CacheStagingError(
+                        "preview_staging", "preview_file_unsupported",
+                        "The material preview bundle contains an unsupported file type.",
+                        "Recreate the preview bundle with JSON and RGBA files only.")
+                try:
+                    size = resolved.stat().st_size
+                except OSError as error:
+                    raise CacheStagingError(
+                        "preview_staging", "preview_file_unavailable",
+                        "Blender could not read a file in the material preview bundle.",
+                        "Disable material previews or verify the preview files are accessible to Blender.") from error
                 total_bytes += size
                 if total_bytes > MAX_PREVIEW_BYTES:
-                    raise ValueError("preview bundle exceeds 1 GiB")
+                    raise CacheStagingError(
+                        "preview_staging", "preview_bundle_too_large",
+                        "The material preview bundle exceeds the 1 GiB limit.",
+                        "Disable material previews or reduce the number and size of preview textures.")
                 destination = target_preview / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(resolved, destination)
+                try:
+                    shutil.copyfile(resolved, destination)
+                except OSError as error:
+                    raise CacheStagingError(
+                        "preview_staging", "preview_copy_failed",
+                        "Blender could not copy the material preview bundle into its cache.",
+                        "Choose a writable cache directory or disable material previews, then retry.") from error
             target_manifest = target_preview / "materials.json"
             if not target_manifest.is_file():
-                raise ValueError("preview bundle did not contain materials.json")
+                raise CacheStagingError(
+                    "preview_staging", "preview_manifest_missing",
+                    "The material preview bundle does not contain materials.json.",
+                    "Recreate the preview bundle or disable material previews before retrying.")
             result["previewManifestPath"] = str(target_manifest)
         return result
     except Exception:

@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -290,6 +291,7 @@ public sealed class BlenderClient : IDisposable
             {
                 schema = context.Schema,
                 version = context.Version,
+                pluginVersion = CurrentPluginVersion,
                 pluginInstanceId = context.PluginInstanceId,
                 contextId = context.ContextId,
                 importId = context.ImportId,
@@ -317,21 +319,121 @@ public sealed class BlenderClient : IDisposable
             });
 
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");
-            using var resp = await _http.PostAsync(
-                $"http://127.0.0.1:{port}/import",
-                content,
-                cancellationToken).ConfigureAwait(false);
-            resp.EnsureSuccessStatusCode();
-            var responseBody = await resp.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            using var response = JsonDocument.Parse(responseBody);
-            return response.RootElement.ValueKind == JsonValueKind.Object &&
-                   response.RootElement.TryGetProperty("cached", out var cached) &&
-                   cached.ValueKind == JsonValueKind.True;
+            HttpResponseMessage resp;
+            try
+            {
+                resp = await _http.PostAsync(
+                    $"http://127.0.0.1:{port}/import",
+                    content,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (HttpRequestException e)
+            {
+                var transportFailure = BridgeFailure.Create(
+                    "blender_addon",
+                    "import",
+                    "transport",
+                    "blender_connection_failed",
+                    "The request could not reach Blender's XIV Instant Edit listener.",
+                    "Start Blender, verify the configured port, and retry.");
+                var exception = new BlenderBridgeException(transportFailure, inner: e);
+                _log?.Error(exception,
+                    $"Blender bridge failure {transportFailure.DiagnosticId}: " +
+                    $"import/transport/{transportFailure.Code}.");
+                throw exception;
+            }
+
+            using (resp)
+            {
+                var responseBody = await resp.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    return ParseImportResponse(resp.StatusCode, responseBody);
+                }
+                catch (BlenderBridgeException exception)
+                {
+                    var failure = exception.Failure;
+                    _log?.Error(exception,
+                        $"Blender bridge failure {failure.DiagnosticId}: HTTP {(int)resp.StatusCode}; " +
+                        $"{failure.Operation}/{failure.Stage}/{failure.Code}; response={exception.RawResponse}");
+                    throw;
+                }
+            }
+        }
+        catch (HttpRequestException e)
+        {
+            var transportFailure = BridgeFailure.Create(
+                "blender_addon",
+                "import",
+                "transport",
+                "blender_connection_failed",
+                "The request could not be completed by Blender's XIV Instant Edit listener.",
+                "Start Blender, verify the configured port, and retry.");
+            var exception = new BlenderBridgeException(transportFailure, inner: e);
+            _log?.Error(exception,
+                $"Blender bridge failure {transportFailure.DiagnosticId}: " +
+                $"import/transport/{transportFailure.Code}.");
+            throw exception;
+        }
+        catch (OperationCanceledException e) when (!cancellationToken.IsCancellationRequested)
+        {
+            var timeoutFailure = BridgeFailure.Create(
+                "blender_addon",
+                "import",
+                "transport",
+                "blender_request_timeout",
+                "The request to Blender's XIV Instant Edit listener timed out.",
+                "Retry the import and check whether Blender is busy or blocked by local security software.");
+            var exception = new BlenderBridgeException(timeoutFailure, inner: e);
+            _log?.Error(exception,
+                $"Blender bridge failure {timeoutFailure.DiagnosticId}: " +
+                $"import/transport/{timeoutFailure.Code}.");
+            throw exception;
         }
         catch
         {
             _contexts.RemoveContext(context.ContextId);
             throw;
+        }
+    }
+
+    internal static bool ParseImportResponse(HttpStatusCode status, string responseBody)
+    {
+        if ((int)status is < 200 or >= 300)
+        {
+            var failure = BridgeFailure.FromResponse(status, responseBody, "import");
+            throw new BlenderBridgeException(failure, responseBody);
+        }
+
+        try
+        {
+            using var response = JsonDocument.Parse(responseBody);
+            if (response.RootElement.ValueKind == JsonValueKind.Object &&
+                response.RootElement.TryGetProperty("cached", out var cached) &&
+                cached.ValueKind == JsonValueKind.True)
+                return true;
+
+            var failure = BridgeFailure.Create(
+                "blender_addon",
+                "import",
+                "response_parsing",
+                "invalid_success_response",
+                "Blender accepted the request but did not confirm that the model was cached.",
+                "Update and restart the XIV Instant Edit Blender add-on, then retry.",
+                (int)status);
+            throw new BlenderBridgeException(failure, responseBody);
+        }
+        catch (JsonException e)
+        {
+            var failure = BridgeFailure.Create(
+                "blender_addon",
+                "import",
+                "response_parsing",
+                "invalid_success_response",
+                "Blender accepted the request but returned an invalid confirmation.",
+                "Update and restart the XIV Instant Edit Blender add-on, then retry.",
+                (int)status);
+            throw new BlenderBridgeException(failure, responseBody, e);
         }
     }
 

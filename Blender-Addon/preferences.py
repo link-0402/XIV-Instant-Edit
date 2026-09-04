@@ -26,21 +26,43 @@ def _update_cache(self, _context) -> None:
         if self.instant_edit_auto_cleanup:
             clean_cache(STALE_SECONDS)
     except Exception as error:
+        from .instant_edit.diagnostics import record_failure
+        record_failure(
+            component="blender_addon",
+            operation="addon_settings",
+            stage="cache_configuration",
+            code="cache_configuration_failed",
+            cause="Blender could not apply the XIV Instant Edit cache setting.",
+            remedy="Choose a writable cache directory in the add-on preferences, then retry.",
+            endpoint="/settings/cache",
+            exception=error,
+        )
         print(f"XIV Instant Edit: could not configure cache: {error}")
 
 
 class XIVIE_OT_clean_cache(Operator):
     bl_idname = "xiv_ie.clean_cache"
     bl_label = "Clean Cache Now"
-    bl_description = "Remove all owned XIV Instant Edit import and export cache jobs"
+    bl_description = "Remove all owned XIV Instant Edit cache jobs and diagnostic reports"
 
     def execute(self, _context):
         try:
             jobs, byte_count = clean_cache()
         except Exception as error:
+            from .instant_edit.diagnostics import record_failure
+            record_failure(
+                component="blender_addon",
+                operation="cache_cleanup",
+                stage="cache_cleanup",
+                code="cache_cleanup_failed",
+                cause="Blender could not clean the XIV Instant Edit cache.",
+                remedy="Choose a writable cache directory or remove only the owned cache folder after closing Blender.",
+                endpoint="/settings/cache/cleanup",
+                exception=error,
+            )
             self.report({"ERROR"}, f"Cache cleanup failed: {error}")
             return {"CANCELLED"}
-        self.report({"INFO"}, f"Removed {jobs} cache job(s), {byte_count / (1024 * 1024):.1f} MiB")
+        self.report({"INFO"}, f"Removed {jobs} cache item(s), {byte_count / (1024 * 1024):.1f} MiB")
         return {"FINISHED"}
 
 

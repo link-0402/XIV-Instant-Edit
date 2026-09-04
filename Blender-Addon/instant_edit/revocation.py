@@ -13,7 +13,8 @@ import bpy
 
 from .cache import ensure_cache_root
 from .context import _value
-from .plugin_http import candidate_ports, post_json
+from .plugin_http import PluginResponseTooLarge, candidate_ports, post_json
+from .diagnostics import record_failure, record_protocol_failure, record_remote_failure
 
 
 SCHEMA = "instant-edit.pending-revocations"
@@ -113,9 +114,32 @@ def _send(record: dict) -> bool:
                 port, "/context/revoke", payload,
                 timeout=REQUEST_TIMEOUT_SECONDS, max_response_size=MAX_RESPONSE_SIZE)
             if 200 <= status < 300:
-                result = json.loads(response_body.decode("utf-8"))
+                try:
+                    result = json.loads(response_body.decode("utf-8"))
+                except (UnicodeError, json.JSONDecodeError):
+                    record_protocol_failure(
+                        response_body, status, endpoint="/context/revoke",
+                        operation="context_revoke")
+                    continue
                 if isinstance(result, dict) and result.get("ok"):
                     return True
+                record_protocol_failure(
+                    response_body, status, endpoint="/context/revoke",
+                    operation="context_revoke")
+            else:
+                record_remote_failure(
+                    response_body, status, endpoint="/context/revoke",
+                    default_operation="context_revoke")
+        except PluginResponseTooLarge as error:
+            record_protocol_failure(
+                error.body,
+                error.status,
+                endpoint="/context/revoke",
+                operation="context_revoke",
+                code="response_too_large",
+                cause="The Dalamud plugin returned a response larger than the bridge limit.",
+            )
+            continue
         except (URLError, TimeoutError, OSError, ValueError, UnicodeError):
             continue
     return False
@@ -149,6 +173,16 @@ def _poll_results():
                     if (item.get("contextId"), item.get("importId")) not in completed
                 ])
         except Exception as error:
+            record_failure(
+                component="blender_addon",
+                operation="context_revocation",
+                stage="revocation_persistence",
+                code="revocation_update_failed",
+                cause="Blender could not update the pending context revocation queue.",
+                remedy="Restart Blender and retry after the Dalamud plugin is running.",
+                endpoint="/context/revoke",
+                exception=error,
+            )
             print(f"XIV Instant Edit: could not update context revocations: {error}")
     return None
 
@@ -161,6 +195,16 @@ def schedule_revocations() -> None:
         with _lock:
             records = _load_locked()
     except Exception as error:
+        record_failure(
+            component="blender_addon",
+            operation="context_revocation",
+            stage="revocation_persistence",
+            code="revocation_queue_unavailable",
+            cause="Blender could not load the pending context revocation queue.",
+            remedy="Choose a writable cache directory and restart Blender.",
+            endpoint="/context/revoke",
+            exception=error,
+        )
         print(f"XIV Instant Edit: could not load context revocations: {error}")
         return
     if not records:

@@ -982,6 +982,13 @@ public sealed class MainWindow : Window, IDisposable
             cancellationToken));
     }
 
+    public void ReportImportFailure(BridgeFailure failure)
+    {
+        var message = failure.UserMessage;
+        SetStatus($"Failed: {message}", FeedbackSeverity.Error);
+        _chat.PrintError($"XIV Instant Edit: {message}");
+    }
+
     private BlenderImportOptions CurrentImportOptions()
         => _config.UseExistingSkeleton
             ? BlenderImportOptions.Existing(

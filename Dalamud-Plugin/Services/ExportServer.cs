@@ -249,6 +249,38 @@ public sealed class ExportServer : IDisposable
 
     }
 
+    private sealed class ImportStatusRequest
+    {
+        [JsonPropertyName("schema")]
+        public string? Schema { get; set; }
+        [JsonPropertyName("version")]
+        public int Version { get; set; }
+        [JsonPropertyName("pluginInstanceId")]
+        public string? PluginInstanceId { get; set; }
+        [JsonPropertyName("contextId")]
+        public string? ContextId { get; set; }
+        [JsonPropertyName("importId")]
+        public string? ImportId { get; set; }
+        [JsonPropertyName("capability")]
+        public string? Capability { get; set; }
+        [JsonPropertyName("status")]
+        public string? Status { get; set; }
+        [JsonPropertyName("component")]
+        public string? Component { get; set; }
+        [JsonPropertyName("operation")]
+        public string? Operation { get; set; }
+        [JsonPropertyName("stage")]
+        public string? Stage { get; set; }
+        [JsonPropertyName("code")]
+        public string? Code { get; set; }
+        [JsonPropertyName("cause")]
+        public string? Cause { get; set; }
+        [JsonPropertyName("remedy")]
+        public string? Remedy { get; set; }
+        [JsonPropertyName("diagnosticId")]
+        public string? DiagnosticId { get; set; }
+    }
+
     private sealed record HttpRequest(string Method, string Path, byte[] Body);
     internal sealed record StagedExport(string FilePath, string DirectoryPath);
 
@@ -270,6 +302,8 @@ public sealed class ExportServer : IDisposable
     private CancellationTokenSource? _runCts;
     private Task? _runTask;
     private bool _disposed;
+
+    public event Action<BridgeFailure>? ImportFailureReceived;
 
     public ExportServer(
         Configuration config,
@@ -418,12 +452,21 @@ public sealed class ExportServer : IDisposable
                 var (request, error) = ReadRequest(stream);
                 if (error is not null || request is null)
                 {
-                    WriteResponse(stream, 400, Json(new { ok = false, error = error ?? "bad request" }));
+                    var failure = StructuredError(
+                        400,
+                        "http_request",
+                        "request_receipt",
+                        RequestReadCode(error),
+                        error ?? "The plugin could not read the bridge request.",
+                        "Update both XIV Instant Edit components and retry.");
+                    WriteResponse(stream, failure.Status, failure.Body);
                     return;
                 }
 
                 cancellationToken.ThrowIfCancellationRequested();
                 var (status, body) = await ProcessRequestAsync(request).ConfigureAwait(false);
+                if (status >= 400)
+                    body = EnrichErrorResponse(request.Path, status, body);
                 cancellationToken.ThrowIfCancellationRequested();
                 WriteResponse(stream, status, body);
             }
@@ -433,10 +476,17 @@ public sealed class ExportServer : IDisposable
             }
             catch (Exception e)
             {
-                _log.Debug($"Export receiver client error: {e.Message}");
                 try
                 {
-                    WriteResponse(stream, 500, Json(new { ok = false, error = "internal server error" }));
+                    var failure = StructuredError(
+                        500,
+                        "http_request",
+                        "processing",
+                        "internal_error",
+                        "The Dalamud bridge encountered an unexpected server error.",
+                        "Retry the operation and review the Dalamud plugin log if it fails again.",
+                        exception: e);
+                    WriteResponse(stream, failure.Status, failure.Body);
                 }
                 catch
                 {
@@ -465,8 +515,49 @@ public sealed class ExportServer : IDisposable
                     "instant-edit.variant-targets.v1",
                     "instant-edit.material-coverage.v1",
                     "instant-edit.backup-restore.v1",
+                    "instant-edit.structured-errors.v1",
+                    "instant-edit.import-status.v1",
                 },
             }));
+
+        if (method == "POST" && path.TrimEnd('/') == "/import/status")
+        {
+            var parsed = DeserializeRequest<ImportStatusRequest>(request.Body, "import status", out var parseError);
+            if (parseError is not null)
+                return parseError.Value;
+            var status = parsed!;
+            var envelopeError = ValidateImportStatusEnvelope(status);
+            if (envelopeError is not null)
+                return Error(400, envelopeError, "unsupported or malformed import status envelope");
+
+            if (!_contexts.TryAuthorizeOperation(
+                    status.PluginInstanceId!, status.ContextId!, status.Capability!,
+                    out var context, out var registryCode) || context is null)
+                return Error(StatusForCode(registryCode), registryCode, "import status context was rejected");
+            if (!string.Equals(context.ImportId, status.ImportId, StringComparison.Ordinal))
+                return Error(401, "import_id_mismatch", "import status identifier was rejected");
+
+            var failure = BridgeFailure.Create(
+                "blender_addon",
+                "import",
+                status.Stage!,
+                status.Code!,
+                status.Cause!,
+                status.Remedy!,
+                diagnosticId: status.DiagnosticId);
+            _log.Error(
+                $"Blender bridge failure {failure.DiagnosticId}: " +
+                $"{failure.Operation}/{failure.Stage}/{failure.Code}: {failure.Cause} Remedy: {failure.Remedy}");
+            try
+            {
+                ImportFailureReceived?.Invoke(failure);
+            }
+            catch (Exception e)
+            {
+                _log.Error(e, $"Import failure notification handler failed for {failure.DiagnosticId}.");
+            }
+            return (200, Json(new { ok = true, code = "import_failure_recorded" }));
+        }
 
         if (method == "POST" && path.TrimEnd('/') == "/context/reattach")
         {
@@ -497,10 +588,9 @@ public sealed class ExportServer : IDisposable
             if (parseError is not null)
                 return parseError.Value;
             var revoke = parsed!;
-            if (!string.Equals(revoke.Schema, "instant-edit.context-revoke", StringComparison.Ordinal) ||
-                revoke.Version != 1 || !IsSafeId(revoke.ContextId) || !IsSafeId(revoke.ImportId) ||
-                string.IsNullOrWhiteSpace(revoke.Capability))
-                return Error(400, "malformed_request", "unsupported or malformed context revoke envelope");
+            var envelopeError = ValidateRevokeEnvelope(revoke);
+            if (envelopeError is not null)
+                return Error(400, envelopeError, "unsupported or malformed context revoke envelope");
             if (!_contexts.TryRevoke(revoke.ContextId!, revoke.ImportId!, revoke.Capability!, out var registryCode))
                 return Error(StatusForCode(registryCode), registryCode, "export context revocation was rejected");
             return (200, Json(new { ok = true, code = registryCode }));
@@ -512,11 +602,9 @@ public sealed class ExportServer : IDisposable
             if (parseError is not null)
                 return parseError.Value;
             var status = parsed!;
-            if (!string.Equals(status.Schema, "instant-edit.export-status", StringComparison.Ordinal) ||
-                status.Version != 1 || string.IsNullOrWhiteSpace(status.PluginInstanceId) ||
-                !IsSafeId(status.ContextId) || !IsSafeId(status.ExportId) ||
-                string.IsNullOrWhiteSpace(status.Capability))
-                return Error(400, "malformed_request", "unsupported or malformed export status envelope");
+            var envelopeError = ValidateExportStatusEnvelope(status);
+            if (envelopeError is not null)
+                return Error(400, envelopeError, "unsupported or malformed export status envelope");
             if (!_contexts.TryGetExportStatus(
                     status.PluginInstanceId!,
                     status.ContextId!,
@@ -536,10 +624,9 @@ public sealed class ExportServer : IDisposable
             if (parseError is not null)
                 return parseError.Value;
             var targetsRequest = parsed!;
-            if (!string.Equals(targetsRequest.Schema, "instant-edit.variant-targets", StringComparison.Ordinal) ||
-                targetsRequest.Version != 1 || string.IsNullOrWhiteSpace(targetsRequest.PluginInstanceId) ||
-                !IsSafeId(targetsRequest.ContextId) || string.IsNullOrWhiteSpace(targetsRequest.Capability))
-                return Error(400, "malformed_request", "unsupported or malformed variant-targets envelope");
+            var envelopeError = ValidateVariantTargetsEnvelope(targetsRequest);
+            if (envelopeError is not null)
+                return Error(400, envelopeError, "unsupported or malformed variant-targets envelope");
             if (!_contexts.TryAuthorizeOperation(
                     targetsRequest.PluginInstanceId!, targetsRequest.ContextId!, targetsRequest.Capability!,
                     out var target, out var registryCode) || target is null)
@@ -896,7 +983,7 @@ public sealed class ExportServer : IDisposable
             return ResultResponse(receipt);
         }
 
-        return (404, Json(new { ok = false, error = "not found" }));
+        return Error(404, "endpoint_not_found", "the requested bridge endpoint was not found");
 
         async Task<ExportReceipt> ApplyExport(
             InstantEditImportContext target,
@@ -990,9 +1077,15 @@ public sealed class ExportServer : IDisposable
 
         try
         {
+            using var document = JsonDocument.Parse(body);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                error = Error(400, "request_not_object", "request body must be a JSON object");
+                return null;
+            }
             var value = JsonSerializer.Deserialize<T>(body, JsonOpts);
             if (value is null)
-                error = Error(400, "malformed_request", "request must be a JSON object");
+                error = Error(400, "request_not_object", "request body must be a JSON object");
             return value;
         }
         catch (Exception e)
@@ -1038,6 +1131,68 @@ public sealed class ExportServer : IDisposable
             string.IsNullOrWhiteSpace(request.VariantTargetId))
             return "missing_variant_target";
         return null;
+    }
+
+    private static string? ValidateImportStatusEnvelope(ImportStatusRequest request)
+    {
+        if (!string.Equals(request.Schema, "instant-edit.import-status", StringComparison.Ordinal))
+            return request.Version == 1 ? "unsupported_schema" : "unsupported_version";
+        if (request.Version != 1)
+            return "unsupported_version";
+        if (!string.Equals(request.Status, "failed", StringComparison.Ordinal))
+            return "invalid_status";
+        if (!string.Equals(request.Component, "blender_addon", StringComparison.Ordinal))
+            return "invalid_component";
+        if (!string.Equals(request.Operation, "import", StringComparison.Ordinal))
+            return "invalid_operation";
+        if (string.IsNullOrWhiteSpace(request.PluginInstanceId) || !IsSafeId(request.ContextId) ||
+            !IsSafeId(request.ImportId) || string.IsNullOrWhiteSpace(request.Capability))
+            return "missing_field";
+        if (!IsSafeDiagnosticValue(request.Stage, 64))
+            return "invalid_stage";
+        if (!IsSafeDiagnosticValue(request.Code, 128))
+            return "invalid_error_code";
+        if (string.IsNullOrWhiteSpace(request.Cause) || request.Cause.Length > 2048)
+            return "invalid_cause";
+        if (string.IsNullOrWhiteSpace(request.Remedy) || request.Remedy.Length > 2048)
+            return "invalid_remedy";
+        return Guid.TryParse(request.DiagnosticId, out _) ? null : "invalid_diagnostic_id";
+    }
+
+    private static string? ValidateRevokeEnvelope(RevokeRequest request)
+    {
+        if (!string.Equals(request.Schema, "instant-edit.context-revoke", StringComparison.Ordinal))
+            return request.Version == 1 ? "unsupported_schema" : "unsupported_version";
+        if (request.Version != 1)
+            return "unsupported_version";
+        return !IsSafeId(request.ContextId) || !IsSafeId(request.ImportId) ||
+               string.IsNullOrWhiteSpace(request.Capability)
+            ? "missing_field"
+            : null;
+    }
+
+    private static string? ValidateExportStatusEnvelope(ExportStatusRequest request)
+    {
+        if (!string.Equals(request.Schema, "instant-edit.export-status", StringComparison.Ordinal))
+            return request.Version == 1 ? "unsupported_schema" : "unsupported_version";
+        if (request.Version != 1)
+            return "unsupported_version";
+        return string.IsNullOrWhiteSpace(request.PluginInstanceId) || !IsSafeId(request.ContextId) ||
+               !IsSafeId(request.ExportId) || string.IsNullOrWhiteSpace(request.Capability)
+            ? "missing_field"
+            : null;
+    }
+
+    private static string? ValidateVariantTargetsEnvelope(VariantTargetsRequest request)
+    {
+        if (!string.Equals(request.Schema, "instant-edit.variant-targets", StringComparison.Ordinal))
+            return request.Version == 1 ? "unsupported_schema" : "unsupported_version";
+        if (request.Version != 1)
+            return "unsupported_version";
+        return string.IsNullOrWhiteSpace(request.PluginInstanceId) || !IsSafeId(request.ContextId) ||
+               string.IsNullOrWhiteSpace(request.Capability)
+            ? "missing_field"
+            : null;
     }
 
     private static string? ValidateMashupEnvelope(MashupExportRequest request)
@@ -1314,6 +1469,156 @@ public sealed class ExportServer : IDisposable
 
         return false;
     }
+
+    private (int Status, string Body) StructuredError(
+        int status,
+        string operation,
+        string stage,
+        string code,
+        string cause,
+        string remedy,
+        string? diagnosticId = null,
+        Exception? exception = null)
+    {
+        var failure = BridgeFailure.Create(
+            "dalamud_plugin", operation, stage, code, cause, remedy, status, diagnosticId);
+        var message =
+            $"Bridge failure {failure.DiagnosticId}: HTTP {status}; " +
+            $"{failure.Operation}/{failure.Stage}/{failure.Code}: {failure.Cause} Remedy: {failure.Remedy}";
+        if (exception is null)
+            _log.Error(message);
+        else
+            _log.Error(exception, message);
+        return (status, Json(new
+        {
+            ok = false,
+            error = failure.Cause,
+            component = failure.Component,
+            operation = failure.Operation,
+            stage = failure.Stage,
+            code = failure.Code,
+            cause = failure.Cause,
+            remedy = failure.Remedy,
+            diagnosticId = failure.DiagnosticId,
+            componentVersion = BlenderClient.CurrentPluginVersion,
+        }));
+    }
+
+    private string EnrichErrorResponse(string path, int status, string body)
+    {
+        var code = "request_rejected";
+        var cause = "The Dalamud plugin rejected the bridge request.";
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            if (document.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                if (document.RootElement.TryGetProperty("code", out var codeValue) &&
+                    codeValue.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(codeValue.GetString()))
+                    code = codeValue.GetString()!;
+                if (document.RootElement.TryGetProperty("error", out var errorValue) &&
+                    errorValue.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(errorValue.GetString()))
+                    cause = errorValue.GetString()!;
+            }
+        }
+        catch (JsonException)
+        {
+            code = "invalid_error_response";
+            cause = "The Dalamud plugin produced an invalid error response.";
+        }
+
+        return StructuredError(
+            status,
+            OperationForPath(path),
+            StageForCode(code),
+            code,
+            cause,
+            RemedyForCode(code)).Body;
+    }
+
+    private static string RequestReadCode(string? error)
+        => error switch
+        {
+            "request headers are missing or too large" => "request_headers_invalid",
+            "invalid request line" => "request_line_invalid",
+            "invalid content length" => "content_length_invalid",
+            "request body is too large" => "request_body_too_large",
+            "request is too large" => "request_too_large",
+            "request body ended early" => "request_body_incomplete",
+            _ => "malformed_http_request",
+        };
+
+    private static string OperationForPath(string path)
+        => path.TrimEnd('/') switch
+        {
+            "/context/reattach" => "context_reattach",
+            "/context/revoke" => "context_revoke",
+            "/import/status" => "import_status",
+            "/export/status" => "export_status",
+            "/variant-targets" => "variant_targets",
+            "/material-coverage" => "material_coverage",
+            "/backup/restore" => "backup_restore",
+            "/mashup/plan" => "mashup_plan",
+            "/mashup/export" => "mashup_export",
+            "/export" => "export",
+            _ => "http_request",
+        };
+
+    private static string StageForCode(string code)
+    {
+        if (code == "endpoint_not_found")
+            return "routing";
+        if (code is "invalid_utf8" or "invalid_json")
+            return "request_parsing";
+        if (code.Contains("schema", StringComparison.Ordinal) ||
+            code.Contains("version", StringComparison.Ordinal) ||
+            code.Contains("field", StringComparison.Ordinal) ||
+            code == "request_not_object" ||
+            code.StartsWith("invalid_", StringComparison.Ordinal) ||
+            code.StartsWith("malformed_", StringComparison.Ordinal))
+            return "request_validation";
+        if (code is "stale_context" or "invalid_capability" or "plugin_instance_mismatch" or
+            "import_id_mismatch")
+            return "authorization";
+        if (code is "unsafe_file_path" or "file_not_found" or "file_not_readable" or
+            "size_mismatch" or "hash_mismatch")
+            return "file_staging";
+        if (code is "duplicate_export_id")
+            return "reservation";
+        if (code is "export_not_found")
+            return "receipt_lookup";
+        if (code is "destination_not_ready" or "vanilla_mod_exists" or "mashup_plan_mismatch")
+            return "destination_validation";
+        return code == "internal_error" ? "processing" : "external_service";
+    }
+
+    private static string RemedyForCode(string code)
+    {
+        if (code == "endpoint_not_found")
+            return "Update both XIV Instant Edit components and verify the configured plugin port.";
+        if (code.Contains("schema", StringComparison.Ordinal) || code.Contains("version", StringComparison.Ordinal) ||
+            code.Contains("field", StringComparison.Ordinal) || code == "request_not_object" ||
+            code.StartsWith("malformed_", StringComparison.Ordinal))
+            return "Update and restart both XIV Instant Edit components, then retry.";
+        if (code is "stale_context" or "invalid_capability" or "plugin_instance_mismatch" or
+            "import_id_mismatch")
+            return "Re-import the model from the current plugin session and retry.";
+        if (code is "unsafe_file_path" or "file_not_found" or "file_not_readable")
+            return "Retry the export and verify the Blender cache directory is accessible.";
+        if (code is "size_mismatch" or "hash_mismatch")
+            return "Export the model again; the staged file changed before the plugin could read it.";
+        if (code is "destination_not_ready" or "vanilla_mod_exists")
+            return "Select or create a valid Penumbra destination, then retry.";
+        if (code is "mashup_plan_mismatch")
+            return "Refresh the mashup plan and retry the export.";
+        if (code == "internal_error")
+            return "Retry the operation and review the Dalamud plugin log if it fails again.";
+        return "Review the reported Penumbra or request details, correct them, and retry.";
+    }
+
+    private static bool IsSafeDiagnosticValue(string? value, int maxLength)
+        => !string.IsNullOrWhiteSpace(value) && value.Length <= maxLength &&
+           value.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.');
 
     private static (int Status, string Body) Error(int status, string code, string message)
         => (status, Json(new { ok = false, code, error = message }));

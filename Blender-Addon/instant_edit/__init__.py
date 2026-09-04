@@ -141,8 +141,19 @@ def register() -> None:
         )
         if prefs.instant_edit_auto_cleanup:
             clean_cache(STALE_SECONDS)
-    except Exception:
-        pass
+    except Exception as error:
+        from .diagnostics import record_failure
+        record_failure(
+            component="blender_addon",
+            operation="addon_startup",
+            stage="cache_configuration",
+            code="cache_configuration_failed",
+            cause="Blender could not configure the XIV Instant Edit cache.",
+            remedy="Choose a writable cache directory in the add-on preferences, then restart Blender.",
+            endpoint="/startup",
+            exception=error,
+        )
+        print(f"XIV Instant Edit: could not configure cache: {error}")
 
     if not start_server(port):
         error = get_server_error() or "the port may already be in use"

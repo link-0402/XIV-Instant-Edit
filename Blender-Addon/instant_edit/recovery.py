@@ -14,7 +14,8 @@ from .context import (
     context_collections,
     validate_context,
 )
-from .plugin_http import candidate_ports, post_json
+from .plugin_http import PluginResponseTooLarge, candidate_ports, post_json
+from .diagnostics import record_failure, record_protocol_failure, record_remote_failure
 
 
 MAX_RESPONSE_SIZE = 64 * 1024
@@ -66,12 +67,34 @@ def _request_reattach(
                 port, "/context/reattach", request_payload,
                 timeout=REQUEST_TIMEOUT_SECONDS, max_response_size=MAX_RESPONSE_SIZE)
             if not 200 <= status < 300:
+                record_remote_failure(
+                    body, status, endpoint="/context/reattach",
+                    default_operation="context_reattach")
                 continue
-            result = json.loads(body.decode("utf-8"))
+            try:
+                result = json.loads(body.decode("utf-8"))
+            except (UnicodeError, json.JSONDecodeError):
+                record_protocol_failure(
+                    body, status, endpoint="/context/reattach",
+                    operation="context_reattach")
+                continue
             payload = result.get("context") if isinstance(result, dict) and result.get("ok") else None
             if not isinstance(payload, dict):
+                record_protocol_failure(
+                    body, status, endpoint="/context/reattach",
+                    operation="context_reattach")
                 continue
             return payload
+        except PluginResponseTooLarge as error:
+            record_protocol_failure(
+                error.body,
+                error.status,
+                endpoint="/context/reattach",
+                operation="context_reattach",
+                code="response_too_large",
+                cause="The Dalamud plugin returned a response larger than the bridge limit.",
+            )
+            continue
         except (URLError, TimeoutError, OSError, ValueError, UnicodeError):
             continue
 
@@ -179,6 +202,16 @@ def _run_scheduled_recovery():
     try:
         recover_saved_contexts()
     except Exception as error:
+        record_failure(
+            component="blender_addon",
+            operation="context_recovery",
+            stage="recovery_startup",
+            code="context_recovery_failed",
+            cause="Blender could not start recovery of saved XIV Instant Edit contexts.",
+            remedy="Restart Blender and re-import any context that remains disconnected.",
+            endpoint="/context/reattach",
+            exception=error,
+        )
         print(f"XIV Instant Edit: context recovery failed: {error}")
     return None
 
@@ -190,8 +223,18 @@ def schedule_recovery() -> None:
     _recovery_scheduled = True
     try:
         bpy.app.timers.register(_run_scheduled_recovery, first_interval=1.0)
-    except Exception:
+    except Exception as error:
         _recovery_scheduled = False
+        record_failure(
+            component="blender_addon",
+            operation="context_recovery",
+            stage="recovery_scheduling",
+            code="recovery_timer_unavailable",
+            cause="Blender could not schedule saved-context recovery.",
+            remedy="Restart Blender and re-import any context that remains disconnected.",
+            endpoint="/context/reattach",
+            exception=error,
+        )
 
 
 def cancel_recovery() -> None:
