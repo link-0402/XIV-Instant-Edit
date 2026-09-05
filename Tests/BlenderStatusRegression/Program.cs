@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http;
+using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services;
 
@@ -178,6 +179,40 @@ Require(
     legacyJson.Code == "legacy_http_error" && legacyJson.Cause == "old add-on rejection",
     "legacy JSON error bodies retain their useful cause");
 
+var importHandler = new StubHandler(() => new HttpResponseMessage(HttpStatusCode.OK)
+{
+    Content = new StringContent("{\"ok\":true,\"cached\":true}"),
+}, null);
+var importRoot = Path.Combine(Path.GetTempPath(), "XIV-Instant-Edit-tests", Guid.NewGuid().ToString("N"));
+try
+{
+    var backupStore = new ModelBackupStore(importRoot);
+    using var importHttp = new HttpClient(importHandler);
+    using var importContexts = new ExportContextRegistry(
+        "blender-import-regression", persist: null, backups: backupStore);
+    using var importClient = new BlenderClient(null!, importContexts, importHttp);
+    var targetRoot = Path.Combine(importRoot, "RegisteredMod");
+    var targetFile = Path.Combine(targetRoot, "Files", "model.mdl");
+    Require(
+        await importClient.SendSourceImportAsync(
+            42424, Path.Combine(importRoot, "handoff.mdl"),
+            "chara/equipment/e0001/model/c0101e0001_top.mdl", 0, "Import", 42425,
+            targetFile, "registered-mod", "Registered Mod",
+            sourceModRootPath: targetRoot, targetRelativePath: "Files/model.mdl"),
+        "BlenderClient accepts a source import with a managed backup target");
+    var importEnvelope = JsonNode.Parse(importHandler.LastBody!)!.AsObject();
+    Require(
+        importEnvelope["backupTargetId"]?.GetValue<string>()?.Length == 64 &&
+        importEnvelope["backupDirectory"]?.GetValue<string>() is { Length: > 0 } backupDirectory &&
+        Path.GetFileName(backupDirectory) == importEnvelope["backupTargetId"]?.GetValue<string>(),
+        "source import requests serialize the managed backup target metadata");
+}
+finally
+{
+    if (Directory.Exists(importRoot))
+        Directory.Delete(importRoot, true);
+}
+
 var safeText = BridgeFailure.Safe(
     "Could not read C:\\Users\\Example\\AppData\\Local\\Temp\\model.mdl or /home/example/model.mdl " +
     "and received {\"capability\":\"private-value\"}");
@@ -194,12 +229,17 @@ sealed class StubHandler(
     Func<HttpResponseMessage>? responseFactory,
     Exception? exception) : HttpMessageHandler
 {
-    protected override Task<HttpResponseMessage> SendAsync(
+    public string? LastBody { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)
     {
+        LastBody = request.Content is null
+            ? null
+            : await request.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (exception is not null)
-            return Task.FromException<HttpResponseMessage>(exception);
-        return Task.FromResult(responseFactory?.Invoke() ?? new HttpResponseMessage(HttpStatusCode.OK));
+            throw exception;
+        return responseFactory?.Invoke() ?? new HttpResponseMessage(HttpStatusCode.OK);
     }
 }

@@ -212,7 +212,9 @@ public sealed class BlenderClient : IDisposable
         string? targetRelativePath = null,
         ResourceDependencyManifest? resourceManifest = null,
         Guid? targetCollectionId = null,
-        string? targetCollectionName = null)
+        string? targetCollectionName = null,
+        SourceOptionLocator? sourceOption = null,
+        string sourceOptionStatus = "unknown")
     {
         if (port is < 1 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(port));
@@ -234,7 +236,9 @@ public sealed class BlenderClient : IDisposable
             targetRelativePath,
             resourceManifest,
             targetCollectionId,
-            targetCollectionName);
+            targetCollectionName,
+            sourceOption,
+            sourceOptionStatus);
 
         return await SendImportAsync(
             port, importFilePath, name, context, cancellationToken,
@@ -314,6 +318,8 @@ public sealed class BlenderClient : IDisposable
                 targetCollectionName = context.TargetCollectionName,
                 resourceManifestVersion = context.ResourceManifestVersion,
                 resourceManifestStatus = context.ResourceManifestStatus,
+                backupTargetId = context.BackupTargetId,
+                backupDirectory = context.BackupDirectory,
                 previewManifestPath,
                 importOptions = importOptions ?? BlenderImportOptions.Generated,
             });

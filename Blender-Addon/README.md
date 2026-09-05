@@ -28,11 +28,8 @@ plus a standalone Simple Import/Export panel.
   textures from non-participating mods. Vanilla resources and shared body/skin,
   pube, and piercing materials remain pass-through dependencies; any remaining
   required external mods are listed in the result and mod description.
-- Automatically collapses imported parts into existing matching-material mesh
-  groups, while shifting unmatched MDL groups away from visible conflicts.
-  Matching uses the complete normalized material path, with the shared
-  `_bibo.mtrl` body material as an intentional exception.
-- Includes an explicit **Auto-collapse materials** action for visible mesh groups.
+- Offsets incoming MDL mesh-group IDs away from visible conflicts without
+  changing group assignment based on materials.
 - Persists import authorization in the Dalamud plugin and reconnects saved scene
   contexts after Blender or plugin restarts.
 - Recovers export receipts after network timeouts without submitting a second

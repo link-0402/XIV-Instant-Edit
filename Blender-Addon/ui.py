@@ -382,7 +382,6 @@ class XIVIE_PT_main(Panel):
         occupied_groups = visible_material_groups()
         if not occupied_groups:
             box.label(text="No visible FFXIV mesh groups.", icon="INFO")
-            box.operator("xiv_ie.auto_collapse_materials", text="Auto-collapse materials")
             return
         drag_state = active_mesh_drag_state()
         drag_scope, drag_group, drag_part, drag_maximum, drag_instance = (
@@ -536,7 +535,6 @@ class XIVIE_PT_main(Panel):
         summary.alignment = "RIGHT"
         count = f"{selected_triangles:,} / {total_triangles:,}" if selected_triangles else f"{total_triangles:,}"
         summary.label(text=f"Triangles: {count}")
-        box.operator("xiv_ie.auto_collapse_materials", text="Auto-collapse materials")
 
     @staticmethod
     def _draw_simple_export(layout) -> None:

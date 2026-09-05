@@ -6,7 +6,6 @@ from . import instant_edit
 from .instant_edit import ops as instant_ops
 from .instant_edit import props as instant_props
 from .operators import (
-    XIVIE_OT_auto_collapse_materials,
     XIVIE_OT_drag_mesh_order,
     XIVIE_OT_mesh_attribute,
     XIVIE_OT_mesh_flow,
@@ -38,7 +37,6 @@ CLASSES = [
     XIVIEExportSettings,
     *instant_props.CLASSES,
     *instant_ops.CLASSES,
-    XIVIE_OT_auto_collapse_materials,
     XIVIE_OT_drag_mesh_order,
     XIVIE_OT_mesh_attribute,
     XIVIE_OT_mesh_flow,

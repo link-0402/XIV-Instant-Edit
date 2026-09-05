@@ -1098,6 +1098,16 @@ public sealed class MainWindow : Window, IDisposable
             }
             else
             {
+                var sourceOption = await _penumbra.CaptureSourceOptionAsync(
+                    source.SourceModDirectory,
+                    source.ActualPath,
+                    source.SourceModRootPath,
+                    source.SourceRelativePath,
+                    model.GamePath,
+                    source.OptionMemberships,
+                    collection?.Id).ConfigureAwait(false);
+                if (sourceOption.Warning is not null)
+                    dependencyWarnings.Add($"Source option: {sourceOption.Warning}");
                 handoffCached = await _blender.SendSourceImportAsync(
                     blenderPort,
                     file,
@@ -1115,6 +1125,8 @@ public sealed class MainWindow : Window, IDisposable
                     resourceManifest: resourceManifest,
                     targetCollectionId: collection?.Id,
                     targetCollectionName: collection?.Name,
+                    sourceOption: sourceOption.Locator,
+                    sourceOptionStatus: sourceOption.Status,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
             }
             var hasPreviewWarning = preview is { Warnings.Count: > 0 };

@@ -15,6 +15,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly ICommandManager         _commands;
     private readonly IPluginLog              _log;
     private readonly Configuration           _config;
+    private readonly ExportContextSessionStore? _contextStore;
+    private readonly ModelBackupStore          _backups;
     private readonly PenumbraService         _penumbra;
     private readonly OnScreenService         _onScreen;
     private readonly ExportContextRegistry   _contexts;
@@ -42,25 +44,56 @@ public sealed class Plugin : IDalamudPlugin
         _log      = log;
 
         _config    = pi.GetPluginConfig() as Configuration ?? new Configuration();
-        if (_config.Version < 9)
+        var pluginInstanceId = Guid.NewGuid().ToString("N");
+        IReadOnlyList<Models.PersistedExportContext> persistedContexts = _config.ExportContexts;
+        try
         {
-            _config.Version = 9;
+            _contextStore = new ExportContextSessionStore(
+                pi.ConfigDirectory.FullName,
+                pluginInstanceId,
+                (message, error) =>
+                {
+                    if (error is null) _log.Warning(message);
+                    else _log.Warning(error, message);
+                });
+            var stored = _contextStore.Load();
+            persistedContexts = stored
+                .Concat(_config.ExportContexts)
+                .GroupBy(item => item.ContextId, StringComparer.Ordinal)
+                .Select(group => group.Last())
+                .ToArray();
+            if (_config.ExportContexts.Count > 0)
+                _contextStore.Persist(persistedContexts);
+            _config.ExportContexts = [];
+            _config.Version = 10;
             pi.SavePluginConfig(_config);
         }
+        catch (Exception error)
+        {
+            _contextStore = null;
+            _log.Error(error, "Could not initialize per-session context storage; retaining contexts in plugin settings.");
+        }
         pi.UiBuilder.DisableUserUiHide = _config.KeepVisibleWhenUiHidden;
-        _penumbra  = new PenumbraService(pi, framework, log, objects, data);
+        _backups   = new ModelBackupStore(pi.ConfigDirectory.FullName);
+        _penumbra  = new PenumbraService(pi, framework, log, objects, data, _backups);
         _onScreen  = new OnScreenService(objects, clientState, framework, _penumbra, log);
         _contexts  = new ExportContextRegistry(
-            Guid.NewGuid().ToString("N"),
-            _config.ExportContexts,
+            pluginInstanceId,
+            persistedContexts,
             contexts =>
             {
+                if (_contextStore is not null)
+                {
+                    _contextStore.Persist(contexts);
+                    return;
+                }
                 lock (_configLock)
                 {
                     _config.ExportContexts = contexts.ToList();
                     _pi.SavePluginConfig(_config);
                 }
-            });
+            },
+            _backups);
         _blender   = new BlenderClient(log, _contexts);
         _exportServer = new ExportServer(_config, _penumbra, _contexts, log);
         _window    = new MainWindow(

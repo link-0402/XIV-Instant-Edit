@@ -6,7 +6,7 @@ namespace InstantEdit;
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 9;
+    public int Version { get; set; } = 10;
 
     /// <summary> Port the Blender add-on listens on for import commands. </summary>
     public int BlenderPort { get; set; } = 42424;
@@ -34,7 +34,13 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>Keep the main window visible when the user hides the game UI with Scroll Lock.</summary>
     public bool KeepVisibleWhenUiHidden { get; set; }
 
-    /// <summary>Import contexts retained so saved Blender scenes can reconnect after a restart.</summary>
+    /// <summary>Legacy v9 context payload retained only for one-time migration or storage fallback.</summary>
     public List<PersistedExportContext> ExportContexts { get; set; } = [];
+
+    // Newtonsoft.Json (used by Dalamud for plugin settings) honors this
+    // convention.  Keep the property readable for the one-time v9 migration,
+    // but do not put the migrated context payload back into InstantEdit.json.
+    public bool ShouldSerializeExportContexts()
+        => Version < 10 || ExportContexts.Count > 0;
 
 }

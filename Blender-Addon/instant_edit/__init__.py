@@ -59,6 +59,11 @@ def _switch_hidden_export_context() -> None:
         None,
     )
     if selected_index is None:
+        if not collections:
+            props.export_destination = NO_EXPORT_CONTEXT
+            props.variant_targets.clear()
+            props.variant_targets_context_id = ""
+            return
         # An empty selector is also a deliberate choice while contexts are
         # visible. Only recover it after the handler observed no visible
         # contexts, such as when a collection is created or un-hidden. If the
@@ -69,6 +74,10 @@ def _switch_hidden_export_context() -> None:
             or (previous_visible_context_ids is None and len(visible) == 1)
         ):
             props.export_destination = str(_value(visible[0], "context_id", ""))
+        elif selected_id != NO_EXPORT_CONTEXT:
+            props.export_destination = NO_EXPORT_CONTEXT
+            props.variant_targets.clear()
+            props.variant_targets_context_id = ""
         return
     if len(collections) < 2 or collection_visible_in_view_layer(
         collections[selected_index], view_layer

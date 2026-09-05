@@ -41,7 +41,8 @@ public sealed record ModPathRemap(
     string ModRoot,
     IReadOnlyDictionary<string, string> RelativePaths);
 
-public sealed record VariantOptionTarget(string Id, string Name, string ModelPath);
+public sealed record VariantOptionTarget(
+    string Id, string Name, string ModelPath, string? BackupTargetId = null, string? BackupDirectory = null);
 public sealed record VariantGroupTarget(string Id, string Name, IReadOnlyList<VariantOptionTarget> Options);
 public sealed record VariantTargetsResult(bool Success, string Code, string Message, IReadOnlyList<VariantGroupTarget> Groups);
 public sealed record PenumbraCollectionTarget(Guid Id, string Name);
@@ -71,6 +72,7 @@ public sealed record MaterialCoverageResult(
     string Code,
     string Message,
     IReadOnlyList<MaterialCoverageMissing> Missing);
+public sealed record SourceOptionCapture(SourceOptionLocator? Locator, string Status, string? Warning = null);
 
 /// <summary>
 /// Wraps all Penumbra IPC used by XIV Instant Edit:
@@ -103,6 +105,7 @@ public sealed class PenumbraService
     private readonly IPluginLog                 _log;
     private readonly IObjectTable?              _objects;
     private readonly IDataManager?              _data;
+    private readonly ModelBackupStore?          _backups;
     private readonly SemaphoreSlim              _exportGate = new(1, 1);
 
     public PenumbraService(
@@ -110,13 +113,15 @@ public sealed class PenumbraService
         IFramework framework,
         IPluginLog log,
         IObjectTable? objects = null,
-        IDataManager? data = null)
+        IDataManager? data = null,
+        ModelBackupStore? backups = null)
     {
         _pi               = pi;
         _log             = log;
         _framework       = framework;
         _objects         = objects;
         _data            = data;
+        _backups         = backups;
         _getPaths        = new GetGameObjectResourcePaths(pi);
         _getObjectTrees  = new GetGameObjectResourceTrees(pi);
         _getPlayerTrees  = new GetPlayerResourceTrees(pi);
@@ -399,7 +404,9 @@ public sealed class PenumbraService
         string? variantTarget,
         string? variantTargetId,
         bool setupVariantInPenumbra,
-        bool backupExisting = false)
+        bool backupExisting = false,
+        SourceOptionLocator? sourceOption = null,
+        string sourceOptionStatus = "unknown")
     {
         if (!IsSafeModName(sourceModDirectory) || !IsSafeGamePath(sourceGamePath) ||
             !IsSafeLocalModelPath(sourceFilePath))
@@ -453,11 +460,28 @@ public sealed class PenumbraService
                 if (groupError is not null)
                     return new ExportResult(false, "stale_variant_target", groupError);
             }
+            JsonObject? sourceOptionTemplate = null;
+            if (setupVariantInPenumbra && !string.Equals(variantTarget, "option", StringComparison.Ordinal))
+            {
+                if (sourceOptionStatus == "ambiguous")
+                    return new ExportResult(false, "ambiguous_source_option",
+                        "Multiple Penumbra options provide the imported model. Re-import it from the intended option, then export again.");
+                if (sourceOptionStatus != "default")
+                {
+                    var source = ResolveSourceOption(resolved.Target.Folder, sourceGamePath,
+                        resolved.Target.RelativePath, sourceOption);
+                    if (source.Error is not null)
+                        return new ExportResult(false, "source_option_unavailable", source.Error);
+                    sourceOptionTemplate = source.Option;
+                }
+            }
             var writeError = WriteModelToOriginalLocation(
                 resolved.Target.Folder,
                 targetFile,
                 exportedFile,
-                backupExisting);
+                backupExisting,
+                resolved.Target.Directory,
+                Path.GetRelativePath(resolved.Target.Folder, targetFile).Replace('\\', '/'));
             if (writeError is not null)
                 return new ExportResult(false, "write_failed", writeError);
             committedTarget = targetFile;
@@ -472,7 +496,8 @@ public sealed class PenumbraService
                     sourceGamePath,
                     relativeVariantPath,
                     variantName!,
-                    variantGroupName!);
+                    variantGroupName!,
+                    sourceOptionTemplate);
                 if (groupError is not null)
                     warnings.Add($"Penumbra variant setup failed: {groupError}");
             }
@@ -534,7 +559,7 @@ public sealed class PenumbraService
                 return new VariantTargetsResult(false, resolved.Code,
                     resolved.Error ?? "The original Penumbra mod is no longer available.", []);
             return new VariantTargetsResult(true, "variant_targets_loaded", "Compatible Penumbra targets loaded.",
-                ReadVariantTargets(resolved.Target.Folder, sourceGamePath));
+                ReadVariantTargets(resolved.Target.Folder, sourceGamePath, resolved.Target.Directory, _backups));
         }
         catch (Exception e)
         {
@@ -1696,11 +1721,13 @@ public sealed class PenumbraService
         return warnings.Count == 0 ? null : string.Join(" ", warnings);
     }
 
-    private static string? WriteModelToOriginalLocation(
+    private string? WriteModelToOriginalLocation(
         string modFolder,
         string targetFile,
         string exportedFile,
-        bool backupExisting = false)
+        bool backupExisting = false,
+        string? modDirectory = null,
+        string? targetRelativePath = null)
     {
         try
         {
@@ -1714,7 +1741,11 @@ public sealed class PenumbraService
 
             Directory.CreateDirectory(parent);
             if (backupExisting && File.Exists(fullTarget))
-                CreateModelBackup(fullTarget);
+            {
+                if (_backups is null || modDirectory is null || targetRelativePath is null)
+                    return "Managed backup storage is unavailable.";
+                _backups.Create(fullTarget, modDirectory, targetRelativePath);
+            }
             var temporary = Path.Combine(parent, $".instant-edit-{Guid.NewGuid():N}.tmp");
             try
             {
@@ -2071,7 +2102,8 @@ public sealed class PenumbraService
         string? sourceModRootPath,
         string? targetRelativePath,
         string sourceGamePath,
-        string backupName)
+        string backupName,
+        string backupTargetId)
     {
         if (!IsSafeModName(sourceModDirectory) || !IsSafeGamePath(sourceGamePath) ||
             !IsSafeLocalModelPath(sourceFilePath) || !TryGetBackupOriginal(backupName, out var originalName))
@@ -2093,22 +2125,36 @@ public sealed class PenumbraService
                     resolved.Code,
                     resolved.Error ?? "The original Penumbra mod is no longer available.");
 
-            var parent = Path.GetDirectoryName(resolved.Target.FilePath);
-            if (parent is null || !string.Equals(Path.GetExtension(originalName), ".mdl", StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(Path.GetExtension(originalName), ".mdl", StringComparison.OrdinalIgnoreCase))
                 return new ExportResult(false, "invalid_restore", "The backup target is invalid.");
-            var backupPath = Path.Combine(parent, backupName);
-            var targetPath = Path.Combine(parent, originalName);
-            if (!IsPathWithin(backupPath, resolved.Target.Folder) ||
-                !IsPathWithin(targetPath, resolved.Target.Folder) ||
-                !string.Equals(Path.GetDirectoryName(backupPath), parent, StringComparison.OrdinalIgnoreCase) ||
-                !File.Exists(backupPath) || new FileInfo(backupPath).Length == 0)
-                return new ExportResult(false, "backup_missing", "The backup is not in the authorized model folder.");
+            if (_backups is null || targetRelativePath is null)
+                return new ExportResult(false, "backup_unavailable", "Managed backup storage is unavailable.");
+            var effectiveRelativePath = targetRelativePath;
+            var targetPath = resolved.Target.FilePath;
+            var expectedTarget = _backups.Describe(sourceModDirectory, effectiveRelativePath);
+            if (!string.Equals(expectedTarget.Id, backupTargetId, StringComparison.Ordinal))
+            {
+                var option = ReadVariantTargets(resolved.Target.Folder, sourceGamePath, sourceModDirectory, _backups)
+                    .SelectMany(group => group.Options)
+                    .SingleOrDefault(candidate => string.Equals(candidate.BackupTargetId, backupTargetId, StringComparison.Ordinal));
+                if (option is null)
+                    return new ExportResult(false, "invalid_backup_target", "The backup does not belong to this export context.");
+                effectiveRelativePath = option.ModelPath;
+                targetPath = Path.GetFullPath(Path.Combine(resolved.Target.Folder,
+                    effectiveRelativePath.Replace('/', Path.DirectorySeparatorChar)));
+                expectedTarget = _backups.Describe(sourceModDirectory, effectiveRelativePath);
+            }
+            var parent = Path.GetDirectoryName(targetPath)!;
+            var backupPath = _backups.Resolve(backupTargetId, backupName);
+            if (!string.Equals(Path.GetFileName(targetPath), originalName, StringComparison.OrdinalIgnoreCase) ||
+                new FileInfo(backupPath).Length == 0)
+                return new ExportResult(false, "backup_missing", "The managed backup does not match the authorized model.");
             if (HasReparsePointInPath(resolved.Target.Folder, parent) ||
                 (File.Exists(backupPath) && (File.GetAttributes(backupPath) & FileAttributes.ReparsePoint) != 0) ||
                 (File.Exists(targetPath) && (File.GetAttributes(targetPath) & FileAttributes.ReparsePoint) != 0))
                 return new ExportResult(false, "destination_unsafe", "The backup target contains an unsupported reparse point.");
 
-            var writeError = RestoreModelBackup(targetPath, backupPath);
+            var writeError = RestoreModelBackup(targetPath, backupPath, sourceModDirectory, effectiveRelativePath);
             if (writeError is not null)
                 return new ExportResult(false, "restore_write_failed", writeError);
             committedTarget = targetPath;
@@ -2151,29 +2197,12 @@ public sealed class PenumbraService
         }
     }
 
-    private static void CreateModelBackup(string targetFile)
-    {
-        var directory = Path.GetDirectoryName(targetFile)!;
-        var original = Path.GetFileName(targetFile);
-        for (var attempt = 0; attempt < 8; attempt++)
-        {
-            var stamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd'T'HHmmss.ffffff'Z'");
-            var backup = Path.Combine(directory, $"{original}.{stamp}.bak");
-            if (File.Exists(backup))
-                continue;
-            File.Copy(targetFile, backup, false);
-            return;
-        }
-
-        throw new IOException("Could not allocate a unique model backup filename.");
-    }
-
-    private static string? RestoreModelBackup(string targetFile, string backupFile)
+    private string? RestoreModelBackup(string targetFile, string backupFile, string modDirectory, string targetRelativePath)
     {
         try
         {
             if (File.Exists(targetFile))
-                CreateModelBackup(targetFile);
+                _backups?.Create(targetFile, modDirectory, targetRelativePath);
             var temporary = Path.Combine(Path.GetDirectoryName(targetFile)!, $".instant-edit-restore-{Guid.NewGuid():N}.tmp");
             try
             {
@@ -2411,8 +2440,217 @@ public sealed class PenumbraService
 
 
     private sealed record VariantOptionResolution(string? FilePath, string Code, string? Error);
+    private sealed record SourceOptionResolution(
+        JsonObject? Option,
+        SourceOptionLocator? Locator,
+        string? Error,
+        bool DefaultMatches = false);
 
-    private static IReadOnlyList<VariantGroupTarget> ReadVariantTargets(string modFolder, string sourceGamePath)
+    private static SourceOptionResolution ResolveSourceOption(
+        string modFolder,
+        string sourceGamePath,
+        string sourceRelativePath,
+        SourceOptionLocator? locator = null)
+    {
+        sourceRelativePath = sourceRelativePath.Replace('\\', '/');
+        var candidates = new List<(JsonObject Option, SourceOptionLocator Locator)>();
+        var meta = LoadJsonObjectStrict(Path.Combine(modFolder, "meta.json"));
+        var version = meta["FileVersion"] is JsonValue value && value.TryGetValue<int>(out var parsed) ? parsed : 3;
+        if (version >= 4)
+        {
+            var groups = meta["Groups"] as JsonArray ?? [];
+            for (var groupIndex = 0; groupIndex < groups.Count; groupIndex++)
+                AddSourceOptionCandidates(groups[groupIndex] as JsonObject, null, groupIndex, sourceGamePath,
+                    sourceRelativePath, candidates);
+        }
+        else
+        {
+            var paths = Directory.EnumerateFiles(modFolder, "group_*.json", SearchOption.TopDirectoryOnly)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray();
+            for (var groupIndex = 0; groupIndex < paths.Length; groupIndex++)
+                AddSourceOptionCandidates(LoadJsonObjectStrict(paths[groupIndex]), Path.GetFileName(paths[groupIndex]),
+                    groupIndex, sourceGamePath, sourceRelativePath, candidates);
+        }
+
+        if (locator is not null)
+        {
+            var exact = candidates.Where(candidate =>
+                string.Equals(candidate.Locator.Membership, locator.Membership, StringComparison.Ordinal) ||
+                (string.Equals(candidate.Locator.GroupName, locator.GroupName, StringComparison.Ordinal) &&
+                 string.Equals(candidate.Locator.OptionName, locator.OptionName, StringComparison.Ordinal))).ToArray();
+            if (exact.Length == 1)
+                return new SourceOptionResolution(exact[0].Option, exact[0].Locator, null);
+        }
+        var defaultData = version >= 4 ? meta["DefaultData"] as JsonObject :
+            LoadJsonObject(Path.Combine(modFolder, "default_mod.json"));
+        var defaultMapping = defaultData?["Files"] is JsonObject defaultFiles
+            ? defaultFiles.FirstOrDefault(pair => SameGamePath(pair.Key, sourceGamePath)).Value
+            : null;
+        var mapsFromDefault = TryNormalizeRelativeModPath(JsonString(defaultMapping), out var defaultPath) &&
+                              string.Equals(defaultPath, sourceRelativePath, StringComparison.OrdinalIgnoreCase);
+        return (candidates.Count, mapsFromDefault) switch
+        {
+            (0, true) => new SourceOptionResolution(null, null, null, true),
+            (0, false) => new SourceOptionResolution(null, null,
+                "The source Penumbra option could not be rediscovered safely. Re-import the model, then export again."),
+            (1, false) => new SourceOptionResolution(candidates[0].Option, candidates[0].Locator, null),
+            _ => new SourceOptionResolution(null, null,
+                "Multiple Penumbra options or Default provide the imported model. Re-import it from the intended option, then export again.",
+                mapsFromDefault),
+        };
+    }
+
+    public async Task<ExportResult> ClearManagedBackupsAsync(
+        string sourceModDirectory, string sourceFilePath, string? sourceModRootPath,
+        string? targetRelativePath, string sourceGamePath, string backupTargetId)
+    {
+        if (_backups is null || targetRelativePath is null)
+            return new ExportResult(false, "backup_unavailable", "Managed backup storage is unavailable.");
+        await _exportGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var resolved = await _framework.RunOnFrameworkThread(() => ResolveSourceModTargetOnFramework(
+                sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath)).ConfigureAwait(false);
+            if (resolved.Target is null)
+                return new ExportResult(false, resolved.Code, resolved.Error ?? "The source mod is unavailable.");
+            var validIds = ReadVariantTargets(resolved.Target.Folder, sourceGamePath, sourceModDirectory, _backups)
+                .SelectMany(group => group.Options)
+                .Select(option => option.BackupTargetId)
+                .Where(id => id is not null)
+                .Append(_backups.Describe(sourceModDirectory, targetRelativePath).Id);
+            if (!validIds.Contains(backupTargetId, StringComparer.Ordinal))
+                return new ExportResult(false, "invalid_backup_target", "The backup target does not belong to this context.");
+            _backups.Clear(backupTargetId);
+            return new ExportResult(true, "backups_cleared", "Managed backups cleared.");
+        }
+        catch (Exception error)
+        {
+            return new ExportResult(false, "backup_clear_failed", error.Message);
+        }
+        finally
+        {
+            _exportGate.Release();
+        }
+    }
+
+    public async Task<SourceOptionCapture> CaptureSourceOptionAsync(
+        string sourceModDirectory, string sourceFilePath, string? sourceModRootPath,
+        string? targetRelativePath, string sourceGamePath,
+        IReadOnlyCollection<string>? preferredMemberships = null,
+        Guid? collectionId = null)
+    {
+        try
+        {
+            var resolved = await _framework.RunOnFrameworkThread(() => ResolveSourceModTargetOnFramework(
+                sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath)).ConfigureAwait(false);
+            if (resolved.Target is null)
+                return new SourceOptionCapture(null, "unknown", resolved.Error);
+            var option = ResolveSourceOption(resolved.Target.Folder, sourceGamePath, resolved.Target.RelativePath);
+            if (preferredMemberships is { Count: > 0 })
+            {
+                var prefersDefault = preferredMemberships.Contains("default", StringComparer.OrdinalIgnoreCase);
+                var preferred = preferredMemberships
+                    .Where(membership => !string.Equals(membership, "default", StringComparison.OrdinalIgnoreCase))
+                    .Select(membership => ResolveSourceOption(resolved.Target.Folder, sourceGamePath,
+                        resolved.Target.RelativePath,
+                        new SourceOptionLocator
+                        {
+                            Membership = membership,
+                            GroupName = "",
+                            OptionName = "",
+                        }))
+                    .Where(candidate => candidate.Error is null && candidate.Locator is not null)
+                    .GroupBy(candidate => candidate.Locator!.Membership, StringComparer.Ordinal)
+                    .Select(group => group.First())
+                    .ToArray();
+                option = (preferred.Length, prefersDefault) switch
+                {
+                    (0, true) => new SourceOptionResolution(null, null, null, true),
+                    (1, false) => preferred[0],
+                    (> 0, _) => new SourceOptionResolution(null, null,
+                        "Multiple clicked option memberships provide the imported model; the active collection selection is required.",
+                        prefersDefault),
+                    _ => option,
+                };
+            }
+            if (option.Error is not null && collectionId is Guid activeCollection && activeCollection != Guid.Empty)
+            {
+                var settings = await _framework.RunOnFrameworkThread(() =>
+                {
+                    var result = _getCurrentModSettings.Invoke(activeCollection, sourceModDirectory, string.Empty, false);
+                    return result.Item1 is PenumbraApiEc.Success && result.Item2 is not null
+                        ? result.Item2.Value.Item3.ToDictionary(pair => pair.Key,
+                            pair => (IReadOnlyList<string>)pair.Value.ToArray(), StringComparer.OrdinalIgnoreCase)
+                        : null;
+                }).ConfigureAwait(false);
+                if (settings is not null)
+                {
+                    var selectedOptions = new List<SourceOptionResolution>();
+                    foreach (var selection in settings)
+                    foreach (var optionName in selection.Value)
+                    {
+                        var selected = ResolveSourceOption(resolved.Target.Folder, sourceGamePath,
+                            resolved.Target.RelativePath, new SourceOptionLocator
+                            {
+                                Membership = "",
+                                GroupName = selection.Key,
+                                OptionName = optionName,
+                            });
+                        if (selected.Error is null && selected.Locator is not null &&
+                            selectedOptions.All(candidate => !string.Equals(
+                                candidate.Locator!.Membership, selected.Locator.Membership, StringComparison.Ordinal)))
+                            selectedOptions.Add(selected);
+                    }
+                    option = selectedOptions.Count switch
+                    {
+                        1 => selectedOptions[0],
+                        > 1 => new SourceOptionResolution(null, null,
+                            "Multiple active Penumbra options provide the imported model. Re-import it from the intended option, then export again.",
+                            option.DefaultMatches),
+                        _ when option.DefaultMatches => new SourceOptionResolution(null, null, null, true),
+                        _ => option,
+                    };
+                }
+            }
+            return option.Error is not null
+                ? new SourceOptionCapture(null, "ambiguous", option.Error)
+                : new SourceOptionCapture(option.Locator, option.Locator is null ? "default" : "ready");
+        }
+        catch (Exception error)
+        {
+            return new SourceOptionCapture(null, "unknown", error.Message);
+        }
+    }
+
+    private static void AddSourceOptionCandidates(
+        JsonObject? group, string? legacyFileName, int groupIndex, string gamePath, string relativePath,
+        ICollection<(JsonObject Option, SourceOptionLocator Locator)> candidates)
+    {
+        if (group?["Options"] is not JsonArray options)
+            return;
+        for (var optionIndex = 0; optionIndex < options.Count; optionIndex++)
+        {
+            if (options[optionIndex] is not JsonObject option || option["Files"] is not JsonObject files)
+                continue;
+            var mapping = files.FirstOrDefault(pair => SameGamePath(pair.Key, gamePath));
+            if (!TryNormalizeRelativeModPath(JsonString(mapping.Value), out var mapped) ||
+                !string.Equals(mapped, relativePath, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var membership = legacyFileName is null
+                ? $"meta:group:{groupIndex}:option:{optionIndex}"
+                : $"legacy:{legacyFileName}:group:0:option:{optionIndex}";
+            candidates.Add((option, new SourceOptionLocator
+            {
+                Membership = membership,
+                GroupName = JsonString(group["Name"]) ?? "",
+                OptionName = JsonString(option["Name"]) ?? "",
+            }));
+        }
+    }
+
+    private static IReadOnlyList<VariantGroupTarget> ReadVariantTargets(
+        string modFolder, string sourceGamePath, string? modDirectory = null,
+        ModelBackupStore? backups = null)
     {
         var groups = new List<(JsonObject Group, string? LegacyFileName)>();
         var meta = LoadJsonObjectStrict(Path.Combine(modFolder, "meta.json"));
@@ -2444,15 +2682,18 @@ public sealed class PenumbraService
                 if (!TryNormalizeRelativeModPath(JsonString(mapping.Value), out var modelPath))
                     continue;
                 var optionId = ReadGuid(option["Id"]);
-                var selector = groupId is Guid groupGuid && optionId is Guid optionGuid
+                var selector = legacyFileName is null && groupId is Guid groupGuid && optionId is Guid optionGuid
                     ? $"option:{groupGuid:D}:{optionGuid:D}"
                     : $"legacy-option:{legacyFileName}:{optionIndex}";
+                var backupTarget = backups is not null && modDirectory is not null
+                    ? backups.Describe(modDirectory, modelPath) : null;
                 targets.Add(new VariantOptionTarget(selector,
-                    JsonString(option["Name"]) ?? "Unnamed Option", modelPath));
+                    JsonString(option["Name"]) ?? "Unnamed Option", modelPath,
+                    backupTarget?.Id, backupTarget?.Directory));
             }
             if (targets.Count > 0)
             {
-                var selector = groupId is Guid groupGuid
+                var selector = legacyFileName is null && groupId is Guid groupGuid
                     ? $"group:{groupGuid:D}"
                     : $"legacy-group:{legacyFileName}";
                 result.Add(new VariantGroupTarget(selector, JsonString(group["Name"])!, targets));
@@ -2600,7 +2841,8 @@ public sealed class PenumbraService
         string sourceGamePath,
         string relativeVariantPath,
         string variantName,
-        string variantGroupName)
+        string variantGroupName,
+        JsonObject? sourceOption = null)
     {
         try
         {
@@ -2661,7 +2903,8 @@ public sealed class PenumbraService
                     relativeVariantPath,
                     variantName,
                     variantGroupName,
-                    embeddedHighestOtherPriority + 1);
+                    embeddedHighestOtherPriority + 1,
+                    sourceOption);
                 if (existingIndex >= 0)
                     groups[existingIndex] = embeddedGroupJson;
                 else
@@ -2714,7 +2957,8 @@ public sealed class PenumbraService
                 relativeVariantPath,
                 variantName,
                 variantGroupName,
-                highestOtherPriority + 1);
+                highestOtherPriority + 1,
+                sourceOption);
 
             var outputGroupPath = existingPath ?? Path.Combine(
                 modFolder,
@@ -2735,7 +2979,8 @@ public sealed class PenumbraService
         string relativeVariantPath,
         string variantName,
         string variantGroupName,
-        int priority)
+        int priority,
+        JsonObject? sourceOption = null)
     {
         var groupId = ReadGuid(existingGroup?["Id"]) ?? Guid.NewGuid();
         var options = existingGroup?["Options"]?.DeepClone() as JsonArray ?? new JsonArray();
@@ -2754,20 +2999,29 @@ public sealed class PenumbraService
                 string.Equals(JsonString(option["Name"]), variantName, StringComparison.OrdinalIgnoreCase));
         if (variantOption is null)
         {
+            var files = sourceOption?["Files"]?.DeepClone() as JsonObject ?? new JsonObject();
+            foreach (var key in files.Select(pair => pair.Key)
+                         .Where(key => SameGamePath(key, sourceGamePath)).ToArray())
+                files.Remove(key);
+            files[sourceGamePath] = relativeVariantPath;
             variantOption = new JsonObject
             {
                 ["Id"] = Guid.NewGuid(),
                 ["Name"] = variantName,
-                ["Files"] = new JsonObject
-                {
-                    [sourceGamePath] = relativeVariantPath,
-                },
+                ["Files"] = files,
             };
+            if (sourceOption?["FileSwaps"] is JsonNode fileSwaps)
+                variantOption["FileSwaps"] = fileSwaps.DeepClone();
+            if (sourceOption?["Manipulations"] is JsonNode manipulations)
+                variantOption["Manipulations"] = manipulations.DeepClone();
             options.Add(variantOption);
         }
         else
         {
             var files = variantOption["Files"]?.DeepClone() as JsonObject ?? new JsonObject();
+            foreach (var key in files.Select(pair => pair.Key)
+                         .Where(key => SameGamePath(key, sourceGamePath)).ToArray())
+                files.Remove(key);
             files[sourceGamePath] = relativeVariantPath;
             variantOption["Files"] = files;
         }
@@ -3567,6 +3821,22 @@ public sealed class PenumbraService
             return false;
         return value.All(c => !char.IsControl(c));
     }
+
+    internal static JsonObject BuildVariantOptionForRegression(
+        JsonObject sourceOption, string sourceGamePath, string relativeVariantPath)
+    {
+        var group = BuildVariantGroup(null, "test", sourceGamePath, relativeVariantPath,
+            "Variant", "Variants", 1, sourceOption);
+        return (group["Options"] as JsonArray)![1]!.AsObject();
+    }
+
+    internal static IReadOnlyList<VariantGroupTarget> ReadVariantTargetsForRegression(
+        string modFolder, string sourceGamePath)
+        => ReadVariantTargets(modFolder, sourceGamePath);
+
+    internal static string? ResolveVariantOptionPathForRegression(
+        string modFolder, string sourceGamePath, string selector)
+        => ResolveVariantOptionTarget(modFolder, sourceGamePath, selector).FilePath;
 
     private static bool IsSafeRelativeModPath(string path)
     {

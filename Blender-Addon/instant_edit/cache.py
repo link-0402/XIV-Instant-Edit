@@ -9,17 +9,24 @@ import tempfile
 import threading
 import time
 import uuid
+import hashlib
+import re
+from datetime import datetime, timezone
 
 
 CACHE_SCHEMA = "instant-edit.cache"
 CACHE_VERSION = 1
 CACHE_FOLDER = "XIV-Instant-Edit"
 STALE_SECONDS = 24 * 60 * 60
+BACKUP_RETENTION_SECONDS = 30 * 24 * 60 * 60
 MAX_MODEL_BYTES = 512 * 1024 * 1024
 MAX_PREVIEW_BYTES = 1024 * 1024 * 1024
 MAX_PREVIEW_FILES = 2048
 MAX_DIAGNOSTIC_REPORTS = 100
 MAX_DIAGNOSTIC_BYTES = 20 * 1024 * 1024
+BACKUP_FILE_RE = re.compile(
+    r"^.+\.(?:mdl|fbx)\.(?P<stamp>\d{8}T\d{6}\.\d{6}Z)\.bak$", re.IGNORECASE
+)
 
 _lock = threading.RLock()
 _base_directory = Path(tempfile.gettempdir())
@@ -91,7 +98,7 @@ def ensure_cache_root() -> Path:
             json.dumps({"schema": CACHE_SCHEMA, "version": CACHE_VERSION}),
             encoding="utf-8",
         )
-    for kind in ("imports", "exports", "diagnostics"):
+    for kind in ("imports", "exports", "diagnostics", "backups"):
         (root / kind).mkdir(exist_ok=True)
     return root
 
@@ -192,6 +199,26 @@ def clean_cache(older_than_seconds: float | None = None) -> tuple[int, int]:
             except OSError:
                 continue
 
+    # Backup histories are deliberately longer-lived than transient jobs.
+    backup_cutoff = time.time() - BACKUP_RETENTION_SECONDS
+    for target in tuple((root / "backups").iterdir()):
+        if target.is_symlink() or not target.is_dir() or not re_full_hash(target.name):
+            continue
+        for candidate in tuple(target.iterdir()):
+            try:
+                match = BACKUP_FILE_RE.match(candidate.name)
+                created = datetime.strptime(
+                    match.group("stamp"), "%Y%m%dT%H%M%S.%fZ"
+                ).replace(tzinfo=timezone.utc).timestamp() if match else None
+                if (candidate.is_symlink() or not candidate.is_file() or
+                        created is None or created > backup_cutoff):
+                    continue
+                bytes_removed += candidate.stat().st_size
+                candidate.unlink()
+                removed += 1
+            except (OSError, ValueError):
+                continue
+
     diagnostics = root / "diagnostics"
     reports = []
     for candidate in tuple(diagnostics.iterdir()):
@@ -226,8 +253,25 @@ def clean_cache(older_than_seconds: float | None = None) -> tuple[int, int]:
     return removed, bytes_removed
 
 
+def re_full_hash(value: str) -> bool:
+    return len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+
+
+def backup_directory(target_file: str | Path, create: bool = False) -> Path:
+    """Return the managed Simple Export history keyed by canonical output path."""
+    target = Path(target_file).expanduser().resolve()
+    target_id = hashlib.sha256(str(target).casefold().encode("utf-8")).hexdigest()
+    directory = ensure_cache_root() / "backups" / target_id
+    if create:
+        directory.mkdir(exist_ok=True)
+        marker = directory / ".target.json"
+        if not marker.exists():
+            marker.write_text(json.dumps({"targetPath": str(target)}), encoding="utf-8")
+    return directory
+
+
 def stage_import(data: dict) -> dict:
-    """Copy a validated v1 handoff into the add-on-owned cache before queueing."""
+    """Copy a validated handoff into the add-on-owned cache before queueing."""
     source_value = Path(data.get("filePath", ""))
     try:
         source_model = source_value.resolve()

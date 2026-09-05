@@ -46,12 +46,114 @@ var testRoot = Path.Combine(Path.GetTempPath(), "InstantEditExportContextRegress
 Directory.CreateDirectory(testRoot);
 try
 {
+    var storeRoot = Path.Combine(testRoot, "ContextStore");
+    var storeNow = DateTimeOffset.Parse("2026-09-04T10:00:00Z");
+    var storedCapability = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+    var storedContext = new PersistedExportContext
+    {
+        Version = 3,
+        ContextId = "stored-context",
+        ImportId = "stored-import",
+        Capability = storedCapability,
+        GamePath = "chara/equipment/e0001/model/c0101e0001_top.mdl",
+        SourceKind = InstantEditImportContext.GameSource,
+        ResolvedGamePath = "chara/equipment/e0001/model/c0101e0001_top.mdl",
+        DestinationState = InstantEditImportContext.NewModRequiredDestination,
+        ObjectIndex = 1,
+        CallbackPort = 42428,
+        LastTouchedAtUtc = storeNow,
+    };
+    var firstStore = new ExportContextSessionStore(storeRoot, Guid.NewGuid().ToString("N"), now: storeNow);
+    firstStore.Load(storeNow);
+    firstStore.Persist([storedContext], storeNow);
+    File.WriteAllText(Path.Combine(storeRoot, "Contexts", $"{Guid.NewGuid():N}.json"), "{ malformed");
+    var secondStore = new ExportContextSessionStore(storeRoot, Guid.NewGuid().ToString("N"), now: storeNow.AddMinutes(1));
+    Require(secondStore.Load(storeNow.AddMinutes(1)).Single().ContextId == storedContext.ContextId,
+        "context session store ignores malformed files and replays valid upserts");
+    secondStore.Persist([], storeNow.AddMinutes(1));
+    var thirdStore = new ExportContextSessionStore(storeRoot, Guid.NewGuid().ToString("N"), now: storeNow.AddMinutes(2));
+    Require(thirdStore.Load(storeNow.AddMinutes(2)).Count == 0,
+        "newer context tombstones win across session files");
+    var expiredStore = new ExportContextSessionStore(Path.Combine(testRoot, "ExpiredStore"),
+        Guid.NewGuid().ToString("N"), now: storeNow);
+    expiredStore.Load(storeNow);
+    expiredStore.Persist([storedContext with { LastTouchedAtUtc = storeNow.AddDays(-31) }], storeNow);
+    var expiryReader = new ExportContextSessionStore(Path.Combine(testRoot, "ExpiredStore"),
+        Guid.NewGuid().ToString("N"), now: storeNow);
+    Require(expiryReader.Load(storeNow).Count == 0,
+        "inactive context records expire after 30 days");
+
+    const string clonedGamePath = "chara/equipment/e0001/model/c0101e0001_top.mdl";
+    var sourceOption = new JsonObject
+    {
+        ["Name"] = "Original",
+        ["Files"] = new JsonObject
+        {
+            [clonedGamePath] = "Files/models/original.mdl",
+            ["chara/equipment/e0001/material/v0001/mt_c0101e0001_top_a.mtrl"] = "Files/materials/top.mtrl",
+            ["chara/equipment/e0001/texture/top_d.tex"] = "Files/textures/top_d.tex",
+        },
+        ["FileSwaps"] = new JsonObject { ["chara/common/texture/a.tex"] = "chara/common/texture/b.tex" },
+        ["Manipulations"] = new JsonArray(new JsonObject { ["Type"] = "Eqp", ["Entry"] = 1 }),
+    };
+    var originalOptionJson = sourceOption.ToJsonString();
+    var clonedOption = PenumbraService.BuildVariantOptionForRegression(
+        sourceOption, clonedGamePath, "Files/models/variant.mdl");
+    Require(clonedOption["Files"]?[clonedGamePath]?.GetValue<string>() == "Files/models/variant.mdl" &&
+            clonedOption["Files"]?["chara/equipment/e0001/material/v0001/mt_c0101e0001_top_a.mtrl"] is not null &&
+            clonedOption["Files"]?["chara/equipment/e0001/texture/top_d.tex"] is not null &&
+            clonedOption["FileSwaps"] is JsonObject && clonedOption["Manipulations"] is JsonArray,
+        "variant options clone materials, textures, file swaps, and manipulations while replacing only the model");
+    Require(sourceOption.ToJsonString() == originalOptionJson,
+        "variant creation leaves the source option unchanged");
+
+    var selectorRoot = Path.Combine(testRoot, "LegacySelectors");
+    Directory.CreateDirectory(selectorRoot);
+    File.WriteAllText(Path.Combine(selectorRoot, "meta.json"), new JsonObject { ["FileVersion"] = 3 }.ToJsonString());
+    File.WriteAllText(Path.Combine(selectorRoot, "group_001.json"), new JsonObject
+    {
+        ["Type"] = "Single",
+        ["Id"] = Guid.NewGuid(),
+        ["Name"] = "Legacy Variants",
+        ["Options"] = new JsonArray(new JsonObject
+        {
+            ["Id"] = Guid.NewGuid(),
+            ["Name"] = "Variant",
+            ["Files"] = new JsonObject { [clonedGamePath] = "Files/models/variant.mdl" },
+        }),
+    }.ToJsonString());
+    var legacyTargets = PenumbraService.ReadVariantTargetsForRegression(selectorRoot, clonedGamePath);
+    Require(legacyTargets.Single().Id == "legacy-group:group_001.json" &&
+            legacyTargets.Single().Options.Single().Id == "legacy-option:group_001.json:0",
+        "v3 groups retain file/index selectors even when temporary GUID fields exist");
+    var stableSelector = legacyTargets.Single().Options.Single().Id;
+    var firstResolvedOption = PenumbraService.ResolveVariantOptionPathForRegression(
+        selectorRoot, clonedGamePath, stableSelector);
+    var secondResolvedOption = PenumbraService.ResolveVariantOptionPathForRegression(
+        selectorRoot, clonedGamePath, stableSelector);
+    Require(firstResolvedOption is not null && firstResolvedOption == secondResolvedOption,
+        "the refreshed v3 option selector resolves for two consecutive saves");
+
     var originalRoot = Path.Combine(testRoot, "OriginalMod");
     var originalParent = Path.Combine(originalRoot, "Files", "models");
     Directory.CreateDirectory(originalParent);
     var originalTarget = Path.Combine(originalParent, "item.mdl");
     File.WriteAllBytes(originalTarget, [1, 2, 3]);
     const string relative = "Files/models/item.mdl";
+    var backupStore = new ModelBackupStore(Path.Combine(testRoot, "PluginConfig"));
+    var adjacentBackup = originalTarget + ".bak";
+    File.WriteAllBytes(adjacentBackup, [9]);
+    var managedBackup = backupStore.Create(originalTarget, "registered-mod", relative);
+    var otherBackupTarget = backupStore.Describe("registered-mod", "Files/models/other.mdl");
+    Require(!PathRules.IsPathWithin(managedBackup, originalRoot) &&
+            Path.GetDirectoryName(managedBackup) != otherBackupTarget.Directory,
+        "managed Quick Export backups live outside mods and remain target-isolated");
+    var oldBackup = Path.Combine(Path.GetDirectoryName(managedBackup)!,
+        "item.mdl.20200101T000000.000000Z.bak");
+    File.Move(managedBackup, oldBackup);
+    backupStore.Cleanup();
+    Require(!File.Exists(oldBackup) && File.Exists(adjacentBackup),
+        "30-day managed cleanup preserves existing adjacent backups");
     var capability = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
     var saved = new PersistedExportContext
     {
@@ -78,15 +180,17 @@ try
     Require(registry.TryReattach(
         saved.ContextId, saved.ImportId, saved.Capability, 42428,
         out var reattached, out var reattachCode),
-        "contexts older than 30 days remain authorized");
+        "legacy persisted contexts remain authorized during migration");
     Require(reattachCode == "context_reattached" && reattached is not null,
         "reattach returns the authoritative context");
     Require(reattached?.TargetRelativePath == relative,
         "persisted contexts retain their durable target-relative path");
-    Require(reattached is { Version: 2, SourceKind: InstantEditImportContext.ModSource,
+    Require(persisted.Single().LastTouchedAtUtc > saved.LastTouchedAtUtc,
+        "authenticated reattachment refreshes context activity");
+    Require(reattached is { Version: 3, SourceKind: InstantEditImportContext.ModSource,
             DestinationState: InstantEditImportContext.ReadyDestination } &&
             reattached.ResolvedGamePath == saved.GamePath,
-        "persisted v1 contexts normalize to ready v2 mod contexts");
+        "persisted v1 contexts normalize to ready v3 mod contexts");
 
     var exportFile = Path.Combine(testRoot, "export.mdl");
     File.WriteAllBytes(exportFile, [4, 5, 6]);
@@ -135,7 +239,7 @@ try
         vanillaConsumer, vanillaResolved, 7, 42428, collectionId, "Player Collection");
     Require(vanillaContext is
         {
-            Version: 2,
+            Version: 3,
             SourceKind: InstantEditImportContext.GameSource,
             DestinationState: InstantEditImportContext.NewModRequiredDestination,
             TargetFilePath: null,
@@ -143,7 +247,7 @@ try
         } && vanillaContext.GamePath == vanillaConsumer &&
         vanillaContext.ResolvedGamePath == vanillaResolved &&
         vanillaContext.TargetCollectionId == collectionId,
-        "vanilla imports retain resolved and consumer paths in a pending v2 context");
+        "vanilla imports retain resolved and consumer paths in a pending v3 context");
     var vanillaModRoot = Path.Combine(testRoot, "Vanilla Edit");
     var vanillaRelative = "Files/" + vanillaConsumer;
     var vanillaTarget = Path.Combine(vanillaModRoot, vanillaRelative.Replace('/', Path.DirectorySeparatorChar));

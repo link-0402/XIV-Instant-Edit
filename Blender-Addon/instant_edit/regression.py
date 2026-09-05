@@ -165,8 +165,10 @@ def run_staging_isolation_regression() -> None:
                 "an invalid Blender manifest produces an unknown add-on version",
             )
         _require(
-            props._export_destination_items(None, bpy.context) == [],
-            "an empty scene context list does not expose a placeholder choice",
+            props._export_destination_items(None, bpy.context) == [
+                (props.NO_EXPORT_CONTEXT, "Select Context", "Choose the imported model destination for Quick Export")
+            ],
+            "an empty scene retains the permanent Context sentinel",
         )
         export_streams = importlib.import_module(f"{package_name}.io.model.exp.streams")
         model_file = importlib.import_module(f"{package_name}.xivpy.model.file")
@@ -891,13 +893,13 @@ def run_staging_isolation_regression() -> None:
             new_mod_name="Vanilla Edit",
         )
         _require(
-            pending_payload["version"] == 2 and
+            pending_payload["version"] == 3 and
             pending_payload["newModName"] == "Vanilla Edit" and
             not pending_payload["backupExisting"] and
             all(field not in pending_payload for field in (
                 "variantName", "variantGroupName", "variantTarget", "variantTargetId"
             )),
-            "pending Quick Export sends only the create-mod v2 envelope",
+            "pending Quick Export sends only the create-mod v3 envelope",
         )
         _require(
             ops.SelectVariantTarget.description(
@@ -935,6 +937,8 @@ def run_staging_isolation_regression() -> None:
                 "target_file_path": r"D:\Penumbra\SourceMod\Files\models\original.mdl",
                 "source_mod_directory": "SourceModDirectory",
                 "source_mod_name": "Source Mod",
+                "backup_target_id": "c" * 64,
+                "backup_directory": "D:/Cache/Backups/" + "c" * 64,
                 "source_mod_root_path": r"D:\Penumbra\SourceMod",
                 "target_relative_path": "Files/models/original.mdl",
                 "import_id": "explicit-import",
@@ -1067,6 +1071,10 @@ def run_staging_isolation_regression() -> None:
         original_model_from_file = ops.XIVModel.from_file
         ops.ModelImport.from_file = staticmethod(fake_import)
         ops.XIVModel.from_file = staticmethod(lambda file_path: FakeModel())
+        original_simple_directory = bpy.context.scene.xiv_ie_settings.export_directory
+        original_set_directory = bpy.context.scene.xiv_ie_settings.simple_import_set_export_directory
+        bpy.context.scene.xiv_ie_settings.simple_import_set_export_directory = True
+        bpy.context.scene.xiv_ie_settings.export_directory = "before-instant-import"
 
         try:
             result = bpy.ops.xiv_ie.instant_import(
@@ -1096,6 +1104,12 @@ def run_staging_isolation_regression() -> None:
             ops.XIVModel.from_file = original_model_from_file
 
         _require(result == {"FINISHED"}, "versioned XIV Instant Edit request completes")
+        _require(
+            Path(bpy.context.scene.xiv_ie_settings.export_directory).name == "models",
+            "mod-backed Instant Edit import uses the authorized model parent for Simple Export",
+        )
+        bpy.context.scene.xiv_ie_settings.export_directory = original_simple_directory
+        bpy.context.scene.xiv_ie_settings.simple_import_set_export_directory = original_set_directory
 
         staging = next(
             collection

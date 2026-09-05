@@ -33,9 +33,13 @@ def target_folder(settings, context=None) -> tuple[Path | None, str]:
             from .instant_edit.ops import export_destination_context
 
             ref = export_destination_context(context)
-            target = Path(ref.target_file_path).expanduser().resolve()
-            if target.parent.is_dir():
-                return target.parent, "Quick Export target"
+            from .instant_edit.ops import selected_variant_target
+            selected = selected_variant_target(context.scene.xiv_ie_instant_edit_props)
+            backup_target_id = getattr(selected, "backup_target_id", "") or ref.backup_target_id
+            backup_directory_value = getattr(selected, "backup_directory", "") or ref.backup_directory
+            folder = Path(backup_directory_value).expanduser().resolve()
+            if backup_target_id and folder.name == backup_target_id:
+                return folder, "Quick Export target"
         except (ContextValidationError, OSError, ValueError):
             pass
 
@@ -46,7 +50,15 @@ def target_folder(settings, context=None) -> tuple[Path | None, str]:
         folder = Path(value).expanduser().resolve()
     except OSError:
         return None, "Simple Export folder"
-    return (folder if folder.is_dir() else None), "Simple Export folder"
+    if not folder.is_dir():
+        return None, "Simple Export folder"
+    from .instant_edit.cache import backup_directory
+    name = (getattr(settings, "export_name", "") or "model").strip()
+    suffix = {"MDL": ".mdl", "FBX": ".fbx", "GLTF": ".gltf"}.get(
+        getattr(settings, "model_format", "MDL"), ".mdl")
+    if name.casefold().endswith(suffix):
+        name = name[:-len(suffix)]
+    return backup_directory(folder / f"{name}{suffix}"), "Simple Export folder"
 
 
 def parse_backup(path: Path) -> BackupEntry | None:
@@ -100,8 +112,10 @@ def create_backup(folder: Path, original_name: str) -> Path | None:
     source = _safe_child(folder, original_name)
     if not source.is_file():
         return None
+    from .instant_edit.cache import backup_directory
+    history = backup_directory(source, create=True)
     for _ in range(8):
-        destination = _safe_child(folder, backup_name(original_name))
+        destination = _safe_child(history, backup_name(original_name))
         if not destination.exists():
             shutil.copyfile(source, destination)
             return destination
@@ -110,12 +124,19 @@ def create_backup(folder: Path, original_name: str) -> Path | None:
 
 def restore_local(folder: Path, entry: BackupEntry) -> Path:
     entry_path = _safe_child(folder, entry.path.name)
-    target = _safe_child(folder, entry.original_name)
+    marker = _safe_child(folder, ".target.json")
+    if not marker.is_file():
+        raise ValueError("managed backup target metadata is missing")
+    import json
+    target = Path(json.loads(marker.read_text(encoding="utf-8"))["targetPath"]).resolve()
+    from .instant_edit.cache import backup_directory
+    if target.name != entry.original_name or backup_directory(target).resolve() != folder.resolve():
+        raise ValueError("managed backup target does not match this backup")
     if not entry_path.is_file():
         raise FileNotFoundError(entry.path.name)
     if target.exists():
-        create_backup(folder, entry.original_name)
-    temporary = _safe_child(folder, f".xiv-ie-restore-{uuid.uuid4().hex}.tmp")
+        create_backup(target.parent, target.name)
+    temporary = _safe_child(target.parent, f".xiv-ie-restore-{uuid.uuid4().hex}.tmp")
     try:
         shutil.copyfile(entry_path, temporary)
         temporary.replace(target)

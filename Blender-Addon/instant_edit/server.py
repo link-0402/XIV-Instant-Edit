@@ -384,7 +384,7 @@ class _ImportHandler(BaseHTTPRequestHandler):
                 "The import request uses an unsupported schema.",
                 "Install matching versions of the Dalamud plugin and Blender add-on.")
         version = data.get("version")
-        if isinstance(version, bool) or version not in {1, 2}:
+        if isinstance(version, bool) or version not in {1, 2, 3}:
             raise BridgeRequestError(
                 "request_validation", "unsupported_version",
                 "The import request uses an unsupported protocol version.",
@@ -408,6 +408,8 @@ class _ImportHandler(BaseHTTPRequestHandler):
         target_relative_path = _string(data, "targetRelativePath", max_length=4096)
         target_collection_id = _string(data, "targetCollectionId", max_length=64)
         target_collection_name = _string(data, "targetCollectionName", max_length=512)
+        backup_target_id = _string(data, "backupTargetId", max_length=128)
+        backup_directory = _string(data, "backupDirectory", max_length=4096)
         preview_manifest_path = _string(data, "previewManifestPath", max_length=4096)
         display_name = _string(data, "displayName", max_length=255)
         if import_options["applyTexturesAndMaterials"] and not preview_manifest_path:
@@ -439,6 +441,16 @@ class _ImportHandler(BaseHTTPRequestHandler):
                 "request_validation", "missing_penumbra_destination",
                 "The import context is missing its Penumbra destination.",
                 "Refresh the model list in the plugin and retry the import.")
+        if version >= 3 and destination_state == "ready" and (
+            len(backup_target_id) != 64
+            or any(char not in "0123456789abcdef" for char in backup_target_id)
+            or not backup_directory
+            or Path(backup_directory).name != backup_target_id
+        ):
+            raise BridgeRequestError(
+                "request_validation", "invalid_backup_target",
+                "The import context is missing its managed backup target.",
+                "Update both XIV Instant Edit components and re-import the model.")
         if destination_state == "new_mod_required" and (
             source_kind != "game" or any((managed_destination, target_file_path,
                                           source_mod_directory, source_mod_name,
@@ -511,6 +523,8 @@ class _ImportHandler(BaseHTTPRequestHandler):
             "targetCollectionName": target_collection_name,
             "resourceManifestVersion": resource_manifest_version,
             "resourceManifestStatus": resource_manifest_status,
+            "backupTargetId": backup_target_id,
+            "backupDirectory": backup_directory,
             "previewManifestPath": preview_manifest_path,
             "callbackPort": callback_port,
             "objectIndex": object_index,
@@ -627,6 +641,8 @@ def poll_import_queue() -> float:
                     target_collection_name=data.get("targetCollectionName", ""),
                     resource_manifest_version=int(data.get("resourceManifestVersion", 0)),
                     resource_manifest_status=data.get("resourceManifestStatus", "capture_failed"),
+                    backup_target_id=data.get("backupTargetId", ""),
+                    backup_directory=data.get("backupDirectory", ""),
                     import_id=data.get("importId", ""),
                     armature_mode=data.get("importOptions", {}).get("armatureMode", "generated"),
                     armature_target=data.get("importOptions", {}).get("targetObject", "Skeleton"),

@@ -130,163 +130,6 @@ def assert_mesh_group_conflict_resolution(addon) -> None:
                 bpy.data.meshes.remove(mesh)
 
 
-def assert_material_group_collapse(addon) -> None:
-    materials = importlib.import_module(f"{addon.__name__}.materials")
-    mesh_objects = []
-    body_material = "/mt_c0101b0001_bibo.mtrl"
-    alternate_body_material = "/mt_c0201b0001_bibo.mtrl"
-    other_material = "/mt_c0101e0001_top_a.mtrl"
-
-    def create(name: str, material_path: str | None = None, import_id: str = "", hidden: bool = False):
-        mesh = bpy.data.meshes.new(f"{name} Data")
-        mesh.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
-        mesh.update()
-        obj = bpy.data.objects.new(name, mesh)
-        bpy.context.collection.objects.link(obj)
-        if material_path is not None:
-            obj["xiv_material"] = material_path
-        if import_id:
-            obj["instant_edit_import_instance_id"] = import_id
-        if hidden:
-            obj.hide_set(True)
-        mesh_objects.append(obj)
-        return obj
-
-    try:
-        existing_target = [
-            create(f"0.{part} Existing Body {part}", body_material, "existing-target")
-            for part in range(4)
-        ]
-        existing_higher = create("1.3 Existing Body", alternate_body_material, "existing-higher")
-        imported_body = [
-            create(f"2.{part} Imported Body", alternate_body_material, "incoming-body")
-            for part in range(3)
-        ]
-        imported_body_lod = create(
-            "2.0 Imported Body LOD1",
-            alternate_body_material,
-            "incoming-body",
-        )
-        imported_other = create("2.3 Imported Other", other_material, "incoming-body")
-        mixed_lod0 = create("3.0 Mixed Material", body_material, "mixed")
-        mixed_lod1 = create("3.0 Mixed Material LOD1", other_material, "mixed")
-        missing_material = create("3.1 Missing Material", None, "missing")
-
-        before_existing = {obj.as_pointer(): obj.name for obj in existing_target + [existing_higher]}
-        moved = materials.collapse_imported_materials(
-            imported_body + [imported_body_lod, imported_other, mixed_lod0, mixed_lod1, missing_material],
-            existing_target + [existing_higher],
-        )
-        if moved != 3:
-            raise AssertionError(f"Imported material collapse moved {moved} parts instead of 3")
-        expected_body_names = {
-            imported_body[0]: "0.4 Imported Body",
-            imported_body[1]: "0.5 Imported Body",
-            imported_body[2]: "0.6 Imported Body",
-            imported_body_lod: "0.4 Imported Body LOD1",
-        }
-        for obj, expected in expected_body_names.items():
-            if obj.name != expected:
-                raise AssertionError(f"Imported material collapse produced {obj.name!r}, expected {expected!r}")
-        if existing_higher.name != "1.3 Existing Body":
-            raise AssertionError("Import-only material collapse moved an existing part")
-        if not imported_other.name.startswith("2.3 "):
-            raise AssertionError("Import-only material collapse moved a different-material part")
-        if not mixed_lod0.name.startswith("3.0 ") or not mixed_lod1.name.startswith("3.0 "):
-            raise AssertionError("Mixed-material LOD part was not skipped")
-        if not missing_material.name.startswith("3.1 "):
-            raise AssertionError("Missing-material part was not skipped")
-        if any(obj.name != before_existing[obj.as_pointer()] for obj in existing_target + [existing_higher]):
-            raise AssertionError("Import-only material collapse changed an existing object")
-
-        cross_race_lod = create(
-            "8.0 Cross-race Bibo LOD0",
-            alternate_body_material,
-            "cross-race-bibo",
-        )
-        cross_race_lod1 = create(
-            "8.0 Cross-race Bibo LOD1",
-            body_material,
-            "cross-race-bibo",
-        )
-        cross_race_existing = [
-            obj for obj in mesh_objects
-            if obj not in (cross_race_lod, cross_race_lod1)
-        ]
-        moved = materials.collapse_imported_materials(
-            [cross_race_lod, cross_race_lod1],
-            cross_race_existing,
-        )
-        if moved != 1 or not cross_race_lod.name.startswith("0.7 ") or \
-                not cross_race_lod1.name.startswith("0.7 "):
-            raise AssertionError("Cross-race Bibo LOD materials were treated as a mismatch")
-        mesh_objects.remove(cross_race_lod)
-        mesh_objects.remove(cross_race_lod1)
-        for cross_race_obj in (cross_race_lod, cross_race_lod1):
-            cross_race_data = cross_race_obj.data
-            bpy.data.objects.remove(cross_race_obj, do_unlink=True)
-            if cross_race_data.users == 0:
-                bpy.data.meshes.remove(cross_race_data)
-
-        moved = materials.auto_collapse_materials(mesh_objects)
-        if moved != 1 or existing_higher.name != "0.7 Existing Body":
-            raise AssertionError("Explicit material collapse did not keep the lowest group canonical")
-        if materials.material_paths(existing_target + [existing_higher]) != [body_material] or \
-                materials.material_mismatch_parts(existing_target + [existing_higher]):
-            raise AssertionError("Bibo material variants were still treated as different after collapse")
-        if materials.auto_collapse_materials(mesh_objects) != 0:
-            raise AssertionError("Repeated material collapse was not idempotent")
-
-        oversized_material = "/mt_c0101e9999_top_a.mtrl"
-        oversized_target = create("6.0 Oversized Target", oversized_material, "oversized-target")
-        oversized_source = create("7.0 Oversized Source", oversized_material, "oversized-source")
-        original_vertex_bound = materials._export_vertex_upper_bound
-        try:
-            materials._export_vertex_upper_bound = (
-                lambda obj, _depsgraph=None: 40_000
-                if obj in {oversized_target, oversized_source}
-                else original_vertex_bound(obj, _depsgraph)
-            )
-            if materials.auto_collapse_materials((oversized_target, oversized_source)) != 0:
-                raise AssertionError("Material collapse exceeded the MDL mesh vertex budget")
-        finally:
-            materials._export_vertex_upper_bound = original_vertex_bound
-        if oversized_target.name != "6.0 Oversized Target" or \
-                oversized_source.name != "7.0 Oversized Source":
-            raise AssertionError("Vertex-budget rejection partially renamed mesh parts")
-
-        operator_source = create("4.0 Operator Body", body_material, "operator")
-        if bpy.ops.xiv_ie.auto_collapse_materials() != {"FINISHED"}:
-            raise AssertionError("Auto-collapse materials operator did not finish")
-        if operator_source.name != "0.8 Operator Body":
-            raise AssertionError("Auto-collapse materials operator did not move its matching part")
-
-        hidden_collision = create("0.9 Collision", body_material, "hidden-collision", hidden=True)
-        collision_source = create("5.0 Collision", body_material, "collision")
-        before_collision = {
-            obj.as_pointer(): obj.name
-            for obj in (operator_source, collision_source, hidden_collision)
-        }
-        try:
-            materials.auto_collapse_materials(bpy.context.visible_objects)
-        except ValueError as error:
-            if "collide" not in str(error).lower():
-                raise
-        else:
-            raise AssertionError("Material collapse did not abort on a hidden name collision")
-        if any(obj.name != before_collision[obj.as_pointer()] for obj in (operator_source, collision_source, hidden_collision)):
-            raise AssertionError("Material collapse partially renamed objects after a collision")
-        print("[PASS] Material-aware import and explicit mesh-group collapse")
-    finally:
-        for obj in mesh_objects:
-            if obj.name not in bpy.data.objects:
-                continue
-            mesh = obj.data
-            bpy.data.objects.remove(obj, do_unlink=True)
-            if mesh.users == 0:
-                bpy.data.meshes.remove(mesh)
-
-
 def assert_mesh_name_conversion(addon) -> None:
     objects = []
 
@@ -364,7 +207,11 @@ def run() -> None:
     try:
         assert_corner_aware_uv_export(addon)
         assert_mesh_group_conflict_resolution(addon)
-        assert_material_group_collapse(addon)
+        if hasattr(importlib.import_module(f"{addon.__name__}.materials"), "collapse_imported_materials"):
+            raise AssertionError("Material collapsing helpers are still present")
+        if hasattr(bpy.types, "XIVIE_OT_auto_collapse_materials"):
+            raise AssertionError("Material collapsing operator is still registered")
+        print("[PASS] Material collapsing feature is absent")
         assert_mesh_name_conversion(addon)
 
         if bpy.context.scene.xiv_ie_settings.create_backfaces:
@@ -378,7 +225,7 @@ def run() -> None:
         if not bpy.context.scene.xiv_ie_settings.simple_import_set_export_directory:
             raise AssertionError("Set Simple Export Folder on Import should default to enabled")
         if not bpy.context.scene.xiv_ie_settings.resolve_mesh_group_conflicts:
-            raise AssertionError("Resolve Mesh Group Name Conflicts should default to enabled")
+            raise AssertionError("Offset Incoming Mesh Group IDs should default to enabled")
         bpy.context.scene.xiv_ie_settings.keep_shapekeys = True
         if bpy.context.scene.xiv_ie_instant_edit_props.show_utilities:
             raise AssertionError("Utilities should be collapsed by default")
@@ -500,7 +347,7 @@ def run() -> None:
 
         instant_module = importlib.import_module(f"{addon.__name__}.instant_edit")
         instant_module._switch_hidden_export_context()
-        if initial_instant_props.export_destination:
+        if initial_instant_props.export_destination != "NONE":
             raise AssertionError("An empty scene unexpectedly selected an export Context")
 
         context_module = importlib.import_module(f"{addon.__name__}.instant_edit.context")
@@ -516,6 +363,8 @@ def run() -> None:
             "target_file_path": "C:/Penumbra/Smoke/model.mdl",
             "source_mod_directory": "SmokeMod",
             "source_mod_name": "Smoke Mod",
+            "backup_target_id": "a" * 64,
+            "backup_directory": "C:/Cache/Backups/" + "a" * 64,
             "resource_manifest_version": 2,
             "resource_manifest_status": "ready",
             "callback_port": 42428,
@@ -670,6 +519,8 @@ def run() -> None:
             "target_file_path": "C:/Penumbra/OtherSmoke/model.mdl",
             "source_mod_directory": "OtherSmokeMod",
             "source_mod_name": "Other Smoke Mod",
+            "backup_target_id": "b" * 64,
+            "backup_directory": "C:/Cache/Backups/" + "b" * 64,
             "resource_manifest_version": 0,
             "resource_manifest_status": "capture_failed",
             "callback_port": 42428,
@@ -1283,20 +1134,26 @@ def run() -> None:
 
             result = bpy.ops.xiv_ie.simple_export()
             backup_module = importlib.import_module(f"{addon.__name__}.backups")
-            backups = backup_module.list_backups(Path(temp_dir))
+            cache_module = importlib.import_module(f"{addon.__name__}.instant_edit.cache")
+            backup_folder = cache_module.backup_directory(target)
+            backups = backup_module.list_backups(backup_folder)
             if result != {"FINISHED"} or len(backups) != 1:
                 raise AssertionError("Replacing an MDL did not create one timestamped backup")
             result = bpy.ops.xiv_ie.simple_export()
-            backups = backup_module.list_backups(Path(temp_dir))
+            backups = backup_module.list_backups(backup_folder)
             if result != {"FINISHED"} or len(backups) != 2 or backups[0].created < backups[1].created:
                 raise AssertionError("Repeated MDL exports did not retain backups newest first")
             print("[PASS] Simple Export retains timestamped backups in newest-first order")
             selected_backup = backups[-1]
-            backup_module.restore_local(Path(temp_dir), selected_backup)
+            adjacent_backup = target.with_name(target.name + ".bak")
+            adjacent_backup.write_bytes(b"existing adjacent backup")
+            backup_module.restore_local(backup_folder, selected_backup)
             if target.read_bytes() != selected_backup.path.read_bytes():
                 raise AssertionError("Restoring an MDL backup did not replace the target model")
-            if backup_module.clear_backups(Path(temp_dir)) < 3 or backup_module.list_backups(Path(temp_dir)):
+            if backup_module.clear_backups(backup_folder) < 3 or backup_module.list_backups(backup_folder):
                 raise AssertionError("Clearing backups did not remove the recognized model backups")
+            if not adjacent_backup.exists():
+                raise AssertionError("Managed backup clearing removed an existing adjacent backup")
             print("[PASS] Backup restore preserves the selected history and clear removes backups")
             settings.backup_models_on_export = False
 
@@ -1470,6 +1327,17 @@ def run() -> None:
                 if duplicate_data.users == 0:
                     bpy.data.meshes.remove(duplicate_data)
         print("[PASS] Mesh Studio rename, attributes, flow, and drag reordering")
+
+        instant_props.export_destination = context_id
+        instant_props.variant_targets.add().selection_id = "stale-after-delete"
+        context_module.clear_context_metadata(bpy.context.scene)
+        instant_module._switch_hidden_export_context()
+        if instant_props.export_destination != "NONE" or instant_props.variant_targets:
+            raise AssertionError("Externally deleted Context left an invalid UI selector")
+        props_module = importlib.import_module(f"{addon.__name__}.instant_edit.props")
+        if props_module._export_destination_items(None, bpy.context)[0][0] != "NONE":
+            raise AssertionError("Context deletion removed the permanent selector sentinel")
+        print("[PASS] Context deletion keeps the Blender panel selector valid")
     finally:
         addon.unregister()
 

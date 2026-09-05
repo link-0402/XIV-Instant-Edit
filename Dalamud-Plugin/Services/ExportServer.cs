@@ -247,6 +247,9 @@ public sealed class ExportServer : IDisposable
         [JsonPropertyName("backupName")]
         public string? BackupName { get; set; }
 
+        [JsonPropertyName("backupTargetId")]
+        public string? BackupTargetId { get; set; }
+
     }
 
     private sealed class ImportStatusRequest
@@ -651,6 +654,8 @@ public sealed class ExportServer : IDisposable
                         id = option.Id,
                         name = option.Name,
                         modelPath = option.ModelPath,
+                        backupTargetId = option.BackupTargetId,
+                        backupDirectory = option.BackupDirectory,
                     }),
                 }),
             }));
@@ -728,13 +733,34 @@ public sealed class ExportServer : IDisposable
                 target.SourceModRootPath,
                 target.TargetRelativePath,
                 target.GamePath,
-                restore.BackupName!).ConfigureAwait(false);
+                restore.BackupName!,
+                restore.BackupTargetId!).ConfigureAwait(false);
             return ResultResponse(new ExportReceipt(
                 result.Success,
                 result.Code,
                 result.Message,
                 result.WarningList,
                 result.TargetFilePath));
+        }
+
+        if (method == "POST" && path.TrimEnd('/') == "/backup/clear")
+        {
+            var parsed = DeserializeRequest<BackupRestoreRequest>(request.Body, "backup clear", out var parseError);
+            if (parseError is not null)
+                return parseError.Value;
+            var clear = parsed!;
+            if (!string.Equals(clear.Schema, "instant-edit.backup-clear", StringComparison.Ordinal) || clear.Version != 1 ||
+                string.IsNullOrWhiteSpace(clear.BackupTargetId))
+                return Error(400, "invalid_backup_clear", "unsupported or malformed backup clear envelope");
+            if (!_contexts.TryAuthorizeOperation(clear.PluginInstanceId!, clear.ContextId!, clear.Capability!,
+                    out var target, out var registryCode) || target is null)
+                return Error(StatusForCode(registryCode), registryCode, "export context was rejected");
+            if (target.DestinationState != InstantEditImportContext.ReadyDestination)
+                return Error(409, "destination_not_ready", "the import has no Penumbra mod backup destination yet");
+            var result = await _penumbra.ClearManagedBackupsAsync(
+                target.SourceModDirectory!, target.TargetFilePath!, target.SourceModRootPath,
+                target.TargetRelativePath, target.GamePath, clear.BackupTargetId!).ConfigureAwait(false);
+            return ResultResponse(new ExportReceipt(result.Success, result.Code, result.Message));
         }
 
         if (method == "POST" && path.TrimEnd('/') == "/mashup/plan")
@@ -1047,7 +1073,9 @@ public sealed class ExportServer : IDisposable
                 variantTarget,
                 variantTargetId,
                 setupVariantInPenumbra,
-                backupExisting).ConfigureAwait(false);
+                backupExisting,
+                target.SourceOption,
+                target.SourceOptionStatus).ConfigureAwait(false);
             return new ExportReceipt(
                 result.Success,
                 result.Code,
@@ -1099,8 +1127,8 @@ public sealed class ExportServer : IDisposable
     private static string? ValidateEnvelope(ExportRequest request)
     {
         if (!string.Equals(request.Schema, "instant-edit.export", StringComparison.Ordinal))
-            return request.Version is 1 or 2 ? "unsupported_schema" : "unsupported_version";
-        if (request.Version is not (1 or 2))
+            return request.Version is 1 or 2 or 3 ? "unsupported_schema" : "unsupported_version";
+        if (request.Version is not (1 or 2 or 3))
             return "unsupported_version";
         if (string.IsNullOrWhiteSpace(request.PluginInstanceId) ||
             string.IsNullOrWhiteSpace(request.ContextId) ||
@@ -1282,12 +1310,13 @@ public sealed class ExportServer : IDisposable
     {
         if (!string.Equals(request.Schema, "instant-edit.backup-restore", StringComparison.Ordinal))
             return request.Version == 1 ? "unsupported_schema" : "unsupported_version";
-        if (request.Version != 1)
+        if (request.Version != 2)
             return "unsupported_version";
         if (string.IsNullOrWhiteSpace(request.PluginInstanceId) ||
             string.IsNullOrWhiteSpace(request.ContextId) ||
             string.IsNullOrWhiteSpace(request.Capability) ||
-            string.IsNullOrWhiteSpace(request.BackupName))
+            string.IsNullOrWhiteSpace(request.BackupName) ||
+            string.IsNullOrWhiteSpace(request.BackupTargetId))
             return "missing_field";
         if (request.BackupName.Length > 512 ||
             request.BackupName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
@@ -1521,6 +1550,7 @@ public sealed class ExportServer : IDisposable
                     cause = errorValue.GetString()!;
             }
         }
+
         catch (JsonException)
         {
             code = "invalid_error_response";
@@ -1558,6 +1588,7 @@ public sealed class ExportServer : IDisposable
             "/variant-targets" => "variant_targets",
             "/material-coverage" => "material_coverage",
             "/backup/restore" => "backup_restore",
+            "/backup/clear" => "backup_clear",
             "/mashup/plan" => "mashup_plan",
             "/mashup/export" => "mashup_export",
             "/export" => "export",

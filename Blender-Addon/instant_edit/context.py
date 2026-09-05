@@ -1,4 +1,4 @@
-"""Context records used by the safe XIV Instant Edit v1 bridge.
+"""Context records used by the safe XIV Instant Edit bridge.
 
 The collection and object custom properties in this module are deliberately
 duplicated (plain and ``instant_edit_*`` names).  The plain names make the
@@ -15,8 +15,8 @@ import bpy
 
 
 SCHEMA = "instant-edit.context"
-VERSION = 2
-SUPPORTED_VERSIONS = {1, 2}
+VERSION = 3
+SUPPORTED_VERSIONS = {1, 2, 3}
 COLLECTION_TAG = "instant_edit_context_id"
 OBJECT_TAG = "instant_edit_context_id"
 
@@ -27,6 +27,7 @@ CONTEXT_METADATA_FIELDS = (
     "target_relative_path", "source_kind", "resolved_game_path", "destination_state",
     "target_collection_id", "target_collection_name",
     "resource_manifest_version", "resource_manifest_status",
+    "backup_target_id", "backup_directory",
     "import_id", "callback_port", "import_file_name", "collection_kind",
 )
 
@@ -131,6 +132,8 @@ class ContextRef:
     target_collection_name: str
     resource_manifest_version: int
     resource_manifest_status: str
+    backup_target_id: str
+    backup_directory: str
     callback_port: int
 
 
@@ -277,6 +280,8 @@ def apply_authoritative_context(collection, payload: dict) -> None:
         "target_collection_name": payload.get("targetCollectionName") or "",
         "resource_manifest_version": payload.get("resourceManifestVersion") or 0,
         "resource_manifest_status": payload.get("resourceManifestStatus") or "capture_failed",
+        "backup_target_id": payload.get("backupTargetId") or "",
+        "backup_directory": payload.get("backupDirectory") or "",
         "import_id": payload.get("importId"),
         "callback_port": payload.get("callbackPort"),
     }
@@ -336,6 +341,7 @@ def validate_context(context_id: str, scene=None) -> ContextRef:
         "target_relative_path", "source_kind", "resolved_game_path", "destination_state",
         "target_collection_id", "target_collection_name",
         "resource_manifest_version", "resource_manifest_status",
+        "backup_target_id", "backup_directory",
     ))
 
     if _value(collection, "schema") != SCHEMA or _value(collection, "version") not in SUPPORTED_VERSIONS:
@@ -357,6 +363,8 @@ def validate_context(context_id: str, scene=None) -> ContextRef:
     target_collection_name = _value(collection, "target_collection_name", "")
     resource_manifest_version = _value(collection, "resource_manifest_version", 0)
     resource_manifest_status = _value(collection, "resource_manifest_status", "capture_failed")
+    backup_target_id = _value(collection, "backup_target_id", "")
+    backup_directory = _value(collection, "backup_directory", "")
     import_id = _value(collection, "import_id", "")
     callback_port = _value(collection, "callback_port", 0)
     if not all(isinstance(value, str) and value for value in (
@@ -375,6 +383,12 @@ def validate_context(context_id: str, scene=None) -> ContextRef:
         managed_destination, target_file_path, source_mod_directory, source_mod_name
     )):
         raise ContextValidationError("ready context collection is missing destination data")
+    if _value(collection, "version") >= 3 and destination_state == "ready" and (
+        not isinstance(backup_target_id, str) or len(backup_target_id) != 64 or
+        any(char not in "0123456789abcdef" for char in backup_target_id) or
+        not isinstance(backup_directory, str) or not backup_directory
+    ):
+        raise ContextValidationError("ready context collection is missing managed backup data")
     if destination_state == "new_mod_required" and (
         source_kind != "game" or any((managed_destination, target_file_path,
                                       source_mod_directory, source_mod_name,
@@ -450,6 +464,8 @@ def validate_context(context_id: str, scene=None) -> ContextRef:
         target_collection_name=target_collection_name if isinstance(target_collection_name, str) else "",
         resource_manifest_version=resource_manifest_version,
         resource_manifest_status=resource_manifest_status,
+        backup_target_id=backup_target_id if isinstance(backup_target_id, str) else "",
+        backup_directory=backup_directory if isinstance(backup_directory, str) else "",
         callback_port=callback_port,
     )
 

@@ -546,6 +546,8 @@ def refresh_variant_targets(
             option_item.group_name = group_name
             option_item.option_name = option_name
             option_item.model_path = model_path
+            option_item.backup_target_id = str(option.get("backupTargetId", "") or "")
+            option_item.backup_directory = str(option.get("backupDirectory", "") or "")
     props.variant_targets_context_id = ref.context_id
     selected_option = None
     if select_group_name is not None and select_option_name is not None:
@@ -674,6 +676,8 @@ class InstantImport(Operator):
     target_collection_name: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
     resource_manifest_version: bpy.props.IntProperty(default=0, options={'HIDDEN'})  # type: ignore
     resource_manifest_status: bpy.props.StringProperty(default="capture_failed", options={'HIDDEN'})  # type: ignore
+    backup_target_id: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
+    backup_directory: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
     import_id: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
     armature_mode: bpy.props.EnumProperty(
         items=[
@@ -731,6 +735,8 @@ class InstantImport(Operator):
                 "target_collection_name": self.target_collection_name,
                 "resource_manifest_version": self.resource_manifest_version,
                 "resource_manifest_status": self.resource_manifest_status,
+                "backup_target_id": self.backup_target_id,
+                "backup_directory": self.backup_directory,
                 "import_id": self.import_id,
                 "callback_port": self.callback_port,
                 "import_file_name": file_path.name,
@@ -789,6 +795,12 @@ class InstantImport(Operator):
             props.plugin_instance_id = self.plugin_instance_id
             props.capability = self.capability
             props.managed_destination = self.managed_destination
+            if (
+                self.source_kind == "mod"
+                and self.target_file_path
+                and get_settings().simple_import_set_export_directory
+            ):
+                get_settings().export_directory = str(Path(self.target_file_path).resolve().parent)
             preview_warnings = [] if preview_package is None else preview_package.warnings
             warning_text = preview_validation_warning
             if preview_warnings:
@@ -1242,8 +1254,11 @@ class ClearInstantEditContexts(Operator):
         except Exception as error:
             self.report({"ERROR"}, f"Contexts were not cleared: could not save revocations: {error}")
             return {"CANCELLED"}
-        cleared = clear_context_metadata(context.scene)
         props = get_instant_edit_props()
+        props.export_destination = "NONE"
+        props.variant_targets.clear()
+        props.variant_targets_context_id = ""
+        cleared = clear_context_metadata(context.scene)
         for field, value in {
             "game_path": "",
             "display_name": "",
@@ -1543,13 +1558,16 @@ def _mashup_assignment_map(plan: dict, materials: dict[str, list[str]]) -> dict[
 
 
 def _send_plugin_restore(ref, backup_name: str) -> dict:
+    selected = selected_variant_target(get_instant_edit_props())
+    backup_target_id = getattr(selected, "backup_target_id", "") or ref.backup_target_id
     payload = {
         "schema": "instant-edit.backup-restore",
-        "version": 1,
+        "version": 2,
         "pluginInstanceId": ref.plugin_instance_id,
         "contextId": ref.context_id,
         "capability": ref.capability,
         "backupName": backup_name,
+        "backupTargetId": backup_target_id,
     }
     try:
         status, body = post_json(
@@ -1591,6 +1609,24 @@ def restore_quick_backup(context: Context, backup_name: str) -> dict:
         if warnings else f"Restored {target}"
     )
     return result
+
+
+def clear_quick_backups(context: Context) -> dict:
+    ref = export_destination_context(context)
+    selected = selected_variant_target(get_instant_edit_props())
+    backup_target_id = getattr(selected, "backup_target_id", "") or ref.backup_target_id
+    payload = {
+        "schema": "instant-edit.backup-clear",
+        "version": 1,
+        "pluginInstanceId": ref.plugin_instance_id,
+        "contextId": ref.context_id,
+        "capability": ref.capability,
+        "backupTargetId": backup_target_id,
+    }
+    body, status = _post_json(ref.callback_port, "/backup/clear", payload)
+    if status != 200:
+        raise _plugin_error_from_body(body, status, "/backup/clear")
+    return _decode_plugin_response(body, status, "/backup/clear")
 
 
 def export_destination_context(context: Context, destination: str | None = None):

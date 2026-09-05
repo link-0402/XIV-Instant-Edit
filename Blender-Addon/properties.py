@@ -88,8 +88,8 @@ class XIVIEExportSettings(PropertyGroup):
         default=True,
     )  # type: ignore
     resolve_mesh_group_conflicts: BoolProperty(
-        name="Resolve Mesh Group Name Conflicts",
-        description="Collapse imported parts into existing matching-material groups (including shared _bibo materials) and offset unmatched groups",
+        name="Offset Incoming Mesh Group IDs",
+        description="Offset incoming mesh group IDs when they conflict with existing visible groups",
         default=True,
     )  # type: ignore
     simple_import_skeleton: PointerProperty(

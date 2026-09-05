@@ -47,6 +47,7 @@ public sealed class ExportContextRegistry : IDisposable
     private readonly object _persistenceLock = new();
     private readonly Dictionary<string, ContextEntry> _contexts = new(StringComparer.Ordinal);
     private readonly Action<IReadOnlyList<PersistedExportContext>>? _persist;
+    private readonly ModelBackupStore? _backups;
     private static readonly TimeSpan ReceiptRetention = TimeSpan.FromDays(1);
     private const int MaxCompletedReceiptsPerContext = 128;
     private bool _disposed;
@@ -54,13 +55,15 @@ public sealed class ExportContextRegistry : IDisposable
     public ExportContextRegistry(
         string pluginInstanceId,
         IEnumerable<PersistedExportContext>? persisted = null,
-        Action<IReadOnlyList<PersistedExportContext>>? persist = null)
+        Action<IReadOnlyList<PersistedExportContext>>? persist = null,
+        ModelBackupStore? backups = null)
     {
         if (string.IsNullOrWhiteSpace(pluginInstanceId))
             throw new ArgumentException("A plugin instance id is required.", nameof(pluginInstanceId));
 
         PluginInstanceId = pluginInstanceId;
         _persist = persist;
+        _backups = backups;
 
         if (persisted is not null)
         {
@@ -91,7 +94,9 @@ public sealed class ExportContextRegistry : IDisposable
         string? targetRelativePath = null,
         ResourceDependencyManifest? resourceManifest = null,
         Guid? targetCollectionId = null,
-        string? targetCollectionName = null)
+        string? targetCollectionName = null,
+        SourceOptionLocator? sourceOption = null,
+        string sourceOptionStatus = "unknown")
     {
         if (!PenumbraService.IsSafeGamePath(gamePath) || objectIndex is < 0 or > ushort.MaxValue ||
             !PenumbraService.IsSafeModName(sourceModDirectory) || callbackPort is < 1 or > 65535 ||
@@ -111,6 +116,9 @@ public sealed class ExportContextRegistry : IDisposable
             targetRelativePath);
 
         var safeManifest = IsSafeResourceManifest(resourceManifest) ? resourceManifest : null;
+        var backupTarget = _backups is not null && targetRelativePath is not null
+            ? _backups.Describe(sourceModDirectory, targetRelativePath)
+            : null;
         var context = new InstantEditImportContext
         {
             PluginInstanceId = PluginInstanceId,
@@ -135,6 +143,11 @@ public sealed class ExportContextRegistry : IDisposable
             ResourceManifestStatus = safeManifest is not null
                 ? "ready"
                 : "capture_failed",
+            BackupTargetId = backupTarget?.Id,
+            BackupDirectory = backupTarget?.Directory,
+            SourceOption = sourceOption,
+            SourceOptionStatus = sourceOptionStatus,
+            LastTouchedAtUtc = DateTimeOffset.UtcNow,
         };
 
         lock (_lock)
@@ -186,6 +199,7 @@ public sealed class ExportContextRegistry : IDisposable
             CallbackPort = callbackPort,
             ResourceManifest = safeManifest,
             ResourceManifestStatus = safeManifest is not null ? "ready" : "capture_failed",
+            LastTouchedAtUtc = DateTimeOffset.UtcNow,
         };
 
         lock (_lock)
@@ -233,6 +247,7 @@ public sealed class ExportContextRegistry : IDisposable
                 entry.Context.SourceKind != InstantEditImportContext.GameSource ||
                 entry.Context.DestinationState != InstantEditImportContext.NewModRequiredDestination)
                 return false;
+            var backupTarget = _backups?.Describe(sourceModDirectory, targetRelativePath);
             context = entry.Context with
             {
                 DestinationState = InstantEditImportContext.ReadyDestination,
@@ -242,6 +257,9 @@ public sealed class ExportContextRegistry : IDisposable
                 TargetRelativePath = targetRelativePath.Replace('\\', '/'),
                 TargetFilePath = target,
                 TargetFolder = Path.GetDirectoryName(target),
+                BackupTargetId = backupTarget?.Id,
+                BackupDirectory = backupTarget?.Directory,
+                LastTouchedAtUtc = DateTimeOffset.UtcNow,
             };
             entry.Context = context;
         }
@@ -299,6 +317,7 @@ public sealed class ExportContextRegistry : IDisposable
                 // attach a saved context to whichever actor now occupies the
                 // previous object-table index.
                 CallbackPort = callbackPort,
+                LastTouchedAtUtc = DateTimeOffset.UtcNow,
             };
             entry.Context = refreshed;
             context = refreshed;
@@ -378,6 +397,9 @@ public sealed class ExportContextRegistry : IDisposable
                                 TargetRelativePath = relative,
                                 TargetFilePath = targetPath,
                                 TargetFolder = Path.GetDirectoryName(targetPath) ?? updated.TargetFolder,
+                                BackupTargetId = _backups?.Describe(sourceModDirectory, relative).Id,
+                                BackupDirectory = _backups?.Describe(sourceModDirectory, relative).Directory,
+                                LastTouchedAtUtc = DateTimeOffset.UtcNow,
                             };
                         }
                     }
@@ -572,6 +594,7 @@ public sealed class ExportContextRegistry : IDisposable
 
     public void CompleteExport(string contextId, string exportId, ExportReceipt receipt)
     {
+        var changed = false;
         lock (_lock)
         {
             if (_contexts.TryGetValue(contextId, out var context) && context.Exports.TryGetValue(exportId, out var export))
@@ -579,8 +602,12 @@ public sealed class ExportContextRegistry : IDisposable
                 export.CompletedAt = DateTimeOffset.UtcNow;
                 export.Completion.TrySetResult(receipt);
                 PruneExportsLocked(context, DateTimeOffset.UtcNow);
+                context.Context = context.Context with { LastTouchedAtUtc = DateTimeOffset.UtcNow };
+                changed = true;
             }
         }
+        if (changed)
+            Persist();
     }
 
     public bool TryGetExportStatus(
@@ -763,6 +790,12 @@ public sealed class ExportContextRegistry : IDisposable
         var safeManifest = IsSafeResourceManifest(saved.ResourceManifest)
             ? saved.ResourceManifest
             : null;
+        var sourceKind = saved.Version >= 2 ? saved.SourceKind! : InstantEditImportContext.ModSource;
+        var resolvedGamePath = saved.Version >= 2 ? saved.ResolvedGamePath! : saved.GamePath;
+        var destinationState = saved.Version >= 2 ? saved.DestinationState! : InstantEditImportContext.ReadyDestination;
+        var backupTarget = destinationState == InstantEditImportContext.ReadyDestination && _backups is not null
+            ? _backups.Describe(saved.SourceModDirectory!, saved.TargetRelativePath!)
+            : null;
         return new InstantEditImportContext
         {
             PluginInstanceId = PluginInstanceId,
@@ -770,9 +803,9 @@ public sealed class ExportContextRegistry : IDisposable
             ImportId = saved.ImportId,
             Capability = saved.Capability,
             GamePath = saved.GamePath,
-            SourceKind = saved.Version >= 2 ? saved.SourceKind! : InstantEditImportContext.ModSource,
-            ResolvedGamePath = saved.Version >= 2 ? saved.ResolvedGamePath! : saved.GamePath,
-            DestinationState = saved.Version >= 2 ? saved.DestinationState! : InstantEditImportContext.ReadyDestination,
+            SourceKind = sourceKind,
+            ResolvedGamePath = resolvedGamePath,
+            DestinationState = destinationState,
             ObjectIndex = saved.ObjectIndex,
             TargetFilePath = saved.TargetFilePath,
             TargetFolder = saved.TargetFolder,
@@ -785,15 +818,26 @@ public sealed class ExportContextRegistry : IDisposable
             CallbackPort = saved.CallbackPort,
             ResourceManifest = safeManifest,
             ResourceManifestStatus = safeManifest is not null ? "ready" : "capture_failed",
+            BackupTargetId = backupTarget?.Id,
+            BackupDirectory = backupTarget?.Directory,
+            SourceOption = saved.SourceOption,
+            SourceOptionStatus = saved.SourceOptionStatus,
+            LastTouchedAtUtc = saved.LastTouchedAtUtc,
         };
     }
 
     private static bool IsSafePersistedContext(PersistedExportContext saved)
     {
-        if (!IsSafeId(saved.ContextId) || !IsSafeId(saved.ImportId) ||
+        if (saved.Version > InstantEditImportContext.CurrentVersion ||
+            !IsSafeId(saved.ContextId) || !IsSafeId(saved.ImportId) ||
             !CapabilityMatches(saved.Capability, saved.Capability) ||
             !PenumbraService.IsSafeGamePath(saved.GamePath) ||
-            saved.CallbackPort is < 1 or > 65535)
+            saved.CallbackPort is < 1 or > 65535 ||
+            saved.SourceOptionStatus is not ("unknown" or "default" or "ready" or "ambiguous") ||
+            (saved.SourceOption is { } option &&
+             (string.IsNullOrWhiteSpace(option.Membership) || option.Membership.Length > 512 ||
+              option.GroupName is null || option.GroupName.Length > 512 ||
+              option.OptionName is null || option.OptionName.Length > 512)))
             return false;
         if (saved.Version < 2)
             return PenumbraService.IsSafeModName(saved.SourceModDirectory) &&
@@ -867,6 +911,14 @@ public sealed class ExportContextRegistry : IDisposable
             List<PersistedExportContext> snapshot;
             lock (_lock)
             {
+                var cutoff = DateTimeOffset.UtcNow - ExportContextSessionStore.Retention;
+                foreach (var expired in _contexts
+                             .Where(pair => pair.Value.Context.LastTouchedAtUtc < cutoff)
+                             .Select(pair => pair.Key).ToArray())
+                {
+                    CompletePendingLocked(_contexts[expired], "stale_context");
+                    _contexts.Remove(expired);
+                }
                 snapshot = _contexts.Values
                     .Select(entry => PersistedExportContext.FromContext(entry.Context))
                     .ToList();

@@ -15,6 +15,7 @@ from bpy.props import (
 _EXPORT_DESTINATION_ITEMS = []
 NO_EXPORT_CONTEXT = "NONE"
 IN_PLACE_TARGET = "IN_PLACE"
+_LAST_EXPORT_DESTINATION = NO_EXPORT_CONTEXT
 
 
 def _export_destination_items(_self, context):
@@ -22,11 +23,16 @@ def _export_destination_items(_self, context):
     from .context import context_collections, _value
 
     scene = getattr(context, "scene", None) or getattr(bpy.context, "scene", None)
+    sentinel = (
+        NO_EXPORT_CONTEXT,
+        "Select Context",
+        "Choose the imported model destination for Quick Export",
+    )
     if scene is None:
-        _EXPORT_DESTINATION_ITEMS = []
+        _EXPORT_DESTINATION_ITEMS = [sentinel]
         return _EXPORT_DESTINATION_ITEMS
 
-    items = []
+    items = [sentinel]
     for collection in sorted(
         context_collections(scene),
         key=lambda value: str(_value(value, "source_game_path", "")).casefold(),
@@ -37,18 +43,13 @@ def _export_destination_items(_self, context):
         mod_name = str(_value(collection, "source_mod_name", ""))
         label = f"{model_name} ({mod_name})" if mod_name else model_name
         items.append((context_id, label, f"Overwrite the imported model at {game_path}"))
-    if items:
-        # Keep an explicit empty choice when real contexts exist, so multiple
-        # destinations can require a deliberate user selection. An empty
-        # enum is the correct representation when the scene has no contexts.
-        items.insert(
-            0,
-            (
-                NO_EXPORT_CONTEXT,
-                "Select Context",
-                "Choose the imported model destination for Quick Export",
-            ),
-        )
+    identifiers = {item[0] for item in items}
+    if _LAST_EXPORT_DESTINATION not in identifiers:
+        items.append((
+            _LAST_EXPORT_DESTINATION,
+            "Removed Context",
+            "This Context was removed and will be deselected automatically",
+        ))
     # Blender requires dynamically generated enum strings to remain alive for
     # as long as the enum is in use.
     _EXPORT_DESTINATION_ITEMS = items
@@ -57,6 +58,8 @@ def _export_destination_items(_self, context):
 
 def _export_destination_changed(self, context) -> None:
     """Refresh the authenticated Penumbra target tree for the selected context."""
+    global _LAST_EXPORT_DESTINATION
+    _LAST_EXPORT_DESTINATION = self.export_destination or NO_EXPORT_CONTEXT
     self.variant_target = "NEW_GROUP"
     self.variant_targets.clear()
     self.variant_targets_context_id = ""
@@ -83,6 +86,8 @@ class XIVIEVariantTarget(PropertyGroup):
     group_name: StringProperty(default="", maxlen=120)  # type: ignore
     option_name: StringProperty(default="", maxlen=120)  # type: ignore
     model_path: StringProperty(default="", maxlen=4096)  # type: ignore
+    backup_target_id: StringProperty(default="", maxlen=128)  # type: ignore
+    backup_directory: StringProperty(default="", maxlen=4096)  # type: ignore
     expanded: BoolProperty(default=True)  # type: ignore
 
 

@@ -219,11 +219,6 @@ class ModelImport:
             
             self._read_xiv_mesh(lod_buffer, indices)
 
-        if resolve_mesh_group_conflicts:
-            from ...materials import collapse_imported_materials
-
-            collapse_imported_materials(self.created_mesh_objects, existing_visible_objects)
-
         return tuple(self.created_mesh_objects)
             
     def _read_xiv_mesh(self, lod_buffer: bytes, indices: NDArray) -> None:

@@ -70,10 +70,28 @@ public sealed record ResourceDependencyManifest
     public JsonArray Manipulations { get; init; } = new();
 }
 
+/// <summary>
+/// Backend-only identity of the Penumbra option that supplied the imported
+/// model.  Its contents are deliberately resolved from the current mod files
+/// when a sibling option is created, rather than duplicating option payloads
+/// into the Blender scene.
+/// </summary>
+public sealed record SourceOptionLocator
+{
+    [JsonPropertyName("membership")]
+    public required string Membership { get; init; }
+
+    [JsonPropertyName("groupName")]
+    public required string GroupName { get; init; }
+
+    [JsonPropertyName("optionName")]
+    public required string OptionName { get; init; }
+}
+
 /// <summary> Versioned, plugin-owned context sent to the Blender add-on. </summary>
 public sealed record InstantEditImportContext
 {
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 3;
     public const string ModSource = "mod";
     public const string GameSource = "game";
     public const string ReadyDestination = "ready";
@@ -155,8 +173,23 @@ public sealed record InstantEditImportContext
     [JsonPropertyName("resourceManifestStatus")]
     public string ResourceManifestStatus { get; init; } = "capture_failed";
 
+    [JsonPropertyName("backupTargetId")]
+    public string? BackupTargetId { get; init; }
+
+    [JsonPropertyName("backupDirectory")]
+    public string? BackupDirectory { get; init; }
+
     [JsonIgnore]
     public ResourceDependencyManifest? ResourceManifest { get; init; }
+
+    [JsonIgnore]
+    public SourceOptionLocator? SourceOption { get; init; }
+
+    [JsonIgnore]
+    public string SourceOptionStatus { get; init; } = "unknown";
+
+    [JsonIgnore]
+    public DateTimeOffset LastTouchedAtUtc { get; init; } = DateTimeOffset.UtcNow;
 }
 
 /// <summary>
@@ -225,6 +258,15 @@ public sealed record PersistedExportContext
     [JsonPropertyName("resourceManifestStatus")]
     public string ResourceManifestStatus { get; init; } = "capture_failed";
 
+    [JsonPropertyName("sourceOption")]
+    public SourceOptionLocator? SourceOption { get; init; }
+
+    [JsonPropertyName("sourceOptionStatus")]
+    public string SourceOptionStatus { get; init; } = "unknown";
+
+    [JsonPropertyName("lastTouchedAtUtc")]
+    public DateTimeOffset LastTouchedAtUtc { get; init; } = DateTimeOffset.UtcNow;
+
     public static PersistedExportContext FromContext(InstantEditImportContext context)
         => new()
         {
@@ -248,6 +290,9 @@ public sealed record PersistedExportContext
             CallbackPort = context.CallbackPort,
             ResourceManifest = context.ResourceManifest,
             ResourceManifestStatus = context.ResourceManifestStatus,
+            SourceOption = context.SourceOption,
+            SourceOptionStatus = context.SourceOptionStatus,
+            LastTouchedAtUtc = context.LastTouchedAtUtc,
         };
 }
 

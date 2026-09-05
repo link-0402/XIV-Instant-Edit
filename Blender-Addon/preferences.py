@@ -43,7 +43,7 @@ def _update_cache(self, _context) -> None:
 class XIVIE_OT_clean_cache(Operator):
     bl_idname = "xiv_ie.clean_cache"
     bl_label = "Clean Cache Now"
-    bl_description = "Remove all owned XIV Instant Edit cache jobs and diagnostic reports"
+    bl_description = "Remove owned cache jobs and reports, plus managed backups older than 30 days"
 
     def execute(self, _context):
         try:

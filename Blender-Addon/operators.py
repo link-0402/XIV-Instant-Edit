@@ -8,7 +8,6 @@ from bpy.types import Context, Operator
 from .instant_edit.context import ContextValidationError, mesh_ids_from_name
 from .materials import (
     assign_material_path,
-    auto_collapse_materials,
     ensure_flow_data,
     find_material_group,
     mesh_flow_enabled,
@@ -437,7 +436,7 @@ class XIVIE_OT_restore_backup(Operator):
 
     def execute(self, context: Context):
         settings = get_settings()
-        folder, _source = target_folder(settings, context)
+        folder, source = target_folder(settings, context)
         if folder is None:
             self.report({"ERROR"}, "The current target export folder is unavailable.")
             return {"CANCELLED"}
@@ -454,10 +453,7 @@ class XIVIE_OT_restore_backup(Operator):
                                                restore_quick_backup)
 
                 ref = export_destination_context(context)
-                quick = (
-                    Path(ref.target_file_path).resolve().parent == folder
-                    and entry.original_name.lower().endswith(".mdl")
-                )
+                quick = source == "Quick Export target" and entry.original_name.lower().endswith(".mdl")
                 if quick:
                     result = restore_quick_backup(context, entry.path.name)
             except (ContextValidationError, ImportError):
@@ -553,8 +549,17 @@ class XIVIE_OT_clear_backups(Operator):
         self.layout.label(text=self.folder_label)
 
     def execute(self, context: Context):
-        folder, _source = target_folder(get_settings(), context)
-        removed = clear_backups(folder)
+        folder, source = target_folder(get_settings(), context)
+        if source == "Quick Export target":
+            try:
+                from .instant_edit.ops import clear_quick_backups
+                clear_quick_backups(context)
+                removed = self.backup_count
+            except Exception as error:
+                self.report({"ERROR"}, f"Clear failed: {error}")
+                return {"CANCELLED"}
+        else:
+            removed = clear_backups(folder)
         self.report({"INFO"}, f"Cleared {removed} backup{'s' if removed != 1 else ''}.")
         return {"FINISHED"}
 
@@ -929,34 +934,6 @@ class XIVIE_OT_mesh_flow(Operator):
             updated = ensure_flow_data(group.objects)
             self.report({"INFO"}, "Flow colour channels updated." if updated else "All flow colour channels already exist.")
         _redraw(context)
-        return {"FINISHED"}
-
-
-class XIVIE_OT_auto_collapse_materials(Operator):
-    bl_idname = "xiv_ie.auto_collapse_materials"
-    bl_label = "Auto-collapse materials"
-    bl_description = "Move matching visible mesh parts into their lowest-numbered mesh group"
-    bl_options = {"REGISTER", "UNDO"}
-
-    @classmethod
-    def poll(cls, context: Context):
-        return context.mode == "OBJECT"
-
-    def execute(self, context: Context):
-        try:
-            moved = auto_collapse_materials(visible_meshobj())
-        except ValueError as error:
-            self.report({"ERROR"}, str(error))
-            return {"CANCELLED"}
-
-        _redraw(context)
-        if moved:
-            self.report(
-                {"INFO"},
-                f"Auto-collapsed {moved} mesh part{'s' if moved != 1 else ''}.",
-            )
-        else:
-            self.report({"INFO"}, "No matching mesh parts needed collapsing.")
         return {"FINISHED"}
 
 

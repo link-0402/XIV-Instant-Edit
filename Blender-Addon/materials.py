@@ -640,7 +640,7 @@ def material_paths(objects) -> list[str]:
     for obj in objects:
         path = export_material_path(obj)
         if path:
-            paths.setdefault(_material_collapse_key(path), path)
+            paths.setdefault(_material_identity_key(path), path)
     return sorted(paths.values())
 
 
@@ -658,196 +658,18 @@ def export_material_path(obj) -> str:
         return ""
 
 
-def _mesh_part_material_path(objects) -> str:
-    """Return one material path when every object in a part agrees on it."""
-    paths = {}
-    for obj in objects:
-        path = export_material_path(obj)
-        key = _material_collapse_key(path) if path else None
-        paths.setdefault(key, path)
-    if len(paths) != 1 or None in paths:
-        return ""
-    return next(iter(paths.values()))
-
-
-def _material_collapse_key(material: str) -> tuple[str, str]:
-    """Return the material identity used when collapsing mesh groups.
+def _material_identity_key(material: str) -> tuple[str, str]:
+    """Return the material identity used by group consistency checks.
 
     FFXIV's Bibo body material is intentionally shared by several model
     prefixes, so its full path is the one supported exception to exact-path
     matching.  Other materials retain their complete normalized path as the
-    identity used for collapsing.
+    identity used for comparisons.
     """
     filename = material.rsplit("/", 1)[-1].casefold()
     if filename.endswith("_bibo.mtrl"):
         return ("bibo", "_bibo.mtrl")
     return ("path", material)
-
-
-def _collapsible_mesh_parts(objects) -> list[tuple[int, int, str, tuple, str]]:
-    """Return material-consistent visible part instances with their material."""
-    candidates = []
-    for group in group_mesh_objects(objects):
-        for instance in mesh_part_instances(group.objects, group.mesh_index):
-            material = _mesh_part_material_path(instance.objects)
-            if material:
-                candidates.append(
-                    (
-                        group.mesh_index,
-                        instance.part_index,
-                        instance.instance_key,
-                        instance.objects,
-                        material,
-                    )
-                )
-    return candidates
-
-
-def _canonical_material_groups(candidates) -> dict[tuple[str, str], int]:
-    canonical = {}
-    for group, _part, _instance_key, _objects, material in candidates:
-        key = _material_collapse_key(material)
-        previous = canonical.get(key)
-        if previous is None or group < previous:
-            canonical[key] = group
-    return canonical
-
-
-def _occupied_mesh_parts(objects) -> defaultdict[int, set[int]]:
-    occupied = defaultdict(set)
-    for obj in objects:
-        try:
-            group, part, _lod = mesh_ids_from_name(obj)
-        except Exception:
-            continue
-        if group >= 0 and part >= 0:
-            occupied[group].add(part)
-    return occupied
-
-
-def _export_vertex_upper_bound(obj, depsgraph=None) -> int:
-    """Return a safe upper bound for the vertices emitted by one submesh."""
-    try:
-        evaluated = obj.evaluated_get(depsgraph) if depsgraph is not None else obj
-        mesh = evaluated.data
-        # The corner-aware exporter emits at most one vertex per evaluated loop.
-        # Using loops remains safe when UVs, normals, colours, or flow data split
-        # a Blender vertex into several MDL vertices.
-        return len(mesh.loops)
-    except (AttributeError, ReferenceError, RuntimeError):
-        return USHORT_LIMIT + 1
-
-
-def _mesh_lod_vertex_budgets(objects, depsgraph=None) -> defaultdict[tuple[int, int], int]:
-    budgets = defaultdict(int)
-    for obj in objects:
-        try:
-            group, _part, lod = mesh_ids_from_name(obj)
-        except Exception:
-            continue
-        budgets[(group, lod)] += _export_vertex_upper_bound(obj, depsgraph)
-    return budgets
-
-
-def _material_collapse_plan(
-    candidates,
-    target_groups: dict[tuple[str, str], int],
-    occupied_objects,
-    *,
-    only_move_down: bool,
-) -> tuple[list[tuple], int]:
-    """Build one atomic rename plan for material-based part moves."""
-    occupied = _occupied_mesh_parts(occupied_objects)
-    try:
-        depsgraph = bpy.context.evaluated_depsgraph_get()
-    except (AttributeError, RuntimeError):
-        depsgraph = None
-    vertex_budgets = _mesh_lod_vertex_budgets(occupied_objects, depsgraph)
-    moves = []
-    ordered = sorted(
-        candidates,
-        key=lambda item: (
-            target_groups.get(_material_collapse_key(item[4]), item[0]),
-            item[0],
-            item[1],
-            item[2],
-        ),
-    )
-    for source_group, source_part, instance_key, objects, material in ordered:
-        target_group = target_groups.get(_material_collapse_key(material))
-        if target_group is None or source_group == target_group:
-            continue
-        if only_move_down and source_group < target_group:
-            continue
-
-        moving_vertices = defaultdict(int)
-        for obj in objects:
-            try:
-                _group, _part, lod = mesh_ids_from_name(obj)
-            except Exception:
-                continue
-            moving_vertices[lod] += _export_vertex_upper_bound(obj, depsgraph)
-        if any(
-            vertex_budgets[(target_group, lod)] + count > USHORT_LIMIT
-            for lod, count in moving_vertices.items()
-        ):
-            continue
-
-        target_part = max(occupied[target_group], default=-1) + 1
-        occupied[target_group].add(target_part)
-        for lod, count in moving_vertices.items():
-            source_key = (source_group, lod)
-            target_key = (target_group, lod)
-            vertex_budgets[source_key] = max(0, vertex_budgets[source_key] - count)
-            vertex_budgets[target_key] += count
-        moves.append((source_group, source_part, instance_key, objects, target_group, target_part))
-
-    renames = []
-    for _source_group, _source_part, _instance_key, objects, target_group, target_part in moves:
-        for obj in objects:
-            _group, _part, lod = mesh_ids_from_name(obj)
-            renames.append(
-                (
-                    obj,
-                    target_group,
-                    target_part,
-                    lod,
-                    mesh_display_name(obj),
-                )
-            )
-    return renames, len(moves)
-
-
-def auto_collapse_materials(objects) -> int:
-    """Move visible matching-material parts into their lowest mesh group."""
-    objects = tuple(objects)
-    candidates = _collapsible_mesh_parts(objects)
-    target_groups = _canonical_material_groups(candidates)
-    renames, moved = _material_collapse_plan(
-        candidates,
-        target_groups,
-        objects,
-        only_move_down=True,
-    )
-    _rename_mesh_targets(renames)
-    return moved
-
-
-def collapse_imported_materials(imported_objects, existing_objects) -> int:
-    """Move imported matching-material parts into pre-existing visible groups."""
-    imported_objects = tuple(imported_objects)
-    existing_objects = tuple(existing_objects)
-    imported_candidates = _collapsible_mesh_parts(imported_objects)
-    existing_candidates = _collapsible_mesh_parts(existing_objects)
-    target_groups = _canonical_material_groups(existing_candidates)
-    renames, moved = _material_collapse_plan(
-        imported_candidates,
-        target_groups,
-        existing_objects + imported_objects,
-        only_move_down=False,
-    )
-    _rename_mesh_targets(renames)
-    return moved
 
 
 def material_mismatch_parts(objects) -> set[int]:
@@ -868,12 +690,12 @@ def material_mismatch_parts(objects) -> set[int]:
     if not ordered:
         return set()
     authoritative = export_material_path(ordered[0])
-    authoritative_key = _material_collapse_key(authoritative) if authoritative else None
+    authoritative_key = _material_identity_key(authoritative) if authoritative else None
     mismatches = set()
     for obj in ordered:
         _group, part, _lod = mesh_ids_from_name(obj)
         path = export_material_path(obj)
-        if not authoritative_key or not path or _material_collapse_key(path) != authoritative_key:
+        if not authoritative_key or not path or _material_identity_key(path) != authoritative_key:
             mismatches.add(part)
     return mismatches
 
