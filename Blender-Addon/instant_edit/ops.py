@@ -3,6 +3,7 @@ import bpy
 from bpy.props import BoolProperty, StringProperty, EnumProperty
 import json
 import hashlib
+import ntpath
 import re
 import threading
 import uuid
@@ -29,6 +30,16 @@ from .material_preview import (cleanup_preview_bundle, discard_preview_data,
                                load_preview_manifest)
 from .cache import create_job, finish_job
 from .diagnostics import record_failure, record_protocol_failure, record_remote_failure
+
+
+def _physical_parent_path(file_path: str) -> str:
+    """Return a model file's parent while preserving Windows bridge paths."""
+    if (
+        "\\" in file_path
+        or bool(ntpath.splitdrive(file_path)[0])
+    ):
+        return ntpath.dirname(ntpath.normpath(file_path))
+    return str(Path(file_path).resolve().parent)
 
 
 MAX_PLUGIN_RESPONSE_SIZE = 64 * 1024
@@ -800,7 +811,7 @@ class InstantImport(Operator):
                 and self.target_file_path
                 and get_settings().simple_import_set_export_directory
             ):
-                get_settings().export_directory = str(Path(self.target_file_path).resolve().parent)
+                get_settings().export_directory = _physical_parent_path(self.target_file_path)
             preview_warnings = [] if preview_package is None else preview_package.warnings
             warning_text = preview_validation_warning
             if preview_warnings:
