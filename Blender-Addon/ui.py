@@ -1,3 +1,4 @@
+import ntpath
 from pathlib import Path
 import textwrap
 
@@ -51,6 +52,24 @@ def _relative_physical_path(file_path: str, root_path: str) -> str:
     """Return a physical file path relative to its source mod root."""
     if not file_path or not root_path:
         return ""
+    # Bridge payloads carry Windows paths even when the regression suite runs
+    # on Linux.  pathlib follows the host OS, so use ntpath for Windows-style
+    # paths instead of treating ``D:\\...`` as a relative POSIX filename.
+    windows_style = (
+        "\\" in file_path
+        or "\\" in root_path
+        or bool(ntpath.splitdrive(file_path)[0])
+        or bool(ntpath.splitdrive(root_path)[0])
+    )
+    if windows_style:
+        file_path = ntpath.normpath(file_path)
+        root_path = ntpath.normpath(root_path)
+        try:
+            if ntpath.normcase(ntpath.commonpath((file_path, root_path))) != ntpath.normcase(root_path):
+                return ""
+            return ntpath.relpath(file_path, root_path).replace("\\", "/")
+        except ValueError:
+            return ""
     try:
         return Path(file_path).resolve(strict=False).relative_to(
             Path(root_path).resolve(strict=False)
