@@ -44,14 +44,35 @@ jobs:
           tar -xJf /tmp/blender.tar.xz --directory /tmp
           echo "/tmp/blender-${{ matrix.version }}-linux-x64" >> "$GITHUB_PATH"
 
-      - name: Run add-on regressions
+      - name: Run bridge regressions
+        env:
+          BLENDER_USER_CONFIG: ${{ runner.temp }}/blender-config
         run: |
+          mkdir -p "$BLENDER_USER_CONFIG"
           blender --background --factory-startup --python-exit-code 1 --python Blender-Addon/testing/bridge_regression.py
+
+      - name: Run export smoke regressions
+        env:
+          BLENDER_USER_CONFIG: ${{ runner.temp }}/blender-config
+        run: |
+          mkdir -p "$BLENDER_USER_CONFIG"
           blender --background --factory-startup --python-exit-code 1 --python Blender-Addon/testing/smoke_export.py
+
+      - name: Run correctness regressions
+        env:
+          BLENDER_USER_CONFIG: ${{ runner.temp }}/blender-config
+        run: |
+          mkdir -p "$BLENDER_USER_CONFIG"
           blender --background --factory-startup --python-exit-code 1 --python Blender-Addon/testing/correctness_regression.py
-          python3 Blender-Addon/testing/cache_regression.py
-          python3 Blender-Addon/testing/diagnostics_regression.py
-          python3 Blender-Addon/testing/server_diagnostics_regression.py
+
+      - name: Run cache regressions
+        run: python3 Blender-Addon/testing/cache_regression.py
+
+      - name: Run diagnostics regressions
+        run: python3 Blender-Addon/testing/diagnostics_regression.py
+
+      - name: Run server diagnostics regressions
+        run: python3 Blender-Addon/testing/server_diagnostics_regression.py
 
   build:
     runs-on: ubuntu-latest
