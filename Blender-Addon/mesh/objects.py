@@ -84,57 +84,75 @@ def copy_mesh_object(source_obj: Object, depsgraph: Depsgraph, export=True) -> O
 
     eval_obj  = source_obj.evaluated_get(depsgraph)
 
-    new_obj      = source_obj.copy()
-    new_obj.data = bpy.data.meshes.new_from_object(
-                    eval_obj, 
-                    preserve_all_data_layers=True, 
-                    depsgraph=depsgraph
-                    )
+    new_obj = source_obj.copy()
+    owned_mesh = None
+    try:
+        owned_mesh = bpy.data.meshes.new_from_object(
+                        eval_obj,
+                        preserve_all_data_layers=True,
+                        depsgraph=depsgraph
+                        )
     
-    for collection in source_obj.users_collection:
-        collection.objects.link(new_obj)
+        new_obj.data = owned_mesh
+        for collection in source_obj.users_collection:
+            collection.objects.link(new_obj)
 
-    new_obj.parent = source_obj.parent
+        new_obj.parent = source_obj.parent
     
-    # If we don't do this, we will crash later if the original mesh had an invalid driver.
-    if new_obj.animation_data:
-        new_obj.animation_data_clear()
+        # If we don't do this, we will crash later if the original mesh had an invalid driver.
+        if new_obj.animation_data:
+            new_obj.animation_data_clear()
         
-    if new_obj.data.shape_keys:
-        if new_obj.data.shape_keys.animation_data:
-            new_obj.data.shape_keys.animation_data_clear()
+        if new_obj.data.shape_keys:
+            if new_obj.data.shape_keys.animation_data:
+                new_obj.data.shape_keys.animation_data_clear()
         
-    # This is just cleanup
-    new_obj.modifiers.clear()
-    new_obj.shape_key_clear()
+        # This is just cleanup
+        new_obj.modifiers.clear()
+        new_obj.shape_key_clear()
 
-    # Assuming TT FBX import needs an armature modifier.
-    if export:
-        armature        = new_obj.modifiers.new(name="Armature", type="ARMATURE")
-        armature.object = source_obj.parent
+        # Assuming TT FBX import needs an armature modifier.
+        if export:
+            armature        = new_obj.modifiers.new(name="Armature", type="ARMATURE")
+            armature.object = source_obj.parent
 
-    return new_obj
+        return new_obj
+    except Exception:
+        bpy.data.objects.remove(new_obj, do_unlink=True)
+        if owned_mesh is not None and owned_mesh.users == 0:
+            bpy.data.meshes.remove(owned_mesh)
+        raise
+
 
 def quick_copy(source_obj: Object, key_name: str=None) -> Object:
-    temp_obj      = source_obj.copy()
-    temp_obj.data = source_obj.data.copy()
+    temp_obj = source_obj.copy()
+    owned_mesh = None
+    try:
+        owned_mesh = source_obj.data.copy()
+        temp_obj.data = owned_mesh
 
-    # When using these you will need to call a despgraph update afterwards if you want to evaluate them
-    if key_name:
-        temp_obj.data.shape_keys.key_blocks[key_name].mute = False
-        temp_obj.data.shape_keys.key_blocks[key_name].value = 1
+        # When using these you will need to call a despgraph update afterwards if you want to evaluate them
+        if key_name:
+            temp_obj.data.shape_keys.key_blocks[key_name].mute = False
+            temp_obj.data.shape_keys.key_blocks[key_name].value = 1
 
-    for collection in source_obj.users_collection:
-        collection.objects.link(temp_obj)
+        for collection in source_obj.users_collection:
+            collection.objects.link(temp_obj)
 
-    if temp_obj.animation_data:
-        temp_obj.animation_data_clear()
+        if temp_obj.animation_data:
+            temp_obj.animation_data_clear()
         
-    if temp_obj.data.shape_keys:
-        if temp_obj.data.shape_keys.animation_data:
-            temp_obj.data.shape_keys.animation_data_clear()
+        if temp_obj.data.shape_keys:
+            if temp_obj.data.shape_keys.animation_data:
+                temp_obj.data.shape_keys.animation_data_clear()
 
-    return temp_obj
+        return temp_obj
+    except Exception:
+        bpy.data.objects.remove(temp_obj, do_unlink=True)
+        if owned_mesh is not None and owned_mesh.users == 0:
+            bpy.data.meshes.remove(owned_mesh)
+        raise
+
 
 def evaluate_obj(obj: Object, depsgraph: Depsgraph) -> Object:
         eval_obj  = obj.evaluated_get(depsgraph)

@@ -30,8 +30,11 @@ before sharing them.
 
 Run the regression commands in
 `.github/workflows/blender-extension-repository.yml` for add-on changes. For
-plugin changes, build the Release configuration and run the relevant tests
-under `Tests`.
+plugin changes, build the Release configuration with
+`-p:SkipDistributionPackage=true` and run both projects under `Tests` with the
+same property. See [test commands and coverage](Tests/README.md) for the full
+local suite and the test-cleanup rationale. Blender commands must include
+`--factory-startup --python-exit-code 1` before `--python` so failures reach CI.
 
 Keep pull requests focused, explain behavior changes, and update the README or
 third-party notices when user-facing behavior or attribution changes. Release

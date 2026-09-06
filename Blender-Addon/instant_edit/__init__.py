@@ -14,6 +14,21 @@ _last_visible_context_ids = None
 
 
 @persistent
+def _prepare_for_scene_load(_dummy) -> None:
+    """Invalidate work before Blender discards nonpersistent timers and scene IDs."""
+    global _visibility_check_pending, _last_visible_context_ids
+    from .ops import reset_material_coverage_state
+
+    cancel_recovery()
+    cancel_revocations()
+    reset_material_coverage_state()
+    if bpy.app.timers.is_registered(_run_visibility_check):
+        bpy.app.timers.unregister(_run_visibility_check)
+    _visibility_check_pending = False
+    _last_visible_context_ids = None
+
+
+@persistent
 def _recover_after_scene_load(_dummy) -> None:
     global _last_visible_context_ids
     from .ops import reset_material_coverage_state
@@ -175,6 +190,8 @@ def register() -> None:
         first_interval=0.25,
         persistent=True,
     )
+    if _prepare_for_scene_load not in bpy.app.handlers.load_pre:
+        bpy.app.handlers.load_pre.append(_prepare_for_scene_load)
     if _recover_after_scene_load not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_recover_after_scene_load)
     if _context_visibility_changed not in bpy.app.handlers.depsgraph_update_post:
@@ -189,6 +206,8 @@ def unregister() -> None:
 
     if _context_visibility_changed in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.remove(_context_visibility_changed)
+    if _prepare_for_scene_load in bpy.app.handlers.load_pre:
+        bpy.app.handlers.load_pre.remove(_prepare_for_scene_load)
     if _recover_after_scene_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_recover_after_scene_load)
     cancel_recovery()

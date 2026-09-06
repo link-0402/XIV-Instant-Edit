@@ -218,7 +218,7 @@ def _run_scheduled_recovery():
 
 def schedule_recovery() -> None:
     global _recovery_scheduled
-    if _recovery_scheduled:
+    if _recovery_scheduled and bpy.app.timers.is_registered(_run_scheduled_recovery):
         return
     _recovery_scheduled = True
     try:
@@ -240,6 +240,7 @@ def schedule_recovery() -> None:
 def cancel_recovery() -> None:
     global _recovery_scheduled, _recovery_generation
     _recovery_generation += 1
+    _recovery_counts.clear()
     try:
         bpy.app.timers.unregister(_run_scheduled_recovery)
     except Exception:

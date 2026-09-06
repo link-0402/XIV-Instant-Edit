@@ -40,3 +40,8 @@ coding-agent-release-workflow.txt
 
 # Local agent scripts.
 .scripts/
+
+# Grill-me skill artifacts.
+**/CONTEXT.md
+**/CONTEXT-MAP.md
+**/docs/adr/

@@ -15,7 +15,7 @@ namespace InstantEdit.Services;
 /// </summary>
 public sealed class ExportServer : IDisposable
 {
-    private sealed class ExportRequest
+    internal sealed class ExportRequest
     {
         [JsonPropertyName("schema")]
         public string? Schema { get; set; }
@@ -938,9 +938,7 @@ public sealed class ExportServer : IDisposable
             if (envelopeError is not null)
                 return Error(StatusForCode(envelopeError), envelopeError, "unsupported or malformed export envelope");
 
-            var requestFingerprint = export.Version >= 2 && export.NewModName is not null
-                ? Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(export.NewModName)))
-                : null;
+            var requestFingerprint = ExportRequestFingerprint(export);
             if (!_contexts.TryBeginExport(
                     export.PluginInstanceId!,
                     export.ContextId!,
@@ -1084,6 +1082,20 @@ public sealed class ExportServer : IDisposable
                 result.TargetFilePath);
         }
     }
+
+    internal static string ExportRequestFingerprint(ExportRequest request)
+        => Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            request.Schema,
+            request.Version,
+            request.VariantName,
+            request.VariantGroupName,
+            request.VariantTarget,
+            request.VariantTargetId,
+            request.SetupInPenumbra,
+            request.BackupExisting,
+            request.NewModName,
+        })));
 
     private T? DeserializeRequest<T>(
         byte[] bodyBytes,

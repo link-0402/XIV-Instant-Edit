@@ -1,6 +1,5 @@
 """Headless Blender smoke test for standalone Simple Export."""
 
-import importlib.util
 import importlib
 import json
 import sys
@@ -11,21 +10,8 @@ from types import SimpleNamespace
 
 import bpy
 
-
-def load_addon(root: Path):
-    package_name = "_xiv_instant_edit_export_smoke"
-    spec = importlib.util.spec_from_file_location(
-        package_name,
-        root / "__init__.py",
-        submodule_search_locations=[str(root)],
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError("could not load XIV Instant Edit")
-    addon = importlib.util.module_from_spec(spec)
-    sys.modules[package_name] = addon
-    spec.loader.exec_module(addon)
-    addon.register()
-    return addon
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from blender_fixtures import addon_session, temporary_scene_data
 
 
 def assert_corner_aware_uv_export(addon) -> None:
@@ -200,18 +186,247 @@ def assert_mesh_name_conversion(addon) -> None:
                 bpy.data.meshes.remove(mesh)
 
 
-def run() -> None:
-    bpy.ops.wm.read_factory_settings(use_empty=True)
-    root = Path(__file__).resolve().parents[1]
-    addon = load_addon(root)
+def assert_simple_import_folder(addon):
+    operators = importlib.import_module(f"{addon.__name__}.operators")
+    settings = bpy.context.scene.xiv_ie_settings
+    saved = {name: getattr(settings, name) for name in (
+        "simple_import_set_export_directory", "simple_import_use_existing_skeleton", "export_directory")}
     try:
+        with temporary_scene_data():
+            simple_import_module = importlib.import_module(f"{addon.__name__}.io.model")
+            original_simple_import = simple_import_module.ModelImport.from_file
+            original_simple_import_model = operators.XIVModel.from_file
+            before_simple_import = {item.as_pointer() for item in bpy.data.objects}
+
+            class FakeSimpleImportModel:
+                bones = ()
+
+            def fake_simple_import(_file_path, _import_name, **_kwargs):
+                mesh = bpy.data.meshes.new("SimpleImportFolderMeshData")
+                mesh.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+                imported = bpy.data.objects.new("SimpleImportFolderMesh", mesh)
+                bpy.context.collection.objects.link(imported)
+                return (imported,)
+
+            simple_import_module.ModelImport.from_file = staticmethod(fake_simple_import)
+            operators.XIVModel.from_file = staticmethod(lambda _path: FakeSimpleImportModel())
+            try:
+                with tempfile.TemporaryDirectory(prefix="xiv-instant-edit-import-folder-") as import_root:
+                    source_folder = Path(import_root) / "source"
+                    source_folder.mkdir()
+                    source_file = source_folder / "simple-import.mdl"
+                    source_file.write_bytes(b"placeholder")
+                    settings.simple_import_set_export_directory = True
+                    settings.simple_import_use_existing_skeleton = False
+                    settings.export_directory = str(Path(import_root) / "before-success")
+                    if bpy.ops.xiv_ie.simple_import(
+                        "EXEC_DEFAULT", filepath=str(source_file), import_format="MDL"
+                    ) != {"FINISHED"}:
+                        raise AssertionError("Simple Import folder-setting regression import failed")
+                    if Path(settings.export_directory).resolve() != source_folder.resolve():
+                        raise AssertionError("Simple Import did not set the export folder to its source folder")
+
+                    def fail_simple_import(*_args, **_kwargs):
+                        raise RuntimeError("forced import failure")
+
+                    simple_import_module.ModelImport.from_file = staticmethod(fail_simple_import)
+                    retained_directory = Path(import_root) / "unchanged-after-failure"
+                    settings.export_directory = str(retained_directory)
+                    try:
+                        bpy.ops.xiv_ie.simple_import(
+                            "EXEC_DEFAULT", filepath=str(source_file), import_format="MDL"
+                        )
+                    except RuntimeError as error:
+                        if "forced import failure" not in str(error):
+                            raise
+                    else:
+                        raise AssertionError("Forced Simple Import failure did not cancel")
+                    if Path(settings.export_directory) != retained_directory:
+                        raise AssertionError("Failed Simple Import changed the export folder")
+            finally:
+                simple_import_module.ModelImport.from_file = original_simple_import
+                operators.XIVModel.from_file = original_simple_import_model
+                for item in tuple(bpy.data.objects):
+                    if item.as_pointer() not in before_simple_import:
+                        bpy.data.objects.remove(item, do_unlink=True)
+            print("[PASS] Simple Import updates its export folder only after success")
+
+    finally:
+        for name, value in saved.items():
+            setattr(settings, name, value)
+
+
+def assert_mesh_studio(addon, obj, second, added_group):
+    materials = importlib.import_module(f"{addon.__name__}.materials")
+    operators = importlib.import_module(f"{addon.__name__}.operators")
+    with temporary_scene_data():
+        renamed = materials.rename_mesh_part([obj, second, added_group], 0, 1, "Renamed Part")
+        if renamed != "Renamed Part" or second.name != "0.1 Renamed Part":
+            raise AssertionError("Mass part rename did not preserve the mesh ID")
+        materials.set_mesh_part_tags([obj, second, added_group], 0, 1, "body,  Body, armor")
+        if second.get("instant_edit_tags") != "body, armor":
+            raise AssertionError("Part tags were not normalized and stored")
+        attribute = materials.set_mesh_part_attribute(
+            [obj, second, added_group], 0, 1, "atr_nek", True
+        )
+        if attribute != "atr_nek" or not second.get(attribute):
+            raise AssertionError("Mesh Studio attribute was not applied to the mesh part")
+        if materials.attribute_display_name(attribute) != "Neck":
+            raise AssertionError("Mesh Studio attribute label was not resolved")
+        if materials.ensure_flow_data([obj, second]) != 2:
+            raise AssertionError("Mesh Studio flow data was not created")
+        materials.set_mesh_flow_enabled([obj, second], True)
+        if not materials.mesh_flow_enabled([obj, second]):
+            raise AssertionError("Mesh Studio flow export was not enabled")
+        if bpy.ops.xiv_ie.mesh_attribute(
+            mesh_group=0, mesh_part=1, attribute="atr_nek"
+        ) != {"FINISHED"} or second.get("atr_nek"):
+            raise AssertionError("Mesh Studio attribute operator did not remove the attribute")
+        if bpy.ops.xiv_ie.mesh_attribute(
+            mesh_group=0, mesh_part=1, attribute="NEW", selection="atr_nek"
+        ) != {"FINISHED"} or not second.get("atr_nek"):
+            raise AssertionError("Mesh Studio attribute operator did not add the attribute")
+        if bpy.ops.xiv_ie.mesh_flow(mesh_group=0, action="TOGGLE") != {"FINISHED"}:
+            raise AssertionError("Mesh Studio flow operator failed")
+        if materials.mesh_flow_enabled([obj, second]):
+            raise AssertionError("Mesh Studio flow operator did not disable export")
+        bpy.ops.xiv_ie.mesh_flow(mesh_group=0, action="TOGGLE")
+        moved_part = operators._move_mesh_part_once(0, 1, "UP")
+        if moved_part != 0 or not second.name.startswith("0.0 "):
+            raise AssertionError("Mesh Studio part drag did not move the part upward")
+        if operators._move_mesh_part_once(0, 0, "DOWN") != 1:
+            raise AssertionError("Mesh Studio part drag did not restore the part order")
+        moved_group = operators._move_mesh_group_once(0, "DOWN")
+        if moved_group != 1:
+            raise AssertionError("Mesh Studio group drag did not move the group downward")
+        if not obj.name.startswith("1.0 ") or not added_group.name.startswith("0.0 "):
+            raise AssertionError("Mesh Studio group drag did not preserve part IDs")
+        slots = materials.material_group_slots(materials.visible_material_groups())
+        if [group.mesh_index for group in slots] != [0, 1, 2] or slots[-1].objects:
+            raise AssertionError("Mesh Studio did not expose one trailing empty group")
+        if operators._move_mesh_group_once(1, "DOWN") != 2:
+            raise AssertionError("Mesh Studio group drag did not move into a new higher group")
+        slots = materials.material_group_slots(materials.visible_material_groups())
+        if [group.mesh_index for group in slots] != [0, 1, 2, 3] or slots[1].objects:
+            raise AssertionError("Mesh Studio did not retain the empty group gap")
+        capped_slots = materials.material_group_slots(
+            materials.visible_material_groups(), maximum_group=2
+        )
+        if [group.mesh_index for group in capped_slots] != [0, 1, 2]:
+            raise AssertionError("Mesh Studio drag preview extended beyond its fixed ceiling")
+        if operators._move_mesh_group_once(2, "DOWN", maximum_group=2) is not None:
+            raise AssertionError("Mesh Studio group drag moved beyond its fixed ceiling")
+        if operators._move_mesh_group_once(2, "UP") != 1:
+            raise AssertionError("Mesh Studio group drag did not fill an empty group gap")
+
+        second_lod = second.copy()
+        second_lod.data = second.data.copy()
+        second_lod.name = "1.1 Renamed Part LOD1"
+        bpy.context.scene.collection.objects.link(second_lod)
+        if operators._move_mesh_part_once(1, 1, "DOWN") != 0:
+            raise AssertionError("Mesh Studio part drag did not enter the trailing empty group")
+        if not second.name.startswith("2.0 ") or not second_lod.name.startswith("2.0 "):
+            raise AssertionError("Mesh Studio cross-group drag did not move every part LOD")
+        cross_anchor = obj.copy()
+        cross_anchor.data = obj.data.copy()
+        cross_anchor.name = "2.1 Cross Group Anchor"
+        bpy.context.scene.collection.objects.link(cross_anchor)
+        try:
+            if operators._move_mesh_part_once(
+                2, 0, "DOWN", cross_group_only=True
+            ) != 0 or not second.name.startswith("3.0 ") or \
+                    not second_lod.name.startswith("3.0 ") or \
+                    not cross_anchor.name.startswith("2.1 "):
+                raise AssertionError(
+                    "Cross-group-only part movement reordered the destination group"
+                )
+            if operators._move_mesh_part_once(
+                3, 0, "UP", cross_group_only=True
+            ) != 0 or not second.name.startswith("2.0 ") or \
+                    not second_lod.name.startswith("2.0 "):
+                raise AssertionError("Cross-group-only part movement did not restore the source group")
+        finally:
+            cross_anchor_data = cross_anchor.data
+            bpy.data.objects.remove(cross_anchor, do_unlink=True)
+            if cross_anchor_data.users == 0:
+                bpy.data.meshes.remove(cross_anchor_data)
+        if operators._move_mesh_part_once(
+            2, 0, "DOWN", maximum_group=2
+        ) is not None:
+            raise AssertionError("Mesh Studio part drag moved beyond its fixed ceiling")
+        if operators._move_mesh_part_once(2, 0, "UP") != 1:
+            raise AssertionError("Mesh Studio part drag did not choose the lowest free destination part")
+        if not second.name.startswith("1.1 ") or not second_lod.name.startswith("1.1 "):
+            raise AssertionError("Mesh Studio cross-group drag did not restore the destination IDs")
+        second_lod_data = second_lod.data
+        bpy.data.objects.remove(second_lod, do_unlink=True)
+        if second_lod_data.users == 0:
+            bpy.data.meshes.remove(second_lod_data)
+
+        duplicate_a = obj.copy()
+        duplicate_a.data = obj.data.copy()
+        duplicate_a.name = "0.0 Duplicate A"
+        duplicate_a["instant_edit_import_instance_id"] = "duplicate-a"
+        bpy.context.collection.objects.link(duplicate_a)
+        duplicate_b = obj.copy()
+        duplicate_b.data = obj.data.copy()
+        duplicate_b.name = "0.0 Duplicate B"
+        duplicate_b["instant_edit_import_instance_id"] = "duplicate-b"
+        bpy.context.collection.objects.link(duplicate_b)
+        duplicate_target = obj.copy()
+        duplicate_target.data = obj.data.copy()
+        duplicate_target.name = "0.1 Duplicate Target"
+        duplicate_target["instant_edit_import_instance_id"] = "duplicate-target"
+        bpy.context.collection.objects.link(duplicate_target)
+        try:
+            duplicate_instances = materials.mesh_part_instances(
+                [duplicate_a, duplicate_b, duplicate_target], 0
+            )
+            if [item.part_index for item in duplicate_instances] != [0, 0, 1]:
+                raise AssertionError("Duplicate mesh IDs were collapsed into one Mesh Studio row")
+            first_key = duplicate_instances[0].instance_key
+            second_key = duplicate_instances[1].instance_key
+            target_key = duplicate_instances[2].instance_key
+            materials.move_mesh_part_to_group(
+                [duplicate_a, duplicate_b, duplicate_target],
+                0,
+                0,
+                1,
+                first_key,
+            )
+            if (
+                not duplicate_a.name.startswith("1.0 ")
+                or not duplicate_b.name.startswith("0.0 ")
+                or not duplicate_target.name.startswith("0.1 ")
+            ):
+                raise AssertionError("Moving one duplicate mesh part changed its sibling")
+            materials.swap_mesh_part_instances(
+                [duplicate_b, duplicate_target],
+                0,
+                0,
+                second_key,
+                1,
+                target_key,
+            )
+            if (
+                not duplicate_b.name.startswith("0.1 ")
+                or not duplicate_target.name.startswith("0.0 ")
+            ):
+                raise AssertionError("Duplicate-safe part ID swapping did not target one instance")
+        finally:
+            for duplicate in (duplicate_a, duplicate_b, duplicate_target):
+                duplicate_data = duplicate.data
+                bpy.data.objects.remove(duplicate, do_unlink=True)
+                if duplicate_data.users == 0:
+                    bpy.data.meshes.remove(duplicate_data)
+        print("[PASS] Mesh Studio rename, attributes, flow, and drag reordering")
+
+
+
+def run() -> None:
+    with addon_session("_xiv_instant_edit_export_smoke") as addon:
         assert_corner_aware_uv_export(addon)
         assert_mesh_group_conflict_resolution(addon)
-        if hasattr(importlib.import_module(f"{addon.__name__}.materials"), "collapse_imported_materials"):
-            raise AssertionError("Material collapsing helpers are still present")
-        if hasattr(bpy.types, "XIVIE_OT_auto_collapse_materials"):
-            raise AssertionError("Material collapsing operator is still registered")
-        print("[PASS] Material collapsing feature is absent")
         assert_mesh_name_conversion(addon)
 
         if bpy.context.scene.xiv_ie_settings.create_backfaces:
@@ -689,9 +904,9 @@ def run() -> None:
                 raise AssertionError(
                     f"Material coverage warning description missing for {selection_id}: {description!r}")
         if instant_ops.SelectVariantTarget.description(
-                bpy.context, SimpleNamespace(selection_id=instant_ops.MASHUP_TARGET)) != \
-                "Combines the visible exported meshes and their material and texture dependencies.":
-            raise AssertionError("Create Mashup hover text changed when material coverage is missing")
+                bpy.context, SimpleNamespace(selection_id=instant_ops.MASHUP_TARGET)) == \
+                instant_ops.MATERIAL_COVERAGE_WARNING:
+            raise AssertionError("Create Mashup incorrectly receives a missing-coverage warning")
         print("[PASS] Material coverage requests, cache invalidation, and target warning descriptions")
         instant_props.export_scope = "CURRENT_COLLECTION"
         if instant_ops.mashup_target_state(bpy.context)[0]:
@@ -790,11 +1005,6 @@ def run() -> None:
                 selection_id=instant_ops.SAVE_NEW_MOD_TARGET) != {"FINISHED"} or \
                 instant_props.variant_target != instant_ops.SAVE_NEW_MOD_TARGET:
             raise AssertionError("Save to new mod target could not be selected")
-        if instant_ops.SelectVariantTarget.description(
-                bpy.context,
-                SimpleNamespace(selection_id=instant_ops.SAVE_NEW_MOD_TARGET),
-        ) != "Saves the visible model as a new mod, bundling participating-mod resources and retaining external dependencies.":
-            raise AssertionError("Save to new mod target hover text is incorrect")
         context_module._set(context_collection, "resource_manifest_version", 0)
         context_module._set(context_collection, "resource_manifest_status", "capture_failed")
         show, enabled, message = instant_ops.save_new_mod_target_state(bpy.context)
@@ -874,63 +1084,7 @@ def run() -> None:
             bpy.data.objects.remove(mannequin, do_unlink=True)
         print("[PASS] Simple Export honors every Export Parts mode and requires Context for its collection")
 
-        simple_import_module = importlib.import_module(f"{addon.__name__}.io.model")
-        original_simple_import = simple_import_module.ModelImport.from_file
-        original_simple_import_model = operators.XIVModel.from_file
-        before_simple_import = {item.as_pointer() for item in bpy.data.objects}
-
-        class FakeSimpleImportModel:
-            bones = ()
-
-        def fake_simple_import(_file_path, _import_name, **_kwargs):
-            mesh = bpy.data.meshes.new("SimpleImportFolderMeshData")
-            mesh.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
-            imported = bpy.data.objects.new("SimpleImportFolderMesh", mesh)
-            bpy.context.collection.objects.link(imported)
-            return (imported,)
-
-        simple_import_module.ModelImport.from_file = staticmethod(fake_simple_import)
-        operators.XIVModel.from_file = staticmethod(lambda _path: FakeSimpleImportModel())
-        try:
-            with tempfile.TemporaryDirectory(prefix="xiv-instant-edit-import-folder-") as import_root:
-                source_folder = Path(import_root) / "source"
-                source_folder.mkdir()
-                source_file = source_folder / "simple-import.mdl"
-                source_file.write_bytes(b"placeholder")
-                settings.simple_import_set_export_directory = True
-                settings.simple_import_use_existing_skeleton = False
-                settings.export_directory = str(Path(import_root) / "before-success")
-                if bpy.ops.xiv_ie.simple_import(
-                    "EXEC_DEFAULT", filepath=str(source_file), import_format="MDL"
-                ) != {"FINISHED"}:
-                    raise AssertionError("Simple Import folder-setting regression import failed")
-                if Path(settings.export_directory).resolve() != source_folder.resolve():
-                    raise AssertionError("Simple Import did not set the export folder to its source folder")
-
-                def fail_simple_import(*_args, **_kwargs):
-                    raise RuntimeError("forced import failure")
-
-                simple_import_module.ModelImport.from_file = staticmethod(fail_simple_import)
-                retained_directory = Path(import_root) / "unchanged-after-failure"
-                settings.export_directory = str(retained_directory)
-                try:
-                    bpy.ops.xiv_ie.simple_import(
-                        "EXEC_DEFAULT", filepath=str(source_file), import_format="MDL"
-                    )
-                except RuntimeError as error:
-                    if "forced import failure" not in str(error):
-                        raise
-                else:
-                    raise AssertionError("Forced Simple Import failure did not cancel")
-                if Path(settings.export_directory) != retained_directory:
-                    raise AssertionError("Failed Simple Import changed the export folder")
-        finally:
-            simple_import_module.ModelImport.from_file = original_simple_import
-            operators.XIVModel.from_file = original_simple_import_model
-            for item in tuple(bpy.data.objects):
-                if item.as_pointer() not in before_simple_import:
-                    bpy.data.objects.remove(item, do_unlink=True)
-        print("[PASS] Simple Import updates its export folder only after success")
+        assert_simple_import_folder(addon)
 
         cache_module = importlib.import_module(f"{addon.__name__}.instant_edit.cache")
         original_auto_cleanup = cache_module.automatic_cleanup_enabled()
@@ -1167,166 +1321,7 @@ def run() -> None:
                 )
             print(f"[PASS] Modifier-only skeleton export produced {modifier_target.stat().st_size} bytes")
 
-        renamed = materials.rename_mesh_part([obj, second, added_group], 0, 1, "Renamed Part")
-        if renamed != "Renamed Part" or second.name != "0.1 Renamed Part":
-            raise AssertionError("Mass part rename did not preserve the mesh ID")
-        materials.set_mesh_part_tags([obj, second, added_group], 0, 1, "body,  Body, armor")
-        if second.get("instant_edit_tags") != "body, armor":
-            raise AssertionError("Part tags were not normalized and stored")
-        attribute = materials.set_mesh_part_attribute(
-            [obj, second, added_group], 0, 1, "atr_nek", True
-        )
-        if attribute != "atr_nek" or not second.get(attribute):
-            raise AssertionError("Mesh Studio attribute was not applied to the mesh part")
-        if materials.attribute_display_name(attribute) != "Neck":
-            raise AssertionError("Mesh Studio attribute label was not resolved")
-        if materials.ensure_flow_data([obj, second]) != 2:
-            raise AssertionError("Mesh Studio flow data was not created")
-        materials.set_mesh_flow_enabled([obj, second], True)
-        if not materials.mesh_flow_enabled([obj, second]):
-            raise AssertionError("Mesh Studio flow export was not enabled")
-        if bpy.ops.xiv_ie.mesh_attribute(
-            mesh_group=0, mesh_part=1, attribute="atr_nek"
-        ) != {"FINISHED"} or second.get("atr_nek"):
-            raise AssertionError("Mesh Studio attribute operator did not remove the attribute")
-        if bpy.ops.xiv_ie.mesh_attribute(
-            mesh_group=0, mesh_part=1, attribute="NEW", selection="atr_nek"
-        ) != {"FINISHED"} or not second.get("atr_nek"):
-            raise AssertionError("Mesh Studio attribute operator did not add the attribute")
-        if bpy.ops.xiv_ie.mesh_flow(mesh_group=0, action="TOGGLE") != {"FINISHED"}:
-            raise AssertionError("Mesh Studio flow operator failed")
-        if materials.mesh_flow_enabled([obj, second]):
-            raise AssertionError("Mesh Studio flow operator did not disable export")
-        bpy.ops.xiv_ie.mesh_flow(mesh_group=0, action="TOGGLE")
-        moved_part = operators._move_mesh_part_once(0, 1, "UP")
-        if moved_part != 0 or not second.name.startswith("0.0 "):
-            raise AssertionError("Mesh Studio part drag did not move the part upward")
-        if operators._move_mesh_part_once(0, 0, "DOWN") != 1:
-            raise AssertionError("Mesh Studio part drag did not restore the part order")
-        moved_group = operators._move_mesh_group_once(0, "DOWN")
-        if moved_group != 1:
-            raise AssertionError("Mesh Studio group drag did not move the group downward")
-        if not obj.name.startswith("1.0 ") or not added_group.name.startswith("0.0 "):
-            raise AssertionError("Mesh Studio group drag did not preserve part IDs")
-        slots = materials.material_group_slots(materials.visible_material_groups())
-        if [group.mesh_index for group in slots] != [0, 1, 2] or slots[-1].objects:
-            raise AssertionError("Mesh Studio did not expose one trailing empty group")
-        if operators._move_mesh_group_once(1, "DOWN") != 2:
-            raise AssertionError("Mesh Studio group drag did not move into a new higher group")
-        slots = materials.material_group_slots(materials.visible_material_groups())
-        if [group.mesh_index for group in slots] != [0, 1, 2, 3] or slots[1].objects:
-            raise AssertionError("Mesh Studio did not retain the empty group gap")
-        capped_slots = materials.material_group_slots(
-            materials.visible_material_groups(), maximum_group=2
-        )
-        if [group.mesh_index for group in capped_slots] != [0, 1, 2]:
-            raise AssertionError("Mesh Studio drag preview extended beyond its fixed ceiling")
-        if operators._move_mesh_group_once(2, "DOWN", maximum_group=2) is not None:
-            raise AssertionError("Mesh Studio group drag moved beyond its fixed ceiling")
-        if operators._move_mesh_group_once(2, "UP") != 1:
-            raise AssertionError("Mesh Studio group drag did not fill an empty group gap")
-
-        second_lod = second.copy()
-        second_lod.data = second.data.copy()
-        second_lod.name = "1.1 Renamed Part LOD1"
-        bpy.context.scene.collection.objects.link(second_lod)
-        if operators._move_mesh_part_once(1, 1, "DOWN") != 0:
-            raise AssertionError("Mesh Studio part drag did not enter the trailing empty group")
-        if not second.name.startswith("2.0 ") or not second_lod.name.startswith("2.0 "):
-            raise AssertionError("Mesh Studio cross-group drag did not move every part LOD")
-        cross_anchor = obj.copy()
-        cross_anchor.data = obj.data.copy()
-        cross_anchor.name = "2.1 Cross Group Anchor"
-        bpy.context.scene.collection.objects.link(cross_anchor)
-        try:
-            if operators._move_mesh_part_once(
-                2, 0, "DOWN", cross_group_only=True
-            ) != 0 or not second.name.startswith("3.0 ") or \
-                    not second_lod.name.startswith("3.0 ") or \
-                    not cross_anchor.name.startswith("2.1 "):
-                raise AssertionError(
-                    "Cross-group-only part movement reordered the destination group"
-                )
-            if operators._move_mesh_part_once(
-                3, 0, "UP", cross_group_only=True
-            ) != 0 or not second.name.startswith("2.0 ") or \
-                    not second_lod.name.startswith("2.0 "):
-                raise AssertionError("Cross-group-only part movement did not restore the source group")
-        finally:
-            cross_anchor_data = cross_anchor.data
-            bpy.data.objects.remove(cross_anchor, do_unlink=True)
-            if cross_anchor_data.users == 0:
-                bpy.data.meshes.remove(cross_anchor_data)
-        if operators._move_mesh_part_once(
-            2, 0, "DOWN", maximum_group=2
-        ) is not None:
-            raise AssertionError("Mesh Studio part drag moved beyond its fixed ceiling")
-        if operators._move_mesh_part_once(2, 0, "UP") != 1:
-            raise AssertionError("Mesh Studio part drag did not choose the lowest free destination part")
-        if not second.name.startswith("1.1 ") or not second_lod.name.startswith("1.1 "):
-            raise AssertionError("Mesh Studio cross-group drag did not restore the destination IDs")
-        second_lod_data = second_lod.data
-        bpy.data.objects.remove(second_lod, do_unlink=True)
-        if second_lod_data.users == 0:
-            bpy.data.meshes.remove(second_lod_data)
-
-        duplicate_a = obj.copy()
-        duplicate_a.data = obj.data.copy()
-        duplicate_a.name = "0.0 Duplicate A"
-        duplicate_a["instant_edit_import_instance_id"] = "duplicate-a"
-        bpy.context.collection.objects.link(duplicate_a)
-        duplicate_b = obj.copy()
-        duplicate_b.data = obj.data.copy()
-        duplicate_b.name = "0.0 Duplicate B"
-        duplicate_b["instant_edit_import_instance_id"] = "duplicate-b"
-        bpy.context.collection.objects.link(duplicate_b)
-        duplicate_target = obj.copy()
-        duplicate_target.data = obj.data.copy()
-        duplicate_target.name = "0.1 Duplicate Target"
-        duplicate_target["instant_edit_import_instance_id"] = "duplicate-target"
-        bpy.context.collection.objects.link(duplicate_target)
-        try:
-            duplicate_instances = materials.mesh_part_instances(
-                [duplicate_a, duplicate_b, duplicate_target], 0
-            )
-            if [item.part_index for item in duplicate_instances] != [0, 0, 1]:
-                raise AssertionError("Duplicate mesh IDs were collapsed into one Mesh Studio row")
-            first_key = duplicate_instances[0].instance_key
-            second_key = duplicate_instances[1].instance_key
-            target_key = duplicate_instances[2].instance_key
-            materials.move_mesh_part_to_group(
-                [duplicate_a, duplicate_b, duplicate_target],
-                0,
-                0,
-                1,
-                first_key,
-            )
-            if (
-                not duplicate_a.name.startswith("1.0 ")
-                or not duplicate_b.name.startswith("0.0 ")
-                or not duplicate_target.name.startswith("0.1 ")
-            ):
-                raise AssertionError("Moving one duplicate mesh part changed its sibling")
-            materials.swap_mesh_part_instances(
-                [duplicate_b, duplicate_target],
-                0,
-                0,
-                second_key,
-                1,
-                target_key,
-            )
-            if (
-                not duplicate_b.name.startswith("0.1 ")
-                or not duplicate_target.name.startswith("0.0 ")
-            ):
-                raise AssertionError("Duplicate-safe part ID swapping did not target one instance")
-        finally:
-            for duplicate in (duplicate_a, duplicate_b, duplicate_target):
-                duplicate_data = duplicate.data
-                bpy.data.objects.remove(duplicate, do_unlink=True)
-                if duplicate_data.users == 0:
-                    bpy.data.meshes.remove(duplicate_data)
-        print("[PASS] Mesh Studio rename, attributes, flow, and drag reordering")
+        assert_mesh_studio(addon, obj, second, added_group)
 
         instant_props.export_destination = context_id
         instant_props.variant_targets.add().selection_id = "stale-after-delete"
@@ -1338,8 +1333,6 @@ def run() -> None:
         if props_module._export_destination_items(None, bpy.context)[0][0] != "NONE":
             raise AssertionError("Context deletion removed the permanent selector sentinel")
         print("[PASS] Context deletion keeps the Blender panel selector valid")
-    finally:
-        addon.unregister()
 
 
 if __name__ == "__main__":

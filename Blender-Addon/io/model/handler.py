@@ -31,24 +31,26 @@ def create_backfaces(obj:Object) -> None:
     old_poly_count = len(mesh.polygons) 
 
     bm = bmesh.new()
-    bm.from_mesh(mesh)
+    try:
+        bm.from_mesh(mesh)
 
-    bm.verts.ensure_lookup_table()
-    bm.faces.ensure_lookup_table()
+        bm.verts.ensure_lookup_table()
+        bm.faces.ensure_lookup_table()
 
-    bf_idx    = obj.vertex_groups["BACKFACES"].index
-    backfaces = _get_backfaces(bm, bf_idx)
+        bf_idx    = obj.vertex_groups["BACKFACES"].index
+        backfaces = _get_backfaces(bm, bf_idx)
     
-    dupe_faces = [
-        geo for geo in 
-        bmesh.ops.duplicate(bm, geom=backfaces[:])["geom"] 
-        if isinstance(geo, bmesh.types.BMFace)
-        ]
+        dupe_faces = [
+            geo for geo in
+            bmesh.ops.duplicate(bm, geom=backfaces[:])["geom"]
+            if isinstance(geo, bmesh.types.BMFace)
+            ]
 
-    bmesh.ops.reverse_faces(bm, faces=dupe_faces)
+        bmesh.ops.reverse_faces(bm, faces=dupe_faces)
 
-    bm.to_mesh(mesh)
-    bm.free()
+        bm.to_mesh(mesh)
+    finally:
+        bm.free()
 
     normals = []
     for face_idx, face in enumerate(mesh.polygons):
@@ -67,32 +69,35 @@ def backfaces_with_shapes(obj: Object) -> None:
     temp_obj = {}
     verts    = len(obj.data.vertices)
     shape_co = np.zeros(verts * 3, dtype=np.float32)
-    for key in key_blocks[1:]:
-        temp_copy = quick_copy(obj)
+    try:
+        for key in key_blocks[1:]:
+            temp_copy = quick_copy(obj)
+            temp_obj[key.name] = temp_copy
         
-        key.data.foreach_get("co", shape_co)
+            key.data.foreach_get("co", shape_co)
 
-        temp_copy.shape_key_clear()
-        temp_copy.data.vertices.foreach_set("co", shape_co)
-        create_backfaces(temp_copy)
-
-        temp_obj[key.name] = temp_copy
+            temp_copy.shape_key_clear()
+            temp_copy.data.vertices.foreach_set("co", shape_co)
+            create_backfaces(temp_copy)
     
-    obj.shape_key_clear()
-    create_backfaces(obj)
-    obj.shape_key_add(name="Basis")
+        obj.shape_key_clear()
+        create_backfaces(obj)
+        obj.shape_key_add(name="Basis")
 
-    verts = len(obj.data.vertices)
-    shape_co = np.zeros(verts * 3, dtype=np.float32)
+        verts = len(obj.data.vertices)
+        shape_co = np.zeros(verts * 3, dtype=np.float32)
 
-    for key_name, copy in temp_obj.items():
-        copy: Object
-        copy.data.vertices.foreach_get("co", shape_co)
+        for key_name, copy in temp_obj.items():
+            copy: Object
+            copy.data.vertices.foreach_get("co", shape_co)
 
-        new_shape = obj.shape_key_add(name=key_name)
-        new_shape.data.foreach_set("co", shape_co)
+            new_shape = obj.shape_key_add(name=key_name)
+            new_shape.data.foreach_set("co", shape_co)
 
-        safe_object_delete(copy)
+    finally:
+        for copy in temp_obj.values():
+            safe_object_delete(copy)
+
 
 def _get_backfaces(bm: BMesh, bf_idx: int) -> list[BMFace]:
     deform_layer = bm.verts.layers.deform.active
@@ -217,6 +222,7 @@ class SceneHandler:
                 'transparency': transparency, 
                 'backfaces'   : backfaces,
                 'old_name'    : obj.name,
+                'hidden'      : obj.hide_get(),
                 'armature'    : armature,
                 }
 
@@ -303,6 +309,7 @@ class SceneHandler:
                 dupe = fixed_transp[obj]
             else:
                 dupe = copy_mesh_object(obj, self.depsgraph)
+                self.delete.append(dupe)
 
                 self.rename_object(dupe, stats["old_name"])
 
@@ -316,7 +323,6 @@ class SceneHandler:
                 backfaces.append(dupe)
             
             dupes.append(dupe)
-            self.delete.append(dupe)
         
         if shape_keys:
             self.handle_shape_keys(shape_keys)
@@ -347,6 +353,7 @@ class SceneHandler:
             original_faces = get_original_faces(obj)
 
             dupe = copy_mesh_object(obj, self.depsgraph)
+            self.delete.append(dupe)
 
             self.rename_object(dupe, self.meshes[obj]["old_name"])
 
@@ -356,12 +363,15 @@ class SceneHandler:
         tri_graph = bpy.context.evaluated_depsgraph_get()
         for dupe, original_faces in to_process:
             eval_obj  = dupe.evaluated_get(tri_graph)
+            previous_mesh = dupe.data
             dupe.data = bpy.data.meshes.new_from_object(
                             eval_obj, 
                             preserve_all_data_layers=True,
                             depsgraph=tri_graph
                             )
             
+            if previous_mesh.users == 0:
+                bpy.data.meshes.remove(previous_mesh)
             sequential_faces(dupe, original_faces)
         
         return fixed_transp
@@ -415,6 +425,7 @@ class SceneHandler:
         for dupe, original, keys in vert_mismatches:
             for key in keys:
                 temp_copy:Object = quick_copy(original, key.name)
+                self.delete.append(temp_copy)
                 temp_copies[dupe][key.name] = temp_copy
 
         shape_graph = bpy.context.evaluated_depsgraph_get()
@@ -427,6 +438,7 @@ class SceneHandler:
                 if self.logger:
                     self.logger.last_item = f"{dupe.name}: Shape {key_name}"
 
+                mesh = None
                 try:
                     eval_obj   = copy.evaluated_get(shape_graph)
                     mesh       = bpy.data.meshes.new_from_object(eval_obj)
@@ -448,11 +460,9 @@ class SceneHandler:
                     raise e
                 
                 finally:
-                    try:
-                        bpy.data.meshes.remove(mesh, do_unlink=True, do_id_user=True, do_ui_user=True)
-                    except:
-                        pass
-
+                    if mesh is not None:
+                        bpy.data.meshes.remove(mesh)
+                    self.delete.remove(copy)
                     safe_object_delete(copy)
 
     def handle_backfaces(self, backfaces: Iterable[Object]):
@@ -524,13 +534,14 @@ class SceneHandler:
         if self.logger:
             self.logger.log("Restoring scene...", 2)
         
-        for obj in self.delete:
+        for obj in reversed(self.delete):
             safe_object_delete(obj)
+        self.delete.clear()
     
         for obj in self.meshes:
             try:
                 obj.name = self.meshes[obj]["old_name"]
-                obj.hide_set(state=False)
+                obj.hide_set(state=self.meshes[obj]["hidden"])
                 if obj.data.shape_keys:
                     key_blocks = obj.data.shape_keys.key_blocks
                     for key_name, value in self.meshes[obj].get("shape_values", ()):

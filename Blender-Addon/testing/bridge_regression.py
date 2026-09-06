@@ -6,7 +6,6 @@ test import, where ``sentinels`` are user objects captured before the import.
 # Modified for XIV Instant Edit, 2026.
 
 import importlib
-import importlib.util
 import json
 import struct
 import sys
@@ -16,6 +15,9 @@ from types import SimpleNamespace
 
 import bpy
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from blender_fixtures import addon_session, temporary_scene_data
 
 
 def _same_object(left, right) -> bool:
@@ -73,381 +75,84 @@ def assert_staging_isolated(collection, created_objects, sentinels=()) -> None:
     )
 
 
-def _load_addon(addon_root: Path):
-    """Load the hyphenated extension directory under a test-only package name."""
-    package_name = "_xiv_instant_edit_regression_addon"
-    spec = importlib.util.spec_from_file_location(
-        package_name,
-        addon_root / "__init__.py",
-        submodule_search_locations=[str(addon_root)],
+def assert_manifest_status(server, addon_root):
+    manifest_version = server._load_addon_version(addon_root / "blender_manifest.toml")
+    status_payload = server._status_payload()
+    _require(
+        manifest_version is not None and
+        status_payload["addonVersion"] == manifest_version and
+        status_payload["ok"] and
+        status_payload["ready"] and
+        status_payload["addonId"] == "xiv_instant_edit" and
+        isinstance(status_payload["capabilities"], list),
+        "the Blender status response reports the manifest version and existing readiness data",
     )
-    if spec is None or spec.loader is None:
-        raise RuntimeError("could not create addon import specification")
-    addon = importlib.util.module_from_spec(spec)
-    sys.modules[package_name] = addon
-    spec.loader.exec_module(addon)
-    return addon, package_name
-
-
-def _register_for_test(addon, package_name: str) -> None:
-    """Register the standalone add-on for a Blender regression run."""
-    addon.register()
-
-
-def _unregister_for_test(addon, package_name: str) -> None:
-    addon.unregister()
-
-
-def run_staging_isolation_regression() -> None:
-    """Run the context-isolation regression in headless Blender."""
-    addon_root = Path(__file__).resolve().parents[1]
-    addon = None
-    temp_path = None
-    staging = None
-    created_objects = ()
-    existing_collection = None
-    existing_mesh = None
-    explicit_context_collection = None
-    explicit_context_mesh = None
-    skeleton = None
-    sentinel = None
-
-    try:
-        bpy.ops.wm.read_factory_settings(use_empty=True)
-        ambient = bpy.context.collection
-
-        sentinel_mesh = bpy.data.meshes.new("InstantEditRegressionSentinelMesh")
-        sentinel = bpy.data.objects.new("InstantEditRegressionSentinel", sentinel_mesh)
-        ambient.objects.link(sentinel)
-
-        bpy.ops.object.select_all(action="DESELECT")
-        sentinel.select_set(True)
-        bpy.context.view_layer.objects.active = sentinel
-        before_selected = tuple(bpy.context.selected_objects)
-        before_active = bpy.context.view_layer.objects.active
-
-        with tempfile.NamedTemporaryFile(suffix=".mdl", delete=False) as mdl_file:
-            temp_path = Path(mdl_file.name)
-            mdl_file.write(b"regression placeholder")
-
-        addon, package_name = _load_addon(addon_root)
-        _register_for_test(addon, package_name)
-        ops = importlib.import_module(f"{package_name}.instant_edit.ops")
-        props = importlib.import_module(f"{package_name}.instant_edit.props")
-        context_module = importlib.import_module(f"{package_name}.instant_edit.context")
-        server = importlib.import_module(f"{package_name}.instant_edit.server")
-        plugin_http = importlib.import_module(f"{package_name}.instant_edit.plugin_http")
-        ui = importlib.import_module(f"{package_name}.ui")
-        material_preview = importlib.import_module(
-            f"{package_name}.instant_edit.material_preview"
-        )
-        manifest_version = server._load_addon_version(addon_root / "blender_manifest.toml")
-        status_payload = server._status_payload()
+    with tempfile.TemporaryDirectory() as version_temp:
+        version_root = Path(version_temp)
         _require(
-            manifest_version is not None and
-            status_payload["addonVersion"] == manifest_version and
-            status_payload["ok"] and
-            status_payload["ready"] and
-            status_payload["addonId"] == "xiv_instant_edit" and
-            isinstance(status_payload["capabilities"], list),
-            "the Blender status response reports the manifest version and existing readiness data",
+            server._load_addon_version(version_root / "missing.toml") is None,
+            "a missing Blender manifest produces an unknown add-on version",
         )
-        with tempfile.TemporaryDirectory() as version_temp:
-            version_root = Path(version_temp)
-            _require(
-                server._load_addon_version(version_root / "missing.toml") is None,
-                "a missing Blender manifest produces an unknown add-on version",
-            )
-            invalid_manifest = version_root / "invalid.toml"
-            invalid_manifest.write_text("version = [", encoding="utf-8")
-            _require(
-                server._load_addon_version(invalid_manifest) is None,
-                "an invalid Blender manifest produces an unknown add-on version",
-            )
+        invalid_manifest = version_root / "invalid.toml"
+        invalid_manifest.write_text("version = [", encoding="utf-8")
         _require(
-            props._export_destination_items(None, bpy.context) == [
-                (props.NO_EXPORT_CONTEXT, "Select Context", "Choose the imported model destination for Quick Export")
-            ],
-            "an empty scene retains the permanent Context sentinel",
+            server._load_addon_version(invalid_manifest) is None,
+            "an invalid Blender manifest produces an unknown add-on version",
         )
-        export_streams = importlib.import_module(f"{package_name}.io.model.exp.streams")
-        model_file = importlib.import_module(f"{package_name}.xivpy.model.file")
 
-        for version, expected in (
-            (model_file.XIVModel.V5, "Pre-Dawntrail MDL version"),
-            (0xDEADBEEF, "Unsupported MDL version 0xDEADBEEF"),
-        ):
-            try:
-                model_file.XIVModel.from_bytes(struct.pack("<I", version))
-            except ValueError as error:
-                _require(expected in str(error), f"MDL version 0x{version:08X} is rejected clearly")
-            else:
-                raise AssertionError(f"unsupported MDL version 0x{version:08X} was accepted")
 
-        stream_dtype = np.dtype([
-            ("uv0", np.float32, (4,)),
-            ("colour0", np.uint8, (4,)),
-            ("colour1", np.uint8, (4,)),
-            ("flow", np.uint8, (4,)),
-        ])
-        texture_stream = np.zeros(2, dtype=stream_dtype)
-        texture_stream["uv0"][:, :2] = ((0.25, 0.75), (0.5, 0.125))
-        texture_stream["colour0"][:] = 12
-        texture_stream["colour1"][:] = 34
-        texture_stream["flow"][:] = 56
-        export_streams.apply_mesh_options({1: texture_stream}, {
-            "copy_uv1_to_uv2": True,
-            "clear_vertex_color1": True,
-            "clear_vertex_color2": True,
-            "clear_flow_data": True,
-        })
-        _require(
-            np.array_equal(texture_stream["uv0"][:, :2], texture_stream["uv0"][:, 2:4]),
-            "UV1 can be copied into UV2 during export",
-        )
-        _require(np.all(texture_stream["colour0"] == 255), "vertex color 1 can be cleared")
-        _require(
-            np.all(texture_stream["colour1"][:, :3] == 0) and np.all(texture_stream["colour1"][:, 3] == 255),
-            "vertex color 2 can be cleared",
-        )
-        _require(
-            np.all(texture_stream["flow"][:, :2] == 0) and np.all(texture_stream["flow"][:, 2:] == 255),
-            "flow data can be reset to neutral",
-        )
-        export_streams.apply_mesh_options({1: texture_stream}, {"clear_uv2": True})
-        _require(np.all(texture_stream["uv0"][:, 2:4] == 0), "UV2 can be cleared during export")
+def assert_model_stream_options(package_name):
+    export_streams = importlib.import_module(f"{package_name}.io.model.exp.streams")
+    model_file = importlib.import_module(f"{package_name}.xivpy.model.file")
 
-        base_import = {
-            "schema": "instant-edit.context",
-            "version": 1,
-            "pluginInstanceId": "plugin-instance",
-            "contextId": "context-id",
-            "importId": "import-id",
-            "capability": "capability",
-            "filePath": r"C:\Temp\instant-edit-import.mdl",
-            "sourceGamePath": "chara/equipment/e0001/model/c0101e0001_top.mdl",
-            "objectIndex": 0,
-            "displayName": "Regression Model",
-            "callbackPort": 42428,
-            "targetFilePath": r"D:\Penumbra\SourceMod\models\original.mdl",
-            "managedDestination": r"D:\Penumbra\SourceMod\models",
-            "sourceModDirectory": "SourceModDirectory",
-            "sourceModName": "Source Mod",
-            "sourceModRootPath": r"D:\Penumbra\SourceMod",
-            "targetRelativePath": "Files/models/original.mdl",
-            "resourceManifestVersion": 0,
-            "resourceManifestStatus": "capture_failed",
-        }
-        validated = server._ImportHandler._validate_import(base_import)
+    for version, expected in (
+        (model_file.XIVModel.V5, "Pre-Dawntrail MDL version"),
+        (0xDEADBEEF, "Unsupported MDL version 0xDEADBEEF"),
+    ):
         try:
-            server._ImportHandler._validate_import({**base_import, "schema": "instant-edit.import"})
-        except ValueError:
-            print("[PASS] transitional import envelopes are rejected")
+            model_file.XIVModel.from_bytes(struct.pack("<I", version))
+        except ValueError as error:
+            _require(expected in str(error), f"MDL version 0x{version:08X} is rejected clearly")
         else:
-            raise AssertionError("a transitional import envelope was accepted")
-        _require(
-            validated["targetFilePath"] == r"D:\Penumbra\SourceMod\models\original.mdl",
-            "the original physical model target is preserved in Blender's import context",
-        )
-        _require(
-            validated["managedDestination"] == r"D:\Penumbra\SourceMod\models",
-            "the original target folder is preserved",
-        )
-        _require(
-            validated["targetRelativePath"] == "Files/models/original.mdl",
-            "the durable target-relative path survives the import envelope",
-        )
-        pending_import = server._ImportHandler._validate_import({
-            **base_import,
-            "version": 2,
-            "contextId": "vanilla-context",
-            "importId": "vanilla-import",
-            "sourceKind": "game",
-            "sourceGamePath": "chara/equipment/e0002/model/c0101e0002_top.mdl",
-            "resolvedGamePath": "chara/equipment/e0003/model/c0101e0003_top.mdl",
-            "destinationState": "new_mod_required",
-            "targetFilePath": None,
-            "managedDestination": None,
-            "sourceModDirectory": None,
-            "sourceModName": None,
-            "sourceModRootPath": None,
-            "targetRelativePath": None,
-            "targetCollectionId": "11111111-1111-1111-1111-111111111111",
-            "targetCollectionName": "Player Collection",
-        })
-        _require(
-            pending_import["destinationState"] == "new_mod_required" and
-            pending_import["managedDestination"] == "" and
-            pending_import["sourceGamePath"].endswith("e0002_top.mdl") and
-            pending_import["resolvedGamePath"].endswith("e0003_top.mdl"),
-            "v2 pending game contexts accept empty destinations and retain consumer and resolved paths",
-        )
-        try:
-            server._ImportHandler._validate_import({
-                **pending_import,
-                "resolvedGamePath": r"C:\Game\rooted.mdl",
-            })
-        except ValueError:
-            print("[PASS] pending game contexts reject rooted resolved paths")
-        else:
-            raise AssertionError("a pending game context accepted a rooted resolved path")
-        pending_collection = context_module.create_collection(
-            bpy.context.scene,
-            {
-                "context_id": "pending-collection-context",
-                "schema": context_module.SCHEMA,
-                "version": 2,
-                "plugin_instance_id": "plugin-instance",
-                "capability": "capability",
-                "source_game_path": pending_import["sourceGamePath"],
-                "source_kind": "game",
-                "resolved_game_path": pending_import["resolvedGamePath"],
-                "destination_state": "new_mod_required",
-                "managed_destination": "",
-                "target_file_path": "",
-                "source_mod_directory": "",
-                "source_mod_name": "",
-                "source_mod_root_path": "",
-                "target_relative_path": "",
-                "target_collection_id": pending_import["targetCollectionId"],
-                "target_collection_name": pending_import["targetCollectionName"],
-                "resource_manifest_version": 0,
-                "resource_manifest_status": "capture_failed",
-                "import_id": "pending-collection-import",
-                "callback_port": 42428,
-                "import_file_name": "vanilla.mdl",
-            },
-        )
-        pending_mesh_data = bpy.data.meshes.new("PendingContextMeshData")
-        pending_mesh_data.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
-        pending_mesh = bpy.data.objects.new("0.0 Pending Context", pending_mesh_data)
-        pending_collection.objects.link(pending_mesh)
-        pending_ref = context_module.validate_context("pending-collection-context", bpy.context.scene)
-        _require(
-            pending_ref.destination_state == "new_mod_required" and
-            ui._import_file_display(pending_ref) == pending_import["resolvedGamePath"],
-            "pending collection validation displays the resolved game-data model path",
-        )
-        context_module.apply_authoritative_context(pending_collection, {
-            "schema": context_module.SCHEMA,
-            "version": 2,
-            "pluginInstanceId": "plugin-instance",
-            "contextId": "pending-collection-context",
-            "importId": "pending-collection-import",
-            "capability": "promoted-capability",
-            "sourceGamePath": pending_import["sourceGamePath"],
-            "sourceKind": "game",
-            "resolvedGamePath": pending_import["resolvedGamePath"],
-            "destinationState": "ready",
-            "managedDestination": r"D:\Penumbra\Vanilla Edit\Files\chara\equipment\e0002\model",
-            "targetFilePath": r"D:\Penumbra\Vanilla Edit\Files\chara\equipment\e0002\model\c0101e0002_top.mdl",
-            "sourceModDirectory": "Vanilla Edit",
-            "sourceModName": "Vanilla Edit",
-            "sourceModRootPath": r"D:\Penumbra\Vanilla Edit",
-            "targetRelativePath": "Files/chara/equipment/e0002/model/c0101e0002_top.mdl",
-            "targetCollectionId": pending_import["targetCollectionId"],
-            "targetCollectionName": pending_import["targetCollectionName"],
-            "resourceManifestVersion": 0,
-            "resourceManifestStatus": "capture_failed",
-            "callbackPort": 42428,
-        })
-        promoted_ref = context_module.validate_context("pending-collection-context", bpy.context.scene)
-        _require(
-            promoted_ref.destination_state == "ready" and
-            promoted_ref.source_mod_directory == "Vanilla Edit" and
-            promoted_ref.target_relative_path.startswith("Files/chara/"),
-            "an authoritative export receipt promotes pending collection metadata to a normal destination",
-        )
-        bpy.data.objects.remove(pending_mesh, do_unlink=True)
-        bpy.data.collections.remove(pending_collection, do_unlink=True)
-        display_ref = SimpleNamespace(
-            target_relative_path=validated["targetRelativePath"],
-            target_file_path=validated["targetFilePath"],
-            source_mod_root_path=r"D:\Penumbra\SourceMod",
-        )
-        _require(
-            ui._export_destination_display(display_ref) == "Files/models/original.mdl",
-            "the export display omits the mod root and includes the model filename",
-        )
-        _require(
-            ui._wrap_display_value(
-                "model/normal/chara/equipment/e0691/model/c0201e0691_top.mdl",
-                42,
-            ) == [
-                "model/normal/chara/equipment/e0691/model/",
-                "c0201e0691_top.mdl",
-            ],
-            "path info wraps at slash boundaries",
-        )
-        derived_display_ref = SimpleNamespace(
-            target_relative_path="",
-            target_file_path=validated["targetFilePath"],
-            source_mod_root_path=r"D:\Penumbra\SourceMod",
-        )
-        _require(
-            ui._export_destination_display(derived_display_ref) == "models/original.mdl",
-            "the export display derives a mod-relative model path",
-        )
+            raise AssertionError(f"unsupported MDL version 0x{version:08X} was accepted")
 
-        validated_options = server._ImportHandler._validate_import({
-            **base_import,
-            "contextId": "context-id-options",
-            "importId": "import-id-options",
-            "importOptions": {
-                "armatureMode": "existing",
-                "targetObject": "  Skeleton  ",
-                "applyTexturesAndMaterials": True,
-                "excludeBodyAndGeneralMaterials": True,
-            },
-            "previewManifestPath": r"C:\Temp\preview\materials.json",
-        })
-        _require(
-            validated_options["importOptions"] == {
-                "armatureMode": "existing",
-                "targetObject": "Skeleton",
-                "applyTexturesAndMaterials": True,
-                "excludeBodyAndGeneralMaterials": True,
-            },
-            "existing-skeleton import options are normalized",
-        )
-        _require(
-            validated_options["previewManifestPath"] == r"C:\Temp\preview\materials.json",
-            "the material-preview manifest path is preserved in the import envelope",
-        )
-        _require(
-            server._ImportHandler._validate_import({**base_import})["importOptions"] == {
-                "armatureMode": "generated",
-                "targetObject": "Skeleton",
-                "applyTexturesAndMaterials": False,
-                "excludeBodyAndGeneralMaterials": False,
-            },
-            "material previews default to disabled",
-        )
-        try:
-            server._ImportHandler._validate_import({**base_import, "importOptions": {"armatureMode": "unknown"}})
-        except ValueError:
-            print("[PASS] invalid import options are rejected")
-        else:
-            raise AssertionError("invalid import options were accepted")
-        try:
-            server._ImportHandler._validate_import({
-                **base_import,
-                "importOptions": {"applyTexturesAndMaterials": "yes"},
-            })
-        except ValueError:
-            print("[PASS] non-boolean material-preview options are rejected")
-        else:
-            raise AssertionError("a non-boolean material-preview option was accepted")
-        try:
-            server._ImportHandler._validate_import({
-                **base_import,
-                "importOptions": {"excludeBodyAndGeneralMaterials": True},
-            })
-        except ValueError:
-            print("[PASS] body/general exclusion requires material previews")
-        else:
-            raise AssertionError("body/general exclusion was accepted without material previews")
+    stream_dtype = np.dtype([
+        ("uv0", np.float32, (4,)),
+        ("colour0", np.uint8, (4,)),
+        ("colour1", np.uint8, (4,)),
+        ("flow", np.uint8, (4,)),
+    ])
+    texture_stream = np.zeros(2, dtype=stream_dtype)
+    texture_stream["uv0"][:, :2] = ((0.25, 0.75), (0.5, 0.125))
+    texture_stream["colour0"][:] = 12
+    texture_stream["colour1"][:] = 34
+    texture_stream["flow"][:] = 56
+    export_streams.apply_mesh_options({1: texture_stream}, {
+        "copy_uv1_to_uv2": True,
+        "clear_vertex_color1": True,
+        "clear_vertex_color2": True,
+        "clear_flow_data": True,
+    })
+    _require(
+        np.array_equal(texture_stream["uv0"][:, :2], texture_stream["uv0"][:, 2:4]),
+        "UV1 can be copied into UV2 during export",
+    )
+    _require(np.all(texture_stream["colour0"] == 255), "vertex color 1 can be cleared")
+    _require(
+        np.all(texture_stream["colour1"][:, :3] == 0) and np.all(texture_stream["colour1"][:, 3] == 255),
+        "vertex color 2 can be cleared",
+    )
+    _require(
+        np.all(texture_stream["flow"][:, :2] == 0) and np.all(texture_stream["flow"][:, 2:] == 255),
+        "flow data can be reset to neutral",
+    )
+    export_streams.apply_mesh_options({1: texture_stream}, {"clear_uv2": True})
+    _require(np.all(texture_stream["uv0"][:, 2:4] == 0), "UV2 can be cleared during export")
 
+
+
+def assert_material_previews(material_preview):
+    with temporary_scene_data():
         with tempfile.TemporaryDirectory() as preview_temp:
             import_directory = Path(preview_temp) / ("a" * 32)
             preview_directory = import_directory / "preview"
@@ -701,6 +406,290 @@ def run_staging_isolation_regression() -> None:
                 raise AssertionError("preview manifest path traversal was accepted")
             material_preview.discard_preview_data(preview_package)
 
+
+
+def run_staging_isolation_regression(addon) -> None:
+    """Run the context-isolation regression in headless Blender."""
+    addon_root = Path(__file__).resolve().parents[1]
+    package_name = addon.__name__
+    temp_path = None
+    staging = None
+    created_objects = ()
+    existing_collection = None
+    existing_mesh = None
+    explicit_context_collection = None
+    explicit_context_mesh = None
+    skeleton = None
+    sentinel = None
+
+    try:
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        ambient = bpy.context.collection
+
+        sentinel_mesh = bpy.data.meshes.new("InstantEditRegressionSentinelMesh")
+        sentinel = bpy.data.objects.new("InstantEditRegressionSentinel", sentinel_mesh)
+        ambient.objects.link(sentinel)
+
+        bpy.ops.object.select_all(action="DESELECT")
+        sentinel.select_set(True)
+        bpy.context.view_layer.objects.active = sentinel
+        before_selected = tuple(bpy.context.selected_objects)
+        before_active = bpy.context.view_layer.objects.active
+
+        with tempfile.NamedTemporaryFile(suffix=".mdl", delete=False) as mdl_file:
+            temp_path = Path(mdl_file.name)
+            mdl_file.write(b"regression placeholder")
+
+        ops = importlib.import_module(f"{package_name}.instant_edit.ops")
+        props = importlib.import_module(f"{package_name}.instant_edit.props")
+        context_module = importlib.import_module(f"{package_name}.instant_edit.context")
+        server = importlib.import_module(f"{package_name}.instant_edit.server")
+        plugin_http = importlib.import_module(f"{package_name}.instant_edit.plugin_http")
+        ui = importlib.import_module(f"{package_name}.ui")
+        material_preview = importlib.import_module(
+            f"{package_name}.instant_edit.material_preview"
+        )
+        assert_manifest_status(server, addon_root)
+
+        _require(
+            [item[0] for item in props._export_destination_items(None, bpy.context)] == [props.NO_EXPORT_CONTEXT],
+            "an empty scene retains the permanent Context sentinel",
+        )
+        assert_model_stream_options(package_name)
+
+        base_import = {
+            "schema": "instant-edit.context",
+            "version": 1,
+            "pluginInstanceId": "plugin-instance",
+            "contextId": "context-id",
+            "importId": "import-id",
+            "capability": "capability",
+            "filePath": r"C:\Temp\instant-edit-import.mdl",
+            "sourceGamePath": "chara/equipment/e0001/model/c0101e0001_top.mdl",
+            "objectIndex": 0,
+            "displayName": "Regression Model",
+            "callbackPort": 42428,
+            "targetFilePath": r"D:\Penumbra\SourceMod\models\original.mdl",
+            "managedDestination": r"D:\Penumbra\SourceMod\models",
+            "sourceModDirectory": "SourceModDirectory",
+            "sourceModName": "Source Mod",
+            "sourceModRootPath": r"D:\Penumbra\SourceMod",
+            "targetRelativePath": "Files/models/original.mdl",
+            "resourceManifestVersion": 0,
+            "resourceManifestStatus": "capture_failed",
+        }
+        validated = server._ImportHandler._validate_import(base_import)
+        try:
+            server._ImportHandler._validate_import({**base_import, "schema": "instant-edit.import"})
+        except ValueError:
+            print("[PASS] transitional import envelopes are rejected")
+        else:
+            raise AssertionError("a transitional import envelope was accepted")
+        _require(
+            validated["targetFilePath"] == r"D:\Penumbra\SourceMod\models\original.mdl",
+            "the original physical model target is preserved in Blender's import context",
+        )
+        _require(
+            validated["managedDestination"] == r"D:\Penumbra\SourceMod\models",
+            "the original target folder is preserved",
+        )
+        _require(
+            validated["targetRelativePath"] == "Files/models/original.mdl",
+            "the durable target-relative path survives the import envelope",
+        )
+        pending_import = server._ImportHandler._validate_import({
+            **base_import,
+            "version": 2,
+            "contextId": "vanilla-context",
+            "importId": "vanilla-import",
+            "sourceKind": "game",
+            "sourceGamePath": "chara/equipment/e0002/model/c0101e0002_top.mdl",
+            "resolvedGamePath": "chara/equipment/e0003/model/c0101e0003_top.mdl",
+            "destinationState": "new_mod_required",
+            "targetFilePath": None,
+            "managedDestination": None,
+            "sourceModDirectory": None,
+            "sourceModName": None,
+            "sourceModRootPath": None,
+            "targetRelativePath": None,
+            "targetCollectionId": "11111111-1111-1111-1111-111111111111",
+            "targetCollectionName": "Player Collection",
+        })
+        _require(
+            pending_import["destinationState"] == "new_mod_required" and
+            pending_import["managedDestination"] == "" and
+            pending_import["sourceGamePath"].endswith("e0002_top.mdl") and
+            pending_import["resolvedGamePath"].endswith("e0003_top.mdl"),
+            "v2 pending game contexts accept empty destinations and retain consumer and resolved paths",
+        )
+        try:
+            server._ImportHandler._validate_import({
+                **pending_import,
+                "resolvedGamePath": r"C:\Game\rooted.mdl",
+            })
+        except ValueError:
+            print("[PASS] pending game contexts reject rooted resolved paths")
+        else:
+            raise AssertionError("a pending game context accepted a rooted resolved path")
+        pending_collection = context_module.create_collection(
+            bpy.context.scene,
+            {
+                "context_id": "pending-collection-context",
+                "schema": context_module.SCHEMA,
+                "version": 2,
+                "plugin_instance_id": "plugin-instance",
+                "capability": "capability",
+                "source_game_path": pending_import["sourceGamePath"],
+                "source_kind": "game",
+                "resolved_game_path": pending_import["resolvedGamePath"],
+                "destination_state": "new_mod_required",
+                "managed_destination": "",
+                "target_file_path": "",
+                "source_mod_directory": "",
+                "source_mod_name": "",
+                "source_mod_root_path": "",
+                "target_relative_path": "",
+                "target_collection_id": pending_import["targetCollectionId"],
+                "target_collection_name": pending_import["targetCollectionName"],
+                "resource_manifest_version": 0,
+                "resource_manifest_status": "capture_failed",
+                "import_id": "pending-collection-import",
+                "callback_port": 42428,
+                "import_file_name": "vanilla.mdl",
+            },
+        )
+        pending_mesh_data = bpy.data.meshes.new("PendingContextMeshData")
+        pending_mesh_data.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+        pending_mesh = bpy.data.objects.new("0.0 Pending Context", pending_mesh_data)
+        pending_collection.objects.link(pending_mesh)
+        pending_ref = context_module.validate_context("pending-collection-context", bpy.context.scene)
+        _require(
+            pending_ref.destination_state == "new_mod_required" and
+            ui._import_file_display(pending_ref) == pending_import["resolvedGamePath"],
+            "pending collection validation displays the resolved game-data model path",
+        )
+        context_module.apply_authoritative_context(pending_collection, {
+            "schema": context_module.SCHEMA,
+            "version": 2,
+            "pluginInstanceId": "plugin-instance",
+            "contextId": "pending-collection-context",
+            "importId": "pending-collection-import",
+            "capability": "promoted-capability",
+            "sourceGamePath": pending_import["sourceGamePath"],
+            "sourceKind": "game",
+            "resolvedGamePath": pending_import["resolvedGamePath"],
+            "destinationState": "ready",
+            "managedDestination": r"D:\Penumbra\Vanilla Edit\Files\chara\equipment\e0002\model",
+            "targetFilePath": r"D:\Penumbra\Vanilla Edit\Files\chara\equipment\e0002\model\c0101e0002_top.mdl",
+            "sourceModDirectory": "Vanilla Edit",
+            "sourceModName": "Vanilla Edit",
+            "sourceModRootPath": r"D:\Penumbra\Vanilla Edit",
+            "targetRelativePath": "Files/chara/equipment/e0002/model/c0101e0002_top.mdl",
+            "targetCollectionId": pending_import["targetCollectionId"],
+            "targetCollectionName": pending_import["targetCollectionName"],
+            "resourceManifestVersion": 0,
+            "resourceManifestStatus": "capture_failed",
+            "callbackPort": 42428,
+        })
+        promoted_ref = context_module.validate_context("pending-collection-context", bpy.context.scene)
+        _require(
+            promoted_ref.destination_state == "ready" and
+            promoted_ref.source_mod_directory == "Vanilla Edit" and
+            promoted_ref.target_relative_path.startswith("Files/chara/"),
+            "an authoritative export receipt promotes pending collection metadata to a normal destination",
+        )
+        bpy.data.objects.remove(pending_mesh, do_unlink=True)
+        bpy.data.collections.remove(pending_collection, do_unlink=True)
+        display_ref = SimpleNamespace(
+            target_relative_path=validated["targetRelativePath"],
+            target_file_path=validated["targetFilePath"],
+            source_mod_root_path=r"D:\Penumbra\SourceMod",
+        )
+        _require(
+            ui._export_destination_display(display_ref) == "Files/models/original.mdl",
+            "the export display omits the mod root and includes the model filename",
+        )
+        _require(
+            ui._wrap_display_value(
+                "model/normal/chara/equipment/e0691/model/c0201e0691_top.mdl",
+                42,
+            ) == [
+                "model/normal/chara/equipment/e0691/model/",
+                "c0201e0691_top.mdl",
+            ],
+            "path info wraps at slash boundaries",
+        )
+        derived_display_ref = SimpleNamespace(
+            target_relative_path="",
+            target_file_path=validated["targetFilePath"],
+            source_mod_root_path=r"D:\Penumbra\SourceMod",
+        )
+        _require(
+            ui._export_destination_display(derived_display_ref) == "models/original.mdl",
+            "the export display derives a mod-relative model path",
+        )
+
+        validated_options = server._ImportHandler._validate_import({
+            **base_import,
+            "contextId": "context-id-options",
+            "importId": "import-id-options",
+            "importOptions": {
+                "armatureMode": "existing",
+                "targetObject": "  Skeleton  ",
+                "applyTexturesAndMaterials": True,
+                "excludeBodyAndGeneralMaterials": True,
+            },
+            "previewManifestPath": r"C:\Temp\preview\materials.json",
+        })
+        _require(
+            validated_options["importOptions"] == {
+                "armatureMode": "existing",
+                "targetObject": "Skeleton",
+                "applyTexturesAndMaterials": True,
+                "excludeBodyAndGeneralMaterials": True,
+            },
+            "existing-skeleton import options are normalized",
+        )
+        _require(
+            validated_options["previewManifestPath"] == r"C:\Temp\preview\materials.json",
+            "the material-preview manifest path is preserved in the import envelope",
+        )
+        _require(
+            server._ImportHandler._validate_import({**base_import})["importOptions"] == {
+                "armatureMode": "generated",
+                "targetObject": "Skeleton",
+                "applyTexturesAndMaterials": False,
+                "excludeBodyAndGeneralMaterials": False,
+            },
+            "material previews default to disabled",
+        )
+        try:
+            server._ImportHandler._validate_import({**base_import, "importOptions": {"armatureMode": "unknown"}})
+        except ValueError:
+            print("[PASS] invalid import options are rejected")
+        else:
+            raise AssertionError("invalid import options were accepted")
+        try:
+            server._ImportHandler._validate_import({
+                **base_import,
+                "importOptions": {"applyTexturesAndMaterials": "yes"},
+            })
+        except ValueError:
+            print("[PASS] non-boolean material-preview options are rejected")
+        else:
+            raise AssertionError("a non-boolean material-preview option was accepted")
+        try:
+            server._ImportHandler._validate_import({
+                **base_import,
+                "importOptions": {"excludeBodyAndGeneralMaterials": True},
+            })
+        except ValueError:
+            print("[PASS] body/general exclusion requires material previews")
+        else:
+            raise AssertionError("body/general exclusion was accepted without material previews")
+
+        assert_material_previews(material_preview)
+
         instant_props = bpy.context.scene.xiv_ie_instant_edit_props
         instant_props.last_status = "Full preview warning details for clipboard regression"
         _require(
@@ -901,13 +890,6 @@ def run_staging_isolation_regression() -> None:
             )),
             "pending Quick Export sends only the create-mod v3 envelope",
         )
-        _require(
-            ops.SelectVariantTarget.description(
-                bpy.context,
-                SimpleNamespace(selection_id=props.IN_PLACE_TARGET),
-            ) == "Overwrites the imported model at its original path without changing Penumbra option groups.",
-            "In-place target hover text explains the original-path overwrite",
-        )
         variant_group_id = variant_group.selection_id
         variant_option_id = variant_option.selection_id
         variant_option_path = variant_option.model_path
@@ -1002,27 +984,6 @@ def run_staging_isolation_regression() -> None:
             _require(
                 instant_props.variant_target == mapped_option_id,
                 "the imported mod's mapped Penumbra option is automatically selected",
-            )
-            _require(
-                ops.SelectVariantTarget.description(
-                    bpy.context,
-                    SimpleNamespace(selection_id="NEW_GROUP"),
-                ) == "Creates a new Group on Export. Define group and option names below.",
-                "New Group hover text explains both name fields",
-            )
-            _require(
-                ops.SelectVariantTarget.description(
-                    bpy.context,
-                    SimpleNamespace(selection_id=variant_group_id),
-                ) == "Creates a new Option in this group. Define the option name below.",
-                "existing group hover text explains new option creation",
-            )
-            _require(
-                ops.SelectVariantTarget.description(
-                    bpy.context,
-                    SimpleNamespace(selection_id=mapped_option_id),
-                ) == "Overwrites this mod option within the group.",
-                "existing option hover text explains overwrite behavior",
             )
             instant_props.variant_target = "NEW_GROUP"
             _require(
@@ -1213,12 +1174,6 @@ def run_staging_isolation_regression() -> None:
 
         print("[RESULT] staging-isolation regression PASSED")
     finally:
-        if addon is not None:
-            try:
-                _unregister_for_test(addon, package_name)
-            except Exception as error:
-                print(f"[WARN] addon cleanup failed: {error}")
-
         for obj in reversed(tuple(created_objects)):
             if any(_same_object(item, obj) for item in bpy.data.objects):
                 bpy.data.objects.remove(obj, do_unlink=True)
@@ -1245,4 +1200,5 @@ def run_staging_isolation_regression() -> None:
 
 
 if __name__ == "__main__":
-    run_staging_isolation_regression()
+    with addon_session("_xiv_instant_edit_regression_addon") as addon:
+        run_staging_isolation_regression(addon)

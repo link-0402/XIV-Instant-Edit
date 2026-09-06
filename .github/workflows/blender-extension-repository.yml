@@ -46,9 +46,12 @@ jobs:
 
       - name: Run add-on regressions
         run: |
-          blender --background --python Blender-Addon/instant_edit/regression.py
-          blender --background --python Blender-Addon/testing/smoke_export.py
+          blender --background --factory-startup --python-exit-code 1 --python Blender-Addon/testing/bridge_regression.py
+          blender --background --factory-startup --python-exit-code 1 --python Blender-Addon/testing/smoke_export.py
+          blender --background --factory-startup --python-exit-code 1 --python Blender-Addon/testing/correctness_regression.py
           python3 Blender-Addon/testing/cache_regression.py
+          python3 Blender-Addon/testing/diagnostics_regression.py
+          python3 Blender-Addon/testing/server_diagnostics_regression.py
 
   build:
     runs-on: ubuntu-latest

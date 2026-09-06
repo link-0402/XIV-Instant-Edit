@@ -424,8 +424,10 @@ public sealed class PenumbraService
         if (setupVariantInPenumbra && variantName is null && !string.Equals(variantTarget, "option", StringComparison.Ordinal))
             return new ExportResult(false, "invalid_variant", "Penumbra variant setup requires Save as Variant.");
         if (setupVariantInPenumbra && !string.Equals(variantTarget, "option", StringComparison.Ordinal) &&
-            !IsSafeVariantGroupName(variantGroupName))
+            !string.Equals(variantTarget, "group", StringComparison.Ordinal) && !IsSafeVariantGroupName(variantGroupName))
             return new ExportResult(false, "invalid_variant_group", "Penumbra variant setup requires an option group name.");
+        if (setupVariantInPenumbra && variantTarget == "group" && string.IsNullOrWhiteSpace(variantTargetId))
+            return new ExportResult(false, "stale_variant_target", "The selected Penumbra group is invalid.");
 
         await _exportGate.WaitAsync().ConfigureAwait(false);
         string? committedTarget = null;
@@ -454,12 +456,6 @@ public sealed class PenumbraService
                     return new ExportResult(false, optionTarget.Code, optionTarget.Error);
                 targetFile = optionTarget.FilePath!;
             }
-            if (setupVariantInPenumbra && string.Equals(variantTarget, "group", StringComparison.Ordinal))
-            {
-                var groupError = ValidateVariantGroupTarget(resolved.Target.Folder, sourceGamePath, variantTargetId);
-                if (groupError is not null)
-                    return new ExportResult(false, "stale_variant_target", groupError);
-            }
             JsonObject? sourceOptionTemplate = null;
             if (setupVariantInPenumbra && !string.Equals(variantTarget, "option", StringComparison.Ordinal))
             {
@@ -475,6 +471,18 @@ public sealed class PenumbraService
                     sourceOptionTemplate = source.Option;
                 }
             }
+            VariantGroupWrite? groupWrite = null;
+            if (setupVariantInPenumbra && !string.Equals(variantTarget, "option", StringComparison.Ordinal))
+            {
+                var groupError = PrepareVariantGroup(
+                    resolved.Target.Folder, sourceGamePath,
+                    Path.GetRelativePath(resolved.Target.Folder, targetFile).Replace('\\', '/'),
+                    variantName!, variantGroupName!, out groupWrite, sourceOptionTemplate,
+                    string.Equals(variantTarget, "group", StringComparison.Ordinal) ? variantTargetId : null);
+                if (groupError is not null)
+                    return new ExportResult(false,
+                        variantTarget == "group" ? "stale_variant_target" : "invalid_variant_group", groupError);
+            }
             var writeError = WriteModelToOriginalLocation(
                 resolved.Target.Folder,
                 targetFile,
@@ -488,16 +496,9 @@ public sealed class PenumbraService
 
             var warnings = new List<string>();
 
-            if (setupVariantInPenumbra && !string.Equals(variantTarget, "option", StringComparison.Ordinal))
+            if (groupWrite is not null)
             {
-                var relativeVariantPath = Path.GetRelativePath(resolved.Target.Folder, targetFile).Replace('\\', '/');
-                var groupError = WriteVariantGroup(
-                    resolved.Target.Folder,
-                    sourceGamePath,
-                    relativeVariantPath,
-                    variantName!,
-                    variantGroupName!,
-                    sourceOptionTemplate);
+                var groupError = CommitVariantGroup(groupWrite);
                 if (groupError is not null)
                     warnings.Add($"Penumbra variant setup failed: {groupError}");
             }
@@ -2742,23 +2743,6 @@ public sealed class PenumbraService
         }
     }
 
-    private static string? ValidateVariantGroupTarget(string modFolder, string sourceGamePath, string? targetId)
-    {
-        JsonObject? group;
-        if (TryParseGroupTargetId(targetId, out var groupId))
-            group = ReadAllVariantGroups(modFolder).FirstOrDefault(candidate => ReadGuid(candidate["Id"]) == groupId);
-        else if (TryParseLegacyGroupTargetId(targetId, out var fileName) && TryLoadLegacyGroup(modFolder, fileName, out group))
-        {
-            // Resolved from the legacy file selected by the Blender tree.
-        }
-        else
-            return "The selected Penumbra group is invalid.";
-        if (group is null || !string.Equals(JsonString(group["Type"]), "Single", StringComparison.OrdinalIgnoreCase) ||
-            !GroupHasGamePath(group, sourceGamePath))
-            return "The selected Penumbra group no longer contains a replacement for this model.";
-        return null;
-    }
-
     private static IReadOnlyList<JsonObject> ReadAllVariantGroups(string modFolder)
     {
         var meta = LoadJsonObjectStrict(Path.Combine(modFolder, "meta.json"));
@@ -2831,29 +2815,45 @@ public sealed class PenumbraService
         return IsSafeRelativeModPath(path);
     }
 
+    internal sealed record VariantGroupWrite(string Path, JsonObject Document);
+
+    internal static string? CommitVariantGroup(VariantGroupWrite prepared)
+    {
+        try
+        {
+            WriteJsonAtomic(prepared.Path, prepared.Document);
+            return null;
+        }
+        catch (Exception error)
+        {
+            return $"penumbra_group_write_failed: {error.Message}";
+        }
+    }
+
     /// <summary>
-    /// Create or update a Penumbra group that redirects the original model path
+    /// Prepare an update to a Penumbra group that redirects the original model path
     /// to the newly exported sibling. Both legacy v3 group files and current v4
     /// embedded groups are supported without rewriting unrelated mod data.
     /// </summary>
-    private static string? WriteVariantGroup(
+    internal static string? PrepareVariantGroup(
         string modFolder,
         string sourceGamePath,
         string relativeVariantPath,
         string variantName,
         string variantGroupName,
-        JsonObject? sourceOption = null)
+        out VariantGroupWrite? prepared,
+        JsonObject? sourceOption = null,
+        string? targetId = null)
     {
+        prepared = null;
         try
         {
             relativeVariantPath = relativeVariantPath.Replace('\\', '/');
             if (!IsSafeGamePath(sourceGamePath) || !IsSafeRelativeModPath(relativeVariantPath) ||
-                !IsSafeVariantName(variantName) || !IsSafeVariantGroupName(variantGroupName))
+                !IsSafeVariantName(variantName) || (targetId is null && !IsSafeVariantGroupName(variantGroupName)))
                 return "invalid_penumbra_variant";
 
-            // A group name is reusable only for a Single group whose existing
-            // options all redirect this same game path. An incompatible match
-            // is rejected so user-owned group semantics are never rewritten.
+            // Existing targets are resolved by identity; only New Group uses name matching.
             var marker = VariantGroupDescriptionPrefix + variantGroupName + " -> " + sourceGamePath;
             var metaPath = Path.Combine(modFolder, "meta.json");
             var meta = LoadJsonObjectStrict(metaPath);
@@ -2870,6 +2870,9 @@ public sealed class PenumbraService
                     groups = new JsonArray();
                     meta["Groups"] = groups;
                 }
+                Guid selectedGroupId = default;
+                if (targetId is not null && !TryParseGroupTargetId(targetId, out selectedGroupId))
+                    return "The selected Penumbra group is invalid.";
                 JsonObject? embeddedExistingGroup = null;
                 var existingIndex = -1;
                 var embeddedNameConflict = false;
@@ -2880,7 +2883,8 @@ public sealed class PenumbraService
                         continue;
                     var sameName = string.Equals(
                         JsonString(group["Name"]), variantGroupName, StringComparison.OrdinalIgnoreCase);
-                    if (sameName && IsReusableVariantGroup(group, sourceGamePath))
+                    var selected = targetId is null ? sameName : ReadGuid(group["Id"]) == selectedGroupId;
+                    if (selected && IsReusableVariantGroup(group, sourceGamePath))
                     {
                         embeddedExistingGroup = group;
                         existingIndex = index;
@@ -2892,9 +2896,11 @@ public sealed class PenumbraService
                     embeddedHighestOtherPriority = Math.Max(embeddedHighestOtherPriority, JsonInt(group["Priority"]));
                 }
 
+                if (targetId is not null && embeddedExistingGroup is null)
+                    return "The selected Penumbra group no longer contains a replacement for this model.";
                 if (embeddedExistingGroup is null && embeddedNameConflict)
                     return "An existing Penumbra group with this name is not a compatible Single group for this model.";
-                if (embeddedHighestOtherPriority == int.MaxValue)
+                if (embeddedExistingGroup is null && embeddedHighestOtherPriority == int.MaxValue)
                     return "penumbra_group_priority_exhausted";
                 var embeddedGroupJson = BuildVariantGroup(
                     embeddedExistingGroup,
@@ -2902,18 +2908,21 @@ public sealed class PenumbraService
                     sourceGamePath,
                     relativeVariantPath,
                     variantName,
-                    variantGroupName,
-                    embeddedHighestOtherPriority + 1,
+                    targetId is null ? variantGroupName : JsonString(embeddedExistingGroup!["Name"])!,
+                    embeddedExistingGroup is null ? embeddedHighestOtherPriority + 1 : JsonInt(embeddedExistingGroup["Priority"]),
                     sourceOption);
                 if (existingIndex >= 0)
                     groups[existingIndex] = embeddedGroupJson;
                 else
                     groups.Add(embeddedGroupJson);
                 meta["LastWrite"] = DateTime.UtcNow;
-                WriteJsonAtomic(metaPath, meta);
+                prepared = new VariantGroupWrite(metaPath, meta);
                 return null;
             }
 
+            string selectedFile = "";
+            if (targetId is not null && !TryParseLegacyGroupTargetId(targetId, out selectedFile))
+                return "The selected Penumbra group is invalid.";
             var groupFiles = Directory.EnumerateFiles(modFolder, "group_*.json", SearchOption.TopDirectoryOnly)
                 .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
@@ -2932,7 +2941,8 @@ public sealed class PenumbraService
                 var group = LoadJsonObjectStrict(groupPath);
                 var sameName = string.Equals(
                     JsonString(group["Name"]), variantGroupName, StringComparison.OrdinalIgnoreCase);
-                var isExisting = sameName && IsReusableVariantGroup(group, sourceGamePath);
+                var selected = targetId is null ? sameName : string.Equals(fileName, selectedFile, StringComparison.OrdinalIgnoreCase);
+                var isExisting = selected && IsReusableVariantGroup(group, sourceGamePath);
                 if (isExisting)
                 {
                     existingPath = groupPath;
@@ -2945,9 +2955,11 @@ public sealed class PenumbraService
                 highestOtherPriority = Math.Max(highestOtherPriority, JsonInt(group["Priority"]));
             }
 
+            if (targetId is not null && existingGroup is null)
+                return "The selected Penumbra group no longer contains a replacement for this model.";
             if (existingGroup is null && nameConflict)
                 return "An existing Penumbra group with this name is not a compatible Single group for this model.";
-            if (highestOtherPriority == int.MaxValue)
+            if (existingGroup is null && highestOtherPriority == int.MaxValue)
                 return "penumbra_group_priority_exhausted";
 
             var groupJson = BuildVariantGroup(
@@ -2956,14 +2968,14 @@ public sealed class PenumbraService
                 sourceGamePath,
                 relativeVariantPath,
                 variantName,
-                variantGroupName,
-                highestOtherPriority + 1,
+                targetId is null ? variantGroupName : JsonString(existingGroup!["Name"])!,
+                existingGroup is null ? highestOtherPriority + 1 : JsonInt(existingGroup["Priority"]),
                 sourceOption);
 
             var outputGroupPath = existingPath ?? Path.Combine(
                 modFolder,
                 $"group_{highestFileIndex + 1:D3}_instant_edit_{SanitizeGroupFileName(variantGroupName)}.json");
-            WriteJsonAtomic(outputGroupPath, groupJson);
+            prepared = new VariantGroupWrite(outputGroupPath, groupJson);
             return null;
         }
         catch (Exception e)
@@ -3029,7 +3041,7 @@ public sealed class PenumbraService
         if (selectedIndex < 0)
             throw new InvalidOperationException("The exported variant option was not added to its group.");
 
-        return new JsonObject
+        var result = existingGroup?.DeepClone() as JsonObject ?? new JsonObject
         {
             ["Version"] = 0,
             ["Type"] = "Single",
@@ -3037,9 +3049,10 @@ public sealed class PenumbraService
             ["Name"] = variantGroupName,
             ["Description"] = marker,
             ["Priority"] = priority,
-            ["DefaultSettings"] = selectedIndex,
-            ["Options"] = options,
         };
+        result["DefaultSettings"] = selectedIndex;
+        result["Options"] = options;
+        return result;
     }
 
     private static bool IsReusableVariantGroup(JsonObject group, string sourceGamePath)

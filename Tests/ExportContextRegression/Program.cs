@@ -42,9 +42,7 @@ static byte[] MinimalModel(params string[] materials)
     return bytes;
 }
 
-var testRoot = Path.Combine(Path.GetTempPath(), "InstantEditExportContextRegression", Guid.NewGuid().ToString("N"));
-Directory.CreateDirectory(testRoot);
-try
+static void CheckSessionStore(string testRoot)
 {
     var storeRoot = Path.Combine(testRoot, "ContextStore");
     var storeNow = DateTimeOffset.Parse("2026-09-04T10:00:00Z");
@@ -82,6 +80,15 @@ try
         Guid.NewGuid().ToString("N"), now: storeNow);
     Require(expiryReader.Load(storeNow).Count == 0,
         "inactive context records expire after 30 days");
+
+}
+
+var testRoot = Path.Combine(Path.GetTempPath(), "InstantEditExportContextRegression", Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(testRoot);
+try
+{
+    VariantExportScenarios.Run(testRoot);
+    CheckSessionStore(testRoot);
 
     const string clonedGamePath = "chara/equipment/e0001/model/c0101e0001_top.mdl";
     var sourceOption = new JsonObject
