@@ -7,6 +7,7 @@ test import, where ``sentinels`` are user objects captured before the import.
 
 import importlib
 import json
+import ntpath
 import struct
 import sys
 import tempfile
@@ -1066,7 +1067,7 @@ def run_staging_isolation_regression(addon) -> None:
 
         _require(result == {"FINISHED"}, "versioned XIV Instant Edit request completes")
         _require(
-            Path(bpy.context.scene.xiv_ie_settings.export_directory).name == "models",
+            ntpath.basename(bpy.context.scene.xiv_ie_settings.export_directory) == "models",
             "mod-backed Instant Edit import uses the authorized model parent for Simple Export",
         )
         bpy.context.scene.xiv_ie_settings.export_directory = original_simple_directory
