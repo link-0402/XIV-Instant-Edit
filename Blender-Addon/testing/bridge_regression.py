@@ -1200,5 +1200,10 @@ def run_staging_isolation_regression(addon) -> None:
 
 
 if __name__ == "__main__":
-    with addon_session("_xiv_instant_edit_regression_addon") as addon:
-        run_staging_isolation_regression(addon)
+    try:
+        with addon_session("_xiv_instant_edit_regression_addon") as addon:
+            run_staging_isolation_regression(addon)
+    except Exception as error:
+        detail = str(error).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print(f"::error file=Blender-Addon/testing/bridge_regression.py::Bridge regression failed: {detail}", flush=True)
+        raise
