@@ -210,8 +210,26 @@ class XIVIEInstantEditProps(PropertyGroup):
     variant_targets_context_id: StringProperty(default="", maxlen=256)  # type: ignore
     variant_targets: CollectionProperty(type=XIVIEVariantTarget)  # type: ignore
 
+def _ensure_scene_property() -> None:
+    """Restore the Scene pointer after a Blender extension hot-reload if possible."""
+    if hasattr(bpy.types.Scene, "xiv_ie_instant_edit_props"):
+        return
+
+    registered = getattr(bpy.types, XIVIEInstantEditProps.__name__, None)
+    if registered is None:
+        raise RuntimeError(
+            "XIV Instant Edit is not fully registered; disable and re-enable the add-on "
+            "or restart Blender."
+        )
+    bpy.types.Scene.xiv_ie_instant_edit_props = PointerProperty(type=registered)
+
+
 def get_instant_edit_props() -> XIVIEInstantEditProps:
-    return bpy.context.scene.xiv_ie_instant_edit_props
+    scene = getattr(bpy.context, "scene", None)
+    if scene is None:
+        raise RuntimeError("XIV Instant Edit requires an active Blender Scene.")
+    _ensure_scene_property()
+    return scene.xiv_ie_instant_edit_props
 
 
 def set_addon_properties() -> None:

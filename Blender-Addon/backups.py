@@ -25,14 +25,19 @@ class BackupEntry:
     timestamped: bool
 
 
-def target_folder(settings, context=None) -> tuple[Path | None, str]:
+def target_folder(
+    settings,
+    context=None,
+    *,
+    persist: bool = True,
+) -> tuple[Path | None, str]:
     """Return the active Quick Export folder, or the Simple Export folder."""
     if context is not None:
         try:
             from .instant_edit.context import ContextValidationError
             from .instant_edit.ops import export_destination_context
 
-            ref = export_destination_context(context)
+            ref = export_destination_context(context, persist=persist)
             from .instant_edit.ops import selected_variant_target
             selected = selected_variant_target(context.scene.xiv_ie_instant_edit_props)
             backup_target_id = getattr(selected, "backup_target_id", "") or ref.backup_target_id

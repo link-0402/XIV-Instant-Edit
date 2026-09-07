@@ -19,6 +19,7 @@ from .materials import (
     mesh_display_name,
     mesh_part_attributes,
     mesh_part_instances,
+    mesh_part_slots,
     material_group_slots,
     visible_material_groups,
 )
@@ -221,7 +222,7 @@ class XIVIE_PT_main(Panel):
         props = get_instant_edit_props()
         box = layout.box()
         try:
-            ref = export_destination_context(context)
+            ref = export_destination_context(context, persist=False)
         except ContextValidationError:
             ref = None
 
@@ -458,8 +459,24 @@ class XIVIE_PT_main(Panel):
             mesh_box.separator(type="LINE", factor=0.2)
             mesh_column = mesh_box.column(align=True)
             part_instances = mesh_part_instances(group.objects, group.mesh_index)
-            for part_instance in part_instances:
+            part_slots = mesh_part_slots(group.objects, group.mesh_index)
+            for part_instance in part_slots:
                 part = part_instance.part_index
+                if part_instance.is_placeholder:
+                    object_row = mesh_column.row(align=True).split(factor=0.4, align=True)
+                    name_row = object_row.row(align=True)
+                    name_row.label(text="", icon="BLANK1")
+                    name_row.label(text="Empty slot", icon="MESH_DATA")
+
+                    part_row = object_row.row(align=True)
+                    part_row.label(text="", icon="BLANK1")
+                    part_row.label(text=str(part))
+
+                    attribute_row = object_row.row(align=True)
+                    attribute_row.alignment = "EXPAND"
+                    attribute_row.label(text=" ", icon="BLANK1")
+                    continue
+
                 part_objects = part_instance.objects
                 display_objects = _lod_zero_objects(part_objects)
                 representative = display_objects[0]
@@ -659,7 +676,7 @@ class XIVIE_PT_main(Panel):
         if not settings.backup_models_on_export:
             return
         try:
-            if export_destination_context(context).destination_state == "new_mod_required":
+            if export_destination_context(context, persist=False).destination_state == "new_mod_required":
                 return
         except ContextValidationError:
             pass
@@ -677,7 +694,7 @@ class XIVIE_PT_main(Panel):
         if not expanded:
             return
 
-        folder, source = target_folder(settings, context)
+        folder, source = target_folder(settings, context, persist=False)
         if folder is None:
             box.label(text=f"{source} is unavailable.", icon="INFO")
             return
@@ -713,4 +730,5 @@ class XIVIE_PT_main(Panel):
         header.label(text="Toolbox", icon="TOOL_SETTINGS")
         if expanded:
             box.operator("xiv_ie.convert_mesh_names", text="Move Mesh IDs to Front", icon="SORTALPHA")
+            box.operator("xiv_ie.compact_context_parts", text="Fill Mesh Part Gaps", icon="SORTALPHA")
             box.operator("xiv_ie.clear_contexts", text="Clear Contexts", icon="TRASH")

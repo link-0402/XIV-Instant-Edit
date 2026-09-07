@@ -974,6 +974,12 @@ def run_staging_isolation_regression(addon) -> None:
         ops._request_variant_targets = fake_variant_request
         try:
             instant_props.export_destination = props.NO_EXPORT_CONTEXT
+            read_only_ref = ops.export_destination_context(bpy.context, persist=False)
+            _require(
+                read_only_ref.context_id == "explicit-context" and
+                instant_props.export_destination == props.NO_EXPORT_CONTEXT,
+                "UI context resolution does not write the Scene selector",
+            )
             preselected_ref = ops.export_destination_context(bpy.context)
             _require(
                 refresh_contexts == ["explicit-context"] and

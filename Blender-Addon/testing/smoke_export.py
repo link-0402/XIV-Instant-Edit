@@ -422,6 +422,189 @@ def assert_mesh_studio(addon, obj, second, added_group):
         print("[PASS] Mesh Studio rename, attributes, flow, and drag reordering")
 
 
+def assert_mesh_part_gap_handling(addon):
+    materials = importlib.import_module(f"{addon.__name__}.materials")
+    operators = importlib.import_module(f"{addon.__name__}.operators")
+    context_module = importlib.import_module(f"{addon.__name__}.instant_edit.context")
+
+    with temporary_scene_data():
+        def create(name, collection=None, hidden=False):
+            mesh = bpy.data.meshes.new(f"{name} Data")
+            mesh.from_pydata(
+                [(0, 0, 0), (1, 0, 0), (0, 1, 0)],
+                [],
+                [(0, 1, 2)],
+            )
+            mesh.update()
+            obj = bpy.data.objects.new(name, mesh)
+            (collection or bpy.context.scene.collection).objects.link(obj)
+            if hidden:
+                obj.hide_set(True)
+            return obj
+
+        def slot_shape(objects, mesh_index):
+            return [
+                (slot.part_index, slot.is_placeholder)
+                for slot in materials.mesh_part_slots(objects, mesh_index)
+            ]
+
+        gap_zero = create("30.0 Gap Zero")
+        gap_two = create("30.2 Gap Two")
+        gap_five = create("30.5 Gap Five")
+        if slot_shape((gap_zero, gap_two), 30) != [
+            (0, False), (1, True), (2, False)
+        ]:
+            raise AssertionError("A single internal part gap did not render one placeholder")
+        if slot_shape((gap_zero, gap_five), 30) != [
+            (0, False), (1, True), (5, False)
+        ]:
+            raise AssertionError("A large part gap rendered more than its smallest placeholder")
+        if slot_shape((gap_two, gap_five), 30) != [
+            (2, False), (3, True), (5, False)
+        ]:
+            raise AssertionError("Part gaps incorrectly added leading or trailing placeholders")
+
+        moved_zero = create("31.0 Drag Zero")
+        moved_two = create("31.2 Drag Two")
+        if operators._move_mesh_part_once(31, 2, "UP") != 1:
+            raise AssertionError("Dragging a part into an empty placeholder did not move it")
+        if not moved_zero.name.startswith("31.0 ") or not moved_two.name.startswith("31.1 "):
+            raise AssertionError("Placeholder movement changed the wrong part")
+
+        swap_zero = create("32.0 Swap Zero")
+        swap_one = create("32.1 Swap One")
+        if operators._move_mesh_part_once(32, 1, "UP") != 0:
+            raise AssertionError("Dragging over an occupied part no longer swaps")
+        if not swap_zero.name.startswith("32.1 ") or not swap_one.name.startswith("32.0 "):
+            raise AssertionError("Occupied part drag did not preserve swap behavior")
+
+        lod_anchor = create("33.0 LOD Anchor")
+        lod_part = create("33.2 LOD Part")
+        lod_part_lod1 = create("33.2 LOD Part LOD1")
+        lod_instance = next(
+            item
+            for item in materials.mesh_part_instances((lod_anchor, lod_part, lod_part_lod1), 33)
+            if item.part_index == 2
+        )
+        if operators._move_mesh_part_once(
+            33, 2, "UP", part_instance_key=lod_instance.instance_key
+        ) != 1:
+            raise AssertionError("LOD part did not move into the placeholder")
+        if not lod_part.name.startswith("33.1 ") or not lod_part_lod1.name.startswith("33.1 "):
+            raise AssertionError("Moving a part into a placeholder split its LOD objects")
+
+        duplicate_zero = create("34.0 Duplicate Zero")
+        duplicate_a = create("34.2 Duplicate A")
+        duplicate_a["instant_edit_import_instance_id"] = "gap-duplicate-a"
+        duplicate_b = create("34.2 Duplicate B")
+        duplicate_b["instant_edit_import_instance_id"] = "gap-duplicate-b"
+        duplicate_instance = next(
+            item
+            for item in materials.mesh_part_instances(
+                (duplicate_zero, duplicate_a, duplicate_b), 34
+            )
+            if item.instance_key == "import:gap-duplicate-a"
+        )
+        if operators._move_mesh_part_once(
+            34, 2, "UP", part_instance_key=duplicate_instance.instance_key
+        ) != 1:
+            raise AssertionError("A duplicate instance did not move independently")
+        if not duplicate_a.name.startswith("34.1 ") or not duplicate_b.name.startswith("34.2 "):
+            raise AssertionError("Moving one duplicate instance changed its sibling")
+
+        visible_collection = context_module.create_collection(
+            bpy.context.scene, {"context_id": "gap-visible-context"}
+        )
+        visible_first = create("40.0 Visible First", visible_collection)
+        visible_second = create("40.2 Visible Second", visible_collection)
+        visible_second_lod1 = create("40.2 Visible Second LOD1", visible_collection)
+        visible_hidden = create(
+            "40.5 Hidden Third", visible_collection, hidden=True
+        )
+
+        hidden_collection = context_module.create_collection(
+            bpy.context.scene, {"context_id": "gap-hidden-context"}
+        )
+        hidden_first = create("41.0 Hidden Collection First", hidden_collection)
+        hidden_second = create("41.2 Hidden Collection Second", hidden_collection)
+        hidden_collection.hide_viewport = True
+
+        excluded_collection = context_module.create_collection(
+            bpy.context.scene, {"context_id": "gap-excluded-context"}
+        )
+        excluded_first = create("42.0 Excluded First", excluded_collection)
+        excluded_second = create("42.2 Excluded Second", excluded_collection)
+        excluded_layer = bpy.context.view_layer.layer_collection.children.get(
+            excluded_collection.name
+        )
+        if excluded_layer is None:
+            raise AssertionError("Excluded test collection was not added to the active view layer")
+        excluded_layer.exclude = True
+
+        if bpy.ops.xiv_ie.compact_context_parts() != {"FINISHED"}:
+            raise AssertionError("Fill Mesh Part Gaps did not finish")
+        if (
+            not visible_first.name.startswith("40.0 ")
+            or not visible_second.name.startswith("40.1 ")
+            or not visible_second_lod1.name.startswith("40.1 ")
+            or not visible_hidden.name.startswith("40.2 ")
+        ):
+            raise AssertionError("Compaction did not preserve visible mesh order and LODs")
+        if not hidden_second.name.startswith("41.2 "):
+            raise AssertionError("Meshes in a hidden collection were compacted")
+        if not excluded_second.name.startswith("42.2 "):
+            raise AssertionError("Meshes in an excluded collection were compacted")
+        compacted_labels = [
+            materials.mesh_display_name(item)
+            for item in materials.mesh_part_instances(tuple(visible_collection.objects), 40)
+        ]
+        if compacted_labels != ["Visible First", "Visible Second", "Hidden Third"]:
+            raise AssertionError("Compaction changed the material-list mesh order")
+
+        compacted_names = tuple(sorted(obj.name for obj in visible_collection.objects))
+        if bpy.ops.xiv_ie.compact_context_parts() != {"FINISHED"}:
+            raise AssertionError("Compacting an already compact collection did not finish")
+        if tuple(sorted(obj.name for obj in visible_collection.objects)) != compacted_names:
+            raise AssertionError("Compacting an already compact collection changed names")
+
+        invalid_collection = context_module.create_collection(
+            bpy.context.scene, {"context_id": "gap-invalid-context"}
+        )
+        invalid_move = create("43.0 Invalid Test", invalid_collection)
+        invalid_gap = create("43.2 Invalid Gap", invalid_collection)
+        invalid_name = create("Not A Mesh Part", invalid_collection)
+        original_invalid_names = (invalid_move.name, invalid_gap.name, invalid_name.name)
+        try:
+            invalid_result = bpy.ops.xiv_ie.compact_context_parts()
+        except RuntimeError as error:
+            if "Mesh part gaps were not filled" not in str(error):
+                raise
+            invalid_result = {"CANCELLED"}
+        if invalid_result != {"CANCELLED"}:
+            raise AssertionError("Invalid mesh names did not cancel compaction")
+        if (invalid_move.name, invalid_gap.name, invalid_name.name) != original_invalid_names:
+            raise AssertionError("Invalid-name cancellation applied a partial compaction")
+
+        collision_collection = bpy.data.collections.new("Gap Collision Collection")
+        bpy.context.scene.collection.children.link(collision_collection)
+        collision_zero = create("44.0 Collision Zero", collision_collection)
+        collision_gap = create("44.2 Collision Target", collision_collection)
+        collision_object = create("44.1 Collision Target")
+        original_collision_names = (collision_zero.name, collision_gap.name)
+        try:
+            materials.compact_mesh_part_indices((collision_collection,))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Rename collision did not cancel compaction")
+        if (collision_zero.name, collision_gap.name) != original_collision_names:
+            raise AssertionError("Rename-collision cancellation applied a partial compaction")
+
+        # Keep these references live until the assertions above have run.
+        _ = (hidden_first, excluded_first, collision_object)
+        print("[PASS] Mesh Studio placeholders and atomic part-gap compaction")
+
+
 
 def run() -> None:
     with addon_session("_xiv_instant_edit_export_smoke") as addon:
@@ -1322,6 +1505,7 @@ def run() -> None:
             print(f"[PASS] Modifier-only skeleton export produced {modifier_target.stat().st_size} bytes")
 
         assert_mesh_studio(addon, obj, second, added_group)
+        assert_mesh_part_gap_handling(addon)
 
         instant_props.export_destination = context_id
         instant_props.variant_targets.add().selection_id = "stale-after-delete"

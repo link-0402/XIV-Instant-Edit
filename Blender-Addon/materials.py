@@ -78,6 +78,7 @@ class MeshPartInstance:
     part_index: int
     instance_key: str
     objects: tuple
+    is_placeholder: bool = False
 
 
 def mesh_part_objects(objects, mesh_index: int, part_index: int) -> tuple:
@@ -164,6 +165,31 @@ def mesh_part_instances(
     )
 
 
+def mesh_part_slots(objects, mesh_index: int) -> tuple[MeshPartInstance, ...]:
+    """Return real part rows plus one display-only row for each internal gap."""
+    instances = mesh_part_instances(objects, mesh_index)
+    if not instances:
+        return ()
+
+    slots = []
+    previous_part = None
+    for instance in instances:
+        if previous_part is not None and instance.part_index > previous_part + 1:
+            placeholder_part = previous_part + 1
+            slots.append(
+                MeshPartInstance(
+                    mesh_index,
+                    placeholder_part,
+                    f"placeholder:{mesh_index}.{placeholder_part}",
+                    (),
+                    True,
+                )
+            )
+        slots.append(instance)
+        previous_part = instance.part_index
+    return tuple(slots)
+
+
 def mesh_part_instance_objects(
     objects,
     mesh_index: int,
@@ -181,10 +207,16 @@ def mesh_part_instance_objects(
 
 def mesh_display_name(obj) -> str:
     """Return the editable human label while hiding the exporter mesh ID."""
+    display_object = obj
+    instance_objects = getattr(obj, "objects", None)
+    if instance_objects is not None:
+        display_object = next(iter(instance_objects), None)
+        if display_object is None:
+            return "Unnamed Part"
     try:
-        label = mesh_name_info(obj).label
+        label = mesh_name_info(display_object).label
     except Exception:
-        label = str(obj.name).strip()
+        label = str(getattr(display_object, "name", "")).strip()
     return label or "Unnamed Part"
 
 
@@ -549,6 +581,48 @@ def swap_mesh_part_instances(
     return _rename_mesh_targets(renames)
 
 
+def move_mesh_part_to_index(
+    objects,
+    mesh_index: int,
+    source_part: int,
+    target_part: int,
+    instance_key: str | None = None,
+) -> int:
+    """Move one complete part instance into an otherwise empty part index."""
+    if target_part < 0:
+        raise ValueError("Mesh part indices cannot be negative.")
+
+    source_objects = mesh_part_instance_objects(
+        objects, mesh_index, source_part, instance_key
+    )
+    if not source_objects:
+        raise ValueError(f"Mesh part {mesh_index}.{source_part} is no longer visible")
+
+    source_ids = {obj.as_pointer() for obj in source_objects}
+    for obj in objects:
+        if obj.as_pointer() in source_ids:
+            continue
+        try:
+            group, part, _lod = mesh_ids_from_name(obj)
+        except Exception:
+            continue
+        if group == mesh_index and part == target_part:
+            raise ValueError(
+                f"Mesh part {mesh_index}.{target_part} is already occupied."
+            )
+
+    if source_part == target_part:
+        return 0
+
+    renames = []
+    for obj in source_objects:
+        _group, _part, lod = mesh_ids_from_name(obj)
+        renames.append(
+            (obj, mesh_index, target_part, lod, mesh_display_name(obj))
+        )
+    return _rename_mesh_targets(renames)
+
+
 def move_mesh_part_to_group(
     objects,
     source_group: int,
@@ -579,6 +653,69 @@ def move_mesh_part_to_group(
         renames.append((obj, target_group, target_part, lod, mesh_display_name(obj)))
     _rename_mesh_targets(renames)
     return target_part
+
+
+def compact_mesh_part_indices(collections) -> int:
+    """Fill part-index gaps in each supplied context collection atomically.
+
+    Direct mesh objects are compacted independently per collection and mesh
+    group.  Existing part-instance ordering is retained, while every LOD in
+    an instance receives the same new part index.
+    """
+    targets = []
+    moved_instances = 0
+    claimed_objects = {}
+
+    for collection in collections:
+        collection_objects = tuple(
+            sorted(
+                (obj for obj in collection.objects if obj.type == "MESH"),
+                key=lambda obj: obj.name.casefold(),
+            )
+        )
+        if not collection_objects:
+            continue
+
+        for obj in collection_objects:
+            pointer = obj.as_pointer()
+            previous_collection = claimed_objects.get(pointer)
+            if previous_collection is not None and previous_collection != collection:
+                raise ValueError(
+                    f"{obj.name}: object is linked to multiple visible Instant Edit collections."
+                )
+            claimed_objects[pointer] = collection
+            try:
+                mesh_ids_from_name(obj)
+            except Exception as error:
+                raise ValueError(f"{obj.name}: invalid mesh name") from error
+
+        grouped = defaultdict(list)
+        for obj in collection_objects:
+            group, _part, _lod = mesh_ids_from_name(obj)
+            grouped[group].append(obj)
+
+        for mesh_index, group_objects in sorted(grouped.items()):
+            instances = mesh_part_instances(group_objects, mesh_index)
+            for target_part, instance in enumerate(instances):
+                if target_part == instance.part_index:
+                    continue
+                moved_instances += 1
+                for obj in instance.objects:
+                    _group, _part, lod = mesh_ids_from_name(obj)
+                    targets.append(
+                        (
+                            obj,
+                            mesh_index,
+                            target_part,
+                            lod,
+                            mesh_display_name(obj),
+                        )
+                    )
+
+    if not targets:
+        return 0
+    _rename_mesh_targets(targets)
+    return moved_instances
 
 
 def _property(obj, name: str, default=None):

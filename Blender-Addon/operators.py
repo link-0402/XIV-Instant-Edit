@@ -13,11 +13,12 @@ from .materials import (
     mesh_flow_enabled,
     mesh_display_name,
     mesh_part_instance_objects,
-    mesh_part_instances,
     mesh_part_tags,
     material_paths,
     material_suggestions,
+    mesh_part_slots,
     move_mesh_part_to_group,
+    move_mesh_part_to_index,
     rename_mesh_part,
     set_mesh_flow_enabled,
     set_mesh_part_attribute,
@@ -118,13 +119,14 @@ def _move_mesh_part_once(
                 part_instance_key,
             )
 
-        instances = list(mesh_part_instances(group.objects, mesh_group))
+        slots = list(mesh_part_slots(group.objects, mesh_group))
         position = next(
             (
                 index
-                for index, item in enumerate(instances)
+                for index, item in enumerate(slots)
                 if item.part_index == mesh_part
                 and item.instance_key == part_instance_key
+                and not item.is_placeholder
             ),
             -1,
         )
@@ -136,8 +138,19 @@ def _move_mesh_part_once(
         # Duplicate rows occupy the same export slot. Skip them until the
         # drag crosses an actual part ID; this lets either duplicate move
         # independently without renaming the other duplicate.
-        while 0 <= neighbor < len(instances):
-            target = instances[neighbor]
+        while 0 <= neighbor < len(slots):
+            target = slots[neighbor]
+            if target.is_placeholder:
+                changed = move_mesh_part_to_index(
+                    visible_meshobj(),
+                    mesh_group,
+                    mesh_part,
+                    target.part_index,
+                    part_instance_key,
+                )
+                if changed:
+                    return target.part_index
+                return None
             if target.part_index != mesh_part:
                 changed = swap_mesh_part_instances(
                     visible_meshobj(),
@@ -162,11 +175,25 @@ def _move_mesh_part_once(
             part_instance_key,
         )
 
-    parts = list(group.parts)
-    position = parts.index(mesh_part)
+    slots = list(mesh_part_slots(group.objects, mesh_group))
+    position = next(
+        (index for index, item in enumerate(slots) if item.part_index == mesh_part),
+        -1,
+    )
+    if position < 0:
+        return None
     neighbor = position + (-1 if direction == "UP" else 1)
-    if not cross_group_only and 0 <= neighbor < len(parts):
-        new_part = parts[neighbor]
+    if not cross_group_only and 0 <= neighbor < len(slots):
+        target = slots[neighbor]
+        if target.is_placeholder:
+            moved = move_mesh_part_to_index(
+                visible_meshobj(),
+                mesh_group,
+                mesh_part,
+                target.part_index,
+            )
+            return target.part_index if moved else None
+        new_part = target.part_index
         swap_mesh_parts(visible_meshobj(), mesh_group, mesh_part, new_part)
         return new_part
 

@@ -15,7 +15,7 @@ from pathlib   import Path
 from bpy.types import Operator, Context
 
 from ..io.model      import ModelImport
-from ..materials     import group_mesh_objects
+from ..materials     import compact_mesh_part_indices, group_mesh_objects
 from ..mesh.export   import export_result, get_export_stats, check_triangulation
 from ..mesh.objects  import visible_meshobj
 from ..properties    import get_settings
@@ -23,7 +23,8 @@ from ..xivpy.model   import XIVModel
 from .props          import IN_PLACE_TARGET, NO_EXPORT_CONTEXT, get_instant_edit_props
 from .context        import (SCHEMA, VERSION, SUPPORTED_VERSIONS, ContextValidationError,
                              _value, apply_authoritative_context, clear_context_metadata,
-                             context_collections, context_id_for_object, create_collection, tag_object,
+                             collection_visible_in_view_layer, context_collections,
+                             context_id_for_object, create_collection, tag_object,
                              validate_context)
 from .plugin_http    import PluginResponseTooLarge, post_json
 from .material_preview import (cleanup_preview_bundle, discard_preview_data,
@@ -1055,7 +1056,7 @@ class QuickExport(Operator):
     @classmethod
     def poll(cls, context: Context):
         try:
-            export_destination_context(context)
+            export_destination_context(context, persist=False)
             return True
         except ContextValidationError:
             return False
@@ -1287,6 +1288,41 @@ class ClearInstantEditContexts(Operator):
             setattr(props, field, value)
         schedule_revocations()
         self.report({"INFO"}, f"Cleared {cleared} XIV Instant Edit context(s); revocation queued.")
+        return {"FINISHED"}
+
+
+class CompactInstantEditParts(Operator):
+    bl_idname = "xiv_ie.compact_context_parts"
+    bl_label = "Fill Mesh Part Gaps"
+    bl_description = (
+        "Fill part-index gaps in visible XIV Instant Edit collections while "
+        "preserving the current mesh order"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: Context):
+        return context.mode == "OBJECT"
+
+    def execute(self, context: Context):
+        collections = [
+            collection
+            for collection in context_collections(context.scene)
+            if collection_visible_in_view_layer(collection, context.view_layer)
+        ]
+        try:
+            moved = compact_mesh_part_indices(collections)
+        except ValueError as error:
+            self.report({"ERROR"}, f"Mesh part gaps were not filled: {error}")
+            return {"CANCELLED"}
+
+        if moved:
+            self.report(
+                {"INFO"},
+                f"Filled mesh part gaps on {moved} part instance{'s' if moved != 1 else ''}.",
+            )
+        else:
+            self.report({"INFO"}, "No mesh part gaps found.")
         return {"FINISHED"}
 
 
@@ -1640,7 +1676,18 @@ def clear_quick_backups(context: Context) -> dict:
     return _decode_plugin_response(body, status, "/backup/clear")
 
 
-def export_destination_context(context: Context, destination: str | None = None):
+def export_destination_context(
+    context: Context,
+    destination: str | None = None,
+    *,
+    persist: bool = True,
+):
+    """Resolve the selected export context.
+
+    Blender does not allow ID-property writes while a panel is being drawn.
+    Callers that only need to render the current state can disable persistence
+    while retaining the legacy single-context resolution behavior.
+    """
     props = get_instant_edit_props()
     destination = (
         destination
@@ -1654,9 +1701,11 @@ def export_destination_context(context: Context, destination: str | None = None)
         refs = _valid_export_contexts(context)
         if len(refs) == 1:
             destination = refs[0].context_id
-            props.export_destination = destination
+            if persist:
+                props.export_destination = destination
         elif destination == "ACTIVE":
-            props.export_destination = NO_EXPORT_CONTEXT
+            if persist:
+                props.export_destination = NO_EXPORT_CONTEXT
     if destination == NO_EXPORT_CONTEXT:
         raise ContextValidationError("Select a Context before exporting or restoring.")
     return validate_context(destination, context.scene)
@@ -2028,6 +2077,7 @@ CLASSES = [
     SaveNewModName,
     VanillaModName,
     ClearInstantEditContexts,
+    CompactInstantEditParts,
     CopyInstantEditStatus,
     ApplyInstantEdit,
 ]
