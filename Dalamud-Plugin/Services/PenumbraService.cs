@@ -82,7 +82,7 @@ public sealed record SourceOptionCapture(SourceOptionLocator? Locator, string St
 /// reading the resolved model files of on-screen game objects and
 /// writing/updating a persistent mod so the edited model applies in-game.
 /// </summary>
-public sealed class PenumbraService
+public sealed partial class PenumbraService
 {
     internal sealed record SourceModTarget(string Directory, string Folder, string FilePath, string RelativePath);
     internal sealed record SourceTargetResolution(SourceModTarget? Target, string Code, string? Error);

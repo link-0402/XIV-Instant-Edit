@@ -76,6 +76,11 @@ def automatic_cleanup_enabled() -> bool:
         return _automatic_cleanup
 
 
+def cache_base_directory() -> Path:
+    with _lock:
+        return _base_directory
+
+
 def cache_root() -> Path:
     with _lock:
         return (_base_directory / CACHE_FOLDER).resolve()
@@ -324,7 +329,7 @@ def stage_import(data: dict) -> dict:
         raise CacheStagingError(
             "file_staging", "cache_unavailable",
             "Blender could not create an import job in the configured cache.",
-            "Choose a writable cache directory in the add-on preferences, then retry.") from error
+            "Set a writable cache directory in XIV Instant Edit's in-game settings, then retry.") from error
     try:
         target_model = job / source_model.name
         try:
@@ -333,7 +338,7 @@ def stage_import(data: dict) -> dict:
             raise CacheStagingError(
                 "file_staging", "model_copy_failed",
                 "Blender could not copy the temporary model into its configured cache.",
-                "Verify the source file and cache directory are accessible to Blender, then retry.") from error
+                "Verify the central cache directory is accessible to Blender, then retry.") from error
         result = dict(data)
         result["filePath"] = str(target_model)
         result["cacheJobDirectory"] = str(job)
@@ -408,7 +413,7 @@ def stage_import(data: dict) -> dict:
                     raise CacheStagingError(
                         "preview_staging", "preview_copy_failed",
                         "Blender could not copy the material preview bundle into its cache.",
-                        "Choose a writable cache directory or disable material previews, then retry.") from error
+                        "Set a writable cache directory in the in-game plugin or disable material previews, then retry.") from error
             target_manifest = target_preview / "materials.json"
             if not target_manifest.is_file():
                 raise CacheStagingError(

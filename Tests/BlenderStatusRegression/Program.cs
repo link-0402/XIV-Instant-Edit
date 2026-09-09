@@ -77,6 +77,38 @@ static async Task CheckConnectionStatesAsync()
 
 await CheckConnectionStatesAsync();
 
+foreach (var (body, expectedCache) in new[]
+{
+    ("""{"addonVersion":"1.1.7","capabilities":["instant-edit.texture-cache.v1"],"cacheRoot":"C:/Cache/XIV-Instant-Edit"}""", "C:/Cache/XIV-Instant-Edit"),
+    ("""{"addonVersion":"1.1.7","cacheRoot":"C:/untrusted"}""", (string?)null),
+    ("""{"addonVersion":"1.1.7","capabilities":["instant-edit.texture-cache.v1"],"cacheRoot":123}""", (string?)null),
+})
+{
+    var cacheStatus = await ProbeAsync(() => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) });
+    Require(cacheStatus.CacheRoot == expectedCache, "cache synchronization requires the capability and a string root");
+}
+var settingsStatus = await ProbeAsync(() => new HttpResponseMessage(HttpStatusCode.OK)
+{
+    Content = new StringContent($"{{\"addonVersion\":\"{BlenderClient.CurrentPluginVersion}\",\"capabilities\":[\"{BlenderClient.CacheSettingsCapability}\"]}}"),
+});
+Require(settingsStatus.CacheSettingsSupported, "the add-on advertises the central cache-settings endpoint");
+
+var cacheHandler = new StubHandler(() => new HttpResponseMessage(HttpStatusCode.OK)
+{
+    Content = new StringContent("{\"ok\":true,\"cacheRoot\":\"C:/Cache/XIV-Instant-Edit\"}"),
+}, null);
+using (var cacheHttp = new HttpClient(cacheHandler))
+using (var cacheContexts = new ExportContextRegistry("blender-cache-settings-regression"))
+using (var cacheClient = new BlenderClient(null!, cacheContexts, cacheHttp))
+{
+    var configured = await cacheClient.ConfigureCacheAsync(42424, "C:/Cache", true);
+    Require(configured == "C:/Cache/XIV-Instant-Edit" && cacheHandler.LastMethod == "POST" &&
+            JsonNode.Parse(cacheHandler.LastBody!)!["schema"]?.GetValue<string>() == "instant-edit.cache-settings" &&
+            JsonNode.Parse(cacheHandler.LastBody!)!["cacheDirectory"]?.GetValue<string>() == "C:/Cache" &&
+            JsonNode.Parse(cacheHandler.LastBody!)!["automaticCleanup"]?.GetValue<bool>() == true,
+        "the plugin sends its central cache directory and cleanup preference to Blender");
+}
+
 var structured = BridgeFailure.FromResponse(
     HttpStatusCode.BadRequest,
     """{"ok":false,"error":"Blender could not access the temporary model file.","component":"blender_addon","operation":"import","stage":"file_staging","code":"model_file_unavailable","cause":"Blender could not access the temporary model file.","remedy":"Run both applications as the same user.","diagnosticId":"01234567"}""",
@@ -222,7 +254,8 @@ Require(
     safeText.Contains("<local-path>", StringComparison.Ordinal),
     "bridge diagnostics redact absolute paths and capability values");
 
-Console.WriteLine("All Blender status regressions passed.");
+await TextureEditScenarios.RunAsync();
+Console.WriteLine("All Blender status and texture regressions passed.");
 
 sealed class StubHandler(
     Func<HttpResponseMessage>? responseFactory,
@@ -234,6 +267,7 @@ sealed class StubHandler(
         HttpRequestMessage request,
         CancellationToken cancellationToken)
     {
+        LastMethod = request.Method.Method;
         LastBody = request.Content is null
             ? null
             : await request.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
@@ -241,4 +275,6 @@ sealed class StubHandler(
             throw exception;
         return responseFactory?.Invoke() ?? new HttpResponseMessage(HttpStatusCode.OK);
     }
+
+    public string? LastMethod { get; private set; }
 }

@@ -106,6 +106,23 @@ def assert_model_stream_options(package_name):
     export_streams = importlib.import_module(f"{package_name}.io.model.exp.streams")
     model_file = importlib.import_module(f"{package_name}.xivpy.model.file")
 
+    material_model = model_file.XIVModel()
+    material_model.materials = [
+        f"/mt_test_{index}.mtrl" for index in range(model_file.XIVModel.MATERIAL_LIMIT)
+    ]
+    material_model.validate()
+    material_model.materials.append("/mt_test_over_limit.mtrl")
+    try:
+        material_model.validate()
+    except ValueError as error:
+        _require(
+            "FFXIV 7.0+" in str(error)
+            and f"up to {model_file.XIVModel.MATERIAL_LIMIT} materials" in str(error),
+            "material-limit failures report the current FFXIV limit",
+        )
+    else:
+        raise AssertionError("a model over the material limit was accepted")
+
     for version, expected in (
         (model_file.XIVModel.V5, "Pre-Dawntrail MDL version"),
         (0xDEADBEEF, "Unsupported MDL version 0xDEADBEEF"),

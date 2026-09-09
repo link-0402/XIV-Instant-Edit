@@ -89,7 +89,15 @@ class XIVModel:
     V6                  = 0x01000006
     NUM_VERTICES        = 17
     FILE_HEADER_SIZE    = 0x44
+    MATERIAL_LIMIT      = 10
     VERTEX_BUFFER_LIMIT = 8388608
+
+    @classmethod
+    def _material_limit_error(cls, count: int) -> str:
+        return (
+            f"Model has {count} materials. FFXIV 7.0+ MDL models support up to "
+            f"{cls.MATERIAL_LIMIT} materials; reduce the model's material count."
+        )
 
     @classmethod
     def _vertex_buffer_limit_error(cls, sizes: list[int]) -> str:
@@ -461,6 +469,10 @@ class XIVModel:
         self.mesh_header.lod_count = count
     
     def validate(self) -> None:
+        material_count = len(self.materials)
+        if material_count > self.MATERIAL_LIMIT:
+            raise ValueError(self._material_limit_error(material_count))
+
         size_limit = any(size > self.VERTEX_BUFFER_LIMIT for size in self.header.vert_buffer_size)
         if size_limit:
             raise ValueError(self._vertex_buffer_limit_error(self.header.vert_buffer_size))

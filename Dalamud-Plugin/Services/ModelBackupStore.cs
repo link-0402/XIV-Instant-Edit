@@ -23,7 +23,8 @@ public sealed partial class ModelBackupStore
     public ManagedBackupTarget Describe(string modDirectory, string targetRelativePath)
     {
         if (!PenumbraService.IsSafeModName(modDirectory) ||
-            !PenumbraService.IsSafeRelativeModelPath(targetRelativePath))
+            !(PenumbraService.IsSafeRelativeModelPath(targetRelativePath) ||
+              PenumbraService.IsSafeGameResourcePath(targetRelativePath, ".tex")))
             throw new ArgumentException("The backup target is invalid.");
         var key = $"{modDirectory.Trim().ToLowerInvariant()}\n{targetRelativePath.Replace('\\', '/').Trim().ToLowerInvariant()}";
         var id = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))).ToLowerInvariant();
@@ -35,7 +36,7 @@ public sealed partial class ModelBackupStore
         var target = Describe(modDirectory, targetRelativePath);
         targetFile = Path.GetFullPath(targetFile);
         if (!File.Exists(targetFile))
-            throw new FileNotFoundException("The model to back up no longer exists.", targetFile);
+            throw new FileNotFoundException("The resource to back up no longer exists.", targetFile);
         Directory.CreateDirectory(target.Directory);
         var original = Path.GetFileName(targetFile);
         for (var attempt = 0; attempt < 8; attempt++)
@@ -108,6 +109,6 @@ public sealed partial class ModelBackupStore
     [GeneratedRegex("^[0-9a-f]{64}$", RegexOptions.CultureInvariant)]
     private static partial Regex TargetIdRegex();
 
-    [GeneratedRegex("^[^\\\\/:*?\"<>|]+\\.(?:mdl|fbx)\\.(?<stamp>\\d{8}T\\d{6}\\.\\d{6}Z)\\.bak$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    [GeneratedRegex("^[^\\\\/:*?\"<>|]+\\.(?:mdl|fbx|tex)\\.(?<stamp>\\d{8}T\\d{6}\\.\\d{6}Z)\\.bak$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
     private static partial Regex BackupNameRegex();
 }

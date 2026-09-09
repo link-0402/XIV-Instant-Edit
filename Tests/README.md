@@ -38,7 +38,10 @@ updates the distribution archives or extension repository index.
 - `ExportContextRegression`: named session-store and variant-export scenarios,
   plus authorization, backups, resource bundling, migration, and mod metadata.
 - `BlenderStatusRegression`: grouped connection states and bridge response,
-  import handoff, and diagnostic behavior.
+  import handoff, diagnostic behavior, cache synchronization, and texture-session
+  regressions in `TextureEditScenarios.cs`. Texture tests exercise the production
+  validators, filesystem watcher, atomic replacement, and backup store with a
+  simulated conversion/IPC backend; they do not test Penumbra's actual codecs.
 - Standalone Python suites: cache ownership and cleanup, diagnostic sanitation
   and limits, import validation, and asynchronous failure reporting.
 
@@ -57,3 +60,6 @@ updates the distribution archives or extension repository index.
 Geometry, authorization, path safety, backup protection, compatibility, and
 failure-restoration tests are retained. The suite has no test-count reduction
 target. Live FFXIV/Penumbra integration remains a separate manual check.
+
+See [texture editing acceptance checks](TextureEditing.md) for the Photoshop and
+live-game scenarios required before releasing texture editing.

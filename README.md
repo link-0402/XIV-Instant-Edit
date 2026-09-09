@@ -52,6 +52,57 @@ Creating new options on existing mods requires you to refresh the view in Penumb
 
 ## Additional notes
 
+### Texture editing
+
+1. Open XIV Instant Edit Settings and enter the full path to your texture editor
+   executable, such as `Photoshop.exe`.
+2. Set the shared cache base directory in XIV Instant Edit Settings. Open `/ie`
+   with the updated Blender addon running once so the plugin can synchronize that
+   directory to Blender; Blender can then be closed for texture editing.
+3. Select **Textures** in **On Screen** or **Mod Browser**, then **Edit texture**.
+   For vanilla textures, enable **Include Vanilla** and enter a new mod name.
+4. Edit the opened TGA, which keeps the original texture filename (for example,
+   `c0101e0001_top_d.tga`), and save that same file as **32-bit TGA with an 8-bit
+   alpha channel**. Uncompressed and RLE TGA saves are supported. Keep the original
+   dimensions. Layered documents need a flattened TGA copy saved over the working
+   file.
+5. After the save settles, Instant Edit converts it to the original TEX format,
+   replaces the mod file with a backup, reloads the mod, and redraws the selected
+   actor and the local player/owned entities. A vanilla override is created and
+   enabled in the captured collection on the first changed save.
+
+The **Texture Edits** tab shows each working path, destination, and save status,
+with controls to open the editor/folder, pause/resume, retry, restore the previous
+backup, or discard the session. Restoration pauses the session and retains your
+working image. Restarted sessions begin paused. A source-file or mapping conflict
+also pauses the session: retain your working image and reopen the texture from
+the browser to start from its current source. **Discard** deletes the session's
+entire working directory, including any editing documents you saved there.
+
+Texture working directories live under `texture-edits/<session-id>` in the
+synchronized cache. **Automatic cache cleanup** is controlled from the in-game
+plugin settings and applies to model cache jobs and paused texture sessions older
+than 24 hours. Sessions with unsaved TGA changes are retained. Changing the cache
+directory in XIV Instant Edit Settings affects new sessions; existing sessions
+retain their paths. Managed TEX backups use the plugin's existing backup storage
+and 30-day retention.
+
+Supported originals are ordinary 2D TEX textures in BC1, BC3, BC4, BC5, BC7, or
+BGRA32, up to 8192 × 8192. The plugin uses Penumbra's conversion API and explicitly
+selects the original format; saving a TGA cannot silently turn a BC7 texture into
+an uncompressed TEX. BC recompression is lossy, but the working TGA remains
+uncompressed or losslessly RLE-compressed, and unchanged pixels skip encoding.
+Mipmapped textures regenerate a complete chain capped at 13 levels; textures
+without mipmaps remain single-level. Unusual formats, arrays, cubes, volumes,
+resizing, DDS/PNG working images, and existing-option destinations for vanilla
+textures are not supported in this first version.
+
+Textures can be shared: all references to the overwritten mod file change.
+Channel data is passed through without intentional color correction,
+premultiplication, or normal-map reconstruction. Preserve all channels in your
+editor, including RGB beneath transparent pixels. See the [manual texture
+acceptance checks](Tests/TextureEditing.md) for Photoshop and live-game validation.
+
 The Blender plugin manages it's mappings to mods via the automatically created "Instant Edit [context_id]" collections. To ensure the addon works properly, do not move, rename, delete or otherwise edit them until you exported the model you were working on. You can easily remove an old context by removing the collection along with it's context afterwards, should you wish to continue other work in the same scene.
 
 ### Main Features

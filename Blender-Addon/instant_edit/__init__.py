@@ -6,7 +6,6 @@ from .props  import set_addon_properties, remove_addon_properties, get_instant_e
 from .server import get_server_error, start_server, stop_server, poll_import_queue
 from .recovery import cancel_recovery, schedule_recovery
 from .revocation import cancel_revocations, schedule_revocations
-from .cache import STALE_SECONDS, clean_cache, configure_cache
 
 
 _visibility_check_pending = False
@@ -159,25 +158,19 @@ def register() -> None:
         from ..preferences import get_prefs
         prefs = get_prefs()
         port = prefs.instant_edit_blender_port
-        configure_cache(
-            bpy.path.abspath(prefs.instant_edit_cache_directory),
-            prefs.instant_edit_auto_cleanup,
-        )
-        if prefs.instant_edit_auto_cleanup:
-            clean_cache(STALE_SECONDS)
     except Exception as error:
         from .diagnostics import record_failure
         record_failure(
             component="blender_addon",
             operation="addon_startup",
-            stage="cache_configuration",
-            code="cache_configuration_failed",
-            cause="Blender could not configure the XIV Instant Edit cache.",
-            remedy="Choose a writable cache directory in the add-on preferences, then restart Blender.",
+            stage="preferences",
+            code="addon_preferences_unavailable",
+            cause="Blender could not read the XIV Instant Edit add-on preferences.",
+            remedy="Verify the Blender add-on installation and restart Blender.",
             endpoint="/startup",
             exception=error,
         )
-        print(f"XIV Instant Edit: could not configure cache: {error}")
+        print(f"XIV Instant Edit: could not read add-on preferences: {error}")
 
     if not start_server(port):
         error = get_server_error() or "the port may already be in use"

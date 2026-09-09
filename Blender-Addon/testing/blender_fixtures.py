@@ -21,11 +21,12 @@ def addon_session(name):
     spec.loader.exec_module(addon)
     preferences = importlib.import_module(f"{name}.preferences")
     bridge = importlib.import_module(f"{name}.instant_edit")
+    cache = importlib.import_module(f"{name}.instant_edit.cache")
     with tempfile.TemporaryDirectory(prefix="xiv-ie-tests-") as temporary:
         prefs = SimpleNamespace(
             instant_edit_blender_port=42424, instant_edit_plugin_port=42428,
-            instant_edit_cache_directory=temporary, instant_edit_auto_cleanup=True,
         )
+        cache.configure_cache(temporary, True)
         # Network behavior is exercised through explicit transport fixtures; a
         # scene test must never bind the user's listener or use their cache.
         with patch.object(preferences, "get_prefs", return_value=prefs), \

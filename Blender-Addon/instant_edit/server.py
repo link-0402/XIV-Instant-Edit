@@ -13,7 +13,7 @@ from queue       import Empty, Full, Queue
 import bpy
 
 from .context import is_safe_game_model_path
-from .cache import CacheStagingError
+from .cache import CacheStagingError, STALE_SECONDS, cache_root
 from .diagnostics import BridgeRequestError, record_failure, sanitize_text
 from .plugin_http import post_json
 
@@ -24,6 +24,8 @@ REQUEST_TIMEOUT_SECONDS = 5
 IMPORT_OPTIONS_CAPABILITY = "instant-edit.import-options.v1"
 MATERIAL_PREVIEW_CAPABILITY = "instant-edit.material-preview.v1"
 CACHE_HANDOFF_CAPABILITY = "instant-edit.cache-handoff.v1"
+TEXTURE_CACHE_CAPABILITY = "instant-edit.texture-cache.v1"
+CACHE_SETTINGS_CAPABILITY = "instant-edit.cache-settings.v1"
 VANILLA_CONTEXT_CAPABILITY = "instant-edit.vanilla-context.v1"
 STRUCTURED_ERRORS_CAPABILITY = "instant-edit.structured-errors.v1"
 IMPORT_STATUS_CAPABILITY = "instant-edit.import-status.v1"
@@ -56,10 +58,13 @@ def _status_payload() -> dict:
         "addon": "XIV Instant Edit",
         "addonId": "xiv_instant_edit",
         "addonVersion": ADDON_VERSION,
+        "cacheRoot": str(cache_root()),
         "capabilities": [
             IMPORT_OPTIONS_CAPABILITY,
             MATERIAL_PREVIEW_CAPABILITY,
             CACHE_HANDOFF_CAPABILITY,
+            TEXTURE_CACHE_CAPABILITY,
+            CACHE_SETTINGS_CAPABILITY,
             VANILLA_CONTEXT_CAPABILITY,
             STRUCTURED_ERRORS_CAPABILITY,
             IMPORT_STATUS_CAPABILITY,
@@ -247,7 +252,9 @@ class _ImportHandler(BaseHTTPRequestHandler):
             ))
 
     def do_POST(self) -> None:
-        if self.path.rstrip("/") != "/import":
+        endpoint = self.path.rstrip("/")
+        is_cache_settings = endpoint == "/settings/cache"
+        if endpoint != "/import" and not is_cache_settings:
             self._respond(404, _failure(
                 404, "http_request", "routing", "endpoint_not_found",
                 "The requested Blender bridge endpoint does not exist.",
@@ -323,6 +330,28 @@ class _ImportHandler(BaseHTTPRequestHandler):
                     endpoint=self.path, exception=error,
                 ))
                 return
+            if is_cache_settings:
+                data = self._validate_cache_settings(data)
+                from .cache import STALE_SECONDS, clean_cache, configure_cache
+                try:
+                    root = configure_cache(data["cacheDirectory"], data["automaticCleanup"])
+                except Exception as error:
+                    raise BridgeRequestError(
+                        "cache_configuration", "cache_configuration_failed",
+                        "Blender could not apply the cache directory from the in-game plugin.",
+                        "Set a writable local cache directory in XIV Instant Edit's in-game settings, then retry.") from error
+                if data["automaticCleanup"]:
+                    try:
+                        clean_cache(STALE_SECONDS)
+                    except Exception as error:
+                        print(f"XIV Instant Edit: cache cleanup after synchronization failed: {sanitize_text(error)}")
+                self._respond(200, {
+                    "ok": True,
+                    "cacheDirectory": str(data["cacheDirectory"]),
+                    "cacheRoot": str(root),
+                })
+                return
+
             data = self._validate_import(data)
             from .cache import stage_import
 
@@ -336,17 +365,20 @@ class _ImportHandler(BaseHTTPRequestHandler):
             ))
             return
         except (BridgeRequestError, CacheStagingError) as error:
+            operation = "cache_settings" if is_cache_settings else "import"
             self._respond(400, _failure(
-                400, "import", error.stage, error.code, error.cause, error.remedy,
+                400, operation, error.stage, error.code, error.cause, error.remedy,
                 endpoint=self.path, exception=error,
                 metadata=_request_metadata(data),
             ))
             return
         except Exception as e:
+            operation = "cache_settings" if is_cache_settings else "import"
             self._respond(400, _failure(
-                400, "import", "file_staging", "handoff_staging_failed",
-                "Blender could not validate or copy the import handoff.",
-                "Verify the configured cache directory is writable and retry the import.",
+                400, operation, "cache_configuration" if is_cache_settings else "file_staging",
+                "cache_configuration_failed" if is_cache_settings else "handoff_staging_failed",
+                "Blender could not apply the cache directory from the in-game plugin." if is_cache_settings else "Blender could not validate or copy the import handoff.",
+                "Set a writable local cache directory in XIV Instant Edit's in-game settings, then retry." if is_cache_settings else "Verify the configured cache directory is writable and retry the import.",
                 endpoint=self.path, exception=e,
                 metadata=_request_metadata(data),
             ))
@@ -368,6 +400,38 @@ class _ImportHandler(BaseHTTPRequestHandler):
             ))
             return
         self._respond(200, {"ok": True, "queued": True, "cached": True})
+
+    @staticmethod
+    def _validate_cache_settings(data) -> dict:
+        if not isinstance(data, dict):
+            raise BridgeRequestError(
+                "request_validation", "request_not_object",
+                "The cache settings JSON root is not an object.",
+                "Update both XIV Instant Edit components and retry.")
+        if data.get("schema") != "instant-edit.cache-settings":
+            raise BridgeRequestError(
+                "request_validation", "unsupported_schema",
+                "The cache settings request uses an unsupported schema.",
+                "Update both XIV Instant Edit components and retry.")
+        if data.get("version") != 1:
+            raise BridgeRequestError(
+                "request_validation", "unsupported_version",
+                "The cache settings request uses an unsupported protocol version.",
+                "Update both XIV Instant Edit components and retry.")
+        directory = _string(data, "cacheDirectory", required=True, max_length=4096).strip()
+        if (directory.startswith(("\\\\", "//")) or
+                not (Path(directory).is_absolute() or re.match(r"^[A-Za-z]:[\\/]", directory))):
+            raise BridgeRequestError(
+                "request_validation", "invalid_cache_directory",
+                "The cache directory must be a local absolute path.",
+                "Set a local absolute cache directory in XIV Instant Edit's in-game settings.")
+        automatic_cleanup = data.get("automaticCleanup", True)
+        if not isinstance(automatic_cleanup, bool):
+            raise BridgeRequestError(
+                "request_validation", "invalid_automatic_cleanup",
+                "automaticCleanup must be a boolean.",
+                "Update both XIV Instant Edit components and retry.")
+        return {**data, "cacheDirectory": directory, "automaticCleanup": automatic_cleanup}
 
     @staticmethod
     def _validate_import(data) -> dict:
