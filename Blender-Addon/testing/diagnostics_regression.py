@@ -8,7 +8,6 @@ import sys
 import tempfile
 import time
 import types
-import uuid
 
 
 def _load_modules():
@@ -43,6 +42,9 @@ def run() -> None:
     cache, diagnostics, plugin_http = _load_modules()
     with tempfile.TemporaryDirectory(prefix="xiv-ie-diagnostics-test-") as temporary:
         root = cache.configure_cache(temporary, True)
+        diagnostics_folder = Path(temporary) / "diagnostics"
+        original_diagnostics_root = cache.diagnostics_root
+        cache.diagnostics_root = lambda: diagnostics_folder
 
         previous_root = cache.cache_root()
         original_ensure_cache_root = cache.ensure_cache_root
@@ -104,7 +106,9 @@ def run() -> None:
                 "response": '{"capability":"private-value"}',
             },
         )
-        report = root / "diagnostics" / f"{failure['diagnosticId']}.json"
+        assert diagnostics.is_diagnostic_id(failure["diagnosticId"])
+        report = diagnostics_folder / f"{failure['diagnosticId']}.json"
+        assert len(report.stem) == diagnostics.DIAGNOSTIC_ID_LENGTH
         assert report.is_file()
         report_text = report.read_text("utf-8")
         report_data = json.loads(report_text)
@@ -115,7 +119,7 @@ def run() -> None:
         assert "<local-path>" in report_text
         assert report_data["technical"]["exceptionMessage"] == "Access denied: <local-path>"
 
-        remote_id = uuid.uuid4().hex
+        remote_id = diagnostics.new_diagnostic_id()
         remote = diagnostics.record_remote_failure(
             json.dumps({
                 "ok": False,
@@ -133,7 +137,7 @@ def run() -> None:
         )
         assert remote["diagnosticId"] == remote_id
         remote_report = json.loads(
-            (root / "diagnostics" / f"{remote_id}.json").read_text("utf-8"))
+            (diagnostics_folder / f"{remote_id}.json").read_text("utf-8"))
         assert remote_report["endpoint"] == "backup/restore"
         assert remote_report["technical"]["componentVersion"] == "1.1.5"
         assert remote_report["componentVersions"]["dalamudPlugin"] == "1.1.5"
@@ -144,15 +148,14 @@ def run() -> None:
             endpoint="/export",
             operation="export",
         )
-        protocol_report = root / "diagnostics" / f"{protocol['diagnosticId']}.json"
+        protocol_report = diagnostics_folder / f"{protocol['diagnosticId']}.json"
         assert protocol["code"] == "invalid_success_response"
         assert "C:\\\\Users" not in protocol_report.read_text("utf-8")
 
         cache.MAX_DIAGNOSTIC_REPORTS = 3
         cache.MAX_DIAGNOSTIC_BYTES = 1024 * 1024
-        diagnostics_folder = root / "diagnostics"
         for index in range(5):
-            item = diagnostics_folder / f"{uuid.uuid4().hex}.json"
+            item = diagnostics_folder / f"{diagnostics.new_diagnostic_id()}.json"
             item.write_text(json.dumps({"index": index}), encoding="utf-8")
             timestamp = time.time() + index
             os.utime(item, (timestamp, timestamp))
@@ -162,14 +165,14 @@ def run() -> None:
         cache.MAX_DIAGNOSTIC_REPORTS = 100
         cache.MAX_DIAGNOSTIC_BYTES = 25
         for index in range(3):
-            item = diagnostics_folder / f"{uuid.uuid4().hex}.json"
+            item = diagnostics_folder / f"{diagnostics.new_diagnostic_id()}.json"
             item.write_text("x" * 20, encoding="utf-8")
             timestamp = time.time() + 10 + index
             os.utime(item, (timestamp, timestamp))
         cache.clean_cache(cache.STALE_SECONDS)
         assert sum(item.stat().st_size for item in diagnostics_folder.glob("*.json")) <= 25
 
-        stale = diagnostics_folder / f"{uuid.uuid4().hex}.json"
+        stale = diagnostics_folder / f"{diagnostics.new_diagnostic_id()}.json"
         stale.write_text("{}", encoding="utf-8")
         old = time.time() - cache.STALE_SECONDS - 60
         os.utime(stale, (old, old))
@@ -179,6 +182,7 @@ def run() -> None:
         removed, _bytes = cache.clean_cache()
         assert removed >= 1
         assert not tuple(diagnostics_folder.glob("*.json"))
+        cache.diagnostics_root = original_diagnostics_root
 
     print("[PASS] structured diagnostic reports are sanitized, bounded, and cleanable")
 

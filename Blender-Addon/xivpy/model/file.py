@@ -91,6 +91,23 @@ class XIVModel:
     FILE_HEADER_SIZE    = 0x44
     VERTEX_BUFFER_LIMIT = 8388608
 
+    @classmethod
+    def _vertex_buffer_limit_error(cls, sizes: list[int]) -> str:
+        exceeded = "; ".join(
+            f"LOD {lod}: {size:,} bytes ({size / 1024 / 1024:.2f} MiB)"
+            for lod, size in enumerate(sizes)
+            if size > cls.VERTEX_BUFFER_LIMIT
+        )
+        return (
+            "Vertex buffer too large. FFXIV limits each LOD's combined vertex "
+            f"buffers to {cls.VERTEX_BUFFER_LIMIT:,} bytes (8 MiB). "
+            f"Exceeded: {exceeded}. This is a byte limit, not a fixed vertex "
+            "count: UV channels, vertex colours, flow data, bone influences, "
+            "seams, and shape keys all affect the size. Reduce those data or "
+            "the geometry; splitting a mesh group only helps the separate "
+            "65,535-exported-vertex mesh limit."
+        )
+
     def __init__(self):
         self.header         = FileHeader()
         self.mesh_header    = MeshHeader()
@@ -444,9 +461,9 @@ class XIVModel:
         self.mesh_header.lod_count = count
     
     def validate(self) -> None:
-        size_limit = any([size > self.VERTEX_BUFFER_LIMIT for size in self.header.vert_buffer_size])
+        size_limit = any(size > self.VERTEX_BUFFER_LIMIT for size in self.header.vert_buffer_size)
         if size_limit:
-            raise ValueError(f"Vertex buffer is too large.")
+            raise ValueError(self._vertex_buffer_limit_error(self.header.vert_buffer_size))
 
     def _get_data_offset(self) -> int:
         return self.FILE_HEADER_SIZE + self.header.runtime_size + self.header.stack_size

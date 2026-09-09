@@ -161,7 +161,9 @@ def run() -> None:
         _expect_code(server, payload, expected)
 
     with tempfile.TemporaryDirectory(prefix="xiv-ie-server-diagnostics-") as temporary:
-        root = cache.configure_cache(temporary, False)
+        cache.configure_cache(temporary, False)
+        diagnostics_folder = Path(temporary) / "diagnostics"
+        cache.diagnostics_root = lambda: diagnostics_folder
         captured = []
         server._notify_import_failure = lambda data, failure: captured.append((data, failure))
         server.bpy = types.SimpleNamespace(
@@ -182,7 +184,7 @@ def run() -> None:
         server.poll_import_queue()
         assert len(captured) == 1
         failure = captured[0][1]
-        report_path = root / "diagnostics" / f"{failure['diagnosticId']}.json"
+        report_path = diagnostics_folder / f"{failure['diagnosticId']}.json"
         report_text = report_path.read_text("utf-8")
         assert failure["code"] == "import_cancelled"
         assert report_path.is_file()

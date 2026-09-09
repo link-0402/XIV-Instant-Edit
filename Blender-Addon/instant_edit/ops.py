@@ -24,7 +24,9 @@ from .props          import IN_PLACE_TARGET, NO_EXPORT_CONTEXT, get_instant_edit
 from .context        import (SCHEMA, VERSION, SUPPORTED_VERSIONS, ContextValidationError,
                              _value, apply_authoritative_context, clear_context_metadata,
                              collection_visible_in_view_layer, context_collections,
-                             context_id_for_object, create_collection, tag_object,
+                             context_id_for_object, create_collection, mesh_ids_from_name,
+                             mesh_name_info, MASHUP_SOURCE_MATERIAL_PROPERTY,
+                             tag_object,
                              validate_context)
 from .plugin_http    import PluginResponseTooLarge, post_json
 from .material_preview import (cleanup_preview_bundle, discard_preview_data,
@@ -153,8 +155,13 @@ def _normalize_mashup_material(material_name: str) -> str:
     return normalized
 
 
-def _object_material_name(obj) -> str:
-    value = obj.get("xiv_material", "")
+def _object_material_name(obj, *, source_material: bool = False) -> str:
+    value = (
+        obj.get(MASHUP_SOURCE_MATERIAL_PROPERTY, "")
+        if source_material else obj.get("xiv_material", "")
+    )
+    if not value and source_material:
+        value = obj.get("xiv_material", "")
     if not value and obj.material_slots and obj.material_slots[0].material is not None:
         value = obj.material_slots[0].material.name
     if not isinstance(value, str) or not value.strip():
@@ -179,7 +186,7 @@ def _collect_export_context_materials(context: Context, ref):
         if context_id not in refs:
             refs[context_id] = validate_context(context_id, context.scene)
             context_order.append(context_id)
-        material = _object_material_name(obj)
+        material = _object_material_name(obj, source_material=True)
         context_materials = materials.setdefault(context_id, [])
         if material.casefold() not in {item.casefold() for item in context_materials}:
             context_materials.append(material)
@@ -252,7 +259,7 @@ def _material_coverage_cache_key(context: Context, ref, refs, materials, objects
             (
                 getattr(obj, "name", ""),
                 context_id_for_object(obj) or ref.context_id,
-                _object_material_name(obj),
+                _object_material_name(obj, source_material=True),
             )
             for obj in objects
         ],
@@ -470,6 +477,149 @@ def normalise_variant_group_name(value: str) -> str:
     if any(ord(char) < 32 for char in name):
         raise ValueError("Penumbra option group name contains a control character.")
     return name
+
+
+def _named_readiness_issue(label: str, names: list[str]) -> str:
+    names = list(dict.fromkeys(str(name) for name in names if name))
+    if not names:
+        return label
+    shown = ", ".join(names[:3])
+    if len(names) > 3:
+        shown += f", +{len(names) - 3} more"
+    return f"{label} ({len(names)}): {shown}"
+
+
+def export_target_issues(
+    context: Context,
+    ref=None,
+    *,
+    material_coverage_warning: bool | None = None,
+) -> list[tuple[str, str]]:
+    """Return grouped readiness issues for the current Quick Export target.
+
+    This intentionally mirrors the export preflight checks without changing any
+    export state.  Each tuple contains a severity (``ERROR`` or ``WARNING``)
+    and a user-facing message.
+    """
+    props = get_instant_edit_props()
+    issues: list[tuple[str, str]] = []
+    if ref is None:
+        try:
+            ref = export_destination_context(context, persist=False)
+        except ContextValidationError as error:
+            return [("ERROR", str(error))]
+    scope = getattr(props, "export_scope", "VISIBLE")
+
+    try:
+        export_objects = export_objects_for_scope(ref, scope)
+    except ContextValidationError as error:
+        export_objects = []
+        issues.append(("ERROR", str(error)))
+
+    if not export_objects:
+        if not any(message == "No visible mesh objects match Export Parts." for _, message in issues):
+            issues.append(("ERROR", "No visible mesh objects match Export Parts."))
+    else:
+        invalid_names = []
+        empty_meshes = []
+        missing_materials = []
+        mesh_ids: dict[tuple[int, int, int], list[str]] = {}
+
+        for obj in export_objects:
+            name = getattr(obj, "name", "Unnamed mesh")
+            if len(getattr(getattr(obj, "data", None), "vertices", ())) == 0:
+                empty_meshes.append(name)
+            try:
+                mesh_id = mesh_ids_from_name(obj)
+            except ContextValidationError:
+                invalid_names.append(name)
+            else:
+                mesh_ids.setdefault(mesh_id, []).append(name)
+
+            try:
+                _object_material_name(obj)
+            except ContextValidationError:
+                missing_materials.append(name)
+
+        duplicate_ids = [
+            name
+            for names in mesh_ids.values()
+            if len(names) > 1
+            for name in names
+        ]
+        not_triangulated = check_triangulation(export_objects)
+
+        if invalid_names:
+            issues.append((
+                "ERROR",
+                _named_readiness_issue("Invalid mesh names", invalid_names),
+            ))
+        if empty_meshes:
+            issues.append((
+                "ERROR",
+                _named_readiness_issue("Empty meshes", empty_meshes),
+            ))
+        if duplicate_ids:
+            issues.append((
+                "ERROR",
+                _named_readiness_issue("Duplicate mesh IDs", duplicate_ids),
+            ))
+        if missing_materials:
+            issues.append((
+                "ERROR",
+                _named_readiness_issue("Missing material paths", missing_materials),
+            ))
+        if not_triangulated:
+            issues.append((
+                "ERROR",
+                _named_readiness_issue("Not triangulated", not_triangulated),
+            ))
+
+    selection = getattr(props, "variant_target", "NEW_GROUP")
+    if selection == MASHUP_TARGET:
+        show_target, enabled, message = mashup_target_state(context, ref)
+        if not show_target:
+            issues.append(("ERROR", "Create Mashup is unavailable for the current export selection."))
+        elif not enabled:
+            issues.append(("ERROR", message or "Create Mashup is not ready for the current export selection."))
+    elif selection == SAVE_NEW_MOD_TARGET:
+        show_target, enabled, message = save_new_mod_target_state(context, ref)
+        if not show_target:
+            issues.append(("ERROR", "Save to new mod is unavailable for the current export selection."))
+        elif not enabled:
+            issues.append(("ERROR", message or "Save to new mod is not ready for the current export selection."))
+    elif selection == "NEW_GROUP":
+        try:
+            normalise_variant_group_name(getattr(props, "variant_group_name", ""))
+        except ValueError as error:
+            issues.append(("ERROR", str(error)))
+        try:
+            validate_variant_name(ref.source_game_path, getattr(props, "variant_name", ""))
+        except ValueError as error:
+            issues.append(("ERROR", str(error)))
+    elif selection != IN_PLACE_TARGET:
+        target = selected_variant_target(props)
+        if getattr(props, "variant_targets_context_id", "") != ref.context_id:
+            issues.append(("ERROR", "Refresh targets for this Context before exporting."))
+        elif target is None:
+            issues.append(("ERROR", "The selected mod option is no longer available; refresh targets."))
+        elif target.kind == "GROUP":
+            try:
+                validate_variant_name(ref.source_game_path, getattr(props, "variant_name", ""))
+            except ValueError as error:
+                issues.append(("ERROR", str(error)))
+        elif target.kind != "OPTION":
+            issues.append(("ERROR", "The selected Penumbra target is invalid; refresh targets."))
+
+    if material_coverage_warning is None:
+        material_coverage_warning = material_coverage_warning_state(context, ref)
+    if selection != MASHUP_TARGET:
+        if material_coverage_warning:
+            issues.append(("WARNING", MATERIAL_COVERAGE_WARNING))
+        elif material_coverage_probe_pending():
+            issues.append(("WARNING", "Checking material and texture coverage…"))
+
+    return issues
 
 
 def selected_variant_target(props):
@@ -965,6 +1115,126 @@ def _preselect_sole_export_context(props, context: Context, imported_context_id:
         # A saved pre-explicit selector must never choose a context implicitly
         # when more than one valid destination now exists.
         props.export_destination = NO_EXPORT_CONTEXT
+
+
+def _mashup_context_metadata(payload: dict, target_file_path: str) -> dict:
+    """Convert a plugin-created output context into collection metadata."""
+    if not isinstance(payload, dict):
+        raise ContextValidationError("plugin returned an invalid mashup output context")
+
+    schema = payload.get("schema")
+    version = payload.get("version")
+    context_id = payload.get("contextId")
+    import_id = payload.get("importId")
+    callback_port = payload.get("callbackPort")
+    if schema != SCHEMA or version not in SUPPORTED_VERSIONS:
+        raise ContextValidationError("plugin returned an unsupported mashup output context")
+    if not all(isinstance(value, str) and value for value in (
+        context_id, import_id, payload.get("pluginInstanceId"),
+        payload.get("capability"), payload.get("sourceGamePath"),
+    )):
+        raise ContextValidationError("plugin returned an incomplete mashup output context")
+    if isinstance(callback_port, bool) or not isinstance(callback_port, int):
+        raise ContextValidationError("plugin returned an invalid mashup output callback port")
+
+    output_path = str(target_file_path or payload.get("targetFilePath") or "")
+    if not output_path:
+        raise ContextValidationError("plugin returned an incomplete mashup output path")
+
+    return {
+        "context_id": context_id,
+        "schema": schema,
+        "version": version,
+        "plugin_instance_id": payload["pluginInstanceId"],
+        "capability": payload["capability"],
+        "source_game_path": payload["sourceGamePath"],
+        "source_kind": payload.get("sourceKind") or "mod",
+        "resolved_game_path": payload.get("resolvedGamePath") or payload["sourceGamePath"],
+        "destination_state": payload.get("destinationState") or "ready",
+        "managed_destination": payload.get("managedDestination") or "",
+        "target_file_path": output_path,
+        "source_mod_directory": payload.get("sourceModDirectory") or "",
+        "source_mod_name": payload.get("sourceModName") or "",
+        "source_mod_root_path": payload.get("sourceModRootPath") or "",
+        "target_relative_path": payload.get("targetRelativePath") or "",
+        "target_collection_id": payload.get("targetCollectionId") or "",
+        "target_collection_name": payload.get("targetCollectionName") or "",
+        "resource_manifest_version": payload.get("resourceManifestVersion") or 0,
+        "resource_manifest_status": payload.get("resourceManifestStatus") or "capture_failed",
+        "backup_target_id": payload.get("backupTargetId") or "",
+        "backup_directory": payload.get("backupDirectory") or "",
+        "import_id": import_id,
+        "callback_port": callback_port,
+        "import_file_name": Path(output_path).name,
+    }
+
+
+def _mashup_duplicate_name(obj, context_id: str) -> str:
+    """Create a unique name that retains the object's YAA mesh identity."""
+    info = mesh_name_info(obj)
+    label = info.label or "Mashup"
+    lod = f" LOD{info.lod}" if info.lod else ""
+    # Keep LOD at the end: mesh_name_info uses the terminal LOD suffix when
+    # recovering the YAA identity from the renamed duplicate.
+    base = f"{info.mesh_group}.{info.mesh_part} {label} [Mashup {context_id[:8]}]{lod}"
+    candidate = base
+    suffix = 2
+    existing = {item.name for item in bpy.data.objects}
+    while candidate in existing:
+        candidate = f"{base} {suffix}"
+        suffix += 1
+    return candidate
+
+
+def _create_mashup_output_context(
+    context: Context,
+    payload: dict,
+    target_file_path: str,
+    export_objects: list,
+    object_contexts: dict,
+    assignments: dict[tuple[str, str], str],
+):
+    """Create a destination context from existing scene meshes, never an MDL import."""
+    metadata = _mashup_context_metadata(payload, target_file_path)
+    collection = create_collection(context.scene, metadata)
+    created_objects = []
+    try:
+        output_context_id = metadata["context_id"]
+        for obj in export_objects:
+            source_context_id, source_material = object_contexts[obj.as_pointer()]
+            alias = assignments[(source_context_id, source_material.casefold())]
+            duplicate = obj.copy()
+            duplicate.data = obj.data.copy()
+            duplicate.name = _mashup_duplicate_name(obj, output_context_id)
+            collection.objects.link(duplicate)
+            tag_object(duplicate, {
+                "context_id": output_context_id,
+                "schema": metadata["schema"],
+                "version": metadata["version"],
+            })
+            duplicate["xiv_material"] = alias
+            duplicate["instant_edit_xiv_material"] = alias
+            duplicate.pop(MASHUP_SOURCE_MATERIAL_PROPERTY, None)
+            created_objects.append(duplicate)
+
+        return validate_context(output_context_id, context.scene), created_objects
+    except Exception:
+        for obj in reversed(created_objects):
+            if obj.name in bpy.data.objects:
+                bpy.data.objects.remove(obj, do_unlink=True)
+        if collection.name in bpy.data.collections:
+            bpy.data.collections.remove(collection, do_unlink=True)
+        raise
+
+
+def _persist_mashup_assignments(export_objects, object_contexts, assignments) -> None:
+    """Keep active-mod mashup aliases while retaining source materials for planning."""
+    for obj in export_objects:
+        context_id, source_material = object_contexts[obj.as_pointer()]
+        alias = assignments[(context_id, source_material.casefold())]
+        obj[MASHUP_SOURCE_MATERIAL_PROPERTY] = source_material
+        obj["xiv_material"] = alias
+        obj["instant_edit_xiv_material"] = alias
 
 
 class RefreshVariantTargets(Operator):
@@ -1791,6 +2061,7 @@ def perform_mashup_export(
     temp_dir = create_job("exports", export_id)
     mdl_path = temp_dir / f"mashup_{export_id}.mdl"
     saved_materials = []
+    persist_active_assignments = False
     try:
         for obj in export_objects:
             context_id, material = object_contexts[obj.as_pointer()]
@@ -1848,6 +2119,63 @@ def perform_mashup_export(
         warnings = result.get("warnings", [])
         target = result.get("targetFilePath") or ref.target_file_path
         destination_name = result.get("destinationName") or name
+        handoff_warnings = []
+        if destination == "ACTIVE_MOD":
+            persist_active_assignments = True
+            try:
+                refresh_variant_targets(
+                    context,
+                    select_group_name=destination_name,
+                    select_option_name=destination_name,
+                )
+                selected = selected_variant_target(get_instant_edit_props())
+                if (
+                    selected is None
+                    or selected.kind != "OPTION"
+                    or selected.group_name.casefold() != destination_name.casefold()
+                    or selected.option_name.casefold() != destination_name.casefold()
+                ):
+                    raise ValueError(
+                        f'Penumbra did not return the new mashup target "{destination_name}"'
+                    )
+            except Exception as error:
+                handoff_warnings.append(
+                    f"Created the mashup, but the new Penumbra target could not be selected: {error}"
+                )
+        else:
+            output_context = result.get("context")
+            if not isinstance(output_context, dict):
+                handoff_warnings.append(
+                    "Created the mashup mod, but the plugin did not return its Blender export context."
+                )
+            else:
+                try:
+                    output_ref, _created_objects = _create_mashup_output_context(
+                        context,
+                        output_context,
+                        str(target),
+                        export_objects,
+                        object_contexts,
+                        assignments,
+                    )
+                    props = get_instant_edit_props()
+                    # The output collection is the complete mashup. Keep the
+                    # original contributor collections available without
+                    # exporting both the sources and their output copies.
+                    props.export_scope = "CURRENT_COLLECTION"
+                    props.export_destination = output_ref.context_id
+                    try:
+                        refresh_variant_targets(context)
+                    except Exception as error:
+                        handoff_warnings.append(
+                            f"Selected the mashup context, but its Penumbra targets could not refresh: {error}"
+                        )
+                except Exception as error:
+                    handoff_warnings.append(
+                        f"Created the mashup mod, but its Blender export context could not be created: {error}"
+                    )
+        if handoff_warnings:
+            warnings = list(warnings) + handoff_warnings
         get_instant_edit_props().last_export_id = export_id
         get_instant_edit_props().last_status = (
             f"Created mashup {destination_name} at {target} with warnings: "
@@ -1864,6 +2192,8 @@ def perform_mashup_export(
                     obj[property_name] = previous
                 else:
                     obj.pop(property_name, None)
+        if persist_active_assignments:
+            _persist_mashup_assignments(export_objects, object_contexts, assignments)
         try:
             finish_job(temp_dir)
         except OSError as error:

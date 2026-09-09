@@ -25,7 +25,10 @@ public sealed record ExportResult(
     string? TargetFilePath = null,
     string? DestinationName = null,
     ModPathRemap? PathRemap = null,
-    IReadOnlyList<string>? RequiredExternalMods = null)
+    IReadOnlyList<string>? RequiredExternalMods = null,
+    string? OutputModDirectory = null,
+    string? OutputModRootPath = null,
+    string? OutputTargetRelativePath = null)
 {
     public ExportResult(bool success, string message)
         : this(success, success ? "export_applied" : "apply_failed", message)
@@ -859,7 +862,7 @@ public sealed class PenumbraService
             materialEntries.Add((contributor, dependency, assignment, bundleMaterialExternalDependencies));
         }
 
-        var actualAliases = MaterialPreviewBundleBuilder.ReadModelMaterials(modelBytes)
+        var actualAliases = MaterialPreviewBundleBuilder.ReadUsedModelMaterials(modelBytes)
             .Select(NormalizeModelMaterial)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (!expectedAliases.SetEquals(actualAliases))
@@ -1300,7 +1303,10 @@ public sealed class PenumbraService
             return new ExportResult(true,
                 warnings.Count == 0 ? "mashup_applied" : "mashup_applied_with_warnings",
                 $"Created mashup group {actualName} in {target.Directory}.", warnings, modelPath, actualName,
-                cleanup.PathRemap, prepared.RequiredExternalMods);
+                cleanup.PathRemap, prepared.RequiredExternalMods,
+                OutputModDirectory: target.Directory,
+                OutputModRootPath: target.Folder,
+                OutputTargetRelativePath: modelRelative);
         }
         catch (Exception e)
         {
@@ -1316,7 +1322,10 @@ public sealed class PenumbraService
                 .ToArray();
             return new ExportResult(true, "mashup_applied_with_warnings",
                 $"Created mashup group {actualName} in {target.Directory}.",
-                warnings, modelPath, actualName, RequiredExternalMods: prepared.RequiredExternalMods);
+                warnings, modelPath, actualName, RequiredExternalMods: prepared.RequiredExternalMods,
+                OutputModDirectory: target.Directory,
+                OutputModRootPath: target.Folder,
+                OutputTargetRelativePath: modelRelative);
         }
     }
 
@@ -1408,7 +1417,10 @@ public sealed class PenumbraService
             return new ExportResult(true,
                 warnings.Count == 0 ? "mashup_mod_created" : "mashup_mod_created_with_warnings",
                 $"Created Penumbra mashup mod {modName}.", warnings, modelPath, modName,
-                RequiredExternalMods: prepared.RequiredExternalMods);
+                RequiredExternalMods: prepared.RequiredExternalMods,
+                OutputModDirectory: modName,
+                OutputModRootPath: finalFolder,
+                OutputTargetRelativePath: modelRelative);
         }
         catch (Exception e)
         {
@@ -1423,7 +1435,10 @@ public sealed class PenumbraService
                     .ToArray();
                 return new ExportResult(true, "mashup_mod_created_with_warnings",
                     $"Created Penumbra mashup mod {modName}.",
-                    warnings, modelPath, modName, RequiredExternalMods: prepared.RequiredExternalMods);
+                    warnings, modelPath, modName, RequiredExternalMods: prepared.RequiredExternalMods,
+                    OutputModDirectory: modName,
+                    OutputModRootPath: finalFolder,
+                    OutputTargetRelativePath: modelRelative);
             }
             return new ExportResult(false, "mashup_mod_create_failed", e.Message);
         }

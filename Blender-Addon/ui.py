@@ -9,8 +9,8 @@ from bpy.types import Context, Panel
 from .instant_edit.context import ContextValidationError, mesh_ids_from_name
 from .instant_edit.ops import (MASHUP_TARGET, SAVE_NEW_MOD_TARGET,
                                export_destination_context, mashup_target_state,
-                               material_coverage_warning_state, normalise_variant_name,
-                               save_new_mod_target_state)
+                               export_target_issues, material_coverage_warning_state,
+                               normalise_variant_name, save_new_mod_target_state)
 from .instant_edit.props import IN_PLACE_TARGET, get_instant_edit_props
 from .materials import (
     attribute_display_name,
@@ -261,10 +261,6 @@ class XIVIE_PT_main(Panel):
             header = targets.row(align=True)
             header.label(text="Export Target", icon="EXPORT")
             header.operator("xiv_ie.refresh_variant_targets", text="", icon="FILE_REFRESH")
-            targets.label(
-                text="Choose In-place to overwrite the imported model, a group to create a new option, or save the visible model to a new mod.",
-                icon="INFO",
-            )
             if props.variant_targets_context_id and props.variant_targets_context_id != getattr(ref, "context_id", ""):
                 targets.label(text="Refresh targets for this Context.", icon="INFO")
             material_coverage_warning = material_coverage_warning_state(context, ref)
@@ -351,6 +347,21 @@ class XIVIE_PT_main(Panel):
                 ).selection_id = SAVE_NEW_MOD_TARGET
                 if not new_mod_enabled and new_mod_message:
                     targets.label(text=new_mod_message, icon="ERROR")
+            readiness_issues = export_target_issues(
+                context,
+                ref,
+                material_coverage_warning=material_coverage_warning,
+            )
+            if readiness_issues:
+                for severity, message in readiness_issues:
+                    issue_row = targets.row(align=True)
+                    issue_row.alert = severity == "ERROR"
+                    issue_row.label(
+                        text=message,
+                        icon="ERROR" if severity == "ERROR" else "WARNING",
+                    )
+            else:
+                targets.label(text="Export selection is clean.", icon="CHECKMARK")
             selected_target = next(
                 (item for item in props.variant_targets if item.selection_id == props.variant_target), None)
             if props.variant_target == "NEW_GROUP":
@@ -670,6 +681,16 @@ class XIVIE_PT_main(Panel):
         row.prop(settings, "clear_vertex_color2")
         row.prop(settings, "clear_flow_data")
 
+        limits = box.box()
+        limits.label(text="FFXIV MDL Limits", icon="INFO")
+        limits.label(text="Vertex data: 8 MiB per LOD, shared by all mesh groups.")
+        limits.label(text="Mesh group: 65,535 exported vertices maximum.")
+        limits.label(text="Model: 4 materials, 32 attributes, 64 weighted bones per mesh.")
+        limits.label(text="Shape keys: 65,535 modified indices per model.")
+        limits.label(text="Final vertices increase at UV/hard/colour seams.")
+        limits.label(text="Extra UVs, colours, flow, weights and shape keys use more bytes.")
+        limits.label(text="These are format limits; slots/items do not get different caps.")
+
     @staticmethod
     def _draw_backups(layout, context: Context) -> None:
         settings = get_settings()
@@ -732,3 +753,10 @@ class XIVIE_PT_main(Panel):
             box.operator("xiv_ie.convert_mesh_names", text="Move Mesh IDs to Front", icon="SORTALPHA")
             box.operator("xiv_ie.compact_context_parts", text="Fill Mesh Part Gaps", icon="SORTALPHA")
             box.operator("xiv_ie.clear_contexts", text="Clear Contexts", icon="TRASH")
+            split = box.split(factor=0.5, align=True)
+            split.column().operator("xiv_ie.open_cache_folder", text="Open Cache", icon="FILE_FOLDER")
+            split.column().operator(
+                "xiv_ie.open_diagnostics_folder",
+                text="Open Diagnostics",
+                icon="FILE_FOLDER",
+            )

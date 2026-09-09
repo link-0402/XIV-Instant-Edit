@@ -107,7 +107,7 @@ public sealed class MaterialPreviewBundleBuilder
         try
         {
             var resources = BuildResourceMap(candidates, warnings);
-            var materialNames = ReadModelMaterials(modelBytes)
+            var materialNames = ReadUsedModelMaterials(modelBytes)
                 .Where(name => !string.IsNullOrWhiteSpace(name))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Take(MaxMaterials + 1)
@@ -267,7 +267,7 @@ public sealed class MaterialPreviewBundleBuilder
             Directory.CreateDirectory(textureDirectory);
 
             var resources = BuildResourceMap(candidates, warnings);
-            var materialNames = ReadModelMaterials(modelBytes)
+            var materialNames = ReadUsedModelMaterials(modelBytes)
                 .Where(name => !string.IsNullOrWhiteSpace(name))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Take(MaxMaterials + 1)
@@ -540,6 +540,106 @@ public sealed class MaterialPreviewBundleBuilder
             throw new InvalidDataException(
                 $"MDL declares {materialCount} materials but its string table contains {materials.Count} safe material paths.");
         return materials;
+    }
+
+    /// <summary>
+    /// Returns only materials attached to renderable meshes. MDLs can retain
+    /// placeholder material names for empty meshes; those names are not runtime
+    /// dependencies and may not have a corresponding MTRL in either the mod or
+    /// the game data.
+    /// </summary>
+    internal static IReadOnlyList<string> ReadUsedModelMaterials(byte[] bytes)
+    {
+        var materials = ReadModelMaterials(bytes);
+        if (!TryReadRenderableMaterialIndices(bytes, materials.Count, out var usedIndices))
+            return materials;
+
+        return materials
+            .Where((_, index) => usedIndices.Contains(index))
+            .ToArray();
+    }
+
+    private static bool TryReadRenderableMaterialIndices(
+        byte[] bytes,
+        int materialCount,
+        out HashSet<int> usedIndices)
+    {
+        usedIndices = [];
+        const int fileHeaderSize = 68;
+        const int vertexDeclarationSize = 17 * 8;
+        const int stringHeaderSize = 8;
+        const int meshHeaderSize = 56;
+        const int elementIdSize = 32;
+        const int lodSize = 60;
+        const int extraLodSize = 20 * 2;
+        const int meshSize = 36;
+        const int terrainShadowMeshSize = 24;
+        const int submeshSize = 16;
+        const int terrainShadowSubmeshSize = 12;
+
+        try
+        {
+            if (bytes.Length < fileHeaderSize + stringHeaderSize || materialCount == 0)
+                return false;
+
+            var declarationCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(12, 2));
+            var stringHeaderOffset = checked(fileHeaderSize + declarationCount * vertexDeclarationSize);
+            if (stringHeaderOffset > bytes.Length - stringHeaderSize)
+                return false;
+
+            var stringSize = BinaryPrimitives.ReadUInt32LittleEndian(
+                bytes.AsSpan(stringHeaderOffset + 4, 4));
+            if (stringSize > bytes.Length - stringHeaderOffset - stringHeaderSize)
+                return false;
+            var meshHeaderOffset = checked(stringHeaderOffset + stringHeaderSize + (int)stringSize);
+            if (meshHeaderOffset > bytes.Length - meshHeaderSize)
+                return false;
+
+            var meshCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(meshHeaderOffset + 4, 2));
+            var attributeCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(meshHeaderOffset + 6, 2));
+            var headerMaterialCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(meshHeaderOffset + 10, 2));
+            var elementIdCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(meshHeaderOffset + 24, 2));
+            var terrainShadowMeshCount = bytes[meshHeaderOffset + 26];
+            var flags2 = bytes[meshHeaderOffset + 27];
+            var terrainShadowSubmeshCount = BinaryPrimitives.ReadUInt16LittleEndian(
+                bytes.AsSpan(meshHeaderOffset + 38, 2));
+            if (headerMaterialCount != materialCount)
+                return false;
+
+            var meshTableOffset = checked(meshHeaderOffset + meshHeaderSize + elementIdCount * elementIdSize +
+                                           3 * lodSize +
+                                           ((flags2 & 0x10) != 0 ? 3 * extraLodSize : 0));
+            var meshTableBytes = checked(meshCount * meshSize);
+            if (meshTableOffset > bytes.Length - meshTableBytes)
+                return false;
+
+            for (var index = 0; index < meshCount; index++)
+            {
+                var offset = checked(meshTableOffset + index * meshSize);
+                var vertexCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(offset, 2));
+                var indexCount = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset + 4, 4));
+                var materialIndex = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(offset + 8, 2));
+                if (materialIndex >= materialCount)
+                    return false;
+                if (vertexCount > 0 && indexCount > 0)
+                    usedIndices.Add(materialIndex);
+            }
+
+            var materialTableOffset = checked(meshTableOffset + meshTableBytes +
+                                               attributeCount * 4 +
+                                               terrainShadowMeshCount * terrainShadowMeshSize +
+                                               BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(meshHeaderOffset + 8, 2)) * submeshSize +
+                                               terrainShadowSubmeshCount * terrainShadowSubmeshSize);
+            return materialTableOffset <= bytes.Length - materialCount * 4;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return false;
+        }
+        catch (OverflowException)
+        {
+            return false;
+        }
     }
 
     internal static string? ResolveMaterialPath(

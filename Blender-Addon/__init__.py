@@ -19,7 +19,12 @@ from .operators import (
     XIVIE_OT_import_backup,
     XIVIE_OT_clear_backups,
 )
-from .preferences import XIVIEPreferences, XIVIE_OT_clean_cache
+from .preferences import (
+    XIVIEPreferences,
+    XIVIE_OT_clean_cache,
+    XIVIE_OT_open_cache_folder,
+    XIVIE_OT_open_diagnostics_folder,
+)
 from .properties import XIVIEExportSettings, set_addon_properties, remove_addon_properties
 from .ui import XIVIE_PT_main, draw_status_context_menu
 
@@ -34,6 +39,8 @@ BUTTON_CONTEXT_MENU = getattr(
 CLASSES = [
     XIVIEPreferences,
     XIVIE_OT_clean_cache,
+    XIVIE_OT_open_cache_folder,
+    XIVIE_OT_open_diagnostics_folder,
     XIVIEExportSettings,
     *instant_props.CLASSES,
     *instant_ops.CLASSES,

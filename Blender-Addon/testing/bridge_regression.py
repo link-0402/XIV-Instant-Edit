@@ -601,6 +601,46 @@ def run_staging_isolation_regression(addon) -> None:
         )
         bpy.data.objects.remove(pending_mesh, do_unlink=True)
         bpy.data.collections.remove(pending_collection, do_unlink=True)
+
+        rerouted_collection = context_module.create_collection(
+            bpy.context.scene,
+            {
+                "context_id": "rerouted-context",
+                "schema": context_module.SCHEMA,
+                "version": 2,
+                "plugin_instance_id": "plugin-instance",
+                "capability": "capability",
+                "source_game_path": base_import["sourceGamePath"],
+                "managed_destination": base_import["managedDestination"],
+                "target_file_path": base_import["targetFilePath"],
+                "source_mod_directory": base_import["sourceModDirectory"],
+                "source_mod_name": base_import["sourceModName"],
+                "source_mod_root_path": base_import["sourceModRootPath"],
+                "target_relative_path": base_import["targetRelativePath"],
+                "callback_port": base_import["callbackPort"],
+            },
+        )
+        rerouted_mesh_data = bpy.data.meshes.new("ReroutedContextMeshData")
+        rerouted_mesh_data.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+        rerouted_mesh = bpy.data.objects.new("0.0 Rerouted Context", rerouted_mesh_data)
+        rerouted_collection.objects.link(rerouted_mesh)
+        context_module.tag_object(rerouted_mesh, {
+            "context_id": "original-context",
+            "schema": context_module.SCHEMA,
+            "version": 2,
+            "xiv_material": "/mt_rerouted.mtrl",
+            "original_material": "ReroutedMaterial",
+            "material_index": 0,
+            "mesh_index": 0,
+            "submesh_index": 0,
+        })
+        _require(
+            context_module.context_id_for_object(rerouted_mesh) == "rerouted-context" and
+            context_module.validate_context("rerouted-context").context_id == "rerouted-context",
+            "moving a tagged model into one Context collection keeps Quick Export available",
+        )
+        bpy.data.objects.remove(rerouted_mesh, do_unlink=True)
+        bpy.data.collections.remove(rerouted_collection, do_unlink=True)
         display_ref = SimpleNamespace(
             target_relative_path=validated["targetRelativePath"],
             target_file_path=validated["targetFilePath"],

@@ -286,6 +286,29 @@ def assert_mesh_studio(addon, obj, second, added_group):
             mesh_group=0, mesh_part=1, attribute="NEW", selection="atr_nek"
         ) != {"FINISHED"} or not second.get("atr_nek"):
             raise AssertionError("Mesh Studio attribute operator did not add the attribute")
+        custom_attribute = "custom_mesh_tag"
+        if bpy.ops.xiv_ie.mesh_attribute(
+            mesh_group=0,
+            mesh_part=1,
+            attribute="NEW",
+            custom=True,
+            custom_attribute=custom_attribute,
+        ) != {"FINISHED"}:
+            raise AssertionError("Custom mesh attribute operator failed")
+        if (
+            not second.get(custom_attribute)
+            or custom_attribute not in materials.mesh_part_attributes([second])
+        ):
+            raise AssertionError("Custom mesh attribute did not preserve its input value")
+        scene = importlib.import_module(f"{addon.__name__}.io.model.exp.scene")
+        if custom_attribute not in scene.get_attributes(second):
+            raise AssertionError("Custom mesh attribute was not collected for export")
+        if bpy.ops.xiv_ie.mesh_attribute(
+            mesh_group=0, mesh_part=1, attribute=custom_attribute
+        ) != {"FINISHED"}:
+            raise AssertionError("Custom mesh attribute removal operator failed")
+        if second.get(custom_attribute):
+            raise AssertionError("Custom mesh attribute could not be removed")
         if bpy.ops.xiv_ie.mesh_flow(mesh_group=0, action="TOGGLE") != {"FINISHED"}:
             raise AssertionError("Mesh Studio flow operator failed")
         if materials.mesh_flow_enabled([obj, second]):
@@ -705,7 +728,39 @@ def run() -> None:
         bpy.context.collection.objects.link(lod_object)
         if materials.material_mismatch_parts([obj, second, lod_object]) != {0}:
             raise AssertionError("Cross-LOD material divergence did not mark its part row")
+
+        duplicate_part = obj.copy()
+        duplicate_part.data = obj.data.copy()
+        duplicate_part.name = "0.0 Duplicate Smoke"
+        bpy.context.collection.objects.link(duplicate_part)
+        other_group_material = "/mt_c0101e0001_other_group.mtrl"
+        materials.assign_material_path([added_group], other_group_material)
+        suggestion_group = materials.MaterialGroup(
+            0,
+            (obj, second, lod_object, duplicate_part),
+        )
+        suggestions = materials.material_suggestions(suggestion_group)
+        suggestion_map = dict(suggestions)
+        expected_suggestions = {
+            assigned: "3 parts",
+            "/mt_c0101e0001_lod.mtrl": "1 part",
+        }
+        if suggestion_map != expected_suggestions:
+            raise AssertionError(
+                f"Group material suggestions were incorrect: {suggestion_map}"
+            )
+        if other_group_material in suggestion_map:
+            raise AssertionError("Material suggestions included a material from another group")
+        materials.assign_material_path(
+            [duplicate_part],
+            "/mt_c0101e0001_manual.mtrl",
+        )
+        if duplicate_part["xiv_material"] != "/mt_c0101e0001_manual.mtrl":
+            raise AssertionError("Manually entered material paths were not assignable")
+        materials.assign_material_path([duplicate_part], assigned)
+
         bpy.data.objects.remove(lod_object, do_unlink=True)
+        bpy.data.objects.remove(duplicate_part, do_unlink=True)
         second.data.materials.clear()
         del second["xiv_material"]
         second.pop("instant_edit_xiv_material", None)
@@ -836,6 +891,7 @@ def run() -> None:
         material_coverage_payloads = []
         material_coverage_warning = True
         material_coverage_delay = 0.2
+        variant_target_failure = False
 
         def fake_urlopen(request, timeout=0):
             nonlocal material_coverage_warning
@@ -882,9 +938,27 @@ def run() -> None:
                     "assignments": assignments,
                 }).encode("utf-8")
                 return FakeResponse(body)
+            if request.full_url.endswith("/variant-targets"):
+                if variant_target_failure:
+                    raise OSError("forced target refresh failure")
+                request_payload = json.loads(request.data.decode("utf-8"))
+                if request_payload.get("contextId") == "smoke-output-context":
+                    groups = []
+                else:
+                    groups = [{
+                        "id": "smoke-mashup-group",
+                        "name": "Smoke Mashup",
+                        "options": [{
+                            "id": "smoke-mashup-option",
+                            "name": "Smoke Mashup",
+                            "modelPath": "Files/xiv-instant-edit/mashups/smoke/model.mdl",
+                        }],
+                    }]
+                return FakeResponse(json.dumps({"ok": True, "groups": groups}).encode("utf-8"))
             if request.full_url.endswith("/mashup/export"):
-                mashup_export_payloads.append(json.loads(request.data.decode("utf-8")))
-                return FakeResponse(json.dumps({
+                payload = json.loads(request.data.decode("utf-8"))
+                mashup_export_payloads.append(payload)
+                response = {
                     "ok": True,
                     "code": "mashup_applied_with_warnings",
                     "message": "created",
@@ -892,7 +966,37 @@ def run() -> None:
                     "requiredExternalMods": ["External Smoke Skin"],
                     "targetFilePath": "C:/Penumbra/SmokeMod/Files/mashup.mdl",
                     "destinationName": "Smoke Mashup",
-                }).encode("utf-8"))
+                }
+                if payload.get("destination") == "new_mod":
+                    response.update({
+                        "targetFilePath": "C:/Penumbra/Smoke Single Mod/Files/xiv-instant-edit/mashups/single/model.mdl",
+                        "destinationName": "Smoke Single Mod",
+                        "context": {
+                            "schema": "instant-edit.context",
+                            "version": 3,
+                            "pluginInstanceId": "smoke-plugin",
+                            "contextId": "smoke-output-context",
+                            "importId": "smoke-output-import",
+                            "capability": "smoke-output-capability",
+                            "sourceGamePath": "chara/equipment/e0001/model/c0101e0001_top.mdl",
+                            "sourceKind": "mod",
+                            "resolvedGamePath": "chara/equipment/e0001/model/c0101e0001_top.mdl",
+                            "destinationState": "ready",
+                            "objectIndex": 0,
+                            "managedDestination": "C:/Penumbra/Smoke Single Mod/Files/xiv-instant-edit/mashups/single",
+                            "targetFilePath": "C:/Penumbra/Smoke Single Mod/Files/xiv-instant-edit/mashups/single/model.mdl",
+                            "sourceModDirectory": "Smoke Single Mod",
+                            "sourceModName": "Smoke Single Mod",
+                            "sourceModRootPath": "C:/Penumbra/Smoke Single Mod",
+                            "targetRelativePath": "Files/xiv-instant-edit/mashups/single/model.mdl",
+                            "resourceManifestVersion": 0,
+                            "resourceManifestStatus": "capture_failed",
+                            "backupTargetId": "c" * 64,
+                            "backupDirectory": "C:/Cache/Backups/" + "c" * 64,
+                            "callbackPort": 42428,
+                        },
+                    })
+                return FakeResponse(json.dumps(response).encode("utf-8"))
             return FakeResponse()
 
         plugin_http.urllib.request.urlopen = fake_urlopen
@@ -1011,6 +1115,94 @@ def run() -> None:
         if not show or not enabled or message:
             raise AssertionError(f"Valid multi-mod Contexts did not enable Create Mashup: {message}")
 
+        readiness_clean = instant_ops.export_target_issues(
+            bpy.context, ref, material_coverage_warning=False
+        )
+        if readiness_clean:
+            raise AssertionError(f"Valid export selection was not reported clean: {readiness_clean}")
+
+        readiness_objects = []
+        readiness_original_scope = instant_props.export_scope
+        try:
+            missing_material = added_group.copy()
+            missing_material.data = added_group.data.copy()
+            missing_material.name = "6.0 Missing Material"
+            missing_material.pop("xiv_material", None)
+            missing_material.pop("instant_edit_xiv_material", None)
+            missing_material.data.materials.clear()
+            bpy.context.scene.collection.objects.link(missing_material)
+            readiness_objects.append(missing_material)
+
+            invalid_name = added_group.copy()
+            invalid_name.data = added_group.data.copy()
+            invalid_name.name = "Readiness Invalid Name"
+            bpy.context.scene.collection.objects.link(invalid_name)
+            readiness_objects.append(invalid_name)
+
+            duplicate_id = added_group.copy()
+            duplicate_id.data = added_group.data.copy()
+            duplicate_id.name = "1.0 Duplicate Readiness"
+            bpy.context.scene.collection.objects.link(duplicate_id)
+            readiness_objects.append(duplicate_id)
+
+            quad_mesh = bpy.data.meshes.new("ReadinessQuadData")
+            quad_mesh.from_pydata(
+                [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)],
+                [],
+                [(0, 1, 2, 3)],
+            )
+            quad_mesh.update()
+            quad_object = bpy.data.objects.new("5.0 Quad Readiness", quad_mesh)
+            quad_object["xiv_material"] = added_material
+            bpy.context.scene.collection.objects.link(quad_object)
+            readiness_objects.append(quad_object)
+
+            readiness_issues = instant_ops.export_target_issues(
+                bpy.context, ref, material_coverage_warning=False
+            )
+            for expected in (
+                "Invalid mesh names",
+                "Duplicate mesh IDs",
+                "Missing material paths",
+                "Not triangulated",
+            ):
+                if not any(expected in message for _severity, message in readiness_issues):
+                    raise AssertionError(f"Readiness status did not report {expected}: {readiness_issues}")
+
+            instant_props.export_scope = "CURRENT_COLLECTION"
+            scoped_issues = instant_ops.export_target_issues(
+                bpy.context, ref, material_coverage_warning=False
+            )
+            if scoped_issues:
+                raise AssertionError(
+                    f"Export Parts scope did not remove excluded readiness issues: {scoped_issues}"
+                )
+
+            hidden_states = [
+                (context_object, context_object.hide_viewport)
+                for context_object in ref.collection.objects
+            ]
+            try:
+                for context_object, _hidden in hidden_states:
+                    context_object.hide_viewport = True
+                empty_scope_issues = instant_ops.export_target_issues(
+                    bpy.context, ref, material_coverage_warning=False
+                )
+                if not any(
+                    "No visible mesh objects match Export Parts." in message
+                    for _severity, message in empty_scope_issues
+                ):
+                    raise AssertionError(
+                        f"Empty export scope was not reported: {empty_scope_issues}"
+                    )
+            finally:
+                for context_object, hidden in hidden_states:
+                    context_object.hide_viewport = hidden
+        finally:
+            instant_props.export_scope = readiness_original_scope
+            for readiness_object in readiness_objects:
+                bpy.data.objects.remove(readiness_object, do_unlink=True)
+
         def await_material_coverage(expected_requests: int, expected_warning: bool) -> None:
             deadline = time.monotonic() + 2.0
             while time.monotonic() < deadline:
@@ -1051,6 +1243,21 @@ def run() -> None:
             raise AssertionError(f"Material coverage request payload was incomplete: {coverage_payload}")
         if not instant_ops.material_coverage_warning_state(bpy.context) or len(material_coverage_payloads) != 1:
             raise AssertionError("Material coverage did not use its ten-second composition cache")
+        coverage_issues = instant_ops.export_target_issues(
+            bpy.context, ref, material_coverage_warning=True
+        )
+        if not any(
+            severity == "WARNING" and instant_ops.MATERIAL_COVERAGE_WARNING in message
+            for severity, message in coverage_issues
+        ) or any(severity == "ERROR" for severity, _message in coverage_issues):
+            raise AssertionError(f"Material coverage was not reported as an advisory warning: {coverage_issues}")
+        instant_props.variant_target = instant_ops.MASHUP_TARGET
+        mashup_readiness = instant_ops.export_target_issues(
+            bpy.context, ref, material_coverage_warning=True
+        )
+        if any(instant_ops.MATERIAL_COVERAGE_WARNING in message for _severity, message in mashup_readiness):
+            raise AssertionError("Create Mashup incorrectly retained the external coverage warning")
+        instant_props.variant_target = "NEW_GROUP"
         material_coverage_warning = False
         instant_props.export_scope = "VISIBLE_NO_MANNEQUIN"
         if instant_ops.material_coverage_warning_state(bpy.context):
@@ -1073,6 +1280,25 @@ def run() -> None:
         smoke_option_target.kind = "OPTION"
         smoke_option_target.group_name = "Smoke Group"
         smoke_option_target.option_name = "Smoke Option"
+        instant_props.variant_target = smoke_group_target.selection_id
+        instant_props.variant_targets_context_id = context_id
+        instant_props.variant_name = ""
+        invalid_target_name_issues = instant_ops.export_target_issues(
+            bpy.context, ref, material_coverage_warning=False
+        )
+        if not any("Enter a variant name." in message for _severity, message in invalid_target_name_issues):
+            raise AssertionError(
+                f"Invalid new option name was not reported: {invalid_target_name_issues}"
+            )
+        instant_props.variant_targets_context_id = "stale-target-context"
+        stale_target_issues = instant_ops.export_target_issues(
+            bpy.context, ref, material_coverage_warning=False
+        )
+        if not any("Refresh targets for this Context" in message for _severity, message in stale_target_issues):
+            raise AssertionError(f"Stale target data was not reported: {stale_target_issues}")
+        instant_props.variant_targets_context_id = context_id
+        instant_props.variant_target = "NEW_GROUP"
+        instant_props.variant_name = "smoke-quick"
         warning_targets = [
             instant_ops.IN_PLACE_TARGET,
             "NEW_GROUP",
@@ -1148,12 +1374,27 @@ def run() -> None:
             raise AssertionError("Active mashup export did not preserve external dependency bundling")
         if "External Smoke Skin" not in instant_props.last_status or "warnings:" not in instant_props.last_status:
             raise AssertionError("External dependency warning was not shown in the mashup receipt")
-        if any(
-            (item.get("xiv_material"), item.get("instant_edit_xiv_material")) !=
-            original_material_properties[item.as_pointer()]
-            for item in (obj, second, added_group, mashup_obj)
-        ):
-            raise AssertionError("Successful mashup export did not restore temporary aliases")
+        active_assignments = {}
+        incoming_slot = "c"
+        for contributor in mashup_plan_payloads[-1]["contributors"]:
+            for material_path in contributor["materials"]:
+                key = (contributor["contextId"], material_path.casefold())
+                alias = planned_aliases.get(key)
+                if alias is None:
+                    alias = f"/mt_c0101e0001_top_{incoming_slot}.mtrl"
+                    incoming_slot = chr(ord(incoming_slot) + 1)
+                active_assignments[key] = alias
+        for item in (obj, second, added_group, mashup_obj):
+            source_material = original_material_properties[item.as_pointer()][0]
+            source_context = context_module.context_id_for_object(item)
+            expected_alias = active_assignments[(source_context, source_material.casefold())]
+            if item.get("xiv_material") != expected_alias or \
+                    item.get("instant_edit_xiv_material") != expected_alias or \
+                    item.get(instant_ops.MASHUP_SOURCE_MATERIAL_PROPERTY) != source_material:
+                raise AssertionError("Successful active-mod mashup did not persist aliases and source materials")
+        if instant_props.variant_target != "smoke-mashup-option" or \
+                instant_props.variant_targets_context_id != context_id:
+            raise AssertionError("Active-mod mashup did not select the newly-created Penumbra option")
         importlib.import_module(f"{addon.__name__}.instant_edit.cache").remove_job(
             Path(mashup_target).parent)
 
@@ -1170,12 +1411,27 @@ def run() -> None:
                 raise AssertionError("Forced mashup export failure did not occur")
         finally:
             instant_ops.export_result = original_mashup_export_result
-        if any(
-            (item.get("xiv_material"), item.get("instant_edit_xiv_material")) !=
-            original_material_properties[item.as_pointer()]
-            for item in (obj, second, added_group, mashup_obj)
-        ):
-            raise AssertionError("Failed mashup export did not restore temporary aliases")
+        for item in (obj, second, added_group, mashup_obj):
+            source_material = original_material_properties[item.as_pointer()][0]
+            source_context = context_module.context_id_for_object(item)
+            expected_alias = active_assignments[(source_context, source_material.casefold())]
+            if item.get("xiv_material") != expected_alias or \
+                    item.get("instant_edit_xiv_material") != expected_alias or \
+                    item.get(instant_ops.MASHUP_SOURCE_MATERIAL_PROPERTY) != source_material:
+                    raise AssertionError("Failed mashup export did not preserve the prior active-mod assignments")
+        variant_target_failure = True
+        try:
+            instant_ops.perform_mashup_export(bpy.context, "ACTIVE_MOD", "Refresh Warning Mashup")
+        finally:
+            variant_target_failure = False
+        if "new Penumbra target could not be selected" not in instant_props.last_status or \
+                "warnings:" not in instant_props.last_status:
+            raise AssertionError("Failed target refresh did not remain successful with a warning")
+        if obj.get("xiv_material") != active_assignments[
+                (context_id, original_material_properties[obj.as_pointer()][0].casefold())] or \
+                obj.get(instant_ops.MASHUP_SOURCE_MATERIAL_PROPERTY) != original_material_properties[
+                    obj.as_pointer()][0]:
+            raise AssertionError("Failed target refresh did not preserve active-mod mashup assignments")
         print("[PASS] Create Mashup eligibility, attribution, aliases, and restoration")
 
         mashup_obj.hide_set(True)
@@ -1197,6 +1453,10 @@ def run() -> None:
         context_module._set(context_collection, "resource_manifest_status", "ready")
         bpy.data.objects.remove(mashup_obj, do_unlink=True)
         bpy.data.collections.remove(mashup_collection)
+        original_model_import = instant_ops.ModelImport.from_file
+        instant_ops.ModelImport.from_file = staticmethod(
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("mashup output unexpectedly re-imported its model")))
         original_finish_job = instant_ops.finish_job
         instant_ops.finish_job = lambda _job: None
         try:
@@ -1204,6 +1464,7 @@ def run() -> None:
                 bpy.context, "NEW_MOD", "Smoke Single Mod", allow_single_context=True)
         finally:
             instant_ops.finish_job = original_finish_job
+            instant_ops.ModelImport.from_file = original_model_import
         if not mashup_plan_payloads or len(mashup_plan_payloads[-1]["contributors"]) != 1:
             raise AssertionError("Save to new mod did not submit one contributor")
         if mashup_plan_payloads[-1].get("destination") != "new_mod":
@@ -1214,6 +1475,25 @@ def run() -> None:
             raise AssertionError("Save to new mod did not submit a new-mod export")
         if mashup_export_payloads[-1].get("bundleExternalDependencies") is not False:
             raise AssertionError("Save to new mod unexpectedly enabled external dependency bundling")
+        output_ref = context_module.validate_context("smoke-output-context", bpy.context.scene)
+        if instant_props.export_destination != "smoke-output-context" or \
+                instant_props.export_scope != "CURRENT_COLLECTION":
+            raise AssertionError("New-mod mashup did not select its output context and collection scope")
+        if len(output_ref.mesh_objects) != 3:
+            raise AssertionError("New-mod mashup output context did not duplicate the exported meshes")
+        if sorted(context_module.mesh_ids_from_name(item) for item in output_ref.mesh_objects) != sorted(
+                context_module.mesh_ids_from_name(item) for item in (obj, second, added_group)):
+            raise AssertionError("New-mod mashup output meshes did not retain valid YAA mesh IDs")
+        output_aliases = {item.get("xiv_material") for item in output_ref.mesh_objects}
+        expected_output_aliases = {
+            active_assignments[(context_id, original_material_properties[obj.as_pointer()][0].casefold())],
+            active_assignments[(context_id, original_material_properties[second.as_pointer()][0].casefold())],
+            active_assignments[(context_id, original_material_properties[added_group.as_pointer()][0].casefold())],
+        }
+        if output_aliases != expected_output_aliases:
+            raise AssertionError("New-mod mashup output meshes did not receive material aliases")
+        if not all(item.name in bpy.data.objects for item in (obj, second, added_group)):
+            raise AssertionError("New-mod mashup handoff removed source contributor objects")
         importlib.import_module(f"{addon.__name__}.instant_edit.cache").remove_job(
             Path(single_mod_target).parent)
         instant_props.export_scope = original_scope_for_mashup

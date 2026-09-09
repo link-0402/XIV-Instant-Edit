@@ -19,6 +19,7 @@ VERSION = 3
 SUPPORTED_VERSIONS = {1, 2, 3}
 COLLECTION_TAG = "instant_edit_context_id"
 OBJECT_TAG = "instant_edit_context_id"
+MASHUP_SOURCE_MATERIAL_PROPERTY = "instant_edit_mashup_source_material"
 
 CONTEXT_METADATA_FIELDS = (
     "context_id", "schema", "version", "plugin_instance_id", "capability",
@@ -29,6 +30,7 @@ CONTEXT_METADATA_FIELDS = (
     "resource_manifest_version", "resource_manifest_status",
     "backup_target_id", "backup_directory",
     "import_id", "callback_port", "import_file_name", "collection_kind",
+    "mashup_source_material",
 )
 
 REQUIRED_OBJECT_FIELDS = (
@@ -241,8 +243,13 @@ def clear_context_metadata(scene=None) -> int:
         _value(collection, "context_id", "")
         for collection in collections
     }
+    collection_objects = {
+        obj
+        for collection in collections
+        for obj in collection.objects
+    }
     for obj in bpy.data.objects:
-        if _value(obj, "context_id", "") in context_ids:
+        if obj in collection_objects or _value(obj, "context_id", "") in context_ids:
             _remove_metadata(obj)
     for collection in collections:
         _remove_metadata(collection)
@@ -298,11 +305,16 @@ def _require_int(value, name: str, minimum: int = 0) -> int:
 
 
 def context_id_for_object(obj) -> str:
-    """Resolve an object's context from its tag or XIV Instant Edit collection."""
-    ids = set()
-    tagged = _value(obj, "context_id", "")
-    if isinstance(tagged, str) and tagged:
-        ids.add(tagged)
+    """Resolve an object's routing context.
+
+    An object's custom-property tag records where it was imported from, but an
+    explicit link to an XIV Instant Edit collection is the user's routing
+    choice.  This lets a model imported under one context be moved into
+    another context and exported there without having to edit Blender's ID
+    properties manually.  Objects linked to more than one Instant Edit
+    collection remain ambiguous and are rejected.
+    """
+    collection_ids = set()
     for collection in obj.users_collection:
         collection_id = _value(collection, "context_id", "")
         if (
@@ -310,10 +322,14 @@ def context_id_for_object(obj) -> str:
             and collection_id
             and _value(collection, "collection_kind") == "instant_edit"
         ):
-            ids.add(collection_id)
-    if len(ids) > 1:
+            collection_ids.add(collection_id)
+    if len(collection_ids) > 1:
         raise ContextValidationError(f"{obj.name}: object belongs to multiple XIV Instant Edit contexts")
-    return next(iter(ids), "")
+    if collection_ids:
+        return next(iter(collection_ids))
+
+    tagged = _value(obj, "context_id", "")
+    return tagged if isinstance(tagged, str) else ""
 
 
 def mesh_ids_from_name(obj) -> tuple[int, int, int]:
@@ -409,8 +425,10 @@ def validate_context(context_id: str, scene=None) -> ContextRef:
         tagged_context_id = _value(obj, "context_id", "")
         if tagged_context_id:
             _check_aliases(obj, REQUIRED_OBJECT_FIELDS + ("plugin_instance_id", "capability"))
-            if tagged_context_id != context_id:
-                raise ContextValidationError(f"{obj.name}: context id does not match its collection")
+            # The collection is the explicit routing choice.  A tagged object
+            # may have originated in a different context and then have been
+            # moved here by the user; context_id_for_object() resolves that
+            # case to this collection's ID.
             if _value(obj, "schema") != SCHEMA or _value(obj, "version") not in SUPPORTED_VERSIONS:
                 raise ContextValidationError(f"{obj.name}: invalid XIV Instant Edit metadata schema")
         if obj.type != "MESH":

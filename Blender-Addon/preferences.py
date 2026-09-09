@@ -9,6 +9,9 @@ from .instant_edit.cache import (
     cache_root,
     clean_cache,
     configure_cache,
+    diagnostics_root,
+    ensure_cache_root,
+    ensure_diagnostics_root,
 )
 
 
@@ -66,6 +69,37 @@ class XIVIE_OT_clean_cache(Operator):
         return {"FINISHED"}
 
 
+def _open_folder(operator: Operator, folder, label: str):
+    try:
+        path = folder()
+        result = bpy.ops.wm.path_open(filepath=str(path))
+    except Exception as error:
+        operator.report({"ERROR"}, f"Could not open {label}: {error}")
+        return {"CANCELLED"}
+    if "FINISHED" not in result:
+        operator.report({"ERROR"}, f"Could not open {label}.")
+        return {"CANCELLED"}
+    return {"FINISHED"}
+
+
+class XIVIE_OT_open_cache_folder(Operator):
+    bl_idname = "xiv_ie.open_cache_folder"
+    bl_label = "Open Cache"
+    bl_description = "Open the configured XIV Instant Edit cache folder"
+
+    def execute(self, _context):
+        return _open_folder(self, ensure_cache_root, "the XIV Instant Edit cache folder")
+
+
+class XIVIE_OT_open_diagnostics_folder(Operator):
+    bl_idname = "xiv_ie.open_diagnostics_folder"
+    bl_label = "Open Diagnostics"
+    bl_description = "Open the Dalamud plugin diagnostics folder"
+
+    def execute(self, _context):
+        return _open_folder(self, ensure_diagnostics_root, "the Dalamud diagnostics folder")
+
+
 class XIVIEPreferences(AddonPreferences):
     bl_idname = __package__
 
@@ -111,6 +145,7 @@ class XIVIEPreferences(AddonPreferences):
         layout.prop(self, "instant_edit_cache_directory")
         layout.prop(self, "instant_edit_auto_cleanup")
         layout.label(text=f"Managed folder: {cache_root()}")
+        layout.label(text=f"Diagnostics: {diagnostics_root()}")
         layout.operator("xiv_ie.clean_cache", icon="TRASH")
 
 

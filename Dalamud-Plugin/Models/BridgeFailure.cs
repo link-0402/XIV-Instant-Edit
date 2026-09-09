@@ -8,6 +8,8 @@ namespace InstantEdit.Models;
 /// <summary>Structured failure exchanged across the local Blender/Dalamud bridge.</summary>
 public sealed record BridgeFailure
 {
+    public const int DiagnosticIdLength = 8;
+
     [JsonPropertyName("component")]
     public required string Component { get; init; }
 
@@ -33,7 +35,7 @@ public sealed record BridgeFailure
     public int? HttpStatus { get; init; }
 
     [JsonIgnore]
-    public string ShortDiagnosticId => DiagnosticId[..Math.Min(8, DiagnosticId.Length)];
+    public string ShortDiagnosticId => DiagnosticId[..Math.Min(DiagnosticIdLength, DiagnosticId.Length)];
 
     [JsonIgnore]
     public string UserMessage
@@ -69,9 +71,9 @@ public sealed record BridgeFailure
             Code = Safe(code, 128),
             Cause = Safe(cause, 2048),
             Remedy = Safe(remedy, 2048),
-            DiagnosticId = Guid.TryParse(diagnosticId, out var parsedDiagnosticId)
-                ? parsedDiagnosticId.ToString("N")
-                : Guid.NewGuid().ToString("N"),
+            DiagnosticId = IsDiagnosticId(diagnosticId)
+                ? diagnosticId!.ToLowerInvariant()
+                : Guid.NewGuid().ToString("N")[..DiagnosticIdLength],
             HttpStatus = httpStatus,
         };
 
@@ -139,6 +141,14 @@ public sealed record BridgeFailure
             "(?i)(\\\"(?:capability|token|secret|pluginInstanceId)\\\"\\s*:\\s*\\\")[^\\\"]*(\\\")",
             "$1<redacted>$2");
         return text[..Math.Min(text.Length, maxLength)];
+    }
+
+    public static bool IsDiagnosticId(string? value)
+    {
+        if (value is null || value.Length != DiagnosticIdLength)
+            return false;
+        return value.All(static character =>
+            character is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F');
     }
 
     private static string? Text(JsonElement root, string name)

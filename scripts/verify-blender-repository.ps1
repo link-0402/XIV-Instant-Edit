@@ -2,7 +2,7 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$RepositoryPath,
-    [string]$ExpectedMinimum = '4.5.3'
+    [string]$ExpectedMinimum = '4.5.0'
 )
 
 $ErrorActionPreference = 'Stop'

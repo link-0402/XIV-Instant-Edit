@@ -79,7 +79,7 @@ await CheckConnectionStatesAsync();
 
 var structured = BridgeFailure.FromResponse(
     HttpStatusCode.BadRequest,
-    """{"ok":false,"error":"Blender could not access the temporary model file.","component":"blender_addon","operation":"import","stage":"file_staging","code":"model_file_unavailable","cause":"Blender could not access the temporary model file.","remedy":"Run both applications as the same user.","diagnosticId":"0123456789abcdef0123456789abcdef"}""",
+    """{"ok":false,"error":"Blender could not access the temporary model file.","component":"blender_addon","operation":"import","stage":"file_staging","code":"model_file_unavailable","cause":"Blender could not access the temporary model file.","remedy":"Run both applications as the same user.","diagnosticId":"01234567"}""",
     "import");
 Require(
     structured.HttpStatus == 400 && structured.Stage == "file_staging" &&
@@ -98,6 +98,9 @@ Require(
     asynchronous.UserMessage.StartsWith(
         "Blender finished receiving the model, but the import failed", StringComparison.Ordinal),
     "asynchronous import failures explain that request receipt already succeeded");
+Require(
+    BridgeFailure.IsDiagnosticId(asynchronous.DiagnosticId),
+    "generated diagnostic IDs use the compact eight-character format");
 
 Require(
     BlenderClient.ParseImportResponse(HttpStatusCode.OK, "{\"ok\":true,\"cached\":true}"),
@@ -117,7 +120,7 @@ try
 {
     BlenderClient.ParseImportResponse(
         HttpStatusCode.BadRequest,
-        """{"ok":false,"component":"blender_addon","operation":"import","stage":"file_staging","code":"model_file_unavailable","cause":"model unavailable","remedy":"retry as the same user","diagnosticId":"0123456789abcdef0123456789abcdef"}""");
+        """{"ok":false,"component":"blender_addon","operation":"import","stage":"file_staging","code":"model_file_unavailable","cause":"model unavailable","remedy":"retry as the same user","diagnosticId":"01234567"}""");
     throw new InvalidOperationException("structured 400 did not throw");
 }
 catch (BlenderBridgeException error)

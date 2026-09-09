@@ -17,6 +17,7 @@ UNIX_PATH = re.compile(r"(?<![A-Za-z0-9_.-])/(?:[^\s\"'<>|/]+/)+[^\s\"'<>|]*")
 SECRET_JSON_VALUE = re.compile(
     r'(?i)("(?:capability|token|secret|pluginInstanceId)"\s*:\s*")[^"]*(")')
 _write_lock = threading.RLock()
+DIAGNOSTIC_ID_LENGTH = 8
 
 
 class BridgeRequestError(ValueError):
@@ -40,7 +41,19 @@ def sanitize_text(value: object, max_length: int = 4096) -> str:
 
 
 def new_diagnostic_id() -> str:
-    return uuid.uuid4().hex
+    return uuid.uuid4().hex[:DIAGNOSTIC_ID_LENGTH]
+
+
+def is_diagnostic_id(value: object) -> bool:
+    text = str(value or "")
+    return len(text) == DIAGNOSTIC_ID_LENGTH and all(
+        character in "0123456789abcdef" for character in text.casefold()
+    )
+
+
+def normalize_diagnostic_id(value: object) -> str:
+    text = str(value or "")
+    return text.casefold() if is_diagnostic_id(text) else new_diagnostic_id()
 
 
 def _installed_addon_version() -> str:
@@ -63,10 +76,7 @@ def failure_payload(
     remedy: str,
     diagnostic_id: str | None = None,
 ) -> dict:
-    try:
-        diagnostic_id = uuid.UUID(str(diagnostic_id)).hex if diagnostic_id else new_diagnostic_id()
-    except (ValueError, AttributeError):
-        diagnostic_id = new_diagnostic_id()
+    diagnostic_id = normalize_diagnostic_id(diagnostic_id)
     safe_cause = sanitize_text(cause, 2048)
     return {
         "ok": False,
@@ -89,12 +99,18 @@ def write_diagnostic(
     exception: BaseException | None = None,
     metadata: dict | None = None,
 ) -> bool:
-    """Persist one sanitized JSON diagnostic under the configured cache root."""
+    """Persist one sanitized JSON diagnostic in the shared XIVLauncher config tree."""
     try:
-        from .cache import STALE_SECONDS, automatic_cleanup_enabled, ensure_cache_root, clean_cache
+        from .cache import (
+            STALE_SECONDS,
+            automatic_cleanup_enabled,
+            clean_cache,
+            ensure_diagnostics_root,
+        )
 
         diagnostic_id = str(payload.get("diagnosticId", ""))
-        uuid.UUID(diagnostic_id)
+        if not is_diagnostic_id(diagnostic_id):
+            return False
         metadata_values = metadata or {}
         technical = {
             sanitize_text(key, 128): sanitize_text(value)
@@ -126,8 +142,7 @@ def write_diagnostic(
             "technical": technical,
         }
         with _write_lock:
-            folder = ensure_cache_root() / "diagnostics"
-            folder.mkdir(exist_ok=True)
+            folder = ensure_diagnostics_root()
             path = folder / f"{diagnostic_id}.json"
             temporary = folder / f".{diagnostic_id}.{uuid.uuid4().hex}.tmp"
             try:

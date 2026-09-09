@@ -18,7 +18,7 @@ public sealed class MainWindow : Window, IDisposable
 {
     private const string WindowOptionsPopupName = "WindowSystemContextActions";
     private const string KofiUrl = "https://ko-fi.com/luci_xiv";
-    private const string ModBrowserAmbiguityWarning = "The Mod Browser selection is potentially ambiguous. Use the On Screen tab instead.";
+    private const string ModBrowserAmbiguityWarning = "The Mod Browser selection is potentially ambiguous. Use the On Screen tab for Mashups and saving to new modpacks instead.";
     private readonly Configuration _config; private readonly PenumbraService _penumbra; private readonly OnScreenService _onScreen;
     private readonly BlenderClient _blender; private readonly IDataManager _data; private readonly IChatGui _chat; private readonly IPluginLog _log;
     private readonly string _pluginVersion;
