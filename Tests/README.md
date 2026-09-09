@@ -1,8 +1,8 @@
 # Regression suite
 
-Run from the repository root. Use Blender 4.5.3 or newer and .NET 10 with the
+Run from the repository root. Use Blender 4.5.0 or newer and .NET 10 with the
 local Dalamud development assemblies installed. CI runs the Blender cases on
-4.5.3 and 5.2.0; standalone Python tests do not require Blender.
+4.5.0 and 5.2.0; standalone Python tests do not require Blender.
 
 ```powershell
 blender --background --factory-startup --python-exit-code 1 --python Blender-Addon/testing/bridge_regression.py

@@ -42,6 +42,55 @@ static byte[] MinimalModel(params string[] materials)
     return bytes;
 }
 
+static byte[] ModelWithMeshes(
+    IReadOnlyList<string> materials,
+    params (ushort MaterialIndex, ushort VertexCount, uint IndexCount)[] meshes)
+{
+    const int fileHeaderSize = 68;
+    const int stringHeaderSize = 8;
+    const int meshHeaderSize = 56;
+    const int lodSize = 60;
+    const int meshSize = 36;
+    var strings = materials.SelectMany(value => Encoding.UTF8.GetBytes(value + "\0")).ToArray();
+    var stringOffsets = new int[materials.Count];
+    var stringOffset = 0;
+    for (var index = 0; index < materials.Count; index++)
+    {
+        stringOffsets[index] = stringOffset;
+        stringOffset += Encoding.UTF8.GetByteCount(materials[index]) + 1;
+    }
+
+    var model = new byte[fileHeaderSize + stringHeaderSize + strings.Length + meshHeaderSize +
+                         3 * lodSize + meshes.Length * meshSize + materials.Count * 4];
+    BitConverter.TryWriteBytes(model.AsSpan(0, 4), 0x01000006u);
+    BitConverter.TryWriteBytes(model.AsSpan(14, 2), checked((ushort)materials.Count));
+
+    var stringsHeader = fileHeaderSize;
+    BitConverter.TryWriteBytes(model.AsSpan(stringsHeader, 2), checked((ushort)materials.Count));
+    BitConverter.TryWriteBytes(model.AsSpan(stringsHeader + 4, 4), checked((uint)strings.Length));
+    strings.CopyTo(model, stringsHeader + stringHeaderSize);
+
+    var meshHeader = stringsHeader + stringHeaderSize + strings.Length;
+    BitConverter.TryWriteBytes(model.AsSpan(meshHeader + 4, 2), checked((ushort)meshes.Length));
+    BitConverter.TryWriteBytes(model.AsSpan(meshHeader + 10, 2), checked((ushort)materials.Count));
+    model[meshHeader + 22] = 1;
+
+    var meshTable = meshHeader + meshHeaderSize + 3 * lodSize;
+    for (var index = 0; index < meshes.Length; index++)
+    {
+        var mesh = meshes[index];
+        var offset = meshTable + index * meshSize;
+        BitConverter.TryWriteBytes(model.AsSpan(offset, 2), mesh.VertexCount);
+        BitConverter.TryWriteBytes(model.AsSpan(offset + 4, 4), mesh.IndexCount);
+        BitConverter.TryWriteBytes(model.AsSpan(offset + 8, 2), mesh.MaterialIndex);
+    }
+
+    var materialTable = meshTable + meshes.Length * meshSize;
+    for (var index = 0; index < stringOffsets.Length; index++)
+        BitConverter.TryWriteBytes(model.AsSpan(materialTable + index * 4, 4), checked((uint)stringOffsets[index]));
+    return model;
+}
+
 static void CheckSessionStore(string testRoot)
 {
     var storeRoot = Path.Combine(testRoot, "ContextStore");
@@ -510,6 +559,26 @@ try
     Require(serializedContext["sourceGamePath"]?.GetValue<string>() == effectiveHairPath &&
             !serializedContext.ContainsKey("gamePath"),
         "reattach contexts use the synchronized sourceGamePath protocol field");
+    var mashupOutputRoot = Path.Combine(testRoot, "Mashup Output");
+    var mashupOutputRelative = "Files/xiv-instant-edit/mashups/output/model.mdl";
+    var mashupOutputTarget = Path.Combine(
+        mashupOutputRoot,
+        mashupOutputRelative.Replace('/', Path.DirectorySeparatorChar));
+    var mashupOutputContext = manifestRegistry.CreateContext(
+        effectiveHairPath, 7, "Mashup Output", mashupOutputTarget, "Mashup Output", 42428,
+        mashupOutputRoot, mashupOutputRelative,
+        targetCollectionId: sourceCollectionId,
+        targetCollectionName: "Import Snapshot Collection");
+    var serializedMashupOutput = JsonNode.Parse(JsonSerializer.Serialize(mashupOutputContext))!.AsObject();
+    Require(mashupOutputContext.DestinationState == InstantEditImportContext.ReadyDestination &&
+            mashupOutputContext.SourceModDirectory == "Mashup Output" &&
+            mashupOutputContext.SourceModRootPath == Path.GetFullPath(mashupOutputRoot) &&
+            mashupOutputContext.TargetRelativePath == mashupOutputRelative &&
+            mashupOutputContext.TargetCollectionId == sourceCollectionId &&
+            mashupOutputContext.ResourceManifestStatus == "capture_failed" &&
+            serializedMashupOutput["sourceModDirectory"]?.GetValue<string>() == "Mashup Output" &&
+            serializedMashupOutput["targetRelativePath"]?.GetValue<string>() == mashupOutputRelative,
+        "new mashup output contexts register and serialize normalized destination paths");
     var failedManifestContext = manifestRegistry.CreateContext(
         effectiveHairPath, 7, "registered-mod", originalTarget, "Registered Mod", 42428,
         originalRoot, relative, null);
@@ -547,6 +616,11 @@ try
             "/mt_c0801h0154_hir_b_c0801.mtrl")).SequenceEqual(
             ["/mt_c0801h0154_hir_b_c0801.mtrl"]),
         "dependency capture reads V6 material paths without Lumina parsing the full model");
+    Require(MaterialPreviewBundleBuilder.ReadUsedModelMaterials(ModelWithMeshes(
+            ["/mt_used.mtrl", "/mt_empty.mtrl"],
+            (0, 12, 18),
+            (1, 0, 0))).SequenceEqual(["/mt_used.mtrl"]),
+        "dependency capture ignores material slots attached only to empty meshes");
 
     const string optionMaterial = "chara/equipment/e0001/material/v0001/mt_option.mtrl";
     const string defaultTexture = "chara/equipment/e0001/texture/default_d.tex";

@@ -873,7 +873,7 @@ class XIVIE_OT_mesh_attribute(Operator):
     mesh_part_instance: StringProperty(default="", options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
     attribute: StringProperty(default="NEW", options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
     custom: BoolProperty(name="Custom", default=False)  # type: ignore
-    custom_attribute: StringProperty(name="", default="atr_", maxlen=128)  # type: ignore
+    custom_attribute: StringProperty(name="", default="", maxlen=128)  # type: ignore
     selection: EnumProperty(
         name="",
         items=(
@@ -973,7 +973,8 @@ class XIVIE_OT_mesh_material(Operator):
     mesh_group: IntProperty(default=0, min=0, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
 
     def _material_search(self, context, edit_text):
-        return material_suggestions()
+        group = find_material_group(context, self.mesh_group)
+        return material_suggestions(group) if group is not None else []
 
     material: StringProperty(
         name="Material Path",

@@ -11,9 +11,14 @@ import numpy as np
 
 from .io.model.com.space import lin_to_srgb
 from .io.model.exp.validators import clean_material_path, USHORT_LIMIT
-from .instant_edit.context import context_id_for_object, mesh_ids_from_name, mesh_name_info
+from .instant_edit.context import (
+    MASHUP_SOURCE_MATERIAL_PROPERTY,
+    context_id_for_object,
+    mesh_ids_from_name,
+    mesh_name_info,
+)
 from .mesh.objects import visible_meshobj
-from .xivpy.model import XIV_ATTR
+from .xivpy.model import is_model_attribute_name
 
 
 MATERIAL_PRESETS = {
@@ -27,7 +32,7 @@ MATERIAL_PRESETS = {
     "yet another toenail": "/mt_c0201b0001_yatoe.mtrl",
 }
 
-_CUSTOM_ATTRIBUTE = re.compile(r"^atr_[a-z0-9_]+$")
+_CUSTOM_ATTRIBUTE = re.compile(r"^[a-z0-9_]+$")
 
 ATTRIBUTE_NAMES = {
     "nek": "Neck",
@@ -308,7 +313,7 @@ def mesh_part_attributes(objects) -> tuple[str, ...]:
         key
         for obj in objects
         for key, value in obj.items()
-        if key.startswith(XIV_ATTR) and value
+        if is_model_attribute_name(key) and value
     }
     return tuple(sorted(attributes))
 
@@ -330,10 +335,8 @@ def attribute_display_name(attribute: str) -> str:
 
 def normalize_mesh_attribute(value: str) -> str:
     attribute = str(value or "").strip().lower().replace(" ", "_")
-    if attribute and not attribute.startswith("atr_"):
-        attribute = f"atr_{attribute}"
-    if not _CUSTOM_ATTRIBUTE.fullmatch(attribute):
-        raise ValueError("Custom attributes must use letters, numbers, or underscores after atr_.")
+    if not _CUSTOM_ATTRIBUTE.fullmatch(attribute) or not is_model_attribute_name(attribute):
+        raise ValueError("Custom attributes must use only letters, numbers, or underscores.")
     return attribute
 
 
@@ -346,8 +349,8 @@ def set_mesh_part_attribute(
     instance_key: str | None = None,
 ) -> str:
     attribute = normalize_mesh_attribute(value) if enabled else str(value or "").strip()
-    if not attribute.startswith(XIV_ATTR):
-        raise ValueError("This is not an XIV mesh attribute.")
+    if not is_model_attribute_name(attribute):
+        raise ValueError("This is not a valid mesh attribute.")
     for obj in mesh_part_instance_objects(objects, mesh_index, part_index, instance_key):
         if enabled:
             obj[attribute] = True
@@ -856,17 +859,36 @@ def assign_material_path(objects, value: str) -> str:
     path = normalize_material_path(value)
     for obj in objects:
         obj["xiv_material"] = path
+        obj.pop(MASHUP_SOURCE_MATERIAL_PROPERTY, None)
         if "instant_edit_xiv_material" in obj or context_id_for_object(obj):
             obj["instant_edit_xiv_material"] = path
     return path
 
 
-def material_suggestions() -> list[str]:
-    detected = []
-    for group in visible_material_groups():
-        detected.extend(material_paths(group.objects))
-    presets = [
-        "Bibo", "Gen2/Vanilla", "Gen3/TBSE", "Bibopube", "Betterpube",
-        "Yet Another Piercing", "Yet Another Toenail", "Yet Another Fingernail",
-    ]
-    return list(dict.fromkeys(sorted(set(detected)) + presets))
+def material_suggestions(group: MaterialGroup) -> list[tuple[str, str]]:
+    """Return material candidates and per-part usage information for one group."""
+    counts = defaultdict(int)
+    representatives = {}
+
+    for part_instance in group.part_instances:
+        part_materials = set()
+        for obj in part_instance.objects:
+            path = export_material_path(obj)
+            if not path:
+                continue
+            identity = _material_identity_key(path)
+            part_materials.add(identity)
+            representatives.setdefault(identity, path)
+
+        for identity in part_materials:
+            counts[identity] += 1
+
+    suggestions = []
+    for identity, path in sorted(
+        representatives.items(),
+        key=lambda item: item[1].casefold(),
+    ):
+        count = counts[identity]
+        suffix = "part" if count == 1 else "parts"
+        suggestions.append((path, f"{count} {suffix}"))
+    return suggestions

@@ -4,7 +4,7 @@ from collections         import defaultdict
 
 from .validators         import remove_loose_verts, split_seams
 from ..com.exceptions    import XIVMeshIDError
-from ....xivpy.model     import XIV_ATTR
+from ....xivpy.model     import is_model_attribute_name
 from ....mesh.transforms import apply_transforms
 from ....instant_edit.context import mesh_ids_from_name
 
@@ -13,7 +13,7 @@ def get_attributes(obj: Object) -> list[str]:
     attributes: list[str] = []
     for attr in obj.keys():
         attr: str
-        if attr.startswith(XIV_ATTR) and obj[attr]:
+        if is_model_attribute_name(attr) and obj[attr]:
             attributes.append(attr.strip())
 
     return attributes

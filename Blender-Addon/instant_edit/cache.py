@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import os
 import shutil
 import tempfile
 import threading
@@ -17,6 +18,9 @@ from datetime import datetime, timezone
 CACHE_SCHEMA = "instant-edit.cache"
 CACHE_VERSION = 1
 CACHE_FOLDER = "XIV-Instant-Edit"
+DIAGNOSTICS_RELATIVE_PATH = Path(
+    "XIVLauncher", "pluginConfigs", "InstantEdit", "Diagnostics"
+)
 STALE_SECONDS = 24 * 60 * 60
 BACKUP_RETENTION_SECONDS = 30 * 24 * 60 * 60
 MAX_MODEL_BYTES = 512 * 1024 * 1024
@@ -24,6 +28,7 @@ MAX_PREVIEW_BYTES = 1024 * 1024 * 1024
 MAX_PREVIEW_FILES = 2048
 MAX_DIAGNOSTIC_REPORTS = 100
 MAX_DIAGNOSTIC_BYTES = 20 * 1024 * 1024
+DIAGNOSTIC_ID_LENGTH = 8
 BACKUP_FILE_RE = re.compile(
     r"^.+\.(?:mdl|fbx)\.(?P<stamp>\d{8}T\d{6}\.\d{6}Z)\.bak$", re.IGNORECASE
 )
@@ -76,6 +81,19 @@ def cache_root() -> Path:
         return (_base_directory / CACHE_FOLDER).resolve()
 
 
+def diagnostics_root() -> Path:
+    """Return the per-user directory shared with the XIVLauncher config tree."""
+    appdata = os.environ.get("APPDATA")
+    base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+    return (base / DIAGNOSTICS_RELATIVE_PATH).resolve()
+
+
+def ensure_diagnostics_root() -> Path:
+    root = diagnostics_root()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def _marker_path(root: Path) -> Path:
     return root / ".instant-edit-cache.json"
 
@@ -98,7 +116,7 @@ def ensure_cache_root() -> Path:
             json.dumps({"schema": CACHE_SCHEMA, "version": CACHE_VERSION}),
             encoding="utf-8",
         )
-    for kind in ("imports", "exports", "diagnostics", "backups"):
+    for kind in ("imports", "exports", "backups"):
         (root / kind).mkdir(exist_ok=True)
     return root
 
@@ -219,37 +237,40 @@ def clean_cache(older_than_seconds: float | None = None) -> tuple[int, int]:
             except (OSError, ValueError):
                 continue
 
-    diagnostics = root / "diagnostics"
-    reports = []
-    for candidate in tuple(diagnostics.iterdir()):
-        try:
-            if candidate.is_symlink() or not candidate.is_file() or candidate.suffix.casefold() != ".json":
+    diagnostics = diagnostics_root()
+    if diagnostics.is_dir():
+        reports = []
+        for candidate in tuple(diagnostics.iterdir()):
+            try:
+                if candidate.is_symlink() or not candidate.is_file() or candidate.suffix.casefold() != ".json":
+                    continue
+                if (len(candidate.stem) != DIAGNOSTIC_ID_LENGTH or
+                        any(character not in "0123456789abcdef" for character in candidate.stem.casefold())):
+                    continue
+                stat = candidate.stat()
+                if cutoff is None or stat.st_mtime <= cutoff:
+                    bytes_removed += stat.st_size
+                    candidate.unlink()
+                    removed += 1
+                else:
+                    reports.append((stat.st_mtime, stat.st_size, candidate))
+            except (OSError, ValueError):
                 continue
-            uuid.UUID(candidate.stem)
-            stat = candidate.stat()
-            if cutoff is None or stat.st_mtime <= cutoff:
-                bytes_removed += stat.st_size
+
+        reports.sort(reverse=True)
+        retained_count = 0
+        retained_bytes = 0
+        for _modified, size, candidate in reports:
+            if retained_count < MAX_DIAGNOSTIC_REPORTS and retained_bytes + size <= MAX_DIAGNOSTIC_BYTES:
+                retained_count += 1
+                retained_bytes += size
+                continue
+            try:
                 candidate.unlink()
                 removed += 1
-            else:
-                reports.append((stat.st_mtime, stat.st_size, candidate))
-        except (OSError, ValueError):
-            continue
-
-    reports.sort(reverse=True)
-    retained_count = 0
-    retained_bytes = 0
-    for _modified, size, candidate in reports:
-        if retained_count < MAX_DIAGNOSTIC_REPORTS and retained_bytes + size <= MAX_DIAGNOSTIC_BYTES:
-            retained_count += 1
-            retained_bytes += size
-            continue
-        try:
-            candidate.unlink()
-            removed += 1
-            bytes_removed += size
-        except OSError:
-            continue
+                bytes_removed += size
+            except OSError:
+                continue
     return removed, bytes_removed
 
 

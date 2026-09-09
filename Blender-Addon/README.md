@@ -63,10 +63,30 @@ When the Dalamud **Exclude body and general materials** sub-option is enabled,
 body skin, body-piercing, and pube slots intentionally retain their colored
 placeholders without producing missing-preview warnings.
 
+### FFXIV MDL limits
+
+The important geometry limits are format limits rather than per-slot or
+per-item settings:
+
+- Each LOD has an 8 MiB vertex-data limit shared by all of its mesh groups and
+  vertex streams.
+- Each mesh group can contain at most 65,535 exported vertices. This is the
+  final game vertex count after UV, hard-normal, colour, and other attribute
+  seams have been split, not necessarily Blender's displayed vertex count.
+- A model can reference up to 4 materials and 32 unique attributes; each mesh
+  can use up to 64 weighted bones.
+- Shape keys share a model-wide limit of 65,535 modified indices.
+
+There is therefore no single vertex-count limit for every item. Additional UV
+channels, vertex colours, flow data, more bone influences, seams, and retained
+shape keys increase the number of exported vertices or the bytes used by each
+vertex. The exporter reports the affected LOD and its actual byte size when the
+8 MiB limit is exceeded.
+
 ## Installation
 
 Build or install the extension ZIP through Blender's Extensions preferences.
-The source directory itself can also be used for development with Blender 4.5.3
+The source directory itself can also be used for development with Blender 4.5.0
 or newer.
 
 Do not enable this extension at the same time as a custom Yet Another Addon

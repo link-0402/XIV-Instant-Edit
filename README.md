@@ -6,7 +6,7 @@ Instant Edit is a combination of in-game Dalamud plugin and Blender addon that a
 
 - [XIVLauncher](https://goatcorp.github.io/) with Dalamud enabled
 - [Penumbra](https://github.com/xivdev/Penumbra)
-- [Blender](https://www.blender.org/) 4.5.3+
+- [Blender](https://www.blender.org/) 4.5.0+
 
 ## Installation
 

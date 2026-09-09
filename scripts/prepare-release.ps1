@@ -86,7 +86,7 @@ if (-not $SkipBlender) {
     }
     & (Join-Path $scriptRoot 'verify-blender-repository.ps1') `
         -RepositoryPath $blenderRepository `
-        -ExpectedMinimum '4.5.3'
+        -ExpectedMinimum '4.5.0'
 }
 
 if (-not (Test-Path -LiteralPath $blenderManifest -PathType Leaf)) {

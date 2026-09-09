@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import uuid
@@ -20,6 +21,12 @@ def run() -> None:
     cache = _load_cache()
     with tempfile.TemporaryDirectory(prefix="xiv-ie-cache-test-") as temporary:
         base = Path(temporary)
+        os.environ["APPDATA"] = str(base / "appdata")
+        expected_diagnostics = (
+            base / "appdata" / "XIVLauncher" / "pluginConfigs" / "InstantEdit" / "Diagnostics"
+        ).resolve()
+        assert cache.diagnostics_root() == expected_diagnostics
+        assert cache.ensure_diagnostics_root() == expected_diagnostics
         root = cache.configure_cache(base, True)
         assert root == (base / cache.CACHE_FOLDER).resolve()
         assert json.loads((root / ".instant-edit-cache.json").read_text("utf-8"))["schema"] == cache.CACHE_SCHEMA

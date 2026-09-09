@@ -903,13 +903,52 @@ public sealed class ExportServer : IDisposable
                             pathRemap.ModDirectory,
                             pathRemap.ModRoot,
                             pathRemap.RelativePaths);
+
+                    var warnings = result.WarningList.ToList();
+                    InstantEditImportContext? outputContext = null;
+                    if (result.Success && string.Equals(mashup.Destination, "new_mod", StringComparison.Ordinal))
+                    {
+                        if (result.OutputModDirectory is null ||
+                            result.OutputModRootPath is null ||
+                            result.OutputTargetRelativePath is null ||
+                            result.TargetFilePath is null)
+                        {
+                            warnings.Add(
+                                "The mashup mod was created, but its Blender export context could not be registered: " +
+                                "the Penumbra output paths were incomplete.");
+                        }
+                        else
+                        {
+                            try
+                            {
+                                outputContext = _contexts.CreateContext(
+                                    activeContext.GamePath,
+                                    activeContext.ObjectIndex,
+                                    result.OutputModDirectory,
+                                    result.TargetFilePath,
+                                    result.DestinationName ?? result.OutputModDirectory,
+                                    activeContext.CallbackPort,
+                                    result.OutputModRootPath,
+                                    result.OutputTargetRelativePath,
+                                    targetCollectionId: activeContext.TargetCollectionId,
+                                    targetCollectionName: activeContext.TargetCollectionName);
+                            }
+                            catch (Exception error)
+                            {
+                                _log.Error(error, "Mashup mod was created, but its Blender export context could not be registered.");
+                                warnings.Add(
+                                    "The mashup mod was created, but its Blender export context could not be registered.");
+                            }
+                        }
+                    }
                     receipt = new ExportReceipt(
                         result.Success,
                         result.Code,
                         result.Message,
-                        result.WarningList,
+                        warnings,
                         result.TargetFilePath,
                         result.DestinationName,
+                        Context: outputContext,
                         RequiredExternalMods: result.RequiredExternalMods);
                 }
             }
@@ -1196,7 +1235,7 @@ public sealed class ExportServer : IDisposable
             return "invalid_cause";
         if (string.IsNullOrWhiteSpace(request.Remedy) || request.Remedy.Length > 2048)
             return "invalid_remedy";
-        return Guid.TryParse(request.DiagnosticId, out _) ? null : "invalid_diagnostic_id";
+        return BridgeFailure.IsDiagnosticId(request.DiagnosticId) ? null : "invalid_diagnostic_id";
     }
 
     private static string? ValidateRevokeEnvelope(RevokeRequest request)
