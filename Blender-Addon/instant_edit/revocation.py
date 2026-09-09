@@ -201,7 +201,7 @@ def schedule_revocations() -> None:
             stage="revocation_persistence",
             code="revocation_queue_unavailable",
             cause="Blender could not load the pending context revocation queue.",
-            remedy="Choose a writable cache directory and restart Blender.",
+            remedy="Set a writable cache directory in XIV Instant Edit's in-game settings and restart Blender.",
             endpoint="/context/revoke",
             exception=error,
         )

@@ -63,26 +63,6 @@ When the Dalamud **Exclude body and general materials** sub-option is enabled,
 body skin, body-piercing, and pube slots intentionally retain their colored
 placeholders without producing missing-preview warnings.
 
-### FFXIV MDL limits
-
-The important geometry limits are format limits rather than per-slot or
-per-item settings:
-
-- Each LOD has an 8 MiB vertex-data limit shared by all of its mesh groups and
-  vertex streams.
-- Each mesh group can contain at most 65,535 exported vertices. This is the
-  final game vertex count after UV, hard-normal, colour, and other attribute
-  seams have been split, not necessarily Blender's displayed vertex count.
-- A model can reference up to 4 materials and 32 unique attributes; each mesh
-  can use up to 64 weighted bones.
-- Shape keys share a model-wide limit of 65,535 modified indices.
-
-There is therefore no single vertex-count limit for every item. Additional UV
-channels, vertex colours, flow data, more bone influences, seams, and retained
-shape keys increase the number of exported vertices or the bytes used by each
-vertex. The exporter reports the affected LOD and its actual byte size when the
-8 MiB limit is exceeded.
-
 ## Installation
 
 Build or install the extension ZIP through Blender's Extensions preferences.
@@ -94,9 +74,10 @@ build that also contains the XIV Instant Edit listener. Both would attempt to ow
 the same local port (42424 by default). The unmodified upstream Yet Another
 Addon can coexist because it does not provide that listener.
 
-The connection ports can be changed in the extension preferences. Simple
-Export and XIV Instant Edit controls are in the **XIV Instant Edit** sidebar tab of
-the 3D Viewport.
+The connection ports can be changed in the extension preferences. The cache
+directory and automatic cleanup are configured in the in-game plugin settings.
+Simple Export and XIV Instant Edit controls are in the **XIV Instant Edit** sidebar
+tab of the 3D Viewport.
 
 ## Attribution and license
 

@@ -1,6 +1,7 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
+using InstantEdit.Services;
 
 namespace InstantEdit.Ui;
 
@@ -11,10 +12,12 @@ public sealed class SettingsWindow
     private readonly Action _saveConfig;
     private readonly Action _restartExportListener;
     private readonly IPluginLog _log;
+    private readonly Action _requestCacheSynchronization;
     private bool _open;
 
-    public SettingsWindow(Configuration config, Action saveConfig, Action restartExportListener, IPluginLog log)
-    { _config = config; _saveConfig = saveConfig; _restartExportListener = restartExportListener; _log = log; }
+    public SettingsWindow(Configuration config, Action saveConfig, Action restartExportListener, IPluginLog log,
+        Action requestCacheSynchronization)
+    { _config = config; _saveConfig = saveConfig; _restartExportListener = restartExportListener; _log = log; _requestCacheSynchronization = requestCacheSynchronization; }
 
     public bool IsOpen { get => _open; set => _open = value; }
     public void Open() => _open = true;
@@ -28,12 +31,38 @@ public sealed class SettingsWindow
         ImGui.TextColored(new Vector4(.95f, .78f, .35f, 1), "XIV INSTANT EDIT SETTINGS");
         ImGui.TextColored(new Vector4(.58f, .6f, .67f, 1), "Connection and export preferences");
         ImGui.Spacing();
-        ImGui.Separator(); ImGui.Text("Blender connection");
+        ImGui.Separator(); ImGui.Text("Connections");
         var blenderPort = _config.BlenderPort; if (ImGui.InputInt("Blender port", ref blenderPort)) { _config.BlenderPort = blenderPort; Save(); }
-        ImGui.TextColored(new Vector4(.55f, .57f, .64f, 1), "Blender and the XIV Instant Edit add-on must already be running before editing.");
-        ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Export connection");
+        ImGui.TextWrapped("Model editing requires Blender. Texture editing works after its cache has synchronized once.");
         var listenPort = _config.ListenPort; if (ImGui.InputInt("Listener port", ref listenPort)) { var changed = listenPort != _config.ListenPort; _config.ListenPort = listenPort; Save(); if (changed) RestartListener(); }
         ImGui.TextColored(new Vector4(.55f, .57f, .64f, 1), "Quick Export writes back to the model's original Penumbra mod.");
+        ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Texture editing");
+        var editor = _config.TextureEditorPath;
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputTextWithHint("##texture-editor", "Full path to Photoshop.exe or another TGA editor", ref editor, 2048))
+        { _config.TextureEditorPath = editor.Trim().Trim('"'); Save(); }
+        ImGui.TextWrapped("Open a texture, edit it, then save the same file as a 32-bit TGA with alpha. Layered work needs a flattened TGA copy.");
+        ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Cache");
+        var cacheDirectory = _config.TextureCacheDirectory;
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputTextWithHint("Cache directory", "Base folder shared by the plugin and Blender", ref cacheDirectory, 4096))
+        {
+            _config.TextureCacheDirectory = cacheDirectory.Trim().Trim('"');
+            Save();
+            try { _requestCacheSynchronization(); }
+            catch (Exception e) { _log.Debug(e.Message); }
+        }
+        var automaticCleanup = _config.AutomaticCacheCleanup;
+        if (ImGui.Checkbox("Automatic cache cleanup", ref automaticCleanup))
+        {
+            _config.AutomaticCacheCleanup = automaticCleanup;
+            Save();
+            try { _requestCacheSynchronization(); }
+            catch (Exception e) { _log.Debug(e.Message); }
+        }
+        ImGui.TextWrapped("When enabled, completed model cache jobs and inactive texture-edit sessions older than 24 hours are removed. Active sessions and unsaved texture edits are kept.");
+        try { ImGui.TextWrapped($"Managed cache: {TextureFiles.CacheRootFor(_config.TextureCacheDirectory)}"); }
+        catch (Exception e) { ImGui.TextWrapped($"Cache directory is invalid: {e.Message}"); }
         ImGui.End();
     }
 

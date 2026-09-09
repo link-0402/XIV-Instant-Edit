@@ -681,16 +681,6 @@ class XIVIE_PT_main(Panel):
         row.prop(settings, "clear_vertex_color2")
         row.prop(settings, "clear_flow_data")
 
-        limits = box.box()
-        limits.label(text="FFXIV MDL Limits", icon="INFO")
-        limits.label(text="Vertex data: 8 MiB per LOD, shared by all mesh groups.")
-        limits.label(text="Mesh group: 65,535 exported vertices maximum.")
-        limits.label(text="Model: 4 materials, 32 attributes, 64 weighted bones per mesh.")
-        limits.label(text="Shape keys: 65,535 modified indices per model.")
-        limits.label(text="Final vertices increase at UV/hard/colour seams.")
-        limits.label(text="Extra UVs, colours, flow, weights and shape keys use more bytes.")
-        limits.label(text="These are format limits; slots/items do not get different caps.")
-
     @staticmethod
     def _draw_backups(layout, context: Context) -> None:
         settings = get_settings()

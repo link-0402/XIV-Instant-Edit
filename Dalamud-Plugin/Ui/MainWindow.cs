@@ -14,7 +14,7 @@ using Lumina.Data;
 namespace InstantEdit.Ui;
 
 /// <summary>Compact resource browser for the authoritative Penumbra resource snapshot.</summary>
-public sealed class MainWindow : Window, IDisposable
+public sealed partial class MainWindow : Window, IDisposable
 {
     private const string WindowOptionsPopupName = "WindowSystemContextActions";
     private const string KofiUrl = "https://ko-fi.com/luci_xiv";
@@ -45,10 +45,11 @@ public sealed class MainWindow : Window, IDisposable
 
     public MainWindow(Configuration config, PenumbraService penumbra, OnScreenService onScreen, BlenderClient blender,
         IDataManager data, IChatGui chat, IPluginLog log, Action saveConfig, Action restartExportListener, IUiBuilder uiBuilder,
-        ITextureProvider textureProvider)
+        ITextureProvider textureProvider, TextureEditService textures)
         : base("XIV Instant Edit##Main")
     {
         _config = config; _penumbra = penumbra; _onScreen = onScreen; _blender = blender; _data = data; _chat = chat; _log = log;
+        _textures = textures;
         _pluginVersion = BlenderClient.CurrentPluginVersion;
         _resourceSources = new ResourceSourceAttributor(penumbra, log);
         _materialPreviews = new MaterialPreviewBundleBuilder(data, log, _resourceSources);
@@ -116,8 +117,14 @@ public sealed class MainWindow : Window, IDisposable
                 ImGui.EndTabItem();
             }
 
+            if (ImGui.BeginTabItem("Texture Edits"))
+            {
+                DrawTextureSessions();
+                ImGui.EndTabItem();
+            }
             ImGui.EndTabBar();
         }
+        DrawTextureDialogs();
         DrawFeedback();
         DrawWindowOptionsExtension();
     }
@@ -479,6 +486,7 @@ public sealed class MainWindow : Window, IDisposable
             if (ImGui.SmallButton("Edit##flat-node-action")) TryEditNode(resource, actor);
             if (ImGui.IsItemHovered()) ImGui.SetTooltip("Edit this model in Blender");
         }
+        else DrawTextureAction(resource, actor);
         ImGui.PopID();
     }
 
@@ -528,6 +536,7 @@ public sealed class MainWindow : Window, IDisposable
             if (ImGui.SmallButton("Edit##node-action")) TryEditNode(node, actor);
             if (ImGui.IsItemHovered()) ImGui.SetTooltip("Edit this model in Blender");
         }
+        else DrawTextureAction(node, actor);
         if (expanded && hasChildren)
         {
             for (var i = 0; i < children.Count; i++)
@@ -582,12 +591,12 @@ public sealed class MainWindow : Window, IDisposable
 
     private void DrawResourceTypeFilters(IReadOnlyList<ActorView> actors)
     {
-        var groups = new[] { "Everything", "Models" };
+        var groups = new[] { "Tree Structure", "Models", "Textures" };
         ImGui.Spacing();
         ImGui.TextColored(new Vector4(.58f, .61f, .69f, 1), "Filter"); ImGui.SameLine(0, 8);
         foreach (var group in groups)
         {
-            var filter = group == "Everything" ? string.Empty : group;
+            var filter = group == "Tree Structure" ? string.Empty : group;
             var count = actors.SelectMany(x => x.Roots).SelectMany(Flatten)
                 .Count(node => MatchesResourceType(node, filter));
             ImGui.PushID($"resource-type-filter:{group}");
@@ -1012,8 +1021,13 @@ public sealed class MainWindow : Window, IDisposable
         var handoffCached = false;
         try
         {
-            if (!await CheckBlenderAsync(blenderPort, cancellationToken).ConfigureAwait(false))
+            var blenderStatus = await CheckBlenderStatusAsync(blenderPort, cancellationToken).ConfigureAwait(false);
+            if (!blenderStatus.Reachable)
                 throw new InvalidOperationException("Blender is offline. Start Blender and enable the XIV Instant Edit add-on before editing.");
+            if (blenderStatus.Classify(_pluginVersion) != BlenderConnectionState.Online)
+                throw new InvalidOperationException(BlenderClient.VersionMismatchMessage(_pluginVersion));
+            if (!await SynchronizeBlenderCacheAsync(blenderStatus, blenderPort, cancellationToken).ConfigureAwait(false))
+                throw new InvalidOperationException("Blender's cache could not be synchronized. Update and restart the XIV Instant Edit add-on, then retry.");
             if (importOptions.ArmatureMode == BlenderImportOptions.ExistingMode &&
                 !await _blender.SupportsImportOptionsAsync(blenderPort, cancellationToken).ConfigureAwait(false))
                 throw new InvalidOperationException("The XIV Instant Edit add-on is too old for custom import options. Update the add-on and restart Blender.");
@@ -1250,8 +1264,40 @@ public sealed class MainWindow : Window, IDisposable
         return await _blender.GetStatusAsync(port, timeout.Token).ConfigureAwait(false);
     }
 
-    private async Task<bool> CheckBlenderAsync(int port, CancellationToken cancellationToken = default)
-        => (await CheckBlenderStatusAsync(port, cancellationToken).ConfigureAwait(false)).Reachable;
+    private async Task<bool> SynchronizeBlenderCacheAsync(
+        BlenderStatus status,
+        int port,
+        CancellationToken cancellationToken = default)
+    {
+        if (status.Classify(_pluginVersion) != BlenderConnectionState.Online || !status.CacheSettingsSupported)
+            return false;
+
+        var expectedRoot = _textures.EnsureConfiguredCache();
+        var synchronizedRoot = await _blender.ConfigureCacheAsync(
+            port, _config.TextureCacheDirectory, _config.AutomaticCacheCleanup, cancellationToken).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(synchronizedRoot))
+            return false;
+
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(expectedRoot), Path.GetFullPath(synchronizedRoot),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception e) when (e is ArgumentException or IOException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    public void RequestCacheSynchronization()
+    {
+        if (_config.AutomaticCacheCleanup)
+            _textures.RequestCacheCleanup();
+        lock (_stateLock)
+            _lastBlenderCheck = DateTime.MinValue;
+        StartBlenderCheckIfNeeded();
+    }
 
     private void StartBlenderCheckIfNeeded()
     {
@@ -1269,6 +1315,8 @@ public sealed class MainWindow : Window, IDisposable
             {
                 var status = await CheckBlenderStatusAsync(_config.BlenderPort).ConfigureAwait(false);
                 state = status.Classify(_pluginVersion);
+                if (state == BlenderConnectionState.Online)
+                    await SynchronizeBlenderCacheAsync(status, _config.BlenderPort).ConfigureAwait(false);
             }
             catch (Exception e)
             {

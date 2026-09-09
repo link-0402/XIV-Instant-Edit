@@ -89,10 +89,33 @@ def _expect_code(server, payload, expected: str) -> None:
         raise AssertionError(f"validation unexpectedly accepted {expected}")
 
 
+def _expect_cache_code(server, payload, expected: str) -> None:
+    try:
+        server._ImportHandler._validate_cache_settings(payload)
+    except server.BridgeRequestError as error:
+        assert error.code == expected, (expected, error.code)
+        assert error.stage and error.cause and error.remedy
+    else:
+        raise AssertionError(f"cache validation unexpectedly accepted {expected}")
+
+
 def run() -> None:
     cache, _diagnostics, server = _load_modules()
     valid = _base_import()
     assert server._ImportHandler._validate_import(copy.deepcopy(valid))["pluginVersion"] == "1.1.5"
+
+    valid_cache = {"schema": "instant-edit.cache-settings", "version": 1,
+                   "cacheDirectory": str(Path(tempfile.gettempdir()).resolve()),
+                   "automaticCleanup": True}
+    assert server._ImportHandler._validate_cache_settings(valid_cache)["cacheDirectory"]
+    for payload, expected in (
+        ({**valid_cache, "schema": "old.schema"}, "unsupported_schema"),
+        ({**valid_cache, "version": 2}, "unsupported_version"),
+        ({**valid_cache, "cacheDirectory": "relative/cache"}, "invalid_cache_directory"),
+        ({**valid_cache, "cacheDirectory": r"\\server\share"}, "invalid_cache_directory"),
+        ({**valid_cache, "automaticCleanup": "yes"}, "invalid_automatic_cleanup"),
+    ):
+        _expect_cache_code(server, payload, expected)
 
     cases = []
     cases.append((None, "request_not_object"))
@@ -162,6 +185,9 @@ def run() -> None:
 
     with tempfile.TemporaryDirectory(prefix="xiv-ie-server-diagnostics-") as temporary:
         cache.configure_cache(temporary, False)
+        status = server._status_payload()
+        assert server.TEXTURE_CACHE_CAPABILITY in status["capabilities"]
+        assert status["cacheRoot"] == str(cache.cache_root())
         diagnostics_folder = Path(temporary) / "diagnostics"
         cache.diagnostics_root = lambda: diagnostics_folder
         captured = []

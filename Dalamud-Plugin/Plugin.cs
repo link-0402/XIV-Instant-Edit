@@ -21,6 +21,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly OnScreenService         _onScreen;
     private readonly ExportContextRegistry   _contexts;
     private readonly BlenderClient           _blender;
+    private readonly TextureEditService      _textures;
     private readonly ExportServer            _exportServer;
     private readonly WindowSystem            _windowSystem;
     private readonly MainWindow              _window;
@@ -44,6 +45,7 @@ public sealed class Plugin : IDalamudPlugin
         _log      = log;
 
         _config    = pi.GetPluginConfig() as Configuration ?? new Configuration();
+        var cacheConfigurationMigrated = MigrateCacheConfiguration(_config);
         var pluginInstanceId = Guid.NewGuid().ToString("N");
         IReadOnlyList<Models.PersistedExportContext> persistedContexts = _config.ExportContexts;
         try
@@ -95,6 +97,10 @@ public sealed class Plugin : IDalamudPlugin
             },
             _backups);
         _blender   = new BlenderClient(log, _contexts);
+        _textures = new TextureEditService(_penumbra, _config, pi.ConfigDirectory.FullName, _backups,
+            (error, message) => log.Warning(error, message));
+        if (_config.AutomaticCacheCleanup)
+            _textures.RequestCacheCleanup();
         _exportServer = new ExportServer(_config, _penumbra, _contexts, log);
         _window    = new MainWindow(
             _config,
@@ -107,13 +113,15 @@ public sealed class Plugin : IDalamudPlugin
             SaveConfiguration,
             () => _exportServer.Restart(),
             _pi.UiBuilder,
-            textureProvider);
+            textureProvider,
+            _textures);
         _exportServer.ImportFailureReceived += _window.ReportImportFailure;
         _settingsWindow = new SettingsWindow(
             _config,
             SaveConfiguration,
             () => _exportServer.Restart(),
-            _log);
+            _log,
+            _window.RequestCacheSynchronization);
 
         _windowSystem = new WindowSystem();
         _windowSystem.AddWindow(_window);
@@ -138,6 +146,8 @@ public sealed class Plugin : IDalamudPlugin
             _log.Error(e, "XIV Instant Edit export receiver could not start.");
         }
 
+        if (cacheConfigurationMigrated)
+            SaveConfiguration();
         _log.Information("XIV Instant Edit loaded.");
     }
 
@@ -158,6 +168,35 @@ public sealed class Plugin : IDalamudPlugin
             _pi.SavePluginConfig(_config);
     }
 
+    private static bool MigrateCacheConfiguration(Configuration config)
+    {
+        if (!string.IsNullOrWhiteSpace(config.TextureCacheDirectory))
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(config.TextureCacheRoot))
+        {
+            try
+            {
+                var legacyRoot = Path.GetFullPath(config.TextureCacheRoot.Trim().Trim('"'));
+                config.TextureCacheDirectory = string.Equals(
+                    Path.GetFileName(legacyRoot), TextureFiles.CacheFolder, StringComparison.OrdinalIgnoreCase)
+                    ? Path.GetDirectoryName(legacyRoot) ?? Path.GetTempPath()
+                    : legacyRoot;
+            }
+            catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                config.TextureCacheDirectory = Path.GetTempPath();
+            }
+        }
+        else
+        {
+            config.TextureCacheDirectory = Path.GetTempPath();
+        }
+
+        config.TextureCacheRoot = "";
+        return true;
+    }
+
     public void Dispose()
     {
         _commands.RemoveHandler("/ie");
@@ -167,6 +206,7 @@ public sealed class Plugin : IDalamudPlugin
         _pi.UiBuilder.OpenConfigUi -= _settingsWindow.Open;
         _windowSystem.RemoveWindow(_window);
         _window.Dispose();
+        _textures.Dispose();
         _exportServer.ImportFailureReceived -= _window.ReportImportFailure;
         _exportServer.Dispose();
         _contexts.Dispose();

@@ -14,6 +14,21 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary> Port this plugin listens on for export results coming from Blender. </summary>
     public int ListenPort { get; set; } = 42428;
 
+    public string TextureEditorPath { get; set; } = "";
+    /// <summary>Base directory for the shared XIV-Instant-Edit cache.</summary>
+    public string TextureCacheDirectory { get; set; } = "";
+
+    /// <summary>Automatically remove stale model cache jobs and inactive texture sessions.</summary>
+    public bool AutomaticCacheCleanup { get; set; } = true;
+
+    /// <summary>
+    /// Legacy cache root written by the first texture-edit implementation. It is
+    /// read once during migration and is not written back to plugin settings.
+    /// </summary>
+    public string TextureCacheRoot { get; set; } = "";
+
+    public bool ShouldSerializeTextureCacheRoot() => false;
+
     /// <summary>Legacy managed-mod setting retained for configuration compatibility.</summary>
 
     /// <summary>Bind imported meshes to an existing Blender armature instead of creating one.</summary>

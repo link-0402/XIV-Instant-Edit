@@ -28,6 +28,10 @@ def run() -> None:
         assert cache.diagnostics_root() == expected_diagnostics
         assert cache.ensure_diagnostics_root() == expected_diagnostics
         root = cache.configure_cache(base, True)
+        texture_session = root / "texture-edits" / uuid.uuid4().hex
+        texture_session.mkdir(parents=True)
+        working_texture = texture_session / "c0101e0001_top_d.tga"
+        working_texture.write_bytes(b"artist working image")
         assert root == (base / cache.CACHE_FOLDER).resolve()
         assert json.loads((root / ".instant-edit-cache.json").read_text("utf-8"))["schema"] == cache.CACHE_SCHEMA
 
@@ -92,6 +96,9 @@ def run() -> None:
         assert removed == 2
         assert removed_bytes >= len(model.read_bytes()) + len(b"result")
         assert not job.exists() and not export_job.exists()
+        assert working_texture.read_bytes() == b"artist working image"
+        cache.clean_cache(cache.STALE_SECONDS)
+        assert working_texture.is_file()
         assert (foreign / "keep.txt").is_file()
 
     print("[PASS] cache staging, ownership boundaries, and cleanup")

@@ -16,6 +16,8 @@ public enum BlenderConnectionState
 
 public sealed record BlenderStatus(bool Reachable, string? AddonVersion)
 {
+    public string? CacheRoot { get; init; }
+    public bool CacheSettingsSupported { get; init; }
     public BlenderConnectionState Classify(string expectedPluginVersion)
     {
         if (!Reachable)
@@ -35,6 +37,8 @@ public sealed class BlenderClient : IDisposable
     public const string ImportOptionsCapability = "instant-edit.import-options.v1";
     public const string MaterialPreviewCapability = "instant-edit.material-preview.v1";
     public const string CacheHandoffCapability = "instant-edit.cache-handoff.v1";
+    public const string TextureCacheCapability = "instant-edit.texture-cache.v1";
+    public const string CacheSettingsCapability = "instant-edit.cache-settings.v1";
     public const string VanillaContextCapability = "instant-edit.vanilla-context.v1";
 
     private readonly HttpClient _http;
@@ -112,7 +116,19 @@ public sealed class BlenderClient : IDisposable
                     return new BlenderStatus(true, null);
 
                 var version = addonVersion.GetString();
-                return new BlenderStatus(true, string.IsNullOrWhiteSpace(version) ? null : version.Trim());
+                var cacheSettingsSupported = document.RootElement.TryGetProperty("capabilities", out var capabilities) &&
+                    capabilities.ValueKind == JsonValueKind.Array && capabilities.EnumerateArray().Any(c =>
+                        c.ValueKind == JsonValueKind.String && c.GetString() == CacheSettingsCapability);
+                var cacheRoot = document.RootElement.TryGetProperty("capabilities", out capabilities) &&
+                    capabilities.ValueKind == JsonValueKind.Array && capabilities.EnumerateArray().Any(c =>
+                        c.ValueKind == JsonValueKind.String && c.GetString() == TextureCacheCapability) &&
+                    document.RootElement.TryGetProperty("cacheRoot", out var cache) && cache.ValueKind == JsonValueKind.String
+                    ? cache.GetString() : null;
+                return new BlenderStatus(true, string.IsNullOrWhiteSpace(version) ? null : version.Trim())
+                {
+                    CacheRoot = cacheRoot,
+                    CacheSettingsSupported = cacheSettingsSupported,
+                };
             }
             catch (JsonException)
             {
@@ -151,6 +167,55 @@ public sealed class BlenderClient : IDisposable
 
     public async Task<bool> SupportsCacheHandoffAsync(int port, CancellationToken cancellationToken = default)
         => await SupportsCapabilityAsync(port, CacheHandoffCapability, cancellationToken).ConfigureAwait(false);
+
+    public async Task<string?> ConfigureCacheAsync(
+        int port,
+        string cacheDirectory,
+        bool automaticCleanup,
+        CancellationToken cancellationToken = default)
+    {
+        if (port is < 1 or > 65535)
+            throw new ArgumentOutOfRangeException(nameof(port));
+        if (string.IsNullOrWhiteSpace(cacheDirectory))
+            throw new ArgumentException("A cache directory is required.", nameof(cacheDirectory));
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            schema = "instant-edit.cache-settings",
+            version = 1,
+            cacheDirectory,
+            automaticCleanup,
+        });
+        using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+        try
+        {
+            using var response = await _http.PostAsync(
+                $"http://127.0.0.1:{port}/settings/cache", content, cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+                return null;
+
+            using var document = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false));
+            return document.RootElement.ValueKind == JsonValueKind.Object &&
+                   document.RootElement.TryGetProperty("cacheRoot", out var root) &&
+                   root.ValueKind == JsonValueKind.String &&
+                   !string.IsNullOrWhiteSpace(root.GetString())
+                ? root.GetString()
+                : null;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 
     public async Task<bool> SupportsVanillaContextAsync(int port, CancellationToken cancellationToken = default)
         => await SupportsCapabilityAsync(port, VanillaContextCapability, cancellationToken).ConfigureAwait(false);
