@@ -1,5 +1,7 @@
 # XIV Instant Edit
 
+# RELEASE VERSION is not fully up-to-date for Penumbra 1.7.1.0 support. I'll get around to update this soon, but it'll take a bit since there are major feature upgrades for this plugin pending and in testing.
+
 Instant Edit is a combination of in-game Dalamud plugin and Blender addon that allows for an easy and instant exchange of game models between the two (.mdl files through Penumbra as well as vanilla assets).
 
 ## Requirements
