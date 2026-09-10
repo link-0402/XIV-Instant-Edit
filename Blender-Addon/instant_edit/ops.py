@@ -538,7 +538,14 @@ def export_target_issues(
 
             try:
                 _object_material_name(obj)
-            except ContextValidationError:
+            except (
+                AttributeError,
+                ContextValidationError,
+                KeyError,
+                ReferenceError,
+                TypeError,
+                ValueError,
+            ):
                 missing_materials.append(name)
 
         duplicate_ids = [

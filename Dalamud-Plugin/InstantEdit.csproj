@@ -57,6 +57,10 @@
       <HintPath>$(DalamudDevPath)\FFXIVClientStructs.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="InteropGenerator.Runtime">
+      <HintPath>$(DalamudDevPath)\InteropGenerator.Runtime.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="Lumina">
       <HintPath>$(DalamudDevPath)\Lumina.dll</HintPath>
       <Private>false</Private>
@@ -69,6 +73,10 @@
       <HintPath>$(DalamudDevPath)\Newtonsoft.Json.dll</HintPath>
       <Private>false</Private>
     </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Services\Animations\TmbLayouts.json" />
   </ItemGroup>
 
   <!--

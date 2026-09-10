@@ -122,6 +122,11 @@ public sealed partial class MainWindow : Window, IDisposable
                 DrawTextureSessions();
                 ImGui.EndTabItem();
             }
+            if (ImGui.BeginTabItem("Animations"))
+            {
+                DrawAnimations();
+                ImGui.EndTabItem();
+            }
             ImGui.EndTabBar();
         }
         DrawTextureDialogs();

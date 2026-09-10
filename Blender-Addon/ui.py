@@ -347,11 +347,18 @@ class XIVIE_PT_main(Panel):
                 ).selection_id = SAVE_NEW_MOD_TARGET
                 if not new_mod_enabled and new_mod_message:
                     targets.label(text=new_mod_message, icon="ERROR")
-            readiness_issues = export_target_issues(
-                context,
-                ref,
-                material_coverage_warning=material_coverage_warning,
-            )
+            try:
+                readiness_issues = export_target_issues(
+                    context,
+                    ref,
+                    material_coverage_warning=material_coverage_warning,
+                )
+            except Exception as error:
+                # Panel drawing must not stop at the target list when a stale
+                # object or older context contains data that the preflight
+                # checker cannot interpret. Keep the diagnostic visible and
+                # continue to the status row below.
+                readiness_issues = [("ERROR", f"Export checks unavailable: {error}")]
             if readiness_issues:
                 for severity, message in readiness_issues:
                     issue_row = targets.row(align=True)

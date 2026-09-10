@@ -1,0 +1,327 @@
+{
+  "C002": {
+    "Name": "TMB",
+    "Dynamic": false,
+    "Size": 28
+  },
+  "C006": {
+    "Name": "Fly Text Settings",
+    "Dynamic": false,
+    "Size": 24
+  },
+  "C009": {
+    "Name": "Animation (PAP Only)",
+    "Dynamic": false,
+    "Size": 24
+  },
+  "C010": {
+    "Name": "Animation",
+    "Dynamic": false,
+    "Size": 40
+  },
+  "C011": {
+    "Name": "Fly Text",
+    "Dynamic": false,
+    "Size": 20
+  },
+  "C012": {
+    "Name": "VFX",
+    "Dynamic": false,
+    "Size": 72
+  },
+  "C013": {
+    "Name": "Model Animation",
+    "Dynamic": false,
+    "Size": 28
+  },
+  "C014": {
+    "Name": "Weapon Position",
+    "Dynamic": false,
+    "Size": 28
+  },
+  "C015": {
+    "Name": "Weapon Size",
+    "Dynamic": false,
+    "Size": 28
+  },
+  "C021": {
+    "Name": "",
+    "Dynamic": false,
+    "Size": 28
+  },
+  "C031": {
+    "Name": "Summon Animation",
+    "Dynamic": true,
+    "Size": 24
+  },
+  "C033": {
+    "Name": "Crafting Delay",
+    "Dynamic": false,
+    "Size": 20
+  },
+  "C034": {
+    "Name": "Gathering Delay",
+    "Dynamic": false,
+    "Size": 20
+  },
+  "C042": {
+    "Name": "Footstep",
+    "Dynamic": false,
+    "Size": 28
+  },
+  "C043": {
+    "Name": "Summon Weapon",
+    "Dynamic": true,
+    "Size": 32
+  },
+  "C053": {
+    "Name": "Voiceline",
+    "Dynamic": false,
+    "Size": 28
+  },
+  "C063": {
+    "Name": "Sound",
+    "Dynamic": false,
+    "Size": 32
+  },
+  "C067": {
+    "Name": "Flinch",
+    "Dynamic": false,
+    "Size": 20
+  },
+  "C068": {
+    "Name": "Shade Color",
+    "Dynamic": false,
+    "Size": 36
+  },
+  "C075": {
+    "Name": "Terrain VFX",
+    "Dynamic": false,
+    "Size": 64
+  },
+  "C083": {
+    "Name": "",
+    "Dynamic": false,
+    "Size": 24
+  },
+  "C084": {
+    "Name": "",
+    "Dynamic": false,
+    "Size": 24
+  },
+  "C088": {
+    "Name": "Animation Blending",
+    "Dynamic": false,
+    "Size": 20
+  },
+  "C089": {
+    "Name": "",
+    "Dynamic": false,
+    "Size": 24
+  },
+  "C093": {
+    "Name": "Color",
+    "Dynamic": false,
+    "Size": 40
+  },
+  "C094": {
+    "Name": "Invisibility",
+    "Dynamic": false,
+    "Size": 32
+  },
+  "C095": {
+    "Name": "",
+    "Dynamic": false,
+    "Size": 32
+  },
+  "C100": {
+    "Name": "Hide Weapon",
+    "Dynamic": false,
+    "Size": 32
+  },
+  "C107": {
+    "Name": "VFX Trigger",
+    "Dynamic": false,
+    "Size": 28
+  },
+  "C117": {
+    "Name": "Forced Forward Movement",
+    "Dynamic": false,
+    "Size": 24
+  },
+  "C118": {
+    "Name": "Animation Transition",
+    "Dynamic": false,
+    "Size": 24
+  },
+  "C120": {
+    "Name": "Controller Vibration",
+    "Dynamic": false,
+    "Size": 24
+  },
+  "C124": {
+    "Name": "Targetable",
+    "Dynamic": false,
+    "Size": 24
+  },
+  "C125": {
+    "Name": "Animation Lock",
+    "Dynamic": false,
+    "Size": 20
+  },
+  "C131": {
+    "Name": "Animation Cancelled by Movement",
+    "Dynamic": false,
+    "Size": 20
+  },
+  "C136": {
+    "Name": "Local Wind Scale",
+    "Dynamic": false,
+    "Size": 20
+  },
+  "C139": {
+    "Name": "Forced Movement Cancel",
+    "Dynamic": false,
+    "Size": 20
+  },
+  "C142": {
+    "Name": "Freeze Position",
+    "Dynamic": false,
+    "Size": 28
+  },
+  "C143": {
+    "Name": "Fishing Sound",
+    "Dynamic": false,
+    "Size": 24
+  },
+  "C144": {
+    "Name": "Camera and Nameplate Control",
+    "Dynamic": false,
+    "Size": 44
+  },
+  "C161": {
+    "Name": "Blink",
+    "Dynamic": false,
+    "Size": 28
+  },
+  "C168": {
+    "Name": "Forced Camera Control",
+    "Dynamic": false,
+    "Size": 56
+  },
+  "C173": {
+    "Name": "Async VFX",
+    "Dynamic": false,
+    "Size": 68
+  },
+  "C174": {
+    "Name": "Object Control",
+    "Dynamic": false,
+    "Size": 40
+  },
+  "C175": {
+    "Name": "Object Scaling",
+    "Dynamic": false,
+    "Size": 40
+  },
+  "C176": {
+    "Name": "Forced Vertical Movement",
+    "Dynamic": false,
+    "Size": 40
+  },
+  "C177": {
+    "Name": "Forced Backwards Movement",
+    "Dynamic": false,
+    "Size": 36
+  },
+  "C178": {
+    "Name": "",
+    "Dynamic": false,
+    "Size": 36
+  },
+  "C187": {
+    "Name": "Remove Part",
+    "Dynamic": false,
+    "Size": 32
+  },
+  "C188": {
+    "Name": "Invisibility",
+    "Dynamic": false,
+    "Size": 20
+  },
+  "C192": {
+    "Name": "",
+    "Dynamic": false,
+    "Size": 56
+  },
+  "C194": {
+    "Name": "",
+    "Dynamic": false,
+    "Size": 28
+  },
+  "C197": {
+    "Name": "Voiceline",
+    "Dynamic": false,
+    "Size": 36
+  },
+  "C198": {
+    "Name": "Lemure",
+    "Dynamic": false,
+    "Size": 40
+  },
+  "C199": {
+    "Name": "Freeze Object",
+    "Dynamic": false,
+    "Size": 32
+  },
+  "C202": {
+    "Name": "",
+    "Dynamic": false,
+    "Size": 36
+  },
+  "C203": {
+    "Name": "Summon Weapon Visibility",
+    "Dynamic": true,
+    "Size": 44
+  },
+  "C204": {
+    "Name": "Shroud Transform",
+    "Dynamic": false,
+    "Size": 28
+  },
+  "C211": {
+    "Name": "Lock Facing Direction",
+    "Dynamic": false,
+    "Size": 28
+  },
+  "C212": {
+    "Name": "",
+    "Dynamic": false,
+    "Size": 32
+  },
+  "C215": {
+    "Name": "",
+    "Dynamic": false,
+    "Size": 28
+  },
+  "C216": {
+    "Name": "Subtitles",
+    "Dynamic": false,
+    "Size": 48
+  },
+  "C225": {
+    "Name": "",
+    "Dynamic": false,
+    "Size": 28
+  },
+  "C230": {
+    "Name": "BGM Track",
+    "Dynamic": false,
+    "Size": 40
+  },
+  "C234": {
+    "Name": "",
+    "Dynamic": false,
+    "Size": 32
+  }
+}

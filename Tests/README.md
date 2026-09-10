@@ -13,6 +13,7 @@ python Blender-Addon/testing/diagnostics_regression.py
 python Blender-Addon/testing/server_diagnostics_regression.py
 dotnet run --project Tests/ExportContextRegression -c Release -p:SkipDistributionPackage=true
 dotnet run --project Tests/BlenderStatusRegression -c Release -p:SkipDistributionPackage=true
+dotnet run --project Tests/AnimationRegression -c Release -p:SkipDistributionPackage=true
 dotnet build Dalamud-Plugin/InstantEdit.csproj -c Release -p:SkipDistributionPackage=true
 ```
 
@@ -44,22 +45,18 @@ updates the distribution archives or extension repository index.
   simulated conversion/IPC backend; they do not test Penumbra's actual codecs.
 - Standalone Python suites: cache ownership and cleanup, diagnostic sanitation
   and limits, import validation, and asynchronous failure reporting.
+- `AnimationRegression`: PAP/SKLB envelopes, complete pose-stack shape fixtures,
+  component filtering, timeline/VFX dependencies, metadata scope, durable recovery,
+  and PAP backup conflict protection. Native Havok and actual IPC acceptance are
+  documented in [animation editing acceptance](AnimationEditing.md).
 
-## Removed or consolidated checks
+## Test design
 
-| Previous check | Retained behavior coverage |
-| --- | --- |
-| Exact Dalamud version-mismatch sentence | Matching/mismatching versions, missing/invalid version data, failed connections, and diagnostic fields remain covered. |
-| Four exact bridge target tooltips: In-place, New Group, existing group, existing option | Target selection, authenticated payloads, destination display, option overwrite, and post-export selection remain covered. |
-| Exact Save to new mod tooltip | Single-context eligibility, dependency failures, selection, and submitted destination/contributors remain covered. |
-| Exact Create Mashup tooltip under a coverage warning | The test still checks that this target does not receive the missing-coverage warning; other targets still must receive it. |
-| Full Context-sentinel label/help tuple | The permanent sentinel's identity and selector behavior remain covered without freezing its display text. |
-| Absence of removed material-collapse helper and operator | Symbol absence has no current behavior contract. Mesh-group conflict handling and per-group material assignment remain covered. |
-| Separate missing-version, invalid-version-type, and malformed-document probe blocks | All three inputs remain as named cases in one table, with the same reachability and mismatch assertions. |
-
-Geometry, authorization, path safety, backup protection, compatibility, and
-failure-restoration tests are retained. The suite has no test-count reduction
-target. Live FFXIV/Penumbra integration remains a separate manual check.
+The automated suites check compilation, serialized contracts, validation,
+state transitions, export/import results, authorization, path safety, backup
+protection, and failure restoration. They intentionally avoid exact UI labels,
+tooltips, display formatting, icons, and status-message wording. Live
+FFXIV/Penumbra integration remains a separate manual check.
 
 See [texture editing acceptance checks](TextureEditing.md) for the Photoshop and
 live-game scenarios required before releasing texture editing.

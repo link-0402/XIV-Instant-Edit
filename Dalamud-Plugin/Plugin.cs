@@ -4,6 +4,7 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using InstantEdit.Services;
+using InstantEdit.Services.Animations;
 using InstantEdit.Ui;
 
 namespace InstantEdit;
@@ -22,6 +23,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly ExportContextRegistry   _contexts;
     private readonly BlenderClient           _blender;
     private readonly TextureEditService      _textures;
+    private readonly AnimationEditService?   _animations;
     private readonly ExportServer            _exportServer;
     private readonly WindowSystem            _windowSystem;
     private readonly MainWindow              _window;
@@ -38,7 +40,8 @@ public sealed class Plugin : IDalamudPlugin
         IDataManager data,
         ITextureProvider textureProvider,
         IObjectTable objects,
-        IFramework framework)
+        IFramework framework,
+        ISigScanner sigScanner)
     {
         _pi       = pi;
         _commands = commands;
@@ -99,6 +102,13 @@ public sealed class Plugin : IDalamudPlugin
         _blender   = new BlenderClient(log, _contexts);
         _textures = new TextureEditService(_penumbra, _config, pi.ConfigDirectory.FullName, _backups,
             (error, message) => log.Warning(error, message));
+        string? animationError = null;
+        try { _animations = new AnimationEditService(pi, framework, objects, data, sigScanner, _penumbra, _backups, log); }
+        catch (Exception error)
+        {
+            animationError = "Animation integration is unavailable: " + error.Message;
+            log.Warning(error, "Could not initialize animation editing; other features remain available.");
+        }
         if (_config.AutomaticCacheCleanup)
             _textures.RequestCacheCleanup();
         _exportServer = new ExportServer(_config, _penumbra, _contexts, log);
@@ -115,6 +125,7 @@ public sealed class Plugin : IDalamudPlugin
             _pi.UiBuilder,
             textureProvider,
             _textures);
+        _window.AttachAnimations(_animations, animationError);
         _exportServer.ImportFailureReceived += _window.ReportImportFailure;
         _settingsWindow = new SettingsWindow(
             _config,
@@ -206,6 +217,7 @@ public sealed class Plugin : IDalamudPlugin
         _pi.UiBuilder.OpenConfigUi -= _settingsWindow.Open;
         _windowSystem.RemoveWindow(_window);
         _window.Dispose();
+        _animations?.Dispose();
         _textures.Dispose();
         _exportServer.ImportFailureReceived -= _window.ReportImportFailure;
         _exportServer.Dispose();
