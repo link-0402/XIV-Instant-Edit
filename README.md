@@ -6,7 +6,8 @@ Instant Edit is a combination of in-game Dalamud plugin and Blender addon that a
 
 - [XIVLauncher](https://goatcorp.github.io/) with Dalamud enabled
 - [Penumbra](https://github.com/xivdev/Penumbra)
-- [Blender](https://www.blender.org/) 4.5.0+
+- [Blender](https://www.blender.org/) 4.5.0+ for model editing
+- A compatible SimpleHeels/LivePose module for animation offset baking
 
 ## Installation
 
@@ -51,6 +52,41 @@ Note that you will not receive automatic feature and compatibility updates this 
 Creating new options on existing mods requires you to refresh the view in Penumbra by navigating to a different mod and back.
 
 ## Additional notes
+
+### Animation offset baking (development builds)
+
+The **Animations** tab captures the local player's emotes and idles together with
+their LivePose adjustments. Select a playing or recent clip, review its source
+and skeleton, choose bones and Position/Rotation/Scale components, then select
+**Create new mod** or **Replace in-place** and click **Edit animation**. The
+selection stays fixed while playback continues; **Refresh capture** explicitly
+updates its pose snapshot. The latest 50 distinct clips are retained until logout
+or character change.
+
+Only the selected clip is edited by default. **Also edit startup** appears when
+one startup can be identified from game-data relationships. Native baking runs
+inside the plugin, including LivePose's CCD and two-joint IK; Blender, VFXEditor,
+and XAT are not runtime dependencies for this tab.
+
+New mods collect supported animation and effect dependencies through the captured
+player collection. Missing assets, ambiguous variants, or unsupported dynamic
+records block packaging with an explanation. In-place output requires a writable
+registered Penumbra PAP source and uses managed backups. Successful output is
+activated automatically, and selected live components are cleared only when
+their captured state still matches. Changes made while baking are retained.
+
+**Recovery** provides **Restore live offsets** and **Undo edit** across plugin
+restarts. Restoring offsets keeps the baked animation active; undo restores the
+original files or disables the created mod before restoring compatible offsets.
+Recovery refuses to overwrite newer work. PAP backups use the existing 30-day
+retention. Play an eligible idle on the same character and collection when
+recovering after a restart.
+
+This implementation still requires the [live-game animation acceptance
+checks](Tests/AnimationEditing.md), particularly native ABI/IK parity and replay
+with source mods disabled. Distribution archives remain unchanged pending those
+checks. General keyframe editing and movement/combat or separate weapon/companion
+rig editing are outside this version.
 
 ### Texture editing
 

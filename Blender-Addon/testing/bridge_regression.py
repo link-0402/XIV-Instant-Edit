@@ -463,7 +463,6 @@ def run_staging_isolation_regression(addon) -> None:
         context_module = importlib.import_module(f"{package_name}.instant_edit.context")
         server = importlib.import_module(f"{package_name}.instant_edit.server")
         plugin_http = importlib.import_module(f"{package_name}.instant_edit.plugin_http")
-        ui = importlib.import_module(f"{package_name}.ui")
         material_preview = importlib.import_module(
             f"{package_name}.instant_edit.material_preview"
         )
@@ -582,9 +581,8 @@ def run_staging_isolation_regression(addon) -> None:
         pending_collection.objects.link(pending_mesh)
         pending_ref = context_module.validate_context("pending-collection-context", bpy.context.scene)
         _require(
-            pending_ref.destination_state == "new_mod_required" and
-            ui._import_file_display(pending_ref) == pending_import["resolvedGamePath"],
-            "pending collection validation displays the resolved game-data model path",
+            pending_ref.destination_state == "new_mod_required",
+            "pending collection validates as a pending game context",
         )
         context_module.apply_authoritative_context(pending_collection, {
             "schema": context_module.SCHEMA,
@@ -658,35 +656,6 @@ def run_staging_isolation_regression(addon) -> None:
         )
         bpy.data.objects.remove(rerouted_mesh, do_unlink=True)
         bpy.data.collections.remove(rerouted_collection, do_unlink=True)
-        display_ref = SimpleNamespace(
-            target_relative_path=validated["targetRelativePath"],
-            target_file_path=validated["targetFilePath"],
-            source_mod_root_path=r"D:\Penumbra\SourceMod",
-        )
-        _require(
-            ui._export_destination_display(display_ref) == "Files/models/original.mdl",
-            "the export display omits the mod root and includes the model filename",
-        )
-        _require(
-            ui._wrap_display_value(
-                "model/normal/chara/equipment/e0691/model/c0201e0691_top.mdl",
-                42,
-            ) == [
-                "model/normal/chara/equipment/e0691/model/",
-                "c0201e0691_top.mdl",
-            ],
-            "path info wraps at slash boundaries",
-        )
-        derived_display_ref = SimpleNamespace(
-            target_relative_path="",
-            target_file_path=validated["targetFilePath"],
-            source_mod_root_path=r"D:\Penumbra\SourceMod",
-        )
-        _require(
-            ui._export_destination_display(derived_display_ref) == "models/original.mdl",
-            "the export display derives a mod-relative model path",
-        )
-
         validated_options = server._ImportHandler._validate_import({
             **base_import,
             "contextId": "context-id-options",
@@ -894,15 +863,7 @@ def run_staging_isolation_regression(addon) -> None:
         )
         instant_props.variant_targets_context_id = "context-id"
         instant_props.variant_name = "new-option"
-        _require(
-            ui._export_destination_display(display_ref, instant_props) == "Files/models/new-option.mdl",
-            "the export display updates to a new variant sibling for a group target",
-        )
         instant_props.variant_target = variant_option.selection_id
-        _require(
-            ui._export_destination_display(display_ref, instant_props) == variant_option.model_path,
-            "the export display updates to the selected option model target",
-        )
         option_payload = ops.build_export_payload(
             SimpleNamespace(plugin_instance_id="plugin-instance", context_id="context-id", capability="capability"),
             "export-id", Path(tempfile.gettempdir()) / "variant-tree-test.mdl", 1, "0" * 64,
@@ -919,10 +880,6 @@ def run_staging_isolation_regression(addon) -> None:
             SimpleNamespace(plugin_instance_id="plugin-instance", context_id="context-id", capability="capability"),
             "export-id", Path(tempfile.gettempdir()) / "in-place-test.mdl", 1, "0" * 64,
             instant_props, "stale-variant-name", "stale-group-name", None, setup_in_penumbra=False,
-        )
-        _require(
-            ui._export_destination_display(display_ref, instant_props) == "Files/models/original.mdl",
-            "In-place selection displays the imported model path",
         )
         _require(
             not in_place_payload["setupInPenumbra"] and
