@@ -930,6 +930,7 @@ public sealed class ExportServer : IDisposable
                                     activeContext.CallbackPort,
                                     result.OutputModRootPath,
                                     result.OutputTargetRelativePath,
+                                    resourceManifest: result.OutputResourceManifest,
                                     targetCollectionId: activeContext.TargetCollectionId,
                                     targetCollectionName: activeContext.TargetCollectionName);
                             }

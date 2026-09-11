@@ -250,6 +250,18 @@ internal static class TextureEditScenarios
             await f.Service.DiscardAsync(s.Id);
         }
 
+        using (var f = new Fixture(Path.Combine(root, "artist-source"), (uint)TexFile.TextureFormat.BC7))
+        {
+            await f.Service.StartAsync(f.Request, false);
+            var s = f.Service.Sessions.Single();
+            await f.Service.SetPausedAsync(s.Id, true);
+            File.WriteAllBytes(Path.Combine(s.Directory, "artist-source.psd"), [1, 2, 3]);
+            SetStale(s.Directory);
+            Check(await f.Service.CleanupStaleSessionsAsync() == 0 && File.Exists(Path.Combine(s.Directory, "artist-source.psd")),
+                "automatic cleanup retains stale sessions with artist source documents");
+            await f.Service.DiscardAsync(s.Id);
+        }
+
         using (var f = new Fixture(Path.Combine(root, "disabled"), (uint)TexFile.TextureFormat.BC7))
         {
             f.Config.AutomaticCacheCleanup = false;
