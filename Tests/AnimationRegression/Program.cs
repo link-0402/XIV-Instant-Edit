@@ -175,6 +175,21 @@ Check(AnimationMetadata.Decode(Metadata(meta)).Count == 3, "effective metadata d
 Check(AnimationMetadata.Applicable(meta, ["chara/human/c0101/skeleton/base/b0002/skl_c0101b0002.sklb"]).Count == 1,
     "EST packaging is scoped to the player's skeleton, race, and gender");
 Reject(() => AnimationMetadata.Decode(Metadata(meta, 99)), "unknown metadata protocol versions cannot silently lose dependencies");
+var animationRelative = "files/" + resource.GamePath;
+var animationMetadata = AnimationCommitService.CreateNewModMetadata(
+    "Animation regression",
+    [new AnimationFileChange(resource.GamePath, "target", "Animation regression", "root",
+        animationRelative, "", resource.Hash, "", "staged")],
+    meta.ToJsonString());
+Check(animationMetadata["FileVersion"]!.GetValue<int>() == 4 &&
+      Guid.TryParse(animationMetadata["Identifier"]!.GetValue<string>(), out _) &&
+      animationMetadata["LastWrite"] is not null &&
+      animationMetadata["Groups"]!.AsArray().Count == 0 &&
+      animationMetadata["DefaultData"]!["Files"]![resource.GamePath]!.GetValue<string>() == animationRelative &&
+      JsonNode.DeepEquals(animationMetadata["DefaultData"]!["Manipulations"], meta),
+    "new animation mods embed mappings and manipulations in v4 meta.json data");
+Reject(() => AnimationCommitService.CreateNewModMetadata("Invalid", [], "{}"),
+    "animation metadata rejects non-array manipulations");
 
 var temp = Path.Combine(Path.GetTempPath(), "ie-animation-regression-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(temp);

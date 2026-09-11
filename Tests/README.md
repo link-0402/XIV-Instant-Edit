@@ -32,9 +32,11 @@ updates the distribution archives or extension repository index.
 - `bridge_regression.py`: manifest status, model stream options, isolated
   material previews, then the import/context/target-selection workflow.
 - `smoke_export.py`: UV seams, mesh IDs and naming, isolated Simple Import folder
-  handling, Mesh Studio operations, and actual MDL export/round-trip workflows.
+  handling, Mesh Studio operations, combined rest rigs and visible mesh bindings,
+  and actual MDL export/round-trip workflows (including newly weighted bones).
 - `correctness_regression.py`: injected transparency, backface, and shape-key
-  preparation failures; scheduled and active workers across file loads; durable
+  preparation failures; armature-combination validation and rollback; scheduled
+  and active workers across file loads; durable
   revocation retries and stale-result rejection.
 - `ExportContextRegression`: named session-store and variant-export scenarios,
   plus authorization, backups, resource bundling, migration, and mod metadata.

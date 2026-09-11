@@ -238,11 +238,7 @@ public sealed partial class PenumbraService
         string modFolder,
         IReadOnlyDictionary<string, IReadOnlyList<string>> enabledOptions)
     {
-        var meta = LoadJsonObjectStrict(Path.Combine(modFolder, "meta.json"));
-        var fileVersion = meta["FileVersion"] is JsonValue value &&
-                          value.TryGetValue<int>(out var parsed)
-            ? parsed
-            : 3;
+        var meta = LoadV4ModMetadata(modFolder);
         var groups = ReadAllVariantGroups(modFolder)
             .Select((group, index) => (Group: group, Index: index))
             .OrderByDescending(item => JsonInt(item.Group["Priority"]))
@@ -297,25 +293,39 @@ public sealed partial class PenumbraService
         foreach (var (group, _index) in groups)
         {
             var groupName = JsonString(group["Name"]);
-            var selected = enabledOptions.FirstOrDefault(pair =>
-                string.Equals(pair.Key, groupName, StringComparison.OrdinalIgnoreCase)).Value;
-            if (selected is null || selected.Count == 0)
+            var selection = enabledOptions.FirstOrDefault(pair =>
+                string.Equals(pair.Key, groupName, StringComparison.OrdinalIgnoreCase));
+            var selected = selection.Value;
+            if (selected is null)
                 continue;
-            var containers = group["Options"] as JsonArray ?? group["Containers"] as JsonArray;
-            if (containers is null)
+
+            if (string.Equals(JsonString(group["Type"]), "Combining", StringComparison.OrdinalIgnoreCase))
+            {
+                if (group["Options"] is not JsonArray combinationOptions ||
+                    group["Containers"] is not JsonArray combinationContainers)
+                    continue;
+                var containerIndex = 0;
+                for (var optionIndex = 0; optionIndex < combinationOptions.Count && optionIndex < 31; ++optionIndex)
+                    if (combinationOptions[optionIndex] is JsonObject option &&
+                        selected.Contains(JsonString(option["Name"]) ?? "", StringComparer.OrdinalIgnoreCase))
+                        containerIndex |= 1 << optionIndex;
+                if (containerIndex < combinationContainers.Count)
+                    Append(combinationContainers[containerIndex]);
+                continue;
+            }
+
+            if (selected.Count == 0 || group["Options"] is not JsonArray options)
                 continue;
             foreach (var selectedName in selected)
             {
-                var container = containers.OfType<JsonObject>().FirstOrDefault(option =>
+                var container = options.OfType<JsonObject>().FirstOrDefault(option =>
                     string.Equals(JsonString(option["Name"]), selectedName, StringComparison.OrdinalIgnoreCase));
                 if (container is not null)
                     Append(container);
             }
         }
 
-        Append(fileVersion >= 4
-            ? meta["DefaultData"]
-            : LoadJsonObjectStrict(Path.Combine(modFolder, "default_mod.json")));
+        Append(meta["DefaultData"]);
         return result;
     }
 
@@ -447,6 +457,7 @@ public sealed partial class PenumbraService
                     false,
                     resolved.Code,
                     resolved.Error ?? "The original Penumbra mod is no longer available.");
+            _ = LoadV4ModMetadata(resolved.Target.Folder);
 
             var targetFile = variantName is null
                 ? resolved.Target.FilePath
@@ -1253,6 +1264,7 @@ public sealed partial class PenumbraService
         string requestedName,
         string description)
     {
+        _ = LoadV4ModMetadata(target.Folder);
         var namespaceRelative = $"Files/xiv-instant-edit/mashups/{exportId[..12]}";
         var namespaceFolder = Path.Combine(target.Folder, namespaceRelative.Replace('/', Path.DirectorySeparatorChar));
         if (Directory.Exists(namespaceFolder))
@@ -1356,25 +1368,17 @@ public sealed partial class PenumbraService
         try
         {
             Directory.CreateDirectory(staging);
-            WriteJsonAtomic(Path.Combine(staging, "meta.json"), new JsonObject
-            {
-                ["FileVersion"] = 3,
-                ["Name"] = modName,
-                ["Author"] = "XIV Instant Edit",
-                ["Description"] = description,
-                ["Image"] = "",
-                ["Version"] = "",
-                ["Website"] = "",
-                ["ModTags"] = new JsonArray(),
-            });
             foreach (var file in prepared.Files)
                 WriteBytesAtomic(staging, file.Key, file.Value);
-            WriteJsonAtomic(
-                Path.Combine(staging, "default_mod.json"),
+            WriteJsonAtomic(Path.Combine(staging, "meta.json"), CreateV4ModMetadata(
+                modName,
+                "XIV Instant Edit",
+                description,
+                "",
                 CreateMashupDefaultData(
                     prepared.Mappings,
                     activeContext.ResourceManifest?.Manipulations,
-                    prepared.FileSwaps));
+                    prepared.FileSwaps)));
             ValidateStagedMashupMod(
                 staging,
                 modName,
@@ -2470,35 +2474,35 @@ public sealed partial class PenumbraService
     {
         sourceRelativePath = sourceRelativePath.Replace('\\', '/');
         var candidates = new List<(JsonObject Option, SourceOptionLocator Locator)>();
-        var meta = LoadJsonObjectStrict(Path.Combine(modFolder, "meta.json"));
-        var version = meta["FileVersion"] is JsonValue value && value.TryGetValue<int>(out var parsed) ? parsed : 3;
-        if (version >= 4)
-        {
-            var groups = meta["Groups"] as JsonArray ?? [];
-            for (var groupIndex = 0; groupIndex < groups.Count; groupIndex++)
-                AddSourceOptionCandidates(groups[groupIndex] as JsonObject, null, groupIndex, sourceGamePath,
-                    sourceRelativePath, candidates);
-        }
-        else
-        {
-            var paths = Directory.EnumerateFiles(modFolder, "group_*.json", SearchOption.TopDirectoryOnly)
-                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray();
-            for (var groupIndex = 0; groupIndex < paths.Length; groupIndex++)
-                AddSourceOptionCandidates(LoadJsonObjectStrict(paths[groupIndex]), Path.GetFileName(paths[groupIndex]),
-                    groupIndex, sourceGamePath, sourceRelativePath, candidates);
-        }
+        var meta = LoadV4ModMetadata(modFolder);
+        var groups = meta["Groups"] as JsonArray ?? [];
+        foreach (var group in groups.OfType<JsonObject>())
+            AddSourceOptionCandidates(group, sourceGamePath, sourceRelativePath, candidates);
 
         if (locator is not null)
         {
-            var exact = candidates.Where(candidate =>
-                string.Equals(candidate.Locator.Membership, locator.Membership, StringComparison.Ordinal) ||
-                (string.Equals(candidate.Locator.GroupName, locator.GroupName, StringComparison.Ordinal) &&
-                 string.Equals(candidate.Locator.OptionName, locator.OptionName, StringComparison.Ordinal))).ToArray();
-            if (exact.Length == 1)
-                return new SourceOptionResolution(exact[0].Option, exact[0].Locator, null);
+            var exactMembership = candidates.Where(candidate =>
+                string.Equals(candidate.Locator.Membership, locator.Membership, StringComparison.Ordinal)).ToArray();
+            if (exactMembership.Length == 1)
+                return new SourceOptionResolution(exactMembership[0].Option, exactMembership[0].Locator, null);
+            if (IsV4OptionMembership(locator.Membership))
+                return new SourceOptionResolution(null, null,
+                    "The saved Penumbra option no longer exists. Re-import the model from the intended option.");
+
+            // Pre-v4 persisted locators used array/file indexes. They can only be recovered by an
+            // unambiguous name pair; an index must never silently select a different v4 option.
+            var nameMatches = candidates.Where(candidate =>
+                !string.IsNullOrWhiteSpace(locator.GroupName) &&
+                !string.IsNullOrWhiteSpace(locator.OptionName) &&
+                string.Equals(candidate.Locator.GroupName, locator.GroupName, StringComparison.Ordinal) &&
+                string.Equals(candidate.Locator.OptionName, locator.OptionName, StringComparison.Ordinal)).ToArray();
+            if (nameMatches.Length == 1)
+                return new SourceOptionResolution(nameMatches[0].Option, nameMatches[0].Locator, null);
+            if (!string.IsNullOrWhiteSpace(locator.Membership))
+                return new SourceOptionResolution(null, null,
+                    "The saved legacy Penumbra option could not be matched uniquely. Re-import the model from the intended option.");
         }
-        var defaultData = version >= 4 ? meta["DefaultData"] as JsonObject :
-            LoadJsonObject(Path.Combine(modFolder, "default_mod.json"));
+        var defaultData = meta["DefaultData"] as JsonObject;
         var defaultMapping = defaultData?["Files"] is JsonObject defaultFiles
             ? defaultFiles.FirstOrDefault(pair => SameGamePath(pair.Key, sourceGamePath)).Value
             : null;
@@ -2639,55 +2643,53 @@ public sealed partial class PenumbraService
     }
 
     private static void AddSourceOptionCandidates(
-        JsonObject? group, string? legacyFileName, int groupIndex, string gamePath, string relativePath,
+        JsonObject? group, string gamePath, string relativePath,
         ICollection<(JsonObject Option, SourceOptionLocator Locator)> candidates)
     {
-        if (group?["Options"] is not JsonArray options)
+        var groupId = ReadGuid(group?["Id"]);
+        if (groupId is null || group?["Options"] is not JsonArray options)
             return;
-        for (var optionIndex = 0; optionIndex < options.Count; optionIndex++)
+        foreach (var option in options.OfType<JsonObject>())
         {
-            if (options[optionIndex] is not JsonObject option || option["Files"] is not JsonObject files)
+            var optionId = ReadGuid(option["Id"]);
+            if (optionId is null || option["Files"] is not JsonObject files)
                 continue;
             var mapping = files.FirstOrDefault(pair => SameGamePath(pair.Key, gamePath));
             if (!TryNormalizeRelativeModPath(JsonString(mapping.Value), out var mapped) ||
                 !string.Equals(mapped, relativePath, StringComparison.OrdinalIgnoreCase))
                 continue;
-            var membership = legacyFileName is null
-                ? $"meta:group:{groupIndex}:option:{optionIndex}"
-                : $"legacy:{legacyFileName}:group:0:option:{optionIndex}";
             candidates.Add((option, new SourceOptionLocator
             {
-                Membership = membership,
+                Membership = $"option:{groupId:D}:{optionId:D}",
                 GroupName = JsonString(group["Name"]) ?? "",
                 OptionName = JsonString(option["Name"]) ?? "",
             }));
         }
     }
 
+    private static bool IsV4OptionMembership(string? membership)
+    {
+        var parts = membership?.Split(':');
+        return parts is ["option", var group, var option] &&
+               Guid.TryParse(group, out _) && Guid.TryParse(option, out _);
+    }
+
     private static IReadOnlyList<VariantGroupTarget> ReadVariantTargets(
         string modFolder, string sourceGamePath, string? modDirectory = null,
         ModelBackupStore? backups = null)
     {
-        var groups = new List<(JsonObject Group, string? LegacyFileName)>();
-        var meta = LoadJsonObjectStrict(Path.Combine(modFolder, "meta.json"));
-        var fileVersion = meta["FileVersion"] is JsonValue versionValue && versionValue.TryGetValue<int>(out var version)
-            ? version : 3;
-        if (fileVersion >= 4)
-            groups.AddRange((meta["Groups"] as JsonArray ?? []).OfType<JsonObject>().Select(group => (group, (string?)null)));
-        else
-            groups.AddRange(Directory.EnumerateFiles(modFolder, "group_*.json", SearchOption.TopDirectoryOnly)
-                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-                .Select(path => (Group: LoadJsonObjectStrict(path), LegacyFileName: (string?)Path.GetFileName(path))));
+        var meta = LoadV4ModMetadata(modFolder);
+        var groups = (meta["Groups"] as JsonArray ?? []).OfType<JsonObject>();
 
         var result = new List<VariantGroupTarget>();
-        foreach (var (group, legacyFileName) in groups)
+        foreach (var group in groups)
         {
             if (!string.Equals(JsonString(group["Type"]), "Single", StringComparison.OrdinalIgnoreCase) ||
                 string.IsNullOrWhiteSpace(JsonString(group["Name"])) ||
                 group["Options"] is not JsonArray options)
                 continue;
             var groupId = ReadGuid(group["Id"]);
-            if (groupId is null && legacyFileName is null)
+            if (groupId is null)
                 continue;
             var targets = new List<VariantOptionTarget>();
             for (var optionIndex = 0; optionIndex < options.Count; ++optionIndex)
@@ -2698,9 +2700,9 @@ public sealed partial class PenumbraService
                 if (!TryNormalizeRelativeModPath(JsonString(mapping.Value), out var modelPath))
                     continue;
                 var optionId = ReadGuid(option["Id"]);
-                var selector = legacyFileName is null && groupId is Guid groupGuid && optionId is Guid optionGuid
-                    ? $"option:{groupGuid:D}:{optionGuid:D}"
-                    : $"legacy-option:{legacyFileName}:{optionIndex}";
+                if (optionId is null)
+                    continue;
+                var selector = $"option:{groupId.Value:D}:{optionId.Value:D}";
                 var backupTarget = backups is not null && modDirectory is not null
                     ? backups.Describe(modDirectory, modelPath) : null;
                 targets.Add(new VariantOptionTarget(selector,
@@ -2709,9 +2711,7 @@ public sealed partial class PenumbraService
             }
             if (targets.Count > 0)
             {
-                var selector = legacyFileName is null && groupId is Guid groupGuid
-                    ? $"group:{groupGuid:D}"
-                    : $"legacy-group:{legacyFileName}";
+                var selector = $"group:{groupId.Value:D}";
                 result.Add(new VariantGroupTarget(selector, JsonString(group["Name"])!, targets));
             }
         }
@@ -2723,25 +2723,12 @@ public sealed partial class PenumbraService
     {
         try
         {
-            JsonObject? group;
-            JsonObject? option;
-            if (TryParseOptionTargetId(targetId, out var groupId, out var optionId))
-            {
-                group = ReadAllVariantGroups(modFolder).FirstOrDefault(candidate => ReadGuid(candidate["Id"]) == groupId);
-                option = group?["Options"] is JsonArray options
-                    ? options.OfType<JsonObject>().FirstOrDefault(candidate => ReadGuid(candidate["Id"]) == optionId)
-                    : null;
-            }
-            else if (TryParseLegacyOptionTargetId(targetId, out var fileName, out var optionIndex) &&
-                     TryLoadLegacyGroup(modFolder, fileName, out group) &&
-                     group["Options"] is JsonArray options && optionIndex < options.Count)
-            {
-                option = options[optionIndex] as JsonObject;
-            }
-            else
-            {
+            if (!TryParseOptionTargetId(targetId, out var groupId, out var optionId))
                 return new VariantOptionResolution(null, "invalid_variant_target", "The selected Penumbra option is invalid.");
-            }
+            var group = ReadAllVariantGroups(modFolder).FirstOrDefault(candidate => ReadGuid(candidate["Id"]) == groupId);
+            var option = group?["Options"] is JsonArray options
+                ? options.OfType<JsonObject>().FirstOrDefault(candidate => ReadGuid(candidate["Id"]) == optionId)
+                : null;
             if (option?["Files"] is not JsonObject files)
                 return new VariantOptionResolution(null, "stale_variant_target", "The selected Penumbra option no longer exists.");
             var mapping = files.FirstOrDefault(pair => SameGamePath(pair.Key, sourceGamePath));
@@ -2760,13 +2747,8 @@ public sealed partial class PenumbraService
 
     private static IReadOnlyList<JsonObject> ReadAllVariantGroups(string modFolder)
     {
-        var meta = LoadJsonObjectStrict(Path.Combine(modFolder, "meta.json"));
-        var version = meta["FileVersion"] is JsonValue value && value.TryGetValue<int>(out var parsed) ? parsed : 3;
-        return version >= 4
-            ? (meta["Groups"] as JsonArray ?? []).OfType<JsonObject>().ToArray()
-            : Directory.EnumerateFiles(modFolder, "group_*.json", SearchOption.TopDirectoryOnly)
-                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-                .Select(LoadJsonObjectStrict).ToArray();
+        var meta = LoadV4ModMetadata(modFolder);
+        return (meta["Groups"] as JsonArray ?? []).OfType<JsonObject>().ToArray();
     }
 
     private static bool TryParseOptionTargetId(string? value, out Guid groupId, out Guid optionId)
@@ -2783,45 +2765,6 @@ public sealed partial class PenumbraService
         groupId = Guid.Empty;
         var parts = value?.Split(':');
         return parts is ["group", var group] && Guid.TryParse(group, out groupId);
-    }
-
-    private static bool TryParseLegacyGroupTargetId(string? value, out string fileName)
-    {
-        fileName = "";
-        var parts = value?.Split(':');
-        return parts is ["legacy-group", var file] && IsSafeLegacyGroupFileName(file, out fileName);
-    }
-
-    private static bool TryParseLegacyOptionTargetId(string? value, out string fileName, out int optionIndex)
-    {
-        fileName = "";
-        optionIndex = -1;
-        var parts = value?.Split(':');
-        return parts is ["legacy-option", var file, var index] &&
-               IsSafeLegacyGroupFileName(file, out fileName) && int.TryParse(index, out optionIndex) && optionIndex >= 0;
-    }
-
-    private static bool TryLoadLegacyGroup(string modFolder, string fileName, out JsonObject group)
-    {
-        group = null!;
-        if (!IsSafeLegacyGroupFileName(fileName, out var safeFileName))
-            return false;
-        var path = Path.Combine(modFolder, safeFileName);
-        if (!File.Exists(path))
-            return false;
-        group = LoadJsonObjectStrict(path);
-        return true;
-    }
-
-    private static bool IsSafeLegacyGroupFileName(string? value, out string fileName)
-    {
-        fileName = "";
-        if (string.IsNullOrWhiteSpace(value) || !string.Equals(Path.GetFileName(value), value, StringComparison.Ordinal) ||
-            !value.StartsWith("group_", StringComparison.OrdinalIgnoreCase) ||
-            !value.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
-            return false;
-        fileName = value;
-        return true;
     }
 
     private static bool TryNormalizeRelativeModPath(string? value, out string path)
@@ -2847,8 +2790,7 @@ public sealed partial class PenumbraService
 
     /// <summary>
     /// Prepare an update to a Penumbra group that redirects the original model path
-    /// to the newly exported sibling. Both legacy v3 group files and current v4
-    /// embedded groups are supported without rewriting unrelated mod data.
+    /// to the newly exported sibling while preserving unrelated v4 metadata.
     /// </summary>
     internal static string? PrepareVariantGroup(
         string modFolder,
@@ -2871,102 +2813,35 @@ public sealed partial class PenumbraService
             // Existing targets are resolved by identity; only New Group uses name matching.
             var marker = VariantGroupDescriptionPrefix + variantGroupName + " -> " + sourceGamePath;
             var metaPath = Path.Combine(modFolder, "meta.json");
-            var meta = LoadJsonObjectStrict(metaPath);
-            var fileVersion = meta["FileVersion"] is JsonValue versionValue &&
-                              versionValue.TryGetValue<int>(out var version)
-                ? version
-                : 3;
-
-            if (fileVersion >= 4)
+            var meta = LoadV4ModMetadata(modFolder);
+            var groups = meta["Groups"] as JsonArray;
+            if (groups is null)
             {
-                var groups = meta["Groups"] as JsonArray;
-                if (groups is null)
-                {
-                    groups = new JsonArray();
-                    meta["Groups"] = groups;
-                }
-                Guid selectedGroupId = default;
-                if (targetId is not null && !TryParseGroupTargetId(targetId, out selectedGroupId))
-                    return "The selected Penumbra group is invalid.";
-                JsonObject? embeddedExistingGroup = null;
-                var existingIndex = -1;
-                var embeddedNameConflict = false;
-                var embeddedHighestOtherPriority = 0;
-                for (var index = 0; index < groups.Count; ++index)
-                {
-                    if (groups[index] is not JsonObject group)
-                        continue;
-                    var sameName = string.Equals(
-                        JsonString(group["Name"]), variantGroupName, StringComparison.OrdinalIgnoreCase);
-                    var selected = targetId is null ? sameName : ReadGuid(group["Id"]) == selectedGroupId;
-                    if (selected && IsReusableVariantGroup(group, sourceGamePath))
-                    {
-                        embeddedExistingGroup = group;
-                        existingIndex = index;
-                        continue;
-                    }
-                    if (sameName)
-                        embeddedNameConflict = true;
-
-                    embeddedHighestOtherPriority = Math.Max(embeddedHighestOtherPriority, JsonInt(group["Priority"]));
-                }
-
-                if (targetId is not null && embeddedExistingGroup is null)
-                    return "The selected Penumbra group no longer contains a replacement for this model.";
-                if (embeddedExistingGroup is null && embeddedNameConflict)
-                    return "An existing Penumbra group with this name is not a compatible Single group for this model.";
-                if (embeddedExistingGroup is null && embeddedHighestOtherPriority == int.MaxValue)
-                    return "penumbra_group_priority_exhausted";
-                var embeddedGroupJson = BuildVariantGroup(
-                    embeddedExistingGroup,
-                    marker,
-                    sourceGamePath,
-                    relativeVariantPath,
-                    variantName,
-                    targetId is null ? variantGroupName : JsonString(embeddedExistingGroup!["Name"])!,
-                    embeddedExistingGroup is null ? embeddedHighestOtherPriority + 1 : JsonInt(embeddedExistingGroup["Priority"]),
-                    sourceOption);
-                if (existingIndex >= 0)
-                    groups[existingIndex] = embeddedGroupJson;
-                else
-                    groups.Add(embeddedGroupJson);
-                meta["LastWrite"] = DateTime.UtcNow;
-                prepared = new VariantGroupWrite(metaPath, meta);
-                return null;
+                groups = new JsonArray();
+                meta["Groups"] = groups;
             }
-
-            string selectedFile = "";
-            if (targetId is not null && !TryParseLegacyGroupTargetId(targetId, out selectedFile))
+            Guid selectedGroupId = default;
+            if (targetId is not null && !TryParseGroupTargetId(targetId, out selectedGroupId))
                 return "The selected Penumbra group is invalid.";
-            var groupFiles = Directory.EnumerateFiles(modFolder, "group_*.json", SearchOption.TopDirectoryOnly)
-                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            string? existingPath = null;
             JsonObject? existingGroup = null;
+            var existingIndex = -1;
             var nameConflict = false;
             var highestOtherPriority = 0;
-            var highestFileIndex = 0;
-
-            foreach (var groupPath in groupFiles)
+            for (var index = 0; index < groups.Count; ++index)
             {
-                var fileName = Path.GetFileName(groupPath);
-                if (TryReadGroupFileIndex(fileName, out var fileIndex))
-                    highestFileIndex = Math.Max(highestFileIndex, fileIndex);
-
-                var group = LoadJsonObjectStrict(groupPath);
+                if (groups[index] is not JsonObject group)
+                    continue;
                 var sameName = string.Equals(
                     JsonString(group["Name"]), variantGroupName, StringComparison.OrdinalIgnoreCase);
-                var selected = targetId is null ? sameName : string.Equals(fileName, selectedFile, StringComparison.OrdinalIgnoreCase);
-                var isExisting = selected && IsReusableVariantGroup(group, sourceGamePath);
-                if (isExisting)
+                var selected = targetId is null ? sameName : ReadGuid(group["Id"]) == selectedGroupId;
+                if (selected && IsReusableVariantGroup(group, sourceGamePath))
                 {
-                    existingPath = groupPath;
                     existingGroup = group;
+                    existingIndex = index;
                     continue;
                 }
                 if (sameName)
                     nameConflict = true;
-
                 highestOtherPriority = Math.Max(highestOtherPriority, JsonInt(group["Priority"]));
             }
 
@@ -2977,7 +2852,7 @@ public sealed partial class PenumbraService
             if (existingGroup is null && highestOtherPriority == int.MaxValue)
                 return "penumbra_group_priority_exhausted";
 
-            var groupJson = BuildVariantGroup(
+            var updatedGroup = BuildVariantGroup(
                 existingGroup,
                 marker,
                 sourceGamePath,
@@ -2986,11 +2861,12 @@ public sealed partial class PenumbraService
                 targetId is null ? variantGroupName : JsonString(existingGroup!["Name"])!,
                 existingGroup is null ? highestOtherPriority + 1 : JsonInt(existingGroup["Priority"]),
                 sourceOption);
-
-            var outputGroupPath = existingPath ?? Path.Combine(
-                modFolder,
-                $"group_{highestFileIndex + 1:D3}_instant_edit_{SanitizeGroupFileName(variantGroupName)}.json");
-            prepared = new VariantGroupWrite(outputGroupPath, groupJson);
+            if (existingIndex >= 0)
+                groups[existingIndex] = updatedGroup;
+            else
+                groups.Add(updatedGroup);
+            TouchV4ModMetadata(meta);
+            prepared = new VariantGroupWrite(metaPath, meta);
             return null;
         }
         catch (Exception e)
@@ -3058,7 +2934,6 @@ public sealed partial class PenumbraService
 
         var result = existingGroup?.DeepClone() as JsonObject ?? new JsonObject
         {
-            ["Version"] = 0,
             ["Type"] = "Single",
             ["Id"] = groupId,
             ["Name"] = variantGroupName,
@@ -3100,29 +2975,10 @@ public sealed partial class PenumbraService
     private static int JsonInt(JsonNode? node)
         => node is JsonValue value && value.TryGetValue<int>(out var number) ? number : 0;
 
-    private static bool TryReadGroupFileIndex(string fileName, out int index)
-    {
-        index = 0;
-        if (!fileName.StartsWith("group_", StringComparison.OrdinalIgnoreCase) || fileName.Length < 10)
-            return false;
-        var separator = fileName.IndexOf('_', 6);
-        if (separator < 0)
-            return false;
-        return int.TryParse(fileName.AsSpan(6, separator - 6), out index) && index > 0;
-    }
-
     private static Guid? ReadGuid(JsonNode? node)
         => node is JsonValue value && value.TryGetValue<string>(out var text) && Guid.TryParse(text, out var guid)
             ? guid
             : null;
-
-    private static string SanitizeGroupFileName(string value)
-    {
-        var safe = new string(value.ToLowerInvariant()
-            .Select(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' ? c : '_')
-            .ToArray()).Trim('_');
-        return string.IsNullOrEmpty(safe) ? "variant" : safe;
-    }
 
     internal static string FormatMashupDescription(
         IReadOnlyList<MashupContributor> contributors,
@@ -3163,32 +3019,52 @@ public sealed partial class PenumbraService
         return false;
     }
 
-    private static JsonObject LoadDefaultMod(string defaultPath)
-        => LoadJsonObject(defaultPath);
-
-    private static JsonObject LoadJsonObject(string path)
+    private static JsonObject LoadV4ModMetadata(string modRoot)
     {
+        const string compatibilityError =
+            "Unsupported Penumbra mod metadata. Update and reload this mod in Penumbra 1.7.1.0 or newer, then retry.";
+        var path = Path.Combine(modRoot, "meta.json");
         if (!File.Exists(path))
-            return new JsonObject();
-
+            throw new InvalidDataException(compatibilityError);
+        JsonObject meta;
         try
         {
-            return JsonNode.Parse(File.ReadAllText(path)) as JsonObject ?? new JsonObject();
+            meta = JsonNode.Parse(File.ReadAllText(path)) as JsonObject
+                ?? throw new InvalidDataException(compatibilityError);
         }
-        catch
+        catch (JsonException error)
         {
-            // A malformed file cannot be merged safely; the exported mapping will
-            // still be written, while unrelated valid files on disk remain intact.
-            return new JsonObject();
+            throw new InvalidDataException(compatibilityError, error);
         }
+        if (JsonInt(meta["FileVersion"]) != 4)
+            throw new InvalidDataException(compatibilityError);
+        return meta;
     }
 
-    private static JsonObject LoadJsonObjectStrict(string path)
+    internal static JsonObject CreateV4ModMetadata(
+        string name,
+        string author,
+        string description,
+        string version,
+        JsonObject defaultData)
+        => new()
+        {
+            ["FileVersion"] = 4,
+            ["Identifier"] = Guid.NewGuid().ToString("D"),
+            ["LastWrite"] = DateTime.UtcNow.ToString("O"),
+            ["Name"] = name,
+            ["Author"] = author,
+            ["Description"] = description,
+            ["Version"] = version,
+            ["DefaultData"] = defaultData,
+            ["Groups"] = new JsonArray(),
+        };
+
+    private static void TouchV4ModMetadata(JsonObject meta)
     {
-        if (!File.Exists(path))
-            throw new FileNotFoundException("Required Penumbra metadata file was not found.", path);
-        return JsonNode.Parse(File.ReadAllText(path)) as JsonObject
-            ?? throw new InvalidDataException($"Penumbra metadata is not a JSON object: {path}");
+        if (JsonInt(meta["FileVersion"]) != 4)
+            throw new InvalidDataException("Only Penumbra FileVersion 4 metadata can be updated.");
+        meta["LastWrite"] = DateTime.UtcNow.ToString("O");
     }
 
     private sealed record ModMappings(
@@ -3198,14 +3074,16 @@ public sealed partial class PenumbraService
 
     private static ModMappings ReadModMappings(string modRoot)
     {
+        var meta = LoadV4ModMetadata(modRoot);
         var gamePathsByModPath = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         var labelsByPath = new Dictionary<string, SortedSet<string>>(StringComparer.OrdinalIgnoreCase);
         var membershipsByPath = new Dictionary<string, SortedSet<string>>(StringComparer.OrdinalIgnoreCase);
 
-        void AddFileMappings(JsonNode? container, string label, string membership)
+        void AddFileMappings(JsonNode? container, string label, IEnumerable<string> membershipValues)
         {
             if (container is not JsonObject value || value["Files"] is not JsonObject files)
                 return;
+            var stableMemberships = membershipValues.ToArray();
 
             foreach (var file in files)
             {
@@ -3232,12 +3110,13 @@ public sealed partial class PenumbraService
                     labels.Add(label);
                     if (!membershipsByPath.TryGetValue(key, out var memberships))
                         membershipsByPath[key] = memberships = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-                    memberships.Add(membership);
+                    foreach (var membership in stableMemberships)
+                        memberships.Add(membership);
                 }
             }
         }
 
-        void AddGroup(JsonNode? group, string scope, int groupIndex)
+        void AddGroup(JsonNode? group)
         {
             if (group is not JsonObject value)
                 return;
@@ -3245,8 +3124,10 @@ public sealed partial class PenumbraService
             var groupName = JsonString(value["Name"]);
             if (string.IsNullOrWhiteSpace(groupName))
                 groupName = "Unnamed group";
+            var groupId = ReadGuid(value["Id"]);
 
-            if (value["Options"] is JsonArray options)
+            var options = value["Options"] as JsonArray;
+            if (options is not null)
             {
                 for (var optionIndex = 0; optionIndex < options.Count; optionIndex++)
                 {
@@ -3256,8 +3137,11 @@ public sealed partial class PenumbraService
                     var label = string.IsNullOrWhiteSpace(optionName)
                         ? groupName
                         : $"{groupName}: {optionName}";
+                    var optionId = ReadGuid(option["Id"]);
+                    if (groupId is null || optionId is null)
+                        continue;
                     AddFileMappings(option, label,
-                        $"{scope}:group:{groupIndex}:option:{optionIndex}");
+                        [$"option:{groupId.Value:D}:{optionId.Value:D}"]);
                 }
             }
 
@@ -3267,37 +3151,29 @@ public sealed partial class PenumbraService
                 {
                     if (containers[containerIndex] is not JsonObject container)
                         continue;
-                    var containerName = JsonString(container["Name"]);
-                    var label = string.IsNullOrWhiteSpace(containerName)
-                        ? groupName
-                        : $"{groupName}: {containerName}";
-                    AddFileMappings(container, label,
-                        $"{scope}:group:{groupIndex}:container:{containerIndex}");
+                    if (groupId is null)
+                        continue;
+                    var selectedOptions = (options ?? [])
+                        .Select((option, optionIndex) => (Option: option as JsonObject, Index: optionIndex))
+                        .Where(item => item.Option is not null && item.Index < 31 &&
+                                       (containerIndex & (1 << item.Index)) != 0)
+                        .Select(item => (Name: JsonString(item.Option!["Name"]), Id: ReadGuid(item.Option["Id"])))
+                        .Where(item => item.Id is not null)
+                        .ToArray();
+                    var selectedNames = selectedOptions.Select(item => item.Name)
+                        .Where(name => !string.IsNullOrWhiteSpace(name));
+                    var labelSuffix = string.Join(" + ", selectedNames);
+                    var label = labelSuffix.Length == 0 ? groupName : $"{groupName}: {labelSuffix}";
+                    AddFileMappings(container, label, selectedOptions.Select(item =>
+                        $"option:{groupId.Value:D}:{item.Id!.Value:D}"));
                 }
             }
         }
 
-        AddFileMappings(LoadJsonObject(Path.Combine(modRoot, "default_mod.json")), "Default", "default");
-
-        var meta = LoadJsonObject(Path.Combine(modRoot, "meta.json"));
-        AddFileMappings(meta["DefaultData"], "Default", "default");
+        AddFileMappings(meta["DefaultData"], "Default", ["default"]);
         if (meta["Groups"] is JsonArray metaGroups)
-            for (var groupIndex = 0; groupIndex < metaGroups.Count; groupIndex++)
-                AddGroup(metaGroups[groupIndex], "meta", groupIndex);
-
-        try
-        {
-            foreach (var groupPath in Directory.EnumerateFiles(
-                         modRoot, "group_*.json", SearchOption.TopDirectoryOnly)
-                         .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
-                AddGroup(LoadJsonObject(groupPath),
-                    $"legacy:{Path.GetFileName(groupPath)}", 0);
-        }
-        catch
-        {
-            // A missing or inaccessible legacy group file should not hide the
-            // resources that were successfully discovered from the mod folder.
-        }
+            foreach (var group in metaGroups)
+                AddGroup(group);
 
         return new ModMappings(
             gamePathsByModPath,
@@ -3388,8 +3264,6 @@ public sealed partial class PenumbraService
         string OldRelativePath,
         string CanonicalPath);
 
-    private sealed record CleanupJsonFile(string Path, JsonObject Value);
-
     private sealed record ModCleanupResult(
         IReadOnlyList<string> Warnings,
         ModPathRemap? PathRemap);
@@ -3409,15 +3283,7 @@ public sealed partial class PenumbraService
             if (!Directory.Exists(root) || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
                 throw new InvalidDataException("The Penumbra mod root is unavailable or unsafe.");
 
-            var jsonFiles = new List<CleanupJsonFile>();
             var mappings = new List<CleanupMapping>();
-
-            void AddJsonFile(string path, JsonObject value)
-            {
-                if (jsonFiles.Any(file => string.Equals(file.Path, path, StringComparison.OrdinalIgnoreCase)))
-                    return;
-                jsonFiles.Add(new CleanupJsonFile(path, value));
-            }
 
             void AddContainer(JsonNode? container, string? groupName, string? optionName, string jsonPath)
             {
@@ -3469,29 +3335,11 @@ public sealed partial class PenumbraService
                     }
             }
 
-            var defaultPath = Path.Combine(root, "default_mod.json");
-            if (File.Exists(defaultPath))
-            {
-                var defaultMod = LoadJsonObjectStrict(defaultPath);
-                AddJsonFile("default_mod.json", defaultMod);
-                AddContainer(defaultMod, null, null, "default_mod.json");
-            }
-
-            var metaPath = Path.Combine(root, "meta.json");
-            var meta = LoadJsonObjectStrict(metaPath);
-            AddJsonFile("meta.json", meta);
+            var meta = LoadV4ModMetadata(root);
             AddContainer(meta["DefaultData"], null, null, "meta.json.DefaultData");
             if (meta["Groups"] is JsonArray groups)
                 for (var index = 0; index < groups.Count; ++index)
                     AddGroup(groups[index], $"meta.json.Groups[{index}]");
-
-            foreach (var groupPath in Directory.EnumerateFiles(root, "group_*.json", SearchOption.TopDirectoryOnly)
-                         .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
-            {
-                var relative = Path.GetFileName(groupPath);
-                AddJsonFile(relative, LoadJsonObjectStrict(groupPath));
-                AddGroup(jsonFiles[^1].Value, relative);
-            }
 
             // A mod without any Files mappings cannot be safely normalized: it
             // may use a layout owned by a newer Penumbra schema. Keep it intact.
@@ -3559,8 +3407,8 @@ public sealed partial class PenumbraService
             {
                 foreach (var file in desiredFiles)
                     WriteModContentAtomic(root, file.Key, file.Value);
-                foreach (var json in jsonFiles)
-                    WriteJsonAtomic(Path.Combine(root, json.Path), json.Value);
+                TouchV4ModMetadata(meta);
+                WriteJsonAtomic(Path.Combine(root, "meta.json"), meta);
 
                 foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).ToArray())
                 {
@@ -3866,6 +3714,20 @@ public sealed partial class PenumbraService
         string modFolder, string sourceGamePath, string selector)
         => ResolveVariantOptionTarget(modFolder, sourceGamePath, selector).FilePath;
 
+    internal static IReadOnlyList<string> ReadOptionMembershipsForRegression(
+        string modFolder, string relativePath)
+    {
+        var mappings = ReadModMappings(modFolder);
+        return OptionMembershipsFor(relativePath, mappings.OptionMemberships);
+    }
+
+    internal static (string? Membership, string? Error) ResolveSourceOptionForRegression(
+        string modFolder, string sourceGamePath, string sourceRelativePath, SourceOptionLocator locator)
+    {
+        var resolution = ResolveSourceOption(modFolder, sourceGamePath, sourceRelativePath, locator);
+        return (resolution.Locator?.Membership, resolution.Error);
+    }
+
     private static bool IsSafeRelativeModPath(string path)
     {
         if (string.IsNullOrWhiteSpace(path) || path.Length > 4096 || path.Contains('\0') ||
@@ -3907,18 +3769,13 @@ public sealed partial class PenumbraService
             fileSwaps ??= new Dictionary<string, string>();
             ValidateMashupMappingsAndSwaps(mappings, fileSwaps);
             var metaPath = Path.Combine(modFolder, "meta.json");
-            var meta = LoadJsonObjectStrict(metaPath);
-            var fileVersion = meta["FileVersion"] is JsonValue versionValue &&
-                              versionValue.TryGetValue<int>(out var version)
-                ? version
-                : 3;
+            var meta = LoadV4ModMetadata(modFolder);
             var allGroups = ReadAllVariantGroups(modFolder);
             var priority = allGroups.Select(group => JsonInt(group["Priority"])).DefaultIfEmpty(0).Max();
             if (priority == int.MaxValue)
                 return "penumbra_group_priority_exhausted";
             var group = new JsonObject
             {
-                ["Version"] = 0,
                 ["Type"] = "Single",
                 ["Id"] = Guid.NewGuid(),
                 ["Name"] = name,
@@ -3941,25 +3798,11 @@ public sealed partial class PenumbraService
                 },
             };
 
-            if (fileVersion >= 4)
-            {
-                var groups = meta["Groups"] as JsonArray ?? new JsonArray();
-                meta["Groups"] = groups;
-                groups.Add(group);
-                meta["LastWrite"] = DateTime.UtcNow;
-                WriteJsonAtomic(metaPath, meta);
-                return null;
-            }
-
-            var highestIndex = Directory.EnumerateFiles(modFolder, "group_*.json", SearchOption.TopDirectoryOnly)
-                .Select(Path.GetFileName)
-                .Where(file => file is not null && TryReadGroupFileIndex(file, out _))
-                .Select(file => { TryReadGroupFileIndex(file!, out var index); return index; })
-                .DefaultIfEmpty(0)
-                .Max();
-            WriteJsonAtomic(Path.Combine(
-                modFolder,
-                $"group_{highestIndex + 1:D3}_instant_edit_{SanitizeGroupFileName(name)}.json"), group);
+            var groups = meta["Groups"] as JsonArray ?? new JsonArray();
+            meta["Groups"] = groups;
+            groups.Add(group);
+            TouchV4ModMetadata(meta);
+            WriteJsonAtomic(metaPath, meta);
             return null;
         }
         catch (Exception e)
@@ -4020,16 +3863,17 @@ public sealed partial class PenumbraService
         ValidateMashupMappingsAndSwaps(mappings, expectedFileSwaps);
         if ((File.GetAttributes(staging) & FileAttributes.ReparsePoint) != 0)
             throw new InvalidDataException("The mashup staging directory is unsafe.");
-        var meta = LoadJsonObjectStrict(Path.Combine(staging, "meta.json"));
-        if (JsonInt(meta["FileVersion"]) != 3 ||
-            !string.Equals(JsonString(meta["Name"]), modName, StringComparison.Ordinal))
+        var meta = LoadV4ModMetadata(staging);
+        if (!string.Equals(JsonString(meta["Name"]), modName, StringComparison.Ordinal) ||
+            ReadGuid(meta["Identifier"]) is null ||
+            !DateTimeOffset.TryParse(JsonString(meta["LastWrite"]), out _))
             throw new InvalidDataException("The mashup mod metadata is invalid.");
-        var defaultMod = LoadJsonObjectStrict(Path.Combine(staging, "default_mod.json"));
-        if (defaultMod["Files"] is not JsonObject files || files.Count != mappings.Count)
+        if (meta["DefaultData"] is not JsonObject defaultData ||
+            defaultData["Files"] is not JsonObject files || files.Count != mappings.Count)
             throw new InvalidDataException("The mashup default mappings are incomplete.");
-        if (defaultMod["FileSwaps"] is not JsonObject fileSwaps || fileSwaps.Count != expectedFileSwaps.Count)
+        if (defaultData["FileSwaps"] is not JsonObject fileSwaps || fileSwaps.Count != expectedFileSwaps.Count)
             throw new InvalidDataException("The mashup default FileSwaps are incomplete.");
-        var actualManipulations = defaultMod["Manipulations"] as JsonArray;
+        var actualManipulations = defaultData["Manipulations"] as JsonArray;
         var expected = CloneManipulations(expectedManipulations);
         if ((expectedManipulations is not null && actualManipulations is null) ||
             !JsonNode.DeepEquals(actualManipulations ?? new JsonArray(), expected))
@@ -4059,7 +3903,6 @@ public sealed partial class PenumbraService
         ValidateMashupMappingsAndSwaps(mappings, fileSwaps);
         return new JsonObject
         {
-            ["Version"] = 0,
             ["Files"] = new JsonObject(mappings.Select(pair =>
                 KeyValuePair.Create<string, JsonNode?>(pair.Key, pair.Value))),
             ["FileSwaps"] = new JsonObject(fileSwaps.Select(pair =>
@@ -4104,25 +3947,18 @@ public sealed partial class PenumbraService
         {
             [gamePath] = relativeModel,
         };
-        WriteJsonAtomic(Path.Combine(staging, "meta.json"), new JsonObject
-        {
-            ["FileVersion"] = 3,
-            ["Name"] = modName,
-            ["Author"] = "XIV Instant Edit",
-            ["Description"] = $"Vanilla model edit for {gamePath}",
-            ["Image"] = "",
-            ["Version"] = "",
-            ["Website"] = "",
-            ["ModTags"] = new JsonArray(),
-        });
         WriteBytesAtomic(staging, relativeModel, modelBytes);
-        WriteJsonAtomic(Path.Combine(staging, "default_mod.json"), new JsonObject
-        {
-            ["Version"] = 0,
-            ["Files"] = new JsonObject { [gamePath] = relativeModel },
-            ["FileSwaps"] = new JsonObject(),
-            ["Manipulations"] = new JsonArray(),
-        });
+        WriteJsonAtomic(Path.Combine(staging, "meta.json"), CreateV4ModMetadata(
+            modName,
+            "XIV Instant Edit",
+            $"Vanilla model edit for {gamePath}",
+            "",
+            new JsonObject
+            {
+                ["Files"] = new JsonObject { [gamePath] = relativeModel },
+                ["FileSwaps"] = new JsonObject(),
+                ["Manipulations"] = new JsonArray(),
+            }));
         ValidateStagedMashupMod(staging, modName, mappings);
         return relativeModel;
     }

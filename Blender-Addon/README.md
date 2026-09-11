@@ -19,6 +19,13 @@ plus a standalone Simple Import/Export panel.
   YAA-compatible `group.part Name` object names.
 - Includes a Toolbox action to convert suffix-form mesh IDs from Textools/FBX
   scenes into the prefix naming convention.
+- Combines two armatures into a new rest rig through **Toolbox > Combine
+  Armatures**. Choose the base rig and an additional rig; shared bone names use
+  the base definition. Both originals are kept and hidden in the current view
+  layer, and only visible meshes using them are reassigned. Existing vertex
+  groups and weights stay unchanged; create groups for newly available bones
+  as needed. Pose, animation, and rig controls remain on the originals. Undo
+  restores the original visibility and mesh bindings.
 - Quick Export back to the original source mod, including variants and optional
   Penumbra setup.
 - Saves a single-context export as a new Penumbra mod, bundling material and

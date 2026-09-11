@@ -119,14 +119,10 @@ public sealed partial class PenumbraService : ITextureEditBackend
 
     internal static string TextureMappingFingerprint(string root)
     {
-        // Include all option metadata: even a renamed/reordered option must not silently retarget a session.
-        var paths = Directory.EnumerateFiles(root, "*.json").Where(p =>
-            Path.GetFileName(p).Equals("meta.json", StringComparison.OrdinalIgnoreCase) ||
-            Path.GetFileName(p).Equals("default_mod.json", StringComparison.OrdinalIgnoreCase) ||
-            Path.GetFileName(p).StartsWith("group_", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray();
-        if (paths.Length == 0) throw new TextureConflictException("The mod metadata is missing.");
-        return TextureFiles.Hash(System.Text.Encoding.UTF8.GetBytes(string.Join("\n", paths.Select(p => Path.GetFileName(p) + ":" + TextureFiles.Hash(TextureFiles.Read(p))))));
+        // Hash the complete v4 document so option renames, reordering, and mapping edits invalidate the session.
+        _ = LoadV4ModMetadata(root);
+        var path = Path.Combine(root, "meta.json");
+        return TextureFiles.Hash(TextureFiles.Read(path));
     }
 
     async Task<TextureCommit> ITextureEditBackend.CommitAsync(TextureEditSession session, byte[] tex, Func<bool> stillCurrent, CancellationToken token, bool restoring)
@@ -231,17 +227,17 @@ public sealed partial class PenumbraService : ITextureEditBackend
         if (!IsSafeNewModName(name) || !IsSafeGameResourcePath(gamePath, ".tex")) throw new IOException("Invalid vanilla texture destination.");
         _ = TextureFiles.ReadTex(bytes);
         var relative = "Files/" + gamePath;
-        WriteJsonAtomic(Path.Combine(staging, "meta.json"), new JsonObject
-        {
-            ["FileVersion"] = 3, ["Name"] = name, ["Author"] = "XIV Instant Edit",
-            ["Description"] = $"Texture edit for {gamePath}", ["Version"] = "", ["Website"] = "", ["Image"] = "", ["ModTags"] = new JsonArray(),
-        });
         WriteBytesAtomic(staging, relative, bytes);
-        WriteJsonAtomic(Path.Combine(staging, "default_mod.json"), new JsonObject
+        WriteJsonAtomic(Path.Combine(staging, "meta.json"), CreateV4ModMetadata(
+            name,
+            "XIV Instant Edit",
+            $"Texture edit for {gamePath}",
+            "",
+            new JsonObject
         {
-            ["Version"] = 0, ["Files"] = new JsonObject { [gamePath] = relative },
+            ["Files"] = new JsonObject { [gamePath] = relative },
             ["FileSwaps"] = new JsonObject(), ["Manipulations"] = new JsonArray(),
-        });
+        }));
     }
 
     private static void DeleteTextureStaging(string path, string expected)

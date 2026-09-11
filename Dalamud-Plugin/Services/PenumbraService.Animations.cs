@@ -44,12 +44,16 @@ public sealed partial class PenumbraService
         return new GetMetaManipulations(_pi).Invoke(player.ObjectIndex);
     });
 
-    internal Task CheckAnimationModRootAsync(string mod, string root) => _framework.RunOnFrameworkThread(() =>
+    internal async Task CheckAnimationModRootAsync(string mod, string root)
     {
-        var registered = GetRegisteredModPath(mod);
-        if (registered == null || !string.Equals(Path.GetFullPath(registered), Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase))
-            throw new IOException($"The registered location of {mod} changed. Recovery will not write to the old location.");
-    });
+        await _framework.RunOnFrameworkThread(() =>
+        {
+            var registered = GetRegisteredModPath(mod);
+            if (registered == null || !string.Equals(Path.GetFullPath(registered), Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase))
+                throw new IOException($"The registered location of {mod} changed. Recovery will not write to the old location.");
+        });
+        _ = LoadV4ModMetadata(root);
+    }
 
     internal async Task ActivateAnimationAsync(AnimationEditJournal journal)
     {

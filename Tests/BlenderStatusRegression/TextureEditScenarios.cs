@@ -192,12 +192,23 @@ internal static class TextureEditScenarios
         File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 41));
         await f.Service.ProcessPendingAsync(true);
         var saved = f.Service.Sessions.Single();
-        var mapping = JsonDocument.Parse(File.ReadAllText(Path.Combine(saved.ModRoot, "default_mod.json")));
-        Check(!saved.NeedsMod && mapping.RootElement.GetProperty("Files").GetProperty(s.GamePath).GetString() == s.RelativePath,
-            "first vanilla save creates a texture override with the captured game path");
+        using var metadata = JsonDocument.Parse(File.ReadAllText(Path.Combine(saved.ModRoot, "meta.json")));
+        var rootMetadata = metadata.RootElement;
+        Check(!saved.NeedsMod && rootMetadata.GetProperty("FileVersion").GetInt32() == 4 &&
+              rootMetadata.GetProperty("Identifier").TryGetGuid(out _) &&
+              rootMetadata.GetProperty("LastWrite").TryGetDateTimeOffset(out _) &&
+              rootMetadata.GetProperty("DefaultData").GetProperty("Files").GetProperty(s.GamePath).GetString() == s.RelativePath &&
+              rootMetadata.GetProperty("Groups").GetArrayLength() == 0 &&
+              !File.Exists(Path.Combine(saved.ModRoot, "default_mod.json")) &&
+              Directory.GetFiles(saved.ModRoot, "group_*.json").Length == 0,
+            "first vanilla save creates one v4 meta.json with the captured texture mapping");
         File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 42));
         await f.Service.ProcessPendingAsync(true);
         Check(f.Backend.Commits == 2, "subsequent vanilla saves reuse the same mod");
+        var v4Fingerprint = PenumbraService.TextureMappingFingerprint(saved.ModRoot);
+        File.WriteAllText(Path.Combine(saved.ModRoot, "default_mod.json"), "{\"ignored\":true}");
+        Check(PenumbraService.TextureMappingFingerprint(saved.ModRoot) == v4Fingerprint,
+            "texture mapping fingerprints ignore stray legacy JSON files");
         Check(await f.Service.StartAsync(f.Request, false) == id, "vanilla reopening reuses the session");
     }
 
@@ -250,6 +261,17 @@ internal static class TextureEditScenarios
                 "disabled automatic cleanup retains stale texture sessions");
             await f.Service.DiscardAsync(s.Id);
         }
+
+        using (var f = new Fixture(Path.Combine(root, "background"), (uint)TexFile.TextureFormat.BC7,
+            watch: true, cleanupInterval: TimeSpan.FromMilliseconds(100)))
+        {
+            await f.Service.StartAsync(f.Request, false);
+            var s = f.Service.Sessions.Single();
+            await f.Service.SetPausedAsync(s.Id, true);
+            SetStale(s.Directory);
+            for (var i = 0; i < 20 && Directory.Exists(s.Directory); i++) await Task.Delay(100);
+            Check(!Directory.Exists(s.Directory), "background cleanup removes stale paused texture sessions");
+        }
     }
 
     private static void SetStale(string directory)
@@ -274,7 +296,7 @@ internal static class TextureEditScenarios
         public readonly ModelBackupStore Backups;
         public readonly string ConfigDir;
         public readonly TextureEditRequest Request;
-        public Fixture(string root, uint format, bool vanilla = false, bool watch = false)
+        public Fixture(string root, uint format, bool vanilla = false, bool watch = false, TimeSpan? cleanupInterval = null)
         {
             ConfigDir = Path.Combine(root, "config"); Directory.CreateDirectory(ConfigDir);
             var cacheDirectory = Path.Combine(root, "cache");
@@ -284,7 +306,7 @@ internal static class TextureEditScenarios
             Backend = new FakeBackend(root, format, Backups, vanilla);
             Request = new TextureEditRequest("chara/test.tex", vanilla ? "chara/test.tex" : Backend.Target,
                 vanilla ? "" : "Mod", Backend.ModRoot, "Files/chara/test.tex", null, 0, vanilla ? "Mod" : "");
-            Service = new TextureEditService(Backend, Config, ConfigDir, Backups, (_, _) => { }, watch);
+            Service = new TextureEditService(Backend, Config, ConfigDir, Backups, (_, _) => { }, watch, cleanupInterval);
         }
         public void Dispose() => Service.Dispose();
     }

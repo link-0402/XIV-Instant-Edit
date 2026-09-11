@@ -32,6 +32,7 @@ from .materials import (
 )
 from .mesh.export import check_triangulation, export_result, get_export_stats
 from .mesh.objects import visible_meshobj
+from .mesh.armatures import available_armatures, combine_armatures
 from .properties import get_settings
 from .xivpy.model import XIVModel
 from .backups import clear_backups, list_backups, restore_local, target_folder
@@ -793,6 +794,66 @@ class XIVIE_OT_rename_mesh_part(Operator):
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
         _redraw(context)
+        return {"FINISHED"}
+
+
+class XIVIE_OT_combine_armatures(Operator):
+    bl_idname = "xiv_ie.combine_armatures"
+    bl_label = "Combine Armatures"
+    bl_description = "Create a combined rest rig, hide the originals, and reassign their visible meshes"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def _armature_search(self, context, edit_text):
+        return [obj.name for obj in available_armatures(context)]
+
+    base_armature: StringProperty(
+        name="Base Armature",
+        description="Keep this rig's rest bones wherever both rigs share a bone name",
+        search=_armature_search,
+    )  # type: ignore
+    additional_armature: StringProperty(
+        name="Additional Armature",
+        description="Add this rig's missing rest bones to the new combined armature",
+        search=_armature_search,
+    )  # type: ignore
+
+    @classmethod
+    def poll(cls, context: Context):
+        if context.mode != "OBJECT":
+            cls.poll_message_set("Switch to Object Mode to combine armatures")
+            return False
+        if len(available_armatures(context)) < 2:
+            cls.poll_message_set("Two armatures are required in the active view layer")
+            return False
+        return True
+
+    def invoke(self, context: Context, event):
+        active = context.view_layer.objects.active
+        self.base_armature = active.name if active and active.type == "ARMATURE" else ""
+        self.additional_armature = next(
+            (obj.name for obj in context.selected_objects
+             if obj.type == "ARMATURE" and obj != active), "")
+        return context.window_manager.invoke_props_dialog(self, width=480)
+
+    def draw(self, context: Context):
+        self.layout.prop(self, "base_armature")
+        self.layout.prop(self, "additional_armature")
+        self.layout.label(text="Shared bone names use the base rig.")
+        self.layout.label(text="Original rigs are kept and hidden in this view layer.")
+        self.layout.label(text="Only visible meshes are reassigned; weights stay unchanged.")
+        self.layout.label(text="The new rig starts at rest without animation controls.")
+
+    def execute(self, context: Context):
+        try:
+            result, count = combine_armatures(
+                context, context.view_layer.objects.get(self.base_armature),
+                context.view_layer.objects.get(self.additional_armature),
+            )
+        except Exception as error:
+            self.report({"ERROR"}, f"Armatures were not combined: {error}")
+            return {"CANCELLED"}
+        _redraw(context)
+        self.report({"INFO"}, f'{result.name}: {len(result.data.bones)} bones, {count} meshes reassigned.')
         return {"FINISHED"}
 
 

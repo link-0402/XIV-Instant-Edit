@@ -12,6 +12,7 @@ import bpy
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from blender_fixtures import addon_session
+from armature_regression import assert_combination_failures, assert_linked_mesh_rejected
 
 
 def export_failure_restores_scene(addon, stage):
@@ -159,6 +160,8 @@ def active_workers_discard_previous_file(addon):
 
 def run():
     with addon_session("_xiv_ie_correctness_regression") as addon:
+        assert_combination_failures(addon)
+        assert_linked_mesh_rejected(addon)
         for stage in ("transparency", "backfaces", "shape_mismatch"):
             export_failure_restores_scene(addon, stage)
         file_load_restarts_schedulers(addon)

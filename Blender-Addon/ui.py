@@ -264,8 +264,13 @@ class XIVIE_PT_main(Panel):
             if props.variant_targets_context_id and props.variant_targets_context_id != getattr(ref, "context_id", ""):
                 targets.label(text="Refresh targets for this Context.", icon="INFO")
             material_coverage_warning = material_coverage_warning_state(context, ref)
+            def target_row_is_alerted(selection_id: str) -> bool:
+                # Keep the selected target's depressed (blue) state visible even
+                # when the material-coverage warning applies to the composition.
+                return material_coverage_warning and props.variant_target != selection_id
+
             in_place = targets.row(align=True)
-            in_place.alert = material_coverage_warning
+            in_place.alert = target_row_is_alerted(IN_PLACE_TARGET)
             in_place.operator(
                 "xiv_ie.select_variant_target",
                 text="In-place",
@@ -273,7 +278,7 @@ class XIVIE_PT_main(Panel):
                 icon="FILE_TICK",
             ).selection_id = IN_PLACE_TARGET
             new_group = targets.row(align=True)
-            new_group.alert = material_coverage_warning
+            new_group.alert = target_row_is_alerted("NEW_GROUP")
             new_group.operator(
                 "xiv_ie.select_variant_target",
                 text="New Group",
@@ -292,7 +297,7 @@ class XIVIE_PT_main(Panel):
                 if item.kind == "GROUP":
                     group_expanded = item.expanded
                     group_row = targets.row(align=True)
-                    group_row.alert = material_coverage_warning
+                    group_row.alert = target_row_is_alerted(item.selection_id)
                     toggle = group_row.operator(
                         "xiv_ie.toggle_variant_target_group",
                         text="",
@@ -308,7 +313,7 @@ class XIVIE_PT_main(Panel):
                     ).selection_id = item.selection_id
                 elif item.kind == "OPTION" and group_expanded:
                     option_row = targets.row(align=True)
-                    option_row.alert = material_coverage_warning
+                    option_row.alert = target_row_is_alerted(item.selection_id)
                     option_row.label(text="", icon="BLANK1")
                     option_row.operator(
                         "xiv_ie.select_variant_target",
@@ -337,7 +342,7 @@ class XIVIE_PT_main(Panel):
                     targets.label(text=mashup_message, icon="ERROR")
             elif show_new_mod:
                 new_mod_row = targets.row(align=True)
-                new_mod_row.alert = material_coverage_warning
+                new_mod_row.alert = target_row_is_alerted(SAVE_NEW_MOD_TARGET)
                 new_mod_row.enabled = new_mod_enabled
                 new_mod_row.operator(
                     "xiv_ie.select_variant_target",
@@ -365,7 +370,9 @@ class XIVIE_PT_main(Panel):
                     issue_row.alert = severity == "ERROR"
                     issue_row.label(
                         text=message,
-                        icon="ERROR" if severity == "ERROR" else "WARNING",
+                        # Blender exposes warning status icons as STATUS_WARNING;
+                        # the generic WARNING enum is not valid in Blender 5.2.
+                        icon="ERROR" if severity == "ERROR" else "STATUS_WARNING",
                     )
             else:
                 targets.label(text="Export selection is clean.", icon="CHECKMARK")
@@ -747,6 +754,7 @@ class XIVIE_PT_main(Panel):
         )
         header.label(text="Toolbox", icon="TOOL_SETTINGS")
         if expanded:
+            box.operator("xiv_ie.combine_armatures", text="Combine Armatures", icon="ARMATURE_DATA")
             box.operator("xiv_ie.convert_mesh_names", text="Move Mesh IDs to Front", icon="SORTALPHA")
             box.operator("xiv_ie.compact_context_parts", text="Fill Mesh Part Gaps", icon="SORTALPHA")
             box.operator("xiv_ie.clear_contexts", text="Clear Contexts", icon="TRASH")

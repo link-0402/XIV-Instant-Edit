@@ -10,6 +10,7 @@ namespace InstantEdit.Services;
 public sealed class TextureEditService : IDisposable
 {
     private static readonly TimeSpan StaleSessionAge = TimeSpan.FromDays(1);
+    private static readonly TimeSpan CacheCleanupInterval = TimeSpan.FromHours(1);
 
     private sealed class Runtime(TextureEditSession session) : IDisposable
     {
@@ -40,16 +41,19 @@ public sealed class TextureEditService : IDisposable
     private readonly CancellationTokenSource _life = new();
     private readonly Task _worker;
     private readonly bool _watch;
+    private readonly TimeSpan _cacheCleanupInterval;
     private TextureEditSession[] _snapshot = [];
     public IReadOnlyList<TextureEditSession> Sessions => Volatile.Read(ref _snapshot);
     public string StartupError { get; private set; } = "";
     internal Task Completion => _worker;
 
     internal TextureEditService(ITextureEditBackend backend, Configuration config, string configDirectory,
-        ModelBackupStore backups, Action<Exception, string> log, bool watch = true)
+        ModelBackupStore backups, Action<Exception, string> log, bool watch = true, TimeSpan? cacheCleanupInterval = null)
     {
         _backend = backend; _config = config; _backups = backups; _log = log;
         _watch = watch;
+        _cacheCleanupInterval = cacheCleanupInterval ?? CacheCleanupInterval;
+        if (_cacheCleanupInterval <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(cacheCleanupInterval));
         _catalog = Path.Combine(configDirectory, "TextureSessions.json");
         try
         {
@@ -379,10 +383,18 @@ public sealed class TextureEditService : IDisposable
     private async Task WatchLoopAsync()
     {
         using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(500));
+        var nextCacheCleanup = DateTime.UtcNow + _cacheCleanupInterval;
         try
         {
             while (await timer.WaitForNextTickAsync(_life.Token).ConfigureAwait(false))
+            {
                 await ProcessPendingAsync().ConfigureAwait(false);
+                if (!_config.AutomaticCacheCleanup || DateTime.UtcNow < nextCacheCleanup) continue;
+                nextCacheCleanup = DateTime.UtcNow + _cacheCleanupInterval;
+                try { await CleanupStaleSessionsAsync().ConfigureAwait(false); }
+                catch (OperationCanceledException) when (_life.IsCancellationRequested) { throw; }
+                catch (Exception error) { _log(error, "Texture cache cleanup failed; existing sessions were retained."); }
+            }
         }
         catch (OperationCanceledException) when (_life.IsCancellationRequested) { }
         finally { foreach (var r in _sessions.Values) r.Dispose(); }
