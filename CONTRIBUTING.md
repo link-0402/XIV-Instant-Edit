@@ -20,7 +20,7 @@ before sharing them.
 ## Development setup
 
 - Blender 4.5.0 or newer is required for add-on development. Continuous
-  integration currently exercises Blender 4.5.0 and 5.2.0.
+  integration currently uses Blender 4.5.0 LTS and 5.2.0 LTS.
 - Plugin development requires the .NET 10 SDK and a local Dalamud development
   installation.
 - The add-on source is under `Blender-Addon`; the Dalamud plugin source is

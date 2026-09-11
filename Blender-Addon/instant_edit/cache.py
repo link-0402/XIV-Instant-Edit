@@ -17,7 +17,8 @@ from datetime import datetime, timezone
 
 CACHE_SCHEMA = "instant-edit.cache"
 CACHE_VERSION = 1
-CACHE_FOLDER = "XIV-Instant-Edit"
+CACHE_FOLDER = "XIV Instant Edit"
+SETTINGS_FILE = "cache-settings.json"
 DIAGNOSTICS_RELATIVE_PATH = Path(
     "XIVLauncher", "pluginConfigs", "InstantEdit", "Diagnostics"
 )
@@ -49,7 +50,7 @@ class CacheStagingError(ValueError):
 
 
 def configure_cache(base_directory: str | Path, automatic_cleanup: bool) -> Path:
-    """Update the thread-safe cache configuration without accessing Blender APIs."""
+    """Update and persist the thread-safe cache configuration without Blender APIs."""
     global _base_directory, _automatic_cleanup
     base = Path(base_directory or tempfile.gettempdir()).expanduser().resolve()
     if base.exists() and not base.is_dir():
@@ -60,7 +61,7 @@ def configure_cache(base_directory: str | Path, automatic_cleanup: bool) -> Path
         _base_directory = base
         _automatic_cleanup = bool(automatic_cleanup)
     try:
-        return ensure_cache_root()
+        root = ensure_cache_root()
     except Exception:
         # Do not leave the process pointed at a broken directory. Otherwise a
         # later bridge failure can lose its diagnostic report as a secondary
@@ -69,6 +70,49 @@ def configure_cache(base_directory: str | Path, automatic_cleanup: bool) -> Path
             _base_directory = previous_base
             _automatic_cleanup = previous_cleanup
         raise
+    _persist_cache_settings(base, bool(automatic_cleanup))
+    return root
+
+
+def cache_settings_path() -> Path:
+    """Return the persistent add-on settings path shared across Blender sessions."""
+    return diagnostics_root().parent / SETTINGS_FILE
+
+
+def restore_cache_configuration() -> bool:
+    """Restore the last successfully synchronized cache configuration, if available."""
+    try:
+        settings = json.loads(cache_settings_path().read_text(encoding="utf-8"))
+        if not isinstance(settings, dict):
+            return False
+        directory = settings.get("cacheDirectory")
+        automatic_cleanup = settings.get("automaticCleanup", True)
+        if not isinstance(directory, str) or not directory.strip() or not isinstance(automatic_cleanup, bool):
+            return False
+        configure_cache(directory, automatic_cleanup)
+        return True
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        return False
+
+
+def _persist_cache_settings(base: Path, automatic_cleanup: bool) -> None:
+    path = cache_settings_path()
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(
+            json.dumps({
+                "cacheDirectory": str(base),
+                "automaticCleanup": automatic_cleanup,
+            }),
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+    except OSError:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def automatic_cleanup_enabled() -> bool:

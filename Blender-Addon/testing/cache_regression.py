@@ -28,6 +28,9 @@ def run() -> None:
         assert cache.diagnostics_root() == expected_diagnostics
         assert cache.ensure_diagnostics_root() == expected_diagnostics
         root = cache.configure_cache(base, True)
+        restored = _load_cache()
+        assert restored.restore_cache_configuration()
+        assert restored.cache_base_directory() == base.resolve()
         texture_session = root / "texture-edits" / uuid.uuid4().hex
         texture_session.mkdir(parents=True)
         working_texture = texture_session / "c0101e0001_top_d.tga"

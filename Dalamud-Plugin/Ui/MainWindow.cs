@@ -25,6 +25,7 @@ public sealed partial class MainWindow : Window, IDisposable
     private readonly MaterialPreviewBundleBuilder _materialPreviews;
     private readonly ResourceSourceAttributor _resourceSources;
     private readonly Action _saveConfig;
+    private readonly Action _openChangelog;
     private readonly IUiBuilder _uiBuilder;
     private readonly object _stateLock = new();
     private readonly CancellationTokenSource _lifetimeCts = new();
@@ -45,7 +46,7 @@ public sealed partial class MainWindow : Window, IDisposable
 
     public MainWindow(Configuration config, PenumbraService penumbra, OnScreenService onScreen, BlenderClient blender,
         IDataManager data, IChatGui chat, IPluginLog log, Action saveConfig, Action restartExportListener, IUiBuilder uiBuilder,
-        ITextureProvider textureProvider, TextureEditService textures)
+        ITextureProvider textureProvider, TextureEditService textures, Action openChangelog)
         : base("XIV Instant Edit##Main")
     {
         _config = config; _penumbra = penumbra; _onScreen = onScreen; _blender = blender; _data = data; _chat = chat; _log = log;
@@ -54,6 +55,7 @@ public sealed partial class MainWindow : Window, IDisposable
         _resourceSources = new ResourceSourceAttributor(penumbra, log);
         _materialPreviews = new MaterialPreviewBundleBuilder(data, log, _resourceSources);
         _saveConfig = saveConfig;
+        _openChangelog = openChangelog;
         _uiBuilder = uiBuilder;
         AllowPinning = true;
         AllowClickthrough = true;
@@ -63,6 +65,12 @@ public sealed partial class MainWindow : Window, IDisposable
             Icon = FontAwesomeIcon.Heart,
             Click = _ => OpenKofiPage(),
             ShowTooltip = () => ImGui.SetTooltip("♥ Support me on Ko-fi"),
+        });
+        TitleBarButtons.Add(new TitleBarButton
+        {
+            Icon = FontAwesomeIcon.BookBookmark,
+            Click = _ => _openChangelog(),
+            ShowTooltip = () => ImGui.SetTooltip("View changelog"),
         });
         _ = uiBuilder.RunWhenUiPrepared(() => LoadSlotIcons(uiBuilder, textureProvider), true);
     }

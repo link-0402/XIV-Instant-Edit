@@ -27,6 +27,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly ExportServer            _exportServer;
     private readonly WindowSystem            _windowSystem;
     private readonly MainWindow              _window;
+    private readonly ChangelogWindow         _changelogWindow;
+    private readonly FirstTimeSetupWindow   _setupWindow;
     private readonly SettingsWindow          _settingsWindow;
 
     public string Name => "XIV Instant Edit";
@@ -112,6 +114,7 @@ public sealed class Plugin : IDalamudPlugin
         if (_config.AutomaticCacheCleanup)
             _textures.RequestCacheCleanup();
         _exportServer = new ExportServer(_config, _penumbra, _contexts, log);
+        _changelogWindow = new ChangelogWindow(_config, BlenderClient.CurrentPluginVersion, SaveConfiguration);
         _window    = new MainWindow(
             _config,
             _penumbra,
@@ -124,22 +127,33 @@ public sealed class Plugin : IDalamudPlugin
             () => _exportServer.Restart(),
             _pi.UiBuilder,
             textureProvider,
-            _textures);
+            _textures,
+            _changelogWindow.Open);
         _window.AttachAnimations(_animations, animationError);
         _exportServer.ImportFailureReceived += _window.ReportImportFailure;
+        _setupWindow = new FirstTimeSetupWindow(
+            _config,
+            SaveConfiguration,
+            _window.RequestCacheSynchronization,
+            _window.Open,
+            _log);
         _settingsWindow = new SettingsWindow(
             _config,
             SaveConfiguration,
             () => _exportServer.Restart(),
             _log,
-            _window.RequestCacheSynchronization);
+            _window.RequestCacheSynchronization,
+            OpenSetupFromSettings);
 
         _windowSystem = new WindowSystem();
         _windowSystem.AddWindow(_window);
+        _windowSystem.AddWindow(_changelogWindow);
+        _windowSystem.AddWindow(_setupWindow);
 
         _pi.UiBuilder.Draw += _windowSystem.Draw;
         _pi.UiBuilder.Draw += _settingsWindow.Draw;
-        _pi.UiBuilder.OpenMainUi += _window.Open;
+        _pi.UiBuilder.Draw += _setupWindow.DrawFileDialog;
+        _pi.UiBuilder.OpenMainUi += OpenMainUi;
         _pi.UiBuilder.OpenConfigUi += _settingsWindow.Open;
 
         _commands.AddHandler("/ie", new CommandInfo(OnCommand)
@@ -170,7 +184,35 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
+        ToggleMainUi();
+    }
+
+    private void OpenMainUi()
+    {
+        if (!_config.FirstTimeSetupCompleted)
+        {
+            _setupWindow.Open();
+            return;
+        }
+
+        _window.Open();
+    }
+
+    private void ToggleMainUi()
+    {
+        if (!_config.FirstTimeSetupCompleted)
+        {
+            _setupWindow.Open();
+            return;
+        }
+
         _window.Toggle();
+    }
+
+    private void OpenSetupFromSettings()
+    {
+        _window.Close();
+        _setupWindow.Open();
     }
 
     private void SaveConfiguration()
@@ -189,8 +231,10 @@ public sealed class Plugin : IDalamudPlugin
             try
             {
                 var legacyRoot = Path.GetFullPath(config.TextureCacheRoot.Trim().Trim('"'));
-                config.TextureCacheDirectory = string.Equals(
-                    Path.GetFileName(legacyRoot), TextureFiles.CacheFolder, StringComparison.OrdinalIgnoreCase)
+                var legacyFolder = Path.GetFileName(legacyRoot);
+                config.TextureCacheDirectory =
+                    (string.Equals(legacyFolder, TextureFiles.CacheFolder, StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(legacyFolder, TextureFiles.LegacyCacheFolder, StringComparison.OrdinalIgnoreCase))
                     ? Path.GetDirectoryName(legacyRoot) ?? Path.GetTempPath()
                     : legacyRoot;
             }
@@ -213,9 +257,12 @@ public sealed class Plugin : IDalamudPlugin
         _commands.RemoveHandler("/ie");
         _pi.UiBuilder.Draw -= _windowSystem.Draw;
         _pi.UiBuilder.Draw -= _settingsWindow.Draw;
-        _pi.UiBuilder.OpenMainUi -= _window.Open;
+        _pi.UiBuilder.Draw -= _setupWindow.DrawFileDialog;
+        _pi.UiBuilder.OpenMainUi -= OpenMainUi;
         _pi.UiBuilder.OpenConfigUi -= _settingsWindow.Open;
         _windowSystem.RemoveWindow(_window);
+        _windowSystem.RemoveWindow(_changelogWindow);
+        _windowSystem.RemoveWindow(_setupWindow);
         _window.Dispose();
         _animations?.Dispose();
         _textures.Dispose();

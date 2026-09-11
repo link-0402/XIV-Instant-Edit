@@ -12,7 +12,8 @@ internal readonly record struct TextureHeader(uint Format, int Width, int Height
 /// <summary>File validation only. All pixel decoding and encoding is delegated to Penumbra.</summary>
 internal static class TextureFiles
 {
-    public const string CacheFolder = "XIV-Instant-Edit";
+    public const string CacheFolder = "XIV Instant Edit";
+    public const string LegacyCacheFolder = "XIV-Instant-Edit";
     private const string CacheSchema = "instant-edit.cache";
     private const int CacheVersion = 1;
     public const int MaxBytes = 512 * 1024 * 1024;

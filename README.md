@@ -23,10 +23,6 @@ Instant Edit is a combination of in-game Dalamud plugin and Blender addon that a
 4. *Recommended* to tick "Check for Updates on Startup" to receive automatic updates.
 5. Find **XIV Instant Edit** and install it if it hasn't already.
 
-You can also download [XIV-Instant-Edit.zip](https://raw.githubusercontent.com/link-0402/XIV-Instant-Edit/main/Blender-Addon/blender_repo/XIV-Instant-Edit.zip)
-and use **Install from Disk** in the same Blender preferences window.
-Note that you will not receive automatic feature and compatibility updates this way and will have to update the add-on manually.
-
 ### Install the Dalamud plugin
 
 1. In FFXIV, run `/xlsettings` and open **Experimental**.
@@ -51,8 +47,6 @@ Note that you will not receive automatic feature and compatibility updates this 
    - Create Mashup creates a new mod or group in an existing mod containing the combined model + all required textures and materials. Only visible with 2+ mods imported into the scene, otherwise switches to "Create as new mod".
    The context dropdown controls which mod structure is being shown.
 6. Hit export. Immediately see the result ingame.
-Creating new options on existing mods requires you to refresh the view in Penumbra by navigating to a different mod and back.
-
 ## Additional notes
 
 ### Animation offset baking (development builds)
