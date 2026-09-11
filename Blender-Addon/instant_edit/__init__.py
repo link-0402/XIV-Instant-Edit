@@ -148,10 +148,12 @@ def _context_visibility_changed(_scene, _depsgraph) -> None:
 def register() -> None:
     global _last_visible_context_ids
     from .ops import poll_material_coverage_results, reset_material_coverage_state
+    from .cache import restore_cache_configuration
 
     _last_visible_context_ids = None
     reset_material_coverage_state()
     set_addon_properties()
+    restore_cache_configuration()
 
     port = 42424
     try:

@@ -216,9 +216,32 @@ public sealed class TextureEditService : IDisposable
     }
     private void ValidateEditor()
     {
-        if (!Path.IsPathFullyQualified(_config.TextureEditorPath) || !File.Exists(_config.TextureEditorPath) ||
-            !string.Equals(Path.GetExtension(_config.TextureEditorPath), ".exe", StringComparison.OrdinalIgnoreCase))
+        if (!TryValidateEditorPath(_config.TextureEditorPath, out _))
             throw new IOException("Set the texture editor executable in XIV Instant Edit Settings first.");
+    }
+
+    internal static bool TryValidateEditorPath(string path, out string error)
+    {
+        if (!Path.IsPathFullyQualified(path))
+        {
+            error = "Choose a full path to the texture editor executable.";
+            return false;
+        }
+
+        if (!File.Exists(path))
+        {
+            error = "The selected texture editor executable does not exist.";
+            return false;
+        }
+
+        if (!string.Equals(Path.GetExtension(path), ".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            error = "Choose a Windows .exe file for the texture editor.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
     }
     private void Launch(string file)
     {

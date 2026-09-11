@@ -13,11 +13,19 @@ public sealed class SettingsWindow
     private readonly Action _restartExportListener;
     private readonly IPluginLog _log;
     private readonly Action _requestCacheSynchronization;
+    private readonly Action _openSetup;
     private bool _open;
 
     public SettingsWindow(Configuration config, Action saveConfig, Action restartExportListener, IPluginLog log,
-        Action requestCacheSynchronization)
-    { _config = config; _saveConfig = saveConfig; _restartExportListener = restartExportListener; _log = log; _requestCacheSynchronization = requestCacheSynchronization; }
+        Action requestCacheSynchronization, Action openSetup)
+    {
+        _config = config;
+        _saveConfig = saveConfig;
+        _restartExportListener = restartExportListener;
+        _log = log;
+        _requestCacheSynchronization = requestCacheSynchronization;
+        _openSetup = openSetup;
+    }
 
     public bool IsOpen { get => _open; set => _open = value; }
     public void Open() => _open = true;
@@ -31,6 +39,16 @@ public sealed class SettingsWindow
         ImGui.TextColored(new Vector4(.95f, .78f, .35f, 1), "XIV INSTANT EDIT SETTINGS");
         ImGui.TextColored(new Vector4(.58f, .6f, .67f, 1), "Connection and export preferences");
         ImGui.Spacing();
+        if (ImGui.Button("Run first-time setup again"))
+        {
+            _open = false;
+            _openSetup();
+            ImGui.End();
+            return;
+        }
+        ImGui.SameLine();
+        ImGui.TextColored(new Vector4(.55f, .57f, .64f, 1), "Review Penumbra, Blender, cache, and texture-editor setup.");
+        ImGui.Spacing();
         ImGui.Separator(); ImGui.Text("Connections");
         var blenderPort = _config.BlenderPort; if (ImGui.InputInt("Blender port", ref blenderPort)) { _config.BlenderPort = blenderPort; Save(); }
         ImGui.TextWrapped("Model editing requires Blender. Texture editing works after its cache has synchronized once.");
@@ -41,7 +59,7 @@ public sealed class SettingsWindow
         ImGui.SetNextItemWidth(-1);
         if (ImGui.InputTextWithHint("##texture-editor", "Full path to Photoshop.exe or another TGA editor", ref editor, 2048))
         { _config.TextureEditorPath = editor.Trim().Trim('"'); Save(); }
-        ImGui.TextWrapped("Open a texture, edit it, then save the same file as a 32-bit TGA with alpha. Layered work needs a flattened TGA copy.");
+        ImGui.TextWrapped("Open a texture, edit it, then save your changes to the same file (in-place as a 32-bit TGA with alpha).");
         ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Cache");
         var cacheDirectory = _config.TextureCacheDirectory;
         ImGui.SetNextItemWidth(-1);

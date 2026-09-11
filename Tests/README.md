@@ -14,6 +14,7 @@ python Blender-Addon/testing/server_diagnostics_regression.py
 dotnet run --project Tests/ExportContextRegression -c Release -p:SkipDistributionPackage=true
 dotnet run --project Tests/BlenderStatusRegression -c Release -p:SkipDistributionPackage=true
 dotnet run --project Tests/AnimationRegression -c Release -p:SkipDistributionPackage=true
+dotnet run --project Tests/ChangelogRegression -c Release -p:SkipDistributionPackage=true
 dotnet build Dalamud-Plugin/InstantEdit.csproj -c Release -p:SkipDistributionPackage=true
 ```
 
@@ -51,6 +52,8 @@ updates the distribution archives or extension repository index.
   component filtering, timeline/VFX dependencies, metadata scope, durable recovery,
   and PAP backup conflict protection. Native Havok and actual IPC acceptance are
   documented in [animation editing acceptance](AnimationEditing.md).
+- `ChangelogRegression`: release catalog ordering and uniqueness, version-aware
+  auto-open behavior, and configuration persistence for the last-seen release.
 
 ## Test design
 

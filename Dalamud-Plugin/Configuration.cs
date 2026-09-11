@@ -8,6 +8,12 @@ public sealed class Configuration : IPluginConfiguration
 {
     public int Version { get; set; } = 10;
 
+    /// <summary>Whether the first-time setup wizard has been completed.</summary>
+    public bool FirstTimeSetupCompleted { get; set; }
+
+    /// <summary>Version of the in-game changelog the user last opened.</summary>
+    public string LastSeenChangelogVersion { get; set; } = "";
+
     /// <summary> Port the Blender add-on listens on for import commands. </summary>
     public int BlenderPort { get; set; } = 42424;
 
@@ -15,7 +21,7 @@ public sealed class Configuration : IPluginConfiguration
     public int ListenPort { get; set; } = 42428;
 
     public string TextureEditorPath { get; set; } = "";
-    /// <summary>Base directory for the shared XIV-Instant-Edit cache.</summary>
+    /// <summary>Base directory for the shared XIV Instant Edit cache.</summary>
     public string TextureCacheDirectory { get; set; } = "";
 
     /// <summary>Automatically remove stale model cache jobs and inactive texture sessions.</summary>

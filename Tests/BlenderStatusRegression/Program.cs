@@ -1,8 +1,10 @@
 using System.Net;
 using System.Net.Http;
 using System.Text.Json.Nodes;
+using InstantEdit;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using Newtonsoft.Json;
 
 static void Require(bool condition, string message)
 {
@@ -75,11 +77,67 @@ static async Task CheckConnectionStatesAsync()
 
 }
 
+static void CheckFirstTimeSetupConfiguration()
+{
+    var fresh = JsonConvert.DeserializeObject<Configuration>("{}");
+    Require(fresh is not null && !fresh.FirstTimeSetupCompleted,
+        "missing setup state defaults to incomplete for existing configurations");
+
+    var completed = new Configuration { FirstTimeSetupCompleted = true };
+    var roundTrip = JsonConvert.DeserializeObject<Configuration>(JsonConvert.SerializeObject(completed));
+    Require(roundTrip is not null && roundTrip.FirstTimeSetupCompleted,
+        "completed setup state survives configuration serialization");
+
+    var root = Path.Combine(Path.GetTempPath(), "XIV-Instant-Edit-tests", $"setup-{Guid.NewGuid():N}");
+    try
+    {
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "existing-file.txt"), "existing content");
+        var managed = TextureFiles.EnsureCacheRoot(root);
+        Require(TextureFiles.CacheFolder == "XIV Instant Edit" &&
+                Path.GetFileName(managed) == "XIV Instant Edit" &&
+                File.Exists(Path.Combine(managed, ".instant-edit-cache.json")) &&
+                Directory.Exists(Path.Combine(managed, "imports")) &&
+                Directory.Exists(Path.Combine(managed, "exports")) &&
+                Directory.Exists(Path.Combine(managed, "backups")),
+            "setup creates the managed cache inside a non-empty base directory");
+
+        var conflictBase = Path.Combine(root, "conflict-base");
+        var conflict = Path.Combine(conflictBase, TextureFiles.CacheFolder);
+        Directory.CreateDirectory(conflict);
+        File.WriteAllText(Path.Combine(conflict, "unrelated-file.txt"), "not a cache marker");
+        try
+        {
+            TextureFiles.EnsureCacheRoot(conflictBase);
+            throw new InvalidOperationException("a conflicting managed cache unexpectedly succeeded");
+        }
+        catch (IOException)
+        {
+            Require(true, "setup rejects a conflicting managed cache folder");
+        }
+
+        var editor = Path.Combine(root, "editor.exe");
+        File.WriteAllText(editor, "test executable");
+        Require(TextureEditService.TryValidateEditorPath(editor, out _),
+            "setup accepts an existing absolute .exe texture editor path");
+        Require(!TextureEditService.TryValidateEditorPath(Path.Combine(root, "missing.exe"), out _),
+            "setup rejects a missing texture editor executable");
+        Require(!TextureEditService.TryValidateEditorPath(Path.Combine(root, "editor.txt"), out _),
+            "setup rejects a non-executable texture editor path");
+    }
+    finally
+    {
+        if (Directory.Exists(root))
+            Directory.Delete(root, true);
+    }
+}
+
 await CheckConnectionStatesAsync();
+CheckFirstTimeSetupConfiguration();
 
 foreach (var (body, expectedCache) in new[]
 {
-    ("""{"addonVersion":"1.1.7","capabilities":["instant-edit.texture-cache.v1"],"cacheRoot":"C:/Cache/XIV-Instant-Edit"}""", "C:/Cache/XIV-Instant-Edit"),
+    ("""{"addonVersion":"1.1.7","capabilities":["instant-edit.texture-cache.v1"],"cacheRoot":"C:/Cache/XIV Instant Edit"}""", "C:/Cache/XIV Instant Edit"),
     ("""{"addonVersion":"1.1.7","cacheRoot":"C:/untrusted"}""", (string?)null),
     ("""{"addonVersion":"1.1.7","capabilities":["instant-edit.texture-cache.v1"],"cacheRoot":123}""", (string?)null),
 })
@@ -95,14 +153,14 @@ Require(settingsStatus.CacheSettingsSupported, "the add-on advertises the centra
 
 var cacheHandler = new StubHandler(() => new HttpResponseMessage(HttpStatusCode.OK)
 {
-    Content = new StringContent("{\"ok\":true,\"cacheRoot\":\"C:/Cache/XIV-Instant-Edit\"}"),
+    Content = new StringContent("{\"ok\":true,\"cacheRoot\":\"C:/Cache/XIV Instant Edit\"}"),
 }, null);
 using (var cacheHttp = new HttpClient(cacheHandler))
 using (var cacheContexts = new ExportContextRegistry("blender-cache-settings-regression"))
 using (var cacheClient = new BlenderClient(null!, cacheContexts, cacheHttp))
 {
     var configured = await cacheClient.ConfigureCacheAsync(42424, "C:/Cache", true);
-    Require(configured == "C:/Cache/XIV-Instant-Edit" && cacheHandler.LastMethod == "POST" &&
+    Require(configured == "C:/Cache/XIV Instant Edit" && cacheHandler.LastMethod == "POST" &&
             JsonNode.Parse(cacheHandler.LastBody!)!["schema"]?.GetValue<string>() == "instant-edit.cache-settings" &&
             JsonNode.Parse(cacheHandler.LastBody!)!["cacheDirectory"]?.GetValue<string>() == "C:/Cache" &&
             JsonNode.Parse(cacheHandler.LastBody!)!["automaticCleanup"]?.GetValue<bool>() == true,
