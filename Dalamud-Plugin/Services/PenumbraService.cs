@@ -28,7 +28,8 @@ public sealed record ExportResult(
     IReadOnlyList<string>? RequiredExternalMods = null,
     string? OutputModDirectory = null,
     string? OutputModRootPath = null,
-    string? OutputTargetRelativePath = null)
+    string? OutputTargetRelativePath = null,
+    ResourceDependencyManifest? OutputResourceManifest = null)
 {
     public ExportResult(bool success, string message)
         : this(success, success ? "export_applied" : "apply_failed", message)
@@ -809,7 +810,151 @@ public sealed partial class PenumbraService
         Dictionary<string, string> FileSwaps,
         IReadOnlyList<string> RequiredExternalMods,
         string Code = "accepted",
-        string? Error = null);
+        string? Error = null,
+        IReadOnlyList<PreparedMashupEntry>? Entries = null);
+
+    private sealed record PreparedMashupEntry(
+        MashupContributor Contributor,
+        MaterialDependency Material,
+        MashupMaterialAssignment Assignment,
+        bool BundleExternalDependencies,
+        string? RelativeMaterialPath,
+        IReadOnlyDictionary<string, string> TextureRewrites);
+
+    private static ResourceDependencyManifest? BuildMashupResourceManifest(
+        PreparedMashup prepared,
+        string outputModDirectory,
+        string outputModRoot,
+        ModPathRemap? pathRemap,
+        JsonArray? manipulations)
+    {
+        if (prepared.Entries is not { Count: > 0 })
+            return null;
+
+        var materials = new List<MaterialDependency>(prepared.Entries.Count);
+        foreach (var entry in prepared.Entries)
+        {
+            SourceResourceLocator materialLocator;
+            string materialGamePath;
+            if (entry.RelativeMaterialPath is { } relativeMaterial)
+            {
+                if (!prepared.Files.TryGetValue(relativeMaterial, out var materialBytes))
+                    return null;
+                relativeMaterial = RemapOutputRelativePath(relativeMaterial, pathRemap);
+                materialGamePath = NormalizeGamePath(entry.Assignment.GamePath);
+                materialLocator = OutputResourceLocator(
+                    materialGamePath, outputModDirectory, outputModRoot, relativeMaterial, materialBytes);
+            }
+            else
+            {
+                materialGamePath = NormalizeGamePath(entry.Material.GamePath);
+                materialLocator = entry.Material.Resource;
+            }
+
+            var textures = new List<TextureDependency>(entry.Material.Textures.Count);
+            foreach (var texture in entry.Material.Textures)
+            {
+                var storedGamePath = entry.TextureRewrites.TryGetValue(
+                    NormalizeGamePath(texture.StoredGamePath), out var rewrittenStoredPath)
+                    ? NormalizeGamePath(rewrittenStoredPath)
+                    : NormalizeGamePath(texture.StoredGamePath);
+                var effectiveGamePath = Dx11TexturePath(storedGamePath, texture.Flags);
+                var textureLocator = texture.Resource;
+
+                if (TryGetGeneratedTexture(
+                        prepared, texture, effectiveGamePath, pathRemap,
+                        out var generatedGamePath, out var generatedRelativePath, out var generatedBytes))
+                {
+                    textureLocator = OutputResourceLocator(
+                        generatedGamePath, outputModDirectory, outputModRoot, generatedRelativePath, generatedBytes);
+                }
+                else if (entry.TextureRewrites.ContainsKey(NormalizeGamePath(texture.StoredGamePath)))
+                {
+                    // A rewritten material without its corresponding generated
+                    // texture would make the manifest appear valid while leaving
+                    // the next mashup unable to read the resource.
+                    return null;
+                }
+
+                textures.Add(texture with
+                {
+                    StoredGamePath = storedGamePath,
+                    EffectiveGamePath = effectiveGamePath,
+                    Resource = textureLocator,
+                });
+            }
+
+            materials.Add(new MaterialDependency
+            {
+                ModelMaterial = NormalizeModelMaterial(entry.Assignment.Alias),
+                GamePath = materialGamePath,
+                Resource = materialLocator,
+                Textures = textures,
+            });
+        }
+
+        return new ResourceDependencyManifest
+        {
+            Materials = materials,
+            Manipulations = CloneManipulations(manipulations),
+        };
+    }
+
+    private static bool TryGetGeneratedTexture(
+        PreparedMashup prepared,
+        TextureDependency texture,
+        string effectiveGamePath,
+        ModPathRemap? pathRemap,
+        out string generatedGamePath,
+        out string generatedRelativePath,
+        out byte[] generatedBytes)
+    {
+        var expectedHash = texture.Resource.Sha256;
+        var possiblePaths = new[]
+        {
+            NormalizeGamePath(effectiveGamePath),
+            NormalizeGamePath(texture.Resource.GamePath),
+        };
+        foreach (var gamePath in possiblePaths.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!prepared.Mappings.TryGetValue(gamePath, out var relative) ||
+                !prepared.Files.TryGetValue(relative, out var bytes) ||
+                !relative.EndsWith(".tex", StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(TextureFiles.Hash(bytes), expectedHash, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            generatedGamePath = gamePath;
+            generatedRelativePath = RemapOutputRelativePath(relative, pathRemap);
+            generatedBytes = bytes;
+            return true;
+        }
+
+        generatedGamePath = string.Empty;
+        generatedRelativePath = string.Empty;
+        generatedBytes = Array.Empty<byte>();
+        return false;
+    }
+
+    private static SourceResourceLocator OutputResourceLocator(
+        string gamePath,
+        string modDirectory,
+        string modRoot,
+        string relativePath,
+        byte[] bytes)
+        => new()
+        {
+            Kind = InstantEditImportContext.ModSource,
+            GamePath = NormalizeGamePath(gamePath),
+            SourceModDirectory = modDirectory,
+            SourceModRootPath = modRoot,
+            SourceRelativePath = relativePath,
+            Sha256 = TextureFiles.Hash(bytes).ToLowerInvariant(),
+        };
+
+    private static string RemapOutputRelativePath(string relativePath, ModPathRemap? pathRemap)
+        => pathRemap?.RelativePaths.TryGetValue(relativePath, out var remapped) == true
+            ? remapped
+            : relativePath;
 
     private async Task<PreparedMashup> PrepareMashupAsync(
         InstantEditImportContext activeContext,
@@ -836,6 +981,7 @@ public sealed partial class PenumbraService
             MaterialDependency Material,
             MashupMaterialAssignment Assignment,
             bool BundleExternalDependencies)>();
+        var preparedEntries = new List<PreparedMashupEntry>();
 
         foreach (var assignment in plan.Assignments)
         {
@@ -933,6 +1079,13 @@ public sealed partial class PenumbraService
                         return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [],
                             "mashup_texture_conflict", textureError);
                 }
+                preparedEntries.Add(new PreparedMashupEntry(
+                    entry.Contributor,
+                    entry.Material,
+                    entry.Assignment,
+                    entry.BundleExternalDependencies,
+                    null,
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)));
                 continue;
             }
 
@@ -1038,6 +1191,13 @@ public sealed partial class PenumbraService
                 return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], "mashup_material_path_conflict",
                     $"More than one rewritten material targets {entry.Assignment.GamePath}.");
             mappings[entry.Assignment.GamePath] = relativeMaterial;
+            preparedEntries.Add(new PreparedMashupEntry(
+                entry.Contributor,
+                entry.Material,
+                entry.Assignment,
+                entry.BundleExternalDependencies,
+                relativeMaterial,
+                rewrites));
         }
 
         var relativeModel = $"Files/xiv-instant-edit/mashups/{exportId[..12]}/model.mdl";
@@ -1047,7 +1207,8 @@ public sealed partial class PenumbraService
             return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], "mashup_mapping_conflict",
                 "A generated file mapping conflicts with a pass-through FileSwap.");
         var requiredExternalMods = await ResolveExternalMashupModNamesAsync(externalDirectories).ConfigureAwait(false);
-        return new PreparedMashup(modelBytes, files, mappings, fileSwaps, requiredExternalMods);
+        return new PreparedMashup(modelBytes, files, mappings, fileSwaps, requiredExternalMods,
+            Entries: preparedEntries);
     }
 
     private async Task<IReadOnlyList<string>> ResolveExternalMashupModNamesAsync(
@@ -1318,7 +1479,10 @@ public sealed partial class PenumbraService
                 cleanup.PathRemap, prepared.RequiredExternalMods,
                 OutputModDirectory: target.Directory,
                 OutputModRootPath: target.Folder,
-                OutputTargetRelativePath: modelRelative);
+                OutputTargetRelativePath: modelRelative,
+                OutputResourceManifest: BuildMashupResourceManifest(
+                    prepared, target.Directory, target.Folder, cleanup.PathRemap,
+                    activeContext.ResourceManifest?.Manipulations));
         }
         catch (Exception e)
         {
@@ -1337,7 +1501,10 @@ public sealed partial class PenumbraService
                 warnings, modelPath, actualName, RequiredExternalMods: prepared.RequiredExternalMods,
                 OutputModDirectory: target.Directory,
                 OutputModRootPath: target.Folder,
-                OutputTargetRelativePath: modelRelative);
+                OutputTargetRelativePath: modelRelative,
+                OutputResourceManifest: BuildMashupResourceManifest(
+                    prepared, target.Directory, target.Folder, null,
+                    activeContext.ResourceManifest?.Manipulations));
         }
     }
 
@@ -1424,7 +1591,10 @@ public sealed partial class PenumbraService
                 RequiredExternalMods: prepared.RequiredExternalMods,
                 OutputModDirectory: modName,
                 OutputModRootPath: finalFolder,
-                OutputTargetRelativePath: modelRelative);
+                OutputTargetRelativePath: modelRelative,
+                OutputResourceManifest: BuildMashupResourceManifest(
+                    prepared, modName, finalFolder, cleanup.PathRemap,
+                    activeContext.ResourceManifest?.Manipulations));
         }
         catch (Exception e)
         {
@@ -1442,7 +1612,10 @@ public sealed partial class PenumbraService
                     warnings, modelPath, modName, RequiredExternalMods: prepared.RequiredExternalMods,
                     OutputModDirectory: modName,
                     OutputModRootPath: finalFolder,
-                    OutputTargetRelativePath: modelRelative);
+                    OutputTargetRelativePath: modelRelative,
+                    OutputResourceManifest: BuildMashupResourceManifest(
+                        prepared, modName, finalFolder, null,
+                        activeContext.ResourceManifest?.Manipulations));
             }
             return new ExportResult(false, "mashup_mod_create_failed", e.Message);
         }

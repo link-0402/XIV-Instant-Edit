@@ -22,6 +22,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
     {
         if (!IsSafeGameResourcePath(request.GamePath, ".tex")) throw new IOException("Select a valid TEX game resource.");
         var vanilla = string.IsNullOrEmpty(request.ModDirectory);
+        var resolvedGamePath = vanilla ? NormalizeGamePath(request.ActualPath) : "";
         var collection = request.ObjectIndex is { } index ? await GetCollectionTargetAsync(index).ConfigureAwait(false) : null;
         var actor = await _framework.RunOnFrameworkThread(() =>
         {
@@ -37,6 +38,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
         if (vanilla)
         {
             if (Path.IsPathRooted(request.ActualPath)) throw new IOException("This external file has no verified Penumbra destination.");
+            if (!IsSafeGameResourcePath(resolvedGamePath, ".tex")) throw new IOException("The resolved vanilla texture path is invalid.");
             if (!IsSafeNewModName(request.NewModName)) throw new IOException("Enter a valid, unused name for the new texture mod.");
             if (collection is null) throw new IOException("The actor's collection is unavailable. Refresh and try again.");
             var root = await _framework.RunOnFrameworkThread(GetModDirectory).ConfigureAwait(false);
@@ -46,8 +48,8 @@ public sealed partial class PenumbraService : ITextureEditBackend
             relative = "Files/" + request.GamePath;
             TextureFiles.EnsureLocalPath(modRoot);
             await EnsureNewTextureModNameAsync(modDirectory, modRoot).ConfigureAwait(false);
-            bytes = await _framework.RunOnFrameworkThread(() => _data?.GetFile(request.GamePath)?.Data.ToArray()
-                ?? throw new IOException("The vanilla texture could not be read.")).ConfigureAwait(false);
+            bytes = await _framework.RunOnFrameworkThread(() => _data?.GetFile(resolvedGamePath)?.Data.ToArray()
+                ?? throw new IOException("The resolved vanilla texture could not be read.")).ConfigureAwait(false);
         }
         else
         {
@@ -57,7 +59,8 @@ public sealed partial class PenumbraService : ITextureEditBackend
         var header = TextureFiles.ReadTex(bytes);
         var session = new TextureEditSession
         {
-            GamePath = request.GamePath, ModDirectory = modDirectory, ModRoot = modRoot, RelativePath = relative,
+            GamePath = request.GamePath, ResolvedGamePath = resolvedGamePath,
+            ModDirectory = modDirectory, ModRoot = modRoot, RelativePath = relative,
             NewModName = request.NewModName, NeedsMod = vanilla, SetupPending = vanilla,
             ObjectIndex = request.ObjectIndex, ActorAddress = request.ActorAddress, ActorId = actor.Id, ActorName = actor.Name,
             CollectionId = collection?.Id, CollectionName = collection?.Name ?? "",
@@ -65,7 +68,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
             LastCommittedHash = vanilla ? "" : TextureFiles.Hash(bytes),
             MappingFingerprint = vanilla ? "" : TextureMappingFingerprint(modRoot),
         };
-        await ValidateLiveTextureMappingAsync(session, vanilla ? request.GamePath : request.ActualPath, true).ConfigureAwait(false);
+        await ValidateLiveTextureMappingAsync(session, vanilla ? resolvedGamePath : request.ActualPath, true).ConfigureAwait(false);
         return new TextureSource(bytes, session);
     }
 
@@ -136,7 +139,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
             if (session.NeedsMod)
             {
                 await EnsureNewTextureModNameAsync(session.ModDirectory, session.ModRoot).ConfigureAwait(false);
-                await ValidateLiveTextureMappingAsync(session, session.GamePath, false).ConfigureAwait(false);
+                await ValidateLiveTextureMappingAsync(session, session.ResolvedGamePath, false).ConfigureAwait(false);
                 TextureFiles.EnsureLocalPath(session.ModRoot);
                 var staging = session.ModRoot + $".instant-edit-{session.Id:N}.tmp";
                 TextureFiles.EnsureLocalPath(staging);

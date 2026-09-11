@@ -76,9 +76,10 @@ public sealed partial class PenumbraService
                 foreach (var mod in _getModList.Invoke().Keys.Where(m => m != journal.ModDirectory))
                 {
                     var settings = _getCurrentModSettings.Invoke(journal.Request.Capture.CollectionId, mod, "", false);
-                    if (settings.Item1 != PenumbraApiEc.Success || settings.Item2 == null)
+                    if (settings.Item1 != PenumbraApiEc.Success)
                         throw new IOException($"Could not inspect the priority of {mod}.");
-                    if (settings.Item2.Value.Item1) highest = Math.Max(highest, settings.Item2.Value.Item2);
+                    if (settings.Item2 is { } current && current.Item1)
+                        highest = Math.Max(highest, current.Item2);
                 }
                 if (highest == int.MaxValue) throw new IOException("An enabled mod already has maximum priority. Lower its priority before retrying.");
                 var configured = ConfigureModForCollectionOnFramework(journal.ModDirectory,

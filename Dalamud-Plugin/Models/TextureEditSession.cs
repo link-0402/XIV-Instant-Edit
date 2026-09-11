@@ -10,6 +10,7 @@ public sealed record TextureEditSession
     public Guid Id { get; init; } = Guid.NewGuid();
     public string CacheRoot { get; init; } = "";
     public string GamePath { get; init; } = "";
+    public string ResolvedGamePath { get; init; } = "";
     public string ModDirectory { get; set; } = "";
     public string ModRoot { get; set; } = "";
     public string RelativePath { get; set; } = "";

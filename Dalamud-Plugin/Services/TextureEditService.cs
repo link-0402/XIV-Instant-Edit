@@ -61,10 +61,19 @@ public sealed class TextureEditService : IDisposable
             {
                 var restored = JsonSerializer.Deserialize<TextureEditSession[]>(TextureFiles.Read(_catalog))
                     ?? throw new IOException("Invalid texture session catalog.");
-                foreach (var s in restored)
+                foreach (var restoredSession in restored)
                 {
+                    // Sessions written before resolved vanilla paths were
+                    // persisted used GamePath for both values. Preserve those
+                    // sessions while allowing new captures to distinguish a
+                    // file-swapped source.
+                    var s = restoredSession.NeedsMod && restoredSession.ResolvedGamePath.Length == 0
+                        ? restoredSession with { ResolvedGamePath = restoredSession.GamePath }
+                        : restoredSession;
                     if (s.Id == Guid.Empty || !PenumbraService.IsSafeGameResourcePath(s.GamePath, ".tex") ||
-                        !PenumbraService.IsSafeGameResourcePath(s.RelativePath, ".tex")) throw new IOException("Invalid texture session identity.");
+                        !PenumbraService.IsSafeGameResourcePath(s.RelativePath, ".tex") ||
+                        (s.NeedsMod && !PenumbraService.IsSafeGameResourcePath(s.ResolvedGamePath, ".tex")))
+                        throw new IOException("Invalid texture session identity.");
                     TextureFiles.EnsureLocalPath(s.Directory);
                     MigrateLegacyWorkingFile(s);
                     TextureFiles.EnsureLocalPath(s.TargetFile);
@@ -324,6 +333,18 @@ public sealed class TextureEditService : IDisposable
         try
         {
             if (!Directory.Exists(session.Directory) || session.WorkingHash.Length == 0 || !File.Exists(session.WorkingFile))
+                return false;
+
+            // The working directory is also the editor handoff directory. Only
+            // remove files that this service creates; an artist may keep a PSD,
+            // layered source, or editor backup beside the working TGA.
+            var generated = new HashSet<string>(new[]
+            {
+                "original.tex", "pixels.tex", "snapshot.tga", "converted.tex", "session.json",
+                Path.GetFileName(session.WorkingFile), "texture.tga",
+            }.Select(name => Path.GetFullPath(Path.Combine(session.Directory, name))), StringComparer.OrdinalIgnoreCase);
+            if (Directory.EnumerateFiles(session.Directory, "*", SearchOption.AllDirectories)
+                    .Any(path => !generated.Contains(Path.GetFullPath(path))))
                 return false;
 
             var latest = Directory.GetLastWriteTimeUtc(session.Directory);
