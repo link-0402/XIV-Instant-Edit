@@ -10,6 +10,7 @@ import bpy
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from blender_fixtures import addon_session, temporary_scene_data
+from armature_regression import assert_combination, assert_combination_export
 
 
 def assert_corner_aware_uv_export(addon) -> None:
@@ -620,6 +621,8 @@ def assert_mesh_part_gap_handling(addon):
 
 def run() -> None:
     with addon_session("_xiv_instant_edit_export_smoke") as addon:
+        assert_combination(addon)
+        assert_combination_export(addon)
         assert_corner_aware_uv_export(addon)
         assert_mesh_group_conflict_resolution(addon)
         assert_mesh_name_conversion(addon)

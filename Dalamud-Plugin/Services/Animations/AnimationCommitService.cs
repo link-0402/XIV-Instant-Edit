@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using InstantEdit.Models;
 
 namespace InstantEdit.Services.Animations;
@@ -103,11 +104,11 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                 }
                 if (journal.Request.Destination == AnimationDestination.NewMod)
                 {
-                    var mappings = journal.Files.ToDictionary(f => f.GamePath, f => f.RelativePath.Replace('\\', '/'));
-                    AnimationJournalStore.WriteAtomic(Path.Combine(journal.ModRoot, "meta.json"), JsonSerializer.SerializeToUtf8Bytes(new
-                        { FileVersion = 3, Name = journal.ModDirectory, Author = "XIV Instant Edit", Version = "1.0", Description = "Animation offsets baked by XIV Instant Edit." }));
-                    AnimationJournalStore.WriteAtomic(Path.Combine(journal.ModRoot, "default_mod.json"), JsonSerializer.SerializeToUtf8Bytes(new
-                        { Files = mappings, FileSwaps = new Dictionary<string, string>(), Manipulations = JsonSerializer.Deserialize<JsonElement>(manifest.ManipulationsJson) }));
+                    var metadata = CreateNewModMetadata(
+                        journal.ModDirectory, journal.Files, manifest.ManipulationsJson);
+                    AnimationJournalStore.WriteAtomic(
+                        Path.Combine(journal.ModRoot, "meta.json"),
+                        JsonSerializer.SerializeToUtf8Bytes(metadata));
                     journal.ModFileHashes = ModHashes(journal.ModRoot);
                 }
                 journal.State = "Committed"; store.Save(journal);
@@ -131,6 +132,27 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                 throw new IOException(journal.Message, error);
             }
         }, token);
+    }
+
+    internal static JsonObject CreateNewModMetadata(
+        string modName, IEnumerable<AnimationFileChange> changes, string manipulationsJson)
+    {
+        var files = new JsonObject();
+        foreach (var change in changes)
+            files[change.GamePath] = change.RelativePath.Replace('\\', '/');
+        var manipulations = JsonNode.Parse(manipulationsJson) as JsonArray
+            ?? throw new InvalidDataException("Animation manipulations are not a JSON array.");
+        return PenumbraService.CreateV4ModMetadata(
+            modName,
+            "XIV Instant Edit",
+            "Animation offsets baked by XIV Instant Edit.",
+            "1.0",
+            new JsonObject
+            {
+                ["Files"] = files,
+                ["FileSwaps"] = new JsonObject(),
+                ["Manipulations"] = manipulations,
+            });
     }
 
     public Task UndoFilesAsync(AnimationEditJournal journal) => penumbra.AnimationExportAsync(() => UndoFilesCoreAsync(journal), CancellationToken.None);

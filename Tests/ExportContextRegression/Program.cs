@@ -163,32 +163,121 @@ try
     Require(sourceOption.ToJsonString() == originalOptionJson,
         "variant creation leaves the source option unchanged");
 
-    var selectorRoot = Path.Combine(testRoot, "LegacySelectors");
+    var selectorRoot = Path.Combine(testRoot, "StableSelectors");
     Directory.CreateDirectory(selectorRoot);
-    File.WriteAllText(Path.Combine(selectorRoot, "meta.json"), new JsonObject { ["FileVersion"] = 3 }.ToJsonString());
-    File.WriteAllText(Path.Combine(selectorRoot, "group_001.json"), new JsonObject
+    var selectorGroupId = Guid.NewGuid();
+    var selectorOptionId = Guid.NewGuid();
+    File.WriteAllText(Path.Combine(selectorRoot, "meta.json"), new JsonObject
     {
-        ["Type"] = "Single",
-        ["Id"] = Guid.NewGuid(),
-        ["Name"] = "Legacy Variants",
-        ["Options"] = new JsonArray(new JsonObject
+        ["FileVersion"] = 4,
+        ["Identifier"] = Guid.NewGuid(),
+        ["LastWrite"] = DateTime.UtcNow,
+        ["DefaultData"] = null,
+        ["Groups"] = new JsonArray(new JsonObject
         {
-            ["Id"] = Guid.NewGuid(),
-            ["Name"] = "Variant",
-            ["Files"] = new JsonObject { [clonedGamePath] = "Files/models/variant.mdl" },
+            ["Type"] = "Single",
+            ["Id"] = selectorGroupId,
+            ["Name"] = "Variants",
+            ["Options"] = new JsonArray(new JsonObject
+            {
+                ["Id"] = selectorOptionId,
+                ["Name"] = "Variant",
+                ["Files"] = new JsonObject { [clonedGamePath] = "Files/models/variant.mdl" },
+            }),
         }),
     }.ToJsonString());
-    var legacyTargets = PenumbraService.ReadVariantTargetsForRegression(selectorRoot, clonedGamePath);
-    Require(legacyTargets.Single().Id == "legacy-group:group_001.json" &&
-            legacyTargets.Single().Options.Single().Id == "legacy-option:group_001.json:0",
-        "v3 groups retain file/index selectors even when temporary GUID fields exist");
-    var stableSelector = legacyTargets.Single().Options.Single().Id;
+    var stableTargets = PenumbraService.ReadVariantTargetsForRegression(selectorRoot, clonedGamePath);
+    Require(stableTargets.Single().Id == $"group:{selectorGroupId:D}" &&
+            stableTargets.Single().Options.Single().Id == $"option:{selectorGroupId:D}:{selectorOptionId:D}",
+        "v4 groups expose stable GUID selectors");
+    var stableSelector = stableTargets.Single().Options.Single().Id;
     var firstResolvedOption = PenumbraService.ResolveVariantOptionPathForRegression(
         selectorRoot, clonedGamePath, stableSelector);
     var secondResolvedOption = PenumbraService.ResolveVariantOptionPathForRegression(
         selectorRoot, clonedGamePath, stableSelector);
     Require(firstResolvedOption is not null && firstResolvedOption == secondResolvedOption,
-        "the refreshed v3 option selector resolves for two consecutive saves");
+        "the refreshed v4 option selector resolves for two consecutive saves");
+    var selectorMetaPath = Path.Combine(selectorRoot, "meta.json");
+    var selectorMeta = JsonNode.Parse(File.ReadAllText(selectorMetaPath))!.AsObject();
+    selectorMeta["Groups"]![0]!["Name"] = "Renamed Group";
+    selectorMeta["Groups"]![0]!["Options"]![0]!["Name"] = "Renamed Option";
+    File.WriteAllText(selectorMetaPath, selectorMeta.ToJsonString());
+    var stableSource = PenumbraService.ResolveSourceOptionForRegression(
+        selectorRoot, clonedGamePath, "Files/models/variant.mdl", new SourceOptionLocator
+        {
+            Membership = stableSelector,
+            GroupName = "Old Group Name",
+            OptionName = "Old Option Name",
+        });
+    Require(stableSource.Error is null && stableSource.Membership == stableSelector,
+        "persisted v4 source identity follows GUIDs across renames");
+    var legacySource = PenumbraService.ResolveSourceOptionForRegression(
+        selectorRoot, clonedGamePath, "Files/models/variant.mdl", new SourceOptionLocator
+        {
+            Membership = "meta:group:0:option:0",
+            GroupName = "Renamed Group",
+            OptionName = "Renamed Option",
+        });
+    Require(legacySource.Error is null && legacySource.Membership == stableSelector,
+        "a legacy index locator upgrades through a unique group and option name match");
+    var staleStableSource = PenumbraService.ResolveSourceOptionForRegression(
+        selectorRoot, clonedGamePath, "Files/models/variant.mdl", new SourceOptionLocator
+        {
+            Membership = $"option:{selectorGroupId:D}:{Guid.NewGuid():D}",
+            GroupName = "Renamed Group",
+            OptionName = "Renamed Option",
+        });
+    Require(staleStableSource.Membership is null && staleStableSource.Error is not null,
+        "a stale v4 GUID locator requires re-import instead of falling back to names");
+    selectorMeta["Groups"]![0]!["Options"]!.AsArray().Add(new JsonObject
+    {
+        ["Id"] = Guid.NewGuid(),
+        ["Name"] = "Renamed Option",
+        ["Files"] = new JsonObject { [clonedGamePath] = "Files/models/variant.mdl" },
+    });
+    File.WriteAllText(selectorMetaPath, selectorMeta.ToJsonString());
+    var ambiguousLegacySource = PenumbraService.ResolveSourceOptionForRegression(
+        selectorRoot, clonedGamePath, "Files/models/variant.mdl", new SourceOptionLocator
+        {
+            Membership = "meta:group:0:option:0",
+            GroupName = "Renamed Group",
+            OptionName = "Renamed Option",
+        });
+    Require(ambiguousLegacySource.Membership is null && ambiguousLegacySource.Error is not null,
+        "legacy index locators require re-import when names are not unique");
+
+    var combiningRoot = Path.Combine(testRoot, "CombiningMemberships");
+    Directory.CreateDirectory(combiningRoot);
+    var combiningGroupId = Guid.NewGuid();
+    var combiningFirstId = Guid.NewGuid();
+    var combiningSecondId = Guid.NewGuid();
+    const string combiningRelative = "Files/models/combined.mdl";
+    File.WriteAllText(Path.Combine(combiningRoot, "meta.json"), new JsonObject
+    {
+        ["FileVersion"] = 4,
+        ["Identifier"] = Guid.NewGuid(),
+        ["LastWrite"] = DateTime.UtcNow,
+        ["DefaultData"] = null,
+        ["Groups"] = new JsonArray(new JsonObject
+        {
+            ["Type"] = "Combining",
+            ["Id"] = combiningGroupId,
+            ["Name"] = "Features",
+            ["Options"] = new JsonArray(
+                new JsonObject { ["Id"] = combiningFirstId, ["Name"] = "First" },
+                new JsonObject { ["Id"] = combiningSecondId, ["Name"] = "Second" }),
+            ["Containers"] = new JsonArray(
+                new JsonObject(), new JsonObject(), new JsonObject(),
+                new JsonObject { ["Files"] = new JsonObject { [clonedGamePath] = combiningRelative } }),
+        }),
+    }.ToJsonString());
+    var combiningMemberships = PenumbraService.ReadOptionMembershipsForRegression(combiningRoot, combiningRelative);
+    Require(combiningMemberships.Order().SequenceEqual(new[]
+        {
+            $"option:{combiningGroupId:D}:{combiningFirstId:D}",
+            $"option:{combiningGroupId:D}:{combiningSecondId:D}",
+        }.Order()),
+        "Combining containers expose stable option GUID memberships instead of array indexes");
 
     var originalRoot = Path.Combine(testRoot, "OriginalMod");
     var originalParent = Path.Combine(originalRoot, "Files", "models");
@@ -626,33 +715,37 @@ try
     const string defaultTexture = "chara/equipment/e0001/texture/default_d.tex";
     const string unmappedTexture = "chara/equipment/e0001/texture/unmapped_n.tex";
     const string ambiguousTexture = "chara/equipment/e0001/texture/ambiguous_s.tex";
+    var browserGroupId = Guid.NewGuid();
+    var browserMembershipA = $"option:{browserGroupId:D}:{Guid.NewGuid():D}";
+    var browserMembershipB = $"option:{browserGroupId:D}:{Guid.NewGuid():D}";
+    var textureMembershipB = $"option:{Guid.NewGuid():D}:{Guid.NewGuid():D}";
     var browserCandidates = new MaterialResourceCandidate[]
     {
         new(optionMaterial, @"G:\Mods\Test\Files\option-a.mtrl",
             "test-mod", @"G:\Mods\Test", "Files/option-a.mtrl",
-            ["meta:group:0:option:0"], "Variant: A"),
+            [browserMembershipA], "Variant: A"),
         new(optionMaterial, @"G:\Mods\Test\Files\option-b.mtrl",
             "test-mod", @"G:\Mods\Test", "Files/option-b.mtrl",
-            ["meta:group:0:option:1"], "Variant: B"),
+            [browserMembershipB], "Variant: B"),
         new(defaultTexture, @"G:\Mods\Test\Files\default.tex",
             "test-mod", @"G:\Mods\Test", "Files/default.tex",
             ["default"], "Default"),
         new(defaultTexture, @"G:\Mods\Test\Files\other-option.tex",
             "test-mod", @"G:\Mods\Test", "Files/other-option.tex",
-            ["meta:group:1:option:1"], "Textures: B"),
+            [textureMembershipB], "Textures: B"),
         new(unmappedTexture, @"G:\Mods\Test\Files\unmapped.tex",
             "test-mod", @"G:\Mods\Test", "Files/unmapped.tex",
             [], "Unmapped"),
         new(ambiguousTexture, @"G:\Mods\Test\Files\ambiguous-one.tex",
             "test-mod", @"G:\Mods\Test", "Files/ambiguous-one.tex",
-            ["meta:group:0:option:0"], "Variant: A"),
+            [browserMembershipA], "Variant: A"),
         new(ambiguousTexture, @"G:\Mods\Test\Files\ambiguous-two.tex",
             "test-mod", @"G:\Mods\Test", "Files/ambiguous-two.tex",
-            ["meta:group:0:option:0"], "Variant: A duplicate"),
+            [browserMembershipA], "Variant: A duplicate"),
     };
     var browserWarnings = new List<string>();
     var scopedBrowserCandidates = MaterialPreviewBundleBuilder.ScopeResourceCandidates(
-        browserCandidates, ["meta:group:0:option:0"], browserWarnings);
+        browserCandidates, [browserMembershipA], browserWarnings);
     Require(scopedBrowserCandidates.Single(candidate => candidate.GamePath == optionMaterial).ActualPath
                 .EndsWith("option-a.mtrl", StringComparison.Ordinal) &&
             scopedBrowserCandidates.Single(candidate => candidate.GamePath == defaultTexture).ActualPath
@@ -1524,14 +1617,15 @@ try
         Path.Combine(markerlessMashupRoot, "Files", "xiv-instant-edit", "mashups", "test", "model.mdl"),
         [1, 2, 3]);
     File.WriteAllText(Path.Combine(markerlessMashupRoot, "meta.json"),
-        "{\"FileVersion\":3,\"Name\":\"Markerless Mashup\"}");
-    File.WriteAllText(Path.Combine(markerlessMashupRoot, "default_mod.json"), new JsonObject
-    {
-        ["Version"] = 0,
-        ["Files"] = new JsonObject { [effectiveHairPath] = markerlessMapping[effectiveHairPath] },
-        ["FileSwaps"] = new JsonObject(mashupFileSwaps.Select(pair =>
-            KeyValuePair.Create<string, JsonNode?>(pair.Key, pair.Value))),
-    }.ToJsonString());
+        PenumbraService.CreateV4ModMetadata(
+            "Markerless Mashup", "XIV Instant Edit", "", "",
+            new JsonObject
+            {
+                ["Files"] = new JsonObject { [effectiveHairPath] = markerlessMapping[effectiveHairPath] },
+                ["FileSwaps"] = new JsonObject(mashupFileSwaps.Select(pair =>
+                    KeyValuePair.Create<string, JsonNode?>(pair.Key, pair.Value))),
+                ["Manipulations"] = new JsonArray(),
+            }).ToJsonString());
     var markerlessValidation = true;
     try
     {
@@ -1553,11 +1647,13 @@ try
         vanillaStageRoot, "Vanilla Model Edit", vanillaConsumer, [10, 11, 12]);
     var stagedVanillaMeta = JsonNode.Parse(
         File.ReadAllText(Path.Combine(vanillaStageRoot, "meta.json")))!.AsObject();
-    var stagedVanillaDefault = JsonNode.Parse(
-        File.ReadAllText(Path.Combine(vanillaStageRoot, "default_mod.json")))!.AsObject();
+    var stagedVanillaDefault = stagedVanillaMeta["DefaultData"]!.AsObject();
     Require(stagedVanillaRelative == "Files/" + vanillaConsumer &&
-            stagedVanillaMeta["FileVersion"]!.GetValue<int>() == 3 &&
+            stagedVanillaMeta["FileVersion"]!.GetValue<int>() == 4 &&
+            Guid.TryParse(stagedVanillaMeta["Identifier"]!.GetValue<string>(), out _) &&
+            DateTimeOffset.TryParse(stagedVanillaMeta["LastWrite"]!.GetValue<string>(), out _) &&
             stagedVanillaMeta["Author"]!.GetValue<string>() == "XIV Instant Edit" &&
+            stagedVanillaMeta["Groups"]!.AsArray().Count == 0 &&
             stagedVanillaDefault["Files"]!.AsObject().Count == 1 &&
             stagedVanillaDefault["Files"]![vanillaConsumer]!.GetValue<string>() == stagedVanillaRelative &&
             stagedVanillaDefault["Manipulations"]!.AsArray().Count == 0 &&
@@ -1565,9 +1661,11 @@ try
                 vanillaStageRoot, stagedVanillaRelative.Replace('/', Path.DirectorySeparatorChar)))
                 .SequenceEqual(new byte[] { 10, 11, 12 }) &&
             !File.Exists(Path.Combine(vanillaStageRoot, ".instant-edit-owner.json")) &&
+            !File.Exists(Path.Combine(vanillaStageRoot, "default_mod.json")) &&
+            Directory.GetFiles(vanillaStageRoot, "group_*.json").Length == 0 &&
             Directory.GetFiles(vanillaStageRoot, "*.mtrl", SearchOption.AllDirectories).Length == 0 &&
             Directory.GetFiles(vanillaStageRoot, "*.tex", SearchOption.AllDirectories).Length == 0,
-        "first vanilla export stages one v3 model mapping without ownership or copied dependencies");
+        "first vanilla export stages one v4 meta.json without legacy metadata or copied dependencies");
     var unsafeVanillaStageRejected = false;
     try
     {
@@ -1580,103 +1678,90 @@ try
     Require(unsafeVanillaStageRejected,
         "vanilla mod staging rejects consumer-path traversal before writing files");
 
-    var manipulationV3Root = Path.Combine(testRoot, "ManipulationsV3");
-    Directory.CreateDirectory(manipulationV3Root);
-    File.WriteAllText(Path.Combine(manipulationV3Root, "meta.json"),
-        "{\"FileVersion\":3,\"Name\":\"Manipulations V3\"}");
-    File.WriteAllText(Path.Combine(manipulationV3Root, "default_mod.json"), new JsonObject
-    {
-        ["Manipulations"] = new JsonArray
-        {
-            new JsonObject
-            {
-                ["Type"] = "Eqp",
-                ["Manipulation"] = new JsonObject { ["SetId"] = 1, ["Slot"] = "Body", ["Entry"] = 99 },
-            },
-            new JsonObject { ["Type"] = "Atr", ["Entry"] = "default" },
-        },
-    }.ToJsonString());
-    File.WriteAllText(Path.Combine(manipulationV3Root, "group_001_low.json"), new JsonObject
-    {
-        ["Type"] = "Multi",
-        ["Name"] = "Details",
-        ["Priority"] = 2,
-        ["Options"] = new JsonArray
-        {
-            new JsonObject
-            {
-                ["Name"] = "Enabled Detail",
-                ["Manipulations"] = new JsonArray
-                {
-                    new JsonObject { ["Type"] = "Eqdp", ["Entry"] = "multi-1" },
-                    new JsonObject { ["Type"] = "Imc", ["Entry"] = "multi-2" },
-                },
-            },
-            new JsonObject
-            {
-                ["Name"] = "Disabled Detail",
-                ["Manipulations"] = new JsonArray { new JsonObject { ["Type"] = "Imc", ["Entry"] = "disabled" } },
-            },
-        },
-    }.ToJsonString());
-    File.WriteAllText(Path.Combine(manipulationV3Root, "group_002_high.json"), new JsonObject
-    {
-        ["Type"] = "Single",
-        ["Name"] = "Shape",
-        ["Priority"] = 9,
-        ["Options"] = new JsonArray
-        {
-            new JsonObject
-            {
-                ["Name"] = "Enabled Shape",
-                ["Manipulations"] = new JsonArray
-                {
-                    new JsonObject
-                    {
-                        ["Type"] = "Eqp",
-                        ["Manipulation"] = new JsonObject { ["SetId"] = 1, ["Slot"] = "Body", ["Entry"] = 11 },
-                    },
-                    new JsonObject { ["Type"] = "Est", ["Entry"] = "high-2" },
-                },
-            },
-        },
-    }.ToJsonString());
-    var v3Manipulations = PenumbraService.CaptureEffectiveManipulations(
-        manipulationV3Root,
-        new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Details"] = ["Enabled Detail"],
-            ["Shape"] = ["Enabled Shape"],
-        });
-    Require(v3Manipulations.Select(item => item!["Type"]!.GetValue<string>())
-                .SequenceEqual(["Eqp", "Est", "Eqdp", "Imc", "Atr"]) &&
-            v3Manipulations.All(item => item!["Entry"]?.GetValue<string>() != "disabled") &&
-            v3Manipulations[0]!["Manipulation"]!["Entry"]!.GetValue<int>() == 11,
-        "v3 manipulation capture applies selected options before Default with unique first-wins conflicts");
-
     var manipulationV4Root = Path.Combine(testRoot, "ManipulationsV4");
     Directory.CreateDirectory(manipulationV4Root);
     File.WriteAllText(Path.Combine(manipulationV4Root, "meta.json"), new JsonObject
     {
         ["FileVersion"] = 4,
+        ["Identifier"] = Guid.NewGuid(),
+        ["LastWrite"] = DateTime.UtcNow,
         ["Name"] = "Manipulations V4",
         ["DefaultData"] = new JsonObject
         {
-            ["Manipulations"] = new JsonArray { new JsonObject { ["Type"] = "Atr", ["Entry"] = "v4-default" } },
+            ["Manipulations"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["Type"] = "Eqp",
+                    ["Manipulation"] = new JsonObject { ["SetId"] = 1, ["Slot"] = "Body", ["Entry"] = 99 },
+                },
+                new JsonObject { ["Type"] = "Atr", ["Entry"] = "default" },
+            },
         },
         ["Groups"] = new JsonArray
         {
             new JsonObject
             {
-                ["Type"] = "Single",
-                ["Name"] = "Variant",
-                ["Priority"] = 4,
+                ["Id"] = Guid.NewGuid(),
+                ["Type"] = "Multi",
+                ["Name"] = "Details",
+                ["Priority"] = 2,
                 ["Options"] = new JsonArray
                 {
                     new JsonObject
                     {
-                        ["Name"] = "Enabled",
-                        ["Manipulations"] = new JsonArray { new JsonObject { ["Type"] = "Eqp", ["Entry"] = "v4-option" } },
+                        ["Id"] = Guid.NewGuid(),
+                        ["Name"] = "Enabled Detail",
+                        ["Manipulations"] = new JsonArray
+                        {
+                            new JsonObject { ["Type"] = "Eqdp", ["Entry"] = "multi-1" },
+                            new JsonObject { ["Type"] = "Imc", ["Entry"] = "multi-2" },
+                        },
+                    },
+                    new JsonObject
+                    {
+                        ["Id"] = Guid.NewGuid(),
+                        ["Name"] = "Disabled Detail",
+                        ["Manipulations"] = new JsonArray { new JsonObject { ["Type"] = "Imc", ["Entry"] = "disabled" } },
+                    },
+                },
+            },
+            new JsonObject
+            {
+                ["Id"] = Guid.NewGuid(),
+                ["Type"] = "Combining",
+                ["Name"] = "Combined",
+                ["Priority"] = 5,
+                ["Options"] = new JsonArray(
+                    new JsonObject { ["Id"] = Guid.NewGuid(), ["Name"] = "First" },
+                    new JsonObject { ["Id"] = Guid.NewGuid(), ["Name"] = "Second" }),
+                ["Containers"] = new JsonArray(
+                    new JsonObject(),
+                    new JsonObject { ["Manipulations"] = new JsonArray { new JsonObject { ["Type"] = "Atr", ["Entry"] = "first" } } },
+                    new JsonObject { ["Manipulations"] = new JsonArray { new JsonObject { ["Type"] = "Atr", ["Entry"] = "second" } } },
+                    new JsonObject { ["Manipulations"] = new JsonArray { new JsonObject { ["Type"] = "Atr", ["Entry"] = "combined" } } }),
+            },
+            new JsonObject
+            {
+                ["Id"] = Guid.NewGuid(),
+                ["Type"] = "Single",
+                ["Name"] = "Shape",
+                ["Priority"] = 9,
+                ["Options"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["Id"] = Guid.NewGuid(),
+                        ["Name"] = "Enabled Shape",
+                        ["Manipulations"] = new JsonArray
+                        {
+                            new JsonObject
+                            {
+                                ["Type"] = "Eqp",
+                                ["Manipulation"] = new JsonObject { ["SetId"] = 1, ["Slot"] = "Body", ["Entry"] = 11 },
+                            },
+                            new JsonObject { ["Type"] = "Est", ["Entry"] = "high-2" },
+                        },
                     },
                 },
             },
@@ -1684,140 +1769,128 @@ try
     }.ToJsonString());
     var v4Manipulations = PenumbraService.CaptureEffectiveManipulations(
         manipulationV4Root,
-        new Dictionary<string, IReadOnlyList<string>> { ["Variant"] = ["Enabled"] });
-    Require(v4Manipulations.Select(item => item!["Entry"]!.GetValue<string>())
-                .SequenceEqual(["v4-option", "v4-default"]),
-        "v4 manipulation capture merges enabled embedded options before DefaultData");
+        new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Details"] = ["Enabled Detail"],
+            ["Combined"] = ["First", "Second"],
+            ["Shape"] = ["Enabled Shape"],
+        });
+    Require(v4Manipulations.Select(item => item!["Type"]!.GetValue<string>())
+                .SequenceEqual(["Eqp", "Est", "Atr", "Eqdp", "Imc"]) &&
+            v4Manipulations.All(item => item!["Entry"]?.GetValue<string>() != "disabled") &&
+            v4Manipulations[0]!["Manipulation"]!["Entry"]!.GetValue<int>() == 11 &&
+            v4Manipulations[2]!["Entry"]!.GetValue<string>() == "combined",
+        "v4 manipulation capture applies Single, Multi, and Combining selections before DefaultData");
     var copiedDefault = PenumbraService.CreateMashupDefaultData(
-        mashupMappings, v3Manipulations, mashupFileSwaps);
-    Require(JsonNode.DeepEquals(copiedDefault["Manipulations"], v3Manipulations) &&
+        mashupMappings, v4Manipulations, mashupFileSwaps);
+    Require(JsonNode.DeepEquals(copiedDefault["Manipulations"], v4Manipulations) &&
             copiedDefault["FileSwaps"]!.AsObject().Count == mashupFileSwaps.Count,
         "new-mod default data preserves active manipulations and pass-through FileSwaps");
 
-    var v3Root = Path.Combine(testRoot, "MashupV3");
-    Directory.CreateDirectory(v3Root);
-    File.WriteAllText(Path.Combine(v3Root, "meta.json"), "{\"FileVersion\":3,\"Name\":\"Keep Me\"}");
-    const string preservedV3 = "{\"Version\":0,\"Type\":\"Single\",\"Name\":\"Existing\",\"Priority\":2,\"Options\":[]}";
-    File.WriteAllText(Path.Combine(v3Root, "group_001_existing.json"), preservedV3);
-    Require(PenumbraService.WriteMashupGroup(
-                v3Root, "Mashup", mashupMappings, manipulations: v3Manipulations,
-                fileSwaps: mashupFileSwaps) is null &&
-            File.ReadAllText(Path.Combine(v3Root, "group_001_existing.json")) == preservedV3,
-        "v3 mashup group creation preserves unrelated group metadata");
-    var createdV3 = JsonNode.Parse(File.ReadAllText(
-        Directory.GetFiles(v3Root, "group_002_*.json").Single()))!.AsObject();
-    Require(createdV3["DefaultSettings"]!.GetValue<int>() == 1 &&
-            createdV3["Options"]!.AsArray()[1]!["Files"]!.AsObject().Count == mashupMappings.Count &&
-            createdV3["Options"]!.AsArray()[1]!["FileSwaps"]!.AsObject().Count == mashupFileSwaps.Count &&
-            JsonNode.DeepEquals(createdV3["Options"]!.AsArray()[1]!["Manipulations"], v3Manipulations),
-        "v3 mashup group enables its option and attaches manipulations and FileSwaps");
-
     var v4Root = Path.Combine(testRoot, "MashupV4");
     Directory.CreateDirectory(v4Root);
-    File.WriteAllText(Path.Combine(v4Root, "meta.json"),
-        "{\"FileVersion\":4,\"Name\":\"Keep Me\",\"Custom\":17," +
-        "\"Groups\":[{\"Version\":0,\"Type\":\"Single\",\"Id\":\"b8297758-0ef7-4ca0-8b9d-c08421c1ab2c\",\"Name\":\"Existing\",\"Priority\":3,\"Options\":[]}]}" );
+    var v4ModId = Guid.NewGuid();
+    var originalLastWrite = DateTime.UtcNow.AddHours(-1);
+    const string strayLegacy = "{\"Version\":0,\"Files\":{\"ignored\":\"ignored\"}}";
+    File.WriteAllText(Path.Combine(v4Root, "default_mod.json"), strayLegacy);
+    File.WriteAllText(Path.Combine(v4Root, "meta.json"), new JsonObject
+    {
+        ["FileVersion"] = 4,
+        ["Identifier"] = v4ModId,
+        ["LastWrite"] = originalLastWrite,
+        ["Name"] = "Keep Me",
+        ["Custom"] = 17,
+        ["PageNames"] = new JsonObject { ["1"] = "One" },
+        ["DefaultData"] = null,
+        ["Groups"] = new JsonArray(new JsonObject
+        {
+            ["Type"] = "Single",
+            ["Id"] = Guid.Parse("b8297758-0ef7-4ca0-8b9d-c08421c1ab2c"),
+            ["Name"] = "Existing",
+            ["Priority"] = 3,
+            ["Page"] = 1,
+            ["Layout"] = new JsonArray("Hide"),
+            ["Condition"] = new JsonObject { ["Type"] = "True" },
+            ["Options"] = new JsonArray(new JsonObject
+            {
+                ["Id"] = Guid.NewGuid(),
+                ["Name"] = "Existing",
+                ["Layout"] = new JsonArray("Separator"),
+                ["Color"] = 3,
+            }),
+        }),
+    }.ToJsonString());
     Require(PenumbraService.WriteMashupGroup(
-            v4Root, "Mashup", mashupMappings, fileSwaps: mashupFileSwaps) is null,
+            v4Root, "Mashup", mashupMappings, manipulations: v4Manipulations,
+            fileSwaps: mashupFileSwaps) is null,
         "v4 mashup group creation succeeds");
     var updatedV4 = JsonNode.Parse(File.ReadAllText(Path.Combine(v4Root, "meta.json")))!.AsObject();
-    Require(updatedV4["Custom"]!.GetValue<int>() == 17 && updatedV4["Groups"]!.AsArray().Count == 2 &&
+    Require(updatedV4["Identifier"]!.GetValue<string>() == v4ModId.ToString() &&
+            updatedV4["Custom"]!.GetValue<int>() == 17 && updatedV4["Groups"]!.AsArray().Count == 2 &&
+            updatedV4["PageNames"]!["1"]!.GetValue<string>() == "One" &&
+            updatedV4["Groups"]![0]!["Layout"]!.AsArray().Count == 1 &&
+            updatedV4["Groups"]![0]!["Condition"]!["Type"]!.GetValue<string>() == "True" &&
+            updatedV4["Groups"]![0]!["Options"]![0]!["Color"]!.GetValue<int>() == 3 &&
             updatedV4["Groups"]!.AsArray()[1]!["Options"]!.AsArray()[1]!["Files"]!.AsObject().Count ==
             mashupMappings.Count &&
             updatedV4["Groups"]!.AsArray()[1]!["Options"]!.AsArray()[1]!["FileSwaps"]!.AsObject().Count ==
-            mashupFileSwaps.Count,
-        "v4 mashup group creation preserves metadata, files, and FileSwaps");
+            mashupFileSwaps.Count &&
+            JsonNode.DeepEquals(updatedV4["Groups"]![1]!["Options"]![1]!["Manipulations"], v4Manipulations) &&
+            Guid.TryParse(updatedV4["Groups"]![1]!["Id"]!.GetValue<string>(), out _) &&
+            updatedV4["Groups"]![1]!["Options"]!.AsArray().All(option => Guid.TryParse(option!["Id"]!.GetValue<string>(), out _)) &&
+            DateTimeOffset.Parse(updatedV4["LastWrite"]!.GetValue<string>()) > originalLastWrite &&
+            File.ReadAllText(Path.Combine(v4Root, "default_mod.json")) == strayLegacy,
+        "v4 mashup group creation preserves optional metadata and stray legacy files while assigning GUIDs and LastWrite");
 
-    var cleanupV3Root = Path.Combine(testRoot, "CleanupV3");
-    Directory.CreateDirectory(Path.Combine(cleanupV3Root, "legacy"));
     var cleanupModelPath = "chara/equipment/e0001/model/c0101e0001_top.mdl";
-    var cleanupMaterialPath = "chara/equipment/e0001/material/v0001/mt_test.mtrl";
-    var duplicateBytes = new byte[] { 9, 8, 7 };
-    File.WriteAllBytes(Path.Combine(cleanupV3Root, "legacy", "first.mdl"), duplicateBytes);
-    File.WriteAllBytes(Path.Combine(cleanupV3Root, "legacy", "second.mdl"), duplicateBytes);
-    File.WriteAllBytes(Path.Combine(cleanupV3Root, "legacy", "material.mtrl"), [1, 2, 3]);
-    File.WriteAllBytes(Path.Combine(cleanupV3Root, "legacy", "unused.tex"), [4, 5, 6]);
-    File.WriteAllBytes(Path.Combine(cleanupV3Root, "preview.png"), [7, 7, 7]);
-    File.WriteAllText(Path.Combine(cleanupV3Root, "meta.json"), new JsonObject
-    {
-        ["FileVersion"] = 3,
-        ["Name"] = "Cleanup V3",
-        ["Description"] = "Keep this description",
-        ["Image"] = "preview.png",
-        ["Custom"] = 41,
-    }.ToJsonString());
-    File.WriteAllText(Path.Combine(cleanupV3Root, "default_mod.json"), new JsonObject
-    {
-        ["Version"] = 0,
-        ["Files"] = new JsonObject { [cleanupModelPath] = "legacy/first.mdl" },
-        ["FileSwaps"] = new JsonObject { ["old.path"] = "new.path" },
-        ["Manipulations"] = new JsonArray { new JsonObject { ["Type"] = "Keep" } },
-    }.ToJsonString());
-    File.WriteAllText(Path.Combine(cleanupV3Root, "group_001_existing.json"), new JsonObject
-    {
-        ["Version"] = 0,
-        ["Type"] = "Single",
-        ["Name"] = "Existing",
-        ["Custom"] = 73,
-        ["Options"] = new JsonArray
-        {
-            new JsonObject { ["Name"] = "None" },
-            new JsonObject
-            {
-                ["Name"] = "Option",
-                ["Files"] = new JsonObject
-                {
-                    [cleanupModelPath] = "legacy/second.mdl",
-                    [cleanupMaterialPath] = "legacy/material.mtrl",
-                },
-            },
-        },
-    }.ToJsonString());
-    var cleanupV3 = PenumbraService.NormalizeAndDeduplicateModForRegression(cleanupV3Root, "cleanup-v3");
-    var cleanupV3Default = JsonNode.Parse(File.ReadAllText(Path.Combine(cleanupV3Root, "default_mod.json")))!.AsObject();
-    var cleanupV3Group = JsonNode.Parse(File.ReadAllText(Path.Combine(cleanupV3Root, "group_001_existing.json")))!.AsObject();
-    var cleanupV3ModelPhysical = Path.Combine(cleanupV3Root, "Files", cleanupModelPath.Replace('/', Path.DirectorySeparatorChar));
-    Require(cleanupV3.Warnings.Count == 0 && cleanupV3.PathRemap is not null &&
-            cleanupV3Default["Files"]![cleanupModelPath]!.GetValue<string>() == "Files/" + cleanupModelPath &&
-            cleanupV3Group["Options"]![1]!["Files"]![cleanupModelPath]!.GetValue<string>() == "Files/" + cleanupModelPath &&
-            File.Exists(cleanupV3ModelPhysical) && !File.Exists(Path.Combine(cleanupV3Root, "legacy", "first.mdl")) &&
-            !File.Exists(Path.Combine(cleanupV3Root, "legacy", "second.mdl")) &&
-            !File.Exists(Path.Combine(cleanupV3Root, "legacy", "unused.tex")),
-        "v3 cleanup normalizes mappings, removes duplicates and unreferenced content");
-    var cleanupV3Meta = JsonNode.Parse(File.ReadAllText(Path.Combine(cleanupV3Root, "meta.json")))!.AsObject();
-    Require(cleanupV3Meta["Description"]!.GetValue<string>() == "Keep this description" &&
-            cleanupV3Meta["Custom"]!.GetValue<int>() == 41 && File.Exists(Path.Combine(cleanupV3Root, "preview.png")) &&
-            cleanupV3Default["FileSwaps"] is not null && cleanupV3Default["Manipulations"] is not null &&
-            cleanupV3Group["Custom"]!.GetValue<int>() == 73,
-        "v3 cleanup preserves metadata, file swaps, manipulations and linked images");
-
     var cleanupV4Root = Path.Combine(testRoot, "CleanupV4");
     Directory.CreateDirectory(Path.Combine(cleanupV4Root, "legacy"));
     var cleanupTexturePath = "chara/equipment/e0001/texture/c0101e0001_top.tex";
+    var cleanupGroupId = Guid.NewGuid();
+    var cleanupOptionId = Guid.NewGuid();
+    var cleanupModId = Guid.NewGuid();
+    var cleanupLastWrite = DateTime.UtcNow.AddHours(-2);
+    const string ignoredGroupJson = "{\"Name\":\"Ignored Legacy Group\"}";
     File.WriteAllBytes(Path.Combine(cleanupV4Root, "legacy", "first.tex"), [5, 4, 3]);
     File.WriteAllBytes(Path.Combine(cleanupV4Root, "legacy", "second.tex"), [5, 4, 3]);
     File.WriteAllBytes(Path.Combine(cleanupV4Root, "legacy", "unused.mtrl"), [2, 2, 2]);
+    File.WriteAllText(Path.Combine(cleanupV4Root, "group_001.json"), ignoredGroupJson);
     File.WriteAllText(Path.Combine(cleanupV4Root, "meta.json"), new JsonObject
     {
         ["FileVersion"] = 4,
+        ["Identifier"] = cleanupModId,
+        ["LastWrite"] = cleanupLastWrite,
         ["Name"] = "Cleanup V4",
         ["Custom"] = 84,
+        ["PageNames"] = new JsonObject { ["2"] = "Two" },
         ["DefaultData"] = new JsonObject
         {
             ["Files"] = new JsonObject { [cleanupTexturePath] = "legacy/first.tex" },
+            ["FileSwaps"] = new JsonObject { ["old.path"] = "new.path" },
+            ["Manipulations"] = new JsonArray { new JsonObject { ["Type"] = "Keep" } },
         },
         ["Groups"] = new JsonArray
         {
             new JsonObject
             {
+                ["Id"] = cleanupGroupId,
+                ["Type"] = "Single",
                 ["Name"] = "Group",
+                ["Page"] = 2,
+                ["Layout"] = new JsonArray("Hide"),
+                ["Condition"] = new JsonObject { ["Type"] = "True" },
+                ["CustomGroup"] = 73,
                 ["Options"] = new JsonArray
                 {
                     new JsonObject
                     {
+                        ["Id"] = cleanupOptionId,
                         ["Name"] = "Option",
                         ["Files"] = new JsonObject { [cleanupTexturePath] = "legacy/second.tex" },
                         ["FileSwaps"] = new JsonObject { ["a"] = "b" },
+                        ["Layout"] = new JsonArray("Separator"),
+                        ["Color"] = 8,
+                        ["CustomOption"] = "keep",
                     },
                 },
             },
@@ -1826,22 +1899,45 @@ try
     var cleanupV4 = PenumbraService.NormalizeAndDeduplicateModForRegression(cleanupV4Root, "cleanup-v4");
     var cleanupV4Meta = JsonNode.Parse(File.ReadAllText(Path.Combine(cleanupV4Root, "meta.json")))!.AsObject();
     Require(cleanupV4.Warnings.Count == 0 && cleanupV4.PathRemap is not null &&
+            cleanupV4Meta["Identifier"]!.GetValue<string>() == cleanupModId.ToString() &&
             cleanupV4Meta["Custom"]!.GetValue<int>() == 84 &&
             cleanupV4Meta["DefaultData"]!["Files"]![cleanupTexturePath]!.GetValue<string>() == "Files/" + cleanupTexturePath &&
+            cleanupV4Meta["DefaultData"]!["FileSwaps"] is not null &&
+            cleanupV4Meta["DefaultData"]!["Manipulations"] is not null &&
+            cleanupV4Meta["PageNames"]!["2"]!.GetValue<string>() == "Two" &&
+            cleanupV4Meta["Groups"]![0]!["Id"]!.GetValue<string>() == cleanupGroupId.ToString() &&
+            cleanupV4Meta["Groups"]![0]!["Layout"]!.AsArray().Count == 1 &&
+            cleanupV4Meta["Groups"]![0]!["Condition"]!["Type"]!.GetValue<string>() == "True" &&
+            cleanupV4Meta["Groups"]![0]!["CustomGroup"]!.GetValue<int>() == 73 &&
             cleanupV4Meta["Groups"]![0]!["Options"]![0]!["Files"]![cleanupTexturePath]!.GetValue<string>() == "Files/" + cleanupTexturePath &&
             cleanupV4Meta["Groups"]![0]!["Options"]![0]!["FileSwaps"] is not null &&
+            cleanupV4Meta["Groups"]![0]!["Options"]![0]!["Id"]!.GetValue<string>() == cleanupOptionId.ToString() &&
+            cleanupV4Meta["Groups"]![0]!["Options"]![0]!["Color"]!.GetValue<int>() == 8 &&
+            cleanupV4Meta["Groups"]![0]!["Options"]![0]!["CustomOption"]!.GetValue<string>() == "keep" &&
+            DateTimeOffset.Parse(cleanupV4Meta["LastWrite"]!.GetValue<string>()) > cleanupLastWrite &&
+            File.ReadAllText(Path.Combine(cleanupV4Root, "group_001.json")) == ignoredGroupJson &&
             !File.Exists(Path.Combine(cleanupV4Root, "legacy", "unused.mtrl")),
-        "v4 cleanup normalizes embedded groups and preserves group metadata");
+        "v4 cleanup normalizes embedded mappings while preserving GUIDs, optional fields, extensions, and stray legacy JSON");
 
     var cleanupFailureRoot = Path.Combine(testRoot, "CleanupFailure");
     Directory.CreateDirectory(cleanupFailureRoot);
-    File.WriteAllText(Path.Combine(cleanupFailureRoot, "meta.json"), "{\"FileVersion\":3,\"Name\":\"Cleanup Failure\"}");
-    File.WriteAllText(Path.Combine(cleanupFailureRoot, "default_mod.json"),
-        "{\"Version\":0,\"Files\":{\"chara/equipment/e0001/model/c0101e0001_top.mdl\":\"missing/item.mdl\"}}");
+    var cleanupFailurePath = Path.Combine(cleanupFailureRoot, "meta.json");
+    File.WriteAllText(cleanupFailurePath, new JsonObject
+    {
+        ["FileVersion"] = 4,
+        ["Identifier"] = Guid.NewGuid(),
+        ["LastWrite"] = DateTime.UtcNow,
+        ["Name"] = "Cleanup Failure",
+        ["DefaultData"] = new JsonObject
+        {
+            ["Files"] = new JsonObject { [cleanupModelPath] = "missing/item.mdl" },
+        },
+        ["Groups"] = new JsonArray(),
+    }.ToJsonString());
+    var cleanupFailureBefore = File.ReadAllText(cleanupFailurePath);
     var cleanupFailure = PenumbraService.NormalizeAndDeduplicateModForRegression(cleanupFailureRoot, "cleanup-failure");
     Require(cleanupFailure.Warnings.Count == 1 && cleanupFailure.PathRemap is null &&
-            JsonNode.Parse(File.ReadAllText(Path.Combine(cleanupFailureRoot, "default_mod.json")))!["Files"]![cleanupModelPath]!.GetValue<string>() ==
-                "missing/item.mdl",
+            File.ReadAllText(cleanupFailurePath) == cleanupFailureBefore,
         "cleanup failures warn and retain the committed mashup unchanged");
 
     var sourceDescription = PenumbraService.FormatMashupDescription(
@@ -1859,12 +1955,14 @@ try
         "mashup descriptions list required external mods without blocking export");
     var describedGroupRoot = Path.Combine(testRoot, "DescribedGroup");
     Directory.CreateDirectory(describedGroupRoot);
-    File.WriteAllText(Path.Combine(describedGroupRoot, "meta.json"), "{\"FileVersion\":3,\"Name\":\"Described\"}");
+    File.WriteAllText(Path.Combine(describedGroupRoot, "meta.json"),
+        PenumbraService.CreateV4ModMetadata("Described", "Author", "Parent", "1.0", new JsonObject()).ToJsonString());
     Require(PenumbraService.WriteMashupGroup(describedGroupRoot, "Mashup", mashupMappings, sourceDescription) is null &&
-            JsonNode.Parse(File.ReadAllText(Directory.GetFiles(describedGroupRoot, "group_*.json").Single()))!["Description"]!.GetValue<string>() ==
+            JsonNode.Parse(File.ReadAllText(Path.Combine(describedGroupRoot, "meta.json")))!["Groups"]![0]!["Description"]!.GetValue<string>() ==
                 sourceDescription &&
             JsonNode.Parse(File.ReadAllText(Path.Combine(describedGroupRoot, "meta.json")))!["Name"]!.GetValue<string>() ==
-                "Described",
+                "Described" &&
+            Directory.GetFiles(describedGroupRoot, "group_*.json").Length == 0,
         "in-place mashups put the source description on their new group without rewriting parent metadata");
 
     Require(PenumbraService.IsSafeNewModName("My Mashup") &&
