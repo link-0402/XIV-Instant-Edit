@@ -145,7 +145,7 @@ internal sealed class LivePoseAdapter(IDalamudPluginInterface pi, IObjectTable o
                 if (method.MakeGenericMethod(entityManager).Invoke(null, args) is not true || args[0] == null) continue;
                 var idType = assembly.GetType("LivePose.Entities.Core.EntityId", true)!;
                 var id = Activator.CreateInstance(idType, $"actor_{player.Address}")!;
-                var entity = entityManager.GetMethod("GetEntity", [idType])?.Invoke(args[0], [id]);
+                var entity = FindEntity(args[0]!, idType, id);
                 if (entity == null) continue;
                 var cap = ((IEnumerable)Get(entity, "Capabilities")).Cast<object>().SingleOrDefault(c =>
                     c.GetType().FullName == "LivePose.Capabilities.Posing.SkeletonPosingCapability");
@@ -162,6 +162,17 @@ internal sealed class LivePoseAdapter(IDalamudPluginInterface pi, IObjectTable o
             LastError = "LivePose integration unavailable: " + (e.InnerException?.Message ?? e.Message);
             throw new InvalidOperationException(LastError, e);
         }
+    }
+
+    internal static object? FindEntity(object manager, Type idType, object id)
+    {
+        // LivePose also exposes GetEntity<T>(EntityId). Parameter types alone
+        // cannot distinguish that overload from the non-generic entity lookup.
+        var method = manager.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance).SingleOrDefault(m =>
+            m.Name == "GetEntity" && !m.IsGenericMethod &&
+            m.GetParameters() is [{ ParameterType: var parameter }] && parameter == idType)
+            ?? throw new NotSupportedException("Unsupported LivePose entity lookup.");
+        return method.Invoke(manager, [id]);
     }
 
     private static void CheckShape(Assembly assembly, object cap)

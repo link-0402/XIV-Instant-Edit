@@ -15,7 +15,7 @@ from pathlib   import Path
 from bpy.types import Operator, Context
 
 from ..io.model      import ModelImport
-from ..materials     import compact_mesh_part_indices, group_mesh_objects
+from ..materials     import attribute_group_data, compact_mesh_part_indices, group_mesh_objects
 from ..mesh.export   import export_result, get_export_stats, check_triangulation
 from ..mesh.objects  import visible_meshobj
 from ..properties    import get_settings
@@ -753,6 +753,35 @@ def refresh_variant_targets(
     return len(props.variant_targets)
 
 
+def refresh_variant_targets_after_operation(
+    context: Context,
+    select_group_name: str | None = None,
+    select_option_name: str | None = None,
+) -> Exception | None:
+    """Refresh the selected Context's target tree after an import or export.
+
+    Standalone import/export can run without an XIV Instant Edit Context. In
+    that case there is no target tree to refresh. A refresh failure must not
+    turn an already-completed model operation into a failed operation, so the
+    caller receives the error and can surface it as a warning instead.
+    """
+    try:
+        export_destination_context(context, persist=False)
+    except ContextValidationError:
+        return None
+    except Exception as error:
+        return error
+    try:
+        refresh_variant_targets(
+            context,
+            select_group_name=select_group_name,
+            select_option_name=select_option_name,
+        )
+    except Exception as error:
+        return error
+    return None
+
+
 def variant_game_path(source_game_path: str, variant_name: str) -> str:
     directory, separator, _ = source_game_path.rpartition("/")
     if not separator:
@@ -838,6 +867,7 @@ class InstantImport(Operator):
     managed_destination: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
     target_file_path: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
     source_mod_directory: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
+    source_mod_stable_id: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
     source_mod_name: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
     source_mod_root_path: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
     target_relative_path: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
@@ -897,6 +927,7 @@ class InstantImport(Operator):
                 "managed_destination": self.managed_destination,
                 "target_file_path": self.target_file_path,
                 "source_mod_directory": self.source_mod_directory,
+                "source_mod_stable_id": self.source_mod_stable_id,
                 "source_mod_name": self.source_mod_name,
                 "source_mod_root_path": self.source_mod_root_path,
                 "target_relative_path": self.target_relative_path,
@@ -980,7 +1011,8 @@ class InstantImport(Operator):
                 f"Imported {file_path.name} with preview warnings: {warning_text}"
                 if warning_text else f"Imported {file_path.name}"
             )
-            _preselect_sole_export_context(props, context, self.context_id)
+            context_selection_changed = _preselect_sole_export_context(
+                props, context, self.context_id)
         except Exception as e:
             _remove_staging_objects(created_objects, collection)
             discard_preview_data(preview_package)
@@ -997,7 +1029,20 @@ class InstantImport(Operator):
                 except OSError as error:
                     print(f"XIV Instant Edit: could not remove import cache job: {error}")
 
+        # Changing the selector already invokes the same refresh through the
+        # property update callback. Avoid issuing that bridge request twice,
+        # while still refreshing imports into an already-selected Context.
+        refresh_error = None
+        if (
+            not context_selection_changed
+            or props.variant_targets_context_id != props.export_destination
+        ):
+            refresh_error = refresh_variant_targets_after_operation(context)
+        if refresh_error is not None:
+            props.last_status += f"; Penumbra targets could not refresh: {refresh_error}"
         if preview_validation_warning or (preview_package is not None and preview_package.warnings):
+            self.report({"WARNING"}, props.last_status)
+        elif refresh_error is not None:
             self.report({"WARNING"}, props.last_status)
         else:
             self.report({"INFO"}, "Model imported!")
@@ -1109,8 +1154,11 @@ def _valid_export_contexts(context: Context) -> list:
     return refs
 
 
-def _preselect_sole_export_context(props, context: Context, imported_context_id: str) -> None:
+def _preselect_sole_export_context(
+    props, context: Context, imported_context_id: str
+) -> bool:
     """Store one concrete context ID without reintroducing an active-context fallback."""
+    previous_selection = props.export_destination
     refs = _valid_export_contexts(context)
     valid_ids = {ref.context_id for ref in refs}
     selected = getattr(props, "export_destination", NO_EXPORT_CONTEXT)
@@ -1122,6 +1170,7 @@ def _preselect_sole_export_context(props, context: Context, imported_context_id:
         # A saved pre-explicit selector must never choose a context implicitly
         # when more than one valid destination now exists.
         props.export_destination = NO_EXPORT_CONTEXT
+    return props.export_destination != previous_selection
 
 
 def _mashup_context_metadata(payload: dict, target_file_path: str) -> dict:
@@ -1161,6 +1210,7 @@ def _mashup_context_metadata(payload: dict, target_file_path: str) -> dict:
         "managed_destination": payload.get("managedDestination") or "",
         "target_file_path": output_path,
         "source_mod_directory": payload.get("sourceModDirectory") or "",
+        "source_mod_stable_id": payload.get("sourceModStableId") or "",
         "source_mod_name": payload.get("sourceModName") or "",
         "source_mod_root_path": payload.get("sourceModRootPath") or "",
         "target_relative_path": payload.get("targetRelativePath") or "",
@@ -1618,8 +1668,10 @@ def build_export_payload(ref, export_id: str, mdl_path: Path, byte_size: int,
                          sha256: str, props, variant_name: str | None,
                          variant_group_name: str | None = None, variant_target=None,
                          backup_existing: bool | None = None, *,
-                         setup_in_penumbra: bool = True,
-                         new_mod_name: str | None = None) -> dict:
+                          setup_in_penumbra: bool = True,
+                         new_mod_name: str | None = None,
+                         attribute_tags: tuple[str, ...] = (),
+                         attribute_masks: dict[str, int] | None = None) -> dict:
     """Build the versioned Dalamud export envelope."""
     payload = {
         "schema": "instant-edit.export",
@@ -1639,6 +1691,10 @@ def build_export_payload(ref, export_id: str, mdl_path: Path, byte_size: int,
     payload["setupInPenumbra"] = setup_in_penumbra
     if new_mod_name is not None:
         payload["newModName"] = new_mod_name
+    if getattr(props, "create_attribute_groups", False):
+        payload["createAttributeGroups"] = True
+        payload["attributeTags"] = list(attribute_tags)
+        payload["attributeMasks"] = dict(attribute_masks or {})
     if setup_in_penumbra:
         if variant_name is not None:
             payload["variantName"] = variant_name
@@ -2039,6 +2095,11 @@ def perform_mashup_export(
     not_triangulated = check_triangulation(export_objects)
     if not_triangulated:
         raise ValueError("Not Triangulated: " + ", ".join(not_triangulated) + ".")
+    attribute_tags, attribute_masks = (
+        attribute_group_data(export_objects, use_lods=get_settings().use_lods)
+        if getattr(get_instant_edit_props(), "create_attribute_groups", False)
+        else ((), {})
+    )
 
     contributors = _mashup_contributor_payload(refs, materials)
     plugin_destination = "active_mod" if destination == "ACTIVE_MOD" else "new_mod"
@@ -2062,6 +2123,9 @@ def perform_mashup_export(
         contributors = _mashup_contributor_payload(refs, materials)
         plan = _send_plugin_mashup_plan(
             ref, contributors, plugin_destination, bundle_external_dependencies)
+        if getattr(get_instant_edit_props(), "create_attribute_groups", False):
+            attribute_tags, attribute_masks = attribute_group_data(
+                export_objects, use_lods=get_settings().use_lods)
     assignments = _mashup_assignment_map(plan, materials)
 
     export_id = uuid.uuid4().hex
@@ -2103,6 +2167,10 @@ def perform_mashup_export(
             "planFingerprint": plan["planFingerprint"],
             "contributors": contributors,
         }
+        if getattr(get_instant_edit_props(), "create_attribute_groups", False):
+            payload["createAttributeGroups"] = True
+            payload["attributeTags"] = list(attribute_tags)
+            payload["attributeMasks"] = dict(attribute_masks)
         try:
             result = _send_plugin_mashup(ref, payload)
         except PluginResponseError as error:
@@ -2257,6 +2325,11 @@ def perform_instant_export(
     not_triangulated = check_triangulation(export_objects)
     if not_triangulated:
         raise ValueError("Not Triangulated: " + ", ".join(not_triangulated) + ".")
+    attribute_tags, attribute_masks = (
+        attribute_group_data(export_objects, use_lods=get_settings().use_lods)
+        if getattr(props, "create_attribute_groups", False)
+        else ((), {})
+    )
 
     export_id = uuid.uuid4().hex
     temp_dir = create_job("exports", export_id)
@@ -2288,6 +2361,8 @@ def perform_instant_export(
             backup_existing=False if pending else None,
             setup_in_penumbra=not pending and not in_place,
             new_mod_name=new_mod_name,
+            attribute_tags=attribute_tags,
+            attribute_masks=attribute_masks,
         )
         try:
             result = _send_plugin_export(ref, payload)
@@ -2320,6 +2395,8 @@ def perform_instant_export(
                 backup_existing=False if pending else None,
                 setup_in_penumbra=not pending and not in_place,
                 new_mod_name=new_mod_name,
+                attribute_tags=attribute_tags,
+                attribute_masks=attribute_masks,
             )
             result = _send_plugin_export(ref, payload)
 
@@ -2353,23 +2430,18 @@ def perform_instant_export(
             if warnings else f"Exported {group_status} to {target_file_path}{setup_status}"
         )
         if pending:
-            try:
-                props.variant_targets_context_id = ""
-                if refresh_variant_targets(context) == 0:
-                    props.variant_target = IN_PLACE_TARGET
-            except Exception as error:
-                props.last_status += f"; Penumbra targets could not refresh: {error}"
-        elif variant_name is not None:
-            try:
-                refresh_variant_targets(
-                    context,
-                    select_group_name=variant_group_name,
-                    select_option_name=variant_name,
-                )
-            except Exception as error:
-                # The model and Penumbra setup have already completed. Leave
-                # the target tree recoverable through its manual refresh button.
-                props.last_status += f"; Penumbra targets could not refresh: {error}"
+            # A newly created Penumbra destination must not preserve the old
+            # Context's target-cache identity.
+            props.variant_targets_context_id = ""
+        refresh_error = refresh_variant_targets_after_operation(
+            context,
+            select_group_name=variant_group_name if variant_name is not None else None,
+            select_option_name=variant_name if variant_name is not None else None,
+        )
+        if refresh_error is not None:
+            # The model and Penumbra setup have already completed. Leave the
+            # target tree recoverable through its manual refresh button.
+            props.last_status += f"; Penumbra targets could not refresh: {refresh_error}"
         return mdl_path
     finally:
         try:

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Collections.Concurrent;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 
@@ -13,8 +14,16 @@ internal sealed class AnimationObserver : IDisposable
     private readonly AnimationResources resources;
     private readonly LivePoseAdapter poses;
     private readonly AnimationCatalog catalog;
+    private readonly AnimationSkeletonIndex skeletons;
+    private readonly IPluginLog log;
+    private readonly ConcurrentDictionary<string, (DateTime At, SkeletonResolution Result)> resolutions = [];
+    private readonly ConcurrentDictionary<string, string> manualChoices = [];
+    private readonly ConcurrentDictionary<string, string> operationErrors = [];
+    private Task matching = Task.CompletedTask;
     private readonly CancellationTokenSource lifetime = new();
+    private CancellationTokenSource? listening;
     private CancellationTokenSource? observation;
+    private volatile bool listeningEnabled;
     private readonly Dictionary<string, ImmutableDictionary<int, string>> prints = [];
     private DateTime next;
     private Task pending = Task.CompletedTask;
@@ -27,47 +36,89 @@ internal sealed class AnimationObserver : IDisposable
     public event Action? CharacterChanged;
 
     public AnimationObserver(IFramework framework, IObjectTable objects, PenumbraService penumbra,
-        AnimationNative native, AnimationResources resources, LivePoseAdapter poses, AnimationCatalog catalog)
+        AnimationNative native, AnimationResources resources, LivePoseAdapter poses, AnimationCatalog catalog, AnimationSkeletonIndex skeletons, IPluginLog log)
     {
         this.framework = framework; this.objects = objects; this.penumbra = penumbra;
         this.native = native; this.resources = resources; this.poses = poses; this.catalog = catalog;
+        this.skeletons = skeletons;
+        this.log = log;
+    }
+    public void Start()
+    {
+        if (listeningEnabled || lifetime.IsCancellationRequested) return;
+        listeningEnabled = true;
+        skeletons.StartSessionLibrary(lifetime.Token);
+        listening = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        next = DateTime.MinValue;
         framework.Update += Update;
+    }
+    public void Stop()
+    {
+        if (!listeningEnabled) return;
+        listeningEnabled = false;
+        framework.Update -= Update;
+        observation?.Cancel();
+        observation?.Dispose();
+        observation = null;
+        listening?.Cancel();
+        listening?.Dispose();
+        listening = null;
+        generation++;
+        MarkNotPlaying();
+        Status = "Open Instant Edit to observe player animations.";
     }
     private unsafe ulong ActorId() => objects.LocalPlayer is { } p ?
         ((FFXIVClientStructs.FFXIV.Client.Game.Character.Character*)p.Address)->ContentId : 0;
     private void Update(IFramework _)
     {
+        var listeningToken = listening;
+        if (!listeningEnabled || listeningToken is null || listeningToken.IsCancellationRequested) return;
         var current = ActorId();
         if (current != actor)
         {
             observation?.Cancel();
             actor = current; generation++; history = []; CharacterChanged?.Invoke();
+            resolutions.Clear(); manualChoices.Clear(); operationErrors.Clear();
         }
-        if (current == 0) { Status = "Log in to observe player emotes and idles."; return; }
+        if (current == 0) { Status = "Log in to observe player emotes, idles, and walk cycles."; return; }
         if (!pending.IsCompleted || DateTime.UtcNow < next) return;
         next = DateTime.UtcNow.AddMilliseconds(500);
         observation?.Dispose();
-        observation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-        pending = ObserveAsync(generation, observation.Token);
+        observation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token, listeningToken.Token);
+        pending = ObserveAsync(generation, observation.Token, listeningToken.Token);
     }
 
-    private async Task ObserveAsync(int expectedGeneration, CancellationToken token)
+    private async Task ObserveAsync(int expectedGeneration, CancellationToken token, CancellationToken listeningToken)
     {
         try
         {
-            native.EnsureAvailable();
             var pair = await framework.RunOnFrameworkThread(() =>
             {
                 token.ThrowIfCancellationRequested();
-                return (Runtime: AnimationRuntime.Capture(objects), Pose: poses.Capture());
+                var runtime = AnimationRuntime.Capture(objects);
+                string? error = null;
+                PoseSnapshot pose;
+                try
+                {
+                    pose = poses.Capture();
+                    if (runtime != null && !pose.Global && (runtime.Timelines[0] != pose.MainTimeline || runtime.Timelines[1] != pose.UpperTimeline || runtime.Timelines[2] != pose.FaceTimeline))
+                        throw new InvalidOperationException("Waiting for LivePose to capture the current timeline transition.");
+                }
+                catch (Exception e)
+                {
+                    error = e.Message;
+                    pose = new(0, 0, 0, false, [], DateTime.UtcNow, "");
+                }
+                return (Runtime: runtime, Pose: pose, PoseError: error);
             });
+            token.ThrowIfCancellationRequested();
             if (pair.Runtime is not { } runtime) { MarkNotPlaying(); Status = "Waiting for an eligible player animation."; return; }
-            if (!pair.Pose.Global && (runtime.Timelines[0] != pair.Pose.MainTimeline || runtime.Timelines[1] != pair.Pose.UpperTimeline || runtime.Timelines[2] != pair.Pose.FaceTimeline))
-                throw new InvalidOperationException("Waiting for LivePose to capture the current timeline transition.");
             var active = runtime.Timelines.Distinct().Select(catalog.Find).OfType<AnimationCatalog.Timeline>().ToArray();
-            if (active.Length == 0) { MarkNotPlaying(); Status = "No eligible emote or idle is playing."; return; }
+            if (active.Length == 0) { MarkNotPlaying(); Status = "No eligible emote, idle, or walk cycle is playing."; return; }
             var collection = await penumbra.GetCollectionTargetAsync(runtime.ObjectIndex) ?? throw new IOException("The player collection is unavailable.");
+            token.ThrowIfCancellationRequested();
             var paths = await penumbra.GetResourcePathsAsync(runtime.ObjectIndex) ?? throw new IOException("Penumbra's player resource snapshot is unavailable.");
+            token.ThrowIfCancellationRequested();
             var gamePaths = paths.Values.SelectMany(p => p).Distinct(StringComparer.Ordinal).ToArray();
             var motionReferences = new Dictionary<ushort, ImmutableHashSet<string>>();
             async Task<ImmutableHashSet<string>> TimelineMotions(AnimationCatalog.Timeline timeline)
@@ -89,60 +140,60 @@ internal sealed class AnimationObserver : IDisposable
                 }
                 return motionReferences[timeline.Id] = names.ToImmutable();
             }
-            foreach (var timeline in active) await TimelineMotions(timeline);
-            var candidates = new List<(AnimationResource Resource, AnimationPap Pap, ImmutableDictionary<int, string> Prints)>();
-            foreach (var path in gamePaths.Where(p => p.EndsWith(".pap", StringComparison.OrdinalIgnoreCase)))
+            foreach (var timeline in active)
+                try { await TimelineMotions(timeline); }
+                catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException) { motionReferences[timeline.Id] = ImmutableHashSet<string>.Empty; }
+            var inferredPaths = active.SelectMany(t => AnimationCatalog.CandidatePapPaths(t, gamePaths)).ToHashSet(StringComparer.Ordinal);
+            var candidatePaths = gamePaths.Where(p => p.EndsWith(".pap", StringComparison.OrdinalIgnoreCase))
+                .Concat(inferredPaths).Distinct(StringComparer.Ordinal).ToArray();
+            var candidates = new List<AnimationPapCandidate>();
+            var missingPaths = new List<string>();
+            foreach (var path in candidatePaths)
             {
+                try
+                {
                 token.ThrowIfCancellationRequested();
-                var source = await resources.ReadAsync(collection.Id, path, token);
+                (AnimationResource Resource, byte[] Bytes) source;
+                try { source = await resources.ReadAsync(collection.Id, path, token); }
+                catch (FileNotFoundException) when (inferredPaths.Contains(path)) { missingPaths.Add(path); continue; }
                 if (!prints.TryGetValue(source.Resource.Hash, out var bindings))
                 {
                     bindings = await framework.RunOnTick(() => { token.ThrowIfCancellationRequested(); return AnimationRuntime.InspectPap(source.Bytes); }, delayTicks: 1);
                     if (prints.Count >= 128) prints.Clear();
                     prints[source.Resource.Hash] = bindings;
                 }
-                candidates.Add((source.Resource, new AnimationPap(source.Bytes), bindings));
+                candidates.Add(new AnimationPapCandidate(source.Resource, new AnimationPap(source.Bytes), bindings));
+                }
+                catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException) { missingPaths.Add(path); }
             }
+            gamePaths = gamePaths.Concat(candidates.Select(c => c.Resource.GamePath)).Distinct(StringComparer.Ordinal).ToArray();
             var captures = new List<AnimationCapture>();
+            var matchedBindings = 0; var ambiguousBindings = 0;
             foreach (var binding in runtime.Bindings)
             {
-                var matches = candidates.SelectMany(p => p.Pap.Entries.Where(e => p.Prints.GetValueOrDefault(e.Binding) == binding.Fingerprint)
-                    .Select(e => (p.Resource, Entry: e))).Distinct().ToArray();
-                // Duplicate byte-identical providers/entries are ambiguous, even if the last control looks plausible.
-                if (matches.Length != 1) continue;
+                // Scope by the active timeline before testing uniqueness. An unrelated
+                // PAP with identical motion data does not make the current idle ambiguous.
+                var matches = AnimationMatching.Find(binding.Fingerprint, candidates, active, motionReferences);
+                if (matches.Length == 0) continue;
+                matchedBindings++;
+                if (matches.Length != 1) { ambiguousBindings++; continue; }
                 var match = matches[0];
-                var timelines = active.Where(t => catalog.Matches(t, match.Resource.GamePath, match.Entry.Name) ||
-                    motionReferences[t.Id].Contains(match.Entry.Name) || motionReferences[t.Id].Contains(match.Resource.GamePath)).ToArray();
-                if (timelines.Length != 1) continue;
-                var timeline = timelines[0];
+                var timeline = match.Timeline;
                 var skeletonPaths = paths.Where(p => string.Equals(p.Key, binding.SkeletonResource, StringComparison.OrdinalIgnoreCase))
                     .SelectMany(p => p.Value).Where(p => p.EndsWith(".sklb", StringComparison.OrdinalIgnoreCase)).Distinct().ToArray();
                 if (skeletonPaths.Length == 0 && AnimationDependencies.SafeGamePath(binding.SkeletonResource)) skeletonPaths = [binding.SkeletonResource];
-                if (skeletonPaths.Length == 0)
-                {
-                    // Penumbra may give a resource handle a collection-qualified virtual filename.
-                    // Resolve it through the actual skeleton graph instead of stripping an assumed filename prefix.
-                    var matching = new List<string>();
-                    foreach (var path in gamePaths.Where(p => p.EndsWith(".sklb", StringComparison.OrdinalIgnoreCase)))
-                    {
-                        var candidate = await resources.ReadAsync(collection.Id, path, token);
-                        var fingerprint = await framework.RunOnTick(() =>
-                        { token.ThrowIfCancellationRequested(); return AnimationRuntime.InspectSkeleton(candidate.Bytes); }, delayTicks: 1);
-                        if (fingerprint == binding.SkeletonFingerprint) matching.Add(path);
-                    }
-                    skeletonPaths = matching.ToArray();
-                }
-                if (skeletonPaths.Length != 1) continue;
-                var sklb = await resources.ReadAsync(collection.Id, skeletonPaths[0], token);
-                await framework.RunOnTick(() => { token.ThrowIfCancellationRequested(); AnimationRuntime.CheckSkeleton(sklb.Bytes, binding.SkeletonFingerprint); }, delayTicks: 1);
                 var clip = new AnimationClip(match.Resource.GamePath, match.Entry.Name, match.Entry.Binding,
-                    binding.Partial, timeline.Id, skeletonPaths[0], binding.SkeletonFingerprint);
-                var family = new HashSet<string>(StringComparer.Ordinal) { clip.GamePath, clip.SkeletonPath };
+                    binding.Partial, timeline.Id, skeletonPaths.FirstOrDefault() ?? "", binding.SkeletonFingerprint,
+                    binding.Skeleton, new(SkeletonResolutionState.Searching, [], Reason: "Finding a compatible source skeleton…"), binding.Fingerprint,
+                    $"{collection.Id}:{match.Resource.Hash}:{match.Resource.ResolvedPath}");
+                if (clip.SkeletonPath.Length == 0)
+                    clip = clip with { SkeletonPath = AnimationSkeletonIndex.RelevantPaths(clip, []).FirstOrDefault() ?? "" };
+                var family = new HashSet<string>(StringComparer.Ordinal) { clip.GamePath };
                 var skeletonIdentity = string.Join('/', clip.SkeletonPath.Split('/').Take(3)) + "/";
                 family.UnionWith(gamePaths.Where(p => p.StartsWith(skeletonIdentity, StringComparison.Ordinal) &&
                     Path.GetExtension(p) is ".skp" or ".phyb" or ".eid"));
                 string? packagingError = null;
-                var startupPaths = new List<(AnimationCatalog.Timeline Timeline, string Path)>();
+                var startupPaths = new List<(AnimationCatalog.Timeline? Timeline, string Path)>();
                 foreach (var id in timeline.Family)
                 {
                     var relative = catalog.Find(id);
@@ -154,44 +205,173 @@ internal sealed class AnimationObserver : IDisposable
                     var tmb = $"chara/action/{relative.Key}.tmb";
                     try { _ = await resources.ReadAsync(collection.Id, tmb, token); family.Add(tmb); }
                     catch (FileNotFoundException) { }
+                    catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException) { packagingError = e.Message; }
                     if (timeline.Startups.Contains(id)) startupPaths.Add((relative, pap));
                 }
-                var sources = new List<AnimationResource> { match.Resource, sklb.Resource };
+                // Some idle loops, including pose01_loop, have a valid sibling
+                // startup but no Emote-sheet relationship. Discover it through the
+                // captured game path, then still validate its effective PAP below.
+                if (startupPaths.Count == 0 && AnimationCatalog.SiblingStartupPath(clip.GamePath) is { } sibling)
+                {
+                    family.Add(sibling);
+                    startupPaths.Add((null, sibling));
+                }
+                var sources = new List<AnimationResource> { match.Resource };
                 AnimationClip? startup = null;
                 if (startupPaths.Count == 1)
                 {
+                    try
+                    {
                     var item = startupPaths[0];
                     var startupSource = await resources.ReadAsync(collection.Id, item.Path, token);
-                    var startupMotions = await TimelineMotions(item.Timeline);
                     var papEntries = new AnimationPap(startupSource.Bytes).Entries;
-                    var entries = papEntries.Where(e => startupMotions.Contains(e.Name)).ToArray();
+                    var startupMotions = item.Timeline == null ? null : await TimelineMotions(item.Timeline);
+                    var entries = startupMotions == null ? papEntries.ToArray() : papEntries.Where(e => startupMotions.Contains(e.Name)).ToArray();
                     if (entries.Length == 0 && papEntries.Length == 1) entries = papEntries.ToArray();
                     if (entries.Length == 1)
                     {
+                        var startupPrints = await framework.RunOnTick(() => AnimationRuntime.InspectPap(startupSource.Bytes), delayTicks: 1);
                         startup = new AnimationClip(item.Path, entries[0].Name, entries[0].Binding, clip.Partial,
-                            item.Timeline.Id, clip.SkeletonPath, clip.SkeletonFingerprint);
+                            item.Timeline?.Id ?? timeline.Id, clip.SkeletonPath, clip.SkeletonFingerprint, binding.Skeleton,
+                            new(SkeletonResolutionState.Searching, []), startupPrints.GetValueOrDefault(entries[0].Binding, ""),
+                            $"{collection.Id}:{startupSource.Resource.Hash}:{startupSource.Resource.ResolvedPath}");
                         sources.Add(startupSource.Resource);
                     }
+                    }
+                    catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException) { packagingError = e.Message; }
                 }
                 var idString = $"{runtime.ActorId}:{timeline.Id}:{clip.GamePath}:{clip.BindingIndex}:{clip.Partial}";
                 captures.Add(new AnimationCapture(idString, runtime.ActorId, runtime.Address, collection.Id, collection.Name,
                     timeline.Name, clip, startup, family.ToImmutableArray(), sources.Distinct().ToImmutableArray(), pair.Pose,
-                    pair.Pose.CapturedUtc, true, PackagingError: packagingError, LoadedResourcePaths: gamePaths.ToImmutableArray()));
+                    pair.Pose.CapturedUtc, true, PackagingError: packagingError, LoadedResourcePaths: gamePaths.ToImmutableArray(), PoseUnavailableReason: pair.PoseError));
             }
+            // Publish identified clips before any native source-skeleton search.
+            await PublishAsync(captures, expectedGeneration, token);
+            if (matching.IsCompleted) matching = MatchAsync(captures.ToArray(), expectedGeneration, listeningToken);
             token.ThrowIfCancellationRequested();
             await framework.RunOnFrameworkThread(() =>
             {
                 if (expectedGeneration != generation) return;
-                var currentIds = captures.Select(c => c.Id).ToHashSet();
-                history = captures.DistinctBy(c => c.Id).Concat(history.Where(c => !currentIds.Contains(c.Id)).Select(c => c with { Playing = false }))
-                    .Take(50).ToImmutableArray();
                 Status = captures.Count > 0 ? $"Listening · {captures.Count} playing · {history.Length} recent" :
-                    "No unique PAP binding matched the active timelines. Wait for the transition to finish.";
+                    $"No editable animation matched. Active: {string.Join(", ", active.Select(t => $"{t.Id} ({t.Key})"))}. " +
+                    $"Playing bindings: {runtime.Bindings.Length}; PAPs checked: {candidates.Count}; " +
+                    $"timeline matches: {matchedBindings}; ambiguous: {ambiguousBindings}." +
+                    (missingPaths.Count == 0 ? "" : $" Missing PAPs: {string.Join(", ", missingPaths)}.");
             });
         }
         catch (OperationCanceledException) { }
-        catch (Exception e) { MarkNotPlaying(); Status = e.InnerException?.Message ?? e.Message; }
+        catch (Exception e)
+        {
+            if (token.IsCancellationRequested || expectedGeneration != generation) return;
+            MarkNotPlaying(); Status = e.InnerException?.Message ?? e.Message;
+        }
+    }
+    private async Task MatchAsync(AnimationCapture[] captures, int expectedGeneration, CancellationToken token)
+    {
+        var expectedRevision = skeletons.Revision;
+        try
+        {
+            foreach (var capture in captures)
+            {
+                if (expectedGeneration != generation || expectedRevision != skeletons.Revision) return;
+                var resolved = await ResolveClip(capture, capture.Clip, token);
+                var startup = capture.Startup == null ? null : await ResolveClip(capture, capture.Startup, token);
+                await framework.RunOnFrameworkThread(() =>
+                {
+                    if (expectedGeneration != generation || expectedRevision != skeletons.Revision) return;
+                    history = history.Select(c => c.Id == capture.Id && ChoiceKey(c.Clip) == ChoiceKey(capture.Clip)
+                        ? c with { Clip = resolved, Startup = startup } : c).ToImmutableArray();
+                });
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception e)
+        {
+            if (token.IsCancellationRequested || expectedGeneration != generation || expectedRevision != skeletons.Revision) return;
+            log.Warning(e, "Animation skeleton matching failed.");
+            await framework.RunOnFrameworkThread(() =>
+            {
+                if (expectedGeneration != generation || expectedRevision != skeletons.Revision) return;
+                foreach (var capture in captures)
+                {
+                    var result = new SkeletonResolution(SkeletonResolutionState.Incompatible, [], Reason: e.GetBaseException().Message);
+                    resolutions[ChoiceKey(capture.Clip)] = (DateTime.UtcNow, result);
+                }
+                history = history.Select(c => resolutions.TryGetValue(ChoiceKey(c.Clip), out var result)
+                    ? c with { Clip = c.Clip with { Resolution = result.Result } } : c).ToImmutableArray();
+            });
+        }
+    }
+    private Task PublishAsync(IEnumerable<AnimationCapture> captures, int expectedGeneration, CancellationToken token) => framework.RunOnFrameworkThread(() =>
+    {
+        token.ThrowIfCancellationRequested();
+        if (expectedGeneration != generation) return;
+        AnimationClip Cached(AnimationClip clip) => clip with
+        {
+            Resolution = resolutions.TryGetValue(ChoiceKey(clip), out var cached) ? cached.Result : clip.Resolution,
+            LastOperationError = operationErrors.GetValueOrDefault(ChoiceKey(clip)),
+        };
+        var current = captures.DistinctBy(c => c.Id).Select(c => c with { Clip = Cached(c.Clip), Startup = c.Startup == null ? null : Cached(c.Startup) }).ToArray();
+        history = MergeHistory(current, history);
+        Status = $"Listening · {current.Length} playing · {history.Length} recent";
+    });
+    internal static ImmutableArray<AnimationCapture> MergeHistory(IEnumerable<AnimationCapture> captures, ImmutableArray<AnimationCapture> previous)
+    {
+        var current = captures.DistinctBy(c => c.Id).ToArray();
+        var ids = current.Select(c => c.Id).ToHashSet();
+        return current.Concat(previous.Where(c => !ids.Contains(c.Id)).Select(c => c with { Playing = false })).Take(50).ToImmutableArray();
+    }
+    private string ChoiceKey(AnimationClip clip) => $"{actor}:{clip.SourceContext}:{clip.GamePath}:{clip.BindingIndex}:{clip.BindingFingerprint}:{clip.SkeletonFingerprint}:{skeletons.Revision}";
+    private async Task<AnimationClip> ResolveClip(AnimationCapture capture, AnimationClip clip, CancellationToken token)
+    {
+        var key = ChoiceKey(clip);
+        if (resolutions.TryGetValue(key, out var cached) && DateTime.UtcNow - cached.At < TimeSpan.FromSeconds(30)) return clip with { Resolution = cached.Result };
+        SkeletonResolution result;
+        try
+        {
+            var source = await resources.ReadAsync(capture.CollectionId, clip.GamePath, token);
+            result = await skeletons.ResolveAsync(capture.CollectionId, clip, source.Bytes, capture.LoadedResourcePaths, manualChoices.GetValueOrDefault(key), token);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception e)
+        {
+            log.Warning(e, $"Skeleton matching failed for {clip.GamePath}, binding {clip.BindingIndex}.");
+            result = new(SkeletonResolutionState.Incompatible, [], Reason: e.GetBaseException().Message);
+        }
+        if (resolutions.Count >= 128) resolutions.Clear();
+        if (manualChoices.TryGetValue(key, out var latestChoice) && result.Candidates.FirstOrDefault(c => AnimationSkeletonIndex.SelectionId(c) == latestChoice) is { } selected)
+            result = result with { State = SkeletonResolutionState.Matched, Selected = selected, Reason = null };
+        resolutions[key] = (DateTime.UtcNow, result);
+        return clip with { Resolution = result };
+    }
+    public void RescanSkeletons() { skeletons.Rescan(); resolutions.Clear(); manualChoices.Clear(); operationErrors.Clear(); next = DateTime.MinValue; }
+    public void ReportOperationError(AnimationClip clip, string? error)
+    {
+        var key = ChoiceKey(clip);
+        if (error == null) operationErrors.TryRemove(key, out _); else operationErrors[key] = error;
+        history = history.Select(c => ChoiceKey(c.Clip) == key ? c with { Clip = c.Clip with { LastOperationError = error } } : c).ToImmutableArray();
+    }
+    public AnimationClip ChooseSkeleton(AnimationClip clip, SkeletonCandidate candidate)
+    {
+        if (clip.Resolution == null || !clip.Resolution.Candidates.Contains(candidate)) throw new InvalidOperationException("Skeleton candidate changed. Refresh the capture.");
+        if (clip.Resolution.State == SkeletonResolutionState.Incompatible)
+            throw new InvalidOperationException("A compatible source reference pose is required before retargeting.");
+        var key = ChoiceKey(clip); manualChoices[key] = AnimationSkeletonIndex.SelectionId(candidate);
+        operationErrors.TryRemove(key, out _);
+        var resolution = clip.Resolution with { State = SkeletonResolutionState.Matched, Selected = candidate, Reason = null };
+        resolutions[key] = (DateTime.UtcNow, resolution);
+        history = history.Select(c => c with
+        {
+            Clip = ChoiceKey(c.Clip) == key ? c.Clip with { Resolution = resolution, LastOperationError = null } : c.Clip,
+            Startup = c.Startup != null && ChoiceKey(c.Startup) == key ? c.Startup with { Resolution = resolution } : c.Startup,
+        }).ToImmutableArray();
+        return clip with { Resolution = resolution, LastOperationError = null };
     }
     private void MarkNotPlaying() => history = history.Select(c => c with { Playing = false }).ToImmutableArray();
-    public void Dispose() { framework.Update -= Update; lifetime.Cancel(); }
+    public void Dispose()
+    {
+        Stop();
+        lifetime.Cancel();
+        lifetime.Dispose();
+    }
 }

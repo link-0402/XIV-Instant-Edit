@@ -96,11 +96,16 @@ public sealed class ExportContextRegistry : IDisposable
         Guid? targetCollectionId = null,
         string? targetCollectionName = null,
         SourceOptionLocator? sourceOption = null,
-        string sourceOptionStatus = "unknown")
+        string sourceOptionStatus = "unknown",
+        Guid? sourceModStableId = null,
+        string? resolvedGamePath = null)
     {
-        if (!PenumbraService.IsSafeGamePath(gamePath) || objectIndex is < 0 or > ushort.MaxValue ||
+        if (!PenumbraService.IsSafeGamePath(gamePath) ||
+            (resolvedGamePath is not null && !PenumbraService.IsSafeGamePath(resolvedGamePath)) ||
+            objectIndex is < 0 or > ushort.MaxValue ||
             !PenumbraService.IsSafeModName(sourceModDirectory) || callbackPort is < 1 or > 65535 ||
             targetCollectionId == Guid.Empty ||
+            sourceModStableId == Guid.Empty ||
             (targetCollectionName is not null && targetCollectionName.Length > 512))
             throw new ArgumentException("The import target is not safe.");
 
@@ -127,12 +132,13 @@ public sealed class ExportContextRegistry : IDisposable
             Capability = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)),
             GamePath = gamePath,
             SourceKind = InstantEditImportContext.ModSource,
-            ResolvedGamePath = gamePath,
+            ResolvedGamePath = resolvedGamePath ?? gamePath,
             DestinationState = InstantEditImportContext.ReadyDestination,
             ObjectIndex = (ushort)objectIndex,
             TargetFilePath = targetFilePath,
             TargetFolder = targetFolder,
             SourceModDirectory = sourceModDirectory,
+            SourceModStableId = sourceModStableId,
             SourceModName = string.IsNullOrWhiteSpace(sourceModName) ? sourceModDirectory : sourceModName,
             SourceModRootPath = sourceModRootPath,
             TargetRelativePath = targetRelativePath,
@@ -217,12 +223,14 @@ public sealed class ExportContextRegistry : IDisposable
         string sourceModName,
         string sourceModRootPath,
         string targetRelativePath,
-        out InstantEditImportContext? context)
+        out InstantEditImportContext? context,
+        Guid? sourceModStableId = null)
     {
         context = null;
         if (!IsSafeId(contextId) || !PenumbraService.IsSafeModName(sourceModDirectory) ||
             string.IsNullOrWhiteSpace(sourceModName) || sourceModName.Length > 512 ||
-            !PenumbraService.IsSafeRelativeModelPath(targetRelativePath))
+            !PenumbraService.IsSafeRelativeModelPath(targetRelativePath) ||
+            sourceModStableId == Guid.Empty)
             return false;
 
         string root;
@@ -252,6 +260,7 @@ public sealed class ExportContextRegistry : IDisposable
             {
                 DestinationState = InstantEditImportContext.ReadyDestination,
                 SourceModDirectory = sourceModDirectory,
+                SourceModStableId = sourceModStableId,
                 SourceModName = sourceModName,
                 SourceModRootPath = root,
                 TargetRelativePath = targetRelativePath.Replace('\\', '/'),
@@ -810,6 +819,7 @@ public sealed class ExportContextRegistry : IDisposable
             TargetFilePath = saved.TargetFilePath,
             TargetFolder = saved.TargetFolder,
             SourceModDirectory = saved.SourceModDirectory,
+            SourceModStableId = saved.SourceModStableId,
             SourceModName = saved.SourceModName,
             SourceModRootPath = saved.SourceModRootPath,
             TargetRelativePath = saved.TargetRelativePath,
@@ -833,6 +843,7 @@ public sealed class ExportContextRegistry : IDisposable
             !CapabilityMatches(saved.Capability, saved.Capability) ||
             !PenumbraService.IsSafeGamePath(saved.GamePath) ||
             saved.CallbackPort is < 1 or > 65535 ||
+            saved.SourceModStableId == Guid.Empty ||
             saved.SourceOptionStatus is not ("unknown" or "default" or "ready" or "ambiguous") ||
             (saved.SourceOption is { } option &&
              (string.IsNullOrWhiteSpace(option.Membership) || option.Membership.Length > 512 ||
@@ -893,8 +904,9 @@ public sealed class ExportContextRegistry : IDisposable
             !PenumbraService.IsSafeGameResourcePath(locator.GamePath, ".mtrl", ".tex"))
             return false;
         if (locator.Kind == "game")
-            return locator.SourceModDirectory is null && locator.SourceRelativePath is null;
+            return locator.SourceModDirectory is null && locator.SourceModStableId is null && locator.SourceRelativePath is null;
         return locator.Kind == "mod" && PenumbraService.IsSafeModName(locator.SourceModDirectory) &&
+               locator.SourceModStableId != Guid.Empty &&
                PenumbraService.IsSafeRelativeResourcePath(locator.SourceRelativePath);
     }
 

@@ -247,6 +247,7 @@ class XIVIE_PT_main(Panel):
 
         box.prop(props, "export_destination", text="Context")
         box.prop(props, "export_scope")
+        box.prop(props, "create_attribute_groups")
         if props.export_scope == "VISIBLE_NO_MANNEQUIN":
             box.prop(props, "export_excluded_mesh", text="Excluded Mesh")
         if ref is not None and ref.destination_state == "new_mod_required":

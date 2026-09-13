@@ -288,6 +288,7 @@ public sealed class OnScreenService
                     SourceLabel = source.Label,
                     SourceModName = source.ModName,
                     SourceModDirectory = source.ModDirectory,
+                    SourceModStableId = source.ModStableId,
                     SourceModRootPath = source.ModRootPath,
                     SourceRelativePath = source.State == ResourceSourceState.GameData
                         ? normalizedActualPath
@@ -375,6 +376,7 @@ public sealed class OnScreenService
             SourceLabel = source.Label,
             SourceModName = source.ModName,
             SourceModDirectory = source.ModDirectory,
+            SourceModStableId = source.ModStableId,
             SourceModRootPath = source.ModRootPath,
             SourceRelativePath = source.State == ResourceSourceState.GameData
                 ? actualPath

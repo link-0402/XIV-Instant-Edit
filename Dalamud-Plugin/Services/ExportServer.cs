@@ -64,6 +64,15 @@ public sealed class ExportServer : IDisposable
 
         [JsonPropertyName("newModName")]
         public string? NewModName { get; set; }
+
+        [JsonPropertyName("createAttributeGroups")]
+        public bool CreateAttributeGroups { get; set; }
+
+        [JsonPropertyName("attributeTags")]
+        public List<string>? AttributeTags { get; set; }
+
+        [JsonPropertyName("attributeMasks")]
+        public Dictionary<string, int>? AttributeMasks { get; set; }
     }
 
     private sealed class ReattachRequest
@@ -127,6 +136,15 @@ public sealed class ExportServer : IDisposable
 
         [JsonPropertyName("planFingerprint")]
         public string? PlanFingerprint { get; set; }
+
+        [JsonPropertyName("createAttributeGroups")]
+        public bool CreateAttributeGroups { get; set; }
+
+        [JsonPropertyName("attributeTags")]
+        public List<string>? AttributeTags { get; set; }
+
+        [JsonPropertyName("attributeMasks")]
+        public Dictionary<string, int>? AttributeMasks { get; set; }
     }
 
     private sealed class MashupPlanRequest
@@ -639,7 +657,7 @@ public sealed class ExportServer : IDisposable
 
             var result = await _penumbra.GetVariantTargetsAsync(
                 target.SourceModDirectory!, target.TargetFilePath!, target.SourceModRootPath,
-                target.TargetRelativePath, target.GamePath).ConfigureAwait(false);
+                target.TargetRelativePath, target.GamePath, target.SourceModStableId).ConfigureAwait(false);
             if (!result.Success)
                 return Error(400, result.Code, result.Message);
             return (200, Json(new
@@ -734,7 +752,8 @@ public sealed class ExportServer : IDisposable
                 target.TargetRelativePath,
                 target.GamePath,
                 restore.BackupName!,
-                restore.BackupTargetId!).ConfigureAwait(false);
+                restore.BackupTargetId!,
+                target.SourceModStableId).ConfigureAwait(false);
             return ResultResponse(new ExportReceipt(
                 result.Success,
                 result.Code,
@@ -759,7 +778,7 @@ public sealed class ExportServer : IDisposable
                 return Error(409, "destination_not_ready", "the import has no Penumbra mod backup destination yet");
             var result = await _penumbra.ClearManagedBackupsAsync(
                 target.SourceModDirectory!, target.TargetFilePath!, target.SourceModRootPath,
-                target.TargetRelativePath, target.GamePath, clear.BackupTargetId!).ConfigureAwait(false);
+                target.TargetRelativePath, target.GamePath, clear.BackupTargetId!, target.SourceModStableId).ConfigureAwait(false);
             return ResultResponse(new ExportReceipt(result.Success, result.Code, result.Message));
         }
 
@@ -866,6 +885,9 @@ public sealed class ExportServer : IDisposable
                         item.ContextId,
                         materials = item.Materials,
                     }),
+                mashup.CreateAttributeGroups,
+                mashup.AttributeTags,
+                mashup.AttributeMasks,
             }, JsonOpts);
             var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintSource)));
             if (!_contexts.TryBeginExport(
@@ -897,7 +919,10 @@ public sealed class ExportServer : IDisposable
                         mashup.ExportId!,
                         mashup.Destination!,
                         mashup.Name!,
-                        mashup.BundleExternalDependencies).ConfigureAwait(false);
+                        mashup.BundleExternalDependencies,
+                        mashup.CreateAttributeGroups,
+                        mashup.AttributeTags,
+                        mashup.AttributeMasks).ConfigureAwait(false);
                     if (result.Success && result.PathRemap is { } pathRemap)
                         _contexts.RemapModPaths(
                             pathRemap.ModDirectory,
@@ -932,7 +957,9 @@ public sealed class ExportServer : IDisposable
                                     result.OutputTargetRelativePath,
                                     resourceManifest: result.OutputResourceManifest,
                                     targetCollectionId: activeContext.TargetCollectionId,
-                                    targetCollectionName: activeContext.TargetCollectionName);
+                                    targetCollectionName: activeContext.TargetCollectionName,
+                                    sourceModStableId: result.OutputModStableId,
+                                    resolvedGamePath: activeContext.ResolvedGamePath);
                             }
                             catch (Exception error)
                             {
@@ -1029,7 +1056,10 @@ public sealed class ExportServer : IDisposable
                         export.VariantTargetId,
                         export.SetupInPenumbra,
                         export.BackupExisting,
-                        export.NewModName).ConfigureAwait(false);
+                        export.NewModName,
+                        export.CreateAttributeGroups,
+                        export.AttributeTags,
+                        export.AttributeMasks).ConfigureAwait(false);
                 }
             }
             catch (Exception e)
@@ -1058,7 +1088,10 @@ public sealed class ExportServer : IDisposable
             string? variantTargetId,
             bool setupVariantInPenumbra,
             bool backupExisting,
-            string? newModName)
+            string? newModName,
+            bool createAttributeGroups,
+            IReadOnlyList<string>? attributeTags,
+            IReadOnlyDictionary<string, int>? attributeMasks)
         {
             if (target.DestinationState == InstantEditImportContext.NewModRequiredDestination)
             {
@@ -1066,7 +1099,9 @@ public sealed class ExportServer : IDisposable
                     return new ExportReceipt(false, "missing_new_mod_name", "enter a name for the new Penumbra mod");
                 if (setupVariantInPenumbra || variantName is not null || variantTarget is not null || backupExisting)
                     return new ExportReceipt(false, "invalid_pending_export", "a first vanilla export cannot target variants or backups");
-                var created = await _penumbra.CreateGameModelModAsync(target, filePath, newModName).ConfigureAwait(false);
+                var created = await _penumbra.CreateGameModelModAsync(
+                    target, filePath, newModName, createAttributeGroups, attributeTags, attributeMasks)
+                    .ConfigureAwait(false);
                 if (!created.Result.Success)
                     return new ExportReceipt(false, created.Result.Code, created.Result.Message, created.Result.WarningList);
                 if (created.ModRoot is null || created.TargetRelativePath is null ||
@@ -1076,7 +1111,8 @@ public sealed class ExportServer : IDisposable
                         newModName,
                         created.ModRoot,
                         created.TargetRelativePath,
-                        out var promoted) || promoted is null)
+                        out var promoted,
+                        created.ModStableId) || promoted is null)
                     return new ExportReceipt(
                         true,
                         "vanilla_mod_created_with_warnings",
@@ -1113,7 +1149,12 @@ public sealed class ExportServer : IDisposable
                 setupVariantInPenumbra,
                 backupExisting,
                 target.SourceOption,
-                target.SourceOptionStatus).ConfigureAwait(false);
+                target.SourceOptionStatus,
+                target.SourceModStableId,
+                createAttributeGroups,
+                attributeTags,
+                attributeMasks,
+                target.ResolvedGamePath).ConfigureAwait(false);
             return new ExportReceipt(
                 result.Success,
                 result.Code,
@@ -1135,6 +1176,9 @@ public sealed class ExportServer : IDisposable
             request.SetupInPenumbra,
             request.BackupExisting,
             request.NewModName,
+            request.CreateAttributeGroups,
+            request.AttributeTags,
+            request.AttributeMasks,
         })));
 
     private T? DeserializeRequest<T>(
@@ -1210,7 +1254,8 @@ public sealed class ExportServer : IDisposable
         if (request.SetupInPenumbra && request.VariantTarget is not "new_group" &&
             string.IsNullOrWhiteSpace(request.VariantTargetId))
             return "missing_variant_target";
-        return null;
+        return ValidateAttributeGroupEnvelope(
+            request.CreateAttributeGroups, request.AttributeTags, request.AttributeMasks);
     }
 
     private static string? ValidateImportStatusEnvelope(ImportStatusRequest request)
@@ -1301,6 +1346,21 @@ public sealed class ExportServer : IDisposable
                 contributor.Materials.Any(material => string.IsNullOrWhiteSpace(material) || material.Length > 512))
                 return "invalid_contributors";
         }
+        return ValidateAttributeGroupEnvelope(
+            request.CreateAttributeGroups, request.AttributeTags, request.AttributeMasks);
+    }
+
+    private static string? ValidateAttributeGroupEnvelope(
+        bool createAttributeGroups,
+        IReadOnlyList<string>? tags,
+        IReadOnlyDictionary<string, int>? masks)
+    {
+        if (!createAttributeGroups && (tags is not null || masks is not null))
+            return "unsupported_field";
+        if (tags is { Count: > 512 } || masks is { Count: > 512 } ||
+            (tags is not null && tags.Any(tag => string.IsNullOrWhiteSpace(tag) || tag.Length > 128)) ||
+            (masks is not null && masks.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || pair.Key.Length > 128)))
+            return "invalid_attribute_groups";
         return null;
     }
 

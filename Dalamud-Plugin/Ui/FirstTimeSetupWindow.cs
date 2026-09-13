@@ -128,21 +128,20 @@ public sealed class FirstTimeSetupWindow : Window
     {
         DrawHeading(
             "Welcome to XIV Instant Edit",
-            "This plugin connects Penumbra, Blender, and the XIV Instant Edit Blender add-on so you can edit models in Blender and send them back to the game.");
+            "This plugin provides workflows for easier and instantanous model, texture and animation editing.");
 
         ImGui.BulletText("Penumbra is required to read modded resources and write exports back to mods.");
         ImGui.BulletText("Blender and the XIV Instant Edit add-on are required for model editing.");
-        ImGui.BulletText("The next step creates a shared cache used by the plugin and the Blender add-on.");
-        ImGui.BulletText("Texture editing is optional and can be enabled by choosing a TGA editor on the final step.");
+        ImGui.BulletText("Texture editing support is software-independent and will work with any established Photo Editing software with TGA support.");
         ImGui.Spacing();
-        ImGui.TextColored(new Vector4(.55f, .57f, .64f, 1), "You can revisit this setup wizard from XIV Instant Edit Settings at any time.");
+        ImGui.TextColored(new Vector4(.55f, .57f, .64f, 1), "You are required to configure a cache directory in the next step, which will be used by both the in-game plugin and the Blender add-on to save temporary export files and backups.");
     }
 
     private void DrawCacheStep()
     {
         DrawHeading(
-            "Choose a shared cache location",
-            "The plugin and Blender add-on use this location to exchange model files and store texture-editing work. The managed XIV Instant Edit folder is created automatically inside the location you choose.");
+            "Choose a cache location",
+            "The plugin and Blender add-on use this location to exchange model files and store texture-editing sessions. The managed XIV Instant Edit folder is created automatically inside the location of your choice.");
 
         ImGui.Text("Cache base directory");
         ImGui.SetNextItemWidth(-1);
@@ -171,14 +170,14 @@ public sealed class FirstTimeSetupWindow : Window
             ImGui.TextWrapped(managedCachePath);
             ImGui.Spacing();
         }
-        ImGui.TextColored(new Vector4(.55f, .57f, .64f, 1), "The cache is required. Setup will verify that the managed folder can be created before it finishes.");
+        ImGui.TextColored(new Vector4(.55f, .57f, .64f, 1), "Setup will verify that the managed folder can be written to before it finishes.");
     }
 
     private void DrawEditorStep()
     {
         DrawHeading(
             "Configure texture editing (optional)",
-            "Choose the executable for Photoshop or another editor that can open and save 32-bit TGA files. Leave this blank if you only plan to edit models.");
+            "Choose the executable for a Photo editing software that can open and save 32-bit TGA files. You can leave this blank if you only plan to edit models.");
 
         ImGui.Text("Texture editor executable");
         ImGui.SetNextItemWidth(-1);

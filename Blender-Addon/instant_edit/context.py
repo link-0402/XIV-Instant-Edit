@@ -10,6 +10,7 @@ it with metadata produced by the normal exporter.
 from dataclasses import dataclass
 from typing import Iterable
 import re
+import uuid
 
 import bpy
 
@@ -25,6 +26,7 @@ CONTEXT_METADATA_FIELDS = (
     "context_id", "schema", "version", "plugin_instance_id", "capability",
     "source_game_path", "managed_destination", "target_file_path",
     "source_mod_directory", "source_mod_name", "source_mod_root_path",
+    "source_mod_stable_id",
     "target_relative_path", "source_kind", "resolved_game_path", "destination_state",
     "target_collection_id", "target_collection_name",
     "resource_manifest_version", "resource_manifest_status",
@@ -127,6 +129,7 @@ class ContextRef:
     managed_destination: str
     target_file_path: str
     source_mod_directory: str
+    source_mod_stable_id: str
     source_mod_name: str
     source_mod_root_path: str
     target_relative_path: str
@@ -280,6 +283,7 @@ def apply_authoritative_context(collection, payload: dict) -> None:
         "managed_destination": payload.get("managedDestination") or "",
         "target_file_path": payload.get("targetFilePath") or "",
         "source_mod_directory": payload.get("sourceModDirectory") or "",
+        "source_mod_stable_id": payload.get("sourceModStableId") or "",
         "source_mod_name": payload.get("sourceModName") or "",
         "source_mod_root_path": payload.get("sourceModRootPath") or "",
         "target_relative_path": payload.get("targetRelativePath") or "",
@@ -354,6 +358,7 @@ def validate_context(context_id: str, scene=None) -> ContextRef:
         "context_id", "schema", "version", "plugin_instance_id", "capability",
         "source_game_path", "managed_destination", "target_file_path",
         "source_mod_directory", "source_mod_name", "source_mod_root_path", "callback_port",
+        "source_mod_stable_id",
         "target_relative_path", "source_kind", "resolved_game_path", "destination_state",
         "target_collection_id", "target_collection_name",
         "resource_manifest_version", "resource_manifest_status",
@@ -372,6 +377,7 @@ def validate_context(context_id: str, scene=None) -> ContextRef:
     managed_destination = _value(collection, "managed_destination", "")
     target_file_path = _value(collection, "target_file_path", "")
     source_mod_directory = _value(collection, "source_mod_directory", "")
+    source_mod_stable_id = _value(collection, "source_mod_stable_id", "")
     source_mod_name = _value(collection, "source_mod_name", "")
     source_mod_root_path = _value(collection, "source_mod_root_path", "")
     target_relative_path = _value(collection, "target_relative_path", "")
@@ -390,6 +396,14 @@ def validate_context(context_id: str, scene=None) -> ContextRef:
         raise ContextValidationError("context collection is missing immutable reference data")
     if source_kind not in {"mod", "game"} or destination_state not in {"ready", "new_mod_required"}:
         raise ContextValidationError("context collection has an invalid source or destination state")
+    if source_mod_stable_id:
+        try:
+            if uuid.UUID(source_mod_stable_id).int == 0:
+                raise ValueError
+        except (ValueError, AttributeError, TypeError):
+            raise ContextValidationError("context collection has an invalid Penumbra mod identity")
+    if source_kind == "game" and source_mod_stable_id:
+        raise ContextValidationError("game context contains unexpected Penumbra mod identity")
     if source_kind == "game" and (
         not is_safe_game_model_path(source_game_path) or
         not is_safe_game_model_path(resolved_game_path)
@@ -475,6 +489,7 @@ def validate_context(context_id: str, scene=None) -> ContextRef:
         managed_destination=managed_destination,
         target_file_path=target_file_path,
         source_mod_directory=source_mod_directory,
+        source_mod_stable_id=source_mod_stable_id,
         source_mod_name=source_mod_name,
         source_mod_root_path=source_mod_root_path if isinstance(source_mod_root_path, str) else "",
         target_relative_path=target_relative_path if isinstance(target_relative_path, str) else "",

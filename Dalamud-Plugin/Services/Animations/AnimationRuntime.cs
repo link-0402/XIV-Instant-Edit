@@ -7,7 +7,8 @@ using InstantEdit.Models;
 
 namespace InstantEdit.Services.Animations;
 
-internal sealed record RuntimeBinding(int Partial, string Fingerprint, string SkeletonResource, string SkeletonFingerprint);
+internal sealed record RuntimeBinding(int Partial, string Fingerprint, string SkeletonResource, string SkeletonFingerprint,
+    SkeletonDescription? Skeleton = null);
 internal sealed record RuntimeAnimationSnapshot(ulong ActorId, long Address, ushort ObjectIndex,
     ImmutableArray<ushort> Timelines, ImmutableArray<RuntimeBinding> Bindings);
 
@@ -40,6 +41,7 @@ internal static unsafe class AnimationRuntime
         var skeleton = character->Skeleton;
         if (skeleton->PartialSkeletonCount is 0 or > 16 || skeleton->PartialSkeletons == null) return null;
         var bindings = ImmutableArray.CreateBuilder<RuntimeBinding>();
+        var descriptions = new Dictionary<nint, SkeletonDescription>();
         for (var partial = 0; partial < skeleton->PartialSkeletonCount; partial++)
         {
             var p = &skeleton->PartialSkeletons[partial];
@@ -48,19 +50,33 @@ internal static unsafe class AnimationRuntime
             {
                 var animated = p->GetHavokAnimatedSkeleton(buffer);
                 if (animated == null || animated->AnimationControls.Length is < 0 or > 256) continue;
-                AnimationNative.ValidateArray(animated->AnimationControls, 256, "animation controls");
+                SkeletonDescription description;
+                try
+                {
+                    AnimationNative.ValidateArray(animated->AnimationControls, 256, "animation controls");
+                    if (!descriptions.TryGetValue((nint)animated->Skeleton, out description!))
+                        descriptions[(nint)animated->Skeleton] = description = AnimationSkeleton.Describe(animated->Skeleton);
+                }
+                catch (InvalidDataException) { continue; }
                 for (var i = 0; i < animated->AnimationControls.Length; i++)
                 {
                     var control = animated->AnimationControls[i].Value;
                     if (control == null || control->Weight <= 0 || control->Binding.ptr == null) continue;
-                    AnimationNative.Sampler.Validate(animated->Skeleton, control->Binding.ptr);
-                    bindings.Add(new RuntimeBinding(partial, AnimationNative.Fingerprint(control->Binding.ptr),
-                        p->SkeletonResourceHandle->FileName.ToString(), SkeletonFingerprint(animated->Skeleton)));
+                    if (CaptureBinding(partial, control->Binding.ptr, p->SkeletonResourceHandle->FileName.ToString(), description) is { } captured)
+                        bindings.Add(captured);
                 }
             }
         }
         return new RuntimeAnimationSnapshot(actor->ContentId, player.Address, player.ObjectIndex,
-            actor->Timeline.TimelineSequencer.TimelineIds.ToArray().ToImmutableArray(), bindings.Distinct().ToImmutableArray());
+            actor->Timeline.TimelineSequencer.TimelineIds.ToArray().ToImmutableArray(),
+            bindings.DistinctBy(b => (b.Partial, b.Fingerprint, b.SkeletonResource, b.SkeletonFingerprint)).ToImmutableArray());
+    }
+
+    internal static RuntimeBinding? CaptureBinding(int partial, FFXIVClientStructs.Havok.Animation.Animation.hkaAnimationBinding* binding,
+        string resource, SkeletonDescription skeleton)
+    {
+        try { return new(partial, AnimationNative.Fingerprint(binding), resource, skeleton.Fingerprint, skeleton); }
+        catch (InvalidDataException) { return null; }
     }
 
     public static string SkeletonFingerprint(hkaSkeleton* skeleton)
@@ -103,7 +119,9 @@ internal static unsafe class AnimationRuntime
     {
         using var doc = new AnimationNative.Document(new AnimationPap(bytes).Havok);
         var result = ImmutableDictionary.CreateBuilder<int, string>();
-        for (var i = 0; i < doc.Container->Bindings.Length; i++) result[i] = AnimationNative.Fingerprint(doc.Container->Bindings[i].ptr);
+        for (var i = 0; i < doc.Container->Bindings.Length; i++)
+            try { result[i] = AnimationNative.Fingerprint(doc.Container->Bindings[i].ptr); }
+            catch (InvalidDataException) { }
         return result.ToImmutable();
     }
     public static void CheckSkeleton(byte[] bytes, string expected)

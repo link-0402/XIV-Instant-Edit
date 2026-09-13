@@ -60,6 +60,24 @@ ATTRIBUTE_VARIANTS = {
     "hv": "Hair",
 }
 
+# These are the model-visible attribute families that can be represented by
+# the generated Penumbra IMC group. Face attributes deliberately remain out of
+# this preset; face custom attributes can still be authored with the atrx_
+# convention and exported through the regular ATR group.
+ATTRIBUTE_GROUP_FAMILIES = (
+    "mv", "tv", "gv", "dv", "sv", "ev", "nv", "wv", "rv", "hv",
+)
+ATTRIBUTE_GROUP_SUFFIXES = tuple("abcdefgh")
+ATTRIBUTE_VARIANT_PRESETS = tuple(
+    f"atr_{family}_{suffix}"
+    for family in ATTRIBUTE_GROUP_FAMILIES
+    for suffix in ATTRIBUTE_GROUP_SUFFIXES
+)
+_ATTRIBUTE_VARIANT_PATTERN = re.compile(
+    r"^atr_(?:" + "|".join(ATTRIBUTE_GROUP_FAMILIES) + r")_(?:[a-h])$"
+)
+_BUILTIN_ATTRIBUTE_NAMES = frozenset(f"atr_{name}" for name in ATTRIBUTE_NAMES)
+
 
 @dataclass(frozen=True)
 class MaterialGroup:
@@ -316,6 +334,68 @@ def mesh_part_attributes(objects) -> tuple[str, ...]:
         if is_model_attribute_name(key) and value
     }
     return tuple(sorted(attributes))
+
+
+def attribute_group_data(
+    objects,
+    *,
+    use_lods: bool = True,
+) -> tuple[tuple[str, ...], dict[str, int]]:
+    """Return model attributes and exact MDL masks for Penumbra groups.
+
+    The exporter assigns attribute bits in first-seen object/custom-property
+    order. Repeating that walk here means the IMC group's masks address the
+    same bits that the just-exported model uses. Body-part attributes are
+    intentionally excluded because they are vanilla visibility controls, not
+    gear/accessory part tags.
+    """
+    model_attributes: list[str] = []
+    exported_lods = range(3 if use_lods else 1)
+    for lod_level in exported_lods:
+        for obj in objects:
+            if getattr(obj, "type", None) != "MESH":
+                continue
+            data = getattr(obj, "data", None)
+            if data is not None and hasattr(data, "vertices") and len(data.vertices) == 0:
+                continue
+            try:
+                object_lod = mesh_ids_from_name(obj)[2]
+            except Exception:
+                continue
+            if object_lod != lod_level:
+                continue
+            for key in obj.keys():
+                attribute = str(key).strip()
+                if not is_model_attribute_name(attribute) or not obj[key]:
+                    continue
+                if attribute not in model_attributes:
+                    model_attributes.append(attribute)
+
+    tags: list[str] = []
+    masks: dict[str, int] = {}
+    invalid_custom: list[str] = []
+    for index, attribute in enumerate(model_attributes):
+        if attribute in _BUILTIN_ATTRIBUTE_NAMES:
+            continue
+        if _ATTRIBUTE_VARIANT_PATTERN.fullmatch(attribute):
+            if index >= 10:
+                raise ValueError(
+                    f"Attribute {attribute} is beyond Penumbra's 10-bit IMC mask limit."
+                )
+            tags.append(attribute)
+            masks[attribute] = 1 << index
+        elif attribute.startswith("atrx_"):
+            tags.append(attribute)
+        elif attribute.startswith("atr"):
+            invalid_custom.append(attribute)
+
+    if invalid_custom:
+        names = ", ".join(sorted(invalid_custom))
+        raise ValueError(
+            "Custom Penumbra attribute groups require attributes beginning with "
+            f"atrx_: {names}"
+        )
+    return tuple(tags), masks
 
 
 def attribute_display_name(attribute: str) -> str:

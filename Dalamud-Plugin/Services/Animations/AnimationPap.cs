@@ -12,27 +12,37 @@ internal sealed class AnimationPap
     private readonly byte[] bytes;
     public int HavokOffset { get; }
     public int TimelineOffset { get; }
+    public ushort ModelId => BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(10));
+    public byte ModelType => bytes[12];
     public ImmutableArray<Entry> Entries { get; }
     public byte[] Havok => bytes[HavokOffset..TimelineOffset];
     public byte[] Timelines => bytes[TimelineOffset..];
     public const int MaxFileSize = 256 * 1024 * 1024;
+    // Packed header: magic/version (8), count (2), model ID (2), type/variant
+    // (1 each), then three int32 offsets. There is no alignment gap at byte 14.
+    private const int HeaderSize = 26;
+    private const int InfoOffsetField = 14;
+    private const int HavokOffsetField = 18;
+    private const int TimelineOffsetField = 22;
+    private const int EntrySize = 40;
 
     public AnimationPap(byte[] data)
     {
-        if (data.Length < 28 || data.Length > MaxFileSize || !data.AsSpan(0, 4).SequenceEqual("pap "u8))
+        if (data.Length < HeaderSize || data.Length > MaxFileSize || !data.AsSpan(0, 4).SequenceEqual("pap "u8))
             throw new InvalidDataException("Invalid PAP header or size.");
         if (ReadInt(data, 4) != 0x00020001) throw new InvalidDataException("Unsupported PAP version.");
         var count = BinaryPrimitives.ReadInt16LittleEndian(data.AsSpan(8));
-        var info = ReadInt(data, 16);
-        HavokOffset = ReadInt(data, 20);
-        TimelineOffset = ReadInt(data, 24);
-        if (count < 1 || count > 4096 || info < 28 || info > HavokOffset ||
-            (long)info + count * 40 > HavokOffset || HavokOffset > TimelineOffset || TimelineOffset > data.Length)
-            throw new InvalidDataException("PAP offsets or animation count are invalid.");
+        var info = ReadInt(data, InfoOffsetField);
+        HavokOffset = ReadInt(data, HavokOffsetField);
+        TimelineOffset = ReadInt(data, TimelineOffsetField);
+        if (count < 1 || count > 4096 || info < HeaderSize || info > HavokOffset ||
+            (long)info + count * EntrySize > HavokOffset || HavokOffset > TimelineOffset || TimelineOffset > data.Length)
+            throw new InvalidDataException($"PAP offsets or animation count are invalid " +
+                $"(count={count}, info={info}, Havok={HavokOffset}, timeline={TimelineOffset}, size={data.Length}).");
         var entries = ImmutableArray.CreateBuilder<Entry>(count);
         for (var i = 0; i < count; i++)
         {
-            var start = info + i * 40;
+            var start = info + i * EntrySize;
             var name = data.AsSpan(start, 32);
             var end = name.IndexOf((byte)0);
             if (end < 1) throw new InvalidDataException("PAP animation name is missing or unterminated.");
@@ -56,7 +66,7 @@ internal sealed class AnimationPap
         bytes.AsSpan(0, HavokOffset).CopyTo(result);
         havok.CopyTo(result, HavokOffset);
         bytes.AsSpan(TimelineOffset).CopyTo(result.AsSpan(footer));
-        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(24), footer);
+        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(TimelineOffsetField), footer);
         _ = new AnimationPap(result);
         return result;
     }

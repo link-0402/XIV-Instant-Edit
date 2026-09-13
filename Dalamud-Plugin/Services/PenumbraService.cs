@@ -29,7 +29,8 @@ public sealed record ExportResult(
     string? OutputModDirectory = null,
     string? OutputModRootPath = null,
     string? OutputTargetRelativePath = null,
-    ResourceDependencyManifest? OutputResourceManifest = null)
+    ResourceDependencyManifest? OutputResourceManifest = null,
+    Guid? OutputModStableId = null)
 {
     public ExportResult(bool success, string message)
         : this(success, success ? "export_applied" : "apply_failed", message)
@@ -50,7 +51,11 @@ public sealed record VariantOptionTarget(
 public sealed record VariantGroupTarget(string Id, string Name, IReadOnlyList<VariantOptionTarget> Options);
 public sealed record VariantTargetsResult(bool Success, string Code, string Message, IReadOnlyList<VariantGroupTarget> Groups);
 public sealed record PenumbraCollectionTarget(Guid Id, string Name);
-public sealed record NewModelModResult(ExportResult Result, string? ModRoot = null, string? TargetRelativePath = null);
+public sealed record NewModelModResult(
+    ExportResult Result,
+    string? ModRoot = null,
+    string? TargetRelativePath = null,
+    Guid? ModStableId = null);
 public sealed record MashupContributor(InstantEditImportContext Context, IReadOnlyList<string> Materials);
 public sealed record MashupMaterialAssignment(
     string ContextId,
@@ -87,9 +92,15 @@ public sealed partial class PenumbraService
 {
     internal sealed record SourceModTarget(string Directory, string Folder, string FilePath, string RelativePath);
     internal sealed record SourceTargetResolution(SourceModTarget? Target, string Code, string? Error);
+    private sealed record AttributeModelIdentity(
+        int Id, int RaceCode, string AtrSlot, string ObjectType, string EquipSlot, string BodySlot);
+    private sealed record AttributeGroupWrite(string Path, JsonObject Document);
 
     private const string OwnershipMarkerFile = ".instant-edit-owner.json";
     private const string VariantGroupDescriptionPrefix = "Managed by XIV Instant Edit variant group: ";
+    private const string AttributeGroupDescriptionPrefix = "Managed by XIV Instant Edit attribute group v1: ";
+    private static readonly string[] AttributeGroupFamilies =
+        ["mv", "tv", "gv", "dv", "sv", "ev", "nv", "wv", "rv", "hv"];
 
     private readonly IDalamudPluginInterface  _pi;
     private readonly GetGameObjectResourcePaths _getPaths;
@@ -420,8 +431,14 @@ public sealed partial class PenumbraService
         bool setupVariantInPenumbra,
         bool backupExisting = false,
         SourceOptionLocator? sourceOption = null,
-        string sourceOptionStatus = "unknown")
+        string sourceOptionStatus = "unknown",
+        Guid? sourceModStableId = null,
+        bool createAttributeGroups = false,
+        IReadOnlyList<string>? attributeTags = null,
+        IReadOnlyDictionary<string, int>? attributeMasks = null,
+        string? resolvedGamePath = null)
     {
+        resolvedGamePath ??= sourceGamePath;
         if (!IsSafeModName(sourceModDirectory) || !IsSafeGamePath(sourceGamePath) ||
             !IsSafeLocalModelPath(sourceFilePath))
             return new ExportResult(false, "destination_unsafe", "The original Penumbra model destination is invalid.");
@@ -452,13 +469,22 @@ public sealed partial class PenumbraService
                     sourceModDirectory,
                     sourceFilePath,
                     sourceModRootPath,
-                    targetRelativePath)).ConfigureAwait(false);
+                    targetRelativePath,
+                    sourceModStableId)).ConfigureAwait(false);
             if (resolved.Target is null)
                 return new ExportResult(
                     false,
                     resolved.Code,
                     resolved.Error ?? "The original Penumbra mod is no longer available.");
             _ = LoadV4ModMetadata(resolved.Target.Folder);
+            if (createAttributeGroups && attributeTags is { Count: > 0 })
+            {
+                var attributeError = ValidateAttributeGroups(
+                    resolved.Target.Folder, resolvedGamePath, attributeTags, attributeMasks);
+                if (attributeError is not null)
+                    return new ExportResult(false, AttributeGroupErrorCode(attributeError),
+                        AttributeGroupErrorMessage(attributeError));
+            }
 
             var targetFile = variantName is null
                 ? resolved.Target.FilePath
@@ -518,6 +544,14 @@ public sealed partial class PenumbraService
                     warnings.Add($"Penumbra variant setup failed: {groupError}");
             }
 
+            if (createAttributeGroups && attributeTags is { Count: > 0 })
+            {
+                var attributeError = WriteAttributeGroups(
+                    resolved.Target.Folder, resolvedGamePath, attributeTags, attributeMasks);
+                if (attributeError is not null)
+                    warnings.Add($"Penumbra attribute group setup failed: {AttributeGroupErrorMessage(attributeError)}");
+            }
+
             var reloadError = await _framework.RunOnFrameworkThread(
                 () => ReloadModOnFramework(resolved.Target.Directory)).ConfigureAwait(false);
             if (reloadError is not null)
@@ -560,7 +594,8 @@ public sealed partial class PenumbraService
         string sourceFilePath,
         string? sourceModRootPath,
         string? targetRelativePath,
-        string sourceGamePath)
+        string sourceGamePath,
+        Guid? sourceModStableId = null)
     {
         if (!IsSafeModName(sourceModDirectory) || !IsSafeLocalModelPath(sourceFilePath) || !IsSafeGamePath(sourceGamePath))
             return new VariantTargetsResult(false, "destination_unsafe", "The original Penumbra model destination is invalid.", []);
@@ -570,7 +605,7 @@ public sealed partial class PenumbraService
         {
             var resolved = await _framework.RunOnFrameworkThread(
                 () => ResolveSourceModTargetOnFramework(
-                    sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath)).ConfigureAwait(false);
+                    sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath, sourceModStableId)).ConfigureAwait(false);
             if (resolved.Target is null)
                 return new VariantTargetsResult(false, resolved.Code,
                     resolved.Error ?? "The original Penumbra mod is no longer available.", []);
@@ -592,7 +627,10 @@ public sealed partial class PenumbraService
     public async Task<NewModelModResult> CreateGameModelModAsync(
         InstantEditImportContext context,
         string exportedFile,
-        string modName)
+        string modName,
+        bool createAttributeGroups = false,
+        IReadOnlyList<string>? attributeTags = null,
+        IReadOnlyDictionary<string, int>? attributeMasks = null)
     {
         if (context.SourceKind != InstantEditImportContext.GameSource ||
             context.DestinationState != InstantEditImportContext.NewModRequiredDestination)
@@ -635,6 +673,13 @@ public sealed partial class PenumbraService
                     modName,
                     context.GamePath,
                     await File.ReadAllBytesAsync(exportedFile).ConfigureAwait(false));
+                if (createAttributeGroups && attributeTags is { Count: > 0 })
+                {
+                    var attributeError = WriteAttributeGroups(
+                        staging, context.ResolvedGamePath, attributeTags, attributeMasks);
+                    if (attributeError is not null)
+                        throw new InvalidDataException(attributeError);
+                }
                 Directory.Move(staging, finalFolder);
                 committed = true;
 
@@ -674,13 +719,14 @@ public sealed partial class PenumbraService
                 }
 
                 var targetFile = Path.Combine(finalFolder, relativeModel.Replace('/', Path.DirectorySeparatorChar));
+                var stableId = ReadModStableIdentifier(finalFolder);
                 return new NewModelModResult(new ExportResult(
                     true,
                     warnings.Count == 0 ? "vanilla_mod_created" : "vanilla_mod_created_with_warnings",
                     $"Created Penumbra model mod {modName}.",
                     warnings,
                     targetFile,
-                    modName), finalFolder, relativeModel);
+                    modName), finalFolder, relativeModel, stableId);
             }
             catch (Exception e)
             {
@@ -689,13 +735,14 @@ public sealed partial class PenumbraService
                 if (committed)
                 {
                     var targetFile = Path.Combine(finalFolder, relativeModel.Replace('/', Path.DirectorySeparatorChar));
+                    var stableId = ReadModStableIdentifier(finalFolder);
                     return new NewModelModResult(new ExportResult(
                         true,
                         "vanilla_mod_created_with_warnings",
                         $"Created Penumbra model mod {modName}.",
                         [$"The model mod was committed, but follow-up processing failed: {e.Message}"],
                         targetFile,
-                        modName), finalFolder, relativeModel);
+                        modName), finalFolder, relativeModel, stableId);
                 }
                 return new NewModelModResult(new ExportResult(false, "vanilla_mod_create_failed", e.Message));
             }
@@ -734,7 +781,10 @@ public sealed partial class PenumbraService
         string exportId,
         string destination,
         string name,
-        bool bundleExternalDependencies = false)
+        bool bundleExternalDependencies = false,
+        bool createAttributeGroups = false,
+        IReadOnlyList<string>? attributeTags = null,
+        IReadOnlyDictionary<string, int>? attributeMasks = null)
     {
         if (_data is null)
             return new ExportResult(false, "mashup_unavailable", "Game data access is unavailable.");
@@ -770,7 +820,8 @@ public sealed partial class PenumbraService
                     activeContext.SourceModDirectory!,
                     activeContext.TargetFilePath!,
                     activeContext.SourceModRootPath,
-                    activeContext.TargetRelativePath)).ConfigureAwait(false);
+                    activeContext.TargetRelativePath,
+                    activeContext.SourceModStableId)).ConfigureAwait(false);
                 if (resolution.Target is null)
                     return new ExportResult(false, resolution.Code,
                         resolution.Error ?? "The active Penumbra mod is no longer available.");
@@ -784,12 +835,27 @@ public sealed partial class PenumbraService
             if (prepared.Error is not null)
                 return new ExportResult(false, prepared.Code, prepared.Error);
 
+            if (createAttributeGroups && attributeTags is { Count: > 0 })
+            {
+                var attributeRoot = activeTarget?.Folder;
+                var attributeError = attributeRoot is not null
+                    ? ValidateAttributeGroups(attributeRoot, activeContext.ResolvedGamePath,
+                        attributeTags, attributeMasks)
+                    : ValidateAttributeGroupRequest(activeContext.ResolvedGamePath,
+                        attributeTags, attributeMasks);
+                if (attributeError is not null)
+                    return new ExportResult(false, AttributeGroupErrorCode(attributeError),
+                        AttributeGroupErrorMessage(attributeError));
+            }
+
             var description = FormatMashupDescription(contributors, prepared.RequiredExternalMods);
 
             return destination == "active_mod"
-                ? await CommitMashupToActiveModAsync(activeTarget!, activeContext, prepared, exportId, name, description)
+                ? await CommitMashupToActiveModAsync(activeTarget!, activeContext, prepared, exportId, name, description,
+                    createAttributeGroups, attributeTags, attributeMasks)
                     .ConfigureAwait(false)
-                : await CommitMashupToNewModAsync(activeContext, prepared, exportId, name, description)
+                : await CommitMashupToNewModAsync(activeContext, prepared, exportId, name, description,
+                    createAttributeGroups, attributeTags, attributeMasks)
                     .ConfigureAwait(false);
         }
         catch (Exception e)
@@ -946,6 +1012,7 @@ public sealed partial class PenumbraService
             Kind = InstantEditImportContext.ModSource,
             GamePath = NormalizeGamePath(gamePath),
             SourceModDirectory = modDirectory,
+            SourceModStableId = ReadModStableIdentifier(modRoot),
             SourceModRootPath = modRoot,
             SourceRelativePath = relativePath,
             Sha256 = TextureFiles.Hash(bytes).ToLowerInvariant(),
@@ -1293,7 +1360,7 @@ public sealed partial class PenumbraService
                  IsSafeRelativeResourcePath(locator.SourceRelativePath))
         {
             var roots = await _framework.RunOnFrameworkThread(
-                () => GetRegisteredManifestRoots(locator.SourceModDirectory!)).ConfigureAwait(false);
+                () => GetRegisteredManifestRoots(locator.SourceModDirectory!, locator.SourceModStableId)).ConfigureAwait(false);
             if (roots.Length == 0)
                 return null;
             return await ReadVerifiedModManifestResourceAsync(locator, roots).ConfigureAwait(false);
@@ -1305,17 +1372,17 @@ public sealed partial class PenumbraService
         return string.Equals(actualHash, locator.Sha256, StringComparison.OrdinalIgnoreCase) ? bytes : null;
     }
 
-    private string[] GetRegisteredManifestRoots(string modDirectory)
+    private string[] GetRegisteredManifestRoots(string modDirectory, Guid? stableId = null)
     {
-        if (!GetMods().Any(mod =>
-                string.Equals(mod.Directory, modDirectory, StringComparison.OrdinalIgnoreCase)))
+        var modList = GetModList();
+        if (!TryResolveRegisteredModIdentity(modList, modDirectory, stableId, null, out var registeredDirectory, out _))
             return [];
 
         var roots = new List<string>();
-        AddCandidateRoot(roots, GetRegisteredModPath(modDirectory));
+        AddCandidateRoot(roots, GetRegisteredModPath(registeredDirectory));
         var configuredRoot = GetModDirectory();
         if (!string.IsNullOrWhiteSpace(configuredRoot))
-            AddCandidateRoot(roots, Path.Combine(configuredRoot, modDirectory));
+            AddCandidateRoot(roots, Path.Combine(configuredRoot, registeredDirectory));
         return roots.ToArray();
     }
 
@@ -1423,7 +1490,10 @@ public sealed partial class PenumbraService
         PreparedMashup prepared,
         string exportId,
         string requestedName,
-        string description)
+        string description,
+        bool createAttributeGroups,
+        IReadOnlyList<string>? attributeTags,
+        IReadOnlyDictionary<string, int>? attributeMasks)
     {
         _ = LoadV4ModMetadata(target.Folder);
         var namespaceRelative = $"Files/xiv-instant-edit/mashups/{exportId[..12]}";
@@ -1448,7 +1518,13 @@ public sealed partial class PenumbraService
                 throw new InvalidDataException(groupError);
             committed = true;
 
+            var attributeWarnings = createAttributeGroups && attributeTags is { Count: > 0 }
+                ? WriteAttributeGroups(target.Folder, activeContext.ResolvedGamePath, attributeTags, attributeMasks)
+                : null;
+
             var warnings = ExternalMashupWarnings(prepared.RequiredExternalMods).ToList();
+            if (attributeWarnings is not null)
+                warnings.Add($"Penumbra attribute group setup failed: {AttributeGroupErrorMessage(attributeWarnings)}");
             var cleanup = NormalizeAndDeduplicateMod(target.Folder, target.Directory);
             warnings.AddRange(cleanup.Warnings);
             try
@@ -1513,7 +1589,10 @@ public sealed partial class PenumbraService
         PreparedMashup prepared,
         string exportId,
         string modName,
-        string description)
+        string description,
+        bool createAttributeGroups,
+        IReadOnlyList<string>? attributeTags,
+        IReadOnlyDictionary<string, int>? attributeMasks)
     {
         if (!IsSafeNewModName(modName))
             return new ExportResult(false, "invalid_mod_name", "The Penumbra mod name is invalid.");
@@ -1546,6 +1625,13 @@ public sealed partial class PenumbraService
                     prepared.Mappings,
                     activeContext.ResourceManifest?.Manipulations,
                     prepared.FileSwaps)));
+            if (createAttributeGroups && attributeTags is { Count: > 0 })
+            {
+                var attributeError = WriteAttributeGroups(
+                    staging, activeContext.ResolvedGamePath, attributeTags, attributeMasks);
+                if (attributeError is not null)
+                    throw new InvalidDataException(attributeError);
+            }
             ValidateStagedMashupMod(
                 staging,
                 modName,
@@ -1585,6 +1671,7 @@ public sealed partial class PenumbraService
             if (cleanup.PathRemap?.RelativePaths.TryGetValue(modelRelative, out var remappedModel) == true)
                 modelRelative = remappedModel;
             var modelPath = Path.Combine(finalFolder, modelRelative.Replace('/', Path.DirectorySeparatorChar));
+            var stableId = ReadModStableIdentifier(finalFolder);
             return new ExportResult(true,
                 warnings.Count == 0 ? "mashup_mod_created" : "mashup_mod_created_with_warnings",
                 $"Created Penumbra mashup mod {modName}.", warnings, modelPath, modName,
@@ -1594,7 +1681,8 @@ public sealed partial class PenumbraService
                 OutputTargetRelativePath: modelRelative,
                 OutputResourceManifest: BuildMashupResourceManifest(
                     prepared, modName, finalFolder, cleanup.PathRemap,
-                    activeContext.ResourceManifest?.Manipulations));
+                    activeContext.ResourceManifest?.Manipulations),
+                OutputModStableId: stableId);
         }
         catch (Exception e)
         {
@@ -1604,6 +1692,7 @@ public sealed partial class PenumbraService
             {
                 var modelRelative = prepared.Mappings[NormalizeGamePath(activeContext.GamePath)];
                 var modelPath = Path.Combine(finalFolder, modelRelative.Replace('/', Path.DirectorySeparatorChar));
+                var stableId = ReadModStableIdentifier(finalFolder);
                 var warnings = ExternalMashupWarnings(prepared.RequiredExternalMods)
                     .Append($"The mashup mod was committed, but Penumbra setup failed: {e.Message}")
                     .ToArray();
@@ -1615,7 +1704,8 @@ public sealed partial class PenumbraService
                     OutputTargetRelativePath: modelRelative,
                     OutputResourceManifest: BuildMashupResourceManifest(
                         prepared, modName, finalFolder, null,
-                        activeContext.ResourceManifest?.Manipulations));
+                        activeContext.ResourceManifest?.Manipulations),
+                    OutputModStableId: stableId);
             }
             return new ExportResult(false, "mashup_mod_create_failed", e.Message);
         }
@@ -1625,26 +1715,30 @@ public sealed partial class PenumbraService
         string sourceModDirectory,
         string sourceFilePath,
         string? sourceModRootPath,
-        string? targetRelativePath)
+        string? targetRelativePath,
+        Guid? sourceModStableId = null)
     {
         if (!TryGetModList(out var modList))
             return new SourceTargetResolution(null, "penumbra_unavailable", "Could not retrieve the Penumbra mod list.");
 
-        var registeredDirectory = modList.Keys.FirstOrDefault(directory =>
-            string.Equals(directory, sourceModDirectory, StringComparison.OrdinalIgnoreCase));
-        if (registeredDirectory is null)
-            return new SourceTargetResolution(null, "source_mod_missing", "The source mod is no longer registered in Penumbra.");
+        if (!TryResolveRegisteredModIdentity(
+                modList,
+                sourceModDirectory,
+                sourceModStableId,
+                sourceModRootPath,
+                out var registeredDirectory,
+                out var identityError))
+            return new SourceTargetResolution(null, identityError.Code, identityError.Message);
 
         try
         {
-            var modPath = _getModPath.Invoke(registeredDirectory, string.Empty);
             var configuredRoot = GetModDirectory();
             return ResolveSourceModTargetFromRoots(
                 registeredDirectory,
                 sourceFilePath,
                 sourceModRootPath,
                 targetRelativePath,
-                modPath.Item1 is PenumbraApiEc.Success ? modPath.Item2 : null,
+                GetRegisteredModPath(registeredDirectory),
                 string.IsNullOrWhiteSpace(configuredRoot)
                     ? null
                     : Path.Combine(configuredRoot, registeredDirectory));
@@ -1972,7 +2066,8 @@ public sealed partial class PenumbraService
     /// <summary>Resolve Penumbra state on the framework thread, then scan files on a worker.</summary>
     public async Task<PenumbraModSnapshot?> GetModResourcesAsync(
         string modDirectory,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Guid? stableId = null)
     {
         if (!IsSafeModName(modDirectory))
             return null;
@@ -1980,7 +2075,7 @@ public sealed partial class PenumbraService
         try
         {
             var request = await _framework.RunOnFrameworkThread(
-                () => ResolveModScanOnFramework(modDirectory)).ConfigureAwait(false);
+                () => ResolveModScanOnFramework(modDirectory, stableId)).ConfigureAwait(false);
             if (request is null)
                 return null;
             return await Task.Run(() => ScanModResources(request, cancellationToken), cancellationToken)
@@ -2011,7 +2106,7 @@ public sealed partial class PenumbraService
             !IsSafeModName(activeContext.SourceModDirectory))
             return MaterialCoverageUnavailable();
 
-        var snapshot = await GetModResourcesAsync(activeContext.SourceModDirectory!, cancellationToken)
+        var snapshot = await GetModResourcesAsync(activeContext.SourceModDirectory!, cancellationToken, activeContext.SourceModStableId)
             .ConfigureAwait(false);
         if (snapshot is null)
             return MaterialCoverageUnavailable();
@@ -2168,8 +2263,11 @@ public sealed partial class PenumbraService
         => new(false, false, "material_coverage_unavailable",
             "Material coverage could not be verified.", Array.Empty<MaterialCoverageMissing>());
 
-    private ModScanRequest? ResolveModScanOnFramework(string modDirectory)
+    private ModScanRequest? ResolveModScanOnFramework(string modDirectory, Guid? stableId = null)
     {
+        if (stableId is not null && TryGetModList(out var modList) &&
+            !TryResolveRegisteredModIdentity(modList, modDirectory, stableId, null, out modDirectory, out _))
+            return null;
         var mod = GetMods().FirstOrDefault(item =>
             string.Equals(item.Directory, modDirectory, StringComparison.OrdinalIgnoreCase));
         if (mod is null)
@@ -2185,6 +2283,12 @@ public sealed partial class PenumbraService
         var modDirectoryRoot = GetModDirectory();
         if (!string.IsNullOrWhiteSpace(modDirectoryRoot))
             AddCandidateRoot(candidateRoots, Path.Combine(modDirectoryRoot, mod.Directory));
+        mod = mod with
+        {
+            StableId = candidateRoots
+                .Select(ReadModStableIdentifier)
+                .FirstOrDefault(identifier => identifier.HasValue),
+        };
         return new ModScanRequest(mod, candidateRoots.ToArray());
     }
 
@@ -2270,11 +2374,12 @@ public sealed partial class PenumbraService
                         mod.Directory,
                         mod.Name,
                         sourceRoot,
-                        resources.OrderBy(resource => resource.GamePath, StringComparer.OrdinalIgnoreCase).ToArray());
+                        resources.OrderBy(resource => resource.GamePath, StringComparer.OrdinalIgnoreCase).ToArray(),
+                        mod.StableId);
             }
 
             return scannedRoot
-                ? new PenumbraModSnapshot(mod.Directory, mod.Name, request.CandidateRoots.FirstOrDefault() ?? string.Empty, Array.Empty<PenumbraModResource>())
+                ? new PenumbraModSnapshot(mod.Directory, mod.Name, request.CandidateRoots.FirstOrDefault() ?? string.Empty, Array.Empty<PenumbraModResource>(), mod.StableId)
                 : null;
         }
         catch (OperationCanceledException)
@@ -2296,7 +2401,8 @@ public sealed partial class PenumbraService
         string? targetRelativePath,
         string sourceGamePath,
         string backupName,
-        string backupTargetId)
+        string backupTargetId,
+        Guid? sourceModStableId = null)
     {
         if (!IsSafeModName(sourceModDirectory) || !IsSafeGamePath(sourceGamePath) ||
             !IsSafeLocalModelPath(sourceFilePath) || !TryGetBackupOriginal(backupName, out var originalName))
@@ -2311,7 +2417,8 @@ public sealed partial class PenumbraService
                     sourceModDirectory,
                     sourceFilePath,
                     sourceModRootPath,
-                    targetRelativePath)).ConfigureAwait(false);
+                    targetRelativePath,
+                    sourceModStableId)).ConfigureAwait(false);
             if (resolved.Target is null)
                 return new ExportResult(
                     false,
@@ -2695,7 +2802,8 @@ public sealed partial class PenumbraService
 
     public async Task<ExportResult> ClearManagedBackupsAsync(
         string sourceModDirectory, string sourceFilePath, string? sourceModRootPath,
-        string? targetRelativePath, string sourceGamePath, string backupTargetId)
+        string? targetRelativePath, string sourceGamePath, string backupTargetId,
+        Guid? sourceModStableId = null)
     {
         if (_backups is null || targetRelativePath is null)
             return new ExportResult(false, "backup_unavailable", "Managed backup storage is unavailable.");
@@ -2703,7 +2811,7 @@ public sealed partial class PenumbraService
         try
         {
             var resolved = await _framework.RunOnFrameworkThread(() => ResolveSourceModTargetOnFramework(
-                sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath)).ConfigureAwait(false);
+                sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath, sourceModStableId)).ConfigureAwait(false);
             if (resolved.Target is null)
                 return new ExportResult(false, resolved.Code, resolved.Error ?? "The source mod is unavailable.");
             var validIds = ReadVariantTargets(resolved.Target.Folder, sourceGamePath, sourceModDirectory, _backups)
@@ -2730,12 +2838,13 @@ public sealed partial class PenumbraService
         string sourceModDirectory, string sourceFilePath, string? sourceModRootPath,
         string? targetRelativePath, string sourceGamePath,
         IReadOnlyCollection<string>? preferredMemberships = null,
-        Guid? collectionId = null)
+        Guid? collectionId = null,
+        Guid? sourceModStableId = null)
     {
         try
         {
             var resolved = await _framework.RunOnFrameworkThread(() => ResolveSourceModTargetOnFramework(
-                sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath)).ConfigureAwait(false);
+                sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath, sourceModStableId)).ConfigureAwait(false);
             if (resolved.Target is null)
                 return new SourceOptionCapture(null, "unknown", resolved.Error);
             var option = ResolveSourceOption(resolved.Target.Folder, sourceGamePath, resolved.Target.RelativePath);
@@ -2838,6 +2947,115 @@ public sealed partial class PenumbraService
                 OptionName = JsonString(option["Name"]) ?? "",
             }));
         }
+    }
+
+    private bool TryResolveRegisteredModIdentity(
+        IReadOnlyDictionary<string, string> modList,
+        string requestedDirectory,
+        Guid? expectedStableId,
+        string? capturedRootPath,
+        out string registeredDirectory,
+        out (string Code, string Message) error)
+    {
+        registeredDirectory = string.Empty;
+        error = ("source_mod_missing", "The source mod is no longer registered in Penumbra.");
+        if (!IsSafeModName(requestedDirectory))
+        {
+            error = ("destination_unsafe", "The original Penumbra mod directory is invalid.");
+            return false;
+        }
+
+        var requested = modList.Keys.FirstOrDefault(directory =>
+            string.Equals(directory, requestedDirectory, StringComparison.OrdinalIgnoreCase));
+        if (expectedStableId is null)
+        {
+            if (requested is null)
+                return false;
+            registeredDirectory = requested;
+            return true;
+        }
+
+        if (expectedStableId == Guid.Empty)
+        {
+            error = ("source_mod_identity_unavailable", "The saved Penumbra mod identity is invalid. Re-import the model.");
+            return false;
+        }
+
+        if (requested is not null)
+        {
+            var requestedRoots = RegisteredModRootCandidates(requested, capturedRootPath).ToArray();
+            if (requestedRoots.Select(ReadModStableIdentifier).Any(identifier => identifier == expectedStableId))
+            {
+                registeredDirectory = requested;
+                return true;
+            }
+        }
+
+        var matches = new List<string>();
+        Guid? requestedObserved = null;
+        foreach (var directory in modList.Keys)
+        {
+            var roots = RegisteredModRootCandidates(
+                directory,
+                string.Equals(directory, requestedDirectory, StringComparison.OrdinalIgnoreCase)
+                    ? capturedRootPath
+                    : null).ToArray();
+            for (var rootIndex = 0; rootIndex < roots.Length; rootIndex++)
+            {
+                var observed = ReadModStableIdentifier(roots[rootIndex]);
+                if (string.Equals(directory, requestedDirectory, StringComparison.OrdinalIgnoreCase) &&
+                    rootIndex == 0 && observed is not null)
+                    requestedObserved = observed;
+                if (observed == expectedStableId)
+                {
+                    if (!matches.Contains(directory, StringComparer.OrdinalIgnoreCase))
+                        matches.Add(directory);
+                    break;
+                }
+            }
+        }
+
+        if (requested is not null && requestedObserved is not null && requestedObserved != expectedStableId)
+        {
+            error = ("source_mod_changed", "The registered Penumbra mod no longer matches the mod used for this import.");
+            return false;
+        }
+        if (matches.Count == 1)
+        {
+            registeredDirectory = matches[0];
+            return true;
+        }
+        if (matches.Count > 1)
+        {
+            error = ("source_mod_ambiguous", "More than one Penumbra mod has the saved stable identity.");
+            return false;
+        }
+        error = (requested is null ? "source_mod_missing" : "source_mod_identity_unavailable",
+            requested is null
+                ? "The source mod is no longer registered in Penumbra."
+                : "The saved Penumbra mod identity could not be verified. Reload the mod in Penumbra, then re-import the model.");
+        return false;
+    }
+
+    private IEnumerable<string> RegisteredModRootCandidates(string directory, string? capturedRootPath = null)
+    {
+        var registered = GetRegisteredModPath(directory);
+        if (!string.IsNullOrWhiteSpace(registered))
+        {
+            yield return registered;
+
+            // Penumbra can briefly return the previous search-order path while a
+            // mod reload is settling. Only use the configured root as a recovery
+            // candidate when that registered path no longer exists; an existing
+            // registered root remains authoritative for identity verification.
+            if (Directory.Exists(registered))
+                yield break;
+        }
+        var configured = GetModDirectory();
+        if (!string.IsNullOrWhiteSpace(configured))
+            yield return Path.Combine(configured, directory);
+        if (!string.IsNullOrWhiteSpace(capturedRootPath))
+            yield return capturedRootPath;
     }
 
     private static bool IsV4OptionMembership(string? membership)
@@ -3062,6 +3280,9 @@ public sealed partial class PenumbraService
         var options = existingGroup?["Options"]?.DeepClone() as JsonArray ?? new JsonArray();
         if (existingGroup is null)
         {
+            // A newly created Single group gets a disable entry. When extending
+            // an existing group, preserve its options exactly and add only the
+            // exported variant.
             options.Insert(0, new JsonObject
             {
                 ["Id"] = Guid.NewGuid(),
@@ -3213,6 +3434,42 @@ public sealed partial class PenumbraService
             throw new InvalidDataException(compatibilityError);
         return meta;
     }
+
+    /// <summary>
+    /// Read Penumbra 1.7's stable mod identifier without making metadata validity a
+    /// prerequisite for legacy imports. A missing or malformed identifier is treated
+    /// as unavailable so callers can retain the pre-1.7 directory-key behavior.
+    /// </summary>
+    internal static Guid? ReadModStableIdentifier(string modRoot)
+    {
+        try
+        {
+            var root = NormalizePhysicalPath(modRoot);
+            if (root is null)
+                return null;
+            if (string.Equals(Path.GetFileName(root), "Files", StringComparison.OrdinalIgnoreCase))
+                root = Directory.GetParent(root)?.FullName;
+            if (root is null)
+                return null;
+
+            var path = Path.Combine(root, "meta.json");
+            if (!File.Exists(path))
+                return null;
+            var meta = JsonNode.Parse(File.ReadAllText(path)) as JsonObject;
+            if (JsonInt(meta?["FileVersion"]) != 4 ||
+                !Guid.TryParse(meta?["Identifier"]?.GetValue<string>(), out var identifier) ||
+                identifier == Guid.Empty)
+                return null;
+            return identifier;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    internal static Guid? ReadModStableIdentifierForRegression(string modRoot)
+        => ReadModStableIdentifier(modRoot);
 
     internal static JsonObject CreateV4ModMetadata(
         string name,
@@ -3908,6 +4165,503 @@ public sealed partial class PenumbraService
             !string.Equals(Path.GetExtension(path), ".mdl", StringComparison.OrdinalIgnoreCase))
             return false;
         return path.Split('/').All(segment => segment.Length > 0 && segment is not ("." or ".."));
+    }
+
+    private static string? ValidateAttributeGroupRequest(
+        string resolvedGamePath,
+        IReadOnlyList<string> tags,
+        IReadOnlyDictionary<string, int>? masks)
+    {
+        return NormalizeAttributeGroupInput(
+            resolvedGamePath, tags, masks, out _, out _, out _);
+    }
+
+    private static string? ValidateAttributeGroups(
+        string modFolder,
+        string resolvedGamePath,
+        IReadOnlyList<string> tags,
+        IReadOnlyDictionary<string, int>? masks)
+    {
+        var inputError = NormalizeAttributeGroupInput(
+            resolvedGamePath, tags, masks, out _, out _, out var customTags);
+        if (inputError is not null)
+            return inputError;
+
+        if (customTags.Count == 0)
+            return null;
+
+        var identity = ParseAttributeModelIdentity(resolvedGamePath);
+        if (identity is null)
+            return "attribute_group_invalid: The resolved model path is not a supported gear, accessory, hair, or face model path.";
+        var meta = LoadV4ModMetadata(modFolder);
+        var marker = AttributeGroupMarker("atr", NormalizeGamePath(resolvedGamePath));
+        return HasUnmanagedAtrConflict(meta, marker, identity)
+            ? "attribute_group_conflict: An existing Penumbra option already contains an unmanaged atrx_ toggle for this exact model ID, slot, and race code. Remove the existing atrx_ toggles first, then retry the export."
+            : null;
+    }
+
+    private static string? WriteAttributeGroups(
+        string modFolder,
+        string resolvedGamePath,
+        IReadOnlyList<string> tags,
+        IReadOnlyDictionary<string, int>? masks)
+    {
+        var error = PrepareAttributeGroups(
+            modFolder, resolvedGamePath, tags, masks, out var prepared);
+        if (error is not null)
+            return error;
+        return prepared is null ? null : CommitAttributeGroups(prepared);
+    }
+
+    private static string? PrepareAttributeGroups(
+        string modFolder,
+        string resolvedGamePath,
+        IReadOnlyList<string> tags,
+        IReadOnlyDictionary<string, int>? masks,
+        out AttributeGroupWrite? prepared)
+    {
+        prepared = null;
+        var inputError = NormalizeAttributeGroupInput(
+            resolvedGamePath, tags, masks, out var identity, out var suffixMasks, out var customTags);
+        if (inputError is not null)
+            return inputError;
+        if (identity is null)
+            return "attribute_group_invalid: The resolved model path is not a supported gear, accessory, hair, or face model path.";
+
+        var metaPath = Path.Combine(modFolder, "meta.json");
+        var meta = LoadV4ModMetadata(modFolder);
+        var groups = meta["Groups"] as JsonArray ?? new JsonArray();
+        meta["Groups"] = groups;
+        var markerPath = NormalizeGamePath(resolvedGamePath);
+        var atrMarker = AttributeGroupMarker("atr", markerPath);
+        if (customTags.Count > 0 && HasUnmanagedAtrConflict(meta, atrMarker, identity))
+            return "attribute_group_conflict: An existing Penumbra option already contains an unmanaged atrx_ toggle for this exact model ID, slot, and race code. Remove the existing atrx_ toggles first, then retry the export.";
+
+        if (suffixMasks.Count > 0)
+        {
+            UpsertAttributeGroup(
+                groups,
+                AttributeGroupMarker("imc", markerPath),
+                GeneratedAttributeGroupName(identity, markerPath, "IMC"),
+                existing => BuildImcAttributeGroup(existing, identity, suffixMasks));
+        }
+        else
+        {
+            RemoveManagedAttributeGroup(groups, AttributeGroupMarker("imc", markerPath));
+        }
+        if (customTags.Count > 0)
+        {
+            UpsertAttributeGroup(
+                groups,
+                atrMarker,
+                GeneratedAttributeGroupName(identity, markerPath, "ATR"),
+                existing => BuildAtrAttributeGroup(existing, identity, customTags));
+        }
+        else
+        {
+            RemoveManagedAttributeGroup(groups, atrMarker);
+        }
+
+        TouchV4ModMetadata(meta);
+        prepared = new AttributeGroupWrite(metaPath, meta);
+        return null;
+    }
+
+    private static string? CommitAttributeGroups(AttributeGroupWrite prepared)
+    {
+        try
+        {
+            WriteJsonAtomic(prepared.Path, prepared.Document);
+            return null;
+        }
+        catch (Exception error)
+        {
+            return $"attribute_group_write_failed: {error.Message}";
+        }
+    }
+
+    internal static string? WriteAttributeGroupsForRegression(
+        string modFolder,
+        string resolvedGamePath,
+        IReadOnlyList<string> tags,
+        IReadOnlyDictionary<string, int>? masks)
+        => WriteAttributeGroups(modFolder, resolvedGamePath, tags, masks);
+
+    private static string? NormalizeAttributeGroupInput(
+        string resolvedGamePath,
+        IReadOnlyList<string> tags,
+        IReadOnlyDictionary<string, int>? masks,
+        out AttributeModelIdentity? identity,
+        out Dictionary<string, int> suffixMasks,
+        out List<string> customTags)
+    {
+        identity = null;
+        suffixMasks = new Dictionary<string, int>(StringComparer.Ordinal);
+        customTags = [];
+        if (tags is null || tags.Count == 0)
+            return null;
+        if (!IsSafeGamePath(resolvedGamePath))
+            return "attribute_group_invalid: The resolved model path is invalid.";
+
+        identity = ParseAttributeModelIdentity(resolvedGamePath);
+        if (identity is null)
+            return "attribute_group_invalid: The resolved model path is not a supported gear, accessory, hair, or face model path.";
+        if (tags.Count > 512)
+            return "attribute_group_invalid: Too many model attributes were supplied.";
+
+        foreach (var tag in tags.Distinct(StringComparer.Ordinal))
+        {
+            if (string.IsNullOrWhiteSpace(tag) || tag.Length > 128 ||
+                !Regex.IsMatch(tag, "^[a-z0-9_]+$", RegexOptions.CultureInvariant))
+                return "attribute_group_invalid: Model attribute names must contain only lowercase letters, numbers, and underscores.";
+
+            if (TryGetStandardAttributeSuffix(tag, out var suffix))
+            {
+                if (masks is null || !masks.TryGetValue(tag, out var mask) || mask is < 1 or > 1023)
+                    return $"attribute_group_invalid: No valid MDL bit mask was supplied for {tag}.";
+                suffixMasks[suffix] = suffixMasks.GetValueOrDefault(suffix) | mask;
+                continue;
+            }
+
+            if (tag.StartsWith("atrx_", StringComparison.Ordinal))
+            {
+                if (tag.Length is < 5 or > 30)
+                    return $"attribute_group_invalid: Custom attribute {tag} must be between 5 and 30 characters.";
+                customTags.Add(tag);
+                continue;
+            }
+
+            // Built-in body-part attributes are valid model attributes but are
+            // deliberately not part of the generated Penumbra groups.
+            if (tag is "atr_nek" or "atr_ude" or "atr_hij" or "atr_arm" or "atr_kod" or
+                "atr_hiz" or "atr_sne" or "atr_leg" or "atr_lpd")
+                continue;
+
+            return $"attribute_group_invalid: Custom attribute {tag} must use the atrx_ prefix; it was not emitted as a Penumbra toggle.";
+        }
+
+        customTags = customTags.Distinct(StringComparer.Ordinal).OrderBy(value => value, StringComparer.Ordinal).ToList();
+        return null;
+    }
+
+    private static bool TryGetStandardAttributeSuffix(string tag, out string suffix)
+    {
+        suffix = "";
+        var match = Regex.Match(
+            tag,
+            "^atr_(?:" + string.Join("|", AttributeGroupFamilies) + ")_(?<suffix>[a-h])$",
+            RegexOptions.CultureInvariant);
+        if (!match.Success)
+            return false;
+        suffix = match.Groups["suffix"].Value;
+        return true;
+    }
+
+    private static AttributeModelIdentity? ParseAttributeModelIdentity(string gamePath)
+    {
+        var path = NormalizeGamePath(gamePath);
+        Match match;
+        string slot;
+        string objectType;
+        string equipSlot;
+        string bodySlot;
+        if (path.StartsWith("chara/equipment/", StringComparison.OrdinalIgnoreCase))
+        {
+            match = Regex.Match(path,
+                @"^chara/equipment/e(?<id>\d{4})/model/c(?<race>\d{4})e\k<id>_(?<slot>met|top|glv|dwn|sho)\.mdl$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            objectType = "Equipment";
+            bodySlot = "Unknown";
+            equipSlot = slot = match.Success ? match.Groups["slot"].Value.ToLowerInvariant() : "";
+        }
+        else if (path.StartsWith("chara/accessory/", StringComparison.OrdinalIgnoreCase))
+        {
+            match = Regex.Match(path,
+                @"^chara/accessory/a(?<id>\d{4})/model/c(?<race>\d{4})a\k<id>_(?<slot>ear|nek|wrs|rir|ril)\.mdl$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            objectType = "Accessory";
+            bodySlot = "Unknown";
+            equipSlot = slot = match.Success ? match.Groups["slot"].Value.ToLowerInvariant() : "";
+        }
+        else if (path.StartsWith("chara/human/", StringComparison.OrdinalIgnoreCase))
+        {
+            match = Regex.Match(path,
+                @"^chara/human/c(?<race>\d{4})/obj/(?<kind>hair|face)/(?<kindId>[hf])(?<id>\d{4})/model/c\k<race>\k<kindId>\k<id>_(?<slot>hir|fac)\.mdl$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            objectType = "Character";
+            equipSlot = "Nothing";
+            slot = match.Success && match.Groups["kind"].Value.Equals("face", StringComparison.OrdinalIgnoreCase)
+                ? "Face" : "Hair";
+            bodySlot = slot;
+        }
+        else
+        {
+            return null;
+        }
+
+        if (!match.Success || !int.TryParse(match.Groups["race"].Value, out var raceCode) ||
+            !int.TryParse(match.Groups["id"].Value, out var id) ||
+            raceCode is < 101 or > 1801 || raceCode % 100 != 1)
+            return null;
+
+        var atrSlot = slot switch
+        {
+            "met" => "Head",
+            "top" => "Body",
+            "glv" => "Hands",
+            "dwn" => "Legs",
+            "sho" => "Feet",
+            "ear" => "Ears",
+            "nek" => "Neck",
+            "wrs" => "Wrists",
+            "rir" => "RFinger",
+            "ril" => "LFinger",
+            "hir" => "Hair",
+            "fac" => "Face",
+            _ => "Unknown",
+        };
+        equipSlot = equipSlot switch
+        {
+            "met" => "Head",
+            "top" => "Body",
+            "glv" => "Hands",
+            "dwn" => "Legs",
+            "sho" => "Feet",
+            "ear" => "Ears",
+            "nek" => "Neck",
+            "wrs" => "Wrists",
+            "rir" => "RFinger",
+            "ril" => "LFinger",
+            _ => equipSlot,
+        };
+        return new AttributeModelIdentity(id, raceCode, atrSlot, objectType, equipSlot, bodySlot);
+    }
+
+    private static string AttributeGroupMarker(string kind, string path)
+        => $"{AttributeGroupDescriptionPrefix}{kind}|{path}";
+
+    private static string GeneratedAttributeGroupName(
+        AttributeModelIdentity identity, string path, string kind)
+    {
+        var stem = Path.GetFileNameWithoutExtension(path);
+        var baseName = $"XIV Instant Edit {stem} Parts ({kind})";
+        return baseName.Length <= 120 ? baseName : baseName[..120].TrimEnd();
+    }
+
+    private static void UpsertAttributeGroup(
+        JsonArray groups,
+        string marker,
+        string requestedName,
+        Func<JsonObject?, JsonObject> builder)
+    {
+        var existingIndex = -1;
+        JsonObject? existing = null;
+        for (var index = 0; index < groups.Count; ++index)
+        {
+            if (groups[index] is not JsonObject group ||
+                !string.Equals(JsonString(group["Description"]), marker, StringComparison.Ordinal))
+                continue;
+            existing = group;
+            existingIndex = index;
+            break;
+        }
+
+        var name = existing is null
+            ? UniqueAttributeGroupName(groups, requestedName)
+            : JsonString(existing["Name"]) ?? requestedName;
+        var priority = existing is null
+            ? NextAttributeGroupPriority(groups)
+            : JsonInt(existing["Priority"]);
+        var result = builder(existing);
+        result["Id"] = ReadGuid(existing?["Id"])?.ToString("D") ?? Guid.NewGuid().ToString("D");
+        result["Name"] = name;
+        result["Description"] = marker;
+        result["Priority"] = priority;
+        if (existingIndex >= 0)
+            groups[existingIndex] = result;
+        else
+            groups.Add(result);
+    }
+
+    private static void RemoveManagedAttributeGroup(JsonArray groups, string marker)
+    {
+        for (var index = groups.Count - 1; index >= 0; --index)
+        {
+            if (groups[index] is JsonObject group &&
+                string.Equals(JsonString(group["Description"]), marker, StringComparison.Ordinal))
+                groups.RemoveAt(index);
+        }
+    }
+
+    private static int NextAttributeGroupPriority(JsonArray groups)
+    {
+        var highest = groups.OfType<JsonObject>().Select(group => JsonInt(group["Priority"]))
+            .DefaultIfEmpty(0).Max();
+        if (highest == int.MaxValue)
+            throw new InvalidDataException("attribute_group_priority_exhausted");
+        return highest + 1;
+    }
+
+    private static string UniqueAttributeGroupName(JsonArray groups, string requested)
+    {
+        var names = groups.OfType<JsonObject>()
+            .Select(group => JsonString(group["Name"]))
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!names.Contains(requested))
+            return requested;
+        for (var suffix = 2; suffix < 10000; ++suffix)
+        {
+            var suffixText = $" ({suffix})";
+            var prefix = requested[..Math.Min(requested.Length, 120 - suffixText.Length)].TrimEnd();
+            var candidate = prefix + suffixText;
+            if (!names.Contains(candidate))
+                return candidate;
+        }
+        throw new InvalidDataException("Could not allocate a unique Penumbra attribute group name.");
+    }
+
+    private static JsonObject BuildImcAttributeGroup(
+        JsonObject? existing,
+        AttributeModelIdentity identity,
+        IReadOnlyDictionary<string, int> suffixMasks)
+    {
+        var result = existing?.DeepClone() as JsonObject ?? new JsonObject();
+        result["Type"] = "Imc";
+        result["AllVariants"] = true;
+        result["OnlyAttributes"] = true;
+        result["Identifier"] = new JsonObject
+        {
+            ["PrimaryId"] = identity.Id,
+            ["SecondaryId"] = 0,
+            ["Variant"] = 1,
+            ["ObjectType"] = identity.ObjectType,
+            ["EquipSlot"] = identity.EquipSlot,
+            ["BodySlot"] = identity.BodySlot,
+        };
+        var allMask = suffixMasks.Values.Aggregate(0, (current, value) => current | value);
+        result["DefaultEntry"] = ImcEntry(allMask);
+        result["Options"] = new JsonArray(suffixMasks
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair => (JsonNode)new JsonObject
+            {
+                ["Id"] = Guid.NewGuid().ToString("D"),
+                ["Name"] = pair.Key.ToUpperInvariant(),
+                ["Description"] = $"Enable model parts tagged with suffix _{pair.Key}.",
+                ["AttributeMask"] = pair.Value,
+            }).ToArray());
+        result.Remove("DefaultSettings");
+        return result;
+    }
+
+    private static JsonObject ImcEntry(int attributeMask)
+        => new()
+        {
+            ["MaterialId"] = 0,
+            ["DecalId"] = 0,
+            ["VfxId"] = 0,
+            ["MaterialAnimationId"] = 0,
+            ["AttributeMask"] = attributeMask,
+            ["SoundId"] = 0,
+        };
+
+    private static JsonObject BuildAtrAttributeGroup(
+        JsonObject? existing,
+        AttributeModelIdentity identity,
+        IReadOnlyList<string> customTags)
+    {
+        var result = existing?.DeepClone() as JsonObject ?? new JsonObject();
+        result["Type"] = "Multi";
+        result["Options"] = new JsonArray(customTags.Select(tag => (JsonNode)new JsonObject
+        {
+            ["Id"] = Guid.NewGuid().ToString("D"),
+            ["Name"] = tag,
+            ["Description"] = $"Enable {tag}.",
+            ["Manipulations"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["Type"] = "Atr",
+                    ["Manipulation"] = new JsonObject
+                    {
+                        ["Entry"] = true,
+                        ["Attribute"] = tag,
+                        ["Slot"] = identity.AtrSlot,
+                        ["Id"] = identity.Id,
+                        ["GenderRaceCondition"] = identity.RaceCode,
+                    },
+                },
+            },
+        }).ToArray());
+        foreach (var property in new[] { "AllVariants", "OnlyAttributes", "Identifier", "DefaultEntry", "DefaultSettings" })
+            result.Remove(property);
+        return result;
+    }
+
+    private static bool HasUnmanagedAtrConflict(
+        JsonObject meta,
+        string managedMarker,
+        AttributeModelIdentity identity)
+    {
+        foreach (var group in (meta["Groups"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
+        {
+            if (string.Equals(JsonString(group["Description"]), managedMarker, StringComparison.Ordinal))
+                continue;
+            foreach (var item in DescendantObjects(group))
+            {
+                var attribute = item["Manipulation"] is JsonObject value
+                    ? JsonString(value["Attribute"])
+                    : null;
+                if (!string.Equals(JsonString(item["Type"]), "Atr", StringComparison.OrdinalIgnoreCase) ||
+                    item["Manipulation"] is not JsonObject manipulation ||
+                    attribute is null || !attribute.StartsWith("atrx_", StringComparison.Ordinal))
+                    continue;
+                if (string.Equals(JsonString(manipulation["Slot"]), identity.AtrSlot, StringComparison.Ordinal) &&
+                    JsonIntFlexible(manipulation["Id"]) == identity.Id &&
+                    JsonIntFlexible(manipulation["GenderRaceCondition"]) == identity.RaceCode)
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    private static IEnumerable<JsonObject> DescendantObjects(JsonNode? node)
+    {
+        if (node is JsonObject objectNode)
+        {
+            yield return objectNode;
+            foreach (var property in objectNode)
+                foreach (var child in DescendantObjects(property.Value))
+                    yield return child;
+        }
+        else if (node is JsonArray arrayNode)
+        {
+            foreach (var item in arrayNode)
+                foreach (var child in DescendantObjects(item))
+                    yield return child;
+        }
+    }
+
+    private static int JsonIntFlexible(JsonNode? node)
+    {
+        if (node is not JsonValue value)
+            return 0;
+        if (value.TryGetValue<int>(out var number))
+            return number;
+        return value.TryGetValue<string>(out var text) && int.TryParse(text, out number) ? number : 0;
+    }
+
+    private static string AttributeGroupErrorCode(string error)
+        => error.StartsWith("attribute_group_conflict:", StringComparison.Ordinal)
+            ? "attribute_group_conflict"
+            : error.StartsWith("attribute_group_write_failed:", StringComparison.Ordinal)
+                ? "attribute_group_write_failed"
+                : "invalid_attribute_groups";
+
+    private static string AttributeGroupErrorMessage(string error)
+    {
+        var separator = error.IndexOf(": ", StringComparison.Ordinal);
+        return separator >= 0 ? error[(separator + 2)..] : error;
     }
 
     private static string UniqueMashupGroupName(string modFolder, string requested)
@@ -4700,7 +5454,7 @@ public sealed partial class PenumbraService
     };
 }
 
-public sealed record PenumbraMod(string Directory, string Name);
+public sealed record PenumbraMod(string Directory, string Name, Guid? StableId = null);
 
 public sealed record PenumbraModResource(
     string GamePath,
@@ -4713,4 +5467,5 @@ public sealed record PenumbraModSnapshot(
     string Directory,
     string Name,
     string RootPath,
-    IReadOnlyList<PenumbraModResource> Resources);
+    IReadOnlyList<PenumbraModResource> Resources,
+    Guid? StableId = null);

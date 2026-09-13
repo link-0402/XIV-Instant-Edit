@@ -8,6 +8,49 @@ internal sealed class AnimationResources(PenumbraService penumbra, IDataManager 
 {
     private readonly ResourceSourceAttributor sources = new(penumbra, log);
 
+    public async Task<(SkeletonSource Source, byte[] Bytes)> ReadSkeletonAsync(Guid collection, SkeletonSource source, CancellationToken token)
+    {
+        if (source.Kind == SkeletonSourceKind.Collection)
+        {
+            var result = await ReadAsync(collection, source.Resource.GamePath, token);
+            return (source with { Resource = result.Resource }, result.Bytes);
+        }
+        var resource = source.Resource;
+        byte[] bytes;
+        if (source.Kind == SkeletonSourceKind.Game)
+        {
+            if (!AnimationDependencies.SafeGamePath(resource.GamePath)) throw new InvalidDataException("Invalid game skeleton path.");
+            bytes = await Task.Run(() => data.GetFile(resource.GamePath)?.Data ?? throw new FileNotFoundException(resource.GamePath), token);
+        }
+        else
+        {
+            if (resource.ModRoot == null || !PathRules.IsPathWithin(resource.ResolvedPath, resource.ModRoot))
+                throw new InvalidDataException("Skeleton is outside its registered mod root.");
+            TextureFiles.EnsureLocalPath(resource.ResolvedPath);
+            using var stream = new FileStream(resource.ResolvedPath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, true);
+            if (stream.Length > AnimationPap.MaxFileSize) throw new InvalidDataException("Skeleton exceeds 256 MiB.");
+            bytes = new byte[checked((int)stream.Length)];
+            await stream.ReadExactlyAsync(bytes, token);
+        }
+        if (bytes.Length > AnimationPap.MaxFileSize) throw new InvalidDataException("Skeleton exceeds 256 MiB.");
+        return (source with { Resource = resource with { Hash = AnimationPap.Hash(bytes) } }, bytes);
+    }
+
+    public async Task CheckSkeletonsAsync(AnimationCapture capture, IEnumerable<AnimationClip> clips, CancellationToken token)
+    {
+        foreach (var source in clips.Select(c => c.Resolution?.Selected?.Source).OfType<SkeletonSource>().Distinct())
+        {
+            if (source.Kind == SkeletonSourceKind.Mod)
+            {
+                var roots = await penumbra.AnimationSkeletonRootsAsync();
+                if (!roots.Any(r => r.Directory == source.Resource.ModDirectory && string.Equals(r.Root, source.Resource.ModRoot, StringComparison.OrdinalIgnoreCase)))
+                    throw new IOException("The source skeleton mod moved or was removed. Rescan skeletons.");
+            }
+            if ((await ReadSkeletonAsync(capture.CollectionId, source, token)).Source != source)
+                throw new IOException("The processing skeleton changed. Refresh the animation capture.");
+        }
+    }
+
     public async Task<(AnimationResource Resource, byte[] Bytes)> ReadAsync(Guid collection, string gamePath, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
@@ -28,7 +71,7 @@ internal sealed class AnimationResources(PenumbraService penumbra, IDataManager 
         }
         var source = await framework.RunOnFrameworkThread(() => sources.AttributionFor(resolved));
         return (new AnimationResource(gamePath, resolved, AnimationPap.Hash(bytes), source.ModDirectory,
-            source.ModRootPath, source.RelativePath), bytes);
+            source.ModRootPath, source.RelativePath, source.ModName), bytes);
     }
 
     public async Task CheckAsync(Guid collection, IEnumerable<AnimationResource> expected, CancellationToken token)
@@ -46,36 +89,29 @@ internal sealed class AnimationResources(PenumbraService penumbra, IDataManager 
         AnimationDependencies.SafeGamePath(source.RelativePath.Replace('\\', '/')) &&
         source.GamePath.EndsWith(".pap", StringComparison.OrdinalIgnoreCase);
 
-    public async Task<AnimationDependencyManifest> ManifestAsync(AnimationCapture capture, AnimationCatalog catalog, CancellationToken token)
+    public async Task<AnimationDependencyManifest> ManifestAsync(AnimationCapture capture, AnimationCatalog catalog,
+        IEnumerable<string> packagedPaths, CancellationToken token)
     {
         var known = capture.FamilyPaths.Concat(capture.Sources.Select(s => s.GamePath)).ToImmutableArray();
-        var loaded = capture.LoadedResourcePaths.IsDefault ? known : capture.LoadedResourcePaths;
+        var loaded = capture.LoadedResourcePaths.IsDefault ? known : known.Concat(capture.LoadedResourcePaths).Distinct().ToImmutableArray();
+        var reads = new Dictionary<string, (AnimationResource Resource, byte[] Bytes)>(StringComparer.Ordinal);
+        async Task<(AnimationResource Resource, byte[] Bytes)> Read(string path)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!reads.TryGetValue(path, out var source)) reads[path] = source = await ReadAsync(capture.CollectionId, path, token);
+            return source;
+        }
         var metadata = AnimationMetadata.Decode(await penumbra.AnimationMetadataAsync(capture.CollectionId));
         var manifest = await AnimationDependencies.BuildAsync(known,
-            path => ReadAsync(capture.CollectionId, path, token),
+            Read,
             async (parent, reference) =>
             {
                 var path = reference.Path;
                 if (reference.Kind == "timeline" && !path.EndsWith(".tmb", StringComparison.OrdinalIgnoreCase)) path = $"chara/action/{path}.tmb";
                 if (reference.Kind == "animation" && !path.EndsWith(".pap", StringComparison.OrdinalIgnoreCase))
                 {
-                    // PAP timelines refer to a contained motion by name. It may already be in the same PAP.
-                    if (parent.EndsWith(".pap", StringComparison.OrdinalIgnoreCase))
-                    {
-                        var pap = new AnimationPap((await ReadAsync(capture.CollectionId, parent, token)).Bytes);
-                        if (pap.Entries.Any(e => e.Name == path)) return Array.Empty<string>();
-                    }
-                    var containing = new List<string>();
-                    foreach (var candidate in known.Where(p => p.EndsWith(".pap", StringComparison.OrdinalIgnoreCase)).Distinct())
-                    {
-                        var pap = new AnimationPap((await ReadAsync(capture.CollectionId, candidate, token)).Bytes);
-                        if (pap.Entries.Any(e => e.Name == path)) containing.Add(candidate);
-                    }
-                    if (containing.Count == 1) return containing;
-                    if (containing.Count > 1) throw new InvalidDataException($"Motion '{path}' in {parent} is present in several family PAPs; the binding cannot be resolved uniquely.");
-                    var candidates = catalog.ResolveMotion(path, capture.Clip.GamePath, known);
-                    if (candidates.Count != 1) throw new InvalidDataException($"Cannot identify the current player's PAP for motion '{path}' in {parent}.");
-                    return candidates;
+                    return await ResolveMotionAsync(path, parent, capture.Clip.GamePath, loaded, catalog,
+                        async candidate => (await Read(candidate)).Bytes, token);
                 }
                 if (reference.Kind == "material" && path.StartsWith('/'))
                 {
@@ -87,6 +123,40 @@ internal sealed class AnimationResources(PenumbraService penumbra, IDataManager 
                 }
                 return new[] { path };
             }, token);
-        return manifest with { ManipulationsJson = AnimationMetadata.Applicable(metadata, manifest.Files.Keys).ToJsonString() };
+        return manifest with { ManipulationsJson = AnimationMetadata.Applicable(metadata, packagedPaths).ToJsonString() };
+    }
+
+    internal static async Task<IReadOnlyList<string>> ResolveMotionAsync(string motion, string parent, string selectedPap,
+        IEnumerable<string> loaded, AnimationCatalog catalog, Func<string, Task<byte[]>> read, CancellationToken token)
+    {
+        async Task<bool> Contains(string path)
+        {
+            token.ThrowIfCancellationRequested();
+            return new AnimationPap(await read(path)).Entries.Any(e => e.Name == motion);
+        }
+        // A timeline can refer to its own PAP entry without an external dependency.
+        if (parent.EndsWith(".pap", StringComparison.OrdinalIgnoreCase) && await Contains(parent)) return [];
+        var paths = loaded.Where(AnimationDependencies.SafeGamePath).Distinct(StringComparer.Ordinal).ToArray();
+        var checkedPaths = new HashSet<string>(StringComparer.Ordinal) { parent };
+        var containing = new List<string>();
+        foreach (var candidate in paths.Where(p => p.EndsWith(".pap", StringComparison.OrdinalIgnoreCase)))
+            if (checkedPaths.Add(candidate) && await Contains(candidate)) containing.Add(candidate);
+        if (containing.Count == 0)
+            foreach (var candidate in catalog.ResolveMotion(motion, selectedPap, paths, token))
+            {
+                if (!checkedPaths.Add(candidate)) continue;
+                try { if (await Contains(candidate)) containing.Add(candidate); }
+                catch (FileNotFoundException) { } // An inferred game variant may not exist.
+            }
+        if (containing.Count != 1)
+            throw new InvalidDataException(containing.Count == 0
+                ? $"Cannot identify the current player's PAP for motion '{motion}' in {parent}."
+                : $"Motion '{motion}' in {parent} is present in several player PAPs; the binding cannot be resolved uniquely.");
+        var papParts = containing[0].Split('/');
+        // Include the captured facial skeleton when this is an external facial PAP.
+        if (papParts.Length >= 7 && papParts[0] == "chara" && papParts[1] == "human" && papParts[3] == "animation" && papParts[4].StartsWith('f'))
+            containing.AddRange(paths.Where(p => p.StartsWith($"chara/human/{papParts[2]}/skeleton/face/{papParts[4]}/", StringComparison.Ordinal) &&
+                p.EndsWith(".sklb", StringComparison.Ordinal)));
+        return containing;
     }
 }

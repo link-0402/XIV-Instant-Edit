@@ -279,7 +279,8 @@ public sealed class BlenderClient : IDisposable
         Guid? targetCollectionId = null,
         string? targetCollectionName = null,
         SourceOptionLocator? sourceOption = null,
-        string sourceOptionStatus = "unknown")
+        string sourceOptionStatus = "unknown",
+        Guid? sourceModStableId = null)
     {
         if (port is < 1 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(port));
@@ -303,7 +304,8 @@ public sealed class BlenderClient : IDisposable
             targetCollectionId,
             targetCollectionName,
             sourceOption,
-            sourceOptionStatus);
+            sourceOptionStatus,
+            sourceModStableId);
 
         return await SendImportAsync(
             port, importFilePath, name, context, cancellationToken,
@@ -376,6 +378,7 @@ public sealed class BlenderClient : IDisposable
                 managedDestination = context.TargetFolder,
                 targetFilePath = context.TargetFilePath,
                 sourceModDirectory = context.SourceModDirectory,
+                sourceModStableId = context.SourceModStableId,
                 sourceModName = context.SourceModName,
                 sourceModRootPath = context.SourceModRootPath,
                 targetRelativePath = context.TargetRelativePath,

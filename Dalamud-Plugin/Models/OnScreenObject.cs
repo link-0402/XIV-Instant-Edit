@@ -42,6 +42,7 @@ public sealed record ResourceNode
     public required string SourceLabel { get; init; }
     public string? SourceModName { get; init; }
     public string? SourceModDirectory { get; init; }
+    public Guid? SourceModStableId { get; init; }
     public string? SourceModRootPath { get; init; }
     public string? SourceRelativePath { get; init; }
     public required string SlotLabel { get; init; }

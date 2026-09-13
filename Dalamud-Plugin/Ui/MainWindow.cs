@@ -716,6 +716,7 @@ public sealed partial class MainWindow : Window, IDisposable
                 snapshot.Directory,
                 snapshot.RootPath,
                 resource.RelativePath,
+                snapshot.StableId,
                 ResourceSourceState.LoadedMod,
                 ResourceSection.Other.ToString(),
                 ResourceType(resource.GamePath),
@@ -836,6 +837,7 @@ public sealed partial class MainWindow : Window, IDisposable
             node.SourceModDirectory ?? string.Empty,
             node.SourceModRootPath ?? string.Empty,
             node.SourceRelativePath ?? string.Empty,
+            node.SourceModStableId,
             node.SourceState,
             node.ResourceSection.ToString(),
             node.SlotLabel,
@@ -1132,7 +1134,8 @@ public sealed partial class MainWindow : Window, IDisposable
                     source.SourceRelativePath,
                     model.GamePath,
                     source.OptionMemberships,
-                    collection?.Id).ConfigureAwait(false);
+                    collection?.Id,
+                    source.SourceModStableId).ConfigureAwait(false);
                 if (sourceOption.Warning is not null)
                     dependencyWarnings.Add($"Source option: {sourceOption.Warning}");
                 handoffCached = await _blender.SendSourceImportAsync(
@@ -1154,6 +1157,7 @@ public sealed partial class MainWindow : Window, IDisposable
                     targetCollectionName: collection?.Name,
                     sourceOption: sourceOption.Locator,
                     sourceOptionStatus: sourceOption.Status,
+                    sourceModStableId: source.SourceModStableId,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
             }
             var hasPreviewWarning = preview is { Warnings.Count: > 0 };
@@ -1250,7 +1254,8 @@ public sealed partial class MainWindow : Window, IDisposable
                             pair.Key,
                             attribution.State == ResourceSourceState.LoadedMod ? attribution.ModDirectory : null,
                             attribution.State == ResourceSourceState.LoadedMod ? attribution.ModRootPath : null,
-                            attribution.State == ResourceSourceState.LoadedMod ? attribution.RelativePath : null));
+                            attribution.State == ResourceSourceState.LoadedMod ? attribution.RelativePath : null,
+                            SourceModStableId: attribution.State == ResourceSourceState.LoadedMod ? attribution.ModStableId : null));
                 }).ToArray();
             }
         }
@@ -1266,7 +1271,8 @@ public sealed partial class MainWindow : Window, IDisposable
                 resource.SourceModRootPath,
                 resource.SourceRelativePath,
                 resource.OptionMemberships,
-                resource.OptionMapping))
+                resource.OptionMapping,
+                resource.SourceModStableId))
             .ToArray();
     }
 
@@ -1436,6 +1442,7 @@ public sealed partial class MainWindow : Window, IDisposable
         string SourceModDirectory,
         string SourceModRootPath,
         string SourceRelativePath,
+        Guid? SourceModStableId,
         ResourceSourceState SourceState,
         string Section,
         string Slot,

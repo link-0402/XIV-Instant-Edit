@@ -14,6 +14,10 @@ public sealed record SourceResourceLocator
     [JsonPropertyName("sourceModDirectory")]
     public string? SourceModDirectory { get; init; }
 
+    /// <summary>Penumbra 1.7 stable identity for the source mod, when available.</summary>
+    [JsonPropertyName("sourceModStableId")]
+    public Guid? SourceModStableId { get; init; }
+
     [JsonPropertyName("sourceModRootPath")]
     public string? SourceModRootPath { get; init; }
 
@@ -142,6 +146,9 @@ public sealed record InstantEditImportContext
     [JsonPropertyName("sourceModDirectory")]
     public string? SourceModDirectory { get; init; }
 
+    [JsonPropertyName("sourceModStableId")]
+    public Guid? SourceModStableId { get; init; }
+
     [JsonPropertyName("sourceModName")]
     public string? SourceModName { get; init; }
 
@@ -234,6 +241,9 @@ public sealed record PersistedExportContext
     [JsonPropertyName("sourceModDirectory")]
     public string? SourceModDirectory { get; init; }
 
+    [JsonPropertyName("sourceModStableId")]
+    public Guid? SourceModStableId { get; init; }
+
     [JsonPropertyName("sourceModName")]
     public string? SourceModName { get; init; }
 
@@ -282,6 +292,7 @@ public sealed record PersistedExportContext
             TargetFilePath = context.TargetFilePath,
             TargetFolder = context.TargetFolder,
             SourceModDirectory = context.SourceModDirectory,
+            SourceModStableId = context.SourceModStableId,
             SourceModName = context.SourceModName,
             SourceModRootPath = context.SourceModRootPath,
             TargetRelativePath = context.TargetRelativePath,

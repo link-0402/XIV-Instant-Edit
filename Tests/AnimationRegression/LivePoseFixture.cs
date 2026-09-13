@@ -103,3 +103,20 @@ namespace LivePose.Config
         }
     }
 }
+
+namespace LivePose.Entities.Core
+{
+    public record struct EntityId(string Unique);
+    public class Entity;
+}
+namespace LivePose.Entities
+{
+    public sealed class EntityManager
+    {
+        public Core.Entity Player { get; } = new();
+        public Core.Entity? GetEntity(Core.EntityId id) => id.Unique == "actor_123" ? Player : null;
+        public T? GetEntity<T>(Core.EntityId id) where T : Core.Entity =>
+            throw new Exception("The reflection adapter must use the non-generic entity lookup.");
+        public Core.Entity? GetEntity(string id) => throw new Exception("Wrong entity ID overload.");
+    }
+}
