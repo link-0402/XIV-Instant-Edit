@@ -47,7 +47,8 @@ public sealed class ResourceSourceAttributor
                 mod.Name,
                 mod.Directory,
                 mod.Path,
-                relativePath);
+                relativePath,
+                mod.StableId);
         }
 
         return new ResourceSource(ResourceSourceState.ExternalResolvedFile, "External resolved file", null, null, null, physicalPath);
@@ -107,7 +108,8 @@ public sealed class ResourceSourceAttributor
 
                 if (path is not null && (modRoot is null ||
                     fromRegistered || IsPathWithin(path, modRoot)))
-                    roots.Add(new ModRoot(path, directory, modName));
+                    roots.Add(new ModRoot(path, directory, modName,
+                        PenumbraService.ReadModStableIdentifier(path)));
             }
 
             return roots.OrderByDescending(root => root.Path.Length).ToArray();
@@ -140,7 +142,7 @@ public sealed class ResourceSourceAttributor
     private static bool IsPathWithin(string path, string root)
         => PathRules.IsPathWithin(path, root);
 
-    private sealed record ModRoot(string Path, string Directory, string Name);
+    private sealed record ModRoot(string Path, string Directory, string Name, Guid? StableId);
 }
 
 public sealed record ResourceSource(
@@ -149,4 +151,5 @@ public sealed record ResourceSource(
     string? ModName,
     string? ModDirectory,
     string? ModRootPath,
-    string? RelativePath);
+    string? RelativePath,
+    Guid? ModStableId = null);

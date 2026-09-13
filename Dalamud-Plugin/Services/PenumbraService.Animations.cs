@@ -7,6 +7,11 @@ namespace InstantEdit.Services;
 
 public sealed partial class PenumbraService
 {
+    internal Task<(string Directory, string Root)[]> AnimationSkeletonRootsAsync() => _framework.RunOnFrameworkThread(() =>
+    {
+        using var mods = new GetModListAdapter(_pi).Invoke();
+        return mods.Select(m => (m.Identifier, m.ModPath.FullName)).ToArray();
+    });
     internal void CheckAnimationCollectionOnFramework(ushort objectIndex, Guid collection)
     {
         var current = _getCollectionForObject.Invoke(objectIndex);
@@ -48,8 +53,8 @@ public sealed partial class PenumbraService
     {
         await _framework.RunOnFrameworkThread(() =>
         {
-            var registered = GetRegisteredModPath(mod);
-            if (registered == null || !string.Equals(Path.GetFullPath(registered), Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase))
+            var registered = RegisteredAnimationModRootOnFramework(mod);
+            if (!PathRules.SamePhysicalPath(registered, root))
                 throw new IOException($"The registered location of {mod} changed. Recovery will not write to the old location.");
         });
         _ = LoadV4ModMetadata(root);
@@ -82,20 +87,36 @@ public sealed partial class PenumbraService
                         highest = Math.Max(highest, current.Item2);
                 }
                 if (highest == int.MaxValue) throw new IOException("An enabled mod already has maximum priority. Lower its priority before retrying.");
-                var configured = ConfigureModForCollectionOnFramework(journal.ModDirectory,
-                    journal.Request.Capture.CollectionId, journal.Request.Capture.CollectionName, priority: highest + 1);
-                if (!configured.Success || configured.WarningList.Count > 0)
-                    throw new IOException(configured.Message + " " + string.Join(" ", configured.WarningList));
+                var priority = _trySetModPriority.Invoke(journal.Request.Capture.CollectionId, journal.ModDirectory, highest + 1, journal.ModDirectory);
+                if (priority is not (PenumbraApiEc.Success or PenumbraApiEc.NothingChanged))
+                    throw new IOException($"Penumbra could not prioritize the edited mod ({priority}).");
+                var enable = _trySetMod.Invoke(journal.Request.Capture.CollectionId, journal.ModDirectory, true, journal.ModDirectory);
+                if (enable is not (PenumbraApiEc.Success or PenumbraApiEc.NothingChanged))
+                    throw new IOException($"Penumbra could not enable the edited mod ({enable}).");
             }
-            else if (RedrawPlayerOwnedEntitiesOnFramework() is { } error) throw new IOException(error);
         });
     }
+
+    private string? RegisteredAnimationModRootOnFramework(string directory)
+    {
+        // GetModPath is Penumbra's virtual UI folder/sort path. ModPath from the
+        // synchronized mod adapter is the actual registered directory on disk.
+        using var mods = new GetModListAdapter(_pi).Invoke();
+        foreach (var mod in mods)
+            if (string.Equals(mod.Identifier, directory, StringComparison.Ordinal)) return mod.ModPath.FullName;
+        return null;
+    }
+
+    internal Task RedrawAnimationAsync() => _framework.RunOnFrameworkThread(() =>
+    {
+        if (RedrawPlayerOwnedEntitiesOnFramework() is { } error) throw new IOException(error);
+    });
 
     internal Task DisableAnimationModAsync(AnimationEditJournal journal) => _framework.RunOnFrameworkThread(() =>
     {
         if (!_getModList.Invoke().ContainsKey(journal.ModDirectory)) return;
-        var registered = GetRegisteredModPath(journal.ModDirectory);
-        if (registered == null || !string.Equals(Path.GetFullPath(registered), Path.GetFullPath(journal.ModRoot), StringComparison.OrdinalIgnoreCase))
+        var registered = RegisteredAnimationModRootOnFramework(journal.ModDirectory);
+        if (!PathRules.SamePhysicalPath(registered, journal.ModRoot))
             throw new IOException("The created mod's registered directory changed. Recovery will not disable a different mod.");
         var result = _trySetMod.Invoke(journal.Request.Capture.CollectionId, journal.ModDirectory, false, journal.ModDirectory);
         if (result is not (PenumbraApiEc.Success or PenumbraApiEc.NothingChanged))

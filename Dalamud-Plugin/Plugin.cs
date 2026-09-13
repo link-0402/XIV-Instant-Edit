@@ -105,7 +105,7 @@ public sealed class Plugin : IDalamudPlugin
         _textures = new TextureEditService(_penumbra, _config, pi.ConfigDirectory.FullName, _backups,
             (error, message) => log.Warning(error, message));
         string? animationError = null;
-        try { _animations = new AnimationEditService(pi, framework, objects, data, sigScanner, _penumbra, _backups, log); }
+        try { _animations = new AnimationEditService(pi, framework, objects, data, sigScanner, _penumbra, _backups, _config, log); }
         catch (Exception error)
         {
             animationError = "Animation integration is unavailable: " + error.Message;

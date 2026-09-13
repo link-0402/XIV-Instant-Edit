@@ -33,6 +33,9 @@ internal static class AnimationPoseRules
         }).Where(b => b.Stacks.Length != 0).ToImmutableArray(),
     };
 
+    /// <summary>Clear every offset in the captured LivePose context, preserving its timeline identity.</summary>
+    public static PoseSnapshot ClearAll(PoseSnapshot pose) => pose with { Bones = [] };
+
     public static void Validate(PoseStack s)
     {
         static bool Finite(Vector3 v) => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
@@ -49,7 +52,11 @@ internal static class AnimationPoseRules
     {
         if (!float.IsFinite(duration) || duration < 0 || duration > 3600)
             throw new InvalidDataException("Animation duration is invalid or exceeds one hour.");
-        var count = Math.Max(2, Math.Max(sourceFrames, checked((int)Math.Ceiling(duration * 30d) + 1)));
+        // An integer subdivision of source intervals includes every original sample
+        // while retaining uniform spacing for the interleaved Havok output.
+        var intervals = Math.Max(1, sourceFrames - 1);
+        var subdivision = Math.Max(1, checked((int)Math.Ceiling(duration * 30d / intervals)));
+        var count = checked(intervals * subdivision + 1);
         if (count > 216001) throw new InvalidDataException("Animation sampling exceeds the frame limit.");
         return count;
     }

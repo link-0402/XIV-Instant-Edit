@@ -7,6 +7,7 @@ internal sealed class AnimationJournalStore
 {
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, IncludeFields = true };
     private readonly string root;
+    private string OffsetBackupPath => Path.Combine(root, "livepose-offset-backup.json");
     public AnimationJournalStore(string configDirectory)
     {
         root = Path.Combine(Path.GetFullPath(configDirectory), "AnimationEdits");
@@ -31,7 +32,7 @@ internal sealed class AnimationJournalStore
             if (new FileInfo(path).Length > 16 * 1024 * 1024) throw new InvalidDataException("An animation recovery record exceeds 16 MiB.");
             var record = JsonSerializer.Deserialize<AnimationEditJournal>(File.ReadAllText(path), Json)
                 ?? throw new InvalidDataException("Invalid animation recovery record.");
-            if (record.Version != 1 || record.Id != id || record.Request?.Id != id) throw new InvalidDataException("Unsupported animation recovery record.");
+            if (record.Version is not (1 or 2) || record.Id != id || record.Request?.Id != id) throw new InvalidDataException("Unsupported animation recovery record.");
             result.Add(record);
         }
         return result.OrderByDescending(r => r.CreatedUtc).ToArray();
@@ -40,6 +41,24 @@ internal sealed class AnimationJournalStore
     {
         var dir = DirectoryFor(record.Id); Directory.CreateDirectory(dir);
         WriteAtomic(Path.Combine(dir, "journal.json"), JsonSerializer.SerializeToUtf8Bytes(record, Json));
+    }
+    public LivePoseOffsetBackup? LoadOffsetBackup()
+    {
+        var path = OffsetBackupPath;
+        if (!File.Exists(path)) return null;
+        TextureFiles.EnsureLocalPath(path);
+        if (new FileInfo(path).Length > 16 * 1024 * 1024) throw new InvalidDataException("The LivePose offset backup exceeds 16 MiB.");
+        return JsonSerializer.Deserialize<LivePoseOffsetBackup>(File.ReadAllText(path), Json)
+            ?? throw new InvalidDataException("Invalid LivePose offset backup.");
+    }
+    public void SaveOffsetBackup(LivePoseOffsetBackup backup)
+        => WriteAtomic(OffsetBackupPath, JsonSerializer.SerializeToUtf8Bytes(backup, Json));
+    public void ClearOffsetBackup()
+    {
+        var path = OffsetBackupPath;
+        if (!File.Exists(path)) return;
+        TextureFiles.EnsureLocalPath(path);
+        File.Delete(path);
     }
     internal static void WriteAtomic(string path, byte[] data)
     {

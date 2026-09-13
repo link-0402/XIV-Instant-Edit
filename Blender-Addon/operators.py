@@ -7,6 +7,8 @@ from bpy.types import Context, Operator
 
 from .instant_edit.context import ContextValidationError, mesh_ids_from_name
 from .materials import (
+    ATTRIBUTE_VARIANT_PRESETS,
+    attribute_display_name,
     assign_material_path,
     ensure_flow_data,
     find_material_group,
@@ -39,6 +41,10 @@ from .backups import clear_backups, list_backups, restore_local, target_folder
 
 
 _ACTIVE_MESH_DRAG: tuple[str, int, int, int, str] | None = None
+_ATTRIBUTE_PRESET_ITEMS = tuple(
+    (attribute, attribute_display_name(attribute), f"Add {attribute} to this mesh part")
+    for attribute in ATTRIBUTE_VARIANT_PRESETS
+)
 
 
 def active_mesh_drag_state() -> tuple[str, int, int, int, str] | None:
@@ -351,7 +357,13 @@ class XIVIE_OT_simple_export(Operator):
             self.report({"ERROR"}, f"Export failed: {error}")
             return {"CANCELLED"}
 
-        self.report({"INFO"}, f"Exported {name}{suffix}")
+        from .instant_edit.ops import refresh_variant_targets_after_operation
+
+        refresh_error = refresh_variant_targets_after_operation(context)
+        message = f"Exported {name}{suffix}"
+        if refresh_error is not None:
+            message += f"; Penumbra targets could not refresh: {refresh_error}"
+        self.report({"WARNING"} if refresh_error is not None else {"INFO"}, message)
         return {"FINISHED"}
 
 
@@ -449,8 +461,14 @@ class XIVIE_OT_simple_import(Operator):
             self.report({"ERROR"}, f"Import failed: {error}")
             return {"CANCELLED"}
 
+        from .instant_edit.ops import refresh_variant_targets_after_operation
+
+        refresh_error = refresh_variant_targets_after_operation(context)
         count_text = f" ({imported_count} mesh object{'s' if imported_count != 1 else ''})" if imported_count else ""
-        self.report({"INFO"}, f"Imported {file_path.name}{count_text}")
+        message = f"Imported {file_path.name}{count_text}"
+        if refresh_error is not None:
+            message += f"; Penumbra targets could not refresh: {refresh_error}"
+        self.report({"WARNING"} if refresh_error is not None else {"INFO"}, message)
         return {"FINISHED"}
 
 
@@ -553,7 +571,16 @@ class XIVIE_OT_import_backup(Operator):
                 bpy.data.collections.remove(collection)
             self.report({"ERROR"}, f"Import failed: {error}")
             return {"CANCELLED"}
-        self.report({"INFO"}, f"Imported {entry.original_name} into {collection.name} ({count} object{'s' if count != 1 else ''})")
+        from .instant_edit.ops import refresh_variant_targets_after_operation
+
+        refresh_error = refresh_variant_targets_after_operation(context)
+        message = (
+            f"Imported {entry.original_name} into {collection.name} "
+            f"({count} object{'s' if count != 1 else ''})"
+        )
+        if refresh_error is not None:
+            message += f"; Penumbra targets could not refresh: {refresh_error}"
+        self.report({"WARNING"} if refresh_error is not None else {"INFO"}, message)
         return {"FINISHED"}
 
 
@@ -947,7 +974,7 @@ class XIVIE_OT_mesh_attribute(Operator):
             ("atr_sne", "Shin", ""),
             ("atr_leg", "Boot", ""),
             ("atr_lpd", "Knee Pad", ""),
-        ),
+        ) + _ATTRIBUTE_PRESET_ITEMS,
         default="atr_nek",
     )  # type: ignore
 

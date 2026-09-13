@@ -20,7 +20,8 @@ public sealed record MaterialResourceCandidate(
     string? SourceModRootPath = null,
     string? SourceRelativePath = null,
     IReadOnlyList<string>? OptionMemberships = null,
-    string? OptionLabel = null);
+    string? OptionLabel = null,
+    Guid? SourceModStableId = null);
 
 public sealed record MaterialPreviewBundleResult(string? ManifestPath, IReadOnlyList<string> Warnings)
 {
@@ -801,6 +802,7 @@ public sealed class MaterialPreviewBundleBuilder
             Kind = "mod",
             GamePath = NormaliseGamePath(gamePath),
             SourceModDirectory = source.ModDirectory,
+            SourceModStableId = source.ModStableId,
             SourceModRootPath = source.ModRootPath,
             SourceRelativePath = source.RelativePath,
             Sha256 = hash,
@@ -821,6 +823,7 @@ public sealed class MaterialPreviewBundleBuilder
             Kind = "mod",
             GamePath = NormaliseGamePath(gamePath),
             SourceModDirectory = source.SourceModDirectory,
+            SourceModStableId = source.SourceModStableId,
             SourceModRootPath = source.SourceModRootPath,
             SourceRelativePath = source.SourceRelativePath,
             Sha256 = hash,

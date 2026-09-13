@@ -467,6 +467,7 @@ class _ImportHandler(BaseHTTPRequestHandler):
         managed_destination = _string(data, "managedDestination", max_length=4096)
         target_file_path = _string(data, "targetFilePath", max_length=4096)
         source_mod_directory = _string(data, "sourceModDirectory", max_length=256)
+        source_mod_stable_id = _string(data, "sourceModStableId", max_length=64)
         source_mod_name = _string(data, "sourceModName", max_length=512)
         source_mod_root_path = _string(data, "sourceModRootPath", max_length=4096)
         target_relative_path = _string(data, "targetRelativePath", max_length=4096)
@@ -491,6 +492,20 @@ class _ImportHandler(BaseHTTPRequestHandler):
                 "request_validation", "unsupported_context_state",
                 "This protocol version cannot represent the requested import context.",
                 "Update both XIV Instant Edit components and retry.")
+        if source_mod_stable_id:
+            try:
+                if uuid.UUID(source_mod_stable_id).int == 0:
+                    raise ValueError
+            except (ValueError, AttributeError, TypeError) as error:
+                raise BridgeRequestError(
+                    "request_validation", "invalid_mod_identity",
+                    "The Penumbra mod identity is invalid.",
+                    "Refresh the model list and retry the import.") from error
+        if source_kind == "game" and source_mod_stable_id:
+            raise BridgeRequestError(
+                "request_validation", "unexpected_mod_identity",
+                "Game-data imports cannot contain a Penumbra mod identity.",
+                "Refresh the model list and retry the import.")
         if source_kind == "game" and (
             not is_safe_game_model_path(source_game_path) or
             not is_safe_game_model_path(resolved_game_path)
@@ -580,6 +595,7 @@ class _ImportHandler(BaseHTTPRequestHandler):
             "managedDestination": managed_destination,
             "targetFilePath": target_file_path,
             "sourceModDirectory": source_mod_directory,
+            "sourceModStableId": source_mod_stable_id,
             "sourceModName": source_mod_name,
             "sourceModRootPath": source_mod_root_path,
             "targetRelativePath": target_relative_path,
@@ -698,6 +714,7 @@ def poll_import_queue() -> float:
                     managed_destination=data.get("managedDestination", ""),
                     target_file_path=data.get("targetFilePath", ""),
                     source_mod_directory=data.get("sourceModDirectory", ""),
+                    source_mod_stable_id=data.get("sourceModStableId", ""),
                     source_mod_name=data.get("sourceModName", ""),
                     source_mod_root_path=data.get("sourceModRootPath", ""),
                     target_relative_path=data.get("targetRelativePath", ""),

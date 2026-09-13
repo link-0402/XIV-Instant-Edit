@@ -46,7 +46,7 @@ public sealed partial class MainWindow
 
     private void DrawTextureSessions()
     {
-        ImGui.TextWrapped("Save the working TGA to update the texture in game. Original compression is preserved. Shared references to the destination file also change.");
+        ImGui.TextWrapped("Save the TGA file to update the texture in game. Original compression level is preserved.");
         if (_textures.StartupError.Length > 0) ImGui.TextWrapped(_textures.StartupError);
         if (Volatile.Read(ref _textureBusy) != 0) ImGui.TextDisabled("Updating texture session…");
         var sessions = _textures.Sessions;
@@ -63,7 +63,7 @@ public sealed partial class MainWindow
             ImGui.TextWrapped($"Working file: {s.WorkingFile}");
             if (s.LastSaved is { } saved) ImGui.TextDisabled($"Last saved: {saved.ToLocalTime():g}");
             ImGui.BeginDisabled(Volatile.Read(ref _textureBusy) != 0);
-            if (ImGui.Button("Open editor")) TextureAction(() => { _textures.OpenEditor(s.Id); return Task.CompletedTask; });
+            if (ImGui.Button("Open in editor")) TextureAction(() => { _textures.OpenEditor(s.Id); return Task.CompletedTask; });
             ImGui.SameLine();
             if (ImGui.Button("Open folder")) TextureAction(() => { _textures.OpenFolder(s.Id); return Task.CompletedTask; });
             ImGui.SameLine();

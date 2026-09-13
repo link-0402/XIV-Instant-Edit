@@ -11,7 +11,8 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
     public async Task<AnimationEditJournal> PrepareAsync(AnimationBakeRequest request, AnimationDependencyManifest manifest,
         ImmutableDictionary<string, byte[]> outputs, CancellationToken token)
     {
-        var journal = new AnimationEditJournal { Id = request.Id, Request = request, PoseBefore = request.Capture.Pose };
+        var journal = new AnimationEditJournal { Id = request.Id, Request = RecoveryRequest(request),
+            PoseBefore = request.Operation == AnimationOperation.BakeOffsets ? request.Capture.Pose : null };
         var dir = store.DirectoryFor(request.Id);
         Directory.CreateDirectory(dir);
         if (request.Destination == AnimationDestination.NewMod)
@@ -24,7 +25,16 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
             if (!PathRules.IsPathWithin(journal.ModRoot, root) || Directory.Exists(journal.ModRoot))
                 throw new IOException("That mod directory already exists. Choose a new mod name.");
         }
-        var files = request.Destination == AnimationDestination.NewMod ? manifest.Files.SetItems(outputs) : outputs;
+        // The dependency manifest is a read/validation graph used while baking.
+        // It is not a list of files to copy into the result mod: that would pull
+        // in every transitively resolved PAP, TMB, effect, skeleton, and other
+        // resource, including files supplied by unrelated mods. A new animation
+        // mod must contain only the clips that were actually baked. In-place
+        // edits already have the same shape because `outputs` contains only the
+        // selected clip and optional startup clip.
+        var files = request.Destination == AnimationDestination.NewMod
+            ? SelectNewModFiles(manifest, outputs)
+            : outputs;
         foreach (var (gamePath, bytes) in files)
         {
             token.ThrowIfCancellationRequested();
@@ -32,7 +42,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
             if (request.Destination == AnimationDestination.NewMod)
             {
                 mod = journal.ModDirectory; root = journal.ModRoot; relative = "files/" + gamePath;
-                target = Path.Combine(root, relative); before = "";
+                target = Path.GetFullPath(Path.Combine(root, relative)); before = "";
             }
             else
             {
@@ -56,6 +66,22 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
         return journal;
     }
 
+    internal static AnimationBakeRequest RecoveryRequest(AnimationBakeRequest request)
+    {
+        AnimationClip Compact(AnimationClip clip) => clip.Resolution is { } resolution ? clip with
+        { Resolution = resolution with { Candidates = resolution.Selected is { } selected ? [selected] : [] } } : clip;
+        return request with { Capture = request.Capture with { Clip = Compact(request.Capture.Clip),
+            Startup = request.Capture.Startup == null ? null : Compact(request.Capture.Startup) } };
+    }
+
+    internal static ImmutableDictionary<string, byte[]> SelectNewModFiles(
+        AnimationDependencyManifest manifest, ImmutableDictionary<string, byte[]> outputs)
+    {
+        if (outputs.Keys.Any(path => !manifest.Files.ContainsKey(path)))
+            throw new InvalidDataException("An edited animation is missing from the captured dependency manifest.");
+        return outputs;
+    }
+
     public async Task CommitAsync(AnimationEditJournal journal, AnimationDependencyManifest manifest,
         Func<Task> checkActor, Action<string> status, CancellationToken token)
     {
@@ -65,13 +91,17 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
             await resources.CheckAsync(journal.Request.Capture.CollectionId, manifest.Resources, token);
             if (journal.Request.Destination == AnimationDestination.NewMod)
             {
-                var metadata = AnimationMetadata.Applicable(AnimationMetadata.Decode(await penumbra.AnimationMetadataAsync(journal.Request.Capture.CollectionId)), manifest.Files.Keys).ToJsonString();
+                var metadata = AnimationMetadata.Applicable(
+                    AnimationMetadata.Decode(await penumbra.AnimationMetadataAsync(journal.Request.Capture.CollectionId)),
+                    journal.Files.Select(file => file.GamePath)).ToJsonString();
                 if (metadata != manifest.ManipulationsJson) throw new IOException("Applicable collection metadata changed during baking. Refresh and retry.");
             }
             foreach (var file in journal.Files) ValidateTarget(journal, file);
             if (journal.Request.Destination == AnimationDestination.InPlace)
                 foreach (var group in journal.Files.GroupBy(f => (f.ModDirectory, f.ModRoot)))
                     await penumbra.CheckAnimationModRootAsync(group.Key.ModDirectory, group.Key.ModRoot);
+            // Dependency and metadata reads can span several ticks; recheck the live destination last.
+            await checkActor();
             token.ThrowIfCancellationRequested();
             status("Committing validated animation files…");
             journal.State = "Committing"; store.Save(journal);
@@ -94,7 +124,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                         RequireHash(backup, file.BeforeHash);
                         journal.Files[i] = file = file with { Backup = backup }; store.Save(journal);
                         var mapping = await penumbra.ResolveAnimationPathAsync(journal.Request.Capture.CollectionId, file.GamePath);
-                        if (!string.Equals(mapping, file.Target, StringComparison.OrdinalIgnoreCase)) throw new IOException($"The mapping for {file.GamePath} changed during commit.");
+                        if (!PathRules.SamePhysicalPath(mapping, file.Target)) throw new IOException($"The mapping for {file.GamePath} changed during commit.");
                         RequireHash(file.Target, file.BeforeHash);
                     }
                     else if (File.Exists(file.Target)) throw new IOException($"Another operation created {file.Target}.");
@@ -115,12 +145,10 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                 await checkActor();
                 status("Activating and verifying animation resources…");
                 await penumbra.ActivateAnimationAsync(journal);
-                foreach (var file in journal.Files)
-                {
-                    var resolved = await penumbra.ResolveAnimationPathAsync(journal.Request.Capture.CollectionId, file.GamePath);
-                    if (!string.Equals(resolved, file.Target, StringComparison.OrdinalIgnoreCase)) throw new IOException($"Activation failed: {file.GamePath} still resolves to {resolved}.");
-                    RequireHash(file.Target, file.AfterHash);
-                }
+                await VerifyActivationAsync(journal.Files,
+                    path => penumbra.ResolveAnimationPathAsync(journal.Request.Capture.CollectionId, path),
+                    file => RequireHash(file.Target, file.AfterHash),
+                    penumbra.RedrawAnimationAsync);
                 if (journal.Request.Destination == AnimationDestination.NewMod) journal.ModFileHashes = ModHashes(journal.ModRoot);
                 journal.State = "Activated"; store.Save(journal);
             }
@@ -132,6 +160,20 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                 throw new IOException(journal.Message, error);
             }
         }, token);
+    }
+
+    internal static async Task VerifyActivationAsync(IEnumerable<AnimationFileChange> files,
+        Func<string, Task<string>> resolve, Action<AnimationFileChange> validate, Func<Task> redraw)
+    {
+        foreach (var file in files)
+        {
+            var resolved = await resolve(file.GamePath);
+            if (!PathRules.SamePhysicalPath(resolved, file.Target))
+                throw new IOException($"Activation failed: {file.GamePath} resolves to {resolved}, expected {file.Target}.");
+            validate(file);
+        }
+        // Do not enqueue a native character rebuild until every mapping and file passed.
+        await redraw();
     }
 
     internal static JsonObject CreateNewModMetadata(

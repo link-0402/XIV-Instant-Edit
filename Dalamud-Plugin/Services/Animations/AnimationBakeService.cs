@@ -75,6 +75,10 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         private readonly AnimationNative.Arena arena = new();
         private AnimationNative.Document? doc, skeletonDoc, verification;
         private AnimationNative.Sampler? sampler, rawSampler, verifySampler;
+        private AnimationNative.Sampler? targetSampler;
+        private AnimationRetarget? retarget;
+        private SkeletonDescription sourceDescription = null!;
+        private hkaAnimationBinding* outputMetadata;
         private readonly AnimationClip clip;
         private readonly AnimationBakeRequest request;
         private hkaAnimationBinding* originalBinding;
@@ -106,37 +110,52 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                     throw new InvalidDataException("The captured PAP clip changed.");
                 doc = new AnimationNative.Document(pap.Havok);
                 skeletonDoc = new AnimationNative.Document(AnimationPap.SkeletonHavok(sklb));
-                if (skeletonDoc.Container->Skeletons.Length != 1 || clip.BindingIndex >= doc.Container->Bindings.Length ||
+                if (clip.BindingIndex >= doc.Container->Bindings.Length ||
                     clip.BindingIndex >= doc.Container->Animations.Length)
                     throw new InvalidDataException("The animation or skeleton selection is ambiguous.");
-                skeleton = skeletonDoc.Container->Skeletons[0].ptr;
+                var expectedSource = clip.Resolution?.Selected?.Skeleton.Fingerprint ?? clip.SkeletonFingerprint;
+                sourceDescription = AnimationSkeleton.SelectSource(AnimationSkeleton.DescribeSources(skeletonDoc.Root, skeletonDoc.Container), expectedSource);
+                var sourceSkeleton = AnimationSkeleton.Materialize(sourceDescription, arena);
+                skeleton = clip.TargetSkeleton == null ? sourceSkeleton : AnimationSkeleton.Materialize(clip.TargetSkeleton, arena);
                 if (AnimationRuntime.SkeletonFingerprint(skeleton) != clip.SkeletonFingerprint)
-                    throw new InvalidDataException("The captured partial skeleton changed before sampling.");
+                    throw new InvalidDataException("The destination skeleton snapshot changed before sampling.");
                 originalBinding = doc.Container->Bindings[clip.BindingIndex].ptr;
                 originalAnimation = originalBinding->Animation.ptr;
+                if (clip.BindingFingerprint.Length > 0 && AnimationNative.Fingerprint(originalBinding) != clip.BindingFingerprint)
+                    throw new InvalidDataException("The selected animation binding changed. Refresh the capture.");
                 if (doc.Container->Animations[clip.BindingIndex].ptr != originalAnimation)
                     throw new InvalidDataException("PAP animation and binding order disagree.");
-                sampler = new AnimationNative.Sampler(skeleton, originalBinding);
-                var rawBinding = arena.Alloc<hkaAnimationBinding>(); *rawBinding = *originalBinding;
-                rawBinding->BlendHint.Storage = 0; rawBinding->MemSizeAndRefCount = 0x00010000;
-                rawSampler = new AnimationNative.Sampler(skeleton, rawBinding);
-                duration = originalAnimation->Duration;
-                var sourceFrames = originalAnimation->Type switch
+                sampler = new AnimationNative.Sampler(sourceSkeleton, originalBinding);
+                var rawBinding = arena.BorrowBinding(originalBinding);
+                rawBinding->BlendHint.Storage = 0;
+                rawSampler = new AnimationNative.Sampler(sourceSkeleton, rawBinding);
+                outputMetadata = arena.BorrowBinding(originalBinding);
+                if (sourceDescription.Fingerprint != clip.SkeletonFingerprint)
                 {
-                    hkaAnimation.AnimationType.SplineCompressedAnimation => ((AnimationNative.Spline*)originalAnimation)->NumFrames,
-                    hkaAnimation.AnimationType.InterleavedAnimation => Math.Max(
-                        ((AnimationNative.Interleaved*)originalAnimation)->Transforms.Length / Math.Max(1, originalAnimation->NumberOfTransformTracks),
-                        ((AnimationNative.Interleaved*)originalAnimation)->Floats.Length / Math.Max(1, originalAnimation->NumberOfFloatTracks)),
-                    _ => throw new InvalidDataException("Unsupported source animation encoding."),
-                };
+                    retarget = new(sourceDescription, AnimationSkeleton.Describe(skeleton), AnimationSkeleton.Channels(originalBinding));
+                    outputMetadata->OriginalSkeletonName = AnimationSkeleton.String(skeleton->Name.String ?? "", arena);
+                    outputMetadata->FloatTrackToFloatSlotIndices = arena.Copy<short>(retarget.FloatMap);
+                    outputMetadata->PartitionIndices = arena.Copy<short>(retarget.PartitionMap);
+                }
+                // Own a normal, one-frame destination pose/control for the existing offset and IK adapter.
+                var poseAnimation = arena.Alloc<AnimationNative.Interleaved>(); native.Initialize(poseAnimation, originalAnimation);
+                poseAnimation->Animation.NumberOfTransformTracks = skeleton->Bones.Length; poseAnimation->Animation.NumberOfFloatTracks = 0;
+                poseAnimation->Transforms = arena.Copy<hkQsTransformf>(new ReadOnlySpan<hkQsTransformf>(skeleton->ReferencePose.Data, skeleton->Bones.Length));
+                var poseBinding = arena.BorrowBinding(originalBinding); poseBinding->BlendHint.Storage = 0; poseBinding->Animation.ptr = &poseAnimation->Animation;
+                poseBinding->TransformTrackToBoneIndices = arena.Copy<short>(Enumerable.Range(0, skeleton->Bones.Length).Select(i => (short)i).ToArray());
+                poseBinding->FloatTrackToFloatSlotIndices = default; poseBinding->PartitionIndices = default;
+                targetSampler = new AnimationNative.Sampler(skeleton, poseBinding);
+                duration = originalAnimation->Duration;
+                var sourceFrames = AnimationNative.SourceFrameCount(originalAnimation);
                 frames = AnimationPoseRules.SampleCount(duration, sourceFrames);
-                if ((long)frames * (sampler.BoneCount * sizeof(hkQsTransformf) + skeleton->FloatSlots.Length * 8) > AnimationPap.MaxFileSize)
+                if ((long)frames * (skeleton->Bones.Length * sizeof(hkQsTransformf) + (skeleton->FloatSlots.Length + sourceSkeleton->FloatSlots.Length) * 4) > AnimationPap.MaxFileSize)
                     throw new InvalidDataException("This animation exceeds the bake memory limit.");
                 originalPrints = Enumerable.Range(0, doc.Container->Bindings.Length).Select(i => AnimationNative.Fingerprint(doc.Container->Bindings[i].ptr)).ToArray();
                 originalMotionPrints = Enumerable.Range(0, doc.Container->Bindings.Length).Select(i => AnimationNative.ExtractedMotionFingerprint(doc.Container->Bindings[i].ptr, motionPath)).ToArray();
-                for (var i = 0; i < originalBinding->TransformTrackToBoneIndices.Length; i++) affected.Add(originalBinding->TransformTrackToBoneIndices[i]);
+                if (retarget == null)
+                    for (var i = 0; i < originalBinding->TransformTrackToBoneIndices.Length; i++) affected.Add(originalBinding->TransformTrackToBoneIndices[i]);
                 var applicable = request.Capture.Pose.Bones.Where(b => b.Id.Partial == clip.Partial && request.SelectedBones.Contains(b.Id)).ToArray();
-                if (applicable.Length == 0) throw new InvalidDataException("No selected offsets belong to this animation's partial skeleton.");
+                if (request.Operation == AnimationOperation.BakeOffsets && applicable.Length == 0) throw new InvalidDataException("No selected offsets belong to this animation's partial skeleton.");
             }
             catch { Dispose(); throw; }
         }
@@ -158,19 +177,30 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             {
                 token.ThrowIfCancellationRequested();
                 sampler!.Sample(Time(frame)); rawSampler!.Sample(Time(frame));
-                native.Apply(sampler, request.Capture.Pose.Bones, clip.Partial, request.Components, request.SelectedBones);
-                var values = new hkQsTransformf[sampler.BoneCount];
+                var mapped = retarget == null ? new ReadOnlySpan<hkQsTransformf>(sampler.Transforms, sampler.BoneCount).ToArray() :
+                    retarget.Map(new ReadOnlySpan<hkQsTransformf>(sampler.Transforms, sampler.BoneCount).ToArray().Select(AnimationSkeleton.Transform).ToArray()).Select(AnimationSkeleton.Transform).ToArray();
+                targetSampler!.SetPose(mapped);
+                if (request.Operation == AnimationOperation.BakeOffsets)
+                    native.Apply(targetSampler, request.Capture.Pose.Bones, clip.Partial, request.Components, request.SelectedBones);
+                var values = new hkQsTransformf[targetSampler.BoneCount];
                 for (var i = 0; i < values.Length; i++)
                 {
-                    values[i] = sampler.Pose->LocalPose[i];
+                    values[i] = targetSampler.Pose->LocalPose[i];
                     AnimationNative.CheckTransform(values[i]);
-                    if (!AnimationNative.Near(values[i], sampler.Transforms[i], 0.000001f)) affected.Add(i);
+                    if (!AnimationNative.Near(values[i], retarget == null ? mapped[i] : skeleton->ReferencePose[i], 0.000001f)) affected.Add(i);
                     if (frame > 0 && Quaternion.Dot(AnimationNative.Rotation(expected[^1][i]), AnimationNative.Rotation(values[i])) < 0)
                     { var q = AnimationNative.Rotation(values[i]); fixed (hkQsTransformf* p = &values[i]) AnimationNative.SetRotation(p, new Quaternion(-q.X, -q.Y, -q.Z, -q.W)); }
                 }
                 expected.Add(values);
-                expectedFloats.Add(new ReadOnlySpan<float>(sampler.Floats, skeleton->FloatSlots.Length).ToArray());
-                rawFloats.Add(new ReadOnlySpan<float>(rawSampler.Floats, skeleton->FloatSlots.Length).ToArray());
+                var floats = new ReadOnlySpan<float>(skeleton->ReferenceFloats.Data, skeleton->FloatSlots.Length).ToArray();
+                for (var i = 0; i < originalBinding->FloatTrackToFloatSlotIndices.Length; i++)
+                {
+                    var src = originalBinding->FloatTrackToFloatSlotIndices[i]; var dst = outputMetadata->FloatTrackToFloatSlotIndices[i];
+                    floats[dst] = retarget == null ? sampler.Floats[src] : AnimationRetarget.MapFloat(sampler.Floats[src],
+                        sourceDescription.ReferenceFloats[src], skeleton->ReferenceFloats[dst], originalBinding->BlendHint.Storage);
+                }
+                expectedFloats.Add(floats);
+                rawFloats.Add(new ReadOnlySpan<float>(rawSampler.Floats, sourceDescription.FloatNames.Length).ToArray());
                 frame++;
             } while (frame < frames && watch.ElapsedMilliseconds < 3);
             return frame == frames;
@@ -179,9 +209,12 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         {
             // Preserve original track ordering; append only bones actually changed by the pose/IK.
             var tracks = new List<short>();
-            for (var i = 0; i < originalBinding->TransformTrackToBoneIndices.Length; i++) tracks.Add(originalBinding->TransformTrackToBoneIndices[i]);
+            if (retarget == null)
+                for (var i = 0; i < originalBinding->TransformTrackToBoneIndices.Length; i++) tracks.Add(originalBinding->TransformTrackToBoneIndices[i]);
             if (tracks.Distinct().Count() != tracks.Count) throw new InvalidDataException("Duplicate track bindings are unsupported.");
             tracks.AddRange(affected.Order().Where(i => !tracks.Contains((short)i)).Select(i => (short)i));
+            // A reference-only repair still needs a sampled channel for a valid interleaved source.
+            if (tracks.Count == 0) tracks.Add(0);
             var animation = arena.Alloc<AnimationNative.Interleaved>();
             native.Initialize(animation, originalAnimation);
             animation->Animation.NumberOfTransformTracks = tracks.Count;
@@ -194,10 +227,11 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 for (var t = 0; t < originalAnimation->NumberOfFloatTracks; t++)
                     animation->Floats[f * originalAnimation->NumberOfFloatTracks + t] = rawFloats[f][originalBinding->FloatTrackToFloatSlotIndices[t]];
             }
-            var binding = arena.Alloc<hkaAnimationBinding>(); *binding = *originalBinding; binding->MemSizeAndRefCount = 0x00010000;
+            var binding = arena.BorrowBinding(outputMetadata);
             binding->TransformTrackToBoneIndices = arena.Copy<short>(tracks.ToArray());
             hkaAnimation* final = &animation->Animation;
-            if (originalAnimation->Type == hkaAnimation.AnimationType.SplineCompressedAnimation)
+            if (originalAnimation->Type is hkaAnimation.AnimationType.SplineCompressedAnimation or
+                hkaAnimation.AnimationType.PredictiveCompressedAnimation)
             {
                 // Compress only tracks. Avoid allocating annotation copies or extra motion references
                 // that would be lost when reattaching the unchanged metadata from the source graph.
@@ -216,18 +250,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             replaced = true;
         }
         private static hkQsTransformf Encode(hkQsTransformf pose, hkQsTransformf reference, sbyte hint)
-        {
-            if (hint == 0) return pose;
-            if (hint is not (1 or 2)) throw new InvalidDataException("Unsupported animation blend hint.");
-            var scale = AnimationNative.Scale(reference);
-            if (Math.Abs(scale.X * scale.Y * scale.Z) < 1e-12f) throw new InvalidDataException("Cannot encode additive animation against a singular reference pose.");
-            var result = pose;
-            result.Translation.X -= reference.Translation.X; result.Translation.Y -= reference.Translation.Y; result.Translation.Z -= reference.Translation.Z;
-            result.Scale.X /= scale.X; result.Scale.Y /= scale.Y; result.Scale.Z /= scale.Z;
-            var inverse = Quaternion.Inverse(AnimationNative.Rotation(reference));
-            AnimationNative.SetRotation(&result, Quaternion.Normalize(hint == 2 ? inverse * AnimationNative.Rotation(pose) : AnimationNative.Rotation(pose) * inverse));
-            return result;
-        }
+            => AnimationSkeleton.Transform(AnimationRetarget.Encode(AnimationSkeleton.Transform(pose), AnimationSkeleton.Transform(reference), hint));
         public void BeginValidation(byte[] bytes)
         {
             verification = new AnimationNative.Document(bytes);
@@ -240,7 +263,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                     throw new InvalidDataException("Baking changed extracted motion.");
             }
             var binding = verification.Container->Bindings[clip.BindingIndex].ptr;
-            if (AnimationNative.MetadataFingerprint(binding) != AnimationNative.MetadataFingerprint(originalBinding))
+            if (AnimationNative.MetadataFingerprint(binding) != AnimationNative.MetadataFingerprint(outputMetadata))
                 throw new InvalidDataException("Baking changed annotations or binding metadata.");
             if (binding->Animation.ptr->Duration != duration || binding->BlendHint.Storage != originalBinding->BlendHint.Storage ||
                 binding->Animation.ptr->NumberOfFloatTracks != originalAnimation->NumberOfFloatTracks ||
@@ -269,6 +292,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         {
             verifySampler?.Dispose(); verifySampler = null; verification?.Dispose(); verification = null;
             rawSampler?.Dispose(); rawSampler = null; sampler?.Dispose(); sampler = null;
+            targetSampler?.Dispose(); targetSampler = null;
             if (replaced && doc != null)
             {
                 doc.Container->Animations[clip.BindingIndex] = new hkRefPtr<hkaAnimation> { ptr = originalAnimation };

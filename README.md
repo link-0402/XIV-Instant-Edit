@@ -1,27 +1,24 @@
 # XIV Instant Edit
 
-# RELEASE VERSION is not fully up-to-date for Penumbra 1.7.1.0 support. I'll get around to update this soon, but it'll take a bit since there are major feature upgrades for this plugin pending and in testing.
+Instant Edit is Final Fantasy XIV Dalamud plugin that serves as a method of instantaneously moving vanilla game or mod resources into editing software and replacing those edited assets back into the game without requiring additional manual user import, export or setup work.
+Model editing uses a Blender add-on to manage model life cycle and allows for exporting of both vanilla as well as modded Penumbra mod model files.
+Additionally, it supports full software-independent texture editing as well as animation editing.
 
-Instant Edit is a combination of in-game Dalamud plugin and Blender addon that allows for an easy and instant exchange of game models between the two (.mdl files through Penumbra as well as vanilla assets).
+Animation skeleton repair resolves the animation's source reference pose from
+installed SKLB files, including source skeletons embedded in Havok mappers, then
+retargets it to the character's live skeleton. Predictive startup clips can use a
+different embedded source from their uncompressed loops. If several sources fit
+equally well, choose the source variant in the animation editor. A missing source
+reference pose cannot be bypassed with Shift.
 
 ## Requirements
 
 - [XIVLauncher](https://goatcorp.github.io/) with Dalamud enabled
-- [Penumbra](https://github.com/xivdev/Penumbra) 1.7.1.0 or newer
+- [Penumbra](https://github.com/xivdev/Penumbra) 1.7.1.0+
 - [Blender](https://www.blender.org/) 4.5.0+ for model editing
-- A compatible SimpleHeels/LivePose module for animation offset baking
+- (optional) an Image Editing Software of your choice (with TGA format support)
 
 ## Installation
-
-### Install the Blender add-on
-
-1. Open **Edit > Preferences > Get Extensions** in Blender.
-2. Click **Repositories**, click **+**, and choose **Add Remote Repository**.
-3. Add this repository URL:
-
-   `https://raw.githubusercontent.com/link-0402/XIV-Instant-Edit/main/Blender-Addon/blender_repo/index.json`
-4. *Recommended* to tick "Check for Updates on Startup" to receive automatic updates.
-5. Find **XIV Instant Edit** and install it if it hasn't already.
 
 ### Install the Dalamud plugin
 
@@ -32,70 +29,44 @@ Instant Edit is a combination of in-game Dalamud plugin and Blender addon that a
 
 3. Enable the repository, save your settings, and open `/xlplugins`.
 4. Find and install **XIV Instant Edit** under **All Plugins**.
+5. When opened for the first time, run through the guided first-time setup, defining a cache location for temporary files used in exports as well as a Photo Editing software of your choice (optional).
 
-## How to use it
+### Install the Blender add-on
+
+1. Open **Edit > Preferences > Get Extensions** in Blender.
+2. Click **Repositories**, click **+**, and choose **Add Remote Repository**.
+3. Add this repository URL:
+
+   `https://raw.githubusercontent.com/link-0402/XIV-Instant-Edit/main/Blender-Addon/blender_repo/index.json`
+4. It is **Strongly recommended** to tick **Check for Updates on Startup** to receive automatic updates. 
+   An out-of-sync version of the plugin and Blender add-on may lead to unexpected behavior and is not supported.
+   Blender's automatic extension updater can be unreliable, please verify the versions match and are up-to-date before submitting issues.
+5. Find **XIV Instant Edit** in the list and install it.
+
+
+## How to: Model Editing
 
 1. Type /ie to open the plugin interface ingame. Click Refresh character list.
-2. Start Blender. Verify The plugin shows Blender as "Online".
-3. Verify import options, then click "Edit" on the model you want to import to Blender.
-4. Do whatever you wanna do with the model in Blender.
-5. Pick an export context from the list
-   - In-place overwrites the exact model that you imported.
-   - New Group sets up a new option group in the mod you imported from and automatically configures the paths for you.
-   - (Existing group) creates a new option in an existing option group.
-   - (Option in existing group) overwrites the model file that is mapped to this option.
-   - Create Mashup creates a new mod or group in an existing mod containing the combined model + all required textures and materials. Only visible with 2+ mods imported into the scene, otherwise switches to "Create as new mod".
+2. Start Blender. Verify the plugin shows Blender as "Online".
+3. Verify import options both in-game and inside the add-on, then click "Edit" on the model you want to import to Blender.
+4. Edit the model as you normally would.
+5. Pick the desired export context from the list:
+   - "In-place" overwrites the exact model that you imported. This is the default export location.
+   - "New Group" sets up a new option group in the mod you imported from and automatically configures the paths for you. Define the new group and option names in the inputs below.
+   - (Existing group) creates a new option in an existing option group. Define the new option name in the inputs below.
+   - (Option within existing group) overwrites the model file that is mapped to this option.
+   - "Create Mashup" creates a new mod or group in an existing mod containing the combined model + all required textures and materials. Only visible with 2+ mods imported into and visible in the scene, otherwise switches to "Create as new mod".
    The context dropdown controls which mod structure is being shown.
-6. Hit export. Immediately see the result ingame.
-## Additional notes
+6. Press "Quick Export". You'll immediately see the results updated in-game (if the model is currently used on your character).
 
-### Animation offset baking (development builds)
+## How to: Texture Editing
 
-The **Animations** tab captures the local player's emotes and idles together with
-their LivePose adjustments. Select a playing or recent clip, review its source
-and skeleton, choose bones and Position/Rotation/Scale components, then select
-**Create new mod** or **Replace in-place** and click **Edit animation**. The
-selection stays fixed while playback continues; **Refresh capture** explicitly
-updates its pose snapshot. The latest 50 distinct clips are retained until logout
-or character change.
-
-Only the selected clip is edited by default. **Also edit startup** appears when
-one startup can be identified from game-data relationships. Native baking runs
-inside the plugin, including LivePose's CCD and two-joint IK; Blender, VFXEditor,
-and XAT are not runtime dependencies for this tab.
-
-New mods collect supported animation and effect dependencies through the captured
-player collection. Missing assets, ambiguous variants, or unsupported dynamic
-records block packaging with an explanation. In-place output requires a writable
-registered Penumbra PAP source and uses managed backups. Successful output is
-activated automatically, and selected live components are cleared only when
-their captured state still matches. Changes made while baking are retained.
-
-**Recovery** provides **Restore live offsets** and **Undo edit** across plugin
-restarts. Restoring offsets keeps the baked animation active; undo restores the
-original files or disables the created mod before restoring compatible offsets.
-Recovery refuses to overwrite newer work. PAP backups use the existing 30-day
-retention. Play an eligible idle on the same character and collection when
-recovering after a restart.
-
-This implementation still requires the [live-game animation acceptance
-checks](Tests/AnimationEditing.md), particularly native ABI/IK parity and replay
-with source mods disabled. Distribution archives remain unchanged pending those
-checks. General keyframe editing and movement/combat or separate weapon/companion
-rig editing are outside this version.
-
-### Texture editing
-
-1. Open XIV Instant Edit Settings and enter the full path to your texture editor
-   executable, such as `Photoshop.exe`.
-2. Set the shared cache base directory in XIV Instant Edit Settings. Open `/ie`
-   with the updated Blender addon running once so the plugin can synchronize that
-   directory to Blender; Blender can then be closed for texture editing.
+1. Type /ie to open the plugin interface ingame. Click Refresh character list.
 3. Select **Textures** in **On Screen** or **Mod Browser**, then **Edit texture**.
    For vanilla textures, enable **Include Vanilla** and enter a new mod name.
-4. Edit the opened TGA, which keeps the original texture filename (for example,
-   `c0101e0001_top_d.tga`), and save that same file as **32-bit TGA with an 8-bit
-   alpha channel**. Uncompressed and RLE TGA saves are supported. Keep the original
+4. Edit the opened TGA, and save that same file as **32-bit TGA with an 8-bit
+   alpha channel**. Usually, simply hitting the save shortcut (for example Ctrl+S) is sufficient.
+   Uncompressed and RLE TGA saves are supported. Keep the original
    dimensions. Layered documents need a flattened TGA copy saved over the working
    file.
 5. After the save settles, Instant Edit converts it to the original TEX format,
@@ -103,39 +74,10 @@ rig editing are outside this version.
    actor and the local player/owned entities. A vanilla override is created and
    enabled in the captured collection on the first changed save.
 
-The **Texture Edits** tab shows each working path, destination, and save status,
-with controls to open the editor/folder, pause/resume, retry, restore the previous
-backup, or discard the session. Restoration pauses the session and retains your
-working image. Restarted sessions begin paused. A source-file or mapping conflict
-also pauses the session: retain your working image and reopen the texture from
-the browser to start from its current source. **Discard** deletes the session's
-entire working directory, including any editing documents you saved there.
 
-Texture working directories live under `texture-edits/<session-id>` in the
-synchronized cache. **Automatic cache cleanup** is controlled from the in-game
-plugin settings and applies to model cache jobs and paused texture sessions older
-than 24 hours. Sessions with unsaved TGA changes are retained. Changing the cache
-directory in XIV Instant Edit Settings affects new sessions; existing sessions
-retain their paths. Managed TEX backups use the plugin's existing backup storage
-and 30-day retention.
+## Additional notes
 
-Supported originals are ordinary 2D TEX textures in BC1, BC3, BC4, BC5, BC7, or
-BGRA32, up to 8192 × 8192. The plugin uses Penumbra's conversion API and explicitly
-selects the original format; saving a TGA cannot silently turn a BC7 texture into
-an uncompressed TEX. BC recompression is lossy, but the working TGA remains
-uncompressed or losslessly RLE-compressed, and unchanged pixels skip encoding.
-Mipmapped textures regenerate a complete chain capped at 13 levels; textures
-without mipmaps remain single-level. Unusual formats, arrays, cubes, volumes,
-resizing, DDS/PNG working images, and existing-option destinations for vanilla
-textures are not supported in this first version.
-
-Textures can be shared: all references to the overwritten mod file change.
-Channel data is passed through without intentional color correction,
-premultiplication, or normal-map reconstruction. Preserve all channels in your
-editor, including RGB beneath transparent pixels. See the [manual texture
-acceptance checks](Tests/TextureEditing.md) for Photoshop and live-game validation.
-
-The Blender plugin manages it's mappings to mods via the automatically created "Instant Edit [context_id]" collections. To ensure the addon works properly, do not move, rename, delete or otherwise edit them until you exported the model you were working on. You can easily remove an old context by removing the collection along with it's context afterwards, should you wish to continue other work in the same scene.
+The Blender plugin manages it's mappings to mods via the automatically created "Instant Edit [context_id]" collections. To ensure the addon works properly, do not move, rename, delete or otherwise edit these collections until you exported the model you were working on. Hiding them from the viewport removes the context temporarily as well. You can then easily remove an old context by simply removing it's collection, should you wish to continue other work in the same scene.
 
 ### Main Features
 Main Features
@@ -144,6 +86,7 @@ Main Features
 - Instant creation of mashups. The plugin automatically sets up all required textures, materials and paths for you.
 - Seamlessly integrates into any existing Blender scene, independent of body, devkit, etc.
 - Simple Importer / Exporter for general FBX and MDL files with various QoL functions and automations optimized for FFXIV workflows
+- One-click import and export for textures
 
 ### Material preview
 
@@ -159,7 +102,7 @@ Making changes to them in Blender will not affect the exported model.
 ## Contributing
 
 Bug reports and feature idea submissions are welcome.
-If you'd like to contribute anything, see [CONTRIBUTING.md](CONTRIBUTING.md) for setup, testing, and submission guidance.
+If you'd like to contribute to this project, see [CONTRIBUTING.md](CONTRIBUTING.md) for setup, testing, and submission guidance.
 
 ## License
 

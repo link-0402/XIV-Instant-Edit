@@ -5,6 +5,14 @@ namespace InstantEdit.Services;
 /// <summary>Shared normalization and containment rules for plugin-controlled paths.</summary>
 internal static class PathRules
 {
+    public static bool SamePhysicalPath(string? left, string? right)
+    {
+        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right) ||
+            !Path.IsPathFullyQualified(left) || !Path.IsPathFullyQualified(right)) return false;
+        return string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)), StringComparison.OrdinalIgnoreCase);
+    }
+
     public static bool IsPathWithin(string path, string root)
     {
         var fullPath = Path.GetFullPath(path);

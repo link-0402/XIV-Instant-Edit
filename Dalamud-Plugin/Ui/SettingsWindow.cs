@@ -63,7 +63,7 @@ public sealed class SettingsWindow
         ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Cache");
         var cacheDirectory = _config.TextureCacheDirectory;
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputTextWithHint("Cache directory", "Base folder shared by the plugin and Blender", ref cacheDirectory, 4096))
+        if (ImGui.InputTextWithHint("Cache directory", "Base folder shared by the in-game plugin and Blender add-on", ref cacheDirectory, 4096))
         {
             _config.TextureCacheDirectory = cacheDirectory.Trim().Trim('"');
             Save();

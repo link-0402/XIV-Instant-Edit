@@ -744,6 +744,29 @@ def run_staging_isolation_regression(addon) -> None:
             "redrawMode" not in redraw_payload,
             "export envelope leaves redraw targeting to the Dalamud plugin",
         )
+        instant_props.create_attribute_groups = True
+        attribute_payload = ops.build_export_payload(
+            SimpleNamespace(
+                plugin_instance_id="plugin-instance",
+                context_id="context-id",
+                capability="capability",
+            ),
+            "attribute-export-id",
+            Path(tempfile.gettempdir()) / "attribute-groups-test.mdl",
+            1,
+            "0" * 64,
+            instant_props,
+            None,
+            attribute_tags=("atr_tv_a", "atrx_cape"),
+            attribute_masks={"atr_tv_a": 1},
+        )
+        instant_props.create_attribute_groups = False
+        _require(
+            attribute_payload["createAttributeGroups"] and
+            attribute_payload["attributeTags"] == ["atr_tv_a", "atrx_cape"] and
+            attribute_payload["attributeMasks"] == {"atr_tv_a": 1},
+            "attribute group settings are carried in the export envelope",
+        )
 
         class ReceiptResponse:
             def __init__(self, status, payload):
@@ -1024,6 +1047,12 @@ def run_staging_isolation_regression(addon) -> None:
                 instant_props.variant_target == variant_option_id,
                 "post-export target refresh selects the newly created option",
             )
+            refresh_contexts.clear()
+            _require(
+                ops.refresh_variant_targets_after_operation(bpy.context) is None and
+                refresh_contexts == ["explicit-context"],
+                "post-operation target refresh reloads the selected Context",
+            )
             selected_ref = ops.export_destination_context(bpy.context)
             _require(
                 ops.export_objects_for_scope(selected_ref, "CURRENT_COLLECTION") == [explicit_context_mesh],
@@ -1061,6 +1090,9 @@ def run_staging_isolation_regression(addon) -> None:
         original_set_directory = bpy.context.scene.xiv_ie_settings.simple_import_set_export_directory
         bpy.context.scene.xiv_ie_settings.simple_import_set_export_directory = True
         bpy.context.scene.xiv_ie_settings.export_directory = "before-instant-import"
+        original_variant_request = ops._request_variant_targets
+        import_refresh_start = len(refresh_contexts)
+        ops._request_variant_targets = fake_variant_request
 
         try:
             result = bpy.ops.xiv_ie.instant_import(
@@ -1088,8 +1120,13 @@ def run_staging_isolation_regression(addon) -> None:
         finally:
             ops.ModelImport.from_file = original_import
             ops.XIVModel.from_file = original_model_from_file
+            ops._request_variant_targets = original_variant_request
 
         _require(result == {"FINISHED"}, "versioned XIV Instant Edit request completes")
+        _require(
+            refresh_contexts[import_refresh_start:] == ["explicit-context"],
+            "successful Instant Import automatically refreshes the selected target list",
+        )
         _require(
             ntpath.basename(bpy.context.scene.xiv_ie_settings.export_directory) == "models",
             "mod-backed Instant Edit import uses the authorized model parent for Simple Export",

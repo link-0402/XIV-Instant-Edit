@@ -125,6 +125,15 @@ class XIVIEInstantEditProps(PropertyGroup):
         ],
     )  # type: ignore
 
+    create_attribute_groups: BoolProperty(
+        name="Create Penumbra Attribute Groups",
+        description=(
+            "Create or update Penumbra IMC/ATR groups from the model's enabled "
+            "part attributes during Quick Export"
+        ),
+        default=False,
+    )  # type: ignore
+
     export_excluded_mesh: PointerProperty(
         type=Object,
         name="Excluded Mesh",

@@ -23,11 +23,9 @@ internal static class ChangelogCatalog
     public static IReadOnlyList<ChangelogRelease> Releases { get; } =
     [
         Release("1.2.0",
-            Highlight("Added texture editing with in-game selection, managed working files, TGA editor handoff, and safe write-back to Penumbra mods."),
-            Entry("Texture sessions now keep working copies, backups, cache ownership, and recovery information so an interrupted edit can be resumed safely.", 1),
-            Highlight("Added animation capture and editing workflows for inspecting recent clips and applying supported pose changes."),
-            Entry("Animation capture keeps a bounded history and exposes source paths, skeleton information, and captured offsets in the plugin UI.", 1),
-            Highlight("Added armature-combine support for importing model parts into an existing Blender skeleton."),
+            Highlight("Added texture editing feature with compatability with various photo editing software (requires 32-bit TGA support)."),
+            Highlight("Added animation editing workflows for exporting and importing animations to and from Blender as well as automatically rebaking animations with current LivePose adjustments (to regain physics interactions and smooth transitions)."),
+            Highlight("Added armature-combine support."),
             Entry("Improved export handoff, diagnostics, path handling, and validation across the plugin and Blender add-on.", 0),
             Important("Update both the Dalamud plugin and the XIV Instant Edit Blender add-on together when using the new texture or animation features.")),
         Release("1.1.7",

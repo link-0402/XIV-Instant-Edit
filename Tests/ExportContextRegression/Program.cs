@@ -624,6 +624,15 @@ try
             manifestPersistence.Single().ResourceManifest?.Materials.Count == 1 &&
             manifestPersistence.Single().ResourceManifestStatus == "ready",
         "new contexts persist an exact mashup dependency manifest");
+    var stableModId = Guid.NewGuid();
+    var stableContext = manifestRegistry.CreateContext(
+        effectiveHairPath, 7, "registered-mod", originalTarget, "Registered Mod", 42428,
+        originalRoot, relative, sourceModStableId: stableModId);
+    var stableContextJson = JsonNode.Parse(JsonSerializer.Serialize(stableContext))!.AsObject();
+    Require(stableContext.SourceModStableId == stableModId &&
+            manifestPersistence.Single(item => item.ContextId == stableContext.ContextId).SourceModStableId == stableModId &&
+            stableContextJson["sourceModStableId"]?.GetValue<Guid>() == stableModId,
+        "Penumbra stable mod identities persist through contexts and the import protocol");
     var sourceCollectionId = Guid.NewGuid();
     var collectionManifestContext = manifestRegistry.CreateContext(
         effectiveHairPath, 7, "registered-mod", originalTarget, "Registered Mod", 42428,
@@ -1651,6 +1660,8 @@ try
     Require(stagedVanillaRelative == "Files/" + vanillaConsumer &&
             stagedVanillaMeta["FileVersion"]!.GetValue<int>() == 4 &&
             Guid.TryParse(stagedVanillaMeta["Identifier"]!.GetValue<string>(), out _) &&
+            PenumbraService.ReadModStableIdentifierForRegression(vanillaStageRoot) ==
+                Guid.Parse(stagedVanillaMeta["Identifier"]!.GetValue<string>()) &&
             DateTimeOffset.TryParse(stagedVanillaMeta["LastWrite"]!.GetValue<string>(), out _) &&
             stagedVanillaMeta["Author"]!.GetValue<string>() == "XIV Instant Edit" &&
             stagedVanillaMeta["Groups"]!.AsArray().Count == 0 &&

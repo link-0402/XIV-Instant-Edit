@@ -29,6 +29,7 @@ internal unsafe sealed class AnimationNative
     private readonly delegate* unmanaged<void*, byte*, hkArray<CcdConstraint>*, hkaPose*, byte*> ccdSolve;
     private readonly delegate* unmanaged<byte*, TwoJointSetup*, hkaPose*, byte*> twoJointSolve;
     public string? UnavailableReason { get; }
+    public string? IkUnavailableReason { get; }
 
     public AnimationNative(ISigScanner scanner)
     {
@@ -38,14 +39,19 @@ internal unsafe sealed class AnimationNative
             interleavedVtbl = relative + 4 + Marshal.ReadInt32(relative);
             compress = (delegate* unmanaged<Spline*, Interleaved*, Spline*>)scanner.ScanText(
                 "48 89 5C 24 ?? 57 48 83 EC 40 48 8B DA 48 8B F9 E8 ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ??");
+            if (interleavedVtbl == 0 || compress == null) throw new InvalidOperationException("An animation runtime signature was not resolved.");
+        }
+        catch (Exception e) { UnavailableReason = "This game build is not compatible with animation baking: " + e.Message; }
+        try
+        {
             ccdCtor = (delegate* unmanaged<void*, int, float, void>)scanner.ScanText("E8 ?? ?? ?? ?? 48 8D 43 ?? 48 C7 43");
             ccdSolve = (delegate* unmanaged<void*, byte*, hkArray<CcdConstraint>*, hkaPose*, byte*>)scanner.ScanText(
                 "E8 ?? ?? ?? ?? 8B 44 24 ?? 48 8B 5C 24 ?? 48 3B 5C 24");
             twoJointSolve = (delegate* unmanaged<byte*, TwoJointSetup*, hkaPose*, byte*>)scanner.ScanText("E8 ?? ?? ?? ?? 0F 28 55 ?? 41 0F 28 D8");
-            if (interleavedVtbl == 0 || compress == null || ccdCtor == null || ccdSolve == null || twoJointSolve == null)
+            if (ccdCtor == null || ccdSolve == null || twoJointSolve == null)
                 throw new InvalidOperationException("An animation runtime signature was not resolved.");
         }
-        catch (Exception e) { UnavailableReason = "This game build is not compatible with animation baking: " + e.Message; }
+        catch (Exception e) { IkUnavailableReason = "IK is unavailable for this game build: " + e.Message; }
     }
 
     public void EnsureAvailable()
@@ -66,6 +72,26 @@ internal unsafe sealed class AnimationNative
         public hkArray<byte> Data;
         public int Endian;
         public uint Padding2;
+    }
+    // hkaPredictiveCompressedAnimation (Havok 2013, x64). The skeleton and
+    // decompression cache are runtime-only and must not participate in identity.
+    // Layout reference: projectanarchy/Source/Animation/Animation/Animation/
+    // PredictiveCompressed/hkaPredictiveCompressedAnimation.h
+    [StructLayout(LayoutKind.Explicit, Size = 0xC0)]
+    internal struct Predictive
+    {
+        [FieldOffset(0x00)] public hkaAnimation Animation;
+        [FieldOffset(0x38)] public hkArray<byte> CompressedData;
+        [FieldOffset(0x48)] public hkArray<ushort> IntData;
+        [FieldOffset(0x58)] public fixed int IntArrayOffsets[9];
+        [FieldOffset(0x80)] public hkArray<float> FloatData;
+        [FieldOffset(0x90)] public fixed int FloatArrayOffsets[3];
+        [FieldOffset(0x9C)] public int NumBones;
+        [FieldOffset(0xA0)] public int NumFloatSlots;
+        [FieldOffset(0xA4)] public int NumFrames;
+        [FieldOffset(0xA8)] public int FirstFloatBlockScaleAndOffsetIndex;
+        [FieldOffset(0xB0)] public hkaSkeleton* Skeleton;
+        [FieldOffset(0xB8)] public int MaxCompressedBytesPerFrame;
     }
     [StructLayout(LayoutKind.Explicit, Size = 0x20)]
     private struct CcdConstraint
@@ -118,6 +144,19 @@ internal unsafe sealed class AnimationNative
             values.CopyTo(new Span<T>(array.Data, array.Length));
             return array;
         }
+        public hkaAnimationBinding* BorrowBinding(hkaAnimationBinding* source)
+        {
+            if (source == null) throw new InvalidDataException("Missing source animation binding.");
+            var binding = Alloc<hkaAnimationBinding>();
+            *binding = *source;
+            // Havok stores the reference count in the LOW ushort and allocation
+            // size/flags in the HIGH ushort. A zero high word disables automatic
+            // reference management for externally owned objects. 0x00010000
+            // means count=0, size=1 and lets a control release this arena pointer
+            // into Havok's allocator, also destroying borrowed source channels.
+            binding->MemSizeAndRefCount = 0;
+            return binding;
+        }
         public void Dispose() { foreach (var a in allocations) NativeMemory.AlignedFree((void*)a); allocations.Clear(); }
     }
 
@@ -143,9 +182,10 @@ internal unsafe sealed class AnimationNative
                 Root = (hkRootLevelContainer*)resource->GetContentsPointer("hkRootLevelContainer", registry->GetTypeInfoRegistry());
                 if (Root == null) throw new InvalidDataException("Missing Havok root container.");
                 Container = (hkaAnimationContainer*)Root->findObjectByName("hkaAnimationContainer", null);
-                if (Container == null || Container->Bindings.Length is < 0 or > 4096 || Container->Animations.Length is < 0 or > 4096 ||
+                if (Container == null) throw new InvalidDataException("The Havok resource has no named hkaAnimationContainer.");
+                if (Container->Bindings.Length is < 0 or > 4096 || Container->Animations.Length is < 0 or > 4096 ||
                     Container->Skeletons.Length is < 0 or > 16)
-                    throw new InvalidDataException("Invalid Havok animation container.");
+                    throw new InvalidDataException($"Invalid Havok animation container (bindings={Container->Bindings.Length}, animations={Container->Animations.Length}, skeletons={Container->Skeletons.Length}).");
                 ValidateArray(Container->Bindings, 4096, "animation bindings");
                 ValidateArray(Container->Animations, 4096, "animations");
                 ValidateArray(Container->Skeletons, 16, "skeletons");
@@ -206,6 +246,17 @@ internal unsafe sealed class AnimationNative
         }
         else if (a->Type == hkaAnimation.AnimationType.InterleavedAnimation)
         { Append(((Interleaved*)a)->Transforms); Append(((Interleaved*)a)->Floats); }
+        else if (a->Type == hkaAnimation.AnimationType.PredictiveCompressedAnimation)
+        {
+            var predictive = (Predictive*)a;
+            Append(predictive->CompressedData); Append(predictive->IntData); Append(predictive->FloatData);
+            hash.AppendData(new ReadOnlySpan<byte>(predictive->IntArrayOffsets, 9 * sizeof(int)));
+            hash.AppendData(new ReadOnlySpan<byte>(predictive->FloatArrayOffsets, 3 * sizeof(int)));
+            hash.AppendData(BitConverter.GetBytes(predictive->NumBones));
+            hash.AppendData(BitConverter.GetBytes(predictive->NumFloatSlots));
+            hash.AppendData(BitConverter.GetBytes(predictive->NumFrames));
+            hash.AppendData(BitConverter.GetBytes(predictive->FirstFloatBlockScaleAndOffsetIndex));
+        }
         else throw new InvalidDataException($"Unsupported animation encoding: {a->Type}.");
         return Convert.ToHexString(hash.GetHashAndReset());
         void Append<T>(hkArray<T> array) where T : unmanaged
@@ -258,6 +309,7 @@ internal unsafe sealed class AnimationNative
     }
     private static void ValidateCounts(hkaAnimation* a)
     {
+        if (a == null) throw new InvalidDataException("Missing animation.");
         if (!float.IsFinite(a->Duration) || a->Duration < 0 || a->Duration > 3600 ||
             a->NumberOfTransformTracks is < 0 or > 4096 || a->NumberOfFloatTracks is < 0 or > 4096)
             throw new InvalidDataException("Invalid animation track counts or duration.");
@@ -291,7 +343,46 @@ internal unsafe sealed class AnimationNative
                 value->Data.Length is < 1 or > AnimationPap.MaxFileSize || !float.IsFinite(value->FrameDuration) || value->FrameDuration < 0)
                 throw new InvalidDataException("Invalid spline frame/block data.");
         }
+        else if (a->Type == hkaAnimation.AnimationType.PredictiveCompressedAnimation)
+        {
+            var value = (Predictive*)a;
+            ValidateArray(value->CompressedData, AnimationPap.MaxFileSize, "predictive compressed data");
+            ValidateArray(value->IntData, AnimationPap.MaxFileSize / sizeof(ushort), "predictive integer data");
+            ValidateArray(value->FloatData, AnimationPap.MaxFileSize / sizeof(float), "predictive float data");
+            if (value->IntData.Length < 8 || value->FloatData.Length < 8 ||
+                value->NumFrames is < 1 or > 216001 || value->NumBones is < 0 or > 4096 ||
+                value->NumFloatSlots is < 0 or > 4096 || value->FirstFloatBlockScaleAndOffsetIndex < 0 ||
+                value->FirstFloatBlockScaleAndOffsetIndex > value->FloatData.Length)
+                throw new InvalidDataException("Invalid predictive frame or channel data.");
+            // Both tables end with eight padding elements for the native decoder.
+            ValidateOffsets(new ReadOnlySpan<int>(value->IntArrayOffsets, 9), value->IntData.Length - 8);
+            ValidateOffsets(new ReadOnlySpan<int>(value->FloatArrayOffsets, 3), value->FloatData.Length - 8);
+        }
         else throw new InvalidDataException($"Unsupported animation encoding: {a->Type}.");
+    }
+
+    private static void ValidateOffsets(ReadOnlySpan<int> offsets, int length)
+    {
+        var previous = 0;
+        foreach (var offset in offsets)
+        {
+            if (offset < previous || offset > length) throw new InvalidDataException("Invalid predictive data offsets.");
+            previous = offset;
+        }
+    }
+
+    internal static int SourceFrameCount(hkaAnimation* animation)
+    {
+        ValidateCounts(animation);
+        return animation->Type switch
+        {
+            hkaAnimation.AnimationType.SplineCompressedAnimation => ((Spline*)animation)->NumFrames,
+            hkaAnimation.AnimationType.PredictiveCompressedAnimation => ((Predictive*)animation)->NumFrames,
+            hkaAnimation.AnimationType.InterleavedAnimation => Math.Max(
+                ((Interleaved*)animation)->Transforms.Length / Math.Max(1, animation->NumberOfTransformTracks),
+                ((Interleaved*)animation)->Floats.Length / Math.Max(1, animation->NumberOfFloatTracks)),
+            _ => throw new InvalidDataException($"Unsupported animation encoding: {animation->Type}."),
+        };
     }
 
     internal static void ValidateArray<T>(hkArray<T> array, int maximum, string name) where T : unmanaged
@@ -341,9 +432,27 @@ internal unsafe sealed class AnimationNative
         public void Sample(float time)
         {
             control->LocalTime = time;
-            animated->sampleAndCombineAnimations(Transforms, Floats);
+            // Predictive channels can refer to the skeleton's reference pose.
+            // Borrow it only for this call: samplers can share the animation and
+            // loaded PAPs do not serialize this runtime pointer.
+            var predictive = control->Binding.ptr->Animation.ptr->Type == hkaAnimation.AnimationType.PredictiveCompressedAnimation
+                ? (Predictive*)control->Binding.ptr->Animation.ptr : null;
+            var previousSkeleton = predictive == null ? null : predictive->Skeleton;
+            try
+            {
+                if (predictive != null) predictive->Skeleton = Skeleton;
+                animated->sampleAndCombineAnimations(Transforms, Floats);
+            }
+            finally { if (predictive != null) predictive->Skeleton = previousSkeleton; }
             var values = new hkArray<hkQsTransformf> { Data = Transforms, Length = BoneCount,
                 CapacityAndFlags = unchecked((int)0x80000000) | BoneCount };
+            Pose->SetPoseLocalSpace(&values);
+        }
+        public void SetPose(ReadOnlySpan<hkQsTransformf> transforms)
+        {
+            if (transforms.Length != BoneCount) throw new InvalidDataException("Pose does not fit target skeleton.");
+            transforms.CopyTo(new Span<hkQsTransformf>(Transforms, BoneCount));
+            var values = new hkArray<hkQsTransformf> { Data = Transforms, Length = BoneCount, CapacityAndFlags = unchecked((int)0x80000000) | BoneCount };
             Pose->SetPoseLocalSpace(&values);
         }
         public static void Validate(hkaSkeleton* s, hkaAnimationBinding* b)
@@ -354,6 +463,13 @@ internal unsafe sealed class AnimationNative
                 s->ParentIndices.Length != s->Bones.Length || s->ReferencePose.Length != s->Bones.Length)
                 throw new InvalidDataException("Invalid animation skeleton.");
             ValidateCounts(b->Animation.ptr);
+            if (b->Animation.ptr->Type == hkaAnimation.AnimationType.PredictiveCompressedAnimation)
+            {
+                var predictive = (Predictive*)b->Animation.ptr;
+                if (predictive->NumBones != s->Bones.Length || predictive->NumFloatSlots != s->FloatSlots.Length)
+                    throw new InvalidDataException($"Predictive animation requires {predictive->NumBones} reference bones and {predictive->NumFloatSlots} reference floats; " +
+                        $"the selected source has {s->Bones.Length} bones and {s->FloatSlots.Length} floats. Rescan skeletons to find a compatible source before retargeting.");
+            }
             ValidateArray(s->Bones, 4096, "bones");
             ValidateArray(s->ParentIndices, 4096, "parents");
             ValidateArray(s->ReferencePose, 4096, "reference transforms");
@@ -413,6 +529,7 @@ internal unsafe sealed class AnimationNative
             {
                 var s = AnimationPoseRules.Filter(original, components);
                 AnimationPoseRules.Validate(s);
+                if (s.Ik.Enabled && IkUnavailableReason != null) throw new InvalidOperationException(IkUnavailableReason);
                 var pose = sampler.Pose;
                 var model = pose->AccessBoneModelSpace(i, Prop(s.Propagate, PoseComponents.Position));
                 var position = Translation(*model) + s.Position;
@@ -496,8 +613,8 @@ internal unsafe sealed class AnimationNative
     {
         animation->Animation = *original;
         *(nint*)animation = interleavedVtbl;
-        // Keep a reference owned by the arena so native consumers cannot delete arena allocations.
-        animation->Animation.MemSizeAndRefCount = 0x00010000;
+        // Arena storage and borrowed metadata must not be released by Havok.
+        animation->Animation.MemSizeAndRefCount = 0;
         animation->Animation.Type = hkaAnimation.AnimationType.InterleavedAnimation;
     }
 }
