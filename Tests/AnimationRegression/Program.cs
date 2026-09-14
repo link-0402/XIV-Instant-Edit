@@ -19,6 +19,7 @@ void Reject(Action action, string name)
 }
 static void Int(byte[] bytes, int at, int value) => BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(at), value);
 SkeletonRepairFixture.Run(Check, Reject);
+ChartSkeletonFixture.Run(Check);
 EmbeddedSkeletonFixture.Run(Check, Reject);
 if (args is ["--skeleton-repair-xml", var animationXml, var skeletonXml])
     EmbeddedSkeletonFixture.InspectXml(animationXml, skeletonXml, Check);
@@ -107,6 +108,19 @@ Check(AnimationPap.SkeletonHavok(sklb).Length == 16, "legacy SKLB locates its Ha
 Check(AnimationPoseRules.SampleCount(1.25f, 12) == 45 && AnimationPoseRules.SampleCount(1, 121) == 121 &&
       AnimationPoseRules.SampleCount(0, 0) == 2, "sampling includes endpoints and retains higher source density");
 Reject(() => AnimationPoseRules.SampleCount(float.NaN, 0), "non-finite duration cannot reach native sampling");
+Check(AnimationPoseRules.ValidStartupDuration(0) && AnimationPoseRules.ValidStartupDuration(2) &&
+      !AnimationPoseRules.ValidStartupDuration(-0.001f) && !AnimationPoseRules.ValidStartupDuration(2.001f) &&
+      !AnimationPoseRules.ValidStartupDuration(float.NaN), "startup duration validation is inclusive and rejects invalid values");
+Check(AnimationPoseRules.StartupSampleCount(0) == 2 && AnimationPoseRules.StartupSampleCount(1) == 31,
+    "zero-duration startup transitions use a repeated immediate endpoint while positive durations use a 30 FPS inclusive grid");
+var startupFrom = new BoneTransform(Vector3.Zero, Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI * 170 / 180), Vector3.One);
+var startupTo = new BoneTransform(new(10, 0, 0), Quaternion.CreateFromAxisAngle(Vector3.UnitY, -MathF.PI * 170 / 180), new(3));
+var startupMid = AnimationPoseRules.Blend(startupFrom, startupTo, 0.5f);
+Check(startupMid.Position == new Vector3(5, 0, 0) && startupMid.Scale == new Vector3(2) &&
+      Math.Abs(1 - Math.Abs(Quaternion.Dot(startupMid.Rotation, Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI)))) < 0.001f &&
+      AnimationPoseRules.BlendFloat(1, 5, 0.5f) == 3 &&
+      AnimationPoseRules.SmoothStep(0) == 0 && AnimationPoseRules.SmoothStep(1) == 1,
+    "startup blending uses smoothstep translation, scale, float, and shortest-path quaternion interpolation");
 
 var ik = new PoseIk(true, 1, true, 0, 0, 2, 1, 0, Vector3.UnitX);
 var first = new PoseStack(new(1, 2, 3), Quaternion.CreateFromAxisAngle(Vector3.UnitY, .6f), new(.1f), PoseComponents.Position, ik);
@@ -158,6 +172,17 @@ Check(AnimationPresentation.ModelName(standing.Clip) == "Female Miqo'te (c0801)"
       AnimationPresentation.BoneName("j_te_l") == "Left Hand (j_te_l)" &&
       AnimationPresentation.BoneName("custom_bone_l") == "Custom Bone Left (custom_bone_l)",
     "animation presentation translates model and known or fallback bone identifiers");
+var sourcePresentation = presentationCandidate with
+{
+    Source = presentationCandidate.Source with
+    {
+        CanonicalModel = "c0101",
+        MappedGamePaths = ["chara/human/c0101/skeleton/base/b0001/skl_c0101b0001.sklb", standing.Clip.SkeletonPath],
+    },
+};
+Check(AnimationPresentation.ModelName(standing.Clip) == "Female Miqo'te (c0801)" &&
+      AnimationPresentation.SourceModelName(sourcePresentation) == "Male Midlander (c0101)",
+    "animation presentation distinguishes the live target model from the mapped source model");
 Check(AnimationPresentation.DefaultModName(standing with { Sources = [resource with { GamePath = standing.Clip.GamePath, ModName = "Paragon" }] }) == "Paragon - Instant Edit" &&
       AnimationPresentation.DefaultModName(capture with { DisplayName = "Joy" }) == "Joy - Instant Edit",
     "animation mod defaults use the source mod or readable game animation name");
@@ -216,6 +241,7 @@ try { save(); throw new Exception("Expected persistence failure"); }
 catch (TargetInvocationException e) when (e.GetBaseException() is IOException)
 { Check(true, "LivePose persistence errors propagate to recovery"); }
 NativeValidationFixture.Run(Check, Reject);
+ObservationPerformanceFixture.Run(Check);
 AnimationMatchingFixture.Run(Check);
 await MotionDependencyFixture.Run(Check, Reject);
 await AnimationActivationFixture.Run(Check, Reject);

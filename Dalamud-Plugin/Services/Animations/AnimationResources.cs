@@ -1,8 +1,50 @@
 using System.Collections.Immutable;
+using System.Text;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 
 namespace InstantEdit.Services.Animations;
+
+internal sealed class AnimationResourceCache
+{
+    private const int MaxEntries = 512;
+    private static readonly TimeSpan Lifetime = TimeSpan.FromSeconds(5);
+    private readonly object sync = new();
+    private readonly Dictionary<string, (AnimationResource Resource, byte[] Bytes, DateTime At)> entries = new(StringComparer.Ordinal);
+
+    public bool TryGet(string gamePath, out (AnimationResource Resource, byte[] Bytes) value)
+    {
+        lock (sync)
+        {
+            if (entries.TryGetValue(gamePath, out var cached) && DateTime.UtcNow - cached.At < Lifetime)
+            {
+                value = (cached.Resource, cached.Bytes);
+                return true;
+            }
+
+            entries.Remove(gamePath);
+        }
+
+        value = default;
+        return false;
+    }
+
+    public void Set(string gamePath, (AnimationResource Resource, byte[] Bytes) value)
+    {
+        lock (sync)
+        {
+            if (entries.Count >= MaxEntries && !entries.ContainsKey(gamePath))
+                entries.Remove(entries.Keys.First());
+            entries[gamePath] = (value.Resource, value.Bytes, DateTime.UtcNow);
+        }
+    }
+
+    public void Clear()
+    {
+        lock (sync)
+            entries.Clear();
+    }
+}
 
 internal sealed class AnimationResources(PenumbraService penumbra, IDataManager data, IFramework framework, IPluginLog log)
 {
@@ -51,9 +93,14 @@ internal sealed class AnimationResources(PenumbraService penumbra, IDataManager 
         }
     }
 
-    public async Task<(AnimationResource Resource, byte[] Bytes)> ReadAsync(Guid collection, string gamePath, CancellationToken token)
+    public Task<(AnimationResource Resource, byte[] Bytes)> ReadAsync(Guid collection, string gamePath, CancellationToken token)
+        => ReadAsync(collection, gamePath, token, null);
+
+    public async Task<(AnimationResource Resource, byte[] Bytes)> ReadAsync(Guid collection, string gamePath,
+        CancellationToken token, AnimationResourceCache? cache)
     {
         token.ThrowIfCancellationRequested();
+        if (cache?.TryGet(gamePath, out var cached) == true) return cached;
         var resolved = await penumbra.ResolveAnimationPathAsync(collection, gamePath);
         byte[] bytes;
         if (Path.IsPathRooted(resolved))
@@ -70,8 +117,21 @@ internal sealed class AnimationResources(PenumbraService penumbra, IDataManager 
             bytes = await Task.Run(() => data.GetFile(resolved)?.Data ?? throw new FileNotFoundException($"Missing game resource: {resolved}"), token);
         }
         var source = await framework.RunOnFrameworkThread(() => sources.AttributionFor(resolved));
-        return (new AnimationResource(gamePath, resolved, AnimationPap.Hash(bytes), source.ModDirectory,
+        var result = (new AnimationResource(gamePath, resolved, AnimationPap.Hash(bytes), source.ModDirectory,
             source.ModRootPath, source.RelativePath, source.ModName), bytes);
+        cache?.Set(gamePath, result);
+        return result;
+    }
+
+    internal static string ResourceMapKey(Dictionary<string, HashSet<string>> paths)
+    {
+        var builder = new StringBuilder();
+        foreach (var pair in paths.OrderBy(p => p.Key, StringComparer.Ordinal))
+        {
+            builder.Append(pair.Key).Append('\0');
+            foreach (var gamePath in pair.Value.Order(StringComparer.Ordinal)) builder.Append(gamePath).Append('\0');
+        }
+        return AnimationPap.Hash(Encoding.UTF8.GetBytes(builder.ToString()));
     }
 
     public async Task CheckAsync(Guid collection, IEnumerable<AnimationResource> expected, CancellationToken token)

@@ -18,6 +18,9 @@ internal sealed class LivePoseAdapter(IDalamudPluginInterface pi, IObjectTable o
 {
     private const BindingFlags Instance = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
     private sealed record Host(Assembly Assembly, object Capability, string Identity);
+    private sealed record HostMetadata(Assembly Assembly, Type EntityManagerType, Type IdType,
+        MethodInfo ServiceLookup, bool ShapeChecked);
+    private HostMetadata? metadata;
     public string? LastError { get; private set; }
 
     public PoseSnapshot Capture()
@@ -133,25 +136,24 @@ internal sealed class LivePoseAdapter(IDalamudPluginInterface pi, IObjectTable o
             var version = pi.GetIpcSubscriber<(int, int)>("LivePose.ApiVersion").InvokeFunc();
             if (version.Item1 != 1) throw new InvalidOperationException($"Unsupported LivePose IPC version {version.Item1}.{version.Item2}.");
             var matches = new List<Host>();
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            var assemblies = metadata is { } cached ? [cached] : AppDomain.CurrentDomain.GetAssemblies()
+                .Select(CreateMetadata).OfType<HostMetadata>().ToArray();
+            foreach (var candidate in assemblies)
             {
-                var module = assembly.GetType("LivePose.LivePose");
-                var entityManager = assembly.GetType("LivePose.Entities.EntityManager");
-                if (module == null || entityManager == null) continue;
-                var method = module.GetMethods(BindingFlags.Public | BindingFlags.Static).SingleOrDefault(m =>
-                    m.Name == "TryGetService" && m.IsGenericMethodDefinition && m.GetParameters().Length == 1);
-                if (method == null) continue;
                 object?[] args = [null];
-                if (method.MakeGenericMethod(entityManager).Invoke(null, args) is not true || args[0] == null) continue;
-                var idType = assembly.GetType("LivePose.Entities.Core.EntityId", true)!;
-                var id = Activator.CreateInstance(idType, $"actor_{player.Address}")!;
-                var entity = FindEntity(args[0]!, idType, id);
+                if (candidate.ServiceLookup.Invoke(null, args) is not true || args[0] == null) continue;
+                var id = Activator.CreateInstance(candidate.IdType, $"actor_{player.Address}")!;
+                var entity = FindEntity(args[0]!, candidate.IdType, id);
                 if (entity == null) continue;
                 var cap = ((IEnumerable)Get(entity, "Capabilities")).Cast<object>().SingleOrDefault(c =>
                     c.GetType().FullName == "LivePose.Capabilities.Posing.SkeletonPosingCapability");
                 if (cap == null) continue;
-                CheckShape(assembly, cap);
-                matches.Add(new Host(assembly, cap, $"livepose-v1:{assembly.ManifestModule.ModuleVersionId:N}"));
+                if (!candidate.ShapeChecked)
+                {
+                    CheckShape(candidate.Assembly, cap);
+                    metadata = candidate with { ShapeChecked = true };
+                }
+                matches.Add(new Host(candidate.Assembly, cap, $"livepose-v1:{candidate.Assembly.ManifestModule.ModuleVersionId:N}"));
             }
             if (matches.Count != 1) throw new InvalidOperationException("A single compatible SimpleHeels LivePose module could not be identified.");
             LastError = null;
@@ -162,6 +164,17 @@ internal sealed class LivePoseAdapter(IDalamudPluginInterface pi, IObjectTable o
             LastError = "LivePose integration unavailable: " + (e.InnerException?.Message ?? e.Message);
             throw new InvalidOperationException(LastError, e);
         }
+    }
+
+    private static HostMetadata? CreateMetadata(Assembly assembly)
+    {
+        var module = assembly.GetType("LivePose.LivePose");
+        var entityManager = assembly.GetType("LivePose.Entities.EntityManager");
+        var idType = assembly.GetType("LivePose.Entities.Core.EntityId");
+        if (module == null || entityManager == null || idType == null) return null;
+        var method = module.GetMethods(BindingFlags.Public | BindingFlags.Static).SingleOrDefault(m =>
+            m.Name == "TryGetService" && m.IsGenericMethodDefinition && m.GetParameters().Length == 1);
+        return method == null ? null : new(assembly, entityManager, idType, method.MakeGenericMethod(entityManager), false);
     }
 
     internal static object? FindEntity(object manager, Type idType, object id)
