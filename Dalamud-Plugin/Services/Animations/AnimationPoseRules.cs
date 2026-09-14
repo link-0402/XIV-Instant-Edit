@@ -6,6 +6,25 @@ namespace InstantEdit.Services.Animations;
 
 internal static class AnimationPoseRules
 {
+    public static bool ValidStartupDuration(float duration) => float.IsFinite(duration) && duration is >= 0 and <= 2;
+
+    public static float SmoothStep(float t) => t * t * (3 - 2 * t);
+
+    public static int StartupSampleCount(float duration) => SampleCount(duration, 2);
+
+    public static float BlendFloat(float from, float to, float t) => from + (to - from) * SmoothStep(t);
+
+    public static BoneTransform Blend(BoneTransform from, BoneTransform to, float t)
+    {
+        var eased = SmoothStep(t);
+        var rotation = to.Rotation;
+        if (Quaternion.Dot(from.Rotation, rotation) < 0)
+            rotation = new(-rotation.X, -rotation.Y, -rotation.Z, -rotation.W);
+        return new(Vector3.Lerp(from.Position, to.Position, eased),
+            Quaternion.Normalize(Quaternion.Slerp(Quaternion.Normalize(from.Rotation), Quaternion.Normalize(rotation), eased)),
+            Vector3.Lerp(from.Scale, to.Scale, eased));
+    }
+
     public static PoseStack Filter(PoseStack stack, PoseComponents components) => stack with
     {
         Position = components.HasFlag(PoseComponents.Position) ? stack.Position : Vector3.Zero,

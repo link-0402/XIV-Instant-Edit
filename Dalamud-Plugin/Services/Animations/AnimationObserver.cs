@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 
@@ -21,11 +22,19 @@ internal sealed class AnimationObserver : IDisposable
     private readonly ConcurrentDictionary<string, string> operationErrors = [];
     private Task matching = Task.CompletedTask;
     private readonly CancellationTokenSource lifetime = new();
+    private readonly RuntimeCaptureCache runtimeCache = new();
+    private readonly AnimationResourceCache resourceCache = new();
+    private readonly ConcurrentDictionary<string, AnimationPap> parsedPaps = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ImmutableHashSet<string>> motionCache = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ImmutableDictionary<int, float>> durations = new(StringComparer.Ordinal);
     private CancellationTokenSource? listening;
     private CancellationTokenSource? observation;
     private volatile bool listeningEnabled;
-    private readonly Dictionary<string, ImmutableDictionary<int, string>> prints = [];
-    private DateTime next;
+    private readonly ConcurrentDictionary<string, ImmutableDictionary<int, string>> prints = new(StringComparer.Ordinal);
+    private RuntimeChangeStamp? lastStamp;
+    private DateTime nextFallback;
+    private Guid resourceCollection;
+    private string? resourceMapKey;
     private Task pending = Task.CompletedTask;
     private ulong actor;
     private int generation;
@@ -49,7 +58,8 @@ internal sealed class AnimationObserver : IDisposable
         listeningEnabled = true;
         skeletons.StartSessionLibrary(lifetime.Token);
         listening = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-        next = DateTime.MinValue;
+        lastStamp = null;
+        nextFallback = DateTime.MinValue;
         framework.Update += Update;
     }
     public void Stop()
@@ -63,39 +73,58 @@ internal sealed class AnimationObserver : IDisposable
         listening?.Cancel();
         listening?.Dispose();
         listening = null;
+        lastStamp = null;
+        runtimeCache.Clear();
+        resourceCache.Clear();
+        parsedPaps.Clear();
+        motionCache.Clear();
+        durations.Clear();
         generation++;
         MarkNotPlaying();
         Status = "Open Instant Edit to observe player animations.";
     }
-    private unsafe ulong ActorId() => objects.LocalPlayer is { } p ?
-        ((FFXIVClientStructs.FFXIV.Client.Game.Character.Character*)p.Address)->ContentId : 0;
     private void Update(IFramework _)
     {
         var listeningToken = listening;
         if (!listeningEnabled || listeningToken is null || listeningToken.IsCancellationRequested) return;
-        var current = ActorId();
+        RuntimeChangeStamp? stamp;
+        try { stamp = AnimationRuntime.CaptureChangeStamp(objects); }
+        catch (Exception e) { log.Debug(e, "Could not capture the animation change stamp."); return; }
+        var current = stamp?.ActorId ?? 0;
         if (current != actor)
         {
             observation?.Cancel();
             actor = current; generation++; history = []; CharacterChanged?.Invoke();
             resolutions.Clear(); manualChoices.Clear(); operationErrors.Clear();
+            runtimeCache.Clear(); resourceCache.Clear(); parsedPaps.Clear(); motionCache.Clear(); durations.Clear();
+            resourceCollection = Guid.Empty; resourceMapKey = null;
         }
         if (current == 0) { Status = "Log in to observe player emotes, idles, and walk cycles."; return; }
-        if (!pending.IsCompleted || DateTime.UtcNow < next) return;
-        next = DateTime.UtcNow.AddMilliseconds(500);
+        var changed = !lastStamp.HasValue || stamp is null || !lastStamp.Value.SameAs(stamp.Value);
+        var now = DateTime.UtcNow;
+        // Leave the last scheduled stamp untouched while work is in flight. If
+        // the player changes during a capture, the next framework tick after
+        // completion will immediately schedule a fresh capture instead of
+        // accidentally treating the change as already observed.
+        if (!pending.IsCompleted) return;
+        if (!changed && now < nextFallback) return;
+        lastStamp = stamp;
+        nextFallback = now.AddMilliseconds(1500);
         observation?.Dispose();
         observation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token, listeningToken.Token);
-        pending = ObserveAsync(generation, observation.Token, listeningToken.Token);
+        pending = ObserveAsync(generation, observation.Token);
     }
 
-    private async Task ObserveAsync(int expectedGeneration, CancellationToken token, CancellationToken listeningToken)
+    private async Task ObserveAsync(int expectedGeneration, CancellationToken token)
     {
+        var observationStarted = Stopwatch.GetTimestamp();
         try
         {
+            var frameworkStarted = Stopwatch.GetTimestamp();
             var pair = await framework.RunOnFrameworkThread(() =>
             {
                 token.ThrowIfCancellationRequested();
-                var runtime = AnimationRuntime.Capture(objects);
+                var runtime = AnimationRuntime.Capture(objects, runtimeCache);
                 string? error = null;
                 PoseSnapshot pose;
                 try
@@ -111,6 +140,9 @@ internal sealed class AnimationObserver : IDisposable
                 }
                 return (Runtime: runtime, Pose: pose, PoseError: error);
             });
+            var frameworkMillis = Stopwatch.GetElapsedTime(frameworkStarted).TotalMilliseconds;
+            if (frameworkMillis >= 2)
+                log.Debug($"Animation observation framework capture took {frameworkMillis:F2} ms.");
             token.ThrowIfCancellationRequested();
             if (pair.Runtime is not { } runtime) { MarkNotPlaying(); Status = "Waiting for an eligible player animation."; return; }
             var active = runtime.Timelines.Distinct().Select(catalog.Find).OfType<AnimationCatalog.Timeline>().ToArray();
@@ -119,11 +151,26 @@ internal sealed class AnimationObserver : IDisposable
             token.ThrowIfCancellationRequested();
             var paths = await penumbra.GetResourcePathsAsync(runtime.ObjectIndex) ?? throw new IOException("Penumbra's player resource snapshot is unavailable.");
             token.ThrowIfCancellationRequested();
+            var mapKey = AnimationResources.ResourceMapKey(paths);
+            var aliases = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var pathMap in paths)
+                aliases[pathMap.Key] = AnimationSkeletonIndex.NormalizeAliases(pathMap.Value);
+            var resourceAliases = aliases.ToImmutable();
+            if (resourceCollection != collection.Id || resourceMapKey != mapKey)
+            {
+                resourceCache.Clear();
+                motionCache.Clear();
+                durations.Clear();
+                resourceCollection = collection.Id;
+                resourceMapKey = mapKey;
+            }
             var gamePaths = paths.Values.SelectMany(p => p).Distinct(StringComparer.Ordinal).ToArray();
             var motionReferences = new Dictionary<ushort, ImmutableHashSet<string>>();
             async Task<ImmutableHashSet<string>> TimelineMotions(AnimationCatalog.Timeline timeline)
             {
                 if (motionReferences.TryGetValue(timeline.Id, out var found)) return found;
+                var motionKey = $"{collection.Id:N}:{mapKey}:{timeline.Id}";
+                if (motionCache.TryGetValue(motionKey, out found)) return motionReferences[timeline.Id] = found;
                 var names = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
                 var pendingPaths = new Queue<string>(); pendingPaths.Enqueue($"chara/action/{timeline.Key}.tmb");
                 var visited = new HashSet<string>(StringComparer.Ordinal);
@@ -132,13 +179,16 @@ internal sealed class AnimationObserver : IDisposable
                     if (!visited.Add(path)) continue;
                     if (visited.Count > 128) throw new InvalidDataException("The active timeline graph exceeds the observation limit.");
                     (AnimationResource Resource, byte[] Bytes) source;
-                    try { source = await resources.ReadAsync(collection.Id, path, token); }
+                    try { source = await resources.ReadAsync(collection.Id, path, token, resourceCache); }
                     catch (FileNotFoundException) when (visited.Count == 1) { break; }
                     foreach (var reference in AnimationDependencies.Read(path, source.Bytes).References)
                         if (reference.Kind == "animation") names.Add(reference.Path);
                         else if (reference.Kind == "timeline") pendingPaths.Enqueue(reference.Path.EndsWith(".tmb", StringComparison.Ordinal) ? reference.Path : $"chara/action/{reference.Path}.tmb");
                 }
-                return motionReferences[timeline.Id] = names.ToImmutable();
+                found = names.ToImmutable();
+                if (motionCache.Count >= 128) motionCache.TryRemove(motionCache.Keys.First(), out _);
+                motionCache[motionKey] = found;
+                return motionReferences[timeline.Id] = found;
             }
             foreach (var timeline in active)
                 try { await TimelineMotions(timeline); }
@@ -154,7 +204,7 @@ internal sealed class AnimationObserver : IDisposable
                 {
                 token.ThrowIfCancellationRequested();
                 (AnimationResource Resource, byte[] Bytes) source;
-                try { source = await resources.ReadAsync(collection.Id, path, token); }
+                try { source = await resources.ReadAsync(collection.Id, path, token, resourceCache); }
                 catch (FileNotFoundException) when (inferredPaths.Contains(path)) { missingPaths.Add(path); continue; }
                 if (!prints.TryGetValue(source.Resource.Hash, out var bindings))
                 {
@@ -162,7 +212,19 @@ internal sealed class AnimationObserver : IDisposable
                     if (prints.Count >= 128) prints.Clear();
                     prints[source.Resource.Hash] = bindings;
                 }
-                candidates.Add(new AnimationPapCandidate(source.Resource, new AnimationPap(source.Bytes), bindings));
+                if (!durations.TryGetValue(source.Resource.Hash, out var bindingDurations))
+                {
+                    bindingDurations = await framework.RunOnTick(() => { token.ThrowIfCancellationRequested(); return AnimationRuntime.InspectPapDurations(source.Bytes); }, delayTicks: 1);
+                    if (durations.Count >= 128) durations.TryRemove(durations.Keys.First(), out _);
+                    durations[source.Resource.Hash] = bindingDurations;
+                }
+                if (!parsedPaps.TryGetValue(source.Resource.Hash, out var parsed))
+                {
+                    parsed = new AnimationPap(source.Bytes);
+                    if (parsedPaps.Count >= 128) parsedPaps.TryRemove(parsedPaps.Keys.First(), out _);
+                    parsedPaps[source.Resource.Hash] = parsed;
+                }
+                candidates.Add(new AnimationPapCandidate(source.Resource, parsed, bindings, bindingDurations));
                 }
                 catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException) { missingPaths.Add(path); }
             }
@@ -179,13 +241,20 @@ internal sealed class AnimationObserver : IDisposable
                 if (matches.Length != 1) { ambiguousBindings++; continue; }
                 var match = matches[0];
                 var timeline = match.Timeline;
+                var pap = candidates.First(candidate => candidate.Resource == match.Resource).Pap;
+                var sourceIdentity = AnimationSkeletonIndex.SourceIdentity(
+                    AnimationSkeletonIndex.AliasesFor(paths, match.Resource.ResolvedPath),
+                    pap.ModelType == 0 ? AnimationSkeletonIndex.ModelCode(pap.ModelId) : null);
                 var skeletonPaths = paths.Where(p => string.Equals(p.Key, binding.SkeletonResource, StringComparison.OrdinalIgnoreCase))
                     .SelectMany(p => p.Value).Where(p => p.EndsWith(".sklb", StringComparison.OrdinalIgnoreCase)).Distinct().ToArray();
                 if (skeletonPaths.Length == 0 && AnimationDependencies.SafeGamePath(binding.SkeletonResource)) skeletonPaths = [binding.SkeletonResource];
                 var clip = new AnimationClip(match.Resource.GamePath, match.Entry.Name, match.Entry.Binding,
                     binding.Partial, timeline.Id, skeletonPaths.FirstOrDefault() ?? "", binding.SkeletonFingerprint,
                     binding.Skeleton, new(SkeletonResolutionState.Searching, [], Reason: "Finding a compatible source skeleton…"), binding.Fingerprint,
-                    $"{collection.Id}:{match.Resource.Hash}:{match.Resource.ResolvedPath}");
+                    $"{collection.Id}:{match.Resource.Hash}:{match.Resource.ResolvedPath}:{sourceIdentity.MappingFingerprint}:{sourceIdentity.CanonicalModel}",
+                    SourceIdentity: sourceIdentity,
+                    Duration: candidates.First(candidate => candidate.Resource == match.Resource).Durations?.GetValueOrDefault(match.Entry.Binding) ?? 0,
+                    IsLoop: timeline.Loop);
                 if (clip.SkeletonPath.Length == 0)
                     clip = clip with { SkeletonPath = AnimationSkeletonIndex.RelevantPaths(clip, []).FirstOrDefault() ?? "" };
                 var family = new HashSet<string>(StringComparer.Ordinal) { clip.GamePath };
@@ -198,15 +267,15 @@ internal sealed class AnimationObserver : IDisposable
                 {
                     var relative = catalog.Find(id);
                     if (relative == null) { packagingError = $"Family timeline {id} is unavailable."; continue; }
-                    var pap = AnimationCatalog.PapPath(relative, clip.GamePath, gamePaths);
-                    if (pap == null) { packagingError = $"Cannot determine the player's variant for {relative.Key}."; continue; }
-                    family.Add(pap);
+                    var familyPap = AnimationCatalog.PapPath(relative, clip.GamePath, gamePaths);
+                    if (familyPap == null) { packagingError = $"Cannot determine the player's variant for {relative.Key}."; continue; }
+                    family.Add(familyPap);
                     // Only existing external timelines are used. Some emotes contain their timeline exclusively inside PAP.
                     var tmb = $"chara/action/{relative.Key}.tmb";
-                    try { _ = await resources.ReadAsync(collection.Id, tmb, token); family.Add(tmb); }
+                    try { _ = await resources.ReadAsync(collection.Id, tmb, token, resourceCache); family.Add(tmb); }
                     catch (FileNotFoundException) { }
                     catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException) { packagingError = e.Message; }
-                    if (timeline.Startups.Contains(id)) startupPaths.Add((relative, pap));
+                    if (timeline.Startups.Contains(id)) startupPaths.Add((relative, familyPap));
                 }
                 // Some idle loops, including pose01_loop, have a valid sibling
                 // startup but no Emote-sheet relationship. Discover it through the
@@ -223,18 +292,36 @@ internal sealed class AnimationObserver : IDisposable
                     try
                     {
                     var item = startupPaths[0];
-                    var startupSource = await resources.ReadAsync(collection.Id, item.Path, token);
-                    var papEntries = new AnimationPap(startupSource.Bytes).Entries;
+                    var startupSource = await resources.ReadAsync(collection.Id, item.Path, token, resourceCache);
+                    var startupPap = GetPap(startupSource);
+                    var startupIdentity = AnimationSkeletonIndex.SourceIdentity(
+                        AnimationSkeletonIndex.AliasesFor(paths, startupSource.Resource.ResolvedPath),
+                        startupPap.ModelType == 0 ? AnimationSkeletonIndex.ModelCode(startupPap.ModelId) : null);
+                    var papEntries = startupPap.Entries;
                     var startupMotions = item.Timeline == null ? null : await TimelineMotions(item.Timeline);
                     var entries = startupMotions == null ? papEntries.ToArray() : papEntries.Where(e => startupMotions.Contains(e.Name)).ToArray();
                     if (entries.Length == 0 && papEntries.Length == 1) entries = papEntries.ToArray();
                     if (entries.Length == 1)
                     {
-                        var startupPrints = await framework.RunOnTick(() => AnimationRuntime.InspectPap(startupSource.Bytes), delayTicks: 1);
+                        if (!prints.TryGetValue(startupSource.Resource.Hash, out var startupPrints))
+                        {
+                            startupPrints = await framework.RunOnTick(() => AnimationRuntime.InspectPap(startupSource.Bytes), delayTicks: 1);
+                            if (prints.Count >= 128) prints.Clear();
+                            prints[startupSource.Resource.Hash] = startupPrints;
+                        }
+                        if (!durations.TryGetValue(startupSource.Resource.Hash, out var startupDurations))
+                        {
+                            startupDurations = await framework.RunOnTick(() => AnimationRuntime.InspectPapDurations(startupSource.Bytes), delayTicks: 1);
+                            if (durations.Count >= 128) durations.TryRemove(durations.Keys.First(), out _);
+                            durations[startupSource.Resource.Hash] = startupDurations;
+                        }
                         startup = new AnimationClip(item.Path, entries[0].Name, entries[0].Binding, clip.Partial,
                             item.Timeline?.Id ?? timeline.Id, clip.SkeletonPath, clip.SkeletonFingerprint, binding.Skeleton,
                             new(SkeletonResolutionState.Searching, []), startupPrints.GetValueOrDefault(entries[0].Binding, ""),
-                            $"{collection.Id}:{startupSource.Resource.Hash}:{startupSource.Resource.ResolvedPath}");
+                            $"{collection.Id}:{startupSource.Resource.Hash}:{startupSource.Resource.ResolvedPath}:{startupIdentity.MappingFingerprint}:{startupIdentity.CanonicalModel}",
+                            SourceIdentity: startupIdentity,
+                            Duration: startupDurations.GetValueOrDefault(entries[0].Binding),
+                            IsLoop: item.Timeline?.Loop ?? false);
                         sources.Add(startupSource.Resource);
                     }
                     }
@@ -243,11 +330,12 @@ internal sealed class AnimationObserver : IDisposable
                 var idString = $"{runtime.ActorId}:{timeline.Id}:{clip.GamePath}:{clip.BindingIndex}:{clip.Partial}";
                 captures.Add(new AnimationCapture(idString, runtime.ActorId, runtime.Address, collection.Id, collection.Name,
                     timeline.Name, clip, startup, family.ToImmutableArray(), sources.Distinct().ToImmutableArray(), pair.Pose,
-                    pair.Pose.CapturedUtc, true, PackagingError: packagingError, LoadedResourcePaths: gamePaths.ToImmutableArray(), PoseUnavailableReason: pair.PoseError));
+                    pair.Pose.CapturedUtc, true, PackagingError: packagingError, LoadedResourcePaths: gamePaths.ToImmutableArray(),
+                    PoseUnavailableReason: pair.PoseError, ResourceAliases: resourceAliases));
             }
             // Publish identified clips before any native source-skeleton search.
             await PublishAsync(captures, expectedGeneration, token);
-            if (matching.IsCompleted) matching = MatchAsync(captures.ToArray(), expectedGeneration, listeningToken);
+            if (matching.IsCompleted) matching = MatchAsync(captures.ToArray(), expectedGeneration, token);
             token.ThrowIfCancellationRequested();
             await framework.RunOnFrameworkThread(() =>
             {
@@ -264,6 +352,12 @@ internal sealed class AnimationObserver : IDisposable
         {
             if (token.IsCancellationRequested || expectedGeneration != generation) return;
             MarkNotPlaying(); Status = e.InnerException?.Message ?? e.Message;
+        }
+        finally
+        {
+            var elapsed = Stopwatch.GetElapsedTime(observationStarted).TotalMilliseconds;
+            if (elapsed >= 2)
+                log.Debug($"Animation observation pipeline took {elapsed:F2} ms.");
         }
     }
     private async Task MatchAsync(AnimationCapture[] captures, int expectedGeneration, CancellationToken token)
@@ -321,7 +415,7 @@ internal sealed class AnimationObserver : IDisposable
         var ids = current.Select(c => c.Id).ToHashSet();
         return current.Concat(previous.Where(c => !ids.Contains(c.Id)).Select(c => c with { Playing = false })).Take(50).ToImmutableArray();
     }
-    private string ChoiceKey(AnimationClip clip) => $"{actor}:{clip.SourceContext}:{clip.GamePath}:{clip.BindingIndex}:{clip.BindingFingerprint}:{clip.SkeletonFingerprint}:{skeletons.Revision}";
+    private string ChoiceKey(AnimationClip clip) => $"{actor}:{clip.SourceContext}:{clip.GamePath}:{clip.BindingIndex}:{clip.BindingFingerprint}:{clip.SkeletonFingerprint}:{clip.SourceIdentity?.MappingFingerprint}:{clip.SourceIdentity?.CanonicalModel}:{skeletons.Revision}";
     private async Task<AnimationClip> ResolveClip(AnimationCapture capture, AnimationClip clip, CancellationToken token)
     {
         var key = ChoiceKey(clip);
@@ -329,8 +423,11 @@ internal sealed class AnimationObserver : IDisposable
         SkeletonResolution result;
         try
         {
-            var source = await resources.ReadAsync(capture.CollectionId, clip.GamePath, token);
-            result = await skeletons.ResolveAsync(capture.CollectionId, clip, source.Bytes, capture.LoadedResourcePaths, manualChoices.GetValueOrDefault(key), token);
+            var source = await resources.ReadAsync(capture.CollectionId, clip.GamePath, token, resourceCache);
+            var pathMap = capture.ResourceAliases.ToDictionary(pair => pair.Key,
+                pair => pair.Value.ToHashSet(StringComparer.Ordinal), StringComparer.OrdinalIgnoreCase);
+            result = await skeletons.ResolveAsync(capture.CollectionId, clip, source.Bytes, capture.LoadedResourcePaths,
+                pathMap, manualChoices.GetValueOrDefault(key), token);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception e)
@@ -344,7 +441,20 @@ internal sealed class AnimationObserver : IDisposable
         resolutions[key] = (DateTime.UtcNow, result);
         return clip with { Resolution = result };
     }
-    public void RescanSkeletons() { skeletons.Rescan(); resolutions.Clear(); manualChoices.Clear(); operationErrors.Clear(); next = DateTime.MinValue; }
+    private AnimationPap GetPap((AnimationResource Resource, byte[] Bytes) source)
+    {
+        if (parsedPaps.TryGetValue(source.Resource.Hash, out var pap)) return pap;
+        pap = new AnimationPap(source.Bytes);
+        if (parsedPaps.Count >= 128) parsedPaps.TryRemove(parsedPaps.Keys.First(), out _);
+        parsedPaps[source.Resource.Hash] = pap;
+        return pap;
+    }
+
+    public void RescanSkeletons()
+    {
+        skeletons.Rescan(); resolutions.Clear(); manualChoices.Clear(); operationErrors.Clear();
+        lastStamp = null; nextFallback = DateTime.MinValue; resourceCache.Clear(); motionCache.Clear(); parsedPaps.Clear(); durations.Clear();
+    }
     public void ReportOperationError(AnimationClip clip, string? error)
     {
         var key = ChoiceKey(clip);

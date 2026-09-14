@@ -23,6 +23,19 @@ internal static class AnimationPresentation
         ["j_toe_r"] = "Right Toes",
     }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
 
+    private static readonly ImmutableDictionary<string, string> ModelLabels = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["c0101"] = "Male Midlander", ["c0201"] = "Female Midlander",
+        ["c0301"] = "Male Highlander", ["c0401"] = "Female Highlander",
+        ["c0501"] = "Male Elezen", ["c0601"] = "Female Elezen",
+        ["c0701"] = "Male Miqo'te", ["c0801"] = "Female Miqo'te",
+        ["c0901"] = "Male Roegadyn", ["c1001"] = "Female Roegadyn",
+        ["c1101"] = "Male Lalafell", ["c1201"] = "Female Lalafell",
+        ["c1301"] = "Male Au Ra", ["c1401"] = "Female Au Ra",
+        ["c1501"] = "Male Hrothgar", ["c1601"] = "Female Hrothgar",
+        ["c1701"] = "Male Viera", ["c1801"] = "Female Viera",
+    }.ToImmutableDictionary(StringComparer.Ordinal);
+
     public static bool Ready(AnimationCapture capture) => capture.Clip.Resolution is { State: SkeletonResolutionState.Matched, Selected: not null };
 
     public static ImmutableArray<ListItem> ListItems(IEnumerable<AnimationCapture> history)
@@ -85,21 +98,21 @@ internal static class AnimationPresentation
     public static string ModelName(AnimationClip clip)
     {
         var model = new[] { clip.SkeletonPath, clip.GamePath, clip.Resolution?.Selected?.Source.Resource.GamePath }
-            .OfType<string>().SelectMany(p => p.Split('/')).FirstOrDefault(p => p.Length == 5 && p[0] == 'c' && p[1..].All(char.IsDigit));
-        if (model == null) return "Unknown model";
-        var labels = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["c0101"] = "Male Midlander", ["c0201"] = "Female Midlander",
-            ["c0301"] = "Male Highlander", ["c0401"] = "Female Highlander",
-            ["c0501"] = "Male Elezen", ["c0601"] = "Female Elezen",
-            ["c0701"] = "Male Miqo'te", ["c0801"] = "Female Miqo'te",
-            ["c0901"] = "Male Roegadyn", ["c1001"] = "Female Roegadyn",
-            ["c1101"] = "Male Lalafell", ["c1201"] = "Female Lalafell",
-            ["c1301"] = "Male Au Ra", ["c1401"] = "Female Au Ra",
-            ["c1501"] = "Male Hrothgar", ["c1601"] = "Female Hrothgar",
-            ["c1701"] = "Male Viera", ["c1801"] = "Female Viera",
-        };
-        return labels.TryGetValue(model, out var label) ? $"{label} ({model})" : model;
+            .OfType<string>().SelectMany(p => p.Replace('\\', '/').Split('/'))
+            .FirstOrDefault(p => p.Length == 5 && p[0] == 'c' && p[1..].All(char.IsDigit));
+        return ModelLabel(model, "Unknown model");
+    }
+
+    internal static string SourceModelName(SkeletonCandidate candidate)
+    {
+        var model = candidate.Source.CanonicalModel ?? AnimationSkeletonIndex.ModelFromPath(candidate.Source.Resource.GamePath);
+        return ModelLabel(model, "Unknown source model");
+    }
+
+    private static string ModelLabel(string? model, string fallback)
+    {
+        if (model == null) return fallback;
+        return ModelLabels.TryGetValue(model, out var label) ? $"{label} ({model})" : model;
     }
 
     public static string BoneName(string raw)

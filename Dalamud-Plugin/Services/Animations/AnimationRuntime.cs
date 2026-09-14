@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text;
 using Dalamud.Plugin.Services;
+using FFXIVClientStructs.Havok.Animation.Animation;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.Havok.Animation.Rig;
 using InstantEdit.Models;
@@ -12,9 +13,96 @@ internal sealed record RuntimeBinding(int Partial, string Fingerprint, string Sk
 internal sealed record RuntimeAnimationSnapshot(ulong ActorId, long Address, ushort ObjectIndex,
     ImmutableArray<ushort> Timelines, ImmutableArray<RuntimeBinding> Bindings);
 
+internal readonly record struct RuntimeControlStamp(int Partial, int Buffer, int Control, nint Binding,
+    nint Animation, nint Skeleton, int WeightBits);
+
+internal readonly record struct RuntimeChangeStamp(ulong ActorId, long Address, ushort ObjectIndex,
+    int TimelineCount, ulong TimelineFingerprint, int PartialCount, ulong SkeletonFingerprint,
+    int ActiveControlCount, ulong ControlFingerprint)
+{
+    public bool SameAs(RuntimeChangeStamp other)
+        => ActorId == other.ActorId && Address == other.Address && ObjectIndex == other.ObjectIndex &&
+           TimelineCount == other.TimelineCount && TimelineFingerprint == other.TimelineFingerprint &&
+           PartialCount == other.PartialCount && SkeletonFingerprint == other.SkeletonFingerprint &&
+           ActiveControlCount == other.ActiveControlCount && ControlFingerprint == other.ControlFingerprint;
+}
+
+/// <summary>Short-lived live-runtime cache. Native pointers are cache keys only and never escape in records.</summary>
+internal sealed unsafe class RuntimeCaptureCache
+{
+    private static readonly TimeSpan Lifetime = TimeSpan.FromSeconds(30);
+    private readonly object sync = new();
+    private readonly Dictionary<SkeletonKey, (SkeletonDescription Description, DateTime At)> skeletons = [];
+    private readonly Dictionary<BindingKey, (string Fingerprint, DateTime At)> bindings = [];
+
+    private readonly record struct SkeletonKey(nint Pointer, string Resource, int Bones, int Floats, int Partitions);
+    private readonly record struct BindingKey(nint Binding, nint Animation, nint Skeleton, string Resource,
+        float Duration, int Type, int TransformTracks, int FloatTracks, int TransformMap, int FloatMap, int Partitions);
+
+    public void Clear()
+    {
+        lock (sync)
+        {
+            skeletons.Clear();
+            bindings.Clear();
+        }
+    }
+
+    public bool TryGetSkeleton(hkaSkeleton* skeleton, string resource, out SkeletonDescription description)
+    {
+        if (skeleton == null) { description = null!; return false; }
+        var key = new SkeletonKey((nint)skeleton, resource, skeleton->Bones.Length, skeleton->FloatSlots.Length, skeleton->Partitions.Length);
+        lock (sync)
+        {
+            if (skeletons.TryGetValue(key, out var cached) && DateTime.UtcNow - cached.At < Lifetime)
+            {
+                description = cached.Description;
+                return true;
+            }
+            skeletons.Remove(key);
+            description = null!;
+            return false;
+        }
+    }
+
+    public void SetSkeleton(hkaSkeleton* skeleton, string resource, SkeletonDescription description)
+    {
+        if (skeleton == null) return;
+        var key = new SkeletonKey((nint)skeleton, resource, skeleton->Bones.Length, skeleton->FloatSlots.Length, skeleton->Partitions.Length);
+        lock (sync)
+        {
+            if (skeletons.Count >= 32 && !skeletons.ContainsKey(key)) skeletons.Remove(skeletons.Keys.First());
+            skeletons[key] = (description, DateTime.UtcNow);
+        }
+    }
+
+    public string BindingFingerprint(hkaAnimationBinding* binding, hkaSkeleton* skeleton, string resource)
+    {
+        var animation = binding->Animation.ptr;
+        var key = new BindingKey((nint)binding, (nint)animation, (nint)skeleton, resource, animation->Duration,
+            (int)animation->Type, animation->NumberOfTransformTracks, animation->NumberOfFloatTracks,
+            binding->TransformTrackToBoneIndices.Length, binding->FloatTrackToFloatSlotIndices.Length,
+            binding->PartitionIndices.Length);
+        lock (sync)
+            if (bindings.TryGetValue(key, out var cached) && DateTime.UtcNow - cached.At < Lifetime) return cached.Fingerprint;
+        var fingerprint = AnimationNative.Fingerprint(binding);
+        lock (sync)
+        {
+            if (bindings.Count >= 256 && !bindings.ContainsKey(key)) bindings.Remove(bindings.Keys.First());
+            bindings[key] = (fingerprint, DateTime.UtcNow);
+        }
+        return fingerprint;
+    }
+}
+
 /// <summary>Only this boundary reads player pointers. No native address escapes in a binding or skeleton record.</summary>
 internal static unsafe class AnimationRuntime
 {
+    private const ulong StampOffset = 14695981039346656037UL;
+
+    private static ulong StampMix(ulong hash, ulong value)
+        => (hash ^ value) * 1099511628211UL;
+
     public static (ulong ActorId, long Address, ushort Index)? Identity(IObjectTable objects)
     {
         if (objects.LocalPlayer is not { } player) return null;
@@ -32,7 +120,59 @@ internal static unsafe class AnimationRuntime
         if (animated == null || SkeletonFingerprint(animated->Skeleton) != clip.SkeletonFingerprint)
             throw new InvalidOperationException("The player's skeleton changed during baking.");
     }
+
+    public static RuntimeChangeStamp? CaptureChangeStamp(IObjectTable objects)
+    {
+        if (objects.LocalPlayer is not { } player) return null;
+        var actor = (Character*)player.Address;
+        var character = actor->GetCharacterBase();
+        var timelineIds = actor->Timeline.TimelineSequencer.TimelineIds;
+        var timelineFingerprint = StampMix(StampOffset, (ulong)timelineIds.Length);
+        for (var i = 0; i < timelineIds.Length; i++) timelineFingerprint = StampMix(timelineFingerprint, timelineIds[i]);
+        if (character == null || character->Skeleton == null || actor->InCombat || actor->IsMounted())
+            return new(actor->ContentId, player.Address, player.ObjectIndex, timelineIds.Length, timelineFingerprint, 0, 0, 0, 0);
+
+        var skeleton = character->Skeleton;
+        if (skeleton->PartialSkeletonCount is 0 or > 16 || skeleton->PartialSkeletons == null)
+            return new(actor->ContentId, player.Address, player.ObjectIndex, timelineIds.Length, timelineFingerprint, 0, 0, 0, 0);
+        var skeletonFingerprint = StampMix(StampOffset, (ulong)skeleton->PartialSkeletonCount);
+        var controlFingerprint = StampOffset;
+        var activeControls = 0;
+        for (var partial = 0; partial < skeleton->PartialSkeletonCount; partial++)
+        {
+            var p = &skeleton->PartialSkeletons[partial];
+            if (p->SkeletonResourceHandle == null) continue;
+            skeletonFingerprint = StampMix(skeletonFingerprint, (ulong)partial);
+            skeletonFingerprint = StampMix(skeletonFingerprint, unchecked((ulong)(nint)p->SkeletonResourceHandle));
+            for (var buffer = 0; buffer < 2; buffer++)
+            {
+                var animated = p->GetHavokAnimatedSkeleton(buffer);
+                if (animated == null || animated->AnimationControls.Length is < 0 or > 256) continue;
+                AnimationNative.ValidateArray(animated->AnimationControls, 256, "animation controls");
+                for (var i = 0; i < animated->AnimationControls.Length; i++)
+                {
+                    var control = animated->AnimationControls[i].Value;
+                    if (control == null || control->Weight <= 0 || control->Binding.ptr == null) continue;
+                    var binding = control->Binding.ptr;
+                    activeControls++;
+                    controlFingerprint = StampMix(controlFingerprint, (ulong)partial);
+                    controlFingerprint = StampMix(controlFingerprint, (ulong)buffer);
+                    controlFingerprint = StampMix(controlFingerprint, (ulong)i);
+                    controlFingerprint = StampMix(controlFingerprint, unchecked((ulong)(nint)binding));
+                    controlFingerprint = StampMix(controlFingerprint, unchecked((ulong)(nint)binding->Animation.ptr));
+                    controlFingerprint = StampMix(controlFingerprint, unchecked((ulong)(nint)animated->Skeleton));
+                    controlFingerprint = StampMix(controlFingerprint, unchecked((uint)BitConverter.SingleToInt32Bits(control->Weight)));
+                }
+            }
+        }
+        return new(actor->ContentId, player.Address, player.ObjectIndex, timelineIds.Length, timelineFingerprint,
+            skeleton->PartialSkeletonCount, skeletonFingerprint, activeControls, controlFingerprint);
+    }
+
     public static RuntimeAnimationSnapshot? Capture(IObjectTable objects)
+        => Capture(objects, null);
+
+    public static RuntimeAnimationSnapshot? Capture(IObjectTable objects, RuntimeCaptureCache? cache)
     {
         if (objects.LocalPlayer is not { } player) return null;
         var actor = (Character*)player.Address;
@@ -55,14 +195,31 @@ internal static unsafe class AnimationRuntime
                 {
                     AnimationNative.ValidateArray(animated->AnimationControls, 256, "animation controls");
                     if (!descriptions.TryGetValue((nint)animated->Skeleton, out description!))
-                        descriptions[(nint)animated->Skeleton] = description = AnimationSkeleton.Describe(animated->Skeleton);
+                    {
+                        var resource = p->SkeletonResourceHandle->FileName.ToString();
+                        if (cache?.TryGetSkeleton(animated->Skeleton, resource, out description) != true)
+                        {
+                            description = AnimationSkeleton.Describe(animated->Skeleton);
+                            cache?.SetSkeleton(animated->Skeleton, resource, description);
+                        }
+                        descriptions[(nint)animated->Skeleton] = description;
+                    }
                 }
                 catch (InvalidDataException) { continue; }
                 for (var i = 0; i < animated->AnimationControls.Length; i++)
                 {
                     var control = animated->AnimationControls[i].Value;
                     if (control == null || control->Weight <= 0 || control->Binding.ptr == null) continue;
-                    if (CaptureBinding(partial, control->Binding.ptr, p->SkeletonResourceHandle->FileName.ToString(), description) is { } captured)
+                    var resource = p->SkeletonResourceHandle->FileName.ToString();
+                    RuntimeBinding? captured;
+                    try
+                    {
+                        var fingerprint = cache?.BindingFingerprint(control->Binding.ptr, animated->Skeleton, resource) ??
+                            AnimationNative.Fingerprint(control->Binding.ptr);
+                        captured = new(partial, fingerprint, resource, description.Fingerprint, description);
+                    }
+                    catch (InvalidDataException) { captured = null; }
+                    if (captured is { })
                         bindings.Add(captured);
                 }
             }
@@ -122,6 +279,23 @@ internal static unsafe class AnimationRuntime
         for (var i = 0; i < doc.Container->Bindings.Length; i++)
             try { result[i] = AnimationNative.Fingerprint(doc.Container->Bindings[i].ptr); }
             catch (InvalidDataException) { }
+        return result.ToImmutable();
+    }
+    public static ImmutableDictionary<int, float> InspectPapDurations(byte[] bytes)
+    {
+        using var doc = new AnimationNative.Document(new AnimationPap(bytes).Havok);
+        var result = ImmutableDictionary.CreateBuilder<int, float>();
+        for (var i = 0; i < doc.Container->Bindings.Length; i++)
+        {
+            try
+            {
+                var binding = doc.Container->Bindings[i].ptr;
+                _ = AnimationNative.Fingerprint(binding);
+                var duration = binding->Animation.ptr->Duration;
+                if (float.IsFinite(duration) && duration >= 0) result[i] = duration;
+            }
+            catch (InvalidDataException) { }
+        }
         return result.ToImmutable();
     }
     public static void CheckSkeleton(byte[] bytes, string expected)

@@ -111,6 +111,7 @@ public sealed partial class MainWindow : Window, IDisposable
     public override void Draw()
     {
         DrawHeader();
+        var animationsTabActive = false;
         if (ImGui.BeginTabBar("##instant-edit-tabs"))
         {
             if (ImGui.BeginTabItem("On Screen"))
@@ -132,11 +133,13 @@ public sealed partial class MainWindow : Window, IDisposable
             }
             if (ImGui.BeginTabItem("Animations"))
             {
+                animationsTabActive = true;
                 DrawAnimations();
                 ImGui.EndTabItem();
             }
             ImGui.EndTabBar();
         }
+        if (!animationsTabActive) animations?.StopObservation();
         DrawTextureDialogs();
         DrawFeedback();
         DrawWindowOptionsExtension();

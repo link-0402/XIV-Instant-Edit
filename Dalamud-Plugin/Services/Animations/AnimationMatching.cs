@@ -3,7 +3,8 @@ using InstantEdit.Models;
 
 namespace InstantEdit.Services.Animations;
 
-internal sealed record AnimationPapCandidate(AnimationResource Resource, AnimationPap Pap, ImmutableDictionary<int, string> Prints);
+internal sealed record AnimationPapCandidate(AnimationResource Resource, AnimationPap Pap, ImmutableDictionary<int, string> Prints,
+    ImmutableDictionary<int, float>? Durations = null);
 internal sealed record AnimationMatch(AnimationResource Resource, AnimationPap.Entry Entry, AnimationCatalog.Timeline Timeline);
 
 internal static class AnimationMatching
