@@ -5,11 +5,14 @@ Model editing uses a Blender add-on to manage model life cycle and allows for ex
 Additionally, it supports full software-independent texture editing as well as animation editing.
 
 Animation skeleton repair resolves the animation's source reference pose from
-installed SKLB files, including source skeletons embedded in Havok mappers, then
-retargets it to the character's live skeleton. Predictive startup clips can use a
-different embedded source from their uncompressed loops. If several sources fit
-equally well, choose the source variant in the animation editor. A missing source
-reference pose cannot be bypassed with Shift.
+installed SKLB files, including source skeletons embedded in Havok mappers, and
+uses the source chosen in the animation editor as its sole processing skeleton.
+LivePose rebakes use that same selected source skeleton: they apply the offsets
+directly to the animation and do not retarget through the character's live
+skeleton. Predictive startup clips can use a different embedded source from
+their uncompressed loops. If several sources fit equally well, choose the source
+variant in the animation editor. A missing source reference pose cannot be
+bypassed with Shift.
 
 ## Requirements
 

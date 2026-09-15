@@ -55,8 +55,15 @@ MATERIAL_COVERAGE_WARNING = (
     "Warning: the output mod is missing material or texture files from one or more non-active source mods. "
     "Use Create Mashup to include them."
 )
+UNSAFE_EXPORT_WARNING = (
+    "This output may not work correctly without a mashup."
+)
 MATERIAL_COVERAGE_CACHE_SECONDS = 10.0
-_material_coverage_cache: dict[str, tuple[float, bool]] = {}
+_SHARED_BODY_MATERIAL = re.compile(
+    r"^mt_c\d{4}b0001(?:_[a-z0-9_]+)?\.mtrl$",
+    re.IGNORECASE,
+)
+_material_coverage_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
 _material_coverage_pending: set[str] = set()
 _material_coverage_results: Queue = Queue()
 _material_coverage_lock = threading.Lock()
@@ -280,7 +287,7 @@ def _material_coverage_payload(ref, contributors: list[dict]) -> dict:
     }
 
 
-def _request_material_coverage(callback_port: int, payload: dict) -> bool:
+def _request_material_coverage(callback_port: int, payload: dict) -> tuple[str, ...]:
     try:
         status, body = post_json(
             callback_port, "/material-coverage", payload,
@@ -292,7 +299,25 @@ def _request_material_coverage(callback_port: int, payload: dict) -> bool:
         covered = result.get("covered")
         if not isinstance(available, bool) or not isinstance(covered, bool):
             raise ValueError("plugin returned an invalid material coverage response")
-        return available and not covered
+        if not available or covered:
+            return ()
+        missing = result.get("missing")
+        if not isinstance(missing, list) or not missing:
+            raise ValueError("plugin returned an invalid missing material list")
+        missing_materials = []
+        seen = set()
+        for item in missing:
+            if not isinstance(item, dict):
+                raise ValueError("plugin returned an invalid missing material entry")
+            material = item.get("modelMaterial")
+            if not isinstance(material, str) or not material.strip() or len(material) > 512:
+                raise ValueError("plugin returned an invalid missing material name")
+            material = _normalize_mashup_material(material)
+            key = material.casefold()
+            if key not in seen:
+                seen.add(key)
+                missing_materials.append(material)
+        return tuple(missing_materials)
     except PluginResponseTooLarge as error:
         record_protocol_failure(
             error.body,
@@ -302,11 +327,11 @@ def _request_material_coverage(callback_port: int, payload: dict) -> bool:
             code="response_too_large",
             cause="The Dalamud plugin returned a response larger than the bridge limit.",
         )
-        return False
+        return ()
     except (URLError, TimeoutError, OSError, ValueError, UnicodeError):
         # Coverage is advisory. An unavailable or older plugin must not alter
         # the ordinary target eligibility or selection behavior.
-        return False
+        return ()
 
 
 def _material_coverage_worker(
@@ -316,10 +341,10 @@ def _material_coverage_worker(
     payload: dict,
 ) -> None:
     try:
-        warning = _request_material_coverage(callback_port, payload)
+        missing_materials = _request_material_coverage(callback_port, payload)
     except Exception:
-        warning = False
-    _material_coverage_results.put((generation, cache_key, warning))
+        missing_materials = ()
+    _material_coverage_results.put((generation, cache_key, missing_materials))
 
 
 def _schedule_material_coverage(
@@ -354,12 +379,23 @@ def material_coverage_probe_pending() -> bool:
         return bool(_material_coverage_pending)
 
 
+def _is_general_material(material: str) -> bool:
+    """Return whether a material is a shared body/general resource."""
+    file_name = _normalize_mashup_material(material).rsplit("/", 1)[-1]
+    lowered = file_name.casefold()
+    return (
+        _SHARED_BODY_MATERIAL.fullmatch(file_name) is not None
+        or "pube" in lowered
+        or "piercing" in lowered
+    )
+
+
 def poll_material_coverage_results() -> float:
     """Apply background probe results on Blender's main thread."""
     changed = False
     while True:
         try:
-            generation, cache_key, warning = _material_coverage_results.get_nowait()
+            generation, cache_key, missing_materials = _material_coverage_results.get_nowait()
         except Empty:
             break
         with _material_coverage_lock:
@@ -368,7 +404,7 @@ def poll_material_coverage_results() -> float:
             _material_coverage_pending.discard(cache_key)
             _material_coverage_cache[cache_key] = (
                 time.monotonic() + MATERIAL_COVERAGE_CACHE_SECONDS,
-                bool(warning),
+                tuple(missing_materials),
             )
             changed = True
 
@@ -395,36 +431,55 @@ def reset_material_coverage_state() -> None:
             break
 
 
-def material_coverage_warning_state(context: Context, ref=None, *, cache_only: bool = False) -> bool:
-    """Return whether the current export composition is missing non-active materials."""
+def material_coverage_missing_materials(
+    context: Context,
+    ref=None,
+    *,
+    cache_only: bool = False,
+) -> tuple[str, ...]:
+    """Return missing non-active materials cached for the export composition."""
     try:
         ref = ref or export_destination_context(context)
         objects, refs, materials, _ = _collect_export_context_materials(context, ref)
         if ref.context_id not in materials or len(materials) < 2:
-            return False
+            return ()
         cache_key = _material_coverage_cache_key(context, ref, refs, materials, objects)
         now = time.monotonic()
         with _material_coverage_lock:
             cached = _material_coverage_cache.get(cache_key)
             if cached is not None:
-                expires_at, warning = cached
+                expires_at, missing_materials = cached
                 if expires_at > now:
-                    return warning
+                    return missing_materials
                 _material_coverage_cache.pop(cache_key, None)
             probe_running = bool(_material_coverage_pending)
         if cache_only:
-            return False
+            return ()
 
         if not probe_running:
-            contributors = _mashup_contributor_payload(refs, materials)
+            contributors = _material_coverage_contributor_payload(ref, refs, materials)
+            if not contributors:
+                return ()
             _schedule_material_coverage(
                 cache_key,
                 ref.callback_port,
                 _material_coverage_payload(ref, contributors),
             )
-        return False
+        return ()
     except (ContextValidationError, AttributeError, RuntimeError, TypeError, ValueError):
+        return ()
+
+
+def material_coverage_warning_state(context: Context, ref=None, *, cache_only: bool = False) -> bool:
+    """Return whether the current export composition is missing non-active materials."""
+    return bool(material_coverage_missing_materials(context, ref, cache_only=cache_only))
+
+
+def unsafe_export_warning_state(context: Context, ref=None) -> bool:
+    """Return whether a non-mashup Quick Export needs explicit confirmation."""
+    if getattr(get_instant_edit_props(), "variant_target", "") == MASHUP_TARGET:
         return False
+    return material_coverage_warning_state(context, ref)
 
 
 def save_new_mod_target_state(context: Context, ref=None) -> tuple[bool, bool, str]:
@@ -487,6 +542,23 @@ def _named_readiness_issue(label: str, names: list[str]) -> str:
     if len(names) > 3:
         shown += f", +{len(names) - 3} more"
     return f"{label} ({len(names)}): {shown}"
+
+
+def _material_coverage_warning_message(missing_materials) -> str:
+    names = list(dict.fromkeys(
+        _normalize_mashup_material(name)
+        for name in missing_materials
+        if isinstance(name, str) and name.strip()
+    ))
+    if not names:
+        return MATERIAL_COVERAGE_WARNING
+    shown = ", ".join(names[:12])
+    if len(names) > 12:
+        shown += f", +{len(names) - 12} more"
+    return (
+        f"Warning: missing files for material{'s' if len(names) != 1 else ''}: {shown}. "
+        "Use Create Mashup to include them."
+    )
 
 
 def export_target_issues(
@@ -622,7 +694,12 @@ def export_target_issues(
         material_coverage_warning = material_coverage_warning_state(context, ref)
     if selection != MASHUP_TARGET:
         if material_coverage_warning:
-            issues.append(("WARNING", MATERIAL_COVERAGE_WARNING))
+            missing_materials = material_coverage_missing_materials(
+                context, ref, cache_only=True)
+            issues.append((
+                "WARNING",
+                _material_coverage_warning_message(missing_materials),
+            ))
         elif material_coverage_probe_pending():
             issues.append(("WARNING", "Checking material and texture coverage…"))
 
@@ -1321,9 +1398,10 @@ class SelectVariantTarget(Operator):
     @classmethod
     def description(cls, context, properties):
         selection_id = getattr(properties, "selection_id", "")
-        if selection_id != MASHUP_TARGET and material_coverage_warning_state(
-                context, cache_only=True):
-            return MATERIAL_COVERAGE_WARNING
+        missing_materials = material_coverage_missing_materials(
+            context, cache_only=True)
+        if selection_id != MASHUP_TARGET and missing_materials:
+            return _material_coverage_warning_message(missing_materials)
         if selection_id == "NEW_GROUP":
             return "Creates a new Group on Export. Define group and option names below."
         if selection_id == IN_PLACE_TARGET:
@@ -1380,6 +1458,16 @@ class QuickExport(Operator):
     bl_description = "Exports the current model back to the game path it was imported from via Penumbra"
     bl_options     = {"UNDO"}
 
+    create_detected_attribute_groups: BoolProperty(
+        name="Create and keep Penumbra part toggles updated",
+        description=(
+            "Create IMC groups for standard part attributes and toggle groups "
+            "for custom atrx_ attributes, then update them on later exports"
+        ),
+        default=True,
+        options={"HIDDEN", "SKIP_SAVE"},
+    )  # type: ignore
+
     @classmethod
     def poll(cls, context: Context):
         try:
@@ -1388,21 +1476,71 @@ class QuickExport(Operator):
         except ContextValidationError:
             return False
 
-    def invoke(self, context: Context, _event):
+    def invoke(self, context: Context, event):
         try:
             if export_destination_context(context).destination_state == "new_mod_required":
                 return bpy.ops.xiv_ie.vanilla_mod_name("INVOKE_DEFAULT", name="")
         except ContextValidationError as error:
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
-        if get_instant_edit_props().variant_target == MASHUP_TARGET:
+        props = get_instant_edit_props()
+        if props.variant_target == MASHUP_TARGET:
             return bpy.ops.xiv_ie.mashup_destination("INVOKE_DEFAULT")
-        if get_instant_edit_props().variant_target == SAVE_NEW_MOD_TARGET:
+        if props.variant_target == SAVE_NEW_MOD_TARGET:
             return bpy.ops.xiv_ie.save_new_mod_name("INVOKE_DEFAULT", name="")
+        try:
+            detected_tags = detected_attribute_group_tags(context)
+        except (ContextValidationError, ValueError):
+            detected_tags = ()
+        self._detected_attribute_group_tags = detected_tags
+        self._prompt_attribute_groups = bool(
+            detected_tags and not getattr(props, "create_attribute_groups", False)
+        )
+        self._confirm_unsafe_export = unsafe_export_warning_state(context)
+        if self._prompt_attribute_groups:
+            return context.window_manager.invoke_props_dialog(self, width=480)
+        if self._confirm_unsafe_export:
+            return context.window_manager.invoke_confirm(self, event)
         return self.execute(context)
+
+    def draw(self, context):
+        if getattr(self, "_prompt_attribute_groups", False):
+            tags = getattr(self, "_detected_attribute_group_tags", ())
+            standard_parts = sorted({
+                tag.rsplit("_", 1)[-1].upper()
+                for tag in tags
+                if re.fullmatch(r"atr_[a-z0-9]+_[a-h]", tag)
+            })
+            custom_tags = sorted(tag for tag in tags if tag.startswith("atrx_"))
+            if standard_parts:
+                self.layout.label(
+                    text=f"Exportable model parts detected: {', '.join(standard_parts)}.",
+                    icon="MODIFIER",
+                )
+                self.layout.label(text="Automatic Penumbra part-toggle setup is not enabled for this scene.")
+            if custom_tags:
+                self.layout.label(
+                    text=f"Custom toggles detected: {', '.join(custom_tags)}.",
+                    icon="MODIFIER",
+                )
+            self.layout.prop(self, "create_detected_attribute_groups")
+
+        if getattr(self, "_confirm_unsafe_export", False):
+            missing_materials = material_coverage_missing_materials(
+                context, cache_only=True)
+            self.layout.label(text="The selected output mod is missing required files for:")
+            for material in missing_materials[:12]:
+                self.layout.label(text=material, icon="MATERIAL")
+            if len(missing_materials) > 12:
+                self.layout.label(text=f"+{len(missing_materials) - 12} more materials")
+            self.layout.label(text=UNSAFE_EXPORT_WARNING, icon="ERROR")
 
     def execute(self, context: Context):
         try:
+            if getattr(self, "_prompt_attribute_groups", False):
+                get_instant_edit_props().create_attribute_groups = bool(
+                    self.create_detected_attribute_groups
+                )
             perform_instant_export(context)
         except Exception as e:
             props = get_instant_edit_props()
@@ -1664,6 +1802,24 @@ class CopyInstantEditStatus(Operator):
         return {"FINISHED"}
 
 
+class CopyExportTargetStatus(Operator):
+    bl_idname = "xiv_ie.copy_target_status"
+    bl_label = "Copy Full Export Target Status"
+    bl_description = "Copy the complete Quick Export target selection status to the clipboard"
+
+    status_message: StringProperty(
+        name="",
+        default="",
+        maxlen=8192,
+        options={"HIDDEN", "SKIP_SAVE"},
+    )  # type: ignore
+
+    def execute(self, context):
+        context.window_manager.clipboard = self.status_message
+        self.report({"INFO"}, "XIV Instant Edit export target status copied")
+        return {"FINISHED"}
+
+
 def build_export_payload(ref, export_id: str, mdl_path: Path, byte_size: int,
                          sha256: str, props, variant_name: str | None,
                          variant_group_name: str | None = None, variant_target=None,
@@ -1912,6 +2068,43 @@ def _mashup_contributor_payload(refs, materials: dict[str, list[str]]) -> list[d
     ]
 
 
+def _material_coverage_contributor_payload(
+    ref,
+    refs,
+    materials: dict[str, list[str]],
+) -> list[dict]:
+    """Build the advisory payload without false positives from shared resources.
+
+    The material coverage endpoint is about dependencies that a non-active
+    source contributes to the selected output.  A non-active copy of a model
+    material already present in the active context cannot replace that active
+    material, and body/general materials are intentionally shared across
+    contexts.  Exclude both cases from the advisory request while leaving the
+    real mashup payload unchanged.
+    """
+    active_materials = {
+        _normalize_mashup_material(material).casefold()
+        for material in materials.get(ref.context_id, ())
+    }
+    contributors = []
+    for item in refs:
+        if item.context_id == ref.context_id:
+            continue
+        values = [
+            material for material in materials[item.context_id]
+            if not _is_general_material(material)
+            and _normalize_mashup_material(material).casefold() not in active_materials
+        ]
+        if not values:
+            continue
+        contributors.append({
+            "contextId": item.context_id,
+            "capability": item.capability,
+            "materials": values,
+        })
+    return contributors
+
+
 def _mashup_assignment_map(plan: dict, materials: dict[str, list[str]]) -> dict[tuple[str, str], str]:
     expected = {
         (context_id, _normalize_mashup_material(material).casefold())
@@ -2060,6 +2253,18 @@ def export_objects_for_scope(ref, scope: str) -> list:
         collection_objects = {obj.as_pointer() for obj in ref.collection.objects}
         return [obj for obj in objects if obj.as_pointer() in collection_objects]
     return objects
+
+
+def detected_attribute_group_tags(context: Context) -> tuple[str, ...]:
+    """Return exportable part/custom tags for the current Quick Export scope."""
+    ref = export_destination_context(context, persist=False)
+    objects = export_objects_for_scope(
+        ref, getattr(get_instant_edit_props(), "export_scope", "VISIBLE"))
+    if not objects:
+        return ()
+    tags, _masks = attribute_group_data(
+        objects, use_lods=get_settings().use_lods)
+    return tags
 
 
 def perform_mashup_export(
@@ -2488,5 +2693,6 @@ CLASSES = [
     ClearInstantEditContexts,
     CompactInstantEditParts,
     CopyInstantEditStatus,
+    CopyExportTargetStatus,
     ApplyInstantEdit,
 ]

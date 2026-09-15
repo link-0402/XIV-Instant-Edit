@@ -198,7 +198,10 @@ internal sealed class AnimationEditService : IDisposable
         }
         if (request.Capture.UnavailableReason != null) throw new InvalidOperationException(request.Capture.UnavailableReason);
         if (request.IncludeStartup && request.Capture.Startup == null) throw new InvalidOperationException("No unique startup was identified.");
-        await CheckActorAsync(request.Capture);
+        // PAP rebakes use the explicitly selected source skeleton. Keep the
+        // actor and collection stable, but never use its current rig as input.
+        var requiresLiveSkeleton = request.Operation == AnimationOperation.CreateStartup;
+        await CheckActorAsync(request.Capture, requiresLiveSkeleton);
         if (request.Operation == AnimationOperation.BakeOffsets) await framework.RunOnFrameworkThread(() => poses.ValidateRoundTrip(request.Capture.Pose));
         await resources.CheckAsync(request.Capture.CollectionId, request.Capture.Sources, token);
         Status = "Capturing effective animation sources and dependencies…";
@@ -230,7 +233,8 @@ internal sealed class AnimationEditService : IDisposable
         if (request.Destination == AnimationDestination.NewMod)
         {
             if (request.Capture.PackagingError != null) throw new InvalidDataException(request.Capture.PackagingError);
-            manifest = await resources.ManifestAsync(manifestCapture, catalog, packagedPaths, token);
+            manifest = await resources.ManifestAsync(manifestCapture, catalog,
+                clips.Select(clip => clip.GamePath), packagedPaths, token);
         }
         else
         {
@@ -244,7 +248,7 @@ internal sealed class AnimationEditService : IDisposable
         var dir = journals.DirectoryFor(request.Id); Directory.CreateDirectory(dir);
         if (request.Operation == AnimationOperation.CreateStartup)
         {
-            await CheckActorAsync(request.Capture);
+            await CheckActorAsync(request.Capture, requiresLiveSkeleton);
             outputs[request.Capture.Startup!.GamePath] = await baker.CreateStartupAsync(
                 startupSources!.Loop, startupSources.Startup, startupSources.Idle, request.StartupOptions!, dir,
                 message => Status = message, token,
@@ -256,7 +260,7 @@ internal sealed class AnimationEditService : IDisposable
         }
         foreach (var clip in request.Operation == AnimationOperation.CreateStartup ? Array.Empty<AnimationClip>() : clips.Distinct())
         {
-            await CheckActorAsync(request.Capture);
+            await CheckActorAsync(request.Capture, requiresLiveSkeleton);
             var source = outputs.TryGetValue(clip.GamePath, out var prior) ? prior : manifest.Files[clip.GamePath];
             var skeletonBytes = clip.Resolution?.Selected is { } selected
                 ? (await resources.ReadSkeletonAsync(request.Capture.CollectionId, selected.Source, token)).Bytes
@@ -265,7 +269,7 @@ internal sealed class AnimationEditService : IDisposable
                 () =>
                 {
                     CheckIdentityOnFramework(request.Capture, true);
-                    AnimationRuntime.CheckPartial(objects, request.Capture.Clip);
+                    if (requiresLiveSkeleton) AnimationRuntime.CheckPartial(objects, request.Capture.Clip);
                     if (request.Operation == AnimationOperation.BakeOffsets) poses.CheckModule(request.Capture.Pose);
                 });
         }
@@ -273,12 +277,12 @@ internal sealed class AnimationEditService : IDisposable
         recovery = recovery.Insert(0, journal);
         await commits.CommitAsync(journal, manifest, async () =>
         {
-            await CheckActorAsync(request.Capture);
+            await CheckActorAsync(request.Capture, requiresLiveSkeleton);
             await resources.CheckSkeletonsAsync(request.Capture, clips, token);
             await framework.RunOnFrameworkThread(() =>
             {
                 CheckIdentityOnFramework(request.Capture, true);
-                AnimationRuntime.CheckPartial(objects, request.Capture.Clip);
+                if (requiresLiveSkeleton) AnimationRuntime.CheckPartial(objects, request.Capture.Clip);
             });
         }, message =>
         {
@@ -302,7 +306,7 @@ internal sealed class AnimationEditService : IDisposable
         journals.SaveOffsetBackup(bakedBackup);
         try
         {
-            await CheckActorAsync(request.Capture);
+            await CheckActorAsync(request.Capture, false);
             journal.OffsetsCleared = await framework.RunOnFrameworkThread(() =>
             {
                 if (disposed) throw new OperationCanceledException();

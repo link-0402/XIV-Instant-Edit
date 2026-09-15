@@ -149,11 +149,20 @@ internal sealed class AnimationResources(PenumbraService penumbra, IDataManager 
         AnimationDependencies.SafeGamePath(source.RelativePath.Replace('\\', '/')) &&
         source.GamePath.EndsWith(".pap", StringComparison.OrdinalIgnoreCase);
 
+    internal static ImmutableArray<string> ManifestRoots(IEnumerable<string> sourcePaths, IEnumerable<string> packagedPaths) =>
+        sourcePaths.Concat(packagedPaths).Distinct(StringComparer.Ordinal).ToImmutableArray();
+
     public async Task<AnimationDependencyManifest> ManifestAsync(AnimationCapture capture, AnimationCatalog catalog,
-        IEnumerable<string> packagedPaths, CancellationToken token)
+        IEnumerable<string> sourcePaths, IEnumerable<string> packagedPaths, CancellationToken token)
     {
         var known = capture.FamilyPaths.Concat(capture.Sources.Select(s => s.GamePath)).ToImmutableArray();
         var loaded = capture.LoadedResourcePaths.IsDefault ? known : known.Concat(capture.LoadedResourcePaths).Distinct().ToImmutableArray();
+        // Family paths are discovery candidates, not all inputs to the current
+        // edit. Traversing every family member makes a loop-only rebake fail on
+        // an unrelated overridden startup TMB. Validate only the PAPs sampled
+        // by this operation and the files produced by it; their transitive
+        // dependencies are still followed below.
+        var roots = ManifestRoots(sourcePaths, packagedPaths);
         var reads = new Dictionary<string, (AnimationResource Resource, byte[] Bytes)>(StringComparer.Ordinal);
         async Task<(AnimationResource Resource, byte[] Bytes)> Read(string path)
         {
@@ -162,7 +171,7 @@ internal sealed class AnimationResources(PenumbraService penumbra, IDataManager 
             return source;
         }
         var metadata = AnimationMetadata.Decode(await penumbra.AnimationMetadataAsync(capture.CollectionId));
-        var manifest = await AnimationDependencies.BuildAsync(known,
+        var manifest = await AnimationDependencies.BuildAsync(roots,
             Read,
             async (parent, reference) =>
             {
@@ -208,6 +217,16 @@ internal sealed class AnimationResources(PenumbraService penumbra, IDataManager 
                 try { if (await Contains(candidate)) containing.Add(candidate); }
                 catch (FileNotFoundException) { } // An inferred game variant may not exist.
             }
+        // Penumbra's player snapshot can omit the animation pack that owns an
+        // external timeline. Emote startup PAPs are deterministic siblings of
+        // the selected loop, so infer that path from the TMB and validate its
+        // actual entry before accepting it.
+        if (containing.Count == 0 &&
+            AnimationCatalog.PapPathFromActionTimeline(parent, selectedPap) is { } inferred && checkedPaths.Add(inferred))
+        {
+            try { if (await Contains(inferred)) containing.Add(inferred); }
+            catch (FileNotFoundException) { }
+        }
         if (containing.Count != 1)
             throw new InvalidDataException(containing.Count == 0
                 ? $"Cannot identify the current player's PAP for motion '{motion}' in {parent}."

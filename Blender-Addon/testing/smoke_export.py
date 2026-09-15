@@ -848,6 +848,7 @@ def run() -> None:
 
         original_urlopen = plugin_http.urllib.request.urlopen
 
+        coverage_material = "/mt_c0101e0002_top_c.mtrl"
         planned_aliases = {
             (context_id, assigned.casefold()): "/mt_c0101e0001_top_a.mtrl",
             (context_id, added_material.casefold()): "/mt_c0101e0001_top_b.mtrl",
@@ -873,7 +874,7 @@ def run() -> None:
                     "missing": [] if not material_coverage_warning else [{
                         "contextId": "smoke-mashup-context",
                         "sourceModName": "Other Smoke Mod",
-                        "modelMaterial": added_material,
+                        "modelMaterial": coverage_material,
                         "gamePath": "chara/equipment/e0001/texture/missing_d.tex",
                         "resourceType": "texture",
                     }],
@@ -1000,7 +1001,7 @@ def run() -> None:
         context_module.tag_object(mashup_obj, {
             **imported_metadata,
             "context_id": mashup_context_id,
-            "xiv_material": added_material,
+            "xiv_material": coverage_material,
             "mesh_index": 2,
         })
         def layer_for(collection):
@@ -1195,28 +1196,73 @@ def run() -> None:
                 coverage_payload.get("contextId") != context_id or \
                 coverage_payload.get("capability") != "smoke-capability" or \
                 {item.get("contextId") for item in coverage_payload.get("contributors", [])} != {
-                    context_id, mashup_context_id
+                    mashup_context_id
                 } or any(
                     not isinstance(item.get("materials"), list) or not item.get("materials")
                     or not isinstance(item.get("capability"), str)
                     for item in coverage_payload.get("contributors", [])
                 ):
             raise AssertionError(f"Material coverage request payload was incomplete: {coverage_payload}")
+        mashup_ref = context_module.validate_context(mashup_context_id, bpy.context.scene)
+        shared_material_payload = instant_ops._material_coverage_contributor_payload(
+            ref,
+            [ref, mashup_ref],
+            {context_id: [assigned], mashup_context_id: [assigned]},
+        )
+        if shared_material_payload:
+            raise AssertionError(
+                f"Shared active material was not removed from coverage payload: {shared_material_payload}")
+        general_material_payload = instant_ops._material_coverage_contributor_payload(
+            ref,
+            [ref, mashup_ref],
+            {
+                context_id: [
+                    "/mt_c0201b0001_bibo.mtrl",
+                    "/mt_c0201b0001_yatoe.mtrl",
+                    "/mt_c0201e0788_sho_a.mtrl",
+                ],
+                mashup_context_id: [
+                    "/mt_c0201b0001_bibo.mtrl",
+                    "/mt_c0201b0001_bibopube.mtrl",
+                    "/mt_c0201b0001_piercings.mtrl",
+                ],
+            },
+        )
+        if general_material_payload:
+            raise AssertionError(
+                f"General materials were not removed from coverage payload: {general_material_payload}")
+        shared_body_materials = (
+            "/mt_c0201b0001_yatoe.mtrl",
+            "/mt_c1301b0001_unlisted_body_variant.mtrl",
+            "/mt_c0101b0001.mtrl",
+        )
+        if not all(instant_ops._is_general_material(material) for material in shared_body_materials):
+            raise AssertionError("The complete race b0001 material family was not treated as shared")
+        if instant_ops._is_general_material("/mt_c0201b0002_yatoe.mtrl"):
+            raise AssertionError("A non-b0001 body material was incorrectly treated as shared")
         if not instant_ops.material_coverage_warning_state(bpy.context) or len(material_coverage_payloads) != 1:
             raise AssertionError("Material coverage did not use its ten-second composition cache")
         coverage_issues = instant_ops.export_target_issues(
             bpy.context, ref, material_coverage_warning=True
         )
         if not any(
-            severity == "WARNING" for severity, _message in coverage_issues
+            severity == "WARNING" and coverage_material in message
+            for severity, message in coverage_issues
         ) or any(severity == "ERROR" for severity, _message in coverage_issues):
-            raise AssertionError(f"Material coverage was not reported as an advisory warning: {coverage_issues}")
+            raise AssertionError(
+                f"Material coverage did not name the missing material: {coverage_issues}")
         instant_props.variant_target = instant_ops.MASHUP_TARGET
         mashup_readiness = instant_ops.export_target_issues(
             bpy.context, ref, material_coverage_warning=True
         )
         if any(severity == "WARNING" for severity, _message in mashup_readiness):
             raise AssertionError("Create Mashup retained the external coverage warning")
+        instant_props.variant_target = "NEW_GROUP"
+        if not instant_ops.unsafe_export_warning_state(bpy.context, ref):
+            raise AssertionError("A non-mashup export did not require confirmation after a coverage miss")
+        instant_props.variant_target = instant_ops.MASHUP_TARGET
+        if instant_ops.unsafe_export_warning_state(bpy.context, ref):
+            raise AssertionError("Create Mashup incorrectly required the non-mashup confirmation")
         instant_props.variant_target = "NEW_GROUP"
         material_coverage_warning = False
         instant_props.export_scope = "VISIBLE_NO_MANNEQUIN"

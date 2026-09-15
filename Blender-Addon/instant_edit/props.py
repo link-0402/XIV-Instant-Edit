@@ -126,7 +126,7 @@ class XIVIEInstantEditProps(PropertyGroup):
     )  # type: ignore
 
     create_attribute_groups: BoolProperty(
-        name="Create Penumbra Attribute Groups",
+        name="Create Penumbra Attribute Toggle Group",
         description=(
             "Create or update Penumbra IMC/ATR groups from the model's enabled "
             "part attributes during Quick Export"

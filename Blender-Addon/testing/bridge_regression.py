@@ -727,6 +727,15 @@ def run_staging_isolation_regression(addon) -> None:
             bpy.ops.xiv_ie.copy_status() == {"FINISHED"},
             "the complete import-status clipboard action executes",
         )
+        _require(
+            bpy.ops.xiv_ie.copy_target_status(
+                status_message=(
+                    "Warning: the output mod is missing material or texture files; "
+                    "use Create Mashup to include them."
+                ),
+            ) == {"FINISHED"},
+            "the complete export-target-status clipboard action executes",
+        )
         redraw_payload = ops.build_export_payload(
             SimpleNamespace(
                 plugin_instance_id="plugin-instance",
@@ -767,6 +776,40 @@ def run_staging_isolation_regression(addon) -> None:
             attribute_payload["attributeMasks"] == {"atr_tv_a": 1},
             "attribute group settings are carried in the export envelope",
         )
+
+        with temporary_scene_data():
+            detection_mesh_data = bpy.data.meshes.new("AttributeDetectionMeshData")
+            detection_mesh_data.from_pydata(
+                [(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+            detection_mesh = bpy.data.objects.new(
+                "0.0 Attribute Detection", detection_mesh_data)
+            bpy.context.collection.objects.link(detection_mesh)
+            detection_mesh["atr_nek"] = True
+            detection_mesh["atr_ude"] = True
+            detection_mesh["atr_hij"] = True
+            detection_mesh["atr_tv_a"] = True
+            detection_mesh["atr_tv_b"] = True
+            detection_mesh["atr_tv_c"] = True
+            original_export_destination = ops.export_destination_context
+            original_export_objects = ops.export_objects_for_scope
+            try:
+                ops.export_destination_context = lambda *_args, **_kwargs: object()
+                ops.export_objects_for_scope = lambda *_args, **_kwargs: [detection_mesh]
+                detected_tags = ops.detected_attribute_group_tags(bpy.context)
+                _tags, detected_masks = importlib.import_module(
+                    f"{package_name}.materials").attribute_group_data([detection_mesh])
+            finally:
+                ops.export_destination_context = original_export_destination
+                ops.export_objects_for_scope = original_export_objects
+            _require(
+                detected_tags == ("atr_tv_a", "atr_tv_b", "atr_tv_c") and
+                detected_masks == {
+                    "atr_tv_a": 1,
+                    "atr_tv_b": 2,
+                    "atr_tv_c": 4,
+                },
+                "Quick Export maps A/B/C by suffix despite preceding built-in attributes",
+            )
 
         class ReceiptResponse:
             def __init__(self, status, payload):

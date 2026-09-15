@@ -36,13 +36,15 @@ public sealed partial class MainWindow : Window, IDisposable
     private bool _blenderChecking; private int _editing;
     private DateTime _lastBlenderCheck = DateTime.MinValue;
     private DateTime _lastModListRefresh = DateTime.MinValue;
-    private string _filter = string.Empty, _modFilter = string.Empty, _resourceTypeFilter = "Models", _status = string.Empty;
+    private string _filter = string.Empty, _modFilter = string.Empty, _resourceTypeFilter = "Models", _status = string.Empty, _textureStatus = string.Empty;
     private string? _selectedModDirectory, _loadedModDirectory;
     private IReadOnlyList<PenumbraMod> _mods = Array.Empty<PenumbraMod>();
     private ActorView? _loadedModView;
     private CancellationTokenSource? _modLoadCts;
     private bool _modLoading, _modLoadFailed;
     private FeedbackSeverity _statusSeverity = FeedbackSeverity.Success;
+    private FeedbackSeverity _textureStatusSeverity = FeedbackSeverity.Success;
+    private MainTab _activeTab = MainTab.OnScreen;
 
     public MainWindow(Configuration config, PenumbraService penumbra, OnScreenService onScreen, BlenderClient blender,
         IDataManager data, IChatGui chat, IPluginLog log, Action saveConfig, Action restartExportListener, IUiBuilder uiBuilder,
@@ -111,37 +113,43 @@ public sealed partial class MainWindow : Window, IDisposable
     public override void Draw()
     {
         DrawHeader();
-        var animationsTabActive = false;
-        if (ImGui.BeginTabBar("##instant-edit-tabs"))
+        var feedback = GetFeedback(_activeTab);
+        var feedbackHeight = GetFeedbackHeight(feedback);
+        var feedbackSpacing = feedbackHeight > 0 ? ImGui.GetStyle().ItemSpacing.Y : 0;
+        var tabRegionHeight = Math.Max(1, ImGui.GetContentRegionAvail().Y - feedbackHeight - feedbackSpacing);
+        var activeTab = _activeTab;
+        if (ImGui.BeginChild("##instant-edit-tab-region", new Vector2(0, tabRegionHeight), false, ImGuiWindowFlags.NoBackground))
         {
-            if (ImGui.BeginTabItem("On Screen"))
+            if (ImGui.BeginTabBar("##instant-edit-tabs"))
             {
-                DrawOnScreenTab();
-                ImGui.EndTabItem();
-            }
+                if (ImGui.BeginTabItem("On Screen"))
+                {
+                    activeTab = MainTab.OnScreen;
+                    DrawOnScreenTab();
+                    ImGui.EndTabItem();
+                }
 
-            if (ImGui.BeginTabItem("Mod Browser"))
-            {
-                DrawModsTab();
-                ImGui.EndTabItem();
-            }
+                if (ImGui.BeginTabItem("Mod Browser"))
+                {
+                    activeTab = MainTab.ModBrowser;
+                    DrawModsTab();
+                    ImGui.EndTabItem();
+                }
 
-            if (ImGui.BeginTabItem("Texture Edits"))
-            {
-                DrawTextureSessions();
-                ImGui.EndTabItem();
+                if (ImGui.BeginTabItem("Texture Edit Sessions"))
+                {
+                    activeTab = MainTab.TextureEdits;
+                    DrawTextureSessions();
+                    ImGui.EndTabItem();
+                }
+                ImGui.EndTabBar();
             }
-            if (ImGui.BeginTabItem("Animations"))
-            {
-                animationsTabActive = true;
-                DrawAnimations();
-                ImGui.EndTabItem();
-            }
-            ImGui.EndTabBar();
         }
-        if (!animationsTabActive) animations?.StopObservation();
+        ImGui.EndChild();
+        _activeTab = activeTab;
+        animations?.StopObservation();
         DrawTextureDialogs();
-        DrawFeedback();
+        DrawFeedback(GetFeedback(activeTab));
         DrawWindowOptionsExtension();
     }
 
@@ -173,6 +181,8 @@ public sealed partial class MainWindow : Window, IDisposable
 
     private void DrawOnScreenTab()
     {
+        ImGui.Spacing();
+        if (ImGui.SmallButton("Refresh character list")) RequestRefresh();
         ImGui.Spacing();
         ImGui.SetNextItemWidth(-1); ImGui.InputTextWithHint("##resource-filter", "Search", ref _filter, 256);
         var includeVanilla = _config.IncludeVanillaResources;
@@ -252,7 +262,6 @@ public sealed partial class MainWindow : Window, IDisposable
     private void DrawHeader()
     {
         ImGui.TextColored(new Vector4(.95f, .78f, .35f, 1), "XIV INSTANT EDIT"); ImGui.SameLine(); ImGui.TextColored(new Vector4(.56f, .58f, .65f, 1), "On Screen");
-        ImGui.SameLine(0, 12); if (ImGui.SmallButton("Refresh character list")) RequestRefresh();
         var penumbra = false;
         try { penumbra = _penumbra.Available; } catch (Exception e) { _log.Debug(e.Message); }
         StartBlenderCheckIfNeeded(); BlenderConnectionState blender; lock (_stateLock) blender = _blenderState;
@@ -270,7 +279,12 @@ public sealed partial class MainWindow : Window, IDisposable
 
     private void DrawImportOptions()
     {
-        ImGui.TextColored(new Vector4(.76f, .78f, .84f, 1), "IMPORT OPTIONS");
+        if (!ImGui.CollapsingHeader("IMPORT OPTIONS", ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            ImGui.Separator();
+            return;
+        }
+
         var useExistingSkeleton = _config.UseExistingSkeleton;
         if (ImGui.Checkbox("Remove imported armature and use existing skeleton", ref useExistingSkeleton))
         {
@@ -293,7 +307,7 @@ public sealed partial class MainWindow : Window, IDisposable
         }
         else
         {
-            ImGui.TextColored(new Vector4(.55f, .57f, .64f, 1), "Each import creates its own InstantEditArmature.");
+            ImGui.TextColored(new Vector4(.55f, .57f, .64f, 1), "Each import creates its own InstantEditArmature. This armature is only safe for import and export and is not suited for posing, animation or scaling.");
         }
 
         var applyTexturesAndMaterials = _config.ApplyTexturesAndMaterials;
@@ -349,11 +363,7 @@ public sealed partial class MainWindow : Window, IDisposable
     private void DrawResources(IReadOnlyList<ActorView> actors, string? emptyMessage = null)
     {
         actors = actors.Where(ActorMatches).ToList();
-        // The feedback panel lives below the tab bar. Reserve its full wrapped height
-        // so resizing grows the resource browser without pushing feedback off-screen.
-        var feedbackHeight = GetFeedbackHeight();
-        var feedbackSpacing = feedbackHeight > 0 ? ImGui.GetStyle().ItemSpacing.Y : 0;
-        var viewportHeight = Math.Max(1, ImGui.GetContentRegionAvail().Y - feedbackHeight - feedbackSpacing);
+        var viewportHeight = Math.Max(1, ImGui.GetContentRegionAvail().Y);
         ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(.075f, .085f, .105f, 1));
         if (!ImGui.BeginChild("##resource-browser", new Vector2(0, viewportHeight), true)) { ImGui.EndChild(); ImGui.PopStyleColor(); return; }
         if (emptyMessage is null && _onScreen.IsRefreshing && actors.Count == 0) ImGui.TextColored(new Vector4(.65f, .68f, .75f, 1), "Refreshing resources…");
@@ -361,8 +371,6 @@ public sealed partial class MainWindow : Window, IDisposable
         else foreach (var actor in actors) DrawActor(actor);
         ImGui.EndChild();
         ImGui.PopStyleColor();
-        if (feedbackHeight > 0)
-            ImGui.Spacing();
     }
 
     private void DrawActor(ActorView actor)
@@ -1355,15 +1363,32 @@ public sealed partial class MainWindow : Window, IDisposable
             }
         });
     }
-    private void DrawFeedback()
+    private FeedbackState GetFeedback(MainTab tab)
     {
-        string text;
-        FeedbackSeverity severity;
-        lock (_stateLock)
+        if (tab == MainTab.TextureEdits)
         {
-            text = _status;
-            severity = _statusSeverity;
+            lock (_stateLock)
+                return new FeedbackState(_textureStatus, _textureStatusSeverity);
         }
+
+        if (tab == MainTab.Animations)
+        {
+            var service = animations;
+            if (service is null)
+                return new FeedbackState(string.Empty, FeedbackSeverity.Error);
+            return new FeedbackState(service.Status, service.LastResult is { Success: false } && !service.Busy
+                ? FeedbackSeverity.Error
+                : FeedbackSeverity.Success);
+        }
+
+        lock (_stateLock)
+            return new FeedbackState(_status, _statusSeverity);
+    }
+
+    private void DrawFeedback(FeedbackState feedback)
+    {
+        var text = feedback.Text;
+        var severity = feedback.Severity;
 
         if (text.Length == 0)
             return;
@@ -1392,13 +1417,8 @@ public sealed partial class MainWindow : Window, IDisposable
         ImGui.PopStyleColor(2);
     }
 
-    private float GetFeedbackHeight()
-    {
-        string text;
-        lock (_stateLock)
-            text = _status;
-        return text.Length == 0 ? 0 : CalculateFeedbackHeight(text);
-    }
+    private float GetFeedbackHeight(FeedbackState feedback)
+        => feedback.Text.Length == 0 ? 0 : CalculateFeedbackHeight(feedback.Text);
 
     private static float CalculateFeedbackHeight(string text)
     {
@@ -1410,6 +1430,7 @@ public sealed partial class MainWindow : Window, IDisposable
     }
 
     private void SetStatus(string text, FeedbackSeverity severity) { lock (_stateLock) { _status = text; _statusSeverity = severity; } }
+    private void SetTextureStatus(string text, FeedbackSeverity severity) { lock (_stateLock) { _textureStatus = text; _textureStatusSeverity = severity; } }
     private static string Sanitize(string name) { var invalid = Path.GetInvalidFileNameChars(); var value = new string(name.Select(c => invalid.Contains(c) ? '_' : c).ToArray()).Trim(); return value.Length == 0 ? "Object" : value; }
 
     private static string Safe(string? value, string fallback = "")
@@ -1427,6 +1448,16 @@ public sealed partial class MainWindow : Window, IDisposable
         Warning,
         Error,
     }
+
+    private enum MainTab
+    {
+        OnScreen,
+        ModBrowser,
+        TextureEdits,
+        Animations,
+    }
+
+    private readonly record struct FeedbackState(string Text, FeedbackSeverity Severity);
 
     private sealed record ActorView(
         OnScreenObject? Entity,

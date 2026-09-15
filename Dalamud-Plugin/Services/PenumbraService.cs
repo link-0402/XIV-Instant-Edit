@@ -436,7 +436,8 @@ public sealed partial class PenumbraService
         bool createAttributeGroups = false,
         IReadOnlyList<string>? attributeTags = null,
         IReadOnlyDictionary<string, int>? attributeMasks = null,
-        string? resolvedGamePath = null)
+        string? resolvedGamePath = null,
+        JsonArray? sourceManipulations = null)
     {
         resolvedGamePath ??= sourceGamePath;
         if (!IsSafeModName(sourceModDirectory) || !IsSafeGamePath(sourceGamePath) ||
@@ -547,7 +548,8 @@ public sealed partial class PenumbraService
             if (createAttributeGroups && attributeTags is { Count: > 0 })
             {
                 var attributeError = WriteAttributeGroups(
-                    resolved.Target.Folder, resolvedGamePath, attributeTags, attributeMasks);
+                    resolved.Target.Folder, resolvedGamePath, attributeTags, attributeMasks,
+                    sourceManipulations);
                 if (attributeError is not null)
                     warnings.Add($"Penumbra attribute group setup failed: {AttributeGroupErrorMessage(attributeError)}");
             }
@@ -676,7 +678,8 @@ public sealed partial class PenumbraService
                 if (createAttributeGroups && attributeTags is { Count: > 0 })
                 {
                     var attributeError = WriteAttributeGroups(
-                        staging, context.ResolvedGamePath, attributeTags, attributeMasks);
+                        staging, context.ResolvedGamePath, attributeTags, attributeMasks,
+                        context.ResourceManifest?.Manipulations);
                     if (attributeError is not null)
                         throw new InvalidDataException(attributeError);
                 }
@@ -1496,6 +1499,12 @@ public sealed partial class PenumbraService
         IReadOnlyDictionary<string, int>? attributeMasks)
     {
         _ = LoadV4ModMetadata(target.Folder);
+        var outputManipulations = createAttributeGroups && attributeTags is { Count: > 0 }
+            ? ManipulationsWithAtrDefaults(
+                activeContext.ResourceManifest?.Manipulations,
+                activeContext.ResolvedGamePath,
+                attributeTags)
+            : CloneManipulations(activeContext.ResourceManifest?.Manipulations);
         var namespaceRelative = $"Files/xiv-instant-edit/mashups/{exportId[..12]}";
         var namespaceFolder = Path.Combine(target.Folder, namespaceRelative.Replace('/', Path.DirectorySeparatorChar));
         if (Directory.Exists(namespaceFolder))
@@ -1519,7 +1528,8 @@ public sealed partial class PenumbraService
             committed = true;
 
             var attributeWarnings = createAttributeGroups && attributeTags is { Count: > 0 }
-                ? WriteAttributeGroups(target.Folder, activeContext.ResolvedGamePath, attributeTags, attributeMasks)
+                ? WriteAttributeGroups(target.Folder, activeContext.ResolvedGamePath, attributeTags,
+                    attributeMasks, activeContext.ResourceManifest?.Manipulations)
                 : null;
 
             var warnings = ExternalMashupWarnings(prepared.RequiredExternalMods).ToList();
@@ -1558,7 +1568,7 @@ public sealed partial class PenumbraService
                 OutputTargetRelativePath: modelRelative,
                 OutputResourceManifest: BuildMashupResourceManifest(
                     prepared, target.Directory, target.Folder, cleanup.PathRemap,
-                    activeContext.ResourceManifest?.Manipulations));
+                    outputManipulations));
         }
         catch (Exception e)
         {
@@ -1580,7 +1590,7 @@ public sealed partial class PenumbraService
                 OutputTargetRelativePath: modelRelative,
                 OutputResourceManifest: BuildMashupResourceManifest(
                     prepared, target.Directory, target.Folder, null,
-                    activeContext.ResourceManifest?.Manipulations));
+                    outputManipulations));
         }
     }
 
@@ -1609,6 +1619,12 @@ public sealed partial class PenumbraService
         if (conflicts || Directory.Exists(finalFolder) || File.Exists(finalFolder))
             return new ExportResult(false, "mashup_mod_exists", "A Penumbra mod or folder with this name already exists.");
 
+        var outputManipulations = createAttributeGroups && attributeTags is { Count: > 0 }
+            ? ManipulationsWithAtrDefaults(
+                activeContext.ResourceManifest?.Manipulations,
+                activeContext.ResolvedGamePath,
+                attributeTags)
+            : CloneManipulations(activeContext.ResourceManifest?.Manipulations);
         var staging = Path.Combine(root, $".instant-edit-mashup-{Guid.NewGuid():N}.tmp");
         var committed = false;
         try
@@ -1628,7 +1644,8 @@ public sealed partial class PenumbraService
             if (createAttributeGroups && attributeTags is { Count: > 0 })
             {
                 var attributeError = WriteAttributeGroups(
-                    staging, activeContext.ResolvedGamePath, attributeTags, attributeMasks);
+                    staging, activeContext.ResolvedGamePath, attributeTags, attributeMasks,
+                    activeContext.ResourceManifest?.Manipulations);
                 if (attributeError is not null)
                     throw new InvalidDataException(attributeError);
             }
@@ -1636,7 +1653,7 @@ public sealed partial class PenumbraService
                 staging,
                 modName,
                 prepared.Mappings,
-                activeContext.ResourceManifest?.Manipulations,
+                outputManipulations,
                 prepared.FileSwaps);
             Directory.Move(staging, finalFolder);
             committed = true;
@@ -1681,7 +1698,7 @@ public sealed partial class PenumbraService
                 OutputTargetRelativePath: modelRelative,
                 OutputResourceManifest: BuildMashupResourceManifest(
                     prepared, modName, finalFolder, cleanup.PathRemap,
-                    activeContext.ResourceManifest?.Manipulations),
+                    outputManipulations),
                 OutputModStableId: stableId);
         }
         catch (Exception e)
@@ -1704,7 +1721,7 @@ public sealed partial class PenumbraService
                     OutputTargetRelativePath: modelRelative,
                     OutputResourceManifest: BuildMashupResourceManifest(
                         prepared, modName, finalFolder, null,
-                        activeContext.ResourceManifest?.Manipulations),
+                        outputManipulations),
                     OutputModStableId: stableId);
             }
             return new ExportResult(false, "mashup_mod_create_failed", e.Message);
@@ -4195,22 +4212,146 @@ public sealed partial class PenumbraService
             return "attribute_group_invalid: The resolved model path is not a supported gear, accessory, hair, or face model path.";
         var meta = LoadV4ModMetadata(modFolder);
         var marker = AttributeGroupMarker("atr", NormalizeGamePath(resolvedGamePath));
-        return HasUnmanagedAtrConflict(meta, marker, identity)
-            ? "attribute_group_conflict: An existing Penumbra option already contains an unmanaged atrx_ toggle for this exact model ID, slot, and race code. Remove the existing atrx_ toggles first, then retry the export."
+        var groups = meta["Groups"] as JsonArray ?? new JsonArray();
+        var previousManagedAtrTags = ManagedAtrTags(groups, marker);
+        var compatibleDefaultTags = new HashSet<string>(previousManagedAtrTags, StringComparer.Ordinal);
+        compatibleDefaultTags.UnionWith(customTags);
+        return HasUnmanagedAtrConflict(meta, marker, identity, compatibleDefaultTags)
+            ? "attribute_group_conflict: An existing Penumbra option already contains an unmanaged atrx_ toggle overlapping this model ID and slot. Remove the existing atrx_ toggles first, then retry the export."
             : null;
     }
 
-    private static string? WriteAttributeGroups(
+    private string? WriteAttributeGroups(
         string modFolder,
         string resolvedGamePath,
         IReadOnlyList<string> tags,
-        IReadOnlyDictionary<string, int>? masks)
+        IReadOnlyDictionary<string, int>? masks,
+        JsonArray? sourceManipulations)
     {
+        JsonObject? defaultImcEntry = null;
+        if (tags.Any(tag => TryGetStandardAttributeSuffix(tag, out _)))
+        {
+            var identity = ParseAttributeModelIdentity(resolvedGamePath);
+            if (identity is not null)
+                defaultImcEntry = ResolveAttributeGroupImcEntry(
+                    resolvedGamePath, identity, sourceManipulations);
+            if (defaultImcEntry is null)
+                return "attribute_group_imc_unavailable: Could not resolve the current IMC entry for this model. Re-import it with game data available, then retry the export.";
+        }
+
         var error = PrepareAttributeGroups(
-            modFolder, resolvedGamePath, tags, masks, out var prepared);
+            modFolder, resolvedGamePath, tags, masks, defaultImcEntry, out var prepared);
         if (error is not null)
             return error;
         return prepared is null ? null : CommitAttributeGroups(prepared);
+    }
+
+    private JsonObject? ResolveAttributeGroupImcEntry(
+        string resolvedGamePath,
+        AttributeModelIdentity identity,
+        JsonArray? sourceManipulations)
+    {
+        var captured = CapturedImcEntry(identity, sourceManipulations);
+        if (captured is not null)
+            return captured;
+        if (_data is null)
+            return null;
+
+        try
+        {
+            var path = NormalizeGamePath(resolvedGamePath);
+            var modelIndex = path.LastIndexOf("/model/", StringComparison.OrdinalIgnoreCase);
+            if (modelIndex <= 0)
+                return null;
+            var folder = path[..modelIndex];
+            var folderName = folder[(folder.LastIndexOf('/') + 1)..];
+            var imc = _data.GetFile<ImcFile>($"{folder}/{folderName}.imc");
+            if (imc is null)
+                return null;
+
+            var logicalPart = identity.AtrSlot switch
+            {
+                "Head" or "Ears" or "Hair" or "Face" => 0,
+                "Body" or "Neck" => 1,
+                "Hands" or "Wrists" => 2,
+                "Legs" or "RFinger" => 3,
+                "Feet" or "LFinger" => 4,
+                _ => -1,
+            };
+            if (logicalPart < 0 || (imc.PartMask & (1 << logicalPart)) == 0)
+                return null;
+            var partIndex = 0;
+            for (var bit = 0; bit < logicalPart; ++bit)
+                if ((imc.PartMask & (1 << bit)) != 0)
+                    ++partIndex;
+
+            var entry = imc.Count > 0
+                ? imc.GetVariant(partIndex, 0)
+                : imc.GetDefaultVariant(partIndex);
+            if (entry.MaterialId == 0)
+                return null;
+            var soundId = entry.SoundId > 0x3F ? entry.SoundId >> 10 : entry.SoundId;
+            return ImcEntry(
+                entry.MaterialId,
+                entry.DecalId,
+                entry.VfxId,
+                entry.MaterialAnimationId,
+                0,
+                soundId);
+        }
+        catch (Exception error)
+        {
+            _log.Debug(error, "Could not resolve the game IMC entry for {GamePath}.", resolvedGamePath);
+            return null;
+        }
+    }
+
+    private static JsonObject? CapturedImcEntry(
+        AttributeModelIdentity identity,
+        JsonArray? sourceManipulations)
+    {
+        if (sourceManipulations is null)
+            return null;
+        foreach (var item in sourceManipulations.OfType<JsonObject>())
+        {
+            if (!string.Equals(JsonString(item["Type"]), "Imc", StringComparison.OrdinalIgnoreCase) ||
+                item["Manipulation"] is not JsonObject manipulation ||
+                manipulation["Entry"] is not JsonObject entry ||
+                !string.Equals(JsonString(manipulation["ObjectType"]), identity.ObjectType,
+                    StringComparison.OrdinalIgnoreCase) ||
+                JsonIntFlexible(manipulation["PrimaryId"]) != identity.Id ||
+                JsonIntFlexible(manipulation["Variant"]) != 1)
+                continue;
+            if (identity.ObjectType is "Equipment" or "Accessory")
+            {
+                if (!string.Equals(JsonString(manipulation["EquipSlot"]), identity.EquipSlot,
+                        StringComparison.OrdinalIgnoreCase))
+                    continue;
+            }
+            else if (!string.Equals(JsonString(manipulation["BodySlot"]), identity.BodySlot,
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var materialId = JsonIntFlexible(entry["MaterialId"]);
+            if (materialId is < 1 or > byte.MaxValue)
+                continue;
+            return ImcEntry(
+                materialId,
+                JsonByteOrZero(entry["DecalId"]),
+                JsonByteOrZero(entry["VfxId"]),
+                JsonByteOrZero(entry["MaterialAnimationId"]),
+                0,
+                Math.Clamp(JsonIntFlexible(entry["SoundId"]), 0, 0x3F));
+        }
+        return null;
+    }
+
+    private static int JsonByteOrZero(JsonNode? node)
+    {
+        var value = JsonIntFlexible(node);
+        return value is >= byte.MinValue and <= byte.MaxValue ? value : 0;
     }
 
     private static string? PrepareAttributeGroups(
@@ -4218,6 +4359,7 @@ public sealed partial class PenumbraService
         string resolvedGamePath,
         IReadOnlyList<string> tags,
         IReadOnlyDictionary<string, int>? masks,
+        JsonObject? defaultImcEntry,
         out AttributeGroupWrite? prepared)
     {
         prepared = null;
@@ -4234,16 +4376,24 @@ public sealed partial class PenumbraService
         meta["Groups"] = groups;
         var markerPath = NormalizeGamePath(resolvedGamePath);
         var atrMarker = AttributeGroupMarker("atr", markerPath);
-        if (customTags.Count > 0 && HasUnmanagedAtrConflict(meta, atrMarker, identity))
-            return "attribute_group_conflict: An existing Penumbra option already contains an unmanaged atrx_ toggle for this exact model ID, slot, and race code. Remove the existing atrx_ toggles first, then retry the export.";
+        var previousManagedAtrTags = ManagedAtrTags(groups, atrMarker);
+        var compatibleDefaultTags = new HashSet<string>(previousManagedAtrTags, StringComparer.Ordinal);
+        compatibleDefaultTags.UnionWith(customTags);
+        if (customTags.Count > 0 && HasUnmanagedAtrConflict(
+                meta, atrMarker, identity, compatibleDefaultTags))
+            return "attribute_group_conflict: An existing Penumbra option already contains an unmanaged atrx_ toggle overlapping this model ID and slot. Remove the existing atrx_ toggles first, then retry the export.";
+
+        UpdateManagedAtrDefaults(meta, identity, previousManagedAtrTags, customTags);
 
         if (suffixMasks.Count > 0)
         {
+            if (defaultImcEntry is null)
+                return "attribute_group_imc_unavailable: No current IMC entry was supplied for the generated group.";
             UpsertAttributeGroup(
                 groups,
                 AttributeGroupMarker("imc", markerPath),
                 GeneratedAttributeGroupName(identity, markerPath, "IMC"),
-                existing => BuildImcAttributeGroup(existing, identity, suffixMasks));
+                existing => BuildImcAttributeGroup(existing, identity, suffixMasks, defaultImcEntry));
         }
         else
         {
@@ -4284,8 +4434,19 @@ public sealed partial class PenumbraService
         string modFolder,
         string resolvedGamePath,
         IReadOnlyList<string> tags,
-        IReadOnlyDictionary<string, int>? masks)
-        => WriteAttributeGroups(modFolder, resolvedGamePath, tags, masks);
+        IReadOnlyDictionary<string, int>? masks,
+        JsonArray? sourceManipulations = null)
+    {
+        var identity = ParseAttributeModelIdentity(resolvedGamePath);
+        var defaultImcEntry = identity is null
+            ? null
+            : CapturedImcEntry(identity, sourceManipulations);
+        var error = PrepareAttributeGroups(
+            modFolder, resolvedGamePath, tags, masks, defaultImcEntry, out var prepared);
+        if (error is not null)
+            return error;
+        return prepared is null ? null : CommitAttributeGroups(prepared);
+    }
 
     private static string? NormalizeAttributeGroupInput(
         string resolvedGamePath,
@@ -4317,9 +4478,10 @@ public sealed partial class PenumbraService
 
             if (TryGetStandardAttributeSuffix(tag, out var suffix))
             {
-                if (masks is null || !masks.TryGetValue(tag, out var mask) || mask is < 1 or > 1023)
-                    return $"attribute_group_invalid: No valid MDL bit mask was supplied for {tag}.";
-                suffixMasks[suffix] = suffixMasks.GetValueOrDefault(suffix) | mask;
+                // IMC columns are semantic suffix bits, not positions in the
+                // model's attribute table. Canonicalize this here as well as
+                // in Blender so older payloads cannot shift A/B/C to D/E/F.
+                suffixMasks[suffix] = 1 << (suffix[0] - 'a');
                 continue;
             }
 
@@ -4524,12 +4686,13 @@ public sealed partial class PenumbraService
     private static JsonObject BuildImcAttributeGroup(
         JsonObject? existing,
         AttributeModelIdentity identity,
-        IReadOnlyDictionary<string, int> suffixMasks)
+        IReadOnlyDictionary<string, int> suffixMasks,
+        JsonObject defaultImcEntry)
     {
         var result = existing?.DeepClone() as JsonObject ?? new JsonObject();
         result["Type"] = "Imc";
         result["AllVariants"] = true;
-        result["OnlyAttributes"] = true;
+        result["OnlyAttributes"] = false;
         result["Identifier"] = new JsonObject
         {
             ["PrimaryId"] = identity.Id,
@@ -4539,9 +4702,10 @@ public sealed partial class PenumbraService
             ["EquipSlot"] = identity.EquipSlot,
             ["BodySlot"] = identity.BodySlot,
         };
-        var allMask = suffixMasks.Values.Aggregate(0, (current, value) => current | value);
-        result["DefaultEntry"] = ImcEntry(allMask);
-        result["Options"] = new JsonArray(suffixMasks
+        var groupEntry = defaultImcEntry.DeepClone().AsObject();
+        groupEntry["AttributeMask"] = 0;
+        result["DefaultEntry"] = groupEntry;
+        var options = suffixMasks
             .OrderBy(pair => pair.Key, StringComparer.Ordinal)
             .Select(pair => (JsonNode)new JsonObject
             {
@@ -4549,20 +4713,27 @@ public sealed partial class PenumbraService
                 ["Name"] = pair.Key.ToUpperInvariant(),
                 ["Description"] = $"Enable model parts tagged with suffix _{pair.Key}.",
                 ["AttributeMask"] = pair.Value,
-            }).ToArray());
-        result.Remove("DefaultSettings");
+            }).ToArray();
+        result["Options"] = new JsonArray(options);
+        result["DefaultSettings"] = (1 << options.Length) - 1;
         return result;
     }
 
-    private static JsonObject ImcEntry(int attributeMask)
+    private static JsonObject ImcEntry(
+        int materialId,
+        int decalId,
+        int vfxId,
+        int materialAnimationId,
+        int attributeMask,
+        int soundId)
         => new()
         {
-            ["MaterialId"] = 0,
-            ["DecalId"] = 0,
-            ["VfxId"] = 0,
-            ["MaterialAnimationId"] = 0,
+            ["MaterialId"] = materialId,
+            ["DecalId"] = decalId,
+            ["VfxId"] = vfxId,
+            ["MaterialAnimationId"] = materialAnimationId,
             ["AttributeMask"] = attributeMask,
-            ["SoundId"] = 0,
+            ["SoundId"] = soundId,
         };
 
     private static JsonObject BuildAtrAttributeGroup(
@@ -4577,31 +4748,140 @@ public sealed partial class PenumbraService
             ["Id"] = Guid.NewGuid().ToString("D"),
             ["Name"] = tag,
             ["Description"] = $"Enable {tag}.",
-            ["Manipulations"] = new JsonArray
-            {
-                new JsonObject
-                {
-                    ["Type"] = "Atr",
-                    ["Manipulation"] = new JsonObject
-                    {
-                        ["Entry"] = true,
-                        ["Attribute"] = tag,
-                        ["Slot"] = identity.AtrSlot,
-                        ["Id"] = identity.Id,
-                        ["GenderRaceCondition"] = identity.RaceCode,
-                    },
-                },
-            },
+            ["Manipulations"] = new JsonArray(BuildAtrManipulation(identity, tag, true)),
         }).ToArray());
         foreach (var property in new[] { "AllVariants", "OnlyAttributes", "Identifier", "DefaultEntry", "DefaultSettings" })
             result.Remove(property);
         return result;
     }
 
+    private static JsonObject BuildAtrManipulation(
+        AttributeModelIdentity identity,
+        string tag,
+        bool enabled)
+        => new()
+        {
+            ["Type"] = "Atr",
+            ["Manipulation"] = new JsonObject
+            {
+                ["Entry"] = enabled,
+                ["Attribute"] = tag,
+                ["Slot"] = identity.AtrSlot,
+                ["Id"] = identity.Id,
+                // Penumbra serializes Any Gender & Race as GenderRace.Unknown.
+                ["GenderRaceCondition"] = 0,
+            },
+        };
+
+    private static HashSet<string> ManagedAtrTags(JsonArray groups, string managedMarker)
+    {
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        var managedGroup = groups.OfType<JsonObject>().FirstOrDefault(group =>
+            string.Equals(JsonString(group["Description"]), managedMarker, StringComparison.Ordinal));
+        if (managedGroup is null)
+            return result;
+        foreach (var item in DescendantObjects(managedGroup))
+            if (string.Equals(JsonString(item["Type"]), "Atr", StringComparison.OrdinalIgnoreCase) &&
+                item["Manipulation"] is JsonObject manipulation &&
+                JsonString(manipulation["Attribute"]) is { } attribute &&
+                attribute.StartsWith("atrx_", StringComparison.Ordinal))
+                result.Add(attribute);
+        return result;
+    }
+
+    private static void UpdateManagedAtrDefaults(
+        JsonObject meta,
+        AttributeModelIdentity identity,
+        IReadOnlySet<string> previousTags,
+        IReadOnlyList<string> currentTags)
+    {
+        if (previousTags.Count == 0 && currentTags.Count == 0)
+            return;
+        var defaultData = meta["DefaultData"] as JsonObject;
+        if (defaultData is null)
+        {
+            defaultData = new JsonObject
+            {
+                ["Files"] = new JsonObject(),
+                ["FileSwaps"] = new JsonObject(),
+                ["Manipulations"] = new JsonArray(),
+            };
+            meta["DefaultData"] = defaultData;
+        }
+        var manipulations = defaultData["Manipulations"] as JsonArray ?? new JsonArray();
+        defaultData["Manipulations"] = manipulations;
+
+        for (var index = manipulations.Count - 1; index >= 0; --index)
+        {
+            if (manipulations[index] is not JsonObject item ||
+                !TryGetAtrManipulation(item, out var manipulation, out var attribute) ||
+                !previousTags.Contains(attribute) ||
+                !AtrManipulationMatchesIdentity(manipulation, identity) ||
+                !IsFalse(manipulation["Entry"]))
+                continue;
+            manipulations.RemoveAt(index);
+        }
+        foreach (var tag in currentTags)
+            if (!manipulations.OfType<JsonObject>().Any(item =>
+                    TryGetAtrManipulation(item, out var manipulation, out var attribute) &&
+                    string.Equals(attribute, tag, StringComparison.Ordinal) &&
+                    AtrManipulationMatchesIdentity(manipulation, identity) &&
+                    IsFalse(manipulation["Entry"])))
+                manipulations.Add(BuildAtrManipulation(identity, tag, false));
+    }
+
+    private static JsonArray ManipulationsWithAtrDefaults(
+        JsonArray? sourceManipulations,
+        string resolvedGamePath,
+        IReadOnlyList<string>? tags)
+    {
+        var result = CloneManipulations(sourceManipulations);
+        var identity = ParseAttributeModelIdentity(resolvedGamePath);
+        if (identity is null || tags is null)
+            return result;
+        foreach (var tag in tags.Where(tag => tag.StartsWith("atrx_", StringComparison.Ordinal))
+                     .Distinct(StringComparer.Ordinal).OrderBy(tag => tag, StringComparer.Ordinal))
+            if (!result.OfType<JsonObject>().Any(item =>
+                    TryGetAtrManipulation(item, out var manipulation, out var attribute) &&
+                    string.Equals(attribute, tag, StringComparison.Ordinal) &&
+                    AtrManipulationMatchesIdentity(manipulation, identity) &&
+                    IsFalse(manipulation["Entry"])))
+                result.Add(BuildAtrManipulation(identity, tag, false));
+        return result;
+    }
+
+    private static bool TryGetAtrManipulation(
+        JsonObject item,
+        out JsonObject manipulation,
+        out string attribute)
+    {
+        manipulation = null!;
+        attribute = "";
+        if (!string.Equals(JsonString(item["Type"]), "Atr", StringComparison.OrdinalIgnoreCase) ||
+            item["Manipulation"] is not JsonObject value ||
+            JsonString(value["Attribute"]) is not { } name ||
+            !name.StartsWith("atrx_", StringComparison.Ordinal))
+            return false;
+        manipulation = value;
+        attribute = name;
+        return true;
+    }
+
+    private static bool AtrManipulationMatchesIdentity(
+        JsonObject manipulation,
+        AttributeModelIdentity identity)
+        => string.Equals(JsonString(manipulation["Slot"]), identity.AtrSlot, StringComparison.Ordinal) &&
+           JsonIntFlexible(manipulation["Id"]) == identity.Id &&
+           JsonIntFlexible(manipulation["GenderRaceCondition"]) == 0;
+
+    private static bool IsFalse(JsonNode? node)
+        => node is JsonValue value && value.TryGetValue<bool>(out var result) && !result;
+
     private static bool HasUnmanagedAtrConflict(
         JsonObject meta,
         string managedMarker,
-        AttributeModelIdentity identity)
+        AttributeModelIdentity identity,
+        IReadOnlySet<string>? managedDefaultTags = null)
     {
         foreach (var group in (meta["Groups"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
         {
@@ -4617,10 +4897,23 @@ public sealed partial class PenumbraService
                     attribute is null || !attribute.StartsWith("atrx_", StringComparison.Ordinal))
                     continue;
                 if (string.Equals(JsonString(manipulation["Slot"]), identity.AtrSlot, StringComparison.Ordinal) &&
-                    JsonIntFlexible(manipulation["Id"]) == identity.Id &&
-                    JsonIntFlexible(manipulation["GenderRaceCondition"]) == identity.RaceCode)
+                    JsonIntFlexible(manipulation["Id"]) == identity.Id)
                     return true;
             }
+        }
+        if (meta["DefaultData"]?["Manipulations"] is not JsonArray defaultManipulations)
+            return false;
+        foreach (var item in defaultManipulations.OfType<JsonObject>())
+        {
+            if (!TryGetAtrManipulation(item, out var manipulation, out var attribute) ||
+                !string.Equals(JsonString(manipulation["Slot"]), identity.AtrSlot, StringComparison.Ordinal) ||
+                JsonIntFlexible(manipulation["Id"]) != identity.Id)
+                continue;
+            if (managedDefaultTags?.Contains(attribute) == true &&
+                AtrManipulationMatchesIdentity(manipulation, identity) &&
+                IsFalse(manipulation["Entry"]))
+                continue;
+            return true;
         }
         return false;
     }

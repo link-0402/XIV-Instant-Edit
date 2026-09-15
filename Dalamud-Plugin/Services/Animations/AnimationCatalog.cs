@@ -168,6 +168,31 @@ internal sealed class AnimationCatalog
         return $"chara/human/{parts[2]}/animation/a0001/{(timeline.LoadType == 1 ? parts[5] : "bt_common")}/{PapKeys(timeline)[0]}.pap";
     }
 
+    /// <summary>
+    /// Infer the player PAP associated with an external emote timeline when its
+    /// PAP was not present in Penumbra's resource snapshot. This is especially
+    /// useful for a loop's sibling startup: the timeline path contains the
+    /// same relative <c>emote/</c> directory as the player animation pack.
+    /// The caller must still read the result and verify that it contains the
+    /// requested PAP entry.
+    /// </summary>
+    public static string? PapPathFromActionTimeline(string actionTimelinePath, string selectedPap)
+    {
+        const string prefix = "chara/action/";
+        const string extension = ".tmb";
+        if (!AnimationDependencies.SafeGamePath(actionTimelinePath) ||
+            !actionTimelinePath.StartsWith(prefix, StringComparison.Ordinal) ||
+            !actionTimelinePath.EndsWith(extension, StringComparison.OrdinalIgnoreCase) ||
+            !AnimationDependencies.SafeGamePath(selectedPap) ||
+            !selectedPap.EndsWith(".pap", StringComparison.OrdinalIgnoreCase)) return null;
+
+        var key = actionTimelinePath[prefix.Length..^extension.Length];
+        if (!key.StartsWith("emote/", StringComparison.Ordinal) || !AnimationDependencies.SafeGamePath(key)) return null;
+        var parts = selectedPap.Split('/');
+        if (parts.Length < 8 || parts[0] != "chara" || parts[1] != "human" || parts[3] != "animation") return null;
+        return string.Join('/', parts.Take(6)) + "/" + key + ".pap";
+    }
+
     /// <summary>Player idle PAPs commonly pair <c>*_loop.pap</c> with a sibling startup.</summary>
     public static string? SiblingStartupPath(string loopPath)
     {

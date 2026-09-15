@@ -186,18 +186,57 @@ internal static class VariantExportScenarios
         var userGroup = Group(Guid.NewGuid(), requestedName);
         userGroup["CustomMetadata"] = new JsonObject { ["Keep"] = "user" };
         var meta = Metadata(userGroup);
+        var unrelatedDefaultManipulation = new JsonObject
+        {
+            ["Type"] = "Eqp",
+            ["Manipulation"] = new JsonObject { ["SetId"] = 1, ["Slot"] = "Body", ["Entry"] = 7 },
+        };
+        meta["DefaultData"] = new JsonObject
+        {
+            ["Files"] = new JsonObject(),
+            ["FileSwaps"] = new JsonObject(),
+            ["Manipulations"] = new JsonArray(unrelatedDefaultManipulation),
+        };
         meta["CustomRootMetadata"] = new JsonObject { ["Keep"] = true };
         File.WriteAllText(metaPath, meta.ToJsonString());
 
         var path = "chara/equipment/e0001/model/c0101e0001_top.mdl";
         var masks = new Dictionary<string, int>
         {
-            ["atr_tv_a"] = 1,
-            ["atr_gv_a"] = 2,
-            ["atr_tv_c"] = 4,
+            // These reproduce MDL-table-position masks from an older add-on.
+            // The plugin must canonicalize them from the suffix instead.
+            ["atr_tv_a"] = 16,
+            ["atr_gv_a"] = 64,
+            ["atr_tv_c"] = 32,
+            ["atr_tv_b"] = 8,
         };
-        var tags = new[] { "atr_tv_a", "atr_gv_a", "atr_tv_c", "atrx_cape" };
-        Require(PenumbraService.WriteAttributeGroupsForRegression(root, path, tags, masks) is null,
+        var tags = new[] { "atr_tv_a", "atr_gv_a", "atr_tv_c", "atr_tv_b", "atrx_cape" };
+        var sourceImc = new JsonArray(new JsonObject
+        {
+            ["Type"] = "Imc",
+            ["Manipulation"] = new JsonObject
+            {
+                ["ObjectType"] = "Equipment",
+                ["PrimaryId"] = 1,
+                ["Variant"] = 1,
+                ["EquipSlot"] = "Body",
+                ["Entry"] = new JsonObject
+                {
+                    ["MaterialId"] = 3,
+                    ["DecalId"] = 2,
+                    ["VfxId"] = 5,
+                    ["MaterialAnimationId"] = 4,
+                    ["AttributeMask"] = 511,
+                    ["SoundId"] = 2,
+                },
+            },
+        });
+        var beforeMissingImc = File.ReadAllText(metaPath);
+        var missingImc = PenumbraService.WriteAttributeGroupsForRegression(root, path, tags, masks);
+        Require(missingImc?.Contains("attribute_group_imc_unavailable", StringComparison.Ordinal) == true &&
+                File.ReadAllText(metaPath) == beforeMissingImc,
+            "attribute groups: a missing source IMC entry is rejected instead of guessing a material ID");
+        Require(PenumbraService.WriteAttributeGroupsForRegression(root, path, tags, masks, sourceImc) is null,
             "attribute groups: standard and custom groups are generated together");
 
         var written = JsonNode.Parse(File.ReadAllText(metaPath))!.AsObject();
@@ -205,24 +244,39 @@ internal static class VariantExportScenarios
         var imc = groups.Single(group => group["Type"]?.GetValue<string>() == "Imc");
         var atr = groups.Single(group => group["Type"]?.GetValue<string>() == "Multi");
         Require(imc["Name"]!.GetValue<string>() == requestedName + " (2)" &&
-                imc["AllVariants"]!.GetValue<bool>() && imc["OnlyAttributes"]!.GetValue<bool>() &&
+                imc["AllVariants"]!.GetValue<bool>() && !imc["OnlyAttributes"]!.GetValue<bool>() &&
                 imc["Identifier"]!["PrimaryId"]!.GetValue<int>() == 1 &&
                 imc["Identifier"]!["ObjectType"]!.GetValue<string>() == "Equipment" &&
                 imc["Identifier"]!["EquipSlot"]!.GetValue<string>() == "Body" &&
                 imc["Identifier"]!["BodySlot"]!.GetValue<string>() == "Unknown" &&
-                imc["Options"]!.AsArray().Count == 2 &&
-                imc["Options"]!.AsArray().Single(option => option!["Name"]!.GetValue<string>() == "A")!["AttributeMask"]!.GetValue<int>() == 3 &&
-                imc["DefaultEntry"]!["AttributeMask"]!.GetValue<int>() == 7,
-            "attribute groups: IMC identity and suffix masks match the exported model");
+                imc["Options"]!.AsArray().Count == 3 &&
+                imc["Options"]!.AsArray().Single(option => option!["Name"]!.GetValue<string>() == "A")!["AttributeMask"]!.GetValue<int>() == 1 &&
+                imc["Options"]!.AsArray().Single(option => option!["Name"]!.GetValue<string>() == "B")!["AttributeMask"]!.GetValue<int>() == 2 &&
+                imc["Options"]!.AsArray().Single(option => option!["Name"]!.GetValue<string>() == "C")!["AttributeMask"]!.GetValue<int>() == 4 &&
+                imc["DefaultEntry"]!["MaterialId"]!.GetValue<int>() == 3 &&
+                imc["DefaultEntry"]!["DecalId"]!.GetValue<int>() == 2 &&
+                imc["DefaultEntry"]!["VfxId"]!.GetValue<int>() == 5 &&
+                imc["DefaultEntry"]!["MaterialAnimationId"]!.GetValue<int>() == 4 &&
+                imc["DefaultEntry"]!["AttributeMask"]!.GetValue<int>() == 0 &&
+                imc["DefaultEntry"]!["SoundId"]!.GetValue<int>() == 2 &&
+                imc["DefaultSettings"]!.GetValue<int>() == 7,
+            "attribute groups: IMC identity, captured entry, flags, and canonical suffix masks are correct");
         var manipulation = atr["Options"]!.AsArray().Single()!["Manipulations"]!.AsArray().Single()!;
+        var defaultManipulations = written["DefaultData"]!["Manipulations"]!.AsArray();
+        var defaultAtr = defaultManipulations.OfType<JsonObject>().Single(item =>
+            item["Type"]?.GetValue<string>() == "Atr");
         Require(atr["Options"]!.AsArray().Count == 1 &&
                 manipulation["Type"]!.GetValue<string>() == "Atr" &&
                 manipulation["Manipulation"]!["Entry"]!.GetValue<bool>() &&
                 manipulation["Manipulation"]!["Attribute"]!.GetValue<string>() == "atrx_cape" &&
                 manipulation["Manipulation"]!["Slot"]!.GetValue<string>() == "Body" &&
                 manipulation["Manipulation"]!["Id"]!.GetValue<int>() == 1 &&
-                manipulation["Manipulation"]!["GenderRaceCondition"]!.GetValue<int>() == 101,
-            "attribute groups: custom ATR uses the exact model, slot, and race identity");
+                manipulation["Manipulation"]!["GenderRaceCondition"]!.GetValue<int>() == 0 &&
+                defaultManipulations.Count == 2 &&
+                !defaultAtr["Manipulation"]!["Entry"]!.GetValue<bool>() &&
+                defaultAtr["Manipulation"]!["Attribute"]!.GetValue<string>() == "atrx_cape" &&
+                defaultAtr["Manipulation"]!["GenderRaceCondition"]!.GetValue<int>() == 0,
+            "attribute groups: default data disables atrx while the user-facing option enables it");
         Require(written["CustomRootMetadata"]!["Keep"]!.GetValue<bool>() &&
                 groups.Single(group => group["Type"]?.GetValue<string>() == "Single")["CustomMetadata"]!["Keep"]!.GetValue<string>() == "user",
             "attribute groups: unrelated metadata and user groups survive generation");
@@ -232,21 +286,27 @@ internal static class VariantExportScenarios
                     root,
                     path,
                     ["atr_tv_a", "atr_tv_b", "atrx_cape"],
-                    new Dictionary<string, int> { ["atr_tv_a"] = 1, ["atr_tv_b"] = 8 }) is null,
+                    new Dictionary<string, int> { ["atr_tv_a"] = 1, ["atr_tv_b"] = 8 },
+                    sourceImc) is null,
             "attribute groups: rerunning updates managed groups");
         var rerun = JsonNode.Parse(File.ReadAllText(metaPath))!["Groups"]!.AsArray().OfType<JsonObject>().ToArray();
         Require(rerun.Count(group => group["Type"]?.GetValue<string>() is "Imc" or "Multi") == 2 &&
                 rerun.Single(group => group["Type"]?.GetValue<string>() == "Imc")["Id"]!.GetValue<string>() == imcId &&
-                rerun.Single(group => group["Type"]?.GetValue<string>() == "Imc")["Options"]!.AsArray().Count == 2,
+                rerun.Single(group => group["Type"]?.GetValue<string>() == "Imc")["Options"]!.AsArray().Count == 2 &&
+                JsonNode.Parse(File.ReadAllText(metaPath))!["DefaultData"]!["Manipulations"]!.AsArray()
+                    .OfType<JsonObject>().Count(item => item["Type"]?.GetValue<string>() == "Atr") == 1,
             "attribute groups: managed group identity is stable across reruns");
         Require(PenumbraService.WriteAttributeGroupsForRegression(
                     root,
                     path,
                     ["atr_tv_a"],
-                    new Dictionary<string, int> { ["atr_tv_a"] = 1 }) is null &&
+                    new Dictionary<string, int> { ["atr_tv_a"] = 1 },
+                    sourceImc) is null &&
                 JsonNode.Parse(File.ReadAllText(metaPath))!["Groups"]!.AsArray()
-                    .OfType<JsonObject>().All(group => group["Type"]?.GetValue<string>() != "Multi"),
-            "attribute groups: removed custom tags remove only the managed ATR group");
+                    .OfType<JsonObject>().All(group => group["Type"]?.GetValue<string>() != "Multi") &&
+                JsonNode.Parse(File.ReadAllText(metaPath))!["DefaultData"]!["Manipulations"]!.AsArray()
+                    .OfType<JsonObject>().All(item => item["Type"]?.GetValue<string>() != "Atr"),
+            "attribute groups: removed custom tags remove the managed ATR group and defaults");
 
         var conflictRoot = Path.Combine(root, "Conflict");
         Directory.CreateDirectory(conflictRoot);
@@ -263,7 +323,7 @@ internal static class VariantExportScenarios
                     ["Manipulation"] = new JsonObject
                     {
                         ["Attribute"] = "atrx_existing", ["Entry"] = true,
-                        ["Slot"] = "Body", ["Id"] = 1, ["GenderRaceCondition"] = 101,
+                        ["Slot"] = "Body", ["Id"] = 1, ["GenderRaceCondition"] = 801,
                     },
                 }),
             }),
@@ -279,16 +339,30 @@ internal static class VariantExportScenarios
         var hairRoot = Path.Combine(root, "Hair");
         Directory.CreateDirectory(hairRoot);
         File.WriteAllText(Path.Combine(hairRoot, "meta.json"), Metadata().ToJsonString());
+        var hairImc = new JsonArray(new JsonObject
+        {
+            ["Type"] = "Imc",
+            ["Manipulation"] = new JsonObject
+            {
+                ["ObjectType"] = "Character",
+                ["PrimaryId"] = 154,
+                ["Variant"] = 1,
+                ["BodySlot"] = "Hair",
+                ["Entry"] = new JsonObject { ["MaterialId"] = 6 },
+            },
+        });
         var hair = PenumbraService.WriteAttributeGroupsForRegression(
             hairRoot,
             "chara/human/c0801/obj/hair/h0154/model/c0801h0154_hir.mdl",
             ["atr_hv_a"],
-            new Dictionary<string, int> { ["atr_hv_a"] = 1 });
+            new Dictionary<string, int> { ["atr_hv_a"] = 1 },
+            hairImc);
         var hairGroup = JsonNode.Parse(File.ReadAllText(Path.Combine(hairRoot, "meta.json")))!["Groups"]!.AsArray()[0]!;
         Require(hair is null && hairGroup!["Identifier"]!["ObjectType"]!.GetValue<string>() == "Character" &&
                 hairGroup["Identifier"]!["BodySlot"]!.GetValue<string>() == "Hair" &&
                 hairGroup["Identifier"]!["EquipSlot"]!.GetValue<string>() == "Nothing" &&
-                hairGroup["Identifier"]!["PrimaryId"]!.GetValue<int>() == 154,
+                hairGroup["Identifier"]!["PrimaryId"]!.GetValue<int>() == 154 &&
+                hairGroup["DefaultEntry"]!["MaterialId"]!.GetValue<int>() == 6,
             "attribute groups: hair paths use character/hair IMC identity");
     }
 

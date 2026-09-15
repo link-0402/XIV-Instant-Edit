@@ -124,9 +124,9 @@ public sealed partial class MainWindow
         if (Interlocked.CompareExchange(ref _textureBusy, 1, 0) != 0) return;
         _ = Task.Run(async () =>
         {
-            try { await action().ConfigureAwait(false); SetStatus("Texture session updated. See Texture Edits for status.", FeedbackSeverity.Success); }
+            try { await action().ConfigureAwait(false); SetTextureStatus("Texture session updated.", FeedbackSeverity.Success); }
             catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
-            catch (Exception error) { _log.Warning(error, "Texture session action failed."); SetStatus(error.Message, FeedbackSeverity.Error); }
+            catch (Exception error) { _log.Warning(error, "Texture session action failed."); SetTextureStatus(error.Message, FeedbackSeverity.Error); }
             finally { Interlocked.Exchange(ref _textureBusy, 0); }
         });
     }

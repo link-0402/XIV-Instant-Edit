@@ -506,7 +506,7 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
                 var overlap = baseline == null ? 0 : Enumerable.Range(0, Math.Min(baseline.Bones.Length, c.Skeleton.Bones.Length))
                     .Count(i => baseline.Bones[i].Name == c.Skeleton.Bones[i].Name && baseline.Bones[i].Parent == c.Skeleton.Bones[i].Parent);
                 var excess = c.Skeleton.Bones.Length - channels.Bones.Length;
-                // A mapped reference pose closest to the original game variant is a
+                // A mapped reference pose closest to the Vanilla game variant is a
                 // better source than another race/era embedded in the same SKLB.
                 var referenceOverlap = baseline == null || c.Source.Variant.Length == 0 ? 0 :
                     Enumerable.Range(0, Math.Min(baseline.Bones.Length, c.Skeleton.Bones.Length)).Count(i =>
