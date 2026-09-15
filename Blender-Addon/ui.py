@@ -366,17 +366,26 @@ class XIVIE_PT_main(Panel):
                 # continue to the status row below.
                 readiness_issues = [("ERROR", f"Export checks unavailable: {error}")]
             if readiness_issues:
-                for severity, message in readiness_issues:
-                    issue_row = targets.row(align=True)
-                    issue_row.alert = severity == "ERROR"
-                    issue_row.label(
-                        text=message,
-                        # Blender exposes warning status icons as STATUS_WARNING;
-                        # the generic WARNING enum is not valid in Blender 5.2.
-                        icon="ERROR" if severity == "ERROR" else "STATUS_WARNING",
-                    )
+                target_status_message = "; ".join(
+                    message for _severity, message in readiness_issues)
+                target_status_icon = (
+                    "ERROR"
+                    if any(severity == "ERROR" for severity, _message in readiness_issues)
+                    else "STATUS_WARNING"
+                )
             else:
-                targets.label(text="Export selection is clean.", icon="CHECKMARK")
+                target_status_message = "Export selection is clean."
+                target_status_icon = "CHECKMARK"
+            target_status_row = targets.row(align=True)
+            target_status_row.alert = target_status_icon == "ERROR"
+            target_status_row.label(text=target_status_message, icon=target_status_icon)
+            # The status is derived while this panel is drawn. Pass it to the
+            # copy button instead of storing it on the scene from draw(), which
+            # Blender disallows and which can stop the rest of this panel.
+            if hasattr(bpy.ops.xiv_ie, "copy_target_status"):
+                target_status_row.operator(
+                    "xiv_ie.copy_target_status", text="", icon="COPYDOWN"
+                ).status_message = target_status_message
             selected_target = next(
                 (item for item in props.variant_targets if item.selection_id == props.variant_target), None)
             if props.variant_target == "NEW_GROUP":

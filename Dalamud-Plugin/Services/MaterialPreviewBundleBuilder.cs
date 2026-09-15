@@ -51,8 +51,8 @@ public sealed class MaterialPreviewBundleBuilder
     private const long MaxMaterialBytes = 16L * 1024 * 1024;
     private const long MaxTextureBytes = 512L * 1024 * 1024;
     private const int MaxManifestBytes = 1024 * 1024;
-    private static readonly Regex StandardBodyMaterial = new(
-        @"^mt_c\d{4}b\d{4}_(?:a|b|bibo|body|skin)\.mtrl$",
+    private static readonly Regex SharedBodyMaterial = new(
+        @"^mt_c\d{4}b0001(?:_[a-z0-9_]+)?\.mtrl$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex RacialMaterialName = new(
         @"^mt_c\d{4}(?<identity>.+\.mtrl)$",
@@ -1029,7 +1029,7 @@ public sealed class MaterialPreviewBundleBuilder
     internal static bool IsBodyOrGeneralMaterial(string materialName)
     {
         var fileName = FileName(materialName);
-        return StandardBodyMaterial.IsMatch(fileName) ||
+        return SharedBodyMaterial.IsMatch(fileName) ||
                fileName.Contains("piercing", StringComparison.OrdinalIgnoreCase) ||
                fileName.Contains("pube", StringComparison.OrdinalIgnoreCase);
     }

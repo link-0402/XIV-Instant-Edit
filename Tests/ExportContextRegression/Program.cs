@@ -1075,10 +1075,14 @@ try
         MaterialPreviewBundleBuilder.IsBodyOrGeneralMaterial("/mt_c0201b0001_a.mtrl") &&
         MaterialPreviewBundleBuilder.IsBodyOrGeneralMaterial("/mt_c0201b0001_bibo.mtrl") &&
         MaterialPreviewBundleBuilder.IsBodyOrGeneralMaterial("/mt_c0201b0001_skin.mtrl") &&
+        MaterialPreviewBundleBuilder.IsBodyOrGeneralMaterial("/mt_c0201b0001_yatoe.mtrl") &&
+        MaterialPreviewBundleBuilder.IsBodyOrGeneralMaterial("/mt_c1301b0001_unlisted_body_variant.mtrl") &&
+        MaterialPreviewBundleBuilder.IsBodyOrGeneralMaterial("/mt_c0101b0001.mtrl") &&
         MaterialPreviewBundleBuilder.IsBodyOrGeneralMaterial("/mt_c0201b0001_bibopube.mtrl") &&
         MaterialPreviewBundleBuilder.IsBodyOrGeneralMaterial("/mt_c0201b0001_piercings.mtrl") &&
+        !MaterialPreviewBundleBuilder.IsBodyOrGeneralMaterial("/mt_c0201b0002_yatoe.mtrl") &&
         !MaterialPreviewBundleBuilder.IsBodyOrGeneralMaterial("/mt_c0201e6106_top_crop.mtrl"),
-        "external bundling reuses the established body, skin, pube, and piercing material exclusions");
+        "external bundling treats the complete race b0001 family as shared");
     var externalGear = CapturedModMaterial(
         "/mt_c0201e6106_top_crop.mtrl",
         "chara/equipment/e6106/material/v0001/mt_c0201e6106_top_crop.mtrl",

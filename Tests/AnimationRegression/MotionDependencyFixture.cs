@@ -24,6 +24,30 @@ internal static class MotionDependencyFixture
             AnimationResources.ResolveMotionAsync(motion, parent, root, loaded, catalog, Read, CancellationToken.None);
         check((await Resolve("cbem_pose01_2lp")).Count == 0 && timelineReads == 0,
             "PAP self references resolve without searching external timelines");
+        const string startup = "chara/human/c0801/animation/a0001/bt_common/emote/pose06_start.pap";
+        files[startup] = Pap("cbem_pose06_1");
+        var startupParent = "chara/action/emote/pose06_start.tmb";
+        var startupCatalog = new AnimationCatalog([], _ => null);
+        var inferredStartup = await AnimationResources.ResolveMotionAsync("cbem_pose06_1", startupParent, root,
+            [root], startupCatalog, Read, CancellationToken.None);
+        check(inferredStartup.SequenceEqual([startup]),
+            "an omitted emote startup PAP is inferred from its external timeline and verified by entry name");
+        const string loopOnly = "chara/human/c0801/animation/a0001/bt_common/emote/pose06_loop.pap";
+        files[loopOnly] = Pap("cbem_pose06_2lp", "cbem_pose06_2lp");
+        files[startup] = Pap("cbem_pose06_2lp", "cbem_pose06_2lp");
+        files[startupParent] = Tmb("cbem_pose06_1");
+        var loopRoots = AnimationResources.ManifestRoots([loopOnly], [loopOnly]);
+        var loopManifest = await AnimationDependencies.BuildAsync(loopRoots, async path =>
+        {
+            var bytes = await Read(path);
+            return (new AnimationResource(path, path, AnimationPap.Hash(bytes)), bytes);
+        }, async (parent, reference) => reference.Kind == "animation"
+            ? await AnimationResources.ResolveMotionAsync(reference.Path, parent, loopOnly,
+                [loopOnly, startup], startupCatalog, Read, CancellationToken.None)
+            : [reference.Path], CancellationToken.None);
+        check(loopManifest.Files.Keys.SequenceEqual([loopOnly]) &&
+              !loopManifest.Files.ContainsKey(startup) && !loopManifest.Files.ContainsKey(startupParent),
+            "a loop-only rebake does not validate unrelated malformed startup family resources");
         check((await Resolve("cfxf_bad")).SequenceEqual([face, skeleton]),
             "modded idle facial motion resolves through the TMB name and captured face skeleton");
         check((await Resolve("cfxf_bad")).SequenceEqual([face, skeleton]) && timelineReads == 1,

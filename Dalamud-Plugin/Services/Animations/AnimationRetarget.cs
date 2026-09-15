@@ -12,7 +12,7 @@ internal sealed class AnimationRetarget
     public short[] FloatMap { get; }
     public short[] PartitionMap { get; }
     private readonly int[] sourceAncestors, targetAncestors;
-    private readonly BoneTransform[] sourceRest, targetRest;
+    private readonly BoneTransform[] sourceRest, targetRest, sourceReferences, targetReferences;
     private readonly Matrix4x4[] targetHelpers;
     public AnimationRetarget(SkeletonDescription source, SkeletonDescription target, AnimationChannels channels)
     {
@@ -26,8 +26,8 @@ internal sealed class AnimationRetarget
         sourceRest = new BoneTransform[source.Bones.Length]; targetRest = new BoneTransform[source.Bones.Length];
         targetHelpers = new Matrix4x4[source.Bones.Length];
         var sharedTargets = BoneMap.Where(i => i >= 0).ToHashSet();
-        var sourceReferences = source.Bones.Select(x => x.Reference).ToArray();
-        var targetReferences = target.Bones.Select(x => x.Reference).ToArray();
+        sourceReferences = source.Bones.Select(x => x.Reference).ToArray();
+        targetReferences = target.Bones.Select(x => x.Reference).ToArray();
         for (var i = 0; i < source.Bones.Length; i++)
         {
             if (BoneMap[i] < 0) continue;
@@ -64,19 +64,29 @@ internal sealed class AnimationRetarget
         var missing = Enumerable.Range(0, values.Count).Where(i => BoneMap[i] < 0 && Meaningful(values[i], source.Bones[i].Reference)).Select(i => source.Bones[i].Name).ToArray();
         if (missing.Length > 0) throw new InvalidDataException("Target skeleton is missing meaningful animation bones: " + string.Join(", ", missing));
         var result = target.Bones.Select(b => b.Reference).ToArray();
-        for (var i = 0; i < values.Count; i++)
+        var sourceForTarget = Enumerable.Repeat(-1, target.Bones.Length).ToArray();
+        for (var i = 0; i < BoneMap.Length; i++) if (BoneMap[i] >= 0) sourceForTarget[BoneMap[i]] = i;
+        // Destination order guarantees that a reparented bone's target parent
+        // has already been mapped before its global transform is made local.
+        for (var dest = 0; dest < sourceForTarget.Length; dest++)
         {
-            var dest = BoneMap[i]; if (dest < 0) continue;
-            if ((sourceAncestors[i] < 0 ? -1 : BoneMap[sourceAncestors[i]]) != targetAncestors[i])
-            {
-                for (var p = i; p >= 0; p = source.Bones[p].Parent)
-                    if (Meaningful(values[p], source.Bones[p].Reference))
-                        throw new InvalidDataException($"Incompatible named ancestry for animation bone '{source.Bones[i].Name}'.");
-            }
+            var i = sourceForTarget[dest]; if (i < 0) continue;
             var sample = Collapse(source, values, i, sourceAncestors[i]);
             if (!Meaningful(sample, sourceRest[i])) continue;
             if ((sourceAncestors[i] < 0 ? -1 : BoneMap[sourceAncestors[i]]) != targetAncestors[i])
-                throw new InvalidDataException($"Incompatible named ancestry for animation bone '{source.Bones[i].Name}'.");
+            {
+                var sourceGlobal = Collapse(source, values, i, -1);
+                var sourceGlobalRest = Collapse(source, sourceReferences, i, -1);
+                var targetGlobalRest = Collapse(target, targetReferences, dest, -1);
+                var targetGlobal = Transfer(sourceGlobal, sourceGlobalRest, targetGlobalRest);
+                var parent = target.Bones[dest].Parent;
+                if (parent < 0) { result[dest] = targetGlobal; continue; }
+                var parentGlobal = Collapse(target, result, parent, -1);
+                if (!Matrix4x4.Invert(Matrix(parentGlobal), out var inverseParent))
+                    throw new InvalidDataException($"Cannot retarget animation bone '{source.Bones[i].Name}' through a singular destination parent.");
+                result[dest] = Decompose(Matrix(targetGlobal) * inverseParent);
+                continue;
+            }
             var retargeted = Transfer(sample, sourceRest[i], targetRest[i]);
             result[dest] = Decompose(Matrix(retargeted) * targetHelpers[i]);
         }

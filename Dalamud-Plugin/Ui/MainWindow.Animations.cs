@@ -117,7 +117,6 @@ public sealed partial class MainWindow
             if (ImGui.Button("Cancel")) animations.Cancel();
             ImGui.EndDisabled();
         }
-        if (!string.IsNullOrWhiteSpace(animations.Status)) ImGui.TextWrapped(animations.Status);
     }
 
     private void DrawAnimationDetails(AnimationCapture capture)
@@ -150,7 +149,7 @@ public sealed partial class MainWindow
         if (file == null) return;
         ImGui.TextUnformatted("Animation file");
         ImGui.Indent();
-        var mod = file.ModName ?? file.ModDirectory ?? "Original game";
+        var mod = file.ModName ?? file.ModDirectory ?? "Vanilla game";
         ImGui.TextUnformatted("Source mod: " + mod);
         ImGui.TextUnformatted("File: " + (file.RelativePath ?? file.GamePath));
         if (ImGui.IsItemHovered()) ImGui.SetTooltip(file.ResolvedPath);
@@ -180,7 +179,7 @@ public sealed partial class MainWindow
         ImGui.TextUnformatted(startup ? "Startup animation source" : "Animation source");
         ImGui.Indent();
         var provider = source.Source.Resource.ModName ?? source.Source.Resource.ModDirectory ??
-            (source.Source.Kind == SkeletonSourceKind.Game ? "Original game" : "Current collection");
+            (source.Source.Kind == SkeletonSourceKind.Game ? "Vanilla game" : "Current collection");
         ImGui.TextUnformatted("Canonical model: " + AnimationPresentation.SourceModelName(source));
         ImGui.TextUnformatted("Physical file: " + source.Source.Resource.ResolvedPath);
         var aliases = source.Source.MappedGamePaths.Select(AnimationSkeletonIndex.ModelFromPath).OfType<string>()
@@ -201,7 +200,7 @@ public sealed partial class MainWindow
                 foreach (var candidate in resolution.Candidates)
                 {
                     var candidateProvider = candidate.Source.Resource.ModName ?? candidate.Source.Resource.ModDirectory ??
-                        (candidate.Source.Kind == SkeletonSourceKind.Game ? "Original game" : "Current collection");
+                        (candidate.Source.Kind == SkeletonSourceKind.Game ? "Vanilla game" : "Current collection");
                     var variant = candidate.Source.Variant.Length == 0 ? "Main skeleton" : candidate.Source.Variant;
                     var label = $"{AnimationPresentation.SourceModelName(candidate)} · {candidateProvider} · {Path.GetFileName(candidate.Source.Resource.ResolvedPath)} · {variant} · {candidate.Skeleton.Bones.Length} bones##{AnimationSkeletonIndex.SelectionId(candidate)}";
                     if (ImGui.Selectable(label, candidate == resolution.Selected))

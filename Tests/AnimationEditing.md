@@ -77,17 +77,20 @@ and registered mod roots, including disabled mods and inactive options. It check
 PAP model metadata and loaded skeleton paths, deduplicates identical skeletons,
 and asks for a source choice when equally ranked candidates differ. Cached
 descriptions are versioned and keyed by content hash; file metadata avoids
-repeated parsing. Before sampling and commit, selected sources are rehashed and
-the actual live destination is checked again. The source inventory refreshes
-automatically when its cache expires or installed skeleton content changes.
+repeated parsing. Before sampling and commit, selected sources are rehashed.
+The source inventory refreshes automatically when its cache expires or installed
+skeleton content changes.
 
-**Repair skeleton** works without LivePose or selected offsets. It targets the
-captured live skeleton and retains live offsets. **Rebake with LivePose** retargets
-first and applies selected offsets/IK in destination space. Meaningful transforms
-include constant non-reference poses; missing meaningful bones or incompatible
-named ancestry block writing. Reference-only tracks can be omitted at the
-existing 0.000001 change tolerance. Target resting proportions and root-motion
-distance are retained; shear and singular reference transforms are rejected.
+**Repair skeleton** works without LivePose or selected offsets. It uses only the
+source skeleton selected in the dropdown and retains live offsets; the captured
+live skeleton is not sampled, validated, or used as a retargeting destination.
+**Rebake with LivePose** uses that same selected source skeleton. It applies the
+selected offsets/IK directly in that skeleton's model space and serializes the
+result against its reference pose; the actor's live skeleton is not sampled,
+validated, or used as a retargeting destination. Meaningful transforms include
+constant non-reference poses. Reference-only tracks can be omitted at the
+existing 0.000001 change tolerance. Shear and singular reference transforms are
+rejected.
 The output sample grid includes every source frame at uniform subdivisions.
 Only the selected PAP bindings and optional independently resolved startup change.
 

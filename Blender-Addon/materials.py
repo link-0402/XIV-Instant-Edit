@@ -341,13 +341,12 @@ def attribute_group_data(
     *,
     use_lods: bool = True,
 ) -> tuple[tuple[str, ...], dict[str, int]]:
-    """Return model attributes and exact MDL masks for Penumbra groups.
+    """Return model attributes and canonical IMC suffix masks for Penumbra groups.
 
-    The exporter assigns attribute bits in first-seen object/custom-property
-    order. Repeating that walk here means the IMC group's masks address the
-    same bits that the just-exported model uses. Body-part attributes are
-    intentionally excluded because they are vanilla visibility controls, not
-    gear/accessory part tags.
+    Penumbra's IMC attribute columns are defined by the tag suffix rather than
+    the attribute's position in the MDL table: _a is bit 0, _b is bit 1, and
+    so on. Body-part attributes are intentionally excluded because they are
+    vanilla visibility controls, not gear/accessory part tags.
     """
     model_attributes: list[str] = []
     exported_lods = range(3 if use_lods else 1)
@@ -374,16 +373,13 @@ def attribute_group_data(
     tags: list[str] = []
     masks: dict[str, int] = {}
     invalid_custom: list[str] = []
-    for index, attribute in enumerate(model_attributes):
+    for attribute in model_attributes:
         if attribute in _BUILTIN_ATTRIBUTE_NAMES:
             continue
         if _ATTRIBUTE_VARIANT_PATTERN.fullmatch(attribute):
-            if index >= 10:
-                raise ValueError(
-                    f"Attribute {attribute} is beyond Penumbra's 10-bit IMC mask limit."
-                )
             tags.append(attribute)
-            masks[attribute] = 1 << index
+            suffix = attribute.rsplit("_", 1)[-1]
+            masks[attribute] = 1 << ATTRIBUTE_GROUP_SUFFIXES.index(suffix)
         elif attribute.startswith("atrx_"):
             tags.append(attribute)
         elif attribute.startswith("atr"):

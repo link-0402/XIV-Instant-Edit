@@ -1154,7 +1154,8 @@ public sealed class ExportServer : IDisposable
                 createAttributeGroups,
                 attributeTags,
                 attributeMasks,
-                target.ResolvedGamePath).ConfigureAwait(false);
+                target.ResolvedGamePath,
+                target.ResourceManifest?.Manipulations).ConfigureAwait(false);
             return new ExportReceipt(
                 result.Success,
                 result.Code,

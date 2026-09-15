@@ -41,7 +41,24 @@ internal static class SkeletonRepairFixture
         var inserted = new AnimationRetarget(target, helpers, channels with { Bones = [0, 1], ReferenceBones = 2 });
         check(Math.Abs(inserted.Map(new[] { T(), T(2.5f) })[2].Position.X - 1.5f) < 1e-6, "target reference helpers are removed from collapsed output to recover local transforms");
         var wrongParent = S("parent", B("root", -1), B("extra", 0), B("hand", 1, 2));
-        reject(() => new AnimationRetarget(source, wrongParent, channels).Map(pose), "meaningful bones cannot be reparented to another shared ancestor");
+        check(Math.Abs(new AnimationRetarget(source, wrongParent, channels).Map(pose)[2].Position.X - 2.5f) < 1e-6,
+            "meaningful reparented bones preserve global rest-relative motion in destination-local space");
+        var sourcePhysics = S("source-physics", B("root", -1), B("j_sebo_b", 0), B("j_sebo_c", 1), B("iv_kyokin_phys_l", 1));
+        var targetPhysics = S("target-physics", B("root", -1), B("j_sebo_b", 0), B("j_sebo_c", 1), B("iv_kyokin_phys_l", 2));
+        var physicsMap = new AnimationRetarget(sourcePhysics, targetPhysics, channels with { Bones = [0, 1, 2, 3], ReferenceBones = 4 });
+        var physicsPose = new[] { T(), T(.25f), T(), T() };
+        check(physicsMap.Map(physicsPose)[3] == targetPhysics.Bones[3].Reference,
+            "a reference-only custom physics bone may keep its target rest transform when an animated ancestor differs");
+        physicsPose[3] = T(.1f);
+        var mappedPhysics = physicsMap.Map(physicsPose);
+        check(Math.Abs(mappedPhysics[3].Position.X - .1f) < 1e-6,
+            "an animated custom physics bone survives a j_sebo_b to j_sebo_c ancestry change");
+        var reversePhysics = new AnimationRetarget(targetPhysics, sourcePhysics,
+            channels with { Bones = [], Floats = [], Partitions = [], ReferenceBones = null, ReferenceFloats = null });
+        var sourceRoundTrip = reversePhysics.Map(mappedPhysics);
+        check(Vector3.Distance(sourceRoundTrip[1].Position, physicsPose[1].Position) < 1e-6 &&
+              Vector3.Distance(sourceRoundTrip[3].Position, physicsPose[3].Position) < 1e-6,
+            "live-space edits on reparented bones round-trip to canonical source space for game playback");
         var rotatedRest = T(2) with { Rotation = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathF.PI / 2) };
         var rotation = AnimationRetarget.Transfer(T(1.5f), T(1), rotatedRest);
         check(Vector3.Distance(rotation.Position, new(2, .5f, 0)) < 1e-5 && Math.Abs(Quaternion.Dot(rotation.Rotation, rotatedRest.Rotation)) > .99999f,
