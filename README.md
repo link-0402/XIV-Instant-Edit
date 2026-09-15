@@ -4,16 +4,6 @@ Instant Edit is Final Fantasy XIV Dalamud plugin that serves as a method of inst
 Model editing uses a Blender add-on to manage model life cycle and allows for exporting of both vanilla as well as modded Penumbra mod model files.
 Additionally, it supports full software-independent texture editing as well as animation editing.
 
-Animation skeleton repair resolves the animation's source reference pose from
-installed SKLB files, including source skeletons embedded in Havok mappers, and
-uses the source chosen in the animation editor as its sole processing skeleton.
-LivePose rebakes use that same selected source skeleton: they apply the offsets
-directly to the animation and do not retarget through the character's live
-skeleton. Predictive startup clips can use a different embedded source from
-their uncompressed loops. If several sources fit equally well, choose the source
-variant in the animation editor. A missing source reference pose cannot be
-bypassed with Shift.
-
 ## Requirements
 
 - [XIVLauncher](https://goatcorp.github.io/) with Dalamud enabled
@@ -28,7 +18,7 @@ bypassed with Shift.
 1. In FFXIV, run `/xlsettings` and open **Experimental**.
 2. Add this URL under **Custom Plugin Repositories**:
 
-   `https://raw.githubusercontent.com/link-0402/XIV-Instant-Edit/main/Dalamud-Plugin/repo.json`
+   `https://raw.githubusercontent.com/link-0402/DalamudPlugins/main/repo.json`
 
 3. Enable the repository, save your settings, and open `/xlplugins`.
 4. Find and install **XIV Instant Edit** under **All Plugins**.
