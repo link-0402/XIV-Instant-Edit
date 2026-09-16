@@ -73,6 +73,29 @@ internal unsafe sealed class AnimationNative
         public int Endian;
         public uint Padding2;
     }
+    // Havok 2013 hkaQuantizedAnimation stores its complete compressed stream
+    // after the common hkaAnimation base. The skeleton pointer is runtime-only.
+    // Layout reference: projectanarchy/Source/Animation/Animation/Animation/
+    // Quantized/hkaQuantizedAnimation.h
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Quantized
+    {
+        public hkaAnimation Animation;
+        public hkArray<byte> Data;
+        public uint Endian;
+        public uint Padding;
+        public hkaSkeleton* Skeleton;
+    }
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    internal struct QuantizedHeader
+    {
+        public ushort HeaderSize, NumBones, NumFloats, NumFrames;
+        public float Duration;
+        public ushort NumStaticTranslations, NumStaticRotations, NumStaticScales, NumStaticFloats;
+        public ushort NumDynamicTranslations, NumDynamicRotations, NumDynamicScales, NumDynamicFloats;
+        public ushort FrameSize, StaticElementsOffset, DynamicElementsOffset, StaticValuesOffset;
+        public ushort DynamicRangeMinimumsOffset, DynamicRangeSpansOffset;
+    }
     // hkaPredictiveCompressedAnimation (Havok 2013, x64). The skeleton and
     // decompression cache are runtime-only and must not participate in identity.
     // Layout reference: projectanarchy/Source/Animation/Animation/Animation/
@@ -257,6 +280,12 @@ internal unsafe sealed class AnimationNative
             hash.AppendData(BitConverter.GetBytes(predictive->NumFrames));
             hash.AppendData(BitConverter.GetBytes(predictive->FirstFloatBlockScaleAndOffsetIndex));
         }
+        else if (a->Type == hkaAnimation.AnimationType.QuantizedCompressedAnimation)
+        {
+            var quantized = (Quantized*)a;
+            Append(quantized->Data);
+            hash.AppendData(BitConverter.GetBytes(quantized->Endian));
+        }
         else throw new InvalidDataException($"Unsupported animation encoding: {a->Type}.");
         return Convert.ToHexString(hash.GetHashAndReset());
         void Append<T>(hkArray<T> array) where T : unmanaged
@@ -358,6 +387,19 @@ internal unsafe sealed class AnimationNative
             ValidateOffsets(new ReadOnlySpan<int>(value->IntArrayOffsets, 9), value->IntData.Length - 8);
             ValidateOffsets(new ReadOnlySpan<int>(value->FloatArrayOffsets, 3), value->FloatData.Length - 8);
         }
+        else if (a->Type == hkaAnimation.AnimationType.QuantizedCompressedAnimation)
+        {
+            var value = (Quantized*)a;
+            ValidateArray(value->Data, AnimationPap.MaxFileSize, "quantized data");
+            if (value->Data.Length < sizeof(QuantizedHeader))
+                throw new InvalidDataException("Quantized animation header is missing.");
+            var header = (QuantizedHeader*)value->Data.Data;
+            if (header->HeaderSize < sizeof(QuantizedHeader) || header->HeaderSize > value->Data.Length ||
+                header->NumBones > 4096 || header->NumFloats > 4096 || header->NumFrames < 2 ||
+                !float.IsFinite(header->Duration) || header->Duration < 0 || header->Duration > 3600 ||
+                header->FrameSize == 0 || (long)header->HeaderSize + (long)header->NumFrames * header->FrameSize > value->Data.Length)
+                throw new InvalidDataException("Invalid quantized frame or channel data.");
+        }
         else throw new InvalidDataException($"Unsupported animation encoding: {a->Type}.");
     }
 
@@ -378,6 +420,7 @@ internal unsafe sealed class AnimationNative
         {
             hkaAnimation.AnimationType.SplineCompressedAnimation => ((Spline*)animation)->NumFrames,
             hkaAnimation.AnimationType.PredictiveCompressedAnimation => ((Predictive*)animation)->NumFrames,
+            hkaAnimation.AnimationType.QuantizedCompressedAnimation => ((QuantizedHeader*)((Quantized*)animation)->Data.Data)->NumFrames,
             hkaAnimation.AnimationType.InterleavedAnimation => Math.Max(
                 ((Interleaved*)animation)->Transforms.Length / Math.Max(1, animation->NumberOfTransformTracks),
                 ((Interleaved*)animation)->Floats.Length / Math.Max(1, animation->NumberOfFloatTracks)),
@@ -435,15 +478,22 @@ internal unsafe sealed class AnimationNative
             // Predictive channels can refer to the skeleton's reference pose.
             // Borrow it only for this call: samplers can share the animation and
             // loaded PAPs do not serialize this runtime pointer.
-            var predictive = control->Binding.ptr->Animation.ptr->Type == hkaAnimation.AnimationType.PredictiveCompressedAnimation
-                ? (Predictive*)control->Binding.ptr->Animation.ptr : null;
-            var previousSkeleton = predictive == null ? null : predictive->Skeleton;
+            var animation = control->Binding.ptr->Animation.ptr;
+            var predictive = animation->Type == hkaAnimation.AnimationType.PredictiveCompressedAnimation ? (Predictive*)animation : null;
+            var quantized = animation->Type == hkaAnimation.AnimationType.QuantizedCompressedAnimation ? (Quantized*)animation : null;
+            var previousPredictiveSkeleton = predictive == null ? null : predictive->Skeleton;
+            var previousQuantizedSkeleton = quantized == null ? null : quantized->Skeleton;
             try
             {
                 if (predictive != null) predictive->Skeleton = Skeleton;
+                if (quantized != null) quantized->Skeleton = Skeleton;
                 animated->sampleAndCombineAnimations(Transforms, Floats);
             }
-            finally { if (predictive != null) predictive->Skeleton = previousSkeleton; }
+            finally
+            {
+                if (predictive != null) predictive->Skeleton = previousPredictiveSkeleton;
+                if (quantized != null) quantized->Skeleton = previousQuantizedSkeleton;
+            }
             var values = new hkArray<hkQsTransformf> { Data = Transforms, Length = BoneCount,
                 CapacityAndFlags = unchecked((int)0x80000000) | BoneCount };
             Pose->SetPoseLocalSpace(&values);
@@ -468,6 +518,13 @@ internal unsafe sealed class AnimationNative
                 var predictive = (Predictive*)b->Animation.ptr;
                 if (predictive->NumBones != s->Bones.Length || predictive->NumFloatSlots != s->FloatSlots.Length)
                     throw new InvalidDataException($"Predictive animation requires {predictive->NumBones} reference bones and {predictive->NumFloatSlots} reference floats; " +
+                        $"the selected source has {s->Bones.Length} bones and {s->FloatSlots.Length} floats. Rescan skeletons to find a compatible source before retargeting.");
+            }
+            if (b->Animation.ptr->Type == hkaAnimation.AnimationType.QuantizedCompressedAnimation)
+            {
+                var header = (QuantizedHeader*)((Quantized*)b->Animation.ptr)->Data.Data;
+                if (header->NumBones != s->Bones.Length || header->NumFloats != s->FloatSlots.Length)
+                    throw new InvalidDataException($"Quantized animation requires {header->NumBones} reference bones and {header->NumFloats} reference floats; " +
                         $"the selected source has {s->Bones.Length} bones and {s->FloatSlots.Length} floats. Rescan skeletons to find a compatible source before retargeting.");
             }
             ValidateArray(s->Bones, 4096, "bones");

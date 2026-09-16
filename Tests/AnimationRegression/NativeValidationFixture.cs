@@ -149,6 +149,45 @@ internal static unsafe class NativeValidationFixture
         reject(() => AnimationNative.SourceFrameCount(&predictive->Animation), "predictive tracks without frames cannot be baked");
         predictive->NumFrames = 216002;
         reject(() => AnimationNative.SourceFrameCount(&predictive->Animation), "predictive frame counts respect the bake limit");
+
+        var quantized = arena.Alloc<AnimationNative.Quantized>();
+        quantized->Animation.Type = hkaAnimation.AnimationType.QuantizedCompressedAnimation;
+        quantized->Animation.Duration = 1;
+        quantized->Animation.NumberOfTransformTracks = 1;
+        quantized->Animation.NumberOfFloatTracks = 1;
+        const int quantizedFrames = 31;
+        const int quantizedFrameSize = 4;
+        quantized->Data = arena.Array<byte>(sizeof(AnimationNative.QuantizedHeader) + quantizedFrames * quantizedFrameSize);
+        var quantizedHeader = (AnimationNative.QuantizedHeader*)quantized->Data.Data;
+        quantizedHeader->HeaderSize = (ushort)sizeof(AnimationNative.QuantizedHeader);
+        quantizedHeader->NumBones = quantizedHeader->NumFloats = 1;
+        quantizedHeader->NumFrames = quantizedFrames;
+        quantizedHeader->Duration = 1;
+        quantizedHeader->FrameSize = quantizedFrameSize;
+        binding->Animation.ptr = &quantized->Animation;
+        original = AnimationNative.Fingerprint(binding);
+        check(original.Length == 64 && AnimationRuntime.CaptureBinding(0, binding, "example.sklb", description) != null &&
+              AnimationNative.SourceFrameCount(&quantized->Animation) == quantizedFrames &&
+              AnimationSkeleton.Channels(binding).ReferenceBones == 1 && AnimationSkeleton.Channels(binding).ReferenceFloats == 1,
+            "quantized animations remain visible to the listener and expose the skeleton channels needed for repair");
+        quantized->Skeleton = skeleton;
+        quantized->Data.CapacityAndFlags = 4096;
+        check(AnimationNative.Fingerprint(binding) == original,
+            "quantized identity ignores its runtime skeleton pointer and array capacity");
+        quantized->Data[sizeof(AnimationNative.QuantizedHeader)]++;
+        check(AnimationNative.Fingerprint(binding) != original, "quantized identity detects compressed motion changes");
+        quantized->Data[sizeof(AnimationNative.QuantizedHeader)]--;
+        AnimationNative.Sampler.Validate(skeleton, binding);
+        quantizedHeader->NumBones = 2;
+        reject(() => AnimationNative.Sampler.Validate(skeleton, binding), "quantized reference bone counts must match before sampling");
+        quantizedHeader->NumBones = 1;
+        quantizedHeader->HeaderSize = 0;
+        reject(() => AnimationNative.Fingerprint(binding), "invalid quantized headers are rejected before matching");
+        quantizedHeader->HeaderSize = (ushort)sizeof(AnimationNative.QuantizedHeader);
+        quantizedHeader->NumFrames = 1;
+        reject(() => AnimationNative.SourceFrameCount(&quantized->Animation), "quantized tracks require enough frames for interpolation");
+
+        binding->Animation.ptr = &predictive->Animation;
         predictive->Animation.Type = hkaAnimation.AnimationType.UnknownAnimation;
         reject(() => AnimationNative.Fingerprint(binding), "unknown encodings remain rejected rather than interpreted as predictive data");
     }
