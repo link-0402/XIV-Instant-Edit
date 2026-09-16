@@ -17,6 +17,9 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
     private bool disposed;
     private void Check(CancellationToken token)
     { token.ThrowIfCancellationRequested(); if (disposed) throw new OperationCanceledException(); }
+    private static unsafe hkQsTransformf Encode(hkQsTransformf pose, hkQsTransformf reference, sbyte hint)
+        => AnimationSkeleton.Transform(AnimationRetarget.Encode(AnimationSkeleton.Transform(pose),
+            AnimationSkeleton.Transform(reference), hint));
     public void Dispose() => framework.RunOnFrameworkThread(() =>
     {
         disposed = true;
@@ -328,10 +331,6 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             startup.Document.Container->Bindings[startup.Input.Clip.BindingIndex] = new hkRefPtr<hkaAnimationBinding> { ptr = binding };
             replaced = true;
         }
-
-        private static hkQsTransformf Encode(hkQsTransformf pose, hkQsTransformf reference, sbyte hint)
-            => AnimationSkeleton.Transform(AnimationRetarget.Encode(AnimationSkeleton.Transform(pose),
-                AnimationSkeleton.Transform(reference), hint));
 
         public void BeginValidation(byte[] bytes)
         {
@@ -647,8 +646,6 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             doc.Container->Bindings[clip.BindingIndex] = new hkRefPtr<hkaAnimationBinding> { ptr = binding };
             replaced = true;
         }
-        private static hkQsTransformf Encode(hkQsTransformf pose, hkQsTransformf reference, sbyte hint)
-            => AnimationSkeleton.Transform(AnimationRetarget.Encode(AnimationSkeleton.Transform(pose), AnimationSkeleton.Transform(reference), hint));
         public void BeginValidation(byte[] bytes)
         {
             verification = new AnimationNative.Document(bytes);
