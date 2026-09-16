@@ -167,19 +167,11 @@ class SceneHandler:
         self.xiv_mdl   : bool            = props.model_format == 'MDL'
         self.is_tris   : bool            = props.check_tris or self.xiv_mdl
         self.backfaces : bool            = (props.create_backfaces and self.is_tris)
-        self.yas_vag   : bool            = True
         self.remove_yas: str             = props.remove_yas
         self.batch     : bool            = batch
         self.source_objects              = source_objects
-        self.torso     : bool            = False
         self.delete    : list[Object]    = []
         self.tri_method: tuple[str, str] = ("BEAUTY", "BEAUTY")
-
-        # Bools for deciding which waist shape keys to keep. Only relevant for Yet Another Devkit.
-        self.rue    = False
-        self.buff   = False
-        self.torso  = False
-        self.devkit = False
 
         self.logger     : YetAnotherLogger = logger
         self.meshes     : dict[Object, dict[str, list | bool]] = {}
@@ -191,9 +183,6 @@ class SceneHandler:
 
         visible_obj = list(self.source_objects) if self.source_objects is not None else visible_meshobj()
         no_skeleton = []
-
-        if self.devkit:
-            self.devkit_checks(visible_obj)
 
         for obj in visible_obj:
             armature = obj.parent if obj.parent and obj.parent.type == "ARMATURE" else next(
@@ -208,13 +197,7 @@ class SceneHandler:
                 continue
             shape_key    = self.sort_shape_keys(obj) if self.shapekeys and obj.data.shape_keys else []
             transparency = ("xiv_transparency" in obj and obj["xiv_transparency"])
-            backfaces    = (self.is_tris and self.backfaces and obj.vertex_groups.get("BACKFACES")) 
-
-            if self.devkit and obj == self.devkit.yam_legs:
-                gen_b   = obj.data.shape_keys.key_blocks.get("Gen B")
-                gen_c   = obj.data.shape_keys.key_blocks.get("Gen C")
-                yas_vag = (gen_b and not gen_b.mute and gen_b.value == 1) or (gen_c and not gen_c.mute and gen_c.value == 1)
-                self.yas_vag = yas_vag
+            backfaces    = (self.is_tris and self.backfaces and obj.vertex_groups.get("BACKFACES"))
 
             self.meshes[obj] = {
                 'shape'       : shape_key, 
@@ -238,45 +221,13 @@ class SceneHandler:
         if no_skeleton:
             raise XIVMeshParentError(f"Missing Skeleton Parent: {', '.join(no_skeleton)}.")
 
-    def devkit_checks(self, visible_obj: Iterable[Object]) -> None:
-        for obj in visible_obj:
-            if not obj.data.shape_keys:
-                continue 
-            rue_key  = obj.data.shape_keys.key_blocks.get("Rue")
-            buff_key = obj.data.shape_keys.key_blocks.get("Buff")
-            if not self.rue and (rue_key and rue_key.mute == False and rue_key.value == 1.0):
-                self.rue = True 
-            if not self.buff and (buff_key and buff_key.mute == False and buff_key.value == 1.0):
-                self.buff = True
-            if not self.torso and obj == self.devkit.yam_torso:
-                self.torso = True
-
     def sort_shape_keys(self, obj: Object) -> list[ShapeKey]:
         shape_keys = []
         for key in obj.data.shape_keys.key_blocks:
             if not key.name.startswith("shp"):
                 continue
-            if self.rue:
-                if key.name[5:11] == "wa_yab":
-                # Rue does not use YAB's waist shape keys.
-                    continue
-                # Removes hip key, use yam for keys meant for rue as well
-                if key.name[5:8] == "yab":
-                    continue  
-            else:
-                if key.name[5:8] == "rue":
-                    continue
-
-            if self.devkit and key.name[5:8] == "wa_":
-                # We check for buff and torso because in the case where the torso and waist are present we
-                # remove the abs key from both body parts.
-                if not self.buff and self.torso and key.name.endswith("_yabs"):
-                    continue
-
-                # We don't have to check for torso here because it's implicitly assumed to be present when buff is True.
-                # If waist and torso are present we then remove the yab key.
-                if self.buff and key.name.endswith("_yab"):
-                    continue
+            if key.name[5:8] == "rue":
+                continue
             shape_keys.append(key)
 
         return shape_keys
@@ -523,9 +474,6 @@ class SceneHandler:
         
         elif self.remove_yas == "NO_GEN":
             excluded_groups.update(genitalia)
-
-        if not self.yas_vag:
-            excluded_groups.update(genitalia[:4])
 
         return tuple(excluded_groups)
 
