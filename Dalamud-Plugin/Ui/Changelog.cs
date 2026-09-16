@@ -18,10 +18,13 @@ internal sealed record ChangelogRelease(
 
 internal static class ChangelogCatalog
 {
-    public const string CurrentVersion = "1.2.0";
+    public const string CurrentVersion = "1.2.1";
 
     public static IReadOnlyList<ChangelogRelease> Releases { get; } =
     [
+        Release("1.2.1",
+            Entry("Improved Blender status message display and fixed a performance issue with Blender UI draw calls; hidden part tags are now suppressed."),
+            Entry("Various internal cleanup and refactoring.")),
         Release("1.2.0",
             Highlight("Added texture editing feature with compatability with various photo editing software (requires 32-bit TGA support)."),
             Highlight("Added armature-combine support in the Toolbox."),
