@@ -13,6 +13,7 @@ using static InstantEdit.TestSupport.Assertions;
 
 static void Int(byte[] bytes, int at, int value) => BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(at), value);
 SkeletonRepairFixture.Run(Check, Reject);
+AnimationFramesFixture.Run(Check, Reject);
 ChartSkeletonFixture.Run(Check);
 EmbeddedSkeletonFixture.Run(Check, Reject);
 if (args is ["--skeleton-repair-xml", var animationXml, var skeletonXml])
@@ -62,6 +63,31 @@ Check(pap.HavokOffset == 106 && pap.TimelineOffset == 114 &&
     "packed 26-byte PAP headers decode offsets, names, types, bindings, and face flags");
 var rebuilt = new AnimationPap(pap.ReplaceHavok(new byte[21]));
 Check(rebuilt.Entries.SequenceEqual(pap.Entries) && rebuilt.Timelines.SequenceEqual(pap.Timelines), "replacing Havok preserves every clip entry and embedded timeline byte");
+// A retargeted PAP must stop advertising the race it was authored for, without
+// disturbing any offset, entry, Havok byte or timeline byte.
+var remodelled = pap.WithModel(0x1101, 0);
+var remodelledPap = new AnimationPap(remodelled);
+Check(remodelledPap.ModelId == 0x1101 && remodelledPap.ModelType == 0 &&
+      remodelledPap.Entries.SequenceEqual(pap.Entries) && remodelledPap.Havok.SequenceEqual(pap.Havok) &&
+      remodelledPap.Timelines.SequenceEqual(pap.Timelines) &&
+      remodelled.AsSpan(13).SequenceEqual(papBytes.AsSpan(13)),
+    "rewriting the PAP source model leaves every offset, entry, Havok byte and timeline byte untouched");
+Check(new AnimationPap(pap.WithModel(pap.ModelId, pap.ModelType)).Havok.SequenceEqual(pap.Havok) &&
+      pap.WithModel(pap.ModelId, pap.ModelType).SequenceEqual(papBytes),
+    "an unchanged PAP model rewrite is byte-identical");
+Reject(() => pap.WithModel(0x0101, 9), "unsupported PAP skeleton types cannot be written");
+// Slot swapping renames an entry so the destination timeline still resolves it.
+var renamed = new AnimationPap(pap.WithEntryNames(new Dictionary<int, string> { [0] = "pose06_loop" }));
+Check(renamed.Entries[0] == pap.Entries[0] with { Name = "pose06_loop" } && renamed.Entries[1] == pap.Entries[1] &&
+      renamed.Havok.SequenceEqual(pap.Havok) && renamed.Timelines.SequenceEqual(pap.Timelines) &&
+      renamed.HavokOffset == pap.HavokOffset && renamed.TimelineOffset == pap.TimelineOffset,
+    "renaming a PAP entry preserves the entry count, bindings, offsets and payload");
+Check(pap.WithEntryNames(new Dictionary<int, string> { [0] = pap.Entries[0].Name }).SequenceEqual(papBytes),
+    "renaming a PAP entry to its existing name is byte-identical");
+Reject(() => pap.WithEntryNames(new Dictionary<int, string> { [2] = "missing" }), "a PAP entry rename cannot address a nonexistent entry");
+Reject(() => pap.WithEntryNames(new Dictionary<int, string> { [0] = "" }), "a PAP entry name cannot be empty");
+Reject(() => pap.WithEntryNames(new Dictionary<int, string> { [0] = new('x', 32) }), "a PAP entry name cannot fill its field without a terminator");
+Reject(() => pap.WithEntryNames(new Dictionary<int, string>()), "an empty PAP rename set is rejected rather than silently copying");
 foreach (var infoPadding in new[] { 0, 2, 5 })
 {
     var originalPap = Pap(infoPadding);
