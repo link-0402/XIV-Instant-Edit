@@ -31,7 +31,7 @@ before sharing them.
 Run the regression commands in
 `.github/workflows/blender-extension-repository.yml` for add-on changes. For
 plugin changes, build the Release configuration with
-`-p:SkipDistributionPackage=true` and run all three .NET projects under `Tests` with the
+`-p:SkipDistributionPackage=true` and run all four .NET regression projects under `Tests` with the
 same property. See [test commands and coverage](Tests/README.md) for the full
 local suite and the test-cleanup rationale. Blender commands must include
 `--factory-startup --python-exit-code 1` before `--python` so failures reach CI.

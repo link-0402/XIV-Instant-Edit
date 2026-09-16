@@ -4,14 +4,9 @@ using System.Text.Json.Nodes;
 using InstantEdit;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.TestSupport;
 using Newtonsoft.Json;
-
-static void Require(bool condition, string message)
-{
-    if (!condition)
-        throw new InvalidOperationException(message);
-    Console.WriteLine($"[PASS] {message}");
-}
+using static InstantEdit.TestSupport.Assertions;
 
 static async Task<BlenderStatus> ProbeAsync(
     Func<HttpResponseMessage>? responseFactory = null,

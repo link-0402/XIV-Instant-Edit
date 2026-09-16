@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <AssemblyName>InstantEdit.TestSupport</AssemblyName>
+  </PropertyGroup>
+</Project>
