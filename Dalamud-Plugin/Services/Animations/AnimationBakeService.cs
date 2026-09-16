@@ -149,8 +149,8 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         private bool replaced;
         private readonly int frames;
 
-        public float Progress => frames == 0 ? 1 : (float)frame / frames;
-        public float ValidationProgress => frames == 0 ? 1 : (float)validationFrame / frames;
+        public float Progress => (float)frame / frames;
+        public float ValidationProgress => (float)validationFrame / frames;
 
         public StartupSession(AnimationNative native, AnimationStartupSource loop, AnimationStartupSource startup,
             AnimationStartupSource? idle, AnimationStartupOptions options, string motionPath)
@@ -161,7 +161,6 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 if (!AnimationPoseRules.ValidStartupDuration(options.DurationSeconds))
                     throw new InvalidDataException("Startup transition duration must be between 0 and 2 seconds.");
                 targetDescription = startup.Clip.TargetSkeleton ?? throw new InvalidDataException("The live target skeleton is unavailable.");
-                AnimationSkeleton.Validate(targetDescription);
                 if (loop.Clip.Partial != startup.Clip.Partial || idle?.Clip.Partial != startup.Clip.Partial ||
                     loop.Clip.TargetSkeleton?.Fingerprint != targetDescription.Fingerprint ||
                     idle?.Clip.TargetSkeleton?.Fingerprint != targetDescription.Fingerprint)
