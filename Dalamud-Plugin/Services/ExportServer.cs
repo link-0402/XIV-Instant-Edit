@@ -523,479 +523,518 @@ public sealed class ExportServer : IDisposable
         var path   = request.Path;
 
         if (method == "GET" && path.TrimEnd('/') == "/status")
-            return (200, Json(new
-            {
-                ok = true,
-                running = true,
-                target = "original_source_mod",
-                capabilities = new[]
-                {
-                    "instant-edit.context-reattach.v1",
-                    "instant-edit.context-revoke.v1",
-                    "instant-edit.export-status.v1",
-                    "instant-edit.variant-targets.v1",
-                    "instant-edit.material-coverage.v1",
-                    "instant-edit.backup-restore.v1",
-                    "instant-edit.structured-errors.v1",
-                    "instant-edit.import-status.v1",
-                },
-            }));
+            return HandleStatus();
 
         if (method == "POST" && path.TrimEnd('/') == "/import/status")
-        {
-            var parsed = DeserializeRequest<ImportStatusRequest>(request.Body, "import status", out var parseError);
-            if (parseError is not null)
-                return parseError.Value;
-            var status = parsed!;
-            var envelopeError = ValidateImportStatusEnvelope(status);
-            if (envelopeError is not null)
-                return Error(400, envelopeError, "unsupported or malformed import status envelope");
-
-            if (!_contexts.TryAuthorizeOperation(
-                    status.PluginInstanceId!, status.ContextId!, status.Capability!,
-                    out var context, out var registryCode) || context is null)
-                return Error(StatusForCode(registryCode), registryCode, "import status context was rejected");
-            if (!string.Equals(context.ImportId, status.ImportId, StringComparison.Ordinal))
-                return Error(401, "import_id_mismatch", "import status identifier was rejected");
-
-            var failure = BridgeFailure.Create(
-                "blender_addon",
-                "import",
-                status.Stage!,
-                status.Code!,
-                status.Cause!,
-                status.Remedy!,
-                diagnosticId: status.DiagnosticId);
-            _log.Error(
-                $"Blender bridge failure {failure.DiagnosticId}: " +
-                $"{failure.Operation}/{failure.Stage}/{failure.Code}: {failure.Cause} Remedy: {failure.Remedy}");
-            try
-            {
-                ImportFailureReceived?.Invoke(failure);
-            }
-            catch (Exception e)
-            {
-                _log.Error(e, $"Import failure notification handler failed for {failure.DiagnosticId}.");
-            }
-            return (200, Json(new { ok = true, code = "import_failure_recorded" }));
-        }
+            return HandleImportStatus(request);
 
         if (method == "POST" && path.TrimEnd('/') == "/context/reattach")
-        {
-            var parsed = DeserializeRequest<ReattachRequest>(request.Body, "context reattach", out var parseError);
-            if (parseError is not null)
-                return parseError.Value;
-            var reattach = parsed!;
-
-            var reattachError = ValidateReattachEnvelope(reattach);
-            if (reattachError is not null)
-                return Error(StatusForCode(reattachError), reattachError, "unsupported or malformed reattach envelope");
-
-            if (!_contexts.TryReattach(
-                    reattach.ContextId!,
-                    reattach.ImportId!,
-                    reattach.Capability!,
-                    _config.ListenPort,
-                    out var context,
-                    out var registryCode))
-                return Error(StatusForCode(registryCode), registryCode, "export context was rejected");
-
-            return (200, Json(new { ok = true, code = registryCode, context }));
-        }
+            return HandleContextReattach(request);
 
         if (method == "POST" && path.TrimEnd('/') == "/context/revoke")
-        {
-            var parsed = DeserializeRequest<RevokeRequest>(request.Body, "context revoke", out var parseError);
-            if (parseError is not null)
-                return parseError.Value;
-            var revoke = parsed!;
-            var envelopeError = ValidateRevokeEnvelope(revoke);
-            if (envelopeError is not null)
-                return Error(400, envelopeError, "unsupported or malformed context revoke envelope");
-            if (!_contexts.TryRevoke(revoke.ContextId!, revoke.ImportId!, revoke.Capability!, out var registryCode))
-                return Error(StatusForCode(registryCode), registryCode, "export context revocation was rejected");
-            return (200, Json(new { ok = true, code = registryCode }));
-        }
+            return HandleContextRevoke(request);
 
         if (method == "POST" && path.TrimEnd('/') == "/export/status")
-        {
-            var parsed = DeserializeRequest<ExportStatusRequest>(request.Body, "export status", out var parseError);
-            if (parseError is not null)
-                return parseError.Value;
-            var status = parsed!;
-            var envelopeError = ValidateExportStatusEnvelope(status);
-            if (envelopeError is not null)
-                return Error(400, envelopeError, "unsupported or malformed export status envelope");
-            if (!_contexts.TryGetExportStatus(
-                    status.PluginInstanceId!,
-                    status.ContextId!,
-                    status.ExportId!,
-                    status.Capability!,
-                    out var completion,
-                    out var registryCode) || completion is null)
-                return Error(StatusForCode(registryCode), registryCode, "export receipt was not found");
-            if (!completion.IsCompleted)
-                return (202, Json(new { ok = true, code = "export_pending", complete = false }));
-            return ResultResponse(await completion.ConfigureAwait(false));
-        }
+            return await HandleExportStatusAsync(request).ConfigureAwait(false);
 
         if (method == "POST" && path.TrimEnd('/') == "/variant-targets")
-        {
-            var parsed = DeserializeRequest<VariantTargetsRequest>(request.Body, "variant targets", out var parseError);
-            if (parseError is not null)
-                return parseError.Value;
-            var targetsRequest = parsed!;
-            var envelopeError = ValidateVariantTargetsEnvelope(targetsRequest);
-            if (envelopeError is not null)
-                return Error(400, envelopeError, "unsupported or malformed variant-targets envelope");
-            if (!_contexts.TryAuthorizeOperation(
-                    targetsRequest.PluginInstanceId!, targetsRequest.ContextId!, targetsRequest.Capability!,
-                    out var target, out var registryCode) || target is null)
-                return Error(StatusForCode(registryCode), registryCode, "export context was rejected");
-            if (target.DestinationState != InstantEditImportContext.ReadyDestination)
-                return Error(409, "destination_not_ready", "create the Penumbra mod before loading variant targets");
-
-            var result = await _penumbra.GetVariantTargetsAsync(
-                target.SourceModDirectory!, target.TargetFilePath!, target.SourceModRootPath,
-                target.TargetRelativePath, target.GamePath, target.SourceModStableId).ConfigureAwait(false);
-            if (!result.Success)
-                return Error(400, result.Code, result.Message);
-            return (200, Json(new
-            {
-                ok = true,
-                groups = result.Groups.Select(group => new
-                {
-                    id = group.Id,
-                    name = group.Name,
-                    options = group.Options.Select(option => new
-                    {
-                        id = option.Id,
-                        name = option.Name,
-                        modelPath = option.ModelPath,
-                        backupTargetId = option.BackupTargetId,
-                        backupDirectory = option.BackupDirectory,
-                    }),
-                }),
-            }));
-        }
+            return await HandleVariantTargetsAsync(request).ConfigureAwait(false);
 
         if (method == "POST" && path.TrimEnd('/') == "/material-coverage")
-        {
-            var parsed = DeserializeRequest<MaterialCoverageRequest>(request.Body, "material coverage", out var parseError);
-            if (parseError is not null)
-                return parseError.Value;
-            var coverageRequest = parsed!;
-            var envelopeError = ValidateMaterialCoverageEnvelope(coverageRequest);
-            if (envelopeError is not null)
-                return Error(StatusForCode(envelopeError), envelopeError, "unsupported or malformed material-coverage envelope");
-            if (!_contexts.TryAuthorizeOperation(
-                    coverageRequest.PluginInstanceId!, coverageRequest.ContextId!, coverageRequest.Capability!,
-                    out var activeContext, out var activeCode) || activeContext is null)
-                return Error(StatusForCode(activeCode), activeCode, "active export context was rejected");
-            if (activeContext.DestinationState != InstantEditImportContext.ReadyDestination)
-                return Error(409, "destination_not_ready", "create the Penumbra mod before checking material coverage");
-
-            var contributors = new List<MashupContributor>();
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var contributor in coverageRequest.Contributors!)
-            {
-                if (!seen.Add(contributor.ContextId!))
-                    return Error(400, "duplicate_context", "a material-coverage context was supplied more than once");
-                if (!_contexts.TryAuthorizeOperation(
-                        coverageRequest.PluginInstanceId!, contributor.ContextId!, contributor.Capability!,
-                        out var contributorContext, out var contributorCode) || contributorContext is null)
-                    return Error(StatusForCode(contributorCode), contributorCode, "a material-coverage context was rejected");
-                if (!IsMashupContributorState(contributorContext))
-                    return Error(409, "destination_not_ready", "a contributing Context is not ready for material coverage");
-                contributors.Add(new MashupContributor(contributorContext, contributor.Materials!));
-            }
-
-            var coverage = await _penumbra.GetMaterialCoverageAsync(activeContext, contributors).ConfigureAwait(false);
-            return (200, Json(new
-            {
-                ok = true,
-                code = coverage.Code,
-                available = coverage.Available,
-                covered = coverage.Covered,
-                message = coverage.Message,
-                missing = coverage.Missing.Select(item => new
-                {
-                    contextId = item.ContextId,
-                    sourceModName = item.SourceModName,
-                    modelMaterial = item.ModelMaterial,
-                    gamePath = item.GamePath,
-                    resourceType = item.ResourceType,
-                }),
-            }));
-        }
+            return await HandleMaterialCoverageAsync(request).ConfigureAwait(false);
 
         if (method == "POST" && path.TrimEnd('/') == "/backup/restore")
-        {
-            var parsed = DeserializeRequest<BackupRestoreRequest>(request.Body, "backup restore", out var parseError);
-            if (parseError is not null)
-                return parseError.Value;
-            var restore = parsed!;
-            var restoreError = ValidateBackupRestoreEnvelope(restore);
-            if (restoreError is not null)
-                return Error(StatusForCode(restoreError), restoreError, "unsupported or malformed backup restore envelope");
-            if (!_contexts.TryAuthorizeOperation(
-                    restore.PluginInstanceId!, restore.ContextId!, restore.Capability!,
-                    out var target, out var registryCode) || target is null)
-                return Error(StatusForCode(registryCode), registryCode, "export context was rejected");
-            if (target.DestinationState != InstantEditImportContext.ReadyDestination)
-                return Error(409, "destination_not_ready", "the import has no Penumbra mod backup destination yet");
-
-            var result = await _penumbra.RestoreSourceBackupAsync(
-                target.SourceModDirectory!,
-                target.TargetFilePath!,
-                target.SourceModRootPath,
-                target.TargetRelativePath,
-                target.GamePath,
-                restore.BackupName!,
-                restore.BackupTargetId!,
-                target.SourceModStableId).ConfigureAwait(false);
-            return ResultResponse(new ExportReceipt(
-                result.Success,
-                result.Code,
-                result.Message,
-                result.WarningList,
-                result.TargetFilePath));
-        }
+            return await HandleBackupRestoreAsync(request).ConfigureAwait(false);
 
         if (method == "POST" && path.TrimEnd('/') == "/backup/clear")
-        {
-            var parsed = DeserializeRequest<BackupRestoreRequest>(request.Body, "backup clear", out var parseError);
-            if (parseError is not null)
-                return parseError.Value;
-            var clear = parsed!;
-            if (!string.Equals(clear.Schema, "instant-edit.backup-clear", StringComparison.Ordinal) || clear.Version != 1 ||
-                string.IsNullOrWhiteSpace(clear.BackupTargetId))
-                return Error(400, "invalid_backup_clear", "unsupported or malformed backup clear envelope");
-            if (!_contexts.TryAuthorizeOperation(clear.PluginInstanceId!, clear.ContextId!, clear.Capability!,
-                    out var target, out var registryCode) || target is null)
-                return Error(StatusForCode(registryCode), registryCode, "export context was rejected");
-            if (target.DestinationState != InstantEditImportContext.ReadyDestination)
-                return Error(409, "destination_not_ready", "the import has no Penumbra mod backup destination yet");
-            var result = await _penumbra.ClearManagedBackupsAsync(
-                target.SourceModDirectory!, target.TargetFilePath!, target.SourceModRootPath,
-                target.TargetRelativePath, target.GamePath, clear.BackupTargetId!, target.SourceModStableId).ConfigureAwait(false);
-            return ResultResponse(new ExportReceipt(result.Success, result.Code, result.Message));
-        }
+            return await HandleBackupClearAsync(request).ConfigureAwait(false);
 
         if (method == "POST" && path.TrimEnd('/') == "/mashup/plan")
-        {
-            var parsed = DeserializeRequest<MashupPlanRequest>(request.Body, "mashup plan", out var parseError);
-            if (parseError is not null)
-                return parseError.Value;
-            var requestPlan = parsed!;
-            var envelopeError = ValidateMashupPlanEnvelope(requestPlan);
-            if (envelopeError is not null)
-                return Error(StatusForCode(envelopeError), envelopeError, "unsupported or malformed mashup plan envelope");
-            if (!_contexts.TryAuthorizeOperation(
-                    requestPlan.PluginInstanceId!, requestPlan.ContextId!, requestPlan.Capability!,
-                    out var activeContext, out var activeCode) || activeContext is null)
-                return Error(StatusForCode(activeCode), activeCode, "active export context was rejected");
-            var planDestination = requestPlan.Destination ?? "active_mod";
-            if (!IsMashupActiveState(activeContext, planDestination))
-                return Error(409, "destination_not_ready", "the active Context is not ready for this mashup destination");
-
-            var contributors = new List<MashupContributor>();
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var contributor in requestPlan.Contributors!)
-            {
-                if (!seen.Add(contributor.ContextId!))
-                    return Error(400, "duplicate_context", "a mashup context was supplied more than once");
-                if (!_contexts.TryAuthorizeOperation(
-                        requestPlan.PluginInstanceId!, contributor.ContextId!, contributor.Capability!,
-                        out var contributorContext, out var contributorCode) || contributorContext is null)
-                    return Error(StatusForCode(contributorCode), contributorCode, "a contributor context was rejected");
-                if (!IsMashupContributorState(contributorContext))
-                    return Error(409, "destination_not_ready", "a contributor Context is not ready for mashup export");
-                contributors.Add(new MashupContributor(contributorContext, contributor.Materials!));
-            }
-
-            var plan = PenumbraService.BuildMashupPlan(
-                activeContext, contributors, requestPlan.BundleExternalDependencies);
-            if (!plan.Success)
-                return Error(StatusForCode(plan.Code), plan.Code, plan.Message);
-            return (200, Json(new
-            {
-                ok = true,
-                code = plan.Code,
-                message = plan.Message,
-                planFingerprint = plan.Fingerprint,
-                assignments = plan.Assignments.Select(item => new
-                {
-                    contextId = item.ContextId,
-                    modelMaterial = item.ModelMaterial,
-                    alias = item.Alias,
-                    gamePath = item.GamePath,
-                    slot = item.Slot,
-                }),
-            }));
-        }
+            return HandleMashupPlan(request);
 
         if (method == "POST" && path.TrimEnd('/') == "/mashup/export")
-        {
-            var parsed = DeserializeRequest<MashupExportRequest>(request.Body, "mashup export", out var parseError);
-            if (parseError is not null)
-                return parseError.Value;
-            var mashup = parsed!;
-            var envelopeError = ValidateMashupEnvelope(mashup);
-            if (envelopeError is not null)
-                return Error(StatusForCode(envelopeError), envelopeError, "unsupported or malformed mashup envelope");
-
-            if (!_contexts.TryAuthorizeOperation(
-                    mashup.PluginInstanceId!, mashup.ContextId!, mashup.Capability!,
-                    out var activeContext, out var activeCode) || activeContext is null)
-                return Error(StatusForCode(activeCode), activeCode, "active export context was rejected");
-            if (!IsMashupActiveState(activeContext, mashup.Destination!))
-                return Error(409, "destination_not_ready", "the active Context is not ready for this mashup destination");
-
-            var contributors = new List<MashupContributor>();
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var contributor in mashup.Contributors!)
-            {
-                if (!seen.Add(contributor.ContextId!))
-                    return Error(400, "duplicate_context", "a mashup context was supplied more than once");
-                if (!_contexts.TryAuthorizeOperation(
-                        mashup.PluginInstanceId!, contributor.ContextId!, contributor.Capability!,
-                        out var contributorContext, out var contributorCode) || contributorContext is null)
-                    return Error(StatusForCode(contributorCode), contributorCode, "a contributor context was rejected");
-                if (!IsMashupContributorState(contributorContext))
-                    return Error(409, "destination_not_ready", "a contributor Context is not ready for mashup export");
-                contributors.Add(new MashupContributor(contributorContext, contributor.Materials!));
-            }
-
-            var plan = PenumbraService.BuildMashupPlan(
-                activeContext, contributors, mashup.BundleExternalDependencies);
-            if (!plan.Success)
-                return Error(StatusForCode(plan.Code), plan.Code, plan.Message);
-            if (!string.Equals(plan.Fingerprint, mashup.PlanFingerprint, StringComparison.OrdinalIgnoreCase))
-                return Error(409, "mashup_plan_mismatch", "The mashup material plan changed; retry the export.");
-
-            var fingerprintSource = JsonSerializer.Serialize(new
-            {
-                mashup.Destination,
-                mashup.BundleExternalDependencies,
-                mashup.Name,
-                mashup.PlanFingerprint,
-                contributors = mashup.Contributors!.Select(item => new
-                    {
-                        item.ContextId,
-                        materials = item.Materials,
-                    }),
-                mashup.CreateAttributeGroups,
-                mashup.AttributeTags,
-                mashup.AttributeMasks,
-            }, JsonOpts);
-            var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintSource)));
-            if (!_contexts.TryBeginExport(
-                    mashup.PluginInstanceId!, mashup.ContextId!, mashup.ExportId!, mashup.Capability!,
-                    mashup.FilePath!, mashup.Size, mashup.Sha256!, out var reservation, out var registryCode,
-                    fingerprint))
-                return Error(StatusForCode(registryCode), registryCode, "mashup export was rejected");
-            if (reservation is null)
-                return Error(500, "internal_error", "mashup reservation was not created");
-            if (!reservation.IsOwner)
-                return ResultResponse(await reservation.Completion.ConfigureAwait(false));
-
-            ExportReceipt receipt;
-            StagedExport? staged = null;
-            try
-            {
-                var stageResult = await StageExportFileAsync(
-                    mashup.FilePath!, mashup.Size, mashup.Sha256!).ConfigureAwait(false);
-                staged = stageResult.Export;
-                if (stageResult.Error is not null)
-                    receipt = new ExportReceipt(false, stageResult.Error.Value.Code, stageResult.Error.Value.Message);
-                else
-                {
-                    var result = await _penumbra.ApplyMashupAsync(
-                        activeContext,
-                        contributors,
-                        plan,
-                        staged!.FilePath,
-                        mashup.ExportId!,
-                        mashup.Destination!,
-                        mashup.Name!,
-                        mashup.BundleExternalDependencies,
-                        mashup.CreateAttributeGroups,
-                        mashup.AttributeTags,
-                        mashup.AttributeMasks).ConfigureAwait(false);
-                    if (result.Success && result.PathRemap is { } pathRemap)
-                        _contexts.RemapModPaths(
-                            pathRemap.ModDirectory,
-                            pathRemap.ModRoot,
-                            pathRemap.RelativePaths);
-
-                    var warnings = result.WarningList.ToList();
-                    InstantEditImportContext? outputContext = null;
-                    if (result.Success && string.Equals(mashup.Destination, "new_mod", StringComparison.Ordinal))
-                    {
-                        if (result.OutputModDirectory is null ||
-                            result.OutputModRootPath is null ||
-                            result.OutputTargetRelativePath is null ||
-                            result.TargetFilePath is null)
-                        {
-                            warnings.Add(
-                                "The mashup mod was created, but its Blender export context could not be registered: " +
-                                "the Penumbra output paths were incomplete.");
-                        }
-                        else
-                        {
-                            try
-                            {
-                                outputContext = _contexts.CreateContext(
-                                    activeContext.GamePath,
-                                    activeContext.ObjectIndex,
-                                    result.OutputModDirectory,
-                                    result.TargetFilePath,
-                                    result.DestinationName ?? result.OutputModDirectory,
-                                    activeContext.CallbackPort,
-                                    result.OutputModRootPath,
-                                    result.OutputTargetRelativePath,
-                                    resourceManifest: result.OutputResourceManifest,
-                                    targetCollectionId: activeContext.TargetCollectionId,
-                                    targetCollectionName: activeContext.TargetCollectionName,
-                                    sourceModStableId: result.OutputModStableId,
-                                    resolvedGamePath: activeContext.ResolvedGamePath);
-                            }
-                            catch (Exception error)
-                            {
-                                _log.Error(error, "Mashup mod was created, but its Blender export context could not be registered.");
-                                warnings.Add(
-                                    "The mashup mod was created, but its Blender export context could not be registered.");
-                            }
-                        }
-                    }
-                    receipt = new ExportReceipt(
-                        result.Success,
-                        result.Code,
-                        result.Message,
-                        warnings,
-                        result.TargetFilePath,
-                        result.DestinationName,
-                        Context: outputContext,
-                        RequiredExternalMods: result.RequiredExternalMods);
-                }
-            }
-            catch (Exception e)
-            {
-                _log.Error(e, "Mashup processing failed.");
-                receipt = new ExportReceipt(false, "internal_error", "mashup processing failed");
-            }
-            finally
-            {
-                CleanupStagedExport(staged);
-            }
-
-            _contexts.CompleteExport(mashup.ContextId!, mashup.ExportId!, receipt);
-            return ResultResponse(receipt);
-        }
+            return await HandleMashupExportAsync(request).ConfigureAwait(false);
 
         if (method == "POST" && path.TrimEnd('/') == "/export")
+            return await HandleExportAsync(request).ConfigureAwait(false);
+
+        return Error(404, "endpoint_not_found", "the requested bridge endpoint was not found");
+    }
+
+    private (int Status, string Body) HandleStatus()
+        => (200, Json(new
         {
+            ok = true,
+            running = true,
+            target = "original_source_mod",
+            capabilities = new[]
+            {
+                "instant-edit.context-reattach.v1",
+                "instant-edit.context-revoke.v1",
+                "instant-edit.export-status.v1",
+                "instant-edit.variant-targets.v1",
+                "instant-edit.material-coverage.v1",
+                "instant-edit.backup-restore.v1",
+                "instant-edit.structured-errors.v1",
+                "instant-edit.import-status.v1",
+            },
+        }));
+
+    private (int Status, string Body) HandleImportStatus(HttpRequest request)
+    {
+        var parsed = DeserializeRequest<ImportStatusRequest>(request.Body, "import status", out var parseError);
+        if (parseError is not null)
+            return parseError.Value;
+        var status = parsed!;
+        var envelopeError = ValidateImportStatusEnvelope(status);
+        if (envelopeError is not null)
+            return Error(400, envelopeError, "unsupported or malformed import status envelope");
+
+        if (!_contexts.TryAuthorizeOperation(
+                status.PluginInstanceId!, status.ContextId!, status.Capability!,
+                out var context, out var registryCode) || context is null)
+            return Error(StatusForCode(registryCode), registryCode, "import status context was rejected");
+        if (!string.Equals(context.ImportId, status.ImportId, StringComparison.Ordinal))
+            return Error(401, "import_id_mismatch", "import status identifier was rejected");
+
+        var failure = BridgeFailure.Create(
+            "blender_addon",
+            "import",
+            status.Stage!,
+            status.Code!,
+            status.Cause!,
+            status.Remedy!,
+            diagnosticId: status.DiagnosticId);
+        _log.Error(
+            $"Blender bridge failure {failure.DiagnosticId}: " +
+            $"{failure.Operation}/{failure.Stage}/{failure.Code}: {failure.Cause} Remedy: {failure.Remedy}");
+        try
+        {
+            ImportFailureReceived?.Invoke(failure);
+        }
+        catch (Exception e)
+        {
+            _log.Error(e, $"Import failure notification handler failed for {failure.DiagnosticId}.");
+        }
+        return (200, Json(new { ok = true, code = "import_failure_recorded" }));
+    }
+
+    private (int Status, string Body) HandleContextReattach(HttpRequest request)
+    {
+        var parsed = DeserializeRequest<ReattachRequest>(request.Body, "context reattach", out var parseError);
+        if (parseError is not null)
+            return parseError.Value;
+        var reattach = parsed!;
+
+        var reattachError = ValidateReattachEnvelope(reattach);
+        if (reattachError is not null)
+            return Error(StatusForCode(reattachError), reattachError, "unsupported or malformed reattach envelope");
+
+        if (!_contexts.TryReattach(
+                reattach.ContextId!,
+                reattach.ImportId!,
+                reattach.Capability!,
+                _config.ListenPort,
+                out var context,
+                out var registryCode))
+            return Error(StatusForCode(registryCode), registryCode, "export context was rejected");
+
+        return (200, Json(new { ok = true, code = registryCode, context }));
+    }
+
+    private (int Status, string Body) HandleContextRevoke(HttpRequest request)
+    {
+        var parsed = DeserializeRequest<RevokeRequest>(request.Body, "context revoke", out var parseError);
+        if (parseError is not null)
+            return parseError.Value;
+        var revoke = parsed!;
+        var envelopeError = ValidateRevokeEnvelope(revoke);
+        if (envelopeError is not null)
+            return Error(400, envelopeError, "unsupported or malformed context revoke envelope");
+        if (!_contexts.TryRevoke(revoke.ContextId!, revoke.ImportId!, revoke.Capability!, out var registryCode))
+            return Error(StatusForCode(registryCode), registryCode, "export context revocation was rejected");
+        return (200, Json(new { ok = true, code = registryCode }));
+    }
+
+    private async Task<(int Status, string Body)> HandleExportStatusAsync(HttpRequest request)
+    {
+        var parsed = DeserializeRequest<ExportStatusRequest>(request.Body, "export status", out var parseError);
+        if (parseError is not null)
+            return parseError.Value;
+        var status = parsed!;
+        var envelopeError = ValidateExportStatusEnvelope(status);
+        if (envelopeError is not null)
+            return Error(400, envelopeError, "unsupported or malformed export status envelope");
+        if (!_contexts.TryGetExportStatus(
+                status.PluginInstanceId!,
+                status.ContextId!,
+                status.ExportId!,
+                status.Capability!,
+                out var completion,
+                out var registryCode) || completion is null)
+            return Error(StatusForCode(registryCode), registryCode, "export receipt was not found");
+        if (!completion.IsCompleted)
+            return (202, Json(new { ok = true, code = "export_pending", complete = false }));
+        return ResultResponse(await completion.ConfigureAwait(false));
+    }
+
+    private async Task<(int Status, string Body)> HandleVariantTargetsAsync(HttpRequest request)
+    {
+        var parsed = DeserializeRequest<VariantTargetsRequest>(request.Body, "variant targets", out var parseError);
+        if (parseError is not null)
+            return parseError.Value;
+        var targetsRequest = parsed!;
+        var envelopeError = ValidateVariantTargetsEnvelope(targetsRequest);
+        if (envelopeError is not null)
+            return Error(400, envelopeError, "unsupported or malformed variant-targets envelope");
+        if (!_contexts.TryAuthorizeOperation(
+                targetsRequest.PluginInstanceId!, targetsRequest.ContextId!, targetsRequest.Capability!,
+                out var target, out var registryCode) || target is null)
+            return Error(StatusForCode(registryCode), registryCode, "export context was rejected");
+        if (target.DestinationState != InstantEditImportContext.ReadyDestination)
+            return Error(409, "destination_not_ready", "create the Penumbra mod before loading variant targets");
+
+        var result = await _penumbra.GetVariantTargetsAsync(
+            target.SourceModDirectory!, target.TargetFilePath!, target.SourceModRootPath,
+            target.TargetRelativePath, target.GamePath, target.SourceModStableId).ConfigureAwait(false);
+        if (!result.Success)
+            return Error(400, result.Code, result.Message);
+        return (200, Json(new
+        {
+            ok = true,
+            groups = result.Groups.Select(group => new
+            {
+                id = group.Id,
+                name = group.Name,
+                options = group.Options.Select(option => new
+                {
+                    id = option.Id,
+                    name = option.Name,
+                    modelPath = option.ModelPath,
+                    backupTargetId = option.BackupTargetId,
+                    backupDirectory = option.BackupDirectory,
+                }),
+            }),
+        }));
+    }
+
+    private async Task<(int Status, string Body)> HandleMaterialCoverageAsync(HttpRequest request)
+    {
+        var parsed = DeserializeRequest<MaterialCoverageRequest>(request.Body, "material coverage", out var parseError);
+        if (parseError is not null)
+            return parseError.Value;
+        var coverageRequest = parsed!;
+        var envelopeError = ValidateMaterialCoverageEnvelope(coverageRequest);
+        if (envelopeError is not null)
+            return Error(StatusForCode(envelopeError), envelopeError, "unsupported or malformed material-coverage envelope");
+        if (!_contexts.TryAuthorizeOperation(
+                coverageRequest.PluginInstanceId!, coverageRequest.ContextId!, coverageRequest.Capability!,
+                out var activeContext, out var activeCode) || activeContext is null)
+            return Error(StatusForCode(activeCode), activeCode, "active export context was rejected");
+        if (activeContext.DestinationState != InstantEditImportContext.ReadyDestination)
+            return Error(409, "destination_not_ready", "create the Penumbra mod before checking material coverage");
+
+        var contributors = new List<MashupContributor>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var contributor in coverageRequest.Contributors!)
+        {
+            if (!seen.Add(contributor.ContextId!))
+                return Error(400, "duplicate_context", "a material-coverage context was supplied more than once");
+            if (!_contexts.TryAuthorizeOperation(
+                    coverageRequest.PluginInstanceId!, contributor.ContextId!, contributor.Capability!,
+                    out var contributorContext, out var contributorCode) || contributorContext is null)
+                return Error(StatusForCode(contributorCode), contributorCode, "a material-coverage context was rejected");
+            if (!IsMashupContributorState(contributorContext))
+                return Error(409, "destination_not_ready", "a contributing Context is not ready for material coverage");
+            contributors.Add(new MashupContributor(contributorContext, contributor.Materials!));
+        }
+
+        var coverage = await _penumbra.GetMaterialCoverageAsync(activeContext, contributors).ConfigureAwait(false);
+        return (200, Json(new
+        {
+            ok = true,
+            code = coverage.Code,
+            available = coverage.Available,
+            covered = coverage.Covered,
+            message = coverage.Message,
+            missing = coverage.Missing.Select(item => new
+            {
+                contextId = item.ContextId,
+                sourceModName = item.SourceModName,
+                modelMaterial = item.ModelMaterial,
+                gamePath = item.GamePath,
+                resourceType = item.ResourceType,
+            }),
+        }));
+    }
+
+    private async Task<(int Status, string Body)> HandleBackupRestoreAsync(HttpRequest request)
+    {
+        var parsed = DeserializeRequest<BackupRestoreRequest>(request.Body, "backup restore", out var parseError);
+        if (parseError is not null)
+            return parseError.Value;
+        var restore = parsed!;
+        var restoreError = ValidateBackupRestoreEnvelope(restore);
+        if (restoreError is not null)
+            return Error(StatusForCode(restoreError), restoreError, "unsupported or malformed backup restore envelope");
+        if (!_contexts.TryAuthorizeOperation(
+                restore.PluginInstanceId!, restore.ContextId!, restore.Capability!,
+                out var target, out var registryCode) || target is null)
+            return Error(StatusForCode(registryCode), registryCode, "export context was rejected");
+        if (target.DestinationState != InstantEditImportContext.ReadyDestination)
+            return Error(409, "destination_not_ready", "the import has no Penumbra mod backup destination yet");
+
+        var result = await _penumbra.RestoreSourceBackupAsync(
+            target.SourceModDirectory!,
+            target.TargetFilePath!,
+            target.SourceModRootPath,
+            target.TargetRelativePath,
+            target.GamePath,
+            restore.BackupName!,
+            restore.BackupTargetId!,
+            target.SourceModStableId).ConfigureAwait(false);
+        return ResultResponse(new ExportReceipt(
+            result.Success,
+            result.Code,
+            result.Message,
+            result.WarningList,
+            result.TargetFilePath));
+    }
+
+    private async Task<(int Status, string Body)> HandleBackupClearAsync(HttpRequest request)
+    {
+        var parsed = DeserializeRequest<BackupRestoreRequest>(request.Body, "backup clear", out var parseError);
+        if (parseError is not null)
+            return parseError.Value;
+        var clear = parsed!;
+        if (!string.Equals(clear.Schema, "instant-edit.backup-clear", StringComparison.Ordinal) || clear.Version != 1 ||
+            string.IsNullOrWhiteSpace(clear.BackupTargetId))
+            return Error(400, "invalid_backup_clear", "unsupported or malformed backup clear envelope");
+        if (!_contexts.TryAuthorizeOperation(clear.PluginInstanceId!, clear.ContextId!, clear.Capability!,
+                out var target, out var registryCode) || target is null)
+            return Error(StatusForCode(registryCode), registryCode, "export context was rejected");
+        if (target.DestinationState != InstantEditImportContext.ReadyDestination)
+            return Error(409, "destination_not_ready", "the import has no Penumbra mod backup destination yet");
+        var result = await _penumbra.ClearManagedBackupsAsync(
+            target.SourceModDirectory!, target.TargetFilePath!, target.SourceModRootPath,
+            target.TargetRelativePath, target.GamePath, clear.BackupTargetId!, target.SourceModStableId).ConfigureAwait(false);
+        return ResultResponse(new ExportReceipt(result.Success, result.Code, result.Message));
+    }
+
+    private (int Status, string Body) HandleMashupPlan(HttpRequest request)
+    {
+        var parsed = DeserializeRequest<MashupPlanRequest>(request.Body, "mashup plan", out var parseError);
+        if (parseError is not null)
+            return parseError.Value;
+        var requestPlan = parsed!;
+        var envelopeError = ValidateMashupPlanEnvelope(requestPlan);
+        if (envelopeError is not null)
+            return Error(StatusForCode(envelopeError), envelopeError, "unsupported or malformed mashup plan envelope");
+        if (!_contexts.TryAuthorizeOperation(
+                requestPlan.PluginInstanceId!, requestPlan.ContextId!, requestPlan.Capability!,
+                out var activeContext, out var activeCode) || activeContext is null)
+            return Error(StatusForCode(activeCode), activeCode, "active export context was rejected");
+        var planDestination = requestPlan.Destination ?? "active_mod";
+        if (!IsMashupActiveState(activeContext, planDestination))
+            return Error(409, "destination_not_ready", "the active Context is not ready for this mashup destination");
+
+        var contributors = new List<MashupContributor>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var contributor in requestPlan.Contributors!)
+        {
+            if (!seen.Add(contributor.ContextId!))
+                return Error(400, "duplicate_context", "a mashup context was supplied more than once");
+            if (!_contexts.TryAuthorizeOperation(
+                    requestPlan.PluginInstanceId!, contributor.ContextId!, contributor.Capability!,
+                    out var contributorContext, out var contributorCode) || contributorContext is null)
+                return Error(StatusForCode(contributorCode), contributorCode, "a contributor context was rejected");
+            if (!IsMashupContributorState(contributorContext))
+                return Error(409, "destination_not_ready", "a contributor Context is not ready for mashup export");
+            contributors.Add(new MashupContributor(contributorContext, contributor.Materials!));
+        }
+
+        var plan = PenumbraService.BuildMashupPlan(
+            activeContext, contributors, requestPlan.BundleExternalDependencies);
+        if (!plan.Success)
+            return Error(StatusForCode(plan.Code), plan.Code, plan.Message);
+        return (200, Json(new
+        {
+            ok = true,
+            code = plan.Code,
+            message = plan.Message,
+            planFingerprint = plan.Fingerprint,
+            assignments = plan.Assignments.Select(item => new
+            {
+                contextId = item.ContextId,
+                modelMaterial = item.ModelMaterial,
+                alias = item.Alias,
+                gamePath = item.GamePath,
+                slot = item.Slot,
+            }),
+        }));
+    }
+
+    private async Task<(int Status, string Body)> HandleMashupExportAsync(HttpRequest request)
+    {
+        var parsed = DeserializeRequest<MashupExportRequest>(request.Body, "mashup export", out var parseError);
+        if (parseError is not null)
+            return parseError.Value;
+        var mashup = parsed!;
+        var envelopeError = ValidateMashupEnvelope(mashup);
+        if (envelopeError is not null)
+            return Error(StatusForCode(envelopeError), envelopeError, "unsupported or malformed mashup envelope");
+
+        if (!_contexts.TryAuthorizeOperation(
+                mashup.PluginInstanceId!, mashup.ContextId!, mashup.Capability!,
+                out var activeContext, out var activeCode) || activeContext is null)
+            return Error(StatusForCode(activeCode), activeCode, "active export context was rejected");
+        if (!IsMashupActiveState(activeContext, mashup.Destination!))
+            return Error(409, "destination_not_ready", "the active Context is not ready for this mashup destination");
+
+        var contributors = new List<MashupContributor>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var contributor in mashup.Contributors!)
+        {
+            if (!seen.Add(contributor.ContextId!))
+                return Error(400, "duplicate_context", "a mashup context was supplied more than once");
+            if (!_contexts.TryAuthorizeOperation(
+                    mashup.PluginInstanceId!, contributor.ContextId!, contributor.Capability!,
+                    out var contributorContext, out var contributorCode) || contributorContext is null)
+                return Error(StatusForCode(contributorCode), contributorCode, "a contributor context was rejected");
+            if (!IsMashupContributorState(contributorContext))
+                return Error(409, "destination_not_ready", "a contributor Context is not ready for mashup export");
+            contributors.Add(new MashupContributor(contributorContext, contributor.Materials!));
+        }
+
+        var plan = PenumbraService.BuildMashupPlan(
+            activeContext, contributors, mashup.BundleExternalDependencies);
+        if (!plan.Success)
+            return Error(StatusForCode(plan.Code), plan.Code, plan.Message);
+        if (!string.Equals(plan.Fingerprint, mashup.PlanFingerprint, StringComparison.OrdinalIgnoreCase))
+            return Error(409, "mashup_plan_mismatch", "The mashup material plan changed; retry the export.");
+
+        var fingerprintSource = JsonSerializer.Serialize(new
+        {
+            mashup.Destination,
+            mashup.BundleExternalDependencies,
+            mashup.Name,
+            mashup.PlanFingerprint,
+            contributors = mashup.Contributors!.Select(item => new
+                {
+                    item.ContextId,
+                    materials = item.Materials,
+                }),
+            mashup.CreateAttributeGroups,
+            mashup.AttributeTags,
+            mashup.AttributeMasks,
+        }, JsonOpts);
+        var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintSource)));
+        if (!_contexts.TryBeginExport(
+                mashup.PluginInstanceId!, mashup.ContextId!, mashup.ExportId!, mashup.Capability!,
+                mashup.FilePath!, mashup.Size, mashup.Sha256!, out var reservation, out var registryCode,
+                fingerprint))
+            return Error(StatusForCode(registryCode), registryCode, "mashup export was rejected");
+        if (reservation is null)
+            return Error(500, "internal_error", "mashup reservation was not created");
+        if (!reservation.IsOwner)
+            return ResultResponse(await reservation.Completion.ConfigureAwait(false));
+
+        ExportReceipt receipt;
+        StagedExport? staged = null;
+        try
+        {
+            var stageResult = await StageExportFileAsync(
+                mashup.FilePath!, mashup.Size, mashup.Sha256!).ConfigureAwait(false);
+            staged = stageResult.Export;
+            if (stageResult.Error is not null)
+                receipt = new ExportReceipt(false, stageResult.Error.Value.Code, stageResult.Error.Value.Message);
+            else
+            {
+                var result = await _penumbra.ApplyMashupAsync(
+                    activeContext,
+                    contributors,
+                    plan,
+                    staged!.FilePath,
+                    mashup.ExportId!,
+                    mashup.Destination!,
+                    mashup.Name!,
+                    mashup.BundleExternalDependencies,
+                    mashup.CreateAttributeGroups,
+                    mashup.AttributeTags,
+                    mashup.AttributeMasks).ConfigureAwait(false);
+                if (result.Success && result.PathRemap is { } pathRemap)
+                    _contexts.RemapModPaths(
+                        pathRemap.ModDirectory,
+                        pathRemap.ModRoot,
+                        pathRemap.RelativePaths);
+
+                var warnings = result.WarningList.ToList();
+                InstantEditImportContext? outputContext = null;
+                if (result.Success && string.Equals(mashup.Destination, "new_mod", StringComparison.Ordinal))
+                {
+                    if (result.OutputModDirectory is null ||
+                        result.OutputModRootPath is null ||
+                        result.OutputTargetRelativePath is null ||
+                        result.TargetFilePath is null)
+                    {
+                        warnings.Add(
+                            "The mashup mod was created, but its Blender export context could not be registered: " +
+                            "the Penumbra output paths were incomplete.");
+                    }
+                    else
+                    {
+                        try
+                        {
+                            outputContext = _contexts.CreateContext(
+                                activeContext.GamePath,
+                                activeContext.ObjectIndex,
+                                result.OutputModDirectory,
+                                result.TargetFilePath,
+                                result.DestinationName ?? result.OutputModDirectory,
+                                activeContext.CallbackPort,
+                                result.OutputModRootPath,
+                                result.OutputTargetRelativePath,
+                                resourceManifest: result.OutputResourceManifest,
+                                targetCollectionId: activeContext.TargetCollectionId,
+                                targetCollectionName: activeContext.TargetCollectionName,
+                                sourceModStableId: result.OutputModStableId,
+                                resolvedGamePath: activeContext.ResolvedGamePath);
+                        }
+                        catch (Exception error)
+                        {
+                            _log.Error(error, "Mashup mod was created, but its Blender export context could not be registered.");
+                            warnings.Add(
+                                "The mashup mod was created, but its Blender export context could not be registered.");
+                        }
+                    }
+                }
+                receipt = new ExportReceipt(
+                    result.Success,
+                    result.Code,
+                    result.Message,
+                    warnings,
+                    result.TargetFilePath,
+                    result.DestinationName,
+                    Context: outputContext,
+                    RequiredExternalMods: result.RequiredExternalMods);
+            }
+        }
+        catch (Exception e)
+        {
+            _log.Error(e, "Mashup processing failed.");
+            receipt = new ExportReceipt(false, "internal_error", "mashup processing failed");
+        }
+        finally
+        {
+            CleanupStagedExport(staged);
+        }
+
+        _contexts.CompleteExport(mashup.ContextId!, mashup.ExportId!, receipt);
+        return ResultResponse(receipt);
+    }
+
+    private async Task<(int Status, string Body)> HandleExportAsync(HttpRequest request)
+    {
             var parsed = DeserializeRequest<ExportRequest>(request.Body, "export", out var parseError);
             if (parseError is not null)
                 return parseError.Value;
@@ -1075,9 +1114,6 @@ public sealed class ExportServer : IDisposable
             _contexts.CompleteExport(export.ContextId!, export.ExportId!, receipt);
             _log.Information($"Export {receipt.Code}: {receipt.Message}");
             return ResultResponse(receipt);
-        }
-
-        return Error(404, "endpoint_not_found", "the requested bridge endpoint was not found");
 
         async Task<ExportReceipt> ApplyExport(
             InstantEditImportContext target,
@@ -1259,12 +1295,18 @@ public sealed class ExportServer : IDisposable
             request.CreateAttributeGroups, request.AttributeTags, request.AttributeMasks);
     }
 
+    /// <summary>Shared preamble for envelopes with exactly one supported schema/version pair.</summary>
+    private static string? ValidateSchemaVersion(string? schema, string expectedSchema, int version, int expectedVersion)
+    {
+        if (!string.Equals(schema, expectedSchema, StringComparison.Ordinal))
+            return version == expectedVersion ? "unsupported_schema" : "unsupported_version";
+        return version != expectedVersion ? "unsupported_version" : null;
+    }
+
     private static string? ValidateImportStatusEnvelope(ImportStatusRequest request)
     {
-        if (!string.Equals(request.Schema, "instant-edit.import-status", StringComparison.Ordinal))
-            return request.Version == 1 ? "unsupported_schema" : "unsupported_version";
-        if (request.Version != 1)
-            return "unsupported_version";
+        if (ValidateSchemaVersion(request.Schema, "instant-edit.import-status", request.Version, 1) is { } schemaError)
+            return schemaError;
         if (!string.Equals(request.Status, "failed", StringComparison.Ordinal))
             return "invalid_status";
         if (!string.Equals(request.Component, "blender_addon", StringComparison.Ordinal))
@@ -1287,10 +1329,8 @@ public sealed class ExportServer : IDisposable
 
     private static string? ValidateRevokeEnvelope(RevokeRequest request)
     {
-        if (!string.Equals(request.Schema, "instant-edit.context-revoke", StringComparison.Ordinal))
-            return request.Version == 1 ? "unsupported_schema" : "unsupported_version";
-        if (request.Version != 1)
-            return "unsupported_version";
+        if (ValidateSchemaVersion(request.Schema, "instant-edit.context-revoke", request.Version, 1) is { } schemaError)
+            return schemaError;
         return !IsSafeId(request.ContextId) || !IsSafeId(request.ImportId) ||
                string.IsNullOrWhiteSpace(request.Capability)
             ? "missing_field"
@@ -1299,10 +1339,8 @@ public sealed class ExportServer : IDisposable
 
     private static string? ValidateExportStatusEnvelope(ExportStatusRequest request)
     {
-        if (!string.Equals(request.Schema, "instant-edit.export-status", StringComparison.Ordinal))
-            return request.Version == 1 ? "unsupported_schema" : "unsupported_version";
-        if (request.Version != 1)
-            return "unsupported_version";
+        if (ValidateSchemaVersion(request.Schema, "instant-edit.export-status", request.Version, 1) is { } schemaError)
+            return schemaError;
         return string.IsNullOrWhiteSpace(request.PluginInstanceId) || !IsSafeId(request.ContextId) ||
                !IsSafeId(request.ExportId) || string.IsNullOrWhiteSpace(request.Capability)
             ? "missing_field"
@@ -1311,10 +1349,8 @@ public sealed class ExportServer : IDisposable
 
     private static string? ValidateVariantTargetsEnvelope(VariantTargetsRequest request)
     {
-        if (!string.Equals(request.Schema, "instant-edit.variant-targets", StringComparison.Ordinal))
-            return request.Version == 1 ? "unsupported_schema" : "unsupported_version";
-        if (request.Version != 1)
-            return "unsupported_version";
+        if (ValidateSchemaVersion(request.Schema, "instant-edit.variant-targets", request.Version, 1) is { } schemaError)
+            return schemaError;
         return string.IsNullOrWhiteSpace(request.PluginInstanceId) || !IsSafeId(request.ContextId) ||
                string.IsNullOrWhiteSpace(request.Capability)
             ? "missing_field"
@@ -1323,10 +1359,8 @@ public sealed class ExportServer : IDisposable
 
     private static string? ValidateMashupEnvelope(MashupExportRequest request)
     {
-        if (!string.Equals(request.Schema, "instant-edit.mashup-export", StringComparison.Ordinal))
-            return request.Version == 2 ? "unsupported_schema" : "unsupported_version";
-        if (request.Version != 2)
-            return "unsupported_version";
+        if (ValidateSchemaVersion(request.Schema, "instant-edit.mashup-export", request.Version, 2) is { } schemaError)
+            return schemaError;
         if (string.IsNullOrWhiteSpace(request.PluginInstanceId) || !IsSafeId(request.ContextId) ||
             !IsSafeId(request.ExportId) || string.IsNullOrWhiteSpace(request.Capability) ||
             string.IsNullOrWhiteSpace(request.FilePath) || string.IsNullOrWhiteSpace(request.Sha256) ||
@@ -1367,10 +1401,8 @@ public sealed class ExportServer : IDisposable
 
     private static string? ValidateMashupPlanEnvelope(MashupPlanRequest request)
     {
-        if (!string.Equals(request.Schema, "instant-edit.mashup-plan", StringComparison.Ordinal))
-            return request.Version == 1 ? "unsupported_schema" : "unsupported_version";
-        if (request.Version != 1)
-            return "unsupported_version";
+        if (ValidateSchemaVersion(request.Schema, "instant-edit.mashup-plan", request.Version, 1) is { } schemaError)
+            return schemaError;
         if (string.IsNullOrWhiteSpace(request.PluginInstanceId) || !IsSafeId(request.ContextId) ||
             string.IsNullOrWhiteSpace(request.Capability) ||
             request.Destination is not ("active_mod" or "new_mod") ||
@@ -1397,10 +1429,8 @@ public sealed class ExportServer : IDisposable
 
     private static string? ValidateMaterialCoverageEnvelope(MaterialCoverageRequest request)
     {
-        if (!string.Equals(request.Schema, "instant-edit.material-coverage", StringComparison.Ordinal))
-            return request.Version == 1 ? "unsupported_schema" : "unsupported_version";
-        if (request.Version != 1)
-            return "unsupported_version";
+        if (ValidateSchemaVersion(request.Schema, "instant-edit.material-coverage", request.Version, 1) is { } schemaError)
+            return schemaError;
         if (string.IsNullOrWhiteSpace(request.PluginInstanceId) || request.PluginInstanceId.Length > 128 ||
             !IsSafeId(request.ContextId) || string.IsNullOrWhiteSpace(request.Capability) ||
             request.Capability.Length > 512 ||
