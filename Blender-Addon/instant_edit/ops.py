@@ -435,6 +435,7 @@ def reset_material_coverage_state() -> None:
             _material_coverage_results.get_nowait()
         except Empty:
             break
+    reset_export_readiness_cache()
 
 
 def material_coverage_missing_materials(
@@ -713,6 +714,80 @@ def export_target_issues(
             issues.append(("WARNING", "Checking material and texture coverage…"))
 
     return issues
+
+
+_EXPORT_READINESS_REFRESH_SECONDS = 0.1
+_export_readiness_display_cache: dict = {"issues": (), "material_coverage_warning": False}
+
+
+def _run_export_readiness_refresh() -> None:
+    """Recompute the export readiness display cache and redraw if it changed.
+
+    export_target_issues()/material_coverage_warning_state() re-scan every
+    visible export object, and the panel that displays them gets redrawn by
+    Blender far more often than the underlying scene actually changes (any
+    viewport interaction can trigger it, not just XIV Instant Edit edits).
+    Recomputing them synchronously inside draw() was a measured, significant
+    cost on scenes with many parts. This mirrors _run_visibility_check's
+    debounce: draw() only ever reads the cache below (request_export_readiness_
+    refresh), and this does the real, fully-correct computation shortly after
+    redraw activity settles.
+    """
+    context = bpy.context
+    try:
+        ref = export_destination_context(context, persist=False)
+    except ContextValidationError as error:
+        issues, warning = [("ERROR", str(error))], False
+    else:
+        warning = material_coverage_warning_state(context, ref)
+        issues = export_target_issues(context, ref, material_coverage_warning=warning)
+    changed = (
+        tuple(issues) != _export_readiness_display_cache["issues"]
+        or warning != _export_readiness_display_cache["material_coverage_warning"]
+    )
+    _export_readiness_display_cache["issues"] = tuple(issues)
+    _export_readiness_display_cache["material_coverage_warning"] = warning
+    if changed:
+        try:
+            for window in bpy.context.window_manager.windows:
+                for area in window.screen.areas:
+                    area.tag_redraw()
+        except (AttributeError, ReferenceError, RuntimeError):
+            pass
+    return None
+
+
+def request_export_readiness_refresh() -> None:
+    """Debounce a background recompute of the export readiness display cache."""
+    if bpy.app.timers.is_registered(_run_export_readiness_refresh):
+        bpy.app.timers.unregister(_run_export_readiness_refresh)
+    bpy.app.timers.register(_run_export_readiness_refresh, first_interval=_EXPORT_READINESS_REFRESH_SECONDS)
+
+
+def cached_export_readiness() -> tuple[list[tuple[str, str]], bool]:
+    """Return the last computed (issues, material_coverage_warning) for display.
+
+    Always instant - this never performs the expensive scan itself, it only
+    reads the last background-computed result and schedules a refresh.
+    Callers that need a synchronous, guaranteed-fresh answer (e.g. actually
+    gating an export) must call export_target_issues()/
+    material_coverage_warning_state() directly instead - this cache can lag
+    real scene state by up to _EXPORT_READINESS_REFRESH_SECONDS.
+    """
+    request_export_readiness_refresh()
+    return (
+        list(_export_readiness_display_cache["issues"]),
+        _export_readiness_display_cache["material_coverage_warning"],
+    )
+
+
+def reset_export_readiness_cache() -> None:
+    _export_readiness_display_cache["issues"] = ()
+    _export_readiness_display_cache["material_coverage_warning"] = False
+    try:
+        bpy.app.timers.unregister(_run_export_readiness_refresh)
+    except Exception:
+        pass
 
 
 def selected_variant_target(props):

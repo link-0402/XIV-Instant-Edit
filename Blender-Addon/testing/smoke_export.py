@@ -291,7 +291,7 @@ def assert_mesh_studio(addon, obj, second, added_group):
             mesh_group=0, mesh_part=1, attribute="atr_tv_a"
         ) != {"FINISHED"} or second.get("atr_tv_a"):
             raise AssertionError("Gear attribute preset could not be removed by the Mesh Studio operator")
-        custom_attribute = "custom_mesh_tag"
+        custom_attribute = "atrx_custom_mesh_tag"
         if bpy.ops.xiv_ie.mesh_attribute(
             mesh_group=0,
             mesh_part=1,
@@ -314,6 +314,18 @@ def assert_mesh_studio(addon, obj, second, added_group):
             raise AssertionError("Custom mesh attribute removal operator failed")
         if second.get(custom_attribute):
             raise AssertionError("Custom mesh attribute could not be removed")
+        second["yas"] = True
+        second["yakit"] = True
+        try:
+            if "yas" in materials.mesh_part_attributes([second]):
+                raise AssertionError("Unrelated devkit property 'yas' leaked into mesh part attributes")
+            if "yakit" in materials.mesh_part_attributes([second]):
+                raise AssertionError("Unrelated devkit property 'yakit' leaked into mesh part attributes")
+            if "yas" in scene.get_attributes(second) or "yakit" in scene.get_attributes(second):
+                raise AssertionError("Unrelated devkit property leaked into the exported attribute list")
+        finally:
+            del second["yas"]
+            del second["yakit"]
         if bpy.ops.xiv_ie.mesh_flow(mesh_group=0, action="TOGGLE") != {"FINISHED"}:
             raise AssertionError("Mesh Studio flow operator failed")
         if materials.mesh_flow_enabled([obj, second]):
