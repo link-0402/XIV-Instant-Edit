@@ -47,9 +47,9 @@ public sealed partial class PenumbraService
         JsonArray? sourceManipulations = null)
     {
         resolvedGamePath ??= sourceGamePath;
-        if (!IsSafeModName(sourceModDirectory) || !IsSafeGamePath(sourceGamePath) ||
-            !IsSafeLocalModelPath(sourceFilePath))
+        if (!IsSafeLocalModelPath(sourceFilePath))
             return new ExportResult(false, "destination_unsafe", "The original Penumbra model destination is invalid.");
+        // ValidateExportRequest also covers sourceModDirectory/sourceGamePath, so they aren't re-checked here.
         var validationError = ValidateExportRequest(sourceModDirectory, sourceGamePath, exportedFile);
         if (validationError is not null)
             return new ExportResult(false, "invalid_export_file", validationError);

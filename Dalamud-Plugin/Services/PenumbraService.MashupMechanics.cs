@@ -218,7 +218,6 @@ public sealed partial class PenumbraService
     {
         if (!Directory.Exists(staging) || !IsSafeNewModName(modName) ||
             !IsSafeGamePath(consumerGamePath) ||
-            !consumerGamePath.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase) ||
             modelBytes.Length == 0)
             throw new InvalidDataException("The vanilla model staging request is invalid.");
 

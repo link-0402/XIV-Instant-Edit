@@ -1035,13 +1035,7 @@ public sealed class MaterialPreviewBundleBuilder
     }
 
     private static bool IsSafeGameResourcePath(string path, params string[] extensions)
-    {
-        path = NormaliseGamePath(path);
-        return path.Length is > 0 and <= 4096 &&
-               !Path.IsPathRooted(path) &&
-               !path.Split('/').Any(segment => segment is "" or "." or "..") &&
-               extensions.Any(extension => path.EndsWith(extension, StringComparison.OrdinalIgnoreCase));
-    }
+        => PenumbraService.IsSafeGameResourcePath(NormaliseGamePath(path), extensions);
 
     internal static class LooseLuminaFile
     {
