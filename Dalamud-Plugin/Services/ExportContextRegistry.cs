@@ -181,8 +181,6 @@ public sealed class ExportContextRegistry : IDisposable
     {
         if (!PenumbraService.IsSafeGamePath(gamePath) ||
             !PenumbraService.IsSafeGamePath(resolvedGamePath) ||
-            !gamePath.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase) ||
-            !resolvedGamePath.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase) ||
             objectIndex is < 0 or > ushort.MaxValue || callbackPort is < 1 or > 65535 ||
             targetCollectionId == Guid.Empty ||
             (targetCollectionName is not null && targetCollectionName.Length > 512))
@@ -794,6 +792,19 @@ public sealed class ExportContextRegistry : IDisposable
         }
     }
 
+    /// <summary>Whether a capability string decodes as a well-formed 32-byte token.</summary>
+    private static bool IsValidCapabilityFormat(string capability)
+    {
+        try
+        {
+            return Convert.FromBase64String(capability).Length == 32;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
     private InstantEditImportContext RuntimeContext(PersistedExportContext saved)
     {
         var safeManifest = IsSafeResourceManifest(saved.ResourceManifest)
@@ -840,7 +851,7 @@ public sealed class ExportContextRegistry : IDisposable
     {
         if (saved.Version > InstantEditImportContext.CurrentVersion ||
             !IsSafeId(saved.ContextId) || !IsSafeId(saved.ImportId) ||
-            !CapabilityMatches(saved.Capability, saved.Capability) ||
+            !IsValidCapabilityFormat(saved.Capability) ||
             !PenumbraService.IsSafeGamePath(saved.GamePath) ||
             saved.CallbackPort is < 1 or > 65535 ||
             saved.SourceModStableId == Guid.Empty ||
