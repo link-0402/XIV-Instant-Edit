@@ -61,17 +61,29 @@ CLASSES = [
 ]
 
 
-def _registered_class(cls):
-    """Return a stale or current Blender class registered under this name."""
-    registered = getattr(bpy.types, cls.__name__, None)
-    return registered if registered is not None else None
-
-
 def register() -> None:
-    # A failed registration can leave the classes processed before the failure
-    # behind. Clean those up so Blender can retry without a restart.
-    if any(_registered_class(cls) is not None for cls in CLASSES):
-        unregister()
+    # register() always tears down first instead of trying to detect whether
+    # a previous session left something registered. Detection turned out to
+    # be unreliable for this add-on's own classes: bpy.types.<cls.__name__>
+    # is None for AddonPreferences even while it's genuinely registered, and
+    # for every Operator here it's *also* wrong, because Blender exposes
+    # Operators under bpy.types by an identifier derived from bl_idname
+    # (e.g. "xiv_ie.clean_cache" -> "XIV_IE_OT_clean_cache"), not by the
+    # Python class name ("XIVIE_OT_clean_cache" - note the missing
+    # underscore). That combination is what let classes stay registered
+    # forever after a disable: unregister() never actually saw them as
+    # registered, so unregister_class() was never called, and the next
+    # register() always hit "already registered as a subclass". Class
+    # objects are stable across a plain enable/disable/enable cycle within
+    # one Blender session (proven empirically - Blender does not reload the
+    # module), so unregister() below just always attempts every class
+    # directly and relies on unregister_class()'s RuntimeError for classes
+    # that were never registered, which it already treats as a no-op. A
+    # Reload Scripts (F8) cycle is the one case this can't fully clean up,
+    # since that creates new, never-registered class objects while the old
+    # ones remain registered under Blender's RNA system - restarting Blender
+    # remains the recovery path for that specific case.
+    unregister()
     try:
         for cls in CLASSES:
             bpy.utils.register_class(cls)
@@ -89,9 +101,7 @@ def unregister() -> None:
     except (AttributeError, RuntimeError):
         pass
     for cls in reversed(CLASSES):
-        registered = _registered_class(cls)
-        if registered is not None:
-            try:
-                bpy.utils.unregister_class(registered)
-            except (AttributeError, RuntimeError):
-                pass
+        try:
+            bpy.utils.unregister_class(cls)
+        except (AttributeError, RuntimeError):
+            pass

@@ -411,8 +411,12 @@ def attribute_display_name(attribute: str) -> str:
 
 def normalize_mesh_attribute(value: str) -> str:
     attribute = str(value or "").strip().lower().replace(" ", "_")
-    if not _CUSTOM_ATTRIBUTE.fullmatch(attribute) or not is_model_attribute_name(attribute):
+    if not _CUSTOM_ATTRIBUTE.fullmatch(attribute):
         raise ValueError("Custom attributes must use only letters, numbers, or underscores.")
+    if not is_model_attribute_name(attribute):
+        raise ValueError(
+            "Custom attributes must start with atr, heels_offset, or skin_suffix."
+        )
     return attribute
 
 

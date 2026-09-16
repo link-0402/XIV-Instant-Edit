@@ -233,6 +233,40 @@ def collection_visible_in_view_layer(collection, view_layer=None) -> bool:
     return walk(view_layer.layer_collection)
 
 
+def visible_collections_in_view_layer(collections, view_layer=None) -> set:
+    """Return the subset of ``collections`` enabled through the current layer tree.
+
+    Walks the view layer's layer-collection tree once regardless of how many
+    collections are being checked, instead of once per collection like
+    repeated collection_visible_in_view_layer() calls would. Callers that
+    need to check many collections at once (e.g. handlers that run on every
+    depsgraph update) should use this instead.
+    """
+    view_layer = view_layer or getattr(bpy.context, "view_layer", None)
+    wanted = {
+        collection for collection in collections
+        if not getattr(collection, "hide_viewport", False)
+    }
+    if view_layer is None or not wanted:
+        return set()
+    visible = set()
+
+    def walk(layer_collection, ancestors_visible=True) -> None:
+        collection_visible = (
+            ancestors_visible
+            and not getattr(layer_collection, "exclude", False)
+            and not getattr(layer_collection, "hide_viewport", False)
+        )
+        collection = layer_collection.collection
+        if collection_visible and collection in wanted:
+            visible.add(collection)
+        for child in layer_collection.children:
+            walk(child, collection_visible)
+
+    walk(view_layer.layer_collection)
+    return visible
+
+
 def _remove_metadata(obj, fields=CONTEXT_METADATA_FIELDS) -> None:
     for field in fields:
         obj.pop(field, None)
@@ -434,7 +468,6 @@ def validate_context(context_id: str, scene=None) -> ContextRef:
 
     objects = tuple(collection.objects)
     mesh_objects = []
-    ids = set()
     for obj in objects:
         tagged_context_id = _value(obj, "context_id", "")
         if tagged_context_id:
@@ -465,10 +498,12 @@ def validate_context(context_id: str, scene=None) -> ContextRef:
             _require_int(_value(obj, "mesh_index"), "mesh index")
             _require_int(_value(obj, "submesh_index"), "submesh index")
 
-        key = mesh_ids_from_name(obj)
-        if key in ids:
-            raise ContextValidationError(f"duplicate mesh part {key[0]}.{key[1]}")
-        ids.add(key)
+        # Multiple objects sharing the same group/part/LOD are a supported
+        # "duplicate part instance" (see materials.mesh_part_instances) and
+        # are flagged as a warning in the UI rather than rejected here; the
+        # scene may also contain hidden duplicates that never affect export.
+        # mesh_ids_from_name still runs so an unparsable mesh name is caught.
+        mesh_ids_from_name(obj)
         mesh_objects.append(obj)
 
     if not mesh_objects:

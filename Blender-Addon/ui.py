@@ -10,7 +10,7 @@ from bpy.types import Context, Panel
 from .instant_edit.context import ContextValidationError, mesh_ids_from_name
 from .instant_edit.ops import (MASHUP_TARGET, SAVE_NEW_MOD_TARGET,
                                export_destination_context, mashup_target_state,
-                               export_target_issues, material_coverage_warning_state,
+                               cached_export_readiness,
                                normalise_variant_name, save_new_mod_target_state)
 from .instant_edit.props import IN_PLACE_TARGET, get_instant_edit_props
 from .materials import (
@@ -192,17 +192,16 @@ def _draw_named_text_input(layout, props, property_name: str, label: str) -> Non
     split.prop(props, property_name, text="")
 
 
-def _export_target_status(context: Context, ref) -> tuple[str, str]:
-    """Compute the Export Target readiness message and icon for ``ref``."""
-    material_coverage_warning = material_coverage_warning_state(context, ref)
-    try:
-        readiness_issues = export_target_issues(
-            context,
-            ref,
-            material_coverage_warning=material_coverage_warning,
-        )
-    except Exception as error:
-        readiness_issues = [("ERROR", f"Export checks unavailable: {error}")]
+def _export_target_status(readiness_issues) -> tuple[str, str]:
+    """Format the Export Target readiness message and icon from ``readiness_issues``.
+
+    ``readiness_issues`` comes from cached_export_readiness(), which is
+    instant to call - it never re-scans the scene itself, it just returns
+    the last background-computed result and schedules a refresh. Computing
+    it synchronously here used to be a measured, significant cost on scenes
+    with many parts, since this is called on every redraw of the panel and
+    Blender redraws it far more often than the scene actually changes.
+    """
     if readiness_issues:
         message = "; ".join(text for _severity, text in readiness_issues)
         icon = (
@@ -268,7 +267,8 @@ class XIVIE_PT_export_target_status_popover(Panel):
         if ref is None:
             layout.label(text="Export context unavailable.", icon="ERROR")
             return
-        message, icon = _export_target_status(context, ref)
+        readiness_issues, _material_coverage_warning = cached_export_readiness()
+        message, icon = _export_target_status(readiness_issues)
         _draw_status_popover_body(layout, context, message, icon)
         layout.separator()
         layout.operator(
@@ -357,7 +357,7 @@ class XIVIE_PT_main(Panel):
             header.operator("xiv_ie.refresh_variant_targets", text="", icon="FILE_REFRESH")
             if props.variant_targets_context_id and props.variant_targets_context_id != getattr(ref, "context_id", ""):
                 targets.label(text="Refresh targets for this Context.", icon="INFO")
-            material_coverage_warning = material_coverage_warning_state(context, ref)
+            readiness_issues, material_coverage_warning = cached_export_readiness()
             def target_row_is_alerted(selection_id: str) -> bool:
                 # Keep the selected target's depressed (blue) state visible even
                 # when the material-coverage warning applies to the composition.
@@ -450,7 +450,7 @@ class XIVIE_PT_main(Panel):
             # object or older context contains data that the preflight
             # checker cannot interpret. Keep the diagnostic visible and
             # continue to the status row below.
-            target_status_message, target_status_icon = _export_target_status(context, ref)
+            target_status_message, target_status_icon = _export_target_status(readiness_issues)
             target_status_row = targets.row(align=True)
             target_status_row.alert = target_status_icon == "ERROR"
             target_status_row.label(text=target_status_message, icon=target_status_icon)

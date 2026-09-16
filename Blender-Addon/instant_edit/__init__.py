@@ -41,7 +41,7 @@ def _recover_after_scene_load(_dummy) -> None:
 def _switch_hidden_export_context() -> None:
     """Keep the selector on a visible context when visibility changes."""
     global _last_visible_context_ids
-    from .context import collection_visible_in_view_layer, context_collections, context_id_for_object, _value
+    from .context import visible_collections_in_view_layer, context_collections, context_id_for_object, _value
     from .props import NO_EXPORT_CONTEXT
 
     scene = getattr(bpy.context, "scene", None)
@@ -55,10 +55,12 @@ def _switch_hidden_export_context() -> None:
             str(_value(value, "context_id", "")).casefold(),
         ),
     )
-    visible = [
-        value for value in collections
-        if collection_visible_in_view_layer(value, view_layer)
-    ]
+    # Walk the view layer's layer-collection tree once for every context
+    # collection here, instead of once per collection - this handler runs on
+    # every depsgraph update, so a per-collection tree walk noticeably added
+    # up during continuous viewport interaction (dragging, painting, sculpting).
+    visible_set = visible_collections_in_view_layer(collections, view_layer)
+    visible = [value for value in collections if value in visible_set]
     visible_ids = {
         str(_value(value, "context_id", "")) for value in visible
     }
@@ -74,9 +76,22 @@ def _switch_hidden_export_context() -> None:
     )
     if selected_index is None:
         if not collections:
-            props.export_destination = NO_EXPORT_CONTEXT
-            props.variant_targets.clear()
-            props.variant_targets_context_id = ""
+            # export_destination's update callback (_export_destination_changed)
+            # runs on every assignment regardless of whether the value actually
+            # changes, and it writes several more properties itself. Without
+            # this guard, every debounced run of this handler while no context
+            # exists in the scene rewrote export_destination to the value it
+            # already had - a property write with no actual state change
+            # behind it, forcing a redraw of anything displaying it (this
+            # add-on's own panel included) on every tick, unlike the "context
+            # selected" case below, which already only writes when the value
+            # genuinely changes.
+            if selected_id != NO_EXPORT_CONTEXT:
+                props.export_destination = NO_EXPORT_CONTEXT
+            if props.variant_targets:
+                props.variant_targets.clear()
+            if props.variant_targets_context_id:
+                props.variant_targets_context_id = ""
             return
         # An empty selector is also a deliberate choice while contexts are
         # visible. Only recover it after the handler observed no visible
@@ -90,12 +105,12 @@ def _switch_hidden_export_context() -> None:
             props.export_destination = str(_value(visible[0], "context_id", ""))
         elif selected_id != NO_EXPORT_CONTEXT:
             props.export_destination = NO_EXPORT_CONTEXT
-            props.variant_targets.clear()
-            props.variant_targets_context_id = ""
+            if props.variant_targets:
+                props.variant_targets.clear()
+            if props.variant_targets_context_id:
+                props.variant_targets_context_id = ""
         return
-    if len(collections) < 2 or collection_visible_in_view_layer(
-        collections[selected_index], view_layer
-    ):
+    if len(collections) < 2 or collections[selected_index] in visible_set:
         return
 
     target_id = NO_EXPORT_CONTEXT
@@ -138,9 +153,19 @@ def _run_visibility_check():
 
 @persistent
 def _context_visibility_changed(_scene, _depsgraph) -> None:
+    """Debounce the visibility check against every depsgraph update.
+
+    This handler runs on every depsgraph update, not just visibility
+    toggles - continuous viewport interaction (dragging, painting,
+    sculpting) fires it dozens of times per second. Rescheduling the timer
+    on each call, instead of only scheduling once while one is already
+    pending, collapses a whole burst of updates into a single check that
+    runs shortly after activity settles, rather than running repeatedly
+    throughout the interaction.
+    """
     global _visibility_check_pending
-    if _visibility_check_pending:
-        return
+    if bpy.app.timers.is_registered(_run_visibility_check):
+        bpy.app.timers.unregister(_run_visibility_check)
     _visibility_check_pending = True
     bpy.app.timers.register(_run_visibility_check, first_interval=0.05)
 
