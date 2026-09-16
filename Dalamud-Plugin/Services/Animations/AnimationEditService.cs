@@ -198,9 +198,11 @@ internal sealed class AnimationEditService : IDisposable
         }
         if (request.Capture.UnavailableReason != null) throw new InvalidOperationException(request.Capture.UnavailableReason);
         if (request.IncludeStartup && request.Capture.Startup == null) throw new InvalidOperationException("No unique startup was identified.");
-        // PAP rebakes use the explicitly selected source skeleton. Keep the
-        // actor and collection stable, but never use its current rig as input.
-        var requiresLiveSkeleton = request.Operation == AnimationOperation.CreateStartup;
+        // Plain PAP rebakes use only the explicitly selected source skeleton
+        // and never touch the current rig. Repair retargets onto the live
+        // skeleton (to rebuild tracks around inserted bones like YAS's), so
+        // it needs the same live-skeleton staleness guard as CreateStartup.
+        var requiresLiveSkeleton = request.Operation is AnimationOperation.CreateStartup or AnimationOperation.RepairSkeleton;
         await CheckActorAsync(request.Capture, requiresLiveSkeleton);
         if (request.Operation == AnimationOperation.BakeOffsets) await framework.RunOnFrameworkThread(() => poses.ValidateRoundTrip(request.Capture.Pose));
         await resources.CheckAsync(request.Capture.CollectionId, request.Capture.Sources, token);
@@ -289,6 +291,16 @@ internal sealed class AnimationEditService : IDisposable
             Status = message;
             if (message.StartsWith("Committing", StringComparison.Ordinal)) CanCancel = false;
         }, token);
+        // An in-place commit just changed the hash of its own captured sources.
+        // The game may not reload the file, so the observer will never revisit
+        // this clip to notice on its own; update it now so a retry (or Refresh)
+        // does not immediately fail CheckAsync against this same edit.
+        if (request.Destination == AnimationDestination.InPlace)
+        {
+            var updatedSources = request.Capture.Sources.Select(s =>
+                journal.Files.FirstOrDefault(f => f.GamePath == s.GamePath) is { } file ? s with { Hash = file.AfterHash } : s).ToImmutableArray();
+            Observer.UpdateSources(request.Capture.Id, updatedSources);
+        }
         if (request.Operation != AnimationOperation.BakeOffsets)
         {
             journal.State = "Completed"; journal.PoseClearOutcome = "NotApplicable";

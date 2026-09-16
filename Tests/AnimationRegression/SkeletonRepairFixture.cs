@@ -39,6 +39,8 @@ internal static class SkeletonRepairFixture
         helperPose[1] = T(2);
         reject(() => helperMap.Map(helperPose), "a moving missing helper cannot be silently dropped");
         var inserted = new AnimationRetarget(target, helpers, channels with { Bones = [0, 1], ReferenceBones = 2 });
+        check(inserted.MapTracks([0, 1]).SequenceEqual(new short[] { 0, 2 }),
+            "repair rewrites numeric animation tracks around inserted destination helper bones");
         check(Math.Abs(inserted.Map(new[] { T(), T(2.5f) })[2].Position.X - 1.5f) < 1e-6, "target reference helpers are removed from collapsed output to recover local transforms");
         var wrongParent = S("parent", B("root", -1), B("extra", 0), B("hand", 1, 2));
         check(Math.Abs(new AnimationRetarget(source, wrongParent, channels).Map(pose)[2].Position.X - 2.5f) < 1e-6,
@@ -130,6 +132,12 @@ internal static class SkeletonRepairFixture
         var merged = AnimationObserver.MergeHistory([capture], [recent]);
         check(merged.Length == 2 && merged[0].Playing && !merged[1].Playing && merged[0].Clip.Resolution?.State == SkeletonResolutionState.Ambiguous,
             "a mismatched clip remains listed and playing without LivePose while old clips become recent");
+        var staleSource = new AnimationResource(clip.GamePath, "resolved.pap", "before-edit-hash");
+        var sourcedCapture = capture with { Sources = [staleSource] };
+        var refreshedByEdit = AnimationObserver.ApplyUpdatedSources([sourcedCapture], "walk", [staleSource with { Hash = "after-edit-hash" }]);
+        var untouchedCapture = AnimationObserver.ApplyUpdatedSources([sourcedCapture], "other-clip", [staleSource with { Hash = "after-edit-hash" }]);
+        check(refreshedByEdit.Single().Sources.Single().Hash == "after-edit-hash" && untouchedCapture.Single().Sources.Single().Hash == "before-edit-hash",
+            "an in-place edit's refreshed source hash reaches only its own captured clip, by id and game path");
         var selectedResolution = ambiguity with { State = SkeletonResolutionState.Matched, Selected = ambiguity.Candidates[0] };
         var request = new AnimationBakeRequest(Guid.NewGuid(), capture with { Clip = clip with { Resolution = selectedResolution }, Startup = clip with { Resolution = selectedResolution } },
             AnimationDestination.NewMod, "Repair", true, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.RepairSkeleton);

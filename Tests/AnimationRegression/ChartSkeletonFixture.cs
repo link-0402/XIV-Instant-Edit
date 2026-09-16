@@ -44,6 +44,14 @@ internal static class ChartSkeletonFixture
         check(mapped.Selected?.Source.CanonicalModel == "c0101" && mapped.State == SkeletonResolutionState.Matched,
             "one mapped c0101 skeleton is selected for the live female Miqo'te target");
 
+        var mapper = c0801 with { Source = c0801.Source with { Variant = "Mapper 0 A (entry 1)" },
+            Skeleton = c0801.Skeleton with { Fingerprint = "c0801-mapper" } };
+        var quantized = AnimationSkeletonIndex.Rank(channels with { ExactReferenceModel = true },
+            [mapper, c0101, c0201, c0801], null, target, sourceIdentity: identity);
+        check(quantized is { State: SkeletonResolutionState.Matched, Candidates.Length: 1 } &&
+              quantized.Selected?.Source.CanonicalModel == "c0801" && quantized.Selected.Source.Variant.Length == 0,
+            "quantized PAPs use their exact model's main skeleton without chart inheritance or mapper endpoints");
+
         var shortSource = Candidate("c0101", Skeleton("short", 2), aliases);
         var completeRace = Candidate("c0801", Skeleton("complete", 3));
         var longerChannels = new AnimationChannels("rig", [0, 1, 2], [], [], 3, 0);

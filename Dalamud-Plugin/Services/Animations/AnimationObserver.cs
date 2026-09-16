@@ -455,6 +455,19 @@ internal sealed class AnimationObserver : IDisposable
         skeletons.Rescan(); resolutions.Clear(); manualChoices.Clear(); operationErrors.Clear();
         lastStamp = null; nextFallback = DateTime.MinValue; resourceCache.Clear(); motionCache.Clear(); parsedPaps.Clear(); durations.Clear();
     }
+    // An in-place edit changes a file's hash but does not itself change what
+    // the game has resident in memory (Penumbra does not hot-reload PAPs). The
+    // edited clip then stops matching any live binding and is never revisited
+    // by the passive scan above, so its captured Sources would stay stale
+    // forever and every retry would fail CheckAsync against its own last edit.
+    public void UpdateSources(string captureId, ImmutableArray<AnimationResource> updatedResources) =>
+        history = ApplyUpdatedSources(history, captureId, updatedResources);
+    internal static ImmutableArray<AnimationCapture> ApplyUpdatedSources(ImmutableArray<AnimationCapture> history,
+        string captureId, ImmutableArray<AnimationResource> updatedResources) =>
+        history.Select(c => c.Id != captureId ? c : c with
+        {
+            Sources = c.Sources.Select(s => updatedResources.FirstOrDefault(u => u.GamePath == s.GamePath) ?? s).ToImmutableArray(),
+        }).ToImmutableArray();
     public void ReportOperationError(AnimationClip clip, string? error)
     {
         var key = ChoiceKey(clip);
