@@ -35,6 +35,9 @@ from .cache import create_job, finish_job
 from .diagnostics import record_failure, record_protocol_failure, record_remote_failure
 
 
+# ---- Dalamud plugin HTTP transport ----
+
+
 def _physical_parent_path(file_path: str) -> str:
     """Return a model file's parent while preserving Windows bridge paths."""
     if (
@@ -151,6 +154,9 @@ def _plugin_transport_error(
         remedy=failure["remedy"],
         diagnostic_id=failure["diagnosticId"],
     )
+
+
+# ---- Material coverage checks (mashup contributor readiness) ----
 
 
 def _normalize_mashup_material(material_name: str) -> str:
@@ -495,6 +501,9 @@ def save_new_mod_target_state(context: Context, ref=None) -> tuple[bool, bool, s
         return True, True, ""
     except ContextValidationError as error:
         return True, False, str(error)
+
+
+# ---- Variant target selection and validation ----
 
 
 def normalise_variant_name(value: str) -> str:
@@ -866,6 +875,9 @@ def variant_game_path(source_game_path: str, variant_name: str) -> str:
     return f"{directory}/{variant_name}.mdl"
 
 
+# ---- Instant Import: object staging snapshot/restore ----
+
+
 def _snapshot_object_state(context: Context) -> tuple:
     """Capture the user state that temporary armature setup can disturb."""
     return (
@@ -920,6 +932,9 @@ def _remove_staging_objects(objects: list, collection) -> None:
 
     if collection is not None and collection.name in bpy.data.collections:
         bpy.data.collections.remove(collection, do_unlink=True)
+
+
+# ---- Instant Import operator (Dalamud-bridge driven import) ----
 
 
 class InstantImport(Operator):
@@ -1220,6 +1235,9 @@ class InstantImport(Operator):
             modifier.object = armature_obj
 
 
+# ---- Mashup export context management ----
+
+
 def _valid_export_contexts(context: Context) -> list:
     refs = []
     for collection in context_collections(context.scene):
@@ -1450,6 +1468,9 @@ class ToggleVariantTargetGroup(Operator):
             return {"CANCELLED"}
         item.expanded = not item.expanded
         return {"FINISHED"}
+
+
+# ---- Quick Export operator (Dalamud-bridge driven export) ----
 
 
 class QuickExport(Operator):
@@ -1711,6 +1732,9 @@ class VanillaModName(Operator):
         )
         get_export_stats(context)
         return {"FINISHED"}
+
+
+# ---- Context and mesh-part management operators ----
 
 
 class ClearInstantEditContexts(Operator):
@@ -2194,6 +2218,9 @@ def clear_quick_backups(context: Context) -> dict:
     return _decode_plugin_response(body, status, "/backup/clear")
 
 
+# ---- Export destination resolution and attribute-group detection ----
+
+
 def export_destination_context(
     context: Context,
     destination: str | None = None,
@@ -2257,6 +2284,9 @@ def detected_attribute_group_tags(context: Context) -> tuple[str, ...]:
     tags, _masks = attribute_group_data(
         objects, use_lods=get_settings().use_lods)
     return tags
+
+
+# ---- Mashup export execution ----
 
 
 def perform_mashup_export(
@@ -2472,6 +2502,9 @@ def perform_mashup_export(
             print(f"XIV Instant Edit: could not remove mashup export cache job: {error}")
 
 
+# ---- Instant Export execution ----
+
+
 def perform_instant_export(
     context: Context,
     destination: str | None = None,
@@ -2645,6 +2678,9 @@ def perform_instant_export(
             finish_job(temp_dir)
         except OSError as error:
             print(f"XIV Instant Edit: could not remove export cache job: {error}")
+
+
+# ---- Apply Instant Edit operator ----
 
 
 class ApplyInstantEdit(Operator):
