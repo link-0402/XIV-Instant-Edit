@@ -45,6 +45,7 @@ public sealed partial class MainWindow : Window, IDisposable
     private FeedbackSeverity _statusSeverity = FeedbackSeverity.Success;
     private FeedbackSeverity _textureStatusSeverity = FeedbackSeverity.Success;
     private MainTab _activeTab = MainTab.OnScreen;
+    private const bool ShowAnimationsTab = false;
 
     public MainWindow(Configuration config, PenumbraService penumbra, OnScreenService onScreen, BlenderClient blender,
         IDataManager data, IChatGui chat, IPluginLog log, Action saveConfig, Action restartExportListener, IUiBuilder uiBuilder,
@@ -144,7 +145,7 @@ public sealed partial class MainWindow : Window, IDisposable
                     ImGui.EndTabItem();
                 }
 
-                if (ImGui.BeginTabItem("Animations"))
+                if (ShowAnimationsTab && ImGui.BeginTabItem("Animations"))
                 {
                     activeTab = MainTab.Animations;
                     animationsTabActive = true;
