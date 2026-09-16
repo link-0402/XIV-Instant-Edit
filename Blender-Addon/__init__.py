@@ -27,13 +27,10 @@ from .preferences import (
     XIVIE_OT_open_diagnostics_folder,
 )
 from .properties import XIVIEExportSettings, set_addon_properties, remove_addon_properties
-from .ui import XIVIE_PT_main, draw_status_context_menu
-
-
-BUTTON_CONTEXT_MENU = getattr(
-    bpy.types,
-    "UI_MT_button_context_menu",
-    getattr(bpy.types, "WM_MT_button_context", None),
+from .ui import (
+    XIVIE_PT_main,
+    XIVIE_PT_export_target_status_popover,
+    XIVIE_PT_last_status_popover,
 )
 
 
@@ -58,6 +55,8 @@ CLASSES = [
     XIVIE_OT_restore_backup,
     XIVIE_OT_import_backup,
     XIVIE_OT_clear_backups,
+    XIVIE_PT_export_target_status_popover,
+    XIVIE_PT_last_status_popover,
     XIVIE_PT_main,
 ]
 
@@ -76,8 +75,6 @@ def register() -> None:
     try:
         for cls in CLASSES:
             bpy.utils.register_class(cls)
-        if BUTTON_CONTEXT_MENU is not None:
-            BUTTON_CONTEXT_MENU.append(draw_status_context_menu)
         set_addon_properties()
         instant_edit.register()
     except Exception:
@@ -87,11 +84,6 @@ def register() -> None:
 
 def unregister() -> None:
     instant_edit.unregister()
-    try:
-        if BUTTON_CONTEXT_MENU is not None:
-            BUTTON_CONTEXT_MENU.remove(draw_status_context_menu)
-    except (ValueError, RuntimeError):
-        pass
     try:
         remove_addon_properties()
     except (AttributeError, RuntimeError):

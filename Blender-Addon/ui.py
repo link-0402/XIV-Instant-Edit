@@ -1,5 +1,6 @@
 import ntpath
 from pathlib import Path
+import re
 import textwrap
 
 import bpy
@@ -38,15 +39,6 @@ def _lod_zero_objects(objects) -> tuple:
         return lod_zero
     lowest_lod = min(mesh_ids_from_name(obj)[2] for obj in objects)
     return tuple(obj for obj in objects if mesh_ids_from_name(obj)[2] == lowest_lod)
-
-
-def draw_status_context_menu(menu, context) -> None:
-    """Add full-status copying when the status text field is right-clicked."""
-    button_prop = getattr(context, "button_prop", None)
-    if button_prop is None or getattr(button_prop, "identifier", "") != "last_status":
-        return
-    menu.layout.separator()
-    menu.layout.operator("xiv_ie.copy_status", text="Copy Full Import Status", icon="COPYDOWN")
 
 
 def _relative_physical_path(file_path: str, root_path: str) -> str:
@@ -198,6 +190,107 @@ def _draw_named_text_input(layout, props, property_name: str, label: str) -> Non
     split = row.split(factor=0.42, align=True)
     split.label(text=label)
     split.prop(props, property_name, text="")
+
+
+def _export_target_status(context: Context, ref) -> tuple[str, str]:
+    """Compute the Export Target readiness message and icon for ``ref``."""
+    material_coverage_warning = material_coverage_warning_state(context, ref)
+    try:
+        readiness_issues = export_target_issues(
+            context,
+            ref,
+            material_coverage_warning=material_coverage_warning,
+        )
+    except Exception as error:
+        readiness_issues = [("ERROR", f"Export checks unavailable: {error}")]
+    if readiness_issues:
+        message = "; ".join(text for _severity, text in readiness_issues)
+        icon = (
+            "ERROR"
+            if any(severity == "ERROR" for severity, _text in readiness_issues)
+            else "STATUS_WARNING"
+        )
+    else:
+        message = "Export selection is clean."
+        icon = "CHECKMARK"
+    return message, icon
+
+
+_MATERIAL_WARNING_RE = re.compile(
+    r"^(?P<prefix>Warning: missing files for materials?:) (?P<materials>.+)\. "
+    r"(?P<guidance>Use Create Mashup to include them\.)$"
+)
+
+
+def _issue_display_lines(message: str) -> list[str]:
+    """Split a known issue message into explicit display lines.
+
+    The material-coverage warning packs a comma-joined material list into one
+    sentence, which word-wraps awkwardly (e.g. a lone ``/`` stranded at the end
+    of a line). When the message matches that shape, break it into a label
+    line, one material per line, and the guidance sentence on its own line.
+    """
+    match = _MATERIAL_WARNING_RE.match(message)
+    if match is None:
+        return [message]
+    materials = [name.strip() for name in match.group("materials").split(", ") if name.strip()]
+    if not materials:
+        return [message]
+    return [match.group("prefix"), *materials, match.group("guidance")]
+
+
+def _draw_status_popover_body(layout, context: Context, message: str, icon: str = "NONE") -> None:
+    """Word-wrap a status message across multiple labels inside a popover."""
+    column = layout.column(align=True)
+    width = _display_wrap_width(context)
+    first = True
+    for segment in _issue_display_lines(message):
+        for line in _wrap_display_value(segment, width) or (segment,):
+            column.label(text=line, icon=icon if first else "NONE")
+            first = False
+
+
+class XIVIE_PT_export_target_status_popover(Panel):
+    """Anchored popover with the full, word-wrapped Export Target status."""
+
+    bl_idname = "XIVIE_PT_export_target_status_popover"
+    bl_label = "Export Target Status"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_ui_units_x = 20
+
+    def draw(self, context: Context) -> None:
+        layout = self.layout
+        try:
+            ref = export_destination_context(context, persist=False)
+        except ContextValidationError:
+            ref = None
+        if ref is None:
+            layout.label(text="Export context unavailable.", icon="ERROR")
+            return
+        message, icon = _export_target_status(context, ref)
+        _draw_status_popover_body(layout, context, message, icon)
+        layout.separator()
+        layout.operator(
+            "xiv_ie.copy_target_status", text="Copy to Clipboard", icon="COPYDOWN"
+        ).status_message = message
+
+
+class XIVIE_PT_last_status_popover(Panel):
+    """Anchored popover with the full, word-wrapped last-action status."""
+
+    bl_idname = "XIVIE_PT_last_status_popover"
+    bl_label = "XIV Instant Edit Status"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_ui_units_x = 20
+
+    def draw(self, context: Context) -> None:
+        layout = self.layout
+        message = get_instant_edit_props().last_status or "No status yet."
+        _draw_status_popover_body(layout, context, message)
+        layout.separator()
+        layout.operator("xiv_ie.copy_status", text="Copy to Clipboard", icon="COPYDOWN")
 
 
 class XIVIE_PT_main(Panel):
@@ -353,39 +446,18 @@ class XIVIE_PT_main(Panel):
                 ).selection_id = SAVE_NEW_MOD_TARGET
                 if not new_mod_enabled and new_mod_message:
                     targets.label(text=new_mod_message, icon="ERROR")
-            try:
-                readiness_issues = export_target_issues(
-                    context,
-                    ref,
-                    material_coverage_warning=material_coverage_warning,
-                )
-            except Exception as error:
-                # Panel drawing must not stop at the target list when a stale
-                # object or older context contains data that the preflight
-                # checker cannot interpret. Keep the diagnostic visible and
-                # continue to the status row below.
-                readiness_issues = [("ERROR", f"Export checks unavailable: {error}")]
-            if readiness_issues:
-                target_status_message = "; ".join(
-                    message for _severity, message in readiness_issues)
-                target_status_icon = (
-                    "ERROR"
-                    if any(severity == "ERROR" for severity, _message in readiness_issues)
-                    else "STATUS_WARNING"
-                )
-            else:
-                target_status_message = "Export selection is clean."
-                target_status_icon = "CHECKMARK"
+            # Panel drawing must not stop at the target list when a stale
+            # object or older context contains data that the preflight
+            # checker cannot interpret. Keep the diagnostic visible and
+            # continue to the status row below.
+            target_status_message, target_status_icon = _export_target_status(context, ref)
             target_status_row = targets.row(align=True)
             target_status_row.alert = target_status_icon == "ERROR"
             target_status_row.label(text=target_status_message, icon=target_status_icon)
-            # The status is derived while this panel is drawn. Pass it to the
-            # copy button instead of storing it on the scene from draw(), which
-            # Blender disallows and which can stop the rest of this panel.
-            if hasattr(bpy.ops.xiv_ie, "copy_target_status"):
-                target_status_row.operator(
-                    "xiv_ie.copy_target_status", text="", icon="COPYDOWN"
-                ).status_message = target_status_message
+            if hasattr(bpy.types, "XIVIE_PT_export_target_status_popover"):
+                target_status_row.popover(
+                    panel="XIVIE_PT_export_target_status_popover", text="", icon="DOWNARROW_HLT"
+                )
             selected_target = next(
                 (item for item in props.variant_targets if item.selection_id == props.variant_target), None)
             if props.variant_target == "NEW_GROUP":
@@ -399,11 +471,9 @@ class XIVIE_PT_main(Panel):
                 _draw_named_text_input(box, props, "variant_name", "New Option Name")
             box.operator("xiv_ie.instant_export", text="Quick Export", icon="EXPORT")
         status_row = box.row(align=True)
-        status = status_row.split(factor=0.14, align=True)
-        status.label(text="Status:", icon="INFO")
-        status_value = status.row(align=True)
-        status_value.prop(props, "last_status", text="")
-        status_value.operator("xiv_ie.copy_status", text="", icon="COPYDOWN")
+        status_row.label(text=props.last_status or "No status yet.", icon="INFO")
+        if hasattr(bpy.types, "XIVIE_PT_last_status_popover"):
+            status_row.popover(panel="XIVIE_PT_last_status_popover", text="", icon="DOWNARROW_HLT")
 
     @staticmethod
     def _draw_mesh_materials(layout, context: Context) -> None:
