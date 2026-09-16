@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Security.Cryptography;
@@ -510,7 +510,7 @@ public sealed partial class PenumbraService
         }
     }
 
-    private static JsonObject BuildVariantGroup(
+    internal static JsonObject BuildVariantGroup(
         JsonObject? existingGroup,
         string marker,
         string sourceGamePath,

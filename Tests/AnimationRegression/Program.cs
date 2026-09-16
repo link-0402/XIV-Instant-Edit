@@ -306,11 +306,26 @@ var packagedManifest = new AnimationDependencyManifest(
     ImmutableDictionary<string, byte[]>.Empty
         .Add(packagedRoot, [1])
         .Add(packagedDependency, [2]));
-var packagedOutputs = ImmutableDictionary<string, byte[]>.Empty.Add(packagedRoot, [3]);
+ImmutableArray<AnimationOutput> packagedOutputs = [new(packagedRoot, "", [3])];
 var selectedModFiles = AnimationCommitService.SelectNewModFiles(packagedManifest, packagedOutputs);
-Check(selectedModFiles.Count == 1 && selectedModFiles.ContainsKey(packagedRoot) &&
-      !selectedModFiles.ContainsKey(packagedDependency),
+Check(selectedModFiles.Length == 1 && selectedModFiles.Any(o => o.GamePath == packagedRoot) &&
+      !selectedModFiles.Any(o => o.GamePath == packagedDependency),
     "new animation mods copy only baked clips, not transitively discovered dependencies");
+Reject(() => AnimationCommitService.SelectNewModFiles(packagedManifest, [new(packagedRoot, "Slot 6", [3]), new("chara/absent.pap", "Slot 6", [4])]),
+    "an optioned output outside the captured dependency manifest is rejected");
+// Two variants legitimately write the same game path, so each option needs its own
+// directory inside the mod.
+Check(AnimationCommitService.OptionSlugs([new(packagedRoot, "Standing Idle 1 to 6", [3]), new(packagedRoot, "Standing Idle 2 to 6", [4])])
+        is { Count: 2 } slugMap && slugMap["Standing Idle 1 to 6"] == "standing-idle-1-to-6" && slugMap["Standing Idle 2 to 6"] == "standing-idle-2-to-6",
+    "each animation option maps to its own directory name inside the mod");
+Reject(() => AnimationCommitService.OptionSlugs([new(packagedRoot, "Idle 1 -> 6", [3])]),
+    "an option name containing a path-invalid character is rejected before it reaches Penumbra");
+Check(AnimationCommitService.OptionSlugs([new(packagedRoot, "", [3])]).Count == 0,
+    "default-data outputs claim no option directory");
+Reject(() => AnimationCommitService.OptionSlugs([new(packagedRoot, "Slot 6", [3]), new(packagedRoot, "Slot  6", [4])]),
+    "two option names reducing to one directory name are rejected rather than overwriting");
+Reject(() => AnimationCommitService.OptionSlugs([new(packagedRoot, "***", [3])]),
+    "an option name with no usable directory name is rejected");
 using (var cancelled = new CancellationTokenSource())
 {
     cancelled.Cancel();
@@ -409,6 +424,42 @@ Check(animationMetadata["FileVersion"]!.GetValue<int>() == 4 &&
     "new animation mods embed mappings and manipulations in v4 meta.json data");
 Reject(() => AnimationCommitService.CreateNewModMetadata("Invalid", [], "{}"),
     "animation metadata rejects non-array manipulations");
+// Optioned outputs become one single-select group instead of flat default data.
+var swapA = "chara/human/c0801/animation/a0001/bt_common/emote/pose06_loop.pap";
+var swapB = "chara/human/c0801/animation/a0001/bt_common/emote/pose06_start.pap";
+var groupedMetadata = AnimationCommitService.CreateNewModMetadata(
+    "Animation regression",
+    [new AnimationFileChange(swapA, "target", "Animation regression", "root", "files/idle-1/" + swapA, "", "hash-a", "", "staged", "Idle 1"),
+     new AnimationFileChange(swapB, "target", "Animation regression", "root", "files/idle-1/" + swapB, "", "hash-b", "", "staged", "Idle 1"),
+     new AnimationFileChange(swapA, "target", "Animation regression", "root", "files/idle-2/" + swapA, "", "hash-c", "", "staged", "Idle 2")],
+    meta.ToJsonString(), groupName: "Standing Idle");
+var swapGroup = groupedMetadata["Groups"]!.AsArray().Single()!.AsObject();
+var swapOptions = swapGroup["Options"]!.AsArray();
+Check(groupedMetadata["DefaultData"]!["Files"]!.AsObject().Count == 0 &&
+      swapGroup["Type"]!.GetValue<string>() == "Single" && swapGroup["Name"]!.GetValue<string>() == "Standing Idle" &&
+      swapOptions.Count == 3 && swapOptions[0]!["Name"]!.GetValue<string>() == "None" &&
+      swapOptions[0]!["Files"] is null && swapOptions[1]!["Name"]!.GetValue<string>() == "Idle 1" &&
+      swapOptions[2]!["Name"]!.GetValue<string>() == "Idle 2",
+    "optioned animation outputs become one single-select group with a leading disable entry");
+Check(swapOptions[1]!["Files"]!.AsObject().Count == 2 &&
+      swapOptions[1]!["Files"]![swapA]!.GetValue<string>() == "files/idle-1/" + swapA &&
+      swapOptions[1]!["Files"]![swapB]!.GetValue<string>() == "files/idle-1/" + swapB &&
+      swapOptions[2]!["Files"]!.AsObject().Count == 1 &&
+      swapOptions[2]!["Files"]![swapA]!.GetValue<string>() == "files/idle-2/" + swapA,
+    "each animation option collects every file it replaces, including a clip's paired startup");
+Check(swapGroup["DefaultSettings"]!.GetValue<int>() == 0,
+    "a generated animation variant group starts disabled so it changes nothing until chosen");
+Check(groupedMetadata["Groups"]!.AsArray().Count == 1 &&
+      swapOptions.Skip(1).Select(o => o!["Id"]!.GetValue<Guid>()).Distinct().Count() == 2,
+    "animation variant options receive distinct identities within a single group");
+Reject(() => PenumbraService.BuildAnimationVariantGroup("Standing Idle", []),
+    "an animation variant group with no options is rejected");
+Reject(() => PenumbraService.BuildAnimationVariantGroup("Standing Idle",
+        [new AnimationFileChange(swapA, "t", "m", "r", "../escape.pap", "", "h", "", "s", "Idle 1")]),
+    "an animation option file escaping the mod directory is rejected");
+Reject(() => PenumbraService.BuildAnimationVariantGroup("Standing Idle",
+        [new AnimationFileChange("../escape.pap", "t", "m", "r", "files/idle-1/x.pap", "", "h", "", "s", "Idle 1")]),
+    "an animation option replacing an unsafe game path is rejected");
 
 var temp = Path.Combine(Path.GetTempPath(), "ie-animation-regression-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(temp);

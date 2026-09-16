@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Security.Cryptography;
@@ -94,7 +94,7 @@ public sealed partial class PenumbraService
         }
     }
 
-    private static bool IsSafeVariantName(string value)
+    internal static bool IsSafeVariantName(string value)
         => PathRules.IsSafeVariantName(value);
 
     internal static bool IsSafeVariantGroupName(string? value)
