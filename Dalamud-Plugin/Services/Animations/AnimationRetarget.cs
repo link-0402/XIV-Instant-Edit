@@ -50,6 +50,20 @@ internal sealed class AnimationRetarget
                     throw new InvalidDataException($"Partition '{a.Name}' has incompatible destination membership.");
         }
     }
+    public short[] MapTracks(IEnumerable<short> tracks)
+    {
+        var result = new List<short>();
+        foreach (var sourceBone in tracks)
+        {
+            if (sourceBone < 0 || sourceBone >= BoneMap.Length)
+                throw new InvalidDataException("Animation transform track is outside its source skeleton.");
+            var targetBone = BoneMap[sourceBone];
+            // Missing reference-only source helpers may be omitted. Map()
+            // separately rejects any missing helper that actually moves.
+            if (targetBone >= 0 && !result.Contains((short)targetBone)) result.Add(checked((short)targetBone));
+        }
+        return result.ToArray();
+    }
     private static short Unique(ImmutableArray<string> names, string name, string kind)
     {
         var matches = names.Select((n, i) => (n, i)).Where(v => v.n == name && name.Length > 0).ToArray();

@@ -60,8 +60,17 @@ public sealed partial class MainWindow
             currentCapture.Clip.BindingFingerprint == previous.Clip.BindingFingerprint && currentCapture.Clip.SourceContext == previous.Clip.SourceContext &&
             currentCapture.Clip.SkeletonFingerprint == previous.Clip.SkeletonFingerprint)
         {
-            // Resolution updates must not recapture offsets or change the user's selected bones.
-            animationSelection = previous with { Clip = currentCapture.Clip, Startup = currentCapture.Startup, Playing = currentCapture.Playing };
+            // Resolution updates must not recapture offsets or change the user's selected bones,
+            // but everything else (including Sources, which an in-place edit can change without
+            // the game reloading the file) should track the observer's latest capture.
+            animationSelection = previous with
+            {
+                Clip = currentCapture.Clip, Startup = currentCapture.Startup, Playing = currentCapture.Playing,
+                Sources = currentCapture.Sources, FamilyPaths = currentCapture.FamilyPaths,
+                LoadedResourcePaths = currentCapture.LoadedResourcePaths, ResourceAliases = currentCapture.ResourceAliases,
+                UnavailableReason = currentCapture.UnavailableReason, PackagingError = currentCapture.PackagingError,
+                PoseUnavailableReason = currentCapture.PoseUnavailableReason,
+            };
         }
         if (animationSelection != null && animationSelection.ActorId != animations.Observer.Actor)
         { animationSelection = null; animationBones.Clear(); }

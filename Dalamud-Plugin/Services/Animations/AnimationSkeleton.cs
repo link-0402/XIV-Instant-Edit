@@ -13,7 +13,8 @@ using InstantEdit.Models;
 namespace InstantEdit.Services.Animations;
 
 internal sealed record AnimationChannels(string OriginalSkeleton, ImmutableArray<short> Bones,
-    ImmutableArray<short> Floats, ImmutableArray<short> Partitions, int? ReferenceBones, int? ReferenceFloats);
+    ImmutableArray<short> Floats, ImmutableArray<short> Partitions, int? ReferenceBones, int? ReferenceFloats,
+    bool ExactReferenceModel = false);
 
 /// <summary>Owned managed descriptions are the only skeleton data allowed across framework ticks.</summary>
 internal static unsafe class AnimationSkeleton
@@ -157,7 +158,8 @@ internal static unsafe class AnimationSkeleton
         return new(b->OriginalSkeletonName.String ?? "", Copy(b->TransformTrackToBoneIndices.Data, b->TransformTrackToBoneIndices.Length),
             Copy(b->FloatTrackToFloatSlotIndices.Data, b->FloatTrackToFloatSlotIndices.Length), Copy(b->PartitionIndices.Data, b->PartitionIndices.Length),
             predictive != null ? predictive->NumBones : quantized == null ? null : quantized->NumBones,
-            predictive != null ? predictive->NumFloatSlots : quantized == null ? null : quantized->NumFloats);
+            predictive != null ? predictive->NumFloatSlots : quantized == null ? null : quantized->NumFloats,
+            quantized != null);
     }
     public static AnimationChannels InspectChannels(byte[] pap, int index)
     {

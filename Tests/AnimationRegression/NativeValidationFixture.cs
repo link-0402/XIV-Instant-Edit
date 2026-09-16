@@ -168,7 +168,7 @@ internal static unsafe class NativeValidationFixture
         original = AnimationNative.Fingerprint(binding);
         check(original.Length == 64 && AnimationRuntime.CaptureBinding(0, binding, "example.sklb", description) != null &&
               AnimationNative.SourceFrameCount(&quantized->Animation) == quantizedFrames &&
-              AnimationSkeleton.Channels(binding).ReferenceBones == 1 && AnimationSkeleton.Channels(binding).ReferenceFloats == 1,
+              AnimationSkeleton.Channels(binding) is { ReferenceBones: 1, ReferenceFloats: 1, ExactReferenceModel: true },
             "quantized animations remain visible to the listener and expose the skeleton channels needed for repair");
         quantized->Skeleton = skeleton;
         quantized->Data.CapacityAndFlags = 4096;

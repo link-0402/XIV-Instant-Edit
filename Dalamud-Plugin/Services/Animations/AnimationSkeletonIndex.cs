@@ -456,11 +456,16 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
         var papModel = sourceIdentity?.PapModel;
         var exactModel = normalizedExpected.Contains("/skeleton/", StringComparison.OrdinalIgnoreCase) &&
             !normalizedExpected.Contains("/skeleton/base/", StringComparison.OrdinalIgnoreCase);
+        var exactReferenceModel = channels.ExactReferenceModel ? papModel ?? targetModel : null;
         string Family(string path) => string.Join('/', path.Split('/').Take(5));
         int ModelScore(SkeletonCandidate candidate)
         {
             var model = candidate.Source.CanonicalModel ?? ModelFromPath(candidate.Source.Resource.GamePath);
             if (model == null) return 0;
+            // Quantized animation data is encoded against one complete reference
+            // skeleton. Its PAP model is authoritative: chart ancestors and
+            // hkaSkeletonMapper endpoints are different reference poses.
+            if (exactReferenceModel != null) return model == exactReferenceModel ? 600 : 0;
             // Facial and other specialized paths do not inherit through the
             // body chart. Keep their race/variant identity exact.
             if (exactModel)
@@ -505,7 +510,12 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
                     parts.Length >= 5 && Family(candidatePath) == Family(normalizedExpected) ? 1 : 0;
                 var overlap = baseline == null ? 0 : Enumerable.Range(0, Math.Min(baseline.Bones.Length, c.Skeleton.Bones.Length))
                     .Count(i => baseline.Bones[i].Name == c.Skeleton.Bones[i].Name && baseline.Bones[i].Parent == c.Skeleton.Bones[i].Parent);
-                var excess = c.Skeleton.Bones.Length - channels.Bones.Length;
+                var bound = channels.Bones.ToHashSet();
+                var referenceOnly = c.Skeleton.Bones.Select((bone, index) => (bone.Name, index))
+                    .Where(bone => !bound.Contains((short)bone.index)).Select(bone => bone.Name).ToArray();
+                var referenceOnlyText = referenceOnly.Length == 0 ? "0 reference-only bones" : referenceOnly.Length <= 4
+                    ? $"{referenceOnly.Length} reference-only bone{(referenceOnly.Length == 1 ? "" : "s")} ({string.Join(", ", referenceOnly)})"
+                    : $"{referenceOnly.Length} reference-only bones";
                 // A mapped reference pose closest to the Vanilla game variant is a
                 // better source than another race/era embedded in the same SKLB.
                 var referenceOverlap = baseline == null || c.Source.Variant.Length == 0 ? 0 :
@@ -516,16 +526,27 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
                 // the main skeleton over newly discovered mapper reference poses.
                 var direct = channels.ReferenceBones == null && c.Source.Variant.Length == 0 ? 1 : 0;
                 var rank = modelScore * 10000000000000000L + name * 1000000000000000L + provenance * 10000000000000L + direct * 1000000000000L +
-                    overlap * 10000000L + referenceOverlap * 1000L - excess;
+                    overlap * 10000000L + referenceOverlap * 1000L - referenceOnly.Length;
                 return c with { Rank = rank,
-                    Rationale = $"Source model {(model ?? "unconfirmed")} (score {modelScore}); skeleton name {(name == 1 ? "matches" : "unconfirmed")}; variant match {provenance}; {overlap} ordered bones/parents match; {referenceOverlap} reference poses match; {excess} unbound bones" };
+                    Rationale = $"Source model {(model ?? "unconfirmed")} (score {modelScore}); skeleton name {(name == 1 ? "matches" : "unconfirmed")}; variant match {provenance}; {overlap} ordered bones/parents match; {referenceOverlap} reference poses match; {referenceOnlyText}" };
             }).GroupBy(c => c.Skeleton.Fingerprint).Select(g => g.OrderByDescending(c => c.Rank).ThenBy(c => c.Source.Resource.ResolvedPath, StringComparer.Ordinal).First())
                 .OrderByDescending(c => c.Rank).ThenBy(c => c.Source.Resource.ResolvedPath, StringComparer.Ordinal).ToImmutableArray();
         }
-        var ranked = RankCandidates(candidates.Where(Fits));
+        var fitting = candidates.Where(Fits);
+        if (channels.ExactReferenceModel)
+        {
+            // Mapper A/B skeletons are conversion endpoints embedded in an
+            // SKLB, not alternative authored rigs for quantized animations.
+            fitting = fitting.Where(candidate => candidate.Source.Variant.Length == 0 &&
+                (exactReferenceModel == null ||
+                 (candidate.Source.CanonicalModel ?? ModelFromPath(candidate.Source.Resource.GamePath)) == exactReferenceModel));
+        }
+        var ranked = RankCandidates(fitting);
         if (ranked.IsEmpty)
             return new(SkeletonResolutionState.Incompatible, [], Reason: channels.ReferenceBones is { } bones
-                ? $"No source skeleton, including embedded mapper skeletons, fits the predictive animation ({bones} reference bones, {channels.ReferenceFloats} reference floats). A compatible source reference pose is required before retargeting."
+                ? channels.ExactReferenceModel
+                    ? $"The quantized animation requires the main {exactReferenceModel ?? "PAP"} skeleton ({bones} reference bones, {channels.ReferenceFloats} reference floats); no exact source was found."
+                    : $"No source skeleton, including embedded mapper skeletons, fits the predictive animation ({bones} reference bones, {channels.ReferenceFloats} reference floats). A compatible source reference pose is required before retargeting."
                 : "No source skeleton has valid animation track, float, and partition bindings.");
         var chosen = ranked.FirstOrDefault(c => SelectionId(c) == selectedIdentity);
         if (chosen == null && (ranked.Length == 1 || ranked[0].Rank > ranked[1].Rank)) chosen = ranked[0];
