@@ -6,12 +6,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 import json
-import math
 import shutil
 import tempfile
 
 import bpy
 import numpy as np
+
+from .validation import ValidationError, validate_bounded_list, validate_integer, validate_number, validate_string
 
 
 SCHEMA = "instant-edit.material-preview"
@@ -74,27 +75,31 @@ def _material_key(value: str) -> str:
 
 
 def _string(value, label: str, max_length: int = 4096) -> str:
-    if not isinstance(value, str) or len(value) > max_length:
-        raise PreviewValidationError(f"{label} must be a string of at most {max_length} characters")
-    return value
+    try:
+        return validate_string(value, f"{label} must be a string of at most {max_length} characters", max_length=max_length)
+    except ValidationError as error:
+        raise PreviewValidationError(str(error)) from error
 
 
 def _integer(value, label: str, minimum: int = 0, maximum: int = 0xFFFFFFFF) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
-        raise PreviewValidationError(f"{label} is outside the supported range")
-    return value
+    try:
+        return validate_integer(value, f"{label} is outside the supported range", minimum=minimum, maximum=maximum)
+    except ValidationError as error:
+        raise PreviewValidationError(str(error)) from error
 
 
 def _bounded_list(value, label: str, maximum: int) -> list:
-    if not isinstance(value, list) or len(value) > maximum:
-        raise PreviewValidationError(f"{label} must be a list with at most {maximum} entries")
-    return value
+    try:
+        return validate_bounded_list(value, f"{label} must be a list with at most {maximum} entries", maximum=maximum)
+    except ValidationError as error:
+        raise PreviewValidationError(str(error)) from error
 
 
 def _number(value, label: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-        raise PreviewValidationError(f"{label} must be a finite number")
-    return float(value)
+    try:
+        return validate_number(value, f"{label} must be a finite number")
+    except ValidationError as error:
+        raise PreviewValidationError(str(error)) from error
 
 
 def _contained_file(root: Path, relative: str) -> Path:

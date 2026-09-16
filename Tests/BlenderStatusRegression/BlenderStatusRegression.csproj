@@ -1,17 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>InstantEdit.BlenderStatusRegression</AssemblyName>
-  </PropertyGroup>
-  <PropertyGroup>
-    <DalamudDevPath Condition="Exists('$(APPDATA)\XIVLauncher\addon\Hooks\dev\Lumina.dll')">$(APPDATA)\XIVLauncher\addon\Hooks\dev</DalamudDevPath>
-    <DalamudDevPath Condition="'$(DalamudDevPath)' == ''">$(APPDATA)\XIVLauncher\addon\Hooks</DalamudDevPath>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Dalamud-Plugin\InstantEdit.csproj" />
+    <ProjectReference Include="..\TestSupport\TestSupport.csproj" />
     <Reference Include="Dalamud">
       <HintPath>$(DalamudDevPath)\Dalamud.dll</HintPath>
       <Private>true</Private>

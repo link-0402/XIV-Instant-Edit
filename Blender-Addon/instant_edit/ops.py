@@ -1997,10 +1997,6 @@ def _recover_export_receipt(ref, export_id: str) -> dict | None:
     return None
 
 
-def _send_plugin_export(ref, payload: dict) -> dict:
-    return _send_plugin_export_to(ref, payload, "/export")
-
-
 def _send_plugin_export_to(ref, payload: dict, endpoint: str) -> dict:
     try:
         status, body = post_json(
@@ -2026,10 +2022,6 @@ def _send_plugin_export_to(ref, payload: dict, endpoint: str) -> dict:
             f"The {endpoint.strip('/') or 'plugin'} response was lost before Blender received it.",
             f"Retry the operation. If it fails again, review the diagnostic report for {message}.",
         ) from error
-
-
-def _send_plugin_mashup(ref, payload: dict) -> dict:
-    return _send_plugin_export_to(ref, payload, "/mashup/export")
 
 
 def _send_plugin_mashup_plan(
@@ -2377,7 +2369,7 @@ def perform_mashup_export(
             payload["attributeTags"] = list(attribute_tags)
             payload["attributeMasks"] = dict(attribute_masks)
         try:
-            result = _send_plugin_mashup(ref, payload)
+            result = _send_plugin_export_to(ref, payload, "/mashup/export")
         except PluginResponseError as error:
             if error.status != 410 and not (
                 error.status == 401 and error.code == "plugin_instance_mismatch"
@@ -2395,7 +2387,7 @@ def perform_mashup_export(
             payload["pluginInstanceId"] = ref.plugin_instance_id
             payload["capability"] = ref.capability
             payload["contributors"] = _mashup_contributor_payload(refs, materials)
-            result = _send_plugin_mashup(ref, payload)
+            result = _send_plugin_export_to(ref, payload, "/mashup/export")
         warnings = result.get("warnings", [])
         target = result.get("targetFilePath") or ref.target_file_path
         destination_name = result.get("destinationName") or name
@@ -2570,7 +2562,7 @@ def perform_instant_export(
             attribute_masks=attribute_masks,
         )
         try:
-            result = _send_plugin_export(ref, payload)
+            result = _send_plugin_export_to(ref, payload, "/export")
         except PluginResponseError as error:
             if error.status != 410 and not (
                 error.status == 401 and error.code == "plugin_instance_mismatch"
@@ -2603,7 +2595,7 @@ def perform_instant_export(
                 attribute_tags=attribute_tags,
                 attribute_masks=attribute_masks,
             )
-            result = _send_plugin_export(ref, payload)
+            result = _send_plugin_export_to(ref, payload, "/export")
 
         props.last_export_id = export_id
         promoted = result.get("context")

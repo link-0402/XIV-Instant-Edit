@@ -4,13 +4,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services;
-
-static void Require(bool condition, string message)
-{
-    if (!condition)
-        throw new InvalidOperationException(message);
-    Console.WriteLine($"[PASS] {message}");
-}
+using InstantEdit.TestSupport;
+using static InstantEdit.TestSupport.Assertions;
 
 static byte[] MinimalMaterial(string texturePath, ushort flags, ushort dataSetSize = 0)
 {

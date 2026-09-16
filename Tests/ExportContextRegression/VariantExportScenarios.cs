@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using static InstantEdit.TestSupport.Assertions;
 
 internal static class VariantExportScenarios
 {
@@ -48,12 +49,6 @@ internal static class VariantExportScenarios
                 DateTimeOffset.Parse(meta["LastWrite"]!.GetValue<string>()) > DateTimeOffset.UtcNow.AddMinutes(-1) &&
                 !Directory.EnumerateFiles(root).Any(path => Path.GetFileName(path).StartsWith("group_", StringComparison.OrdinalIgnoreCase)),
             "v4: new groups and options receive GUIDs and update embedded metadata only");
-    }
-
-    private static void Require(bool value, string message)
-    {
-        if (!value) throw new InvalidOperationException(message);
-        Console.WriteLine($"[PASS] {message}");
     }
 
     private static JsonObject Group(Guid id, string name) => new()

@@ -1,15 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>InstantEdit.AnimationRegression</AssemblyName>
-    <DalamudDevPath>$(APPDATA)\XIVLauncher\addon\Hooks\dev</DalamudDevPath>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Dalamud-Plugin\InstantEdit.csproj" />
+    <ProjectReference Include="..\TestSupport\TestSupport.csproj" />
     <Reference Include="Dalamud"><HintPath>$(DalamudDevPath)\Dalamud.dll</HintPath><Private>true</Private></Reference>
     <Reference Include="Lumina"><HintPath>$(DalamudDevPath)\Lumina.dll</HintPath><Private>true</Private></Reference>
     <Reference Include="FFXIVClientStructs"><HintPath>$(DalamudDevPath)\FFXIVClientStructs.dll</HintPath><Private>true</Private></Reference>

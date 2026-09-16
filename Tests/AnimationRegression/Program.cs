@@ -8,15 +8,9 @@ using System.Reflection;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
+using InstantEdit.TestSupport;
+using static InstantEdit.TestSupport.Assertions;
 
-var passed = 0;
-void Check(bool value, string name) { if (!value) throw new Exception(name); Console.WriteLine("[PASS] " + name); passed++; }
-void Reject(Action action, string name)
-{
-    try { action(); } catch (Exception e) when (e is InvalidDataException or IOException or ArgumentException)
-    { Check(true, name); return; }
-    throw new Exception("Expected rejection: " + name);
-}
 static void Int(byte[] bytes, int at, int value) => BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(at), value);
 SkeletonRepairFixture.Run(Check, Reject);
 ChartSkeletonFixture.Run(Check);
@@ -426,4 +420,4 @@ try
     Check(File.ReadAllText(file) == "newer user work", "failed conflict checks leave later work intact");
 }
 finally { Directory.Delete(temp, true); }
-Console.WriteLine($"Animation regressions: {passed} passed. Native/game acceptance must be run inside FFXIV.");
+Console.WriteLine($"Animation regressions: {PassCount} passed. Native/game acceptance must be run inside FFXIV.");

@@ -16,6 +16,7 @@ from .context import is_safe_game_model_path
 from .cache import CacheStagingError, STALE_SECONDS, cache_root
 from .diagnostics import BridgeRequestError, record_failure, sanitize_text
 from .plugin_http import post_json
+from .validation import ValidationError, validate_string
 
 
 MAX_IMPORT_BODY_SIZE = 1024 * 1024
@@ -74,17 +75,17 @@ def _status_payload() -> dict:
 
 def _string(data: dict, *names: str, required: bool = False, max_length: int = 1024) -> str:
     value = next((data.get(name) for name in names if name in data), "")
-    if value is None and not required:
-        return ""
-    if not isinstance(value, str) or len(value) > max_length or (required and not value):
-        label = names[0]
+    label = names[0]
+    message = f"{label} must be a non-empty string" if required else f"{label} must be a string"
+    try:
+        return validate_string(value, message, max_length=max_length, allow_none=not required, require_non_empty=required)
+    except ValidationError as error:
         raise BridgeRequestError(
             "request_validation",
             f"invalid_{_snake_case(label)}",
-            f"{label} must be a non-empty string" if required else f"{label} must be a string",
+            str(error),
             "Update both XIV Instant Edit components and retry the import.",
-        )
-    return value
+        ) from error
 
 
 def _snake_case(value: str) -> str:

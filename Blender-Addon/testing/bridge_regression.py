@@ -848,7 +848,7 @@ def run_staging_isolation_regression(addon) -> None:
 
         plugin_http.urllib.request.urlopen = timed_out_then_receipt
         try:
-            receipt = ops._send_plugin_export(
+            receipt = ops._send_plugin_export_to(
                 SimpleNamespace(
                     plugin_instance_id="plugin-instance",
                     context_id="context-id",
@@ -856,6 +856,7 @@ def run_staging_isolation_regression(addon) -> None:
                     callback_port=42428,
                 ),
                 redraw_payload,
+                "/export",
             )
         finally:
             plugin_http.urllib.request.urlopen = original_urlopen
