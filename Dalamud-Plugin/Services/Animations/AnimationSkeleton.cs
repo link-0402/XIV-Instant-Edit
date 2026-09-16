@@ -152,9 +152,12 @@ internal static unsafe class AnimationSkeleton
             throw new InvalidDataException("Implicit or mismatched animation bindings are unsupported.");
         ImmutableArray<short> Copy(short* values, int count) => new ReadOnlySpan<short>(values, count).ToArray().ToImmutableArray();
         var predictive = a->Type == hkaAnimation.AnimationType.PredictiveCompressedAnimation ? (AnimationNative.Predictive*)a : null;
+        var quantized = a->Type == hkaAnimation.AnimationType.QuantizedCompressedAnimation
+            ? (AnimationNative.QuantizedHeader*)((AnimationNative.Quantized*)a)->Data.Data : null;
         return new(b->OriginalSkeletonName.String ?? "", Copy(b->TransformTrackToBoneIndices.Data, b->TransformTrackToBoneIndices.Length),
             Copy(b->FloatTrackToFloatSlotIndices.Data, b->FloatTrackToFloatSlotIndices.Length), Copy(b->PartitionIndices.Data, b->PartitionIndices.Length),
-            predictive == null ? null : predictive->NumBones, predictive == null ? null : predictive->NumFloatSlots);
+            predictive != null ? predictive->NumBones : quantized == null ? null : quantized->NumBones,
+            predictive != null ? predictive->NumFloatSlots : quantized == null ? null : quantized->NumFloats);
     }
     public static AnimationChannels InspectChannels(byte[] pap, int index)
     {

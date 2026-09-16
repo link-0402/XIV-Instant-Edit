@@ -118,6 +118,7 @@ public sealed partial class MainWindow : Window, IDisposable
         var feedbackSpacing = feedbackHeight > 0 ? ImGui.GetStyle().ItemSpacing.Y : 0;
         var tabRegionHeight = Math.Max(1, ImGui.GetContentRegionAvail().Y - feedbackHeight - feedbackSpacing);
         var activeTab = _activeTab;
+        var animationsTabActive = false;
         if (ImGui.BeginChild("##instant-edit-tab-region", new Vector2(0, tabRegionHeight), false, ImGuiWindowFlags.NoBackground))
         {
             if (ImGui.BeginTabBar("##instant-edit-tabs"))
@@ -142,12 +143,21 @@ public sealed partial class MainWindow : Window, IDisposable
                     DrawTextureSessions();
                     ImGui.EndTabItem();
                 }
+
+                if (ImGui.BeginTabItem("Animations"))
+                {
+                    activeTab = MainTab.Animations;
+                    animationsTabActive = true;
+                    DrawAnimations();
+                    ImGui.EndTabItem();
+                }
                 ImGui.EndTabBar();
             }
         }
         ImGui.EndChild();
         _activeTab = activeTab;
-        animations?.StopObservation();
+        if (!animationsTabActive)
+            animations?.StopObservation();
         DrawTextureDialogs();
         DrawFeedback(GetFeedback(activeTab));
         DrawWindowOptionsExtension();
