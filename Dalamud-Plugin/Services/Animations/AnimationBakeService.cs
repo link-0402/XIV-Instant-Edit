@@ -161,10 +161,8 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 if (!AnimationPoseRules.ValidStartupDuration(options.DurationSeconds))
                     throw new InvalidDataException("Startup transition duration must be between 0 and 2 seconds.");
                 targetDescription = startup.Clip.TargetSkeleton ?? throw new InvalidDataException("The live target skeleton is unavailable.");
-                if (loop.Clip.Partial != startup.Clip.Partial || idle?.Clip.Partial != startup.Clip.Partial ||
-                    loop.Clip.TargetSkeleton?.Fingerprint != targetDescription.Fingerprint ||
-                    idle?.Clip.TargetSkeleton?.Fingerprint != targetDescription.Fingerprint)
-                    throw new InvalidDataException("The loop and startup target skeletons are incompatible.");
+                if (AnimationPoseRules.StartupTargetMismatch(loop.Clip, startup.Clip, idle?.Clip, targetDescription) is { } mismatch)
+                    throw new InvalidDataException(mismatch);
                 targetSkeleton = AnimationSkeleton.Materialize(targetDescription, arena);
                 this.startup = new Source(startup, targetDescription, arena, false);
                 this.loop = new Source(loop, targetDescription, arena, true);

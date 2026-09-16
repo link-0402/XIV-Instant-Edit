@@ -8,21 +8,41 @@ internal static class AnimationPoseRules
 {
     public static bool ValidStartupDuration(float duration) => float.IsFinite(duration) && duration is >= 0 and <= 2;
 
+    /// <summary>
+    /// Startup generation retargets the loop, startup and optional idle onto the
+    /// live rig independently, so only that destination has to agree. Differing
+    /// source skeletons (bone counts included) are expected and harmless, and a
+    /// null idle simply means the transition starts from the reference pose.
+    /// </summary>
+    public static string? StartupTargetMismatch(AnimationClip loop, AnimationClip startup, AnimationClip? idle,
+        SkeletonDescription target)
+    {
+        if (loop.Partial != startup.Partial || loop.TargetSkeleton?.Fingerprint != target.Fingerprint)
+            return "The loop and startup target skeletons are incompatible.";
+        if (idle != null && (idle.Partial != startup.Partial || idle.TargetSkeleton?.Fingerprint != target.Fingerprint))
+            return "The character idle and startup target skeletons are incompatible.";
+        return null;
+    }
+
     public static float SmoothStep(float t) => t * t * (3 - 2 * t);
 
     public static int StartupSampleCount(float duration) => SampleCount(duration, 2);
 
-    public static float BlendFloat(float from, float to, float t) => from + (to - from) * SmoothStep(t);
+    public static float BlendFloat(float from, float to, float t) => InterpolateFloat(from, to, SmoothStep(t));
 
-    public static BoneTransform Blend(BoneTransform from, BoneTransform to, float t)
+    public static BoneTransform Blend(BoneTransform from, BoneTransform to, float t) => Interpolate(from, to, SmoothStep(t));
+
+    /// <summary>Uniform interpolation. Resampling a clip must not ease; only transitions do.</summary>
+    public static float InterpolateFloat(float from, float to, float t) => from + (to - from) * t;
+
+    public static BoneTransform Interpolate(BoneTransform from, BoneTransform to, float t)
     {
-        var eased = SmoothStep(t);
         var rotation = to.Rotation;
         if (Quaternion.Dot(from.Rotation, rotation) < 0)
             rotation = new(-rotation.X, -rotation.Y, -rotation.Z, -rotation.W);
-        return new(Vector3.Lerp(from.Position, to.Position, eased),
-            Quaternion.Normalize(Quaternion.Slerp(Quaternion.Normalize(from.Rotation), Quaternion.Normalize(rotation), eased)),
-            Vector3.Lerp(from.Scale, to.Scale, eased));
+        return new(Vector3.Lerp(from.Position, to.Position, t),
+            Quaternion.Normalize(Quaternion.Slerp(Quaternion.Normalize(from.Rotation), Quaternion.Normalize(rotation), t)),
+            Vector3.Lerp(from.Scale, to.Scale, t));
     }
 
     public static PoseStack Filter(PoseStack stack, PoseComponents components) => stack with

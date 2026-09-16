@@ -148,6 +148,22 @@ internal static class SkeletonRepairFixture
             "recovery retains selected source and destination identities without serializing the whole skeleton index");
         var frames = AnimationPoseRules.SampleCount(1, 25);
         check(frames >= 31 && (frames - 1) % 24 == 0, "uniform bake grid includes every source sample even below thirty frames per second");
+        // The loop and its startup routinely resolve different source skeletons
+        // (a 168- versus 167-bone SKLB, for instance). Only the live rig they are
+        // both retargeted onto has to agree, and a reference-pose start has no
+        // idle clip at all.
+        var startupClip = clip with { GamePath = "example_start.pap", Resolution = selectedResolution };
+        var differentSource = startupClip with { SkeletonFingerprint = "other-source" };
+        check(AnimationPoseRules.StartupTargetMismatch(clip, differentSource, null, target) == null,
+            "a reference-pose startup with a different source skeleton is not a target mismatch");
+        check(AnimationPoseRules.StartupTargetMismatch(clip, startupClip, clip, target) == null,
+            "a character-idle startup sharing the live rig is accepted");
+        check(AnimationPoseRules.StartupTargetMismatch(clip with { TargetSkeleton = source }, startupClip, null, target)
+                == "The loop and startup target skeletons are incompatible.",
+            "a loop captured against a different live rig is rejected");
+        check(AnimationPoseRules.StartupTargetMismatch(clip, startupClip, clip with { Partial = 1 }, target)
+                == "The character idle and startup target skeletons are incompatible.",
+            "an idle from another partial skeleton is rejected");
 
         var temp = Path.Combine(Path.GetTempPath(), "ie-skeleton-regression-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(temp);
