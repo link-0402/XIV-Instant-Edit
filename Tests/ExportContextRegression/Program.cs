@@ -133,147 +133,9 @@ try
 {
     VariantExportScenarios.Run(testRoot);
     CheckSessionStore(testRoot);
+    SelectorStabilityScenarios.Run(testRoot);
 
-    const string clonedGamePath = "chara/equipment/e0001/model/c0101e0001_top.mdl";
-    var sourceOption = new JsonObject
-    {
-        ["Name"] = "Original",
-        ["Files"] = new JsonObject
-        {
-            [clonedGamePath] = "Files/models/original.mdl",
-            ["chara/equipment/e0001/material/v0001/mt_c0101e0001_top_a.mtrl"] = "Files/materials/top.mtrl",
-            ["chara/equipment/e0001/texture/top_d.tex"] = "Files/textures/top_d.tex",
-        },
-        ["FileSwaps"] = new JsonObject { ["chara/common/texture/a.tex"] = "chara/common/texture/b.tex" },
-        ["Manipulations"] = new JsonArray(new JsonObject { ["Type"] = "Eqp", ["Entry"] = 1 }),
-    };
-    var originalOptionJson = sourceOption.ToJsonString();
-    var clonedOption = PenumbraService.BuildVariantOptionForRegression(
-        sourceOption, clonedGamePath, "Files/models/variant.mdl");
-    Require(clonedOption["Files"]?[clonedGamePath]?.GetValue<string>() == "Files/models/variant.mdl" &&
-            clonedOption["Files"]?["chara/equipment/e0001/material/v0001/mt_c0101e0001_top_a.mtrl"] is not null &&
-            clonedOption["Files"]?["chara/equipment/e0001/texture/top_d.tex"] is not null &&
-            clonedOption["FileSwaps"] is JsonObject && clonedOption["Manipulations"] is JsonArray,
-        "variant options clone materials, textures, file swaps, and manipulations while replacing only the model");
-    Require(sourceOption.ToJsonString() == originalOptionJson,
-        "variant creation leaves the source option unchanged");
-
-    var selectorRoot = Path.Combine(testRoot, "StableSelectors");
-    Directory.CreateDirectory(selectorRoot);
-    var selectorGroupId = Guid.NewGuid();
-    var selectorOptionId = Guid.NewGuid();
-    File.WriteAllText(Path.Combine(selectorRoot, "meta.json"), new JsonObject
-    {
-        ["FileVersion"] = 4,
-        ["Identifier"] = Guid.NewGuid(),
-        ["LastWrite"] = DateTime.UtcNow,
-        ["DefaultData"] = null,
-        ["Groups"] = new JsonArray(new JsonObject
-        {
-            ["Type"] = "Single",
-            ["Id"] = selectorGroupId,
-            ["Name"] = "Variants",
-            ["Options"] = new JsonArray(new JsonObject
-            {
-                ["Id"] = selectorOptionId,
-                ["Name"] = "Variant",
-                ["Files"] = new JsonObject { [clonedGamePath] = "Files/models/variant.mdl" },
-            }),
-        }),
-    }.ToJsonString());
-    var stableTargets = PenumbraService.ReadVariantTargetsForRegression(selectorRoot, clonedGamePath);
-    Require(stableTargets.Single().Id == $"group:{selectorGroupId:D}" &&
-            stableTargets.Single().Options.Single().Id == $"option:{selectorGroupId:D}:{selectorOptionId:D}",
-        "v4 groups expose stable GUID selectors");
-    var stableSelector = stableTargets.Single().Options.Single().Id;
-    var firstResolvedOption = PenumbraService.ResolveVariantOptionPathForRegression(
-        selectorRoot, clonedGamePath, stableSelector);
-    var secondResolvedOption = PenumbraService.ResolveVariantOptionPathForRegression(
-        selectorRoot, clonedGamePath, stableSelector);
-    Require(firstResolvedOption is not null && firstResolvedOption == secondResolvedOption,
-        "the refreshed v4 option selector resolves for two consecutive saves");
-    var selectorMetaPath = Path.Combine(selectorRoot, "meta.json");
-    var selectorMeta = JsonNode.Parse(File.ReadAllText(selectorMetaPath))!.AsObject();
-    selectorMeta["Groups"]![0]!["Name"] = "Renamed Group";
-    selectorMeta["Groups"]![0]!["Options"]![0]!["Name"] = "Renamed Option";
-    File.WriteAllText(selectorMetaPath, selectorMeta.ToJsonString());
-    var stableSource = PenumbraService.ResolveSourceOptionForRegression(
-        selectorRoot, clonedGamePath, "Files/models/variant.mdl", new SourceOptionLocator
-        {
-            Membership = stableSelector,
-            GroupName = "Old Group Name",
-            OptionName = "Old Option Name",
-        });
-    Require(stableSource.Error is null && stableSource.Membership == stableSelector,
-        "persisted v4 source identity follows GUIDs across renames");
-    var legacySource = PenumbraService.ResolveSourceOptionForRegression(
-        selectorRoot, clonedGamePath, "Files/models/variant.mdl", new SourceOptionLocator
-        {
-            Membership = "meta:group:0:option:0",
-            GroupName = "Renamed Group",
-            OptionName = "Renamed Option",
-        });
-    Require(legacySource.Error is null && legacySource.Membership == stableSelector,
-        "a legacy index locator upgrades through a unique group and option name match");
-    var staleStableSource = PenumbraService.ResolveSourceOptionForRegression(
-        selectorRoot, clonedGamePath, "Files/models/variant.mdl", new SourceOptionLocator
-        {
-            Membership = $"option:{selectorGroupId:D}:{Guid.NewGuid():D}",
-            GroupName = "Renamed Group",
-            OptionName = "Renamed Option",
-        });
-    Require(staleStableSource.Membership is null && staleStableSource.Error is not null,
-        "a stale v4 GUID locator requires re-import instead of falling back to names");
-    selectorMeta["Groups"]![0]!["Options"]!.AsArray().Add(new JsonObject
-    {
-        ["Id"] = Guid.NewGuid(),
-        ["Name"] = "Renamed Option",
-        ["Files"] = new JsonObject { [clonedGamePath] = "Files/models/variant.mdl" },
-    });
-    File.WriteAllText(selectorMetaPath, selectorMeta.ToJsonString());
-    var ambiguousLegacySource = PenumbraService.ResolveSourceOptionForRegression(
-        selectorRoot, clonedGamePath, "Files/models/variant.mdl", new SourceOptionLocator
-        {
-            Membership = "meta:group:0:option:0",
-            GroupName = "Renamed Group",
-            OptionName = "Renamed Option",
-        });
-    Require(ambiguousLegacySource.Membership is null && ambiguousLegacySource.Error is not null,
-        "legacy index locators require re-import when names are not unique");
-
-    var combiningRoot = Path.Combine(testRoot, "CombiningMemberships");
-    Directory.CreateDirectory(combiningRoot);
-    var combiningGroupId = Guid.NewGuid();
-    var combiningFirstId = Guid.NewGuid();
-    var combiningSecondId = Guid.NewGuid();
-    const string combiningRelative = "Files/models/combined.mdl";
-    File.WriteAllText(Path.Combine(combiningRoot, "meta.json"), new JsonObject
-    {
-        ["FileVersion"] = 4,
-        ["Identifier"] = Guid.NewGuid(),
-        ["LastWrite"] = DateTime.UtcNow,
-        ["DefaultData"] = null,
-        ["Groups"] = new JsonArray(new JsonObject
-        {
-            ["Type"] = "Combining",
-            ["Id"] = combiningGroupId,
-            ["Name"] = "Features",
-            ["Options"] = new JsonArray(
-                new JsonObject { ["Id"] = combiningFirstId, ["Name"] = "First" },
-                new JsonObject { ["Id"] = combiningSecondId, ["Name"] = "Second" }),
-            ["Containers"] = new JsonArray(
-                new JsonObject(), new JsonObject(), new JsonObject(),
-                new JsonObject { ["Files"] = new JsonObject { [clonedGamePath] = combiningRelative } }),
-        }),
-    }.ToJsonString());
-    var combiningMemberships = PenumbraService.ReadOptionMembershipsForRegression(combiningRoot, combiningRelative);
-    Require(combiningMemberships.Order().SequenceEqual(new[]
-        {
-            $"option:{combiningGroupId:D}:{combiningFirstId:D}",
-            $"option:{combiningGroupId:D}:{combiningSecondId:D}",
-        }.Order()),
-        "Combining containers expose stable option GUID memberships instead of array indexes");
-
+    // ---- Backup safety, export-context authorization, and revocation ----
     var originalRoot = Path.Combine(testRoot, "OriginalMod");
     var originalParent = Path.Combine(originalRoot, "Files", "models");
     Directory.CreateDirectory(originalParent);
@@ -388,6 +250,7 @@ try
         vanillaContext.ResolvedGamePath == vanillaResolved &&
         vanillaContext.TargetCollectionId == collectionId,
         "vanilla imports retain resolved and consumer paths in a pending v3 context");
+    // ---- Vanilla game-context promotion and restart persistence ----
     var vanillaModRoot = Path.Combine(testRoot, "Vanilla Edit");
     var vanillaRelative = "Files/" + vanillaConsumer;
     var vanillaTarget = Path.Combine(vanillaModRoot, vanillaRelative.Replace('/', Path.DirectorySeparatorChar));
@@ -421,6 +284,7 @@ try
             "malformed v2 game contexts with rooted resolved paths are rejected on restore");
     }
 
+    // ---- Source-mod target resolution across custom, moved, missing, ambiguous, and unsafe roots ----
     var movedRoot = Path.Combine(testRoot, "MovedCustomRoot");
     var movedParent = Path.Combine(movedRoot, "Files", "models");
     Directory.CreateDirectory(movedParent);
@@ -478,6 +342,7 @@ try
         Console.WriteLine("[SKIP] reparse-point creation is not supported on this host");
     }
 
+    // ---- Plugin-owned export staging ----
     var sourceToStage = Path.Combine(testRoot, "stage-source.mdl");
     var stageBytes = Enumerable.Range(0, 4096).Select(index => (byte)(index % 251)).ToArray();
     File.WriteAllBytes(sourceToStage, stageBytes);
@@ -492,6 +357,7 @@ try
     Require(!Directory.Exists(stageResult.Export.DirectoryPath),
         "plugin-owned staging is removed after export completion");
 
+    // ---- On Screen resource-tree reconciliation for EST-swapped and vanilla models ----
     const string galianModel = @"G:\Penumbra\Galian Hair\chara\human\c0801\obj\hair\h0154\model\c0801h0154_hir.mdl";
     const string effectiveHairPath = "chara/human/c0801/obj/hair/h0154/model/c0801h0154_hir.mdl";
     var galianResolvedPaths = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
@@ -582,6 +448,7 @@ try
             PenumbraService.IsSafeGamePath(vanillaActualModel),
         "Penumbra tree game-data paths normalize from FullPath backslashes into editable game paths");
 
+    // ---- Export-context dependency-manifest persistence and Dalamud configuration round-tripping ----
     var manifest = new ResourceDependencyManifest
     {
         Materials =
@@ -684,6 +551,7 @@ try
             legacyManifestContext.ResourceManifest is null,
         "manifest-v1 contexts require re-import before new-mod or mashup export");
 
+    // ---- Mod Browser / dependency-capture material path resolution ----
     const string swappedMaterial = "chara/human/c0201/obj/hair/h0179/material/v0001/mt_c0201h0179_hir_b_c0801.mtrl";
     var swappedResources = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
     {
@@ -787,6 +655,7 @@ try
             },
         "Mod Browser dependency locators preserve the scanned mod source metadata");
 
+    // ---- Mashup source-manifest remapping and cross-root verification ----
     var manifestSourceRoot = Path.Combine(testRoot, "ManifestSource");
     var manifestRelative = "chara/human/c0201/obj/hair/h0154/material/v0001/mt_test.mtrl";
     var manifestSourceFile = Path.Combine(
@@ -857,6 +726,7 @@ try
         },
         Textures = [],
     };
+    // ---- Mashup planning: canonical slot allocation across contributors ----
     var galianManifest = new ResourceDependencyManifest
     {
         Materials =
@@ -1327,6 +1197,7 @@ try
     };
 
     const string coverageGamePath = "chara/equipment/e0118/material/v0001/mt_coverage.mtrl";
+    // ---- Material coverage evaluation for export redraw warnings ----
     var coverageOutputPath = Path.Combine(testRoot, "CoverageOutput", "Files", "coverage.mtrl");
     Directory.CreateDirectory(Path.GetDirectoryName(coverageOutputPath)!);
     var coverageBytes = Encoding.UTF8.GetBytes("captured coverage material");
@@ -1615,6 +1486,7 @@ try
         ["chara/equipment/e0001/material/v0001/mt_external.mtrl"] =
             "chara/equipment/e9999/material/v0001/mt_external.mtrl",
     };
+    // ---- Markerless mashup migration ----
     var markerlessMashupRoot = Path.Combine(testRoot, "MarkerlessMashup");
     var markerlessMapping = new Dictionary<string, string>
     {
@@ -1649,6 +1521,7 @@ try
             !File.Exists(Path.Combine(markerlessMashupRoot, ".instant-edit-owner.json")),
         "new mashup staging validates without creating an ownership marker");
 
+    // ---- Vanilla game-model staging ----
     var vanillaStageRoot = Path.Combine(testRoot, "VanillaStage");
     Directory.CreateDirectory(vanillaStageRoot);
     var stagedVanillaRelative = PenumbraService.StageGameModelMod(
@@ -1688,6 +1561,7 @@ try
     Require(unsafeVanillaStageRejected,
         "vanilla mod staging rejects consumer-path traversal before writing files");
 
+    // ---- v4 manipulation capture (Single, Multi, and Combining selections) ----
     var manipulationV4Root = Path.Combine(testRoot, "ManipulationsV4");
     Directory.CreateDirectory(manipulationV4Root);
     File.WriteAllText(Path.Combine(manipulationV4Root, "meta.json"), new JsonObject
@@ -1797,6 +1671,7 @@ try
             copiedDefault["FileSwaps"]!.AsObject().Count == mashupFileSwaps.Count,
         "new-mod default data preserves active manipulations and pass-through FileSwaps");
 
+    // ---- v4 mashup group creation and metadata preservation ----
     var v4Root = Path.Combine(testRoot, "MashupV4");
     Directory.CreateDirectory(v4Root);
     var v4ModId = Guid.NewGuid();
@@ -1853,6 +1728,7 @@ try
         "v4 mashup group creation preserves optional metadata and stray legacy files while assigning GUIDs and LastWrite");
 
     var cleanupModelPath = "chara/equipment/e0001/model/c0101e0001_top.mdl";
+    // ---- v4 mod normalization and cleanup ----
     var cleanupV4Root = Path.Combine(testRoot, "CleanupV4");
     Directory.CreateDirectory(Path.Combine(cleanupV4Root, "legacy"));
     var cleanupTexturePath = "chara/equipment/e0001/texture/c0101e0001_top.tex";
@@ -1929,6 +1805,7 @@ try
             !File.Exists(Path.Combine(cleanupV4Root, "legacy", "unused.mtrl")),
         "v4 cleanup normalizes embedded mappings while preserving GUIDs, optional fields, extensions, and stray legacy JSON");
 
+    // ---- Cleanup failure handling ----
     var cleanupFailureRoot = Path.Combine(testRoot, "CleanupFailure");
     Directory.CreateDirectory(cleanupFailureRoot);
     var cleanupFailurePath = Path.Combine(cleanupFailureRoot, "meta.json");
@@ -1963,6 +1840,7 @@ try
     Require(externalDescription.EndsWith(
             "Requires external mods: External Skin, External Hair.", StringComparison.Ordinal),
         "mashup descriptions list required external mods without blocking export");
+    // ---- Mashup group descriptions ----
     var describedGroupRoot = Path.Combine(testRoot, "DescribedGroup");
     Directory.CreateDirectory(describedGroupRoot);
     File.WriteAllText(Path.Combine(describedGroupRoot, "meta.json"),
