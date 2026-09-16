@@ -261,9 +261,6 @@ class FileExport:
                                                 **settings.get_mesh_options()
                                             )
         
-        except Exception as e:
-            raise e
-
         finally:
             if scene_handler is not None:
                 scene_handler.restore_meshes()

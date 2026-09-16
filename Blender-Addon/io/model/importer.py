@@ -338,11 +338,9 @@ class ModelImport:
             for key, value in self.context_metadata.items():
                 new_obj[key] = value
 
-        target_collection = getattr(self, "collection", None)
-        if target_collection is None:
-            if self.require_collection:
-                raise ValueError("a dedicated import collection is required")
-            target_collection = bpy.context.collection
+        # _import_mdl already rejects a missing collection when require_collection is set,
+        # so reaching this with target_collection None means the ambient collection is fine.
+        target_collection = getattr(self, "collection", None) or bpy.context.collection
         target_collection.objects.link(new_obj)
         self.created_mesh_objects.append(new_obj)
         self.created_objects.append(new_obj)
