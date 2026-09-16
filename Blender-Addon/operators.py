@@ -212,6 +212,23 @@ def _move_mesh_part_once(
     )
 
 
+class _new_objects_since:
+    """Diff bpy.data.objects around a block that runs a built-in import operator.
+
+    Blender's built-in importers (e.g. import_scene.fbx) don't report which
+    objects they created, unlike ModelImport.from_file's explicit
+    created_objects parameter, so this is the only way to recover that list.
+    """
+
+    def __enter__(self):
+        self._before = set(bpy.data.objects)
+        self.created: list = []
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.created = [obj for obj in bpy.data.objects if obj not in self._before]
+
+
 def _simple_import_bind_existing_skeleton(imported_objects: list, skeleton) -> list:
     """Rebind this import's meshes and remove only its imported armatures."""
     mesh_objects = [obj for obj in imported_objects if obj.type == "MESH"]
@@ -434,16 +451,14 @@ class XIVIE_OT_simple_import(Operator):
                         imported_objects,
                     )
             else:
-                existing_objects = {obj.as_pointer() for obj in bpy.data.objects}
-                result = bpy.ops.import_scene.fbx(
-                    filepath=str(file_path),
-                    colors_type="LINEAR",
-                )
-                if "FINISHED" not in result:
-                    return set(result)
-                imported_objects = [
-                    obj for obj in bpy.data.objects if obj.as_pointer() not in existing_objects
-                ]
+                with _new_objects_since() as tracker:
+                    result = bpy.ops.import_scene.fbx(
+                        filepath=str(file_path),
+                        colors_type="LINEAR",
+                    )
+                    if "FINISHED" not in result:
+                        return set(result)
+                imported_objects = tracker.created
                 if use_existing_skeleton:
                     imported_objects = _simple_import_bind_existing_skeleton(imported_objects, skeleton)
 
@@ -541,21 +556,24 @@ class XIVIE_OT_import_backup(Operator):
             return {"CANCELLED"}
         collection = bpy.data.collections.new(f"Backup - {Path(entry.original_name).stem}")
         context.scene.collection.children.link(collection)
-        before = set(bpy.data.objects)
+        is_mdl = entry.original_name.lower().endswith(".mdl")
+        tracker = _new_objects_since()
         try:
-            if entry.original_name.lower().endswith(".mdl"):
-                from .io.model import ModelImport
+            with tracker:
+                if is_mdl:
+                    from .io.model import ModelImport
 
-                imported = ModelImport.from_file(
-                    str(entry.path), Path(entry.original_name).stem,
-                    collection=collection, require_collection=True,
-                )
-                count = len(imported)
-            else:
-                result = bpy.ops.import_scene.fbx(filepath=str(entry.path), colors_type="LINEAR")
-                if "FINISHED" not in result:
-                    raise RuntimeError("Blender FBX importer did not finish")
-                new_objects = [obj for obj in bpy.data.objects if obj not in before]
+                    imported = ModelImport.from_file(
+                        str(entry.path), Path(entry.original_name).stem,
+                        collection=collection, require_collection=True,
+                    )
+                    count = len(imported)
+                else:
+                    result = bpy.ops.import_scene.fbx(filepath=str(entry.path), colors_type="LINEAR")
+                    if "FINISHED" not in result:
+                        raise RuntimeError("Blender FBX importer did not finish")
+            if not is_mdl:
+                new_objects = tracker.created
                 for obj in new_objects:
                     if collection not in obj.users_collection:
                         collection.objects.link(obj)
@@ -564,9 +582,8 @@ class XIVIE_OT_import_backup(Operator):
                             old_collection.objects.unlink(obj)
                 count = len(new_objects)
         except Exception as error:
-            for obj in tuple(bpy.data.objects):
-                if obj not in before:
-                    bpy.data.objects.remove(obj, do_unlink=True)
+            for obj in tracker.created:
+                bpy.data.objects.remove(obj, do_unlink=True)
             if collection.name in bpy.data.collections:
                 bpy.data.collections.remove(collection)
             self.report({"ERROR"}, f"Import failed: {error}")
