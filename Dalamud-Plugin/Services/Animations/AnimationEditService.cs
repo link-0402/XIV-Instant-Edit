@@ -275,7 +275,8 @@ internal sealed class AnimationEditService : IDisposable
                     if (request.Operation == AnimationOperation.BakeOffsets) poses.CheckModule(request.Capture.Pose);
                 });
         }
-        var journal = await commits.PrepareAsync(request, manifest, outputs.ToImmutable(), token);
+        var journal = await commits.PrepareAsync(request, manifest,
+            [.. outputs.Select(output => new AnimationOutput(output.Key, "", output.Value))], token);
         recovery = recovery.Insert(0, journal);
         await commits.CommitAsync(journal, manifest, async () =>
         {

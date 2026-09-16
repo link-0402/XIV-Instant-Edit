@@ -65,6 +65,12 @@ internal sealed record AnimationStartupOptions(AnimationStartupPose Pose, float 
 internal sealed record AnimationStartupSource(AnimationClip Clip, AnimationResource Resource, byte[] Pap, byte[] Skeleton);
 internal sealed record AnimationDependencyManifest(ImmutableArray<AnimationResource> Resources,
     ImmutableDictionary<string, byte[]> Files, string ManipulationsJson = "[]");
+/// <summary>
+/// One produced file. An empty <paramref name="Option"/> writes into the mod's default
+/// data; a named one becomes a Penumbra option, so several variants may legitimately
+/// produce the same game path.
+/// </summary>
+internal sealed record AnimationOutput(string GamePath, string Option, byte[] Bytes);
 internal sealed record AnimationEditResult(Guid Id, bool Success, string Message, string? ModDirectory = null);
 /// <summary>One guarded, durable LivePose clear operation for the current player.</summary>
 internal sealed record LivePoseOffsetBackup(ulong ActorId, Guid CollectionId, PoseSnapshot Before,
@@ -89,4 +95,9 @@ internal sealed class AnimationEditJournal
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
 }
 internal sealed record AnimationFileChange(string GamePath, string Target, string ModDirectory, string ModRoot,
-    string RelativePath, string BeforeHash, string AfterHash, string Backup, string Staged);
+    string RelativePath, string BeforeHash, string AfterHash, string Backup, string Staged, string Option = "")
+{
+    // Journals written before option groups existed have no Option; they load as
+    // default-data changes, which is what they were.
+    public string Option { get; init; } = Option ?? "";
+}
