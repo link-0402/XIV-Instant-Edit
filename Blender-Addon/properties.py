@@ -51,7 +51,7 @@ class XIVIEExportSettings(PropertyGroup):
     simple_io_tab: EnumProperty(
         name="Simple Import/Export",
         items=[
-            ("IMPORT", "Import", "Import an MDL or FBX file"),
+            ("IMPORT", "Import", "Import an MDL, FBX, or glTF file"),
             ("EXPORT", "Export", "Export visible mesh objects"),
         ],
         default="EXPORT",
@@ -74,7 +74,7 @@ class XIVIEExportSettings(PropertyGroup):
     )  # type: ignore
     import_format: EnumProperty(
         name="Format",
-        items=[("MDL", "MDL", "FFXIV model"), ("FBX", "FBX", "Autodesk FBX")],
+        items=[("MDL", "MDL", "FFXIV model"), ("FBX", "FBX", "Autodesk FBX"), ("GLTF", "glTF", "glTF")],
         default="MDL",
     )  # type: ignore
     simple_import_use_existing_skeleton: BoolProperty(

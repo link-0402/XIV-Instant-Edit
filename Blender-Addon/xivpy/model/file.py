@@ -60,8 +60,8 @@ class BoneTable:
 class ElementID:
     element_id : int = 0
     parent_bone: int = 0
-    translate  : List[int] = field(default_factory=[])
-    rotate     : List[int] = field(default_factory=[])
+    translate  : List[int] = field(default_factory=list)
+    rotate     : List[int] = field(default_factory=list)
 
     @classmethod
     def from_bytes(cls, reader: BinaryReader) -> 'ElementID':

@@ -193,7 +193,10 @@ public sealed partial class MainWindow
         var key = SafeId($"{scope}:{type}:{name}:{gamePath}:{actualPath}");
         ImGui.PushID(key);
         var presentation = Safe(node.Slot, KindLabel(type));
-        var children = node.Children;
+        // Only descend into children IE can actually edit (or that themselves
+        // contain one) - resources like animations, skeletons, or VFX have
+        // nothing to open here, so they're dropped from the tree entirely.
+        var children = node.Children.Where(HasResourceTypeMatch).ToList();
         var hasChildren = children.Count > 0;
         var model = IsModel(node);
         var expanded = autoExpandSearch || _expanded.Contains(key);
@@ -473,17 +476,24 @@ public sealed partial class MainWindow
 
     private static bool MatchesResourceType(ResourceView node, string filter)
     {
-        if (string.IsNullOrWhiteSpace(filter))
-            return true;
-
         var type = Safe(node.Type).ToLowerInvariant();
         var gamePath = Safe(node.GamePath).ToLowerInvariant();
         var actualPath = Safe(node.ActualPath).ToLowerInvariant();
+        var isModel = type.Contains("model") || gamePath.EndsWith(".mdl") || actualPath.EndsWith(".mdl");
+        var isTexture = type.Contains("texture") || gamePath.EndsWith(".tex") || gamePath.EndsWith(".atex") || actualPath.EndsWith(".tex") || actualPath.EndsWith(".atex");
+        var isMaterial = type.Contains("material") || gamePath.EndsWith(".mtrl") || actualPath.EndsWith(".mtrl");
+
+        // The default "Tree Structure" view (no explicit filter) still omits
+        // resources IE cannot edit (animations, skeletons, VFX, etc.) rather
+        // than showing every resource Penumbra reports.
+        if (string.IsNullOrWhiteSpace(filter))
+            return isModel || isTexture || isMaterial;
+
         return filter switch
         {
-            "Models" => type.Contains("model") || gamePath.EndsWith(".mdl") || actualPath.EndsWith(".mdl"),
-            "Textures" => type.Contains("texture") || gamePath.EndsWith(".tex") || gamePath.EndsWith(".atex") || actualPath.EndsWith(".tex") || actualPath.EndsWith(".atex"),
-            "Materials" => type.Contains("material") || gamePath.EndsWith(".mtrl") || actualPath.EndsWith(".mtrl"),
+            "Models" => isModel,
+            "Textures" => isTexture,
+            "Materials" => isMaterial,
             _ => true,
         };
     }
