@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Text.RegularExpressions;
 using InstantEdit.Models;
 
 namespace InstantEdit.Services.Animations;
@@ -8,9 +7,6 @@ namespace InstantEdit.Services.Animations;
 internal static class AnimationPresentation
 {
     internal sealed record ListItem(AnimationCapture Capture, bool Startup, bool SeparatorBefore);
-
-    private static readonly Regex PoseSlot = new(@"(?:^|/)(?<chair>j_)?pose(?<slot>\d{2})_(?<state>loop|start)",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly ImmutableDictionary<string, string> BoneLabels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -76,20 +72,27 @@ internal static class AnimationPresentation
 
     private static bool TryIdleName(AnimationClip clip, bool startup, out string name)
     {
-        var match = PoseSlot.Match(clip.GamePath);
-        if (!match.Success)
+        if (AnimationSlots.Describe(clip.GamePath) is not { } slot)
         {
             if (clip.GamePath.EndsWith("/resident/idle.pap", StringComparison.OrdinalIgnoreCase))
             { name = "Standing Idle - Loop 1"; return true; }
             name = ""; return false;
         }
-        var slot = int.Parse(match.Groups["slot"].Value);
-        var state = startup || match.Groups["state"].Value.Equals("start", StringComparison.OrdinalIgnoreCase) ? "Startup" : "Loop";
-        var chair = match.Groups["chair"].Success || clip.Timeline is 642 or 643;
-        var ground = clip.Timeline is 653 or 654 || clip.GamePath.Contains("ground", StringComparison.OrdinalIgnoreCase);
-        name = chair ? $"Chair Sitting Idle {slot} - {state}" : ground ? $"Ground Sitting Idle {slot} - {state}" :
-            $"Standing Idle - {state} {slot}";
+        name = SlotName(slot, clip.Timeline, startup || slot.Startup ? "Startup" : "Loop");
         return true;
+    }
+
+    /// <summary>
+    /// Label a numbered slot. The family comes from the filename prefix, with the
+    /// timeline disambiguating sitting rows that report their transition instead.
+    /// </summary>
+    internal static string SlotName(AnimationSlot slot, ushort timeline, string state)
+    {
+        var chair = slot.Prefix.StartsWith("j_", StringComparison.Ordinal) || timeline is 642 or 643;
+        var ground = timeline is 653 or 654 || slot.Directory.Contains("ground", StringComparison.OrdinalIgnoreCase);
+        return chair ? $"Chair Sitting Idle {slot.Index} - {state}"
+            : ground ? $"Ground Sitting Idle {slot.Index} - {state}"
+            : $"Standing Idle - {state} {slot.Index}";
     }
 
     public static string AnimationState(AnimationCapture capture, bool startup) => startup ? "Startup" :

@@ -14,6 +14,7 @@ using static InstantEdit.TestSupport.Assertions;
 static void Int(byte[] bytes, int at, int value) => BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(at), value);
 SkeletonRepairFixture.Run(Check, Reject);
 AnimationFramesFixture.Run(Check, Reject);
+AnimationSlotFixture.Run(Check, Reject);
 ChartSkeletonFixture.Run(Check);
 EmbeddedSkeletonFixture.Run(Check, Reject);
 if (args is ["--skeleton-repair-xml", var animationXml, var skeletonXml])
@@ -88,6 +89,26 @@ Reject(() => pap.WithEntryNames(new Dictionary<int, string> { [2] = "missing" })
 Reject(() => pap.WithEntryNames(new Dictionary<int, string> { [0] = "" }), "a PAP entry name cannot be empty");
 Reject(() => pap.WithEntryNames(new Dictionary<int, string> { [0] = new('x', 32) }), "a PAP entry name cannot fill its field without a terminator");
 Reject(() => pap.WithEntryNames(new Dictionary<int, string>()), "an empty PAP rename set is rejected rather than silently copying");
+// Moving a clip into another slot needs all three: the destination game path, the
+// PAP entry name, and the C009 motion path inside the embedded timeline.
+var motionRenamed = AnimationTimelineNames.Rename(papBytes, new Dictionary<string, string> { ["loop"] = "pose" });
+Check(motionRenamed.Length == papBytes.Length &&
+      new AnimationPap(motionRenamed) is { } motionPap && motionPap.Havok.SequenceEqual(pap.Havok) &&
+      motionPap.Entries.SequenceEqual(pap.Entries) &&
+      motionRenamed.AsSpan(0, pap.TimelineOffset).SequenceEqual(papBytes.AsSpan(0, pap.TimelineOffset)) &&
+      AnimationDependencies.Read("x.pap", motionRenamed).References.Any(r => r.Path == "pose") &&
+      !AnimationDependencies.Read("x.pap", motionRenamed).References.Any(r => r.Path == "loop"),
+    "renaming a timeline motion rewrites the C009 path in place without moving any offset");
+Check(AnimationDependencies.Read("x.pap", motionRenamed).References.Any(r => r.Path == "start"),
+    "renaming one timeline motion leaves the other entry's timeline untouched");
+Reject(() => AnimationTimelineNames.Rename(papBytes, new Dictionary<string, string> { ["loop"] = "looping" }),
+    "a timeline motion rename that would change the string length is refused");
+Reject(() => AnimationTimelineNames.Rename(papBytes, new Dictionary<string, string> { ["absent"] = "absen2" }),
+    "renaming a motion the timeline never references is refused");
+Reject(() => AnimationTimelineNames.Rename(papBytes, new Dictionary<string, string>()),
+    "an empty timeline motion rename set is refused");
+Reject(() => AnimationTimelineNames.Rename(papBytes, new Dictionary<string, string> { ["loop"] = "po/e" }),
+    "a timeline motion cannot be renamed to an unsafe name");
 foreach (var infoPadding in new[] { 0, 2, 5 })
 {
     var originalPap = Pap(infoPadding);
