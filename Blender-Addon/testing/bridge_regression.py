@@ -602,6 +602,7 @@ def run_staging_isolation_regression(addon) -> None:
             "managedDestination": r"D:\Penumbra\Vanilla Edit\Files\chara\equipment\e0002\model",
             "targetFilePath": r"D:\Penumbra\Vanilla Edit\Files\chara\equipment\e0002\model\c0101e0002_top.mdl",
             "sourceModDirectory": "Vanilla Edit",
+            "sourceModStableId": "22222222-2222-2222-2222-222222222222",
             "sourceModName": "Vanilla Edit",
             "sourceModRootPath": r"D:\Penumbra\Vanilla Edit",
             "targetRelativePath": "Files/chara/equipment/e0002/model/c0101e0002_top.mdl",
@@ -615,9 +616,19 @@ def run_staging_isolation_regression(addon) -> None:
         _require(
             promoted_ref.destination_state == "ready" and
             promoted_ref.source_mod_directory == "Vanilla Edit" and
+            promoted_ref.source_mod_stable_id == "22222222-2222-2222-2222-222222222222" and
             promoted_ref.target_relative_path.startswith("Files/chara/"),
-            "an authoritative export receipt promotes pending collection metadata to a normal destination",
+            "an authoritative export receipt promotes pending collection metadata, including the new mod's "
+            "stable id, to a normal destination",
         )
+        context_module._set(pending_collection, "source_mod_stable_id", "22222222-2222-2222-2222-222222222222")
+        context_module._set(pending_collection, "destination_state", "new_mod_required")
+        try:
+            context_module.validate_context("pending-collection-context", bpy.context.scene)
+        except context_module.ContextValidationError:
+            print("[PASS] a still-pending game context rejects a stray Penumbra mod identity")
+        else:
+            raise AssertionError("a still-pending game context accepted a stray Penumbra mod identity")
         bpy.data.objects.remove(pending_mesh, do_unlink=True)
         bpy.data.collections.remove(pending_collection, do_unlink=True)
 

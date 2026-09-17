@@ -1554,16 +1554,6 @@ class QuickExport(Operator):
     bl_description = "Exports the current model back to the game path it was imported from via Penumbra"
     bl_options     = {"UNDO"}
 
-    create_detected_attribute_groups: BoolProperty(
-        name="Create and keep Penumbra part toggles updated",
-        description=(
-            "Create IMC groups for standard part attributes and toggle groups "
-            "for custom atrx_ attributes, then update them on later exports"
-        ),
-        default=True,
-        options={"HIDDEN", "SKIP_SAVE"},
-    )  # type: ignore
-
     @classmethod
     def poll(cls, context: Context):
         try:
@@ -1584,43 +1574,12 @@ class QuickExport(Operator):
             return bpy.ops.xiv_ie.mashup_destination("INVOKE_DEFAULT")
         if props.variant_target == SAVE_NEW_MOD_TARGET:
             return bpy.ops.xiv_ie.save_new_mod_name("INVOKE_DEFAULT", name="")
-        try:
-            detected_tags = detected_attribute_group_tags(context)
-        except (ContextValidationError, ValueError):
-            detected_tags = ()
-        self._detected_attribute_group_tags = detected_tags
-        self._prompt_attribute_groups = bool(
-            detected_tags and not getattr(props, "create_attribute_groups", False)
-        )
         self._confirm_unsafe_export = unsafe_export_warning_state(context)
-        if self._prompt_attribute_groups:
-            return context.window_manager.invoke_props_dialog(self, width=480)
         if self._confirm_unsafe_export:
             return context.window_manager.invoke_confirm(self, event)
         return self.execute(context)
 
     def draw(self, context):
-        if getattr(self, "_prompt_attribute_groups", False):
-            tags = getattr(self, "_detected_attribute_group_tags", ())
-            standard_parts = sorted({
-                tag.rsplit("_", 1)[-1].upper()
-                for tag in tags
-                if re.fullmatch(r"atr_[a-z0-9]+_[a-h]", tag)
-            })
-            custom_tags = sorted(tag for tag in tags if tag.startswith("atrx_"))
-            if standard_parts:
-                self.layout.label(
-                    text=f"Exportable model parts detected: {', '.join(standard_parts)}.",
-                    icon="MODIFIER",
-                )
-                self.layout.label(text="Automatic Penumbra part-toggle setup is not enabled for this scene.")
-            if custom_tags:
-                self.layout.label(
-                    text=f"Custom toggles detected: {', '.join(custom_tags)}.",
-                    icon="MODIFIER",
-                )
-            self.layout.prop(self, "create_detected_attribute_groups")
-
         if getattr(self, "_confirm_unsafe_export", False):
             missing_materials = material_coverage_missing_materials(
                 context, cache_only=True)
@@ -1633,10 +1592,6 @@ class QuickExport(Operator):
 
     def execute(self, context: Context):
         try:
-            if getattr(self, "_prompt_attribute_groups", False):
-                get_instant_edit_props().create_attribute_groups = bool(
-                    self.create_detected_attribute_groups
-                )
             perform_instant_export(context)
         except Exception as e:
             props = get_instant_edit_props()

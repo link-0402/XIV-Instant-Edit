@@ -525,8 +525,14 @@ def _mesh_object_name(mesh_index: int, part_index: int, label: str, lod: int | N
     return f"{mesh_index}.{part_index} {label}{lod_suffix}"
 
 
-def _rename_mesh_targets(targets) -> int:
-    """Apply mesh-ID renames without allowing Blender to suffix collisions."""
+def _rename_mesh_targets(targets, objects=None) -> int:
+    """Apply mesh-ID renames without allowing Blender to suffix collisions.
+
+    Collisions are only checked against `objects` (the visible mesh objects
+    shown in the materials list). Hidden objects aren't listed there and
+    can't be moved or renamed alongside the visible ones, so they must not
+    block a move.
+    """
     targets = tuple(targets)
     if not targets:
         return 0
@@ -540,8 +546,9 @@ def _rename_mesh_targets(targets) -> int:
         raise ValueError("Mesh movement would create duplicate object names.")
 
     target_ids = {obj.as_pointer() for obj, _name in desired}
+    pool = bpy.data.objects if objects is None else objects
     existing_names = {
-        obj.name for obj in bpy.data.objects if obj.as_pointer() not in target_ids
+        obj.name for obj in pool if obj.as_pointer() not in target_ids
     }
     conflicts = sorted(set(desired_names) & existing_names)
     if conflicts:
@@ -615,7 +622,7 @@ def _swap_mesh_ids(objects, first: tuple[int, int], second: tuple[int, int], swa
             new_group = group
             new_part = second[1] if part == first[1] else first[1]
         renames.append((obj, new_group, new_part, lod, label))
-    return _rename_mesh_targets(renames)
+    return _rename_mesh_targets(renames, objects)
 
 
 def swap_mesh_groups(objects, first_group: int, second_group: int) -> int:
@@ -661,7 +668,7 @@ def swap_mesh_part_instances(
     for obj in second_objects:
         _group, _part, lod = mesh_ids_from_name(obj)
         renames.append((obj, mesh_index, first_part, lod, mesh_display_name(obj)))
-    return _rename_mesh_targets(renames)
+    return _rename_mesh_targets(renames, objects)
 
 
 def move_mesh_part_to_index(
@@ -703,7 +710,7 @@ def move_mesh_part_to_index(
         renames.append(
             (obj, mesh_index, target_part, lod, mesh_display_name(obj))
         )
-    return _rename_mesh_targets(renames)
+    return _rename_mesh_targets(renames, objects)
 
 
 def move_mesh_part_to_group(
@@ -734,7 +741,7 @@ def move_mesh_part_to_group(
     for obj in source_objects:
         _group, _part, lod = mesh_ids_from_name(obj)
         renames.append((obj, target_group, target_part, lod, mesh_display_name(obj)))
-    _rename_mesh_targets(renames)
+    _rename_mesh_targets(renames, objects)
     return target_part
 
 

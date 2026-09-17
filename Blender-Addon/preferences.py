@@ -20,7 +20,7 @@ def _update_listen_port(self, _context) -> None:
 class XIVIE_OT_clean_cache(Operator):
     bl_idname = "xiv_ie.clean_cache"
     bl_label = "Clean Blender Cache Now"
-    bl_description = "Remove owned model cache jobs and reports, plus managed backups older than 30 days"
+    bl_description = "Remove owned model cache jobs and reports, plus managed backups older than 7 days"
 
     def execute(self, _context):
         try:

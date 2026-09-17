@@ -436,7 +436,7 @@ def validate_context(context_id: str, scene=None) -> ContextRef:
                 raise ValueError
         except (ValueError, AttributeError, TypeError):
             raise ContextValidationError("context collection has an invalid Penumbra mod identity")
-    if source_kind == "game" and source_mod_stable_id:
+    if source_kind == "game" and destination_state != "ready" and source_mod_stable_id:
         raise ContextValidationError("game context contains unexpected Penumbra mod identity")
     if source_kind == "game" and (
         not is_safe_game_model_path(source_game_path) or
