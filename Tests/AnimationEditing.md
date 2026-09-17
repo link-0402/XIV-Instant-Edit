@@ -313,3 +313,26 @@ The job journal and staged PAPs are under the plugin configuration directory's
 General keyframe editing, movement/combat animations, other race variants, and
 editing separate companion/weapon rigs are outside this release. Unsupported
 dependency constructs are a packaging boundary, not permission to omit assets.
+
+## Slot swapping live acceptance (pending)
+
+Slot swapping is a file-level remap: the motion data is never decoded, compressed
+or retargeted, so none of the native checks above apply to it. What does need
+verifying is that the destination timeline resolves the moved clip at all.
+
+- [ ] Select a numbered pose, search its group, and confirm the discovered slots
+  match the ones the character can actually play. A slot the probe misses is a
+  discovery bug; a slot it invents is a validation bug.
+- [ ] Map one slot to another, create the variants, then enable each option in
+  Penumbra in turn. Each must play the mapped animation, including its startup.
+  A slot left Unchanged must be untouched by the mod.
+- [ ] Confirm the generated group starts on **None** and changes nothing until an
+  option is chosen.
+- [ ] Verify all three rewrites landed, against the manual VFXEditor workflow this
+  replaces: the file sits at the destination game path, the PAP entry name carries
+  the destination slot number, and the C009 motion path inside the embedded
+  timeline carries the same name. Missing the third resolves nothing in game.
+- [ ] Swap chair-sitting and ground-sitting families as well as standing poses.
+  A family whose slots ship loop-only must not gain an invented startup.
+- [ ] Undo the edit and confirm every destination slot returns to its original
+  animation.
