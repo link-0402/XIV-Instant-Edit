@@ -359,6 +359,42 @@ internal sealed class AnimationEditService : IDisposable
             new Dictionary<string, string> { [entry.Name] = renamed });
     }
 
+    /// <summary>Slots discovered for the last group probed, keyed by that group.</summary>
+    public string SlotGroup { get; private set; } = "";
+    public ImmutableArray<AnimationSlot> Slots { get; private set; } = [];
+    public string? SlotError { get; private set; }
+
+    /// <summary>
+    /// Probe a group for the slots that actually exist. Penumbra's resource tree
+    /// exposes skeletons and material PAPs but never enumerates a character's
+    /// animation packs, so discovery has to read candidate paths and see which
+    /// resolve. Kept explicit rather than automatic, because it is many reads.
+    /// </summary>
+    public void DiscoverSlots(AnimationCapture capture, AnimationSlot template) => Launch(async token =>
+    {
+        SlotGroup = ""; Slots = []; SlotError = null;
+        var found = ImmutableArray.CreateBuilder<AnimationSlot>();
+        for (var index = 0; index <= 15; index++)
+            foreach (var startup in new[] { false, true })
+            {
+                token.ThrowIfCancellationRequested();
+                var slot = template.At(index) with { Startup = startup };
+                Status = $"Looking for {slot.PapPath}…";
+                try
+                {
+                    var read = await resources.ReadAsync(capture.CollectionId, slot.PapPath, token);
+                    // A path that resolves but is not a readable PAP is not a slot.
+                    _ = new AnimationPap(read.Bytes);
+                    found.Add(slot);
+                }
+                catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException or InvalidDataException) { }
+            }
+        Slots = found.ToImmutable();
+        SlotGroup = template.Group;
+        SlotError = Slots.Any(slot => !slot.Startup) ? null : "No animations were found in this group.";
+        Status = SlotError ?? $"Found {Slots.Count(slot => !slot.Startup)} animations in this group.";
+    }, clip: capture.Clip);
+
     public void SwapSlots(AnimationBakeRequest request) => Launch(async token =>
     {
         if (request.Operation != AnimationOperation.SwapSlots)
