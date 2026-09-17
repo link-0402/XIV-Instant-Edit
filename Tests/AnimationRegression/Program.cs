@@ -110,6 +110,9 @@ Check(motionGrown.Length > papBytes.Length && grownReferences.Contains("looping"
       new AnimationPap(motionGrown).Havok.SequenceEqual(pap.Havok) &&
       motionGrown.AsSpan(0, pap.TimelineOffset).SequenceEqual(papBytes.AsSpan(0, pap.TimelineOffset)),
     "a timeline motion rename that needs more room grows its own timeline without disturbing the rest of the PAP");
+Check(AnimationDependencies.Read("x.pap", motionGrown).Problems.IsEmpty &&
+      AnimationDependencies.Read("x.pap", papBytes).Problems.IsEmpty,
+    "a grown timeline still walks cleanly to the end of the PAP, leaving no unrecognized trailing bytes");
 var motionShortened = AnimationTimelineNames.Rename(papBytes, new Dictionary<string, string> { ["start"] = "st" });
 Check(motionShortened.Length == papBytes.Length &&
       AnimationDependencies.Read("x.pap", motionShortened).References.Select(r => r.Path).Contains("st"),
