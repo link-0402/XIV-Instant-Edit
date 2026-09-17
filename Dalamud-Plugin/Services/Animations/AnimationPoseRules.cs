@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Numerics;
 using InstantEdit.Models;
 
@@ -23,6 +23,14 @@ internal static class AnimationPoseRules
             return "The character idle and startup target skeletons are incompatible.";
         return null;
     }
+
+    /// <summary>
+    /// A retimed clip still has to land on a sane sample grid and keep its
+    /// timeline's 16-bit frame times in range, so the length is bounded well
+    /// inside what SampleCount would accept.
+    /// </summary>
+    public static bool ValidRetimeDuration(float duration) =>
+        float.IsFinite(duration) && duration is > 0 and <= 600;
 
     public static float SmoothStep(float t) => t * t * (3 - 2 * t);
 

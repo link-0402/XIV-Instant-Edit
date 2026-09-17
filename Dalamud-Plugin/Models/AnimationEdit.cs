@@ -6,7 +6,7 @@ namespace InstantEdit.Models;
 [Flags]
 internal enum PoseComponents { None = 0, Position = 1, Rotation = 2, Scale = 4, All = 7 }
 internal enum AnimationDestination { NewMod, InPlace }
-internal enum AnimationOperation { BakeOffsets, RepairSkeleton, CreateStartup, SwapSlots, AttachFace }
+internal enum AnimationOperation { BakeOffsets, RepairSkeleton, CreateStartup, SwapSlots, AttachFace, Retime }
 internal enum AnimationStartupPose { ReferencePose, CharacterIdle }
 internal enum SkeletonResolutionState { Searching, Matched, Ambiguous, Incompatible }
 internal enum SkeletonSourceKind { Collection, Game, Mod }
@@ -61,7 +61,8 @@ internal sealed record AnimationBakeRequest(Guid Id, AnimationCapture Capture, A
     AnimationOperation Operation = AnimationOperation.BakeOffsets,
     // Retained for old journal deserialization only; never bypasses source compatibility.
     bool AllowClosestSkeletonRepair = false, AnimationStartupOptions? StartupOptions = null,
-    ImmutableArray<AnimationSlotSwap> SlotSwaps = default, AnimationFaceOptions? FaceOptions = null)
+    ImmutableArray<AnimationSlotSwap> SlotSwaps = default, AnimationFaceOptions? FaceOptions = null,
+    AnimationRetimeOptions? RetimeOptions = null)
 {
     public ImmutableArray<AnimationSlotSwap> SlotSwaps { get; init; } = SlotSwaps.IsDefault ? [] : SlotSwaps;
 }
@@ -79,6 +80,8 @@ internal sealed record AnimationSlot(string Root, string Family, int Index, bool
 }
 
 internal sealed record AnimationSlotSwap(AnimationSlot Destination, AnimationSlot Source, string Option);
+/// <summary>Change how long a clip runs, rescaling its timeline events to match.</summary>
+internal sealed record AnimationRetimeOptions(float DurationSeconds);
 /// <summary>Swap the facial motion a body animation plays for another expression's.</summary>
 internal sealed record AnimationFaceOptions(string FromMotion, string ToMotion, string Expression);
 internal sealed record AnimationStartupOptions(AnimationStartupPose Pose, float DurationSeconds);

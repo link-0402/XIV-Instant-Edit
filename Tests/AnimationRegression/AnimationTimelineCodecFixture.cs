@@ -122,5 +122,26 @@ internal static class AnimationTimelineCodecFixture
             malformed.AsSpan(animationEntry.Single(e => e.Magic == "C010").Position + 4), 36);
         reject(() => AnimationTimelineCodec.Scale(malformed, 2),
             "an entry whose size disagrees with its known layout refuses to retime");
+
+        check(AnimationPoseRules.ValidRetimeDuration(1f / 30) && AnimationPoseRules.ValidRetimeDuration(600) &&
+              !AnimationPoseRules.ValidRetimeDuration(0) && !AnimationPoseRules.ValidRetimeDuration(-1) &&
+              !AnimationPoseRules.ValidRetimeDuration(600.1f) && !AnimationPoseRules.ValidRetimeDuration(float.NaN),
+            "retime lengths are bounded above zero and within ten minutes");
+
+        // The length bar maps seconds to pixels; getting that wrong would let the
+        // handle report a length the user did not pick.
+        var scale = new InstantEdit.Ui.AnimationTimelineWidget.Scale(InstantEdit.Ui.AnimationTimelineWidget.SpanFor(4, 4), 200);
+        check(Math.Abs(scale.X(0)) < 0.001 && Math.Abs(scale.Seconds(scale.X(3)) - 3) < 0.001 &&
+              Math.Abs(scale.X(scale.Span) - 200) < 0.001,
+            "the length bar round-trips between seconds and pixels across its span");
+        check(Math.Abs(scale.X(-5)) < 0.001 && Math.Abs(scale.X(scale.Span * 2) - 200) < 0.001 &&
+              scale.Seconds(-50) == 0 && Math.Abs(scale.Seconds(1000) - scale.Span) < 0.001,
+            "the length bar clamps positions outside the span it shows");
+        check(InstantEdit.Ui.AnimationTimelineWidget.SpanFor(4, 9) > 9 &&
+              InstantEdit.Ui.AnimationTimelineWidget.SpanFor(0, 0) > 0,
+            "the bar always leaves room past the longer length, and never collapses to zero");
+        check(new InstantEdit.Ui.AnimationTimelineWidget.Scale(600, 200).TickStep > 1 &&
+              new InstantEdit.Ui.AnimationTimelineWidget.Scale(5, 200).TickStep == 1,
+            "second ticks thin out on a long clip rather than crowding into a solid block");
     }
 }
