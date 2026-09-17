@@ -1,4 +1,4 @@
-using System.Buffers.Binary;
+﻿using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.IO.Compression;
 using System.Numerics;
@@ -13,6 +13,10 @@ using static InstantEdit.TestSupport.Assertions;
 
 static void Int(byte[] bytes, int at, int value) => BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(at), value);
 SkeletonRepairFixture.Run(Check, Reject);
+AnimationFramesFixture.Run(Check, Reject);
+AnimationSlotFixture.Run(Check, Reject);
+AnimationFaceFixture.Run(Check, Reject);
+AnimationTimelineCodecFixture.Run(Check, Reject);
 ChartSkeletonFixture.Run(Check);
 EmbeddedSkeletonFixture.Run(Check, Reject);
 if (args is ["--skeleton-repair-xml", var animationXml, var skeletonXml])
@@ -26,9 +30,9 @@ static byte[] Timeline(string code, string? path = null, int field = 20, int siz
     if (path != null) Int(bytes, 12 + field, size - 8);
     text.CopyTo(bytes, 12 + size); return bytes;
 }
-static byte[] Pap(int infoPadding = 0)
+static byte[] Pap(int infoPadding = 0, string first = "loop", string second = "start", int secondFace = 1)
 {
-    var a = Timeline("C009", "loop"); var b = Timeline("C009", "start");
+    var a = Timeline("C009", first); var b = Timeline("C009", second);
     var padding = (-a.Length) & 3;
     // Write the packed fields sequentially, as VFXEditor does. Do not share
     // header constants with the parser: the previous fixture hid its alignment bug.
@@ -40,7 +44,7 @@ static byte[] Pap(int infoPadding = 0)
     writer.Write(0); writer.Write(0); writer.Write(0);
     writer.Write(new byte[infoPadding]);
     var info = (int)stream.Position;
-    foreach (var (name, type, binding, face) in new[] { ("loop", (short)7, (short)0, 0), ("start", (short)3, (short)1, 1) })
+    foreach (var (name, type, binding, face) in new[] { (first, (short)7, (short)0, 0), (second, (short)3, (short)1, secondFace) })
     {
         var text = Encoding.UTF8.GetBytes(name);
         writer.Write(text); writer.Write(new byte[32 - text.Length]);
@@ -62,6 +66,104 @@ Check(pap.HavokOffset == 106 && pap.TimelineOffset == 114 &&
     "packed 26-byte PAP headers decode offsets, names, types, bindings, and face flags");
 var rebuilt = new AnimationPap(pap.ReplaceHavok(new byte[21]));
 Check(rebuilt.Entries.SequenceEqual(pap.Entries) && rebuilt.Timelines.SequenceEqual(pap.Timelines), "replacing Havok preserves every clip entry and embedded timeline byte");
+// A retargeted PAP must stop advertising the race it was authored for, without
+// disturbing any offset, entry, Havok byte or timeline byte.
+var remodelled = pap.WithModel(0x1101, 0);
+var remodelledPap = new AnimationPap(remodelled);
+Check(remodelledPap.ModelId == 0x1101 && remodelledPap.ModelType == 0 &&
+      remodelledPap.Entries.SequenceEqual(pap.Entries) && remodelledPap.Havok.SequenceEqual(pap.Havok) &&
+      remodelledPap.Timelines.SequenceEqual(pap.Timelines) &&
+      remodelled.AsSpan(13).SequenceEqual(papBytes.AsSpan(13)),
+    "rewriting the PAP source model leaves every offset, entry, Havok byte and timeline byte untouched");
+Check(new AnimationPap(pap.WithModel(pap.ModelId, pap.ModelType)).Havok.SequenceEqual(pap.Havok) &&
+      pap.WithModel(pap.ModelId, pap.ModelType).SequenceEqual(papBytes),
+    "an unchanged PAP model rewrite is byte-identical");
+Reject(() => pap.WithModel(0x0101, 9), "unsupported PAP skeleton types cannot be written");
+// Slot swapping renames an entry so the destination timeline still resolves it.
+var renamed = new AnimationPap(pap.WithEntryNames(new Dictionary<int, string> { [0] = "pose06_loop" }));
+Check(renamed.Entries[0] == pap.Entries[0] with { Name = "pose06_loop" } && renamed.Entries[1] == pap.Entries[1] &&
+      renamed.Havok.SequenceEqual(pap.Havok) && renamed.Timelines.SequenceEqual(pap.Timelines) &&
+      renamed.HavokOffset == pap.HavokOffset && renamed.TimelineOffset == pap.TimelineOffset,
+    "renaming a PAP entry preserves the entry count, bindings, offsets and payload");
+Check(pap.WithEntryNames(new Dictionary<int, string> { [0] = pap.Entries[0].Name }).SequenceEqual(papBytes),
+    "renaming a PAP entry to its existing name is byte-identical");
+Reject(() => pap.WithEntryNames(new Dictionary<int, string> { [2] = "missing" }), "a PAP entry rename cannot address a nonexistent entry");
+Reject(() => pap.WithEntryNames(new Dictionary<int, string> { [0] = "" }), "a PAP entry name cannot be empty");
+Reject(() => pap.WithEntryNames(new Dictionary<int, string> { [0] = new('x', 32) }), "a PAP entry name cannot fill its field without a terminator");
+Reject(() => pap.WithEntryNames(new Dictionary<int, string>()), "an empty PAP rename set is rejected rather than silently copying");
+// Moving a clip into another slot needs all three: the destination game path, the
+// PAP entry name, and the C009 motion path inside the embedded timeline.
+var motionRenamed = AnimationTimelineNames.Rename(papBytes, new Dictionary<string, string> { ["loop"] = "pose" });
+Check(motionRenamed.Length == papBytes.Length &&
+      new AnimationPap(motionRenamed) is { } motionPap && motionPap.Havok.SequenceEqual(pap.Havok) &&
+      motionPap.Entries.SequenceEqual(pap.Entries) &&
+      motionRenamed.AsSpan(0, pap.TimelineOffset).SequenceEqual(papBytes.AsSpan(0, pap.TimelineOffset)) &&
+      AnimationDependencies.Read("x.pap", motionRenamed).References.Any(r => r.Path == "pose") &&
+      !AnimationDependencies.Read("x.pap", motionRenamed).References.Any(r => r.Path == "loop"),
+    "renaming a timeline motion rewrites the C009 path in place without moving any offset");
+Check(AnimationDependencies.Read("x.pap", motionRenamed).References.Any(r => r.Path == "start"),
+    "renaming one timeline motion leaves the other entry's timeline untouched");
+// A longer name is appended to its own timeline and the entry re-pointed, so no
+// existing byte moves and no other displacement is invalidated.
+var motionGrown = AnimationTimelineNames.Rename(papBytes, new Dictionary<string, string> { ["loop"] = "looping" });
+var grownReferences = AnimationDependencies.Read("x.pap", motionGrown).References.Select(r => r.Path).ToArray();
+Check(motionGrown.Length > papBytes.Length && grownReferences.Contains("looping") &&
+      !grownReferences.Contains("loop") && grownReferences.Contains("start") &&
+      new AnimationPap(motionGrown).Havok.SequenceEqual(pap.Havok) &&
+      motionGrown.AsSpan(0, pap.TimelineOffset).SequenceEqual(papBytes.AsSpan(0, pap.TimelineOffset)),
+    "a timeline motion rename that needs more room grows its own timeline without disturbing the rest of the PAP");
+Check(AnimationDependencies.Read("x.pap", motionGrown).Problems.IsEmpty &&
+      AnimationDependencies.Read("x.pap", papBytes).Problems.IsEmpty,
+    "a grown timeline still walks cleanly to the end of the PAP, leaving no unrecognized trailing bytes");
+var motionShortened = AnimationTimelineNames.Rename(papBytes, new Dictionary<string, string> { ["start"] = "st" });
+Check(motionShortened.Length == papBytes.Length &&
+      AnimationDependencies.Read("x.pap", motionShortened).References.Select(r => r.Path).Contains("st"),
+    "a timeline motion rename that needs less room is written in place");
+Reject(() => AnimationTimelineNames.Rename(papBytes, new Dictionary<string, string> { ["absent"] = "absen2" }),
+    "renaming a motion the timeline never references is refused");
+Reject(() => AnimationTimelineNames.Rename(papBytes, new Dictionary<string, string>()),
+    "an empty timeline motion rename set is refused");
+Reject(() => AnimationTimelineNames.Rename(papBytes, new Dictionary<string, string> { ["loop"] = "po/e" }),
+    "a timeline motion cannot be renamed to an unsafe name");
+// A slot swap is a file-level remap: motion data is untouched, so the whole
+// operation is offline-verifiable and never reaches the baker.
+const string slotRoot = "chara/human/c0801/animation/a0001/bt_common";
+AnimationSlot SwapSlot(int index) => new(slotRoot, "standing", index, false, $"{slotRoot}/emote/pose{index:D2}_loop.pap");
+var slotSource = Pap(0, "cbem_pose03_2lp", "cbem_pose03_2st");
+var slotDestination = Pap(0, "cbem_pose06_2lp", "cbem_pose06_2st");
+var slotSwap = new AnimationSlotSwap(SwapSlot(6), SwapSlot(3), "Pose 3");
+var swappedBytes = AnimationEditService.RetargetSlot(slotSource, slotDestination, slotSwap);
+var swappedPap = new AnimationPap(swappedBytes);
+var swappedRefs = AnimationDependencies.Read("x.pap", swappedBytes).References.Select(r => r.Path).ToArray();
+Check(swappedBytes.Length == slotSource.Length && swappedPap.Entries[0].Name == "cbem_pose06_2lp" &&
+      swappedPap.Entries[0].Binding == 0 && swappedPap.Entries[1] == new AnimationPap.Entry("cbem_pose03_2st", 3, 1, 1) &&
+      swappedPap.Havok.SequenceEqual(new AnimationPap(slotSource).Havok) &&
+      swappedRefs.Contains("cbem_pose06_2lp") && !swappedRefs.Contains("cbem_pose03_2lp"),
+    "a slot swap takes the destination's motion name for the body entry and its timeline, leaving motion data and other entries alone");
+Check(swappedRefs.Contains("cbem_pose03_2st"),
+    "a slot swap does not touch the face entry's timeline");
+// The base member of a family is not numbered, so its name is nothing like the
+// length of a pose slot's. Both directions have to work.
+var baseSource = Pap(0, "jmn", "jmn_f");
+var grown = AnimationEditService.RetargetSlot(baseSource, slotDestination,
+    new AnimationSlotSwap(SwapSlot(6), new AnimationSlot(slotRoot, "standing", 0, false, $"{slotRoot}/resident/jmn.pap"), "Base"));
+var grownRefs = AnimationDependencies.Read("x.pap", grown).References.Select(r => r.Path).ToArray();
+Check(grown.Length > baseSource.Length && new AnimationPap(grown).Entries[0].Name == "cbem_pose06_2lp" &&
+      new AnimationPap(grown).Havok.SequenceEqual(new AnimationPap(baseSource).Havok) &&
+      grownRefs.Contains("cbem_pose06_2lp") && !grownRefs.Contains("jmn") && grownRefs.Contains("jmn_f"),
+    "swapping a base animation into a numbered slot grows the timeline to fit the longer motion name");
+var shrunk = AnimationEditService.RetargetSlot(slotDestination, baseSource,
+    new AnimationSlotSwap(new AnimationSlot(slotRoot, "standing", 0, false, $"{slotRoot}/resident/jmn.pap"), SwapSlot(6), "Pose 6"));
+var shrunkRefs = AnimationDependencies.Read("x.pap", shrunk).References.Select(r => r.Path).ToArray();
+Check(shrunk.Length == slotDestination.Length && new AnimationPap(shrunk).Entries[0].Name == "jmn" &&
+      shrunkRefs.Contains("jmn") && !shrunkRefs.Contains("cbem_pose06_2lp"),
+    "swapping a numbered slot onto a base animation writes the shorter name in place");
+Check(AnimationEditService.RetargetSlot(slotSource, slotSource, slotSwap).SequenceEqual(slotSource),
+    "a swap between clips that already share a motion name rewrites nothing");
+Reject(() => AnimationEditService.RetargetSlot(Pap(0, "cbem_pose03_2lp", "cbem_pose03_2st", secondFace: 0), slotDestination, slotSwap),
+    "a slot swap refuses a source with several body animations");
+Reject(() => AnimationEditService.RetargetSlot(slotSource, Pap(0, "a", "b", secondFace: 0), slotSwap),
+    "a slot swap refuses a destination with several body animations");
 foreach (var infoPadding in new[] { 0, 2, 5 })
 {
     var originalPap = Pap(infoPadding);
@@ -143,7 +245,9 @@ var standing = capture with
     DisplayName = "Idle", Playing = true,
     Clip = capture.Clip with { GamePath = "chara/human/c0801/animation/a0001/bt_common/resident/idle.pap", Timeline = 3,
         SkeletonPath = "chara/human/c0801/skeleton/base/b0001/skl_c0801b0001.sklb", Resolution = matched },
-    Startup = capture.Clip with { GamePath = "chara/human/c0801/animation/a0001/bt_common/emote/j_pose01_start.pap", Timeline = 642, Resolution = matched },
+    // Timeline 642 is chair sitting, so the path has to be the chair family's s_pose
+    // prefix. j_pose is ground sitting and would contradict the timeline.
+    Startup = capture.Clip with { GamePath = "chara/human/c0801/animation/a0001/bt_common/emote/s_pose01_start.pap", Timeline = 642, Resolution = matched },
 };
 var recentReady = standing with { Id = "recent", Playing = false, Startup = null, Clip = standing.Clip with
 { GamePath = "chara/human/c0801/animation/a0001/bt_common/resident/move_a.pap", Timeline = 13 } };
@@ -155,7 +259,7 @@ Check(listItems.Length == 4 && !listItems[0].Startup && listItems[1].Startup && 
 var waitingStartup = standing with { Startup = standing.Startup! with { Resolution = new(SkeletonResolutionState.Searching, []) } };
 Check(AnimationPresentation.ListItems([waitingStartup]) is [{ Startup: false }, { Startup: true }],
     "a detected startup remains visible with its active loop while its skeleton is prepared");
-Check(AnimationPresentation.AnimationName(standing) == "Standing Idle - Loop 1" &&
+Check(AnimationPresentation.AnimationName(standing) == "Standing Idle - Loop 0" &&
       AnimationPresentation.AnimationName(standing, true) == "Chair Sitting Idle 1 - Startup" &&
       AnimationPresentation.AnimationName(recentReady) == "Movement - Running" &&
       AnimationPresentation.AnimationName(capture with { DisplayName = "Joy" }) == "Joy" &&
@@ -280,11 +384,26 @@ var packagedManifest = new AnimationDependencyManifest(
     ImmutableDictionary<string, byte[]>.Empty
         .Add(packagedRoot, [1])
         .Add(packagedDependency, [2]));
-var packagedOutputs = ImmutableDictionary<string, byte[]>.Empty.Add(packagedRoot, [3]);
+ImmutableArray<AnimationOutput> packagedOutputs = [new(packagedRoot, "", [3])];
 var selectedModFiles = AnimationCommitService.SelectNewModFiles(packagedManifest, packagedOutputs);
-Check(selectedModFiles.Count == 1 && selectedModFiles.ContainsKey(packagedRoot) &&
-      !selectedModFiles.ContainsKey(packagedDependency),
+Check(selectedModFiles.Length == 1 && selectedModFiles.Any(o => o.GamePath == packagedRoot) &&
+      !selectedModFiles.Any(o => o.GamePath == packagedDependency),
     "new animation mods copy only baked clips, not transitively discovered dependencies");
+Reject(() => AnimationCommitService.SelectNewModFiles(packagedManifest, [new(packagedRoot, "Slot 6", [3]), new("chara/absent.pap", "Slot 6", [4])]),
+    "an optioned output outside the captured dependency manifest is rejected");
+// Two variants legitimately write the same game path, so each option needs its own
+// directory inside the mod.
+Check(AnimationCommitService.OptionSlugs([new(packagedRoot, "Standing Idle 1 to 6", [3]), new(packagedRoot, "Standing Idle 2 to 6", [4])])
+        is { Count: 2 } slugMap && slugMap["Standing Idle 1 to 6"] == "standing-idle-1-to-6" && slugMap["Standing Idle 2 to 6"] == "standing-idle-2-to-6",
+    "each animation option maps to its own directory name inside the mod");
+Reject(() => AnimationCommitService.OptionSlugs([new(packagedRoot, "Idle 1 -> 6", [3])]),
+    "an option name containing a path-invalid character is rejected before it reaches Penumbra");
+Check(AnimationCommitService.OptionSlugs([new(packagedRoot, "", [3])]).Count == 0,
+    "default-data outputs claim no option directory");
+Reject(() => AnimationCommitService.OptionSlugs([new(packagedRoot, "Slot 6", [3]), new(packagedRoot, "Slot  6", [4])]),
+    "two option names reducing to one directory name are rejected rather than overwriting");
+Reject(() => AnimationCommitService.OptionSlugs([new(packagedRoot, "***", [3])]),
+    "an option name with no usable directory name is rejected");
 using (var cancelled = new CancellationTokenSource())
 {
     cancelled.Cancel();
@@ -383,6 +502,42 @@ Check(animationMetadata["FileVersion"]!.GetValue<int>() == 4 &&
     "new animation mods embed mappings and manipulations in v4 meta.json data");
 Reject(() => AnimationCommitService.CreateNewModMetadata("Invalid", [], "{}"),
     "animation metadata rejects non-array manipulations");
+// Optioned outputs become one single-select group instead of flat default data.
+var swapA = "chara/human/c0801/animation/a0001/bt_common/emote/pose06_loop.pap";
+var swapB = "chara/human/c0801/animation/a0001/bt_common/emote/pose06_start.pap";
+var groupedMetadata = AnimationCommitService.CreateNewModMetadata(
+    "Animation regression",
+    [new AnimationFileChange(swapA, "target", "Animation regression", "root", "files/idle-1/" + swapA, "", "hash-a", "", "staged", "Idle 1"),
+     new AnimationFileChange(swapB, "target", "Animation regression", "root", "files/idle-1/" + swapB, "", "hash-b", "", "staged", "Idle 1"),
+     new AnimationFileChange(swapA, "target", "Animation regression", "root", "files/idle-2/" + swapA, "", "hash-c", "", "staged", "Idle 2")],
+    meta.ToJsonString(), groupName: "Standing Idle");
+var swapGroup = groupedMetadata["Groups"]!.AsArray().Single()!.AsObject();
+var swapOptions = swapGroup["Options"]!.AsArray();
+Check(groupedMetadata["DefaultData"]!["Files"]!.AsObject().Count == 0 &&
+      swapGroup["Type"]!.GetValue<string>() == "Single" && swapGroup["Name"]!.GetValue<string>() == "Standing Idle" &&
+      swapOptions.Count == 3 && swapOptions[0]!["Name"]!.GetValue<string>() == "None" &&
+      swapOptions[0]!["Files"] is null && swapOptions[1]!["Name"]!.GetValue<string>() == "Idle 1" &&
+      swapOptions[2]!["Name"]!.GetValue<string>() == "Idle 2",
+    "optioned animation outputs become one single-select group with a leading disable entry");
+Check(swapOptions[1]!["Files"]!.AsObject().Count == 2 &&
+      swapOptions[1]!["Files"]![swapA]!.GetValue<string>() == "files/idle-1/" + swapA &&
+      swapOptions[1]!["Files"]![swapB]!.GetValue<string>() == "files/idle-1/" + swapB &&
+      swapOptions[2]!["Files"]!.AsObject().Count == 1 &&
+      swapOptions[2]!["Files"]![swapA]!.GetValue<string>() == "files/idle-2/" + swapA,
+    "each animation option collects every file it replaces, including a clip's paired startup");
+Check(swapGroup["DefaultSettings"]!.GetValue<int>() == 0,
+    "a generated animation variant group starts disabled so it changes nothing until chosen");
+Check(groupedMetadata["Groups"]!.AsArray().Count == 1 &&
+      swapOptions.Skip(1).Select(o => o!["Id"]!.GetValue<Guid>()).Distinct().Count() == 2,
+    "animation variant options receive distinct identities within a single group");
+Reject(() => PenumbraService.BuildAnimationVariantGroup("Standing Idle", []),
+    "an animation variant group with no options is rejected");
+Reject(() => PenumbraService.BuildAnimationVariantGroup("Standing Idle",
+        [new AnimationFileChange(swapA, "t", "m", "r", "../escape.pap", "", "h", "", "s", "Idle 1")]),
+    "an animation option file escaping the mod directory is rejected");
+Reject(() => PenumbraService.BuildAnimationVariantGroup("Standing Idle",
+        [new AnimationFileChange("../escape.pap", "t", "m", "r", "files/idle-1/x.pap", "", "h", "", "s", "Idle 1")]),
+    "an animation option replacing an unsafe game path is rejected");
 
 var temp = Path.Combine(Path.GetTempPath(), "ie-animation-regression-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(temp);

@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Numerics;
 using Dalamud.Plugin.Services;
@@ -161,10 +161,8 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 if (!AnimationPoseRules.ValidStartupDuration(options.DurationSeconds))
                     throw new InvalidDataException("Startup transition duration must be between 0 and 2 seconds.");
                 targetDescription = startup.Clip.TargetSkeleton ?? throw new InvalidDataException("The live target skeleton is unavailable.");
-                if (loop.Clip.Partial != startup.Clip.Partial || idle?.Clip.Partial != startup.Clip.Partial ||
-                    loop.Clip.TargetSkeleton?.Fingerprint != targetDescription.Fingerprint ||
-                    idle?.Clip.TargetSkeleton?.Fingerprint != targetDescription.Fingerprint)
-                    throw new InvalidDataException("The loop and startup target skeletons are incompatible.");
+                if (AnimationPoseRules.StartupTargetMismatch(loop.Clip, startup.Clip, idle?.Clip, targetDescription) is { } mismatch)
+                    throw new InvalidDataException(mismatch);
                 targetSkeleton = AnimationSkeleton.Materialize(targetDescription, arena);
                 this.startup = new Source(startup, targetDescription, arena, false);
                 this.loop = new Source(loop, targetDescription, arena, true);
@@ -467,7 +465,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         private readonly string[] originalMotionPrints;
         private readonly string motionPath;
         private readonly int frames;
-        private readonly float duration;
+        private readonly float duration, sourceDuration;
         private int frame, validationFrame;
         private bool replaced;
         public float Progress => (float)frame / frames;
@@ -525,7 +523,24 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 poseBinding->TransformTrackToBoneIndices = arena.Copy<short>(Enumerable.Range(0, skeleton->Bones.Length).Select(i => (short)i).ToArray());
                 poseBinding->FloatTrackToFloatSlotIndices = default; poseBinding->PartitionIndices = default;
                 targetSampler = new AnimationNative.Sampler(skeleton, poseBinding);
-                duration = originalAnimation->Duration;
+                sourceDuration = originalAnimation->Duration;
+                // Retiming is the only operation that writes a different length than
+                // it read. Everything else keeps the source's, and BeginValidation
+                // holds the output to whichever this is.
+                if (request.Operation == AnimationOperation.Retime)
+                {
+                    if (request.RetimeOptions is not { } retime || !AnimationPoseRules.ValidRetimeDuration(retime.DurationSeconds))
+                        throw new InvalidDataException("The new animation length must be above 0 and at most 600 seconds.");
+                    if (sourceDuration <= 0)
+                        throw new InvalidDataException("A clip with no length cannot be retimed.");
+                    // Root motion is reattached byte-identical and its fingerprint is
+                    // asserted unchanged, so a clip carrying it would keep displacement
+                    // meant for the original length. Refuse rather than desynchronize it.
+                    if (AnimationNative.ExtractedMotionFingerprint(originalBinding, motionPath) != "none")
+                        throw new InvalidDataException("This animation carries root motion, which cannot be retimed yet.");
+                    duration = retime.DurationSeconds;
+                }
+                else duration = sourceDuration;
                 var sourceFrames = AnimationNative.SourceFrameCount(originalAnimation);
                 frames = AnimationPoseRules.SampleCount(duration, sourceFrames);
                 if ((long)frames * (skeleton->Bones.Length * sizeof(hkQsTransformf) + (skeleton->FloatSlots.Length + sourceSkeleton->FloatSlots.Length) * 4) > AnimationPap.MaxFileSize)
@@ -541,6 +556,12 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             catch { Dispose(); throw; }
         }
         private float Time(int index) => index == frames - 1 ? duration : duration * index / (frames - 1);
+        /// <summary>
+        /// Where in the source a sample comes from. Output and source positions are
+        /// the same fraction of their own clip, so a retime resamples uniformly.
+        /// </summary>
+        private float SourceTime(int index) =>
+            index == frames - 1 ? sourceDuration : sourceDuration * index / (frames - 1);
         public void Save(string path) => doc!.Save(path);
         public void ValidateUnchanged(byte[] bytes)
         {
@@ -557,7 +578,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             do
             {
                 token.ThrowIfCancellationRequested();
-                sampler!.Sample(Time(frame)); rawSampler!.Sample(Time(frame));
+                sampler!.Sample(SourceTime(frame)); rawSampler!.Sample(SourceTime(frame));
                 var sourceValues = new ReadOnlySpan<hkQsTransformf>(sampler.Transforms, sampler.BoneCount).ToArray();
                 var mappedValues = retarget == null ? sourceValues : retarget.Map(sourceValues.Select(AnimationSkeleton.Transform).ToArray())
                     .Select(AnimationSkeleton.Transform).ToArray();
@@ -613,6 +634,9 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             if (tracks.Count == 0) tracks.Add(0);
             var animation = arena.Alloc<AnimationNative.Interleaved>();
             native.Initialize(animation, originalAnimation);
+            // Initialize copies the source's duration; a retime is the one case that
+            // then overrides it, and BeginValidation holds the output to this value.
+            animation->Animation.Duration = duration;
             animation->Animation.NumberOfTransformTracks = tracks.Count;
             animation->Transforms = arena.Array<hkQsTransformf>(checked(frames * tracks.Count));
             animation->Floats = arena.Array<float>(checked(frames * originalAnimation->NumberOfFloatTracks));

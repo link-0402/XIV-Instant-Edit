@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Numerics;
 
 namespace InstantEdit.Models;
@@ -6,7 +6,7 @@ namespace InstantEdit.Models;
 [Flags]
 internal enum PoseComponents { None = 0, Position = 1, Rotation = 2, Scale = 4, All = 7 }
 internal enum AnimationDestination { NewMod, InPlace }
-internal enum AnimationOperation { BakeOffsets, RepairSkeleton, CreateStartup }
+internal enum AnimationOperation { BakeOffsets, RepairSkeleton, CreateStartup, SwapSlots, AttachFace, Retime }
 internal enum AnimationStartupPose { ReferencePose, CharacterIdle }
 internal enum SkeletonResolutionState { Searching, Matched, Ambiguous, Incompatible }
 internal enum SkeletonSourceKind { Collection, Game, Mod }
@@ -60,11 +60,40 @@ internal sealed record AnimationBakeRequest(Guid Id, AnimationCapture Capture, A
     string ModName, bool IncludeStartup, ImmutableHashSet<PoseBoneId> SelectedBones, PoseComponents Components,
     AnimationOperation Operation = AnimationOperation.BakeOffsets,
     // Retained for old journal deserialization only; never bypasses source compatibility.
-    bool AllowClosestSkeletonRepair = false, AnimationStartupOptions? StartupOptions = null);
+    bool AllowClosestSkeletonRepair = false, AnimationStartupOptions? StartupOptions = null,
+    ImmutableArray<AnimationSlotSwap> SlotSwaps = default, AnimationFaceOptions? FaceOptions = null,
+    AnimationRetimeOptions? RetimeOptions = null)
+{
+    public ImmutableArray<AnimationSlotSwap> SlotSwaps { get; init; } = SlotSwaps.IsDefault ? [] : SlotSwaps;
+}
+/// <summary>
+/// One member of an animation family the player can switch between, such as the
+/// standing idles or the ground-sitting set. Most are numbered files like
+/// <c>emote/j_pose02_loop.pap</c>, but every family also has an unnumbered base
+/// member in another directory - <c>resident/jmn.pap</c> is ground-sit 0 - so a
+/// slot carries its path rather than computing it from a prefix and a number.
+/// </summary>
+internal sealed record AnimationSlot(string Root, string Family, int Index, bool Startup, string PapPath)
+{
+    /// <summary>Identity of the family a slot belongs to, independent of its number.</summary>
+    public string Group => $"{Root}/{Family}";
+}
+
+internal sealed record AnimationSlotSwap(AnimationSlot Destination, AnimationSlot Source, string Option);
+/// <summary>Change how long a clip runs, rescaling its timeline events to match.</summary>
+internal sealed record AnimationRetimeOptions(float DurationSeconds);
+/// <summary>Swap the facial motion a body animation plays for another expression's.</summary>
+internal sealed record AnimationFaceOptions(string FromMotion, string ToMotion, string Expression);
 internal sealed record AnimationStartupOptions(AnimationStartupPose Pose, float DurationSeconds);
 internal sealed record AnimationStartupSource(AnimationClip Clip, AnimationResource Resource, byte[] Pap, byte[] Skeleton);
 internal sealed record AnimationDependencyManifest(ImmutableArray<AnimationResource> Resources,
     ImmutableDictionary<string, byte[]> Files, string ManipulationsJson = "[]");
+/// <summary>
+/// One produced file. An empty <paramref name="Option"/> writes into the mod's default
+/// data; a named one becomes a Penumbra option, so several variants may legitimately
+/// produce the same game path.
+/// </summary>
+internal sealed record AnimationOutput(string GamePath, string Option, byte[] Bytes);
 internal sealed record AnimationEditResult(Guid Id, bool Success, string Message, string? ModDirectory = null);
 /// <summary>One guarded, durable LivePose clear operation for the current player.</summary>
 internal sealed record LivePoseOffsetBackup(ulong ActorId, Guid CollectionId, PoseSnapshot Before,
@@ -73,7 +102,7 @@ internal sealed record LivePoseOffsetBackup(ulong ActorId, Guid CollectionId, Po
 /// <summary>Durable transaction state. File and pose recovery both use compare-before-write.</summary>
 internal sealed class AnimationEditJournal
 {
-    public int Version { get; set; } = 2;
+    public int Version { get; set; } = 3;
     public Guid Id { get; set; }
     public string State { get; set; } = "Prepared";
     public string Message { get; set; } = "";
@@ -89,4 +118,9 @@ internal sealed class AnimationEditJournal
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
 }
 internal sealed record AnimationFileChange(string GamePath, string Target, string ModDirectory, string ModRoot,
-    string RelativePath, string BeforeHash, string AfterHash, string Backup, string Staged);
+    string RelativePath, string BeforeHash, string AfterHash, string Backup, string Staged, string Option = "")
+{
+    // Journals written before option groups existed have no Option; they load as
+    // default-data changes, which is what they were.
+    public string Option { get; init; } = Option ?? "";
+}
