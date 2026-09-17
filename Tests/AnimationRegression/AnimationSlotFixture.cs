@@ -1,3 +1,4 @@
+using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 
 internal static class AnimationSlotFixture

@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Numerics;
 
 namespace InstantEdit.Models;
@@ -6,7 +6,7 @@ namespace InstantEdit.Models;
 [Flags]
 internal enum PoseComponents { None = 0, Position = 1, Rotation = 2, Scale = 4, All = 7 }
 internal enum AnimationDestination { NewMod, InPlace }
-internal enum AnimationOperation { BakeOffsets, RepairSkeleton, CreateStartup }
+internal enum AnimationOperation { BakeOffsets, RepairSkeleton, CreateStartup, SwapSlots }
 internal enum AnimationStartupPose { ReferencePose, CharacterIdle }
 internal enum SkeletonResolutionState { Searching, Matched, Ambiguous, Incompatible }
 internal enum SkeletonSourceKind { Collection, Game, Mod }
@@ -60,7 +60,26 @@ internal sealed record AnimationBakeRequest(Guid Id, AnimationCapture Capture, A
     string ModName, bool IncludeStartup, ImmutableHashSet<PoseBoneId> SelectedBones, PoseComponents Components,
     AnimationOperation Operation = AnimationOperation.BakeOffsets,
     // Retained for old journal deserialization only; never bypasses source compatibility.
-    bool AllowClosestSkeletonRepair = false, AnimationStartupOptions? StartupOptions = null);
+    bool AllowClosestSkeletonRepair = false, AnimationStartupOptions? StartupOptions = null,
+    ImmutableArray<AnimationSlotSwap> SlotSwaps = default)
+{
+    public ImmutableArray<AnimationSlotSwap> SlotSwaps { get; init; } = SlotSwaps.IsDefault ? [] : SlotSwaps;
+}
+/// <summary>
+/// One numbered animation within a family that shares a directory and filename
+/// prefix, such as the standing poses <c>emote/pose01_loop.pap</c>..<c>pose06_loop.pap</c>
+/// or the chair-sitting <c>j_pose*</c> set beside them.
+/// </summary>
+internal sealed record AnimationSlot(string Directory, string Prefix, int Index, bool Startup)
+{
+    /// <summary>Stable identity of the family a slot belongs to, independent of its number.</summary>
+    public string Group => $"{Directory}/{Prefix}";
+    public string PapPath => $"{Directory}/{Prefix}{Index:D2}_{(Startup ? "start" : "loop")}.pap";
+    public AnimationSlot At(int index) => this with { Index = index };
+    public AnimationSlot Paired => this with { Startup = !Startup };
+}
+
+internal sealed record AnimationSlotSwap(AnimationSlot Destination, AnimationSlot Source, string Option);
 internal sealed record AnimationStartupOptions(AnimationStartupPose Pose, float DurationSeconds);
 internal sealed record AnimationStartupSource(AnimationClip Clip, AnimationResource Resource, byte[] Pap, byte[] Skeleton);
 internal sealed record AnimationDependencyManifest(ImmutableArray<AnimationResource> Resources,
@@ -79,7 +98,7 @@ internal sealed record LivePoseOffsetBackup(ulong ActorId, Guid CollectionId, Po
 /// <summary>Durable transaction state. File and pose recovery both use compare-before-write.</summary>
 internal sealed class AnimationEditJournal
 {
-    public int Version { get; set; } = 2;
+    public int Version { get; set; } = 3;
     public Guid Id { get; set; }
     public string State { get; set; } = "Prepared";
     public string Message { get; set; } = "";

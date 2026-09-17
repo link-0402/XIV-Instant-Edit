@@ -1,23 +1,8 @@
 ﻿using System.Collections.Immutable;
 using System.Text.RegularExpressions;
+using InstantEdit.Models;
 
 namespace InstantEdit.Services.Animations;
-
-/// <summary>
-/// One numbered animation within a family that shares a directory and filename
-/// prefix, such as the standing poses <c>emote/pose01_loop.pap</c>..<c>pose06_loop.pap</c>
-/// or the chair-sitting <c>j_pose*</c> set beside them.
-/// </summary>
-internal sealed record AnimationSlot(string Directory, string Prefix, int Index, bool Startup)
-{
-    /// <summary>Stable identity of the family a slot belongs to, independent of its number.</summary>
-    public string Group => $"{Directory}/{Prefix}";
-    public string PapPath => $"{Directory}/{Prefix}{Index:D2}_{(Startup ? "start" : "loop")}.pap";
-    public AnimationSlot At(int index) => this with { Index = index };
-    public AnimationSlot Paired => this with { Startup = !Startup };
-}
-
-internal sealed record AnimationSlotSwap(AnimationSlot Destination, AnimationSlot Source, string Option);
 
 /// <summary>
 /// Slot identity is derived from the PAP path rather than an enumerated table, so a
