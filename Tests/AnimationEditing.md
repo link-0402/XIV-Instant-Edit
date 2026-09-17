@@ -329,13 +329,17 @@ verifying is that the destination timeline resolves the moved clip at all.
 - [ ] Confirm the generated group starts on **None** and changes nothing until an
   option is chosen.
 - [ ] Verify all three rewrites landed, against the manual VFXEditor workflow this
-  replaces: the file sits at the destination game path, the PAP entry name carries
-  the destination slot number, and the C009 motion path inside the embedded
-  timeline carries the same name. Missing the third resolves nothing in game.
+  replaces: the file sits at the destination game path, the PAP entry name matches
+  the destination's, and the C009 motion path inside the PAP's **embedded** timeline
+  carries the same name. Missing the third resolves nothing in game. The standalone
+  `chara/action/**.tmb` files are never written; a slot swap does not need them
+  changed.
 - [ ] Swap each family's unnumbered base animation both ways: `idle.pap` with a
   standing pose, `sit.pap` with a chair pose, `jmn.pap` with a ground pose. These
-  are the cases where the motion name changes length, so the embedded timeline has
-  to grow to fit it. Confirm the grown file still plays and still loads its own
+  are the cases where the motion name changes length, so the embedded timeline
+  grows to fit it. The rewrite is re-read with the dependency parser before it is
+  accepted, so a malformed footer fails the edit rather than reaching the game;
+  what live testing adds is that the grown file still plays and still fires its own
   sounds and effects.
 - [ ] Confirm discovery finds each base animation. It is probed in both the resident
   and emote directories because the layout is not assumed; if neither resolves, the

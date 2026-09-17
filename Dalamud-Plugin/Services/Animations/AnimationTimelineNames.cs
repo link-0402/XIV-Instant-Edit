@@ -89,6 +89,29 @@ internal static class AnimationTimelineNames
         papBytes.AsSpan(0, pap.TimelineOffset).CopyTo(result);
         footer.ToArray().CopyTo(result, pap.TimelineOffset);
         _ = new AnimationPap(result);
+        Verify(papBytes, result, renames);
         return result;
+    }
+
+    /// <summary>
+    /// Re-read the rewritten PAP with the same parser the dependency graph uses and
+    /// require that it differs only by the rename. Growing a timeline is safe only
+    /// because displacements are entry-relative; this turns that from an assumption
+    /// into a post-condition, and it also catches a footer whose padding or length
+    /// headers no longer add up, which surfaces as trailing unrecognized bytes.
+    /// </summary>
+    private static void Verify(byte[] before, byte[] after, IReadOnlyDictionary<string, string> renames)
+    {
+        var original = AnimationDependencies.Read("timeline.pap", before);
+        var rewritten = AnimationDependencies.Read("timeline.pap", after);
+        var expected = original.References
+            .Select(r => r.Kind == "animation" && renames.TryGetValue(r.Path, out var name) ? r with { Path = name } : r)
+            .ToHashSet();
+        if (!rewritten.References.ToHashSet().SetEquals(expected))
+            throw new InvalidDataException("Renaming the animation's timeline changed more than the motion name. The file was not changed.");
+        if (rewritten.Problems.Except(original.Problems).Any())
+            throw new InvalidDataException(
+                "Renaming the animation's timeline left it unreadable: " +
+                string.Join(" ", rewritten.Problems.Except(original.Problems)));
     }
 }
