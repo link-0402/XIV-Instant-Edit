@@ -202,8 +202,8 @@ Use a development plugin installation and a test Penumbra collection. Record
 FFXIV, Dalamud, FFXIVClientStructs, Penumbra, SimpleHeels, and Instant Edit build
 versions. Keep the source mod and original PAP/SKLB available for comparisons.
 Record game paths, binding indices, partial indices, capture times, and job IDs.
-The job journal and staged PAPs are under the plugin configuration directory's
-`AnimationEdits/<job-id>` directory; managed PAP backups are under `Backups`.
+The job journal and staged PAPs are under the managed cache directory's
+`AnimationEdits/<job-id>` directory; managed PAP backups are under `backups`.
 
 ## Native round trips and transform parity
 
@@ -307,9 +307,89 @@ The job journal and staged PAPs are under the plugin configuration directory's
   restoration must refuse conflicting changes. Test moved/renamed mods, expired
   backups, a different player, and a different collection.
 - [ ] Test multiple successive edits and undo them in reverse order. Preserve the
-  recovery records across plugin restarts. PAP backups share the existing 30-day
+  recovery records across plugin restarts. PAP backups share the existing 7-day
   managed retention; expired backups must produce a clear recovery error.
 
 General keyframe editing, movement/combat animations, other race variants, and
-editing separate companion/weapon rigs are outside this release. Unsupported
+editing separate companion/weapon rigs are outside this release. Clip length is no
+longer fixed: retiming resamples a clip onto a new length and rescales its timeline
+events to match, though clips carrying root motion are still refused. Unsupported
 dependency constructs are a packaging boundary, not permission to omit assets.
+
+## Animation length live acceptance (pending)
+
+Retiming is the first new operation that samples motion through Havok and writes a
+clip whose declared length differs from the one it read, so unlike slot swapping and
+facial attachment the native checks above all apply to it.
+
+- [ ] Retime an emote longer and shorter. The motion must play at the new speed with
+  no stutter at either end, and the last sample must land exactly on the new length.
+- [ ] Confirm footsteps, sounds and effects stay in step with the motion at both
+  lengths. They are rescaled by the same factor as the clip; a drift means the
+  timeline codec and the bake disagreed about the factor.
+- [ ] Retime a clip that carries root motion and confirm it is refused with a clear
+  reason rather than desynchronising its displacement.
+- [ ] Retime the same clip twice in a row and confirm the second edit scales from the
+  already-retimed length, not the original.
+- [ ] Drag the length bar and confirm the handle lands on whole frames, matching the
+  number typed into the field beside it.
+- [ ] Undo and confirm both the motion and its event timing return to the original.
+
+## Facial expression live acceptance (pending)
+
+Attaching an expression rewrites only the animation's own reference to the facial
+motion it plays. No motion data is decoded and no face file is copied into the mod,
+so the expression must already exist for the character's face variant.
+
+- [ ] On an animation that plays a face, read its expression and confirm the
+  reported motion matches what the file actually names. The documented case is
+  `pose01_loop.pap` naming `cfxf_bad`, which ActionTimeline 622 (`facial/pose/bad`)
+  resolves to `nonresident/bad.pap` for the tested c0801/f0002 variant.
+- [ ] Attach a different expression and confirm the character plays it with the body
+  animation unchanged.
+- [ ] Confirm an expression whose clip the character's face variant does not contain
+  fails cleanly rather than playing nothing. Expression discovery reads the game's
+  facial timelines and does not know which variants ship which clip; if that turns
+  out to matter, the list needs filtering per variant.
+- [ ] Attach an expression whose motion name is longer than the current one, which
+  grows the embedded timeline, and confirm the animation still plays.
+- [ ] Select an animation that plays no face and confirm the section says so rather
+  than offering an attachment.
+- [ ] Undo and confirm the original expression returns.
+
+## Slot swapping live acceptance (pending)
+
+Slot swapping is a file-level remap: the motion data is never decoded, compressed
+or retargeted, so none of the native checks above apply to it. What does need
+verifying is that the destination timeline resolves the moved clip at all.
+
+- [ ] Select a numbered pose, search its group, and confirm the discovered slots
+  match the ones the character can actually play. A slot the probe misses is a
+  discovery bug; a slot it invents is a validation bug.
+- [ ] Map one slot to another, create the variants, then enable each option in
+  Penumbra in turn. Each must play the mapped animation, including its startup.
+  A slot left Unchanged must be untouched by the mod.
+- [ ] Confirm the generated group starts on **None** and changes nothing until an
+  option is chosen.
+- [ ] Verify all three rewrites landed, against the manual VFXEditor workflow this
+  replaces: the file sits at the destination game path, the PAP entry name matches
+  the destination's, and the C009 motion path inside the PAP's **embedded** timeline
+  carries the same name. Missing the third resolves nothing in game. The standalone
+  `chara/action/**.tmb` files are never written; a slot swap does not need them
+  changed.
+- [ ] Swap each family's unnumbered base animation both ways: `idle.pap` with a
+  standing pose, `sit.pap` with a chair pose, `jmn.pap` with a ground pose. These
+  are the cases where the motion name changes length, so the embedded timeline
+  grows to fit it. A TMB keeps its strings at the very end, after the incremental
+  sequence that TMAL, TMAC and TMTR all measure up to, so appending there leaves
+  every byte count correct and only TMLB's length changes. The rewrite is also
+  re-read with the dependency parser before it is accepted, so a malformed footer
+  fails the edit rather than reaching the game. What live testing adds is that the
+  grown file still plays and still fires its own sounds and effects.
+- [ ] Confirm discovery finds each base animation. It is probed in both the resident
+  and emote directories because the layout is not assumed; if neither resolves, the
+  base member is simply absent from the grid and that is a discovery bug to report.
+- [ ] Swap chair-sitting and ground-sitting families as well as standing poses.
+  A family whose slots ship loop-only must not gain an invented startup.
+- [ ] Undo the edit and confirm every destination slot returns to its original
+  animation.

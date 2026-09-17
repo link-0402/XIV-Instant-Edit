@@ -1,10 +1,11 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using InstantEdit.Models;
 
 namespace InstantEdit.Services.Animations;
 
 internal sealed class AnimationJournalStore
 {
+    public static readonly TimeSpan Retention = TimeSpan.FromDays(7);
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, IncludeFields = true };
     private readonly string root;
     private string OffsetBackupPath => Path.Combine(root, "livepose-offset-backup.json");
@@ -13,6 +14,27 @@ internal sealed class AnimationJournalStore
         root = Path.Combine(Path.GetFullPath(configDirectory), "AnimationEdits");
         TextureFiles.EnsureLocalPath(root);
         Directory.CreateDirectory(root);
+        Cleanup();
+    }
+    public void Cleanup(DateTime? now = null)
+    {
+        var cutoff = (now ?? DateTime.UtcNow) - Retention;
+        foreach (var dir in Directory.EnumerateDirectories(root))
+        {
+            if (!Guid.TryParseExact(Path.GetFileName(dir), "N", out _)) continue;
+            var path = Path.Combine(dir, "journal.json");
+            try
+            {
+                if (!File.Exists(path)) continue;
+                var record = JsonSerializer.Deserialize<AnimationEditJournal>(File.ReadAllText(path), Json);
+                if (record is null || record.CreatedUtc > cutoff) continue;
+            }
+            catch (Exception e) when (e is IOException or JsonException or InvalidDataException)
+            {
+                continue;
+            }
+            Directory.Delete(dir, recursive: true);
+        }
     }
     public string DirectoryFor(Guid id)
     {
@@ -32,7 +54,7 @@ internal sealed class AnimationJournalStore
             if (new FileInfo(path).Length > 16 * 1024 * 1024) throw new InvalidDataException("An animation recovery record exceeds 16 MiB.");
             var record = JsonSerializer.Deserialize<AnimationEditJournal>(File.ReadAllText(path), Json)
                 ?? throw new InvalidDataException("Invalid animation recovery record.");
-            if (record.Version is not (1 or 2) || record.Id != id || record.Request?.Id != id) throw new InvalidDataException("Unsupported animation recovery record.");
+            if (record.Version is not (1 or 2 or 3) || record.Id != id || record.Request?.Id != id) throw new InvalidDataException("Unsupported animation recovery record.");
             result.Add(record);
         }
         return result.OrderByDescending(r => r.CreatedUtc).ToArray();

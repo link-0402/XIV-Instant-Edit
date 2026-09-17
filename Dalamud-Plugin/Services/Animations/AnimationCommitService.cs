@@ -9,7 +9,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
     ModelBackupStore backups, AnimationJournalStore store)
 {
     public async Task<AnimationEditJournal> PrepareAsync(AnimationBakeRequest request, AnimationDependencyManifest manifest,
-        ImmutableDictionary<string, byte[]> outputs, CancellationToken token)
+        ImmutableArray<AnimationOutput> outputs, CancellationToken token)
     {
         var journal = new AnimationEditJournal { Id = request.Id, Request = RecoveryRequest(request),
             PoseBefore = request.Operation == AnimationOperation.BakeOffsets ? request.Capture.Pose : null };
@@ -35,13 +35,19 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
         var files = request.Destination == AnimationDestination.NewMod
             ? SelectNewModFiles(manifest, outputs)
             : outputs;
-        foreach (var (gamePath, bytes) in files)
+        if (request.Destination == AnimationDestination.InPlace && files.Any(output => output.Option.Length > 0))
+            throw new InvalidDataException("Option variants need their own mod. Choose Create new mod.");
+        var slugs = OptionSlugs(files);
+        foreach (var (gamePath, option, bytes) in files)
         {
             token.ThrowIfCancellationRequested();
             string mod, root, target, relative, before;
             if (request.Destination == AnimationDestination.NewMod)
             {
-                mod = journal.ModDirectory; root = journal.ModRoot; relative = "files/" + gamePath;
+                // Each option owns a namespace, so two variants of the same clip do
+                // not collide on one file inside the mod.
+                mod = journal.ModDirectory; root = journal.ModRoot;
+                relative = option.Length == 0 ? "files/" + gamePath : $"files/{slugs[option]}/{gamePath}";
                 target = Path.GetFullPath(Path.Combine(root, relative)); before = "";
             }
             else
@@ -58,7 +64,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
             await File.WriteAllBytesAsync(staged, bytes, token);
             var after = AnimationPap.Hash(bytes);
             if (AnimationPap.Hash(await File.ReadAllBytesAsync(staged, token)) != after) throw new IOException("Staged output validation failed.");
-            journal.Files.Add(new AnimationFileChange(gamePath, target, mod, root, relative, before, after, "", staged));
+            journal.Files.Add(new AnimationFileChange(gamePath, target, mod, root, relative, before, after, "", staged, option));
         }
         if (journal.Files.Select(f => f.Target).Distinct(StringComparer.OrdinalIgnoreCase).Count() != journal.Files.Count)
             throw new IOException("Several edited game paths share one source file. Use Create new mod to separate them.");
@@ -74,12 +80,33 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
             Startup = request.Capture.Startup == null ? null : Compact(request.Capture.Startup) } };
     }
 
-    internal static ImmutableDictionary<string, byte[]> SelectNewModFiles(
-        AnimationDependencyManifest manifest, ImmutableDictionary<string, byte[]> outputs)
+    internal static ImmutableArray<AnimationOutput> SelectNewModFiles(
+        AnimationDependencyManifest manifest, ImmutableArray<AnimationOutput> outputs)
     {
-        if (outputs.Keys.Any(path => !manifest.Files.ContainsKey(path)))
+        if (outputs.Any(output => !manifest.Files.ContainsKey(output.GamePath)))
             throw new InvalidDataException("An edited animation is missing from the captured dependency manifest.");
         return outputs;
+    }
+
+    /// <summary>
+    /// Map each option name to the path segment that holds its files. Two options
+    /// whose names reduce to one segment would silently overwrite each other.
+    /// </summary>
+    internal static ImmutableDictionary<string, string> OptionSlugs(IEnumerable<AnimationOutput> outputs)
+    {
+        var result = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        var used = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in outputs.Select(output => output.Option).Where(o => o.Length > 0).Distinct(StringComparer.Ordinal))
+        {
+            if (!PenumbraService.IsSafeVariantName(name)) throw new InvalidDataException($"'{name}' is not a valid Penumbra option name.");
+            var slug = new string([.. name.Select(c => char.IsAsciiLetterOrDigit(c) ? char.ToLowerInvariant(c) : '-')]).Trim('-');
+            while (slug.Contains("--", StringComparison.Ordinal)) slug = slug.Replace("--", "-", StringComparison.Ordinal);
+            if (slug.Length is 0 or > 64) throw new InvalidDataException($"Option '{name}' has no usable directory name.");
+            if (used.TryGetValue(slug, out var taken))
+                throw new InvalidDataException($"Options '{taken}' and '{name}' share the directory name '{slug}'. Rename one.");
+            used[slug] = name; result[name] = slug;
+        }
+        return result.ToImmutable();
     }
 
     public async Task CommitAsync(AnimationEditJournal journal, AnimationDependencyManifest manifest,
@@ -181,14 +208,15 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
 
     internal static JsonObject CreateNewModMetadata(
         string modName, IEnumerable<AnimationFileChange> changes, string manipulationsJson,
-        string description = "Animation offsets baked by XIV Instant Edit.")
+        string description = "Animation offsets baked by XIV Instant Edit.",
+        string groupName = "Animation Variants")
     {
         var files = new JsonObject();
-        foreach (var change in changes)
+        foreach (var change in changes.Where(change => change.Option.Length == 0))
             files[change.GamePath] = change.RelativePath.Replace('\\', '/');
         var manipulations = JsonNode.Parse(manipulationsJson) as JsonArray
             ?? throw new InvalidDataException("Animation manipulations are not a JSON array.");
-        return PenumbraService.CreateV4ModMetadata(
+        var metadata = PenumbraService.CreateV4ModMetadata(
             modName,
             "XIV Instant Edit",
             description,
@@ -199,6 +227,12 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                 ["FileSwaps"] = new JsonObject(),
                 ["Manipulations"] = manipulations,
             });
+        // Optioned changes become one single-select group so the variants are
+        // switchable in Penumbra without re-running the edit.
+        var optioned = changes.Where(change => change.Option.Length > 0).ToArray();
+        if (optioned.Length > 0)
+            metadata["Groups"] = new JsonArray(PenumbraService.BuildAnimationVariantGroup(groupName, optioned));
+        return metadata;
     }
 
     public Task UndoFilesAsync(AnimationEditJournal journal) => penumbra.AnimationExportAsync(() => UndoFilesCoreAsync(journal), CancellationToken.None);
