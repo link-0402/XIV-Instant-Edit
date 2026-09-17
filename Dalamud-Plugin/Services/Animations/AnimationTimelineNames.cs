@@ -27,6 +27,14 @@ internal static class AnimationTimelineNames
     /// invalidate one. Swapping a numbered slot with its family's base member needs
     /// this: <c>jmn</c> and <c>cbem_pose03_2lp</c> are nothing like the same length.
     /// </para>
+    /// <para>
+    /// The end of a timeline is also where its strings already live: a TMB lays out
+    /// its paths in string form at the very end, preceded by an incremental sequence.
+    /// The byte counts in TMAL, TMAC and TMTR all measure up to the start of that
+    /// sequence, so they sit entirely before the string area and appending past it
+    /// leaves them correct. Only TMLB's own length covers the whole timeline, and
+    /// that is rewritten here.
+    /// </para>
     /// </summary>
     public static byte[] Rename(byte[] papBytes, IReadOnlyDictionary<string, string> renames)
     {

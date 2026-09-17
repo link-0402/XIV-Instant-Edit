@@ -337,10 +337,12 @@ verifying is that the destination timeline resolves the moved clip at all.
 - [ ] Swap each family's unnumbered base animation both ways: `idle.pap` with a
   standing pose, `sit.pap` with a chair pose, `jmn.pap` with a ground pose. These
   are the cases where the motion name changes length, so the embedded timeline
-  grows to fit it. The rewrite is re-read with the dependency parser before it is
-  accepted, so a malformed footer fails the edit rather than reaching the game;
-  what live testing adds is that the grown file still plays and still fires its own
-  sounds and effects.
+  grows to fit it. A TMB keeps its strings at the very end, after the incremental
+  sequence that TMAL, TMAC and TMTR all measure up to, so appending there leaves
+  every byte count correct and only TMLB's length changes. The rewrite is also
+  re-read with the dependency parser before it is accepted, so a malformed footer
+  fails the edit rather than reaching the game. What live testing adds is that the
+  grown file still plays and still fires its own sounds and effects.
 - [ ] Confirm discovery finds each base animation. It is probed in both the resident
   and emote directories because the layout is not assumed; if neither resolves, the
   base member is simply absent from the grid and that is a discovery bug to report.
