@@ -336,6 +336,71 @@ internal sealed class AnimationEditService : IDisposable
         journal.State = "Completed"; journals.Save(journal); Status = journal.Message;
     }, request.Id, request.Capture.Clip);
 
+    /// <summary>
+    /// Rewrite one clip so it plays from another slot. This is a file-level remap:
+    /// the motion data is untouched, so it never reaches the baker, the Havok round
+    /// trip, or the live skeleton.
+    /// </summary>
+    internal static byte[] RetargetSlot(byte[] papBytes, AnimationSlotSwap swap)
+    {
+        var pap = new AnimationPap(papBytes);
+        var body = pap.Entries.Select((entry, index) => (entry, index)).Where(e => e.entry.Face == 0).ToArray();
+        if (body.Length != 1)
+            throw new InvalidDataException(body.Length == 0
+                ? $"{swap.Source.PapPath} has no body animation to swap."
+                : $"{swap.Source.PapPath} contains several body animations; the swap source is ambiguous.");
+        var (entry, index) = body[0];
+        var renamed = AnimationSlots.Renumber(entry.Name, swap.Source.Index, swap.Destination.Index)
+            ?? throw new InvalidDataException(
+                $"'{entry.Name}' cannot be renumbered from slot {swap.Source.Index} to {swap.Destination.Index}.");
+        // Both the entry name and the timeline's own reference to it must move, or
+        // the destination timeline resolves nothing.
+        return AnimationTimelineNames.Rename(pap.WithEntryNames(new Dictionary<int, string> { [index] = renamed }),
+            new Dictionary<string, string> { [entry.Name] = renamed });
+    }
+
+    public void SwapSlots(AnimationBakeRequest request) => Launch(async token =>
+    {
+        if (request.Operation != AnimationOperation.SwapSlots)
+            throw new InvalidOperationException("This request is not a slot swap.");
+        if (request.SlotSwaps.Length == 0)
+            throw new InvalidOperationException("Map at least one slot to a different animation first.");
+        // Variants need a mod of their own; an in-place edit has nowhere to put them.
+        if (request.Destination != AnimationDestination.NewMod)
+            throw new InvalidOperationException("Slot variants need their own mod. Choose Create new mod.");
+        if (!PenumbraService.IsSafeNewModName(request.ModName))
+            throw new InvalidDataException("Choose a valid mod name before swapping slots.");
+        if (request.Capture.UnavailableReason != null) throw new InvalidOperationException(request.Capture.UnavailableReason);
+        if (request.Capture.PackagingError != null) throw new InvalidDataException(request.Capture.PackagingError);
+
+        await CheckActorAsync(request.Capture, false);
+        await resources.CheckAsync(request.Capture.CollectionId, request.Capture.Sources, token);
+        Status = "Capturing the animations being swapped…";
+        var sourcePaths = request.SlotSwaps.Select(swap => swap.Source.PapPath).Distinct(StringComparer.Ordinal).ToArray();
+        var packagedPaths = request.SlotSwaps.Select(swap => swap.Destination.PapPath).Distinct(StringComparer.Ordinal).ToArray();
+        var manifest = await resources.ManifestAsync(request.Capture, catalog, sourcePaths, packagedPaths, token);
+
+        var outputs = ImmutableArray.CreateBuilder<AnimationOutput>(request.SlotSwaps.Length);
+        foreach (var swap in request.SlotSwaps)
+        {
+            token.ThrowIfCancellationRequested();
+            Status = $"Preparing {swap.Option}…";
+            if (!manifest.Files.TryGetValue(swap.Source.PapPath, out var bytes))
+                throw new InvalidDataException($"{swap.Source.PapPath} was not captured for this swap.");
+            outputs.Add(new AnimationOutput(swap.Destination.PapPath, swap.Option, RetargetSlot(bytes, swap)));
+        }
+        var journal = await commits.PrepareAsync(request, manifest, outputs.ToImmutable(), token);
+        recovery = recovery.Insert(0, journal);
+        await commits.CommitAsync(journal, manifest, () => CheckActorAsync(request.Capture, false), message =>
+        {
+            Status = message;
+            if (message.StartsWith("Committing", StringComparison.Ordinal)) CanCancel = false;
+        }, token);
+        journal.State = "Completed"; journal.PoseClearOutcome = "NotApplicable";
+        journal.Message = "Slot variants activated. Choose one in Penumbra. Live offsets were retained.";
+        journals.Save(journal); Status = journal.Message;
+    }, request.Id, request.Capture.Clip);
+
     private async Task<StartupSources> ResolveStartupSourcesAsync(AnimationCapture capture,
         AnimationStartupOptions options, CancellationToken token)
     {

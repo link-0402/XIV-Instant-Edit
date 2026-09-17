@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using InstantEdit.Models;
 
 namespace InstantEdit.Services.Animations;
@@ -32,7 +32,7 @@ internal sealed class AnimationJournalStore
             if (new FileInfo(path).Length > 16 * 1024 * 1024) throw new InvalidDataException("An animation recovery record exceeds 16 MiB.");
             var record = JsonSerializer.Deserialize<AnimationEditJournal>(File.ReadAllText(path), Json)
                 ?? throw new InvalidDataException("Invalid animation recovery record.");
-            if (record.Version is not (1 or 2) || record.Id != id || record.Request?.Id != id) throw new InvalidDataException("Unsupported animation recovery record.");
+            if (record.Version is not (1 or 2 or 3) || record.Id != id || record.Request?.Id != id) throw new InvalidDataException("Unsupported animation recovery record.");
             result.Add(record);
         }
         return result.OrderByDescending(r => r.CreatedUtc).ToArray();

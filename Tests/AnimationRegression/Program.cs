@@ -1,4 +1,4 @@
-using System.Buffers.Binary;
+﻿using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.IO.Compression;
 using System.Numerics;
@@ -28,9 +28,9 @@ static byte[] Timeline(string code, string? path = null, int field = 20, int siz
     if (path != null) Int(bytes, 12 + field, size - 8);
     text.CopyTo(bytes, 12 + size); return bytes;
 }
-static byte[] Pap(int infoPadding = 0)
+static byte[] Pap(int infoPadding = 0, string first = "loop", string second = "start", int secondFace = 1)
 {
-    var a = Timeline("C009", "loop"); var b = Timeline("C009", "start");
+    var a = Timeline("C009", first); var b = Timeline("C009", second);
     var padding = (-a.Length) & 3;
     // Write the packed fields sequentially, as VFXEditor does. Do not share
     // header constants with the parser: the previous fixture hid its alignment bug.
@@ -42,7 +42,7 @@ static byte[] Pap(int infoPadding = 0)
     writer.Write(0); writer.Write(0); writer.Write(0);
     writer.Write(new byte[infoPadding]);
     var info = (int)stream.Position;
-    foreach (var (name, type, binding, face) in new[] { ("loop", (short)7, (short)0, 0), ("start", (short)3, (short)1, 1) })
+    foreach (var (name, type, binding, face) in new[] { (first, (short)7, (short)0, 0), (second, (short)3, (short)1, secondFace) })
     {
         var text = Encoding.UTF8.GetBytes(name);
         writer.Write(text); writer.Write(new byte[32 - text.Length]);
@@ -109,6 +109,26 @@ Reject(() => AnimationTimelineNames.Rename(papBytes, new Dictionary<string, stri
     "an empty timeline motion rename set is refused");
 Reject(() => AnimationTimelineNames.Rename(papBytes, new Dictionary<string, string> { ["loop"] = "po/e" }),
     "a timeline motion cannot be renamed to an unsafe name");
+// A slot swap is a file-level remap: motion data is untouched, so the whole
+// operation is offline-verifiable and never reaches the baker.
+const string slotDir = "chara/human/c0801/animation/a0001/bt_common/emote";
+AnimationSlot SwapSlot(int index, bool startup = false) => new(slotDir, "pose", index, startup);
+var slotPapBytes = Pap(0, "cbem_pose03_2lp", "cbem_pose03_2st");
+var slotSwap = new AnimationSlotSwap(SwapSlot(6), SwapSlot(3), "Pose 3");
+var swappedBytes = AnimationEditService.RetargetSlot(slotPapBytes, slotSwap);
+var swappedPap = new AnimationPap(swappedBytes);
+var swappedRefs = AnimationDependencies.Read("x.pap", swappedBytes).References.Select(r => r.Path).ToArray();
+Check(swappedBytes.Length == slotPapBytes.Length && swappedPap.Entries[0].Name == "cbem_pose06_2lp" &&
+      swappedPap.Entries[0].Binding == 0 && swappedPap.Entries[1] == new AnimationPap.Entry("cbem_pose03_2st", 3, 1, 1) &&
+      swappedPap.Havok.SequenceEqual(new AnimationPap(slotPapBytes).Havok) &&
+      swappedRefs.Contains("cbem_pose06_2lp") && !swappedRefs.Contains("cbem_pose03_2lp"),
+    "a slot swap renumbers the body entry and its timeline motion while leaving the motion data and other entries alone");
+Check(swappedRefs.Contains("cbem_pose03_2st"),
+    "a slot swap does not touch the face entry's timeline");
+Reject(() => AnimationEditService.RetargetSlot(Pap(0, "cbem_loop", "cbem_start"), slotSwap),
+    "a slot swap refuses a motion name that does not carry the source slot number");
+Reject(() => AnimationEditService.RetargetSlot(Pap(0, "cbem_pose03_2lp", "cbem_pose03_2st", secondFace: 0), slotSwap),
+    "a slot swap refuses a source with several body animations");
 foreach (var infoPadding in new[] { 0, 2, 5 })
 {
     var originalPap = Pap(infoPadding);
