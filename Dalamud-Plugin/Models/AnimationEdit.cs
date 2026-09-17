@@ -66,17 +66,16 @@ internal sealed record AnimationBakeRequest(Guid Id, AnimationCapture Capture, A
     public ImmutableArray<AnimationSlotSwap> SlotSwaps { get; init; } = SlotSwaps.IsDefault ? [] : SlotSwaps;
 }
 /// <summary>
-/// One numbered animation within a family that shares a directory and filename
-/// prefix, such as the standing poses <c>emote/pose01_loop.pap</c>..<c>pose06_loop.pap</c>
-/// or the chair-sitting <c>j_pose*</c> set beside them.
+/// One member of an animation family the player can switch between, such as the
+/// standing idles or the ground-sitting set. Most are numbered files like
+/// <c>emote/j_pose02_loop.pap</c>, but every family also has an unnumbered base
+/// member in another directory - <c>resident/jmn.pap</c> is ground-sit 0 - so a
+/// slot carries its path rather than computing it from a prefix and a number.
 /// </summary>
-internal sealed record AnimationSlot(string Directory, string Prefix, int Index, bool Startup)
+internal sealed record AnimationSlot(string Root, string Family, int Index, bool Startup, string PapPath)
 {
-    /// <summary>Stable identity of the family a slot belongs to, independent of its number.</summary>
-    public string Group => $"{Directory}/{Prefix}";
-    public string PapPath => $"{Directory}/{Prefix}{Index:D2}_{(Startup ? "start" : "loop")}.pap";
-    public AnimationSlot At(int index) => this with { Index = index };
-    public AnimationSlot Paired => this with { Startup = !Startup };
+    /// <summary>Identity of the family a slot belongs to, independent of its number.</summary>
+    public string Group => $"{Root}/{Family}";
 }
 
 internal sealed record AnimationSlotSwap(AnimationSlot Destination, AnimationSlot Source, string Option);

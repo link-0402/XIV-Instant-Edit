@@ -202,8 +202,8 @@ Use a development plugin installation and a test Penumbra collection. Record
 FFXIV, Dalamud, FFXIVClientStructs, Penumbra, SimpleHeels, and Instant Edit build
 versions. Keep the source mod and original PAP/SKLB available for comparisons.
 Record game paths, binding indices, partial indices, capture times, and job IDs.
-The job journal and staged PAPs are under the plugin configuration directory's
-`AnimationEdits/<job-id>` directory; managed PAP backups are under `Backups`.
+The job journal and staged PAPs are under the managed cache directory's
+`AnimationEdits/<job-id>` directory; managed PAP backups are under `backups`.
 
 ## Native round trips and transform parity
 
@@ -307,7 +307,7 @@ The job journal and staged PAPs are under the plugin configuration directory's
   restoration must refuse conflicting changes. Test moved/renamed mods, expired
   backups, a different player, and a different collection.
 - [ ] Test multiple successive edits and undo them in reverse order. Preserve the
-  recovery records across plugin restarts. PAP backups share the existing 30-day
+  recovery records across plugin restarts. PAP backups share the existing 7-day
   managed retention; expired backups must produce a clear recovery error.
 
 General keyframe editing, movement/combat animations, other race variants, and
@@ -332,6 +332,14 @@ verifying is that the destination timeline resolves the moved clip at all.
   replaces: the file sits at the destination game path, the PAP entry name carries
   the destination slot number, and the C009 motion path inside the embedded
   timeline carries the same name. Missing the third resolves nothing in game.
+- [ ] Swap each family's unnumbered base animation both ways: `idle.pap` with a
+  standing pose, `sit.pap` with a chair pose, `jmn.pap` with a ground pose. These
+  are the cases where the motion name changes length, so the embedded timeline has
+  to grow to fit it. Confirm the grown file still plays and still loads its own
+  sounds and effects.
+- [ ] Confirm discovery finds each base animation. It is probed in both the resident
+  and emote directories because the layout is not assumed; if neither resolves, the
+  base member is simply absent from the grid and that is a discovery bug to report.
 - [ ] Swap chair-sitting and ground-sitting families as well as standing poses.
   A family whose slots ship loop-only must not gain an invented startup.
 - [ ] Undo the edit and confirm every destination slot returns to its original

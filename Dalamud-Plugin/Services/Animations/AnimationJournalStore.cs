@@ -5,6 +5,7 @@ namespace InstantEdit.Services.Animations;
 
 internal sealed class AnimationJournalStore
 {
+    public static readonly TimeSpan Retention = TimeSpan.FromDays(7);
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, IncludeFields = true };
     private readonly string root;
     private string OffsetBackupPath => Path.Combine(root, "livepose-offset-backup.json");
@@ -13,6 +14,27 @@ internal sealed class AnimationJournalStore
         root = Path.Combine(Path.GetFullPath(configDirectory), "AnimationEdits");
         TextureFiles.EnsureLocalPath(root);
         Directory.CreateDirectory(root);
+        Cleanup();
+    }
+    public void Cleanup(DateTime? now = null)
+    {
+        var cutoff = (now ?? DateTime.UtcNow) - Retention;
+        foreach (var dir in Directory.EnumerateDirectories(root))
+        {
+            if (!Guid.TryParseExact(Path.GetFileName(dir), "N", out _)) continue;
+            var path = Path.Combine(dir, "journal.json");
+            try
+            {
+                if (!File.Exists(path)) continue;
+                var record = JsonSerializer.Deserialize<AnimationEditJournal>(File.ReadAllText(path), Json);
+                if (record is null || record.CreatedUtc > cutoff) continue;
+            }
+            catch (Exception e) when (e is IOException or JsonException or InvalidDataException)
+            {
+                continue;
+            }
+            Directory.Delete(dir, recursive: true);
+        }
     }
     public string DirectoryFor(Guid id)
     {

@@ -48,7 +48,7 @@ internal sealed class AnimationEditService : IDisposable
         poses = new LivePoseAdapter(pi, objects);
         catalog = new AnimationCatalog(data);
         resources = new AnimationResources(penumbra, data, framework, log);
-        journals = new AnimationJournalStore(pi.ConfigDirectory.FullName);
+        journals = new AnimationJournalStore(TextureFiles.EnsureCacheRoot(configuration.TextureCacheDirectory));
         recovery = journals.Load().ToImmutableArray();
         offsetBackup = journals.LoadOffsetBackup();
         commits = new AnimationCommitService(penumbra, resources, backups, journals);
@@ -341,22 +341,29 @@ internal sealed class AnimationEditService : IDisposable
     /// the motion data is untouched, so it never reaches the baker, the Havok round
     /// trip, or the live skeleton.
     /// </summary>
-    internal static byte[] RetargetSlot(byte[] papBytes, AnimationSlotSwap swap)
+    internal static byte[] RetargetSlot(byte[] sourceBytes, byte[] destinationBytes, AnimationSlotSwap swap)
     {
-        var pap = new AnimationPap(papBytes);
+        var source = new AnimationPap(sourceBytes);
+        var (entry, index) = Body(source, swap.Source.PapPath);
+        // Take the name the destination timeline already resolves by, rather than
+        // renumbering the source's. A family's base member is not numbered at all,
+        // so jmn.pap has no digits to rewrite into a pose slot.
+        var (target, _) = Body(new AnimationPap(destinationBytes), swap.Destination.PapPath);
+        if (entry.Name == target.Name) return sourceBytes;
+        // Both the entry name and the timeline's own reference to it must move, or
+        // the destination timeline resolves nothing.
+        return AnimationTimelineNames.Rename(source.WithEntryNames(new Dictionary<int, string> { [index] = target.Name }),
+            new Dictionary<string, string> { [entry.Name] = target.Name });
+    }
+
+    private static (AnimationPap.Entry Entry, int Index) Body(AnimationPap pap, string path)
+    {
         var body = pap.Entries.Select((entry, index) => (entry, index)).Where(e => e.entry.Face == 0).ToArray();
         if (body.Length != 1)
             throw new InvalidDataException(body.Length == 0
-                ? $"{swap.Source.PapPath} has no body animation to swap."
-                : $"{swap.Source.PapPath} contains several body animations; the swap source is ambiguous.");
-        var (entry, index) = body[0];
-        var renamed = AnimationSlots.Renumber(entry.Name, swap.Source.Index, swap.Destination.Index)
-            ?? throw new InvalidDataException(
-                $"'{entry.Name}' cannot be renumbered from slot {swap.Source.Index} to {swap.Destination.Index}.");
-        // Both the entry name and the timeline's own reference to it must move, or
-        // the destination timeline resolves nothing.
-        return AnimationTimelineNames.Rename(pap.WithEntryNames(new Dictionary<int, string> { [index] = renamed }),
-            new Dictionary<string, string> { [entry.Name] = renamed });
+                ? $"{path} has no body animation to swap."
+                : $"{path} contains several body animations; the swap is ambiguous.");
+        return body[0];
     }
 
     /// <summary>Slots discovered for the last group probed, keyed by that group.</summary>
@@ -374,21 +381,22 @@ internal sealed class AnimationEditService : IDisposable
     {
         SlotGroup = ""; Slots = []; SlotError = null;
         var found = ImmutableArray.CreateBuilder<AnimationSlot>();
-        for (var index = 0; index <= 15; index++)
-            foreach (var startup in new[] { false, true })
+        foreach (var slot in AnimationSlots.Candidates(template))
+        {
+            token.ThrowIfCancellationRequested();
+            // The base member's directory is offered twice; whichever resolves wins,
+            // and a family that already found its base skips the second candidate.
+            if (slot.Index == 0 && found.Any(existing => existing.Index == 0)) continue;
+            Status = $"Looking for {slot.PapPath}…";
+            try
             {
-                token.ThrowIfCancellationRequested();
-                var slot = template.At(index) with { Startup = startup };
-                Status = $"Looking for {slot.PapPath}…";
-                try
-                {
-                    var read = await resources.ReadAsync(capture.CollectionId, slot.PapPath, token);
-                    // A path that resolves but is not a readable PAP is not a slot.
-                    _ = new AnimationPap(read.Bytes);
-                    found.Add(slot);
-                }
-                catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException or InvalidDataException) { }
+                var read = await resources.ReadAsync(capture.CollectionId, slot.PapPath, token);
+                // A path that resolves but is not a readable PAP is not a slot.
+                _ = new AnimationPap(read.Bytes);
+                found.Add(slot);
             }
+            catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException or InvalidDataException) { }
+        }
         Slots = found.ToImmutable();
         SlotGroup = template.Group;
         SlotError = Slots.Any(slot => !slot.Startup) ? null : "No animations were found in this group.";
@@ -423,7 +431,9 @@ internal sealed class AnimationEditService : IDisposable
             Status = $"Preparing {swap.Option}…";
             if (!manifest.Files.TryGetValue(swap.Source.PapPath, out var bytes))
                 throw new InvalidDataException($"{swap.Source.PapPath} was not captured for this swap.");
-            outputs.Add(new AnimationOutput(swap.Destination.PapPath, swap.Option, RetargetSlot(bytes, swap)));
+            if (!manifest.Files.TryGetValue(swap.Destination.PapPath, out var destination))
+                throw new InvalidDataException($"{swap.Destination.PapPath} was not captured for this swap.");
+            outputs.Add(new AnimationOutput(swap.Destination.PapPath, swap.Option, RetargetSlot(bytes, destination, swap)));
         }
         var journal = await commits.PrepareAsync(request, manifest, outputs.ToImmutable(), token);
         recovery = recovery.Insert(0, journal);

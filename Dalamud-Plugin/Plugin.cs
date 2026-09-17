@@ -51,12 +51,13 @@ public sealed class Plugin : IDalamudPlugin
 
         _config    = pi.GetPluginConfig() as Configuration ?? new Configuration();
         var cacheConfigurationMigrated = MigrateCacheConfiguration(_config);
+        var cacheRoot = TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory);
         var pluginInstanceId = Guid.NewGuid().ToString("N");
         IReadOnlyList<Models.PersistedExportContext> persistedContexts = _config.ExportContexts;
         try
         {
             _contextStore = new ExportContextSessionStore(
-                pi.ConfigDirectory.FullName,
+                cacheRoot,
                 pluginInstanceId,
                 (message, error) =>
                 {
@@ -81,7 +82,7 @@ public sealed class Plugin : IDalamudPlugin
             _log.Error(error, "Could not initialize per-session context storage; retaining contexts in plugin settings.");
         }
         pi.UiBuilder.DisableUserUiHide = _config.KeepVisibleWhenUiHidden;
-        _backups   = new ModelBackupStore(pi.ConfigDirectory.FullName);
+        _backups   = new ModelBackupStore(cacheRoot);
         _penumbra  = new PenumbraService(pi, framework, log, objects, data, _backups);
         _onScreen  = new OnScreenService(objects, clientState, framework, _penumbra, log);
         _contexts  = new ExportContextRegistry(
@@ -102,7 +103,7 @@ public sealed class Plugin : IDalamudPlugin
             },
             _backups);
         _blender   = new BlenderClient(log, _contexts);
-        _textures = new TextureEditService(_penumbra, _config, pi.ConfigDirectory.FullName, _backups,
+        _textures = new TextureEditService(_penumbra, _config, cacheRoot, _backups,
             (error, message) => log.Warning(error, message));
         string? animationError = null;
         try { _animations = new AnimationEditService(pi, framework, objects, data, sigScanner, _penumbra, _backups, _config, log); }

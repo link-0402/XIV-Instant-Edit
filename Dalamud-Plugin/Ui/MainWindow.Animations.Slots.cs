@@ -45,10 +45,11 @@ public sealed partial class MainWindow
             ImGui.PushID(destination.Index);
             var source = animationSlotMap.GetValueOrDefault(destination.Index, destination.Index);
             ImGui.SetNextItemWidth(260);
+            var chosen = loops.FirstOrDefault(slot => slot.Index == source);
             if (ImGui.BeginCombo(AnimationPresentation.SlotName(destination, capture.Clip.Timeline, "Loop"),
-                    source == destination.Index
+                    source == destination.Index || chosen == null
                         ? "Unchanged"
-                        : AnimationPresentation.SlotName(destination.At(source), capture.Clip.Timeline, "Loop")))
+                        : AnimationPresentation.SlotName(chosen, capture.Clip.Timeline, "Loop")))
             {
                 if (ImGui.Selectable("Unchanged", source == destination.Index))
                     animationSlotMap.Remove(destination.Index);
