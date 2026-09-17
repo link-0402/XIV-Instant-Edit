@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using InstantEdit.Models;
@@ -9,7 +9,7 @@ namespace InstantEdit.Services.Animations;
 internal sealed record AnimationReference(string Path, string Kind);
 internal sealed record AnimationReferences(ImmutableArray<AnimationReference> References, ImmutableArray<string> Problems);
 /// <summary>One string a timeline entry points at, with the byte position it lives at.</summary>
-internal readonly record struct TimelineString(string Magic, int Position, string Value);
+internal readonly record struct TimelineString(string Magic, int Position, string Value, int Field, int Anchor);
 
 /// <summary>Bounded, format-aware readers. Unknown timeline constructs cannot silently produce an incomplete mod.</summary>
 internal static class AnimationDependencies
@@ -105,7 +105,7 @@ internal static class AnimationDependencies
                     {
                         references.Add(new AnimationReference(path,
                             magic == "C002" ? "timeline" : magic is "C009" or "C010" ? "animation" : "resource"));
-                        strings?.Add(new TimelineString(magic, (int)position, path));
+                        strings?.Add(new TimelineString(magic, (int)position, path, cursor + field, cursor + 8));
                     }
                 }
             }

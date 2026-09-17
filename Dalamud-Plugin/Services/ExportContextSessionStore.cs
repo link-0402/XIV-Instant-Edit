@@ -11,7 +11,7 @@ public sealed class ExportContextSessionStore
 {
     private const string Schema = "instant-edit.context-session";
     private const int Version = 1;
-    public static readonly TimeSpan Retention = TimeSpan.FromDays(30);
+    public static readonly TimeSpan Retention = TimeSpan.FromDays(7);
 
     private sealed record StoredUpsert(
         DateTimeOffset UpdatedAtUtc,

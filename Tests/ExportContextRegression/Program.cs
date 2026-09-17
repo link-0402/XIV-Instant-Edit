@@ -123,7 +123,7 @@ static void CheckSessionStore(string testRoot)
     var expiryReader = new ExportContextSessionStore(Path.Combine(testRoot, "ExpiredStore"),
         Guid.NewGuid().ToString("N"), now: storeNow);
     Require(expiryReader.Load(storeNow).Count == 0,
-        "inactive context records expire after 30 days");
+        "inactive context records expire after 7 days");
 
 }
 
@@ -155,7 +155,7 @@ try
     File.Move(managedBackup, oldBackup);
     backupStore.Cleanup();
     Require(!File.Exists(oldBackup) && File.Exists(adjacentBackup),
-        "30-day managed cleanup preserves existing adjacent backups");
+        "7-day managed cleanup preserves existing adjacent backups");
     var capability = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
     var saved = new PersistedExportContext
     {

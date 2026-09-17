@@ -10,7 +10,7 @@ public sealed record ManagedBackupTarget(string Id, string Directory);
 /// <summary>Plugin-owned backup history, isolated from Penumbra mod folders.</summary>
 public sealed partial class ModelBackupStore
 {
-    public static readonly TimeSpan Retention = TimeSpan.FromDays(30);
+    public static readonly TimeSpan Retention = TimeSpan.FromDays(7);
     private readonly string _root;
 
     public ModelBackupStore(string configDirectory)

@@ -88,11 +88,10 @@ internal static class AnimationPresentation
     /// </summary>
     internal static string SlotName(AnimationSlot slot, ushort timeline, string state)
     {
-        var chair = slot.Prefix.StartsWith("j_", StringComparison.Ordinal) || timeline is 642 or 643;
-        var ground = timeline is 653 or 654 || slot.Directory.Contains("ground", StringComparison.OrdinalIgnoreCase);
-        return chair ? $"Chair Sitting Idle {slot.Index} - {state}"
-            : ground ? $"Ground Sitting Idle {slot.Index} - {state}"
-            : $"Standing Idle - {state} {slot.Index}";
+        var label = AnimationSlots.Label(slot.Family, timeline);
+        return AnimationSlots.Resolve(slot.Family, timeline) == "standing"
+            ? $"{label} - {state} {slot.Index}"
+            : $"{label} {slot.Index} - {state}";
     }
 
     public static string AnimationState(AnimationCapture capture, bool startup) => startup ? "Startup" :

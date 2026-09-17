@@ -101,8 +101,19 @@ Check(motionRenamed.Length == papBytes.Length &&
     "renaming a timeline motion rewrites the C009 path in place without moving any offset");
 Check(AnimationDependencies.Read("x.pap", motionRenamed).References.Any(r => r.Path == "start"),
     "renaming one timeline motion leaves the other entry's timeline untouched");
-Reject(() => AnimationTimelineNames.Rename(papBytes, new Dictionary<string, string> { ["loop"] = "looping" }),
-    "a timeline motion rename that would change the string length is refused");
+// A longer name is appended to its own timeline and the entry re-pointed, so no
+// existing byte moves and no other displacement is invalidated.
+var motionGrown = AnimationTimelineNames.Rename(papBytes, new Dictionary<string, string> { ["loop"] = "looping" });
+var grownReferences = AnimationDependencies.Read("x.pap", motionGrown).References.Select(r => r.Path).ToArray();
+Check(motionGrown.Length > papBytes.Length && grownReferences.Contains("looping") &&
+      !grownReferences.Contains("loop") && grownReferences.Contains("start") &&
+      new AnimationPap(motionGrown).Havok.SequenceEqual(pap.Havok) &&
+      motionGrown.AsSpan(0, pap.TimelineOffset).SequenceEqual(papBytes.AsSpan(0, pap.TimelineOffset)),
+    "a timeline motion rename that needs more room grows its own timeline without disturbing the rest of the PAP");
+var motionShortened = AnimationTimelineNames.Rename(papBytes, new Dictionary<string, string> { ["start"] = "st" });
+Check(motionShortened.Length == papBytes.Length &&
+      AnimationDependencies.Read("x.pap", motionShortened).References.Select(r => r.Path).Contains("st"),
+    "a timeline motion rename that needs less room is written in place");
 Reject(() => AnimationTimelineNames.Rename(papBytes, new Dictionary<string, string> { ["absent"] = "absen2" }),
     "renaming a motion the timeline never references is refused");
 Reject(() => AnimationTimelineNames.Rename(papBytes, new Dictionary<string, string>()),
@@ -111,24 +122,43 @@ Reject(() => AnimationTimelineNames.Rename(papBytes, new Dictionary<string, stri
     "a timeline motion cannot be renamed to an unsafe name");
 // A slot swap is a file-level remap: motion data is untouched, so the whole
 // operation is offline-verifiable and never reaches the baker.
-const string slotDir = "chara/human/c0801/animation/a0001/bt_common/emote";
-AnimationSlot SwapSlot(int index, bool startup = false) => new(slotDir, "pose", index, startup);
-var slotPapBytes = Pap(0, "cbem_pose03_2lp", "cbem_pose03_2st");
+const string slotRoot = "chara/human/c0801/animation/a0001/bt_common";
+AnimationSlot SwapSlot(int index) => new(slotRoot, "standing", index, false, $"{slotRoot}/emote/pose{index:D2}_loop.pap");
+var slotSource = Pap(0, "cbem_pose03_2lp", "cbem_pose03_2st");
+var slotDestination = Pap(0, "cbem_pose06_2lp", "cbem_pose06_2st");
 var slotSwap = new AnimationSlotSwap(SwapSlot(6), SwapSlot(3), "Pose 3");
-var swappedBytes = AnimationEditService.RetargetSlot(slotPapBytes, slotSwap);
+var swappedBytes = AnimationEditService.RetargetSlot(slotSource, slotDestination, slotSwap);
 var swappedPap = new AnimationPap(swappedBytes);
 var swappedRefs = AnimationDependencies.Read("x.pap", swappedBytes).References.Select(r => r.Path).ToArray();
-Check(swappedBytes.Length == slotPapBytes.Length && swappedPap.Entries[0].Name == "cbem_pose06_2lp" &&
+Check(swappedBytes.Length == slotSource.Length && swappedPap.Entries[0].Name == "cbem_pose06_2lp" &&
       swappedPap.Entries[0].Binding == 0 && swappedPap.Entries[1] == new AnimationPap.Entry("cbem_pose03_2st", 3, 1, 1) &&
-      swappedPap.Havok.SequenceEqual(new AnimationPap(slotPapBytes).Havok) &&
+      swappedPap.Havok.SequenceEqual(new AnimationPap(slotSource).Havok) &&
       swappedRefs.Contains("cbem_pose06_2lp") && !swappedRefs.Contains("cbem_pose03_2lp"),
-    "a slot swap renumbers the body entry and its timeline motion while leaving the motion data and other entries alone");
+    "a slot swap takes the destination's motion name for the body entry and its timeline, leaving motion data and other entries alone");
 Check(swappedRefs.Contains("cbem_pose03_2st"),
     "a slot swap does not touch the face entry's timeline");
-Reject(() => AnimationEditService.RetargetSlot(Pap(0, "cbem_loop", "cbem_start"), slotSwap),
-    "a slot swap refuses a motion name that does not carry the source slot number");
-Reject(() => AnimationEditService.RetargetSlot(Pap(0, "cbem_pose03_2lp", "cbem_pose03_2st", secondFace: 0), slotSwap),
+// The base member of a family is not numbered, so its name is nothing like the
+// length of a pose slot's. Both directions have to work.
+var baseSource = Pap(0, "jmn", "jmn_f");
+var grown = AnimationEditService.RetargetSlot(baseSource, slotDestination,
+    new AnimationSlotSwap(SwapSlot(6), new AnimationSlot(slotRoot, "standing", 0, false, $"{slotRoot}/resident/jmn.pap"), "Base"));
+var grownRefs = AnimationDependencies.Read("x.pap", grown).References.Select(r => r.Path).ToArray();
+Check(grown.Length > baseSource.Length && new AnimationPap(grown).Entries[0].Name == "cbem_pose06_2lp" &&
+      new AnimationPap(grown).Havok.SequenceEqual(new AnimationPap(baseSource).Havok) &&
+      grownRefs.Contains("cbem_pose06_2lp") && !grownRefs.Contains("jmn") && grownRefs.Contains("jmn_f"),
+    "swapping a base animation into a numbered slot grows the timeline to fit the longer motion name");
+var shrunk = AnimationEditService.RetargetSlot(slotDestination, baseSource,
+    new AnimationSlotSwap(new AnimationSlot(slotRoot, "standing", 0, false, $"{slotRoot}/resident/jmn.pap"), SwapSlot(6), "Pose 6"));
+var shrunkRefs = AnimationDependencies.Read("x.pap", shrunk).References.Select(r => r.Path).ToArray();
+Check(shrunk.Length == slotDestination.Length && new AnimationPap(shrunk).Entries[0].Name == "jmn" &&
+      shrunkRefs.Contains("jmn") && !shrunkRefs.Contains("cbem_pose06_2lp"),
+    "swapping a numbered slot onto a base animation writes the shorter name in place");
+Check(AnimationEditService.RetargetSlot(slotSource, slotSource, slotSwap).SequenceEqual(slotSource),
+    "a swap between clips that already share a motion name rewrites nothing");
+Reject(() => AnimationEditService.RetargetSlot(Pap(0, "cbem_pose03_2lp", "cbem_pose03_2st", secondFace: 0), slotDestination, slotSwap),
     "a slot swap refuses a source with several body animations");
+Reject(() => AnimationEditService.RetargetSlot(slotSource, Pap(0, "a", "b", secondFace: 0), slotSwap),
+    "a slot swap refuses a destination with several body animations");
 foreach (var infoPadding in new[] { 0, 2, 5 })
 {
     var originalPap = Pap(infoPadding);
@@ -210,7 +240,9 @@ var standing = capture with
     DisplayName = "Idle", Playing = true,
     Clip = capture.Clip with { GamePath = "chara/human/c0801/animation/a0001/bt_common/resident/idle.pap", Timeline = 3,
         SkeletonPath = "chara/human/c0801/skeleton/base/b0001/skl_c0801b0001.sklb", Resolution = matched },
-    Startup = capture.Clip with { GamePath = "chara/human/c0801/animation/a0001/bt_common/emote/j_pose01_start.pap", Timeline = 642, Resolution = matched },
+    // Timeline 642 is chair sitting, so the path has to be the chair family's s_pose
+    // prefix. j_pose is ground sitting and would contradict the timeline.
+    Startup = capture.Clip with { GamePath = "chara/human/c0801/animation/a0001/bt_common/emote/s_pose01_start.pap", Timeline = 642, Resolution = matched },
 };
 var recentReady = standing with { Id = "recent", Playing = false, Startup = null, Clip = standing.Clip with
 { GamePath = "chara/human/c0801/animation/a0001/bt_common/resident/move_a.pap", Timeline = 13 } };
@@ -222,7 +254,7 @@ Check(listItems.Length == 4 && !listItems[0].Startup && listItems[1].Startup && 
 var waitingStartup = standing with { Startup = standing.Startup! with { Resolution = new(SkeletonResolutionState.Searching, []) } };
 Check(AnimationPresentation.ListItems([waitingStartup]) is [{ Startup: false }, { Startup: true }],
     "a detected startup remains visible with its active loop while its skeleton is prepared");
-Check(AnimationPresentation.AnimationName(standing) == "Standing Idle - Loop 1" &&
+Check(AnimationPresentation.AnimationName(standing) == "Standing Idle - Loop 0" &&
       AnimationPresentation.AnimationName(standing, true) == "Chair Sitting Idle 1 - Startup" &&
       AnimationPresentation.AnimationName(recentReady) == "Movement - Running" &&
       AnimationPresentation.AnimationName(capture with { DisplayName = "Joy" }) == "Joy" &&
