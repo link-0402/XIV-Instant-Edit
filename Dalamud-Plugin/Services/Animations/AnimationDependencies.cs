@@ -8,6 +8,8 @@ namespace InstantEdit.Services.Animations;
 
 internal sealed record AnimationReference(string Path, string Kind);
 internal sealed record AnimationReferences(ImmutableArray<AnimationReference> References, ImmutableArray<string> Problems);
+/// <summary>One string a timeline entry points at, with the byte position it lives at.</summary>
+internal readonly record struct TimelineString(string Magic, int Position, string Value);
 
 /// <summary>Bounded, format-aware readers. Unknown timeline constructs cannot silently produce an incomplete mod.</summary>
 internal static class AnimationDependencies
@@ -62,7 +64,15 @@ internal static class AnimationDependencies
         return new AnimationReferences(references.Distinct().ToImmutableArray(), problems.Distinct().ToImmutableArray());
     }
 
-    private static int ReadTimeline(byte[] bytes, int start, List<AnimationReference> references, List<string> problems)
+    /// <summary>
+    /// Locate every string a timeline points at, sharing the reader's parser so a
+    /// rewriter can never disagree with dependency discovery about where they are.
+    /// </summary>
+    internal static int CollectTimelineStrings(byte[] bytes, int start, List<TimelineString> strings)
+        => ReadTimeline(bytes, start, [], [], strings);
+
+    private static int ReadTimeline(byte[] bytes, int start, List<AnimationReference> references, List<string> problems,
+        List<TimelineString>? strings = null)
     {
         if (start < 0 || start > bytes.Length - 12 || !bytes.AsSpan(start, 4).SequenceEqual("TMLB"u8))
             throw new InvalidDataException("Invalid animation timeline header.");
@@ -91,8 +101,12 @@ internal static class AnimationDependencies
                     var position = (long)cursor + 8 + displacement;
                     if (position < start || position >= end) throw new InvalidDataException($"Invalid {magic} string offset.");
                     var path = ReadString(bytes, (int)position, end);
-                    if (path.Length > 0) references.Add(new AnimationReference(path,
-                        magic == "C002" ? "timeline" : magic is "C009" or "C010" ? "animation" : "resource"));
+                    if (path.Length > 0)
+                    {
+                        references.Add(new AnimationReference(path,
+                            magic == "C002" ? "timeline" : magic is "C009" or "C010" ? "animation" : "resource"));
+                        strings?.Add(new TimelineString(magic, (int)position, path));
+                    }
                 }
             }
             cursor += size;
