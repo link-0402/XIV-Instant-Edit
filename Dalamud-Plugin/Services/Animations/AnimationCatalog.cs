@@ -9,6 +9,10 @@ internal sealed class AnimationCatalog
 {
     internal sealed record Timeline(ushort Id, string Key, string Name, byte LoadType, bool Loop,
         ImmutableArray<ushort> Family, ImmutableArray<ushort> Startups);
+    /// <summary>A selectable facial expression: its timeline key and the motion a body clip names to play it.</summary>
+    internal sealed record FacialClip(ushort Id, string Key, string Name, string Motion);
+    private readonly Dictionary<ushort, string> facialKeys = [];
+    private ImmutableArray<FacialClip>? facialClips;
     private readonly Dictionary<ushort, Timeline> timelines = [];
     private readonly Dictionary<string, string> motions = new(StringComparer.Ordinal);
     private readonly Func<string, byte[]?> readTimeline;
@@ -67,6 +71,57 @@ internal sealed class AnimationCatalog
             var file = motion.Filename.ExtractText();
             if (file.Length > 0) motions.TryAdd(motion.RowId.ToString(), file);
         }
+        // Facial rows are not part of any emote family, so they never reach the
+        // timeline table; they are collected separately for expression selection.
+        foreach (var row in sheet)
+        {
+            if (row.RowId is 0 or > ushort.MaxValue || row.Key.IsEmpty) continue;
+            var key = row.Key.ExtractText();
+            if (row.LoadType == 0 && key.StartsWith(FacialPrefix, StringComparison.Ordinal))
+                facialKeys.TryAdd((ushort)row.RowId, key);
+        }
+    }
+
+    private const string FacialPrefix = "facial/pose/";
+
+    /// <summary>
+    /// Every facial expression the game can play, with the motion name a body
+    /// animation uses to request it. The link is only in the facial timeline's own
+    /// TMB, so it is resolved by reading them, once, on first use.
+    /// </summary>
+    public ImmutableArray<FacialClip> FacialClips(CancellationToken token)
+    {
+        if (facialClips is { } cached) return cached;
+        var result = ImmutableArray.CreateBuilder<FacialClip>();
+        foreach (var (id, key) in facialKeys.OrderBy(pair => pair.Key))
+        {
+            token.ThrowIfCancellationRequested();
+            if (!AnimationDependencies.SafeGamePath(key)) continue;
+            var path = $"chara/action/{key}.tmb";
+            if (readTimeline(path) is not { } bytes) continue;
+            string[] motions;
+            try
+            {
+                motions = AnimationDependencies.Read(path, bytes).References
+                    .Where(reference => reference.Kind == "animation")
+                    .Select(reference => reference.Path).Distinct(StringComparer.Ordinal).ToArray();
+            }
+            catch (InvalidDataException) { continue; }
+            // An expression that names several motions is ambiguous to select by.
+            if (motions.Length != 1 || !AnimationTimelineNames.IsSafeMotionName(motions[0])) continue;
+            result.Add(new FacialClip(id, key, FacialName(key), motions[0]));
+        }
+        facialClips = result.ToImmutable();
+        return facialClips.Value;
+    }
+
+    internal static string FacialName(string key)
+    {
+        var name = key.StartsWith(FacialPrefix, StringComparison.Ordinal) ? key[FacialPrefix.Length..] : key;
+        var words = name.Split('_', StringSplitOptions.RemoveEmptyEntries)
+            .Select(word => char.ToUpperInvariant(word[0]) + word[1..]);
+        var label = string.Join(' ', words);
+        return label.Length == 0 ? key : label;
     }
     public Timeline? Find(ushort id) => timelines.GetValueOrDefault(id);
     private static ImmutableArray<string> PapKeys(Timeline timeline) => timeline.Key switch

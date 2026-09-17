@@ -6,7 +6,7 @@ namespace InstantEdit.Models;
 [Flags]
 internal enum PoseComponents { None = 0, Position = 1, Rotation = 2, Scale = 4, All = 7 }
 internal enum AnimationDestination { NewMod, InPlace }
-internal enum AnimationOperation { BakeOffsets, RepairSkeleton, CreateStartup, SwapSlots }
+internal enum AnimationOperation { BakeOffsets, RepairSkeleton, CreateStartup, SwapSlots, AttachFace }
 internal enum AnimationStartupPose { ReferencePose, CharacterIdle }
 internal enum SkeletonResolutionState { Searching, Matched, Ambiguous, Incompatible }
 internal enum SkeletonSourceKind { Collection, Game, Mod }
@@ -61,7 +61,7 @@ internal sealed record AnimationBakeRequest(Guid Id, AnimationCapture Capture, A
     AnimationOperation Operation = AnimationOperation.BakeOffsets,
     // Retained for old journal deserialization only; never bypasses source compatibility.
     bool AllowClosestSkeletonRepair = false, AnimationStartupOptions? StartupOptions = null,
-    ImmutableArray<AnimationSlotSwap> SlotSwaps = default)
+    ImmutableArray<AnimationSlotSwap> SlotSwaps = default, AnimationFaceOptions? FaceOptions = null)
 {
     public ImmutableArray<AnimationSlotSwap> SlotSwaps { get; init; } = SlotSwaps.IsDefault ? [] : SlotSwaps;
 }
@@ -79,6 +79,8 @@ internal sealed record AnimationSlot(string Root, string Family, int Index, bool
 }
 
 internal sealed record AnimationSlotSwap(AnimationSlot Destination, AnimationSlot Source, string Option);
+/// <summary>Swap the facial motion a body animation plays for another expression's.</summary>
+internal sealed record AnimationFaceOptions(string FromMotion, string ToMotion, string Expression);
 internal sealed record AnimationStartupOptions(AnimationStartupPose Pose, float DurationSeconds);
 internal sealed record AnimationStartupSource(AnimationClip Clip, AnimationResource Resource, byte[] Pap, byte[] Skeleton);
 internal sealed record AnimationDependencyManifest(ImmutableArray<AnimationResource> Resources,

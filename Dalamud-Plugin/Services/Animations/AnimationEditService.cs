@@ -366,6 +366,80 @@ internal sealed class AnimationEditService : IDisposable
         return body[0];
     }
 
+    /// <summary>Facial expressions available to attach, resolved from the game's facial timelines.</summary>
+    public ImmutableArray<AnimationCatalog.FacialClip> Faces { get; private set; } = [];
+    /// <summary>The facial motion the inspected animation currently plays, and which capture that was.</summary>
+    public string FaceCurrent { get; private set; } = "";
+    public string FaceCapture { get; private set; } = "";
+    public string? FaceError { get; private set; }
+
+    public void DiscoverFaces(AnimationCapture capture) => Launch(async token =>
+    {
+        Faces = []; FaceCurrent = ""; FaceCapture = ""; FaceError = null;
+        Status = "Reading this animation's facial reference…";
+        // Which face plays is recorded inside the animation itself, so it has to be
+        // read rather than inferred from the live pose's facial timeline.
+        var animation = await resources.ReadAsync(capture.CollectionId, capture.Clip.GamePath, token);
+        var external = AnimationFaces.ExternalMotions(animation.Bytes);
+        if (external.IsEmpty)
+        {
+            FaceCapture = capture.Id;
+            FaceError = "This animation does not play a facial expression, so there is none to swap.";
+            Status = FaceError; return;
+        }
+        Status = "Reading the game's facial expressions…";
+        var clips = await Task.Run(() => catalog.FacialClips(token), token);
+        Faces = clips; FaceCurrent = external[0]; FaceCapture = capture.Id;
+        FaceError = clips.IsEmpty ? "No facial expressions could be resolved from the game's timelines." : null;
+        Status = FaceError ?? $"This animation plays {external[0]}; {clips.Length} expressions are available.";
+    }, clip: capture.Clip);
+
+    public void AttachFace(AnimationBakeRequest request) => Launch(async token =>
+    {
+        if (request.Operation != AnimationOperation.AttachFace)
+            throw new InvalidOperationException("This request is not a facial attachment.");
+        if (request.FaceOptions is not { } options)
+            throw new InvalidOperationException("Choose a facial expression first.");
+        if (request.Destination == AnimationDestination.NewMod && !PenumbraService.IsSafeNewModName(request.ModName))
+            throw new InvalidDataException("Choose a valid mod name before attaching a face.");
+        if (request.Capture.UnavailableReason != null) throw new InvalidOperationException(request.Capture.UnavailableReason);
+        if (request.Destination == AnimationDestination.NewMod && request.Capture.PackagingError != null)
+            throw new InvalidDataException(request.Capture.PackagingError);
+
+        var clip = request.Capture.Clip;
+        await CheckActorAsync(request.Capture, false);
+        await resources.CheckAsync(request.Capture.CollectionId, request.Capture.Sources, token);
+        Status = "Capturing the animation being retargeted…";
+        AnimationDependencyManifest manifest;
+        if (request.Destination == AnimationDestination.NewMod)
+            manifest = await resources.ManifestAsync(request.Capture, catalog, [clip.GamePath], [clip.GamePath], token);
+        else
+        {
+            var values = new List<(AnimationResource Resource, byte[] Bytes)>();
+            foreach (var path in request.Capture.Sources.Select(s => s.GamePath).Distinct())
+                values.Add(await resources.ReadAsync(request.Capture.CollectionId, path, token));
+            manifest = new AnimationDependencyManifest(values.Select(v => v.Resource).ToImmutableArray(),
+                values.ToImmutableDictionary(v => v.Resource.GamePath, v => v.Bytes));
+        }
+        if (!manifest.Files.TryGetValue(clip.GamePath, out var bytes))
+            throw new InvalidDataException($"{clip.GamePath} was not captured for this edit.");
+        Status = $"Attaching {options.Expression}…";
+        var output = AnimationFaces.Retarget(bytes, options.FromMotion, options.ToMotion);
+        var journal = await commits.PrepareAsync(request, manifest, [new AnimationOutput(clip.GamePath, "", output)], token);
+        recovery = recovery.Insert(0, journal);
+        await commits.CommitAsync(journal, manifest, () => CheckActorAsync(request.Capture, false), message =>
+        {
+            Status = message;
+            if (message.StartsWith("Committing", StringComparison.Ordinal)) CanCancel = false;
+        }, token);
+        if (request.Destination == AnimationDestination.InPlace)
+            Observer.UpdateSources(request.Capture.Id, request.Capture.Sources.Select(s =>
+                journal.Files.FirstOrDefault(f => f.GamePath == s.GamePath) is { } file ? s with { Hash = file.AfterHash } : s).ToImmutableArray());
+        journal.State = "Completed"; journal.PoseClearOutcome = "NotApplicable";
+        journal.Message = $"{options.Expression} attached. Live offsets were retained.";
+        journals.Save(journal); Status = journal.Message;
+    }, request.Id, request.Capture.Clip);
+
     /// <summary>Slots discovered for the last group probed, keyed by that group.</summary>
     public string SlotGroup { get; private set; } = "";
     public ImmutableArray<AnimationSlot> Slots { get; private set; } = [];

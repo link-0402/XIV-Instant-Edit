@@ -325,6 +325,7 @@ public sealed partial class MainWindow
         ImGui.EndDisabled();
 
         DrawStartupTransitionAction(capture);
+        DrawFaceAction(capture);
         DrawSlotSwapAction(capture);
     }
 
