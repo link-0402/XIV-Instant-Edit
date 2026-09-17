@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using InstantEdit.Models;
@@ -325,6 +325,7 @@ public sealed partial class MainWindow
         ImGui.EndDisabled();
 
         DrawStartupTransitionAction(capture);
+        DrawRetimeAction(capture);
         DrawFaceAction(capture);
         DrawSlotSwapAction(capture);
     }

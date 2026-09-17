@@ -185,6 +185,15 @@ internal sealed class AnimationEditService : IDisposable
                 !AnimationPoseRules.ValidStartupDuration(options.DurationSeconds))
                 throw new InvalidDataException("Startup transition duration must be between 0 and 2 seconds.");
         }
+        if (request.Operation == AnimationOperation.Retime)
+        {
+            if (request.RetimeOptions is not { } retime || !AnimationPoseRules.ValidRetimeDuration(retime.DurationSeconds))
+                throw new InvalidDataException("The new animation length must be above 0 and at most 600 seconds.");
+            if (request.Capture.Clip.Duration <= 0)
+                throw new InvalidOperationException("This animation's length is unknown, so it cannot be retimed.");
+            if (request.IncludeStartup)
+                throw new InvalidOperationException("Retiming applies to the selected clip only; clear Include startup first.");
+        }
         if (request.Operation == AnimationOperation.BakeOffsets)
         {
             if (request.Capture.PoseUnavailableReason != null) throw new InvalidOperationException(request.Capture.PoseUnavailableReason);
@@ -267,13 +276,21 @@ internal sealed class AnimationEditService : IDisposable
             var skeletonBytes = clip.Resolution?.Selected is { } selected
                 ? (await resources.ReadSkeletonAsync(request.Capture.CollectionId, selected.Source, token)).Bytes
                 : manifest.Files[clip.SkeletonPath];
-            outputs[clip.GamePath] = await baker.BakeAsync(source, skeletonBytes, clip, request, dir, message => Status = message, token,
+            var baked = await baker.BakeAsync(source, skeletonBytes, clip, request, dir, message => Status = message, token,
                 () =>
                 {
                     CheckIdentityOnFramework(request.Capture, true);
                     if (requiresLiveSkeleton) AnimationRuntime.CheckPartial(objects, request.Capture.Clip);
                     if (request.Operation == AnimationOperation.BakeOffsets) poses.CheckModule(request.Capture.Pose);
                 });
+            // The motion is now a different length, so the events its timeline fires
+            // have to move with it or the footsteps and sounds drift out of step.
+            if (request.Operation == AnimationOperation.Retime)
+            {
+                Status = "Retiming the animation's timeline events…";
+                baked = AnimationTimelineCodec.Scale(baked, request.RetimeOptions!.DurationSeconds / clip.Duration);
+            }
+            outputs[clip.GamePath] = baked;
         }
         var journal = await commits.PrepareAsync(request, manifest,
             [.. outputs.Select(output => new AnimationOutput(output.Key, "", output.Value))], token);
@@ -305,9 +322,12 @@ internal sealed class AnimationEditService : IDisposable
         if (request.Operation != AnimationOperation.BakeOffsets)
         {
             journal.State = "Completed"; journal.PoseClearOutcome = "NotApplicable";
-            journal.Message = request.Operation == AnimationOperation.CreateStartup
-                ? "Startup transition activated. Live offsets were retained."
-                : "Repaired animation activated. Live offsets were retained.";
+            journal.Message = request.Operation switch
+            {
+                AnimationOperation.CreateStartup => "Startup transition activated. Live offsets were retained.",
+                AnimationOperation.Retime => "Retimed animation activated. Live offsets were retained.",
+                _ => "Repaired animation activated. Live offsets were retained.",
+            };
             journals.Save(journal); Status = journal.Message; return;
         }
         // Record clearing intent first. A restart can compare live state against both sides of this exact scope.

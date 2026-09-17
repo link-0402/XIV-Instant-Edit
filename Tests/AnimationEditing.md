@@ -311,8 +311,29 @@ The job journal and staged PAPs are under the managed cache directory's
   managed retention; expired backups must produce a clear recovery error.
 
 General keyframe editing, movement/combat animations, other race variants, and
-editing separate companion/weapon rigs are outside this release. Unsupported
+editing separate companion/weapon rigs are outside this release. Clip length is no
+longer fixed: retiming resamples a clip onto a new length and rescales its timeline
+events to match, though clips carrying root motion are still refused. Unsupported
 dependency constructs are a packaging boundary, not permission to omit assets.
+
+## Animation length live acceptance (pending)
+
+Retiming is the first new operation that samples motion through Havok and writes a
+clip whose declared length differs from the one it read, so unlike slot swapping and
+facial attachment the native checks above all apply to it.
+
+- [ ] Retime an emote longer and shorter. The motion must play at the new speed with
+  no stutter at either end, and the last sample must land exactly on the new length.
+- [ ] Confirm footsteps, sounds and effects stay in step with the motion at both
+  lengths. They are rescaled by the same factor as the clip; a drift means the
+  timeline codec and the bake disagreed about the factor.
+- [ ] Retime a clip that carries root motion and confirm it is refused with a clear
+  reason rather than desynchronising its displacement.
+- [ ] Retime the same clip twice in a row and confirm the second edit scales from the
+  already-retimed length, not the original.
+- [ ] Drag the length bar and confirm the handle lands on whole frames, matching the
+  number typed into the field beside it.
+- [ ] Undo and confirm both the motion and its event timing return to the original.
 
 ## Facial expression live acceptance (pending)
 
