@@ -15,6 +15,7 @@ static void Int(byte[] bytes, int at, int value) => BinaryPrimitives.WriteInt32L
 SkeletonRepairFixture.Run(Check, Reject);
 AnimationFramesFixture.Run(Check, Reject);
 AnimationSlotFixture.Run(Check, Reject);
+AnimationFaceFixture.Run(Check, Reject);
 ChartSkeletonFixture.Run(Check);
 EmbeddedSkeletonFixture.Run(Check, Reject);
 if (args is ["--skeleton-repair-xml", var animationXml, var skeletonXml])

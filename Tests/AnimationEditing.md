@@ -314,6 +314,28 @@ General keyframe editing, movement/combat animations, other race variants, and
 editing separate companion/weapon rigs are outside this release. Unsupported
 dependency constructs are a packaging boundary, not permission to omit assets.
 
+## Facial expression live acceptance (pending)
+
+Attaching an expression rewrites only the animation's own reference to the facial
+motion it plays. No motion data is decoded and no face file is copied into the mod,
+so the expression must already exist for the character's face variant.
+
+- [ ] On an animation that plays a face, read its expression and confirm the
+  reported motion matches what the file actually names. The documented case is
+  `pose01_loop.pap` naming `cfxf_bad`, which ActionTimeline 622 (`facial/pose/bad`)
+  resolves to `nonresident/bad.pap` for the tested c0801/f0002 variant.
+- [ ] Attach a different expression and confirm the character plays it with the body
+  animation unchanged.
+- [ ] Confirm an expression whose clip the character's face variant does not contain
+  fails cleanly rather than playing nothing. Expression discovery reads the game's
+  facial timelines and does not know which variants ship which clip; if that turns
+  out to matter, the list needs filtering per variant.
+- [ ] Attach an expression whose motion name is longer than the current one, which
+  grows the embedded timeline, and confirm the animation still plays.
+- [ ] Select an animation that plays no face and confirm the section says so rather
+  than offering an attachment.
+- [ ] Undo and confirm the original expression returns.
+
 ## Slot swapping live acceptance (pending)
 
 Slot swapping is a file-level remap: the motion data is never decoded, compressed
