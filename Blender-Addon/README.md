@@ -45,7 +45,7 @@ plus a standalone Simple Import/Export panel.
   mounts after Quick Export.
 - Simple Export to MDL, FBX, or glTF for visible mesh objects, with an explicit
   `All except...` mesh exclusion option.
-- Simple Import from MDL or FBX files.
+- Simple Import from MDL, FBX, or glTF (.gltf/.glb) files.
 - Simple Import/Export settings are separated into dedicated option sections,
   including the import-time export-folder setting.
 - Export-time UV2 copy/clear, vertex color/alpha cleanup, and flow-data cleanup.
