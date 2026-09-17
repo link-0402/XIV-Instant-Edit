@@ -387,7 +387,7 @@ class XIVIE_OT_simple_export(Operator):
 class XIVIE_OT_simple_import(Operator):
     bl_idname = "xiv_ie.simple_import"
     bl_label = "Simple Import"
-    bl_description = "Import an MDL or FBX file into the current scene"
+    bl_description = "Import an MDL, FBX, or glTF file into the current scene"
     bl_options = {"REGISTER", "UNDO"}
 
     filepath: StringProperty(options={"HIDDEN"})  # type: ignore
@@ -396,6 +396,7 @@ class XIVIE_OT_simple_import(Operator):
         items=[
             ("MDL", "MDL", "FFXIV model"),
             ("FBX", "FBX", "Autodesk FBX"),
+            ("GLTF", "glTF", "glTF"),
         ],
         default="MDL",
         options={"HIDDEN", "SKIP_SAVE"},
@@ -408,20 +409,21 @@ class XIVIE_OT_simple_import(Operator):
     def invoke(self, context: Context, event):
         settings = get_settings()
         self.import_format = settings.import_format
-        self.filter_glob = {"MDL": "*.mdl", "FBX": "*.fbx"}[self.import_format]
+        self.filter_glob = {"MDL": "*.mdl", "FBX": "*.fbx", "GLTF": "*.gltf;*.glb"}[self.import_format]
         context.window_manager.fileselect_add(self)
         return {"RUNNING_MODAL"}
 
     def execute(self, context: Context):
         file_path = Path(bpy.path.abspath(self.filepath)).resolve()
         import_format = self.import_format
-        expected_suffix = {"MDL": ".mdl", "FBX": ".fbx"}[import_format]
+        expected_suffixes = {"MDL": (".mdl",), "FBX": (".fbx",), "GLTF": (".gltf", ".glb")}[import_format]
         settings = get_settings()
         skeleton = settings.simple_import_skeleton
         use_existing_skeleton = settings.simple_import_use_existing_skeleton
 
-        if not file_path.is_file() or file_path.suffix.casefold() != expected_suffix:
-            self.report({"ERROR"}, f"Choose a valid {expected_suffix[1:].upper()} file.")
+        if not file_path.is_file() or file_path.suffix.casefold() not in expected_suffixes:
+            valid = "/".join(suffix[1:].upper() for suffix in expected_suffixes)
+            self.report({"ERROR"}, f"Choose a valid {valid} file.")
             return {"CANCELLED"}
         if use_existing_skeleton and (skeleton is None or skeleton.type != "ARMATURE"):
             self.report({"ERROR"}, "Choose an existing Blender Armature for the imported meshes.")
@@ -452,10 +454,13 @@ class XIVIE_OT_simple_import(Operator):
                     )
             else:
                 with _new_objects_since() as tracker:
-                    result = bpy.ops.import_scene.fbx(
-                        filepath=str(file_path),
-                        colors_type="LINEAR",
-                    )
+                    if import_format == "FBX":
+                        result = bpy.ops.import_scene.fbx(
+                            filepath=str(file_path),
+                            colors_type="LINEAR",
+                        )
+                    else:
+                        result = bpy.ops.import_scene.gltf(filepath=str(file_path))
                     if "FINISHED" not in result:
                         return set(result)
                 imported_objects = tracker.created

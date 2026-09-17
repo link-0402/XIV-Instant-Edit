@@ -250,12 +250,14 @@ def _draw_status_popover_body(layout, context: Context, message: str, icon: str 
 
 
 class XIVIE_PT_export_target_status_popover(Panel):
-    """Anchored popover with the full, word-wrapped Export Target status."""
+    """Pop out full export status message."""
 
     bl_idname = "XIVIE_PT_export_target_status_popover"
     bl_label = "Export Target Status"
     bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
+    # HEADER (not UI) keeps this out of the sidebar's tab list - it's only
+    # ever shown anchored via layout.popover(), never as its own N-panel tab.
+    bl_region_type = "HEADER"
     bl_ui_units_x = 20
 
     def draw(self, context: Context) -> None:
@@ -277,12 +279,14 @@ class XIVIE_PT_export_target_status_popover(Panel):
 
 
 class XIVIE_PT_last_status_popover(Panel):
-    """Anchored popover with the full, word-wrapped last-action status."""
+    """Pop out full last status message."""
 
     bl_idname = "XIVIE_PT_last_status_popover"
     bl_label = "XIV Instant Edit Status"
     bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
+    # HEADER (not UI) keeps this out of the sidebar's tab list - it's only
+    # ever shown anchored via layout.popover(), never as its own N-panel tab.
+    bl_region_type = "HEADER"
     bl_ui_units_x = 20
 
     def draw(self, context: Context) -> None:
@@ -296,7 +300,9 @@ class XIVIE_PT_last_status_popover(Panel):
 class XIVIE_PT_main(Panel):
     bl_idname = "XIVIE_PT_main"
     bl_label = "XIV Instant Edit"
-    bl_category = "XIV Instant Edit"
+    # "XI" collides with Yet Another Addon's sidebar tab; leading "IE" keeps
+    # the abbreviated tab label distinct from it.
+    bl_category = "IE - Instant Edit"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
 
