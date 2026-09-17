@@ -16,6 +16,7 @@ SkeletonRepairFixture.Run(Check, Reject);
 AnimationFramesFixture.Run(Check, Reject);
 AnimationSlotFixture.Run(Check, Reject);
 AnimationFaceFixture.Run(Check, Reject);
+AnimationTimelineCodecFixture.Run(Check, Reject);
 ChartSkeletonFixture.Run(Check);
 EmbeddedSkeletonFixture.Run(Check, Reject);
 if (args is ["--skeleton-repair-xml", var animationXml, var skeletonXml])
