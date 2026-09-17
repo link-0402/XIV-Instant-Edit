@@ -18,10 +18,20 @@ internal sealed record ChangelogRelease(
 
 internal static class ChangelogCatalog
 {
-    public const string CurrentVersion = "1.2.1";
+    public const string CurrentVersion = "1.2.2";
 
     public static IReadOnlyList<ChangelogRelease> Releases { get; } =
     [
+        Release("1.2.2",
+            Entry("Added glTF (.gltf/.glb) support to Simple Import in the Blender add-on."),
+            Entry("Fixed the Blender add-on's sidebar tab label colliding with Yet Another Addon's."),
+            Entry("Improved performance of on-screen resource source lookups for large mod lists."),
+            Entry("Streamlined the On Screen resource tree to only show items Instant Edit can actually edit."),
+            Entry("Fixed a mesh-renaming bug in the Toolbox where hidden objects could block valid renames."),
+            Entry("Fixed a Quick Export validation edge case involving stray Penumbra mod identities."),
+            Entry("Reduced managed Blender cache backup retention from 30 to 7 days."),
+            Entry("Simplified Quick Export's automatic Penumbra attribute-group toggle."),
+            Entry("Various internal cleanup and refactoring.")),
         Release("1.2.1",
             Entry("Improved Blender status message display and fixed a performance issue with Blender UI draw calls; hidden part tags are now suppressed."),
             Entry("Various internal cleanup and refactoring.")),
