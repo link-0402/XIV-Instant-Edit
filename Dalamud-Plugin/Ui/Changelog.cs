@@ -18,10 +18,14 @@ internal sealed record ChangelogRelease(
 
 internal static class ChangelogCatalog
 {
-    public const string CurrentVersion = "1.2.2";
+    public const string CurrentVersion = "1.2.3";
 
     public static IReadOnlyList<ChangelogRelease> Releases { get; } =
     [
+        Release("1.2.3",
+            Entry("Improved material previews for hair, eyebrows, and eyelashes in the Blender add-on."),
+            Entry("Fixed a stale warning that could appear after creating a Mashup."),
+            Entry("The Toolbox now highlights the currently selected mesh part.")),
         Release("1.2.2",
             Entry("Added glTF (.gltf/.glb) support to Simple Import in the Blender add-on."),
             Entry("Fixed the Blender add-on's sidebar tab label colliding with Yet Another Addon's."),
