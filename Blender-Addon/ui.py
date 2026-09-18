@@ -519,6 +519,7 @@ class XIVIE_PT_main(Panel):
             drag_state if drag_state is not None else ("", -1, -1, None, "")
         )
         groups = material_group_slots(occupied_groups, drag_maximum)
+        selected_objects = set(context.selected_objects)
 
         columns = box.row(align=True).split(factor=0.4, align=True)
         for title in ("OBJECT", "PART", "ATTR"):
@@ -602,6 +603,7 @@ class XIVIE_PT_main(Panel):
                     and drag_part == part
                     and drag_instance == part_instance.instance_key
                 )
+                part_is_selected = any(obj in selected_objects for obj in part_objects)
                 material_mismatch = part in mismatch_parts
                 object_row.alert = material_mismatch and not part_is_dragged
 
@@ -613,7 +615,8 @@ class XIVIE_PT_main(Panel):
                 rename = name_row.operator(
                     "xiv_ie.rename_mesh_part",
                     text=mesh_display_name(representative),
-                    emboss=False,
+                    emboss=part_is_selected,
+                    depress=part_is_selected,
                 )
                 rename.mesh_group = group.mesh_index
                 rename.mesh_part = part

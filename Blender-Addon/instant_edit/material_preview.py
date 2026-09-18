@@ -379,6 +379,75 @@ def _build_character_base(preview: PreviewMaterial):
     return np.clip(base_pixels, 0.0, 1.0), index_texture
 
 
+# xivModdingFramework's own un-customized preview defaults (ModelTexture.cs,
+# CustomModelColors.HairColor / HairHighlightColor) — the closest thing to a
+# "correct" placeholder since the real color is a per-character dye value
+# that hair.shpk materials don't carry in the .mtrl itself.
+_HAIR_COLOR_DEFAULT = np.array([110, 77, 35], dtype=np.float32) / 255.0
+_HAIR_HIGHLIGHT_DEFAULT = np.array([91, 110, 129], dtype=np.float32) / 255.0
+
+# Shader constant id for the alpha threshold multiplier (xivModdingFramework
+# ModelTexture.GetShaderMapper: ConstantId 699138595).
+_ALPHA_THRESHOLD_CONSTANT_ID = 699138595
+
+
+def _shader_constant_values(preview: PreviewMaterial, constant_id: int) -> list | None:
+    for constant in preview.shader_constants:
+        if constant.get("id") == constant_id:
+            return constant.get("values")
+    return None
+
+
+def _can_build_hair_preview(preview: PreviewMaterial) -> bool:
+    return (
+        not any(texture.usage == "diffuse" for texture in preview.textures)
+        and _first_texture(preview, "mask") is not None
+        and _first_texture(preview, "normal") is not None
+    )
+
+
+def _build_hair_preview(preview: PreviewMaterial):
+    """Approximate hair.shpk-style materials (eyebrows, eyelashes, hair cards)
+    that ship only a mask + normal texture and no diffuse.
+
+    Channel layout confirmed against xivModdingFramework's ModelTexture.GetShaderMapper
+    (EShaderPack.Hair): normal.b is highlight-color influence, normal.a is
+    opacity, mask.r/g are specular/roughness, mask.a is a diffuse/occlusion
+    multiplier. The game hard-cuts normal.a to 0/1 unless the material's
+    EnableTranslucency flag is set, but that flag isn't captured in the
+    manifest yet, and BC-compressed alpha rarely lands on an exact 255 even
+    for texels meant to read as fully opaque — hard-cutting here zeroes out
+    almost all real coverage. Smooth alpha is the safer default until the
+    flag is threaded through.
+    """
+    mask_texture = _first_texture(preview, "mask")
+    normal_texture = _first_texture(preview, "normal")
+    if mask_texture is None or normal_texture is None:
+        raise PreviewValidationError("hair preview requires a mask texture and a normal texture")
+
+    normal_pixels = _read_texture_pixels(normal_texture)
+    height, width = normal_pixels.shape[:2]
+    mask_pixels = _resize_nearest(_read_texture_pixels(mask_texture), width, height)
+
+    alpha_multiplier = 1.0
+    alpha_threshold_values = _shader_constant_values(preview, _ALPHA_THRESHOLD_CONSTANT_ID)
+    if alpha_threshold_values:
+        if alpha_threshold_values[0] != 0:
+            alpha_multiplier = 1.0 / alpha_threshold_values[0]
+        else:
+            alpha_multiplier = 255.0
+    alpha = np.clip(normal_pixels[:, :, 3] * alpha_multiplier, 0.0, 1.0)
+
+    highlight_influence = normal_pixels[:, :, 2:3]
+    base_color = _HAIR_COLOR_DEFAULT * (1.0 - highlight_influence) + _HAIR_HIGHLIGHT_DEFAULT * highlight_influence
+    occlusion = mask_pixels[:, :, 3:4] ** 2
+
+    base_pixels = np.ones((height, width, 4), dtype=np.float32)
+    base_pixels[:, :, :3] = base_color * occlusion
+    base_pixels[:, :, 3] = alpha
+    return np.clip(base_pixels, 0.0, 1.0), normal_texture, mask_texture
+
+
 def create_preview_material(
     model_material: str,
     fallback_color,
@@ -393,7 +462,12 @@ def create_preview_material(
         package.warnings.append(f"No preview data for {Path(model_material).name or model_material}")
         return None
     can_build_character_base = _can_build_character_base(preview)
-    if not can_build_character_base and not any(texture.usage in {"diffuse", "normal", "specular"} for texture in preview.textures):
+    can_build_hair_preview = not can_build_character_base and _can_build_hair_preview(preview)
+    if (
+        not can_build_character_base
+        and not can_build_hair_preview
+        and not any(texture.usage in {"diffuse", "normal", "specular"} for texture in preview.textures)
+    ):
         package.warnings.append(f"No usable preview textures for {Path(model_material).name or model_material}")
         return None
 
@@ -464,12 +538,75 @@ def create_preview_material(
         except Exception as error:
             package.warnings.append(f"Could not build colorset preview for {label}: {error}")
 
+    hair_preview_built = False
+    if can_build_hair_preview:
+        try:
+            hair_pixels, normal_texture, mask_texture = _build_hair_preview(preview)
+            hair_image = _create_pixels_image(
+                f"{label} [{suffix}] Hair Base Color",
+                hair_pixels,
+                "sRGB",
+                package,
+            )
+            hair_image["xiv_texture_game_path"] = normal_texture.game_path
+            hair_image["xiv_sampler_id"] = f"0x{normal_texture.sampler_id:08X}"
+            hair_image["instant_edit_preview_usage"] = "hair-base"
+            uv = nodes.new(type="ShaderNodeUVMap")
+            uv.uv_map = f"uv{normal_texture.uv_set}"
+            uv.location = (-900, 300)
+            image_node = nodes.new(type="ShaderNodeTexImage")
+            image_node.image = hair_image
+            image_node.label = "Hair Base Color + Opacity (approximate)"
+            image_node.location = (-620, 300)
+            links.new(uv.outputs["UV"], image_node.inputs["Vector"])
+            if base_color is not None:
+                links.new(image_node.outputs["Color"], base_color)
+            alpha = _socket(principled, "Alpha")
+            if alpha is not None:
+                links.new(image_node.outputs["Alpha"], alpha)
+
+            mask_image = _create_image(mask_texture, package, f"{label} [{suffix}]")
+            mask_uv = nodes.new(type="ShaderNodeUVMap")
+            mask_uv.uv_map = f"uv{mask_texture.uv_set}"
+            mask_uv.location = (-900, -500)
+            mask_node = nodes.new(type="ShaderNodeTexImage")
+            mask_node.image = mask_image
+            mask_node.label = f"Mask — {Path(mask_texture.game_path).name}"
+            mask_node.location = (-620, -500)
+            links.new(mask_uv.outputs["UV"], mask_node.inputs["Vector"])
+            separate = nodes.new(type="ShaderNodeSeparateColor")
+            separate.location = (-340, -500)
+            links.new(mask_node.outputs["Color"], separate.inputs["Color"])
+            specular = _socket(principled, "Specular IOR Level", "Specular")
+            if specular is not None:
+                links.new(separate.outputs["Red"], specular)
+            if roughness is not None:
+                links.new(separate.outputs["Green"], roughness)
+
+            connected.update({"diffuse", "specular"})
+            hair_preview_built = True
+            # Smooth alpha (soft brow/lash strand edges) dithers into visible
+            # noise under DITHERED; a plain alpha blend reads cleanly for this
+            # mostly-flat, non-self-overlapping decal geometry.
+            material.surface_render_method = "BLENDED"
+            package.warnings.append(
+                f"Approximate preview for {label}: hair.shpk has no diffuse texture, using xivModdingFramework's "
+                "default hair colors (real color depends on in-game dye data not stored in the material)"
+            )
+        except Exception as error:
+            package.warnings.append(f"Could not build hair preview for {label}: {error}")
+
     for index, texture in enumerate(preview.textures):
         if character_base_built and texture.usage in {"diffuse", "index", "mask"}:
             continue
+        if hair_preview_built and texture.usage == "mask":
+            continue
         try:
             pixels = None
-            if character_base_built and texture.usage == "normal":
+            if (character_base_built or hair_preview_built) and texture.usage == "normal":
+                # normal.b/normal.a are repurposed (highlight influence / opacity)
+                # rather than a true tangent Z, so force a flat Z before using
+                # this as an actual tangent-space normal map input.
                 pixels = _read_texture_pixels(texture).copy()
                 pixels[:, :, 2:] = 1.0
             image = _create_image(texture, package, f"{label} [{suffix}]", pixels=pixels)
