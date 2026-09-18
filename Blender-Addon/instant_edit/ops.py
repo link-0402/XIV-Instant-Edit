@@ -2514,6 +2514,11 @@ def perform_mashup_export(
             f"{plugin_warning_summary(warnings)}"
             if warnings else f"Created mashup {destination_name} at {target}"
         )
+        # The mashup just bundled the contributing contexts' materials into
+        # the target mod, so any cached "missing material" answer for this
+        # composition now predates the write. Drop it so the next readiness
+        # check re-probes the plugin instead of repeating the stale warning.
+        reset_material_coverage_state()
         return mdl_path
     finally:
         for obj, properties in reversed(saved_materials):
