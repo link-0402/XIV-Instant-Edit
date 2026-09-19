@@ -18,10 +18,15 @@ internal sealed record ChangelogRelease(
 
 internal static class ChangelogCatalog
 {
-    public const string CurrentVersion = "1.2.3";
+    public const string CurrentVersion = "1.2.4";
 
     public static IReadOnlyList<ChangelogRelease> Releases { get; } =
     [
+        Release("1.2.4",
+            Entry("Fixed a model import issue that could distort unusually dense meshes."),
+            Entry("Fixed vertex weights not combining correctly in some cases."),
+            Entry("Added face toggle attributes to the mesh part preset list."),
+            Entry("Added a plugin icon and texture-export helper scripts for GIMP, Krita, Paint.NET, and Photoshop.")),
         Release("1.2.3",
             Entry("Improved material previews for hair, eyebrows, and eyelashes in the Blender add-on."),
             Entry("Fixed a stale warning that could appear after creating a Mashup."),
