@@ -7,7 +7,7 @@
       "id": "xiv_instant_edit",
       "name": "XIV Instant Edit",
       "tagline": "Instant FFXIV model editing and focused model export",
-      "version": "1.2.3",
+      "version": "1.2.4",
       "type": "add-on",
       "maintainer": "Luci",
       "license": [
@@ -27,8 +27,8 @@
         "User Interface"
       ],
       "archive_url": "./XIV-Instant-Edit.zip",
-      "archive_size": 196070,
-      "archive_hash": "sha256:26d50da11f1e0cf77ecbbc5ab247f7e352a7f1c0ffaafa596ed44ed41a8845b5"
+      "archive_size": 196965,
+      "archive_hash": "sha256:6e4980878e1bf53be1240f160b80843635f5bd4172b4a2a086ba81204e20f12e"
     }
   ]
 }
