@@ -8,14 +8,23 @@ from ..com.space   import xiv_to_blend_space, tangent_to_world_space
 
 
 def get_positions(streams: dict[int, NDArray]) -> NDArray:
-    return xiv_to_blend_space(streams[0]["position"])
+    # Position is stored as HALF4 (x, y, z, w); w is unused padding. Blender's
+    # foreach_set("co", ...) expects exactly 3 floats per vertex, so the 4th
+    # column must be dropped here rather than left for the caller to flatten -
+    # otherwise every vertex after the first reads increasingly misaligned
+    # data (borrowing bytes from a neighbouring vertex), an error that grows
+    # with vertex count and was invisible on typical gear but catastrophic on
+    # an unusually dense mesh.
+    return xiv_to_blend_space(streams[0]["position"])[:, :3]
 
 def get_shape_positions(streams: dict[int, NDArray], shape_vertices: NDArray, shape_indices: NDArray) -> NDArray:
     pos     = streams[0]["position"].copy()
     new_pos = pos[shape_vertices]
     pos[shape_indices] = xiv_to_blend_space(new_pos)
 
-    return pos
+    # Same HALF4 padding column as get_positions() - drop it before this
+    # reaches a shape key's foreach_set("co", ...), which is also 3-wide.
+    return pos[:, :3]
 
 def get_normals(streams: dict[int, NDArray]) -> NDArray | None:
     return xiv_to_blend_space(normalise_vectors(streams[1]["normal"][:, :3]))

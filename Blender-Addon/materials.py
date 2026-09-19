@@ -76,6 +76,17 @@ ATTRIBUTE_VARIANT_PRESETS = tuple(
 _ATTRIBUTE_VARIANT_PATTERN = re.compile(
     r"^atr_(?:" + "|".join(ATTRIBUTE_GROUP_FAMILIES) + r")_(?:[a-h])$"
 )
+
+# Face toggles (atr_fv_a - atr_fv_g) are addable presets like the other
+# variant families above, but Glamourer already drives them directly in-game,
+# so they're kept out of ATTRIBUTE_GROUP_FAMILIES: attribute_group_data() must
+# never turn one into a generated Penumbra Option group.
+FACE_ATTRIBUTE_SUFFIXES = tuple("abcdefg")
+FACE_ATTRIBUTE_PRESETS = tuple(f"atr_fv_{suffix}" for suffix in FACE_ATTRIBUTE_SUFFIXES)
+_FACE_ATTRIBUTE_PATTERN = re.compile(
+    r"^atr_fv_(?:" + "|".join(FACE_ATTRIBUTE_SUFFIXES) + r")$"
+)
+
 _BUILTIN_ATTRIBUTE_NAMES = frozenset(f"atr_{name}" for name in ATTRIBUTE_NAMES)
 
 
@@ -346,7 +357,10 @@ def attribute_group_data(
     Penumbra's IMC attribute columns are defined by the tag suffix rather than
     the attribute's position in the MDL table: _a is bit 0, _b is bit 1, and
     so on. Body-part attributes are intentionally excluded because they are
-    vanilla visibility controls, not gear/accessory part tags.
+    vanilla visibility controls, not gear/accessory part tags. Face toggles
+    (atr_fv_*) are excluded for a different reason: Glamourer already drives
+    them directly, so they're still exported on the mesh but never get a
+    generated Option group here.
     """
     model_attributes: list[str] = []
     exported_lods = range(3 if use_lods else 1)
@@ -380,6 +394,11 @@ def attribute_group_data(
             tags.append(attribute)
             suffix = attribute.rsplit("_", 1)[-1]
             masks[attribute] = 1 << ATTRIBUTE_GROUP_SUFFIXES.index(suffix)
+        elif _FACE_ATTRIBUTE_PATTERN.fullmatch(attribute):
+            # Exported on the mesh like any other attribute, but never turned
+            # into a Penumbra Option group: Glamourer already drives face
+            # toggles directly, so a generated group would just conflict.
+            continue
         elif attribute.startswith("atrx_"):
             tags.append(attribute)
         elif attribute.startswith("atr"):
