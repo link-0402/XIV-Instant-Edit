@@ -26,7 +26,7 @@ internal static class ChangelogCatalog
             Entry("Fixed a model import issue that could distort unusually dense meshes."),
             Entry("Fixed vertex weights not combining correctly in some cases."),
             Entry("Added face toggle attributes to the mesh part preset list."),
-            Entry("Added a plugin icon and texture-export helper scripts for GIMP, Krita, Paint.NET, and Photoshop.")),
+            Highlight("Added fast texture save scripts for Photoshop, GIMP and Krita (see Github page).")),
         Release("1.2.3",
             Entry("Improved material previews for hair, eyebrows, and eyelashes in the Blender add-on."),
             Entry("Fixed a stale warning that could appear after creating a Mashup."),
