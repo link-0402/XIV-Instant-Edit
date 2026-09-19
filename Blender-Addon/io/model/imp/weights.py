@@ -11,10 +11,18 @@ def create_weight_matrix(obj: Object, weight_array: NDArray, bone_indices: NDArr
 
     num_verts, bone_count = bone_indices.shape
     flat_indices = np.repeat(np.arange(num_verts), bone_count)
-    flat_weights = weight_array.flatten()   
+    flat_weights = weight_array.flatten()
     nonzero_mask = flat_weights != 0
-    
-    weight_matrix[flat_indices[nonzero_mask], bone_indices.flatten()[nonzero_mask]] += flat_weights[nonzero_mask]
+
+    # Fancy-index += silently keeps only one write per duplicate (vertex, bone)
+    # pair instead of summing them; np.add.at is the version that actually
+    # accumulates, which matters once a vertex references the same bone from
+    # more than one of its influence slots (possible with 8-influence meshes).
+    np.add.at(
+        weight_matrix,
+        (flat_indices[nonzero_mask], bone_indices.flatten()[nonzero_mask]),
+        flat_weights[nonzero_mask],
+    )
 
     return weight_matrix
 

@@ -8,6 +8,7 @@
     "Punchline": "Send Penumbra model files to Blender and back with a single click.",
     "ApplicableVersion": "any",
     "RepoUrl": "https://github.com/link-0402/XIV-Instant-Edit",
+    "IconUrl": "https://raw.githubusercontent.com/link-0402/XIV-Instant-Edit/main/Dalamud-Plugin/InstantEdit/icon.png",
     "DalamudApiLevel": 15,
     "LoadRequiredState": 0,
     "LoadSync": true,

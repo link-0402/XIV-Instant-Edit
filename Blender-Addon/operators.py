@@ -8,6 +8,7 @@ from bpy.types import Context, Operator
 from .instant_edit.context import ContextValidationError, mesh_ids_from_name
 from .materials import (
     ATTRIBUTE_VARIANT_PRESETS,
+    FACE_ATTRIBUTE_PRESETS,
     attribute_display_name,
     assign_material_path,
     ensure_flow_data,
@@ -43,7 +44,7 @@ from .backups import clear_backups, list_backups, restore_local, target_folder
 _ACTIVE_MESH_DRAG: tuple[str, int, int, int, str] | None = None
 _ATTRIBUTE_PRESET_ITEMS = tuple(
     (attribute, attribute_display_name(attribute), f"Add {attribute} to this mesh part")
-    for attribute in ATTRIBUTE_VARIANT_PRESETS
+    for attribute in ATTRIBUTE_VARIANT_PRESETS + FACE_ATTRIBUTE_PRESETS
 )
 
 
