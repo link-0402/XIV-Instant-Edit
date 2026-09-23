@@ -149,7 +149,8 @@ public sealed class Plugin : IDalamudPlugin
             _pi.UiBuilder,
             textureProvider,
             _textures,
-            _changelogWindow.Open);
+            _changelogWindow.Open,
+            () => _settingsWindow!.Open());
         _window.AttachAnimations(_animations, animationError);
         _exportServer.ImportFailureReceived += _window.ReportImportFailure;
         _setupWindow = new FirstTimeSetupWindow(
@@ -171,9 +172,9 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.AddWindow(_window);
         _windowSystem.AddWindow(_changelogWindow);
         _windowSystem.AddWindow(_setupWindow);
+        _windowSystem.AddWindow(_settingsWindow);
 
         _pi.UiBuilder.Draw += _windowSystem.Draw;
-        _pi.UiBuilder.Draw += _settingsWindow.Draw;
         _pi.UiBuilder.Draw += _setupWindow.DrawFileDialog;
         _pi.UiBuilder.OpenMainUi += OpenMainUi;
         _pi.UiBuilder.OpenConfigUi += _settingsWindow.Open;
@@ -278,13 +279,13 @@ public sealed class Plugin : IDalamudPlugin
     {
         _commands.RemoveHandler("/ie");
         _pi.UiBuilder.Draw -= _windowSystem.Draw;
-        _pi.UiBuilder.Draw -= _settingsWindow.Draw;
         _pi.UiBuilder.Draw -= _setupWindow.DrawFileDialog;
         _pi.UiBuilder.OpenMainUi -= OpenMainUi;
         _pi.UiBuilder.OpenConfigUi -= _settingsWindow.Open;
         _windowSystem.RemoveWindow(_window);
         _windowSystem.RemoveWindow(_changelogWindow);
         _windowSystem.RemoveWindow(_setupWindow);
+        _windowSystem.RemoveWindow(_settingsWindow);
         _window.Dispose();
         _onScreen.Dispose();
         _animations?.Dispose();

@@ -1,5 +1,6 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 
@@ -36,7 +37,7 @@ public sealed partial class MainWindow
         ImGui.TextWrapped("Untick a bone to stop this animation from moving it, for example to give hair, cloth " +
             "or tail bones back to physics. Rebaking removes unticked bones from the animation.");
 
-        ImGui.SetNextItemWidth(Math.Min(260, ImGui.GetContentRegionAvail().X));
+        ImGui.SetNextItemWidth(Math.Min(Theme.Scaled(260), ImGui.GetContentRegionAvail().X));
         ImGui.InputTextWithHint("##animated-bone-filter", "Filter bones", ref animationBoneFilter, 128);
         var filter = animationBoneFilter.Trim();
         string[] shown = filter.Length == 0 ? [.. bones] : [.. bones.Where(name =>
@@ -47,19 +48,21 @@ public sealed partial class MainWindow
         if (ImGui.SmallButton(filter.Length == 0 ? "Untick all" : "Untick matching")) animationExcludedBones.UnionWith(shown);
 
         var row = ImGui.GetFrameHeightWithSpacing();
-        if (ImGui.BeginChild("##animated-bones", new Vector2(0, Math.Clamp(shown.Length * row + 8, row + 8, 240)), true))
+        var listHeight = Math.Clamp(shown.Length * row + Theme.Scaled(8), row + Theme.Scaled(8), Theme.Scaled(240));
+        using (var list = ImRaii.Child("##animated-bones", new Vector2(0, listHeight), true))
         {
-            if (shown.Length == 0) ImGui.TextDisabled("No animated bone matches the filter.");
-            foreach (var name in shown)
+            if (list.Success)
             {
-                ImGui.PushID(name);
-                var kept = !animationExcludedBones.Contains(name);
-                if (ImGui.Checkbox(AnimationPresentation.BoneName(name), ref kept))
-                { if (kept) animationExcludedBones.Remove(name); else animationExcludedBones.Add(name); }
-                ImGui.PopID();
+                if (shown.Length == 0) ImGui.TextDisabled("No animated bone matches the filter.");
+                foreach (var name in shown)
+                {
+                    using var id = ImRaii.PushId(name);
+                    var kept = !animationExcludedBones.Contains(name);
+                    if (ImGui.Checkbox(AnimationPresentation.BoneName(name), ref kept))
+                    { if (kept) animationExcludedBones.Remove(name); else animationExcludedBones.Add(name); }
+                }
             }
         }
-        ImGui.EndChild();
         ImGui.TextDisabled(animationExcludedBones.Count == 0
             ? $"All {bones.Length} bones stay animated."
             : $"{bones.Length - animationExcludedBones.Count} of {bones.Length} bones stay animated; " +

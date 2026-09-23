@@ -1,5 +1,6 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services;
 
@@ -17,28 +18,29 @@ public sealed partial class MainWindow
     {
         if (!resource.GamePath.EndsWith(".tex", StringComparison.OrdinalIgnoreCase)) return;
         var available = resource.SourceState is ResourceSourceState.GameData or ResourceSourceState.LoadedMod;
-        ImGui.BeginDisabled(!available || Volatile.Read(ref _textureBusy) != 0);
-        if (ImGui.SmallButton("Edit texture"))
+        using (ImRaii.Disabled(!available || Volatile.Read(ref _textureBusy) != 0))
         {
-            var request = new TextureEditRequest(resource.GamePath, resource.ActualPath,
-                resource.SourceState == ResourceSourceState.GameData ? "" : resource.SourceModDirectory,
-                resource.SourceModRootPath, resource.SourceRelativePath,
-                actor.Entity?.ObjectIndex, actor.Entity?.Address.ToInt64() ?? 0);
-            if (resource.SourceState == ResourceSourceState.GameData)
+            if (ImGui.SmallButton("Edit texture"))
             {
-                // Reopen existing vanilla work without asking for a second destination.
-                var existing = _textures.FindReusable(request);
-                if (existing is not null) TextureAction(() => _textures.OpenEditorAsync(existing.Id));
-                else
+                var request = new TextureEditRequest(resource.GamePath, resource.ActualPath,
+                    resource.SourceState == ResourceSourceState.GameData ? "" : resource.SourceModDirectory,
+                    resource.SourceModRootPath, resource.SourceRelativePath,
+                    actor.Entity?.ObjectIndex, actor.Entity?.Address.ToInt64() ?? 0);
+                if (resource.SourceState == ResourceSourceState.GameData)
                 {
-                    _newTexture = request;
-                    _textureModName = Sanitize("Texture Edit " + Path.GetFileNameWithoutExtension(resource.GamePath));
+                    // Reopen existing vanilla work without asking for a second destination.
+                    var existing = _textures.FindReusable(request);
+                    if (existing is not null) TextureAction(() => _textures.OpenEditorAsync(existing.Id));
+                    else
+                    {
+                        _newTexture = request;
+                        _textureModName = Sanitize("Texture Edit " + Path.GetFileNameWithoutExtension(resource.GamePath));
+                    }
                 }
+                else TextureAction(async () => { await _textures.StartAsync(request).ConfigureAwait(false); });
             }
-            else TextureAction(async () => { await _textures.StartAsync(request).ConfigureAwait(false); });
         }
-        ImGui.EndDisabled();
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip(available
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled)) ImGui.SetTooltip(available
             ? "Open as a 32-bit TGA in your configured editor. Shared references to this texture will also change."
             : "This texture has no verified writable mod source.");
     }
@@ -54,35 +56,38 @@ public sealed partial class MainWindow
         if (sessions.Count == 0) ImGui.TextWrapped("No texture sessions. Select Textures in On Screen or Mod Browser, then choose Edit texture. Set your editor executable in Settings first.");
         foreach (var s in sessions)
         {
-            ImGui.PushID(s.Id.ToString("N"));
+            using var id = ImRaii.PushId(s.Id.ToString("N"));
             ImGui.Separator();
             ImGui.TextUnformatted(Path.GetFileName(s.GamePath));
             var format = TextureFiles.FormatName(s.SavedFormat) + (s.SavedFormat == s.Format ? "" : $" (originally {TextureFiles.FormatName(s.Format)})");
             ImGui.TextDisabled($"{s.Width} × {s.Height} · {format} · {(s.MipMaps ? "Mipmaps" : "No mipmaps")}");
-            var color = s.Conflict ? new Vector4(1f, .45f, .35f, 1) : s.Paused ? new Vector4(.95f, .78f, .35f, 1) : new Vector4(.65f, .83f, .7f, 1);
-            ImGui.PushTextWrapPos(); ImGui.TextColored(color, s.Status); ImGui.PopTextWrapPos();
+            var color = s.Conflict ? Theme.Conflict : s.Paused ? Theme.Paused : Theme.Watching;
+            using (ImRaii.TextWrapPos(0f))
+                ImGui.TextColored(color, s.Status);
             ImGui.TextWrapped(s.NeedsMod ? $"First save creates mod: {s.NewModName}" : $"Destination: {s.TargetFile}");
             ImGui.TextWrapped($"Working file: {s.WorkingFile}");
             if (s.LastSaved is { } saved) ImGui.TextDisabled($"Last saved: {saved.ToLocalTime():g}");
-            ImGui.BeginDisabled(Volatile.Read(ref _textureBusy) != 0);
-            if (ImGui.Button("Open in editor")) TextureAction(() => _textures.OpenEditorAsync(s.Id));
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Open the working TGA. A paused session resumes watching for saves.");
-            ImGui.SameLine();
-            if (ImGui.Button("Open folder")) TextureAction(() => { _textures.OpenFolder(s.Id); return Task.CompletedTask; });
-            ImGui.SameLine();
-            ImGui.BeginDisabled(s.Conflict || string.IsNullOrEmpty(s.PixelHash));
-            if (ImGui.Button(s.Paused ? "Resume" : "Pause")) TextureAction(() => _textures.SetPausedAsync(s.Id, !s.Paused));
-            ImGui.SameLine();
-            if (ImGui.Button("Retry")) TextureAction(() => _textures.RetryAsync(s.Id));
-            ImGui.EndDisabled();
-            ImGui.BeginDisabled(s.NeedsMod || s.Conflict);
-            if (ImGui.Button("Restore backup")) TextureAction(() => _textures.RestoreAsync(s.Id));
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Restore the previous saved texture (or the original before the first edit), then pause. The working TGA is retained.");
-            ImGui.EndDisabled();
-            ImGui.SameLine();
-            if (ImGui.Button("Discard…")) _discardTexture = s.Id;
-            ImGui.EndDisabled();
-            ImGui.PopID();
+            using (ImRaii.Disabled(Volatile.Read(ref _textureBusy) != 0))
+            {
+                if (ImGui.Button("Open in editor")) TextureAction(() => _textures.OpenEditorAsync(s.Id));
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("Open the working TGA. A paused session resumes watching for saves.");
+                ImGui.SameLine();
+                if (ImGui.Button("Open folder")) TextureAction(() => { _textures.OpenFolder(s.Id); return Task.CompletedTask; });
+                ImGui.SameLine();
+                using (ImRaii.Disabled(s.Conflict || string.IsNullOrEmpty(s.PixelHash)))
+                {
+                    if (ImGui.Button(s.Paused ? "Resume" : "Pause")) TextureAction(() => _textures.SetPausedAsync(s.Id, !s.Paused));
+                    ImGui.SameLine();
+                    if (ImGui.Button("Retry")) TextureAction(() => _textures.RetryAsync(s.Id));
+                }
+                using (ImRaii.Disabled(s.NeedsMod || s.Conflict))
+                {
+                    if (ImGui.Button("Restore backup")) TextureAction(() => _textures.RestoreAsync(s.Id));
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("Restore the previous saved texture (or the original before the first edit), then pause. The working TGA is retained.");
+                }
+                ImGui.SameLine();
+                if (ImGui.Button("Discard…")) _discardTexture = s.Id;
+            }
         }
     }
 
@@ -92,7 +97,7 @@ public sealed partial class MainWindow
         if (ImGui.BeginPopupModal("New texture mod", ImGuiWindowFlags.AlwaysAutoResize))
         {
             ImGui.TextWrapped("The first successful save creates a new mod and enables it in this actor's collection.");
-            ImGui.SetNextItemWidth(420);
+            ImGui.SetNextItemWidth(Theme.Scaled(420));
             ImGui.InputText("Mod name", ref _textureModName, 120);
             if (ImGui.Button("Open texture"))
             {
