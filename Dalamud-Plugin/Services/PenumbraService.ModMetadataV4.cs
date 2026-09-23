@@ -278,6 +278,52 @@ public sealed partial class PenumbraService
             yield return "Files/" + normalized;
     }
 
+    /// <summary>
+    /// Repoint every mapping of <paramref name="gamePath"/> to <paramref name="oldRelativePath"/>
+    /// so it resolves to <paramref name="newRelativePath"/> instead. A mod can offer
+    /// the same override from several mutually exclusive options, so every
+    /// DefaultData, group, option, and container mapping that matches is updated
+    /// together. Returns true when some other game path still maps to the old
+    /// physical file, meaning the caller must not delete it.
+    /// </summary>
+    internal static bool RenameAnimationFileMapping(string modRoot, string gamePath, string oldRelativePath, string newRelativePath)
+    {
+        var meta = LoadV4ModMetadata(modRoot);
+        var oldNormalized = oldRelativePath.Replace('\\', '/').Trim();
+        var renamed = false;
+        var stillReferenced = false;
+
+        void Visit(JsonObject? container)
+        {
+            if (container?["Files"] is not JsonObject files) return;
+            foreach (var pair in files.ToArray())
+            {
+                var value = JsonString(pair.Value);
+                if (string.IsNullOrWhiteSpace(value) ||
+                    !string.Equals(value.Replace('\\', '/').Trim(), oldNormalized, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (SameGamePath(pair.Key, gamePath)) { files[pair.Key] = newRelativePath; renamed = true; }
+                else stillReferenced = true;
+            }
+        }
+
+        Visit(meta["DefaultData"] as JsonObject);
+        if (meta["Groups"] is JsonArray groups)
+            foreach (var group in groups.OfType<JsonObject>())
+            {
+                Visit(group);
+                if (group["Options"] is JsonArray options)
+                    foreach (var option in options.OfType<JsonObject>()) Visit(option);
+                if (group["Containers"] is JsonArray containers)
+                    foreach (var container in containers.OfType<JsonObject>()) Visit(container);
+            }
+
+        if (!renamed) throw new InvalidDataException($"{gamePath} is no longer mapped to {oldRelativePath} in this mod.");
+        TouchV4ModMetadata(meta);
+        WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
+        return stillReferenced;
+    }
+
     private static void WriteJsonAtomic(string path, JsonObject value)
     {
         var tempPath = path + ".tmp." + Guid.NewGuid().ToString("N");

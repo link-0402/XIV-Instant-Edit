@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.TestSupport;
+using InstantEdit.Ui;
 using static InstantEdit.TestSupport.Assertions;
 
 static byte[] MinimalMaterial(string texturePath, ushort flags, ushort dataSetSize = 0)
@@ -124,6 +125,30 @@ static void CheckSessionStore(string testRoot)
         Guid.NewGuid().ToString("N"), now: storeNow);
     Require(expiryReader.Load(storeNow).Count == 0,
         "inactive context records expire after 7 days");
+
+    // 1.2.x kept contexts in the managed cache. A temp cleaner that removed only the
+    // ownership marker left Contexts behind, and the non-empty unmarked cache then
+    // stopped the plugin from loading.
+    var legacyBase = Path.Combine(testRoot, "LegacyCacheBase");
+    var legacyCache = TextureFiles.CacheRootFor(legacyBase);
+    var legacyStore = new ExportContextSessionStore(legacyCache, Guid.NewGuid().ToString("N"), now: storeNow);
+    legacyStore.Load(storeNow);
+    legacyStore.Persist([storedContext], storeNow);
+    File.WriteAllText(Path.Combine(legacyCache, "Contexts", $".{Guid.NewGuid():N}.{Guid.NewGuid():N}.tmp"), "{");
+    Require(!File.Exists(Path.Combine(legacyCache, ".instant-edit-cache.json")),
+        "legacy fixture reproduces a cache without its ownership marker");
+    var migratedConfig = Path.Combine(testRoot, "MigratedConfig");
+    Require(ExportContextSessionStore.ImportLegacy(legacyCache, migratedConfig) == 1,
+        "legacy context sessions move out of the cache");
+    Require(!Directory.Exists(Path.Combine(legacyCache, "Contexts")),
+        "the emptied legacy Contexts folder is removed along with interrupted writes");
+    Require(TextureFiles.EnsureCacheRoot(legacyBase) == legacyCache,
+        "the cache re-establishes its ownership marker once legacy contexts have moved");
+    var migratedStore = new ExportContextSessionStore(migratedConfig, Guid.NewGuid().ToString("N"), now: storeNow);
+    Require(migratedStore.Load(storeNow).Single().ContextId == storedContext.ContextId,
+        "migrated contexts load from the config folder");
+    Require(ExportContextSessionStore.ImportLegacy(legacyCache, migratedConfig) == 0,
+        "migration is a no-op once the cache holds no contexts");
 
 }
 
@@ -449,6 +474,123 @@ try
             PenumbraService.IsSafeGamePath(vanillaActualModel),
         "Penumbra tree game-data paths normalize from FullPath backslashes into editable game paths");
 
+    // ---- On Screen source attribution: disk-free mod index and lazy stable identifiers ----
+    var attributionRoot = Path.Combine(testRoot, "AttributionMods");
+    var attributionMods = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    void WriteAttributionMeta(string directory, Guid identifier)
+        => File.WriteAllText(Path.Combine(attributionRoot, directory, "meta.json"), new JsonObject
+        {
+            ["FileVersion"] = 4,
+            ["Identifier"] = identifier.ToString("D"),
+            ["Name"] = directory,
+        }.ToJsonString());
+    Guid AddAttributionMod(string directory)
+    {
+        var identifier = Guid.NewGuid();
+        Directory.CreateDirectory(Path.Combine(attributionRoot, directory));
+        WriteAttributionMeta(directory, identifier);
+        attributionMods[directory] = directory;
+        return identifier;
+    }
+
+    for (var modIndex = 0; modIndex < 40; modIndex++)
+        AddAttributionMod($"Mod {modIndex:D2}");
+    var mod01Id = PenumbraService.ReadModStableIdentifierForRegression(Path.Combine(attributionRoot, "Mod 01"));
+    var prefixedModId = AddAttributionMod("Mod 01 Extra");
+    attributionMods[@"..\Escaped"] = "Escaped";
+    var stableIdReads = new List<string>();
+    var attributor = ResourceSourceAttributor.CreateForRegression(
+        () => new ModListSnapshot(attributionRoot, attributionMods),
+        modRoot =>
+        {
+            stableIdReads.Add(Path.GetFileName(modRoot));
+            return PenumbraService.ReadModStableIdentifierForRegression(modRoot);
+        });
+
+    var mod01Texture = attributor.AttributionFor(Path.Combine(attributionRoot, "Mod 01", "chara", "texture.tex"));
+    Require(mod01Id is not null &&
+            mod01Texture is
+            {
+                State: ResourceSourceState.LoadedMod, ModName: "Mod 01", ModDirectory: "Mod 01",
+                RelativePath: "chara/texture.tex",
+            } &&
+            mod01Texture.ModStableId == mod01Id &&
+            stableIdReads.SequenceEqual(["Mod 01"]),
+        "source attribution reads only the attributed mod's meta.json, not every installed mod's");
+
+    var mod01Model = attributor.AttributionFor(attributionRoot.ToUpperInvariant() + "/mod 01/chara/model.mdl");
+    Require(mod01Model is { State: ResourceSourceState.LoadedMod, ModDirectory: "Mod 01", RelativePath: "chara/model.mdl" } &&
+            mod01Model.ModStableId == mod01Id &&
+            stableIdReads.Count == 1,
+        "repeat attribution within a mod reuses its identifier across path casing and separators");
+
+    var prefixedSource = attributor.AttributionFor(Path.Combine(attributionRoot, "Mod 01 Extra", "file.mtrl"));
+    Require(prefixedSource is { ModDirectory: "Mod 01 Extra", RelativePath: "file.mtrl" } &&
+            prefixedSource.ModStableId == prefixedModId &&
+            stableIdReads.SequenceEqual(["Mod 01", "Mod 01 Extra"]),
+        "mods whose folder names share a prefix are attributed to the exact folder");
+
+    Require(attributor.AttributionFor(Path.Combine(testRoot, "Elsewhere", "file.tex")).State ==
+                ResourceSourceState.ExternalResolvedFile &&
+            attributor.AttributionFor(Path.Combine(attributionRoot, "Unregistered Mod", "file.tex")).State ==
+                ResourceSourceState.ExternalResolvedFile &&
+            attributor.AttributionFor(Path.Combine(testRoot, "Escaped", "file.tex")).State ==
+                ResourceSourceState.ExternalResolvedFile &&
+            attributor.AttributionFor(attributionRoot).State == ResourceSourceState.ExternalResolvedFile &&
+            attributor.AttributionFor("chara/equipment/e0001/model/c0101e0001_top.mdl").State ==
+                ResourceSourceState.GameData &&
+            attributor.AttributionFor(" ").State == ResourceSourceState.SourceUnavailable &&
+            stableIdReads.Count == 2,
+        "paths outside registered mod folders stay unattributed without reading any metadata");
+
+    attributor.Invalidate();
+    _ = attributor.AttributionFor(Path.Combine(attributionRoot, "Mod 01", "chara", "texture.tex"));
+    Require(stableIdReads.Count == 2,
+        "an unchanged meta.json is not re-read when the mod index is rebuilt");
+
+    var replacementId = Guid.NewGuid();
+    WriteAttributionMeta("Mod 01", replacementId);
+    File.SetLastWriteTimeUtc(Path.Combine(attributionRoot, "Mod 01", "meta.json"), DateTime.UtcNow.AddMinutes(5));
+    attributor.Invalidate();
+    Require(attributor.AttributionFor(Path.Combine(attributionRoot, "Mod 01", "chara", "texture.tex")).ModStableId ==
+                replacementId &&
+            stableIdReads.Count == 3,
+        "a replaced mod's new stable identifier is read once its meta.json changes");
+
+    var failModListRead = false;
+    var flakyAttributor = ResourceSourceAttributor.CreateForRegression(
+        () => failModListRead ? null : new ModListSnapshot(attributionRoot, attributionMods),
+        PenumbraService.ReadModStableIdentifierForRegression);
+    var flakyPath = Path.Combine(attributionRoot, "Mod 02", "file.tex");
+    var beforeFailedRead = flakyAttributor.AttributionFor(flakyPath);
+    failModListRead = true;
+    flakyAttributor.Invalidate();
+    Require(beforeFailedRead.State == ResourceSourceState.LoadedMod &&
+            flakyAttributor.AttributionFor(flakyPath) is { State: ResourceSourceState.LoadedMod, ModDirectory: "Mod 02" },
+        "a failed Penumbra mod-list read keeps the previous source index instead of emptying it");
+    Require(ResourceSourceAttributor.CreateForRegression(() => null, _ => throw new InvalidOperationException("no metadata read expected"))
+                .AttributionFor(flakyPath).State == ResourceSourceState.ExternalResolvedFile,
+        "without a readable mod list, rooted files are reported as external");
+
+    // ---- On Screen resource-type classification behind the cached filters ----
+    Require(ResourceKindClassifier.Classify(
+                "Mdl", "chara/equipment/e0001/model/c0101e0001_top.mdl", @"G:\Penumbra\Mod\top.mdl") ==
+                ResourceKinds.Model &&
+            ResourceKindClassifier.Classify("Tex", "chara/common/texture/--sky.tex", "") == ResourceKinds.Texture &&
+            ResourceKindClassifier.Classify("Resource", "vfx/common/eff/x.ATEX", null) == ResourceKinds.Texture &&
+            ResourceKindClassifier.Classify("Material", "", "") == ResourceKinds.Material &&
+            ResourceKindClassifier.Classify("Mtrl", "chara/equipment/e0001/material/mt_a.mtrl", null) ==
+                ResourceKinds.Material &&
+            ResourceKindClassifier.Classify("Shpk", "shader/sm5/shpk/skin.shpk", "") == ResourceKinds.None &&
+            ResourceKindClassifier.Classify(" ", null, null) == ResourceKinds.None,
+        "resource rows are classified into editable kinds as the type filters expect");
+    Require(ResourceKindClassifier.ForFilter("") == ResourceKinds.Editable &&
+            ResourceKindClassifier.ForFilter("Models") == ResourceKinds.Model &&
+            ResourceKindClassifier.ForFilter("Textures") == ResourceKinds.Texture &&
+            ResourceKindClassifier.ForFilter("Materials") == ResourceKinds.Material &&
+            ResourceKindClassifier.ForFilter("Anything else") is null,
+        "the Tree Structure filter admits editable kinds only, and unknown filters admit every resource");
+
     // ---- Export-context dependency-manifest persistence and Dalamud configuration round-tripping ----
     var manifest = new ResourceDependencyManifest
     {
@@ -655,6 +797,64 @@ try
                 SourceRelativePath: "Files/option-a.mtrl",
             },
         "Mod Browser dependency locators preserve the scanned mod source metadata");
+
+    // ---- Material previews with non-finite material values ----
+    // RUEXB+ Stellar Blade's top stores +inf (half 0x7C00) in colorset row 1.
+    var infiniteMaterial = MinimalMaterial("a.tex", 0x8000, 2176);
+    var colorSetOffset = 16 + 4 + BitConverter.ToUInt16(infiniteMaterial, 8);
+    BitConverter.TryWriteBytes(infiniteMaterial.AsSpan(colorSetOffset, 2), (ushort)0xFC00);
+    BitConverter.TryWriteBytes(infiniteMaterial.AsSpan(colorSetOffset + 2, 2), (ushort)0x7E00);
+    BitConverter.TryWriteBytes(infiniteMaterial.AsSpan(colorSetOffset + 46 * 2, 2), (ushort)0x7C00);
+    var infiniteColorSet = MaterialPreviewBundleBuilder.ReadColorSet(
+        infiniteMaterial,
+        MaterialPreviewBundleBuilder.LooseLuminaFile.Load<Lumina.Data.Files.MtrlFile>(infiniteMaterial));
+    using (var colorSetJson = JsonDocument.Parse(JsonSerializer.Serialize(infiniteColorSet)))
+    {
+        var values = colorSetJson.RootElement.GetProperty("values");
+        Require(values[46].GetSingle() == 65504f && values[0].GetSingle() == -65504f && values[1].GetSingle() == 0f,
+            "material previews serialize infinite and NaN colorset halves as finite JSON numbers");
+    }
+    Require(MaterialPreviewBundleBuilder.JsonSafe(float.PositiveInfinity, float.MaxValue) == float.MaxValue &&
+            MaterialPreviewBundleBuilder.JsonSafe(-2.5f, float.MaxValue) == -2.5f,
+        "finite shader constants are unchanged while infinities clamp to the largest float");
+
+    // The shader header's last four bytes hold the translucency (0x10) and
+    // hide-backfaces (0x01) flags that decide how Blender renders the preview.
+    var translucentMaterial = MinimalMaterial("a.tex", 0, 2112);
+    BitConverter.TryWriteBytes(translucentMaterial.AsSpan(translucentMaterial.Length - 4, 4), 0x1Cu);
+    var translucentMtrl = MaterialPreviewBundleBuilder.LooseLuminaFile.Load<Lumina.Data.Files.MtrlFile>(translucentMaterial);
+    Require(MaterialPreviewBundleBuilder.ReadMaterialMetadata(translucentMaterial, translucentMtrl).Flags == 0x1C,
+        "material previews carry the shader-header translucency and backface flags");
+    using (var dyeColorSetJson = JsonDocument.Parse(JsonSerializer.Serialize(
+               MaterialPreviewBundleBuilder.ReadColorSet(translucentMaterial, translucentMtrl))))
+    {
+        Require(dyeColorSetJson.RootElement.GetProperty("height").GetInt32() == 32 &&
+                dyeColorSetJson.RootElement.GetProperty("values").GetArrayLength() == 1024,
+            "expanded colorsets followed by a 64-byte dye table are previewed");
+    }
+
+    // Mod tools can write mip offsets that do not match the stored data; the
+    // preview rebuilds them so Lumina decodes the first surface correctly.
+    var misplacedMips = new byte[80 + 2 * 2 * 4 + 4];
+    BitConverter.TryWriteBytes(misplacedMips.AsSpan(0, 4), 0x00800000u);
+    BitConverter.TryWriteBytes(misplacedMips.AsSpan(4, 4), 0x1450u);
+    BitConverter.TryWriteBytes(misplacedMips.AsSpan(8, 2), (ushort)2);
+    BitConverter.TryWriteBytes(misplacedMips.AsSpan(10, 2), (ushort)2);
+    BitConverter.TryWriteBytes(misplacedMips.AsSpan(12, 2), (ushort)1);
+    misplacedMips[14] = 2;
+    BitConverter.TryWriteBytes(misplacedMips.AsSpan(28, 4), 80u);
+    BitConverter.TryWriteBytes(misplacedMips.AsSpan(32, 4), 83u);
+    for (var i = 80; i < 96; i += 4)
+        misplacedMips.AsSpan(i, 4).Fill((byte)(i - 60));
+    var normalizedMips = MaterialPreviewBundleBuilder.NormalizeTextureMipOffsets(misplacedMips);
+    var decodedMips = MaterialPreviewBundleBuilder.LooseLuminaFile.Load<Lumina.Data.Files.TexFile>(normalizedMips)
+        .ImageData;
+    Require(BitConverter.ToUInt32(normalizedMips, 32) == 96 && decodedMips.Length == 16 &&
+            decodedMips[0] == 20 && decodedMips[15] == 32,
+        "texture previews rebuild mip offsets that do not describe the stored surfaces");
+    var ordinaryMips = (byte[])normalizedMips.Clone();
+    Require(ReferenceEquals(MaterialPreviewBundleBuilder.NormalizeTextureMipOffsets(ordinaryMips), ordinaryMips),
+        "texture previews keep consistent mip offset tables unchanged");
 
     // ---- Mashup source-manifest remapping and cross-root verification ----
     var manifestSourceRoot = Path.Combine(testRoot, "ManifestSource");

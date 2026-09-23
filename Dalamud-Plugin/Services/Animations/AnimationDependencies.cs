@@ -8,15 +8,11 @@ namespace InstantEdit.Services.Animations;
 
 internal sealed record AnimationReference(string Path, string Kind);
 internal sealed record AnimationReferences(ImmutableArray<AnimationReference> References, ImmutableArray<string> Problems);
-/// <summary>One string a timeline entry points at, with the byte position it lives at.</summary>
-internal readonly record struct TimelineString(string Magic, int Position, string Value, int Field, int Anchor);
-/// <summary>One timeline entry, with the byte position and declared size it occupies.</summary>
-internal readonly record struct TimelineEntry(string Magic, int Position, int Size);
 
 /// <summary>Bounded, format-aware readers. Unknown timeline constructs cannot silently produce an incomplete mod.</summary>
 internal static class AnimationDependencies
 {
-    private sealed record Layout(int Size, string Name, bool Dynamic);
+    private sealed record Layout(int Size, string Name);
     private static readonly Dictionary<string, Layout> Layouts = LoadLayouts();
     private static Dictionary<string, Layout> LoadLayouts()
     {
@@ -66,23 +62,7 @@ internal static class AnimationDependencies
         return new AnimationReferences(references.Distinct().ToImmutableArray(), problems.Distinct().ToImmutableArray());
     }
 
-    /// <summary>
-    /// Locate every string a timeline points at, sharing the reader's parser so a
-    /// rewriter can never disagree with dependency discovery about where they are.
-    /// </summary>
-    internal static int CollectTimelineStrings(byte[] bytes, int start, List<TimelineString> strings)
-        => ReadTimeline(bytes, start, [], [], strings);
-
-    /// <summary>
-    /// Walk a timeline's entries, sharing the reader's parser so a rewriter sees the
-    /// same bounds and sizes dependency discovery does. Problems are reported rather
-    /// than thrown so a caller can refuse an edit it cannot model completely.
-    /// </summary>
-    internal static int CollectTimelineEntries(byte[] bytes, int start, List<TimelineEntry> entries, List<string> problems)
-        => ReadTimeline(bytes, start, [], problems, null, entries);
-
-    private static int ReadTimeline(byte[] bytes, int start, List<AnimationReference> references, List<string> problems,
-        List<TimelineString>? strings = null, List<TimelineEntry>? visited = null)
+    private static int ReadTimeline(byte[] bytes, int start, List<AnimationReference> references, List<string> problems)
     {
         if (start < 0 || start > bytes.Length - 12 || !bytes.AsSpan(start, 4).SequenceEqual("TMLB"u8))
             throw new InvalidDataException("Invalid animation timeline header.");
@@ -94,12 +74,15 @@ internal static class AnimationDependencies
             if (cursor > end - 8) throw new InvalidDataException("Truncated animation timeline entry.");
             var magic = Encoding.ASCII.GetString(bytes, cursor, 4); var size = AnimationPap.ReadInt(bytes, cursor + 4);
             if (size < 8 || size > end - cursor) throw new InvalidDataException($"Invalid {magic} timeline entry size.");
-            visited?.Add(new TimelineEntry(magic, cursor, size));
+            // Only the entries whose path fields are read below name a file; VFXEditor's
+            // TMB definitions agree that no other entry carries a string. Everything else -
+            // footsteps, voice lines, BGM, terrain effects, summons - has the game pick a
+            // resource by numeric ID at runtime. There is no dependency to follow, and every
+            // edit carries those IDs over untouched, so they select exactly what they did
+            // before. A new mod holds only the baked clips, never these resources.
             if (Layouts.TryGetValue(magic, out var layout))
             {
                 if (size != layout.Size) problems.Add($"Unsupported {magic} ({layout.Name}) entry size {size}.");
-                if (layout.Dynamic || string.IsNullOrEmpty(layout.Name) || magic is "C013" or "C042" or "C053" or "C075" or "C143" or "C197" or "C198" or "C204" or "C230")
-                    problems.Add($"{magic} ({layout.Name}) has unresolved dynamic resource selection; complete packaging cannot be established.");
             }
             else if (magic is not ("TMDH" or "TMPP" or "TMAL" or "TMAC" or "TMTR" or "TMFC"))
                 problems.Add($"Unknown timeline entry {magic}.");
@@ -113,11 +96,8 @@ internal static class AnimationDependencies
                     if (position < start || position >= end) throw new InvalidDataException($"Invalid {magic} string offset.");
                     var path = ReadString(bytes, (int)position, end);
                     if (path.Length > 0)
-                    {
                         references.Add(new AnimationReference(path,
                             magic == "C002" ? "timeline" : magic is "C009" or "C010" ? "animation" : "resource"));
-                        strings?.Add(new TimelineString(magic, (int)position, path, cursor + field, cursor + 8));
-                    }
                 }
             }
             cursor += size;

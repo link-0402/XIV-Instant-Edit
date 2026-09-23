@@ -357,7 +357,8 @@ public sealed partial class PenumbraService
         }
     }
 
-    private bool TryGetModList(out Dictionary<string, string> modList)
+    /// <summary> Reads the mod list, distinguishing an IPC failure from an empty list. </summary>
+    internal bool TryGetModList(out Dictionary<string, string> modList)
     {
         try
         {
@@ -366,7 +367,7 @@ public sealed partial class PenumbraService
         }
         catch (Exception e)
         {
-            _log.Error(e, "Could not retrieve the Penumbra mod list for export.");
+            _log.Error(e, "Could not retrieve the Penumbra mod list.");
             modList = new Dictionary<string, string>();
             return false;
         }

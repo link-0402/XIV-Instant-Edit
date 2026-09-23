@@ -6,35 +6,7 @@ namespace InstantEdit.Services.Animations;
 
 internal static class AnimationPoseRules
 {
-    public static bool ValidStartupDuration(float duration) => float.IsFinite(duration) && duration is >= 0 and <= 2;
-
-    /// <summary>
-    /// Startup generation retargets the loop, startup and optional idle onto the
-    /// live rig independently, so only that destination has to agree. Differing
-    /// source skeletons (bone counts included) are expected and harmless, and a
-    /// null idle simply means the transition starts from the reference pose.
-    /// </summary>
-    public static string? StartupTargetMismatch(AnimationClip loop, AnimationClip startup, AnimationClip? idle,
-        SkeletonDescription target)
-    {
-        if (loop.Partial != startup.Partial || loop.TargetSkeleton?.Fingerprint != target.Fingerprint)
-            return "The loop and startup target skeletons are incompatible.";
-        if (idle != null && (idle.Partial != startup.Partial || idle.TargetSkeleton?.Fingerprint != target.Fingerprint))
-            return "The character idle and startup target skeletons are incompatible.";
-        return null;
-    }
-
-    /// <summary>
-    /// A retimed clip still has to land on a sane sample grid and keep its
-    /// timeline's 16-bit frame times in range, so the length is bounded well
-    /// inside what SampleCount would accept.
-    /// </summary>
-    public static bool ValidRetimeDuration(float duration) =>
-        float.IsFinite(duration) && duration is > 0 and <= 600;
-
     public static float SmoothStep(float t) => t * t * (3 - 2 * t);
-
-    public static int StartupSampleCount(float duration) => SampleCount(duration, 2);
 
     public static float BlendFloat(float from, float to, float t) => InterpolateFloat(from, to, SmoothStep(t));
 

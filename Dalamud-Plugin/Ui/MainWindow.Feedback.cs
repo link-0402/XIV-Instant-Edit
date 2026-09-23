@@ -135,5 +135,18 @@ public sealed partial class MainWindow
         int Order,
         string OptionMapping,
         IReadOnlyList<string> OptionMemberships,
-        List<ResourceView> Children);
+        List<ResourceView> Children)
+    {
+        // Classified once: the type filters and tree drawing query these every frame.
+        // Children are complete when a view is constructed and are never mutated.
+        public ResourceKinds Kinds { get; } = ResourceKindClassifier.Classify(Type, GamePath, ActualPath);
+        public ResourceKinds DescendantKinds { get; } =
+            Children.Aggregate(ResourceKinds.None, (kinds, child) => kinds | child.SubtreeKinds);
+        public ResourceKinds SubtreeKinds => Kinds | DescendantKinds;
+
+        private ResourceView[]? _flattened;
+
+        /// <summary> This view followed by all of its descendants, depth first. </summary>
+        public IReadOnlyList<ResourceView> Flattened => _flattened ??= Flatten(this).ToArray();
+    }
 }

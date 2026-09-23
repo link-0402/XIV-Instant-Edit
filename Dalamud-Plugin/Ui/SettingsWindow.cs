@@ -14,10 +14,11 @@ public sealed class SettingsWindow
     private readonly IPluginLog _log;
     private readonly Action _requestCacheSynchronization;
     private readonly Action _openSetup;
+    private readonly string _cacheStartupError;
     private bool _open;
 
     public SettingsWindow(Configuration config, Action saveConfig, Action restartExportListener, IPluginLog log,
-        Action requestCacheSynchronization, Action openSetup)
+        Action requestCacheSynchronization, Action openSetup, string cacheStartupError = "")
     {
         _config = config;
         _saveConfig = saveConfig;
@@ -25,6 +26,7 @@ public sealed class SettingsWindow
         _log = log;
         _requestCacheSynchronization = requestCacheSynchronization;
         _openSetup = openSetup;
+        _cacheStartupError = cacheStartupError;
     }
 
     public bool IsOpen { get => _open; set => _open = value; }
@@ -81,6 +83,14 @@ public sealed class SettingsWindow
         ImGui.TextWrapped("When enabled, completed model cache jobs and inactive texture-edit sessions older than 24 hours are removed. Active sessions and unsaved texture edits are kept.");
         try { ImGui.TextWrapped($"Managed cache: {TextureFiles.CacheRootFor(_config.TextureCacheDirectory)}"); }
         catch (Exception e) { ImGui.TextWrapped($"Cache directory is invalid: {e.Message}"); }
+        if (_cacheStartupError.Length > 0)
+        {
+            ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(.95f, .45f, .4f, 1));
+            ImGui.TextWrapped($"The cache could not be opened when the plugin loaded: {_cacheStartupError} " +
+                "Choose another cache directory (or empty this one), then reload the plugin. " +
+                "Model backups are kept in the plugin's config folder until then.");
+            ImGui.PopStyleColor();
+        }
         ImGui.End();
     }
 
