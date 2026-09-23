@@ -38,6 +38,27 @@ def run() -> None:
         assert root == (base / cache.CACHE_FOLDER).resolve()
         assert json.loads((root / ".instant-edit-cache.json").read_text("utf-8"))["schema"] == cache.CACHE_SCHEMA
 
+        # Temp cleaners delete the old marker while newer cache files survive; a
+        # cache holding only its own entries re-adopts itself, a foreign entry is refused.
+        (root / ".instant-edit-cache.json").unlink()
+        (root / "Contexts").mkdir()
+        (root / "Contexts" / f"{uuid.uuid4().hex}.json").write_text("{}", encoding="utf-8")
+        (root / "TextureSessions.json").write_text("[]", encoding="utf-8")
+        (root / f".pending-context-revocations.json.{uuid.uuid4().hex}.tmp").write_text("{", encoding="utf-8")
+        assert cache.ensure_cache_root() == root
+        assert (root / ".instant-edit-cache.json").is_file()
+        (root / ".instant-edit-cache.json").unlink()
+        foreign_entry = root / "notes.txt"
+        foreign_entry.write_text("user file", encoding="utf-8")
+        try:
+            cache.ensure_cache_root()
+        except ValueError:
+            assert not (root / ".instant-edit-cache.json").exists()
+        else:
+            raise AssertionError("an unmarked cache with a foreign entry was adopted")
+        foreign_entry.unlink()
+        assert cache.ensure_cache_root() == root
+
         handoff = base / "handoff" / uuid.uuid4().hex
         preview = handoff / "preview"
         preview.mkdir(parents=True)

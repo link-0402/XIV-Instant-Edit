@@ -41,7 +41,7 @@ Additionally, it supports full software-independent texture editing as well as a
 
 1. Type /ie to open the plugin interface ingame. Click Refresh character list.
 2. Start Blender. Verify the plugin shows Blender as "Online".
-3. Verify import options both in-game and inside the add-on, then click "Edit" on the model you want to import to Blender.
+3. Verify the model options both in-game (under **Options**) and inside the add-on, then click "Edit" on the model you want to import to Blender.
 4. Edit the model as you normally would.
 5. Pick the desired export context from the list:
    - "In-place" overwrites the exact model that you imported. This is the default export location.
@@ -59,13 +59,16 @@ Additionally, it supports full software-independent texture editing as well as a
    For vanilla textures, enable **Include Vanilla** and enter a new mod name.
 3. Edit the opened TGA, and save that same file as **32-bit TGA with an 8-bit
    alpha channel**. Usually, simply hitting the save shortcut (for example Ctrl+S) is sufficient.
-   Uncompressed and RLE TGA saves are supported. Keep the original
-   dimensions. Layered documents need a flattened TGA copy saved over the working
-   file.
+   Uncompressed and RLE TGA saves are supported. You can change the resolution
+   (up to 8192 × 8192); compressed formats need a width and height divisible by 4.
+   Layered documents need a flattened TGA copy saved over the working file.
 4. After the save settles, Instant Edit converts it to the original TEX format,
    replaces the mod file with a backup, reloads the mod, and redraws the selected
    actor and the local player/owned entities. A vanilla override is created and
-   enabled in the captured collection on the first changed save.
+   enabled in the captured collection on the first changed save. To save
+   uncompressed instead, turn off **Recompress saved textures** under **Options**.
+5. Sessions pause when the game or plugin restarts. Opening the texture again
+   (or **Open in editor** in **Texture Edit Sessions**) resumes it.
 
 
 ## Additional notes
@@ -86,8 +89,11 @@ Main Features
 The optional texture import uses the effective MTRL and TEX files resolved for the
 selected model and packs the generated images into the Blender file. It is a
 practical Principled BSDF approximation, not an exact reproduction of FFXIV's
-shader pipeline. Character gear without a diffuse map is composed from its
-colorset, index, normal, and mask textures. Missing or unsupported
+shader pipeline. Character gear is composed from its colorset, index, normal,
+mask, and (in compatibility mode) diffuse textures, including colorset
+roughness, metalness, and emission. Transparency follows each material's own
+settings: translucent materials such as sheer fabric blend, while others cut
+out at the material's alpha threshold. Missing or unsupported
 resources keep the existing colored placeholder and produce a warning without
 blocking model import. Note that the texture import is for preview purposes only.
 Making changes to them in Blender will not affect the exported model.

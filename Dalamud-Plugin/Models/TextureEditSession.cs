@@ -24,9 +24,13 @@ public sealed record TextureEditSession
     public string ActorName { get; init; } = "";
     public Guid? CollectionId { get; init; }
     public string CollectionName { get; init; } = "";
+    /// <summary>Format captured when the session opened; recompressed saves keep it.</summary>
     public uint Format { get; init; }
-    public int Width { get; init; }
-    public int Height { get; init; }
+    /// <summary>Format of the texture currently committed to the destination.</summary>
+    public uint SavedFormat { get; set; }
+    /// <summary>Dimensions of the texture currently committed to the destination.</summary>
+    public int Width { get; set; }
+    public int Height { get; set; }
     public bool MipMaps { get; init; }
     public string LastCommittedHash { get; set; } = "";
     public string PixelHash { get; set; } = "";
@@ -48,6 +52,6 @@ internal interface ITextureEditBackend
 {
     Task<TextureSource> CaptureAsync(TextureEditRequest request, CancellationToken token);
     Task ConvertAsync(string input, string output, TextureType format, bool mipMaps);
-    Task<TextureCommit> CommitAsync(TextureEditSession session, byte[] tex, Func<bool> stillCurrent, CancellationToken token, bool restoring = false);
+    Task<TextureCommit> CommitAsync(TextureEditSession session, byte[] tex, Func<bool> stillCurrent, CancellationToken token);
     Task<string> RefreshAsync(TextureEditSession session, CancellationToken token);
 }

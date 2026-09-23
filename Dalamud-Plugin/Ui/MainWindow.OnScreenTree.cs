@@ -15,6 +15,18 @@ namespace InstantEdit.Ui;
 
 public sealed partial class MainWindow
 {
+    private static readonly string[] ResourceTypeFilterGroups = ["Tree Structure", "Models", "Textures"];
+
+    // View-model caches: drawing must not rebuild, re-classify, or re-search the resource
+    // tree every frame. They are replaced when the snapshot, filter, or search changes.
+    private IReadOnlyList<OnScreenObject>? _actorSnapshot;
+    private bool _actorSnapshotIncludesVanilla;
+    private List<ActorView> _actors = [];
+    private ActorView[] _resourceTypeCountActors = [];
+    private readonly int[] _resourceTypeCounts = new int[ResourceTypeFilterGroups.Length];
+    private readonly Dictionary<ResourceView, bool> _searchMatches = new(ReferenceEqualityComparer.Instance);
+    private string _searchMatchesFilter = string.Empty;
+
     private static void Status(string name, bool good, string value)
         => Status(name, good ? BlenderConnectionState.Online : BlenderConnectionState.Offline, value);
 
@@ -81,10 +93,7 @@ public sealed partial class MainWindow
 
     private void DrawModResourceRows(ActorView actor)
     {
-        var resources = actor.Roots
-            .Where(HasResourceTypeMatch)
-            .OrderBy(resource => resource.GamePath, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        // BuildModView sorts the roots by game path once, so this only filters them.
         var flags = ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.BordersOuter |
                     ImGuiTableFlags.Resizable | ImGuiTableFlags.SizingStretchProp;
         if (!ImGui.BeginTable("##mod-resource-table", 4, flags))
@@ -99,14 +108,21 @@ public sealed partial class MainWindow
         if (IsFilteredResourceView)
         {
             var row = 0;
-            foreach (var root in resources)
-                foreach (var resource in Flatten(root).Where(MatchesSelectedResourceType))
-                    DrawFlatNode(actor, root, resource, $"mod:flat:{row++}", true);
+            foreach (var root in actor.Roots)
+            {
+                if (!HasResourceTypeMatch(root))
+                    continue;
+                foreach (var resource in root.Flattened)
+                    if (MatchesSelectedResourceType(resource))
+                        DrawFlatNode(actor, root, resource, $"mod:flat:{row++}", true);
+            }
         }
         else
         {
-            for (var i = 0; i < resources.Count; i++)
-                DrawNode(actor, resources[i], $"mod:{i}", 0, false, false, true);
+            var index = 0;
+            foreach (var root in actor.Roots)
+                if (HasResourceTypeMatch(root))
+                    DrawNode(actor, root, $"mod:{index++}", 0, false, false, true);
         }
 
         ImGui.EndTable();
@@ -146,8 +162,11 @@ public sealed partial class MainWindow
         var row = 0;
         foreach (var root in roots)
         {
-            foreach (var resource in Flatten(root).Where(x => MatchesSelectedResourceType(x) && (!filterBySearch || Matches(x))))
-                DrawFlatNode(actor, root, resource, $"{key}:flat:{row++}");
+            foreach (var resource in root.Flattened)
+            {
+                if (MatchesSelectedResourceType(resource) && (!filterBySearch || Matches(resource)))
+                    DrawFlatNode(actor, root, resource, $"{key}:flat:{row++}");
+            }
         }
     }
 
@@ -196,8 +215,7 @@ public sealed partial class MainWindow
         // Only descend into children IE can actually edit (or that themselves
         // contain one) - resources like animations, skeletons, or VFX have
         // nothing to open here, so they're dropped from the tree entirely.
-        var children = node.Children.Where(HasResourceTypeMatch).ToList();
-        var hasChildren = children.Count > 0;
+        var hasChildren = HasChildResourceTypeMatch(node);
         var model = IsModel(node);
         var expanded = autoExpandSearch || _expanded.Contains(key);
         var arrow = hasChildren ? (expanded ? "▼" : "▶") : "  ";
@@ -235,9 +253,16 @@ public sealed partial class MainWindow
         else DrawTextureAction(node, actor);
         if (expanded && hasChildren)
         {
-            for (var i = 0; i < children.Count; i++)
-                if (!filterBySearch || Matches(children[i]))
-                    DrawNode(actor, children[i], $"{scope}:{i}", depth + 1, filterBySearch, autoExpandSearch, showOptionMapping);
+            // Child IDs count every type-matching child, including ones the search hides.
+            var childIndex = 0;
+            foreach (var child in node.Children)
+            {
+                if (!HasResourceTypeMatch(child))
+                    continue;
+                var i = childIndex++;
+                if (!filterBySearch || Matches(child))
+                    DrawNode(actor, child, $"{scope}:{i}", depth + 1, filterBySearch, autoExpandSearch, showOptionMapping);
+            }
         }
         ImGui.PopID();
     }
@@ -287,23 +312,45 @@ public sealed partial class MainWindow
 
     private void DrawResourceTypeFilters(IReadOnlyList<ActorView> actors)
     {
-        var groups = new[] { "Tree Structure", "Models", "Textures" };
+        var counts = ResourceTypeCounts(actors);
         ImGui.Spacing();
         ImGui.TextColored(new Vector4(.58f, .61f, .69f, 1), "Filter"); ImGui.SameLine(0, 8);
-        foreach (var group in groups)
+        for (var i = 0; i < ResourceTypeFilterGroups.Length; i++)
         {
-            var filter = group == "Tree Structure" ? string.Empty : group;
-            var count = actors.SelectMany(x => x.Roots).SelectMany(Flatten)
-                .Count(node => MatchesResourceType(node, filter));
+            var group = ResourceTypeFilterGroups[i];
+            var filter = ResourceTypeFilterFor(group);
             ImGui.PushID($"resource-type-filter:{group}");
             var selected = _resourceTypeFilter == filter;
             if (selected) ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(.45f, .34f, .16f, 1));
-            if (ImGui.SmallButton($"{group}  {count}")) _resourceTypeFilter = filter;
+            if (ImGui.SmallButton($"{group}  {counts[i]}")) _resourceTypeFilter = filter;
             if (selected) ImGui.PopStyleColor();
-            if (group != groups[^1]) ImGui.SameLine(0, 6);
+            if (i < ResourceTypeFilterGroups.Length - 1) ImGui.SameLine(0, 6);
             ImGui.PopID();
         }
         ImGui.NewLine();
+    }
+
+    private static string ResourceTypeFilterFor(string group)
+        => group == "Tree Structure" ? string.Empty : group;
+
+    /// <summary> Filter-button counts, recomputed only when the displayed actors change. </summary>
+    private int[] ResourceTypeCounts(IReadOnlyList<ActorView> actors)
+    {
+        var unchanged = actors.Count == _resourceTypeCountActors.Length;
+        for (var i = 0; unchanged && i < actors.Count; i++)
+            unchanged = ReferenceEquals(actors[i], _resourceTypeCountActors[i]);
+        if (unchanged)
+            return _resourceTypeCounts;
+
+        for (var i = 0; i < ResourceTypeFilterGroups.Length; i++)
+        {
+            var filter = ResourceTypeFilterFor(ResourceTypeFilterGroups[i]);
+            _resourceTypeCounts[i] = actors.SelectMany(x => x.Roots).SelectMany(root => root.Flattened)
+                .Count(node => MatchesResourceType(node, filter));
+        }
+
+        _resourceTypeCountActors = actors.ToArray();
+        return _resourceTypeCounts;
     }
 
     private IReadOnlyList<PenumbraMod> ReadMods()
@@ -407,6 +454,7 @@ public sealed partial class MainWindow
                 resource.OptionMapping,
                 resource.OptionMemberships,
                 new List<ResourceView>()))
+            .OrderBy(resource => resource.GamePath, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         return new ActorView(
@@ -439,21 +487,43 @@ public sealed partial class MainWindow
             _ => "Resource",
         };
 
+    /// <summary> The root followed by its descendants, depth first. </summary>
     private static IEnumerable<ResourceView> Flatten(ResourceView root)
-    { yield return root; foreach (var child in root.Children) foreach (var item in Flatten(child)) yield return item; }
+    {
+        var pending = new Stack<ResourceView>();
+        pending.Push(root);
+        while (pending.Count > 0)
+        {
+            var node = pending.Pop();
+            yield return node;
+            for (var i = node.Children.Count - 1; i >= 0; i--)
+                pending.Push(node.Children[i]);
+        }
+    }
 
+    /// <summary> The On Screen view model, rebuilt only when the snapshot or the vanilla toggle changes. </summary>
     private List<ActorView> ReadActors()
     {
-        var result = new List<ActorView>();
-        foreach (var entity in _onScreen.Items)
+        var items = _onScreen.Items;
+        var includeVanilla = _config.IncludeVanillaResources;
+        if (ReferenceEquals(items, _actorSnapshot) && includeVanilla == _actorSnapshotIncludesVanilla)
+            return _actors;
+
+        var result = new List<ActorView>(items.Count);
+        foreach (var entity in items)
         {
             var parsed = OnScreenService.ProjectVisibleResourceNodes(
                     entity.ResourceRoots,
-                    _config.IncludeVanillaResources)
+                    includeVanilla)
                 .Select(ReadNode)
                 .ToList();
             result.Add(new ActorView(entity, entity.PresentationCategory.ToString(), Safe(entity.Name), parsed, entity.ObjectIndex));
         }
+
+        _actorSnapshot = items;
+        _actorSnapshotIncludesVanilla = includeVanilla;
+        _actors = result;
+        _searchMatches.Clear();
         return result;
     }
 
@@ -469,34 +539,18 @@ public sealed partial class MainWindow
     private bool IsFilteredResourceView => !string.IsNullOrWhiteSpace(_resourceTypeFilter);
 
     private bool HasResourceTypeMatch(ResourceView node)
-        => MatchesSelectedResourceType(node) || node.Children.Any(HasResourceTypeMatch);
+        => ResourceKindClassifier.ForFilter(_resourceTypeFilter) is not { } kinds || (node.SubtreeKinds & kinds) != 0;
+
+    private bool HasChildResourceTypeMatch(ResourceView node)
+        => ResourceKindClassifier.ForFilter(_resourceTypeFilter) is { } kinds
+            ? (node.DescendantKinds & kinds) != 0
+            : node.Children.Count > 0;
 
     private bool MatchesSelectedResourceType(ResourceView node)
         => MatchesResourceType(node, _resourceTypeFilter);
 
     private static bool MatchesResourceType(ResourceView node, string filter)
-    {
-        var type = Safe(node.Type).ToLowerInvariant();
-        var gamePath = Safe(node.GamePath).ToLowerInvariant();
-        var actualPath = Safe(node.ActualPath).ToLowerInvariant();
-        var isModel = type.Contains("model") || gamePath.EndsWith(".mdl") || actualPath.EndsWith(".mdl");
-        var isTexture = type.Contains("texture") || gamePath.EndsWith(".tex") || gamePath.EndsWith(".atex") || actualPath.EndsWith(".tex") || actualPath.EndsWith(".atex");
-        var isMaterial = type.Contains("material") || gamePath.EndsWith(".mtrl") || actualPath.EndsWith(".mtrl");
-
-        // The default "Tree Structure" view (no explicit filter) still omits
-        // resources IE cannot edit (animations, skeletons, VFX, etc.) rather
-        // than showing every resource Penumbra reports.
-        if (string.IsNullOrWhiteSpace(filter))
-            return isModel || isTexture || isMaterial;
-
-        return filter switch
-        {
-            "Models" => isModel,
-            "Textures" => isTexture,
-            "Materials" => isMaterial,
-            _ => true,
-        };
-    }
+        => ResourceKindClassifier.ForFilter(filter) is not { } kinds || (node.Kinds & kinds) != 0;
 
     private void ToggleExpanded(string key, bool expanded, bool defaultExpanded)
     {
@@ -559,19 +613,31 @@ public sealed partial class MainWindow
             _ => false,
         };
     }
+    /// <summary> Search match for a node or any descendant, memoized per search text and snapshot. </summary>
     private bool Matches(ResourceView node)
     {
         var filter = Safe(_filter);
-        var children = node.Children;
-        return string.IsNullOrWhiteSpace(filter)
-            || Safe(node.Name).Contains(filter, StringComparison.OrdinalIgnoreCase)
+        if (string.IsNullOrWhiteSpace(filter))
+            return true;
+        if (!string.Equals(filter, _searchMatchesFilter, StringComparison.Ordinal))
+        {
+            _searchMatches.Clear();
+            _searchMatchesFilter = filter;
+        }
+
+        if (_searchMatches.TryGetValue(node, out var matches))
+            return matches;
+
+        matches = Safe(node.Name).Contains(filter, StringComparison.OrdinalIgnoreCase)
             || Safe(node.Type).Contains(filter, StringComparison.OrdinalIgnoreCase)
             || Safe(node.SourceLabel).Contains(filter, StringComparison.OrdinalIgnoreCase)
             || Safe(node.SourceModName).Contains(filter, StringComparison.OrdinalIgnoreCase)
             || Safe(node.SourceRelativePath).Contains(filter, StringComparison.OrdinalIgnoreCase)
             || Safe(node.GamePath).Contains(filter, StringComparison.OrdinalIgnoreCase)
             || Safe(node.ActualPath).Contains(filter, StringComparison.OrdinalIgnoreCase)
-            || children.Any(Matches);
+            || node.Children.Any(Matches);
+        _searchMatches[node] = matches;
+        return matches;
     }
     private bool LoadSlotIcons(IUiBuilder uiBuilder, ITextureProvider textureProvider)
     {

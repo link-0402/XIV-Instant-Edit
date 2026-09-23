@@ -610,6 +610,7 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
         lock (libraryLock) library = sessionLibrary;
         candidates.AddRange(library.Select(entry => entry.CandidateFor(expected, sourceIdentity)));
         var baseline = candidates.FirstOrDefault(c => c.Source.Kind == SkeletonSourceKind.Game && c.Source.Resource.GamePath == expected && c.Source.Variant.Length == 0)?.Skeleton;
-        return Rank(channels, candidates, baseline, expected, manual, sourceIdentity);
+        // Keep which bones the clip animates; the selected source names them.
+        return Rank(channels, candidates, baseline, expected, manual, sourceIdentity) with { TrackBones = channels.Bones };
     }
 }

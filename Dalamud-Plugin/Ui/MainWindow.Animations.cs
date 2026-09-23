@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using InstantEdit.Models;
@@ -16,9 +16,6 @@ public sealed partial class MainWindow
     private AnimationDestination animationDestination = AnimationDestination.NewMod;
     private bool animationStartupSelected;
     private bool animationIncludeStartup;
-    private AnimationStartupPose animationStartupPose = AnimationStartupPose.ReferencePose;
-    private float animationStartupDuration;
-    private string? animationStartupSettingsKey;
     private string animationModName = "";
 
     internal void AttachAnimations(AnimationEditService? service, string? error)
@@ -34,20 +31,10 @@ public sealed partial class MainWindow
         animationSelection = capture;
         animationBones.Clear();
         animationBones.UnionWith(capture.Pose.Bones.Where(b => b.Id.Partial == capture.Clip.Partial && b.Id.Slot == 0).Select(b => b.Id));
+        ResetAnimatedBones();
         animationComponents = PoseComponents.All;
         animationStartupSelected = startup && capture.Startup != null;
-        animationStartupSettingsKey = null;
-        SyncStartupSettings(capture);
         animationModName = AnimationPresentation.DefaultModName(capture);
-    }
-
-    private void SyncStartupSettings(AnimationCapture capture)
-    {
-        var key = $"{capture.Id}:{capture.Startup?.GamePath}:{capture.Startup?.BindingFingerprint}:{capture.Startup?.Duration}";
-        if (animationStartupSettingsKey == key) return;
-        animationStartupSettingsKey = key;
-        animationStartupPose = AnimationStartupPose.ReferencePose;
-        animationStartupDuration = Math.Clamp(capture.Startup?.Duration ?? 0, 0, 2);
     }
 
     private void DrawAnimations()
@@ -73,10 +60,9 @@ public sealed partial class MainWindow
             };
         }
         if (animationSelection != null && animationSelection.ActorId != animations.Observer.Actor)
-        { animationSelection = null; animationBones.Clear(); }
+        { animationSelection = null; animationBones.Clear(); ResetAnimatedBones(); }
         if (animationSelection is { Playing: false } staleSelection && !AnimationPresentation.Ready(staleSelection))
-        { animationSelection = null; animationBones.Clear(); }
-        if (animationSelection is { } selectedSettings) SyncStartupSettings(selectedSettings);
+        { animationSelection = null; animationBones.Clear(); ResetAnimatedBones(); }
 
         var entries = AnimationPresentation.ListItems(history);
         var width = Math.Max(230, Math.Min(340, ImGui.GetContentRegionAvail().X * 0.34f));
@@ -117,6 +103,8 @@ public sealed partial class MainWindow
         {
             ImGui.Spacing();
             DrawLivePoseAdjustments(capture);
+            ImGui.Spacing();
+            DrawAnimatedBones(capture);
             ImGui.Spacing();
             DrawAnimationActions(capture);
         }
@@ -305,10 +293,21 @@ public sealed partial class MainWindow
                 blocked ??= "This animation has no writable Penumbra source. Choose Create new mod.";
         }
         if (blocked != null) ImGui.TextWrapped(blocked);
+        // Bones unticked under Animated Bones are left out of every rebake in this row.
+        ImmutableArray<string> excluded = [.. animationExcludedBones.Order(StringComparer.Ordinal)];
+        var exclusionBlocked = AnimationBones.Problem(capture.Clip, excluded);
+        var offsetConflict = AnimationBones.OffsetConflict(excluded, animationBones.Select(b => b.Name));
+        if (exclusionBlocked != null) ImGui.TextWrapped(exclusionBlocked);
+        else if (!excluded.IsEmpty)
+        {
+            ImGui.TextDisabled($"{excluded.Length} unticked bone{(excluded.Length == 1 ? "" : "s")} will be left out of the rebake.");
+            if (offsetConflict != null) ImGui.TextWrapped(offsetConflict);
+        }
         var poseUnavailable = capture.PoseUnavailableReason != null;
-        ImGui.BeginDisabled(animations!.Busy || blocked != null || poseUnavailable || animationBones.Count == 0 || animationComponents == PoseComponents.None);
+        ImGui.BeginDisabled(animations!.Busy || blocked != null || exclusionBlocked != null || offsetConflict != null ||
+            poseUnavailable || animationBones.Count == 0 || animationComponents == PoseComponents.None);
         if (ImGui.Button("Rebake with LivePose")) animations.Edit(new AnimationBakeRequest(Guid.NewGuid(), capture, animationDestination,
-            animationModName.Trim(), includeStartup, animationBones.ToImmutableHashSet(), animationComponents));
+            animationModName.Trim(), includeStartup, animationBones.ToImmutableHashSet(), animationComponents, ExcludedBones: excluded));
         ImGui.EndDisabled();
         ImGui.SameLine();
         string? repairBlocked = capture.UnavailableReason ?? clips.Select(SkeletonBlock).FirstOrDefault(reason => reason != null);
@@ -319,71 +318,19 @@ public sealed partial class MainWindow
             if (paths.Any(p => !capture.Sources.Any(s => s.GamePath == p && AnimationResources.CanReplace(s))))
                 repairBlocked ??= "This animation has no writable Penumbra source. Choose Create new mod.";
         }
-        ImGui.BeginDisabled(animations.Busy || repairBlocked != null);
+        ImGui.BeginDisabled(animations.Busy || repairBlocked != null || exclusionBlocked != null);
         if (ImGui.Button("Repair skeleton")) animations.Edit(new AnimationBakeRequest(Guid.NewGuid(), capture, animationDestination,
-            animationModName.Trim(), includeStartup, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.RepairSkeleton));
+            animationModName.Trim(), includeStartup, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.RepairSkeleton,
+            ExcludedBones: excluded));
         ImGui.EndDisabled();
-
-        DrawStartupTransitionAction(capture);
-        DrawRetimeAction(capture);
-        DrawFaceAction(capture);
-        DrawSlotSwapAction(capture);
-    }
-
-    private void DrawStartupTransitionAction(AnimationCapture capture)
-    {
-        if (animationStartupSelected || !capture.Clip.IsLoop) return;
-
-        ImGui.Separator();
-        ImGui.TextUnformatted("Create startup transition");
-        ImGui.TextWrapped("Replace only the linked startup animation with a transition into this loop. The loop itself is unchanged.");
-        if (capture.Startup is not { } startup)
-        {
-            ImGui.TextDisabled("Unavailable: this loop has no unique linked startup animation.");
-            return;
-        }
-
-        string? blocked = capture.UnavailableReason ?? StartupSkeletonBlock(capture.Clip) ?? StartupSkeletonBlock(startup);
-        if (animationDestination == AnimationDestination.NewMod)
-            blocked ??= capture.PackagingError;
-        else if (!capture.Sources.Any(s => s.GamePath == startup.GamePath && AnimationResources.CanReplace(s)))
-            blocked ??= "The linked startup has no writable Penumbra source. Choose Create new mod.";
-
-        if (ImGui.BeginCombo("Start pose", animationStartupPose == AnimationStartupPose.ReferencePose
-                ? "Reference pose" : "Character idle"))
-        {
-            foreach (var pose in Enum.GetValues<AnimationStartupPose>())
-            {
-                var label = pose == AnimationStartupPose.ReferencePose ? "Reference pose" : "Character idle";
-                if (ImGui.Selectable(label, pose == animationStartupPose)) animationStartupPose = pose;
-            }
-            ImGui.EndCombo();
-        }
-        ImGui.SetNextItemWidth(180);
-        ImGui.InputFloat("Blend duration (seconds)", ref animationStartupDuration, 0.05f, 0.1f, "%.2f");
-        animationStartupDuration = Math.Clamp(animationStartupDuration, 0, 2);
-        ImGui.TextDisabled("Smooth ease-in/out; duration is limited to 0.00–2.00 seconds.");
-        if (animationStartupPose == AnimationStartupPose.CharacterIdle)
-            ImGui.TextDisabled("Character idle uses timeline 3's resolved resident/idle.pap body clip; an unavailable or ambiguous source disables generation.");
-
-        if (blocked != null) ImGui.TextWrapped("Unavailable: " + blocked);
-        var invalidDuration = !float.IsFinite(animationStartupDuration) || animationStartupDuration is < 0 or > 2;
-        if (animations!.Busy) ImGui.TextDisabled("Unavailable: another animation operation is in progress.");
-        if (invalidDuration) ImGui.TextDisabled("Unavailable: enter a duration from 0.00 to 2.00 seconds.");
-        ImGui.BeginDisabled(animations!.Busy || blocked != null || invalidDuration);
-        if (ImGui.Button("Create startup transition"))
-            animations.Edit(new AnimationBakeRequest(Guid.NewGuid(), capture, animationDestination,
-                animationModName.Trim(), false, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None,
-                AnimationOperation.CreateStartup, StartupOptions: new AnimationStartupOptions(
-                    animationStartupPose, animationStartupDuration)));
+        ImGui.SameLine();
+        // Needs no LivePose; the source, skeleton and destination checks behind the
+        // repair button are the ones this rebake needs too.
+        ImGui.BeginDisabled(animations.Busy || repairBlocked != null || exclusionBlocked != null || excluded.IsEmpty);
+        if (ImGui.Button("Rebake without unticked bones")) animations.Edit(new AnimationBakeRequest(Guid.NewGuid(), capture,
+            animationDestination, animationModName.Trim(), includeStartup, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None,
+            AnimationOperation.ExcludeBones, ExcludedBones: excluded));
         ImGui.EndDisabled();
-    }
-
-    private static string? StartupSkeletonBlock(AnimationClip clip)
-    {
-        if (clip.TargetSkeleton == null) return "The live target skeleton is unavailable.";
-        return clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: not null }
-            ? clip.Resolution?.Reason ?? "A compatible animation source skeleton is still being identified." : null;
     }
 
     private static string? SkeletonBlock(AnimationClip clip) => clip.Resolution is { State: not SkeletonResolutionState.Matched } resolution

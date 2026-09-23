@@ -78,8 +78,11 @@ public sealed class TextureEditService : IDisposable
                     MigrateLegacyWorkingFile(s);
                     TextureFiles.EnsureLocalPath(s.TargetFile);
                     _ = TextureFiles.OutputType(s.Format);
+                    // Sessions from before optional recompression always saved in their captured format.
+                    if (s.SavedFormat == 0) s.SavedFormat = s.Format;
+                    if (!TextureFiles.IsSessionFormat(s.SavedFormat, s)) throw new IOException("Invalid texture session format.");
                     s.Paused = true;
-                    s.Status = s.Conflict ? s.Status : "Paused after restart. Resume to apply saved changes.";
+                    s.Status = s.Conflict ? s.Status : "Paused after restart. Open the texture again or Resume to apply saved changes.";
                     if (!_sessions.TryAdd(s.Id, new Runtime(s))) throw new IOException("Duplicate texture session identity.");
                 }
             }
@@ -155,20 +158,20 @@ public sealed class TextureEditService : IDisposable
         {
             EnsureReady();
             if (launchEditor) ValidateEditor();
-            var existing = _sessions.Values.FirstOrDefault(r => !r.Session.Conflict &&
-                (string.IsNullOrEmpty(request.ModDirectory)
-                    ? r.Session.NewModName.Length > 0 && r.Session.GamePath == request.GamePath && r.Session.CollectionId.HasValue &&
-                      r.Session.ObjectIndex == request.ObjectIndex && r.Session.ActorAddress == request.ActorAddress
-                    : string.Equals(r.Session.TargetFile, request.ActualPath, StringComparison.OrdinalIgnoreCase)));
+            var existing = _sessions.Values.FirstOrDefault(r => IsReusableFor(r.Session, request));
             if (existing is not null)
             {
                 if (launchEditor) Launch(existing.Session.WorkingFile);
+                ResumeIfPaused(existing);
                 return existing.Session.Id;
             }
             var root = EnsureConfiguredCache();
             var source = await _backend.CaptureAsync(request, _life.Token).ConfigureAwait(false);
             _life.Token.ThrowIfCancellationRequested();
-            var session = source.Session with { CacheRoot = root, Paused = true, Status = "Preparing working image" };
+            var session = source.Session with
+            {
+                CacheRoot = root, SavedFormat = source.Session.Format, Paused = true, Status = "Preparing working image",
+            };
             TextureFiles.EnsureLocalPath(session.Directory);
             Directory.CreateDirectory(session.Directory);
             var runtime = new Runtime(session);
@@ -207,7 +210,29 @@ public sealed class TextureEditService : IDisposable
         finally { _gate.Release(); }
     }
 
-    public void OpenEditor(Guid id) => Launch(Get(id).Session.WorkingFile);
+    /// <summary>A session that finished opening and has no source conflict continues when its texture is opened again.</summary>
+    internal static bool IsReusableFor(TextureEditSession session, TextureEditRequest request)
+        => !session.Conflict && session.PixelHash.Length > 0 &&
+           (string.IsNullOrEmpty(request.ModDirectory)
+               ? session.NewModName.Length > 0 && session.GamePath == request.GamePath && session.CollectionId.HasValue &&
+                 session.ObjectIndex == request.ObjectIndex && session.ActorAddress == request.ActorAddress
+               : string.Equals(session.TargetFile, request.ActualPath, StringComparison.OrdinalIgnoreCase));
+
+    public TextureEditSession? FindReusable(TextureEditRequest request) => Sessions.FirstOrDefault(s => IsReusableFor(s, request));
+
+    /// <summary>Opening the working image means editing continues, so a paused session resumes.</summary>
+    public async Task OpenEditorAsync(Guid id)
+    {
+        Launch(Get(id).Session.WorkingFile);
+        await _gate.WaitAsync(_life.Token).ConfigureAwait(false);
+        try
+        {
+            EnsureReady();
+            ResumeIfPaused(Get(id));
+        }
+        finally { _gate.Release(); }
+    }
+
     public void OpenFolder(Guid id)
     {
         var path = Get(id).Session.Directory;
@@ -260,21 +285,30 @@ public sealed class TextureEditService : IDisposable
         runtime.Enabled = false;
         runtime.Changed();
         await _gate.WaitAsync(_life.Token).ConfigureAwait(false);
-        try
-        {
-            var s = Get(id).Session;
-            if (!paused && s.Conflict) throw new IOException("This session has a source conflict. Its TGA is retained; reopen the texture from the browser.");
-            if (!paused && s.PixelHash.Length == 0) throw new IOException("This session did not finish opening. Discard it and reopen the texture.");
-            TextureFiles.EnsureLocalPath(s.Directory);
-            s.Paused = paused;
-            runtime.RetryAt = 0;
-            runtime.Failures = 0;
-            s.Status = paused ? "Paused" : "Watching for saves";
-            runtime.Enabled = !paused;
-            if (!paused) ArmWatcher(runtime);
-            Persist();
-        }
+        try { ApplyPaused(Get(id), paused); }
         finally { _gate.Release(); }
+    }
+
+    // Callers hold the queue gate.
+    private void ApplyPaused(Runtime runtime, bool paused)
+    {
+        var s = runtime.Session;
+        if (!paused && s.Conflict) throw new IOException("This session has a source conflict. Its TGA is retained; reopen the texture from the browser.");
+        if (!paused && s.PixelHash.Length == 0) throw new IOException("This session did not finish opening. Discard it and reopen the texture.");
+        TextureFiles.EnsureLocalPath(s.Directory);
+        s.Paused = paused;
+        runtime.RetryAt = 0;
+        runtime.Failures = 0;
+        s.Status = paused ? "Paused" : "Watching for saves";
+        runtime.Enabled = !paused;
+        if (!paused) ArmWatcher(runtime);
+        Persist();
+    }
+
+    private void ResumeIfPaused(Runtime runtime)
+    {
+        var s = runtime.Session;
+        if (s.Paused && !s.Conflict && s.PixelHash.Length > 0) ApplyPaused(runtime, false);
     }
 
     public async Task RetryAsync(Guid id)
@@ -302,13 +336,17 @@ public sealed class TextureEditService : IDisposable
             var source = string.IsNullOrEmpty(s.LastBackup) ? Path.Combine(s.Directory, "original.tex")
                 : _backups.Resolve(target.Id, Path.GetFileName(s.LastBackup));
             var original = TextureFiles.Read(source);
+            // Earlier saves may have been resized or stored uncompressed, so the backup's size can differ.
             var h = TextureFiles.ReadTex(original);
-            if (h.Format != s.Format || h.Width != s.Width || h.Height != s.Height) throw new IOException("The backup does not match this session.");
+            if (!TextureFiles.IsSessionFormat(h.Format, s)) throw new IOException("The backup does not match this session.");
             _life.Token.ThrowIfCancellationRequested();
-            var result = await _backend.CommitAsync(s, original, () => !_life.IsCancellationRequested, _life.Token, restoring: true).ConfigureAwait(false);
+            var result = await _backend.CommitAsync(s, original, () => !_life.IsCancellationRequested, _life.Token).ConfigureAwait(false);
             s.LastCommittedHash = result.Hash;
             s.LastBackup = result.Backup;
             s.LastSaved = DateTimeOffset.UtcNow;
+            s.SavedFormat = h.Format;
+            s.Width = h.Width;
+            s.Height = h.Height;
             // Intentionally keep the artist's working image and pixel baseline unchanged.
             s.Status = "Backup restored. Session paused; working TGA retained.";
             Persist();
@@ -508,7 +546,9 @@ public sealed class TextureEditService : IDisposable
             runtime.RetryAt = 0;
         }
         if (Environment.TickCount64 < runtime.RetryAt) return;
-        TextureFiles.ValidateTga(tga, s.Width, s.Height);
+        var (width, height) = TextureFiles.ValidateTga(tga);
+        var format = TextureFiles.SaveFormat(s, _config.RecompressTextures);
+        TextureFiles.ValidateEncodable(format, width, height);
         await Task.Delay(150, _life.Token).ConfigureAwait(false);
         bool Current() => runtime.Enabled && !_life.IsCancellationRequested && generation == Interlocked.Read(ref runtime.Generation) &&
             TextureFiles.Hash(TextureFiles.Read(s.WorkingFile)) == hash;
@@ -524,9 +564,10 @@ public sealed class TextureEditService : IDisposable
         _life.Token.ThrowIfCancellationRequested();
         var rawPixels = TextureFiles.Read(pixels);
         var pixelHeader = TextureFiles.ReadTex(rawPixels);
-        if (pixelHeader.Width != s.Width || pixelHeader.Height != s.Height) throw new IOException("Decoded dimensions do not match the working image.");
+        if (pixelHeader.Width != width || pixelHeader.Height != height) throw new IOException("Decoded dimensions do not match the working image.");
         var pixelHash = TextureFiles.PixelHash(rawPixels);
-        if (pixelHash == s.PixelHash)
+        // A recompression setting change is applied by the next save even when its pixels are unchanged.
+        if (pixelHash == s.PixelHash && format == s.SavedFormat)
         {
             if (!Current()) return;
             s.WorkingHash = hash;
@@ -534,16 +575,19 @@ public sealed class TextureEditService : IDisposable
             Persist();
             return;
         }
-        await _backend.ConvertAsync(snapshot, output, TextureFiles.OutputType(s.Format), s.MipMaps).ConfigureAwait(false);
+        await _backend.ConvertAsync(snapshot, output, TextureFiles.OutputType(format), s.MipMaps).ConfigureAwait(false);
         _life.Token.ThrowIfCancellationRequested();
         if (!Current()) return;
         var converted = TextureFiles.Read(output);
-        TextureFiles.ValidateOutput(converted, s);
+        TextureFiles.ValidateOutput(converted, format, width, height, s.MipMaps);
         var result = await _backend.CommitAsync(s, converted, Current, _life.Token).ConfigureAwait(false);
         s.LastCommittedHash = result.Hash;
         s.LastBackup = result.Backup;
         s.PixelHash = pixelHash;
         s.WorkingHash = hash;
+        s.SavedFormat = format;
+        s.Width = width;
+        s.Height = height;
         s.LastSaved = DateTimeOffset.UtcNow;
         s.Status = result.Message;
         // Save commit identity before any refresh that may fail.

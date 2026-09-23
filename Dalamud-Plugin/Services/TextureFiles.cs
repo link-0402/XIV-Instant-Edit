@@ -16,7 +16,22 @@ internal static class TextureFiles
     public const string LegacyCacheFolder = "XIV-Instant-Edit";
     private const string CacheSchema = "instant-edit.cache";
     private const int CacheVersion = 1;
+    // Top-level entries the plugin or the Blender add-on write into the cache.
+    // Keep in sync with OWNED_ROOT_DIRECTORIES/OWNED_ROOT_FILES in Blender-Addon/instant_edit/cache.py.
+    private static readonly HashSet<string> OwnedRootDirectories = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "imports", "exports", "backups", "texture-edits", "AnimationEdits", "skeleton-library", "Contexts",
+    };
+    private static readonly HashSet<string> OwnedRootFiles = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "TextureSessions.json", "TextureSessions.json.tmp", "pending-context-revocations.json",
+    };
+    private static readonly System.Text.RegularExpressions.Regex OwnedRootTemporary = new(
+        @"^\.pending-context-revocations\.json\.[0-9a-f]{32}\.tmp$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     public const int MaxBytes = 512 * 1024 * 1024;
+    public const int MaxDimension = 8192;
+    private const uint Uncompressed = (uint)TexFile.TextureFormat.B8G8R8A8;
     public static string Hash(ReadOnlySpan<byte> data) => Convert.ToHexString(SHA256.HashData(data));
     public static TextureType OutputType(uint format) => (TexFile.TextureFormat)format switch
     {
@@ -34,6 +49,14 @@ internal static class TextureFiles
         TextureType.Bc1Tex => "BC1", TextureType.Bc3Tex => "BC3", TextureType.Bc4Tex => "BC4",
         TextureType.Bc5Tex => "BC5", TextureType.Bc7Tex => "BC7", _ => "BGRA32",
     };
+
+    public static bool IsBlockCompressed(uint format) => OutputType(format) != TextureType.RgbaTex;
+
+    /// <summary>Encoding for the next save: the captured format, or uncompressed when recompression is off.</summary>
+    public static uint SaveFormat(TextureEditSession session, bool recompress) => recompress ? session.Format : Uncompressed;
+
+    /// <summary>A session's destination holds either its captured format or an uncompressed save.</summary>
+    public static bool IsSessionFormat(uint format, TextureEditSession session) => format == session.Format || format == Uncompressed;
 
     public static string CacheRootFor(string cacheDirectory)
     {
@@ -67,12 +90,25 @@ internal static class TextureFiles
         }
         else
         {
-            if (Directory.EnumerateFileSystemEntries(root).Any())
+            // Temp cleaners delete the marker once it is old, while newer cache files
+            // survive. A folder holding only entries this cache creates is still ours.
+            if (Directory.EnumerateFileSystemEntries(root).Any(entry => !IsOwnedRootEntry(entry)))
                 throw new IOException("The cache directory is not empty and is not owned by XIV Instant Edit.");
             File.WriteAllText(marker, "{\"schema\":\"instant-edit.cache\",\"version\":1}");
         }
         foreach (var folder in new[] { "imports", "exports", "backups" })
             Directory.CreateDirectory(Path.Combine(root, folder));
+    }
+
+    private static bool IsOwnedRootEntry(string path)
+    {
+        var attributes = File.GetAttributes(path);
+        if ((attributes & FileAttributes.ReparsePoint) != 0)
+            return false;
+        var name = Path.GetFileName(path);
+        return (attributes & FileAttributes.Directory) != 0
+            ? OwnedRootDirectories.Contains(name)
+            : OwnedRootFiles.Contains(name) || OwnedRootTemporary.IsMatch(name);
     }
 
     public static TextureHeader ReadTex(ReadOnlySpan<byte> bytes)
@@ -84,8 +120,8 @@ internal static class TextureFiles
         var h = new TextureHeader(BinaryPrimitives.ReadUInt32LittleEndian(bytes[4..]),
             BinaryPrimitives.ReadUInt16LittleEndian(bytes[8..]), BinaryPrimitives.ReadUInt16LittleEndian(bytes[10..]), bytes[14] & 0x7f);
         _ = OutputType(h.Format);
-        if (h.Width is < 1 or > 8192 || h.Height is < 1 or > 8192 || h.Mips is < 1 or > 13 || h.Mips > FullMipCount(h.Width, h.Height))
-            throw new InvalidDataException("Unsupported TEX dimensions or mip count (maximum size: 8192 × 8192).");
+        if (h.Width is < 1 or > MaxDimension || h.Height is < 1 or > MaxDimension || h.Mips is < 1 or > 13 || h.Mips > FullMipCount(h.Width, h.Height))
+            throw new InvalidDataException($"Unsupported TEX dimensions or mip count (maximum size: {MaxDimension} × {MaxDimension}).");
         long previousEnd = 80;
         for (var mip = 0; mip < h.Mips; mip++)
         {
@@ -103,35 +139,68 @@ internal static class TextureFiles
 
     public static int FullMipCount(int w, int h) => Math.Min(13, 1 + System.Numerics.BitOperations.Log2((uint)Math.Max(w, h)));
 
-    public static void ValidateOutput(byte[] bytes, TextureEditSession session, bool restoring = false)
+    public static void ValidateOutput(byte[] bytes, uint format, int width, int height, bool mipMaps)
     {
         var header = ReadTex(bytes);
-        if (header.Format != session.Format || header.Width != session.Width || header.Height != session.Height ||
-            (!restoring && header.Mips != (session.MipMaps ? FullMipCount(session.Width, session.Height) : 1)))
-            throw new InvalidDataException("Converted TEX format, dimensions or mipmaps do not match the session.");
+        if (header.Format != format || header.Width != width || header.Height != height ||
+            header.Mips != (mipMaps ? FullMipCount(width, height) : 1))
+            throw new InvalidDataException("Converted TEX format, dimensions or mipmaps do not match the saved image.");
     }
 
+    /// <summary>Commit-time check: any supported size, stored in the session's captured format or uncompressed.</summary>
+    public static TextureHeader ValidateCommit(byte[] bytes, TextureEditSession session)
+    {
+        var header = ReadTex(bytes);
+        if (!IsSessionFormat(header.Format, session))
+            throw new InvalidDataException($"A {FormatName(session.Format)} session cannot store {FormatName(header.Format)} data.");
+        return header;
+    }
+
+    /// <summary>Block-compressed formats encode whole 4 × 4 tiles; Direct3D requires this of the top level.</summary>
+    public static void ValidateEncodable(uint format, int width, int height)
+    {
+        if (IsBlockCompressed(format) && (width % 4 != 0 || height % 4 != 0))
+            throw new InvalidDataException($"{FormatName(format)} needs a width and height divisible by 4; this save is {width} × {height}. " +
+                "Resize it, or turn off texture recompression in Options to save uncompressed.");
+    }
+
+    /// <summary>Identity of the decoded image. The size participates so a same-area resize still counts as a change.</summary>
     public static string PixelHash(byte[] uncompressedTex)
     {
         var h = ReadTex(uncompressedTex);
-        if (h.Format != (uint)TexFile.TextureFormat.B8G8R8A8) throw new InvalidDataException("Penumbra did not return BGRA32 pixels.");
+        if (h.Format != Uncompressed) throw new InvalidDataException("Penumbra did not return BGRA32 pixels.");
         var offset = (int)BinaryPrimitives.ReadUInt32LittleEndian(uncompressedTex.AsSpan(28));
-        return Hash(uncompressedTex.AsSpan(offset, checked(h.Width * h.Height * 4)));
+        Span<byte> size = stackalloc byte[8];
+        BinaryPrimitives.WriteInt32LittleEndian(size, h.Width);
+        BinaryPrimitives.WriteInt32LittleEndian(size[4..], h.Height);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData(size);
+        hash.AppendData(uncompressedTex.AsSpan(offset, checked(h.Width * h.Height * 4)));
+        return Convert.ToHexString(hash.GetHashAndReset());
     }
 
     public static void ValidateTga(ReadOnlySpan<byte> bytes, int width, int height)
     {
+        var size = ValidateTga(bytes);
+        if (size != (width, height))
+            throw new InvalidDataException($"The TGA is {size.Width} × {size.Height}; expected {width} × {height}.");
+    }
+
+    /// <summary>Validates a 32-bit TGA save and returns its dimensions.</summary>
+    public static (int Width, int Height) ValidateTga(ReadOnlySpan<byte> bytes)
+    {
         if (bytes.Length < 18 || bytes.Length > MaxBytes || bytes[1] != 0 || bytes[2] is not (2 or 10) ||
             bytes[16] != 32 || (bytes[17] & 15) != 8 || (bytes[17] & 0xc0) != 0)
             throw new InvalidDataException("Save a 32-bit true-color TGA with an 8-bit alpha channel (uncompressed or RLE).");
-        if (BinaryPrimitives.ReadUInt16LittleEndian(bytes[12..]) != width || BinaryPrimitives.ReadUInt16LittleEndian(bytes[14..]) != height)
-            throw new InvalidDataException($"Keep the original dimensions: {width} × {height}.");
+        int width = BinaryPrimitives.ReadUInt16LittleEndian(bytes[12..]), height = BinaryPrimitives.ReadUInt16LittleEndian(bytes[14..]);
+        if (width is < 1 or > MaxDimension || height is < 1 or > MaxDimension)
+            throw new InvalidDataException($"Texture size must be 1 to {MaxDimension} pixels per side; this save is {width} × {height}.");
         var offset = 18 + bytes[0];
         var remaining = checked(width * height);
         if (bytes[2] == 2)
         {
             if ((long)offset + remaining * 4L > bytes.Length) throw new InvalidDataException("TGA save is incomplete.");
-            return;
+            return (width, height);
         }
         while (remaining > 0)
         {
@@ -143,6 +212,7 @@ internal static class TextureFiles
             if (offset > bytes.Length) throw new InvalidDataException("TGA RLE save is incomplete.");
             remaining -= count;
         }
+        return (width, height);
     }
 
     public static void EnsureLocalPath(string path)

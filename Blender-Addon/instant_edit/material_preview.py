@@ -51,6 +51,8 @@ class PreviewMaterial:
     shader_constants: list
     color_set: object
     textures: list[PreviewTexture]
+    # MTRL shader-header flags; None when the plugin predates sending them.
+    material_flags: int | None = None
 
 
 @dataclass
@@ -237,6 +239,9 @@ def load_preview_manifest(manifest_path: str, model_file_path: str) -> PreviewPa
         additional_data = _string(raw_material.get("additionalData", ""), "additional material data", 256)
         if len(additional_data) % 2 or any(character not in "0123456789abcdefABCDEF" for character in additional_data):
             raise PreviewValidationError("additional material data must be hexadecimal")
+        material_flags = raw_material.get("materialFlags")
+        if material_flags is not None:
+            material_flags = _integer(material_flags, "material flags")
 
         materials[key] = PreviewMaterial(
             model_material=model_material,
@@ -247,6 +252,7 @@ def load_preview_manifest(manifest_path: str, model_file_path: str) -> PreviewPa
             shader_constants=shader_constants,
             color_set=color_set,
             textures=textures,
+            material_flags=material_flags,
         )
 
     return PreviewPackage(
@@ -264,6 +270,11 @@ def _socket(node, *names):
         if socket is not None:
             return socket
     return None
+
+
+def _socket_by_id(sockets, identifier: str):
+    # Mix nodes expose several same-named sockets (Float/Vector/Color).
+    return next(socket for socket in sockets if socket.identifier == identifier)
 
 
 def _read_texture_pixels(texture: PreviewTexture):
@@ -289,6 +300,9 @@ def _create_pixels_image(name: str, pixels, color_space: str, package: PreviewPa
     )
     package.created_images.append(image)
     image.colorspace_settings.name = color_space
+    # FFXIV textures pack unrelated data into alpha (opacity, colorset index,
+    # hair highlights). Straight alpha would black out RGB wherever it is 0.
+    image.alpha_mode = "CHANNEL_PACKED"
     image.pixels.foreach_set(np.asarray(pixels[::-1], dtype=np.float32).ravel())
     image.update()
     try:
@@ -329,66 +343,33 @@ def _resize_nearest(pixels, width: int, height: int):
     return pixels[rows[:, None], columns[None, :]]
 
 
-def _can_build_character_base(preview: PreviewMaterial) -> bool:
-    return (
-        preview.shader_package.casefold() in {"character.shpk", "characterlegacy.shpk", "characterglass.shpk"}
-        and preview.color_set is not None
-        and _first_texture(preview, "index") is not None
-    )
+def _linear_to_srgb(values):
+    values = np.clip(values, 0.0, 1.0)
+    return np.where(values <= 0.0031308, values * 12.92, 1.055 * np.power(values, 1.0 / 2.4) - 0.055)
 
 
-def _build_character_base(preview: PreviewMaterial):
-    """Bake the practical character colorset/index path used by ordinary gear."""
-    index_texture = _first_texture(preview, "index")
-    if index_texture is None or preview.color_set is None:
-        raise PreviewValidationError("character preview requires an index texture and colorset")
+# MTRL shader-header flags (Meddle ShaderFlags, TexTools EMaterialFlags1).
+_FLAG_HIDE_BACKFACES = 0x01
+_FLAG_TRANSLUCENT = 0x10
 
-    row_stride = preview.color_set["width"] * 4
-    table_values = np.asarray(preview.color_set["values"], dtype=np.float32)
-    if row_stride not in {16, 32} or table_values.size < row_stride * 2 or table_values.size % row_stride:
-        raise PreviewValidationError("character colorset does not contain complete rows")
-    table = table_values.reshape((-1, row_stride))
-    index_pixels = _read_texture_pixels(index_texture)
-    height, width = index_pixels.shape[:2]
+# Shader constant and key ids shared by the character shader family.
+# g_AlphaThreshold also matches xivModdingFramework's ConstantId 699138595.
+_ALPHA_THRESHOLD_CONSTANT_ID = 0x29AC0223
+_EMISSIVE_COLOR_CONSTANT_ID = 0x38A64362
+_TEXTURE_MODE_KEY = 0xB616DC5A
+_TEXTURE_MODE_COMPATIBILITY = 0x600EF9DF
 
-    # character.shpk selects a pair of colorset rows through index R and
-    # interpolates that pair through inverted index G.
-    table_pairs = np.rint((index_pixels[:, :, 0] * 255.0) / 17.0).astype(np.intp)
-    previous_rows = np.clip(table_pairs * 2, 0, table.shape[0] - 1)
-    next_rows = np.minimum(previous_rows + 1, table.shape[0] - 1)
-    blend = (1.0 - index_pixels[:, :, 1])[:, :, None]
-    linear_diffuse = table[previous_rows, :3] * (1.0 - blend) + table[next_rows, :3] * blend
-    base_pixels = np.ones((height, width, 4), dtype=np.float32)
-    base_pixels[:, :, :3] = np.clip(np.sqrt(np.maximum(linear_diffuse, 0.0)), 0.0, 1.0)
-
-    normal_texture = _first_texture(preview, "normal")
-    if normal_texture is not None:
-        normal_pixels = _resize_nearest(_read_texture_pixels(normal_texture), width, height)
-        base_pixels[:, :, 3] *= normal_pixels[:, :, 2]
-
-    diffuse_texture = _first_texture(preview, "diffuse")
-    if diffuse_texture is not None:
-        diffuse_pixels = _resize_nearest(_read_texture_pixels(diffuse_texture), width, height)
-        base_pixels *= diffuse_pixels
-
-    mask_texture = _first_texture(preview, "mask")
-    if mask_texture is not None:
-        mask_pixels = _resize_nearest(_read_texture_pixels(mask_texture), width, height)
-        base_pixels[:, :, :3] *= mask_pixels[:, :, 2:3]
-
-    return np.clip(base_pixels, 0.0, 1.0), index_texture
-
-
-# xivModdingFramework's own un-customized preview defaults (ModelTexture.cs,
-# CustomModelColors.HairColor / HairHighlightColor) — the closest thing to a
-# "correct" placeholder since the real color is a per-character dye value
-# that hair.shpk materials don't carry in the .mtrl itself.
-_HAIR_COLOR_DEFAULT = np.array([110, 77, 35], dtype=np.float32) / 255.0
-_HAIR_HIGHLIGHT_DEFAULT = np.array([91, 110, 129], dtype=np.float32) / 255.0
-
-# Shader constant id for the alpha threshold multiplier (xivModdingFramework
-# ModelTexture.GetShaderMapper: ConstantId 699138595).
-_ALPHA_THRESHOLD_CONSTANT_ID = 699138595
+# Shader packages with character.shpk's colorset, index and normal layout;
+# MeddleTools maps all of them onto its character node group.
+_CHARACTER_SHADERS = frozenset({
+    "character.shpk",
+    "characterlegacy.shpk",
+    "characterglass.shpk",
+    "characterinc.shpk",
+    "characterscroll.shpk",
+    "characterstockings.shpk",
+    "charactertransparency.shpk",
+})
 
 
 def _shader_constant_values(preview: PreviewMaterial, constant_id: int) -> list | None:
@@ -398,9 +379,146 @@ def _shader_constant_values(preview: PreviewMaterial, constant_id: int) -> list 
     return None
 
 
+def _shader_key_value(preview: PreviewMaterial, key_id: int) -> int | None:
+    for key in preview.shader_keys:
+        if key.get("category") == key_id:
+            return key.get("value")
+    return None
+
+
+def _alpha_threshold(preview: PreviewMaterial) -> float | None:
+    values = _shader_constant_values(preview, _ALPHA_THRESHOLD_CONSTANT_ID)
+    return float(values[0]) if values else None
+
+
+def _is_translucent(preview: PreviewMaterial) -> bool | None:
+    if preview.material_flags is None:
+        return None
+    return bool(preview.material_flags & _FLAG_TRANSLUCENT)
+
+
+def _opacity_source(preview: PreviewMaterial) -> tuple[str, int] | None:
+    """Return the texture usage and channel that hold the material's opacity."""
+    shader = preview.shader_package.casefold()
+    if shader in {"characterstockings.shpk", "iris.shpk"}:
+        # Stockings reuse normal B for sheerness; eyes always draw opaque.
+        return None
+    if shader in _CHARACTER_SHADERS:
+        return "normal", 2
+    if shader in {"hair.shpk", "charactertattoo.shpk"}:
+        return "normal", 3
+    return "diffuse", 3
+
+
+def _can_build_character_base(preview: PreviewMaterial) -> bool:
+    return (
+        preview.shader_package.casefold() in _CHARACTER_SHADERS
+        and preview.color_set is not None
+        and _first_texture(preview, "index") is not None
+    )
+
+
+@dataclass
+class _ColorsetMaps:
+    """Colorset values evaluated at every texel of the index texture."""
+
+    base_color: object
+    surface: object
+    legacy_gloss: bool
+    emissive: object = None
+    emission_strength: float = 1.0
+
+
+def _bake_colorset(preview: PreviewMaterial, index_texture: PreviewTexture) -> _ColorsetMaps:
+    """Look up the colorset rows each index texel selects.
+
+    Only index-dependent values are baked, at the index texture's own size.
+    Diffuse, mask and normal textures keep their native resolution and are
+    combined in the node tree: baking them at the index size decimated a 2K
+    suit to the 32x32 placeholder index many modded materials ship.
+    """
+    row_stride = preview.color_set["width"] * 4
+    values = np.asarray(preview.color_set["values"], dtype=np.float32)
+    if row_stride not in {16, 32} or values.size < row_stride * 2 or values.size % row_stride:
+        raise PreviewValidationError("character colorset does not contain complete rows")
+    table = values.reshape((-1, row_stride))
+    index_pixels = _read_texture_pixels(index_texture)
+    height, width = index_pixels.shape[:2]
+
+    # character.shpk selects a pair of colorset rows through index R and
+    # interpolates that pair through inverted index G.
+    table_pairs = np.rint((index_pixels[:, :, 0] * 255.0) / 17.0).astype(np.intp)
+    previous_rows = np.clip(table_pairs * 2, 0, table.shape[0] - 1)
+    next_rows = np.minimum(previous_rows + 1, table.shape[0] - 1)
+    blend = (1.0 - index_pixels[:, :, 1])[:, :, None]
+    del index_pixels, table_pairs
+
+    def interpolate(*columns):
+        rows = table[:, list(columns)]
+        return rows[previous_rows] * (1.0 - blend) + rows[next_rows] * blend
+
+    base_color = np.ones((height, width, 4), dtype=np.float32)
+    base_color[:, :, :3] = _linear_to_srgb(interpolate(0, 1, 2))
+
+    # Surface channels: R roughness source, G metalness, B specular level.
+    surface = np.ones((height, width, 4), dtype=np.float32)
+    legacy_gloss = row_stride == 16 or preview.shader_package.casefold() == "characterlegacy.shpk"
+    if legacy_gloss:
+        # characterlegacy.shpk has no roughness column; its shader derives one
+        # from gloss as exp2(-gloss / 15). Dawntrail-width legacy tables store
+        # gloss and specular strength in columns 3 and 7, 16-wide ones swapped.
+        gloss, specular = (3, 7) if row_stride == 32 else (7, 3)
+        surface[:, :, 0] = np.exp2(-np.clip(interpolate(gloss)[:, :, 0], 0.0, 240.0) / 15.0)
+        surface[:, :, 1] = 0.0
+        surface[:, :, 2] = np.clip(0.5 * interpolate(specular)[:, :, 0], 0.0, 1.0)
+    else:
+        surface[:, :, 0] = np.clip(interpolate(16)[:, :, 0], 0.0, 1.0)
+        surface[:, :, 1] = np.clip(interpolate(18)[:, :, 0], 0.0, 1.0)
+        surface[:, :, 2] = 0.5
+    maps = _ColorsetMaps(base_color, surface, legacy_gloss)
+
+    emissive = np.maximum(interpolate(8, 9, 10), 0.0)
+    emissive_color = _shader_constant_values(preview, _EMISSIVE_COLOR_CONSTANT_ID)
+    if emissive_color and len(emissive_color) >= 3:
+        emissive *= np.square(np.maximum(np.asarray(emissive_color[:3], dtype=np.float32), 0.0))
+    peak = float(emissive.max())
+    if peak > 1.0 / 255.0:
+        # Colorset emission is HDR: keep the hue in the image and the
+        # brightness in the Principled emission strength.
+        maps.emission_strength = max(peak, 1.0)
+        maps.emissive = np.ones((height, width, 4), dtype=np.float32)
+        maps.emissive[:, :, :3] = _linear_to_srgb(emissive / maps.emission_strength)
+    return maps
+
+
+def _normal_preview_pixels(texture: PreviewTexture, opacity_channel: int | None):
+    """Rebuild tangent-space Z from a normal map's RG channels.
+
+    FFXIV repurposes normal B and A (opacity, colorset index, hair highlight,
+    skin influence), so neither holds a usable Z. When the material's opacity
+    lives in this texture, it moves to alpha for the shared alpha wiring.
+    """
+    pixels = _read_texture_pixels(texture)
+    opacity = pixels[:, :, opacity_channel].copy() if opacity_channel is not None else None
+    x = pixels[:, :, 0] * 2.0 - 1.0
+    y = pixels[:, :, 1] * 2.0 - 1.0
+    pixels[:, :, 2] = np.sqrt(np.clip(1.0 - x * x - y * y, 0.0, 1.0)) * 0.5 + 0.5
+    pixels[:, :, 3] = 1.0 if opacity is None else opacity
+    return pixels
+
+
+# xivModdingFramework's own un-customized preview defaults (ModelTexture.cs,
+# CustomModelColors.HairColor / HairHighlightColor) — the closest thing to a
+# "correct" placeholder since the real color is a per-character dye value
+# that hair.shpk materials don't carry in the .mtrl itself.
+_HAIR_COLOR_DEFAULT = np.array([110, 77, 35], dtype=np.float32) / 255.0
+_HAIR_HIGHLIGHT_DEFAULT = np.array([91, 110, 129], dtype=np.float32) / 255.0
+
+
 def _can_build_hair_preview(preview: PreviewMaterial) -> bool:
     return (
-        not any(texture.usage == "diffuse" for texture in preview.textures)
+        preview.shader_package.casefold() == "hair.shpk"
+        and not any(texture.usage == "diffuse" for texture in preview.textures)
         and _first_texture(preview, "mask") is not None
         and _first_texture(preview, "normal") is not None
     )
@@ -413,12 +531,8 @@ def _build_hair_preview(preview: PreviewMaterial):
     Channel layout confirmed against xivModdingFramework's ModelTexture.GetShaderMapper
     (EShaderPack.Hair): normal.b is highlight-color influence, normal.a is
     opacity, mask.r/g are specular/roughness, mask.a is a diffuse/occlusion
-    multiplier. The game hard-cuts normal.a to 0/1 unless the material's
-    EnableTranslucency flag is set, but that flag isn't captured in the
-    manifest yet, and BC-compressed alpha rarely lands on an exact 255 even
-    for texels meant to read as fully opaque — hard-cutting here zeroes out
-    almost all real coverage. Smooth alpha is the safer default until the
-    flag is threaded through.
+    multiplier. Opacity is wired from the normal image like every other
+    shader, which applies the material's threshold and translucency flag.
     """
     mask_texture = _first_texture(preview, "mask")
     normal_texture = _first_texture(preview, "normal")
@@ -429,23 +543,190 @@ def _build_hair_preview(preview: PreviewMaterial):
     height, width = normal_pixels.shape[:2]
     mask_pixels = _resize_nearest(_read_texture_pixels(mask_texture), width, height)
 
-    alpha_multiplier = 1.0
-    alpha_threshold_values = _shader_constant_values(preview, _ALPHA_THRESHOLD_CONSTANT_ID)
-    if alpha_threshold_values:
-        if alpha_threshold_values[0] != 0:
-            alpha_multiplier = 1.0 / alpha_threshold_values[0]
-        else:
-            alpha_multiplier = 255.0
-    alpha = np.clip(normal_pixels[:, :, 3] * alpha_multiplier, 0.0, 1.0)
-
     highlight_influence = normal_pixels[:, :, 2:3]
     base_color = _HAIR_COLOR_DEFAULT * (1.0 - highlight_influence) + _HAIR_HIGHLIGHT_DEFAULT * highlight_influence
     occlusion = mask_pixels[:, :, 3:4] ** 2
 
     base_pixels = np.ones((height, width, 4), dtype=np.float32)
     base_pixels[:, :, :3] = base_color * occlusion
-    base_pixels[:, :, 3] = alpha
     return np.clip(base_pixels, 0.0, 1.0), normal_texture, mask_texture
+
+
+class _PreviewNodes:
+    """Creates one preview material's texture nodes left of its Principled BSDF."""
+
+    def __init__(self, material, package: PreviewPackage, image_label: str):
+        self.nodes = material.node_tree.nodes
+        self.links = material.node_tree.links
+        self.package = package
+        self.image_label = image_label
+        self._rows = 0
+
+    def image(self, image, uv_set: int, label: str):
+        y = 440 - self._rows * 300
+        self._rows += 1
+        uv = self.nodes.new(type="ShaderNodeUVMap")
+        uv.uv_map = f"uv{uv_set}"
+        uv.location = (-1320, y)
+        node = self.nodes.new(type="ShaderNodeTexImage")
+        node.image = image
+        node.label = label
+        node.location = (-1060, y)
+        self.links.new(uv.outputs["UV"], node.inputs["Vector"])
+        return node
+
+    def texture(self, texture: PreviewTexture, pixels=None):
+        image = _create_image(texture, self.package, self.image_label, pixels=pixels)
+        return self.image(image, texture.uv_set, f"{texture.usage.title()} — {Path(texture.game_path).name}")
+
+    def baked(self, pixels, color_space: str, name: str, usage: str, source: PreviewTexture):
+        image = _create_pixels_image(f"{self.image_label} {name}", pixels, color_space, self.package)
+        image["xiv_texture_game_path"] = source.game_path
+        image["xiv_sampler_id"] = f"0x{source.sampler_id:08X}"
+        image["instant_edit_preview_usage"] = usage
+        return self.image(image, source.uv_set, name)
+
+    def separate(self, image_node):
+        node = self.nodes.new(type="ShaderNodeSeparateColor")
+        node.location = (image_node.location.x + 300, image_node.location.y)
+        self.links.new(image_node.outputs["Color"], node.inputs["Color"])
+        return node
+
+    def math(self, operation: str, first, second, location, clamp: bool = False):
+        node = self.nodes.new(type="ShaderNodeMath")
+        node.operation = operation
+        node.use_clamp = clamp
+        node.location = location
+        for socket, value in zip(node.inputs, (first, second)):
+            if isinstance(value, (int, float)):
+                socket.default_value = value
+            else:
+                self.links.new(value, socket)
+        return node.outputs["Value"]
+
+    def multiply(self, color, factor, location, label: str):
+        node = self.nodes.new(type="ShaderNodeMix")
+        node.data_type = "RGBA"
+        node.blend_type = "MULTIPLY"
+        node.label = label
+        node.location = location
+        _socket_by_id(node.inputs, "Factor_Float").default_value = 1.0
+        self.links.new(color, _socket_by_id(node.inputs, "A_Color"))
+        self.links.new(factor, _socket_by_id(node.inputs, "B_Color"))
+        return _socket_by_id(node.outputs, "Result_Color")
+
+
+def _texture_node(tree: _PreviewNodes, texture: PreviewTexture, label: str, warnings: list, pixels=None):
+    try:
+        return tree.texture(texture, pixels=pixels() if callable(pixels) else pixels)
+    except Exception as error:
+        warnings.append(f"Could not create {texture.usage} preview for {label}: {error}")
+        return None
+
+
+def _link(tree: _PreviewNodes, output, principled, *names) -> None:
+    socket = _socket(principled, *names)
+    if socket is not None:
+        tree.links.new(output, socket)
+
+
+def _wire_character(tree, preview, principled, colorset: _ColorsetMaps, label: str, handled: set) -> None:
+    """Combine colorset, diffuse and mask the way character.shpk does.
+
+    Channel semantics follow MeddleTools' character node group: diffuse is
+    only sampled in GetValuesCompatibility mode, colorset roughness scales
+    with mask G, mask R scales specular, and metalness is the colorset's.
+    """
+    warnings = tree.package.warnings
+    index_texture = _first_texture(preview, "index")
+    handled.add(id(index_texture))
+    base_node = tree.baked(colorset.base_color, "sRGB", "Colorset Base Color", "colorset-base", index_texture)
+    base_node.label = "Colorset + Index Base Color"
+    color = base_node.outputs["Color"]
+
+    diffuse_texture = _first_texture(preview, "diffuse")
+    if (
+        diffuse_texture is not None
+        and _shader_key_value(preview, _TEXTURE_MODE_KEY) == _TEXTURE_MODE_COMPATIBILITY
+    ):
+        handled.add(id(diffuse_texture))
+        diffuse_node = _texture_node(tree, diffuse_texture, label, warnings)
+        if diffuse_node is not None:
+            color = tree.multiply(color, diffuse_node.outputs["Color"], (-480, 420), "Diffuse × Colorset")
+
+    mask = None
+    mask_texture = _first_texture(preview, "mask")
+    if mask_texture is not None:
+        handled.add(id(mask_texture))
+        mask_node = _texture_node(tree, mask_texture, label, warnings)
+        if mask_node is not None:
+            mask = tree.separate(mask_node)
+            # Mask B is ambient occlusion. xivModdingFramework reads masks as
+            # sRGB, so it darkens the linear color by the channel's square.
+            occlusion = tree.math("MULTIPLY", mask.outputs["Blue"], mask.outputs["Blue"], (-480, 160))
+            color = tree.multiply(color, occlusion, (-260, 420), "Mask Occlusion")
+    _link(tree, color, principled, "Base Color")
+
+    surface_node = tree.baked(
+        colorset.surface, "Non-Color", "Colorset Roughness Metalness Specular", "colorset-surface", index_texture
+    )
+    surface = tree.separate(surface_node)
+    roughness = surface.outputs["Red"]
+    specular = surface.outputs["Blue"]
+    if mask is not None:
+        # Modern colorset roughness scales by mask G (MeddleTools). Legacy gloss
+        # scales by mask G instead, which the baked exp2(-gloss / 15) takes as
+        # a power: exp2(-gloss * G / 15).
+        roughness = tree.math(
+            "POWER" if colorset.legacy_gloss else "MULTIPLY",
+            roughness, mask.outputs["Green"], (-260, surface_node.location.y), clamp=True,
+        )
+        specular = tree.math(
+            "MULTIPLY", specular, mask.outputs["Red"], (-260, surface_node.location.y - 180), clamp=True
+        )
+    _link(tree, roughness, principled, "Roughness")
+    _link(tree, surface.outputs["Green"], principled, "Metallic")
+    _link(tree, specular, principled, "Specular IOR Level", "Specular")
+
+    if colorset.emissive is not None:
+        emissive_node = tree.baked(colorset.emissive, "sRGB", "Colorset Emissive", "colorset-emissive", index_texture)
+        _link(tree, emissive_node.outputs["Color"], principled, "Emission Color", "Emission")
+        strength = _socket(principled, "Emission Strength")
+        if strength is not None:
+            strength.default_value = colorset.emission_strength
+
+
+def _wire_hair(tree, principled, hair_pixels, normal_texture, mask_texture, label: str, handled: set) -> None:
+    hair_node = tree.baked(hair_pixels, "sRGB", "Hair Base Color", "hair-base", normal_texture)
+    hair_node.label = "Hair Base Color (approximate)"
+    _link(tree, hair_node.outputs["Color"], principled, "Base Color")
+    handled.add(id(mask_texture))
+    mask_node = _texture_node(tree, mask_texture, label, tree.package.warnings)
+    if mask_node is not None:
+        mask = tree.separate(mask_node)
+        _link(tree, mask.outputs["Red"], principled, "Specular IOR Level", "Specular")
+        _link(tree, mask.outputs["Green"], principled, "Roughness")
+
+
+def _link_opacity(tree: _PreviewNodes, principled, alpha, preview: PreviewMaterial) -> bool:
+    """Shape sampled opacity like the game's alpha test or alpha blend.
+
+    Opaque materials discard texels below g_AlphaThreshold (default 0).
+    Translucent ones blend with opacity divided by the threshold, as TexTools
+    and MeddleTools both render it; unknown flags keep that smooth alpha.
+    """
+    alpha_input = _socket(principled, "Alpha")
+    if alpha_input is None or alpha is None:
+        return False
+    threshold = _alpha_threshold(preview)
+    if _is_translucent(preview) is False:
+        if threshold is None or threshold <= 0.0:
+            return False
+        alpha = tree.math("GREATER_THAN", alpha, threshold - 1e-6, (-40, -420))
+    elif threshold is not None and threshold > 0.0 and threshold != 1.0:
+        alpha = tree.math("DIVIDE", alpha, threshold, (-40, -420), clamp=True)
+    tree.links.new(alpha, alpha_input)
+    return True
 
 
 def create_preview_material(
@@ -478,7 +759,6 @@ def create_preview_material(
     package.created_materials.append(material)
     material.use_nodes = True
     material.surface_render_method = "DITHERED"
-    material.use_backface_culling = True
     material["xiv_mtrl_game_path"] = preview.game_path
     material["xiv_shader_package"] = preview.shader_package
     material["xiv_material_additional_data"] = preview.additional_data
@@ -486,6 +766,8 @@ def create_preview_material(
     material["xiv_shader_constants"] = json.dumps(preview.shader_constants, separators=(",", ":"))
     if preview.color_set is not None:
         material["xiv_colorset"] = json.dumps(preview.color_set, separators=(",", ":"))
+    if preview.material_flags is not None:
+        material["xiv_material_flags"] = f"0x{preview.material_flags:08X}"
 
     nodes = material.node_tree.nodes
     links = material.node_tree.links
@@ -505,90 +787,23 @@ def create_preview_material(
     if metallic is not None:
         metallic.default_value = 0.0
 
-    role_y = {"diffuse": 300, "normal": 20, "specular": -260, "mask": -500, "index": -720, "other": -940}
-    connected = set()
-    character_base_built = False
+    tree = _PreviewNodes(material, package, f"{label} [{suffix}]")
+    handled: set[int] = set()
+    colorset = None
     if can_build_character_base:
         try:
-            character_pixels, index_texture = _build_character_base(preview)
-            character_image = _create_pixels_image(
-                f"{label} [{suffix}] Colorset Base Color",
-                character_pixels,
-                "sRGB",
-                package,
-            )
-            character_image["xiv_texture_game_path"] = index_texture.game_path
-            character_image["xiv_sampler_id"] = f"0x{index_texture.sampler_id:08X}"
-            character_image["instant_edit_preview_usage"] = "colorset-base"
-            uv = nodes.new(type="ShaderNodeUVMap")
-            uv.uv_map = f"uv{index_texture.uv_set}"
-            uv.location = (-900, 300)
-            image_node = nodes.new(type="ShaderNodeTexImage")
-            image_node.image = character_image
-            image_node.label = "Colorset + Index Base Color"
-            image_node.location = (-620, 300)
-            links.new(uv.outputs["UV"], image_node.inputs["Vector"])
-            if base_color is not None:
-                links.new(image_node.outputs["Color"], base_color)
-            alpha = _socket(principled, "Alpha")
-            if alpha is not None:
-                links.new(image_node.outputs["Alpha"], alpha)
-            connected.add("diffuse")
-            character_base_built = True
+            colorset = _bake_colorset(preview, _first_texture(preview, "index"))
+            _wire_character(tree, preview, principled, colorset, label, handled)
         except Exception as error:
+            colorset = None
             package.warnings.append(f"Could not build colorset preview for {label}: {error}")
 
-    hair_preview_built = False
+    hair_built = False
     if can_build_hair_preview:
         try:
             hair_pixels, normal_texture, mask_texture = _build_hair_preview(preview)
-            hair_image = _create_pixels_image(
-                f"{label} [{suffix}] Hair Base Color",
-                hair_pixels,
-                "sRGB",
-                package,
-            )
-            hair_image["xiv_texture_game_path"] = normal_texture.game_path
-            hair_image["xiv_sampler_id"] = f"0x{normal_texture.sampler_id:08X}"
-            hair_image["instant_edit_preview_usage"] = "hair-base"
-            uv = nodes.new(type="ShaderNodeUVMap")
-            uv.uv_map = f"uv{normal_texture.uv_set}"
-            uv.location = (-900, 300)
-            image_node = nodes.new(type="ShaderNodeTexImage")
-            image_node.image = hair_image
-            image_node.label = "Hair Base Color + Opacity (approximate)"
-            image_node.location = (-620, 300)
-            links.new(uv.outputs["UV"], image_node.inputs["Vector"])
-            if base_color is not None:
-                links.new(image_node.outputs["Color"], base_color)
-            alpha = _socket(principled, "Alpha")
-            if alpha is not None:
-                links.new(image_node.outputs["Alpha"], alpha)
-
-            mask_image = _create_image(mask_texture, package, f"{label} [{suffix}]")
-            mask_uv = nodes.new(type="ShaderNodeUVMap")
-            mask_uv.uv_map = f"uv{mask_texture.uv_set}"
-            mask_uv.location = (-900, -500)
-            mask_node = nodes.new(type="ShaderNodeTexImage")
-            mask_node.image = mask_image
-            mask_node.label = f"Mask — {Path(mask_texture.game_path).name}"
-            mask_node.location = (-620, -500)
-            links.new(mask_uv.outputs["UV"], mask_node.inputs["Vector"])
-            separate = nodes.new(type="ShaderNodeSeparateColor")
-            separate.location = (-340, -500)
-            links.new(mask_node.outputs["Color"], separate.inputs["Color"])
-            specular = _socket(principled, "Specular IOR Level", "Specular")
-            if specular is not None:
-                links.new(separate.outputs["Red"], specular)
-            if roughness is not None:
-                links.new(separate.outputs["Green"], roughness)
-
-            connected.update({"diffuse", "specular"})
-            hair_preview_built = True
-            # Smooth alpha (soft brow/lash strand edges) dithers into visible
-            # noise under DITHERED; a plain alpha blend reads cleanly for this
-            # mostly-flat, non-self-overlapping decal geometry.
-            material.surface_render_method = "BLENDED"
+            _wire_hair(tree, principled, hair_pixels, normal_texture, mask_texture, label, handled)
+            hair_built = True
             package.warnings.append(
                 f"Approximate preview for {label}: hair.shpk has no diffuse texture, using xivModdingFramework's "
                 "default hair colors (real color depends on in-game dye data not stored in the material)"
@@ -596,53 +811,69 @@ def create_preview_material(
         except Exception as error:
             package.warnings.append(f"Could not build hair preview for {label}: {error}")
 
-    for index, texture in enumerate(preview.textures):
-        if character_base_built and texture.usage in {"diffuse", "index", "mask"}:
-            continue
-        if hair_preview_built and texture.usage == "mask":
-            continue
-        try:
-            pixels = None
-            if (character_base_built or hair_preview_built) and texture.usage == "normal":
-                # normal.b/normal.a are repurposed (highlight influence / opacity)
-                # rather than a true tangent Z, so force a flat Z before using
-                # this as an actual tangent-space normal map input.
-                pixels = _read_texture_pixels(texture).copy()
-                pixels[:, :, 2:] = 1.0
-            image = _create_image(texture, package, f"{label} [{suffix}]", pixels=pixels)
-            uv = nodes.new(type="ShaderNodeUVMap")
-            uv.uv_map = f"uv{texture.uv_set}"
-            uv.location = (-900, role_y.get(texture.usage, -940) - index * 35)
-            image_node = nodes.new(type="ShaderNodeTexImage")
-            image_node.image = image
-            image_node.label = f"{texture.usage.title()} — {Path(texture.game_path).name}"
-            image_node.location = (-620, uv.location.y)
-            links.new(uv.outputs["UV"], image_node.inputs["Vector"])
+    opacity_source = _opacity_source(preview)
+    opacity = None
+    normal_texture = _first_texture(preview, "normal")
+    if normal_texture is not None:
+        handled.add(id(normal_texture))
+        channel = opacity_source[1] if opacity_source and opacity_source[0] == "normal" else None
+        normal_node = _texture_node(
+            tree, normal_texture, label, package.warnings,
+            pixels=lambda: _normal_preview_pixels(normal_texture, channel),
+        )
+        if normal_node is not None:
+            normal_map = nodes.new(type="ShaderNodeNormalMap")
+            normal_map.uv_map = f"uv{normal_texture.uv_set}"
+            normal_map.location = (-40, normal_node.location.y)
+            links.new(normal_node.outputs["Color"], normal_map.inputs["Color"])
+            _link(tree, normal_map.outputs["Normal"], principled, "Normal")
+            if channel is not None:
+                opacity = normal_node.outputs["Alpha"]
 
-            if texture.usage == "diffuse" and "diffuse" not in connected:
-                if base_color is not None:
-                    links.new(image_node.outputs["Color"], base_color)
-                alpha = _socket(principled, "Alpha")
-                if alpha is not None:
-                    links.new(image_node.outputs["Alpha"], alpha)
-                connected.add("diffuse")
-            elif texture.usage == "normal" and "normal" not in connected:
-                normal_map = nodes.new(type="ShaderNodeNormalMap")
-                normal_map.location = (-40, image_node.location.y)
-                links.new(image_node.outputs["Color"], normal_map.inputs["Color"])
-                normal = _socket(principled, "Normal")
-                if normal is not None:
-                    links.new(normal_map.outputs["Normal"], normal)
-                connected.add("normal")
-            elif texture.usage == "specular" and "specular" not in connected:
-                specular = _socket(principled, "Specular IOR Level", "Specular")
-                if specular is not None:
-                    links.new(image_node.outputs["Color"], specular)
-                connected.add("specular")
-        except Exception as error:
-            package.warnings.append(f"Could not create {texture.usage} preview for {label}: {error}")
+    if colorset is None and not hair_built:
+        diffuse_texture = _first_texture(preview, "diffuse")
+        if diffuse_texture is not None:
+            handled.add(id(diffuse_texture))
+            diffuse_node = _texture_node(tree, diffuse_texture, label, package.warnings)
+            if diffuse_node is not None:
+                _link(tree, diffuse_node.outputs["Color"], principled, "Base Color")
+                if opacity_source == ("diffuse", 3):
+                    opacity = diffuse_node.outputs["Alpha"]
+        specular_texture = _first_texture(preview, "specular")
+        if specular_texture is not None:
+            handled.add(id(specular_texture))
+            specular_node = _texture_node(tree, specular_texture, label, package.warnings)
+            if specular_node is not None:
+                _link(tree, specular_node.outputs["Color"], principled, "Specular IOR Level", "Specular")
+        mask_texture = _first_texture(preview, "mask")
+        if mask_texture is not None and preview.shader_package.casefold() == "skin.shpk":
+            # skin.shpk: mask R is specular strength and mask G roughness.
+            handled.add(id(mask_texture))
+            mask_node = _texture_node(tree, mask_texture, label, package.warnings)
+            if mask_node is not None:
+                mask = tree.separate(mask_node)
+                _link(tree, mask.outputs["Red"], principled, "Specular IOR Level", "Specular")
+                _link(tree, mask.outputs["Green"], principled, "Roughness")
 
-    if not connected:
+    # Keep every remaining texture visible in the node tree for inspection.
+    for texture in preview.textures:
+        if id(texture) not in handled:
+            _texture_node(tree, texture, label, package.warnings)
+
+    translucent = _is_translucent(preview)
+    alpha_linked = _link_opacity(tree, principled, opacity, preview)
+    if translucent and alpha_linked and preview.shader_package.casefold() != "hair.shpk":
+        # Translucent gear blends like it does in game; dithering turns sheer
+        # fabric into noise. Only each object's nearest layer blends, so one
+        # continuous mesh cannot sort its own triangles into the wrong order.
+        # Hair cards overlap one another and stay dithered.
+        material.surface_render_method = "BLENDED"
+        material.use_transparency_overlap = False
+    material.use_backface_culling = (
+        True if preview.material_flags is None else bool(preview.material_flags & _FLAG_HIDE_BACKFACES)
+    )
+
+    if not any(socket.is_linked for socket in principled.inputs):
         package.warnings.append(f"No usable preview could be built for {label}")
         package.created_materials.remove(material)
         bpy.data.materials.remove(material)

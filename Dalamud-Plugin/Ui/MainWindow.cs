@@ -45,9 +45,10 @@ public sealed partial class MainWindow : Window, IDisposable
     private FeedbackSeverity _statusSeverity = FeedbackSeverity.Success;
     private FeedbackSeverity _textureStatusSeverity = FeedbackSeverity.Success;
     private MainTab _activeTab = MainTab.OnScreen;
-    private const bool ShowAnimationsTab = false;
+    private const bool ShowAnimationsTab = true;
 
-    public MainWindow(Configuration config, PenumbraService penumbra, OnScreenService onScreen, BlenderClient blender,
+    public MainWindow(Configuration config, PenumbraService penumbra, OnScreenService onScreen,
+        ResourceSourceAttributor resourceSources, BlenderClient blender,
         IDataManager data, IChatGui chat, IPluginLog log, Action saveConfig, Action restartExportListener, IUiBuilder uiBuilder,
         ITextureProvider textureProvider, TextureEditService textures, Action openChangelog)
         : base("XIV Instant Edit##Main")
@@ -55,7 +56,7 @@ public sealed partial class MainWindow : Window, IDisposable
         _config = config; _penumbra = penumbra; _onScreen = onScreen; _blender = blender; _data = data; _chat = chat; _log = log;
         _textures = textures;
         _pluginVersion = BlenderClient.CurrentPluginVersion;
-        _resourceSources = new ResourceSourceAttributor(penumbra, log);
+        _resourceSources = resourceSources;
         _materialPreviews = new MaterialPreviewBundleBuilder(data, log, _resourceSources);
         _saveConfig = saveConfig;
         _openChangelog = openChangelog;
@@ -193,7 +194,11 @@ public sealed partial class MainWindow : Window, IDisposable
     private void DrawOnScreenTab()
     {
         ImGui.Spacing();
-        if (ImGui.SmallButton("Refresh character list")) RequestRefresh();
+        var refreshing = _onScreen.IsRefreshing;
+        ImGui.BeginDisabled(refreshing);
+        if (ImGui.SmallButton(refreshing ? "Refreshing…##refresh-character-list" : "Refresh character list##refresh-character-list"))
+            RequestRefresh();
+        ImGui.EndDisabled();
         ImGui.Spacing();
         ImGui.SetNextItemWidth(-1); ImGui.InputTextWithHint("##resource-filter", "Search", ref _filter, 256);
         var includeVanilla = _config.IncludeVanillaResources;
@@ -285,22 +290,47 @@ public sealed partial class MainWindow : Window, IDisposable
         };
         Status("Blender", blender, blenderMessage);
         ImGui.Separator();
-        DrawImportOptions();
+        DrawOptions();
     }
 
-    private void DrawImportOptions()
+    private void DrawOptions()
     {
-        if (!ImGui.CollapsingHeader("IMPORT OPTIONS", ImGuiTreeNodeFlags.DefaultOpen))
+        if (!ImGui.CollapsingHeader("OPTIONS", ImGuiTreeNodeFlags.DefaultOpen))
         {
             ImGui.Separator();
             return;
         }
 
+        ImGui.TextColored(new Vector4(.76f, .78f, .84f, 1), "Models");
+        DrawModelOptions();
+        ImGui.Separator();
+        ImGui.TextColored(new Vector4(.76f, .78f, .84f, 1), "Textures");
+        DrawTextureOptions();
+        ImGui.Separator();
+    }
+
+    private void DrawTextureOptions()
+    {
+        var recompress = _config.RecompressTextures;
+        if (ImGui.Checkbox("Recompress saved textures", ref recompress))
+        {
+            _config.RecompressTextures = recompress;
+            _saveConfig();
+        }
+        ImGui.PushTextWrapPos();
+        ImGui.TextColored(
+            new Vector4(.55f, .57f, .64f, 1),
+            "Texture edits keep their original compression (BC1–BC7). When off, saves are written uncompressed: larger files without compression artifacts.");
+        ImGui.PopTextWrapPos();
+    }
+
+    private void DrawModelOptions()
+    {
         var useExistingSkeleton = _config.UseExistingSkeleton;
         if (ImGui.Checkbox("Remove imported armature and use existing skeleton", ref useExistingSkeleton))
         {
             _config.UseExistingSkeleton = useExistingSkeleton;
-            SaveImportOptions();
+            SaveModelOptions();
         }
 
         if (_config.UseExistingSkeleton)
@@ -311,7 +341,7 @@ public sealed partial class MainWindow : Window, IDisposable
             if (ImGui.InputText("Skeleton object", ref skeletonName, 128))
             {
                 _config.SkeletonObjectName = skeletonName;
-                SaveImportOptions();
+                SaveModelOptions();
             }
             ImGui.SameLine();
             ImGui.TextColored(new Vector4(.55f, .57f, .64f, 1), "must be an existing Blender Armature");
@@ -325,7 +355,7 @@ public sealed partial class MainWindow : Window, IDisposable
         if (ImGui.Checkbox("Apply textures and materials", ref applyTexturesAndMaterials))
         {
             _config.ApplyTexturesAndMaterials = applyTexturesAndMaterials;
-            SaveImportOptions();
+            SaveModelOptions();
         }
         ImGui.TextColored(
             new Vector4(.55f, .57f, .64f, 1),
@@ -337,17 +367,16 @@ public sealed partial class MainWindow : Window, IDisposable
         if (ImGui.Checkbox("Exclude body and general materials", ref excludeBodyAndGeneralMaterials))
         {
             _config.ExcludeBodyAndGeneralMaterials = excludeBodyAndGeneralMaterials;
-            SaveImportOptions();
+            SaveModelOptions();
         }
         ImGui.EndDisabled();
         ImGui.TextColored(
             new Vector4(.55f, .57f, .64f, 1),
             "Leaves body skin, body-piercing, and pube materials as colored placeholders.");
         ImGui.Unindent();
-        ImGui.Separator();
     }
 
-    private void SaveImportOptions()
+    private void SaveModelOptions()
     {
         _config.SkeletonObjectName = string.IsNullOrWhiteSpace(_config.SkeletonObjectName)
             ? "Skeleton"

@@ -51,19 +51,35 @@ public sealed class Plugin : IDalamudPlugin
 
         _config    = pi.GetPluginConfig() as Configuration ?? new Configuration();
         var cacheConfigurationMigrated = MigrateCacheConfiguration(_config);
-        var cacheRoot = TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory);
+        var configDirectory = pi.ConfigDirectory.FullName;
+        Action<string, Exception?> logStoreWarning = (message, error) =>
+        {
+            if (error is null) _log.Warning(message);
+            else _log.Warning(error, message);
+        };
+        // Contexts are durable plugin state and live in the config folder; 1.2.x
+        // kept them in the managed cache. Move them out before the ownership check,
+        // since they are what keeps an unmarked cache non-empty.
+        try { ExportContextSessionStore.ImportLegacy(TextureFiles.CacheRootFor(_config.TextureCacheDirectory), configDirectory, logStoreWarning); }
+        catch (Exception error) { _log.Warning(error, "Could not move export contexts out of the cache."); }
+        // A cache problem must not stop the plugin from loading: the fix is choosing
+        // another cache directory in Settings, which needs the plugin running.
+        string? cacheRoot = null;
+        var cacheStartupError = "";
+        try { cacheRoot = TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory); }
+        catch (Exception error)
+        {
+            cacheStartupError = error.Message;
+            _log.Error(error, "Could not open the XIV Instant Edit cache; cache-backed features are unavailable until it is fixed.");
+        }
+        // Backups and the texture session catalog normally live in the cache, which
+        // Blender shares; the config folder keeps them working until the cache is fixed.
+        var storageRoot = cacheRoot ?? configDirectory;
         var pluginInstanceId = Guid.NewGuid().ToString("N");
         IReadOnlyList<Models.PersistedExportContext> persistedContexts = _config.ExportContexts;
         try
         {
-            _contextStore = new ExportContextSessionStore(
-                cacheRoot,
-                pluginInstanceId,
-                (message, error) =>
-                {
-                    if (error is null) _log.Warning(message);
-                    else _log.Warning(error, message);
-                });
+            _contextStore = new ExportContextSessionStore(configDirectory, pluginInstanceId, logStoreWarning);
             var stored = _contextStore.Load();
             persistedContexts = stored
                 .Concat(_config.ExportContexts)
@@ -82,9 +98,12 @@ public sealed class Plugin : IDalamudPlugin
             _log.Error(error, "Could not initialize per-session context storage; retaining contexts in plugin settings.");
         }
         pi.UiBuilder.DisableUserUiHide = _config.KeepVisibleWhenUiHidden;
-        _backups   = new ModelBackupStore(cacheRoot);
+        _backups   = new ModelBackupStore(storageRoot);
         _penumbra  = new PenumbraService(pi, framework, log, objects, data, _backups);
-        _onScreen  = new OnScreenService(objects, clientState, framework, _penumbra, log);
+        // One attributor serves the On Screen snapshot and the Edit/material-preview flows,
+        // so both share its mod index and cached stable identifiers.
+        var resourceSources = new ResourceSourceAttributor(_penumbra, log);
+        _onScreen  = new OnScreenService(objects, clientState, framework, _penumbra, resourceSources, log);
         _contexts  = new ExportContextRegistry(
             pluginInstanceId,
             persistedContexts,
@@ -103,7 +122,7 @@ public sealed class Plugin : IDalamudPlugin
             },
             _backups);
         _blender   = new BlenderClient(log, _contexts);
-        _textures = new TextureEditService(_penumbra, _config, cacheRoot, _backups,
+        _textures = new TextureEditService(_penumbra, _config, storageRoot, _backups,
             (error, message) => log.Warning(error, message));
         string? animationError = null;
         try { _animations = new AnimationEditService(pi, framework, objects, data, sigScanner, _penumbra, _backups, _config, log); }
@@ -120,6 +139,7 @@ public sealed class Plugin : IDalamudPlugin
             _config,
             _penumbra,
             _onScreen,
+            resourceSources,
             _blender,
             data,
             chat,
@@ -144,7 +164,8 @@ public sealed class Plugin : IDalamudPlugin
             () => _exportServer.Restart(),
             _log,
             _window.RequestCacheSynchronization,
-            OpenSetupFromSettings);
+            OpenSetupFromSettings,
+            cacheStartupError);
 
         _windowSystem = new WindowSystem();
         _windowSystem.AddWindow(_window);
@@ -265,6 +286,7 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.RemoveWindow(_changelogWindow);
         _windowSystem.RemoveWindow(_setupWindow);
         _window.Dispose();
+        _onScreen.Dispose();
         _animations?.Dispose();
         _textures.Dispose();
         _exportServer.ImportFailureReceived -= _window.ReportImportFailure;

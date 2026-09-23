@@ -21,6 +21,10 @@ public sealed class Configuration : IPluginConfiguration
     public int ListenPort { get; set; } = 42428;
 
     public string TextureEditorPath { get; set; } = "";
+
+    /// <summary>Re-encode texture saves in their original TEX format instead of uncompressed BGRA32.</summary>
+    public bool RecompressTextures { get; set; } = true;
+
     /// <summary>Base directory for the shared XIV Instant Edit cache.</summary>
     public string TextureCacheDirectory { get; set; } = "";
 

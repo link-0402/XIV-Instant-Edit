@@ -128,9 +128,9 @@ public sealed partial class PenumbraService : ITextureEditBackend
         return TextureFiles.Hash(TextureFiles.Read(path));
     }
 
-    async Task<TextureCommit> ITextureEditBackend.CommitAsync(TextureEditSession session, byte[] tex, Func<bool> stillCurrent, CancellationToken token, bool restoring)
+    async Task<TextureCommit> ITextureEditBackend.CommitAsync(TextureEditSession session, byte[] tex, Func<bool> stillCurrent, CancellationToken token)
     {
-        TextureFiles.ValidateOutput(tex, session, restoring);
+        TextureFiles.ValidateCommit(tex, session);
         await _exportGate.WaitAsync(token).ConfigureAwait(false);
         try
         {

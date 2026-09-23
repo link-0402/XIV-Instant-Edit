@@ -27,9 +27,8 @@ public sealed partial class MainWindow
             if (resource.SourceState == ResourceSourceState.GameData)
             {
                 // Reopen existing vanilla work without asking for a second destination.
-                var existing = _textures.Sessions.FirstOrDefault(s => !s.Conflict && s.NewModName.Length > 0 &&
-                    s.GamePath == request.GamePath && s.ObjectIndex == request.ObjectIndex && s.ActorAddress == request.ActorAddress);
-                if (existing is not null) TextureAction(() => { _textures.OpenEditor(existing.Id); return Task.CompletedTask; });
+                var existing = _textures.FindReusable(request);
+                if (existing is not null) TextureAction(() => _textures.OpenEditorAsync(existing.Id));
                 else
                 {
                     _newTexture = request;
@@ -46,7 +45,9 @@ public sealed partial class MainWindow
 
     private void DrawTextureSessions()
     {
-        ImGui.TextWrapped("Save the TGA file to update the texture in game. Original compression level is preserved.");
+        ImGui.TextWrapped("Save the TGA file to update the texture in game. You can also change its resolution. " + (_config.RecompressTextures
+            ? "Saves keep the original compression."
+            : "Saves are written uncompressed (BGRA32).") + " Change this under Options.");
         if (_textures.StartupError.Length > 0) ImGui.TextWrapped(_textures.StartupError);
         if (Volatile.Read(ref _textureBusy) != 0) ImGui.TextDisabled("Updating texture session…");
         var sessions = _textures.Sessions;
@@ -56,14 +57,16 @@ public sealed partial class MainWindow
             ImGui.PushID(s.Id.ToString("N"));
             ImGui.Separator();
             ImGui.TextUnformatted(Path.GetFileName(s.GamePath));
-            ImGui.TextDisabled($"{s.Width} × {s.Height} · {TextureFiles.FormatName(s.Format)} · {(s.MipMaps ? "Mipmaps" : "No mipmaps")}");
+            var format = TextureFiles.FormatName(s.SavedFormat) + (s.SavedFormat == s.Format ? "" : $" (originally {TextureFiles.FormatName(s.Format)})");
+            ImGui.TextDisabled($"{s.Width} × {s.Height} · {format} · {(s.MipMaps ? "Mipmaps" : "No mipmaps")}");
             var color = s.Conflict ? new Vector4(1f, .45f, .35f, 1) : s.Paused ? new Vector4(.95f, .78f, .35f, 1) : new Vector4(.65f, .83f, .7f, 1);
             ImGui.PushTextWrapPos(); ImGui.TextColored(color, s.Status); ImGui.PopTextWrapPos();
             ImGui.TextWrapped(s.NeedsMod ? $"First save creates mod: {s.NewModName}" : $"Destination: {s.TargetFile}");
             ImGui.TextWrapped($"Working file: {s.WorkingFile}");
             if (s.LastSaved is { } saved) ImGui.TextDisabled($"Last saved: {saved.ToLocalTime():g}");
             ImGui.BeginDisabled(Volatile.Read(ref _textureBusy) != 0);
-            if (ImGui.Button("Open in editor")) TextureAction(() => { _textures.OpenEditor(s.Id); return Task.CompletedTask; });
+            if (ImGui.Button("Open in editor")) TextureAction(() => _textures.OpenEditorAsync(s.Id));
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Open the working TGA. A paused session resumes watching for saves.");
             ImGui.SameLine();
             if (ImGui.Button("Open folder")) TextureAction(() => { _textures.OpenFolder(s.Id); return Task.CompletedTask; });
             ImGui.SameLine();
