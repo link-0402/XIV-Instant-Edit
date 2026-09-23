@@ -4,15 +4,6 @@ using Dalamud.Interface.Utility;
 
 namespace InstantEdit.Ui;
 
-/// <summary> Severity of a status message or banner. </summary>
-internal enum FeedbackSeverity
-{
-    Success,
-    Warning,
-    Error,
-    Info,
-}
-
 /// <summary>
 /// The plugin's design tokens: every colour and size the windows use. Colours are the
 /// ones the original UI used as literals, merged into one meaning each; sizes go through

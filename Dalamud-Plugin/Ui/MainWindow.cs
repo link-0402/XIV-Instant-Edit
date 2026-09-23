@@ -27,21 +27,17 @@ public sealed partial class MainWindow : Window, IDisposable
     private readonly IUiBuilder _uiBuilder;
     private readonly object _stateLock = new();
     private readonly CancellationTokenSource _lifetimeCts = new();
-    private readonly HashSet<string> _expanded = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _collapsedFiltered = new(StringComparer.Ordinal);
     private IReadOnlyDictionary<string, IDalamudTextureWrap> _slotIcons = new Dictionary<string, IDalamudTextureWrap>();
     private BlenderConnectionState _blenderState = BlenderConnectionState.Offline;
     private bool _blenderChecking; private int _editing;
     private DateTime _lastBlenderCheck = DateTime.MinValue;
     private DateTime _lastModListRefresh = DateTime.MinValue;
-    private string _filter = string.Empty, _modFilter = string.Empty, _resourceTypeFilter = "Models", _status = string.Empty, _textureStatus = string.Empty;
+    private string _filter = string.Empty, _modFilter = string.Empty;
     private string? _selectedModDirectory, _loadedModDirectory;
     private IReadOnlyList<PenumbraMod> _mods = Array.Empty<PenumbraMod>();
     private ActorView? _loadedModView;
     private CancellationTokenSource? _modLoadCts;
     private bool _modLoading, _modLoadFailed;
-    private FeedbackSeverity _statusSeverity = FeedbackSeverity.Success;
-    private FeedbackSeverity _textureStatusSeverity = FeedbackSeverity.Success;
     private MainTab _activeTab = MainTab.OnScreen;
     private const bool ShowAnimationsTab = true;
 
@@ -60,6 +56,7 @@ public sealed partial class MainWindow : Window, IDisposable
         _openChangelog = openChangelog;
         _openSettings = openSettings;
         _uiBuilder = uiBuilder;
+        _kinds.Set(ResourceKinds.Model);
         AllowPinning = true;
         AllowClickthrough = true;
         AllowBackgroundBlur = true;
@@ -217,6 +214,7 @@ public sealed partial class MainWindow : Window, IDisposable
         }
         ImGui.Spacing();
         ImGui.SetNextItemWidth(-1); ImGui.InputTextWithHint("##resource-filter", "Search", ref _filter, 256);
+        _search.Text = _filter;
         var includeVanilla = _config.IncludeVanillaResources;
         if (ImGui.Checkbox("Include Vanilla", ref includeVanilla))
         {
@@ -236,13 +234,13 @@ public sealed partial class MainWindow : Window, IDisposable
         ImGui.SetNextItemWidth(-1); ImGui.InputTextWithHint("##mod-filter", "Search", ref _modFilter, 256);
 
         var mods = ReadMods();
-        var filteredMods = mods.Where(ModMatches).ToArray();
-        var listHeight = Math.Min(Theme.Scaled(180), Math.Max(Theme.Scaled(72), filteredMods.Length * ImGui.GetFrameHeightWithSpacing() + Theme.Scaled(8)));
+        var filteredMods = _modList.Apply(mods, _modFilter);
+        var listHeight = Math.Min(Theme.Scaled(180), Math.Max(Theme.Scaled(72), filteredMods.Count * ImGui.GetFrameHeightWithSpacing() + Theme.Scaled(8)));
         using (var list = ImRaii.Child("##mod-list", new Vector2(0, listHeight), true))
         {
             if (list.Success)
             {
-                if (filteredMods.Length == 0)
+                if (filteredMods.Count == 0)
                     ImGui.TextColored(Theme.Muted, "No matching Penumbra mods.");
                 else
                     foreach (var mod in filteredMods)
