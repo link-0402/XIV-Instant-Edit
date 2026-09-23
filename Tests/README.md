@@ -40,7 +40,9 @@ updates the distribution archives or extension repository index.
   and active workers across file loads; durable
   revocation retries and stale-result rejection.
 - `ExportContextRegression`: named session-store and variant-export scenarios,
-  plus authorization, backups, resource bundling, migration, and mod metadata.
+  plus authorization, backups, resource bundling, migration, mod metadata, and
+  collection activation (`CollectionActivationScenarios.cs`: enabling a new mod
+  must not depend on the redraw step).
 - `BlenderStatusRegression`: grouped connection states and bridge response,
   import handoff, diagnostic behavior, cache synchronization, and texture-session
   regressions in `TextureEditScenarios.cs`. Texture tests exercise the production

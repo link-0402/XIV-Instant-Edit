@@ -55,14 +55,14 @@ Additionally, it supports full software-independent texture editing as well as a
 ## How to: Texture Editing
 
 1. Type /ie to open the plugin interface ingame. Click Refresh character list.
-3. Select **Textures** in **On Screen** or **Mod Browser**, then **Edit texture**.
+2. Select **Textures** in **On Screen** or **Mod Browser**, then **Edit texture**.
    For vanilla textures, enable **Include Vanilla** and enter a new mod name.
-4. Edit the opened TGA, and save that same file as **32-bit TGA with an 8-bit
+3. Edit the opened TGA, and save that same file as **32-bit TGA with an 8-bit
    alpha channel**. Usually, simply hitting the save shortcut (for example Ctrl+S) is sufficient.
    Uncompressed and RLE TGA saves are supported. Keep the original
    dimensions. Layered documents need a flattened TGA copy saved over the working
    file.
-5. After the save settles, Instant Edit converts it to the original TEX format,
+4. After the save settles, Instant Edit converts it to the original TEX format,
    replaces the mod file with a backup, reloads the mod, and redraws the selected
    actor and the local player/owned entities. A vanilla override is created and
    enabled in the captured collection on the first changed save.
