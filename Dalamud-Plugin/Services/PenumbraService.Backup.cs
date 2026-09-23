@@ -287,42 +287,51 @@ public sealed partial class PenumbraService
         bool setPriority = true,
         int priority = int.MaxValue,
         bool redraw = true)
+        => ApplyModToCollection(
+            modName,
+            collectionName,
+            () => _trySetMod.Invoke(collectionId, modName, true, modName),
+            setPriority ? () => _trySetModPriority.Invoke(collectionId, modName, priority, modName) : null,
+            redraw ? RedrawPlayerOwnedEntitiesOnFramework : null,
+            (message, error) => _log.Error(error, message));
+
+    /// <summary>
+    /// Enables a mod in a collection, optionally sets its priority, and optionally redraws the
+    /// player-owned entities afterwards. The steps are delegates so the sequencing can be
+    /// regression-tested without Penumbra: skipping the redraw must never skip the enable.
+    /// </summary>
+    internal static ExportResult ApplyModToCollection(
+        string modName,
+        string collectionName,
+        Func<PenumbraApiEc> enable,
+        Func<PenumbraApiEc>? setPriority,
+        Func<string?>? redraw,
+        Action<string, Exception>? logError = null)
     {
         PenumbraApiEc enabledResult;
-        if (!redraw)
-            return new ExportResult(true, $"Applied {modName} to {collectionName}.");
-
         try
         {
-            enabledResult = _trySetMod.Invoke(
-                collectionId,
-                modName,
-                true,
-                modName);
+            enabledResult = enable();
         }
         catch (Exception e)
         {
-            _log.Error(e, "Could not enable the XIV Instant Edit mod in Penumbra.");
+            logError?.Invoke("Could not enable the XIV Instant Edit mod in Penumbra.", e);
             return new ExportResult(false, $"Penumbra enable failed: {e.Message}");
         }
 
         if (enabledResult is not (PenumbraApiEc.Success or PenumbraApiEc.NothingChanged))
             return new ExportResult(false, $"Penumbra rejected enabling the mod ({enabledResult}).");
 
-        if (setPriority)
+        if (setPriority is not null)
         {
             PenumbraApiEc priorityResult;
             try
             {
-                priorityResult = _trySetModPriority.Invoke(
-                    collectionId,
-                    modName,
-                    priority,
-                    modName);
+                priorityResult = setPriority();
             }
             catch (Exception e)
             {
-                _log.Error(e, "Could not prioritize the XIV Instant Edit mod in Penumbra.");
+                logError?.Invoke("Could not prioritize the XIV Instant Edit mod in Penumbra.", e);
                 return new ExportResult(false, $"Penumbra priority failed: {e.Message}");
             }
 
@@ -330,20 +339,20 @@ public sealed partial class PenumbraService
                 return new ExportResult(false, $"Penumbra rejected the mod priority ({priorityResult}).");
         }
 
+        var applied = $"Applied {modName} to {collectionName}.";
+        if (redraw is null)
+            return new ExportResult(true, applied);
+
         try
         {
-            var redrawWarning = RedrawPlayerOwnedEntitiesOnFramework();
+            var redrawWarning = redraw();
             return redrawWarning is null
-                ? new ExportResult(true, $"Applied {modName} to {collectionName}.")
-                : new ExportResult(
-                    true,
-                    "export_applied_with_warnings",
-                    $"Applied {modName} to {collectionName}.",
-                    [redrawWarning]);
+                ? new ExportResult(true, applied)
+                : new ExportResult(true, "export_applied_with_warnings", applied, [redrawWarning]);
         }
         catch (Exception e)
         {
-            _log.Error(e, "Penumbra redraw failed after applying export.");
+            logError?.Invoke("Penumbra redraw failed after applying export.", e);
             return new ExportResult(false, $"Penumbra redraw failed: {e.Message}");
         }
     }

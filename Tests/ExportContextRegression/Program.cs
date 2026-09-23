@@ -134,6 +134,7 @@ try
     VariantExportScenarios.Run(testRoot);
     CheckSessionStore(testRoot);
     SelectorStabilityScenarios.Run(testRoot);
+    CollectionActivationScenarios.Run();
 
     // ---- Backup safety, export-context authorization, and revocation ----
     var originalRoot = Path.Combine(testRoot, "OriginalMod");
