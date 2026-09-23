@@ -42,7 +42,9 @@ updates the distribution archives or extension repository index.
 - `ExportContextRegression`: named session-store and variant-export scenarios,
   plus authorization, backups, resource bundling, migration, mod metadata, and
   collection activation (`CollectionActivationScenarios.cs`: enabling a new mod
-  must not depend on the redraw step).
+  must not depend on the redraw step), and the window view models
+  (`UiViewModelScenarios.cs`: kind filters, search, expansion keys, status feed,
+  session grouping and the mod-view builder, all without ImGui).
 - `BlenderStatusRegression`: grouped connection states and bridge response,
   import handoff, diagnostic behavior, cache synchronization, and texture-session
   regressions in `TextureEditScenarios.cs`. Texture tests exercise the production

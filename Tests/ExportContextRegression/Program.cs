@@ -160,6 +160,7 @@ try
     CheckSessionStore(testRoot);
     SelectorStabilityScenarios.Run(testRoot);
     CollectionActivationScenarios.Run();
+    UiViewModelScenarios.Run();
 
     // ---- Backup safety, export-context authorization, and revocation ----
     var originalRoot = Path.Combine(testRoot, "OriginalMod");

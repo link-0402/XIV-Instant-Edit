@@ -59,12 +59,16 @@ public sealed partial class MainWindow
             using var id = ImRaii.PushId(s.Id.ToString("N"));
             ImGui.Separator();
             ImGui.TextUnformatted(Path.GetFileName(s.GamePath));
-            var format = TextureFiles.FormatName(s.SavedFormat) + (s.SavedFormat == s.Format ? "" : $" (originally {TextureFiles.FormatName(s.Format)})");
-            ImGui.TextDisabled($"{s.Width} × {s.Height} · {format} · {(s.MipMaps ? "Mipmaps" : "No mipmaps")}");
-            var color = s.Conflict ? Theme.Conflict : s.Paused ? Theme.Paused : Theme.Watching;
+            ImGui.TextDisabled(SessionViews.Caption(s));
+            var color = SessionViews.StateOf(s) switch
+            {
+                SessionState.Conflict => Theme.Conflict,
+                SessionState.Paused => Theme.Paused,
+                _ => Theme.Watching,
+            };
             using (ImRaii.TextWrapPos(0f))
                 ImGui.TextColored(color, s.Status);
-            ImGui.TextWrapped(s.NeedsMod ? $"First save creates mod: {s.NewModName}" : $"Destination: {s.TargetFile}");
+            ImGui.TextWrapped(SessionViews.DestinationLine(s));
             ImGui.TextWrapped($"Working file: {s.WorkingFile}");
             if (s.LastSaved is { } saved) ImGui.TextDisabled($"Last saved: {saved.ToLocalTime():g}");
             using (ImRaii.Disabled(Volatile.Read(ref _textureBusy) != 0))

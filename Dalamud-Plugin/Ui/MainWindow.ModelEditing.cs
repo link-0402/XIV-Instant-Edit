@@ -17,7 +17,7 @@ public sealed partial class MainWindow
 {
     private void TryEditNode(ResourceView node, ActorView actor)
     {
-        if (!IsModel(node) || !IsSafeModel(node))
+        if (!node.IsModel || !ResourceViews.IsSafeModel(node))
         {
             SetStatus("Only safe .mdl resources can be imported.", FeedbackSeverity.Warning);
             return;
@@ -303,7 +303,7 @@ public sealed partial class MainWindow
         }
 
         return actor.Roots
-            .SelectMany(Flatten)
+            .SelectMany(ResourceViews.Flatten)
             .Where(resource => resource.GamePath.EndsWith(".mtrl", StringComparison.OrdinalIgnoreCase) ||
                                resource.GamePath.EndsWith(".tex", StringComparison.OrdinalIgnoreCase))
             .Select(resource => new MaterialResourceCandidate(
