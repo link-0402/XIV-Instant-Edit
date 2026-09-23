@@ -1,15 +1,12 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
-using Dalamud.Interface.Components;
-using Dalamud.Interface.Textures;
 using Dalamud.Interface.Textures.TextureWraps;
+using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
-using InstantEdit.Models;
 using InstantEdit.Services;
-using Lumina.Data;
 
 namespace InstantEdit.Ui;
 
@@ -26,6 +23,7 @@ public sealed partial class MainWindow : Window, IDisposable
     private readonly ResourceSourceAttributor _resourceSources;
     private readonly Action _saveConfig;
     private readonly Action _openChangelog;
+    private readonly Action _openSettings;
     private readonly IUiBuilder _uiBuilder;
     private readonly object _stateLock = new();
     private readonly CancellationTokenSource _lifetimeCts = new();
@@ -50,7 +48,7 @@ public sealed partial class MainWindow : Window, IDisposable
     public MainWindow(Configuration config, PenumbraService penumbra, OnScreenService onScreen,
         ResourceSourceAttributor resourceSources, BlenderClient blender,
         IDataManager data, IChatGui chat, IPluginLog log, Action saveConfig, Action restartExportListener, IUiBuilder uiBuilder,
-        ITextureProvider textureProvider, TextureEditService textures, Action openChangelog)
+        ITextureProvider textureProvider, TextureEditService textures, Action openChangelog, Action openSettings)
         : base("XIV Instant Edit##Main")
     {
         _config = config; _penumbra = penumbra; _onScreen = onScreen; _blender = blender; _data = data; _chat = chat; _log = log;
@@ -60,6 +58,7 @@ public sealed partial class MainWindow : Window, IDisposable
         _materialPreviews = new MaterialPreviewBundleBuilder(data, log, _resourceSources);
         _saveConfig = saveConfig;
         _openChangelog = openChangelog;
+        _openSettings = openSettings;
         _uiBuilder = uiBuilder;
         AllowPinning = true;
         AllowClickthrough = true;
@@ -75,6 +74,12 @@ public sealed partial class MainWindow : Window, IDisposable
             Icon = FontAwesomeIcon.BookBookmark,
             Click = _ => _openChangelog(),
             ShowTooltip = () => ImGui.SetTooltip("View changelog"),
+        });
+        TitleBarButtons.Add(new TitleBarButton
+        {
+            Icon = FontAwesomeIcon.Cog,
+            Click = _ => _openSettings(),
+            ShowTooltip = () => ImGui.SetTooltip("Settings"),
         });
         _ = uiBuilder.RunWhenUiPrepared(() => LoadSlotIcons(uiBuilder, textureProvider), true);
     }
@@ -121,42 +126,54 @@ public sealed partial class MainWindow : Window, IDisposable
         var tabRegionHeight = Math.Max(1, ImGui.GetContentRegionAvail().Y - feedbackHeight - feedbackSpacing);
         var activeTab = _activeTab;
         var animationsTabActive = false;
-        if (ImGui.BeginChild("##instant-edit-tab-region", new Vector2(0, tabRegionHeight), false, ImGuiWindowFlags.NoBackground))
+        using (var region = ImRaii.Child("##instant-edit-tab-region", new Vector2(0, tabRegionHeight), false, ImGuiWindowFlags.NoBackground))
         {
-            if (ImGui.BeginTabBar("##instant-edit-tabs"))
+            if (region.Success)
             {
-                if (ImGui.BeginTabItem("On Screen"))
+                using var tabs = ImRaii.TabBar("##instant-edit-tabs");
+                if (tabs.Success)
                 {
-                    activeTab = MainTab.OnScreen;
-                    DrawOnScreenTab();
-                    ImGui.EndTabItem();
-                }
+                    using (var tab = ImRaii.TabItem("On Screen"))
+                    {
+                        if (tab.Success)
+                        {
+                            activeTab = MainTab.OnScreen;
+                            DrawOnScreenTab();
+                        }
+                    }
 
-                if (ImGui.BeginTabItem("Mod Browser"))
-                {
-                    activeTab = MainTab.ModBrowser;
-                    DrawModsTab();
-                    ImGui.EndTabItem();
-                }
+                    using (var tab = ImRaii.TabItem("Mod Browser"))
+                    {
+                        if (tab.Success)
+                        {
+                            activeTab = MainTab.ModBrowser;
+                            DrawModsTab();
+                        }
+                    }
 
-                if (ImGui.BeginTabItem("Texture Edit Sessions"))
-                {
-                    activeTab = MainTab.TextureEdits;
-                    DrawTextureSessions();
-                    ImGui.EndTabItem();
-                }
+                    using (var tab = ImRaii.TabItem("Texture Edit Sessions"))
+                    {
+                        if (tab.Success)
+                        {
+                            activeTab = MainTab.TextureEdits;
+                            DrawTextureSessions();
+                        }
+                    }
 
-                if (ShowAnimationsTab && ImGui.BeginTabItem("Animations"))
-                {
-                    activeTab = MainTab.Animations;
-                    animationsTabActive = true;
-                    DrawAnimations();
-                    ImGui.EndTabItem();
+                    if (ShowAnimationsTab)
+                    {
+                        using var tab = ImRaii.TabItem("Animations");
+                        if (tab.Success)
+                        {
+                            activeTab = MainTab.Animations;
+                            animationsTabActive = true;
+                            DrawAnimations();
+                        }
+                    }
                 }
-                ImGui.EndTabBar();
             }
         }
-        ImGui.EndChild();
+
         _activeTab = activeTab;
         if (!animationsTabActive)
             animations?.StopObservation();
@@ -168,37 +185,36 @@ public sealed partial class MainWindow : Window, IDisposable
     /// <summary>
     /// Adds the plugin-specific visibility option to Dalamud's standard window options popup.
     /// The built-in popup is drawn by <see cref="WindowSystem"/> after the window content, so
-    /// this callback is registered immediately after the window system draw callback.
+    /// this must stay the last top-level call of <see cref="Draw"/>, outside any child or id scope.
     /// </summary>
     public void DrawWindowOptionsExtension()
     {
         if (!ImGui.IsPopupOpen(WindowOptionsPopupName))
             return;
 
-        ImGui.PushStyleVar(ImGuiStyleVar.Alpha, 1f);
-        if (ImGui.BeginPopup(WindowOptionsPopupName, ImGuiWindowFlags.NoMove))
+        using var alpha = ImRaii.PushStyle(ImGuiStyleVar.Alpha, 1f);
+        using var popup = ImRaii.Popup(WindowOptionsPopupName, ImGuiWindowFlags.NoMove);
+        if (!popup.Success)
+            return;
+        var keepVisible = _config.KeepVisibleWhenUiHidden;
+        if (ImGui.Checkbox("Don't hide the plugin window when hiding UI", ref keepVisible))
         {
-            var keepVisible = _config.KeepVisibleWhenUiHidden;
-            if (ImGui.Checkbox("Don't hide the plugin window when hiding UI", ref keepVisible))
-            {
-                _config.KeepVisibleWhenUiHidden = keepVisible;
-                _uiBuilder.DisableUserUiHide = keepVisible;
-                _saveConfig();
-            }
-            ImGuiComponents.HelpMarker("Keep XIV Instant Edit visible when the game UI is hidden with Scroll Lock.");
-            ImGui.EndPopup();
+            _config.KeepVisibleWhenUiHidden = keepVisible;
+            _uiBuilder.DisableUserUiHide = keepVisible;
+            _saveConfig();
         }
-        ImGui.PopStyleVar();
+        Widgets.HelpTip("Keep XIV Instant Edit visible when the game UI is hidden with Scroll Lock.");
     }
 
     private void DrawOnScreenTab()
     {
         ImGui.Spacing();
         var refreshing = _onScreen.IsRefreshing;
-        ImGui.BeginDisabled(refreshing);
-        if (ImGui.SmallButton(refreshing ? "Refreshing…##refresh-character-list" : "Refresh character list##refresh-character-list"))
-            RequestRefresh();
-        ImGui.EndDisabled();
+        using (ImRaii.Disabled(refreshing))
+        {
+            if (ImGui.SmallButton(refreshing ? "Refreshing…##refresh-character-list" : "Refresh character list##refresh-character-list"))
+                RequestRefresh();
+        }
         ImGui.Spacing();
         ImGui.SetNextItemWidth(-1); ImGui.InputTextWithHint("##resource-filter", "Search", ref _filter, 256);
         var includeVanilla = _config.IncludeVanillaResources;
@@ -207,7 +223,7 @@ public sealed partial class MainWindow : Window, IDisposable
             _config.IncludeVanillaResources = includeVanilla;
             _saveConfig();
         }
-        ImGuiComponents.HelpMarker("Show resources loaded directly from game data alongside Penumbra-modified resources.");
+        Widgets.HelpTip("Show resources loaded directly from game data alongside Penumbra-modified resources.");
         var actors = ReadActors();
         DrawResourceTypeFilters(actors);
         ImGui.Spacing();
@@ -221,24 +237,26 @@ public sealed partial class MainWindow : Window, IDisposable
 
         var mods = ReadMods();
         var filteredMods = mods.Where(ModMatches).ToArray();
-        var listHeight = Math.Min(180, Math.Max(72, filteredMods.Length * (ImGui.GetFrameHeightWithSpacing()) + 8));
-        if (ImGui.BeginChild("##mod-list", new Vector2(0, listHeight), true))
+        var listHeight = Math.Min(Theme.Scaled(180), Math.Max(Theme.Scaled(72), filteredMods.Length * ImGui.GetFrameHeightWithSpacing() + Theme.Scaled(8)));
+        using (var list = ImRaii.Child("##mod-list", new Vector2(0, listHeight), true))
         {
-            if (filteredMods.Length == 0)
-                ImGui.TextColored(new Vector4(.65f, .68f, .75f, 1), "No matching Penumbra mods.");
-            else
-                foreach (var mod in filteredMods)
-                {
-                    var selected = string.Equals(_selectedModDirectory, mod.Directory, StringComparison.OrdinalIgnoreCase);
-                    if (ImGui.Selectable($"{mod.Name}##mod:{SafeId(mod.Directory)}", selected))
+            if (list.Success)
+            {
+                if (filteredMods.Length == 0)
+                    ImGui.TextColored(Theme.Muted, "No matching Penumbra mods.");
+                else
+                    foreach (var mod in filteredMods)
                     {
-                        CancelModLoad();
-                        _selectedModDirectory = mod.Directory;
-                        _loadedModDirectory = null;
-                        _loadedModView = null;
+                        var selected = string.Equals(_selectedModDirectory, mod.Directory, StringComparison.OrdinalIgnoreCase);
+                        if (ImGui.Selectable($"{mod.Name}##mod:{SafeId(mod.Directory)}", selected))
+                        {
+                            CancelModLoad();
+                            _selectedModDirectory = mod.Directory;
+                            _loadedModDirectory = null;
+                            _loadedModView = null;
+                        }
                     }
-                }
-            ImGui.EndChild();
+            }
         }
 
         var selectedMod = mods.FirstOrDefault(mod =>
@@ -246,7 +264,7 @@ public sealed partial class MainWindow : Window, IDisposable
         if (selectedMod is null)
         {
             ImGui.Spacing();
-            ImGui.TextColored(new Vector4(.65f, .68f, .75f, 1), "Select a Penumbra mod to browse its resources.");
+            ImGui.TextColored(Theme.Muted, "Select a Penumbra mod to browse its resources.");
             return;
         }
 
@@ -263,13 +281,12 @@ public sealed partial class MainWindow : Window, IDisposable
             }
             var message = loading ? "Scanning the selected Penumbra mod..." :
                 failed ? "Could not read the selected Penumbra mod." : "No supported resources found.";
-            var color = failed ? new Vector4(.9f, .55f, .35f, 1) : new Vector4(.65f, .68f, .75f, 1);
-            ImGui.TextColored(color, message);
+            ImGui.TextColored(failed ? Theme.Offline : Theme.Muted, message);
             return;
         }
 
         ImGui.Spacing();
-        ImGui.TextColored(new Vector4(.76f, .78f, .84f, 1), selectedMod.Name);
+        ImGui.TextColored(Theme.Label, selectedMod.Name);
         DrawResourceTypeFilters([modView]);
         ImGui.Spacing();
         DrawResources([modView], "No supported models, textures, or materials found in this mod.");
@@ -277,21 +294,29 @@ public sealed partial class MainWindow : Window, IDisposable
 
     private void DrawHeader()
     {
-        ImGui.TextColored(new Vector4(.95f, .78f, .35f, 1), "XIV INSTANT EDIT"); ImGui.SameLine(); ImGui.TextColored(new Vector4(.56f, .58f, .65f, 1), "On Screen");
+        ImGui.TextColored(Theme.Accent, "XIV INSTANT EDIT"); ImGui.SameLine(); ImGui.TextColored(Theme.Muted, "On Screen");
         var penumbra = false;
         try { penumbra = _penumbra.Available; } catch (Exception e) { _log.Debug(e.Message); }
         StartBlenderCheckIfNeeded(); BlenderConnectionState blender; lock (_stateLock) blender = _blenderState;
-        Status("Penumbra", penumbra, penumbra ? "OK" : "Unavailable"); ImGui.SameLine(0, 10);
+        Widgets.StatusDot("Penumbra", penumbra ? Theme.Online : Theme.Offline, penumbra ? "OK" : "Unavailable"); ImGui.SameLine(0, Theme.Scaled(10));
         var blenderMessage = blender switch
         {
             BlenderConnectionState.Online => "Online",
             BlenderConnectionState.VersionMismatch => BlenderClient.VersionMismatchMessage(_pluginVersion),
             _ => "Offline",
         };
-        Status("Blender", blender, blenderMessage);
+        Widgets.StatusDot("Blender", ConnectionColour(blender), blenderMessage);
         ImGui.Separator();
         DrawOptions();
     }
+
+    private static Vector4 ConnectionColour(BlenderConnectionState state)
+        => state switch
+        {
+            BlenderConnectionState.Online => Theme.Online,
+            BlenderConnectionState.VersionMismatch => Theme.Mismatch,
+            _ => Theme.Offline,
+        };
 
     private void DrawOptions()
     {
@@ -301,10 +326,10 @@ public sealed partial class MainWindow : Window, IDisposable
             return;
         }
 
-        ImGui.TextColored(new Vector4(.76f, .78f, .84f, 1), "Models");
+        ImGui.TextColored(Theme.Label, "Models");
         DrawModelOptions();
         ImGui.Separator();
-        ImGui.TextColored(new Vector4(.76f, .78f, .84f, 1), "Textures");
+        ImGui.TextColored(Theme.Label, "Textures");
         DrawTextureOptions();
         ImGui.Separator();
     }
@@ -317,11 +342,7 @@ public sealed partial class MainWindow : Window, IDisposable
             _config.RecompressTextures = recompress;
             _saveConfig();
         }
-        ImGui.PushTextWrapPos();
-        ImGui.TextColored(
-            new Vector4(.55f, .57f, .64f, 1),
-            "Texture edits keep their original compression (BC1–BC7). When off, saves are written uncompressed: larger files without compression artifacts.");
-        ImGui.PopTextWrapPos();
+        Widgets.HintWrapped("Texture edits keep their original compression (BC1–BC7). When off, saves are written uncompressed: larger files without compression artifacts.");
     }
 
     private void DrawModelOptions()
@@ -335,20 +356,20 @@ public sealed partial class MainWindow : Window, IDisposable
 
         if (_config.UseExistingSkeleton)
         {
-            ImGui.TextColored(new Vector4(.55f, .57f, .64f, 1), "Imported meshes receive an Armature modifier targeting this Blender object:");
+            Widgets.Hint("Imported meshes receive an Armature modifier targeting this Blender object:");
             var skeletonName = _config.SkeletonObjectName;
-            ImGui.SetNextItemWidth(Math.Max(180, ImGui.GetContentRegionAvail().X * 0.45f));
+            ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(180), ImGui.GetContentRegionAvail().X * 0.45f));
             if (ImGui.InputText("Skeleton object", ref skeletonName, 128))
             {
                 _config.SkeletonObjectName = skeletonName;
                 SaveModelOptions();
             }
             ImGui.SameLine();
-            ImGui.TextColored(new Vector4(.55f, .57f, .64f, 1), "must be an existing Blender Armature");
+            Widgets.Hint("must be an existing Blender Armature");
         }
         else
         {
-            ImGui.TextColored(new Vector4(.55f, .57f, .64f, 1), "Each import creates its own InstantEditArmature. This armature is only safe for import and export and is not suited for posing, animation or scaling.");
+            Widgets.Hint("Each import creates its own InstantEditArmature. This armature is only safe for import and export and is not suited for posing, animation or scaling.");
         }
 
         var applyTexturesAndMaterials = _config.ApplyTexturesAndMaterials;
@@ -357,23 +378,19 @@ public sealed partial class MainWindow : Window, IDisposable
             _config.ApplyTexturesAndMaterials = applyTexturesAndMaterials;
             SaveModelOptions();
         }
-        ImGui.TextColored(
-            new Vector4(.55f, .57f, .64f, 1),
-            "Creates display-only Blender materials. Quick Export still writes model data only.");
+        Widgets.Hint("Creates display-only Blender materials. Quick Export still writes model data only.");
 
-        ImGui.Indent();
-        ImGui.BeginDisabled(!applyTexturesAndMaterials);
-        var excludeBodyAndGeneralMaterials = _config.ExcludeBodyAndGeneralMaterials;
-        if (ImGui.Checkbox("Exclude body and general materials", ref excludeBodyAndGeneralMaterials))
+        using var indent = ImRaii.PushIndent();
+        using (ImRaii.Disabled(!applyTexturesAndMaterials))
         {
-            _config.ExcludeBodyAndGeneralMaterials = excludeBodyAndGeneralMaterials;
-            SaveModelOptions();
+            var excludeBodyAndGeneralMaterials = _config.ExcludeBodyAndGeneralMaterials;
+            if (ImGui.Checkbox("Exclude body and general materials", ref excludeBodyAndGeneralMaterials))
+            {
+                _config.ExcludeBodyAndGeneralMaterials = excludeBodyAndGeneralMaterials;
+                SaveModelOptions();
+            }
         }
-        ImGui.EndDisabled();
-        ImGui.TextColored(
-            new Vector4(.55f, .57f, .64f, 1),
-            "Leaves body skin, body-piercing, and pube materials as colored placeholders.");
-        ImGui.Unindent();
+        Widgets.Hint("Leaves body skin, body-piercing, and pube materials as colored placeholders.");
     }
 
     private void SaveModelOptions()
@@ -385,5 +402,4 @@ public sealed partial class MainWindow : Window, IDisposable
             _config.SkeletonObjectName = _config.SkeletonObjectName[..128];
         _saveConfig();
     }
-
 }

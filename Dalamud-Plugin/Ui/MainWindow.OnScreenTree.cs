@@ -1,20 +1,20 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
-using Dalamud.Interface.Components;
 using Dalamud.Interface.Textures;
 using Dalamud.Interface.Textures.TextureWraps;
-using Dalamud.Interface.Windowing;
+using Dalamud.Interface.Utility.Raii;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using InstantEdit.Models;
 using InstantEdit.Services;
-using Lumina.Data;
 
 namespace InstantEdit.Ui;
 
 public sealed partial class MainWindow
 {
+    private const ImGuiTableFlags ResourceTableFlags = ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.BordersOuter |
+                                                        ImGuiTableFlags.Resizable | ImGuiTableFlags.SizingStretchProp;
     private static readonly string[] ResourceTypeFilterGroups = ["Tree Structure", "Models", "Textures"];
 
     // View-model caches: drawing must not rebuild, re-classify, or re-search the resource
@@ -27,31 +27,17 @@ public sealed partial class MainWindow
     private readonly Dictionary<ResourceView, bool> _searchMatches = new(ReferenceEqualityComparer.Instance);
     private string _searchMatchesFilter = string.Empty;
 
-    private static void Status(string name, bool good, string value)
-        => Status(name, good ? BlenderConnectionState.Online : BlenderConnectionState.Offline, value);
-
-    private static void Status(string name, BlenderConnectionState state, string value)
-    {
-        var color = state switch
-        {
-            BlenderConnectionState.Online => new Vector4(.3f, .78f, .5f, 1),
-            BlenderConnectionState.VersionMismatch => new Vector4(1f, .65f, .1f, 1),
-            _ => new Vector4(.9f, .45f, .32f, 1),
-        };
-        ImGui.TextColored(color, "●"); ImGui.SameLine(0, 3); ImGui.TextColored(new Vector4(.7f, .72f, .78f, 1), $"{name}: {value}");
-    }
-
     private void DrawResources(IReadOnlyList<ActorView> actors, string? emptyMessage = null)
     {
         actors = actors.Where(ActorMatches).ToList();
         var viewportHeight = Math.Max(1, ImGui.GetContentRegionAvail().Y);
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(.075f, .085f, .105f, 1));
-        if (!ImGui.BeginChild("##resource-browser", new Vector2(0, viewportHeight), true)) { ImGui.EndChild(); ImGui.PopStyleColor(); return; }
-        if (emptyMessage is null && _onScreen.IsRefreshing && actors.Count == 0) ImGui.TextColored(new Vector4(.65f, .68f, .75f, 1), "Refreshing resources…");
-        else if (actors.Count == 0) ImGui.TextColored(new Vector4(.65f, .68f, .75f, 1), emptyMessage ?? "No snapshot loaded. Use Refresh character list to collect on-screen resources.");
+        using var background = ImRaii.PushColor(ImGuiCol.ChildBg, Theme.PanelBg);
+        using var browser = ImRaii.Child("##resource-browser", new Vector2(0, viewportHeight), true);
+        if (!browser.Success)
+            return;
+        if (emptyMessage is null && _onScreen.IsRefreshing && actors.Count == 0) ImGui.TextColored(Theme.Muted, "Refreshing resources…");
+        else if (actors.Count == 0) ImGui.TextColored(Theme.Muted, emptyMessage ?? "No snapshot loaded. Use Refresh character list to collect on-screen resources.");
         else foreach (var actor in actors) DrawActor(actor);
-        ImGui.EndChild();
-        ImGui.PopStyleColor();
     }
 
     private void DrawActor(ActorView actor)
@@ -63,46 +49,42 @@ public sealed partial class MainWindow
         }
 
         var actorId = SafeId($"actor:{actor.Entity.Address:X}:{actor.Entity.ObjectIndex}");
-        ImGui.PushID(actorId); DrawOpaqueRow();
+        using var id = ImRaii.PushId(actorId);
+        DrawOpaqueRow();
         var filteredView = IsFilteredResourceView;
         var expanded = filteredView
             ? !_collapsedFiltered.Contains(actorId)
             : SearchActive || _expanded.Contains(actorId);
-        if (ImGui.Button(expanded ? "▼##actor-toggle" : "▶##actor-toggle", new Vector2(22, ImGui.GetFrameHeight()))) ToggleExpanded(actorId, expanded, filteredView);
-        ImGui.SameLine(0, 4); var header = Safe($"{actor.Category}{(string.IsNullOrWhiteSpace(actor.Name) ? string.Empty : $"  ·  {actor.Name}")}", "Player");
+        if (ImGui.Button(expanded ? "▼##actor-toggle" : "▶##actor-toggle", new Vector2(Theme.ArrowWidth, ImGui.GetFrameHeight()))) ToggleExpanded(actorId, expanded, filteredView);
+        ImGui.SameLine(0, Theme.Scaled(4)); var header = Safe($"{actor.Category}{(string.IsNullOrWhiteSpace(actor.Name) ? string.Empty : $"  ·  {actor.Name}")}", "Player");
         var actorLabelWidth = Math.Max(1, ImGui.GetContentRegionAvail().X);
         if (ImGui.Selectable($"{header}##actor-label", false, ImGuiSelectableFlags.None, new Vector2(actorLabelWidth, ImGui.GetFrameHeight()))) ToggleExpanded(actorId, expanded, filteredView);
-        if (expanded)
-        {
-            var flags = ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.BordersOuter |
-                        ImGuiTableFlags.Resizable | ImGuiTableFlags.SizingStretchProp;
-            if (ImGui.BeginTable("##resource-table", 3, flags))
-            {
-                ImGui.TableSetupColumn("Slot / Item", ImGuiTableColumnFlags.WidthStretch, .36f);
-                ImGui.TableSetupColumn("Mod / Resource Path", ImGuiTableColumnFlags.WidthStretch, .64f);
-                ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 58);
-                ImGui.TableHeadersRow();
-                DrawSection(actor, ResourceSection.CharacterFeatures, "Character features", actorId + ":features");
-                DrawSection(actor, ResourceSection.Gear, "Gear", actorId + ":gear");
-                DrawSection(actor, ResourceSection.Other, "Other", actorId + ":other");
-                ImGui.EndTable();
-            }
-        }
-        ImGui.PopID();
+        if (!expanded)
+            return;
+
+        using var table = ImRaii.Table("##resource-table", 3, ResourceTableFlags);
+        if (!table.Success)
+            return;
+        ImGui.TableSetupColumn("Slot / Item", ImGuiTableColumnFlags.WidthStretch, .36f);
+        ImGui.TableSetupColumn("Mod / Resource Path", ImGuiTableColumnFlags.WidthStretch, .64f);
+        ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, Theme.Scaled(58));
+        ImGui.TableHeadersRow();
+        DrawSection(actor, ResourceSection.CharacterFeatures, "Character features", actorId + ":features");
+        DrawSection(actor, ResourceSection.Gear, "Gear", actorId + ":gear");
+        DrawSection(actor, ResourceSection.Other, "Other", actorId + ":other");
     }
 
     private void DrawModResourceRows(ActorView actor)
     {
         // BuildModView sorts the roots by game path once, so this only filters them.
-        var flags = ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.BordersOuter |
-                    ImGuiTableFlags.Resizable | ImGuiTableFlags.SizingStretchProp;
-        if (!ImGui.BeginTable("##mod-resource-table", 4, flags))
+        using var table = ImRaii.Table("##mod-resource-table", 4, ResourceTableFlags);
+        if (!table.Success)
             return;
 
         ImGui.TableSetupColumn("Resource", ImGuiTableColumnFlags.WidthStretch, .36f);
         ImGui.TableSetupColumn("Mod / Resource Path", ImGuiTableColumnFlags.WidthStretch, .42f);
         ImGui.TableSetupColumn("Mod Options", ImGuiTableColumnFlags.WidthStretch, .22f);
-        ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 58);
+        ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, Theme.Scaled(58));
         ImGui.TableHeadersRow();
 
         if (IsFilteredResourceView)
@@ -124,8 +106,6 @@ public sealed partial class MainWindow
                 if (HasResourceTypeMatch(root))
                     DrawNode(actor, root, $"mod:{index++}", 0, false, false, true);
         }
-
-        ImGui.EndTable();
     }
 
     private void DrawSection(ActorView actor, ResourceSection section, string label, string key)
@@ -137,15 +117,15 @@ public sealed partial class MainWindow
         nodes = nodes.OrderBy(x => x.Order);
         var ordered = nodes.ToList();
         if (ordered.Count == 0) return;
-        ImGui.PushID(SafeId(key));
+        using var id = ImRaii.PushId(SafeId(key));
         ImGui.TableNextRow();
         ImGui.TableSetColumnIndex(0);
         var filteredView = IsFilteredResourceView;
         var expanded = filteredView
             ? !_collapsedFiltered.Contains(key)
             : SearchActive || _expanded.Contains(key);
-        if (ImGui.Button(expanded ? "▼##section-toggle" : "▶##section-toggle", new Vector2(22, ImGui.GetFrameHeight()))) ToggleExpanded(key, expanded, filteredView);
-        ImGui.SameLine(0, 4);
+        if (ImGui.Button(expanded ? "▼##section-toggle" : "▶##section-toggle", new Vector2(Theme.ArrowWidth, ImGui.GetFrameHeight()))) ToggleExpanded(key, expanded, filteredView);
+        ImGui.SameLine(0, Theme.Scaled(4));
         if (ImGui.Selectable($"{label}##section-label", false, ImGuiSelectableFlags.SpanAllColumns, new Vector2(0, ImGui.GetFrameHeight()))) ToggleExpanded(key, expanded, filteredView);
         if (expanded)
         {
@@ -154,7 +134,6 @@ public sealed partial class MainWindow
             else
                 for (var i = 0; i < ordered.Count; i++) DrawNode(actor, ordered[i], $"{key}:{i}", 3, filterBySearch, searchActive);
         }
-        ImGui.PopID();
     }
 
     private void DrawFlatSection(ActorView actor, IReadOnlyList<ResourceView> roots, string key, bool filterBySearch)
@@ -172,12 +151,12 @@ public sealed partial class MainWindow
 
     private void DrawFlatNode(ActorView actor, ResourceView item, ResourceView resource, string scope, bool showOptionMapping = false)
     {
-        ImGui.PushID(SafeId(scope));
+        using var id = ImRaii.PushId(SafeId(scope));
         ImGui.TableNextRow();
         ImGui.TableSetColumnIndex(0);
-        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + 18);
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + Theme.TreeIndent);
         DrawSlotIcon(Safe(item.Slot, KindLabel(item.Type)), item.Icon, item.Section);
-        ImGui.SameLine(0, 6);
+        ImGui.SameLine(0, Theme.Scaled(6));
         var itemName = Safe(DisplayName(item.Name, item.ActualPath), "Unnamed resource");
         ImGui.TextUnformatted(itemName);
         if (ImGui.IsItemHovered())
@@ -199,7 +178,6 @@ public sealed partial class MainWindow
             if (ImGui.IsItemHovered()) ImGui.SetTooltip("Edit this model in Blender");
         }
         else DrawTextureAction(resource, actor);
-        ImGui.PopID();
     }
 
     private void DrawNode(ActorView actor, ResourceView node, string scope, int depth, bool filterBySearch, bool autoExpandSearch, bool showOptionMapping = false)
@@ -210,7 +188,7 @@ public sealed partial class MainWindow
         var actualPath = Safe(node.ActualPath);
         var source = Safe(node.SourceLabel, "Source unavailable");
         var key = SafeId($"{scope}:{type}:{name}:{gamePath}:{actualPath}");
-        ImGui.PushID(key);
+        using var id = ImRaii.PushId(key);
         var presentation = Safe(node.Slot, KindLabel(type));
         // Only descend into children IE can actually edit (or that themselves
         // contain one) - resources like animations, skeletons, or VFX have
@@ -224,13 +202,13 @@ public sealed partial class MainWindow
         ImGui.TableSetColumnIndex(0);
         // ImGui's persistent Indent state is reset while changing table rows/cells.
         // Offset this cell's cursor directly so every tree level moves right.
-        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + Math.Max(0, depth - 2) * 18);
-        if (ImGui.Button(Safe($"{arrow}##expand:{key}", "  ##expand"), new Vector2(22, ImGui.GetFrameHeight())))
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + Math.Max(0, depth - 2) * Theme.TreeIndent);
+        if (ImGui.Button(Safe($"{arrow}##expand:{key}", "  ##expand"), new Vector2(Theme.ArrowWidth, ImGui.GetFrameHeight())))
             if (hasChildren) { if (expanded) _expanded.Remove(key); else _expanded.Add(key); }
         if (ImGui.IsItemHovered() && hasChildren) ImGui.SetTooltip(expanded ? "Collapse" : "Expand");
-        ImGui.SameLine(0, 4);
+        ImGui.SameLine(0, Theme.Scaled(4));
         DrawSlotIcon(presentation, node.Icon, node.Section);
-        ImGui.SameLine(0, 6);
+        ImGui.SameLine(0, Theme.Scaled(6));
         var itemName = Safe(DisplayName(name, actualPath), "Unnamed resource");
         var hovered = ImGui.Selectable($"{itemName}##label:{key}", false, ImGuiSelectableFlags.None, new Vector2(0, ImGui.GetFrameHeight()));
         if (hovered && hasChildren) { if (expanded) _expanded.Remove(key); else _expanded.Add(key); }
@@ -264,25 +242,24 @@ public sealed partial class MainWindow
                     DrawNode(actor, child, $"{scope}:{i}", depth + 1, filterBySearch, autoExpandSearch, showOptionMapping);
             }
         }
-        ImGui.PopID();
     }
 
     private void DrawResolvedPath(ResourceView node, string source, string actualPath, string gamePath)
     {
         if (!string.IsNullOrWhiteSpace(node.SourceModName))
         {
-            ImGui.TextColored(new Vector4(.3f, .9f, .35f, 1), $"[{node.SourceModName}]");
-            ImGui.SameLine(0, 5);
+            ImGui.TextColored(Theme.ModSource, $"[{node.SourceModName}]");
+            ImGui.SameLine(0, Theme.Scaled(5));
         }
         else if (node.SourceState == ResourceSourceState.GameData)
         {
-            ImGui.TextColored(new Vector4(.45f, .7f, .95f, 1), "[Game Data]");
-            ImGui.SameLine(0, 5);
+            ImGui.TextColored(Theme.GameSource, "[Game Data]");
+            ImGui.SameLine(0, Theme.Scaled(5));
         }
         else if (!string.IsNullOrWhiteSpace(source))
         {
-            ImGui.TextColored(new Vector4(.55f, .57f, .63f, 1), $"[{source}]");
-            ImGui.SameLine(0, 5);
+            ImGui.TextColored(Theme.Hint, $"[{source}]");
+            ImGui.SameLine(0, Theme.Scaled(5));
         }
 
         var displayPath = Safe(node.SourceRelativePath, Safe(gamePath, actualPath));
@@ -301,12 +278,11 @@ public sealed partial class MainWindow
 
         if (icon is null)
         {
-            ImGui.Dummy(new Vector2(ImGui.GetFrameHeight()));
+            ImGui.Dummy(new Vector2(Theme.IconSize));
             return;
         }
 
-        var size = new Vector2(ImGui.GetFrameHeight());
-        ImGui.Image(icon.Handle, size);
+        ImGui.Image(icon.Handle, new Vector2(Theme.IconSize));
         if (ImGui.IsItemHovered()) ImGui.SetTooltip(slot);
     }
 
@@ -314,18 +290,16 @@ public sealed partial class MainWindow
     {
         var counts = ResourceTypeCounts(actors);
         ImGui.Spacing();
-        ImGui.TextColored(new Vector4(.58f, .61f, .69f, 1), "Filter"); ImGui.SameLine(0, 8);
+        ImGui.TextColored(Theme.Muted, "Filter"); ImGui.SameLine(0, Theme.Scaled(8));
         for (var i = 0; i < ResourceTypeFilterGroups.Length; i++)
         {
             var group = ResourceTypeFilterGroups[i];
             var filter = ResourceTypeFilterFor(group);
-            ImGui.PushID($"resource-type-filter:{group}");
+            using var id = ImRaii.PushId($"resource-type-filter:{group}");
             var selected = _resourceTypeFilter == filter;
-            if (selected) ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(.45f, .34f, .16f, 1));
+            using var colour = ImRaii.PushColor(ImGuiCol.Button, Theme.Selection, selected);
             if (ImGui.SmallButton($"{group}  {counts[i]}")) _resourceTypeFilter = filter;
-            if (selected) ImGui.PopStyleColor();
-            if (i < ResourceTypeFilterGroups.Length - 1) ImGui.SameLine(0, 6);
-            ImGui.PopID();
+            if (i < ResourceTypeFilterGroups.Length - 1) ImGui.SameLine(0, Theme.Scaled(6));
         }
         ImGui.NewLine();
     }
@@ -720,7 +694,11 @@ public sealed partial class MainWindow
     }
 
     private void DrawOpaqueRow()
-    { var p = ImGui.GetCursorScreenPos(); ImGui.GetWindowDrawList().AddRectFilled(p, p + new Vector2(ImGui.GetContentRegionAvail().X, ImGui.GetFrameHeight()), ImGui.GetColorU32(new Vector4(.11f, .12f, .15f, 1)), 2); }
+    {
+        var p = ImGui.GetCursorScreenPos();
+        ImGui.GetWindowDrawList().AddRectFilled(p, p + new Vector2(ImGui.GetContentRegionAvail().X, ImGui.GetFrameHeight()), ImGui.GetColorU32(Theme.RowAlt), Theme.Scaled(2));
+    }
+
     private static void ShowPathTooltip(bool hovered, string path)
     {
         if (!hovered) return;

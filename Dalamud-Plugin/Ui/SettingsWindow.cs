@@ -1,12 +1,13 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using InstantEdit.Services;
 
 namespace InstantEdit.Ui;
 
 /// <summary>Dedicated Dalamud configuration surface; kept separate from model selection.</summary>
-public sealed class SettingsWindow
+public sealed class SettingsWindow : Window
 {
     private readonly Configuration _config;
     private readonly Action _saveConfig;
@@ -15,10 +16,10 @@ public sealed class SettingsWindow
     private readonly Action _requestCacheSynchronization;
     private readonly Action _openSetup;
     private readonly string _cacheStartupError;
-    private bool _open;
 
     public SettingsWindow(Configuration config, Action saveConfig, Action restartExportListener, IPluginLog log,
         Action requestCacheSynchronization, Action openSetup, string cacheStartupError = "")
+        : base("XIV Instant Edit Settings##Settings")
     {
         _config = config;
         _saveConfig = saveConfig;
@@ -27,35 +28,41 @@ public sealed class SettingsWindow
         _requestCacheSynchronization = requestCacheSynchronization;
         _openSetup = openSetup;
         _cacheStartupError = cacheStartupError;
+
+        Size = new Vector2(600, 480);
+        SizeCondition = ImGuiCond.FirstUseEver;
+        SizeConstraints = new WindowSizeConstraints
+        {
+            MinimumSize = new Vector2(520, 360),
+            MaximumSize = new Vector2(1000, 900),
+        };
+        AllowPinning = true;
+        AllowBackgroundBlur = true;
+        RespectCloseHotkey = true;
     }
 
-    public bool IsOpen { get => _open; set => _open = value; }
-    public void Open() => _open = true;
-    public void Close() => _open = false;
-    public void Toggle() => _open = !_open;
+    public void Open() => IsOpen = true;
+    public void Close() => IsOpen = false;
 
-    public void Draw()
+    public override void Draw()
     {
-        if (!_open) return;
-        if (!ImGui.Begin("XIV Instant Edit Settings##Settings", ref _open)) { ImGui.End(); return; }
-        ImGui.TextColored(new Vector4(.95f, .78f, .35f, 1), "XIV INSTANT EDIT SETTINGS");
-        ImGui.TextColored(new Vector4(.58f, .6f, .67f, 1), "Connection and export preferences");
+        ImGui.TextColored(Theme.Accent, "XIV INSTANT EDIT SETTINGS");
+        ImGui.TextColored(Theme.Muted, "Connection and export preferences");
         ImGui.Spacing();
         if (ImGui.Button("Run first-time setup again"))
         {
-            _open = false;
+            IsOpen = false;
             _openSetup();
-            ImGui.End();
             return;
         }
         ImGui.SameLine();
-        ImGui.TextColored(new Vector4(.55f, .57f, .64f, 1), "Review Penumbra, Blender, cache, and texture-editor setup.");
+        Widgets.Hint("Review Penumbra, Blender, cache, and texture-editor setup.");
         ImGui.Spacing();
         ImGui.Separator(); ImGui.Text("Connections");
         var blenderPort = _config.BlenderPort; if (ImGui.InputInt("Blender port", ref blenderPort)) { _config.BlenderPort = blenderPort; Save(); }
         ImGui.TextWrapped("Model editing requires Blender. Texture editing works after its cache has synchronized once.");
         var listenPort = _config.ListenPort; if (ImGui.InputInt("Listener port", ref listenPort)) { var changed = listenPort != _config.ListenPort; _config.ListenPort = listenPort; Save(); if (changed) RestartListener(); }
-        ImGui.TextColored(new Vector4(.55f, .57f, .64f, 1), "Quick Export writes back to the model's original Penumbra mod.");
+        Widgets.Hint("Quick Export writes back to the model's original Penumbra mod.");
         ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Texture editing");
         var editor = _config.TextureEditorPath;
         ImGui.SetNextItemWidth(-1);
@@ -85,13 +92,12 @@ public sealed class SettingsWindow
         catch (Exception e) { ImGui.TextWrapped($"Cache directory is invalid: {e.Message}"); }
         if (_cacheStartupError.Length > 0)
         {
-            ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(.95f, .45f, .4f, 1));
-            ImGui.TextWrapped($"The cache could not be opened when the plugin loaded: {_cacheStartupError} " +
+            ImGui.Spacing();
+            Widgets.Banner("##settings-cache-error", FeedbackSeverity.Error,
+                $"The cache could not be opened when the plugin loaded: {_cacheStartupError} " +
                 "Choose another cache directory (or empty this one), then reload the plugin. " +
                 "Model backups are kept in the plugin's config folder until then.");
-            ImGui.PopStyleColor();
         }
-        ImGui.End();
     }
 
     private void Save()
