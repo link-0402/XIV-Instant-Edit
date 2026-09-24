@@ -65,6 +65,9 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>Refresh the On Screen list a second after Penumbra reports a mod-setting change or a redraw.</summary>
     public bool AutoRefreshOnScreen { get; set; } = true;
 
+    /// <summary>Render a small shaded thumbnail of Dawntrail models in the hover card.</summary>
+    public bool RenderModelThumbnails { get; set; } = true;
+
     /// <summary>Legacy v9 context payload retained only for one-time migration or storage fallback.</summary>
     public List<PersistedExportContext> ExportContexts { get; set; } = [];
 

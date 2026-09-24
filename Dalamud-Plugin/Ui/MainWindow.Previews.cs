@@ -21,16 +21,107 @@ public sealed partial class MainWindow
     {
         var texture = (node.Kinds & ResourceKinds.Texture) != 0;
         var material = (node.Kinds & ResourceKinds.Material) != 0;
-        if ((texture || material) && PreviewReadable(node) && Widgets.HoverDelay(hoverId))
+        var model = (node.Kinds & ResourceKinds.Model) != 0;
+        if ((texture || material || model) && PreviewReadable(node) && Widgets.HoverDelay(hoverId))
         {
             if (texture)
                 DrawTexturePreviewTooltip(node, presentation);
-            else
+            else if (material)
                 DrawMaterialHoverCard(node, presentation);
+            else
+                DrawModelHoverCard(node, presentation);
             return;
         }
 
         ImGui.SetTooltip($"{presentation}\nGame path: {(node.GamePath.Length == 0 ? "(none)" : node.GamePath)}");
+    }
+
+    private void DrawModelHoverCard(ResourceView node, string presentation)
+    {
+        var entry = _previews.GetModel(_previews.KeyFor(node.ActualPath, node.SourceState == ResourceSourceState.GameData));
+        using var tooltip = ImRaii.Tooltip();
+        ImGui.TextColored(Theme.Label, presentation);
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.TextColored(Theme.Hint, Safe(node.GamePath, "(no game path)"));
+        ImGui.Separator();
+        switch (entry.State)
+        {
+            case PreviewState.Failed:
+                using (ImRaii.TextWrapPos(Theme.Scaled(360)))
+                    ImGui.TextColored(Theme.Warning, $"Model unavailable: {entry.Error}");
+                return;
+            case PreviewState.Loading:
+                ImGui.TextColored(Theme.Muted, "Reading model…");
+                return;
+        }
+
+        var preview = entry.Value!;
+        var info = preview.Info;
+        var box = new Vector2(Theme.Scaled(256));
+        if (preview.Thumbnail is not null)
+            Widgets.FittedImage(preview.Thumbnail, box);
+        else if (preview.ThumbnailNote is not null)
+        {
+            using (ImRaii.TextWrapPos(Theme.Scaled(360)))
+                ImGui.TextColored(Theme.Hint, preview.ThumbnailNote);
+        }
+
+        var meshes = info.MeshCount == 1 ? "1 mesh" : $"{info.MeshCount} meshes";
+        var lods = info.LodCount == 1 ? "1 LOD" : $"{info.LodCount} LODs";
+        ImGui.TextColored(Theme.Text, $"{info.VersionLabel} · {lods} · {meshes} · {info.Lod0Vertices:N0} verts / {info.Lod0Triangles:N0} tris");
+        if (info.Partial)
+            ImGui.TextColored(Theme.Warning, $"Partial read: {info.Note}");
+        if (info.Materials.Count > 0)
+        {
+            ImGui.Spacing();
+            ImGui.TextColored(Theme.Label, "Materials");
+            for (var i = 0; i < info.Materials.Count; i++)
+            {
+                var (r, g, b) = ModelThumbnailRenderer.Palette[i % ModelThumbnailRenderer.Palette.Length];
+                var chip = ImGui.GetCursorScreenPos();
+                var chipSize = new Vector2(ImGui.GetTextLineHeight() * .8f);
+                ImGui.GetWindowDrawList().AddRectFilled(chip + new Vector2(0, (ImGui.GetTextLineHeight() - chipSize.Y) / 2), chip + chipSize + new Vector2(0, (ImGui.GetTextLineHeight() - chipSize.Y) / 2),
+                    ImGui.GetColorU32(new Vector4(r / 255f, g / 255f, b / 255f, 1)), Theme.Scaled(2));
+                ImGui.Dummy(chipSize);
+                ImGui.SameLine(0, Theme.Gap);
+                ImGui.TextUnformatted(Path.GetFileName(info.Materials[i]));
+                var textures = CountMaterialTextures(node, info.Materials[i]);
+                if (textures >= 0)
+                {
+                    ImGui.SameLine(0, Theme.Gap);
+                    ImGui.TextColored(Theme.Muted, textures == 1 ? "1 texture" : $"{textures} textures");
+                }
+            }
+        }
+        if (info.Attributes.Count > 0)
+        {
+            ImGui.Spacing();
+            ImGui.TextColored(Theme.Label, "Attributes");
+            using var wrap = ImRaii.TextWrapPos(Theme.Scaled(360));
+            ImGui.TextColored(Theme.Muted, string.Join(" · ", info.Attributes));
+        }
+        ImGui.Spacing();
+        ImGui.TextColored(Theme.Muted, $"{info.BoneCount} bones · {info.ShapeCount} shapes · radius {info.Radius:0.##}");
+    }
+
+    /// <summary> Textures of the matching material row under this model in the tree, or -1 when the tree has no such row. </summary>
+    private static int CountMaterialTextures(ResourceView model, string materialPath)
+    {
+        var fileName = Path.GetFileName(materialPath);
+        foreach (var child in model.Children)
+        {
+            if ((child.Kinds & ResourceKinds.Material) == 0)
+                continue;
+            if (!string.Equals(child.GamePath, materialPath, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(Path.GetFileName(child.GamePath), fileName, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var count = 0;
+            foreach (var texture in child.Children)
+                if ((texture.Kinds & ResourceKinds.Texture) != 0)
+                    count++;
+            return count;
+        }
+        return -1;
     }
 
     private void DrawTexturePreviewTooltip(ResourceView node, string presentation)

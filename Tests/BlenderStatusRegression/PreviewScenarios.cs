@@ -31,6 +31,136 @@ internal static class PreviewScenarios
     {
         await CachePolicyAsync();
         DecoderChecks();
+        ModelChecks();
+    }
+
+    /// <summary>
+    /// A minimal Dawntrail model: one mesh of a unit cube with a float3 position stream, one
+    /// material, two attributes and one bone. Layout: file header | vertex declaration | string
+    /// table | mesh header | 3 LODs | mesh | attribute offsets | material offset | bone offset |
+    /// vertex buffer | index buffer.
+    /// </summary>
+    private static byte[] SyntheticModel(out int meshTableOffset)
+    {
+        var strings = new[] { "atr_a", "atr_b", "chara/equipment/e0001/material/v0001/mt_c0101e0001_top_a.mtrl", "j_kosi" };
+        var stringBytes = strings.SelectMany(s => System.Text.Encoding.UTF8.GetBytes(s + "\0")).ToArray();
+        var stringOffsets = new int[strings.Length];
+        for (int i = 0, at = 0; i < strings.Length; i++)
+        {
+            stringOffsets[i] = at;
+            at += System.Text.Encoding.UTF8.GetByteCount(strings[i]) + 1;
+        }
+
+        const int header = 68, declaration = 136, stringHeader = 8, meshHeader = 56, lod = 60, mesh = 36;
+        var stringTable = header + declaration;
+        var meshHeaderAt = stringTable + stringHeader + stringBytes.Length;
+        var lods = meshHeaderAt + meshHeader;
+        var meshes = lods + 3 * lod;
+        var attributes = meshes + mesh;
+        var materials = attributes + 2 * 4;
+        var bones = materials + 4;
+        var vertexData = bones + 4;
+        var indexData = vertexData + 8 * 12;
+        var bytes = new byte[indexData + 36 * 2];
+        meshTableOffset = meshes;
+
+        void U16(int at, int value) => BitConverter.TryWriteBytes(bytes.AsSpan(at, 2), (ushort)value);
+        void U32(int at, uint value) => BitConverter.TryWriteBytes(bytes.AsSpan(at, 4), value);
+        void F32(int at, float value) => BitConverter.TryWriteBytes(bytes.AsSpan(at, 4), value);
+
+        U32(0, 0x01000006u);
+        U16(12, 1);
+        U16(14, 1);
+        U32(16, (uint)vertexData);
+        U32(28, (uint)indexData);
+        U32(40, 8 * 12);
+        U32(52, 36 * 2);
+        bytes[64] = 1;
+        // Position element: stream 0, offset 0, type 2 (float3), usage 0 (position); then the terminator.
+        bytes[header + 2] = 2;
+        bytes[header + 8] = 0xFF;
+        U16(stringTable, strings.Length);
+        U32(stringTable + 4, (uint)stringBytes.Length);
+        stringBytes.CopyTo(bytes, stringTable + stringHeader);
+        F32(meshHeaderAt, 1.5f);
+        U16(meshHeaderAt + 4, 1);
+        U16(meshHeaderAt + 6, 2);
+        U16(meshHeaderAt + 10, 1);
+        U16(meshHeaderAt + 12, 1);
+        bytes[meshHeaderAt + 22] = 1;
+        U16(lods, 0);
+        U16(lods + 2, 1);
+        U16(meshes, 8);
+        U32(meshes + 4, 36);
+        U16(meshes + 8, 0);
+        U32(meshes + 16, 0);
+        U32(meshes + 20, 0);
+        bytes[meshes + 32] = 12;
+        bytes[meshes + 35] = 1;
+        U32(attributes, (uint)stringOffsets[0]);
+        U32(attributes + 4, (uint)stringOffsets[1]);
+        U32(materials, (uint)stringOffsets[2]);
+        U32(bones, (uint)stringOffsets[3]);
+        for (var v = 0; v < 8; v++)
+        {
+            F32(vertexData + v * 12, v & 1);
+            F32(vertexData + v * 12 + 4, (v >> 1) & 1);
+            F32(vertexData + v * 12 + 8, (v >> 2) & 1);
+        }
+        int[] cube =
+        [
+            0, 2, 1, 1, 2, 3, 4, 5, 6, 5, 7, 6, 0, 1, 4, 1, 5, 4,
+            2, 6, 3, 3, 6, 7, 0, 4, 2, 2, 4, 6, 1, 3, 5, 3, 7, 5,
+        ];
+        for (var i = 0; i < cube.Length; i++)
+            U16(indexData + i * 2, cube[i]);
+        return bytes;
+    }
+
+    private static void ModelChecks()
+    {
+        var model = SyntheticModel(out var meshTable);
+        var info = ModelInfoReader.Read(model);
+        Require(info.IsV6 && info.VersionLabel == "V6" && info.LodCount == 1 && info.MeshCount == 1 && info.Lod0Vertices == 8 && info.Lod0Indices == 36
+                && info.Lod0Triangles == 12 && info.Materials.Count == 1 && info.Materials[0].EndsWith("top_a.mtrl", StringComparison.Ordinal)
+                && info.Attributes.SequenceEqual(["atr_a", "atr_b"]) && info.BoneCount == 1 && info.ShapeCount == 0
+                && Math.Abs(info.Radius - 1.5f) < 1e-6 && !info.Partial && info.Note is null,
+            "the model info reader reads the header, string table, LOD 0 totals and attribute names");
+        var truncated = ModelInfoReader.Read(model[..(meshTable + 10)]);
+        Require(truncated.Partial && truncated.Note is not null && truncated.MeshCount == 1 && truncated.IsV6,
+            "a truncated model yields a partial read instead of an exception");
+        var ancient = new byte[80];
+        BitConverter.TryWriteBytes(ancient.AsSpan(0, 4), 0x01000005u);
+        Require(ModelInfoReader.Read(ancient).VersionLabel == "V5" && ModelInfoReader.Read([1, 2, 3]).Partial,
+            "unsupported versions and junk are reported, never thrown");
+
+        var geometry = ModelGeometryReader.Read(model);
+        Require(geometry.Positions.Length == 8 && geometry.Indices.Length == 36 && geometry.TriangleCount == 12 && geometry.Meshes.Length == 1
+                && geometry.Meshes[0] == (0, 36, 0) && geometry.Min == System.Numerics.Vector3.Zero && geometry.Max == System.Numerics.Vector3.One,
+            "the geometry reader returns LOD 0 positions, triangles and bounds");
+        Reject(() => ModelGeometryReader.Read(model[..^4]), "a truncated index buffer is rejected");
+        var v5 = (byte[])model.Clone();
+        BitConverter.TryWriteBytes(v5.AsSpan(0, 4), 0x01000005u);
+        var refused = false;
+        try { ModelGeometryReader.Read(v5); } catch (NotSupportedException) { refused = true; }
+        Require(refused, "pre-Dawntrail models get no thumbnail");
+
+        var pixels = ModelThumbnailRenderer.Render(geometry, 64, supersample: false);
+        int minX = 64, maxX = -1, minY = 64, maxY = -1, opaque = 0;
+        for (var y = 0; y < 64; y++)
+            for (var x = 0; x < 64; x++)
+            {
+                if (pixels[(y * 64 + x) * 4 + 3] == 0) continue;
+                opaque++;
+                minX = Math.Min(minX, x); maxX = Math.Max(maxX, x); minY = Math.Min(minY, y); maxY = Math.Max(maxY, y);
+            }
+        Require(opaque > 200 && minX >= 3 && minY >= 3 && maxX <= 60 && maxY <= 60 && maxX - minX >= 30,
+            "the rasteriser draws the cube fitted inside the margins");
+        var smooth = ModelThumbnailRenderer.Render(geometry, 32);
+        Require(smooth.Length == 32 * 32 * 4 && smooth.Where((_, i) => i % 4 == 3).Any(a => a == 255) && smooth.Where((_, i) => i % 4 == 3).Any(a => a is > 0 and < 255),
+            "supersampling produces soft edges");
+        var empty = new ModelGeometry([], [], [], System.Numerics.Vector3.Zero, System.Numerics.Vector3.Zero);
+        Require(ModelThumbnailRenderer.Render(empty, 16, false).All(b => b == 0), "empty geometry renders fully transparent");
     }
 
     private static async Task CachePolicyAsync()

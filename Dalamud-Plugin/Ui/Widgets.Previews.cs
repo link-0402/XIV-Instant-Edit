@@ -62,15 +62,7 @@ internal static partial class Widgets
         switch (entry.State)
         {
             case PreviewState.Ready when entry.Value is { } preview:
-                var wrap = alpha && preview.Alpha is not null ? preview.Alpha : preview.Rgb;
-                var scale = Math.Min(box.X / Math.Max(1, wrap.Width), box.Y / Math.Max(1, wrap.Height));
-                var size = new Vector2(wrap.Width * scale, wrap.Height * scale);
-                var origin = position + (box - size) / 2;
-                Checkerboard(origin, size, Theme.Scaled(8));
-                ImGui.SetCursorScreenPos(origin);
-                ImGui.Image(wrap.Handle, size);
-                ImGui.SetCursorScreenPos(position);
-                ImGui.Dummy(box);
+                FittedImage(alpha && preview.Alpha is not null ? preview.Alpha : preview.Rgb, box);
                 break;
             case PreviewState.Failed:
                 drawList.AddRect(position, position + box, ImGui.GetColorU32(Theme.WithAlpha(Theme.Muted, .4f)), Theme.Scaled(3));
@@ -90,6 +82,20 @@ internal static partial class Widgets
                 ImGui.Dummy(box);
                 break;
         }
+    }
+
+    /// <summary> Draws a texture wrap fitted into a box over a checkerboard. Always occupies the box. </summary>
+    public static void FittedImage(Dalamud.Interface.Textures.TextureWraps.IDalamudTextureWrap wrap, Vector2 box)
+    {
+        var position = ImGui.GetCursorScreenPos();
+        var scale = Math.Min(box.X / Math.Max(1, wrap.Width), box.Y / Math.Max(1, wrap.Height));
+        var size = new Vector2(wrap.Width * scale, wrap.Height * scale);
+        var origin = position + (box - size) / 2;
+        Checkerboard(origin, size, Theme.Scaled(8));
+        ImGui.SetCursorScreenPos(origin);
+        ImGui.Image(wrap.Handle, size);
+        ImGui.SetCursorScreenPos(position);
+        ImGui.Dummy(box);
     }
 
     /// <summary> The caption under a preview: dimensions, format and mip count, or the load state. </summary>

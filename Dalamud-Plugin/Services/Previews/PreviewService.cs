@@ -30,10 +30,36 @@ public sealed class TexturePreview : IDisposable
     }
 }
 
+/// <summary> A model's header facts plus, when enabled and possible, a rendered thumbnail. </summary>
+public sealed class ModelPreview : IDisposable
+{
+    public ModelPreview(ModelInfo info, IDalamudTextureWrap? thumbnail, string? thumbnailNote)
+    {
+        Info = info;
+        Thumbnail = thumbnail;
+        ThumbnailNote = thumbnailNote;
+    }
+
+    public ModelInfo Info { get; }
+    public IDalamudTextureWrap? Thumbnail { get; private set; }
+
+    /// <summary> Why there is no thumbnail (disabled, unsupported model, or the reason it failed). </summary>
+    public string? ThumbnailNote { get; }
+
+    public long Bytes => Thumbnail is null ? 0 : ModelThumbnailRenderer.DefaultSize * ModelThumbnailRenderer.DefaultSize * 4L;
+
+    public void Dispose()
+    {
+        Thumbnail?.Dispose();
+        Thumbnail = null;
+    }
+}
+
 /// <summary>
-/// Owns the preview caches for textures and materials. Loads run on worker threads (file or
-/// game-data read, CPU decode, GPU upload); <see cref="GetTexture"/>, <see cref="GetMaterial"/>,
-/// <see cref="KeyFor"/> and <see cref="Pump"/> are called from the draw thread.
+/// Owns the preview caches for textures, materials and models. Loads run on worker threads
+/// (file or game-data read, CPU decode or rasterisation, GPU upload); <see cref="GetTexture"/>,
+/// <see cref="GetMaterial"/>, <see cref="GetModel"/>, <see cref="KeyFor"/> and <see cref="Pump"/>
+/// are called from the draw thread.
 /// </summary>
 public sealed class PreviewService : IDisposable
 {
@@ -42,19 +68,26 @@ public sealed class PreviewService : IDisposable
     private readonly ITextureProvider _textures;
     private readonly IDataManager _data;
     private readonly IPluginLog _log;
+    private readonly Func<bool> _renderModelThumbnails;
     private readonly AsyncPreviewCache<TexturePreview> _textureCache;
     private readonly AsyncPreviewCache<MaterialPreview> _materialCache;
+    private readonly AsyncPreviewCache<ModelPreview> _modelCache;
     private readonly Dictionary<string, (long At, PreviewKey Key)> _keys = new(StringComparer.OrdinalIgnoreCase);
 
-    public PreviewService(ITextureProvider textures, IDataManager data, IPluginLog log, long byteBudget = 64L << 20)
+    public PreviewService(ITextureProvider textures, IDataManager data, IPluginLog log, Func<bool> renderModelThumbnails, long byteBudget = 64L << 20)
     {
         _textures = textures;
         _data = data;
         _log = log;
+        _renderModelThumbnails = renderModelThumbnails;
         _textureCache = new AsyncPreviewCache<TexturePreview>(LoadTextureAsync, preview => preview.Info.Bgra.Length, preview => preview.Dispose(),
             maxEntries: 32, byteBudget: byteBudget, maxConcurrent: 2);
         _materialCache = new AsyncPreviewCache<MaterialPreview>(LoadMaterialAsync, _ => 0, _ => { }, maxEntries: 64, byteBudget: long.MaxValue, maxConcurrent: 2);
+        _modelCache = new AsyncPreviewCache<ModelPreview>(LoadModelAsync, preview => preview.Bytes, preview => preview.Dispose(),
+            maxEntries: 32, byteBudget: byteBudget / 2, maxConcurrent: 1);
     }
+
+    public PreviewEntry<ModelPreview> GetModel(PreviewKey key) => _modelCache.Get(key);
 
     /// <summary> The cache key for a row: file size and write time for mod files (re-read at most once a second), zeros for game data. </summary>
     public PreviewKey KeyFor(string path, bool isGameData)
@@ -130,6 +163,7 @@ public sealed class PreviewService : IDisposable
             _keys.Remove(path);
         _textureCache.Invalidate(path);
         _materialCache.Invalidate(path);
+        _modelCache.Invalidate(path);
     }
 
     /// <summary> Releases previews evicted since the last frame. Call once per frame from the draw thread. </summary>
@@ -137,12 +171,39 @@ public sealed class PreviewService : IDisposable
     {
         _textureCache.Pump();
         _materialCache.Pump();
+        _modelCache.Pump();
     }
 
     public void Dispose()
     {
         _textureCache.Dispose();
         _materialCache.Dispose();
+        _modelCache.Dispose();
+    }
+
+    private async Task<ModelPreview> LoadModelAsync(PreviewKey key, CancellationToken token)
+    {
+        var bytes = await ReadBytesAsync(key, token).ConfigureAwait(false);
+        var info = ModelInfoReader.Read(bytes);
+        token.ThrowIfCancellationRequested();
+        if (!_renderModelThumbnails())
+            return new ModelPreview(info, null, "Model thumbnails are turned off in Settings.");
+        try
+        {
+            var geometry = ModelGeometryReader.Read(bytes);
+            var pixels = ModelThumbnailRenderer.Render(geometry);
+            token.ThrowIfCancellationRequested();
+            var wrap = await _textures.CreateFromRawAsync(
+                RawImageSpecification.Bgra32(ModelThumbnailRenderer.DefaultSize, ModelThumbnailRenderer.DefaultSize),
+                pixels,
+                $"InstantEdit.ModelPreview:{Path.GetFileName(key.Path)}",
+                token).ConfigureAwait(false);
+            return new ModelPreview(info, wrap, null);
+        }
+        catch (Exception e) when (e is NotSupportedException or InvalidDataException)
+        {
+            return new ModelPreview(info, null, e.Message);
+        }
     }
 
     private async Task<byte[]> ReadBytesAsync(PreviewKey key, CancellationToken token)

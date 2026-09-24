@@ -137,7 +137,7 @@ public sealed class Plugin : IDalamudPlugin
         if (_config.AutomaticCacheCleanup)
             _textures.RequestCacheCleanup();
         _exportServer = new ExportServer(_config, _penumbra, _contexts, log);
-        _previews = new PreviewService(textureProvider, data, log);
+        _previews = new PreviewService(textureProvider, data, log, () => _config.RenderModelThumbnails);
         _textures.FileChanged += _previews.Invalidate;
         _changelogWindow = new ChangelogWindow(_config, BlenderClient.CurrentPluginVersion, SaveConfiguration);
         _window    = new MainWindow(
