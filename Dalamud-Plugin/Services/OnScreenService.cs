@@ -12,7 +12,12 @@ namespace InstantEdit.Services;
 /// explicitly, then each is joined to the object table and admitted by supported object-kind
 /// checks before its immutable, pruned snapshot is published.
 /// </summary>
-public sealed class OnScreenService
+/// <remarks>
+/// Collection runs on a worker, like Penumbra's own On-Screen tab: Penumbra builds the
+/// player-scoped trees on the calling thread and marshals only its object-table enumeration
+/// to the framework thread. The object-table joins here make one short framework visit.
+/// </remarks>
+public sealed class OnScreenService : IDisposable
 {
     private readonly IObjectTable _objects;
     private readonly IClientState _clientState;
@@ -22,6 +27,7 @@ public sealed class OnScreenService
     private readonly IPluginLog _log;
     private readonly Lock _lock = new();
     private readonly HashSet<string> _reportedAmbiguities = new(StringComparer.Ordinal);
+    private readonly CancellationTokenSource _lifetime = new();
 
     private IReadOnlyList<OnScreenObject> _items = Array.Empty<OnScreenObject>();
     private bool _refreshing;
@@ -31,15 +37,18 @@ public sealed class OnScreenService
         IClientState clientState,
         IFramework framework,
         PenumbraService penumbra,
+        ResourceSourceAttributor sourceAttributor,
         IPluginLog log)
     {
         _objects = objects;
         _clientState = clientState;
         _framework = framework;
         _penumbra = penumbra;
-        _sourceAttributor = new ResourceSourceAttributor(penumbra, log);
+        _sourceAttributor = sourceAttributor;
         _log = log;
     }
+
+    public void Dispose() => _lifetime.Cancel();
 
     public bool IsRefreshing
     {
@@ -49,6 +58,16 @@ public sealed class OnScreenService
     public IReadOnlyList<OnScreenObject> Items
     {
         get { lock (_lock) return _items; }
+    }
+
+    /// <summary>
+    /// Whether a change to the actor at this address can alter the snapshot: it is one of
+    /// the listed actors, or nothing has been captured yet. Safe to call from any thread.
+    /// </summary>
+    public bool ShowsActor(nint address)
+    {
+        var items = Items;
+        return items.Count == 0 || items.Any(item => item.Address == address);
     }
 
     public void RequestRefresh()
@@ -62,7 +81,10 @@ public sealed class OnScreenService
 
         try
         {
-            _framework.RunOnFrameworkThread(CollectSnapshot)
+            // Requests arrive from ImGui and chat commands on the main thread, where
+            // RunOnFrameworkThread runs inline: starting the collection with it would stall
+            // the frame for the whole build, so it starts on a worker instead.
+            Task.Run(CollectSnapshot, _lifetime.Token)
                 .ContinueWith(OnCollected, TaskScheduler.Default);
         }
         catch (Exception e)
@@ -75,7 +97,7 @@ public sealed class OnScreenService
 
     private void OnCollected(Task<List<OnScreenObject>> task)
     {
-        if (task.IsFaulted)
+        if (task.IsFaulted && !_lifetime.IsCancellationRequested)
             _log.Error(task.Exception?.GetBaseException(), "Failed to collect player resource trees.");
 
         lock (_lock)
@@ -85,22 +107,80 @@ public sealed class OnScreenService
         }
     }
 
+    /// <summary> Runs on a worker; only <see cref="JoinObjectTable"/> visits the framework thread. </summary>
     private List<OnScreenObject> CollectSnapshot()
+    {
+        var token = _lifetime.Token;
+        var trees = _penumbra.GetPlayerResourceTrees();
+        var resolvedPaths = _penumbra.GetPlayerResourcePaths();
+        token.ThrowIfCancellationRequested();
+
+        // Block this worker, not the frame, until the next framework tick. Awaiting instead
+        // would resume the pruning below inline on the framework thread that completes it.
+        var joined = _framework.RunOnTick(() => JoinObjectTable(trees, resolvedPaths), cancellationToken: token)
+            .GetAwaiter().GetResult();
+
+        var result = new List<OnScreenObject>(joined.Count);
+        foreach (var entry in joined)
+        {
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                IReadOnlyList<ResourceNode> roots = (entry.Tree.Nodes ?? [])
+                    .Select(CopyPrunedNode)
+                    .Where(node => node is not null)
+                    .Cast<ResourceNode>()
+                    .OrderBy(node => SectionOrder(node.ResourceSection))
+                    .ThenBy(node => node.SortOrder)
+                    .ToArray();
+                var treeRootCount = roots.Count;
+                roots = AddMissingResolvedModels(roots, entry.ResolvedPaths, _sourceAttributor.AttributionFor);
+                if (roots.Count > treeRootCount)
+                    _log.Debug($"Supplemented {roots.Count - treeRootCount} model resource(s) omitted from Penumbra's tree DTO for object {entry.ObjectIndex}.");
+                if (roots.Count == 0)
+                    continue;
+
+                result.Add(new OnScreenObject
+                {
+                    ObjectIndex = entry.ObjectIndex,
+                    Address = entry.Address,
+                    Name = entry.Name,
+                    PresentationCategory = entry.Category,
+                    ResourceRoots = roots,
+                });
+            }
+            catch (Exception e)
+            {
+                _log.Debug($"Could not copy player resource tree for object {entry.ObjectIndex}: {e.Message}");
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Joins Penumbra's trees to the object table on the framework thread and recovers
+    /// missing owned objects. Only plain values leave this method.
+    /// </summary>
+    private List<JoinedTree> JoinObjectTable(
+        IReadOnlyDictionary<ushort, ResourceTreeDto> trees,
+        IReadOnlyDictionary<ushort, Dictionary<string, HashSet<string>>> resolvedPaths)
     {
         // IClientState has no LocalPlayer property in the installed Dalamud API. It is
         // injected to gate snapshots on a live client; IObjectTable.LocalPlayer is the
         // supported local-player identity source for this API version.
-        if (!_clientState.IsLoggedIn || _objects.LocalPlayer is not { Address: not 0 } localPlayer)
+        if (_lifetime.IsCancellationRequested || !_clientState.IsLoggedIn ||
+            _objects.LocalPlayer is not { Address: not 0 } localPlayer)
             return [];
 
-        var trees = _penumbra.GetPlayerResourceTrees();
-        var treeEntries = trees.ToList();
+        var treeEntries = trees
+            .Select(entry => new TreeEntry(entry.Key, entry.Value, resolvedPaths.GetValueOrDefault(entry.Key)))
+            .ToList();
         AddMissingOwnedTrees(treeEntries, localPlayer);
-        var resolvedPaths = _penumbra.GetResourcePaths(treeEntries.Select(entry => entry.Key).ToArray());
-        var result = new List<OnScreenObject>(trees.Count);
-        for (var treeIndex = 0; treeIndex < treeEntries.Count; treeIndex++)
+
+        var joined = new List<JoinedTree>(treeEntries.Count);
+        foreach (var (index, tree, paths) in treeEntries)
         {
-            var (index, tree) = treeEntries[treeIndex];
             try
             {
                 var candidate = _objects[index];
@@ -113,37 +193,20 @@ public sealed class OnScreenService
                 if (!TryClassifyCandidate(candidate, localPlayer, out var category))
                     continue;
 
-                IReadOnlyList<ResourceNode> roots = (tree.Nodes ?? [])
-                    .Select(CopyPrunedNode)
-                    .Where(node => node is not null)
-                    .Cast<ResourceNode>()
-                    .OrderBy(node => SectionOrder(node.ResourceSection))
-                    .ThenBy(node => node.SortOrder)
-                    .ToArray();
-                var treeRootCount = roots.Count;
-                roots = AddMissingResolvedModels(
-                    roots,
-                    treeIndex < resolvedPaths.Length ? resolvedPaths[treeIndex] : null,
-                    _sourceAttributor.AttributionFor);
-                if (roots.Count > treeRootCount)
-                    _log.Debug($"Supplemented {roots.Count - treeRootCount} model resource(s) omitted from Penumbra's tree DTO for object {index}.");
-                if (roots.Count == 0)
-                    continue;
-
-                result.Add(CreateSnapshot(index, candidate, category, roots));
+                joined.Add(new JoinedTree(index, candidate.Address, candidate.Name.TextValue ?? "Unknown", category, tree, paths));
             }
             catch (Exception e)
             {
-                _log.Debug($"Could not copy player resource tree for object {index}: {e.Message}");
+                _log.Debug($"Could not join player resource tree for object {index}: {e.Message}");
             }
         }
 
-        return result;
+        return joined;
     }
 
-    private void AddMissingOwnedTrees(List<KeyValuePair<ushort, ResourceTreeDto>> treeEntries, IGameObject localPlayer)
+    private void AddMissingOwnedTrees(List<TreeEntry> treeEntries, IGameObject localPlayer)
     {
-        var existing = treeEntries.Select(entry => entry.Key).ToHashSet();
+        var existing = treeEntries.Select(entry => entry.ObjectIndex).ToHashSet();
         var missing = new List<ushort>();
         try
         {
@@ -168,12 +231,16 @@ public sealed class OnScreenService
         if (missing.Count == 0)
             return;
 
-        var recovered = _penumbra.GetResourceTrees(missing.ToArray());
+        // Penumbra's per-object tree and path IPCs index Dalamud's object table, so these
+        // rare recoveries (usually one mount or minion) stay in the framework visit.
+        var indices = missing.ToArray();
+        var recovered = _penumbra.GetResourceTrees(indices);
+        var recoveredPaths = _penumbra.GetResourcePaths(indices);
         for (var i = 0; i < missing.Count && i < recovered.Length; i++)
         {
             var recoveredTree = recovered[i];
             if (recoveredTree is not null)
-                treeEntries.Add(new KeyValuePair<ushort, ResourceTreeDto>(missing[i], recoveredTree));
+                treeEntries.Add(new TreeEntry(missing[i], recoveredTree, i < recoveredPaths.Length ? recoveredPaths[i] : null));
         }
     }
 
@@ -219,19 +286,18 @@ public sealed class OnScreenService
         }
     }
 
-    private OnScreenObject CreateSnapshot(
-        ushort objectIndex,
-        IGameObject gameObject,
-        ActorPresentationCategory category,
-        IReadOnlyList<ResourceNode> roots)
-        => new()
-        {
-            ObjectIndex = objectIndex,
-            Address = gameObject.Address,
-            Name = gameObject.Name.TextValue ?? "Unknown",
-            PresentationCategory = category,
-            ResourceRoots = roots,
-        };
+    private sealed record TreeEntry(
+        ushort ObjectIndex,
+        ResourceTreeDto Tree,
+        Dictionary<string, HashSet<string>>? ResolvedPaths);
+
+    private sealed record JoinedTree(
+        ushort ObjectIndex,
+        nint Address,
+        string Name,
+        ActorPresentationCategory Category,
+        ResourceTreeDto Tree,
+        Dictionary<string, HashSet<string>>? ResolvedPaths);
 
     /// <summary>
     /// Penumbra's tree DTO serializes its hierarchy and exposes a game path only when

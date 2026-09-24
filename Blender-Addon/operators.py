@@ -5,23 +5,27 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
 from bpy.types import Context, Operator
 
-from .instant_edit.context import ContextValidationError, mesh_ids_from_name
+from .instant_edit.context import ContextValidationError, mesh_ids_from_name, planned_mesh_ids
 from .materials import (
     ATTRIBUTE_VARIANT_PRESETS,
     FACE_ATTRIBUTE_PRESETS,
     attribute_display_name,
     assign_material_path,
+    commit_mesh_id_plan,
     ensure_flow_data,
     find_material_group,
+    insert_mesh_part_instance,
     mesh_flow_enabled,
     mesh_display_name,
     mesh_part_instance_objects,
     mesh_part_tags,
     material_paths,
     material_suggestions,
+    matching_material_path,
     mesh_part_slots,
     move_mesh_part_to_group,
     move_mesh_part_to_index,
+    other_group_materials,
     rename_mesh_part,
     set_mesh_flow_enabled,
     set_mesh_part_attribute,
@@ -42,6 +46,7 @@ from .backups import clear_backups, list_backups, restore_local, target_folder
 
 
 _ACTIVE_MESH_DRAG: tuple[str, int, int, int, str] | None = None
+_ACTIVE_MESH_DRAG_PLAN: dict[int, tuple[int, int]] | None = None
 _ATTRIBUTE_PRESET_ITEMS = tuple(
     (attribute, attribute_display_name(attribute), f"Add {attribute} to this mesh part")
     for attribute in ATTRIBUTE_VARIANT_PRESETS + FACE_ATTRIBUTE_PRESETS
@@ -51,6 +56,11 @@ _ATTRIBUTE_PRESET_ITEMS = tuple(
 def active_mesh_drag_state() -> tuple[str, int, int, int, str] | None:
     """Return scope, current group/part, ceiling, and optional instance key."""
     return _ACTIVE_MESH_DRAG
+
+
+def active_mesh_drag_plan() -> dict[int, tuple[int, int]] | None:
+    """Return the planned mesh IDs of the drag in progress, if any."""
+    return _ACTIVE_MESH_DRAG_PLAN
 
 
 def _redraw(context: Context) -> None:
@@ -143,6 +153,12 @@ def _move_mesh_part_once(
 
         step = -1 if direction == "UP" else 1
         neighbor = position + step
+        is_duplicate = any(
+            not item.is_placeholder
+            and item.part_index == mesh_part
+            and item.instance_key != part_instance_key
+            for item in slots
+        )
         # Duplicate rows occupy the same export slot. Skip them until the
         # drag crosses an actual part ID; this lets either duplicate move
         # independently without renaming the other duplicate.
@@ -159,6 +175,18 @@ def _move_mesh_part_once(
                 if changed:
                     return target.part_index
                 return None
+            if target.part_index != mesh_part and is_duplicate:
+                # A swap would hand the passed part this duplicate ID. Insert
+                # after it (or before it, moving up) and shift later parts.
+                new_part = target.part_index + (1 if step > 0 else 0)
+                insert_mesh_part_instance(
+                    visible_meshobj(),
+                    mesh_group,
+                    mesh_part,
+                    new_part,
+                    part_instance_key,
+                )
+                return new_part
             if target.part_index != mesh_part:
                 changed = swap_mesh_part_instances(
                     visible_meshobj(),
@@ -173,8 +201,20 @@ def _move_mesh_part_once(
                 return None
             neighbor += step
 
-        # There is no distinct part ID in this direction, so the selected
-        # instance can still be moved into an adjacent material group.
+        # There is no distinct part ID in this direction. A duplicate first
+        # takes the free ID just past the group's end, so it can be resolved
+        # without leaving the group; otherwise move to the adjacent group.
+        if is_duplicate:
+            edge = slots[-1].part_index + 1 if step > 0 else slots[0].part_index - 1
+            if edge >= 0:
+                move_mesh_part_to_index(
+                    visible_meshobj(),
+                    mesh_group,
+                    mesh_part,
+                    edge,
+                    part_instance_key,
+                )
+                return edge
         return _move_mesh_part_to_adjacent_group(
             mesh_group,
             mesh_part,
@@ -670,7 +710,7 @@ class XIVIE_OT_drag_mesh_order(Operator):
         return f"Hold and drag vertically to reorder this {item}; release to drop; Esc or right-click cancels"
 
     def invoke(self, context: Context, event):
-        global _ACTIVE_MESH_DRAG
+        global _ACTIVE_MESH_DRAG, _ACTIVE_MESH_DRAG_PLAN
         if self.scope == "GROUP":
             group = find_material_group(context, self.mesh_group)
             targets = group.objects if group is not None else ()
@@ -686,7 +726,12 @@ class XIVIE_OT_drag_mesh_order(Operator):
             return {"CANCELLED"}
 
         self._dragged_objects = tuple(targets)
-        self._original_names = tuple((obj, obj.name) for obj in visible_meshobj())
+        self._dragged_ids = {obj.as_pointer() for obj in targets}
+        self._visible_objects = tuple(visible_meshobj())
+        # Moves are planned here and previewed in the panel; objects are only
+        # renamed once, when the drag is released.
+        self._plan = {}
+        _ACTIVE_MESH_DRAG_PLAN = self._plan
         self._last_mouse_y = event.mouse_y
         self._drag_distance = 0.0
         self._part_drag_group_lock = None
@@ -724,7 +769,6 @@ class XIVIE_OT_drag_mesh_order(Operator):
 
         if event.type in {"ESC", "RIGHTMOUSE", "WINDOW_DEACTIVATE"}:
             if event.type == "WINDOW_DEACTIVATE" or event.value == "PRESS":
-                self._restore_names()
                 return self._finish(context, cancelled=True)
 
         if event.type in {"RET", "NUMPAD_ENTER", "SPACE"} and event.value == "PRESS":
@@ -737,6 +781,10 @@ class XIVIE_OT_drag_mesh_order(Operator):
         return {"RUNNING_MODAL"}
 
     def _move_once(self, context: Context, direction: str) -> bool:
+        with planned_mesh_ids(self._plan):
+            return self._plan_move_once(context, direction)
+
+    def _plan_move_once(self, context: Context, direction: str) -> bool:
         global _ACTIVE_MESH_DRAG
         try:
             mesh_group, mesh_part, _lod = mesh_ids_from_name(self._dragged_objects[0])
@@ -772,6 +820,12 @@ class XIVIE_OT_drag_mesh_order(Operator):
             # Keep the newly entered group locked for this drag. Further
             # movement crosses groups instead of reordering inside it.
             self._part_drag_group_lock = new_group
+        if self.scope == "PART" and new_group != self.mesh_group:
+            # Parts passed on the way out of the source group return to their
+            # own IDs; only the dragged part leaves.
+            for pointer in tuple(self._plan):
+                if pointer not in self._dragged_ids:
+                    del self._plan[pointer]
         _ACTIVE_MESH_DRAG = (
             self.scope,
             new_group,
@@ -782,23 +836,18 @@ class XIVIE_OT_drag_mesh_order(Operator):
         _redraw(context)
         return True
 
-    def _restore_names(self) -> None:
-        existing = [
-            (obj, name)
-            for obj, name in self._original_names
-            if obj.name in bpy.data.objects and bpy.data.objects[obj.name] == obj
-        ]
-        for index, (obj, _name) in enumerate(existing):
-            obj.name = f"__xiv_ie_drag_restore_{index}_{obj.as_pointer()}"
-        for obj, name in existing:
-            obj.name = name
-
-    @staticmethod
-    def _finish(context: Context, cancelled: bool):
-        global _ACTIVE_MESH_DRAG
+    def _finish(self, context: Context, cancelled: bool):
+        global _ACTIVE_MESH_DRAG, _ACTIVE_MESH_DRAG_PLAN
         _ACTIVE_MESH_DRAG = None
+        _ACTIVE_MESH_DRAG_PLAN = None
         context.window.cursor_modal_restore()
         context.workspace.status_text_set(None)
+        if not cancelled:
+            try:
+                commit_mesh_id_plan(self._plan, self._visible_objects)
+            except ValueError as error:
+                self.report({"ERROR"}, str(error))
+                cancelled = True
         _redraw(context)
         return {"CANCELLED"} if cancelled else {"FINISHED"}
 
@@ -984,7 +1033,12 @@ class XIVIE_OT_mesh_attribute(Operator):
     mesh_part_instance: StringProperty(default="", options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
     attribute: StringProperty(default="NEW", options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
     custom: BoolProperty(name="Custom", default=False)  # type: ignore
-    custom_attribute: StringProperty(name="", default="", maxlen=128)  # type: ignore
+    custom_attribute: StringProperty(
+        name="",
+        description="Attribute name, such as atrx_cape, or a heels offset such as heels_offset=0.15",
+        default="",
+        maxlen=128,
+    )  # type: ignore
     selection: EnumProperty(
         name="",
         items=(
@@ -1075,6 +1129,44 @@ class XIVIE_OT_mesh_flow(Operator):
         return {"FINISHED"}
 
 
+_QUICK_MATERIAL_NONE = "NONE"
+# The material dialog's quick selectors as (path, mesh groups) pairs, plus the
+# enum items built from them. Blender requires dynamically generated enum
+# strings to remain alive for as long as the enum is in use.
+_QUICK_MATERIALS: tuple[tuple[str, tuple[int, ...]], ...] = ()
+_QUICK_MATERIAL_ITEMS = [(_QUICK_MATERIAL_NONE, "None", "")]
+
+
+def _mesh_groups_label(groups) -> str:
+    return "Mesh " + ", ".join(f"#{group}" for group in groups)
+
+
+def _model_mesh_objects(context: Context) -> list:
+    """Return the meshes Quick Export writes as the selected Context's model."""
+    from .instant_edit.ops import export_destination_context, export_objects_for_scope
+
+    try:
+        ref = export_destination_context(context, persist=False)
+    except ContextValidationError:
+        ref = None
+    scope = getattr(context.scene.xiv_ie_instant_edit_props, "export_scope", "VISIBLE")
+    try:
+        return export_objects_for_scope(ref, scope)
+    except ContextValidationError:
+        return visible_meshobj()
+
+
+def _prepare_quick_materials(context: Context, mesh_group: int) -> tuple:
+    """Offer the materials of the model's other mesh groups in the material dialog."""
+    global _QUICK_MATERIALS, _QUICK_MATERIAL_ITEMS
+    _QUICK_MATERIALS = tuple(other_group_materials(_model_mesh_objects(context), mesh_group))
+    _QUICK_MATERIAL_ITEMS = [(_QUICK_MATERIAL_NONE, "None", "")] + [
+        (path, path, f"Use the material of {_mesh_groups_label(groups)}")
+        for path, groups in _QUICK_MATERIALS
+    ]
+    return _QUICK_MATERIALS
+
+
 class XIVIE_OT_mesh_material(Operator):
     bl_idname = "xiv_ie.mesh_material"
     bl_label = "Mesh Material"
@@ -1085,13 +1177,46 @@ class XIVIE_OT_mesh_material(Operator):
 
     def _material_search(self, context, edit_text):
         group = find_material_group(context, self.mesh_group)
-        return material_suggestions(group) if group is not None else []
+        suggestions = material_suggestions(group) if group is not None else []
+        listed = [path for path, _usage in suggestions]
+        suggestions.extend(
+            (path, _mesh_groups_label(groups))
+            for path, groups in _QUICK_MATERIALS
+            if matching_material_path(path, listed) is None
+        )
+        return suggestions
+
+    def _material_edited(self, _context):
+        # Keep a quick selector pressed only while it matches the material path.
+        choice = matching_material_path(
+            self.material, [path for path, _groups in _QUICK_MATERIALS]
+        ) or _QUICK_MATERIAL_NONE
+        if self.quick_material != choice:
+            self.quick_material = choice
+
+    def _quick_material_items(self, _context):
+        return _QUICK_MATERIAL_ITEMS
+
+    def _quick_material_selected(self, _context):
+        choice = self.quick_material
+        if choice not in {"", _QUICK_MATERIAL_NONE} and matching_material_path(
+            self.material, (choice,)
+        ) is None:
+            self.material = choice
 
     material: StringProperty(
         name="Material Path",
         description="FFXIV .mtrl path used when exporting this mesh group",
         search=_material_search,
         search_options={"SUGGESTION"},
+        update=_material_edited,
+    )  # type: ignore
+    quick_material: EnumProperty(
+        name="Other Mesh Group Materials",
+        description="Use a material already assigned to another mesh group of this model",
+        items=_quick_material_items,
+        update=_quick_material_selected,
+        options={"SKIP_SAVE"},
     )  # type: ignore
 
     @classmethod
@@ -1103,6 +1228,7 @@ class XIVIE_OT_mesh_material(Operator):
         if group is None:
             self.report({"ERROR"}, f"Mesh group {self.mesh_group} is no longer available.")
             return {"CANCELLED"}
+        _prepare_quick_materials(context, self.mesh_group)
         paths = material_paths(group.objects)
         self.material = paths[0] if len(paths) == 1 else ""
         return context.window_manager.invoke_props_dialog(
@@ -1114,6 +1240,15 @@ class XIVIE_OT_mesh_material(Operator):
     def draw(self, context: Context):
         self.layout.label(text=f"Mesh Group {self.mesh_group}")
         self.layout.prop(self, "material", text="")
+        if not _QUICK_MATERIALS:
+            return
+        self.layout.separator()
+        self.layout.label(text="Materials on other mesh groups:")
+        column = self.layout.column(align=True)
+        for path, groups in _QUICK_MATERIALS:
+            row = column.row(align=True).split(factor=0.75, align=True)
+            row.prop_enum(self, "quick_material", path, text=path)
+            row.label(text=_mesh_groups_label(groups))
 
     def execute(self, context: Context):
         group = find_material_group(context, self.mesh_group)

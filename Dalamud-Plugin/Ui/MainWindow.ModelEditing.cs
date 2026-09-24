@@ -17,7 +17,7 @@ public sealed partial class MainWindow
 {
     private void TryEditNode(ResourceView node, ActorView actor)
     {
-        if (!IsModel(node) || !IsSafeModel(node))
+        if (!node.IsModel || !ResourceViews.IsSafeModel(node))
         {
             SetStatus("Only safe .mdl resources can be imported.", FeedbackSeverity.Warning);
             return;
@@ -211,9 +211,7 @@ public sealed partial class MainWindow
                     : "exact material/texture sources could not be captured; re-import after resolving the missing resources.")}"
                 : string.Empty;
             var hasWarning = hasPreviewWarning || hasMashupWarning;
-            var status = actor.Entity is null && hasWarning
-                ? $"Sent {model.FileName} to Blender. {ModBrowserAmbiguityWarning}"
-                : $"Sent {model.FileName} to Blender.{warning}{mashupWarning}";
+            var status = $"Sent {model.FileName} to Blender.{warning}{mashupWarning}";
             SetStatus(status, hasWarning ? FeedbackSeverity.Warning : FeedbackSeverity.Success);
             _chat.Print($"XIV Instant Edit: {model.FileName} sent to Blender.");
         }
@@ -303,7 +301,7 @@ public sealed partial class MainWindow
         }
 
         return actor.Roots
-            .SelectMany(Flatten)
+            .SelectMany(ResourceViews.Flatten)
             .Where(resource => resource.GamePath.EndsWith(".mtrl", StringComparison.OrdinalIgnoreCase) ||
                                resource.GamePath.EndsWith(".tex", StringComparison.OrdinalIgnoreCase))
             .Select(resource => new MaterialResourceCandidate(

@@ -33,8 +33,11 @@ Run the regression commands in
 plugin changes, build the Release configuration with
 `-p:SkipDistributionPackage=true` and run all four .NET regression projects under `Tests` with the
 same property. See [test commands and coverage](Tests/README.md) for the full
-local suite and the test-cleanup rationale. Blender commands must include
-`--factory-startup --python-exit-code 1` before `--python` so failures reach CI.
+local suite and the test-cleanup rationale. Run Blender tests through
+`Blender-Addon/testing/run_blender_suites.py`. It passes
+`--factory-startup --python-exit-code 1` before `--python` so failures reach CI,
+and gives each script a disposable Blender user profile so the tests cannot
+delete the wheels your installed extensions use.
 
 Keep pull requests focused, explain behavior changes, and update the README or
 third-party notices when user-facing behavior or attribution changes. Release

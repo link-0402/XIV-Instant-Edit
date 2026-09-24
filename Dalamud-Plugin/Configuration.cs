@@ -21,6 +21,10 @@ public sealed class Configuration : IPluginConfiguration
     public int ListenPort { get; set; } = 42428;
 
     public string TextureEditorPath { get; set; } = "";
+
+    /// <summary>Re-encode texture saves in their original TEX format instead of uncompressed BGRA32.</summary>
+    public bool RecompressTextures { get; set; } = true;
+
     /// <summary>Base directory for the shared XIV Instant Edit cache.</summary>
     public string TextureCacheDirectory { get; set; } = "";
 
@@ -54,6 +58,15 @@ public sealed class Configuration : IPluginConfiguration
 
     /// <summary>Keep the main window visible when the user hides the game UI with Scroll Lock.</summary>
     public bool KeepVisibleWhenUiHidden { get; set; }
+
+    /// <summary>Mirror warnings, errors and model handoff results as Dalamud notifications.</summary>
+    public bool ShowNotifications { get; set; } = true;
+
+    /// <summary>Refresh the On Screen list a second after Penumbra reports a mod-setting change or a redraw.</summary>
+    public bool AutoRefreshOnScreen { get; set; } = true;
+
+    /// <summary>Render a small shaded thumbnail of Dawntrail models in the hover card.</summary>
+    public bool RenderModelThumbnails { get; set; } = true;
 
     /// <summary>Legacy v9 context payload retained only for one-time migration or storage fallback.</summary>
     public List<PersistedExportContext> ExportContexts { get; set; } = [];

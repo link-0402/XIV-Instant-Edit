@@ -187,6 +187,40 @@ def assert_material_previews(material_preview):
             (preview_directory / "diffuse.rgba").write_bytes(diffuse_bytes)
             (preview_directory / "normal.rgba").write_bytes(normal_bytes)
             (preview_directory / "index.rgba").write_bytes(index_bytes)
+            # Normal B is character.shpk opacity; the 4x2 diffuse is larger
+            # than the 2x1 index and must keep its own resolution.
+            (preview_directory / "normal_opacity.rgba").write_bytes(bytes((128, 128, 128, 255)))
+            (preview_directory / "diffuse_wide.rgba").write_bytes(bytes(range(32)))
+
+            def colorset_row(diffuse, roughness=0.0, metalness=0.0, emissive=(0.0, 0.0, 0.0)):
+                row = [0.0] * 32
+                row[0:3] = diffuse
+                row[8:11] = emissive
+                row[16] = roughness
+                row[18] = metalness
+                return row
+
+            def character_textures(diffuse_file):
+                return [{
+                    "usage": "index", "samplerId": 0x565F8FD8, "samplerFlags": 0,
+                    "gamePath": "chara/equipment/e0001/texture/sheer_id.tex", "file": "index.rgba",
+                    "width": 2, "height": 1, "uvSet": 0, "colorSpace": "Non-Color",
+                }, {
+                    "usage": "normal", "samplerId": 0x0C5EC1F1, "samplerFlags": 0,
+                    "gamePath": "chara/equipment/e0001/texture/sheer_n.tex", "file": "normal_opacity.rgba",
+                    "width": 1, "height": 1, "uvSet": 0, "colorSpace": "Non-Color",
+                }, {
+                    "usage": "diffuse", "samplerId": 0x115306BE, "samplerFlags": 0,
+                    "gamePath": "chara/equipment/e0001/texture/sheer_base.tex", "file": diffuse_file,
+                    "width": 4, "height": 2, "uvSet": 0, "colorSpace": "sRGB",
+                }]
+
+            sheer_colorset = {
+                "width": 8,
+                "height": 2,
+                "values": colorset_row((1.0, 0.0, 0.0), 0.25, 0.75, (2.0, 0.0, 0.0)) + colorset_row((0.0, 0.0, 1.0)),
+            }
+            alpha_threshold = {"id": 0x29AC0223, "values": [0.5]}
             preview_manifest = {
                 "schema": "instant-edit.material-preview",
                 "version": 1,
@@ -280,6 +314,56 @@ def assert_material_previews(material_preview):
                     "shaderConstants": [],
                     "colorSet": None,
                     "textures": [],
+                }, {
+                    "modelMaterial": "/mt_c0101h0001_hir_a.mtrl",
+                    "gamePath": "chara/human/c0101/obj/hair/h0001/material/v0001/mt_c0101h0001_hir_a.mtrl",
+                    "shaderPackage": "hair.shpk",
+                    "materialFlags": 0x10,
+                    "additionalData": "",
+                    "shaderKeys": [],
+                    "shaderConstants": [],
+                    "colorSet": None,
+                    "textures": [{
+                        "usage": "normal",
+                        "samplerId": 0x0C5EC1F1,
+                        "samplerFlags": 0,
+                        "gamePath": "chara/human/c0101/obj/hair/h0001/texture/c0101h0001_hir_n.tex",
+                        "file": "normal.rgba",
+                        "width": 1,
+                        "height": 1,
+                        "uvSet": 0,
+                        "colorSpace": "Non-Color",
+                    }, {
+                        "usage": "mask",
+                        "samplerId": 0x8A4E82B6,
+                        "samplerFlags": 0,
+                        "gamePath": "chara/human/c0101/obj/hair/h0001/texture/c0101h0001_hir_m.tex",
+                        "file": "normal.rgba",
+                        "width": 1,
+                        "height": 1,
+                        "uvSet": 0,
+                        "colorSpace": "Non-Color",
+                    }],
+                }, {
+                    "modelMaterial": "/mt_sheer.mtrl",
+                    "gamePath": "chara/equipment/e0001/material/v0001/mt_sheer.mtrl",
+                    "shaderPackage": "character.shpk",
+                    "materialFlags": 0x10,
+                    "additionalData": "",
+                    "shaderKeys": [{"category": 0xB616DC5A, "value": 0x600EF9DF}],
+                    "shaderConstants": [alpha_threshold],
+                    "colorSet": sheer_colorset,
+                    "textures": character_textures("diffuse_wide.rgba"),
+                }, {
+                    "modelMaterial": "/mt_cutout.mtrl",
+                    "gamePath": "chara/equipment/e0001/material/v0001/mt_cutout.mtrl",
+                    "shaderPackage": "character.shpk",
+                    "materialFlags": 0x01,
+                    "additionalData": "",
+                    "shaderKeys": [],
+                    "shaderConstants": [alpha_threshold],
+                    "colorSet": sheer_colorset,
+                    "textures": character_textures("diffuse_wide.rgba"),
                 }],
             }
             manifest_path = preview_directory / "materials.json"
@@ -289,7 +373,7 @@ def assert_material_previews(material_preview):
                 str(model_path),
             )
             _require(
-                len(preview_package.materials) == 3,
+                len(preview_package.materials) == 6,
                 "a bounded synthetic material-preview manifest is accepted",
             )
             warning_count = len(preview_package.warnings)
@@ -358,11 +442,120 @@ def assert_material_previews(material_preview):
                 gear_base_node.image.get("instant_edit_preview_usage") == "colorset-base",
                 "gear base color is synthesized from its colorset and index texture",
             )
+            hair_material = material_preview.create_preview_material(
+                "/mt_c0101h0001_hir_a.mtrl",
+                (0.8, 0.1, 0.8, 1.0),
+                preview_package,
+                "hair-context",
+            )
+            hair_principled = next(
+                node for node in hair_material.node_tree.nodes
+                if node.bl_idname == "ShaderNodeBsdfPrincipled"
+            )
+            _require(
+                hair_principled.inputs["Base Color"].links[0].from_node.image.get("instant_edit_preview_usage")
+                == "hair-base",
+                "hair.shpk materials without a diffuse build the approximate hair preview",
+            )
+            _require(
+                all(material.surface_render_method == "DITHERED"
+                    for material in (preview_material_one, gear_material, hair_material)),
+                "gear and hair previews both use the Dithered render method",
+            )
             gear_pixels = np.asarray(gear_base_node.image.pixels[:], dtype=np.float32).reshape((1, 2, 4))
             _require(
                 gear_pixels[0, 0, 0] > 0.99 and gear_pixels[0, 0, 2] < 0.01
                 and gear_pixels[0, 1, 2] > 0.99 and gear_pixels[0, 1, 0] < 0.01,
                 "colorset row selection and interpolation produce the expected gear colors",
+            )
+
+            def linked_from(socket):
+                return socket.links[0].from_node if socket.is_linked else None
+
+            def principled_of(material):
+                return next(
+                    node for node in material.node_tree.nodes
+                    if node.bl_idname == "ShaderNodeBsdfPrincipled"
+                )
+
+            sheer_material = material_preview.create_preview_material(
+                "/mt_sheer.mtrl",
+                (0.8, 0.1, 0.8, 1.0),
+                preview_package,
+                "sheer-context",
+            )
+            sheer_principled = principled_of(sheer_material)
+            _require(
+                sheer_material.surface_render_method == "BLENDED"
+                and not sheer_material.use_transparency_overlap
+                and not sheer_material.use_backface_culling,
+                "translucent gear blends its nearest layer and shows the backfaces its material keeps",
+            )
+            sheer_alpha = linked_from(sheer_principled.inputs["Alpha"])
+            sheer_normal_image = linked_from(sheer_alpha.inputs[0]).image
+            _require(
+                sheer_alpha.operation == "DIVIDE"
+                and abs(sheer_alpha.inputs[1].default_value - 0.5) < 1e-6
+                and sheer_normal_image["instant_edit_preview_usage"] == "normal",
+                "translucent opacity is normal B divided by the alpha threshold",
+            )
+            normal_pixels = np.asarray(sheer_normal_image.pixels[:], dtype=np.float32)
+            _require(
+                normal_pixels[2] > 0.99 and abs(normal_pixels[3] - 128 / 255) < 0.01,
+                "normal previews rebuild Z and carry normal B opacity in alpha",
+            )
+            sheer_base = linked_from(sheer_principled.inputs["Base Color"])
+            base_sources = {
+                linked_from(socket).image.get("instant_edit_preview_usage"): linked_from(socket).image
+                for socket in sheer_base.inputs
+                if socket.is_linked
+            }
+            _require(
+                sheer_base.blend_type == "MULTIPLY"
+                and set(base_sources) == {"colorset-base", "diffuse"}
+                and tuple(base_sources["diffuse"].size) == (4, 2),
+                "compatibility-mode diffuse multiplies the colorset at the diffuse's own resolution",
+            )
+            surface_image = linked_from(
+                linked_from(sheer_principled.inputs["Metallic"]).inputs["Color"]
+            ).image
+            surface_pixels = np.asarray(surface_image.pixels[:], dtype=np.float32).reshape((1, 2, 4))
+            _require(
+                surface_image["instant_edit_preview_usage"] == "colorset-surface"
+                and abs(surface_pixels[0, 0, 0] - 0.25) < 0.01
+                and abs(surface_pixels[0, 0, 1] - 0.75) < 0.01,
+                "colorset roughness and metalness drive the Principled material",
+            )
+            _require(
+                sheer_principled.inputs["Emission Color"].is_linked
+                and abs(sheer_principled.inputs["Emission Strength"].default_value - 2.0) < 1e-6,
+                "HDR colorset emission keeps its strength",
+            )
+
+            cutout_material = material_preview.create_preview_material(
+                "/mt_cutout.mtrl",
+                (0.8, 0.1, 0.8, 1.0),
+                preview_package,
+                "cutout-context",
+            )
+            cutout_principled = principled_of(cutout_material)
+            cutout_alpha = linked_from(cutout_principled.inputs["Alpha"])
+            _require(
+                cutout_material.surface_render_method == "DITHERED"
+                and cutout_material.use_backface_culling
+                and cutout_alpha.operation == "GREATER_THAN"
+                and abs(cutout_alpha.inputs[1].default_value - 0.5) < 1e-4,
+                "opaque gear cuts opacity at the alpha threshold instead of dithering it",
+            )
+            _require(
+                linked_from(cutout_principled.inputs["Base Color"]).image.get("instant_edit_preview_usage")
+                == "colorset-base",
+                "the default multi-material mode takes its color from the colorset alone",
+            )
+            _require(
+                hair_material.surface_render_method == "DITHERED"
+                and not hair_material.use_backface_culling,
+                "translucent hair cards stay dithered",
             )
             preview_images = list(preview_package.created_images)
             _require(
@@ -426,6 +619,16 @@ def assert_material_previews(material_preview):
                 print("[PASS] preview manifest path traversal is rejected")
             else:
                 raise AssertionError("preview manifest path traversal was accepted")
+
+            invalid_flags_manifest = json.loads(json.dumps(preview_manifest))
+            invalid_flags_manifest["materials"][0]["materialFlags"] = -1
+            manifest_path.write_text(json.dumps(invalid_flags_manifest), encoding="utf-8")
+            try:
+                material_preview.load_preview_manifest(str(manifest_path), str(model_path))
+            except material_preview.PreviewValidationError:
+                print("[PASS] invalid material flags are rejected")
+            else:
+                raise AssertionError("invalid material flags were accepted")
             material_preview.discard_preview_data(preview_package)
 
 

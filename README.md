@@ -10,6 +10,7 @@ Additionally, it supports full software-independent texture editing as well as a
 - [Penumbra](https://github.com/xivdev/Penumbra) 1.7.1.0+
 - [Blender](https://www.blender.org/) 4.5.0+ for model editing
 - (optional) an Image Editing Software of your choice (with TGA format support)
+- (optional) the LivePose Dalamud plugin for animation editing (baking pose adjustments)
 
 ## Installation
 
@@ -39,9 +40,9 @@ Additionally, it supports full software-independent texture editing as well as a
 
 ## How to: Model Editing
 
-1. Type /ie to open the plugin interface ingame. Click Refresh character list.
-2. Start Blender. Verify the plugin shows Blender as "Online".
-3. Verify import options both in-game and inside the add-on, then click "Edit" on the model you want to import to Blender.
+1. Type /ie to open the plugin interface ingame. The on-screen list loads on its own; the refresh button in the toolbar reloads it.
+2. Start Blender. Verify the toolbar shows Blender as "Online".
+3. Verify the model options both in-game (the sliders button in the toolbar) and inside the add-on, then use the pencil action (or right-click, "Edit model in Blender") on the model you want to import. Hover a model for a summary and thumbnail before importing it.
 4. Edit the model as you normally would.
 5. Pick the desired export context from the list:
    - "In-place" overwrites the exact model that you imported. This is the default export location.
@@ -54,40 +55,81 @@ Additionally, it supports full software-independent texture editing as well as a
 
 ## How to: Texture Editing
 
-1. Type /ie to open the plugin interface ingame. Click Refresh character list.
-3. Select **Textures** in **On Screen** or **Mod Browser**, then **Edit texture**.
-   For vanilla textures, enable **Include Vanilla** and enter a new mod name.
-4. Edit the opened TGA, and save that same file as **32-bit TGA with an 8-bit
+1. Type /ie to open the plugin interface ingame.
+2. Choose the **Textures** chip in **On Screen** or **Mod Browser**, then use the brush action
+   (or right-click, "Edit texture") on a texture. Hovering a texture shows a preview first.
+   For vanilla textures, enable **Include vanilla** and enter a new mod name.
+3. Edit the opened TGA, and save that same file as **32-bit TGA with an 8-bit
    alpha channel**.
-   Uncompressed and RLE TGA saves are supported. Keep the original
-   dimensions.
-5. After the save finishes, Instant Edit converts it to the original TEX format,
+   Uncompressed and RLE TGA saves are supported. You can change the resolution
+   (up to 8192 × 8192); compressed formats need a width and height divisible by 4.
+4. After the save finishes, Instant Edit converts it to the original TEX format,
    replaces the mod file with a backup, reloads the mod, and redraws the selected
    actor and the local player/owned entities. A vanilla override is created and
-   enabled in the captured collection on the first changed save.
+   enabled in the captured collection on the first changed save. To save
+   uncompressed instead, turn off **Recompress saved textures** in the toolbar's
+   options popover.
+5. To make variants, save a copy of the TGA under another name in the same folder
+   (for example `Red.tga`). Instant Edit writes it next to the original TEX, adds it as
+   an option named after the file to a `<texture> variants` group in the mod, and
+   selects that option in the captured collection. The group's **Original** option shows
+   the edited texture; saving the main TGA switches back to it. Saving a variant again
+   updates it.
+6. Sessions pause when the game or plugin restarts. Opening the texture again
+   (or the open action on its card in **Sessions**) resumes it.
 
 Note that textures must be saves as a flattened TGA file. You can either do so manually or use one of the save scripts for Photoshop, GIMP and Krita here: https://github.com/link-0402/XIV-Instant-Edit/tree/main/Tools. Other image editing software might not support similar scripts or already saves a flattened copy with the usual Ctrl + S shortcut.
 
+## How to: Animation Editing
+
+Animation editing needs the LivePose plugin. It rebakes a character animation so that
+LivePose adjustments become part of the animation itself, repairs animations whose
+skeleton no longer matches the character, or removes bones from an animation to hand
+them back to physics.
+
+1. Open the **Animations** tab and play the animation (an emote, idle or movement)
+   on your character. Ready animations appear in the list on the left.
+2. Select it. The **Source** card shows the file, the live skeleton and the source
+   skeleton the animation was made for; pick one if several candidates match, or use
+   **Rescan skeletons** after installing new skeleton mods.
+3. Under **Current LivePose Adjustments**, tick the bones and components to bake.
+   **Animated Bones** lets you untick bones the animation should stop driving.
+4. Under **Bake**, choose a new mod or an in-place replacement and press
+   **Rebake with LivePose**, **Repair skeleton** or **Rebake without unticked bones**.
+5. Every edit is journaled for a week. **Undo last edit** reverts it and restores the
+   live offsets it cleared; the **Recent edits** card lists older edits and reopens on
+   its own when an interrupted edit needs attention.
+
 ## Additional notes
+
+The plugin window has a toolbar with the tabs, Penumbra and Blender status dots, a
+refresh button and an options popover; the gear in the title bar opens Settings, where
+automatic refresh, notifications and model thumbnails can be turned off. The status
+strip at the bottom keeps the latest message per tab and a history of recent messages.
 
 The Blender plugin manages it's mappings to mods via the automatically created "Instant Edit [context_id]" collections. To ensure the addon works properly, do not move, rename, delete or otherwise edit these collections until you exported the model you were working on. Hiding them from the viewport removes the context temporarily as well. You can then easily remove an old context by simply removing it's collection, should you wish to continue other work in the same scene.
 
 ### Main Features
-Main Features
 - One-click import of models through an on-screen browser or simplified mod file browser.
+- Hover previews for textures (with alpha), materials (their texture slots) and models (mesh, material and attribute summary with a rendered thumbnail).
+- The on-screen list follows Penumbra: it refreshes when mod settings change or characters are redrawn, and rows offer copy, open folder, Open in Penumbra and Show in Mod Browser.
 - Easy export context selection. Export in-place, pick any existing mod option or easily create a new one. The plugin sets up everything for you automatically.
 - Instant creation of mashups. The plugin automatically sets up all required textures, materials and paths for you.
 - Seamlessly integrates into any existing Blender scene, independent of body, devkit, etc.
 - Simple Importer / Exporter for general FBX and MDL files with various QoL functions and automations optimized for FFXIV workflows
 - One-click import and export for textures
+- Animation editing: bake LivePose adjustments, repair skeletons, exclude bones, with undo and recovery
 
 ### Material preview
 
 The optional texture import uses the effective MTRL and TEX files resolved for the
 selected model and packs the generated images into the Blender file. It is a
 practical Principled BSDF approximation, not an exact reproduction of FFXIV's
-shader pipeline. Character gear without a diffuse map is composed from its
-colorset, index, normal, and mask textures. Missing or unsupported
+shader pipeline. Character gear is composed from its colorset, index, normal,
+mask, and (in compatibility mode) diffuse textures, including colorset
+roughness, metalness, and emission. Transparency follows each material's own
+settings: translucent materials such as sheer fabric blend, while others cut
+out at the material's alpha threshold. Missing or unsupported
 resources keep the existing colored placeholder and produce a warning without
 blocking model import. Note that the texture import is for preview purposes only.
 Making changes to them in Blender will not affect the exported model.

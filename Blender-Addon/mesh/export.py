@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from pathlib         import Path
 from bpy.types       import Context, UILayout
 
+from .heels          import apply_calculated_heels_offset
 from .objects        import visible_meshobj
 from ..io.model      import ModelExport, SceneHandler
 from ..io.logging    import YetAnotherLogger
@@ -224,6 +225,12 @@ class FileExport:
             scene_handler.prepare_scene()
             scene_handler.process_scene()
 
+            heels_offset = None
+            if get_settings().calculate_heels_offset:
+                # Measured on the prepared export copies: rest pose, modifiers
+                # and shape-key basis match what the exporter writes.
+                heels_offset = apply_calculated_heels_offset(scene_handler.export_objs)
+
             if self.logger:
                 self.logger.log_separator()
                 self.logger.log(f"Exporting {self.file_path.stem}")
@@ -260,7 +267,11 @@ class FileExport:
                                                 **settings.get_model_flags(),
                                                 **settings.get_mesh_options()
                                             )
-        
+
+            if heels_offset is not None:
+                attribute, obj_name = heels_offset
+                _export_stats.setdefault(obj_name, []).append(f"Calculated {attribute}.")
+
         finally:
             if scene_handler is not None:
                 scene_handler.restore_meshes()

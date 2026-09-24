@@ -54,11 +54,18 @@ internal static class TextureEditScenarios
             Reject(() => TextureFiles.ValidateTga(tga, 8, 8), "missing alpha descriptor rejected");
             tga[17] = 0x28; tga[16] = 24;
             Reject(() => TextureFiles.ValidateTga(tga, 8, 8), "24-bit TGA rejected");
-            Reject(() => TextureFiles.ValidateTga(Tga(4, 8, 1), 8, 8), "resizing rejected");
+            Reject(() => TextureFiles.ValidateTga(Tga(4, 8, 1), 8, 8), "initial conversion must match the captured size");
+            Check(TextureFiles.ValidateTga(Tga(4, 12, 1)) == (4, 12), "resized TGA saves report their dimensions");
+            Reject(() => TextureFiles.ValidateTga(Tga(0, 8, 1)), "zero-width TGA rejected");
+            Reject(() => TextureFiles.ValidateEncodable((uint)TexFile.TextureFormat.BC7, 6, 8), "block-compressed saves need whole 4 × 4 tiles");
+            TextureFiles.ValidateEncodable((uint)TexFile.TextureFormat.B8G8R8A8, 6, 7);
+            Check(true, "uncompressed saves accept any supported size");
             var rgba = Tex((uint)TexFile.TextureFormat.B8G8R8A8, 8, 8, 1, 0);
             var hash = TextureFiles.PixelHash(rgba);
             rgba[80] = 123; // RGB under alpha zero must participate in no-op detection.
             Check(hash != TextureFiles.PixelHash(rgba), "hidden RGB participates in pixel hashing");
+            Check(TextureFiles.PixelHash(Tex((uint)TexFile.TextureFormat.B8G8R8A8, 4, 16, 1, 0)) != hash,
+                "same-area resizes with identical bytes still count as changed pixels");
             var namedSession = new TextureEditSession
             {
                 CacheRoot = root,
@@ -67,7 +74,11 @@ internal static class TextureEditScenarios
             Check(Path.GetFileName(namedSession.WorkingFile) == "c0101e0001_top_d.tga",
                 "working TGA keeps the original texture filename");
             await SessionFailuresAsync(Path.Combine(root, "failures"));
+            await ResizeAndEncodingAsync(Path.Combine(root, "resize"));
+            await IncompleteSessionAsync(Path.Combine(root, "incomplete"));
             await VanillaAsync(Path.Combine(root, "vanilla"));
+            await VariantsAsync(Path.Combine(root, "variants"));
+            await VanillaVariantAsync(Path.Combine(root, "vanilla-variant"));
             await WatcherAsync(Path.Combine(root, "watcher"));
             await CacheCleanupAsync(Path.Combine(root, "cache-cleanup"));
             AtomicReplacement(Path.Combine(root, "atomic"));
@@ -102,12 +113,80 @@ internal static class TextureEditScenarios
                 TextureFiles.Hash(original), f.Backups, () => true, CancellationToken.None), "locked destination rejects atomic replacement");
         }
         Check(File.ReadAllBytes(target).SequenceEqual(original), "replacement failure retains original bytes");
-        var s = new TextureEditSession { Format = (uint)TexFile.TextureFormat.BC7, Width = 8, Height = 8, MipMaps = true };
-        Reject(() => TextureFiles.ValidateOutput(Tex(s.Format, 8, 8, 1, 1), s), "missing generated mipmaps rejected");
-        Reject(() => TextureFiles.ValidateOutput(Tex((uint)TexFile.TextureFormat.B8G8R8A8, 8, 8, 4, 1), s), "uncompressed output cannot replace a compressed original");
-        s = s with { MipMaps = false };
-        TextureFiles.ValidateOutput(Tex(s.Format, 8, 8, 1, 1), s);
+        var bc7 = (uint)TexFile.TextureFormat.BC7;
+        var bgra = (uint)TexFile.TextureFormat.B8G8R8A8;
+        Reject(() => TextureFiles.ValidateOutput(Tex(bc7, 8, 8, 1, 1), bc7, 8, 8, true), "missing generated mipmaps rejected");
+        Reject(() => TextureFiles.ValidateOutput(Tex(bgra, 8, 8, 4, 1), bc7, 8, 8, true), "converted output must use the requested encoding");
+        Reject(() => TextureFiles.ValidateOutput(Tex(bc7, 8, 8, 4, 1), bc7, 16, 8, true), "converted output must match the saved size");
+        TextureFiles.ValidateOutput(Tex(bc7, 8, 8, 1, 1), bc7, 8, 8, false);
         Check(true, "non-mipmapped originals retain a single surface");
+        var s = new TextureEditSession { Format = bc7, Width = 8, Height = 8, MipMaps = true };
+        TextureFiles.ValidateCommit(Tex(bgra, 16, 4, 1, 1), s);
+        Check(true, "an uncompressed save of any supported size can replace a compressed original");
+        Reject(() => TextureFiles.ValidateCommit(Tex((uint)TexFile.TextureFormat.BC1, 8, 8, 4, 1), s), "commits cannot switch to another compressed format");
+    }
+
+    private static async Task ResizeAndEncodingAsync(string root)
+    {
+        var bc7 = (uint)TexFile.TextureFormat.BC7;
+        var bgra = (uint)TexFile.TextureFormat.B8G8R8A8;
+        using var f = new Fixture(root, bc7);
+        var id = await f.Service.StartAsync(f.Request, false);
+        var s = f.Service.Sessions.Single();
+        Check(s.SavedFormat == bc7, "new sessions record the captured format as saved");
+
+        File.WriteAllBytes(s.WorkingFile, Tga(16, 4, 50));
+        await f.Service.ProcessPendingAsync(true);
+        var header = TextureFiles.ReadTex(File.ReadAllBytes(s.TargetFile));
+        var resized = TextureFiles.Hash(File.ReadAllBytes(s.TargetFile));
+        Check(f.Backend.Commits == 1 && header is { Width: 16, Height: 4 } && header.Format == bc7 &&
+              header.Mips == TextureFiles.FullMipCount(16, 4) && f.Service.Sessions.Single() is { Width: 16, Height: 4 },
+            "a resized save commits at its new resolution with a regenerated mip chain");
+
+        File.WriteAllBytes(s.WorkingFile, Tga(6, 4, 51));
+        await f.Service.ProcessPendingAsync(true);
+        Check(f.Backend.Commits == 1 && TextureFiles.Hash(File.ReadAllBytes(s.TargetFile)) == resized,
+            "a BC save that is not whole 4 × 4 tiles leaves the destination unchanged");
+
+        f.Config.RecompressTextures = false;
+        await f.Service.ProcessPendingAsync(true);
+        header = TextureFiles.ReadTex(File.ReadAllBytes(s.TargetFile));
+        Check(f.Backend.Commits == 2 && f.Backend.LastFormat == TextureType.RgbaTex && header.Format == bgra &&
+              header is { Width: 6, Height: 4 } && f.Service.Sessions.Single().SavedFormat == bgra,
+            "with recompression off, saves are written uncompressed at any size");
+
+        await f.Service.RestoreAsync(id);
+        Check(TextureFiles.Hash(File.ReadAllBytes(s.TargetFile)) == resized &&
+              f.Service.Sessions.Single() is { Paused: true, Width: 16, Height: 4 } restored && restored.SavedFormat == bc7,
+            "restoring a backup with a different size and encoding updates the session");
+        Check(await f.Service.StartAsync(f.Request, false) == id && !f.Service.Sessions.Single().Paused,
+            "opening a paused texture again resumes its session");
+
+        f.Config.RecompressTextures = true;
+        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 52));
+        await f.Service.ProcessPendingAsync(true);
+        f.Config.RecompressTextures = false;
+        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 52).Concat(new byte[] { 1, 2, 3 }).ToArray());
+        await f.Service.ProcessPendingAsync(true);
+        // Commits: two saves, the restore, then the recompressed and the uncompressed save.
+        Check(f.Backend.Commits == 5 && f.Service.Sessions.Single().SavedFormat == bgra,
+            "a recompression change applies on the next save even when pixels are unchanged");
+        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 52).Concat(new byte[] { 4, 5, 6 }).ToArray());
+        await f.Service.ProcessPendingAsync(true);
+        Check(f.Backend.Commits == 5, "unchanged pixels and encoding skip recompression");
+    }
+
+    private static async Task IncompleteSessionAsync(string root)
+    {
+        using var f = new Fixture(root, (uint)TexFile.TextureFormat.BC7);
+        f.Backend.FailConversion = true;
+        try { await f.Service.StartAsync(f.Request, false); }
+        catch (IOException) { }
+        f.Backend.FailConversion = false;
+        var broken = f.Service.Sessions.Single().Id;
+        var id = await f.Service.StartAsync(f.Request, false);
+        Check(id != broken && !f.Service.Sessions.Single(item => item.Id == id).Paused,
+            "a session that failed to open is not reused when the texture is opened again");
     }
 
     private static async Task RoundTripAsync(string root, uint format, TextureType target)
@@ -132,6 +211,8 @@ internal static class TextureEditScenarios
         await fixture.Service.Completion;
         using var restored = new TextureEditService(fixture.Backend, fixture.Config, fixture.ConfigDir, fixture.Backups, (_, _) => { }, false);
         Check(restored.Sessions.Single().Paused && restored.Sessions.Single().WorkingFile == s.WorkingFile, "session is restored paused after restart");
+        Check(await restored.StartAsync(fixture.Request, false) == id && !restored.Sessions.Single().Paused,
+            "reopening a texture after restart resumes its session");
         await restored.DiscardAsync(id);
         Check(!Directory.Exists(s.Directory) && File.Exists(s.TargetFile), "discard removes only working files");
     }
@@ -210,6 +291,94 @@ internal static class TextureEditScenarios
         Check(PenumbraService.TextureMappingFingerprint(saved.ModRoot) == v4Fingerprint,
             "texture mapping fingerprints ignore stray legacy JSON files");
         Check(await f.Service.StartAsync(f.Request, false) == id, "vanilla reopening reuses the session");
+    }
+
+    private static async Task VariantsAsync(string root)
+    {
+        var bc7 = (uint)TexFile.TextureFormat.BC7;
+        using var f = new Fixture(root, bc7, withMeta: true);
+        var id = await f.Service.StartAsync(f.Request, false);
+        var s = f.Service.Sessions.Single();
+        Check(TextureEditService.IsVariantFileName(s, "Red.tga") && !TextureEditService.IsVariantFileName(s, "test.tga") &&
+              !TextureEditService.IsVariantFileName(s, "snapshot.tga") && !TextureEditService.IsVariantFileName(s, "Red.png"),
+            "only differently named TGAs beside the working image are variants");
+
+        File.WriteAllBytes(Path.Combine(s.Directory, "Red.tga"), Tga(8, 8, 70));
+        await f.Service.ProcessPendingAsync(true);
+        s = f.Service.Sessions.Single();
+        var red = s.Variants.Single();
+        var redTarget = s.VariantTargetFile(red);
+        Check(red is { Name: "Red", RelativePath: "Files/chara/test_Red.tex" } && File.Exists(redTarget) &&
+              TextureFiles.ReadTex(File.ReadAllBytes(redTarget)).Format == bc7 &&
+              File.ReadAllBytes(s.TargetFile).SequenceEqual(f.Backend.Original),
+            "a variant TGA is encoded to its own TEX beside the original, which stays untouched");
+        var group = VariantGroup(s);
+        var options = group.GetProperty("Options");
+        Check(group.GetProperty("Type").GetString() == "Single" && group.GetProperty("Name").GetString() == "test variants" &&
+              group.GetProperty("DefaultSettings").GetInt32() == 0 && options.GetArrayLength() == 2 &&
+              options[0].GetProperty("Name").GetString() == "Original" && !options[0].TryGetProperty("Files", out _) &&
+              options[1].GetProperty("Name").GetString() == "Red" &&
+              options[1].GetProperty("Files").GetProperty("chara/test.tex").GetString() == red.RelativePath,
+            "the variant becomes an option mapping the original game path, beside an empty Original option");
+        Check(f.Backend.LastShown == red.OptionId && s.OriginalOptionId is not null,
+            "saving a variant selects its option");
+
+        File.WriteAllBytes(Path.Combine(s.Directory, "Red.tga"), Tga(8, 8, 71));
+        await f.Service.ProcessPendingAsync(true);
+        s = f.Service.Sessions.Single();
+        Check(f.Backend.VariantCommits == 2 && s.Variants.Single().RelativePath == red.RelativePath &&
+              VariantGroup(s).GetProperty("Options").GetArrayLength() == 2 && File.ReadAllBytes(redTarget)[80] == 71,
+            "saving a variant again replaces its TEX without adding options");
+
+        File.WriteAllBytes(Path.Combine(s.Directory, "Blue.tga"), Tga(8, 8, 72));
+        File.WriteAllBytes(Path.Combine(s.Directory, "Original.tga"), Tga(8, 8, 73));
+        await f.Service.ProcessPendingAsync(true);
+        s = f.Service.Sessions.Single();
+        using (var metadata = JsonDocument.Parse(File.ReadAllText(Path.Combine(s.ModRoot, "meta.json"))))
+            Check(metadata.RootElement.GetProperty("Groups").GetArrayLength() == 1 &&
+                  VariantGroup(s).GetProperty("Options").GetArrayLength() == 3 &&
+                  s.Variants.Select(v => v.Name).Order().SequenceEqual(["Blue", "Red"]),
+                "further variants join the same group; the reserved Original name is refused");
+
+        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 74));
+        await f.Service.ProcessPendingAsync(true);
+        s = f.Service.Sessions.Single();
+        Check(f.Backend.Commits == 1 && !s.Conflict && f.Backend.LastShown == s.OriginalOptionId,
+            "the main image still saves after its variant group changed meta.json, and shows Original");
+        Check(TextureEditService.IsReusableFor(s, f.Request with { ActualPath = redTarget }),
+            "a texture showing a variant reopens its session");
+
+        f.Service.Dispose();
+        await f.Service.Completion;
+        using var restored = new TextureEditService(f.Backend, f.Config, f.ConfigDir, f.Backups, (_, _) => { }, false);
+        Check(restored.Sessions.Single().Variants.Count == 2 && restored.Sessions.Single().VariantGroupId == s.VariantGroupId,
+            "variants survive a restart");
+        await restored.DiscardAsync(id);
+        Check(File.Exists(redTarget), "discard keeps committed variant files");
+    }
+
+    private static async Task VanillaVariantAsync(string root)
+    {
+        using var f = new Fixture(root, (uint)TexFile.TextureFormat.BC7, vanilla: true);
+        await f.Service.StartAsync(f.Request, false);
+        var s = f.Service.Sessions.Single();
+        File.WriteAllBytes(Path.Combine(s.Directory, "Red.tga"), Tga(8, 8, 80));
+        await f.Service.ProcessPendingAsync(true);
+        s = f.Service.Sessions.Single();
+        Check(!s.NeedsMod && File.ReadAllBytes(s.TargetFile).SequenceEqual(f.Backend.Original) &&
+              s.Variants.Single().RelativePath == "Files/chara/test_Red.tex" && VariantGroup(s).GetProperty("Options").GetArrayLength() == 2,
+            "a variant of a vanilla texture creates the mod with the unchanged original, then adds the variant");
+        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 81));
+        await f.Service.ProcessPendingAsync(true);
+        Check(f.Backend.Commits == 2 && File.ReadAllBytes(f.Service.Sessions.Single().TargetFile)[80] == 81,
+            "the vanilla session's main image then saves into that mod");
+    }
+
+    private static JsonElement VariantGroup(TextureEditSession s)
+    {
+        using var metadata = JsonDocument.Parse(File.ReadAllText(Path.Combine(s.ModRoot, "meta.json")));
+        return metadata.RootElement.GetProperty("Groups").EnumerateArray()
+            .Single(group => group.GetProperty("Id").GetGuid() == s.VariantGroupId).Clone();
     }
 
     private static async Task WatcherAsync(string root)
@@ -308,14 +477,14 @@ internal static class TextureEditScenarios
         public readonly ModelBackupStore Backups;
         public readonly string ConfigDir;
         public readonly TextureEditRequest Request;
-        public Fixture(string root, uint format, bool vanilla = false, bool watch = false, TimeSpan? cleanupInterval = null)
+        public Fixture(string root, uint format, bool vanilla = false, bool watch = false, TimeSpan? cleanupInterval = null, bool withMeta = false)
         {
             ConfigDir = Path.Combine(root, "config"); Directory.CreateDirectory(ConfigDir);
             var cacheDirectory = Path.Combine(root, "cache");
             MakeCache(cacheDirectory);
             Config = new Configuration { TextureCacheDirectory = cacheDirectory };
             Backups = new ModelBackupStore(ConfigDir);
-            Backend = new FakeBackend(root, format, Backups, vanilla);
+            Backend = new FakeBackend(root, format, Backups, vanilla, withMeta);
             Request = new TextureEditRequest("chara/test.tex", vanilla ? "chara/test.tex" : Backend.Target,
                 vanilla ? "" : "Mod", Backend.ModRoot, "Files/chara/test.tex", null, 0, vanilla ? "Mod" : "");
             Service = new TextureEditService(Backend, Config, ConfigDir, Backups, (_, _) => { }, watch, cleanupInterval);
@@ -331,20 +500,26 @@ internal static class TextureEditScenarios
         public readonly byte[] Original;
         private readonly ModelBackupStore _backups;
         private readonly bool _vanilla;
-        public int Commits;
+        public int Commits, VariantCommits;
+        public Guid? LastShown;
         public TextureType LastFormat;
         public bool FailConversion, RefreshWarning;
         public Action? OnEncode;
-        public FakeBackend(string root, uint format, ModelBackupStore backups, bool vanilla)
+        public FakeBackend(string root, uint format, ModelBackupStore backups, bool vanilla, bool withMeta = false)
         {
             _backups = backups; _vanilla = vanilla;
             ModRoot = Path.Combine(root, "Mod"); Target = Path.Combine(ModRoot, "Files", "chara", "test.tex");
             Original = Tex(format, 8, 8, 4, 12);
-            if (!vanilla)
+            if (vanilla) return;
+            if (withMeta)
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(Target)!);
-                File.WriteAllBytes(Target, Original);
+                // A registered v4 mod, which variant groups need.
+                Directory.CreateDirectory(ModRoot);
+                PenumbraService.StageGameTextureMod(ModRoot, "Mod", "chara/test.tex", Original);
+                return;
             }
+            Directory.CreateDirectory(Path.GetDirectoryName(Target)!);
+            File.WriteAllBytes(Target, Original);
         }
         public Task<TextureSource> CaptureAsync(TextureEditRequest request, CancellationToken token)
         {
@@ -354,6 +529,7 @@ internal static class TextureEditScenarios
                 GamePath = request.GamePath, ModDirectory = "Mod", ModRoot = ModRoot, RelativePath = "Files/chara/test.tex",
                 NewModName = request.NewModName, NeedsMod = _vanilla, CollectionId = Guid.NewGuid(),
                 Format = h.Format, Width = 8, Height = 8, MipMaps = true, LastCommittedHash = _vanilla ? "" : TextureFiles.Hash(Original),
+                MappingFingerprint = File.Exists(Path.Combine(ModRoot, "meta.json")) ? PenumbraService.TextureMappingFingerprint(ModRoot) : "",
             }));
         }
         public Task ConvertAsync(string input, string output, TextureType format, bool mipMaps)
@@ -369,15 +545,16 @@ internal static class TextureEditScenarios
                     TextureType.Bc4Tex => TexFile.TextureFormat.BC4, TextureType.Bc5Tex => TexFile.TextureFormat.BC5,
                     TextureType.Bc7Tex => TexFile.TextureFormat.BC7, _ => TexFile.TextureFormat.B8G8R8A8,
                 };
-                File.WriteAllBytes(output, Tex((uint)code, 8, 8, mipMaps ? 4 : 1, tga[18]));
+                var (width, height) = TextureFiles.ValidateTga(tga);
+                File.WriteAllBytes(output, Tex((uint)code, width, height, mipMaps ? TextureFiles.FullMipCount(width, height) : 1, tga[18]));
                 if (mipMaps) { LastFormat = format; OnEncode?.Invoke(); }
             }
             return Task.CompletedTask;
         }
-        public Task<TextureCommit> CommitAsync(TextureEditSession s, byte[] tex, Func<bool> current, CancellationToken token, bool restoring = false)
+        public Task<TextureCommit> CommitAsync(TextureEditSession s, byte[] tex, Func<bool> current, CancellationToken token)
         {
             var h = TextureFiles.ReadTex(tex);
-            if (h.Format != s.Format) throw new IOException("Incorrect format");
+            if (!TextureFiles.IsSessionFormat(h.Format, s)) throw new IOException("Incorrect format");
             if (!current()) throw new OperationCanceledException();
             string backup = "";
             if (s.NeedsMod)
@@ -385,6 +562,7 @@ internal static class TextureEditScenarios
                 Directory.CreateDirectory(ModRoot);
                 PenumbraService.StageGameTextureMod(ModRoot, "Mod", s.GamePath, tex);
                 s.NeedsMod = false;
+                s.MappingFingerprint = PenumbraService.TextureMappingFingerprint(ModRoot);
             }
             else
             {
@@ -394,7 +572,17 @@ internal static class TextureEditScenarios
             Interlocked.Increment(ref Commits);
             return Task.FromResult(new TextureCommit(TextureFiles.Hash(tex), backup, "Saved"));
         }
-        public Task<string> RefreshAsync(TextureEditSession s, CancellationToken token) => Task.FromResult(RefreshWarning ? "Texture saved; refresh needs attention" : "Saved and redrawn");
+        public Task<TextureVariantCommit> CommitVariantAsync(TextureEditSession s, TextureVariant variant, byte[] tex, Func<bool> current, CancellationToken token)
+        {
+            var result = PenumbraService.CommitTextureVariantFiles(s, variant, tex, _backups, current, token);
+            Interlocked.Increment(ref VariantCommits);
+            return Task.FromResult(result);
+        }
+        public Task<string> RefreshAsync(TextureEditSession s, Guid? showOption, CancellationToken token)
+        {
+            LastShown = showOption;
+            return Task.FromResult(RefreshWarning ? "Texture saved; refresh needs attention" : "Saved and redrawn");
+        }
     }
 
     private static byte[] Tga(int width, int height, byte value)
@@ -406,7 +594,7 @@ internal static class TextureEditScenarios
         bytes.AsSpan(18).Fill(value);
         return bytes;
     }
-    private static byte[] Tex(uint format, int width, int height, int mips, byte value)
+    internal static byte[] Tex(uint format, int width, int height, int mips, byte value)
     {
         var sizes = Enumerable.Range(0, mips).Select(m => format == (uint)TexFile.TextureFormat.B8G8R8A8
             ? Math.Max(1, width >> m) * Math.Max(1, height >> m) * 4

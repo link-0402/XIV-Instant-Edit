@@ -18,10 +18,20 @@ internal sealed record ChangelogRelease(
 
 internal static class ChangelogCatalog
 {
-    public const string CurrentVersion = "1.2.4";
+    public const string CurrentVersion = "1.3.0";
 
     public static IReadOnlyList<ChangelogRelease> Releases { get; } =
     [
+        Release("1.3.0",
+            Highlight("Redesigned the plugin window: toolbar tabs with Penumbra and Blender status, an Options popover, and a status strip with a message history."),
+            Highlight("Hover a texture to preview it (hold Shift for a larger view with the alpha channel), hover a material to see its textures, and hover a model for its mesh, material and attribute summary with a rendered thumbnail."),
+            Entry("The resource browser gained a search box (Ctrl+F), kind chips including Materials, source badges, click-to-copy paths, and a right-click menu with copy, open folder, Open in Penumbra and Show in Mod Browser."),
+            Entry("The Mod Browser is a resizable list and detail view with Open in Penumbra."),
+            Entry("Texture edit sessions are cards grouped by mod, with thumbnails and icon actions."),
+            Highlight("Texture variants: save a copy of the TGA under another name in its folder and it becomes a Penumbra option, named after the file, in a variants group for that texture."),
+            Entry("Animations: rescan skeletons, restore offsets, undo the last edit, and a recovery list of recent edits that reopens interrupted ones."),
+            Entry("The on-screen list refreshes automatically when Penumbra or Glamourer changes your character, and warnings, errors and handoff results also appear as Dalamud notifications; both can be turned off in Settings."),
+            Important("Fixed newly created vanilla mods (from model exports and texture edits) never being enabled in the collection.")),
         Release("1.2.4",
             Entry("Fixed a model import issue that could distort unusually dense meshes."),
             Entry("Fixed vertex weights not combining correctly in some cases."),

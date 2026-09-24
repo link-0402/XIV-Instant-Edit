@@ -7,12 +7,6 @@ namespace InstantEdit.Services.Animations;
 
 internal sealed class AnimationEditService : IDisposable
 {
-    private sealed record StartupSources(AnimationStartupSource Loop, AnimationStartupSource Startup,
-        AnimationStartupSource? Idle)
-    {
-        public IEnumerable<AnimationStartupSource> All => Idle is { } idle ? [Loop, Startup, idle] : [Loop, Startup];
-    }
-
     private readonly IFramework framework;
     private readonly IObjectTable objects;
     private readonly PenumbraService penumbra;
@@ -23,7 +17,6 @@ internal sealed class AnimationEditService : IDisposable
     private readonly AnimationJournalStore journals;
     private readonly AnimationCommitService commits;
     private readonly AnimationCatalog catalog;
-    private readonly AnimationSkeletonIndex skeletons;
     private readonly IPluginLog log;
     private CancellationTokenSource? cancellation;
     private Task work = Task.CompletedTask;
@@ -53,9 +46,8 @@ internal sealed class AnimationEditService : IDisposable
         offsetBackup = journals.LoadOffsetBackup();
         commits = new AnimationCommitService(penumbra, resources, backups, journals);
         baker = new AnimationBakeService(native, framework);
-        skeletons = new AnimationSkeletonIndex(penumbra, resources, framework, log,
-            () => TextureFiles.EnsureCacheRoot(configuration.TextureCacheDirectory));
-        Observer = new AnimationObserver(framework, objects, penumbra, native, resources, poses, catalog, skeletons, log);
+        Observer = new AnimationObserver(framework, objects, penumbra, native, resources, poses, catalog,
+            new AnimationSkeletonIndex(penumbra, resources, framework, log, () => TextureFiles.EnsureCacheRoot(configuration.TextureCacheDirectory)), log);
         Observer.CharacterChanged += Cancel;
     }
     public void Cancel() { if (CanCancel) cancellation?.Cancel(); }
@@ -167,33 +159,6 @@ internal sealed class AnimationEditService : IDisposable
         native.EnsureAvailable();
         if (request.Destination == AnimationDestination.NewMod && !PenumbraService.IsSafeNewModName(request.ModName))
             throw new InvalidDataException("Choose a valid mod name before baking.");
-        if (request.Operation == AnimationOperation.CreateStartup)
-        {
-            if (!request.Capture.Clip.IsLoop)
-                throw new InvalidOperationException("Select a loop animation before creating a startup transition.");
-            if (request.Capture.Startup is not { } startup)
-                throw new InvalidOperationException("No unique startup animation is linked to this loop.");
-            if (startup.Resolution is not { State: SkeletonResolutionState.Matched, Selected: not null })
-                throw new InvalidOperationException(startup.Resolution?.Reason ?? "Choose a compatible startup source skeleton first.");
-            if (request.Capture.Clip.TargetSkeleton is not { } loopTarget || startup.TargetSkeleton is not { } startupTarget ||
-                loopTarget.Fingerprint != startupTarget.Fingerprint || request.Capture.Clip.Partial != startup.Partial)
-                throw new InvalidOperationException("The loop and linked startup do not share a compatible body skeleton.");
-            if (request.Destination == AnimationDestination.InPlace &&
-                !request.Capture.Sources.Any(s => s.GamePath == startup.GamePath && AnimationResources.CanReplace(s)))
-                throw new InvalidOperationException("The linked startup has no writable Penumbra source. Choose Create new mod.");
-            if (request.StartupOptions is not { } options || !Enum.IsDefined(typeof(AnimationStartupPose), options.Pose) ||
-                !AnimationPoseRules.ValidStartupDuration(options.DurationSeconds))
-                throw new InvalidDataException("Startup transition duration must be between 0 and 2 seconds.");
-        }
-        if (request.Operation == AnimationOperation.Retime)
-        {
-            if (request.RetimeOptions is not { } retime || !AnimationPoseRules.ValidRetimeDuration(retime.DurationSeconds))
-                throw new InvalidDataException("The new animation length must be above 0 and at most 600 seconds.");
-            if (request.Capture.Clip.Duration <= 0)
-                throw new InvalidOperationException("This animation's length is unknown, so it cannot be retimed.");
-            if (request.IncludeStartup)
-                throw new InvalidOperationException("Retiming applies to the selected clip only; clear Include startup first.");
-        }
         if (request.Operation == AnimationOperation.BakeOffsets)
         {
             if (request.Capture.PoseUnavailableReason != null) throw new InvalidOperationException(request.Capture.PoseUnavailableReason);
@@ -205,95 +170,64 @@ internal sealed class AnimationEditService : IDisposable
                     .Any(s => !AnimationPoseRules.Empty(AnimationPoseRules.Filter(s, request.Components))))
                 throw new InvalidDataException("The selected components contain no applied adjustments.");
         }
+        if (request.Operation == AnimationOperation.ExcludeBones && request.ExcludedBones.IsEmpty)
+            throw new InvalidDataException("Untick at least one animated bone first.");
+        if (AnimationBones.Problem(request.Capture.Clip, request.ExcludedBones) is { } exclusion)
+            throw new InvalidDataException(exclusion);
+        if (request.Operation == AnimationOperation.BakeOffsets &&
+            AnimationBones.OffsetConflict(request.ExcludedBones, request.SelectedBones.Select(b => b.Name)) is { } conflict)
+            throw new InvalidDataException(conflict);
         if (request.Capture.UnavailableReason != null) throw new InvalidOperationException(request.Capture.UnavailableReason);
         if (request.IncludeStartup && request.Capture.Startup == null) throw new InvalidOperationException("No unique startup was identified.");
         // Plain PAP rebakes use only the explicitly selected source skeleton
         // and never touch the current rig. Repair retargets onto the live
         // skeleton (to rebuild tracks around inserted bones like YAS's), so
-        // it needs the same live-skeleton staleness guard as CreateStartup.
-        var requiresLiveSkeleton = request.Operation is AnimationOperation.CreateStartup or AnimationOperation.RepairSkeleton;
+        // it needs a live-skeleton staleness guard.
+        var requiresLiveSkeleton = request.Operation == AnimationOperation.RepairSkeleton;
         await CheckActorAsync(request.Capture, requiresLiveSkeleton);
         if (request.Operation == AnimationOperation.BakeOffsets) await framework.RunOnFrameworkThread(() => poses.ValidateRoundTrip(request.Capture.Pose));
         await resources.CheckAsync(request.Capture.CollectionId, request.Capture.Sources, token);
         Status = "Capturing effective animation sources and dependencies…";
-        var startupSources = request.Operation == AnimationOperation.CreateStartup
-            ? await ResolveStartupSourcesAsync(request.Capture, request.StartupOptions!, token)
-            : null;
-        var clips = request.Operation == AnimationOperation.CreateStartup
-            ? startupSources!.All.Select(s => s.Clip).ToArray()
-            : request.IncludeStartup ? new[] { request.Capture.Clip, request.Capture.Startup! } : [request.Capture.Clip];
+        var clips = request.IncludeStartup ? new[] { request.Capture.Clip, request.Capture.Startup! } : [request.Capture.Clip];
         foreach (var clip in clips)
             if (clip.Resolution is { } resolution &&
                 (resolution.Selected == null || resolution.State != SkeletonResolutionState.Matched))
                 throw new InvalidOperationException(resolution.Reason ?? "Choose a compatible processing skeleton first.");
         await resources.CheckSkeletonsAsync(request.Capture, clips, token);
-        var manifestCapture = request.Capture;
-        if (startupSources is { Idle: { } idle })
-            manifestCapture = manifestCapture with
-            {
-                FamilyPaths = manifestCapture.FamilyPaths.Add(idle.Resource.GamePath),
-                Sources = manifestCapture.Sources.Add(idle.Resource).Distinct().ToImmutableArray(),
-            };
-        // Recheck after resolving any dynamic idle source so a source change
-        // racing the initial preflight cannot be baked into a stale commit.
-        await resources.CheckAsync(request.Capture.CollectionId, manifestCapture.Sources, token);
-        var packagedPaths = request.Operation == AnimationOperation.CreateStartup
-            ? new[] { request.Capture.Startup!.GamePath }
-            : clips.Select(clip => clip.GamePath).Distinct(StringComparer.Ordinal).ToArray();
+        var packagedPaths = clips.Select(clip => clip.GamePath).Distinct(StringComparer.Ordinal).ToArray();
         AnimationDependencyManifest manifest;
         if (request.Destination == AnimationDestination.NewMod)
         {
             if (request.Capture.PackagingError != null) throw new InvalidDataException(request.Capture.PackagingError);
-            manifest = await resources.ManifestAsync(manifestCapture, catalog,
+            manifest = await resources.ManifestAsync(request.Capture, catalog,
                 clips.Select(clip => clip.GamePath), packagedPaths, token);
         }
         else
         {
             var values = new List<(AnimationResource Resource, byte[] Bytes)>();
-            foreach (var path in manifestCapture.Sources.Select(s => s.GamePath).Distinct())
+            foreach (var path in request.Capture.Sources.Select(s => s.GamePath).Distinct())
                 values.Add(await resources.ReadAsync(request.Capture.CollectionId, path, token));
             manifest = new AnimationDependencyManifest(values.Select(v => v.Resource).ToImmutableArray(),
                 values.ToImmutableDictionary(v => v.Resource.GamePath, v => v.Bytes));
         }
         var outputs = ImmutableDictionary.CreateBuilder<string, byte[]>();
         var dir = journals.DirectoryFor(request.Id); Directory.CreateDirectory(dir);
-        if (request.Operation == AnimationOperation.CreateStartup)
-        {
-            await CheckActorAsync(request.Capture, requiresLiveSkeleton);
-            outputs[request.Capture.Startup!.GamePath] = await baker.CreateStartupAsync(
-                startupSources!.Loop, startupSources.Startup, startupSources.Idle, request.StartupOptions!, dir,
-                message => Status = message, token,
-                () =>
-                {
-                    CheckIdentityOnFramework(request.Capture, true);
-                    AnimationRuntime.CheckPartial(objects, request.Capture.Clip);
-                });
-        }
-        foreach (var clip in request.Operation == AnimationOperation.CreateStartup ? Array.Empty<AnimationClip>() : clips.Distinct())
+        foreach (var clip in clips.Distinct())
         {
             await CheckActorAsync(request.Capture, requiresLiveSkeleton);
             var source = outputs.TryGetValue(clip.GamePath, out var prior) ? prior : manifest.Files[clip.GamePath];
             var skeletonBytes = clip.Resolution?.Selected is { } selected
                 ? (await resources.ReadSkeletonAsync(request.Capture.CollectionId, selected.Source, token)).Bytes
                 : manifest.Files[clip.SkeletonPath];
-            var baked = await baker.BakeAsync(source, skeletonBytes, clip, request, dir, message => Status = message, token,
+            outputs[clip.GamePath] = await baker.BakeAsync(source, skeletonBytes, clip, request, dir, message => Status = message, token,
                 () =>
                 {
                     CheckIdentityOnFramework(request.Capture, true);
                     if (requiresLiveSkeleton) AnimationRuntime.CheckPartial(objects, request.Capture.Clip);
                     if (request.Operation == AnimationOperation.BakeOffsets) poses.CheckModule(request.Capture.Pose);
                 });
-            // The motion is now a different length, so the events its timeline fires
-            // have to move with it or the footsteps and sounds drift out of step.
-            if (request.Operation == AnimationOperation.Retime)
-            {
-                Status = "Retiming the animation's timeline events…";
-                baked = AnimationTimelineCodec.Scale(baked, request.RetimeOptions!.DurationSeconds / clip.Duration);
-            }
-            outputs[clip.GamePath] = baked;
         }
-        var journal = await commits.PrepareAsync(request, manifest,
-            [.. outputs.Select(output => new AnimationOutput(output.Key, "", output.Value))], token);
+        var journal = await commits.PrepareAsync(request, manifest, outputs.ToImmutable(), token);
         recovery = recovery.Insert(0, journal);
         await commits.CommitAsync(journal, manifest, async () =>
         {
@@ -309,25 +243,29 @@ internal sealed class AnimationEditService : IDisposable
             Status = message;
             if (message.StartsWith("Committing", StringComparison.Ordinal)) CanCancel = false;
         }, token);
-        // An in-place commit just changed the hash of its own captured sources.
-        // The game may not reload the file, so the observer will never revisit
-        // this clip to notice on its own; update it now so a retry (or Refresh)
-        // does not immediately fail CheckAsync against this same edit.
+        // An in-place commit just changed the hash of its own captured sources -
+        // and, for a rebake that had to land at a fresh path, their resolved
+        // location too. The game may not reload the file, so the observer will
+        // never revisit this clip to notice on its own; update it now so a retry
+        // (or Refresh) does not immediately fail CheckAsync against this same edit.
         if (request.Destination == AnimationDestination.InPlace)
         {
             var updatedSources = request.Capture.Sources.Select(s =>
-                journal.Files.FirstOrDefault(f => f.GamePath == s.GamePath) is { } file ? s with { Hash = file.AfterHash } : s).ToImmutableArray();
+                journal.Files.FirstOrDefault(f => f.GamePath == s.GamePath) is { } file
+                    ? s with
+                    {
+                        Hash = file.AfterHash, ResolvedPath = file.Target,
+                        ModDirectory = file.ModDirectory, ModRoot = file.ModRoot, RelativePath = file.RelativePath,
+                    }
+                    : s).ToImmutableArray();
             Observer.UpdateSources(request.Capture.Id, updatedSources);
         }
         if (request.Operation != AnimationOperation.BakeOffsets)
         {
             journal.State = "Completed"; journal.PoseClearOutcome = "NotApplicable";
-            journal.Message = request.Operation switch
-            {
-                AnimationOperation.CreateStartup => "Startup transition activated. Live offsets were retained.",
-                AnimationOperation.Retime => "Retimed animation activated. Live offsets were retained.",
-                _ => "Repaired animation activated. Live offsets were retained.",
-            };
+            journal.Message = request.Operation == AnimationOperation.ExcludeBones
+                ? "Animation activated without the unticked bones. Live offsets were retained."
+                : "Repaired animation activated. Live offsets were retained.";
             journals.Save(journal); Status = journal.Message; return;
         }
         // Record clearing intent first. A restart can compare live state against both sides of this exact scope.
@@ -355,250 +293,6 @@ internal sealed class AnimationEditService : IDisposable
         catch (Exception e) { RestoreOffsetBackup(previousBackup); journal.Message = "Animation activated; live offsets were retained: " + e.Message; }
         journal.State = "Completed"; journals.Save(journal); Status = journal.Message;
     }, request.Id, request.Capture.Clip);
-
-    /// <summary>
-    /// Rewrite one clip so it plays from another slot. This is a file-level remap:
-    /// the motion data is untouched, so it never reaches the baker, the Havok round
-    /// trip, or the live skeleton.
-    /// </summary>
-    internal static byte[] RetargetSlot(byte[] sourceBytes, byte[] destinationBytes, AnimationSlotSwap swap)
-    {
-        var source = new AnimationPap(sourceBytes);
-        var (entry, index) = Body(source, swap.Source.PapPath);
-        // Take the name the destination timeline already resolves by, rather than
-        // renumbering the source's. A family's base member is not numbered at all,
-        // so jmn.pap has no digits to rewrite into a pose slot.
-        var (target, _) = Body(new AnimationPap(destinationBytes), swap.Destination.PapPath);
-        if (entry.Name == target.Name) return sourceBytes;
-        // Both the entry name and the timeline's own reference to it must move, or
-        // the destination timeline resolves nothing.
-        return AnimationTimelineNames.Rename(source.WithEntryNames(new Dictionary<int, string> { [index] = target.Name }),
-            new Dictionary<string, string> { [entry.Name] = target.Name });
-    }
-
-    private static (AnimationPap.Entry Entry, int Index) Body(AnimationPap pap, string path)
-    {
-        var body = pap.Entries.Select((entry, index) => (entry, index)).Where(e => e.entry.Face == 0).ToArray();
-        if (body.Length != 1)
-            throw new InvalidDataException(body.Length == 0
-                ? $"{path} has no body animation to swap."
-                : $"{path} contains several body animations; the swap is ambiguous.");
-        return body[0];
-    }
-
-    /// <summary>Facial expressions available to attach, resolved from the game's facial timelines.</summary>
-    public ImmutableArray<AnimationCatalog.FacialClip> Faces { get; private set; } = [];
-    /// <summary>The facial motion the inspected animation currently plays, and which capture that was.</summary>
-    public string FaceCurrent { get; private set; } = "";
-    public string FaceCapture { get; private set; } = "";
-    public string? FaceError { get; private set; }
-
-    public void DiscoverFaces(AnimationCapture capture) => Launch(async token =>
-    {
-        Faces = []; FaceCurrent = ""; FaceCapture = ""; FaceError = null;
-        Status = "Reading this animation's facial reference…";
-        // Which face plays is recorded inside the animation itself, so it has to be
-        // read rather than inferred from the live pose's facial timeline.
-        var animation = await resources.ReadAsync(capture.CollectionId, capture.Clip.GamePath, token);
-        var external = AnimationFaces.ExternalMotions(animation.Bytes);
-        if (external.IsEmpty)
-        {
-            FaceCapture = capture.Id;
-            FaceError = "This animation does not play a facial expression, so there is none to swap.";
-            Status = FaceError; return;
-        }
-        Status = "Reading the game's facial expressions…";
-        var clips = await Task.Run(() => catalog.FacialClips(token), token);
-        Faces = clips; FaceCurrent = external[0]; FaceCapture = capture.Id;
-        FaceError = clips.IsEmpty ? "No facial expressions could be resolved from the game's timelines." : null;
-        Status = FaceError ?? $"This animation plays {external[0]}; {clips.Length} expressions are available.";
-    }, clip: capture.Clip);
-
-    public void AttachFace(AnimationBakeRequest request) => Launch(async token =>
-    {
-        if (request.Operation != AnimationOperation.AttachFace)
-            throw new InvalidOperationException("This request is not a facial attachment.");
-        if (request.FaceOptions is not { } options)
-            throw new InvalidOperationException("Choose a facial expression first.");
-        if (request.Destination == AnimationDestination.NewMod && !PenumbraService.IsSafeNewModName(request.ModName))
-            throw new InvalidDataException("Choose a valid mod name before attaching a face.");
-        if (request.Capture.UnavailableReason != null) throw new InvalidOperationException(request.Capture.UnavailableReason);
-        if (request.Destination == AnimationDestination.NewMod && request.Capture.PackagingError != null)
-            throw new InvalidDataException(request.Capture.PackagingError);
-
-        var clip = request.Capture.Clip;
-        await CheckActorAsync(request.Capture, false);
-        await resources.CheckAsync(request.Capture.CollectionId, request.Capture.Sources, token);
-        Status = "Capturing the animation being retargeted…";
-        AnimationDependencyManifest manifest;
-        if (request.Destination == AnimationDestination.NewMod)
-            manifest = await resources.ManifestAsync(request.Capture, catalog, [clip.GamePath], [clip.GamePath], token);
-        else
-        {
-            var values = new List<(AnimationResource Resource, byte[] Bytes)>();
-            foreach (var path in request.Capture.Sources.Select(s => s.GamePath).Distinct())
-                values.Add(await resources.ReadAsync(request.Capture.CollectionId, path, token));
-            manifest = new AnimationDependencyManifest(values.Select(v => v.Resource).ToImmutableArray(),
-                values.ToImmutableDictionary(v => v.Resource.GamePath, v => v.Bytes));
-        }
-        if (!manifest.Files.TryGetValue(clip.GamePath, out var bytes))
-            throw new InvalidDataException($"{clip.GamePath} was not captured for this edit.");
-        Status = $"Attaching {options.Expression}…";
-        var output = AnimationFaces.Retarget(bytes, options.FromMotion, options.ToMotion);
-        var journal = await commits.PrepareAsync(request, manifest, [new AnimationOutput(clip.GamePath, "", output)], token);
-        recovery = recovery.Insert(0, journal);
-        await commits.CommitAsync(journal, manifest, () => CheckActorAsync(request.Capture, false), message =>
-        {
-            Status = message;
-            if (message.StartsWith("Committing", StringComparison.Ordinal)) CanCancel = false;
-        }, token);
-        if (request.Destination == AnimationDestination.InPlace)
-            Observer.UpdateSources(request.Capture.Id, request.Capture.Sources.Select(s =>
-                journal.Files.FirstOrDefault(f => f.GamePath == s.GamePath) is { } file ? s with { Hash = file.AfterHash } : s).ToImmutableArray());
-        journal.State = "Completed"; journal.PoseClearOutcome = "NotApplicable";
-        journal.Message = $"{options.Expression} attached. Live offsets were retained.";
-        journals.Save(journal); Status = journal.Message;
-    }, request.Id, request.Capture.Clip);
-
-    /// <summary>Slots discovered for the last group probed, keyed by that group.</summary>
-    public string SlotGroup { get; private set; } = "";
-    public ImmutableArray<AnimationSlot> Slots { get; private set; } = [];
-    public string? SlotError { get; private set; }
-
-    /// <summary>
-    /// Probe a group for the slots that actually exist. Penumbra's resource tree
-    /// exposes skeletons and material PAPs but never enumerates a character's
-    /// animation packs, so discovery has to read candidate paths and see which
-    /// resolve. Kept explicit rather than automatic, because it is many reads.
-    /// </summary>
-    public void DiscoverSlots(AnimationCapture capture, AnimationSlot template) => Launch(async token =>
-    {
-        SlotGroup = ""; Slots = []; SlotError = null;
-        var found = ImmutableArray.CreateBuilder<AnimationSlot>();
-        foreach (var slot in AnimationSlots.Candidates(template))
-        {
-            token.ThrowIfCancellationRequested();
-            // The base member's directory is offered twice; whichever resolves wins,
-            // and a family that already found its base skips the second candidate.
-            if (slot.Index == 0 && found.Any(existing => existing.Index == 0)) continue;
-            Status = $"Looking for {slot.PapPath}…";
-            try
-            {
-                var read = await resources.ReadAsync(capture.CollectionId, slot.PapPath, token);
-                // A path that resolves but is not a readable PAP is not a slot.
-                _ = new AnimationPap(read.Bytes);
-                found.Add(slot);
-            }
-            catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException or InvalidDataException) { }
-        }
-        Slots = found.ToImmutable();
-        SlotGroup = template.Group;
-        SlotError = Slots.Any(slot => !slot.Startup) ? null : "No animations were found in this group.";
-        Status = SlotError ?? $"Found {Slots.Count(slot => !slot.Startup)} animations in this group.";
-    }, clip: capture.Clip);
-
-    public void SwapSlots(AnimationBakeRequest request) => Launch(async token =>
-    {
-        if (request.Operation != AnimationOperation.SwapSlots)
-            throw new InvalidOperationException("This request is not a slot swap.");
-        if (request.SlotSwaps.Length == 0)
-            throw new InvalidOperationException("Map at least one slot to a different animation first.");
-        // Variants need a mod of their own; an in-place edit has nowhere to put them.
-        if (request.Destination != AnimationDestination.NewMod)
-            throw new InvalidOperationException("Slot variants need their own mod. Choose Create new mod.");
-        if (!PenumbraService.IsSafeNewModName(request.ModName))
-            throw new InvalidDataException("Choose a valid mod name before swapping slots.");
-        if (request.Capture.UnavailableReason != null) throw new InvalidOperationException(request.Capture.UnavailableReason);
-        if (request.Capture.PackagingError != null) throw new InvalidDataException(request.Capture.PackagingError);
-
-        await CheckActorAsync(request.Capture, false);
-        await resources.CheckAsync(request.Capture.CollectionId, request.Capture.Sources, token);
-        Status = "Capturing the animations being swapped…";
-        var sourcePaths = request.SlotSwaps.Select(swap => swap.Source.PapPath).Distinct(StringComparer.Ordinal).ToArray();
-        var packagedPaths = request.SlotSwaps.Select(swap => swap.Destination.PapPath).Distinct(StringComparer.Ordinal).ToArray();
-        var manifest = await resources.ManifestAsync(request.Capture, catalog, sourcePaths, packagedPaths, token);
-
-        var outputs = ImmutableArray.CreateBuilder<AnimationOutput>(request.SlotSwaps.Length);
-        foreach (var swap in request.SlotSwaps)
-        {
-            token.ThrowIfCancellationRequested();
-            Status = $"Preparing {swap.Option}…";
-            if (!manifest.Files.TryGetValue(swap.Source.PapPath, out var bytes))
-                throw new InvalidDataException($"{swap.Source.PapPath} was not captured for this swap.");
-            if (!manifest.Files.TryGetValue(swap.Destination.PapPath, out var destination))
-                throw new InvalidDataException($"{swap.Destination.PapPath} was not captured for this swap.");
-            outputs.Add(new AnimationOutput(swap.Destination.PapPath, swap.Option, RetargetSlot(bytes, destination, swap)));
-        }
-        var journal = await commits.PrepareAsync(request, manifest, outputs.ToImmutable(), token);
-        recovery = recovery.Insert(0, journal);
-        await commits.CommitAsync(journal, manifest, () => CheckActorAsync(request.Capture, false), message =>
-        {
-            Status = message;
-            if (message.StartsWith("Committing", StringComparison.Ordinal)) CanCancel = false;
-        }, token);
-        journal.State = "Completed"; journal.PoseClearOutcome = "NotApplicable";
-        journal.Message = "Slot variants activated. Choose one in Penumbra. Live offsets were retained.";
-        journals.Save(journal); Status = journal.Message;
-    }, request.Id, request.Capture.Clip);
-
-    private async Task<StartupSources> ResolveStartupSourcesAsync(AnimationCapture capture,
-        AnimationStartupOptions options, CancellationToken token)
-    {
-        if (capture.Startup is not { } startup)
-            throw new InvalidOperationException("No unique startup animation is linked to this loop.");
-        var loopSource = await ReadStartupSourceAsync(capture, capture.Clip, token);
-        var startupSource = await ReadStartupSourceAsync(capture, startup, token);
-        AnimationStartupSource? idleSource = null;
-        if (options.Pose == AnimationStartupPose.CharacterIdle)
-        {
-            var timeline = catalog.Find(3) ?? throw new InvalidDataException("The default standing idle timeline is unavailable.");
-            var known = capture.FamilyPaths.Concat(capture.LoadedResourcePaths).Concat(capture.Sources.Select(s => s.GamePath))
-                .Append(capture.Clip.GamePath).Distinct(StringComparer.Ordinal).ToArray();
-            var idlePath = AnimationCatalog.PapPath(timeline, capture.Clip.GamePath, known)
-                ?? throw new InvalidDataException("The character's default idle variant could not be determined.");
-            var idle = await resources.ReadAsync(capture.CollectionId, idlePath, token);
-            var pap = new AnimationPap(idle.Bytes);
-            var entries = pap.Entries.Where(e => e.Face == 0).ToArray();
-            if (entries.Length != 1)
-                throw new InvalidDataException(entries.Length == 0
-                    ? "The character's default idle PAP has no unambiguous body animation."
-                    : "The character's default idle PAP contains several body animations; the idle source is ambiguous.");
-            var entry = entries[0];
-            var prints = await framework.RunOnTick(() => AnimationRuntime.InspectPap(idle.Bytes), delayTicks: 1);
-            var fingerprint = prints.GetValueOrDefault(entry.Binding, "");
-            if (fingerprint.Length == 0) throw new InvalidDataException("The character's default idle binding is invalid.");
-            var pathMap = capture.ResourceAliases.ToDictionary(pair => pair.Key,
-                pair => pair.Value.ToHashSet(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
-            var identity = AnimationSkeletonIndex.SourceIdentity(
-                AnimationSkeletonIndex.AliasesFor(pathMap, idle.Resource.ResolvedPath),
-                pap.ModelType == 0 ? AnimationSkeletonIndex.ModelCode(pap.ModelId) : null);
-            var idleClip = new AnimationClip(idlePath, entry.Name, entry.Binding, capture.Clip.Partial,
-                timeline.Id, capture.Clip.SkeletonPath, capture.Clip.SkeletonFingerprint, capture.Clip.TargetSkeleton,
-                new(SkeletonResolutionState.Searching, [], Reason: "Finding a compatible default idle source skeleton…"), fingerprint,
-                $"{capture.CollectionId}:{idle.Resource.Hash}:{idle.Resource.ResolvedPath}:{identity.MappingFingerprint}:{identity.CanonicalModel}",
-                SourceIdentity: identity, IsLoop: true);
-            var loaded = capture.LoadedResourcePaths.Concat(capture.Sources.Select(s => s.GamePath))
-                .Append(idlePath).Distinct(StringComparer.Ordinal).ToArray();
-            var resolution = await skeletons.ResolveAsync(capture.CollectionId, idleClip, idle.Bytes, loaded, pathMap, null, token);
-            idleClip = idleClip with { Resolution = resolution };
-            if (resolution is not { State: SkeletonResolutionState.Matched, Selected: not null })
-                throw new InvalidOperationException(resolution.Reason ?? "No compatible default idle source skeleton was found.");
-            var skeleton = await resources.ReadSkeletonAsync(capture.CollectionId, resolution.Selected.Source, token);
-            idleSource = new AnimationStartupSource(idleClip, idle.Resource, idle.Bytes, skeleton.Bytes);
-        }
-        return new(loopSource, startupSource, idleSource);
-    }
-
-    private async Task<AnimationStartupSource> ReadStartupSourceAsync(AnimationCapture capture,
-        AnimationClip clip, CancellationToken token)
-    {
-        if (clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: not null })
-            throw new InvalidOperationException(clip.Resolution?.Reason ?? "Choose a compatible animation source skeleton first.");
-        var resolution = clip.Resolution!;
-        var animation = await resources.ReadAsync(capture.CollectionId, clip.GamePath, token);
-        var skeleton = await resources.ReadSkeletonAsync(capture.CollectionId, resolution.Selected.Source, token);
-        return new AnimationStartupSource(clip, animation.Resource, animation.Bytes, skeleton.Bytes);
-    }
 
     public void RestoreOffsets(AnimationEditJournal journal) => Launch(async _ =>
     {

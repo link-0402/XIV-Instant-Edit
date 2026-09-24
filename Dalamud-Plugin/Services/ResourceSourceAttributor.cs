@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using InstantEdit.Models;
 using Dalamud.Plugin.Services;
 
@@ -8,21 +10,45 @@ namespace InstantEdit.Services;
 /// identifies only the directory containing a file; it never infers option, priority,
 /// or which collection decision produced the resolved path.
 /// </summary>
+/// <remarks>
+/// Penumbra loads every mod from a direct child of its mod directory, so the index is
+/// derived from the mod list alone and never touches the disk. Since Penumbra 1.7 a
+/// mod's meta.json also carries all of its option data (on the order of 100 MiB across
+/// a few thousand installed mods), so stable identifiers are read lazily, only for mods
+/// a resolved path actually belongs to, and cached until that meta.json changes.
+/// </remarks>
 public sealed class ResourceSourceAttributor
 {
-    private static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(30);
+    // A rebuild is two IPC calls and string work only, so a short interval keeps newly
+    // installed or removed mods current at no measurable cost.
+    private static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(5);
 
-    private readonly PenumbraService _penumbra;
-    private readonly IPluginLog _log;
+    private readonly Func<ModListSnapshot?> _readModList;
+    private readonly ModStableIdCache _stableIds;
+    private readonly Action<string>? _logDebug;
     private readonly object _lock = new();
     private DateTime _lastRefreshUtc = DateTime.MinValue;
     private ModRootIndex _index = ModRootIndex.Empty;
+    private long _generation;
 
     public ResourceSourceAttributor(PenumbraService penumbra, IPluginLog log)
+        : this(() => ReadModList(penumbra), PenumbraService.ReadModStableIdentifier, message => log.Debug(message))
     {
-        _penumbra = penumbra;
-        _log = log;
     }
+
+    // Logging stays a delegate so regression tests can use this type without Dalamud loaded.
+    private ResourceSourceAttributor(Func<ModListSnapshot?> readModList, Func<string, Guid?> readStableId, Action<string>? logDebug)
+    {
+        _readModList = readModList;
+        _stableIds = new ModStableIdCache(readStableId);
+        _logDebug = logDebug;
+    }
+
+    /// <summary> Regression seam: supplies the Penumbra mod list and the stable-identifier reader. </summary>
+    internal static ResourceSourceAttributor CreateForRegression(
+        Func<ModListSnapshot?> readModList,
+        Func<string, Guid?> readStableId)
+        => new(readModList, readStableId, null);
 
     public ResourceSource AttributionFor(string? actualPath)
     {
@@ -36,33 +62,21 @@ public sealed class ResourceSourceAttributor
         if (physicalPath is null)
             return new ResourceSource(ResourceSourceState.SourceUnavailable, "Source unavailable", null, null, null, null);
 
-        var index = GetModRootIndex();
-
-        // Fast path: almost every resolved file lives directly under Penumbra's
-        // standard mod root as "<root>/<mod directory>/...", so the immediate child
-        // segment is an O(1) dictionary lookup instead of scanning every installed
-        // mod's path. With a few thousand mods installed, that scan alone was the
-        // dominant cost of every on-screen refresh.
-        if (index.StandardRootDirectory is { } standardRoot)
-        {
-            var candidate = StandardCandidatePath(physicalPath, standardRoot);
-            if (candidate is not null && index.ByStandardPath.TryGetValue(candidate, out var directMod))
-                return BuildLoadedModSource(directMod, physicalPath);
-        }
-
-        // Fallback: mods relocated outside the standard root (or any case the fast
-        // path above didn't resolve) still get a correct answer via the full scan.
-        foreach (var mod in index.All)
-        {
-            if (!IsPathWithin(physicalPath, mod.Path))
-                continue;
-            return BuildLoadedModSource(mod, physicalPath);
-        }
+        var (index, generation) = GetModRootIndex();
+        if (index.TryFind(physicalPath, out var mod))
+            return BuildLoadedModSource(mod, physicalPath, _stableIds.Get(mod.Path, generation));
 
         return new ResourceSource(ResourceSourceState.ExternalResolvedFile, "External resolved file", null, null, null, physicalPath);
     }
 
-    private static ResourceSource BuildLoadedModSource(ModRoot mod, string physicalPath)
+    /// <summary> Makes the next attribution rebuild the mod index and revalidate identifiers. </summary>
+    internal void Invalidate()
+    {
+        lock (_lock)
+            _lastRefreshUtc = DateTime.MinValue;
+    }
+
+    private static ResourceSource BuildLoadedModSource(ModRoot mod, string physicalPath, Guid? stableId)
     {
         var relativePath = Path.GetRelativePath(mod.Path, physicalPath).Replace('\\', '/');
         return new ResourceSource(
@@ -72,100 +86,42 @@ public sealed class ResourceSourceAttributor
             mod.Directory,
             mod.Path,
             relativePath,
-            mod.StableId);
+            stableId);
     }
 
-    /// <summary> The candidate standard-layout mod path for a file under <paramref name="standardRoot"/>, i.e. "&lt;root&gt;/&lt;first segment&gt;". </summary>
-    private static string? StandardCandidatePath(string physicalPath, string standardRoot)
-    {
-        if (!physicalPath.StartsWith(standardRoot, StringComparison.OrdinalIgnoreCase) ||
-            physicalPath.Length <= standardRoot.Length + 1)
-            return null;
-
-        var afterRoot = physicalPath[(standardRoot.Length + 1)..];
-        var separatorIndex = afterRoot.IndexOfAny(['\\', '/']);
-        var firstSegment = separatorIndex < 0 ? afterRoot : afterRoot[..separatorIndex];
-        return firstSegment.Length == 0 ? null : Path.Combine(standardRoot, firstSegment);
-    }
-
-    private ModRootIndex GetModRootIndex()
+    private (ModRootIndex Index, long Generation) GetModRootIndex()
     {
         lock (_lock)
         {
             if (DateTime.UtcNow - _lastRefreshUtc < RefreshInterval)
-                return _index;
+                return (_index, _generation);
 
+            // A failed read keeps the previous index and is retried after the interval,
+            // rather than attributing every modded file as external until then.
             _lastRefreshUtc = DateTime.UtcNow;
-            _index = BuildModRootIndex();
-            return _index;
+            try
+            {
+                if (_readModList() is { } snapshot)
+                {
+                    _index = ModRootIndex.Build(snapshot);
+                    _generation++;
+                }
+            }
+            catch (Exception e)
+            {
+                _logDebug?.Invoke($"Could not build Penumbra mod source map: {e.Message}");
+            }
+
+            return (_index, _generation);
         }
     }
 
-    private ModRootIndex BuildModRootIndex()
+    private static ModListSnapshot? ReadModList(PenumbraService penumbra)
     {
-        try
-        {
-            var modRoot = NormalizePhysicalPath(_penumbra.GetModDirectory());
-
-            var roots = new List<ModRoot>();
-            var byStandardPath = new Dictionary<string, ModRoot>(StringComparer.OrdinalIgnoreCase);
-            foreach (var (directory, modName) in _penumbra.GetModList())
-            {
-                if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(modName))
-                    continue;
-
-                // The standard Penumbra layout is just a string concatenation; it does
-                // not touch the filesystem or any IPC and stays cheap even when the
-                // Penumbra mod folder holds thousands of directories. Use it for every
-                // mod before consulting the per-mod registered path so the on-screen and
-                // search tabs still populate under that scale.
-                string? path = null;
-                bool fromRegistered = false;
-                bool isStandardPath = false;
-                if (modRoot is not null)
-                {
-                    var standardPath = NormalizePhysicalPath(Path.Combine(modRoot, directory));
-                    if (standardPath is not null && IsPathWithin(standardPath, modRoot))
-                    {
-                        path = standardPath;
-                        isStandardPath = true;
-                    }
-                }
-
-                // A mod stored outside Penumbra's global root is only discoverable via
-                // its Penumbra IPC entry. Also retry when the conventional directory
-                // is absent: GetModDirectory is only the default root, while Penumbra
-                // permits an individual mod to have a manually configured location.
-                // This keeps the common path cheap without attributing relocated mods
-                // to a non-existent default directory.
-                if (path is null || !Directory.Exists(path))
-                {
-                    var registeredPath = _penumbra.GetRegisteredModPath(directory);
-                    path = NormalizePhysicalPath(registeredPath);
-                    fromRegistered = registeredPath is not null;
-                    isStandardPath = false;
-                }
-
-                if (path is not null && (modRoot is null ||
-                    fromRegistered || IsPathWithin(path, modRoot)))
-                {
-                    var root = new ModRoot(path, directory, modName, PenumbraService.ReadModStableIdentifier(path));
-                    roots.Add(root);
-                    if (isStandardPath)
-                        byStandardPath[path] = root;
-                }
-            }
-
-            return new ModRootIndex(
-                roots.OrderByDescending(root => root.Path.Length).ToArray(),
-                byStandardPath,
-                modRoot);
-        }
-        catch (Exception e)
-        {
-            _log.Debug($"Could not build Penumbra mod source map: {e.Message}");
-            return ModRootIndex.Empty;
-        }
+        var modDirectory = penumbra.GetModDirectory();
+        if (modDirectory is null)
+            return null;
+        return penumbra.TryGetModList(out var mods) ? new ModListSnapshot(modDirectory, mods) : null;
     }
 
     private static string? NormalizePhysicalPath(string? path)
@@ -186,26 +142,117 @@ public sealed class ResourceSourceAttributor
         }
     }
 
-    private static bool IsPathWithin(string path, string root)
-        => PathRules.IsPathWithin(path, root);
+    private sealed record ModRoot(string Path, string Directory, string Name);
 
-    private sealed record ModRoot(string Path, string Directory, string Name, Guid? StableId);
+    /// <summary> Mods keyed by their folder name directly below Penumbra's mod directory. </summary>
+    private sealed class ModRootIndex
+    {
+        public static readonly ModRootIndex Empty = new(null, new Dictionary<string, ModRoot>(StringComparer.OrdinalIgnoreCase));
+
+        private readonly string? _modDirectory;
+        private readonly IReadOnlyDictionary<string, ModRoot> _byFolder;
+
+        private ModRootIndex(string? modDirectory, IReadOnlyDictionary<string, ModRoot> byFolder)
+        {
+            _modDirectory = modDirectory;
+            _byFolder = byFolder;
+        }
+
+        public static ModRootIndex Build(ModListSnapshot snapshot)
+        {
+            var modDirectory = NormalizePhysicalPath(snapshot.ModDirectory);
+            if (modDirectory is null)
+                return Empty;
+
+            var byFolder = new Dictionary<string, ModRoot>(snapshot.Mods.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var (directory, modName) in snapshot.Mods)
+            {
+                if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(modName))
+                    continue;
+
+                // A directory key that is not a single folder name below the mod directory
+                // (for example one containing "..") cannot be a Penumbra mod and is ignored.
+                var path = NormalizePhysicalPath(System.IO.Path.Combine(modDirectory, directory));
+                if (path is null ||
+                    !string.Equals(System.IO.Path.GetDirectoryName(path), modDirectory, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                byFolder[System.IO.Path.GetFileName(path)] = new ModRoot(path, directory, modName);
+            }
+
+            return new ModRootIndex(modDirectory, byFolder);
+        }
+
+        public bool TryFind(string physicalPath, [NotNullWhen(true)] out ModRoot? mod)
+        {
+            mod = null;
+            return _modDirectory is not null &&
+                   FolderBelow(physicalPath, _modDirectory) is { } folder &&
+                   _byFolder.TryGetValue(folder, out mod);
+        }
+
+        private static string? FolderBelow(string physicalPath, string modDirectory)
+        {
+            var separated = System.IO.Path.EndsInDirectorySeparator(modDirectory);
+            var prefixLength = separated ? modDirectory.Length : modDirectory.Length + 1;
+            if (physicalPath.Length <= prefixLength ||
+                !physicalPath.StartsWith(modDirectory, StringComparison.OrdinalIgnoreCase) ||
+                (!separated && physicalPath[modDirectory.Length] is not ('\\' or '/')))
+                return null;
+
+            var rest = physicalPath.AsSpan(prefixLength);
+            var separator = rest.IndexOfAny('\\', '/');
+            var folder = separator < 0 ? rest : rest[..separator];
+            return folder.IsEmpty ? null : folder.ToString();
+        }
+    }
 
     /// <summary>
-    /// <paramref name="All"/> keeps the longest-path-first order the linear fallback
-    /// scan relies on; <paramref name="ByStandardPath"/> indexes only the mods that sit
-    /// directly under <paramref name="StandardRootDirectory"/> (the common case) for
-    /// O(1) lookups instead of scanning every installed mod per resource.
+    /// Stable identifiers per mod root. An identifier is re-read only when its meta.json
+    /// changes, and that is checked at most once per index generation.
     /// </summary>
-    private sealed record ModRootIndex(
-        IReadOnlyList<ModRoot> All,
-        IReadOnlyDictionary<string, ModRoot> ByStandardPath,
-        string? StandardRootDirectory)
+    private sealed class ModStableIdCache(Func<string, Guid?> readStableId)
     {
-        public static readonly ModRootIndex Empty = new(
-            Array.Empty<ModRoot>(), new Dictionary<string, ModRoot>(StringComparer.OrdinalIgnoreCase), null);
+        private readonly ConcurrentDictionary<string, Entry> _entries = new(StringComparer.OrdinalIgnoreCase);
+
+        public Guid? Get(string modRoot, long generation)
+        {
+            if (_entries.TryGetValue(modRoot, out var cached) && cached.Generation == generation)
+                return cached.StableId;
+
+            var stamp = ReadStamp(modRoot);
+            if (cached is not null && cached.Stamp == stamp)
+            {
+                _entries[modRoot] = cached with { Generation = generation };
+                return cached.StableId;
+            }
+
+            var stableId = readStableId(modRoot);
+            _entries[modRoot] = new Entry(stableId, stamp, generation);
+            return stableId;
+        }
+
+        private static MetaStamp? ReadStamp(string modRoot)
+        {
+            try
+            {
+                var meta = new FileInfo(System.IO.Path.Combine(modRoot, "meta.json"));
+                return meta.Exists ? new MetaStamp(meta.LastWriteTimeUtc, meta.Length) : null;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                return null;
+            }
+        }
+
+        private readonly record struct MetaStamp(DateTime LastWriteUtc, long Length);
+
+        private sealed record Entry(Guid? StableId, MetaStamp? Stamp, long Generation);
     }
 }
+
+/// <summary> Penumbra's mod directory and its mod list, keyed by mod directory name. </summary>
+internal sealed record ModListSnapshot(string? ModDirectory, IReadOnlyDictionary<string, string> Mods);
 
 public sealed record ResourceSource(
     ResourceSourceState State,

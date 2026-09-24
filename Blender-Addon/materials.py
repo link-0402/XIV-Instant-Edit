@@ -13,10 +13,12 @@ from .io.model.com.space import lin_to_srgb
 from .io.model.exp.validators import clean_material_path, USHORT_LIMIT
 from .instant_edit.context import (
     MASHUP_SOURCE_MATERIAL_PROPERTY,
+    active_mesh_id_plan,
     context_id_for_object,
     mesh_ids_from_name,
     mesh_name_info,
 )
+from .mesh.heels import is_heels_offset_attribute, normalize_heels_offset
 from .mesh.objects import visible_meshobj
 from .xivpy.model import is_model_attribute_name
 
@@ -192,7 +194,7 @@ def mesh_part_instances(
             instances,
             key=lambda item: (
                 item.part_index,
-                item.objects[0].name.casefold() if item.objects else "",
+                _planned_object_name(item.objects[0]).casefold() if item.objects else "",
                 item.instance_key,
             ),
         )
@@ -429,9 +431,17 @@ def attribute_display_name(attribute: str) -> str:
 
 
 def normalize_mesh_attribute(value: str) -> str:
-    attribute = str(value or "").strip().lower().replace(" ", "_")
+    text = str(value or "").strip()
+    # SimpleHeels' heels_offset=<number> is the one attribute that carries a
+    # value, so it gets its own validation instead of the name-only pattern.
+    if is_heels_offset_attribute(text) and "=" in text:
+        return normalize_heels_offset(text)
+    attribute = text.lower().replace(" ", "_")
     if not _CUSTOM_ATTRIBUTE.fullmatch(attribute):
-        raise ValueError("Custom attributes must use only letters, numbers, or underscores.")
+        raise ValueError(
+            "Custom attributes must use only letters, numbers, or underscores "
+            "(or heels_offset=<number>)."
+        )
     if not is_model_attribute_name(attribute):
         raise ValueError(
             "Custom attributes must start with atr, heels_offset, or skin_suffix."
@@ -450,7 +460,11 @@ def set_mesh_part_attribute(
     attribute = normalize_mesh_attribute(value) if enabled else str(value or "").strip()
     if not is_model_attribute_name(attribute):
         raise ValueError("This is not a valid mesh attribute.")
+    replaces_heels = enabled and is_heels_offset_attribute(attribute)
     for obj in mesh_part_instance_objects(objects, mesh_index, part_index, instance_key):
+        if replaces_heels:
+            for key in [key for key in obj.keys() if is_heels_offset_attribute(key)]:
+                del obj[key]
         if enabled:
             obj[attribute] = True
         elif attribute in obj:
@@ -544,6 +558,32 @@ def _mesh_object_name(mesh_index: int, part_index: int, label: str, lod: int | N
     return f"{mesh_index}.{part_index} {label}{lod_suffix}"
 
 
+def _planned_object_name(obj) -> str:
+    """Return the object's name, or the name a pending drag will give it."""
+    plan = active_mesh_id_plan()
+    if not plan or obj.as_pointer() not in plan:
+        return obj.name
+    info = mesh_name_info(obj)
+    return _mesh_object_name(info.mesh_group, info.mesh_part, mesh_display_name(obj), info.lod)
+
+
+def commit_mesh_id_plan(plan: dict[int, tuple[int, int]], objects) -> int:
+    """Rename every object a drag moved, in one collision-checked pass.
+
+    Must run outside planned_mesh_ids() so the objects' current names are read.
+    """
+    targets = []
+    for obj in objects:
+        planned = plan.get(obj.as_pointer())
+        if planned is None:
+            continue
+        info = mesh_name_info(obj)
+        if planned == (info.mesh_group, info.mesh_part):
+            continue
+        targets.append((obj, planned[0], planned[1], info.lod, mesh_display_name(obj)))
+    return _rename_mesh_targets(targets, objects)
+
+
 def _rename_mesh_targets(targets, objects=None) -> int:
     """Apply mesh-ID renames without allowing Blender to suffix collisions.
 
@@ -567,13 +607,21 @@ def _rename_mesh_targets(targets, objects=None) -> int:
     target_ids = {obj.as_pointer() for obj, _name in desired}
     pool = bpy.data.objects if objects is None else objects
     existing_names = {
-        obj.name for obj in pool if obj.as_pointer() not in target_ids
+        _planned_object_name(obj) for obj in pool if obj.as_pointer() not in target_ids
     }
     conflicts = sorted(set(desired_names) & existing_names)
     if conflicts:
         raise ValueError(
             "Mesh movement would collide with existing objects: " + ", ".join(conflicts)
         )
+
+    plan = active_mesh_id_plan()
+    if plan is not None:
+        # A drag in progress only records the move; commit_mesh_id_plan
+        # renames once the drop is released.
+        for obj, group, part, _lod, _label in targets:
+            plan[obj.as_pointer()] = (group, part)
+        return len(desired)
 
     originals = [(obj, obj.name) for obj, _name in desired]
     all_names = {obj.name for obj in bpy.data.objects}
@@ -729,6 +777,49 @@ def move_mesh_part_to_index(
         renames.append(
             (obj, mesh_index, target_part, lod, mesh_display_name(obj))
         )
+    return _rename_mesh_targets(renames, objects)
+
+
+def insert_mesh_part_instance(
+    objects,
+    mesh_index: int,
+    source_part: int,
+    target_part: int,
+    instance_key: str,
+) -> int:
+    """Insert a part instance at target_part, shifting later parts to make room.
+
+    Used for duplicate IDs: the source ID stays taken by the duplicate's
+    sibling, so a swap would pass the conflict on to the other part. Parts
+    from target_part onward move up by one until a free ID absorbs the shift.
+    """
+    source_objects = mesh_part_instance_objects(
+        objects, mesh_index, source_part, instance_key
+    )
+    if not source_objects:
+        raise ValueError(f"Mesh part {mesh_index}.{source_part} is no longer visible")
+
+    source_ids = {obj.as_pointer() for obj in source_objects}
+    occupied = defaultdict(list)
+    for obj in objects:
+        if obj.as_pointer() in source_ids:
+            continue
+        try:
+            group, part, lod = mesh_ids_from_name(obj)
+        except Exception:
+            continue
+        if group == mesh_index:
+            occupied[part].append((obj, lod))
+
+    renames = []
+    for obj in source_objects:
+        _group, _part, lod = mesh_ids_from_name(obj)
+        renames.append((obj, mesh_index, target_part, lod, mesh_display_name(obj)))
+    part = target_part
+    while part in occupied:
+        for obj, lod in occupied[part]:
+            renames.append((obj, mesh_index, part + 1, lod, mesh_display_name(obj)))
+        part += 1
     return _rename_mesh_targets(renames, objects)
 
 
@@ -998,3 +1089,29 @@ def material_suggestions(group: MaterialGroup) -> list[tuple[str, str]]:
         suffix = "part" if count == 1 else "parts"
         suggestions.append((path, f"{count} {suffix}"))
     return suggestions
+
+
+def other_group_materials(objects, mesh_index: int) -> list[tuple[str, tuple[int, ...]]]:
+    """Return the materials of a model's other mesh groups and the groups using each.
+
+    The material dialog offers these as quick selectors so one group can reuse
+    another group's material.  Paths are deduplicated with the same identity
+    rules as the group consistency checks and ordered by their first group.
+    """
+    usage = {}
+    for group in group_mesh_objects(objects):
+        if group.mesh_index == mesh_index:
+            continue
+        for path in material_paths(group.objects):
+            _path, groups = usage.setdefault(_material_identity_key(path), (path, []))
+            groups.append(group.mesh_index)
+    return [(path, tuple(groups)) for path, groups in usage.values()]
+
+
+def matching_material_path(value: str, paths) -> str | None:
+    """Return the entry of ``paths`` that ``value`` would export as, if any."""
+    try:
+        identity = _material_identity_key(normalize_material_path(value))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return next((path for path in paths if _material_identity_key(path) == identity), None)

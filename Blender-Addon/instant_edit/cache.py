@@ -33,6 +33,15 @@ DIAGNOSTIC_ID_LENGTH = 8
 BACKUP_FILE_RE = re.compile(
     r"^.+\.(?:mdl|fbx)\.(?P<stamp>\d{8}T\d{6}\.\d{6}Z)\.bak$", re.IGNORECASE
 )
+# Top-level entries the add-on or the in-game plugin write into the cache. Keep in
+# sync with OwnedRootDirectories/OwnedRootFiles in Dalamud-Plugin/Services/TextureFiles.cs.
+OWNED_ROOT_DIRECTORIES = frozenset(name.casefold() for name in (
+    "imports", "exports", "backups", "texture-edits", "AnimationEdits", "skeleton-library", "Contexts",
+))
+OWNED_ROOT_FILES = frozenset(name.casefold() for name in (
+    "TextureSessions.json", "TextureSessions.json.tmp", "pending-context-revocations.json",
+))
+OWNED_ROOT_TEMPORARY_RE = re.compile(r"^\.pending-context-revocations\.json\.[0-9a-f]{32}\.tmp$", re.IGNORECASE)
 
 _lock = threading.RLock()
 _base_directory = Path(tempfile.gettempdir())
@@ -147,6 +156,15 @@ def _marker_path(root: Path) -> Path:
     return root / ".instant-edit-cache.json"
 
 
+def _is_owned_root_entry(entry: Path) -> bool:
+    if entry.is_symlink() or getattr(entry, "is_junction", lambda: False)():
+        return False
+    name = entry.name.casefold()
+    if entry.is_dir():
+        return name in OWNED_ROOT_DIRECTORIES
+    return name in OWNED_ROOT_FILES or OWNED_ROOT_TEMPORARY_RE.match(entry.name) is not None
+
+
 def ensure_cache_root() -> Path:
     root = cache_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -159,7 +177,9 @@ def ensure_cache_root() -> Path:
         if payload != {"schema": CACHE_SCHEMA, "version": CACHE_VERSION}:
             raise ValueError("cache ownership marker is invalid")
     else:
-        if any(root.iterdir()):
+        # Temp cleaners delete the marker once it is old, while newer cache files
+        # survive. A folder holding only entries this cache creates is still ours.
+        if not all(_is_owned_root_entry(entry) for entry in root.iterdir()):
             raise ValueError("cache directory is not empty and has no XIV Instant Edit ownership marker")
         marker.write_text(
             json.dumps({"schema": CACHE_SCHEMA, "version": CACHE_VERSION}),

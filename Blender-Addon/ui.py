@@ -7,7 +7,7 @@ import bpy
 
 from bpy.types import Context, Panel
 
-from .instant_edit.context import ContextValidationError, mesh_ids_from_name
+from .instant_edit.context import ContextValidationError, mesh_ids_from_name, planned_mesh_ids
 from .instant_edit.ops import (MASHUP_TARGET, SAVE_NEW_MOD_TARGET,
                                export_destination_context, mashup_target_state,
                                cached_export_readiness,
@@ -24,7 +24,7 @@ from .materials import (
     material_group_slots,
     visible_material_groups,
 )
-from .operators import active_mesh_drag_state
+from .operators import active_mesh_drag_plan, active_mesh_drag_state
 from .properties import get_settings
 from .backups import list_backups, target_folder
 
@@ -483,6 +483,13 @@ class XIVIE_PT_main(Panel):
 
     @staticmethod
     def _draw_mesh_materials(layout, context: Context) -> None:
+        # During a reorder drag the rows show the planned IDs; the objects
+        # themselves are only renamed when the drag is released.
+        with planned_mesh_ids(active_mesh_drag_plan()):
+            XIVIE_PT_main._draw_mesh_material_rows(layout, context)
+
+    @staticmethod
+    def _draw_mesh_material_rows(layout, context: Context) -> None:
         """Draw the compact Mesh Studio overview adapted from Yet Another Addon."""
         def triangle_count(obj) -> int:
             obj.data.calc_loop_triangles()
@@ -769,6 +776,7 @@ class XIVIE_PT_main(Panel):
         row = options.row(align=True)
         row.prop(settings, "create_backfaces")
         row.prop(settings, "reset_scaling_on_export")
+        options.prop(settings, "calculate_heels_offset")
         options.prop(settings, "remove_yas")
         options.prop(settings, "backup_models_on_export")
 

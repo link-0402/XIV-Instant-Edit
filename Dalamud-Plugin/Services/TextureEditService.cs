@@ -27,9 +27,34 @@ public sealed class TextureEditService : IDisposable
         public int Failures;
         public long RetryAt;
         public volatile bool Enabled = !session.Paused;
+        public long VariantGeneration;
+        /// <summary>Save tracking per variant TGA name; only touched while holding the queue gate.</summary>
+        public readonly Dictionary<string, VariantState> Variants = new(StringComparer.OrdinalIgnoreCase);
         public void Changed() { Interlocked.Exchange(ref ChangedAt, Environment.TickCount64); Interlocked.Increment(ref Generation); }
+        public void VariantChanged() { Interlocked.Exchange(ref ChangedAt, Environment.TickCount64); Interlocked.Increment(ref VariantGeneration); }
+        public VariantState StateFor(string name)
+        {
+            if (!Variants.TryGetValue(name, out var state)) Variants[name] = state = new VariantState();
+            return state;
+        }
         public void Dispose() { Enabled = false; Interlocked.Increment(ref Generation); Watcher?.Dispose(); }
     }
+
+    private sealed class VariantState
+    {
+        public long ObservedGeneration = -1;
+        public long ObservedLength = -1;
+        public long ObservedWrite;
+        public long LastHashCheck;
+        public string FailedHash = "";
+        public int Failures;
+        public long RetryAt;
+    }
+
+    /// <summary>TGAs in the working folder that the service writes itself, so they are never variants.</summary>
+    private static readonly HashSet<string> ReservedTgaNames = new(StringComparer.OrdinalIgnoreCase) { "snapshot.tga", "texture.tga" };
+    /// <summary>Scratch folder for variant conversions, kept out of the watched top level.</summary>
+    private const string VariantWorkFolder = "variant-work";
 
     private readonly ITextureEditBackend _backend;
     private readonly Configuration _config;
@@ -45,6 +70,21 @@ public sealed class TextureEditService : IDisposable
     private TextureEditSession[] _snapshot = [];
     public IReadOnlyList<TextureEditSession> Sessions => Volatile.Read(ref _snapshot);
     public string StartupError { get; private set; } = "";
+
+    /// <summary> Raised (on the service's worker) with the destination path after a save or restore replaced it. </summary>
+    public event Action<string>? FileChanged;
+
+    private void RaiseFileChanged(string path)
+    {
+        try
+        {
+            FileChanged?.Invoke(path);
+        }
+        catch (Exception error)
+        {
+            _log(error, "A texture file-changed handler failed.");
+        }
+    }
     internal Task Completion => _worker;
 
     internal TextureEditService(ITextureEditBackend backend, Configuration config, string configDirectory,
@@ -70,6 +110,10 @@ public sealed class TextureEditService : IDisposable
                     var s = restoredSession.NeedsMod && restoredSession.ResolvedGamePath.Length == 0
                         ? restoredSession with { ResolvedGamePath = restoredSession.GamePath }
                         : restoredSession;
+                    s.Variants ??= [];
+                    if (s.Variants.Any(v => !PathRules.IsSafeVariantName(v.Name) ||
+                            (v.RelativePath.Length > 0 && !PenumbraService.IsSafeGameResourcePath(v.RelativePath, ".tex"))))
+                        throw new IOException("Invalid texture variant.");
                     if (s.Id == Guid.Empty || !PenumbraService.IsSafeGameResourcePath(s.GamePath, ".tex") ||
                         !PenumbraService.IsSafeGameResourcePath(s.RelativePath, ".tex") ||
                         (s.NeedsMod && !PenumbraService.IsSafeGameResourcePath(s.ResolvedGamePath, ".tex")))
@@ -78,8 +122,11 @@ public sealed class TextureEditService : IDisposable
                     MigrateLegacyWorkingFile(s);
                     TextureFiles.EnsureLocalPath(s.TargetFile);
                     _ = TextureFiles.OutputType(s.Format);
+                    // Sessions from before optional recompression always saved in their captured format.
+                    if (s.SavedFormat == 0) s.SavedFormat = s.Format;
+                    if (!TextureFiles.IsSessionFormat(s.SavedFormat, s)) throw new IOException("Invalid texture session format.");
                     s.Paused = true;
-                    s.Status = s.Conflict ? s.Status : "Paused after restart. Resume to apply saved changes.";
+                    s.Status = s.Conflict ? s.Status : "Paused after restart. Open the texture again or Resume to apply saved changes.";
                     if (!_sessions.TryAdd(s.Id, new Runtime(s))) throw new IOException("Duplicate texture session identity.");
                 }
             }
@@ -155,20 +202,20 @@ public sealed class TextureEditService : IDisposable
         {
             EnsureReady();
             if (launchEditor) ValidateEditor();
-            var existing = _sessions.Values.FirstOrDefault(r => !r.Session.Conflict &&
-                (string.IsNullOrEmpty(request.ModDirectory)
-                    ? r.Session.NewModName.Length > 0 && r.Session.GamePath == request.GamePath && r.Session.CollectionId.HasValue &&
-                      r.Session.ObjectIndex == request.ObjectIndex && r.Session.ActorAddress == request.ActorAddress
-                    : string.Equals(r.Session.TargetFile, request.ActualPath, StringComparison.OrdinalIgnoreCase)));
+            var existing = _sessions.Values.FirstOrDefault(r => IsReusableFor(r.Session, request));
             if (existing is not null)
             {
-                if (launchEditor) Launch(existing.Session.WorkingFile);
+                if (launchEditor) Launch(EditorFileFor(existing.Session, request));
+                ResumeIfPaused(existing);
                 return existing.Session.Id;
             }
             var root = EnsureConfiguredCache();
             var source = await _backend.CaptureAsync(request, _life.Token).ConfigureAwait(false);
             _life.Token.ThrowIfCancellationRequested();
-            var session = source.Session with { CacheRoot = root, Paused = true, Status = "Preparing working image" };
+            var session = source.Session with
+            {
+                CacheRoot = root, SavedFormat = source.Session.Format, Paused = true, Status = "Preparing working image",
+            };
             TextureFiles.EnsureLocalPath(session.Directory);
             Directory.CreateDirectory(session.Directory);
             var runtime = new Runtime(session);
@@ -207,7 +254,48 @@ public sealed class TextureEditService : IDisposable
         finally { _gate.Release(); }
     }
 
-    public void OpenEditor(Guid id) => Launch(Get(id).Session.WorkingFile);
+    /// <summary>A session that finished opening and has no source conflict continues when its texture is opened again.</summary>
+    internal static bool IsReusableFor(TextureEditSession session, TextureEditRequest request)
+        => !session.Conflict && session.PixelHash.Length > 0 &&
+           (string.IsNullOrEmpty(request.ModDirectory)
+               ? session.NewModName.Length > 0 && session.GamePath == request.GamePath && session.CollectionId.HasValue &&
+                 session.ObjectIndex == request.ObjectIndex && session.ActorAddress == request.ActorAddress
+               : string.Equals(session.TargetFile, request.ActualPath, StringComparison.OrdinalIgnoreCase) ||
+                 VariantShowing(session, request) is not null);
+
+    /// <summary>The variant whose TEX the request shows, when the actor has that option selected.</summary>
+    private static TextureVariant? VariantShowing(TextureEditSession session, TextureEditRequest request)
+        => session.Variants.FirstOrDefault(v => v.RelativePath.Length > 0 &&
+            string.Equals(session.VariantTargetFile(v), request.ActualPath, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Reopening a texture that shows a variant opens that variant's TGA.</summary>
+    private static string EditorFileFor(TextureEditSession session, TextureEditRequest request)
+        => VariantShowing(session, request) is { } variant && File.Exists(session.VariantWorkingFile(variant))
+            ? session.VariantWorkingFile(variant)
+            : session.WorkingFile;
+
+    /// <summary>A top-level TGA in the working folder other than the working image and the service's own files.</summary>
+    internal static bool IsVariantFileName(TextureEditSession session, string? fileName)
+        => fileName is not null && fileName == Path.GetFileName(fileName) &&
+           Path.GetExtension(fileName).Equals(".tga", StringComparison.OrdinalIgnoreCase) &&
+           !fileName.Equals(Path.GetFileName(session.WorkingFile), StringComparison.OrdinalIgnoreCase) &&
+           !ReservedTgaNames.Contains(fileName);
+
+    public TextureEditSession? FindReusable(TextureEditRequest request) => Sessions.FirstOrDefault(s => IsReusableFor(s, request));
+
+    /// <summary>Opening the working image means editing continues, so a paused session resumes.</summary>
+    public async Task OpenEditorAsync(Guid id)
+    {
+        Launch(Get(id).Session.WorkingFile);
+        await _gate.WaitAsync(_life.Token).ConfigureAwait(false);
+        try
+        {
+            EnsureReady();
+            ResumeIfPaused(Get(id));
+        }
+        finally { _gate.Release(); }
+    }
+
     public void OpenFolder(Guid id)
     {
         var path = Get(id).Session.Directory;
@@ -260,21 +348,30 @@ public sealed class TextureEditService : IDisposable
         runtime.Enabled = false;
         runtime.Changed();
         await _gate.WaitAsync(_life.Token).ConfigureAwait(false);
-        try
-        {
-            var s = Get(id).Session;
-            if (!paused && s.Conflict) throw new IOException("This session has a source conflict. Its TGA is retained; reopen the texture from the browser.");
-            if (!paused && s.PixelHash.Length == 0) throw new IOException("This session did not finish opening. Discard it and reopen the texture.");
-            TextureFiles.EnsureLocalPath(s.Directory);
-            s.Paused = paused;
-            runtime.RetryAt = 0;
-            runtime.Failures = 0;
-            s.Status = paused ? "Paused" : "Watching for saves";
-            runtime.Enabled = !paused;
-            if (!paused) ArmWatcher(runtime);
-            Persist();
-        }
+        try { ApplyPaused(Get(id), paused); }
         finally { _gate.Release(); }
+    }
+
+    // Callers hold the queue gate.
+    private void ApplyPaused(Runtime runtime, bool paused)
+    {
+        var s = runtime.Session;
+        if (!paused && s.Conflict) throw new IOException("This session has a source conflict. Its TGA is retained; reopen the texture from the browser.");
+        if (!paused && s.PixelHash.Length == 0) throw new IOException("This session did not finish opening. Discard it and reopen the texture.");
+        TextureFiles.EnsureLocalPath(s.Directory);
+        s.Paused = paused;
+        runtime.RetryAt = 0;
+        runtime.Failures = 0;
+        s.Status = paused ? "Paused" : "Watching for saves";
+        runtime.Enabled = !paused;
+        if (!paused) ArmWatcher(runtime);
+        Persist();
+    }
+
+    private void ResumeIfPaused(Runtime runtime)
+    {
+        var s = runtime.Session;
+        if (s.Paused && !s.Conflict && s.PixelHash.Length > 0) ApplyPaused(runtime, false);
     }
 
     public async Task RetryAsync(Guid id)
@@ -284,7 +381,7 @@ public sealed class TextureEditService : IDisposable
         try
         {
             var s = Get(id).Session;
-            if (!s.NeedsMod) s.Status = await _backend.RefreshAsync(s, _life.Token).ConfigureAwait(false);
+            if (!s.NeedsMod) s.Status = await _backend.RefreshAsync(s, null, _life.Token).ConfigureAwait(false);
             Persist();
         }
         finally { _gate.Release(); }
@@ -302,17 +399,22 @@ public sealed class TextureEditService : IDisposable
             var source = string.IsNullOrEmpty(s.LastBackup) ? Path.Combine(s.Directory, "original.tex")
                 : _backups.Resolve(target.Id, Path.GetFileName(s.LastBackup));
             var original = TextureFiles.Read(source);
+            // Earlier saves may have been resized or stored uncompressed, so the backup's size can differ.
             var h = TextureFiles.ReadTex(original);
-            if (h.Format != s.Format || h.Width != s.Width || h.Height != s.Height) throw new IOException("The backup does not match this session.");
+            if (!TextureFiles.IsSessionFormat(h.Format, s)) throw new IOException("The backup does not match this session.");
             _life.Token.ThrowIfCancellationRequested();
-            var result = await _backend.CommitAsync(s, original, () => !_life.IsCancellationRequested, _life.Token, restoring: true).ConfigureAwait(false);
+            var result = await _backend.CommitAsync(s, original, () => !_life.IsCancellationRequested, _life.Token).ConfigureAwait(false);
             s.LastCommittedHash = result.Hash;
             s.LastBackup = result.Backup;
             s.LastSaved = DateTimeOffset.UtcNow;
+            s.SavedFormat = h.Format;
+            s.Width = h.Width;
+            s.Height = h.Height;
+            RaiseFileChanged(s.TargetFile);
             // Intentionally keep the artist's working image and pixel baseline unchanged.
             s.Status = "Backup restored. Session paused; working TGA retained.";
             Persist();
-            var refresh = await _backend.RefreshAsync(s, _life.Token).ConfigureAwait(false);
+            var refresh = await _backend.RefreshAsync(s, s.OriginalOptionId, _life.Token).ConfigureAwait(false);
             if (refresh.Contains("attention", StringComparison.Ordinal)) s.Status += " " + refresh;
             Persist();
         }
@@ -365,7 +467,10 @@ public sealed class TextureEditService : IDisposable
             {
                 "original.tex", "pixels.tex", "snapshot.tga", "converted.tex", "session.json",
                 Path.GetFileName(session.WorkingFile), "texture.tga",
-            }.Select(name => Path.GetFullPath(Path.Combine(session.Directory, name))), StringComparer.OrdinalIgnoreCase);
+                Path.Combine(VariantWorkFolder, "snapshot.tga"), Path.Combine(VariantWorkFolder, "pixels.tex"),
+                Path.Combine(VariantWorkFolder, "converted.tex"),
+            }.Concat(session.Variants.Select(v => v.Name + ".tga"))
+                .Select(name => Path.GetFullPath(Path.Combine(session.Directory, name))), StringComparer.OrdinalIgnoreCase);
             if (Directory.EnumerateFiles(session.Directory, "*", SearchOption.AllDirectories)
                     .Any(path => !generated.Contains(Path.GetFullPath(path))))
                 return false;
@@ -378,6 +483,11 @@ public sealed class TextureEditService : IDisposable
                 latest = latest > modified ? latest : modified;
             }
             if (latest >= cutoff) return false;
+            foreach (var variant in session.Variants)
+            {
+                var file = session.VariantWorkingFile(variant);
+                if (File.Exists(file) && TextureFiles.Hash(TextureFiles.Read(file)) != variant.WorkingHash) return false;
+            }
             return TextureFiles.Hash(TextureFiles.Read(session.WorkingFile)) == session.WorkingHash;
         }
         catch { return false; }
@@ -412,12 +522,13 @@ public sealed class TextureEditService : IDisposable
             void Changed(string? name)
             {
                 if (string.Equals(name, Path.GetFileName(runtime.Session.WorkingFile), StringComparison.OrdinalIgnoreCase)) runtime.Changed();
+                else if (IsVariantFileName(runtime.Session, name)) runtime.VariantChanged();
             }
             watcher.Changed += (_, e) => Changed(e.Name);
             watcher.Created += (_, e) => Changed(e.Name);
             watcher.Deleted += (_, e) => Changed(e.Name);
             watcher.Renamed += (_, e) => { Changed(e.Name); Changed(e.OldName); };
-            watcher.Error += (_, _) => runtime.Changed();
+            watcher.Error += (_, _) => { runtime.Changed(); runtime.VariantChanged(); };
             watcher.EnableRaisingEvents = true;
             runtime.Watcher = watcher;
         }
@@ -458,32 +569,205 @@ public sealed class TextureEditService : IDisposable
                 if (force) runtime.RetryAt = 0;
                 try { await ApplySaveAsync(runtime, force).ConfigureAwait(false); }
                 catch (OperationCanceledException) when (!_life.IsCancellationRequested) { /* superseded by save or pause */ }
-                catch (Exception error) when (error is not OperationCanceledException)
-                {
-                    var message = "Save not applied: " + error.Message;
-                    var changed = runtime.Session.Status != message;
-                    runtime.Session.Status = message;
-                    runtime.Failures = Math.Min(runtime.Failures + 1, 5);
-                    runtime.RetryAt = Environment.TickCount64 + Math.Min(30000, 1000 * (1 << runtime.Failures));
-                    if (error is TextureConflictException)
-                    {
-                        runtime.Session.Conflict = true;
-                        runtime.Session.Paused = true;
-                        runtime.Enabled = false;
-                    }
-                    if (changed) _log(error, "Texture save failed; the previous destination remains available.");
-                    try { Persist(); }
-                    catch (Exception storageError)
-                    {
-                        runtime.Enabled = false;
-                        runtime.Session.Paused = true;
-                        runtime.Session.Status += " Session storage failed: " + storageError.Message;
-                        Publish();
-                    }
-                }
+                catch (Exception error) when (error is not OperationCanceledException) { ReportSaveFailure(runtime, error); }
+                if (runtime.Enabled) await ApplyVariantSavesAsync(runtime, force).ConfigureAwait(false);
             }
         }
         finally { _gate.Release(); }
+    }
+
+    /// <summary>Records a failed save and backs off; a conflict pauses the whole session. Callers hold the queue gate.</summary>
+    private void ReportSaveFailure(Runtime runtime, Exception error, string? variantName = null)
+    {
+        var s = runtime.Session;
+        var message = (variantName is null ? "Save not applied: " : $"Variant \"{variantName}\" not applied: ") + error.Message;
+        var changed = s.Status != message;
+        s.Status = message;
+        if (variantName is null)
+        {
+            runtime.Failures = Math.Min(runtime.Failures + 1, 5);
+            runtime.RetryAt = Environment.TickCount64 + Math.Min(30000, 1000 * (1 << runtime.Failures));
+        }
+        else
+        {
+            var state = runtime.StateFor(variantName);
+            state.Failures = Math.Min(state.Failures + 1, 5);
+            state.RetryAt = Environment.TickCount64 + Math.Min(30000, 1000 * (1 << state.Failures));
+            if (FindVariant(s, variantName) is { } variant) variant.Status = "Save not applied: " + error.Message;
+        }
+        if (error is TextureConflictException)
+        {
+            s.Conflict = true;
+            s.Paused = true;
+            runtime.Enabled = false;
+        }
+        if (changed) _log(error, "Texture save failed; the previous destination remains available.");
+        try { Persist(); }
+        catch (Exception storageError)
+        {
+            runtime.Enabled = false;
+            s.Paused = true;
+            s.Status += " Session storage failed: " + storageError.Message;
+            Publish();
+        }
+    }
+
+    private static TextureVariant? FindVariant(TextureEditSession session, string name)
+        => session.Variants.FirstOrDefault(v => string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase));
+
+    private async Task ApplyVariantSavesAsync(Runtime runtime, bool force)
+    {
+        string[] files;
+        try
+        {
+            files = Directory.EnumerateFiles(runtime.Session.Directory, "*.tga", SearchOption.TopDirectoryOnly)
+                .Where(path => IsVariantFileName(runtime.Session, Path.GetFileName(path)))
+                .ToArray();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return; }
+        foreach (var file in files)
+        {
+            if (!runtime.Enabled) return;
+            var name = Path.GetFileNameWithoutExtension(file);
+            try { await ApplyVariantSaveAsync(runtime, name, force).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (!_life.IsCancellationRequested) { /* superseded by save or pause */ }
+            catch (Exception error) when (error is not OperationCanceledException) { ReportSaveFailure(runtime, error, name); }
+        }
+    }
+
+    /// <summary>
+    /// Mirrors <see cref="ApplySaveAsync"/> for one variant TGA: the first changed save creates
+    /// the variant's TEX and Penumbra option, later saves replace that TEX.
+    /// </summary>
+    private async Task ApplyVariantSaveAsync(Runtime runtime, string name, bool force)
+    {
+        var s = runtime.Session;
+        var file = Path.Combine(s.Directory, name + ".tga");
+        var state = runtime.StateFor(name);
+        var existing = FindVariant(s, name);
+        var generation = Interlocked.Read(ref runtime.VariantGeneration);
+        var info = new FileInfo(file);
+        if (!info.Exists) return;
+        if (force) state.RetryAt = 0;
+        if (!force && generation == state.ObservedGeneration && info.Length == state.ObservedLength &&
+            info.LastWriteTimeUtc.Ticks == state.ObservedWrite && Environment.TickCount64 - state.LastHashCheck < 30000 &&
+            state.Failures == 0) return;
+        var tga = TextureFiles.Read(file);
+        state.LastHashCheck = Environment.TickCount64;
+        state.ObservedLength = info.Length;
+        state.ObservedWrite = info.LastWriteTimeUtc.Ticks;
+        state.ObservedGeneration = generation;
+        var hash = TextureFiles.Hash(tga);
+        if (hash == existing?.WorkingHash) return;
+        if (hash != state.FailedHash)
+        {
+            state.FailedHash = hash;
+            state.Failures = 0;
+            state.RetryAt = 0;
+        }
+        if (Environment.TickCount64 < state.RetryAt) return;
+        if (!PathRules.IsSafeVariantName(name))
+            throw new IOException($"\"{name}\" cannot be used as a Penumbra option name. Rename the TGA.");
+        if (string.Equals(name, PenumbraService.OriginalTextureOptionName, StringComparison.OrdinalIgnoreCase))
+            throw new IOException($"\"{name}\" is reserved for the edited texture. Rename the TGA.");
+        var (width, height) = TextureFiles.ValidateTga(tga);
+        var format = TextureFiles.SaveFormat(s, _config.RecompressTextures);
+        TextureFiles.ValidateEncodable(format, width, height);
+        await Task.Delay(150, _life.Token).ConfigureAwait(false);
+        bool Current() => runtime.Enabled && !_life.IsCancellationRequested &&
+            generation == Interlocked.Read(ref runtime.VariantGeneration) && TextureFiles.Hash(TextureFiles.Read(file)) == hash;
+        if (!Current()) return;
+        s.Status = $"Converting variant \"{name}\"…";
+        Publish();
+        var work = Path.Combine(s.Directory, VariantWorkFolder);
+        TextureFiles.EnsureLocalPath(work);
+        Directory.CreateDirectory(work);
+        var snapshot = Path.Combine(work, "snapshot.tga");
+        var pixels = Path.Combine(work, "pixels.tex");
+        var output = Path.Combine(work, "converted.tex");
+        File.WriteAllBytes(snapshot, tga);
+        await _backend.ConvertAsync(snapshot, pixels, TextureType.RgbaTex, false).ConfigureAwait(false);
+        _life.Token.ThrowIfCancellationRequested();
+        var rawPixels = TextureFiles.Read(pixels);
+        var pixelHeader = TextureFiles.ReadTex(rawPixels);
+        if (pixelHeader.Width != width || pixelHeader.Height != height) throw new IOException("Decoded dimensions do not match the variant image.");
+        var pixelHash = TextureFiles.PixelHash(rawPixels);
+        if (existing is not null && pixelHash == existing.PixelHash && format == existing.SavedFormat)
+        {
+            if (!Current()) return;
+            existing.WorkingHash = hash;
+            s.Status = $"Watching; variant \"{name}\" pixels are unchanged";
+            Persist();
+            return;
+        }
+        await _backend.ConvertAsync(snapshot, output, TextureFiles.OutputType(format), s.MipMaps).ConfigureAwait(false);
+        _life.Token.ThrowIfCancellationRequested();
+        if (!Current()) return;
+        var converted = TextureFiles.Read(output);
+        TextureFiles.ValidateOutput(converted, format, width, height, s.MipMaps);
+        if (s.NeedsMod) await CreateModFromOriginalAsync(s, Current).ConfigureAwait(false);
+
+        var variant = existing ?? new TextureVariant { Name = name };
+        var result = await _backend.CommitVariantAsync(s, variant, converted, Current, _life.Token).ConfigureAwait(false);
+        if (existing is null) s.Variants.Add(variant);
+        variant.RelativePath = result.RelativePath;
+        variant.OptionId = result.OptionId;
+        variant.LastCommittedHash = result.Hash;
+        variant.PixelHash = pixelHash;
+        variant.WorkingHash = hash;
+        variant.SavedFormat = format;
+        variant.LastSaved = DateTimeOffset.UtcNow;
+        variant.Status = "Saved";
+        s.VariantGroupId = result.GroupId;
+        s.OriginalOptionId = result.OriginalOptionId;
+        s.MappingFingerprint = result.MappingFingerprint;
+        s.Status = $"Variant \"{name}\" saved";
+        RaiseFileChanged(s.VariantTargetFile(variant));
+        if (!PersistCommit(runtime)) return;
+        _life.Token.ThrowIfCancellationRequested();
+        var refresh = await _backend.RefreshAsync(s, variant.OptionId, _life.Token).ConfigureAwait(false);
+        variant.Status = refresh;
+        s.Status = $"Variant \"{name}\": {refresh}";
+        Persist();
+    }
+
+    /// <summary>
+    /// A vanilla session has no mod until its first save. A variant needs one to live in, so the
+    /// captured texture is published unchanged first; the group's Original option then shows it.
+    /// </summary>
+    private async Task CreateModFromOriginalAsync(TextureEditSession s, Func<bool> current)
+    {
+        var original = TextureFiles.Read(Path.Combine(s.Directory, "original.tex"));
+        var header = TextureFiles.ReadTex(original);
+        var result = await _backend.CommitAsync(s, original, current, _life.Token).ConfigureAwait(false);
+        s.LastCommittedHash = result.Hash;
+        s.LastBackup = result.Backup;
+        s.SavedFormat = header.Format;
+        s.Width = header.Width;
+        s.Height = header.Height;
+        Persist();
+        // Registers the mod with Penumbra, which the variant commit's destination check requires.
+        s.Status = await _backend.RefreshAsync(s, null, _life.Token).ConfigureAwait(false);
+        Persist();
+    }
+
+    /// <summary>Saves commit identity before any refresh that may fail; false when session storage failed and the session paused.</summary>
+    private bool PersistCommit(Runtime runtime)
+    {
+        try
+        {
+            Persist();
+            return true;
+        }
+        catch (Exception error)
+        {
+            runtime.Enabled = false;
+            runtime.Session.Paused = true;
+            runtime.Session.Status = "Texture saved, but session storage failed. Paused: " + error.Message;
+            _log(error, runtime.Session.Status);
+            Publish();
+            return false;
+        }
     }
 
     private async Task ApplySaveAsync(Runtime runtime, bool force)
@@ -508,7 +792,9 @@ public sealed class TextureEditService : IDisposable
             runtime.RetryAt = 0;
         }
         if (Environment.TickCount64 < runtime.RetryAt) return;
-        TextureFiles.ValidateTga(tga, s.Width, s.Height);
+        var (width, height) = TextureFiles.ValidateTga(tga);
+        var format = TextureFiles.SaveFormat(s, _config.RecompressTextures);
+        TextureFiles.ValidateEncodable(format, width, height);
         await Task.Delay(150, _life.Token).ConfigureAwait(false);
         bool Current() => runtime.Enabled && !_life.IsCancellationRequested && generation == Interlocked.Read(ref runtime.Generation) &&
             TextureFiles.Hash(TextureFiles.Read(s.WorkingFile)) == hash;
@@ -524,9 +810,10 @@ public sealed class TextureEditService : IDisposable
         _life.Token.ThrowIfCancellationRequested();
         var rawPixels = TextureFiles.Read(pixels);
         var pixelHeader = TextureFiles.ReadTex(rawPixels);
-        if (pixelHeader.Width != s.Width || pixelHeader.Height != s.Height) throw new IOException("Decoded dimensions do not match the working image.");
+        if (pixelHeader.Width != width || pixelHeader.Height != height) throw new IOException("Decoded dimensions do not match the working image.");
         var pixelHash = TextureFiles.PixelHash(rawPixels);
-        if (pixelHash == s.PixelHash)
+        // A recompression setting change is applied by the next save even when its pixels are unchanged.
+        if (pixelHash == s.PixelHash && format == s.SavedFormat)
         {
             if (!Current()) return;
             s.WorkingHash = hash;
@@ -534,31 +821,26 @@ public sealed class TextureEditService : IDisposable
             Persist();
             return;
         }
-        await _backend.ConvertAsync(snapshot, output, TextureFiles.OutputType(s.Format), s.MipMaps).ConfigureAwait(false);
+        await _backend.ConvertAsync(snapshot, output, TextureFiles.OutputType(format), s.MipMaps).ConfigureAwait(false);
         _life.Token.ThrowIfCancellationRequested();
         if (!Current()) return;
         var converted = TextureFiles.Read(output);
-        TextureFiles.ValidateOutput(converted, s);
+        TextureFiles.ValidateOutput(converted, format, width, height, s.MipMaps);
         var result = await _backend.CommitAsync(s, converted, Current, _life.Token).ConfigureAwait(false);
         s.LastCommittedHash = result.Hash;
         s.LastBackup = result.Backup;
         s.PixelHash = pixelHash;
         s.WorkingHash = hash;
+        s.SavedFormat = format;
+        s.Width = width;
+        s.Height = height;
         s.LastSaved = DateTimeOffset.UtcNow;
         s.Status = result.Message;
-        // Save commit identity before any refresh that may fail.
-        try { Persist(); }
-        catch (Exception error)
-        {
-            runtime.Enabled = false;
-            s.Paused = true;
-            s.Status = "Texture saved, but session storage failed. Paused: " + error.Message;
-            _log(error, s.Status);
-            Publish();
-            return;
-        }
+        RaiseFileChanged(s.TargetFile);
+        if (!PersistCommit(runtime)) return;
         _life.Token.ThrowIfCancellationRequested();
-        s.Status = await _backend.RefreshAsync(s, _life.Token).ConfigureAwait(false);
+        // With variants, the edited texture shows only while the group's Original option is selected.
+        s.Status = await _backend.RefreshAsync(s, s.OriginalOptionId, _life.Token).ConfigureAwait(false);
         Persist();
     }
 
@@ -579,7 +861,9 @@ public sealed class TextureEditService : IDisposable
         _life.Token.ThrowIfCancellationRequested();
         if (StartupError.Length > 0) throw new IOException(StartupError);
     }
-    private void Publish() => Volatile.Write(ref _snapshot, _sessions.Values.Select(r => r.Session with { }).OrderBy(s => s.GamePath).ToArray());
+    private void Publish() => Volatile.Write(ref _snapshot, _sessions.Values
+        .Select(r => r.Session with { Variants = r.Session.Variants.Select(v => v with { }).ToList() })
+        .OrderBy(s => s.GamePath).ToArray());
     private void Persist()
     {
         EnsureReady();
