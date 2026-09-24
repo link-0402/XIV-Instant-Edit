@@ -41,6 +41,9 @@ def _load_modules():
 def run() -> None:
     cache, diagnostics, plugin_http = _load_modules()
     with tempfile.TemporaryDirectory(prefix="xiv-ie-diagnostics-test-") as temporary:
+        # configure_cache persists cache-settings.json under APPDATA, beside
+        # the real Dalamud plugin configuration; keep it in the test directory.
+        os.environ["APPDATA"] = str(Path(temporary) / "appdata")
         root = cache.configure_cache(temporary, True)
         diagnostics_folder = Path(temporary) / "diagnostics"
         original_diagnostics_root = cache.diagnostics_root
