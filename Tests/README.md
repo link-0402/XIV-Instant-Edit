@@ -5,9 +5,7 @@ local Dalamud development assemblies installed. CI runs the Blender cases on
 4.5.0 and 5.2.0; standalone Python tests do not require Blender.
 
 ```powershell
-blender --background --factory-startup --python-exit-code 1 --python Blender-Addon/testing/bridge_regression.py
-blender --background --factory-startup --python-exit-code 1 --python Blender-Addon/testing/smoke_export.py
-blender --background --factory-startup --python-exit-code 1 --python Blender-Addon/testing/correctness_regression.py
+python Blender-Addon/testing/run_blender_suites.py
 python Blender-Addon/testing/cache_regression.py
 python Blender-Addon/testing/diagnostics_regression.py
 python Blender-Addon/testing/server_diagnostics_regression.py
@@ -18,12 +16,29 @@ dotnet run --project Tests/ChangelogRegression -c Release -p:SkipDistributionPac
 dotnet build Dalamud-Plugin/InstantEdit.csproj -c Release -p:SkipDistributionPackage=true
 ```
 
-PowerShell users should check `$LASTEXITCODE` after each command. Blender's
-`--python-exit-code 1` must precede `--python`; without it a Python assertion can
-print a traceback while Blender exits successfully.
+PowerShell users should check `$LASTEXITCODE` after each command.
+
+`run_blender_suites.py` runs `bridge_regression`, `smoke_export`, and
+`correctness_regression`, or the suite names and script paths you pass, as
+`blender --background --factory-startup --python-exit-code 1 --python <script>`.
+Pass `--blender <path>` to test a Blender that is not on PATH. Each script gets
+a new temporary Blender user profile. The fixtures call
+`bpy.ops.wm.read_factory_settings`, which, with no extensions enabled, rewrites
+`extensions/.cache/compat.dat` and deletes every wheel from `extensions/.local`.
+In your own profile that removes libraries such as SciPy from the extensions
+you have installed. `addon_session` therefore refuses to run unless all of
+Blender's user directories are inside the `XIV_IE_TEST_PROFILE` directory.
+
+To launch Blender directly, set `BLENDER_USER_RESOURCES` and
+`XIV_IE_TEST_PROFILE` to the same new, empty directory and clear any other
+`BLENDER_USER_*` variable. Keep `--python-exit-code 1` before `--python`;
+without it a Python assertion can print a traceback while Blender exits
+successfully.
 
 The Blender fixtures register a test add-on with an isolated temporary cache,
-stub listener startup, and clean scene data after each run. HTTP contracts are
+point `APPDATA` into the same temporary directory so cache settings and
+diagnostic reports stay out of the Dalamud plugin's configuration folder, stub
+listener startup, and clean scene data after each run. HTTP contracts are
 tested through explicit transport stubs. The bridge suite now lives under
 `Blender-Addon/testing`, which packaging already excludes. None of these commands
 updates the distribution archives or extension repository index.
