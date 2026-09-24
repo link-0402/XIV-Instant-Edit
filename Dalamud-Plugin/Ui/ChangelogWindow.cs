@@ -10,6 +10,8 @@ public sealed class ChangelogWindow : Window
     private readonly Configuration _config;
     private readonly Action _saveConfiguration;
     private readonly string _currentVersion;
+    private string _since;
+    private bool _onlyNew;
 
     public ChangelogWindow(Configuration config, string currentVersion, Action saveConfiguration)
         : base("XIV Instant Edit Changelog##Changelog")
@@ -17,6 +19,7 @@ public sealed class ChangelogWindow : Window
         _config = config;
         _currentVersion = currentVersion;
         _saveConfiguration = saveConfiguration;
+        _since = _config.LastSeenChangelogVersion;
 
         Size = new Vector2(640, 520);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -30,6 +33,7 @@ public sealed class ChangelogWindow : Window
 
         if (ChangelogCatalog.ShouldAutoOpen(_config.LastSeenChangelogVersion, _currentVersion))
         {
+            _onlyNew = HasNewReleases();
             IsOpen = true;
             MarkAsSeen();
         }
@@ -37,6 +41,8 @@ public sealed class ChangelogWindow : Window
 
     public void Open()
     {
+        if (!IsOpen)
+            _since = _config.LastSeenChangelogVersion;
         IsOpen = true;
         MarkAsSeen();
     }
@@ -49,6 +55,12 @@ public sealed class ChangelogWindow : Window
         ImGui.SameLine();
         ImGui.TextColored(Theme.Muted, "CHANGELOG");
         ImGui.TextColored(Theme.Muted, $"Version {_currentVersion}");
+        if (HasNewReleases())
+        {
+            ImGui.SameLine(0, Theme.Scaled(12));
+            if (Widgets.Chip($"New since {_since}", CountNewReleases(), _onlyNew))
+                _onlyNew = !_onlyNew;
+        }
         ImGui.Separator();
 
         var availableHeight = Math.Max(1f, ImGui.GetContentRegionAvail().Y);
@@ -58,10 +70,21 @@ public sealed class ChangelogWindow : Window
 
         foreach (var release in ChangelogCatalog.Releases)
         {
+            if (_onlyNew && !IsNewerThanSince(release.Version))
+                continue;
             DrawRelease(release);
             ImGui.Spacing();
         }
     }
+
+    private bool HasNewReleases()
+        => _since.Length > 0 && Version.TryParse(_since, out _) && CountNewReleases() > 0;
+
+    private int CountNewReleases()
+        => ChangelogCatalog.Releases.Count(release => IsNewerThanSince(release.Version));
+
+    private bool IsNewerThanSince(string version)
+        => Version.TryParse(_since, out var since) && Version.TryParse(version, out var candidate) && candidate > since;
 
     private static void DrawRelease(ChangelogRelease release)
     {
