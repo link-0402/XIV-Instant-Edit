@@ -69,7 +69,6 @@ public sealed partial class MainWindow : Window, IDisposable
         _openChangelog = openChangelog;
         _openSettings = openSettings;
         _uiBuilder = uiBuilder;
-        _kinds.Set(ResourceKinds.Model);
         _feed.Reported += Notify;
         _penumbra.ResourcesChanged += OnResourcesChanged;
         Size = new Vector2(880, 640);
@@ -137,6 +136,16 @@ public sealed partial class MainWindow : Window, IDisposable
     /// <summary> Penumbra reported a mod-setting change or a redraw; refresh once things settle. </summary>
     private void OnResourcesChanged()
         => Volatile.Write(ref _resourcesChangedTicks, Math.Max(1, Environment.TickCount64));
+
+    /// <summary>
+    /// Glamourer changed an actor in place, which Penumbra does not report as a redraw.
+    /// Changes to other players (e.g. applied by sync plugins) are ignored.
+    /// </summary>
+    internal void OnGlamourerAppearanceChanged(nint address)
+    {
+        if (_onScreen.ShowsActor(address))
+            OnResourcesChanged();
+    }
 
     /// <summary>
     /// Refreshes the snapshot a second after the last Penumbra change. Changes that arrive while
