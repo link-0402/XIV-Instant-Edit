@@ -486,7 +486,7 @@ internal static class TextureEditScenarios
         bytes.AsSpan(18).Fill(value);
         return bytes;
     }
-    private static byte[] Tex(uint format, int width, int height, int mips, byte value)
+    internal static byte[] Tex(uint format, int width, int height, int mips, byte value)
     {
         var sizes = Enumerable.Range(0, mips).Select(m => format == (uint)TexFile.TextureFormat.B8G8R8A8
             ? Math.Max(1, width >> m) * Math.Max(1, height >> m) * 4

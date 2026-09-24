@@ -270,9 +270,10 @@ public sealed partial class MainWindow
         var context = ReferenceEquals(item, resource) ? string.Empty : Safe(item.DisplayName);
         var labelWidth = context.Length == 0 ? 0 : ImGui.CalcTextSize(name).X + Theme.Gap;
         ImGui.Selectable($"{name}##label", false, ImGuiSelectableFlags.None, new Vector2(labelWidth, ImGui.GetFrameHeight()));
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip($"{Safe(item.Slot, item.Type)}\nGame path: {(resource.GamePath.Length == 0 ? "(none)" : resource.GamePath)}");
+        var hovered = ImGui.IsItemHovered();
         ImGui.OpenPopupOnItemClick(RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
+        if (hovered)
+            DrawRowHover(resource, Safe(item.Slot, item.Type), scope);
         if (context.Length > 0)
         {
             ImGui.SameLine(0, Theme.Gap);
@@ -316,9 +317,10 @@ public sealed partial class MainWindow
         ImGui.SameLine(0, Theme.Gap);
         if (ImGui.Selectable($"{Safe(node.DisplayName, "Unnamed resource")}##label", false, ImGuiSelectableFlags.None, new Vector2(0, ImGui.GetFrameHeight())) && hasChildren)
             _expansion.Toggle(key, expanded, false);
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip($"{presentation}\nGame path: {(node.GamePath.Length == 0 ? "(none)" : node.GamePath)}");
+        var hovered = ImGui.IsItemHovered();
         ImGui.OpenPopupOnItemClick(RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
+        if (hovered)
+            DrawRowHover(node, presentation, key);
         DrawRowCells(actor, node, layout);
         DrawRowMenu(actor, node);
 

@@ -335,6 +335,7 @@ Require(
     "bridge diagnostics redact absolute paths and capability values");
 
 await TextureEditScenarios.RunAsync();
+await PreviewScenarios.RunAsync();
 Console.WriteLine("All Blender status and texture regressions passed.");
 
 sealed class StubHandler(

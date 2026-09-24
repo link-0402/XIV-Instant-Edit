@@ -10,7 +10,7 @@ namespace InstantEdit.Ui;
 /// Reusable controls shared by every window. Everything here draws with <see cref="Theme"/>
 /// tokens, so a window never carries its own colours or pixel sizes.
 /// </summary>
-internal static class Widgets
+internal static partial class Widgets
 {
     /// <summary> A square icon button. The id must be unique within the current id scope. </summary>
     public static bool IconButton(string id, FontAwesomeIcon icon, string? tooltip = null, bool enabled = true)

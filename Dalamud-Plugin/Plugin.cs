@@ -5,6 +5,7 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.Previews;
 using InstantEdit.Ui;
 
 namespace InstantEdit;
@@ -23,6 +24,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly ExportContextRegistry   _contexts;
     private readonly BlenderClient           _blender;
     private readonly TextureEditService      _textures;
+    private readonly PreviewService          _previews;
     private readonly AnimationEditService?   _animations;
     private readonly ExportServer            _exportServer;
     private readonly WindowSystem            _windowSystem;
@@ -135,6 +137,8 @@ public sealed class Plugin : IDalamudPlugin
         if (_config.AutomaticCacheCleanup)
             _textures.RequestCacheCleanup();
         _exportServer = new ExportServer(_config, _penumbra, _contexts, log);
+        _previews = new PreviewService(textureProvider, data, log);
+        _textures.FileChanged += _previews.Invalidate;
         _changelogWindow = new ChangelogWindow(_config, BlenderClient.CurrentPluginVersion, SaveConfiguration);
         _window    = new MainWindow(
             _config,
@@ -151,6 +155,7 @@ public sealed class Plugin : IDalamudPlugin
             textureProvider,
             _textures,
             notifications,
+            _previews,
             _changelogWindow.Open,
             () => _settingsWindow!.Open());
         _window.AttachAnimations(_animations, animationError);
@@ -289,6 +294,8 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.RemoveWindow(_setupWindow);
         _windowSystem.RemoveWindow(_settingsWindow);
         _window.Dispose();
+        _textures.FileChanged -= _previews.Invalidate;
+        _previews.Dispose();
         _onScreen.Dispose();
         _animations?.Dispose();
         _textures.Dispose();

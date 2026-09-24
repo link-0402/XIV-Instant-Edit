@@ -50,6 +50,9 @@ updates the distribution archives or extension repository index.
   regressions in `TextureEditScenarios.cs`. Texture tests exercise the production
   validators, filesystem watcher, atomic replacement, and backup store with a
   simulated conversion/IPC backend; they do not test Penumbra's actual codecs.
+  `PreviewScenarios.cs` covers the hover-preview cache policy (LRU, byte budget,
+  invalidation, failure caching, disposal with loads in flight) and the CPU
+  texture decoder, without a GPU.
 - Standalone Python suites: cache ownership and cleanup, diagnostic sanitation
   and limits, import validation, and asynchronous failure reporting.
 - `AnimationRegression`: PAP/SKLB envelopes, complete pose-stack shape fixtures,

@@ -45,6 +45,21 @@ public sealed class TextureEditService : IDisposable
     private TextureEditSession[] _snapshot = [];
     public IReadOnlyList<TextureEditSession> Sessions => Volatile.Read(ref _snapshot);
     public string StartupError { get; private set; } = "";
+
+    /// <summary> Raised (on the service's worker) with the destination path after a save or restore replaced it. </summary>
+    public event Action<string>? FileChanged;
+
+    private void RaiseFileChanged(string path)
+    {
+        try
+        {
+            FileChanged?.Invoke(path);
+        }
+        catch (Exception error)
+        {
+            _log(error, "A texture file-changed handler failed.");
+        }
+    }
     internal Task Completion => _worker;
 
     internal TextureEditService(ITextureEditBackend backend, Configuration config, string configDirectory,
@@ -347,6 +362,7 @@ public sealed class TextureEditService : IDisposable
             s.SavedFormat = h.Format;
             s.Width = h.Width;
             s.Height = h.Height;
+            RaiseFileChanged(s.TargetFile);
             // Intentionally keep the artist's working image and pixel baseline unchanged.
             s.Status = "Backup restored. Session paused; working TGA retained.";
             Persist();
@@ -590,6 +606,7 @@ public sealed class TextureEditService : IDisposable
         s.Height = height;
         s.LastSaved = DateTimeOffset.UtcNow;
         s.Status = result.Message;
+        RaiseFileChanged(s.TargetFile);
         // Save commit identity before any refresh that may fail.
         try { Persist(); }
         catch (Exception error)

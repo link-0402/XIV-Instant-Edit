@@ -56,6 +56,9 @@ public sealed partial class MainWindow
         {
             using var id = ImRaii.PushId(s.Id.ToString("N"));
             ImGui.Separator();
+            DrawSessionThumbnail(s);
+            ImGui.SameLine(0, Theme.Gap);
+            using var details = ImRaii.Group();
             ImGui.TextUnformatted(Path.GetFileName(s.GamePath));
             ImGui.TextDisabled(SessionViews.Caption(s));
             var color = SessionViews.StateOf(s) switch
