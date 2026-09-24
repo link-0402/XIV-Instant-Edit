@@ -296,6 +296,7 @@ public sealed class Plugin : IDalamudPlugin
         _exportServer.Dispose();
         _contexts.Dispose();
         _blender.Dispose();
+        _penumbra.Dispose();
         SaveConfiguration();
     }
 }

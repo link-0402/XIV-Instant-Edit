@@ -211,9 +211,7 @@ public sealed partial class MainWindow
                     : "exact material/texture sources could not be captured; re-import after resolving the missing resources.")}"
                 : string.Empty;
             var hasWarning = hasPreviewWarning || hasMashupWarning;
-            var status = actor.Entity is null && hasWarning
-                ? $"Sent {model.FileName} to Blender. {ModBrowserAmbiguityWarning}"
-                : $"Sent {model.FileName} to Blender.{warning}{mashupWarning}";
+            var status = $"Sent {model.FileName} to Blender.{warning}{mashupWarning}";
             SetStatus(status, hasWarning ? FeedbackSeverity.Warning : FeedbackSeverity.Success);
             _chat.Print($"XIV Instant Edit: {model.FileName} sent to Blender.");
         }

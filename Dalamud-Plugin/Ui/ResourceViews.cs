@@ -12,6 +12,32 @@ internal sealed record ActorView(
     int ImportObjectIndex)
 {
     private Dictionary<ResourceSection, ResourceView[]>? _sectionRoots;
+    private string? _header;
+    private string? _summary;
+
+    /// <summary> "Player  ·  Name" (or just the category when the actor has no name). </summary>
+    public string Header => _header ??= string.IsNullOrWhiteSpace(Name) ? Category : $"{Category}  ·  {Name}";
+
+    /// <summary> "3 models · 12 textures · 5 materials" over every row under this actor; empty when there are none. </summary>
+    public string Summary => _summary ??= BuildSummary();
+
+    private string BuildSummary()
+    {
+        int models = 0, textures = 0, materials = 0;
+        foreach (var root in Roots)
+            foreach (var node in root.Flattened)
+            {
+                if ((node.Kinds & ResourceKinds.Model) != 0) models++;
+                if ((node.Kinds & ResourceKinds.Texture) != 0) textures++;
+                if ((node.Kinds & ResourceKinds.Material) != 0) materials++;
+            }
+
+        var parts = new List<string>(3);
+        if (models > 0) parts.Add(models == 1 ? "1 model" : $"{models} models");
+        if (textures > 0) parts.Add(textures == 1 ? "1 texture" : $"{textures} textures");
+        if (materials > 0) parts.Add(materials == 1 ? "1 material" : $"{materials} materials");
+        return string.Join(" · ", parts);
+    }
 
     /// <summary> The roots of one section in display order, computed once per view. </summary>
     public IReadOnlyList<ResourceView> RootsInSection(ResourceSection section)

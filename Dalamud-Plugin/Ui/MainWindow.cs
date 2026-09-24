@@ -18,7 +18,8 @@ public sealed partial class MainWindow : Window, IDisposable
     private const string OptionsPopupName = "##instant-edit-options";
     private const string HistoryPopupName = "##instant-edit-status-history";
     private const string KofiUrl = "https://ko-fi.com/luci_xiv";
-    private const string ModBrowserAmbiguityWarning = "The Mod Browser selection is potentially ambiguous. Use the On Screen tab for Mashups and saving to new modpacks instead.";
+    private const string ModBrowserAmbiguityWarning = "Imports from the Mod Browser can be ambiguous when a mod maps the same model in several options. Use the On Screen tab for Mashups and for saving to new modpacks.";
+    private const int AutoRefreshDelayMs = 1000;
     private readonly Configuration _config; private readonly PenumbraService _penumbra; private readonly OnScreenService _onScreen;
     private readonly BlenderClient _blender; private readonly IDataManager _data; private readonly IChatGui _chat; private readonly IPluginLog _log;
     private readonly INotificationManager _notifications;
@@ -43,6 +44,8 @@ public sealed partial class MainWindow : Window, IDisposable
     private CancellationTokenSource? _modLoadCts;
     private bool _modLoading, _modLoadFailed;
     private MainTab _activeTab = MainTab.OnScreen;
+    private MainTab? _pendingTab;
+    private long _resourcesChangedTicks;
     private string _sessionsTabLabel = "Sessions";
     private int _sessionsTabCount = -1;
     private const bool ShowAnimationsTab = true;
@@ -66,11 +69,12 @@ public sealed partial class MainWindow : Window, IDisposable
         _uiBuilder = uiBuilder;
         _kinds.Set(ResourceKinds.Model);
         _feed.Reported += Notify;
-        Size = new Vector2(860, 620);
+        _penumbra.ResourcesChanged += OnResourcesChanged;
+        Size = new Vector2(880, 640);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(640, 400),
+            MinimumSize = new Vector2(660, 400),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
         AllowPinning = true;
@@ -99,6 +103,7 @@ public sealed partial class MainWindow : Window, IDisposable
 
     public void Dispose()
     {
+        _penumbra.ResourcesChanged -= OnResourcesChanged;
         _feed.Reported -= Notify;
         _lifetimeCts.Cancel();
         _modLoadCts?.Cancel();
@@ -127,6 +132,38 @@ public sealed partial class MainWindow : Window, IDisposable
 
     public override void OnClose() => animations?.StopObservation();
 
+    /// <summary> Penumbra reported a mod-setting change or a redraw; refresh once things settle. </summary>
+    private void OnResourcesChanged()
+        => Volatile.Write(ref _resourcesChangedTicks, Math.Max(1, Environment.TickCount64));
+
+    /// <summary>
+    /// Refreshes the snapshot a second after the last Penumbra change. Changes that arrive while
+    /// a refresh is running keep the timestamp, so one more refresh follows when it finishes.
+    /// </summary>
+    private void PumpAutoRefresh()
+    {
+        var changed = Volatile.Read(ref _resourcesChangedTicks);
+        if (changed == 0)
+            return;
+        if (!_config.AutoRefreshOnScreen)
+        {
+            Volatile.Write(ref _resourcesChangedTicks, 0);
+            return;
+        }
+        if (Environment.TickCount64 - changed < AutoRefreshDelayMs || _onScreen.IsRefreshing)
+            return;
+        if (Interlocked.CompareExchange(ref _resourcesChangedTicks, 0, changed) != changed)
+            return;
+        try
+        {
+            _onScreen.RequestRefresh();
+        }
+        catch (Exception e)
+        {
+            _log.Debug($"Automatic refresh failed: {e.Message}");
+        }
+    }
+
     private void OpenKofiPage()
     {
         try
@@ -141,6 +178,7 @@ public sealed partial class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
+        PumpAutoRefresh();
         var activeTab = DrawToolbar();
         var stripHeight = ImGui.GetFrameHeight();
         var contentHeight = Math.Max(1, ImGui.GetContentRegionAvail().Y - stripHeight - ImGui.GetStyle().ItemSpacing.Y);
@@ -203,7 +241,8 @@ public sealed partial class MainWindow : Window, IDisposable
     /// <summary> The tab row with the connection dots, refresh and options at its right edge. </summary>
     private MainTab DrawToolbar()
     {
-        var active = _activeTab;
+        var active = _pendingTab ?? _activeTab;
+        _pendingTab = null;
         var style = ImGui.GetStyle();
         var frame = ImGui.GetFrameHeight();
 
@@ -407,86 +446,6 @@ public sealed partial class MainWindow : Window, IDisposable
         {
             _log.Debug($"Could not show a notification: {e.Message}");
         }
-    }
-
-    private void DrawOnScreenTab()
-    {
-        ImGui.Spacing();
-        ImGui.SetNextItemWidth(-1); ImGui.InputTextWithHint("##resource-filter", "Search", ref _filter, 256);
-        _search.Text = _filter;
-        var includeVanilla = _config.IncludeVanillaResources;
-        if (ImGui.Checkbox("Include Vanilla", ref includeVanilla))
-        {
-            _config.IncludeVanillaResources = includeVanilla;
-            _saveConfig();
-        }
-        Widgets.HelpTip("Show resources loaded directly from game data alongside Penumbra-modified resources.");
-        var actors = ReadActors();
-        DrawResourceTypeFilters(actors);
-        ImGui.Spacing();
-        DrawResources(actors);
-    }
-
-    private void DrawModsTab()
-    {
-        ImGui.Spacing();
-        ImGui.SetNextItemWidth(-1); ImGui.InputTextWithHint("##mod-filter", "Search", ref _modFilter, 256);
-
-        var mods = ReadMods();
-        var filteredMods = _modList.Apply(mods, _modFilter);
-        var listHeight = Math.Min(Theme.Scaled(180), Math.Max(Theme.Scaled(72), filteredMods.Count * ImGui.GetFrameHeightWithSpacing() + Theme.Scaled(8)));
-        using (var list = ImRaii.Child("##mod-list", new Vector2(0, listHeight), true))
-        {
-            if (list.Success)
-            {
-                if (filteredMods.Count == 0)
-                    ImGui.TextColored(Theme.Muted, "No matching Penumbra mods.");
-                else
-                    foreach (var mod in filteredMods)
-                    {
-                        var selected = string.Equals(_selectedModDirectory, mod.Directory, StringComparison.OrdinalIgnoreCase);
-                        if (ImGui.Selectable($"{mod.Name}##mod:{SafeId(mod.Directory)}", selected))
-                        {
-                            CancelModLoad();
-                            _selectedModDirectory = mod.Directory;
-                            _loadedModDirectory = null;
-                            _loadedModView = null;
-                        }
-                    }
-            }
-        }
-
-        var selectedMod = mods.FirstOrDefault(mod =>
-            string.Equals(mod.Directory, _selectedModDirectory, StringComparison.OrdinalIgnoreCase));
-        if (selectedMod is null)
-        {
-            ImGui.Spacing();
-            ImGui.TextColored(Theme.Muted, "Select a Penumbra mod to browse its resources.");
-            return;
-        }
-
-        var modView = GetModView(selectedMod);
-        if (modView is null)
-        {
-            ImGui.Spacing();
-            bool loading;
-            bool failed;
-            lock (_stateLock)
-            {
-                loading = _modLoading;
-                failed = _modLoadFailed;
-            }
-            var message = loading ? "Scanning the selected Penumbra mod..." :
-                failed ? "Could not read the selected Penumbra mod." : "No supported resources found.";
-            ImGui.TextColored(failed ? Theme.Offline : Theme.Muted, message);
-            return;
-        }
-
-        ImGui.Spacing();
-        ImGui.TextColored(Theme.Label, selectedMod.Name);
-        DrawResourceTypeFilters([modView]);
-        ImGui.Spacing();
-        DrawResources([modView], "No supported models, textures, or materials found in this mod.");
     }
 
     private void DrawTextureOptions()

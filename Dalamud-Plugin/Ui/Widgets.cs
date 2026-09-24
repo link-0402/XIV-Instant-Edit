@@ -23,18 +23,134 @@ internal static class Widgets
         return clicked && enabled;
     }
 
-    /// <summary> A rounded pill with tinted background, used for sources and states. </summary>
-    public static void Badge(string text, Vector4 colour, string? tooltip = null)
+    /// <summary>
+    /// A rounded pill with tinted background, used for sources and states. It occupies one
+    /// frame height so it lines up with buttons in a row. Returns true while hovered so the
+    /// caller can build a tooltip only when needed.
+    /// </summary>
+    public static bool Badge(string text, Vector4 colour)
     {
         var padding = new Vector2(Theme.Scaled(6), Theme.Scaled(2));
         var size = ImGui.CalcTextSize(text) + padding * 2;
-        var position = ImGui.GetCursorScreenPos();
+        var frame = ImGui.GetFrameHeight();
+        var position = ImGui.GetCursorScreenPos() + new Vector2(0, Math.Max(0, (frame - size.Y) / 2));
         var drawList = ImGui.GetWindowDrawList();
         drawList.AddRectFilled(position, position + size, ImGui.GetColorU32(Theme.WithAlpha(colour, .18f)), Theme.Scaled(4));
         drawList.AddText(position + padding, ImGui.GetColorU32(colour), text);
-        ImGui.Dummy(size);
+        ImGui.Dummy(new Vector2(size.X, Math.Max(frame, size.Y)));
+        return ImGui.IsItemHovered();
+    }
+
+    /// <summary> A glyph from the icon font, aligned with framed controls on the same line. </summary>
+    public static void Icon(FontAwesomeIcon icon, Vector4 colour)
+    {
+        ImGui.AlignTextToFramePadding();
+        using var font = ImRaii.PushFont(UiBuilder.IconFont);
+        ImGui.TextColored(colour, icon.ToIconString());
+    }
+
+    /// <summary> An icon button without a frame; highlights on hover. </summary>
+    public static bool GhostIconButton(string id, FontAwesomeIcon icon, string? tooltip = null)
+    {
+        using var colour = ImRaii.PushColor(ImGuiCol.Button, Vector4.Zero);
+        var clicked = ImGuiComponents.IconButton(id, icon);
         if (tooltip is not null && ImGui.IsItemHovered())
             ImGui.SetTooltip(tooltip);
+        return clicked;
+    }
+
+    /// <summary> A filter chip with a count; filled when selected. Returns true when clicked. </summary>
+    public static bool Chip(string label, int count, bool selected)
+    {
+        using var colour = ImRaii.PushColor(ImGuiCol.Button, Theme.Selection, selected)
+            .Push(ImGuiCol.ButtonHovered, Theme.WithAlpha(Theme.Selection, .85f), selected);
+        return ImGui.SmallButton($"{label}  {count}##chip-{label}");
+    }
+
+    /// <summary> A search field that fills the row, with a clear button when it has text and Ctrl+F focus. </summary>
+    public static bool SearchBox(string id, ref string text, string hint)
+    {
+        if (ImGui.GetIO().KeyCtrl && ImGui.IsKeyPressed(ImGuiKey.F) && ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows))
+            ImGui.SetKeyboardFocusHere();
+        var clearWidth = text.Length > 0 ? ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.X : 0;
+        ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(80), ImGui.GetContentRegionAvail().X - clearWidth));
+        var changed = ImGui.InputTextWithHint(id, hint, ref text, 256);
+        if (text.Length == 0)
+            return changed;
+        ImGui.SameLine();
+        if (GhostIconButton(id + "-clear", FontAwesomeIcon.Times, "Clear the search"))
+        {
+            text = string.Empty;
+            changed = true;
+        }
+        return changed;
+    }
+
+    /// <summary> A path in the monospace font; hovering shows the full path and a click copies it. </summary>
+    public static void PathText(string display, string fullPath)
+    {
+        ImGui.AlignTextToFramePadding();
+        using (ImRaii.PushFont(UiBuilder.MonoFont))
+            ImGui.TextUnformatted(display);
+        if (!ImGui.IsItemHovered())
+            return;
+        if (fullPath.Length == 0)
+        {
+            ImGui.SetTooltip("No resolved path");
+            return;
+        }
+        ImGui.SetTooltip($"{fullPath}\nClick to copy");
+        if (ImGui.IsItemClicked())
+            ImGui.SetClipboardText(fullPath);
+    }
+
+    /// <summary> A vertical drag handle between two panes. Adjusts <paramref name="size"/> while dragged. </summary>
+    public static void Splitter(string id, ref float size, float min, float max, float height)
+    {
+        ImGui.InvisibleButton(id, new Vector2(Theme.Scaled(6), Math.Max(1, height)));
+        var hovered = ImGui.IsItemHovered();
+        var active = ImGui.IsItemActive();
+        if (hovered || active)
+            ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeEw);
+        if (active)
+            size = Math.Clamp(size + ImGui.GetIO().MouseDelta.X, min, Math.Max(min, max));
+        var rectMin = ImGui.GetItemRectMin();
+        var rectMax = ImGui.GetItemRectMax();
+        var colour = active ? Theme.Accent : hovered ? Theme.Muted : Theme.WithAlpha(Theme.Muted, .25f);
+        ImGui.GetWindowDrawList().AddRectFilled(
+            new Vector2(rectMin.X + Theme.Scaled(2), rectMin.Y),
+            new Vector2(rectMax.X - Theme.Scaled(2), rectMax.Y),
+            ImGui.GetColorU32(colour));
+    }
+
+    /// <summary> A centred placeholder for empty lists: an icon, a title and an optional hint. </summary>
+    public static void EmptyState(FontAwesomeIcon icon, string title, string? hint = null)
+    {
+        ImGui.Dummy(new Vector2(0, Theme.Scaled(28)));
+        var iconText = icon.ToIconString();
+        using (ImRaii.PushFont(UiBuilder.IconFont))
+        {
+            CentreCursor(ImGui.CalcTextSize(iconText).X);
+            ImGui.TextColored(Theme.Inactive, iconText);
+        }
+        ImGui.Spacing();
+        CentreCursor(ImGui.CalcTextSize(title).X);
+        ImGui.TextColored(Theme.Label, title);
+        if (hint is null)
+            return;
+        var available = ImGui.GetContentRegionAvail().X;
+        var width = Math.Min(available, Theme.Scaled(440));
+        var hintWidth = Math.Min(width, ImGui.CalcTextSize(hint).X);
+        CentreCursor(hintWidth);
+        using var wrap = ImRaii.TextWrapPos(ImGui.GetCursorPosX() + width);
+        ImGui.TextColored(Theme.Hint, hint);
+    }
+
+    private static void CentreCursor(float width)
+    {
+        var available = ImGui.GetContentRegionAvail().X;
+        if (available > width)
+            ImGui.SetCursorPosX(ImGui.GetCursorPosX() + (available - width) / 2);
     }
 
     /// <summary> A labelled section start with an optional muted detail (a count, a path). </summary>
