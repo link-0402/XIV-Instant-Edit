@@ -21,9 +21,11 @@ from .materials import (
     mesh_part_tags,
     material_paths,
     material_suggestions,
+    matching_material_path,
     mesh_part_slots,
     move_mesh_part_to_group,
     move_mesh_part_to_index,
+    other_group_materials,
     rename_mesh_part,
     set_mesh_flow_enabled,
     set_mesh_part_attribute,
@@ -1127,6 +1129,44 @@ class XIVIE_OT_mesh_flow(Operator):
         return {"FINISHED"}
 
 
+_QUICK_MATERIAL_NONE = "NONE"
+# The material dialog's quick selectors as (path, mesh groups) pairs, plus the
+# enum items built from them. Blender requires dynamically generated enum
+# strings to remain alive for as long as the enum is in use.
+_QUICK_MATERIALS: tuple[tuple[str, tuple[int, ...]], ...] = ()
+_QUICK_MATERIAL_ITEMS = [(_QUICK_MATERIAL_NONE, "None", "")]
+
+
+def _mesh_groups_label(groups) -> str:
+    return "Mesh " + ", ".join(f"#{group}" for group in groups)
+
+
+def _model_mesh_objects(context: Context) -> list:
+    """Return the meshes Quick Export writes as the selected Context's model."""
+    from .instant_edit.ops import export_destination_context, export_objects_for_scope
+
+    try:
+        ref = export_destination_context(context, persist=False)
+    except ContextValidationError:
+        ref = None
+    scope = getattr(context.scene.xiv_ie_instant_edit_props, "export_scope", "VISIBLE")
+    try:
+        return export_objects_for_scope(ref, scope)
+    except ContextValidationError:
+        return visible_meshobj()
+
+
+def _prepare_quick_materials(context: Context, mesh_group: int) -> tuple:
+    """Offer the materials of the model's other mesh groups in the material dialog."""
+    global _QUICK_MATERIALS, _QUICK_MATERIAL_ITEMS
+    _QUICK_MATERIALS = tuple(other_group_materials(_model_mesh_objects(context), mesh_group))
+    _QUICK_MATERIAL_ITEMS = [(_QUICK_MATERIAL_NONE, "None", "")] + [
+        (path, path, f"Use the material of {_mesh_groups_label(groups)}")
+        for path, groups in _QUICK_MATERIALS
+    ]
+    return _QUICK_MATERIALS
+
+
 class XIVIE_OT_mesh_material(Operator):
     bl_idname = "xiv_ie.mesh_material"
     bl_label = "Mesh Material"
@@ -1137,13 +1177,46 @@ class XIVIE_OT_mesh_material(Operator):
 
     def _material_search(self, context, edit_text):
         group = find_material_group(context, self.mesh_group)
-        return material_suggestions(group) if group is not None else []
+        suggestions = material_suggestions(group) if group is not None else []
+        listed = [path for path, _usage in suggestions]
+        suggestions.extend(
+            (path, _mesh_groups_label(groups))
+            for path, groups in _QUICK_MATERIALS
+            if matching_material_path(path, listed) is None
+        )
+        return suggestions
+
+    def _material_edited(self, _context):
+        # Keep a quick selector pressed only while it matches the material path.
+        choice = matching_material_path(
+            self.material, [path for path, _groups in _QUICK_MATERIALS]
+        ) or _QUICK_MATERIAL_NONE
+        if self.quick_material != choice:
+            self.quick_material = choice
+
+    def _quick_material_items(self, _context):
+        return _QUICK_MATERIAL_ITEMS
+
+    def _quick_material_selected(self, _context):
+        choice = self.quick_material
+        if choice not in {"", _QUICK_MATERIAL_NONE} and matching_material_path(
+            self.material, (choice,)
+        ) is None:
+            self.material = choice
 
     material: StringProperty(
         name="Material Path",
         description="FFXIV .mtrl path used when exporting this mesh group",
         search=_material_search,
         search_options={"SUGGESTION"},
+        update=_material_edited,
+    )  # type: ignore
+    quick_material: EnumProperty(
+        name="Other Mesh Group Materials",
+        description="Use a material already assigned to another mesh group of this model",
+        items=_quick_material_items,
+        update=_quick_material_selected,
+        options={"SKIP_SAVE"},
     )  # type: ignore
 
     @classmethod
@@ -1155,6 +1228,7 @@ class XIVIE_OT_mesh_material(Operator):
         if group is None:
             self.report({"ERROR"}, f"Mesh group {self.mesh_group} is no longer available.")
             return {"CANCELLED"}
+        _prepare_quick_materials(context, self.mesh_group)
         paths = material_paths(group.objects)
         self.material = paths[0] if len(paths) == 1 else ""
         return context.window_manager.invoke_props_dialog(
@@ -1166,6 +1240,15 @@ class XIVIE_OT_mesh_material(Operator):
     def draw(self, context: Context):
         self.layout.label(text=f"Mesh Group {self.mesh_group}")
         self.layout.prop(self, "material", text="")
+        if not _QUICK_MATERIALS:
+            return
+        self.layout.separator()
+        self.layout.label(text="Materials on other mesh groups:")
+        column = self.layout.column(align=True)
+        for path, groups in _QUICK_MATERIALS:
+            row = column.row(align=True).split(factor=0.75, align=True)
+            row.prop_enum(self, "quick_material", path, text=path)
+            row.label(text=_mesh_groups_label(groups))
 
     def execute(self, context: Context):
         group = find_material_group(context, self.mesh_group)

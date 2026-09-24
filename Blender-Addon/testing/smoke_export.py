@@ -667,6 +667,98 @@ def assert_mesh_part_gap_handling(addon):
         print("[PASS] Mesh Studio placeholders and atomic part-gap compaction")
 
 
+def assert_mesh_material_quick_selectors(addon):
+    materials = importlib.import_module(f"{addon.__name__}.materials")
+    operators = importlib.import_module(f"{addon.__name__}.operators")
+    props = bpy.context.scene.xiv_ie_instant_edit_props
+
+    with temporary_scene_data():
+        def create(name, material=None):
+            mesh = bpy.data.meshes.new(f"{name} Data")
+            mesh.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+            mesh.update()
+            obj = bpy.data.objects.new(name, mesh)
+            bpy.context.scene.collection.objects.link(obj)
+            if material:
+                obj["xiv_material"] = material
+            return obj
+
+        top_a = "/mt_c0201e0501_top_a.mtrl"
+        top_b = "/mt_c0201e0501_top_b.mtrl"
+        skin = "/mt_c0201b0001_a.mtrl"
+        new_part = create("53.0 Quick New")
+        objects = (
+            create("50.0 Quick Top", top_a),
+            create("51.0 Quick Sleeve", top_b),
+            create("51.1 Quick Cuff", top_b),
+            create("52.0 Quick Belt", top_a),
+            new_part,
+        )
+        mannequin = create("54.0 Quick Mannequin", skin)
+
+        if materials.other_group_materials(objects, 50) != [(top_b, (51,)), (top_a, (52,))]:
+            raise AssertionError("Quick selectors did not list the other groups' materials in group order")
+        if materials.other_group_materials(objects, 53) != [(top_a, (50, 52)), (top_b, (51,))]:
+            raise AssertionError("Quick selectors did not merge a material shared by several groups")
+        bibo_groups = (
+            create("55.0 Quick Bibo", "/mt_c0201b0001_bibo.mtrl"),
+            create("56.0 Quick Other Bibo", "/mt_c1401b0001_bibo.mtrl"),
+        )
+        if materials.other_group_materials(bibo_groups, 57) != [
+            ("/mt_c0201b0001_bibo.mtrl", (55, 56))
+        ]:
+            raise AssertionError("Quick selectors listed one Bibo material identity twice")
+        if (
+            materials.matching_material_path("mt_c0201e0501_top_b", (top_a, top_b)) != top_b
+            or materials.matching_material_path("bibo", ("/mt_c1401b0001_bibo.mtrl",))
+            != "/mt_c1401b0001_bibo.mtrl"
+            or materials.matching_material_path("", (top_a,)) is not None
+            or materials.matching_material_path("/mt_c0201e0501_top_c.mtrl", (top_a, top_b))
+            is not None
+        ):
+            raise AssertionError("Typed material paths did not match their quick selectors")
+
+        saved_scope = props.export_scope
+        saved_excluded = props.export_excluded_mesh
+        try:
+            # The dialog offers the model Quick Export would write, so a mesh
+            # excluded from the export scope does not contribute its material.
+            props.export_scope = "VISIBLE_NO_MANNEQUIN"
+            props.export_excluded_mesh = mannequin
+            offered = dict(operators._prepare_quick_materials(bpy.context, 53))
+        finally:
+            props.export_scope = saved_scope
+            props.export_excluded_mesh = saved_excluded
+        if offered.get(top_a) != (50, 52) or offered.get(top_b) != (51,):
+            raise AssertionError("The material dialog did not offer the other mesh groups' materials")
+        if skin in offered:
+            raise AssertionError("The material dialog offered a mesh excluded from the export")
+
+        if bpy.ops.xiv_ie.mesh_material(
+            "EXEC_DEFAULT", mesh_group=53, material="mt_c0201e0501_top_b"
+        ) != {"FINISHED"} or new_part.get("xiv_material") != top_b:
+            raise AssertionError("A material from another mesh group was not assigned")
+        dialog = bpy.context.window_manager.operator_properties_last("xiv_ie.mesh_material")
+        dialog.mesh_group = 53
+        dialog.material = ""
+        dialog.quick_material = top_a
+        if dialog.material != top_a:
+            raise AssertionError("Choosing a quick selector did not fill in its material path")
+        dialog.material = "mt_c0201e0501_top_b"
+        if dialog.quick_material != top_b or dialog.material != "mt_c0201e0501_top_b":
+            raise AssertionError("Typing another group's material did not select its quick selector")
+        dialog.material = "/mt_c0201e0501_custom.mtrl"
+        if dialog.quick_material != "NONE":
+            raise AssertionError("A custom material path left a quick selector selected")
+        suggested = [
+            path for path, _usage in operators.XIVIE_OT_mesh_material._material_search(
+                dialog, bpy.context, ""
+            )
+        ]
+        if suggested.count(top_b) != 1 or top_a not in suggested:
+            raise AssertionError("Material search did not include each other group's material once")
+        print("[PASS] Mesh material dialog offers the model's other group materials")
+
 
 def assert_mesh_drag_plan(addon):
     """Drive the drag operator's steps: nothing is renamed until the drop commits."""
@@ -1966,6 +2058,7 @@ def run() -> None:
         assert_mesh_studio(addon, obj, second, added_group)
         assert_mesh_part_gap_handling(addon)
         assert_mesh_drag_plan(addon)
+        assert_mesh_material_quick_selectors(addon)
 
         instant_props.export_destination = context_id
         instant_props.variant_targets.add().selection_id = "stale-after-delete"
