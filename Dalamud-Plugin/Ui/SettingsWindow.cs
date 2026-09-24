@@ -73,6 +73,10 @@ public sealed class SettingsWindow : Window
         var autoRefresh = _config.AutoRefreshOnScreen;
         if (ImGui.Checkbox("Refresh automatically when Penumbra changes", ref autoRefresh)) { _config.AutoRefreshOnScreen = autoRefresh; Save(); }
         Widgets.Hint("Reloads the on-screen list a second after a mod setting changes or a character is redrawn.");
+        ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Previews");
+        var thumbnails = _config.RenderModelThumbnails;
+        if (ImGui.Checkbox("Render model thumbnails on hover", ref thumbnails)) { _config.RenderModelThumbnails = thumbnails; Save(); }
+        Widgets.Hint("Draws a small shaded view of Dawntrail (V6) models in the hover card. Textures and materials always preview.");
         ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Notifications");
         var showNotifications = _config.ShowNotifications;
         if (ImGui.Checkbox("Show notifications", ref showNotifications)) { _config.ShowNotifications = showNotifications; Save(); }
