@@ -45,25 +45,13 @@ jobs:
           echo "/tmp/blender-${{ matrix.version }}-linux-x64" >> "$GITHUB_PATH"
 
       - name: Run bridge regressions
-        env:
-          BLENDER_USER_CONFIG: ${{ runner.temp }}/blender-config
-        run: |
-          mkdir -p "$BLENDER_USER_CONFIG"
-          blender --background --factory-startup --python-exit-code 1 --python Blender-Addon/testing/bridge_regression.py
+        run: python3 Blender-Addon/testing/run_blender_suites.py bridge_regression
 
       - name: Run export smoke regressions
-        env:
-          BLENDER_USER_CONFIG: ${{ runner.temp }}/blender-config
-        run: |
-          mkdir -p "$BLENDER_USER_CONFIG"
-          blender --background --factory-startup --python-exit-code 1 --python Blender-Addon/testing/smoke_export.py
+        run: python3 Blender-Addon/testing/run_blender_suites.py smoke_export
 
       - name: Run correctness regressions
-        env:
-          BLENDER_USER_CONFIG: ${{ runner.temp }}/blender-config
-        run: |
-          mkdir -p "$BLENDER_USER_CONFIG"
-          blender --background --factory-startup --python-exit-code 1 --python Blender-Addon/testing/correctness_regression.py
+        run: python3 Blender-Addon/testing/run_blender_suites.py correctness_regression
 
       - name: Run cache regressions
         run: python3 Blender-Addon/testing/cache_regression.py
