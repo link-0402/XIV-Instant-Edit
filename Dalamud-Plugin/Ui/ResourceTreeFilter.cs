@@ -120,6 +120,21 @@ internal sealed class ResourceTypeCounter
 }
 
 /// <summary>
+/// A tree row's place: the item row's indent within the cell, the row's level below that
+/// item (0 for the item itself), which ancestors' guide lines continue past it (bit c for
+/// the line hanging from the level-c ancestor), and whether it is its parent's last row.
+/// </summary>
+internal readonly record struct TreeGuide(float Indent, int Level, ulong Continues, bool Last)
+{
+    /// <summary> The guide for a child; this row's own line continues past the child's rows unless this row is last. </summary>
+    public TreeGuide Child(bool last)
+        => new(Indent, Level + 1, Level == 0 ? 0 : Continues | (Last ? 0 : 1UL << (Level - 1)), last);
+
+    /// <summary> Whether the line hanging from the level-<paramref name="column"/> ancestor passes this row. </summary>
+    public bool LineContinues(int column) => column is >= 0 and < 64 && (Continues & (1UL << column)) != 0;
+}
+
+/// <summary>
 /// Which actors, sections and rows are expanded. Rows in the tree view start collapsed and
 /// remember what was opened; rows in the flat view start expanded and remember what was closed.
 /// </summary>
@@ -154,6 +169,7 @@ internal sealed class ExpansionState
         {
             ResourceSection.CharacterFeatures => ":features",
             ResourceSection.Gear => ":gear",
+            ResourceSection.Animations => ":animations",
             _ => ":other",
         };
 

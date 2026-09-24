@@ -75,16 +75,22 @@ internal static class ObservationPerformanceFixture
             },
         }, new JsonSerializerOptions { IncludeFields = true });
         Func<string, (bool Exists, long Length, DateTime Write)> state = _ => (true, 10L, write);
-        check(AnimationSkeletonIndex.TryLoadSessionLibraryJson(json, state, out var library, "map-a") && library.Length == 1,
-            "valid session-library files load from disk");
-        check(!AnimationSkeletonIndex.TryLoadSessionLibraryJson(json, _ => (true, 11L, write), out _),
-            "stale session-library source metadata is rejected");
-        check(!AnimationSkeletonIndex.TryLoadSessionLibraryJson(json, state, out _, "map-b"),
-            "changed mod mappings invalidate the cached session skeleton library");
-        check(!AnimationSkeletonIndex.TryLoadSessionLibraryJson("{not-json", state, out _),
+        // The saved library is only rebuilt on request (Settings), so loading never
+        // invalidates it: mod-mapping changes are ignored, changed files are kept and
+        // counted, and only files that no longer exist are left out.
+        check(AnimationSkeletonIndex.TryLoadSessionLibraryJson(json, state, out var library, out var missing, out var changed, out var built) &&
+              library.Length == 1 && missing == 0 && changed == 0 && built == write,
+            "a saved skeleton library loads from the cache folder with its build time, whatever its mod-mapping fingerprint");
+        check(AnimationSkeletonIndex.TryLoadSessionLibraryJson(json, _ => (true, 11L, write), out var kept, out _, out var rewritten, out _) &&
+              kept.Length == 1 && rewritten == 1,
+            "a skeleton file changed since the build keeps its entry and is counted instead of invalidating the library");
+        check(AnimationSkeletonIndex.TryLoadSessionLibraryJson(json, _ => (false, 0L, DateTime.MinValue), out var pruned, out var removed, out _, out _) &&
+              pruned.IsEmpty && removed == 1,
+            "a skeleton file removed since the build is left out of the loaded library and counted");
+        check(!AnimationSkeletonIndex.TryLoadSessionLibraryJson("{not-json", state, out _, out _, out _, out _),
             "corrupt session-library files are rejected");
         var wrongVersion = json.Replace("\"Version\":3", "\"Version\":2", StringComparison.Ordinal);
-        check(!AnimationSkeletonIndex.TryLoadSessionLibraryJson(wrongVersion, state, out _),
+        check(!AnimationSkeletonIndex.TryLoadSessionLibraryJson(wrongVersion, state, out _, out _, out _, out _),
             "version-mismatched session-library files are rejected");
     }
 }

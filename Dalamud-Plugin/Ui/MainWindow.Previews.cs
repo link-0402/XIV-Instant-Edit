@@ -192,7 +192,7 @@ public sealed partial class MainWindow
             ImGui.SameLine(0, Theme.Gap);
             using (ImRaii.Group())
             {
-                ImGui.TextColored(Theme.Label, UsageLabel(slot.Usage));
+                ImGui.TextColored(Theme.TextureRoleColour(TextureRoleClassifier.FromUsage(slot.Usage)), UsageLabel(slot.Usage));
                 ImGui.TextColored(Theme.Muted, Path.GetFileName(slot.GamePath));
                 if (child is null)
                     ImGui.TextColored(Theme.Hint, "not loaded for this actor");
@@ -221,7 +221,7 @@ public sealed partial class MainWindow
     private static string UsageLabel(string usage)
         => usage switch
         {
-            "diffuse" => "Diffuse",
+            "diffuse" => "Base",
             "normal" => "Normal",
             "mask" => "Mask",
             "index" => "Index",

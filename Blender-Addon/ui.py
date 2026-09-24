@@ -1,44 +1,55 @@
 import ntpath
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import textwrap
+from collections import Counter, defaultdict
+from typing import NamedTuple
 
-import bpy
+from bpy.types import Context, Menu, Panel
 
-from bpy.types import Context, Panel
-
-from .instant_edit.context import ContextValidationError, mesh_ids_from_name, planned_mesh_ids
+from .instant_edit.context import (
+    ContextValidationError,
+    _value,
+    context_collections,
+    planned_mesh_ids,
+    validate_context,
+)
 from .instant_edit.ops import (MASHUP_TARGET, SAVE_NEW_MOD_TARGET,
                                export_destination_context, mashup_target_state,
                                cached_export_readiness,
                                normalise_variant_name, save_new_mod_target_state)
-from .instant_edit.props import IN_PLACE_TARGET, get_instant_edit_props
+from .instant_edit.props import DEFAULT_STATUS, IN_PLACE_TARGET, get_instant_edit_props
+from .instant_edit.server import server_status
 from .materials import (
     attribute_display_name,
     material_mismatch_parts,
     material_paths,
     mesh_display_name,
     mesh_part_attributes,
-    mesh_part_instances,
-    mesh_part_slots,
-    material_group_slots,
-    visible_material_groups,
 )
+from .mesh_list import layout_rows, lod_zero_objects, scene_parts
 from .operators import active_mesh_drag_plan, active_mesh_drag_state
 from .properties import get_settings
 from .backups import list_backups, target_folder
 
 
-def _lod_zero_objects(objects) -> tuple:
-    """Choose LOD 0, or the lowest available LOD, without failing on empty slots."""
-    objects = tuple(objects)
-    if not objects:
-        return ()
-    lod_zero = tuple(obj for obj in objects if mesh_ids_from_name(obj)[2] == 0)
-    if lod_zero:
-        return lod_zero
-    lowest_lod = min(mesh_ids_from_name(obj)[2] for obj in objects)
-    return tuple(obj for obj in objects if mesh_ids_from_name(obj)[2] == lowest_lod)
+# "XI" collides with Yet Another Addon's sidebar tab; leading "IE" keeps the
+# abbreviated tab label distinct from it.
+CATEGORY = "IE - Instant Edit"
+
+# Blender's report icons: warnings use the ERROR triangle and errors the CANCEL
+# circle. STATUS_WARNING only exists from Blender 5.0 on.
+_SEVERITY_ICONS = {"ERROR": "CANCEL", "WARNING": "ERROR"}
+_MAX_SHOWN_ISSUES = 4
+_VERTEX_LIMIT = 65536
+_VERTEX_WARNING = 58982
+
+# Model file suffixes and the equipment slots they belong to.
+_SLOT_LABELS = {
+    "met": "Head", "top": "Body", "glv": "Hands", "dwn": "Legs", "sho": "Feet",
+    "ear": "Earrings", "nek": "Necklace", "wrs": "Bracelets", "rir": "Right Ring",
+    "ril": "Left Ring", "hir": "Hair", "fac": "Face", "til": "Tail", "zer": "Ears",
+}
 
 
 def _relative_physical_path(file_path: str, root_path: str) -> str:
@@ -106,8 +117,7 @@ def _export_destination_display(ref, props=None) -> str:
     }:
         return destination
 
-    selected_target = next(
-        (item for item in props.variant_targets if item.selection_id == props.variant_target), None)
+    selected_target = _selected_target(props)
     if (
         selected_target is not None
         and selected_target.kind == "OPTION"
@@ -169,50 +179,12 @@ def _wrap_display_value(value: str, width: int) -> list[str]:
     return lines
 
 
-def _draw_wrapped_display(
-    layout,
-    context: Context,
-    label: str,
-    value: str,
-    icon: str = "NONE",
-) -> None:
-    """Draw a simple multi-line display for a potentially long filesystem path."""
+def _draw_wrapped_label(layout, context: Context, text: str, icon: str = "NONE", indent: int = 4) -> None:
+    """Draw a sentence across as many labels as the sidebar width needs."""
     column = layout.column(align=True)
-    column.label(text=f"{label}:", icon=icon)
-    wrapped = _wrap_display_value(value, _display_wrap_width(context))
-    for line in wrapped or ("Unavailable",):
-        column.label(text=line)
-
-
-def _draw_named_text_input(layout, props, property_name: str, label: str) -> None:
-    """Keep the label readable while reserving a compact field for the value."""
-    row = layout.row(align=True)
-    split = row.split(factor=0.42, align=True)
-    split.label(text=label)
-    split.prop(props, property_name, text="")
-
-
-def _export_target_status(readiness_issues) -> tuple[str, str]:
-    """Format the Export Target readiness message and icon from ``readiness_issues``.
-
-    ``readiness_issues`` comes from cached_export_readiness(), which is
-    instant to call - it never re-scans the scene itself, it just returns
-    the last background-computed result and schedules a refresh. Computing
-    it synchronously here used to be a measured, significant cost on scenes
-    with many parts, since this is called on every redraw of the panel and
-    Blender redraws it far more often than the scene actually changes.
-    """
-    if readiness_issues:
-        message = "; ".join(text for _severity, text in readiness_issues)
-        icon = (
-            "ERROR"
-            if any(severity == "ERROR" for severity, _text in readiness_issues)
-            else "STATUS_WARNING"
-        )
-    else:
-        message = "Export selection is clean."
-        icon = "CHECKMARK"
-    return message, icon
+    width = max(20, _display_wrap_width(context) - indent)
+    for index, line in enumerate(_wrap_display_value(text, width) or (text,)):
+        column.label(text=line, icon=icon if index == 0 else ("BLANK1" if icon != "NONE" else "NONE"))
 
 
 _MATERIAL_WARNING_RE = re.compile(
@@ -238,6 +210,16 @@ def _issue_display_lines(message: str) -> list[str]:
     return [match.group("prefix"), *materials, match.group("guidance")]
 
 
+def _status_icon(message: str) -> str:
+    """Pick a report icon for the free-text status of the last action."""
+    lowered = message.casefold()
+    if "failed" in lowered or lowered.startswith("could not") or "unavailable" in lowered:
+        return "CANCEL"
+    if "warning" in lowered or "could not refresh" in lowered:
+        return "ERROR"
+    return "INFO"
+
+
 def _draw_status_popover_body(layout, context: Context, message: str, icon: str = "NONE") -> None:
     """Word-wrap a status message across multiple labels inside a popover."""
     column = layout.column(align=True)
@@ -249,33 +231,157 @@ def _draw_status_popover_body(layout, context: Context, message: str, icon: str 
             first = False
 
 
-class XIVIE_PT_export_target_status_popover(Panel):
-    """Pop out full export status message."""
+# ---- Contexts and export targets --------------------------------------------------
 
-    bl_idname = "XIVIE_PT_export_target_status_popover"
-    bl_label = "Export Target Status"
-    bl_space_type = "VIEW_3D"
-    # HEADER (not UI) keeps this out of the sidebar's tab list - it's only
-    # ever shown anchored via layout.popover(), never as its own N-panel tab.
-    bl_region_type = "HEADER"
-    bl_ui_units_x = 20
+
+class _ContextEntry(NamedTuple):
+    context_id: str
+    collection: object
+    label: str
+    ref: object
+    error: str
+
+
+def _model_label(game_path: str) -> str:
+    stem = PurePosixPath(str(game_path or "").replace("\\", "/")).stem
+    suffix = stem.rsplit("_", 1)[-1].casefold() if "_" in stem else ""
+    return _SLOT_LABELS.get(suffix, stem or "Model")
+
+
+def _context_entries(context: Context) -> list[_ContextEntry]:
+    """Every Context collection in the scene, valid or not, in selector order."""
+    rows = []
+    for collection in context_collections(context.scene):
+        context_id = str(_value(collection, "context_id", ""))
+        try:
+            ref, error = validate_context(context_id, context.scene), ""
+        except ContextValidationError as exc:
+            ref, error = None, str(exc)
+        game_path = str(_value(collection, "source_game_path", "")).replace("\\", "/")
+        source = str(_value(collection, "source_mod_name", "") or "")
+        if not source and _value(collection, "source_kind", "mod") == "game":
+            source = "Game Data"
+        rows.append((game_path.casefold(), context_id, collection, game_path, source, ref, error))
+    rows.sort(key=lambda row: (row[0], row[1]))
+
+    def label_for(game_path, source, use_file_name):
+        model = PurePosixPath(game_path).stem if use_file_name else _model_label(game_path)
+        return f"{model} · {source}" if source else model or "Model"
+
+    labels = [label_for(row[3], row[4], False) for row in rows]
+    # Two Contexts for the same slot of one mod fall back to the model file name.
+    labels = [
+        label_for(row[3], row[4], True) if labels.count(label) > 1 else label
+        for row, label in zip(rows, labels)
+    ]
+    entries = []
+    for row, label in zip(rows, labels):
+        repeat = labels[:len(entries)].count(label)
+        entries.append(_ContextEntry(
+            row[1], row[2], f"{label} ({repeat + 1})" if repeat else label, row[5], row[6]))
+    return entries
+
+
+def _layer_collection(layer_collection, collection):
+    if layer_collection.collection == collection:
+        return layer_collection
+    for child in layer_collection.children:
+        found = _layer_collection(child, collection)
+        if found is not None:
+            return found
+    return None
+
+
+def _selected_target(props):
+    return next(
+        (item for item in props.variant_targets if item.selection_id == props.variant_target), None)
+
+
+def _target_groups(props) -> list:
+    """Return the cached target tree as (group, options) pairs."""
+    groups = []
+    for item in props.variant_targets:
+        if item.kind == "GROUP":
+            groups.append((item, []))
+        elif item.kind == "OPTION" and groups:
+            groups[-1][1].append(item)
+    return groups
+
+
+def _target_summary(props) -> tuple[str, str]:
+    """Text and icon for the export target dropdown."""
+    selection = props.variant_target
+    if selection == IN_PLACE_TARGET:
+        return "In Place", "FILE_TICK"
+    if selection == "NEW_GROUP":
+        return "New Group", "ADD"
+    if selection == MASHUP_TARGET:
+        return "Create Mashup", "EXPERIMENTAL"
+    if selection == SAVE_NEW_MOD_TARGET:
+        return "Save as New Mod", "NEWFOLDER"
+    target = _selected_target(props)
+    if target is None:
+        return "Choose a Target", "QUESTION"
+    if target.kind == "GROUP":
+        return f"{target.group_name} › New Option", "ADD"
+    return f"{target.group_name} › {target.option_name}", "FILE"
+
+
+class XIVIE_MT_export_targets(Menu):
+    bl_idname = "XIVIE_MT_export_targets"
+    bl_label = "Export Target"
 
     def draw(self, context: Context) -> None:
         layout = self.layout
+        props = get_instant_edit_props()
         try:
             ref = export_destination_context(context, persist=False)
-        except ContextValidationError:
-            ref = None
-        if ref is None:
-            layout.label(text="Export context unavailable.", icon="ERROR")
+        except ContextValidationError as error:
+            layout.label(text=str(error), icon="INFO")
             return
-        readiness_issues, _material_coverage_warning = cached_export_readiness()
-        message, icon = _export_target_status(readiness_issues)
-        _draw_status_popover_body(layout, context, message, icon)
+
+        def target(parent, selection_id: str, text: str) -> None:
+            selected = props.variant_target == selection_id
+            parent.operator(
+                "xiv_ie.select_variant_target",
+                text=text,
+                icon="RADIOBUT_ON" if selected else "RADIOBUT_OFF",
+            ).selection_id = selection_id
+
+        target(layout, IN_PLACE_TARGET, "In Place")
+        if props.variant_targets_context_id == ref.context_id:
+            for group, options in _target_groups(props):
+                layout.separator()
+                layout.label(text=group.group_name, icon="OUTLINER_COLLECTION")
+                for option in options:
+                    target(layout, option.selection_id, option.option_name)
+                target(layout, group.selection_id, "New Option...")
+        else:
+            layout.separator()
+            layout.operator("xiv_ie.refresh_variant_targets", text="Load Mod Options", icon="FILE_REFRESH")
         layout.separator()
-        layout.operator(
-            "xiv_ie.copy_target_status", text="Copy to Clipboard", icon="COPYDOWN"
-        ).status_message = message
+        target(layout, "NEW_GROUP", "New Group...")
+
+        show_mashup, mashup_enabled, mashup_message = mashup_target_state(context, ref)
+        if show_mashup:
+            row = layout.row()
+            row.enabled = mashup_enabled
+            target(row, MASHUP_TARGET, "Create Mashup...")
+            if not mashup_enabled and mashup_message:
+                layout.label(text=mashup_message, icon="ERROR")
+            return
+        show_new_mod, new_mod_enabled, new_mod_message = save_new_mod_target_state(context, ref)
+        if show_new_mod:
+            row = layout.row()
+            row.enabled = new_mod_enabled
+            target(row, SAVE_NEW_MOD_TARGET, "Save as New Mod...")
+            if not new_mod_enabled and new_mod_message:
+                layout.label(text=new_mod_message, icon="ERROR")
+
+
+# ---- Popovers -----------------------------------------------------------------------
+# HEADER (not UI) keeps these out of the sidebar's tab list; they are only ever
+# shown anchored via layout.popover(), never as their own N-panel tab.
 
 
 class XIVIE_PT_last_status_popover(Panel):
@@ -284,8 +390,6 @@ class XIVIE_PT_last_status_popover(Panel):
     bl_idname = "XIVIE_PT_last_status_popover"
     bl_label = "XIV Instant Edit Status"
     bl_space_type = "VIEW_3D"
-    # HEADER (not UI) keeps this out of the sidebar's tab list - it's only
-    # ever shown anchored via layout.popover(), never as its own N-panel tab.
     bl_region_type = "HEADER"
     bl_ui_units_x = 20
 
@@ -297,568 +401,716 @@ class XIVIE_PT_last_status_popover(Panel):
         layout.operator("xiv_ie.copy_status", text="Copy to Clipboard", icon="COPYDOWN")
 
 
-class XIVIE_PT_main(Panel):
-    bl_idname = "XIVIE_PT_main"
-    bl_label = "XIV Instant Edit"
-    # "XI" collides with Yet Another Addon's sidebar tab; leading "IE" keeps
-    # the abbreviated tab label distinct from it.
-    bl_category = "IE - Instant Edit"
+class XIVIE_PT_connection_popover(Panel):
+    bl_idname = "XIVIE_PT_connection_popover"
+    bl_label = "Plugin Connection"
     bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
+    bl_region_type = "HEADER"
+    bl_ui_units_x = 16
 
     def draw(self, context: Context) -> None:
         layout = self.layout
-        self._draw_instant_edit(layout, context)
-        self._draw_mesh_materials(layout, context)
-        self._draw_simple_export(layout)
-        self._draw_import_options(layout)
-        self._draw_export_options(layout)
-        self._draw_backups(layout, context)
-        self._draw_utilities(layout)
+        running, port, error = server_status()
+        if running:
+            layout.label(text=f"Listening for the plugin on port {port}", icon="CHECKMARK")
+        else:
+            row = layout.row()
+            row.alert = True
+            row.label(text=f"Not listening on port {port}", icon="CANCEL")
+            _draw_wrapped_label(layout, context, error or "The listener could not start.", "BLANK1")
+            _draw_wrapped_label(
+                layout, context,
+                "Close the program that uses this port, or choose another port in the preferences.",
+                "BLANK1",
+            )
+        layout.separator()
+        row = layout.row(align=True)
+        row.operator("preferences.addon_show", text="Preferences", icon="PREFERENCES").module = __package__
+        row.operator("xiv_ie.open_diagnostics_folder", text="Diagnostics", icon="FILE_FOLDER")
 
-    @staticmethod
-    def _draw_instant_edit(layout, context: Context) -> None:
+
+class XIVIE_PT_context_details_popover(Panel):
+    bl_idname = "XIVIE_PT_context_details_popover"
+    bl_label = "Context Details"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "HEADER"
+    bl_ui_units_x = 22
+
+    def draw(self, context: Context) -> None:
+        layout = self.layout
+        try:
+            ref = export_destination_context(context, persist=False)
+        except ContextValidationError as error:
+            layout.label(text=str(error), icon="INFO")
+            return
+        if ref.source_kind == "game":
+            source = ("Game Data", "", "WORLD")
+        else:
+            source = (
+                ref.source_mod_name or "Source Mod",
+                ref.source_mod_root_path or ref.source_mod_directory,
+                "FILE_FOLDER",
+            )
+        destination = (
+            "Not created yet" if ref.destination_state == "new_mod_required"
+            else _export_destination_display(ref, get_instant_edit_props())
+        )
+        width = max(24, _display_wrap_width(context) - 6)
+        for title, value, icon in (
+            source,
+            ("Imported File", _import_file_display(ref), "IMPORT"),
+            ("Export Destination", destination, "EXPORT"),
+        ):
+            header = layout.row(align=True)
+            header.label(text=title, icon=icon)
+            if value and value not in {"Unavailable", "Not created yet"}:
+                header.operator("xiv_ie.copy_text", text="", icon="COPYDOWN", emboss=False).text = value
+            if value:
+                column = layout.column(align=True)
+                for line in _wrap_display_value(value, width):
+                    column.label(text=line, icon="BLANK1")
+        layout.separator()
+        layout.operator("xiv_ie.open_context_folder", icon="FILE_FOLDER")
+
+
+class XIVIE_PT_export_scope_popover(Panel):
+    bl_idname = "XIVIE_PT_export_scope_popover"
+    bl_label = "Quick Export Options"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "HEADER"
+    bl_ui_units_x = 16
+
+    def draw(self, context: Context) -> None:
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
         props = get_instant_edit_props()
-        box = layout.box()
+        layout.prop(props, "export_scope", text="Parts")
+        if props.export_scope == "VISIBLE_NO_MANNEQUIN":
+            layout.prop(props, "export_excluded_mesh", text="Except")
+        layout.column(heading="Penumbra").prop(props, "create_attribute_groups", text="Attribute Group")
+
+
+# ---- Instant Edit (session) panel ---------------------------------------------------
+
+
+def _draw_status_row(layout, props) -> None:
+    message = props.last_status or ""
+    if not message or message == DEFAULT_STATUS:
+        return
+    icon = _status_icon(message)
+    row = layout.row(align=True)
+    row.alert = icon == "CANCEL"
+    text = row.row(align=True)
+    text.active = icon != "INFO"
+    text.label(text=message, icon=icon)
+    row.popover("XIVIE_PT_last_status_popover", text="", icon="DOWNARROW_HLT")
+
+
+def _draw_empty_session(layout, context: Context, props) -> None:
+    box = layout.box()
+    box.label(text="No model loaded", icon="INFO")
+    _draw_wrapped_label(
+        box, context,
+        "In XIV Instant Edit, press the pen icon next to a model to edit it here.",
+        "BLANK1",
+        indent=6,
+    )
+    running, port, _error = server_status()
+    if not running:
+        row = layout.row(align=True)
+        row.alert = True
+        row.label(text=f"Not listening on port {port}", icon="CANCEL")
+        row.popover("XIVIE_PT_connection_popover", text="", icon="DOWNARROW_HLT")
+    layout.operator("xiv_ie.simple_import", text="Import a Model File...", icon="IMPORT")
+    _draw_status_row(layout, props)
+
+
+def _draw_context_rows(layout, context: Context, props, entries, ref) -> None:
+    column = layout.column(align=True)
+    for entry in entries:
+        row = column.row(align=True)
+        layer = _layer_collection(context.view_layer.layer_collection, entry.collection)
+        if layer is not None:
+            row.prop(layer, "hide_viewport", text="", emboss=False)
+        selected = props.export_destination == entry.context_id
+        button = row.row(align=True)
+        button.alert = bool(entry.error)
+        button.operator(
+            "xiv_ie.select_export_context",
+            text=entry.label,
+            icon="ERROR" if entry.error else ("RADIOBUT_ON" if selected else "RADIOBUT_OFF"),
+            depress=selected,
+        ).context_id = entry.context_id
+        if selected and ref is not None:
+            row.popover("XIVIE_PT_context_details_popover", text="", icon="THREE_DOTS")
+        else:
+            row.label(text="", icon="BLANK1")
+
+
+def _draw_target(layout, props, ref) -> bool:
+    """Draw the target dropdown and its name fields; return whether an option name is needed."""
+    row = layout.row(align=True)
+    text, icon = _target_summary(props)
+    row.menu("XIVIE_MT_export_targets", text=text, icon=icon)
+    row.operator("xiv_ie.refresh_variant_targets", text="", icon="FILE_REFRESH")
+    if props.variant_targets_context_id != ref.context_id:
+        hint = layout.row()
+        hint.active = False
+        hint.label(text="Refresh to load this mod's options.", icon="INFO")
+
+    target = _selected_target(props)
+    needs_group = props.variant_target == "NEW_GROUP"
+    needs_option = needs_group or (target is not None and target.kind == "GROUP")
+    if needs_option:
+        fields = layout.column(align=True)
+        fields.use_property_split = True
+        fields.use_property_decorate = False
+        if needs_group:
+            fields.prop(props, "variant_group_name", text="Group")
+        fields.prop(props, "variant_name", text="Option", placeholder="Option name")
+    return needs_option
+
+
+def _draw_destination(layout, props, ref, needs_option: bool) -> None:
+    if props.variant_target in {MASHUP_TARGET, SAVE_NEW_MOD_TARGET}:
+        return
+    if needs_option:
+        try:
+            normalise_variant_name(props.variant_name)
+        except ValueError:
+            return
+    row = layout.row()
+    row.active = False
+    row.label(text=f"→ {PurePosixPath(_export_destination_display(ref, props)).name}", icon="BLANK1")
+
+
+def _draw_readiness(layout, context: Context, props, ref) -> None:
+    issues, material_coverage_warning = cached_export_readiness()
+    if not issues:
+        layout.label(text="Ready to export", icon="CHECKMARK")
+        return
+    box = layout.box()
+    column = box.column(align=True)
+    width = max(20, _display_wrap_width(context) - 5)
+    for severity, message in issues[:_MAX_SHOWN_ISSUES]:
+        icon = "TIME" if message.startswith("Checking ") else _SEVERITY_ICONS.get(severity, "INFO")
+        first = True
+        for segment in _issue_display_lines(message):
+            for line in _wrap_display_value(segment, width) or (segment,):
+                row = column.row()
+                row.alert = severity == "ERROR"
+                row.label(text=line, icon=icon if first else "BLANK1")
+                first = False
+    if len(issues) > _MAX_SHOWN_ISSUES:
+        column.label(text=f"+{len(issues) - _MAX_SHOWN_ISSUES} more", icon="BLANK1")
+
+    actions = box.row(align=True)
+    offers_mashup = False
+    if material_coverage_warning and props.variant_target != MASHUP_TARGET:
+        show_mashup, mashup_enabled, _message = mashup_target_state(context, ref)
+        if show_mashup:
+            offers_mashup = True
+            fix = actions.row(align=True)
+            fix.enabled = mashup_enabled
+            fix.operator(
+                "xiv_ie.select_variant_target", text="Use Create Mashup", icon="EXPERIMENTAL",
+            ).selection_id = MASHUP_TARGET
+    if not offers_mashup:
+        actions.alignment = "RIGHT"
+    actions.operator("xiv_ie.copy_target_status", text="", icon="COPYDOWN").status_message = "\n".join(
+        message for _severity, message in issues)
+
+
+def _draw_export_button(layout, props, ref) -> None:
+    text, icon = "Quick Export", "EXPORT"
+    if ref.destination_state == "new_mod_required":
+        text, icon = "Create Penumbra Mod...", "NEWFOLDER"
+    elif props.variant_target == MASHUP_TARGET:
+        text, icon = "Create Mashup...", "EXPERIMENTAL"
+    elif props.variant_target == SAVE_NEW_MOD_TARGET:
+        text, icon = "Save as New Mod...", "NEWFOLDER"
+    row = layout.row(align=True)
+    row.scale_y = 1.4
+    row.operator("xiv_ie.instant_export", text=text, icon=icon)
+    row.popover("XIVIE_PT_export_scope_popover", text="", icon="PREFERENCES")
+
+
+def _draw_scope_summary(layout, props) -> None:
+    """Point out non-default Quick Export options that live in the popover."""
+    notes = []
+    if props.export_scope == "VISIBLE_NO_MANNEQUIN":
+        excluded = props.export_excluded_mesh
+        notes.append((f"Except {excluded.name}" if excluded is not None else "No mesh excluded yet", "FILTER"))
+    elif props.export_scope == "CURRENT_COLLECTION":
+        notes.append(("Context collection only", "FILTER"))
+    if props.create_attribute_groups:
+        notes.append(("Creates an attribute toggle group", "OUTLINER_COLLECTION"))
+    column = layout.column(align=True)
+    column.active = False
+    for text, icon in notes:
+        column.label(text=text, icon=icon)
+
+
+class XIVIE_PT_session(Panel):
+    bl_idname = "XIVIE_PT_session"
+    bl_label = "Instant Edit"
+    bl_category = CATEGORY
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_order = 0
+
+    def draw_header_preset(self, context: Context) -> None:
+        running, _port, _error = server_status()
+        row = self.layout.row(align=True)
+        row.alert = not running
+        row.popover("XIVIE_PT_connection_popover", text="", icon="LINKED" if running else "UNLINKED")
+
+    def draw(self, context: Context) -> None:
+        layout = self.layout
+        props = get_instant_edit_props()
+        entries = _context_entries(context)
+        if not entries:
+            _draw_empty_session(layout, context, props)
+            return
         try:
             ref = export_destination_context(context, persist=False)
         except ContextValidationError:
             ref = None
 
-        if ref is not None:
-            if ref.source_kind == "game":
-                box.label(text="Source: Game Data")
+        if len(entries) > 1 or ref is None:
+            _draw_context_rows(layout, context, props, entries, ref)
+        if ref is None:
+            if any(entry.ref is not None for entry in entries):
+                layout.label(text="Choose the Context to export.", icon="INFO")
             else:
-                source_mod = ref.source_mod_root_path or ref.source_mod_name or ref.source_mod_directory
-                box.label(text=f"Source Mod: {source_mod}")
-            _draw_wrapped_display(box, context, "Imported File", _import_file_display(ref))
-            destination = box.box()
-            _draw_wrapped_display(
-                destination,
-                context,
-                "Current Export Destination",
-                "Not created yet" if ref.destination_state == "new_mod_required"
-                else _export_destination_display(ref, props),
-                icon="EXPORT",
-            )
+                _draw_wrapped_label(
+                    layout, context, f"This Context cannot be exported: {entries[0].error}", "CANCEL")
+            _draw_status_row(layout, props)
+            return
+        if len(entries) == 1:
+            row = layout.row(align=True)
+            row.label(text=entries[0].label, icon="FILE_3D")
+            row.popover("XIVIE_PT_context_details_popover", text="", icon="THREE_DOTS")
+
+        if ref.destination_state == "new_mod_required":
+            _draw_wrapped_label(layout, context, "Quick Export creates a new Penumbra mod for this model.", "INFO")
         else:
-            box.label(text="Pick a model through the Dalamud plugin.", icon="INFO")
+            needs_option = _draw_target(layout, props, ref)
+            _draw_destination(layout, props, ref, needs_option)
+        _draw_readiness(layout, context, props, ref)
+        _draw_export_button(layout, props, ref)
+        _draw_scope_summary(layout, props)
+        _draw_status_row(layout, props)
 
-        box.prop(props, "export_destination", text="Context")
-        box.prop(props, "export_scope")
-        box.prop(props, "create_attribute_groups")
-        if props.export_scope == "VISIBLE_NO_MANNEQUIN":
-            box.prop(props, "export_excluded_mesh", text="Excluded Mesh")
-        if ref is not None and ref.destination_state == "new_mod_required":
-            pending = box.box()
-            pending.label(
-                text="Quick Export will create a new Penumbra mod for this model.",
-                icon="INFO",
-            )
-            box.operator("xiv_ie.instant_export", text="Quick Export", icon="EXPORT")
-        elif ref is not None:
-            targets = box.box()
-            header = targets.row(align=True)
-            header.label(text="Export Target", icon="EXPORT")
-            header.operator("xiv_ie.refresh_variant_targets", text="", icon="FILE_REFRESH")
-            if props.variant_targets_context_id and props.variant_targets_context_id != getattr(ref, "context_id", ""):
-                targets.label(text="Refresh targets for this Context.", icon="INFO")
-            readiness_issues, material_coverage_warning = cached_export_readiness()
-            def target_row_is_alerted(selection_id: str) -> bool:
-                # Keep the selected target's depressed (blue) state visible even
-                # when the material-coverage warning applies to the composition.
-                return material_coverage_warning and props.variant_target != selection_id
 
-            in_place = targets.row(align=True)
-            in_place.alert = target_row_is_alerted(IN_PLACE_TARGET)
-            in_place.operator(
-                "xiv_ie.select_variant_target",
-                text="In-place",
-                depress=props.variant_target == IN_PLACE_TARGET,
-                icon="FILE_TICK",
-            ).selection_id = IN_PLACE_TARGET
-            new_group = targets.row(align=True)
-            new_group.alert = target_row_is_alerted("NEW_GROUP")
-            new_group.operator(
-                "xiv_ie.select_variant_target",
-                text="New Group",
-                depress=props.variant_target == "NEW_GROUP",
-                icon="ADD",
-            ).selection_id = "NEW_GROUP"
-            if not props.variant_targets:
-                status = (
-                    "No existing mod options found."
-                    if props.variant_targets_context_id == getattr(ref, "context_id", "")
-                    else "Refresh to load compatible groups and options."
-                )
-                targets.label(text=status, icon="INFO")
-            group_expanded = True
-            for item in props.variant_targets:
-                if item.kind == "GROUP":
-                    group_expanded = item.expanded
-                    group_row = targets.row(align=True)
-                    group_row.alert = target_row_is_alerted(item.selection_id)
-                    toggle = group_row.operator(
-                        "xiv_ie.toggle_variant_target_group",
-                        text="",
-                        icon="TRIA_DOWN" if item.expanded else "TRIA_RIGHT",
-                        emboss=False,
-                    )
-                    toggle.selection_id = item.selection_id
-                    group_row.operator(
-                        "xiv_ie.select_variant_target",
-                        text=item.group_name,
-                        depress=props.variant_target == item.selection_id,
-                        icon="OUTLINER_COLLECTION",
-                    ).selection_id = item.selection_id
-                elif item.kind == "OPTION" and group_expanded:
-                    option_row = targets.row(align=True)
-                    option_row.alert = target_row_is_alerted(item.selection_id)
-                    option_row.label(text="", icon="BLANK1")
-                    option_row.operator(
-                        "xiv_ie.select_variant_target",
-                        text=item.option_name,
-                        depress=props.variant_target == item.selection_id,
-                        icon="FILE",
-                    ).selection_id = item.selection_id
-            show_mashup, mashup_enabled, mashup_message = mashup_target_state(context, ref)
-            show_new_mod = new_mod_enabled = False
-            new_mod_message = ""
-            if not show_mashup:
-                show_new_mod, new_mod_enabled, new_mod_message = save_new_mod_target_state(
-                    context, ref)
-            if show_mashup or show_new_mod:
-                targets.separator(type="LINE")
-            if show_mashup:
-                mashup_row = targets.row(align=True)
-                mashup_row.enabled = mashup_enabled
-                mashup_row.operator(
-                    "xiv_ie.select_variant_target",
-                    text="Create Mashup",
-                    depress=props.variant_target == MASHUP_TARGET,
-                    icon="EXPERIMENTAL",
-                ).selection_id = MASHUP_TARGET
-                if not mashup_enabled and mashup_message:
-                    targets.label(text=mashup_message, icon="ERROR")
-            elif show_new_mod:
-                new_mod_row = targets.row(align=True)
-                new_mod_row.alert = target_row_is_alerted(SAVE_NEW_MOD_TARGET)
-                new_mod_row.enabled = new_mod_enabled
-                new_mod_row.operator(
-                    "xiv_ie.select_variant_target",
-                    text="Save to new mod",
-                    depress=props.variant_target == SAVE_NEW_MOD_TARGET,
-                    icon="EXPORT",
-                ).selection_id = SAVE_NEW_MOD_TARGET
-                if not new_mod_enabled and new_mod_message:
-                    targets.label(text=new_mod_message, icon="ERROR")
-            # Panel drawing must not stop at the target list when a stale
-            # object or older context contains data that the preflight
-            # checker cannot interpret. Keep the diagnostic visible and
-            # continue to the status row below.
-            target_status_message, target_status_icon = _export_target_status(readiness_issues)
-            target_status_row = targets.row(align=True)
-            target_status_row.alert = target_status_icon == "ERROR"
-            target_status_row.label(text=target_status_message, icon=target_status_icon)
-            if hasattr(bpy.types, "XIVIE_PT_export_target_status_popover"):
-                target_status_row.popover(
-                    panel="XIVIE_PT_export_target_status_popover", text="", icon="DOWNARROW_HLT"
-                )
-            selected_target = next(
-                (item for item in props.variant_targets if item.selection_id == props.variant_target), None)
-            if props.variant_target == "NEW_GROUP":
-                _draw_named_text_input(box, props, "variant_group_name", "New Group Name")
-            if (
-                props.variant_target not in {
-                    IN_PLACE_TARGET, MASHUP_TARGET, SAVE_NEW_MOD_TARGET,
-                }
-                and (selected_target is None or selected_target.kind != "OPTION")
-            ):
-                _draw_named_text_input(box, props, "variant_name", "New Option Name")
-            box.operator("xiv_ie.instant_export", text="Quick Export", icon="EXPORT")
-        status_row = box.row(align=True)
-        status_row.label(text=props.last_status or "No status yet.", icon="INFO")
-        if hasattr(bpy.types, "XIVIE_PT_last_status_popover"):
-            status_row.popover(panel="XIVIE_PT_last_status_popover", text="", icon="DOWNARROW_HLT")
+# ---- Mesh Groups panel ----------------------------------------------------------------
 
-    @staticmethod
-    def _draw_mesh_materials(layout, context: Context) -> None:
-        # During a reorder drag the rows show the planned IDs; the objects
-        # themselves are only renamed when the drag is released.
-        with planned_mesh_ids(active_mesh_drag_plan()):
-            XIVIE_PT_main._draw_mesh_material_rows(layout, context)
 
-    @staticmethod
-    def _draw_mesh_material_rows(layout, context: Context) -> None:
-        """Draw the compact Mesh Studio overview adapted from Yet Another Addon."""
-        def triangle_count(obj) -> int:
-            obj.data.calc_loop_triangles()
-            return len(obj.data.loop_triangles)
+def _triangle_count(obj) -> int:
+    obj.data.calc_loop_triangles()
+    return len(obj.data.loop_triangles)
 
-        def aligned_control(layout, label: str):
-            row = layout.row(align=True).split(factor=0.25, align=True)
-            label_row = row.row(align=True)
-            label_row.alignment = "RIGHT"
-            label_row.label(text=label)
-            return row.row(align=True)
 
-        settings = get_settings()
-        box = layout.box()
-        expanded = settings.show_mesh_materials
-        header = box.row(align=True)
-        header.prop(
-            settings,
-            "show_mesh_materials",
-            text="",
-            icon="TRIA_DOWN" if expanded else "TRIA_RIGHT",
-            emboss=False,
-        )
-        header.label(text="Mesh Materials", icon="MATERIAL")
-        if not expanded:
-            return
+def _aligned_control(layout, label: str):
+    row = layout.row(align=True).split(factor=0.25, align=True)
+    label_row = row.row(align=True)
+    label_row.alignment = "RIGHT"
+    label_row.label(text=label)
+    return row.row(align=True)
 
-        occupied_groups = visible_material_groups()
-        if not occupied_groups:
-            box.label(text="No visible FFXIV mesh groups.", icon="INFO")
-            return
-        drag_state = active_mesh_drag_state()
-        drag_scope, drag_group, drag_part, drag_maximum, drag_instance = (
-            drag_state if drag_state is not None else ("", -1, -1, None, "")
-        )
-        groups = material_group_slots(occupied_groups, drag_maximum)
-        selected_objects = set(context.selected_objects)
 
-        columns = box.row(align=True).split(factor=0.4, align=True)
-        for title in ("OBJECT", "PART", "ATTR"):
-            column = columns.row(align=True)
-            column.alignment = "CENTER"
-            column.label(text=title)
+def _draw_empty_mesh_group(box, group: int) -> None:
+    empty_row = box.box().row(align=True)
+    empty_row.label(text=f"Mesh #{group}")
+    empty_label = empty_row.row(align=True)
+    empty_label.alignment = "RIGHT"
+    empty_label.label(text="Empty", icon="MESH_DATA")
 
-        total_triangles = 0
-        for group in groups:
-            if not group.objects:
-                empty_box = box.box()
-                empty_row = empty_box.row(align=True)
-                empty_row.label(text=f"Mesh #{group.mesh_index}")
-                empty_label = empty_row.row(align=True)
-                empty_label.alignment = "RIGHT"
-                empty_label.label(text="Empty", icon="MESH_DATA")
-                continue
-            paths = material_paths(group.objects)
-            mismatch_parts = material_mismatch_parts(group.objects)
-            lod_zero = _lod_zero_objects(group.objects)
-            vertices = sum(len(obj.data.vertices) for obj in lod_zero)
-            total_triangles += sum(triangle_count(obj) for obj in lod_zero)
 
+def _draw_mesh_group_header(mesh_box, group: int, vertices: int, dragged: bool) -> None:
+    mesh_header = mesh_box.row(align=True).split(factor=0.4, align=True)
+    mesh_id_row = mesh_header.row(align=True)
+    mesh_id_row.label(text=f"Mesh #{group}", icon="MOUSE_LMB_DRAG" if dragged else "BLANK1")
+    drag = mesh_id_row.operator(
+        "xiv_ie.drag_mesh_order",
+        text="",
+        icon="MOUSE_LMB_DRAG" if dragged else "GRIP_V",
+        emboss=dragged,
+        depress=dragged,
+    )
+    drag.scope = "GROUP"
+    drag.mesh_group = group
+    vertex_row = mesh_header.row(align=True)
+    vertex_row.alignment = "RIGHT"
+    if vertices > _VERTEX_LIMIT:
+        vertex_row.label(text="", icon="ERROR")
+    elif vertices > _VERTEX_WARNING:
+        vertex_row.label(text="", icon="INFO")
+    vertex_row.label(text=f"Vertices: {vertices:,}")
+
+
+def _draw_empty_part_slot(mesh_column, part_index: int) -> None:
+    object_row = mesh_column.row(align=True).split(factor=0.4, align=True)
+    name_row = object_row.row(align=True)
+    name_row.label(text="", icon="BLANK1")
+    name_row.label(text="Empty slot", icon="MESH_DATA")
+    part_row = object_row.row(align=True)
+    part_row.label(text="", icon="BLANK1")
+    part_row.label(text=str(part_index))
+    attribute_row = object_row.row(align=True)
+    attribute_row.alignment = "EXPAND"
+    attribute_row.label(text=" ", icon="BLANK1")
+
+
+def _draw_mesh_part(mesh_column, part, duplicate: bool, mismatch: bool, selected: bool, dragged: bool) -> None:
+    shown = lod_zero_objects(part.objects)
+    object_row = mesh_column.row(align=True).split(factor=0.4, align=True)
+    object_row.alert = mismatch and not dragged
+
+    name_row = object_row.row(align=True)
+    name_row.label(text="", icon="MOUSE_LMB_DRAG" if dragged else "BLANK1")
+    select = name_row.operator(
+        "xiv_ie.select_mesh_part",
+        text=mesh_display_name(shown[0]),
+        emboss=selected,
+        depress=selected,
+    )
+    select.mesh_group = part.group
+    select.mesh_part = part.part
+    select.mesh_part_instance = part.instance_key
+
+    part_row = object_row.row(align=True)
+    part_row.label(text="", icon="ERROR" if duplicate or mismatch else "BLANK1")
+    part_row.label(text=str(part.part))
+    drag = part_row.operator(
+        "xiv_ie.drag_mesh_order",
+        text="",
+        icon="MOUSE_LMB_DRAG" if dragged else "GRIP_V",
+        emboss=dragged,
+        depress=dragged,
+    )
+    drag.scope = "PART"
+    drag.mesh_group = part.group
+    drag.mesh_part = part.part
+    drag.mesh_part_instance = part.instance_key
+
+    attribute_row = object_row.row(align=True)
+    attribute_row.alignment = "EXPAND"
+    attributes = mesh_part_attributes(shown)
+    if not attributes:
+        attribute_row.label(text=" ", icon="BLANK1")
+    for attribute in attributes:
+        remove = attribute_row.operator("xiv_ie.mesh_attribute", text=attribute_display_name(attribute))
+        remove.mesh_group = part.group
+        remove.mesh_part = part.part
+        remove.mesh_part_instance = part.instance_key
+        remove.attribute = attribute
+    add = attribute_row.operator("xiv_ie.mesh_attribute", text="", icon="ADD")
+    add.mesh_group = part.group
+    add.mesh_part = part.part
+    add.mesh_part_instance = part.instance_key
+    add.attribute = "NEW"
+
+
+# Blender names an operator's properties after its bl_idname; this is
+# xiv_ie.select_mesh_part, the operator behind every part name.
+_PART_NAME_OPERATOR = "XIV_IE_OT_select_mesh_part"
+
+
+def draw_mesh_part_context_menu(self, context: Context) -> None:
+    """Add part actions to Blender's right-click menu of a Mesh Groups part name."""
+    button = getattr(context, "button_operator", None)
+    if button is None or button.rna_type.identifier != _PART_NAME_OPERATOR:
+        return
+    layout = self.layout
+    layout.separator()
+    duplicate = layout.operator("xiv_ie.duplicate_backfaces", icon="NORMALS_FACE")
+    duplicate.mesh_group = button.mesh_group
+    duplicate.mesh_part = button.mesh_part
+    duplicate.mesh_part_instance = button.mesh_part_instance
+
+
+def _draw_mesh_groups(layout, context: Context) -> None:
+    """Draw the compact Mesh Studio overview adapted from Yet Another Addon."""
+    box = layout.box()
+    parts = scene_parts()
+    if not parts:
+        box.label(text="No visible FFXIV mesh groups.", icon="INFO")
+        return
+    drag_state = active_mesh_drag_state() or ("", -1, -1, None, "")
+    objects = defaultdict(list)
+    for part in parts:
+        objects[part.group].extend(part.objects)
+    selected = set(context.selected_objects)
+
+    columns = box.row(align=True).split(factor=0.4, align=True)
+    for title in ("OBJECT", "PART", "ATTR"):
+        column = columns.row(align=True)
+        column.alignment = "CENTER"
+        column.label(text=title)
+
+    total_triangles = 0
+    shown_objects = set()
+    # Draw exactly the rows mesh_list lays out, which is what lets a drag keep
+    # the dragged row under the pointer.
+    mesh_box = mesh_column = None
+    for row in layout_rows(parts, maximum_group=drag_state[3]):
+        if row.kind == "empty":
+            _draw_empty_mesh_group(box, row.group)
+        elif row.kind == "header":
+            group_objects = objects[row.group]
+            lod_zero = lod_zero_objects(group_objects)
+            shown_objects.update(lod_zero)
+            total_triangles += sum(_triangle_count(obj) for obj in lod_zero)
+            mismatch = material_mismatch_parts(group_objects)
+            uses = Counter(part.part for part in parts if part.group == row.group)
             mesh_box = box.box()
-            mesh_header = mesh_box.row(align=True).split(factor=0.4, align=True)
-            group_is_dragged = drag_scope == "GROUP" and drag_group == group.mesh_index
-            mesh_id_row = mesh_header.row(align=True)
-            mesh_id_row.label(
-                text=f"Mesh #{group.mesh_index}",
-                icon="MOUSE_LMB_DRAG" if group_is_dragged else "BLANK1",
+            _draw_mesh_group_header(
+                mesh_box,
+                row.group,
+                sum(len(obj.data.vertices) for obj in lod_zero),
+                drag_state[0] == "GROUP" and drag_state[1] == row.group,
             )
-            drag = mesh_id_row.operator(
-                "xiv_ie.drag_mesh_order",
-                text="",
-                icon="MOUSE_LMB_DRAG" if group_is_dragged else "GRIP_V",
-                emboss=group_is_dragged,
-                depress=group_is_dragged,
-            )
-            drag.scope = "GROUP"
-            drag.mesh_group = group.mesh_index
-            vertex_row = mesh_header.row(align=True)
-            vertex_row.alignment = "RIGHT"
-            if vertices > 65536:
-                vertex_row.label(text="", icon="ERROR")
-            elif vertices > 58982:
-                vertex_row.label(text="", icon="INFO")
-            vertex_row.label(text=f"Vertices: {vertices:,}")
-
             mesh_box.separator(type="LINE", factor=0.2)
             mesh_column = mesh_box.column(align=True)
-            part_instances = mesh_part_instances(group.objects, group.mesh_index)
-            part_slots = mesh_part_slots(group.objects, group.mesh_index)
-            for part_instance in part_slots:
-                part = part_instance.part_index
-                if part_instance.is_placeholder:
-                    object_row = mesh_column.row(align=True).split(factor=0.4, align=True)
-                    name_row = object_row.row(align=True)
-                    name_row.label(text="", icon="BLANK1")
-                    name_row.label(text="Empty slot", icon="MESH_DATA")
-
-                    part_row = object_row.row(align=True)
-                    part_row.label(text="", icon="BLANK1")
-                    part_row.label(text=str(part))
-
-                    attribute_row = object_row.row(align=True)
-                    attribute_row.alignment = "EXPAND"
-                    attribute_row.label(text=" ", icon="BLANK1")
-                    continue
-
-                part_objects = part_instance.objects
-                display_objects = _lod_zero_objects(part_objects)
-                representative = display_objects[0]
-                duplicate_ids = sum(
-                    item.part_index == part for item in part_instances
-                ) > 1
-
-                object_row = mesh_column.row(align=True).split(factor=0.4, align=True)
-                part_is_dragged = (
-                    drag_scope == "PART"
-                    and drag_group == group.mesh_index
-                    and drag_part == part
-                    and drag_instance == part_instance.instance_key
-                )
-                part_is_selected = any(obj in selected_objects for obj in part_objects)
-                material_mismatch = part in mismatch_parts
-                object_row.alert = material_mismatch and not part_is_dragged
-
-                name_row = object_row.row(align=True)
-                name_row.label(
-                    text="",
-                    icon="MOUSE_LMB_DRAG" if part_is_dragged else "BLANK1",
-                )
-                rename = name_row.operator(
-                    "xiv_ie.rename_mesh_part",
-                    text=mesh_display_name(representative),
-                    emboss=part_is_selected,
-                    depress=part_is_selected,
-                )
-                rename.mesh_group = group.mesh_index
-                rename.mesh_part = part
-                rename.mesh_part_instance = part_instance.instance_key
-
-                part_row = object_row.row(align=True)
-                part_row.label(
-                    text="",
-                    icon="ERROR" if duplicate_ids or material_mismatch else "BLANK1",
-                )
-                part_row.label(text=str(part))
-                drag = part_row.operator(
-                    "xiv_ie.drag_mesh_order",
-                    text="",
-                    icon="MOUSE_LMB_DRAG" if part_is_dragged else "GRIP_V",
-                    emboss=part_is_dragged,
-                    depress=part_is_dragged,
-                )
-                drag.scope = "PART"
-                drag.mesh_group = group.mesh_index
-                drag.mesh_part = part
-                drag.mesh_part_instance = part_instance.instance_key
-
-                attribute_row = object_row.row(align=True)
-                attribute_row.alignment = "EXPAND"
-                attributes = mesh_part_attributes(display_objects)
-                if not attributes:
-                    attribute_row.label(text=" ", icon="BLANK1")
-                for attribute in attributes:
-                    remove = attribute_row.operator(
-                        "xiv_ie.mesh_attribute",
-                        text=attribute_display_name(attribute),
-                    )
-                    remove.mesh_group = group.mesh_index
-                    remove.mesh_part = part
-                    remove.mesh_part_instance = part_instance.instance_key
-                    remove.attribute = attribute
-                add = attribute_row.operator("xiv_ie.mesh_attribute", text="", icon="ADD")
-                add.mesh_group = group.mesh_index
-                add.mesh_part = part
-                add.mesh_part_instance = part_instance.instance_key
-                add.attribute = "NEW"
-
+        elif row.kind == "gap":
+            _draw_empty_part_slot(mesh_column, row.part_index)
+        elif row.kind == "part":
+            part = row.part
+            _draw_mesh_part(
+                mesh_column,
+                part,
+                uses[part.part] > 1,
+                part.part in mismatch,
+                any(obj in selected for obj in part.objects),
+                drag_state[0] == "PART"
+                and (drag_state[1], drag_state[2], drag_state[4]) == (part.group, part.part, part.instance_key),
+            )
+        else:
             mesh_box.separator(type="LINE", factor=0.5)
+            paths = material_paths(objects[row.group])
             if not paths:
                 text = "Add Mesh Properties"
             elif len(paths) > 1:
                 text = "Multiple Materials"
             else:
                 text = paths[0]
-            material_row = aligned_control(mesh_box.column(align=True), "Material:")
-            operator = material_row.operator("xiv_ie.mesh_material", text=text)
-            operator.mesh_group = group.mesh_index
+            material_row = _aligned_control(mesh_box.column(align=True), "Material:")
+            material_row.operator("xiv_ie.mesh_material", text=text).mesh_group = row.group
 
-        visible_lod_zero = {
-            obj
-            for group in groups
-            for obj in _lod_zero_objects(group.objects)
-        }
-        selected_triangles = sum(
-            triangle_count(obj)
-            for obj in context.selected_objects
-            if obj.type == "MESH" and obj in visible_lod_zero
-        )
-        summary = box.row(align=True)
-        summary.alignment = "RIGHT"
-        count = f"{selected_triangles:,} / {total_triangles:,}" if selected_triangles else f"{total_triangles:,}"
-        summary.label(text=f"Triangles: {count}")
+    selected_triangles = sum(
+        _triangle_count(obj)
+        for obj in context.selected_objects
+        if obj.type == "MESH" and obj in shown_objects
+    )
+    summary = box.row(align=True)
+    summary.alignment = "RIGHT"
+    count = f"{selected_triangles:,} / {total_triangles:,}" if selected_triangles else f"{total_triangles:,}"
+    summary.label(text=f"Triangles: {count}")
 
-    @staticmethod
-    def _draw_simple_export(layout) -> None:
+
+class XIVIE_PT_mesh_groups(Panel):
+    bl_idname = "XIVIE_PT_mesh_groups"
+    bl_label = "Mesh Groups"
+    bl_category = CATEGORY
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_order = 1
+
+    def draw(self, context: Context) -> None:
+        # During a reorder drag the rows show the planned IDs; the objects
+        # themselves are only renamed when the drag is released.
+        with planned_mesh_ids(active_mesh_drag_plan()):
+            _draw_mesh_groups(self.layout, context)
+
+
+# ---- File Import / Export, Options, Backups, Tools --------------------------------
+
+
+class XIVIE_PT_file_io(Panel):
+    bl_idname = "XIVIE_PT_file_io"
+    bl_label = "File Import / Export"
+    bl_category = CATEGORY
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_options = {"DEFAULT_CLOSED"}
+    bl_order = 2
+
+    def draw(self, context: Context) -> None:
+        layout = self.layout
         settings = get_settings()
-        box = layout.box()
-        expanded = settings.show_simple_export
-        header = box.row(align=True)
-        header.prop(
-            settings,
-            "show_simple_export",
-            text="",
-            icon="TRIA_DOWN" if expanded else "TRIA_RIGHT",
-            emboss=False,
-        )
-        header.label(text="Simple Import/Export", icon="EXPORT")
-        if not expanded:
-            return
+        props = get_instant_edit_props()
+        layout.operator("xiv_ie.simple_import", text="Import MDL, FBX or glTF...", icon="IMPORT")
+        column = layout.column()
+        column.use_property_split = True
+        column.use_property_decorate = False
+        column.row(align=True).prop(settings, "simple_import_armature", expand=True)
+        if settings.simple_import_use_existing_skeleton:
+            column.prop(settings, "simple_import_skeleton", text="Skeleton")
 
-        tabs = box.row(align=True)
-        tabs.prop(settings, "simple_io_tab", expand=True)
+        layout.separator(type="LINE")
+        column = layout.column()
+        column.use_property_split = True
+        column.use_property_decorate = False
+        column.prop(settings, "export_directory", text="Folder")
+        column.prop(settings, "export_name", text="File Name")
+        column.row(align=True).prop(settings, "model_format", expand=True)
+        column.prop(props, "export_scope", text="Parts")
+        if props.export_scope == "VISIBLE_NO_MANNEQUIN":
+            column.prop(props, "export_excluded_mesh", text="Except")
+        layout.operator("xiv_ie.simple_export", text="Export Model File", icon="EXPORT")
 
-        if settings.simple_io_tab == "IMPORT":
-            box.prop(settings, "import_format", expand=True)
-            box.prop(
-                settings,
-                "simple_import_use_existing_skeleton",
-                text="Remove imported armature and use existing skeleton",
-            )
-            if settings.simple_import_use_existing_skeleton:
-                box.prop(settings, "simple_import_skeleton", text="Skeleton Object")
-            box.operator("xiv_ie.simple_import", text="Import", icon="IMPORT")
-            return
 
-        box.prop(settings, "export_directory")
-        row = box.row(align=True)
-        row.prop(settings, "export_name")
-        row.prop(settings, "model_format", text="")
-        box.operator("xiv_ie.simple_export", icon="EXPORT")
+class XIVIE_PT_options(Panel):
+    bl_idname = "XIVIE_PT_options"
+    bl_label = "Options"
+    bl_category = CATEGORY
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_options = {"DEFAULT_CLOSED"}
+    bl_order = 3
 
-    @staticmethod
-    def _draw_import_options(layout) -> None:
+    def draw(self, context: Context) -> None:
+        pass
+
+
+class XIVIE_PT_options_import(Panel):
+    bl_idname = "XIVIE_PT_options_import"
+    bl_label = "Import"
+    bl_parent_id = "XIVIE_PT_options"
+    bl_category = CATEGORY
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+
+    def draw(self, context: Context) -> None:
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
         settings = get_settings()
-        box = layout.box()
-        expanded = settings.show_import_options
-        header = box.row(align=True)
-        header.prop(
-            settings,
-            "show_import_options",
-            text="",
-            icon="TRIA_DOWN" if expanded else "TRIA_RIGHT",
-            emboss=False,
-        )
-        header.label(text="Import Options", icon="IMPORT")
-        if not expanded:
-            return
+        layout.column(heading="Mesh Groups").prop(settings, "resolve_mesh_group_conflicts")
+        layout.column(heading="Export Folder").prop(settings, "simple_import_set_export_directory")
 
-        box.prop(settings, "resolve_mesh_group_conflicts")
-        box.prop(settings, "simple_import_set_export_directory")
 
-    @staticmethod
-    def _draw_export_options(layout) -> None:
+class XIVIE_PT_options_export(Panel):
+    bl_idname = "XIVIE_PT_options_export"
+    bl_label = "Export"
+    bl_parent_id = "XIVIE_PT_options"
+    bl_category = CATEGORY
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+
+    def draw(self, context: Context) -> None:
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
         settings = get_settings()
-        box = layout.box()
-        expanded = settings.show_export_options
-        header = box.row(align=True)
-        header.prop(
-            settings,
-            "show_export_options",
-            text="",
-            icon="TRIA_DOWN" if expanded else "TRIA_RIGHT",
-            emboss=False,
-        )
-        header.label(text="Export Options", icon="EXPORT")
-        if not expanded:
-            return
+        for heading, name, text in (
+            ("Keep", "keep_shapekeys", "Shape Keys"),
+            ("Check", "check_tris", "Triangulation"),
+            ("Create", "create_backfaces", "Backfaces"),
+            ("Reset", "reset_scaling_on_export", "Armature Scaling"),
+            ("Calculate", "calculate_heels_offset", "Heels Offset"),
+        ):
+            layout.column(heading=heading).prop(settings, name, text=text)
+        layout.prop(settings, "remove_yas")
 
-        options = box.box()
-        options.label(text="Model Options")
-        row = options.row(align=True)
-        row.prop(settings, "keep_shapekeys")
-        row.prop(settings, "check_tris")
-        row = options.row(align=True)
-        row.prop(settings, "create_backfaces")
-        row.prop(settings, "reset_scaling_on_export")
-        options.prop(settings, "calculate_heels_offset")
-        options.prop(settings, "remove_yas")
-        options.prop(settings, "backup_models_on_export")
 
-        cleanup = box.box()
-        cleanup.label(text="Vertex Data Fixes")
-        row = cleanup.row(align=True)
-        row.prop(settings, "clear_uv2")
-        row.prop(settings, "copy_uv1_to_uv2")
-        row = cleanup.row(align=True)
-        row.prop(settings, "clear_vertex_color1")
-        row.prop(settings, "clear_vertex_alpha1")
-        row = cleanup.row(align=True)
-        row.prop(settings, "clear_vertex_color2")
-        row.prop(settings, "clear_flow_data")
+class XIVIE_PT_options_vertex_data(Panel):
+    bl_idname = "XIVIE_PT_options_vertex_data"
+    bl_label = "Vertex Data"
+    bl_parent_id = "XIVIE_PT_options"
+    bl_category = CATEGORY
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_options = {"DEFAULT_CLOSED"}
 
-    @staticmethod
-    def _draw_backups(layout, context: Context) -> None:
+    def draw(self, context: Context) -> None:
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
         settings = get_settings()
-        if not settings.backup_models_on_export:
-            return
+        layout.prop(settings, "uv2_mode")
+        layout.prop(settings, "vertex_color1_mode")
+        column = layout.column(heading="Clear")
+        column.prop(settings, "clear_vertex_color2", text="Vertex Color 2")
+        column.prop(settings, "clear_flow_data", text="Flow Data")
+
+
+def _grouped_backups(entries) -> list:
+    """Group backups by original file name, newest group first."""
+    groups: dict[str, list] = {}
+    for entry in entries:
+        groups.setdefault(entry.original_name, []).append(entry)
+    return list(groups.items())
+
+
+class XIVIE_PT_backups(Panel):
+    bl_idname = "XIVIE_PT_backups"
+    bl_label = "Backups"
+    bl_category = CATEGORY
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_options = {"DEFAULT_CLOSED"}
+    bl_order = 4
+
+    def draw_header(self, context: Context) -> None:
+        self.layout.prop(get_settings(), "backup_models_on_export", text="")
+
+    def draw(self, context: Context) -> None:
+        layout = self.layout
+        settings = get_settings()
         try:
-            if export_destination_context(context, persist=False).destination_state == "new_mod_required":
-                return
+            ref = export_destination_context(context, persist=False)
         except ContextValidationError:
-            pass
-        box = layout.box()
-        expanded = settings.show_backups
-        header = box.row(align=True)
-        header.prop(
-            settings,
-            "show_backups",
-            text="",
-            icon="TRIA_DOWN" if expanded else "TRIA_RIGHT",
-            emboss=False,
-        )
-        header.label(text="Backup", icon="FILE_BACKUP")
-        if not expanded:
+            ref = None
+        if ref is not None and ref.destination_state == "new_mod_required":
+            _draw_wrapped_label(layout, context, "Backups start once Quick Export has created the mod.", "INFO")
             return
-
+        if not settings.backup_models_on_export:
+            hint = layout.row()
+            hint.active = False
+            hint.label(text="New backups are off (checkbox above).", icon="INFO")
         folder, source = target_folder(settings, context, persist=False)
         if folder is None:
-            box.label(text=f"{source} is unavailable.", icon="INFO")
+            _draw_wrapped_label(
+                layout, context,
+                "Choose a File Export folder to see its backups." if source == "Simple Export folder"
+                else f"The {source} is unavailable.",
+                "INFO",
+            )
             return
-        box.label(text=f"Folder: {folder}")
         entries = list_backups(folder)
         if not entries:
-            box.label(text="No model backups found.", icon="INFO")
-        for entry in entries:
-            row = box.row(align=True)
-            row.label(text=entry.original_name, icon="FILE")
-            row.label(text=entry.created.astimezone().strftime("%Y-%m-%d %H:%M:%S"))
-            restore = row.operator("xiv_ie.restore_backup", text="", icon="FILE_REFRESH")
-            restore.backup_name = entry.path.name
-            import_op = row.operator("xiv_ie.import_backup", text="", icon="IMPORT")
-            import_op.backup_name = entry.path.name
-        clear = box.row()
-        clear.enabled = bool(entries)
-        clear.operator("xiv_ie.clear_backups", text="Clear All Backups", icon="TRASH")
+            layout.label(text="No backups yet.", icon="INFO")
+            return
+        for original_name, group in _grouped_backups(entries):
+            layout.label(text=original_name, icon="FILE_3D")
+            column = layout.column(align=True)
+            for entry in group:
+                row = column.row(align=True)
+                row.label(text=entry.created.astimezone().strftime("%Y-%m-%d %H:%M:%S"), icon="TIME")
+                row.operator("xiv_ie.import_backup", text="", icon="IMPORT").backup_name = entry.path.name
+                row.operator("xiv_ie.restore_backup", text="", icon="RECOVER_LAST").backup_name = entry.path.name
+        layout.operator("xiv_ie.clear_backups", text="Delete All Backups...", icon="TRASH")
 
-    @staticmethod
-    def _draw_utilities(layout) -> None:
-        props = get_instant_edit_props()
-        box = layout.box()
-        expanded = props.show_utilities
-        header = box.row(align=True)
-        header.prop(
-            props,
-            "show_utilities",
-            text="",
-            icon="TRIA_DOWN" if expanded else "TRIA_RIGHT",
-            emboss=False,
-        )
-        header.label(text="Toolbox", icon="TOOL_SETTINGS")
-        if expanded:
-            box.operator("xiv_ie.combine_armatures", text="Combine Armatures", icon="ARMATURE_DATA")
-            box.operator("xiv_ie.convert_mesh_names", text="Move Mesh IDs to Front", icon="SORTALPHA")
-            box.operator("xiv_ie.compact_context_parts", text="Fill Mesh Part Gaps", icon="SORTALPHA")
-            box.operator("xiv_ie.clear_contexts", text="Clear Contexts", icon="TRASH")
-            split = box.split(factor=0.5, align=True)
-            split.column().operator("xiv_ie.open_cache_folder", text="Open Cache", icon="FILE_FOLDER")
-            split.column().operator(
-                "xiv_ie.open_diagnostics_folder",
-                text="Open Diagnostics",
-                icon="FILE_FOLDER",
-            )
+
+class XIVIE_PT_tools(Panel):
+    bl_idname = "XIVIE_PT_tools"
+    bl_label = "Tools"
+    bl_category = CATEGORY
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_options = {"DEFAULT_CLOSED"}
+    bl_order = 5
+
+    def draw(self, context: Context) -> None:
+        layout = self.layout
+        layout.operator("xiv_ie.combine_armatures", text="Combine Armatures...", icon="ARMATURE_DATA")
+        column = layout.column(align=True)
+        column.operator("xiv_ie.convert_mesh_names", text="Move Mesh IDs to Front", icon="SORTALPHA")
+        column.operator("xiv_ie.compact_context_parts", text="Fill Mesh Part Gaps", icon="SORTSIZE")
+        layout.operator("xiv_ie.clear_contexts", text="Clear All Contexts...", icon="TRASH")
+        row = layout.row(align=True)
+        row.operator("xiv_ie.open_cache_folder", text="Cache", icon="FILE_FOLDER")
+        row.operator("xiv_ie.open_diagnostics_folder", text="Diagnostics", icon="FILE_FOLDER")

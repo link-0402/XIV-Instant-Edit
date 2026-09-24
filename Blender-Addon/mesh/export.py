@@ -9,7 +9,6 @@ from .heels          import apply_calculated_heels_offset
 from .objects        import visible_meshobj
 from ..io.model      import ModelExport, SceneHandler
 from ..io.logging    import YetAnotherLogger
-from ..io.model.data import get_neck_morphs
 from ..properties    import get_settings
 from ..backups       import create_backup
 
@@ -262,7 +261,7 @@ class FileExport:
                                                 scene_handler.export_objs, 
                                                 str(self.file_path) + ".mdl",
                                                 settings.use_lods,
-                                                get_neck_morphs(settings.neck_morph),
+                                                [],
                                                 logger=self.logger,
                                                 **settings.get_model_flags(),
                                                 **settings.get_mesh_options()

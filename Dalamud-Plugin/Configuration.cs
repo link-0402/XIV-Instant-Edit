@@ -47,6 +47,21 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>Name of the scene armature used when <see cref="UseExistingSkeleton"/> is enabled.</summary>
     public string SkeletonObjectName { get; set; } = "Skeleton";
 
+    /// <summary>Blender armature that animations from the Animations tab are keyed onto.</summary>
+    public string AnimationArmatureName { get; set; } = "Skeleton";
+
+    /// <summary>
+    /// Key bone scale in animations sent to Blender. Off leaves scaling applied in Blender,
+    /// such as a Customize+ profile, in place.
+    /// </summary>
+    public bool AnimationKeyScale { get; set; }
+
+    /// <summary>Length of a live pose recording, in seconds.</summary>
+    public float RecordingSeconds { get; set; } = 5f;
+
+    /// <summary>Countdown before a live pose recording starts, in seconds.</summary>
+    public float RecordingDelaySeconds { get; set; } = 3f;
+
     /// <summary>Create display-only Blender materials from the resolved FFXIV resources.</summary>
     public bool ApplyTexturesAndMaterials { get; set; }
 

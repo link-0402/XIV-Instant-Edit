@@ -97,6 +97,16 @@ internal static class AnimationPresentation
     public static string AnimationState(AnimationCapture capture, bool startup) => startup ? "Startup" :
         AnimationCatalog.IsExplicitIdle(capture.Clip.Timeline) || AnimationCatalog.IsExplicitWalk(capture.Clip.Timeline) ? "Loop" : "Emote";
 
+    /// <summary>The Blender action name of a clip: its display name, followed by its name inside the PAP.</summary>
+    public static string ExportName(AnimationCapture capture, bool startup = false)
+    {
+        var name = AnimationName(capture, startup);
+        var clip = startup ? capture.Startup : capture.Clip;
+        return clip == null || string.IsNullOrWhiteSpace(clip.Name) || name.Contains(clip.Name, StringComparison.OrdinalIgnoreCase)
+            ? name
+            : $"{name} ({clip.Name})";
+    }
+
     public static string ModelName(AnimationClip clip)
     {
         var model = new[] { clip.SkeletonPath, clip.GamePath, clip.Resolution?.Selected?.Source.Resource.GamePath }

@@ -5,38 +5,26 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
 from bpy.types import Context, Operator
 
-from .instant_edit.context import ContextValidationError, mesh_ids_from_name, planned_mesh_ids
+from .instant_edit.context import ContextValidationError
 from .materials import (
     ATTRIBUTE_VARIANT_PRESETS,
     FACE_ATTRIBUTE_PRESETS,
     attribute_display_name,
     assign_material_path,
+    backface_copies,
     commit_mesh_id_plan,
-    ensure_flow_data,
     find_material_group,
-    insert_mesh_part_instance,
-    mesh_flow_enabled,
-    mesh_display_name,
     mesh_part_instance_objects,
-    mesh_part_tags,
+    mesh_part_instances,
+    material_mismatch_parts,
     material_paths,
     material_suggestions,
     matching_material_path,
-    mesh_part_slots,
-    move_mesh_part_to_group,
-    move_mesh_part_to_index,
     other_group_materials,
-    rename_mesh_part,
-    set_mesh_flow_enabled,
     set_mesh_part_attribute,
-    set_mesh_part_tags,
-    swap_mesh_groups,
-    swap_mesh_part_instances,
-    swap_mesh_parts,
     convert_suffix_mesh_names,
-    visible_material_group_slots,
-    visible_material_groups,
 )
+from .mesh_list import DragSession, ListMetrics, list_parts, moved_part, placement_plan, scene_parts
 from .mesh.export import check_triangulation, export_result, get_export_stats
 from .mesh.objects import visible_meshobj
 from .mesh.armatures import available_armatures, combine_armatures
@@ -69,188 +57,15 @@ def _redraw(context: Context) -> None:
             area.tag_redraw()
 
 
-def _move_mesh_group_once(
-    mesh_group: int,
-    direction: str,
-    maximum_group: int | None = None,
-) -> int | None:
-    groups = visible_material_group_slots(maximum_group)
-    position = next(
-        (index for index, group in enumerate(groups) if group.mesh_index == mesh_group),
-        -1,
-    )
-    neighbor = position + (-1 if direction == "UP" else 1)
-    if position < 0 or neighbor < 0 or neighbor >= len(groups):
-        return None
-    new_group = groups[neighbor].mesh_index
-    swap_mesh_groups(visible_meshobj(), mesh_group, new_group)
-    return new_group
-
-
-def _move_mesh_part_to_adjacent_group(
-    mesh_group: int,
-    mesh_part: int,
-    direction: str,
-    maximum_group: int | None = None,
-    part_instance_key: str | None = None,
-) -> int | None:
-    step = -1 if direction == "UP" else 1
-    target_group = mesh_group + step
-    if target_group < 0:
-        return None
-    highest_group = max(item.mesh_index for item in visible_material_groups())
-    if target_group > highest_group + 1:
-        return None
-    if maximum_group is not None and target_group > maximum_group:
-        return None
-    return move_mesh_part_to_group(
-        visible_meshobj(),
-        mesh_group,
-        mesh_part,
-        target_group,
-        part_instance_key,
-    )
-
-
-def _move_mesh_part_once(
-    mesh_group: int,
-    mesh_part: int,
-    direction: str,
-    maximum_group: int | None = None,
-    part_instance_key: str | None = None,
-    cross_group_only: bool = False,
-) -> int | None:
-    group = next(
-        (item for item in visible_material_groups() if item.mesh_index == mesh_group),
-        None,
-    )
-    if group is None or mesh_part not in group.parts:
-        return None
-
-    if part_instance_key is not None:
-        if cross_group_only:
-            return _move_mesh_part_to_adjacent_group(
-                mesh_group,
-                mesh_part,
-                direction,
-                maximum_group,
-                part_instance_key,
-            )
-
-        slots = list(mesh_part_slots(group.objects, mesh_group))
-        position = next(
-            (
-                index
-                for index, item in enumerate(slots)
-                if item.part_index == mesh_part
-                and item.instance_key == part_instance_key
-                and not item.is_placeholder
-            ),
-            -1,
-        )
-        if position < 0:
-            return None
-
-        step = -1 if direction == "UP" else 1
-        neighbor = position + step
-        is_duplicate = any(
-            not item.is_placeholder
-            and item.part_index == mesh_part
-            and item.instance_key != part_instance_key
-            for item in slots
-        )
-        # Duplicate rows occupy the same export slot. Skip them until the
-        # drag crosses an actual part ID; this lets either duplicate move
-        # independently without renaming the other duplicate.
-        while 0 <= neighbor < len(slots):
-            target = slots[neighbor]
-            if target.is_placeholder:
-                changed = move_mesh_part_to_index(
-                    visible_meshobj(),
-                    mesh_group,
-                    mesh_part,
-                    target.part_index,
-                    part_instance_key,
-                )
-                if changed:
-                    return target.part_index
-                return None
-            if target.part_index != mesh_part and is_duplicate:
-                # A swap would hand the passed part this duplicate ID. Insert
-                # after it (or before it, moving up) and shift later parts.
-                new_part = target.part_index + (1 if step > 0 else 0)
-                insert_mesh_part_instance(
-                    visible_meshobj(),
-                    mesh_group,
-                    mesh_part,
-                    new_part,
-                    part_instance_key,
-                )
-                return new_part
-            if target.part_index != mesh_part:
-                changed = swap_mesh_part_instances(
-                    visible_meshobj(),
-                    mesh_group,
-                    mesh_part,
-                    part_instance_key,
-                    target.part_index,
-                    target.instance_key,
-                )
-                if changed:
-                    return target.part_index
-                return None
-            neighbor += step
-
-        # There is no distinct part ID in this direction. A duplicate first
-        # takes the free ID just past the group's end, so it can be resolved
-        # without leaving the group; otherwise move to the adjacent group.
-        if is_duplicate:
-            edge = slots[-1].part_index + 1 if step > 0 else slots[0].part_index - 1
-            if edge >= 0:
-                move_mesh_part_to_index(
-                    visible_meshobj(),
-                    mesh_group,
-                    mesh_part,
-                    edge,
-                    part_instance_key,
-                )
-                return edge
-        return _move_mesh_part_to_adjacent_group(
-            mesh_group,
-            mesh_part,
-            direction,
-            maximum_group,
-            part_instance_key,
-        )
-
-    slots = list(mesh_part_slots(group.objects, mesh_group))
-    position = next(
-        (index for index, item in enumerate(slots) if item.part_index == mesh_part),
-        -1,
-    )
-    if position < 0:
-        return None
-    neighbor = position + (-1 if direction == "UP" else 1)
-    if not cross_group_only and 0 <= neighbor < len(slots):
-        target = slots[neighbor]
-        if target.is_placeholder:
-            moved = move_mesh_part_to_index(
-                visible_meshobj(),
-                mesh_group,
-                mesh_part,
-                target.part_index,
-            )
-            return target.part_index if moved else None
-        new_part = target.part_index
-        swap_mesh_parts(visible_meshobj(), mesh_group, mesh_part, new_part)
-        return new_part
-
-    return _move_mesh_part_to_adjacent_group(
-        mesh_group,
-        mesh_part,
-        direction,
-        maximum_group,
-    )
+def _region_zoom(region) -> float:
+    """Pixels per layout pixel of a region's View2D (1.0 unless the user zoomed it)."""
+    try:
+        _x, bottom = region.view2d.view_to_region(0.0, 0.0, clip=False)
+        _x, top = region.view2d.view_to_region(0.0, 1000.0, clip=False)
+    except (AttributeError, RuntimeError, TypeError):
+        return 1.0
+    zoom = abs(top - bottom) / 1000.0
+    return zoom if zoom > 0.0 else 1.0
 
 
 class _new_objects_since:
@@ -364,13 +179,19 @@ def _simple_import_select_objects(objects: list) -> None:
 
 class XIVIE_OT_simple_export(Operator):
     bl_idname = "xiv_ie.simple_export"
-    bl_label = "Simple Export"
-    bl_description = "Export all visible mesh objects using the selected format"
+    bl_label = "Export Model File"
+    bl_description = "Export the meshes chosen by Export Parts to the export folder in the selected format"
     bl_options = {"REGISTER"}
 
     @classmethod
     def poll(cls, context: Context):
-        return context.mode == "OBJECT" and bool(visible_meshobj())
+        if context.mode != "OBJECT":
+            cls.poll_message_set("Switch to Object Mode to export")
+            return False
+        if not visible_meshobj():
+            cls.poll_message_set("There are no visible meshes to export")
+            return False
+        return True
 
     def execute(self, context: Context):
         settings = get_settings()
@@ -425,45 +246,58 @@ class XIVIE_OT_simple_export(Operator):
         return {"FINISHED"}
 
 
+_IMPORT_SUFFIXES = {"MDL": (".mdl",), "FBX": (".fbx",), "GLTF": (".gltf", ".glb")}
+
+
 class XIVIE_OT_simple_import(Operator):
     bl_idname = "xiv_ie.simple_import"
-    bl_label = "Simple Import"
+    bl_label = "Import Model File"
     bl_description = "Import an MDL, FBX, or glTF file into the current scene"
     bl_options = {"REGISTER", "UNDO"}
 
     filepath: StringProperty(options={"HIDDEN"})  # type: ignore
-    filter_glob: StringProperty(subtype="FILE_PATH", options={"HIDDEN"})  # type: ignore
+    filter_glob: StringProperty(
+        default="*.mdl;*.fbx;*.gltf;*.glb",
+        subtype="FILE_PATH",
+        options={"HIDDEN"},
+    )  # type: ignore
     import_format: EnumProperty(
         items=[
+            ("AUTO", "Automatic", "Choose the format from the file extension"),
             ("MDL", "MDL", "FFXIV model"),
             ("FBX", "FBX", "Autodesk FBX"),
             ("GLTF", "glTF", "glTF"),
         ],
-        default="MDL",
+        default="AUTO",
         options={"HIDDEN", "SKIP_SAVE"},
     )  # type: ignore
 
     @classmethod
     def poll(cls, context: Context):
-        return context.mode == "OBJECT"
+        if context.mode != "OBJECT":
+            cls.poll_message_set("Switch to Object Mode to import")
+            return False
+        return True
 
     def invoke(self, context: Context, event):
-        settings = get_settings()
-        self.import_format = settings.import_format
-        self.filter_glob = {"MDL": "*.mdl", "FBX": "*.fbx", "GLTF": "*.gltf;*.glb"}[self.import_format]
         context.window_manager.fileselect_add(self)
         return {"RUNNING_MODAL"}
 
     def execute(self, context: Context):
         file_path = Path(bpy.path.abspath(self.filepath)).resolve()
+        suffix = file_path.suffix.casefold()
         import_format = self.import_format
-        expected_suffixes = {"MDL": (".mdl",), "FBX": (".fbx",), "GLTF": (".gltf", ".glb")}[import_format]
+        if import_format == "AUTO":
+            import_format = next(
+                (name for name, suffixes in _IMPORT_SUFFIXES.items() if suffix in suffixes), "")
+        expected_suffixes = _IMPORT_SUFFIXES.get(import_format, ())
         settings = get_settings()
         skeleton = settings.simple_import_skeleton
         use_existing_skeleton = settings.simple_import_use_existing_skeleton
 
-        if not file_path.is_file() or file_path.suffix.casefold() not in expected_suffixes:
-            valid = "/".join(suffix[1:].upper() for suffix in expected_suffixes)
+        if not file_path.is_file() or suffix not in expected_suffixes:
+            valid = "/".join(
+                item[1:].upper() for item in (expected_suffixes or (".mdl", ".fbx", ".gltf", ".glb")))
             self.report({"ERROR"}, f"Choose a valid {valid} file.")
             return {"CANCELLED"}
         if use_existing_skeleton and (skeleton is None or skeleton.type != "ARMATURE"):
@@ -540,6 +374,25 @@ class XIVIE_OT_restore_backup(Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     backup_name: StringProperty(options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
+
+    def invoke(self, context: Context, event):
+        folder, _source = target_folder(get_settings(), context)
+        entry = next((item for item in list_backups(folder) if item.path.name == self.backup_name), None)
+        if entry is None:
+            self.report({"ERROR"}, "That backup no longer exists.")
+            return {"CANCELLED"}
+        stamp = entry.created.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        return context.window_manager.invoke_confirm(
+            self,
+            event,
+            title="Restore Backup?",
+            message=(
+                f"Replace {entry.original_name} with the backup from {stamp}? "
+                "The current file is backed up first."
+            ),
+            confirm_text="Restore",
+            icon="WARNING",
+        )
 
     def execute(self, context: Context):
         settings = get_settings()
@@ -660,11 +513,16 @@ class XIVIE_OT_clear_backups(Operator):
         folder, _source = target_folder(get_settings(), context)
         self.folder_label = str(folder) if folder is not None else "Unavailable folder"
         self.backup_count = len(list_backups(folder))
-        return context.window_manager.invoke_confirm(self, event)
+        # invoke_confirm never calls draw(); the dialog must show what is deleted.
+        return context.window_manager.invoke_props_dialog(
+            self, width=460, title="Delete All Backups?", confirm_text="Delete")
 
     def draw(self, context: Context):
-        self.layout.label(text=f"Delete {self.backup_count} backup(s) from:")
-        self.layout.label(text=self.folder_label)
+        layout = self.layout
+        count = self.backup_count
+        layout.label(text=f"Delete {count} backup{'s' if count != 1 else ''} from:", icon="ERROR")
+        layout.label(text=self.folder_label, icon="BLANK1")
+        layout.label(text="This cannot be undone.", icon="BLANK1")
 
     def execute(self, context: Context):
         folder, source = target_folder(get_settings(), context)
@@ -685,13 +543,13 @@ class XIVIE_OT_clear_backups(Operator):
 class XIVIE_OT_drag_mesh_order(Operator):
     bl_idname = "xiv_ie.drag_mesh_order"
     bl_label = "Drag to Reorder"
-    bl_description = "Hold and drag vertically to reorder this mesh group or part"
+    bl_description = "Click, move the pointer to the new position, then click again to drop"
     bl_options = {"REGISTER", "UNDO", "BLOCKING"}
 
     scope: EnumProperty(
         items=(
             ("GROUP", "Mesh Group", "Reorder the complete mesh group"),
-            ("PART", "Mesh Part", "Reorder this part inside its mesh group"),
+            ("PART", "Mesh Part", "Move this part within or between mesh groups"),
         ),
         default="GROUP",
         options={"HIDDEN", "SKIP_SAVE"},
@@ -707,64 +565,48 @@ class XIVIE_OT_drag_mesh_order(Operator):
     @classmethod
     def description(cls, context, properties):
         item = "mesh group" if properties.scope == "GROUP" else "mesh part"
-        return f"Hold and drag vertically to reorder this {item}; release to drop; Esc or right-click cancels"
+        # Blender runs button operators on release, so the drag starts on a click.
+        return (
+            f"Click to pick up this {item}, move the pointer to where it should go, "
+            "and click again to drop it there. Esc or right-click cancels"
+        )
 
     def invoke(self, context: Context, event):
         global _ACTIVE_MESH_DRAG, _ACTIVE_MESH_DRAG_PLAN
-        if self.scope == "GROUP":
-            group = find_material_group(context, self.mesh_group)
-            targets = group.objects if group is not None else ()
-        else:
-            targets = mesh_part_instance_objects(
-                visible_meshobj(),
+        try:
+            self._session = DragSession(
+                scene_parts(),
+                ListMetrics.from_preferences(context.preferences),
+                self.scope,
                 self.mesh_group,
                 self.mesh_part,
-                self.mesh_part_instance or None,
+                self.mesh_part_instance,
             )
-        if not targets:
-            self.report({"ERROR"}, "The mesh item is no longer visible.")
+        except LookupError as error:
+            self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
-
-        self._dragged_objects = tuple(targets)
-        self._dragged_ids = {obj.as_pointer() for obj in targets}
+        # The layout is in unzoomed pixels; Ctrl+Middle-mouse can zoom the sidebar.
+        self._zoom = _region_zoom(getattr(context, "region", None))
+        self._start_y = event.mouse_y
         self._visible_objects = tuple(visible_meshobj())
-        # Moves are planned here and previewed in the panel; objects are only
-        # renamed once, when the drag is released.
-        self._plan = {}
-        _ACTIVE_MESH_DRAG_PLAN = self._plan
-        self._last_mouse_y = event.mouse_y
-        self._drag_distance = 0.0
-        self._part_drag_group_lock = None
-        self._step = max(18.0, 22.0 * context.preferences.system.ui_scale)
-        self._maximum_group = max(
-            group.mesh_index for group in visible_material_groups()
-        ) + 1
-        _ACTIVE_MESH_DRAG = (
-            self.scope,
-            self.mesh_group,
-            self.mesh_part,
-            self._maximum_group,
-            self.mesh_part_instance,
-        )
+        _ACTIVE_MESH_DRAG = self._session.drag_state()
+        _ACTIVE_MESH_DRAG_PLAN = self._session.plan()
 
         context.window.cursor_modal_set("MOVE_Y")
         context.workspace.status_text_set(
-            "Hold and drag vertically to reorder; release to drop; Esc or right-click to cancel"
+            "Move the pointer to where it should go and click to drop; Esc or right-click to cancel"
         )
         context.window_manager.modal_handler_add(self)
         _redraw(context)
         return {"RUNNING_MODAL"}
 
     def modal(self, context: Context, event):
+        global _ACTIVE_MESH_DRAG, _ACTIVE_MESH_DRAG_PLAN
         if event.type == "MOUSEMOVE":
-            self._drag_distance += event.mouse_y - self._last_mouse_y
-            self._last_mouse_y = event.mouse_y
-            while abs(self._drag_distance) >= self._step:
-                direction = "UP" if self._drag_distance > 0 else "DOWN"
-                if not self._move_once(context, direction):
-                    self._drag_distance = 0.0
-                    break
-                self._drag_distance += -self._step if direction == "UP" else self._step
+            if self._session.update((self._start_y - event.mouse_y) / self._zoom):
+                _ACTIVE_MESH_DRAG = self._session.drag_state()
+                _ACTIVE_MESH_DRAG_PLAN = self._session.plan()
+                _redraw(context)
             return {"RUNNING_MODAL"}
 
         if event.type in {"ESC", "RIGHTMOUSE", "WINDOW_DEACTIVATE"}:
@@ -780,119 +622,189 @@ class XIVIE_OT_drag_mesh_order(Operator):
 
         return {"RUNNING_MODAL"}
 
-    def _move_once(self, context: Context, direction: str) -> bool:
-        with planned_mesh_ids(self._plan):
-            return self._plan_move_once(context, direction)
-
-    def _plan_move_once(self, context: Context, direction: str) -> bool:
-        global _ACTIVE_MESH_DRAG
-        try:
-            mesh_group, mesh_part, _lod = mesh_ids_from_name(self._dragged_objects[0])
-        except Exception:
-            return False
-        try:
-            cross_group_only = (
-                self.scope == "PART"
-                and self._part_drag_group_lock == mesh_group
-            )
-            if self.scope == "GROUP":
-                moved = _move_mesh_group_once(
-                    mesh_group,
-                    direction,
-                    self._maximum_group,
-                )
-            else:
-                moved = _move_mesh_part_once(
-                    mesh_group,
-                    mesh_part,
-                    direction,
-                    self._maximum_group,
-                    self.mesh_part_instance or None,
-                    cross_group_only=cross_group_only,
-                )
-        except ValueError as error:
-            self.report({"ERROR"}, str(error))
-            return False
-        if moved is None:
-            return False
-        new_group, new_part, _lod = mesh_ids_from_name(self._dragged_objects[0])
-        if self.scope == "PART" and new_group != mesh_group:
-            # Keep the newly entered group locked for this drag. Further
-            # movement crosses groups instead of reordering inside it.
-            self._part_drag_group_lock = new_group
-        if self.scope == "PART" and new_group != self.mesh_group:
-            # Parts passed on the way out of the source group return to their
-            # own IDs; only the dragged part leaves.
-            for pointer in tuple(self._plan):
-                if pointer not in self._dragged_ids:
-                    del self._plan[pointer]
-        _ACTIVE_MESH_DRAG = (
-            self.scope,
-            new_group,
-            new_part,
-            self._maximum_group,
-            self.mesh_part_instance,
-        )
-        _redraw(context)
-        return True
-
     def _finish(self, context: Context, cancelled: bool):
         global _ACTIVE_MESH_DRAG, _ACTIVE_MESH_DRAG_PLAN
         _ACTIVE_MESH_DRAG = None
         _ACTIVE_MESH_DRAG_PLAN = None
         context.window.cursor_modal_restore()
         context.workspace.status_text_set(None)
-        if not cancelled:
+        plan = self._session.plan()
+        if not cancelled and plan:
             try:
-                commit_mesh_id_plan(self._plan, self._visible_objects)
+                commit_mesh_id_plan(plan, self._visible_objects)
             except ValueError as error:
                 self.report({"ERROR"}, str(error))
                 cancelled = True
         _redraw(context)
-        return {"CANCELLED"} if cancelled else {"FINISHED"}
+        return {"CANCELLED"} if cancelled or not plan else {"FINISHED"}
 
 
-class XIVIE_OT_rename_mesh_part(Operator):
-    bl_idname = "xiv_ie.rename_mesh_part"
-    bl_label = "Rename Mesh Part"
-    bl_description = "Rename this part without changing its export ID"
+class XIVIE_OT_select_mesh_part(Operator):
+    bl_idname = "xiv_ie.select_mesh_part"
+    bl_label = "Select Mesh Part"
+    bl_description = "Select this part's objects; Shift-click adds or removes them"
     bl_options = {"REGISTER", "UNDO"}
 
     mesh_group: IntProperty(default=0, min=0, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
     mesh_part: IntProperty(default=0, min=0, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
     mesh_part_instance: StringProperty(default="", options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
-    new_name: StringProperty(name="Part Name", maxlen=128)  # type: ignore
+    extend: BoolProperty(name="Extend", default=False, options={"SKIP_SAVE"})  # type: ignore
+
+    @classmethod
+    def poll(cls, context: Context):
+        if context.mode != "OBJECT":
+            cls.poll_message_set("Switch to Object Mode to select mesh parts")
+            return False
+        return True
+
+    @classmethod
+    def description(cls, context, properties):
+        lines = [cls.bl_description]
+        group = find_material_group(context, properties.mesh_group)
+        if group is not None:
+            if properties.mesh_part in material_mismatch_parts(group.objects):
+                lines.append("Its material differs from the rest of the mesh group.")
+            instances = mesh_part_instances(group.objects, properties.mesh_group, properties.mesh_part)
+            if len(instances) > 1:
+                lines.append("Another visible part uses the same number; drag one of them to a free slot.")
+        return "\n".join(lines)
 
     def invoke(self, context: Context, event):
+        self.extend = event.shift
+        return self.execute(context)
+
+    def execute(self, context: Context):
         objects = mesh_part_instance_objects(
             visible_meshobj(),
             self.mesh_group,
             self.mesh_part,
             self.mesh_part_instance or None,
         )
+        objects = [obj for obj in objects if obj.name in context.view_layer.objects]
         if not objects:
             self.report({"ERROR"}, f"Mesh part {self.mesh_group}.{self.mesh_part} is no longer visible.")
             return {"CANCELLED"}
-        self.new_name = mesh_display_name(objects[0])
-        return context.window_manager.invoke_props_dialog(self, width=420)
+        # Shift-click toggles like the Outliner: a fully selected part is removed.
+        deselect = self.extend and all(obj.select_get() for obj in objects)
+        if not self.extend:
+            for obj in context.selected_objects:
+                obj.select_set(False)
+        for obj in objects:
+            obj.select_set(not deselect)
+        if not deselect:
+            context.view_layer.objects.active = objects[0]
+        _redraw(context)
+        return {"FINISHED"}
 
-    def draw(self, context: Context):
-        self.layout.label(text=f"Rename mesh part {self.mesh_group}.{self.mesh_part}")
-        self.layout.prop(self, "new_name", text="Name")
+
+def _share_local_views(context: Context, pairs) -> None:
+    """Show each copy in every local view its original is shown in, as Duplicate does."""
+    if context.screen is None:
+        return
+    for area in context.screen.areas:
+        space = area.spaces.active if area.type == "VIEW_3D" else None
+        if space is None or space.local_view is None:
+            continue
+        for original, copy in pairs:
+            if original.local_view_get(space):
+                copy.local_view_set(space, True)
+
+
+def _flip_normals_in_edit_mode(context: Context, objects) -> None:
+    """Run Edit Mode's Normals > Flip on every face of `objects`, leaving them selected.
+
+    Only the Edit Mode operator also reverses custom normals, which imported
+    meshes carry; Mesh.flip_normals() and bmesh's reverse_faces leave them.
+    """
+    for obj in context.selected_objects:
+        obj.select_set(False)
+    for obj in objects:
+        obj.select_set(True)
+    context.view_layer.objects.active = objects[0]
+    bpy.ops.object.mode_set(mode="EDIT")
+    try:
+        if any(obj.mode != "EDIT" for obj in objects):
+            raise RuntimeError("the duplicate could not enter Edit Mode")
+        bpy.ops.mesh.select_all(action="SELECT")
+        bpy.ops.mesh.flip_normals()
+    finally:
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def _remove_objects(objects) -> None:
+    for obj in objects:
+        mesh = obj.data
+        bpy.data.objects.remove(obj, do_unlink=True)
+        if mesh is not None and mesh.users == 0:
+            bpy.data.meshes.remove(mesh)
+
+
+class XIVIE_OT_duplicate_backfaces(Operator):
+    bl_idname = "xiv_ie.duplicate_backfaces"
+    bl_label = "Generate Duplicate with Backfaces"
+    bl_description = (
+        "Duplicate this part as the next part number, moving parts in the way up by one, "
+        "and flip the duplicate's normals"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    mesh_group: IntProperty(default=0, min=0, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
+    mesh_part: IntProperty(default=0, min=0, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
+    mesh_part_instance: StringProperty(default="", options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
+
+    @classmethod
+    def poll(cls, context: Context):
+        if context.mode != "OBJECT":
+            cls.poll_message_set("Switch to Object Mode to duplicate mesh parts")
+            return False
+        return True
 
     def execute(self, context: Context):
-        try:
-            rename_mesh_part(
-                visible_meshobj(),
-                self.mesh_group,
-                self.mesh_part,
-                self.new_name,
-                self.mesh_part_instance or None,
-            )
-        except ValueError as error:
-            self.report({"ERROR"}, str(error))
+        visible = tuple(visible_meshobj())
+        originals = mesh_part_instance_objects(
+            visible,
+            self.mesh_group,
+            self.mesh_part,
+            self.mesh_part_instance or None,
+        )
+        if not originals:
+            self.report({"ERROR"}, f"Mesh part {self.mesh_group}.{self.mesh_part} is no longer visible.")
             return {"CANCELLED"}
+        copies = backface_copies(originals)
+        _share_local_views(context, list(zip(originals, copies)))
+        try:
+            _flip_normals_in_edit_mode(context, copies)
+            objects = visible + tuple(copies)
+            parts = list_parts(objects)
+            added = next(part for part in parts if copies[0] in part.objects)
+            # The copy shares the original's number, so dropping it one higher
+            # inserts it: parts in the way move up until a free number.
+            placement = moved_part(parts, added.ident, self.mesh_group, self.mesh_part + 1)
+            commit_mesh_id_plan(placement_plan(parts, placement), objects)
+        except (RuntimeError, ValueError) as error:
+            _remove_objects(copies)
+            self.report({"ERROR"}, f"Could not add the backface part: {error}")
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"Added part {self.mesh_group}.{self.mesh_part + 1} with flipped normals")
         _redraw(context)
+        return {"FINISHED"}
+
+
+class XIVIE_OT_copy_text(Operator):
+    bl_idname = "xiv_ie.copy_text"
+    bl_label = "Copy"
+    bl_description = "Copy this text to the clipboard"
+    bl_options = {"INTERNAL"}
+
+    text: StringProperty(default="", maxlen=8192, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
+
+    @classmethod
+    def description(cls, context, properties):
+        return f"Copy to the clipboard:\n{properties.text}" if properties.text else cls.bl_description
+
+    def execute(self, context: Context):
+        context.window_manager.clipboard = self.text
+        self.report({"INFO"}, "Copied to the clipboard")
         return {"FINISHED"}
 
 
@@ -932,7 +844,15 @@ class XIVIE_OT_combine_armatures(Operator):
         self.additional_armature = next(
             (obj.name for obj in context.selected_objects
              if obj.type == "ARMATURE" and obj != active), "")
-        return context.window_manager.invoke_props_dialog(self, width=480)
+        # With exactly two rigs available there is only one sensible pairing.
+        armatures = [obj.name for obj in available_armatures(context)]
+        if len(armatures) == 2:
+            if self.base_armature not in armatures:
+                self.base_armature = armatures[0]
+            if self.additional_armature not in armatures or self.additional_armature == self.base_armature:
+                self.additional_armature = next(name for name in armatures if name != self.base_armature)
+        return context.window_manager.invoke_props_dialog(
+            self, width=480, title="Combine Armatures", confirm_text="Combine")
 
     def draw(self, context: Context):
         self.layout.prop(self, "base_armature")
@@ -980,48 +900,6 @@ class XIVIE_OT_convert_mesh_names(Operator):
         return {"FINISHED"}
 
 
-class XIVIE_OT_mesh_tags(Operator):
-    bl_idname = "xiv_ie.mesh_tags"
-    bl_label = "Mesh Part Tags"
-    bl_description = "Set comma-separated tags on this mesh part"
-    bl_options = {"REGISTER", "UNDO"}
-
-    mesh_group: IntProperty(default=0, min=0, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
-    mesh_part: IntProperty(default=0, min=0, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
-    mesh_part_instance: StringProperty(default="", options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
-    tags: StringProperty(name="Tags", description="Comma-separated tags attached to this model part", maxlen=512)  # type: ignore
-
-    def invoke(self, context: Context, event):
-        objects = mesh_part_instance_objects(
-            visible_meshobj(),
-            self.mesh_group,
-            self.mesh_part,
-            self.mesh_part_instance or None,
-        )
-        if not objects:
-            self.report({"ERROR"}, f"Mesh part {self.mesh_group}.{self.mesh_part} is no longer visible.")
-            return {"CANCELLED"}
-        self.tags = mesh_part_tags(objects)
-        if self.tags == "<multiple>":
-            self.tags = ""
-        return context.window_manager.invoke_props_dialog(self, width=520)
-
-    def draw(self, context: Context):
-        self.layout.label(text=f"Tags for mesh part {self.mesh_group}.{self.mesh_part}")
-        self.layout.prop(self, "tags", text="")
-
-    def execute(self, context: Context):
-        set_mesh_part_tags(
-            visible_meshobj(),
-            self.mesh_group,
-            self.mesh_part,
-            self.tags,
-            self.mesh_part_instance or None,
-        )
-        _redraw(context)
-        return {"FINISHED"}
-
-
 class XIVIE_OT_mesh_attribute(Operator):
     bl_idname = "xiv_ie.mesh_attribute"
     bl_label = "Mesh Part Attribute"
@@ -1064,12 +942,19 @@ class XIVIE_OT_mesh_attribute(Operator):
     def invoke(self, context: Context, event):
         if self.attribute != "NEW":
             return self.execute(context)
-        return context.window_manager.invoke_props_dialog(self, width=320)
+        return context.window_manager.invoke_props_dialog(
+            self, width=340, title=f"Add Attribute to Part {self.mesh_group}.{self.mesh_part}",
+            confirm_text="Add")
 
     def draw(self, context: Context):
         layout = self.layout
-        layout.prop(self, "custom", icon="FILE_TEXT")
-        layout.prop(self, "custom_attribute" if self.custom else "selection")
+        row = layout.row(align=True)
+        row.prop(self, "custom", text="Preset", toggle=True, invert_checkbox=True)
+        row.prop(self, "custom", text="Custom", toggle=True)
+        if self.custom:
+            layout.prop(self, "custom_attribute", placeholder="atrx_name or heels_offset=0.15")
+        else:
+            layout.prop(self, "selection")
 
     def execute(self, context: Context):
         value = self.custom_attribute if self.custom else self.selection
@@ -1091,41 +976,6 @@ class XIVIE_OT_mesh_attribute(Operator):
         _redraw(context)
         verb = "Added" if enabled else "Removed"
         self.report({"INFO"}, f"{verb} {attribute} on mesh part {self.mesh_group}.{self.mesh_part}")
-        return {"FINISHED"}
-
-
-class XIVIE_OT_mesh_flow(Operator):
-    bl_idname = "xiv_ie.mesh_flow"
-    bl_label = "Mesh Flow Data"
-    bl_description = "Create or toggle XIV flow data for this mesh group"
-    bl_options = {"REGISTER", "UNDO"}
-
-    mesh_group: IntProperty(default=0, min=0, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
-    action: StringProperty(default="ADD", options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
-
-    @classmethod
-    def poll(cls, context: Context):
-        return context.mode == "OBJECT"
-
-    @classmethod
-    def description(cls, context, properties):
-        if properties.action == "TOGGLE":
-            return "Toggle whether the MDL exporter includes this mesh group's flow data"
-        return "Add a neutral XIV flow colour channel to every part in this mesh group"
-
-    def execute(self, context: Context):
-        group = find_material_group(context, self.mesh_group)
-        if group is None:
-            self.report({"ERROR"}, f"Mesh group {self.mesh_group} is no longer available.")
-            return {"CANCELLED"}
-        if self.action == "TOGGLE":
-            enabled = not mesh_flow_enabled(group.objects)
-            set_mesh_flow_enabled(group.objects, enabled)
-            self.report({"INFO"}, f"Mesh group {self.mesh_group}: flow export {'enabled' if enabled else 'disabled'}")
-        else:
-            updated = ensure_flow_data(group.objects)
-            self.report({"INFO"}, "Flow colour channels updated." if updated else "All flow colour channels already exist.")
-        _redraw(context)
         return {"FINISHED"}
 
 
@@ -1174,6 +1024,16 @@ class XIVIE_OT_mesh_material(Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     mesh_group: IntProperty(default=0, min=0, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
+
+    @classmethod
+    def description(cls, context, properties):
+        group = find_material_group(context, properties.mesh_group)
+        paths = material_paths(group.objects) if group is not None else []
+        if len(paths) == 1:
+            return f"{paths[0]}\nChange the FFXIV material of mesh group {properties.mesh_group}"
+        if paths:
+            return "The parts of this mesh group use different materials:\n" + "\n".join(paths)
+        return f"Set the FFXIV material of mesh group {properties.mesh_group}"
 
     def _material_search(self, context, edit_text):
         group = find_material_group(context, self.mesh_group)
@@ -1234,11 +1094,11 @@ class XIVIE_OT_mesh_material(Operator):
         return context.window_manager.invoke_props_dialog(
             self,
             width=520,
+            title=f"Material for Mesh Group {self.mesh_group}",
             confirm_text="Assign Material",
         )
 
     def draw(self, context: Context):
-        self.layout.label(text=f"Mesh Group {self.mesh_group}")
         self.layout.prop(self, "material", text="")
         if not _QUICK_MATERIALS:
             return

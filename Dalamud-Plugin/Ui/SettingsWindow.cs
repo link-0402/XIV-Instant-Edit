@@ -1,8 +1,10 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using InstantEdit.Services;
+using InstantEdit.Services.Animations;
 
 namespace InstantEdit.Ui;
 
@@ -16,6 +18,9 @@ public sealed class SettingsWindow : Window
     private readonly Action _requestCacheSynchronization;
     private readonly Action _openSetup;
     private readonly string _cacheStartupError;
+    private AnimationEditService? _animations;
+    private string? _animationError;
+    private DateTime? _savedSkeletonLibrary;
 
     public SettingsWindow(Configuration config, Action saveConfig, Action restartExportListener, IPluginLog log,
         Action requestCacheSynchronization, Action openSetup, string cacheStartupError = "")
@@ -43,6 +48,15 @@ public sealed class SettingsWindow : Window
 
     public void Open() => IsOpen = true;
     public void Close() => IsOpen = false;
+
+    internal void AttachAnimations(AnimationEditService? service, string? error)
+    {
+        _animations = service;
+        _animationError = error;
+    }
+
+    // Before the library is loaded this session, Settings shows when the saved one was built.
+    public override void OnOpen() => _savedSkeletonLibrary = _animations?.SavedSkeletonLibraryUtc();
 
     public override void Draw()
     {
@@ -110,6 +124,61 @@ public sealed class SettingsWindow : Window
                 "Choose another cache directory (or empty this one), then reload the plugin. " +
                 "Model backups are kept in the plugin's config folder until then.");
         }
+        ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Skeleton library");
+        DrawSkeletonLibrary();
+    }
+
+    /// <summary>The library of every skeleton in the installed mods that animations are matched against.</summary>
+    private void DrawSkeletonLibrary()
+    {
+        ImGui.TextWrapped("Animations are matched to the skeleton they were made for from a library of every skeleton in your " +
+                          "Penumbra mods. It is built once, saved in the cache folder, and only built again with this button.");
+        var service = _animations;
+        if (service is null)
+        {
+            Widgets.Hint(_animationError ?? "Animation integration is unavailable.");
+            return;
+        }
+        var library = service.SkeletonLibrary;
+        var working = library.State is SkeletonLibraryState.Loading or SkeletonLibraryState.Building;
+        using (ImRaii.Disabled(working))
+        {
+            if (ImGui.Button("Rebuild skeleton library"))
+                service.RebuildSkeletonLibrary();
+        }
+        ImGui.SameLine();
+        Widgets.Hint("After installing, updating or removing skeleton mods.");
+        switch (library.State)
+        {
+            case SkeletonLibraryState.NotLoaded:
+                Widgets.HintWrapped(_savedSkeletonLibrary is { } saved
+                    ? $"Saved {saved.ToLocalTime():g}. It loads the first time an animation is matched."
+                    : "Not built yet. It is built the first time an animation is matched, or now with the button.");
+                break;
+            case SkeletonLibraryState.Loading:
+                Widgets.HintWrapped("Loading the saved library…");
+                break;
+            case SkeletonLibraryState.Building:
+                Widgets.HintWrapped(library.Total == 0
+                    ? "Building: looking for skeletons in your mods…"
+                    : $"Building: {library.Progress} of {library.Total} skeleton files read. Animations are matched once it is done.");
+                break;
+            case SkeletonLibraryState.Ready:
+                Widgets.HintWrapped($"{library.Skeletons} skeletons from {library.Files} files, built {library.BuiltUtc?.ToLocalTime():g}.");
+                if (library.Missing > 0 || library.Changed > 0)
+                    Widgets.Banner("##skeleton-library-stale", FeedbackSeverity.Warning,
+                        $"Since then, {Files(library.Missing)} of it were removed and {Files(library.Changed)} changed. Rebuild to pick those changes up.");
+                if (library.Error is { } saveError)
+                    Widgets.Banner("##skeleton-library-save", FeedbackSeverity.Warning, saveError);
+                break;
+            case SkeletonLibraryState.Failed:
+                Widgets.Banner("##skeleton-library-failed", FeedbackSeverity.Error,
+                    $"The last build failed: {library.Error}" +
+                    (library.Skeletons > 0 ? " The previous library stays in use." : ""));
+                break;
+        }
+
+        static string Files(int count) => count == 1 ? "1 file" : $"{count} files";
     }
 
     private void Save()

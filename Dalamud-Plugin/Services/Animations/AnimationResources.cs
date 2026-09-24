@@ -86,7 +86,7 @@ internal sealed class AnimationResources(PenumbraService penumbra, IDataManager 
             {
                 var roots = await penumbra.AnimationSkeletonRootsAsync();
                 if (!roots.Any(r => r.Directory == source.Resource.ModDirectory && string.Equals(r.Root, source.Resource.ModRoot, StringComparison.OrdinalIgnoreCase)))
-                    throw new IOException("The source skeleton mod moved or was removed. Rescan skeletons.");
+                    throw new IOException("The source skeleton mod moved or was removed. Rebuild the skeleton library in Settings.");
             }
             if ((await ReadSkeletonAsync(capture.CollectionId, source, token)).Source != source)
                 throw new IOException("The processing skeleton changed. Refresh the animation capture.");

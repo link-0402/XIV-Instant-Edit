@@ -219,9 +219,14 @@ public sealed partial class MainWindow : Window, IDisposable
         }
 
         _activeTab = activeTab;
-        if (!animationsTabActive)
+        // The listener runs for the Animations tab, and for On Screen while its Animations filter
+        // is on. It is not started otherwise: until a skeleton library is saved, its first match builds one.
+        if (activeTab == MainTab.OnScreen && _kinds.Contains(ResourceKinds.Animation))
+            animations?.StartObservation();
+        else if (!animationsTabActive)
             animations?.StopObservation();
         DrawTextureDialogs();
+        DrawAnimationSendDialog();
         DrawStatusStrip(GetFeedback(activeTab));
         DrawWindowOptionsExtension();
     }
@@ -300,7 +305,7 @@ public sealed partial class MainWindow : Window, IDisposable
         if (Widgets.IconButton("##refresh", FontAwesomeIcon.Sync, refreshing ? "Refreshing the on-screen resource list…" : "Refresh the on-screen resource list", !refreshing))
             RequestRefresh();
         ImGui.SameLine();
-        if (Widgets.IconButton("##options", FontAwesomeIcon.SlidersH, "Model import and texture options"))
+        if (Widgets.IconButton("##options", FontAwesomeIcon.SlidersH, "Model import, texture and animation export options"))
             ImGui.OpenPopup(OptionsPopupName);
         DrawOptionsPopup();
         ImGui.Separator();
@@ -339,6 +344,11 @@ public sealed partial class MainWindow : Window, IDisposable
         ImGui.Spacing();
         Widgets.SectionHeader("Texture editing");
         DrawTextureOptions();
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+        Widgets.SectionHeader("Animation export");
+        DrawAnimationExportOptions();
     }
 
     /// <summary> The bottom row: latest message for the active tab, busy indicator, and the history popover. </summary>

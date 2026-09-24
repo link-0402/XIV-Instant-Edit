@@ -450,10 +450,20 @@ internal sealed class AnimationObserver : IDisposable
         return pap;
     }
 
-    public void RescanSkeletons()
+    /// <summary>Matches every animation to a source skeleton again, for example after the skeleton library was rebuilt.</summary>
+    public void RefreshSkeletonMatches()
     {
-        skeletons.Rescan(); resolutions.Clear(); manualChoices.Clear(); operationErrors.Clear();
+        resolutions.Clear(); manualChoices.Clear(); operationErrors.Clear();
         lastStamp = null; nextFallback = DateTime.MinValue; resourceCache.Clear(); motionCache.Clear(); parsedPaps.Clear(); durations.Clear();
+        // Recent animations are not observed again; send them back through matching.
+        history = history.Select(c => c with
+        {
+            Clip = c.Clip with { Resolution = new(SkeletonResolutionState.Searching, [], Reason: "Finding a compatible source skeleton…") },
+            Startup = c.Startup == null ? null : c.Startup with { Resolution = new(SkeletonResolutionState.Searching, []) },
+        }).ToImmutableArray();
+        // A match still running from before the rebuild stops at its revision check.
+        if (!history.IsEmpty)
+            matching = MatchAsync(history.ToArray(), generation, lifetime.Token);
     }
     // An in-place edit changes a file's hash but does not itself change what
     // the game has resident in memory (Penumbra does not hot-reload PAPs). The

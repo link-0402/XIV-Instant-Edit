@@ -324,6 +324,75 @@ finally
         Directory.Delete(importRoot, true);
 }
 
+var keyed = BlenderClient.ParseAnimationResponse(HttpStatusCode.OK,
+    """{"ok":true,"queued":false,"applied":true,"action":"Live pose 19:42:07","armature":"Skeleton","frames":301,"frameRate":60.0,"frameStart":1,"frameEnd":301,"matchedBones":438,"missingBoneCount":6,"missingBones":["n_hara","iv_ochinko_a","iv_ochinko_b","iv_ochinko_c","iv_ochinko_d","iv_ochinko_e"]}""");
+Require(
+    keyed is { Applied: true, Action: "Live pose 19:42:07", Armature: "Skeleton", Frames: 301, FrameStart: 1, FrameEnd: 301,
+        MatchedBones: 438, MissingBoneCount: 6 } && keyed.MissingBones!.Count == 6 && keyed.FrameRate == 60,
+    "an animation Blender keyed reports its action, armature, frames and bone match");
+Require(
+    keyed.Describe().Contains("\"Live pose 19:42:07\" on \"Skeleton\"", StringComparison.Ordinal) &&
+    keyed.Describe().Contains("6 bones are not in the armature (n_hara, iv_ochinko_a, iv_ochinko_b, iv_ochinko_c, …)", StringComparison.Ordinal),
+    "the animation summary names the action and the first bones the armature lacks");
+var queuedAnimation = BlenderClient.ParseAnimationResponse(HttpStatusCode.Accepted, """{"ok":true,"queued":true,"applied":false}""");
+Require(!queuedAnimation.Applied && queuedAnimation.Describe().Contains("idle", StringComparison.Ordinal),
+    "an animation Blender could not key yet is reported as queued");
+try
+{
+    BlenderClient.ParseAnimationResponse((HttpStatusCode)422,
+        """{"component":"blender_addon","operation":"animation_import","stage":"animation_processing","code":"animation_no_matching_bones","cause":"Armature \"Skeleton\" has none of the animation's 7 bones.","remedy":"Send the animation to the FFXIV skeleton armature your meshes are weighted to.","diagnosticId":"89abcdef"}""");
+    throw new InvalidOperationException("animation failure did not throw");
+}
+catch (BlenderBridgeException error)
+{
+    Require(
+        error.HttpStatus == 422 && error.Failure.Stage == "animation_processing" &&
+        error.Failure.Code == "animation_no_matching_bones" &&
+        error.Failure.UserMessage.StartsWith("Blender animation import failed during animation processing", StringComparison.Ordinal),
+        "an animation Blender could not use reports Blender's reason");
+}
+foreach (var unconfirmed in new[] { "{}", """{"applied":false}""", "not JSON" })
+{
+    try
+    {
+        BlenderClient.ParseAnimationResponse(HttpStatusCode.OK, unconfirmed);
+        throw new InvalidOperationException("unconfirmed animation success did not throw");
+    }
+    catch (BlenderBridgeException error)
+    {
+        Require(error.Failure.Code == "invalid_success_response" && error.Failure.Operation == "animation_import",
+            $"an animation response that confirms nothing is refused ({unconfirmed})");
+    }
+}
+var animationHandler = new StubHandler(() => new HttpResponseMessage(HttpStatusCode.OK)
+{
+    Content = new StringContent("""{"ok":true,"applied":true,"action":"Walk","armature":"Skeleton","frames":31,"frameRate":30,"frameStart":1,"frameEnd":31,"matchedBones":7,"missingBoneCount":0,"missingBones":[]}"""),
+}, null);
+using (var animationHttp = new HttpClient(animationHandler))
+using (var animationContexts = new ExportContextRegistry("blender-animation-regression", persist: null))
+using (var animationClient = new BlenderClient(null!, animationContexts, animationHttp))
+{
+    var sent = await animationClient.SendAnimationAsync(42424, "XIEA"u8.ToArray());
+    Require(sent is { Applied: true, Action: "Walk", Frames: 31 } && animationHandler.LastMethod == "POST" && animationHandler.LastBody == "XIEA",
+        "an animation is posted to Blender as its encoded take and the confirmation is parsed");
+}
+using (var offlineHttp = new HttpClient(new StubHandler(null, new HttpRequestException("refused"))))
+using (var offlineContexts = new ExportContextRegistry("blender-animation-offline", persist: null))
+using (var offlineClient = new BlenderClient(null!, offlineContexts, offlineHttp))
+{
+    try
+    {
+        await offlineClient.SendAnimationAsync(42424, [1]);
+        throw new InvalidOperationException("offline animation send did not throw");
+    }
+    catch (BlenderBridgeException error)
+    {
+        Require(error.Failure.Stage == "transport" && error.Failure.Code == "blender_connection_failed" &&
+                error.Failure.Operation == "animation_import",
+            "an animation that cannot reach Blender reports a transport failure");
+    }
+}
+
 var safeText = BridgeFailure.Safe(
     "Could not read C:\\Users\\Example\\AppData\\Local\\Temp\\model.mdl or /home/example/model.mdl " +
     "and received {\"capability\":\"private-value\"}");

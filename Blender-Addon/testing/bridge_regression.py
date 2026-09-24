@@ -1118,7 +1118,6 @@ def run_staging_isolation_regression(addon) -> None:
         variant_group.selection_id = "group:11111111-1111-1111-1111-111111111111"
         variant_group.kind = "GROUP"
         variant_group.group_name = "Group A"
-        variant_group.expanded = True
         variant_option = instant_props.variant_targets.add()
         variant_option.selection_id = "option:11111111-1111-1111-1111-111111111111:22222222-2222-2222-2222-222222222222"
         variant_option.kind = "OPTION"
@@ -1130,12 +1129,6 @@ def run_staging_isolation_regression(addon) -> None:
             ops.selected_variant_target(instant_props).group_name == "Group A",
             "a compatible Penumbra group can be selected from the cached tree",
         )
-        _require(
-            bpy.ops.xiv_ie.toggle_variant_target_group(selection_id=variant_group.selection_id) == {"FINISHED"} and
-            not variant_group.expanded,
-            "Penumbra target groups can be collapsed independently",
-        )
-        variant_group.expanded = True
         group_payload = ops.build_export_payload(
             SimpleNamespace(plugin_instance_id="plugin-instance", context_id="context-id", capability="capability"),
             "export-id", Path(tempfile.gettempdir()) / "variant-tree-test.mdl", 1, "0" * 64,

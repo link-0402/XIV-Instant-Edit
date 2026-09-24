@@ -8,7 +8,91 @@ internal enum ResourceKinds : byte
     Model = 1,
     Texture = 2,
     Material = 4,
-    Editable = Model | Texture | Material,
+    /// <summary> A character animation pack (.pap), which can be sent to Blender. </summary>
+    Animation = 8,
+    Editable = Model | Texture | Material | Animation,
+}
+
+/// <summary> What a texture is used for; the browser colours texture rows by it. </summary>
+internal enum TextureRole : byte
+{
+    /// <summary> Not a texture. </summary>
+    None,
+    /// <summary> Base colour (diffuse). </summary>
+    Base,
+    Normal,
+    Mask,
+    Index,
+    /// <summary> Any other texture: specular, catchlight, sphere maps, decals, flow maps, VFX. </summary>
+    Other,
+}
+
+/// <summary> Classifies texture rows by role. Like the kinds, a row's role is classified once per view. </summary>
+internal static class TextureRoleClassifier
+{
+    private const string SamplerPrefix = "g_Sampler";
+
+    /// <summary>
+    /// The role of a texture row. Penumbra names a material's texture nodes after the shader
+    /// sampler they are bound to (g_SamplerNormal, …), which is authoritative; Mod Browser rows
+    /// and samplers whose names Penumbra could not read fall back to the game's file-name suffixes.
+    /// </summary>
+    public static TextureRole Classify(ResourceKinds kinds, string? name, string? gamePath, string? actualPath)
+        => (kinds & ResourceKinds.Texture) == 0
+            ? TextureRole.None
+            : FromSamplerName(name) ?? FromFileName(string.IsNullOrEmpty(gamePath) ? actualPath : gamePath);
+
+    /// <summary> The role a shader sampler name implies, or null when the name is not a sampler name. </summary>
+    public static TextureRole? FromSamplerName(string? name)
+    {
+        if (name is null || !name.StartsWith(SamplerPrefix, StringComparison.OrdinalIgnoreCase))
+            return null;
+        var sampler = name[SamplerPrefix.Length..];
+        // Checked in this order so compound names such as TileNormal or WrinklesMask keep their role.
+        if (Has("Normal")) return TextureRole.Normal;
+        if (Has("Mask")) return TextureRole.Mask;
+        if (Has("Index")) return TextureRole.Index;
+        if (Has("Diffuse") || Has("Base")) return TextureRole.Base;
+        return TextureRole.Other;
+
+        bool Has(string part) => sampler.Contains(part, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary> The role the game's texture naming implies: _n/_norm, _m/_mask, _id and _d/_base. </summary>
+    public static TextureRole FromFileName(string? path)
+    {
+        var stem = Path.GetFileNameWithoutExtension(path ?? string.Empty);
+        var separator = stem.LastIndexOf('_');
+        return (separator < 0 ? string.Empty : stem[(separator + 1)..].ToLowerInvariant()) switch
+        {
+            "n" or "norm" => TextureRole.Normal,
+            "m" or "mask" => TextureRole.Mask,
+            "id" => TextureRole.Index,
+            "d" or "base" => TextureRole.Base,
+            _ => TextureRole.Other,
+        };
+    }
+
+    /// <summary> The role of a material preview's texture usage ("diffuse", "normal", …). </summary>
+    public static TextureRole FromUsage(string? usage)
+        => usage switch
+        {
+            "diffuse" => TextureRole.Base,
+            "normal" => TextureRole.Normal,
+            "mask" => TextureRole.Mask,
+            "index" => TextureRole.Index,
+            _ => TextureRole.Other,
+        };
+
+    public static string Label(TextureRole role)
+        => role switch
+        {
+            TextureRole.Base => "Base",
+            TextureRole.Normal => "Normal",
+            TextureRole.Mask => "Mask",
+            TextureRole.Index => "Index",
+            _ => "Other",
+        };
 }
 
 /// <summary>
@@ -29,6 +113,10 @@ internal static class ResourceKindClassifier
             kinds |= ResourceKinds.Texture;
         if (type.Contains("material", StringComparison.OrdinalIgnoreCase) || HasExtension(".mtrl"))
             kinds |= ResourceKinds.Material;
+        // Only character animation packs: Penumbra's tree also reports material animations
+        // (.pap files that animate gear materials), which have no skeleton to send.
+        if (IsCharacterAnimation(gamePath))
+            kinds |= ResourceKinds.Animation;
         return kinds;
 
         bool HasExtension(string extension)
@@ -36,18 +124,35 @@ internal static class ResourceKindClassifier
                actualPath.EndsWith(extension, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Whether a game path is a character animation pack (<c>chara/human/cNNNN/animation/…/*.pap</c>),
+    /// whose clips can be sampled on a character skeleton and sent to Blender.
+    /// </summary>
+    public static bool IsCharacterAnimation(string? gamePath)
+    {
+        if (string.IsNullOrEmpty(gamePath) || !gamePath.EndsWith(".pap", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var parts = gamePath.Replace('\\', '/').Split('/');
+        return parts.Length > 5 &&
+               parts[0].Equals("chara", StringComparison.OrdinalIgnoreCase) &&
+               parts[1].Equals("human", StringComparison.OrdinalIgnoreCase) &&
+               parts[2].Length == 5 && parts[2][0] is 'c' or 'C' && parts[2].Skip(1).All(char.IsAsciiDigit) &&
+               parts[3].Equals("animation", StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary> The kinds a resource-type filter admits, or null when it admits every resource. </summary>
     public static ResourceKinds? ForFilter(string? filter)
         => string.IsNullOrWhiteSpace(filter)
             // The default "Tree Structure" view (no explicit filter) still omits
-            // resources IE cannot edit (animations, skeletons, VFX, etc.) rather
-            // than showing every resource Penumbra reports.
+            // resources IE cannot use (skeletons, VFX, material animations, etc.)
+            // rather than showing every resource Penumbra reports.
             ? ResourceKinds.Editable
             : filter switch
             {
                 "Models" => ResourceKinds.Model,
                 "Textures" => ResourceKinds.Texture,
                 "Materials" => ResourceKinds.Material,
+                "Animations" => ResourceKinds.Animation,
                 _ => null,
             };
 }

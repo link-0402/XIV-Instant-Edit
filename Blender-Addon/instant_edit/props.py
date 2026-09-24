@@ -15,6 +15,7 @@ from bpy.props import (
 _EXPORT_DESTINATION_ITEMS = []
 NO_EXPORT_CONTEXT = "NONE"
 IN_PLACE_TARGET = "IN_PLACE"
+DEFAULT_STATUS = "Pick a model in-game via the XIV Instant Edit plugin to get started."
 _LAST_EXPORT_DESTINATION = NO_EXPORT_CONTEXT
 
 
@@ -88,16 +89,9 @@ class XIVIEVariantTarget(PropertyGroup):
     model_path: StringProperty(default="", maxlen=4096)  # type: ignore
     backup_target_id: StringProperty(default="", maxlen=128)  # type: ignore
     backup_directory: StringProperty(default="", maxlen=4096)  # type: ignore
-    expanded: BoolProperty(default=True)  # type: ignore
 
 
 class XIVIEInstantEditProps(PropertyGroup):
-
-    show_utilities: BoolProperty(
-        name="Toolbox",
-        description="Show maintenance actions for XIV Instant Edit context data",
-        default=False,
-    )  # type: ignore
 
     export_destination: EnumProperty(
         name="Context",
@@ -108,25 +102,25 @@ class XIVIEInstantEditProps(PropertyGroup):
 
     export_scope: EnumProperty(
         name="Export Parts",
-        description="Choose which visible mesh objects Quick Export and Simple Export include",
+        description="Choose which visible mesh objects Quick Export and File Export include",
         default="VISIBLE",
         items=[
             ("VISIBLE", "All Visible", "Export every visible mesh object"),
             (
                 "VISIBLE_NO_MANNEQUIN",
-                "All except...",
-                "Export every visible mesh object except the explicitly selected mesh",
+                "All Except One",
+                "Export every visible mesh object except the chosen mesh",
             ),
             (
                 "CURRENT_COLLECTION",
-                "XIV Instant Edit Collection",
+                "Context Collection",
                 "Export only visible mesh objects in the selected Context's XIV Instant Edit collection",
             ),
         ],
     )  # type: ignore
 
     create_attribute_groups: BoolProperty(
-        name="Create & Manage Penumbra Attribute Toggle Group",
+        name="Attribute Toggle Group",
         description=(
             "Create or update Penumbra IMC/ATR groups from the model's enabled "
             "part attributes during Quick Export"
@@ -191,7 +185,7 @@ class XIVIEInstantEditProps(PropertyGroup):
     last_status: StringProperty(
         name="",
         description="Status of the last XIV Instant Edit action",
-        default="Pick a model in-game via the XIV Instant Edit plugin to get started.",
+        default=DEFAULT_STATUS,
         maxlen=4096,
     )  # type: ignore
 

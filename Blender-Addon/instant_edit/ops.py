@@ -861,7 +861,6 @@ def refresh_variant_targets(
         group_item.selection_id = group_id
         group_item.kind = "GROUP"
         group_item.group_name = group_name
-        group_item.expanded = True
         for option in options:
             if not isinstance(option, dict):
                 continue
@@ -1524,24 +1523,62 @@ class SelectVariantTarget(Operator):
         return {"FINISHED"}
 
 
-class ToggleVariantTargetGroup(Operator):
-    bl_idname = "xiv_ie.toggle_variant_target_group"
-    bl_label = "Expand or Collapse Penumbra Group"
-    bl_description = "Show or hide the compatible options in this Penumbra group"
+class SelectExportContext(Operator):
+    bl_idname = "xiv_ie.select_export_context"
+    bl_label = "Select Context"
+    bl_description = "Export this Context with Quick Export"
     bl_options = {"INTERNAL"}
 
-    selection_id: StringProperty(options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
+    context_id: StringProperty(options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
 
-    def execute(self, _context):
-        item = next(
-            (target for target in get_instant_edit_props().variant_targets
-             if target.kind == "GROUP" and target.selection_id == self.selection_id),
-            None,
-        )
-        if item is None:
-            self.report({"WARNING"}, "The Penumbra group is no longer available.")
+    @classmethod
+    def description(cls, context, properties):
+        try:
+            validate_context(properties.context_id, context.scene)
+        except ContextValidationError as error:
+            return f"This Context cannot be exported: {error}"
+        return cls.bl_description
+
+    def execute(self, context: Context):
+        try:
+            validate_context(self.context_id, context.scene)
+        except ContextValidationError as error:
+            self.report({"ERROR"}, f"This Context cannot be exported: {error}")
             return {"CANCELLED"}
-        item.expanded = not item.expanded
+        props = get_instant_edit_props()
+        if props.export_destination != self.context_id:
+            # The enum update refreshes the Penumbra targets for the new Context.
+            props.export_destination = self.context_id
+        return {"FINISHED"}
+
+
+class OpenContextFolder(Operator):
+    bl_idname = "xiv_ie.open_context_folder"
+    bl_label = "Open Mod Folder"
+    bl_description = "Open the selected Context's Penumbra mod folder"
+
+    @classmethod
+    def poll(cls, context: Context):
+        try:
+            ref = export_destination_context(context, persist=False)
+        except ContextValidationError as error:
+            cls.poll_message_set(str(error))
+            return False
+        if not ref.source_mod_root_path:
+            cls.poll_message_set("This Context has no mod folder yet")
+            return False
+        return True
+
+    def execute(self, context: Context):
+        folder = export_destination_context(context, persist=False).source_mod_root_path
+        try:
+            result = bpy.ops.wm.path_open(filepath=folder)
+        except RuntimeError as error:
+            self.report({"ERROR"}, f"Could not open the mod folder: {error}")
+            return {"CANCELLED"}
+        if "FINISHED" not in result:
+            self.report({"ERROR"}, "Could not open the mod folder.")
+            return {"CANCELLED"}
         return {"FINISHED"}
 
 
@@ -1559,7 +1596,8 @@ class QuickExport(Operator):
         try:
             export_destination_context(context, persist=False)
             return True
-        except ContextValidationError:
+        except ContextValidationError as error:
+            cls.poll_message_set(str(error))
             return False
 
     def invoke(self, context: Context, event):
@@ -1576,19 +1614,24 @@ class QuickExport(Operator):
             return bpy.ops.xiv_ie.save_new_mod_name("INVOKE_DEFAULT", name="")
         self._confirm_unsafe_export = unsafe_export_warning_state(context)
         if self._confirm_unsafe_export:
-            return context.window_manager.invoke_confirm(self, event)
+            # invoke_confirm never calls draw(); a props dialog shows the materials.
+            return context.window_manager.invoke_props_dialog(
+                self, width=460, title="Export Without Mashup?", confirm_text="Export Anyway")
         return self.execute(context)
 
     def draw(self, context):
         if getattr(self, "_confirm_unsafe_export", False):
+            layout = self.layout
             missing_materials = material_coverage_missing_materials(
                 context, cache_only=True)
-            self.layout.label(text="The selected output mod is missing required files for:")
+            layout.label(text="The output mod is missing files for these materials:", icon="ERROR")
+            column = layout.column(align=True)
             for material in missing_materials[:12]:
-                self.layout.label(text=material, icon="MATERIAL")
+                column.label(text=material, icon="MATERIAL")
             if len(missing_materials) > 12:
-                self.layout.label(text=f"+{len(missing_materials) - 12} more materials")
-            self.layout.label(text=UNSAFE_EXPORT_WARNING, icon="ERROR")
+                column.label(text=f"+{len(missing_materials) - 12} more materials", icon="BLANK1")
+            layout.label(text=UNSAFE_EXPORT_WARNING, icon="BLANK1")
+            layout.label(text="Choose Create Mashup as the target to include them.", icon="BLANK1")
 
     def execute(self, context: Context):
         try:
@@ -1607,31 +1650,25 @@ class QuickExport(Operator):
         return {"FINISHED"}
 
 
-def mashup_name_operator_args(
-    destination: str,
-    bundle_external_dependencies: bool,
-) -> dict:
-    return {
-        "destination": destination,
-        "bundle_external_dependencies": bool(bundle_external_dependencies),
-        "name": "Mashup" if destination == "ACTIVE_MOD" else "",
-    }
-
-
 class MashupDestination(Operator):
     bl_idname = "xiv_ie.mashup_destination"
     bl_label = "Create Mashup"
-    bl_description = "Choose where the dependency-aware mashup will be created"
+    bl_description = "Combine the visible Contexts and their material and texture dependencies into one mashup"
 
     destination: EnumProperty(
         name="Destination",
         items=[
-            ("ACTIVE_MOD", "Combine in active context mod...", "Create a new group in the active Context mod"),
-            ("NEW_MOD", "Create as new mod...", "Create a new Penumbra mod and list required external dependencies"),
+            ("ACTIVE_MOD", "New Group", "Add the mashup as a new option group in the selected Context's mod"),
+            ("NEW_MOD", "New Mod", "Create a new Penumbra mod and list its required external dependencies"),
         ],
         default="ACTIVE_MOD",
     )  # type: ignore
-
+    name: StringProperty(
+        name="Name",
+        description="Name of the new option group or Penumbra mod",
+        default="Mashup",
+        maxlen=120,
+    )  # type: ignore
     bundle_external_dependencies: BoolProperty(
         name="Bundle external dependencies",
         description=(
@@ -1642,10 +1679,15 @@ class MashupDestination(Operator):
     )  # type: ignore
 
     def draw(self, _context):
-        self.layout.prop(self, "destination")
-        self.layout.prop(self, "bundle_external_dependencies")
-        help_box = self.layout.box()
-        help_box.label(text="Shared skin, pube, and piercing materials remain external.", icon="INFO")
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        layout.prop(self, "destination", expand=True)
+        layout.prop(self, "name", text="Group Name" if self.destination == "ACTIVE_MOD" else "Mod Name")
+        layout.prop(self, "bundle_external_dependencies", text="Bundle Dependencies")
+        note = layout.row()
+        note.active = False
+        note.label(text="Shared skin, pube, and piercing materials stay external.", icon="INFO")
 
     def invoke(self, context: Context, _event):
         try:
@@ -1653,39 +1695,8 @@ class MashupDestination(Operator):
         except Exception as error:
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
-        return context.window_manager.invoke_props_dialog(self, width=430)
-
-    def execute(self, _context):
-        return bpy.ops.xiv_ie.mashup_name(
-            "INVOKE_DEFAULT",
-            **mashup_name_operator_args(
-                self.destination,
-                self.bundle_external_dependencies,
-            ),
-        )
-
-
-class MashupName(Operator):
-    bl_idname = "xiv_ie.mashup_name"
-    bl_label = "Create Mashup"
-    bl_description = "Name the Penumbra mashup destination"
-
-    destination: StringProperty(options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
-    bundle_external_dependencies: BoolProperty(
-        default=False,
-        options={"HIDDEN", "SKIP_SAVE"},
-    )  # type: ignore
-    name: StringProperty(name="Name", default="", maxlen=120)  # type: ignore
-
-    def draw(self, _context):
-        self.layout.prop(
-            self,
-            "name",
-            text="Mashup Name" if self.destination == "ACTIVE_MOD" else "Mod Name",
-        )
-
-    def invoke(self, context: Context, _event):
-        return context.window_manager.invoke_props_dialog(self, width=430)
+        return context.window_manager.invoke_props_dialog(
+            self, width=460, title="Create Mashup", confirm_text="Create Mashup")
 
     def execute(self, context: Context):
         try:
@@ -1714,10 +1725,11 @@ class SaveNewModName(Operator):
     name: StringProperty(name="Mod Name", default="", maxlen=120)  # type: ignore
 
     def draw(self, _context):
-        self.layout.prop(self, "name", text="Mod Name")
+        self.layout.prop(self, "name", text="Mod Name", placeholder="Name of the new mod")
 
     def invoke(self, context: Context, _event):
-        return context.window_manager.invoke_props_dialog(self, width=430)
+        return context.window_manager.invoke_props_dialog(
+            self, width=430, title="Save as New Mod", confirm_text="Save")
 
     def execute(self, context: Context):
         try:
@@ -1742,10 +1754,11 @@ class VanillaModName(Operator):
     name: StringProperty(name="Mod Name", default="", maxlen=120)  # type: ignore
 
     def draw(self, _context):
-        self.layout.prop(self, "name", text="Mod Name")
+        self.layout.prop(self, "name", text="Mod Name", placeholder="Name of the new mod")
 
     def invoke(self, context: Context, _event):
-        return context.window_manager.invoke_props_dialog(self, width=430)
+        return context.window_manager.invoke_props_dialog(
+            self, width=430, title="Create Penumbra Mod", confirm_text="Create Mod")
 
     def execute(self, context: Context):
         try:
@@ -1775,6 +1788,24 @@ class ClearInstantEditContexts(Operator):
     @classmethod
     def poll(cls, context: Context):
         return context.mode == "OBJECT"
+
+    def invoke(self, context: Context, event):
+        count = len(context_collections(context.scene))
+        if not count:
+            self.report({"INFO"}, "There are no XIV Instant Edit Contexts to clear.")
+            return {"CANCELLED"}
+        # The plugin revokes the cleared Contexts, which undo cannot bring back.
+        return context.window_manager.invoke_confirm(
+            self,
+            event,
+            title="Clear All Contexts?",
+            message=(
+                f"Forget {count} Context{'s' if count != 1 else ''}? The scene objects stay, "
+                "but Quick Export can no longer write them back to their mods. This cannot be undone."
+            ),
+            confirm_text="Clear Contexts",
+            icon="WARNING",
+        )
 
     def execute(self, context: Context):
         collections = context_collections(context.scene)
@@ -2715,47 +2746,18 @@ def perform_instant_export(
             print(f"XIV Instant Edit: could not remove export cache job: {error}")
 
 
-# ---- Apply Instant Edit operator ----
-
-
-class ApplyInstantEdit(Operator):
-    bl_idname = "xiv_ie.instant_apply"
-    bl_label = "Apply XIV Instant Edit"
-    bl_description = "Apply the active XIV Instant Edit context"
-
-    @classmethod
-    def poll(cls, context):
-        return QuickExport.poll(context)
-
-    def execute(self, context):
-        try:
-            perform_instant_export(context)
-        except Exception as e:
-            get_instant_edit_props().last_status = f"Apply failed: {e}"
-            self.report({"ERROR"}, f"Apply failed: {e}")
-            return {"CANCELLED"}
-        status = get_instant_edit_props().last_status
-        self.report(
-            {"WARNING"} if " with warnings:" in status or "could not refresh" in status else {"INFO"},
-            status,
-        )
-        get_export_stats(context)
-        return {"FINISHED"}
-
-
 CLASSES = [
     InstantImport,
     RefreshVariantTargets,
     SelectVariantTarget,
-    ToggleVariantTargetGroup,
+    SelectExportContext,
+    OpenContextFolder,
     QuickExport,
     MashupDestination,
-    MashupName,
     SaveNewModName,
     VanillaModName,
     ClearInstantEditContexts,
     CompactInstantEditParts,
     CopyInstantEditStatus,
     CopyExportTargetStatus,
-    ApplyInstantEdit,
 ]

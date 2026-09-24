@@ -18,8 +18,9 @@ dotnet build Dalamud-Plugin/InstantEdit.csproj -c Release -p:SkipDistributionPac
 
 PowerShell users should check `$LASTEXITCODE` after each command.
 
-`run_blender_suites.py` runs `bridge_regression`, `smoke_export`, and
-`correctness_regression`, or the suite names and script paths you pass, as
+`run_blender_suites.py` runs `bridge_regression`, `smoke_export`,
+`correctness_regression` and `animation_regression`, or the suite names and script
+paths you pass, as
 `blender --background --factory-startup --python-exit-code 1 --python <script>`.
 Pass `--blender <path>` to test a Blender that is not on PATH. Each script gets
 a new temporary Blender user profile. The fixtures call
@@ -54,12 +55,19 @@ updates the distribution archives or extension repository index.
   preparation failures; armature-combination validation and rollback; scheduled
   and active workers across file loads; durable
   revocation retries and stale-result rejection.
+- `animation_regression.py`: animations from the plugin. Take validation, the
+  game-to-armature conversion (checked against the game's model-space pose through
+  arbitrary rest orientations, a scaled and rotated armature object, reparented and
+  missing bones, and Euler and axis-angle bones), resampling to the scene frame
+  rate, target armature selection, rollback of a failed keying, and the
+  `/animation` endpoint.
 - `ExportContextRegression`: named session-store and variant-export scenarios,
   plus authorization, backups, resource bundling, migration, mod metadata, and
   collection activation (`CollectionActivationScenarios.cs`: enabling a new mod
   must not depend on the redraw step), and the window view models
   (`UiViewModelScenarios.cs`: kind filters, search, expansion keys, status feed,
-  session grouping and the mod-view builder, all without ImGui).
+  session grouping and the mod-view builder, all without ImGui), and which `.pap`
+  files the browsers list as sendable character animations (`AnimationRowScenarios.cs`).
 - `BlenderStatusRegression`: grouped connection states and bridge response,
   import handoff, diagnostic behavior, cache synchronization, and texture-session
   regressions in `TextureEditScenarios.cs`. Texture tests exercise the production
@@ -67,17 +75,27 @@ updates the distribution archives or extension repository index.
   simulated conversion/IPC backend; they do not test Penumbra's actual codecs.
   `PreviewScenarios.cs` covers the hover-preview cache policy (LRU, byte budget,
   invalidation, failure caching, disposal with loads in flight) and the CPU
-  texture decoder, without a GPU.
+  texture decoder, without a GPU. Animation sends cover Blender's keyed, queued
+  and refused responses and the transport failure.
 - Standalone Python suites: cache ownership and cleanup, diagnostic sanitation
   and limits, import validation, and asynchronous failure reporting.
 - `AnimationRegression`: PAP/SKLB envelopes, complete pose-stack shape fixtures,
   component filtering, timeline/VFX dependencies, metadata scope, durable recovery,
-  and PAP backup conflict protection. Native Havok and actual IPC acceptance are
+  and PAP backup conflict protection, plus the binary take sent to Blender and the
+  resampling of recordings, On Screen rows for detected animations, and action
+  names for Mod Browser files. Native Havok and actual IPC acceptance are
   documented in [animation editing acceptance](AnimationEditing.md).
 - `ChangelogRegression`: release catalog ordering and uniqueness, version-aware
   auto-open behavior, and configuration persistence for the last-seen release.
 
 ## Test design
+
+To check that the plugin's binary take and the add-on's reader still agree, write
+the fixture take and parse it with `animation.parse_take` in Blender:
+
+```powershell
+dotnet run --project Tests/AnimationRegression -c Release -p:SkipDistributionPackage=true -- --write-sample-take "sample.take"
+```
 
 For local skeleton-repair diagnosis, export a predictive PAP's Havok payload and
 its source SKLB payload to XML with XAT, then run:

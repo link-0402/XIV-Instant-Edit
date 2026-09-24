@@ -518,14 +518,14 @@ internal unsafe sealed class AnimationNative
                 var predictive = (Predictive*)b->Animation.ptr;
                 if (predictive->NumBones != s->Bones.Length || predictive->NumFloatSlots != s->FloatSlots.Length)
                     throw new InvalidDataException($"Predictive animation requires {predictive->NumBones} reference bones and {predictive->NumFloatSlots} reference floats; " +
-                        $"the selected source has {s->Bones.Length} bones and {s->FloatSlots.Length} floats. Rescan skeletons to find a compatible source before retargeting.");
+                        $"the selected source has {s->Bones.Length} bones and {s->FloatSlots.Length} floats. Rebuild the skeleton library in Settings to find a compatible source before retargeting.");
             }
             if (b->Animation.ptr->Type == hkaAnimation.AnimationType.QuantizedCompressedAnimation)
             {
                 var header = (QuantizedHeader*)((Quantized*)b->Animation.ptr)->Data.Data;
                 if (header->NumBones != s->Bones.Length || header->NumFloats != s->FloatSlots.Length)
                     throw new InvalidDataException($"Quantized animation requires {header->NumBones} reference bones and {header->NumFloats} reference floats; " +
-                        $"the selected source has {s->Bones.Length} bones and {s->FloatSlots.Length} floats. Rescan skeletons to find a compatible source before retargeting.");
+                        $"the selected source has {s->Bones.Length} bones and {s->FloatSlots.Length} floats. Rebuild the skeleton library in Settings to find a compatible source before retargeting.");
             }
             ValidateArray(s->Bones, 4096, "bones");
             ValidateArray(s->ParentIndices, 4096, "parents");
