@@ -7,7 +7,8 @@ it with metadata produced by the normal exporter.
 """
 # Modified for XIV Instant Edit, 2026.
 
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from typing import Iterable
 import re
 import uuid
@@ -67,8 +68,40 @@ _MESH_ID_SUFFIX = re.compile(r"^(.+?)\s+(\d+)\.(\d+)$")
 _LOD_SUFFIX = re.compile(r"\s+LOD(\d+)$", re.IGNORECASE)
 
 
+_planned_mesh_ids: dict[int, tuple[int, int]] | None = None
+
+
+@contextmanager
+def planned_mesh_ids(plan: dict[int, tuple[int, int]] | None):
+    """Read mesh IDs from a plan (object pointer -> (group, part)) instead of names.
+
+    A mesh-order drag records its moves here, so the panel can preview them
+    while nothing is renamed until the drop is committed.
+    """
+    global _planned_mesh_ids
+    previous = _planned_mesh_ids
+    _planned_mesh_ids = plan
+    try:
+        yield plan
+    finally:
+        _planned_mesh_ids = previous
+
+
+def active_mesh_id_plan() -> dict[int, tuple[int, int]] | None:
+    return _planned_mesh_ids
+
+
 def mesh_name_info(obj) -> MeshNameInfo:
     """Parse a mesh name while retaining its ID orientation and display label."""
+    info = _parse_mesh_name(obj)
+    if _planned_mesh_ids:
+        planned = _planned_mesh_ids.get(obj.as_pointer())
+        if planned is not None:
+            return replace(info, mesh_group=planned[0], mesh_part=planned[1])
+    return info
+
+
+def _parse_mesh_name(obj) -> MeshNameInfo:
     name = str(obj.name).strip()
     lod = 0
     lod_match = _LOD_SUFFIX.search(name)

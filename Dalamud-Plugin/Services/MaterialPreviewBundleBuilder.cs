@@ -348,7 +348,7 @@ public sealed class MaterialPreviewBundleBuilder
 
                     try
                     {
-                        var tex = LooseLuminaFile.Load<TexFile>(textureBytes);
+                        var tex = LooseLuminaFile.Load<TexFile>(NormalizeTextureMipOffsets(textureBytes));
                         var width = (int)tex.Header.Width;
                         var height = (int)tex.Header.Height;
                         if (width is < 1 or > MaxDimension || height is < 1 or > MaxDimension)
@@ -394,6 +394,7 @@ public sealed class MaterialPreviewBundleBuilder
                     modelMaterial,
                     gamePath = materialPath,
                     shaderPackage = ReadString(mtrl.Strings, mtrl.FileHeader.ShaderPackageNameOffset),
+                    materialFlags = metadata.Flags,
                     additionalData = ReadAdditionalData(materialBytes, mtrl),
                     shaderKeys = metadata.ShaderKeys,
                     shaderConstants = metadata.ShaderConstants,
@@ -845,12 +846,17 @@ public sealed class MaterialPreviewBundleBuilder
         return $"{baseDirectory}/material/v0001{materialName}";
     }
 
-    private sealed record MaterialMetadata(
+    /// <param name="Flags">
+    /// Shader-header material flags: 0x01 hides backfaces and 0x10 enables
+    /// translucency (alpha blending instead of an alpha-threshold cutout).
+    /// </param>
+    internal sealed record MaterialMetadata(
         ParsedSampler[] Samplers,
         object[] ShaderKeys,
-        object[] ShaderConstants);
+        object[] ShaderConstants,
+        uint Flags);
 
-    private readonly record struct ParsedSampler(uint SamplerId, uint Flags, byte TextureIndex);
+    internal readonly record struct ParsedSampler(uint SamplerId, uint Flags, byte TextureIndex);
 
     /// <summary>
     /// Reads the shader section independently of Lumina's MtrlFile parser.
@@ -859,7 +865,7 @@ public sealed class MaterialPreviewBundleBuilder
     /// Dawntrail 0x800/0x880 datasets. The leading file header, string table,
     /// and texture offsets remain usable, but its Samplers array is then empty.
     /// </summary>
-    private static MaterialMetadata ReadMaterialMetadata(byte[] bytes, MtrlFile mtrl)
+    internal static MaterialMetadata ReadMaterialMetadata(byte[] bytes, MtrlFile mtrl)
     {
         const int materialHeaderSize = 12;
         const int shaderKeySize = 8;
@@ -877,6 +883,7 @@ public sealed class MaterialPreviewBundleBuilder
         var shaderKeyCount = BitConverter.ToUInt16(bytes, headerOffset + 2);
         var constantCount = BitConverter.ToUInt16(bytes, headerOffset + 4);
         var samplerCount = BitConverter.ToUInt16(bytes, headerOffset + 6);
+        var flags = BitConverter.ToUInt32(bytes, headerOffset + 8);
         if (shaderKeyCount > maxShaderKeys || constantCount > maxConstants || samplerCount > maxSamplers)
             throw new InvalidDataException("material shader metadata exceeds the supported limits");
         if (shaderValueByteSize % sizeof(float) != 0)
@@ -928,11 +935,11 @@ public sealed class MaterialPreviewBundleBuilder
             var count = constant.Size / sizeof(float);
             var values = new float[count];
             for (var j = 0; j < count; j++)
-                values[j] = BitConverter.ToSingle(bytes, shaderValuesOffset + constant.Offset + j * sizeof(float));
+                values[j] = JsonSafe(BitConverter.ToSingle(bytes, shaderValuesOffset + constant.Offset + j * sizeof(float)), float.MaxValue);
             shaderConstants[i] = new { id = constant.Id, values };
         }
 
-        return new MaterialMetadata(samplers, shaderKeys, shaderConstants);
+        return new MaterialMetadata(samplers, shaderKeys, shaderConstants, flags);
     }
 
     internal static IReadOnlyList<string> ReadTextureUsages(byte[] materialBytes)
@@ -965,14 +972,24 @@ public sealed class MaterialPreviewBundleBuilder
             + mtrl.FileHeader.StringTableSize
             + mtrl.FileHeader.AdditionalDataSize);
 
-    private static object? ReadColorSet(byte[] bytes, MtrlFile mtrl)
+    /// <summary>
+    /// Materials can legitimately store IEEE infinities or NaN (for example a
+    /// colorset half of 0x7C00), which JSON cannot represent. Infinities keep
+    /// their sign at the largest finite value of the source type.
+    /// </summary>
+    internal static float JsonSafe(float value, float limit)
+        => float.IsNaN(value) ? 0f : Math.Clamp(value, -limit, limit);
+
+    internal static object? ReadColorSet(byte[] bytes, MtrlFile mtrl)
     {
         var size = mtrl.FileHeader.DataSetSize;
         var (tableSize, width, height) = size switch
         {
             512 => (512, 4, 16),       // Legacy 16-row colorset.
+            544 => (512, 4, 16),       // Legacy colorset + 32-byte dye table.
             1024 => (1024, 4, 32),     // Legacy 32-row colorset.
             2048 => (2048, 8, 32),     // Dawntrail expanded colorset.
+            2112 => (2048, 8, 32),     // Expanded colorset + 64-byte dye table.
             2176 => (2048, 8, 32),     // Expanded colorset + 128-byte dye table.
             _ => (0, 0, 0),
         };
@@ -983,8 +1000,69 @@ public sealed class MaterialPreviewBundleBuilder
             return null;
         var values = new float[tableSize / 2];
         for (var i = 0; i < values.Length; i++)
-            values[i] = (float)BitConverter.UInt16BitsToHalf(BitConverter.ToUInt16(bytes, offset + i * 2));
+            values[i] = JsonSafe((float)BitConverter.UInt16BitsToHalf(BitConverter.ToUInt16(bytes, offset + i * 2)), (float)Half.MaxValue);
         return new { width, height, values };
+    }
+
+    /// <summary>
+    /// Some texture tools write TEX headers whose mip offset table does not
+    /// describe the data, such as uncompressed-size offsets for BC7 mips or
+    /// small bogus values. Lumina sizes each mip from that table, so it throws
+    /// or decodes zeros for textures the game draws normally. When the stored
+    /// table cannot hold the mips, rebuild it for contiguous 2D mips after the
+    /// first surface, keeping only the levels that fit in the file.
+    /// </summary>
+    internal static byte[] NormalizeTextureMipOffsets(byte[] bytes)
+    {
+        const int headerSize = 80;
+        const int offsetTable = 28;
+        const uint textureTypeMask = 0x13C00000;
+        const uint textureType2D = 0x00800000;
+        if (bytes.Length < headerSize ||
+            (BinaryPrimitives.ReadUInt32LittleEndian(bytes) & textureTypeMask) != textureType2D)
+            return bytes;
+
+        // Mirrors Lumina's TexFile.SliceSize: format bits 4-7 hold log2(bits
+        // per pixel) and bits 12-15 the type, where 3 and 6 are BC formats.
+        var format = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(4));
+        int width = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(8));
+        int height = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(10));
+        var mipCount = Math.Clamp(bytes[14] & 0x7F, 1, 13);
+        var bitsPerPixel = 1L << (int)((format >> 4) & 0xF);
+        var blockCompressed = ((format >> 12) & 0xF) is 3 or 6;
+        long SurfaceSize(int mip)
+        {
+            long w = Math.Max(1, width >> mip), h = Math.Max(1, height >> mip);
+            return blockCompressed
+                ? Math.Max(1, (w + 3) / 4) * Math.Max(1, (h + 3) / 4) * bitsPerPixel * 2
+                : w * h * bitsPerPixel / 8;
+        }
+
+        var offsets = new long[mipCount];
+        for (var mip = 0; mip < mipCount; mip++)
+            offsets[mip] = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offsetTable + mip * 4));
+        var consistent = offsets[0] >= headerSize;
+        for (var mip = 0; consistent && mip < mipCount; mip++)
+        {
+            var end = offsets[mip] + SurfaceSize(mip);
+            consistent = end <= bytes.Length && (mip == mipCount - 1 || offsets[mip + 1] >= end);
+        }
+        if (consistent)
+            return bytes;
+
+        var start = offsets[0] >= headerSize && offsets[0] + SurfaceSize(0) <= bytes.Length ? offsets[0] : headerSize;
+        if (start + SurfaceSize(0) > bytes.Length)
+            return bytes;
+        var normalized = (byte[])bytes.Clone();
+        var kept = 0;
+        for (var offset = start; kept < mipCount && offset + SurfaceSize(kept) <= bytes.Length; kept++)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(normalized.AsSpan(offsetTable + kept * 4), (uint)offset);
+            offset += SurfaceSize(kept);
+        }
+        normalized.AsSpan(offsetTable + kept * 4, (13 - kept) * 4).Clear();
+        normalized[14] = (byte)((bytes[14] & 0x80) | kept);
+        return normalized;
     }
 
     private static string ReadAdditionalData(byte[] bytes, MtrlFile mtrl)

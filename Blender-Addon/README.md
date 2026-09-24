@@ -10,7 +10,8 @@ plus a standalone Simple Import/Export panel.
 - Creates isolated import collections and preserves the authorized Penumbra
   export destination.
 - Supports generated import armatures or a named existing scene armature.
-- Displays and assigns the FFXIV material path for every visible mesh group.
+- Displays and assigns the FFXIV material path for every visible mesh group,
+  with quick selectors for the materials used by the model's other mesh groups.
 - Highlights only the mesh-part rows whose normalized export material is
   missing or differs from the first part used by their mesh group.
 - Optionally builds import-local, packed Principled BSDF previews from the
@@ -51,6 +52,11 @@ plus a standalone Simple Import/Export panel.
 - Export-time UV2 copy/clear, vertex color/alpha cleanup, and flow-data cleanup.
 - Optional **Reset Scaling on Export** neutralization; armature rest-pose
   neutralization and complete state restoration remain automatic.
+- SimpleHeels offsets: type `heels_offset=0.15` as a custom Mesh Studio
+  attribute, or enable **Calculate Heels Offset** to measure how far the LOD 0
+  geometry reaches below the floor and write that value on the first mesh part
+  at export. The calculated value replaces manual heels attributes; when nothing
+  is below the floor, no offset is added and manual attributes are kept.
 
 Meshes in one export may resolve to different Blender armatures. Each mesh uses
 its parent armature when present, otherwise its first valid Armature modifier.
@@ -62,8 +68,11 @@ Material previews are display-only and intentionally approximate. They do not
 include actor colors or dye baking, do not add material/texture editing, and
 are never included in Quick Export. Missing preview resources fall back to the
 existing colored placeholder without blocking geometry import. Gear using
-`character.shpk`-family colorsets and index textures is composed into a packed
-base-color preview. Standalone
+`character.shpk`-family colorsets and index textures bakes the colorset lookup
+(base color, roughness, metalness, emission) at the index texture's size and
+combines it in the node tree with the diffuse, mask, and normal textures at
+their own sizes. Materials flagged translucent render with Blender's Blended
+method; other materials cut out at their alpha threshold. Standalone
 Simple Import does not resolve FFXIV resources and is unchanged.
 
 When the Dalamud **Exclude body and general materials** sub-option is enabled,

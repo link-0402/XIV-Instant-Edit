@@ -314,6 +314,35 @@ def assert_mesh_studio(addon, obj, second, added_group):
             raise AssertionError("Custom mesh attribute removal operator failed")
         if second.get(custom_attribute):
             raise AssertionError("Custom mesh attribute could not be removed")
+        if bpy.ops.xiv_ie.mesh_attribute(
+            mesh_group=0,
+            mesh_part=1,
+            attribute="NEW",
+            custom=True,
+            custom_attribute=" Heels_Offset = 0,15 ",
+        ) != {"FINISHED"} or not second.get("heels_offset=0.15"):
+            raise AssertionError("A typed heels_offset=<number> attribute was rejected or not normalized")
+        if "heels_offset=0.15" not in scene.get_attributes(second):
+            raise AssertionError("The heels offset attribute was not collected for export")
+        if materials.attribute_display_name("heels_offset=0.15") != "Heels: 0.15":
+            raise AssertionError("The heels offset attribute label did not show its value")
+        materials.set_mesh_part_attribute(
+            [obj, second, added_group], 0, 1, "heels_offset=-0.123456", True
+        )
+        heels_keys = [key for key in second.keys() if key.startswith("heels_offset")]
+        if heels_keys != ["heels_offset=-0.1235"]:
+            raise AssertionError(f"A new heels offset did not replace the old one: {heels_keys}")
+        for invalid in ("heels_offset=", "heels_offset=abc", "heels_offset=nan", "heels_offsetx=1"):
+            try:
+                materials.normalize_mesh_attribute(invalid)
+            except ValueError:
+                continue
+            raise AssertionError(f"Invalid heels offset was accepted: {invalid!r}")
+        if bpy.ops.xiv_ie.mesh_attribute(
+            mesh_group=0, mesh_part=1, attribute="heels_offset=-0.1235"
+        ) != {"FINISHED"} or any(key.startswith("heels_offset") for key in second.keys()):
+            raise AssertionError("The heels offset attribute could not be removed")
+        print("[PASS] Mesh Studio accepts, replaces, and removes typed heels offsets")
         second["yas"] = True
         second["yakit"] = True
         try:
@@ -638,6 +667,197 @@ def assert_mesh_part_gap_handling(addon):
         print("[PASS] Mesh Studio placeholders and atomic part-gap compaction")
 
 
+def assert_mesh_material_quick_selectors(addon):
+    materials = importlib.import_module(f"{addon.__name__}.materials")
+    operators = importlib.import_module(f"{addon.__name__}.operators")
+    props = bpy.context.scene.xiv_ie_instant_edit_props
+
+    with temporary_scene_data():
+        def create(name, material=None):
+            mesh = bpy.data.meshes.new(f"{name} Data")
+            mesh.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+            mesh.update()
+            obj = bpy.data.objects.new(name, mesh)
+            bpy.context.scene.collection.objects.link(obj)
+            if material:
+                obj["xiv_material"] = material
+            return obj
+
+        top_a = "/mt_c0201e0501_top_a.mtrl"
+        top_b = "/mt_c0201e0501_top_b.mtrl"
+        skin = "/mt_c0201b0001_a.mtrl"
+        new_part = create("53.0 Quick New")
+        objects = (
+            create("50.0 Quick Top", top_a),
+            create("51.0 Quick Sleeve", top_b),
+            create("51.1 Quick Cuff", top_b),
+            create("52.0 Quick Belt", top_a),
+            new_part,
+        )
+        mannequin = create("54.0 Quick Mannequin", skin)
+
+        if materials.other_group_materials(objects, 50) != [(top_b, (51,)), (top_a, (52,))]:
+            raise AssertionError("Quick selectors did not list the other groups' materials in group order")
+        if materials.other_group_materials(objects, 53) != [(top_a, (50, 52)), (top_b, (51,))]:
+            raise AssertionError("Quick selectors did not merge a material shared by several groups")
+        bibo_groups = (
+            create("55.0 Quick Bibo", "/mt_c0201b0001_bibo.mtrl"),
+            create("56.0 Quick Other Bibo", "/mt_c1401b0001_bibo.mtrl"),
+        )
+        if materials.other_group_materials(bibo_groups, 57) != [
+            ("/mt_c0201b0001_bibo.mtrl", (55, 56))
+        ]:
+            raise AssertionError("Quick selectors listed one Bibo material identity twice")
+        if (
+            materials.matching_material_path("mt_c0201e0501_top_b", (top_a, top_b)) != top_b
+            or materials.matching_material_path("bibo", ("/mt_c1401b0001_bibo.mtrl",))
+            != "/mt_c1401b0001_bibo.mtrl"
+            or materials.matching_material_path("", (top_a,)) is not None
+            or materials.matching_material_path("/mt_c0201e0501_top_c.mtrl", (top_a, top_b))
+            is not None
+        ):
+            raise AssertionError("Typed material paths did not match their quick selectors")
+
+        saved_scope = props.export_scope
+        saved_excluded = props.export_excluded_mesh
+        try:
+            # The dialog offers the model Quick Export would write, so a mesh
+            # excluded from the export scope does not contribute its material.
+            props.export_scope = "VISIBLE_NO_MANNEQUIN"
+            props.export_excluded_mesh = mannequin
+            offered = dict(operators._prepare_quick_materials(bpy.context, 53))
+        finally:
+            props.export_scope = saved_scope
+            props.export_excluded_mesh = saved_excluded
+        if offered.get(top_a) != (50, 52) or offered.get(top_b) != (51,):
+            raise AssertionError("The material dialog did not offer the other mesh groups' materials")
+        if skin in offered:
+            raise AssertionError("The material dialog offered a mesh excluded from the export")
+
+        if bpy.ops.xiv_ie.mesh_material(
+            "EXEC_DEFAULT", mesh_group=53, material="mt_c0201e0501_top_b"
+        ) != {"FINISHED"} or new_part.get("xiv_material") != top_b:
+            raise AssertionError("A material from another mesh group was not assigned")
+        dialog = bpy.context.window_manager.operator_properties_last("xiv_ie.mesh_material")
+        dialog.mesh_group = 53
+        dialog.material = ""
+        dialog.quick_material = top_a
+        if dialog.material != top_a:
+            raise AssertionError("Choosing a quick selector did not fill in its material path")
+        dialog.material = "mt_c0201e0501_top_b"
+        if dialog.quick_material != top_b or dialog.material != "mt_c0201e0501_top_b":
+            raise AssertionError("Typing another group's material did not select its quick selector")
+        dialog.material = "/mt_c0201e0501_custom.mtrl"
+        if dialog.quick_material != "NONE":
+            raise AssertionError("A custom material path left a quick selector selected")
+        suggested = [
+            path for path, _usage in operators.XIVIE_OT_mesh_material._material_search(
+                dialog, bpy.context, ""
+            )
+        ]
+        if suggested.count(top_b) != 1 or top_a not in suggested:
+            raise AssertionError("Material search did not include each other group's material once")
+        print("[PASS] Mesh material dialog offers the model's other group materials")
+
+
+def assert_mesh_drag_plan(addon):
+    """Drive the drag operator's steps: nothing is renamed until the drop commits."""
+    materials = importlib.import_module(f"{addon.__name__}.materials")
+    operators = importlib.import_module(f"{addon.__name__}.operators")
+    context_module = importlib.import_module(f"{addon.__name__}.instant_edit.context")
+    drag_operator = operators.XIVIE_OT_drag_mesh_order
+
+    class Drag:
+        _move_once = drag_operator._move_once
+        _plan_move_once = drag_operator._plan_move_once
+
+        def __init__(self, objects, group, part, maximum_group):
+            instance = next(
+                item for item in materials.mesh_part_instances(objects, group, part)
+                if objects[0] in item.objects
+            )
+            self.scope = "PART"
+            self.mesh_group = group
+            self.mesh_part = part
+            self.mesh_part_instance = instance.instance_key
+            self._dragged_objects = instance.objects
+            self._dragged_ids = {obj.as_pointer() for obj in instance.objects}
+            self._plan = {}
+            self._part_drag_group_lock = None
+            self._maximum_group = maximum_group
+
+        def report(self, _level, message):
+            raise AssertionError(message)
+
+    with temporary_scene_data():
+        def create(name, import_id=None):
+            mesh = bpy.data.meshes.new(f"{name} Data")
+            mesh.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+            obj = bpy.data.objects.new(name, mesh)
+            bpy.context.scene.collection.objects.link(obj)
+            if import_id:
+                obj["instant_edit_import_instance_id"] = import_id
+            return obj
+
+        def planned(objects):
+            with context_module.planned_mesh_ids(drag._plan):
+                return [context_module.mesh_ids_from_name(obj)[:2] for obj in objects]
+
+        # The reported layout: Pubes duplicates Piercing B's ID 60.0.
+        piercing_b = create("60.0 Piercing B", "piercing-b")
+        pubes = create("60.0 Pubes", "pubes")
+        piercing_r = create("60.1 Piercing R", "piercing-r")
+        piercing_l = create("60.2 Piercing L", "piercing-l")
+        rows = (piercing_b, pubes, piercing_r, piercing_l)
+        original_names = [obj.name for obj in rows]
+
+        drag = Drag((pubes, piercing_b, piercing_r, piercing_l), 60, 0, 61)
+        expected_steps = (
+            # Inserted after Piercing R; Piercing L shifts to make room.
+            [(60, 0), (60, 2), (60, 1), (60, 3)],
+            [(60, 0), (60, 3), (60, 1), (60, 2)],
+            # Leaving the group returns every passed part to its own ID.
+            [(60, 0), (61, 0), (60, 1), (60, 2)],
+        )
+        for step, expected in enumerate(expected_steps, 1):
+            if not drag._move_once(bpy.context, "DOWN"):
+                raise AssertionError(f"Drag step {step} did not move the duplicate part")
+            if [obj.name for obj in rows] != original_names:
+                raise AssertionError(f"Drag step {step} renamed objects before the drop")
+            if planned(rows) != expected:
+                raise AssertionError(f"Drag step {step} planned {planned(rows)}, expected {expected}")
+        if set(drag._plan) != drag._dragged_ids:
+            raise AssertionError("Leaving the source group kept plans for the parts it passed")
+        materials.commit_mesh_id_plan(drag._plan, rows)
+        if [obj.name for obj in rows] != [
+            "60.0 Piercing B", "61.0 Pubes", "60.1 Piercing R", "60.2 Piercing L"
+        ]:
+            raise AssertionError(f"Moving a duplicate to another group renamed other parts: {[obj.name for obj in rows]}")
+
+        # Dropped inside its group, the duplicate is resolved by insertion.
+        pubes.name = "60.0 Pubes"
+        drag = Drag((pubes, piercing_b, piercing_r, piercing_l), 60, 0, 61)
+        drag._move_once(bpy.context, "DOWN")
+        materials.commit_mesh_id_plan(drag._plan, rows)
+        if [obj.name for obj in rows] != [
+            "60.0 Piercing B", "60.2 Pubes", "60.1 Piercing R", "60.3 Piercing L"
+        ]:
+            raise AssertionError(f"Dropping a duplicate inside its group: {[obj.name for obj in rows]}")
+
+        # A unique part swaps while it passes, but only the part itself leaves.
+        first = create("62.0 First")
+        middle = create("62.1 Middle")
+        last = create("62.2 Last")
+        drag = Drag((middle, first, last), 62, 1, 63)
+        drag._move_once(bpy.context, "DOWN")
+        if planned((first, middle, last)) != [(62, 0), (62, 2), (62, 1)]:
+            raise AssertionError("A unique part did not preview a swap inside its group")
+        drag._move_once(bpy.context, "DOWN")
+        materials.commit_mesh_id_plan(drag._plan, (first, middle, last))
+        if [obj.name for obj in (first, middle, last)] != ["62.0 First", "63.0 Middle", "62.2 Last"]:
+            raise AssertionError(f"A part leaving its group renamed the parts it passed: {[obj.name for obj in (first, middle, last)]}")
+        print("[PASS] Mesh part drags rename only on drop and never pass on duplicate IDs")
+
 
 def run() -> None:
     with addon_session("_xiv_instant_edit_export_smoke") as addon:
@@ -655,6 +875,8 @@ def run() -> None:
             raise AssertionError("Keep Shape Keys should default to disabled")
         if bpy.context.scene.xiv_ie_settings.reset_scaling_on_export:
             raise AssertionError("Reset Scaling on Export should default to disabled")
+        if bpy.context.scene.xiv_ie_settings.calculate_heels_offset:
+            raise AssertionError("Calculate Heels Offset should default to disabled")
         if not bpy.context.scene.xiv_ie_settings.simple_import_set_export_directory:
             raise AssertionError("Set Simple Export Folder on Import should default to enabled")
         if not bpy.context.scene.xiv_ie_settings.resolve_mesh_group_conflicts:
@@ -1776,6 +1998,53 @@ def run() -> None:
             print("[PASS] Backup restore preserves the selected history and clear removes backups")
             settings.backup_models_on_export = False
 
+            heels_objects = [obj, second, added_group]
+            settings.calculate_heels_offset = True
+            second["heels_offset=0.5"] = True
+            try:
+                export_module._export_stats = {}
+                export_module.export_result(
+                    Path(temp_dir) / "heels_flat", "MDL", export_objects=heels_objects)
+                flat_model = model_module.XIVModel.from_file(Path(temp_dir) / "heels_flat.mdl")
+                if [a for a in flat_model.attributes if a.startswith("heels")] != ["heels_offset=0.5"]:
+                    raise AssertionError(
+                        f"A model without geometry below the floor lost its manual heels offset: "
+                        f"{flat_model.attributes}")
+
+                # The second part dips below the floor, but the offset belongs
+                # on the first part and replaces the manual attribute. The rig
+                # is scaled 2x here, so the offset must follow the same
+                # transforms as the exported vertices.
+                second.location.z = -0.1234
+                for reset_scaling, expected in ((True, "heels_offset=0.1234"), (False, "heels_offset=0.2468")):
+                    settings.reset_scaling_on_export = reset_scaling
+                    export_module._export_stats = {}
+                    export_module.export_result(
+                        Path(temp_dir) / "heels", "MDL", export_objects=heels_objects)
+                    heels_model = model_module.XIVModel.from_file(Path(temp_dir) / "heels.mdl")
+                    heels_attributes = [a for a in heels_model.attributes if a.startswith("heels")]
+                    if heels_attributes != [expected]:
+                        raise AssertionError(
+                            f"Calculated heels offset was not exported as {expected} "
+                            f"(reset scaling {reset_scaling}): {heels_model.attributes}")
+                    heels_bit = 1 << heels_model.attributes.index(expected)
+                    if not heels_model.submeshes[0].attribute_idx_mask & heels_bit:
+                        raise AssertionError("Calculated heels offset was not set on the first mesh part")
+                    if f"Calculated {expected}." not in export_module._export_stats.get(obj.name, ()):
+                        raise AssertionError(f"Heels offset was not reported: {export_module._export_stats}")
+                if (
+                    not second.get("heels_offset=0.5")
+                    or any(key.startswith("heels_offset") for key in obj.keys())
+                ):
+                    raise AssertionError("Calculating the heels offset changed the scene's objects")
+                print("[PASS] Calculated heels offset is exported on the first mesh part")
+            finally:
+                export_module._export_stats = {}
+                settings.calculate_heels_offset = False
+                settings.reset_scaling_on_export = False
+                second.location.z = 0.0
+                del second["heels_offset=0.5"]
+
             obj.parent = None
             settings.export_name = "smoke_modifier_only"
             result = bpy.ops.xiv_ie.simple_export()
@@ -1788,6 +2057,8 @@ def run() -> None:
 
         assert_mesh_studio(addon, obj, second, added_group)
         assert_mesh_part_gap_handling(addon)
+        assert_mesh_drag_plan(addon)
+        assert_mesh_material_quick_selectors(addon)
 
         instant_props.export_destination = context_id
         instant_props.variant_targets.add().selection_id = "stale-after-delete"

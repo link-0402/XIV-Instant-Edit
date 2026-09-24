@@ -1,6 +1,8 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
+using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 
@@ -16,9 +18,6 @@ public sealed partial class MainWindow
     private AnimationDestination animationDestination = AnimationDestination.NewMod;
     private bool animationStartupSelected;
     private bool animationIncludeStartup;
-    private AnimationStartupPose animationStartupPose = AnimationStartupPose.ReferencePose;
-    private float animationStartupDuration;
-    private string? animationStartupSettingsKey;
     private string animationModName = "";
 
     internal void AttachAnimations(AnimationEditService? service, string? error)
@@ -26,33 +25,25 @@ public sealed partial class MainWindow
         animations = service;
         animationError = error;
     }
-    public override void OnOpen() { }
-    public override void OnClose() => animations?.StopObservation();
 
     private void SelectAnimation(AnimationCapture capture, bool startup = false)
     {
         animationSelection = capture;
         animationBones.Clear();
         animationBones.UnionWith(capture.Pose.Bones.Where(b => b.Id.Partial == capture.Clip.Partial && b.Id.Slot == 0).Select(b => b.Id));
+        ResetAnimatedBones();
         animationComponents = PoseComponents.All;
         animationStartupSelected = startup && capture.Startup != null;
-        animationStartupSettingsKey = null;
-        SyncStartupSettings(capture);
         animationModName = AnimationPresentation.DefaultModName(capture);
-    }
-
-    private void SyncStartupSettings(AnimationCapture capture)
-    {
-        var key = $"{capture.Id}:{capture.Startup?.GamePath}:{capture.Startup?.BindingFingerprint}:{capture.Startup?.Duration}";
-        if (animationStartupSettingsKey == key) return;
-        animationStartupSettingsKey = key;
-        animationStartupPose = AnimationStartupPose.ReferencePose;
-        animationStartupDuration = Math.Clamp(capture.Startup?.Duration ?? 0, 0, 2);
     }
 
     private void DrawAnimations()
     {
-        if (animations == null) { ImGui.TextWrapped(animationError ?? "Animation integration is unavailable."); return; }
+        if (animations == null)
+        {
+            Widgets.EmptyState(FontAwesomeIcon.ExclamationTriangle, "Animation editing is unavailable", animationError ?? "Animation integration is unavailable.");
+            return;
+        }
         animations.StartObservation();
         ImGui.Spacing();
         var history = animations.Observer.History;
@@ -73,66 +64,75 @@ public sealed partial class MainWindow
             };
         }
         if (animationSelection != null && animationSelection.ActorId != animations.Observer.Actor)
-        { animationSelection = null; animationBones.Clear(); }
+        { animationSelection = null; animationBones.Clear(); ResetAnimatedBones(); }
         if (animationSelection is { Playing: false } staleSelection && !AnimationPresentation.Ready(staleSelection))
-        { animationSelection = null; animationBones.Clear(); }
-        if (animationSelection is { } selectedSettings) SyncStartupSettings(selectedSettings);
+        { animationSelection = null; animationBones.Clear(); ResetAnimatedBones(); }
 
         var entries = AnimationPresentation.ListItems(history);
-        var width = Math.Max(230, Math.Min(340, ImGui.GetContentRegionAvail().X * 0.34f));
-        if (ImGui.BeginChild("##character-animations", new Vector2(width, 330), true))
+        var width = Math.Max(Theme.Scaled(230), Math.Min(Theme.Scaled(340), ImGui.GetContentRegionAvail().X * 0.34f));
+        var height = Math.Max(1, ImGui.GetContentRegionAvail().Y);
+        using (var list = ImRaii.Child("##character-animations", new Vector2(width, height), true))
         {
-            ImGui.TextUnformatted("Character Animations");
-            ImGui.Separator();
-            if (entries.IsEmpty) ImGui.TextWrapped("No ready character animations are available yet.");
-            foreach (var entry in entries)
-            {
-                if (entry.SeparatorBefore) ImGui.Separator();
-                var listCapture = entry.Capture;
-                var label = AnimationPresentation.AnimationName(listCapture, entry.Startup);
-                ImGui.PushID(listCapture.Id + (entry.Startup ? "-startup" : "-live"));
-                var active = listCapture.Playing && !entry.Startup;
-                if (active) ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(.35f, .9f, .45f, 1));
-                if (ImGui.Selectable(label,
-                    animationSelection?.Id == listCapture.Id && animationStartupSelected == entry.Startup))
-                    SelectAnimation(listCapture, entry.Startup);
-                if (active) ImGui.PopStyleColor();
-                if (ImGui.IsItemHovered())
-                    ImGui.SetTooltip((entry.Startup ? "Linked startup\n" : "") + (entry.Startup ? listCapture.Startup!.GamePath : listCapture.Clip.GamePath));
-                ImGui.PopID();
-            }
+            if (list.Success)
+                DrawAnimationList(entries);
         }
-        ImGui.EndChild(); ImGui.SameLine();
-        if (ImGui.BeginChild("##animation-details", new Vector2(0, 330), true))
+        ImGui.SameLine();
+        using var details = ImRaii.Child("##animation-details", new Vector2(0, height), true);
+        if (!details.Success)
+            return;
+        if (animationSelection is not { } capture)
         {
-            ImGui.TextUnformatted("Animation Details");
-            ImGui.Separator();
-            if (animationSelection is not { } selected)
-                ImGui.TextWrapped("Select a ready animation to review its source and LivePose adjustments.");
-            else DrawAnimationDetails(selected);
+            Widgets.EmptyState(FontAwesomeIcon.Running, "Select an animation",
+                "Choose a ready animation on the left to review its source, adjust LivePose offsets and bake.");
         }
-        ImGui.EndChild();
-
-        if (animationSelection is { } capture)
+        else
         {
+            if (ImGui.CollapsingHeader("Source", ImGuiTreeNodeFlags.DefaultOpen))
+                DrawAnimationDetails(capture);
             ImGui.Spacing();
             DrawLivePoseAdjustments(capture);
             ImGui.Spacing();
-            DrawAnimationActions(capture);
+            DrawAnimatedBones(capture);
+            ImGui.Spacing();
+            if (ImGui.CollapsingHeader("Bake", ImGuiTreeNodeFlags.DefaultOpen))
+                DrawAnimationActions(capture);
+            ImGui.Spacing();
         }
-        if (animations.Busy)
+        DrawRecoveryCard();
+    }
+
+    private void DrawAnimationList(ImmutableArray<AnimationPresentation.ListItem> entries)
+    {
+        Widgets.SectionHeader("Character animations", entries.IsEmpty ? null : $"{entries.Length}");
+        ImGui.Separator();
+        if (entries.IsEmpty)
         {
-            ImGui.SameLine(); ImGui.BeginDisabled(!animations.CanCancel);
-            if (ImGui.Button("Cancel")) animations.Cancel();
-            ImGui.EndDisabled();
+            Widgets.MutedWrapped(animations!.Observer.Status);
+            Widgets.HintWrapped("Ready animations appear here once the local player plays an emote, idle or movement animation outside combat.");
+            return;
+        }
+        foreach (var entry in entries)
+        {
+            if (entry.SeparatorBefore) ImGui.Separator();
+            var listCapture = entry.Capture;
+            var label = AnimationPresentation.AnimationName(listCapture, entry.Startup);
+            using var id = ImRaii.PushId(listCapture.Id + (entry.Startup ? "-startup" : "-live"));
+            var active = listCapture.Playing && !entry.Startup;
+            using var activeColour = ImRaii.PushColor(ImGuiCol.Text, Theme.Success, active);
+            if (ImGui.Selectable(label,
+                animationSelection?.Id == listCapture.Id && animationStartupSelected == entry.Startup))
+                SelectAnimation(listCapture, entry.Startup);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip((entry.Startup ? "Linked startup\n" : "") + (entry.Startup ? listCapture.Startup!.GamePath : listCapture.Clip.GamePath));
         }
     }
 
     private void DrawAnimationDetails(AnimationCapture capture)
     {
         var selectedClip = animationStartupSelected && capture.Startup is { } startup ? startup : capture.Clip;
-        ImGui.TextUnformatted(AnimationPresentation.AnimationName(capture, animationStartupSelected));
-        ImGui.TextDisabled(AnimationPresentation.AnimationState(capture, animationStartupSelected));
+        ImGui.TextColored(Theme.Label, AnimationPresentation.AnimationName(capture, animationStartupSelected));
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.TextColored(Theme.Muted, AnimationPresentation.AnimationState(capture, animationStartupSelected));
         ImGui.TextUnformatted("Animation target: " + AnimationPresentation.ModelName(selectedClip));
         DrawAnimationFileSource(capture, selectedClip);
         DrawLiveSkeleton(capture.Clip);
@@ -149,7 +149,20 @@ public sealed partial class MainWindow
         }
 
         if (!string.IsNullOrWhiteSpace(capture.Clip.LastOperationError))
-            ImGui.TextWrapped("Last attempt: " + capture.Clip.LastOperationError);
+        {
+            ImGui.Spacing();
+            Widgets.Banner("##animation-last-error", FeedbackSeverity.Warning, "Last attempt: " + capture.Clip.LastOperationError);
+        }
+
+        ImGui.Spacing();
+        using (ImRaii.Disabled(animations!.Busy))
+        {
+            if (Widgets.IconButton("##rescan-skeletons", FontAwesomeIcon.Sync, "Rescan the skeleton library (every .sklb in your mods) when a source skeleton is missing or stale"))
+                animations.Observer.RescanSkeletons();
+        }
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Hint, "Rescan skeletons");
     }
 
     private static void DrawAnimationFileSource(AnimationCapture capture, AnimationClip clip)
@@ -157,23 +170,21 @@ public sealed partial class MainWindow
         var file = capture.Sources.FirstOrDefault(s => s.GamePath == clip.GamePath);
         if (file == null) return;
         ImGui.TextUnformatted("Animation file");
-        ImGui.Indent();
+        using var indent = ImRaii.PushIndent();
         var mod = file.ModName ?? file.ModDirectory ?? "Vanilla game";
         ImGui.TextUnformatted("Source mod: " + mod);
         ImGui.TextUnformatted("File: " + (file.RelativePath ?? file.GamePath));
         if (ImGui.IsItemHovered()) ImGui.SetTooltip(file.ResolvedPath);
-        ImGui.Unindent();
     }
 
     private static void DrawLiveSkeleton(AnimationClip clip)
     {
         ImGui.TextUnformatted("Live character skeleton");
-        ImGui.Indent();
+        using var indent = ImRaii.PushIndent();
         var skeleton = clip.TargetSkeleton;
         var label = skeleton == null ? "Live skeleton unavailable" : $"{Path.GetFileName(clip.SkeletonPath)} · {skeleton.Bones.Length} bones";
         ImGui.TextUnformatted(label);
         if (ImGui.IsItemHovered() && !string.IsNullOrWhiteSpace(clip.SkeletonPath)) ImGui.SetTooltip(clip.SkeletonPath);
-        ImGui.Unindent();
     }
 
     private void DrawAnimationSource(AnimationCapture capture, AnimationClip clip, bool startup)
@@ -186,7 +197,7 @@ public sealed partial class MainWindow
             return;
         }
         ImGui.TextUnformatted(startup ? "Startup animation source" : "Animation source");
-        ImGui.Indent();
+        using var indent = ImRaii.PushIndent();
         var provider = source.Source.Resource.ModName ?? source.Source.Resource.ModDirectory ??
             (source.Source.Kind == SkeletonSourceKind.Game ? "Vanilla game" : "Current collection");
         ImGui.TextUnformatted("Canonical model: " + AnimationPresentation.SourceModelName(source));
@@ -194,17 +205,17 @@ public sealed partial class MainWindow
         var aliases = source.Source.MappedGamePaths.Select(AnimationSkeletonIndex.ModelFromPath).OfType<string>()
             .Distinct(StringComparer.Ordinal).ToArray();
         if (aliases.Length > 0) ImGui.TextDisabled("Mapped aliases: " + string.Join(", ", aliases));
-        ImGui.TextDisabled($"Skeleton: {source.Skeleton.Bones.Length} bones");
-        ImGui.TextDisabled("Provided by " + provider);
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip(source.Source.Resource.ResolvedPath + "\nSelection rationale: " + source.Rationale);
-        ImGui.TextDisabled("Selection rationale: " + source.Rationale);
+        ImGui.TextDisabled($"Skeleton: {source.Skeleton.Bones.Length} bones · provided by {provider}");
+        ImGui.SameLine(0, Theme.Gap);
+        Widgets.HelpTip("Selection rationale: " + source.Rationale + "\n" + source.Source.Resource.ResolvedPath);
         if (source.Source.Variant.Length > 0) ImGui.TextDisabled(source.Source.Variant);
         if (resolution!.Candidates.Length > 1)
         {
             ImGui.TextDisabled("Choose the skeleton this animation was made for.");
-            ImGui.BeginDisabled(animations!.Busy);
-            if (ImGui.BeginCombo(startup ? "Startup animation skeleton" : "Animation skeleton",
-                resolution.Selected == null ? "Choose source skeleton" : AnimationPresentation.SourceModelName(source)))
+            using var busy = ImRaii.Disabled(animations!.Busy);
+            using var combo = ImRaii.Combo(startup ? "Startup animation skeleton" : "Animation skeleton",
+                resolution.Selected == null ? "Choose source skeleton" : AnimationPresentation.SourceModelName(source));
+            if (combo.Success)
             {
                 foreach (var candidate in resolution.Candidates)
                 {
@@ -219,11 +230,8 @@ public sealed partial class MainWindow
                     }
                     if (ImGui.IsItemHovered()) ImGui.SetTooltip(candidate.Rationale + "\n" + candidate.Source.Resource.ResolvedPath);
                 }
-                ImGui.EndCombo();
             }
-            ImGui.EndDisabled();
         }
-        ImGui.Unindent();
     }
 
     private void DrawLivePoseAdjustments(AnimationCapture capture)
@@ -238,36 +246,48 @@ public sealed partial class MainWindow
         }
         ImGui.NewLine();
         var poseUnavailable = capture.PoseUnavailableReason != null;
-        ImGui.BeginDisabled(animations!.Busy || poseUnavailable);
-        if (ImGui.Button("Clear all offsets")) animations.ClearOffsets(capture);
-        ImGui.EndDisabled();
-        ImGui.SameLine();
-        ImGui.BeginDisabled(animations.Busy || !animations.CanReapplyOffsets || poseUnavailable);
-        if (ImGui.Button("Reapply offsets")) animations.ReapplyOffsets(capture);
-        ImGui.EndDisabled();
-        ImGui.SameLine();
-        ImGui.BeginDisabled(animations.Busy || poseUnavailable);
-        if (ImGui.Button("Refresh offsets"))
+        using (ImRaii.Disabled(animations!.Busy || poseUnavailable))
         {
-            var selected = capture;
-            animations.Refresh(selected, refreshed =>
-            {
-                if (animationSelection?.Id != selected.Id) return;
-                animationSelection = refreshed;
-                animationBones.IntersectWith(refreshed.Pose.Bones.Select(b => b.Id));
-            });
+            if (ImGui.Button("Clear all offsets")) animations.ClearOffsets(capture);
         }
-        ImGui.EndDisabled();
+        ImGui.SameLine();
+        using (ImRaii.Disabled(animations.Busy || !animations.CanReapplyOffsets || poseUnavailable))
+        {
+            if (ImGui.Button("Reapply offsets")) animations.ReapplyOffsets(capture);
+        }
+        ImGui.SameLine();
+        using (ImRaii.Disabled(animations.Busy || poseUnavailable))
+        {
+            if (ImGui.Button("Refresh offsets"))
+            {
+                var selected = capture;
+                animations.Refresh(selected, refreshed =>
+                {
+                    if (animationSelection?.Id != selected.Id) return;
+                    animationSelection = refreshed;
+                    animationBones.IntersectWith(refreshed.Pose.Bones.Select(b => b.Id));
+                });
+            }
+        }
+        ImGui.SameLine();
+        var restorable = FindOffsetJournal(capture);
+        using (ImRaii.Disabled(animations.Busy || restorable is null))
+        {
+            if (ImGui.Button("Restore offsets")) animations.RestoreOffsets(restorable!);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(restorable is null
+                ? "No bake of this animation cleared live offsets that could be put back."
+                : $"Put back the live offsets captured before the edit from {restorable.CreatedUtc.ToLocalTime():g}.");
         if (poseUnavailable) ImGui.TextWrapped("LivePose adjustments are unavailable: " + capture.PoseUnavailableReason);
         ImGui.Separator();
         foreach (var bone in capture.Pose.Bones.Where(b => b.Id.Slot == 0 && b.Id.Partial == capture.Clip.Partial))
         {
-            ImGui.PushID(bone.Id.Name);
+            using var id = ImRaii.PushId(bone.Id.Name);
             var enabled = animationBones.Contains(bone.Id);
             if (ImGui.Checkbox(AnimationPresentation.BoneName(bone.Id.Name), ref enabled))
             { if (enabled) animationBones.Add(bone.Id); else animationBones.Remove(bone.Id); }
             ImGui.SameLine(); ImGui.TextDisabled($"{bone.Stacks.Length} adjustment(s)");
-            ImGui.PopID();
         }
     }
 
@@ -294,7 +314,7 @@ public sealed partial class MainWindow
         string? blocked = capture.UnavailableReason ?? clips.Select(SkeletonBlock).FirstOrDefault(reason => reason != null);
         if (animationDestination == AnimationDestination.NewMod)
         {
-            ImGui.SetNextItemWidth(Math.Min(400, ImGui.GetContentRegionAvail().X));
+            ImGui.SetNextItemWidth(Math.Min(Theme.Scaled(400), ImGui.GetContentRegionAvail().X));
             ImGui.InputText("Mod name", ref animationModName, 128);
             blocked ??= capture.PackagingError;
         }
@@ -304,12 +324,27 @@ public sealed partial class MainWindow
             if (paths.Any(p => !capture.Sources.Any(s => s.GamePath == p && AnimationResources.CanReplace(s))))
                 blocked ??= "This animation has no writable Penumbra source. Choose Create new mod.";
         }
-        if (blocked != null) ImGui.TextWrapped(blocked);
+        if (blocked != null)
+            Widgets.Banner("##bake-blocked", FeedbackSeverity.Warning, blocked);
+        // Bones unticked under Animated Bones are left out of every rebake in this row.
+        ImmutableArray<string> excluded = [.. animationExcludedBones.Order(StringComparer.Ordinal)];
+        var exclusionBlocked = AnimationBones.Problem(capture.Clip, excluded);
+        var offsetConflict = AnimationBones.OffsetConflict(excluded, animationBones.Select(b => b.Name));
+        if (exclusionBlocked != null) Widgets.Banner("##bake-exclusion", FeedbackSeverity.Warning, exclusionBlocked);
+        else if (!excluded.IsEmpty)
+        {
+            ImGui.TextDisabled($"{excluded.Length} unticked bone{(excluded.Length == 1 ? "" : "s")} will be left out of the rebake.");
+            if (offsetConflict != null) Widgets.Banner("##bake-conflict", FeedbackSeverity.Warning, offsetConflict);
+        }
         var poseUnavailable = capture.PoseUnavailableReason != null;
-        ImGui.BeginDisabled(animations!.Busy || blocked != null || poseUnavailable || animationBones.Count == 0 || animationComponents == PoseComponents.None);
-        if (ImGui.Button("Rebake with LivePose")) animations.Edit(new AnimationBakeRequest(Guid.NewGuid(), capture, animationDestination,
-            animationModName.Trim(), includeStartup, animationBones.ToImmutableHashSet(), animationComponents));
-        ImGui.EndDisabled();
+        using (ImRaii.Disabled(animations!.Busy || blocked != null || exclusionBlocked != null || offsetConflict != null ||
+            poseUnavailable || animationBones.Count == 0 || animationComponents == PoseComponents.None))
+        {
+            if (ImGui.Button("Rebake with LivePose")) animations.Edit(new AnimationBakeRequest(Guid.NewGuid(), capture, animationDestination,
+                animationModName.Trim(), includeStartup, animationBones.ToImmutableHashSet(), animationComponents, ExcludedBones: excluded));
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Bake the ticked LivePose adjustments into the animation and clear them from the live pose.");
         ImGui.SameLine();
         string? repairBlocked = capture.UnavailableReason ?? clips.Select(SkeletonBlock).FirstOrDefault(reason => reason != null);
         if (animationDestination == AnimationDestination.NewMod) repairBlocked ??= capture.PackagingError;
@@ -319,71 +354,36 @@ public sealed partial class MainWindow
             if (paths.Any(p => !capture.Sources.Any(s => s.GamePath == p && AnimationResources.CanReplace(s))))
                 repairBlocked ??= "This animation has no writable Penumbra source. Choose Create new mod.";
         }
-        ImGui.BeginDisabled(animations.Busy || repairBlocked != null);
-        if (ImGui.Button("Repair skeleton")) animations.Edit(new AnimationBakeRequest(Guid.NewGuid(), capture, animationDestination,
-            animationModName.Trim(), includeStartup, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.RepairSkeleton));
-        ImGui.EndDisabled();
-
-        DrawStartupTransitionAction(capture);
-        DrawRetimeAction(capture);
-        DrawFaceAction(capture);
-        DrawSlotSwapAction(capture);
-    }
-
-    private void DrawStartupTransitionAction(AnimationCapture capture)
-    {
-        if (animationStartupSelected || !capture.Clip.IsLoop) return;
-
-        ImGui.Separator();
-        ImGui.TextUnformatted("Create startup transition");
-        ImGui.TextWrapped("Replace only the linked startup animation with a transition into this loop. The loop itself is unchanged.");
-        if (capture.Startup is not { } startup)
+        using (ImRaii.Disabled(animations.Busy || repairBlocked != null || exclusionBlocked != null))
         {
-            ImGui.TextDisabled("Unavailable: this loop has no unique linked startup animation.");
-            return;
+            if (ImGui.Button("Repair skeleton")) animations.Edit(new AnimationBakeRequest(Guid.NewGuid(), capture, animationDestination,
+                animationModName.Trim(), includeStartup, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.RepairSkeleton,
+                ExcludedBones: excluded));
         }
-
-        string? blocked = capture.UnavailableReason ?? StartupSkeletonBlock(capture.Clip) ?? StartupSkeletonBlock(startup);
-        if (animationDestination == AnimationDestination.NewMod)
-            blocked ??= capture.PackagingError;
-        else if (!capture.Sources.Any(s => s.GamePath == startup.GamePath && AnimationResources.CanReplace(s)))
-            blocked ??= "The linked startup has no writable Penumbra source. Choose Create new mod.";
-
-        if (ImGui.BeginCombo("Start pose", animationStartupPose == AnimationStartupPose.ReferencePose
-                ? "Reference pose" : "Character idle"))
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Retarget the animation onto the live skeleton, for example after a mod inserted bones.");
+        ImGui.SameLine();
+        // Needs no LivePose; the source, skeleton and destination checks behind the
+        // repair button are the ones this rebake needs too.
+        using (ImRaii.Disabled(animations.Busy || repairBlocked != null || exclusionBlocked != null || excluded.IsEmpty))
         {
-            foreach (var pose in Enum.GetValues<AnimationStartupPose>())
-            {
-                var label = pose == AnimationStartupPose.ReferencePose ? "Reference pose" : "Character idle";
-                if (ImGui.Selectable(label, pose == animationStartupPose)) animationStartupPose = pose;
-            }
-            ImGui.EndCombo();
+            if (ImGui.Button("Rebake without unticked bones")) animations.Edit(new AnimationBakeRequest(Guid.NewGuid(), capture,
+                animationDestination, animationModName.Trim(), includeStartup, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None,
+                AnimationOperation.ExcludeBones, ExcludedBones: excluded));
         }
-        ImGui.SetNextItemWidth(180);
-        ImGui.InputFloat("Blend duration (seconds)", ref animationStartupDuration, 0.05f, 0.1f, "%.2f");
-        animationStartupDuration = Math.Clamp(animationStartupDuration, 0, 2);
-        ImGui.TextDisabled("Smooth ease-in/out; duration is limited to 0.00–2.00 seconds.");
-        if (animationStartupPose == AnimationStartupPose.CharacterIdle)
-            ImGui.TextDisabled("Character idle uses timeline 3's resolved resident/idle.pap body clip; an unavailable or ambiguous source disables generation.");
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Write the animation without tracks for the unticked bones, handing them back to physics.");
 
-        if (blocked != null) ImGui.TextWrapped("Unavailable: " + blocked);
-        var invalidDuration = !float.IsFinite(animationStartupDuration) || animationStartupDuration is < 0 or > 2;
-        if (animations!.Busy) ImGui.TextDisabled("Unavailable: another animation operation is in progress.");
-        if (invalidDuration) ImGui.TextDisabled("Unavailable: enter a duration from 0.00 to 2.00 seconds.");
-        ImGui.BeginDisabled(animations!.Busy || blocked != null || invalidDuration);
-        if (ImGui.Button("Create startup transition"))
-            animations.Edit(new AnimationBakeRequest(Guid.NewGuid(), capture, animationDestination,
-                animationModName.Trim(), false, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None,
-                AnimationOperation.CreateStartup, StartupOptions: new AnimationStartupOptions(
-                    animationStartupPose, animationStartupDuration)));
-        ImGui.EndDisabled();
-    }
-
-    private static string? StartupSkeletonBlock(AnimationClip clip)
-    {
-        if (clip.TargetSkeleton == null) return "The live target skeleton is unavailable.";
-        return clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: not null }
-            ? clip.Resolution?.Reason ?? "A compatible animation source skeleton is still being identified." : null;
+        var undoable = FindUndoableLastEdit();
+        ImGui.SameLine(0, Theme.Scaled(16));
+        using (ImRaii.Disabled(animations.Busy || undoable is null))
+        {
+            if (ImGui.Button("Undo last edit")) animations.Undo(undoable!);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(undoable is null
+                ? "There is no completed edit to undo."
+                : $"Revert {AnimationPresentation.AnimationName(undoable.Request.Capture, false)} ({OperationLabel(undoable.Request.Operation)}, {DestinationLabel(undoable.Request)}) and restore its live offsets.");
     }
 
     private static string? SkeletonBlock(AnimationClip clip) => clip.Resolution is { State: not SkeletonResolutionState.Matched } resolution

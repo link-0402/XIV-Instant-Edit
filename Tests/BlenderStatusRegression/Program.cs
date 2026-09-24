@@ -111,6 +111,33 @@ static void CheckFirstTimeSetupConfiguration()
             Require(true, "setup rejects a conflicting managed cache folder");
         }
 
+        // Temp cleaners delete the old marker (and empty folders) while newer cache
+        // files survive; a cache holding only its own entries re-adopts itself.
+        var cleanedBase = Path.Combine(root, "cleaned-base");
+        var cleaned = Path.Combine(cleanedBase, TextureFiles.CacheFolder);
+        Directory.CreateDirectory(Path.Combine(cleaned, "Contexts"));
+        Directory.CreateDirectory(Path.Combine(cleaned, "Backups"));
+        Directory.CreateDirectory(Path.Combine(cleaned, "skeleton-library"));
+        File.WriteAllText(Path.Combine(cleaned, "Contexts", $"{Guid.NewGuid():N}.json"), "{}");
+        File.WriteAllText(Path.Combine(cleaned, "TextureSessions.json"), "[]");
+        File.WriteAllText(Path.Combine(cleaned, $".pending-context-revocations.json.{Guid.NewGuid():N}.tmp"), "{");
+        Require(TextureFiles.EnsureCacheRoot(cleanedBase) == cleaned &&
+                File.Exists(Path.Combine(cleaned, ".instant-edit-cache.json")),
+            "a cache whose marker was removed re-adopts itself when it holds only cache entries");
+
+        File.Delete(Path.Combine(cleaned, ".instant-edit-cache.json"));
+        File.WriteAllText(Path.Combine(cleaned, "notes.txt"), "user file");
+        try
+        {
+            TextureFiles.EnsureCacheRoot(cleanedBase);
+            throw new InvalidOperationException("an unmarked cache with a foreign entry unexpectedly succeeded");
+        }
+        catch (IOException)
+        {
+            Require(!File.Exists(Path.Combine(cleaned, ".instant-edit-cache.json")),
+                "an unmarked cache is still refused when it holds any foreign entry");
+        }
+
         var editor = Path.Combine(root, "editor.exe");
         File.WriteAllText(editor, "test executable");
         Require(TextureEditService.TryValidateEditorPath(editor, out _),
@@ -308,6 +335,7 @@ Require(
     "bridge diagnostics redact absolute paths and capability values");
 
 await TextureEditScenarios.RunAsync();
+await PreviewScenarios.RunAsync();
 Console.WriteLine("All Blender status and texture regressions passed.");
 
 sealed class StubHandler(

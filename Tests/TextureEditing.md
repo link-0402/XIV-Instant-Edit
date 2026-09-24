@@ -19,11 +19,19 @@ agent.
   in place. Confirm the original TEX format is retained, dimensions are unchanged,
   and the game renders the intended change. Compression artifacts are expected
   for BC formats; gamma changes, premultiplication and channel swaps are not.
+- Resize the image (for example 2048 → 1024, and a non-square size) and save.
+  The TEX must take the new size with a regenerated mip chain, keep its format,
+  and render correctly in game. The session must show the new size.
+- Turn off **Recompress saved textures** under Options and save again without
+  changing pixels. The destination must become uncompressed BGRA32 at the same
+  size, and a size that is not divisible by 4 must now be accepted. Turn the
+  option back on and confirm the next save restores the original compression.
 - Confirm existing non-mipmapped textures remain single-level. Mipmapped inputs
   should regenerate the full size-appropriate chain, capped at 13 levels.
-- Confirm 24-bit/missing-alpha saves, resized images, truncated saves and
-  unsupported source layouts/formats produce actionable status without replacing
-  the destination. Fix the working file and verify the next save is applied.
+- Confirm 24-bit/missing-alpha saves, BC saves whose size is not divisible by 4,
+  truncated saves and unsupported source layouts/formats produce actionable
+  status without replacing the destination. Fix the working file and verify the
+  next save is applied.
 
 ## Sessions and live integration
 
@@ -42,6 +50,9 @@ agent.
 - Pause while encoding; verify the pending conversion cannot replace the TEX.
   Resume and verify the pending working image is processed. Restart the plugin
   with sessions open; confirm they restore paused with their original paths.
+  Choose **Edit texture** on one of them (and **Open in editor** on another):
+  each must resume without pressing Resume, and a save made while paused must
+  then be applied.
 - Edit the destination externally, change its option mapping, disable/remove/move
   its mod, or change the actor's active texture mapping. The session must pause
   on a conflict rather than overwrite a different source. Reopening from the
@@ -59,6 +70,24 @@ agent.
   object that reused its index. Preserve the local player and owned-entity redraw
   behavior. When reload/redraw fails after a commit, show that the texture was
   saved and allow Retry to refresh it without re-encoding unchanged pixels.
+
+## Variants
+
+- Save a copy of the working TGA as `Red.tga` in the session folder. Confirm
+  `<texture>_Red.tex` appears beside the destination, the mod gains a Single group
+  `<texture> variants` with **Original** and **Red**, Red is selected in the captured
+  collection and the actor shows it. Other collections using the mod keep Original.
+- Save `Red.tga` again: the same TEX updates (with a backup) and no option is added.
+  Save `Blue.tga`: it joins the same group. `Original.tga` and names Penumbra cannot
+  use report a status instead of committing.
+- With Red selected, save the main TGA. It must commit without a mapping conflict and
+  switch the group back to Original.
+- Rename the group and the Red option in Penumbra, reload, and save Red again: the
+  renamed option is updated and selected, not duplicated.
+- On a vanilla texture, save a variant before the main TGA. The mod is created with the
+  unchanged texture, registered, enabled, and the variant is added and selected.
+- With a variant showing, use the brush action on that texture in On Screen: the
+  existing session reopens and the variant's TGA opens in the editor.
 
 ## Implementation validation environment
 

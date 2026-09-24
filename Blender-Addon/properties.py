@@ -106,6 +106,15 @@ class XIVIEExportSettings(PropertyGroup):
         description="Temporarily reset armature scaling, positioning and rotation to default values for export.",
         default=False,
     )  # type: ignore
+    calculate_heels_offset: BoolProperty(
+        name="Calculate Heels Offset",
+        description=(
+            "Measure how far the model reaches below the floor and export it as a "
+            "heels_offset attribute on the first mesh part, replacing any manual "
+            "heels_offset attribute. Nothing is added when no geometry is below the floor"
+        ),
+        default=False,
+    )  # type: ignore
     remove_yas: EnumProperty(
         name="YAS Groups",
         items=[("KEEP", "Keep", "Keep all groups"), ("NO_GEN", "Remove Genitalia", "Remove genital groups"), ("REMOVE", "Remove All", "Remove iv_/ya_ groups")],

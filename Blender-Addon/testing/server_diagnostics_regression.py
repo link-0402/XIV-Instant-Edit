@@ -3,6 +3,7 @@
 import copy
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -184,6 +185,9 @@ def run() -> None:
         _expect_code(server, payload, expected)
 
     with tempfile.TemporaryDirectory(prefix="xiv-ie-server-diagnostics-") as temporary:
+        # configure_cache persists cache-settings.json under APPDATA, beside
+        # the real Dalamud plugin configuration; keep it in the test directory.
+        os.environ["APPDATA"] = str(Path(temporary) / "appdata")
         cache.configure_cache(temporary, False)
         status = server._status_payload()
         assert server.TEXTURE_CACHE_CAPABILITY in status["capabilities"]

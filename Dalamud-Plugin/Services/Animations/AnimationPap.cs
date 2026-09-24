@@ -85,31 +85,6 @@ internal sealed class AnimationPap
         return result;
     }
 
-    /// <summary>
-    /// Rename entries in place, keyed by entry index. The entry count, every offset
-    /// and all Havok and TMB bytes are unchanged, so this cannot move a binding.
-    /// </summary>
-    public byte[] WithEntryNames(IReadOnlyDictionary<int, string> names)
-    {
-        if (names.Count == 0) throw new InvalidDataException("No PAP entry rename was supplied.");
-        var info = ReadInt(bytes, InfoOffsetField);
-        var result = bytes.ToArray();
-        foreach (var (index, name) in names)
-        {
-            if (index < 0 || index >= Entries.Length)
-                throw new InvalidDataException($"PAP entry {index} does not exist.");
-            var encoded = Encoding.UTF8.GetBytes(name);
-            // 32 bytes including the terminator, matching the reader's NUL scan.
-            if (encoded.Length is < 1 or > 31 || encoded.Contains((byte)0))
-                throw new InvalidDataException($"PAP entry name '{name}' is empty or too long.");
-            var start = info + index * EntrySize;
-            result.AsSpan(start, 32).Clear();
-            encoded.CopyTo(result.AsSpan(start));
-        }
-        _ = new AnimationPap(result);
-        return result;
-    }
-
     public static int ReadInt(byte[] data, int offset)
     {
         if (offset < 0 || offset > data.Length - 4) throw new InvalidDataException("Resource offset is out of bounds.");

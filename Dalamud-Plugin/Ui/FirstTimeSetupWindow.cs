@@ -59,8 +59,8 @@ public sealed class FirstTimeSetupWindow : Window
 
     public override void Draw()
     {
-        ImGui.TextColored(new Vector4(.95f, .78f, .35f, 1), "XIV INSTANT EDIT");
-        ImGui.TextColored(new Vector4(.58f, .6f, .67f, 1), "First-time setup");
+        ImGui.TextColored(Theme.Accent, "XIV INSTANT EDIT");
+        ImGui.TextColored(Theme.Muted, "First-time setup");
         ImGui.Spacing();
         DrawProgress();
         ImGui.Spacing();
@@ -83,15 +83,7 @@ public sealed class FirstTimeSetupWindow : Window
         if (_error.Length > 0)
         {
             ImGui.Spacing();
-            ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(.24f, .055f, .055f, 1));
-            ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(.9f, .3f, .3f, 1));
-            ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 4);
-            ImGui.PushStyleVar(ImGuiStyleVar.ChildBorderSize, 1);
-            if (ImGui.BeginChild("##setup-error", new Vector2(0, CalculateErrorHeight()), true))
-                ImGui.TextWrapped(_error);
-            ImGui.EndChild();
-            ImGui.PopStyleVar(2);
-            ImGui.PopStyleColor(2);
+            Widgets.Banner("##setup-error", FeedbackSeverity.Error, _error);
         }
 
         ImGui.Spacing();
@@ -104,22 +96,20 @@ public sealed class FirstTimeSetupWindow : Window
 
     private void DrawProgress()
     {
-        ImGui.TextColored(new Vector4(.76f, .78f, .84f, 1), $"Step {_step + 1} of {StepCount}");
+        ImGui.TextColored(Theme.Label, $"Step {_step + 1} of {StepCount}");
         ImGui.SameLine();
         for (var i = 0; i < StepCount; i++)
         {
-            var color = i <= _step
-                ? new Vector4(.95f, .78f, .35f, 1)
-                : new Vector4(.35f, .37f, .43f, 1);
+            var color = i <= _step ? Theme.Accent : Theme.Inactive;
             ImGui.TextColored(color, i == _step ? "●" : "○");
             if (i < StepCount - 1)
-                ImGui.SameLine(0, 4);
+                ImGui.SameLine(0, Theme.Scaled(4));
         }
     }
 
     private static void DrawHeading(string heading, string description)
     {
-        ImGui.TextColored(new Vector4(.95f, .78f, .35f, 1), heading);
+        ImGui.TextColored(Theme.Accent, heading);
         ImGui.TextWrapped(description);
         ImGui.Spacing();
     }
@@ -134,7 +124,7 @@ public sealed class FirstTimeSetupWindow : Window
         ImGui.BulletText("Blender and the XIV Instant Edit add-on are required for model editing.");
         ImGui.BulletText("Texture editing support is software-independent and will work with any established Photo Editing software with TGA support.");
         ImGui.Spacing();
-        ImGui.TextColored(new Vector4(.55f, .57f, .64f, 1), "You are required to configure a cache directory in the next step, which will be used by both the in-game plugin and the Blender add-on to save temporary export files and backups.");
+        Widgets.HintWrapped("You are required to configure a cache directory in the next step, which will be used by both the in-game plugin and the Blender add-on to save temporary export files and backups.");
     }
 
     private void DrawCacheStep()
@@ -161,16 +151,16 @@ public sealed class FirstTimeSetupWindow : Window
                 true);
         }
         ImGui.SameLine();
-        ImGui.TextColored(new Vector4(.55f, .57f, .64f, 1), "The base directory may already contain other files.");
+        Widgets.Hint("The base directory may already contain other files.");
         ImGui.Spacing();
         var managedCachePath = ManagedCachePathFor(_cacheDirectory);
         if (managedCachePath is not null)
         {
-            ImGui.TextColored(new Vector4(.76f, .78f, .84f, 1), "Managed cache folder");
+            ImGui.TextColored(Theme.Label, "Managed cache folder");
             ImGui.TextWrapped(managedCachePath);
             ImGui.Spacing();
         }
-        ImGui.TextColored(new Vector4(.55f, .57f, .64f, 1), "Setup will verify that the managed folder can be written to before it finishes.");
+        Widgets.Hint("Setup will verify that the managed folder can be written to before it finishes.");
     }
 
     private void DrawEditorStep()
@@ -183,7 +173,7 @@ public sealed class FirstTimeSetupWindow : Window
         ImGui.SetNextItemWidth(-1);
         if (ImGui.InputTextWithHint("##setup-texture-editor", "Full path to Photoshop.exe or another TGA editor", ref _textureEditorPath, 2048))
             _textureEditorPath = _textureEditorPath.Trim().Trim('"');
-        ImGui.TextColored(new Vector4(.55f, .57f, .64f, 1), "You can configure or change this later in XIV Instant Edit Settings.");
+        Widgets.Hint("You can configure or change this later in XIV Instant Edit Settings.");
     }
 
     private void DrawFooter()
@@ -204,10 +194,10 @@ public sealed class FirstTimeSetupWindow : Window
         ImGui.SameLine();
         if (_step == EditorStep)
         {
-            if (ImGui.Button("Finish", new Vector2(92, 0)))
+            if (ImGui.Button("Finish", new Vector2(Theme.Scaled(92), 0)))
                 Finish();
         }
-        else if (ImGui.Button("Next", new Vector2(72, 0)))
+        else if (ImGui.Button("Next", new Vector2(Theme.Scaled(72), 0)))
         {
             _error = string.Empty;
             _step++;
@@ -255,12 +245,6 @@ public sealed class FirstTimeSetupWindow : Window
         catch (Exception error) { _log.Debug(error.Message); }
         IsOpen = false;
         _openMainWindow();
-    }
-
-    private float CalculateErrorHeight()
-    {
-        var width = Math.Max(1, ImGui.GetContentRegionAvail().X - ImGui.GetStyle().WindowPadding.X * 2);
-        return Math.Max(ImGui.GetFrameHeightWithSpacing() * 2, ImGui.CalcTextSize(_error, false, width).Y + ImGui.GetStyle().WindowPadding.Y * 2 + 4);
     }
 
     private static string ExistingDirectoryOrCurrent(string path)

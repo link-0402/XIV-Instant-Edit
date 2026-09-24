@@ -103,7 +103,14 @@ public sealed partial class PenumbraService : ITextureEditBackend
             obj.Name.ToString() == session.ActorName;
     }
 
-    private async Task ValidateLiveTextureMappingAsync(TextureEditSession session, string expected, bool requireActor)
+    private Task ValidateLiveTextureMappingAsync(TextureEditSession session, string expected, bool requireActor)
+        => ValidateLiveTextureMappingAsync(session, [expected], requireActor);
+
+    /// <summary>The files the session may show: its destination, or one of its variants when that option is selected.</summary>
+    private static string[] SessionTextureFiles(TextureEditSession session)
+        => [session.TargetFile, .. session.Variants.Where(v => v.RelativePath.Length > 0).Select(session.VariantTargetFile)];
+
+    private async Task ValidateLiveTextureMappingAsync(TextureEditSession session, IReadOnlyCollection<string> expected, bool requireActor)
     {
         if (!session.ObjectIndex.HasValue) return;
         await _framework.RunOnFrameworkThread(() =>
@@ -114,7 +121,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
                 return;
             }
             var paths = GetResourcePaths((ushort)session.ObjectIndex.Value);
-            if (paths is null || !paths.Any(p => string.Equals(p.Key, expected, StringComparison.OrdinalIgnoreCase) &&
+            if (paths is null || !paths.Any(p => expected.Contains(p.Key, StringComparer.OrdinalIgnoreCase) &&
                     p.Value.Contains(session.GamePath, StringComparer.OrdinalIgnoreCase)))
                 throw new TextureConflictException("The actor's texture mapping changed. Refresh and reopen the texture.");
         }).ConfigureAwait(false);
@@ -128,9 +135,9 @@ public sealed partial class PenumbraService : ITextureEditBackend
         return TextureFiles.Hash(TextureFiles.Read(path));
     }
 
-    async Task<TextureCommit> ITextureEditBackend.CommitAsync(TextureEditSession session, byte[] tex, Func<bool> stillCurrent, CancellationToken token, bool restoring)
+    async Task<TextureCommit> ITextureEditBackend.CommitAsync(TextureEditSession session, byte[] tex, Func<bool> stillCurrent, CancellationToken token)
     {
-        TextureFiles.ValidateOutput(tex, session, restoring);
+        TextureFiles.ValidateCommit(tex, session);
         await _exportGate.WaitAsync(token).ConfigureAwait(false);
         try
         {
@@ -166,7 +173,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
                 await ValidateTextureDestinationAsync(session.ModDirectory, session.ModRoot, session.RelativePath, session.TargetFile, token).ConfigureAwait(false);
                 if (TextureMappingFingerprint(session.ModRoot) != session.MappingFingerprint)
                     throw new TextureConflictException("The mod's options or mappings changed. Reopen the texture from the browser.");
-                await ValidateLiveTextureMappingAsync(session, session.TargetFile, false).ConfigureAwait(false);
+                await ValidateLiveTextureMappingAsync(session, SessionTextureFiles(session), false).ConfigureAwait(false);
                 if (_backups is null) throw new IOException("Texture backup storage is unavailable.");
                 backup = TextureFiles.Replace(session.TargetFile, session.ModRoot, session.RelativePath,
                     session.ModDirectory, tex, session.LastCommittedHash, _backups, () =>
@@ -181,12 +188,18 @@ public sealed partial class PenumbraService : ITextureEditBackend
         finally { _exportGate.Release(); }
     }
 
-    async Task<string> ITextureEditBackend.RefreshAsync(TextureEditSession session, CancellationToken token)
+    async Task<string> ITextureEditBackend.RefreshAsync(TextureEditSession session, Guid? showOption, CancellationToken token)
     {
         var warnings = new List<string>();
         try
         {
             token.ThrowIfCancellationRequested();
+            // Resolve names off the framework thread: meta.json can be large, and the artist may
+            // have renamed the group or option in Penumbra since it was created.
+            var select = showOption.HasValue && session is { VariantGroupId: not null, CollectionId: not null, NeedsMod: false };
+            var selection = select ? ReadTextureVariantSelection(session.ModRoot, session.VariantGroupId!.Value, showOption!.Value) : null;
+            if (select && selection is null)
+                warnings.Add("The variant option no longer exists in Penumbra; select it there manually.");
             // Adding an already registered mod is unnecessary; this also retries registration after a failed first save.
             var registered = await _framework.RunOnFrameworkThread(() => GetMods().Any(m => m.Directory == session.ModDirectory)).ConfigureAwait(false);
             if (!registered && session.SetupPending)
@@ -207,6 +220,12 @@ public sealed partial class PenumbraService : ITextureEditBackend
                     if (!configure.Success) warnings.Add(configure.Message);
                     warnings.AddRange(configure.WarningList);
                     if (configure.Success && warnings.Count == 0) session.SetupPending = false;
+                }
+                if (selection is { } selected && session.CollectionId is { } target)
+                {
+                    var result = _trySetModSetting.Invoke(target, session.ModDirectory, selected.Group, selected.Option, session.ModDirectory);
+                    if (result is not (PenumbraApiEc.Success or PenumbraApiEc.NothingChanged))
+                        warnings.Add($"Could not select \"{selected.Option}\" in {session.CollectionName} ({result}).");
                 }
                 try
                 {
