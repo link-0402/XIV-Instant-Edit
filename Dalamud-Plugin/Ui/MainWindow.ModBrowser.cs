@@ -40,7 +40,7 @@ public sealed partial class MainWindow
             string.Equals(mod.Directory, _selectedModDirectory, StringComparison.OrdinalIgnoreCase));
         if (selectedMod is null)
         {
-            Widgets.EmptyState(FontAwesomeIcon.FolderOpen, "Select a mod", "Choose a Penumbra mod on the left to browse its models, textures and materials.");
+            Widgets.EmptyState(FontAwesomeIcon.FolderOpen, "Select a mod", "Choose a Penumbra mod on the left to browse its models, textures, materials and animations.");
             return;
         }
 
@@ -60,7 +60,7 @@ public sealed partial class MainWindow
             else if (failed)
                 Widgets.EmptyState(FontAwesomeIcon.ExclamationTriangle, "Could not read the selected mod", "Its meta.json may be missing or older than Penumbra 1.7.1. Reload the mod in Penumbra and try again.");
             else
-                Widgets.EmptyState(FontAwesomeIcon.FolderOpen, "No supported resources", "This mod has no models, textures or materials.");
+                Widgets.EmptyState(FontAwesomeIcon.FolderOpen, "No supported resources", "This mod has no models, textures, materials or animations.");
             return;
         }
 
@@ -70,7 +70,7 @@ public sealed partial class MainWindow
         ImGui.Spacing();
         Widgets.Banner("##mod-ambiguity", FeedbackSeverity.Info, ModBrowserAmbiguityWarning);
         ImGui.Spacing();
-        DrawResources(_modViewActors, "No supported models, textures, or materials found in this mod.");
+        DrawResources(_modViewActors, "No supported models, textures, materials or animations found in this mod.");
     }
 
     private void DrawModList(IReadOnlyList<PenumbraMod> mods)

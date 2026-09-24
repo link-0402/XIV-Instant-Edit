@@ -30,8 +30,14 @@ CACHE_SETTINGS_CAPABILITY = "instant-edit.cache-settings.v1"
 VANILLA_CONTEXT_CAPABILITY = "instant-edit.vanilla-context.v1"
 STRUCTURED_ERRORS_CAPABILITY = "instant-edit.structured-errors.v1"
 IMPORT_STATUS_CAPABILITY = "instant-edit.import-status.v1"
+ANIMATION_IMPORT_CAPABILITY = "instant-edit.animation-import.v1"
+MAX_ANIMATION_QUEUE_SIZE = 4
+# How long an animation request waits for Blender's main thread to key it, so the plugin
+# can report the result. Blender busy with a modal tool keeps the request queued instead.
+ANIMATION_APPLY_WAIT_SECONDS = 20
 
 _import_queue: Queue = Queue(maxsize=MAX_IMPORT_QUEUE_SIZE)
+_animation_queue: Queue = Queue(maxsize=MAX_ANIMATION_QUEUE_SIZE)
 _server              = None
 _thread               = None
 _port                 = 42424
@@ -69,6 +75,7 @@ def _status_payload() -> dict:
             VANILLA_CONTEXT_CAPABILITY,
             STRUCTURED_ERRORS_CAPABILITY,
             IMPORT_STATUS_CAPABILITY,
+            ANIMATION_IMPORT_CAPABILITY,
         ],
     }
 
@@ -254,6 +261,9 @@ class _ImportHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         endpoint = self.path.rstrip("/")
+        if endpoint == "/animation":
+            self._handle_animation()
+            return
         is_cache_settings = endpoint == "/settings/cache"
         if endpoint != "/import" and not is_cache_settings:
             self._respond(404, _failure(
@@ -401,6 +411,77 @@ class _ImportHandler(BaseHTTPRequestHandler):
             ))
             return
         self._respond(200, {"ok": True, "queued": True, "cached": True})
+
+    def _handle_animation(self) -> None:
+        """Receive a take, have Blender's main thread key it, and report the result."""
+        from .animation import MAX_BODY_SIZE, parse_take
+
+        try:
+            length_header = self.headers.get("Content-Length")
+            try:
+                length = int(length_header) if length_header is not None else -1
+            except ValueError:
+                length = -1
+            if length < 0:
+                status = 411 if length_header is None else 400
+                self._respond(status, _failure(
+                    status, "animation_import", "request_receipt", "content_length_invalid",
+                    "The animation request has no valid Content-Length header.",
+                    "Update both XIV Instant Edit components and retry.",
+                    endpoint=self.path,
+                ))
+                return
+            if length > MAX_BODY_SIZE:
+                self._respond(413, _failure(
+                    413, "animation_import", "request_receipt", "request_body_too_large",
+                    f"The animation exceeds Blender's {MAX_BODY_SIZE // (1024 * 1024)} MiB limit.",
+                    "Record a shorter take, then send it again.",
+                    endpoint=self.path,
+                ))
+                return
+            body = self.rfile.read(length)
+            if len(body) != length:
+                self._respond(400, _failure(
+                    400, "animation_import", "request_receipt", "request_body_incomplete",
+                    "The connection ended before Blender received the complete animation.",
+                    "Send the animation again and check local security software if it happens repeatedly.",
+                    endpoint=self.path,
+                ))
+                return
+            take = parse_take(body)
+        except (socket.timeout, TimeoutError):
+            self._respond(408, _failure(
+                408, "animation_import", "request_receipt", "request_body_timeout",
+                "Blender timed out while receiving the animation.",
+                "Send the animation again and check for heavy system load or local filtering software.",
+                endpoint=self.path,
+            ))
+            return
+        except BridgeRequestError as error:
+            self._respond(400, _failure(
+                400, "animation_import", error.stage, error.code, error.cause, error.remedy,
+                endpoint=self.path, exception=error,
+            ))
+            return
+
+        job = {"take": take, "done": threading.Event(), "result": None, "failure": None}
+        try:
+            _animation_queue.put_nowait(job)
+        except Full:
+            self._respond(503, _failure(
+                503, "animation_import", "queueing", "animation_queue_full",
+                "Blender is still keying earlier animations.",
+                "Wait until they appear in Blender, then send the animation again.",
+                endpoint=self.path,
+            ))
+            return
+        if not job["done"].wait(ANIMATION_APPLY_WAIT_SECONDS):
+            self._respond(202, {"ok": True, "queued": True, "applied": False})
+            return
+        if job["failure"] is not None:
+            self._respond(422, job["failure"])
+            return
+        self._respond(200, {"ok": True, "queued": False, "applied": True, **job["result"]})
 
     @staticmethod
     def _validate_cache_settings(data) -> dict:
@@ -640,6 +721,7 @@ def start_server(port: int = 42424) -> bool:
     except OSError as e:
         _server = None
         _thread = None
+        _port = port
         _server_error = str(e)
         _failure(
             500,
@@ -671,6 +753,11 @@ def get_server_error() -> str:
     return _server_error
 
 
+def server_status() -> tuple[bool, int, str]:
+    """Return whether the listener runs, its (last requested) port, and the startup error."""
+    return _server is not None, _port, _server_error
+
+
 def stop_server() -> None:
     global _server, _thread, _port
 
@@ -685,9 +772,53 @@ def stop_server() -> None:
         _port   = 42424
 
 
+def _set_last_status(text: str) -> None:
+    props = getattr(bpy.context.scene, "xiv_ie_instant_edit_props", None)
+    if props is not None:
+        props.last_status = text
+
+
+def process_animation_queue() -> None:
+    """Key the animations received since the last call. Runs on Blender's main thread."""
+    from .animation import AnimationApplyError, apply_take, summary
+
+    while True:
+        try:
+            job = _animation_queue.get_nowait()
+        except Empty:
+            return
+        take = job["take"]
+        metadata = {
+            "pluginVersion": take.plugin_version or "unknown",
+            "animationKind": take.kind,
+            "bones": len(take.bones),
+            "frames": len(take.times),
+        }
+        try:
+            job["result"] = apply_take(take)
+            _set_last_status(summary(job["result"]))
+        except AnimationApplyError as error:
+            job["failure"] = _failure(
+                422, "animation_import", "animation_processing", error.code, error.cause, error.remedy,
+                endpoint="/animation", metadata=metadata,
+            )
+            _set_last_status(f"Animation failed: {error.cause}")
+        except Exception as error:
+            job["failure"] = _failure(
+                500, "animation_import", "animation_processing", "animation_processing_failed",
+                "Blender encountered an unexpected error while keying the animation.",
+                "Review the diagnostic report, then send the animation again.",
+                endpoint="/animation", exception=error, metadata=metadata,
+            )
+            _set_last_status("Animation failed: Blender encountered an unexpected error.")
+        finally:
+            job["done"].set()
+
+
 def poll_import_queue() -> float:
     """Timer callback that runs pending imports on Blender's main thread."""
     try:
+        process_animation_queue()
         while True:
             try:
                 data = _import_queue.get_nowait()

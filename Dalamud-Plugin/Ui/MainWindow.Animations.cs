@@ -42,6 +42,9 @@ public sealed partial class MainWindow
         if (animations == null)
         {
             Widgets.EmptyState(FontAwesomeIcon.ExclamationTriangle, "Animation editing is unavailable", animationError ?? "Animation integration is unavailable.");
+            ImGui.Spacing();
+            // Recording reads the live skeleton directly and needs none of the editing services.
+            DrawRecorderCard();
             return;
         }
         animations.StartObservation();
@@ -80,15 +83,19 @@ public sealed partial class MainWindow
         using var details = ImRaii.Child("##animation-details", new Vector2(0, height), true);
         if (!details.Success)
             return;
+        DrawRecorderCard();
+        ImGui.Spacing();
         if (animationSelection is not { } capture)
         {
             Widgets.EmptyState(FontAwesomeIcon.Running, "Select an animation",
-                "Choose a ready animation on the left to review its source, adjust LivePose offsets and bake.");
+                "Choose a ready animation on the left to review its source, send it to Blender, adjust LivePose offsets and bake.");
         }
         else
         {
             if (ImGui.CollapsingHeader("Source", ImGuiTreeNodeFlags.DefaultOpen))
                 DrawAnimationDetails(capture);
+            ImGui.Spacing();
+            DrawSendToBlender(capture);
             ImGui.Spacing();
             DrawLivePoseAdjustments(capture);
             ImGui.Spacing();
@@ -155,14 +162,13 @@ public sealed partial class MainWindow
         }
 
         ImGui.Spacing();
-        using (ImRaii.Disabled(animations!.Busy))
-        {
-            if (Widgets.IconButton("##rescan-skeletons", FontAwesomeIcon.Sync, "Rescan the skeleton library (every .sklb in your mods) when a source skeleton is missing or stale"))
-                animations.Observer.RescanSkeletons();
-        }
+        // The library is only rebuilt on request, from Settings.
+        if (Widgets.IconButton("##skeleton-library", FontAwesomeIcon.Cog,
+                "Rebuild the skeleton library in Settings when a source skeleton is missing, for example after installing skeleton mods"))
+            _openSettings();
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Hint, "Rescan skeletons");
+        ImGui.TextColored(Theme.Hint, "Skeleton library in Settings");
     }
 
     private static void DrawAnimationFileSource(AnimationCapture capture, AnimationClip clip)

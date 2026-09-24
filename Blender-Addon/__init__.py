@@ -6,12 +6,12 @@ from . import instant_edit
 from .instant_edit import ops as instant_ops
 from .instant_edit import props as instant_props
 from .operators import (
+    XIVIE_OT_copy_text,
     XIVIE_OT_drag_mesh_order,
+    XIVIE_OT_duplicate_backfaces,
     XIVIE_OT_mesh_attribute,
-    XIVIE_OT_mesh_flow,
     XIVIE_OT_mesh_material,
-    XIVIE_OT_mesh_tags,
-    XIVIE_OT_rename_mesh_part,
+    XIVIE_OT_select_mesh_part,
     XIVIE_OT_convert_mesh_names,
     XIVIE_OT_combine_armatures,
     XIVIE_OT_simple_import,
@@ -28,9 +28,21 @@ from .preferences import (
 )
 from .properties import XIVIEExportSettings, set_addon_properties, remove_addon_properties
 from .ui import (
-    XIVIE_PT_main,
-    XIVIE_PT_export_target_status_popover,
+    XIVIE_MT_export_targets,
+    XIVIE_PT_backups,
+    XIVIE_PT_connection_popover,
+    XIVIE_PT_context_details_popover,
+    XIVIE_PT_export_scope_popover,
+    XIVIE_PT_file_io,
     XIVIE_PT_last_status_popover,
+    XIVIE_PT_mesh_groups,
+    XIVIE_PT_options,
+    XIVIE_PT_options_export,
+    XIVIE_PT_options_import,
+    XIVIE_PT_options_vertex_data,
+    XIVIE_PT_session,
+    XIVIE_PT_tools,
+    draw_mesh_part_context_menu,
 )
 
 
@@ -42,12 +54,12 @@ CLASSES = [
     XIVIEExportSettings,
     *instant_props.CLASSES,
     *instant_ops.CLASSES,
+    XIVIE_OT_copy_text,
     XIVIE_OT_drag_mesh_order,
+    XIVIE_OT_duplicate_backfaces,
     XIVIE_OT_mesh_attribute,
-    XIVIE_OT_mesh_flow,
     XIVIE_OT_mesh_material,
-    XIVIE_OT_mesh_tags,
-    XIVIE_OT_rename_mesh_part,
+    XIVIE_OT_select_mesh_part,
     XIVIE_OT_convert_mesh_names,
     XIVIE_OT_combine_armatures,
     XIVIE_OT_simple_import,
@@ -55,9 +67,21 @@ CLASSES = [
     XIVIE_OT_restore_backup,
     XIVIE_OT_import_backup,
     XIVIE_OT_clear_backups,
-    XIVIE_PT_export_target_status_popover,
+    XIVIE_MT_export_targets,
     XIVIE_PT_last_status_popover,
-    XIVIE_PT_main,
+    XIVIE_PT_connection_popover,
+    XIVIE_PT_context_details_popover,
+    XIVIE_PT_export_scope_popover,
+    # Top-level panels keep their bl_order; sub-panels follow their parent.
+    XIVIE_PT_session,
+    XIVIE_PT_mesh_groups,
+    XIVIE_PT_file_io,
+    XIVIE_PT_options,
+    XIVIE_PT_options_import,
+    XIVIE_PT_options_export,
+    XIVIE_PT_options_vertex_data,
+    XIVIE_PT_backups,
+    XIVIE_PT_tools,
 ]
 
 
@@ -89,12 +113,14 @@ def register() -> None:
             bpy.utils.register_class(cls)
         set_addon_properties()
         instant_edit.register()
+        bpy.types.UI_MT_button_context_menu.append(draw_mesh_part_context_menu)
     except Exception:
         unregister()
         raise
 
 
 def unregister() -> None:
+    bpy.types.UI_MT_button_context_menu.remove(draw_mesh_part_context_menu)
     instant_edit.unregister()
     try:
         remove_addon_properties()

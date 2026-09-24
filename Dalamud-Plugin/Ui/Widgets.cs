@@ -26,9 +26,10 @@ internal static partial class Widgets
     /// <summary>
     /// A rounded pill with tinted background, used for sources and states. It occupies one
     /// frame height so it lines up with buttons in a row. Returns true while hovered so the
-    /// caller can build a tooltip only when needed.
+    /// caller can build a tooltip only when needed. The text takes the pill's colour unless
+    /// <paramref name="textColour"/> is given.
     /// </summary>
-    public static bool Badge(string text, Vector4 colour)
+    public static bool Badge(string text, Vector4 colour, Vector4? textColour = null)
     {
         var padding = new Vector2(Theme.Scaled(6), Theme.Scaled(2));
         var size = ImGui.CalcTextSize(text) + padding * 2;
@@ -36,7 +37,7 @@ internal static partial class Widgets
         var position = ImGui.GetCursorScreenPos() + new Vector2(0, Math.Max(0, (frame - size.Y) / 2));
         var drawList = ImGui.GetWindowDrawList();
         drawList.AddRectFilled(position, position + size, ImGui.GetColorU32(Theme.WithAlpha(colour, .18f)), Theme.Scaled(4));
-        drawList.AddText(position + padding, ImGui.GetColorU32(colour), text);
+        drawList.AddText(position + padding, ImGui.GetColorU32(textColour ?? colour), text);
         ImGui.Dummy(new Vector2(size.X, Math.Max(frame, size.Y)));
         return ImGui.IsItemHovered();
     }
@@ -49,22 +50,51 @@ internal static partial class Widgets
         ImGui.TextColored(colour, icon.ToIconString());
     }
 
-    /// <summary> An icon button without a frame; highlights on hover. </summary>
-    public static bool GhostIconButton(string id, FontAwesomeIcon icon, string? tooltip = null)
+    /// <summary> An icon button without a frame; highlights on hover. A size centres the icon in a fixed box. </summary>
+    public static bool GhostIconButton(string id, FontAwesomeIcon icon, string? tooltip = null, Vector2? size = null)
     {
         using var colour = ImRaii.PushColor(ImGuiCol.Button, Vector4.Zero);
-        var clicked = ImGuiComponents.IconButton(id, icon);
+        var clicked = size is { } box ? ImGuiComponents.IconButton(id, icon, box) : ImGuiComponents.IconButton(id, icon);
         if (tooltip is not null && ImGui.IsItemHovered())
             ImGui.SetTooltip(tooltip);
         return clicked;
     }
 
-    /// <summary> A filter chip with a count; filled when selected. Returns true when clicked. </summary>
-    public static bool Chip(string label, int count, bool selected)
+    /// <summary>
+    /// A filter chip with a count; filled when selected. Returns true when clicked. Swatches
+    /// draw a colour dot before the label, split into equal wedges when there are several, so
+    /// the chip doubles as a legend for the colours its rows use.
+    /// </summary>
+    public static bool Chip(string label, int count, bool selected, params Vector4[] swatches)
     {
         using var colour = ImRaii.PushColor(ImGuiCol.Button, Theme.Selection, selected)
             .Push(ImGuiCol.ButtonHovered, Theme.WithAlpha(Theme.Selection, .85f), selected);
-        return ImGui.SmallButton($"{label}  {count}##chip-{label}");
+        if (swatches.Length == 0)
+            return ImGui.SmallButton($"{label}  {count}##chip-{label}");
+
+        // Leading spaces reserve the dot's room inside the button, whatever the font size.
+        var radius = Theme.Scaled(3.5f);
+        var spaces = (int)Math.Ceiling((radius * 2 + Theme.Scaled(4)) / Math.Max(1, ImGui.CalcTextSize(" ").X));
+        var clicked = ImGui.SmallButton($"{new string(' ', spaces)}{label}  {count}##chip-{label}");
+        var min = ImGui.GetItemRectMin();
+        var max = ImGui.GetItemRectMax();
+        var centre = new Vector2(min.X + ImGui.GetStyle().FramePadding.X + radius, (min.Y + max.Y) / 2);
+        var drawList = ImGui.GetWindowDrawList();
+        if (swatches.Length == 1)
+        {
+            drawList.AddCircleFilled(centre, radius, ImGui.GetColorU32(swatches[0]));
+            return clicked;
+        }
+
+        var wedge = 2 * MathF.PI / swatches.Length;
+        for (var i = 0; i < swatches.Length; i++)
+        {
+            var start = -MathF.PI / 2 + i * wedge;
+            drawList.PathLineTo(centre);
+            drawList.PathArcTo(centre, radius, start, start + wedge);
+            drawList.PathFillConvex(ImGui.GetColorU32(swatches[i]));
+        }
+        return clicked;
     }
 
     /// <summary> A search field that fills the row, with a clear button when it has text and Ctrl+F focus. </summary>

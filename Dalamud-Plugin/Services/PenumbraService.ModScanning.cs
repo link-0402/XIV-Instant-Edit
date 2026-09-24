@@ -323,7 +323,8 @@ public sealed partial class PenumbraService
                     if (!extension.Equals(".mdl", StringComparison.OrdinalIgnoreCase) &&
                         !extension.Equals(".tex", StringComparison.OrdinalIgnoreCase) &&
                         !extension.Equals(".atex", StringComparison.OrdinalIgnoreCase) &&
-                        !extension.Equals(".mtrl", StringComparison.OrdinalIgnoreCase))
+                        !extension.Equals(".mtrl", StringComparison.OrdinalIgnoreCase) &&
+                        !extension.Equals(".pap", StringComparison.OrdinalIgnoreCase))
                         continue;
 
                     resources.Add(new PenumbraModResource(

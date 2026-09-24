@@ -367,9 +367,6 @@ class ModelImport:
         new_mesh.polygons.foreach_set("loop_start", loop_start)
         new_mesh.polygons.foreach_set("loop_total", loop_total)
 
-        new_mesh.update()
-        new_mesh.validate()
-
         if self.uv0:
             uvs.extend(get_uv0(streams))
         if self.uv1:
@@ -385,14 +382,23 @@ class ModelImport:
 
         if self.normals:
             normals = get_normals(streams)
-            new_mesh.normals_split_custom_set_from_vertices(normals)
-        
+
         if all((self.normals, self.tangents, self.flow)):
             bitangents = get_bitangents(streams)
             flow       = get_flow(streams[1]["flow"], normals, bitangents)
             flow_attr  = new_mesh.color_attributes.new(name=f"xiv_flow", type='FLOAT_COLOR', domain='CORNER')
             flow_attr.data.foreach_set("color", flow[submesh_indices].ravel())
-      
+
+        # Validate only after every corner layer is filled: it removes duplicate faces
+        # (e.g. a back face reusing the front face's vertices) together with their
+        # corners, which would leave arrays sized from submesh_indices too long.
+        new_mesh.update()
+        new_mesh.validate()
+
+        # Per-vertex, so unaffected by faces removed during validation.
+        if self.normals:
+            new_mesh.normals_split_custom_set_from_vertices(normals)
+
         return new_mesh
     
     def _verify_attributes(self, streams: dict[int, NDArray], vert_decl: VertexDeclaration) -> None:

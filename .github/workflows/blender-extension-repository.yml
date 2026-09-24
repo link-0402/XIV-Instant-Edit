@@ -53,6 +53,9 @@ jobs:
       - name: Run correctness regressions
         run: python3 Blender-Addon/testing/run_blender_suites.py correctness_regression
 
+      - name: Run animation regressions
+        run: python3 Blender-Addon/testing/run_blender_suites.py animation_regression
+
       - name: Run cache regressions
         run: python3 Blender-Addon/testing/cache_regression.py
 

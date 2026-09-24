@@ -27,6 +27,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly TextureEditService      _textures;
     private readonly PreviewService          _previews;
     private readonly AnimationEditService?   _animations;
+    private readonly AnimationRecorder       _recorder;
     private readonly ExportServer            _exportServer;
     private readonly WindowSystem            _windowSystem;
     private readonly MainWindow              _window;
@@ -47,7 +48,8 @@ public sealed class Plugin : IDalamudPlugin
         IObjectTable objects,
         IFramework framework,
         ISigScanner sigScanner,
-        INotificationManager notifications)
+        INotificationManager notifications,
+        ITargetManager targets)
     {
         _pi       = pi;
         _commands = commands;
@@ -136,6 +138,7 @@ public sealed class Plugin : IDalamudPlugin
             animationError = "Animation integration is unavailable: " + error.Message;
             log.Warning(error, "Could not initialize animation editing; other features remain available.");
         }
+        _recorder = new AnimationRecorder(framework, objects, clientState, targets);
         if (_config.AutomaticCacheCleanup)
             _textures.RequestCacheCleanup();
         _exportServer = new ExportServer(_config, _penumbra, _contexts, log);
@@ -161,6 +164,7 @@ public sealed class Plugin : IDalamudPlugin
             _changelogWindow.Open,
             () => _settingsWindow!.Open());
         _window.AttachAnimations(_animations, animationError);
+        _window.AttachRecorder(_recorder);
         _exportServer.ImportFailureReceived += _window.ReportImportFailure;
         _glamourer.AppearanceChanged += _window.OnGlamourerAppearanceChanged;
         _setupWindow = new FirstTimeSetupWindow(
@@ -177,6 +181,7 @@ public sealed class Plugin : IDalamudPlugin
             _window.RequestCacheSynchronization,
             OpenSetupFromSettings,
             cacheStartupError);
+        _settingsWindow.AttachAnimations(_animations, animationError);
 
         _windowSystem = new WindowSystem();
         _windowSystem.AddWindow(_window);
@@ -298,6 +303,7 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.RemoveWindow(_settingsWindow);
         _glamourer.AppearanceChanged -= _window.OnGlamourerAppearanceChanged;
         _glamourer.Dispose();
+        _recorder.Dispose();
         _window.Dispose();
         _textures.FileChanged -= _previews.Invalidate;
         _previews.Dispose();

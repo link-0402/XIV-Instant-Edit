@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from types import SimpleNamespace
 import bpy
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -257,24 +258,24 @@ def assert_simple_import_folder(addon):
 
 def assert_mesh_studio(addon, obj, second, added_group):
     materials = importlib.import_module(f"{addon.__name__}.materials")
-    operators = importlib.import_module(f"{addon.__name__}.operators")
     with temporary_scene_data():
-        renamed = materials.rename_mesh_part([obj, second, added_group], 0, 1, "Renamed Part")
-        if renamed != "Renamed Part" or second.name != "0.1 Renamed Part":
-            raise AssertionError("Mass part rename did not preserve the mesh ID")
-        materials.set_mesh_part_tags([obj, second, added_group], 0, 1, "body,  Body, armor")
-        if second.get("instant_edit_tags") != "body, armor":
-            raise AssertionError("Part tags were not normalized and stored")
+        # Clicking a part's name selects its objects; Shift-click adds or removes them.
+        if bpy.ops.xiv_ie.select_mesh_part(mesh_group=0, mesh_part=1) != {"FINISHED"} or (
+            set(bpy.context.selected_objects) != {second}
+            or bpy.context.view_layer.objects.active is not second
+        ):
+            raise AssertionError("Clicking a mesh part did not select only that part")
+        bpy.ops.xiv_ie.select_mesh_part(mesh_group=0, mesh_part=0, extend=True)
+        if set(bpy.context.selected_objects) != {obj, second}:
+            raise AssertionError("Shift-clicking a mesh part did not add it to the selection")
+        bpy.ops.xiv_ie.select_mesh_part(mesh_group=0, mesh_part=0, extend=True)
+        if set(bpy.context.selected_objects) != {second}:
+            raise AssertionError("Shift-clicking a selected mesh part did not remove it")
         attribute = materials.set_mesh_part_attribute(
             [obj, second, added_group], 0, 1, "atr_nek", True
         )
         if attribute != "atr_nek" or not second.get(attribute):
             raise AssertionError("Mesh Studio attribute was not applied to the mesh part")
-        if materials.ensure_flow_data([obj, second]) != 2:
-            raise AssertionError("Mesh Studio flow data was not created")
-        materials.set_mesh_flow_enabled([obj, second], True)
-        if not materials.mesh_flow_enabled([obj, second]):
-            raise AssertionError("Mesh Studio flow export was not enabled")
         if bpy.ops.xiv_ie.mesh_attribute(
             mesh_group=0, mesh_part=1, attribute="atr_nek"
         ) != {"FINISHED"} or second.get("atr_nek"):
@@ -355,45 +356,40 @@ def assert_mesh_studio(addon, obj, second, added_group):
         finally:
             del second["yas"]
             del second["yakit"]
-        if bpy.ops.xiv_ie.mesh_flow(mesh_group=0, action="TOGGLE") != {"FINISHED"}:
-            raise AssertionError("Mesh Studio flow operator failed")
-        if materials.mesh_flow_enabled([obj, second]):
-            raise AssertionError("Mesh Studio flow operator did not disable export")
-        bpy.ops.xiv_ie.mesh_flow(mesh_group=0, action="TOGGLE")
-        moved_part = operators._move_mesh_part_once(0, 1, "UP")
-        if moved_part != 0 or not second.name.startswith("0.0 "):
+        mesh_list = importlib.import_module(f"{addon.__name__}.mesh_list")
+        visible_meshobj = importlib.import_module(f"{addon.__name__}.mesh.objects").visible_meshobj
+        _drop_part(addon, visible_meshobj(), second, 0, 0)
+        if not second.name.startswith("0.0 ") or not obj.name.startswith("0.1 "):
             raise AssertionError("Mesh Studio part drag did not move the part upward")
-        if operators._move_mesh_part_once(0, 0, "DOWN") != 1:
+        _drop_part(addon, visible_meshobj(), second, 0, 1)
+        if not second.name.startswith("0.1 ") or not obj.name.startswith("0.0 "):
             raise AssertionError("Mesh Studio part drag did not restore the part order")
-        moved_group = operators._move_mesh_group_once(0, "DOWN")
-        if moved_group != 1:
-            raise AssertionError("Mesh Studio group drag did not move the group downward")
+        _drop_group(addon, visible_meshobj(), 0, 1)
         if not obj.name.startswith("1.0 ") or not added_group.name.startswith("0.0 "):
             raise AssertionError("Mesh Studio group drag did not preserve part IDs")
-        slots = materials.material_group_slots(materials.visible_material_groups())
-        if [group.mesh_index for group in slots] != [0, 1, 2] or slots[-1].objects:
+        if mesh_list.group_slots({0, 1}) != [0, 1, 2]:
             raise AssertionError("Mesh Studio did not expose one trailing empty group")
-        if operators._move_mesh_group_once(1, "DOWN") != 2:
+        _drop_group(addon, visible_meshobj(), 1, 2)
+        if not obj.name.startswith("2.0 ") or not second.name.startswith("2.1 "):
             raise AssertionError("Mesh Studio group drag did not move into a new higher group")
-        slots = materials.material_group_slots(materials.visible_material_groups())
-        if [group.mesh_index for group in slots] != [0, 1, 2, 3] or slots[1].objects:
+        if mesh_list.group_slots({0, 2}) != [0, 1, 2, 3]:
             raise AssertionError("Mesh Studio did not retain the empty group gap")
-        capped_slots = materials.material_group_slots(
-            materials.visible_material_groups(), maximum_group=2
-        )
-        if [group.mesh_index for group in capped_slots] != [0, 1, 2]:
+        if mesh_list.group_slots({0, 2}, maximum_group=2) != [0, 1, 2]:
             raise AssertionError("Mesh Studio drag preview extended beyond its fixed ceiling")
-        if operators._move_mesh_group_once(2, "DOWN", maximum_group=2) is not None:
+        group_drag = mesh_list.DragSession(
+            mesh_list.scene_parts(), mesh_list.ListMetrics(20, 17, 19, 18), "GROUP", 2)
+        group_drag.update(10_000)
+        if group_drag.drag_state()[1] != group_drag.maximum_group or group_drag.maximum_group != 3:
             raise AssertionError("Mesh Studio group drag moved beyond its fixed ceiling")
-        if operators._move_mesh_group_once(2, "UP") != 1:
+        _drop_group(addon, visible_meshobj(), 2, 1)
+        if not obj.name.startswith("1.0 ") or not second.name.startswith("1.1 "):
             raise AssertionError("Mesh Studio group drag did not fill an empty group gap")
 
         second_lod = second.copy()
         second_lod.data = second.data.copy()
-        second_lod.name = "1.1 Renamed Part LOD1"
+        second_lod.name = f"{second.name} LOD1"
         bpy.context.scene.collection.objects.link(second_lod)
-        if operators._move_mesh_part_once(1, 1, "DOWN") != 0:
-            raise AssertionError("Mesh Studio part drag did not enter the trailing empty group")
+        _drop_part(addon, visible_meshobj(), second, 2, 0)
         if not second.name.startswith("2.0 ") or not second_lod.name.startswith("2.0 "):
             raise AssertionError("Mesh Studio cross-group drag did not move every part LOD")
         cross_anchor = obj.copy()
@@ -401,30 +397,38 @@ def assert_mesh_studio(addon, obj, second, added_group):
         cross_anchor.name = "2.1 Cross Group Anchor"
         bpy.context.scene.collection.objects.link(cross_anchor)
         try:
-            if operators._move_mesh_part_once(
-                2, 0, "DOWN", cross_group_only=True
-            ) != 0 or not second.name.startswith("3.0 ") or \
-                    not second_lod.name.startswith("3.0 ") or \
-                    not cross_anchor.name.startswith("2.1 "):
-                raise AssertionError(
-                    "Cross-group-only part movement reordered the destination group"
-                )
-            if operators._move_mesh_part_once(
-                3, 0, "UP", cross_group_only=True
-            ) != 0 or not second.name.startswith("2.0 ") or \
-                    not second_lod.name.startswith("2.0 "):
-                raise AssertionError("Cross-group-only part movement did not restore the source group")
+            _drop_part(addon, visible_meshobj(), second, 3, 0)
+            if (
+                not second.name.startswith("3.0 ")
+                or not second_lod.name.startswith("3.0 ")
+                or not cross_anchor.name.startswith("2.1 ")
+            ):
+                raise AssertionError("A part leaving its group renamed the parts it left behind")
+            _drop_part(addon, visible_meshobj(), second, 2, 0)
+            if (
+                not second.name.startswith("2.0 ")
+                or not second_lod.name.startswith("2.0 ")
+                or not cross_anchor.name.startswith("2.1 ")
+            ):
+                raise AssertionError("Dropping a part into a free index shifted the destination group")
         finally:
             cross_anchor_data = cross_anchor.data
             bpy.data.objects.remove(cross_anchor, do_unlink=True)
             if cross_anchor_data.users == 0:
                 bpy.data.meshes.remove(cross_anchor_data)
-        if operators._move_mesh_part_once(
-            2, 0, "DOWN", maximum_group=2
-        ) is not None:
+        parts = mesh_list.scene_parts()
+        part_drag = mesh_list.DragSession(
+            parts,
+            mesh_list.ListMetrics(20, 17, 19, 18),
+            "PART",
+            2,
+            0,
+            next(part.instance_key for part in parts if second in part.objects),
+        )
+        part_drag.update(10_000)
+        if part_drag.drag_state()[1] != part_drag.maximum_group or part_drag.plan() and bpy.data.objects.get(second.name) is not second:
             raise AssertionError("Mesh Studio part drag moved beyond its fixed ceiling")
-        if operators._move_mesh_part_once(2, 0, "UP") != 1:
-            raise AssertionError("Mesh Studio part drag did not choose the lowest free destination part")
+        _drop_part(addon, visible_meshobj(), second, 1, 1)
         if not second.name.startswith("1.1 ") or not second_lod.name.startswith("1.1 "):
             raise AssertionError("Mesh Studio cross-group drag did not restore the destination IDs")
         second_lod_data = second_lod.data
@@ -453,30 +457,14 @@ def assert_mesh_studio(addon, obj, second, added_group):
             )
             if [item.part_index for item in duplicate_instances] != [0, 0, 1]:
                 raise AssertionError("Duplicate mesh IDs were collapsed into one Mesh Studio row")
-            first_key = duplicate_instances[0].instance_key
-            second_key = duplicate_instances[1].instance_key
-            target_key = duplicate_instances[2].instance_key
-            materials.move_mesh_part_to_group(
-                [duplicate_a, duplicate_b, duplicate_target],
-                0,
-                0,
-                1,
-                first_key,
-            )
+            _drop_part(addon, [duplicate_a, duplicate_b, duplicate_target], duplicate_a, 1, 0)
             if (
                 not duplicate_a.name.startswith("1.0 ")
                 or not duplicate_b.name.startswith("0.0 ")
                 or not duplicate_target.name.startswith("0.1 ")
             ):
                 raise AssertionError("Moving one duplicate mesh part changed its sibling")
-            materials.swap_mesh_part_instances(
-                [duplicate_b, duplicate_target],
-                0,
-                0,
-                second_key,
-                1,
-                target_key,
-            )
+            _drop_part(addon, [duplicate_b, duplicate_target], duplicate_target, 0, 0)
             if (
                 not duplicate_b.name.startswith("0.1 ")
                 or not duplicate_target.name.startswith("0.0 ")
@@ -488,12 +476,11 @@ def assert_mesh_studio(addon, obj, second, added_group):
                 bpy.data.objects.remove(duplicate, do_unlink=True)
                 if duplicate_data.users == 0:
                     bpy.data.meshes.remove(duplicate_data)
-        print("[PASS] Mesh Studio rename, attributes, flow, and drag reordering")
+        print("[PASS] Mesh Studio selection, attributes, and drag reordering")
 
 
 def assert_mesh_part_gap_handling(addon):
     materials = importlib.import_module(f"{addon.__name__}.materials")
-    operators = importlib.import_module(f"{addon.__name__}.operators")
     context_module = importlib.import_module(f"{addon.__name__}.instant_edit.context")
 
     with temporary_scene_data():
@@ -511,10 +498,14 @@ def assert_mesh_part_gap_handling(addon):
                 obj.hide_set(True)
             return obj
 
+        mesh_list = importlib.import_module(f"{addon.__name__}.mesh_list")
+
         def slot_shape(objects, mesh_index):
+            parts = [part for part in mesh_list.list_parts(objects) if part.group == mesh_index]
             return [
-                (slot.part_index, slot.is_placeholder)
-                for slot in materials.mesh_part_slots(objects, mesh_index)
+                (row.part.part if row.kind == "part" else row.part_index, row.kind == "gap")
+                for row in mesh_list.layout_rows(parts)
+                if row.kind in {"part", "gap"}
             ]
 
         gap_zero = create("30.0 Gap Zero")
@@ -535,30 +526,20 @@ def assert_mesh_part_gap_handling(addon):
 
         moved_zero = create("31.0 Drag Zero")
         moved_two = create("31.2 Drag Two")
-        if operators._move_mesh_part_once(31, 2, "UP") != 1:
-            raise AssertionError("Dragging a part into an empty placeholder did not move it")
+        _drop_part(addon, (moved_zero, moved_two), moved_two, 31, 1)
         if not moved_zero.name.startswith("31.0 ") or not moved_two.name.startswith("31.1 "):
-            raise AssertionError("Placeholder movement changed the wrong part")
+            raise AssertionError("Dragging a part into an empty placeholder changed the wrong part")
 
         swap_zero = create("32.0 Swap Zero")
         swap_one = create("32.1 Swap One")
-        if operators._move_mesh_part_once(32, 1, "UP") != 0:
-            raise AssertionError("Dragging over an occupied part no longer swaps")
+        _drop_part(addon, (swap_zero, swap_one), swap_one, 32, 0)
         if not swap_zero.name.startswith("32.1 ") or not swap_one.name.startswith("32.0 "):
             raise AssertionError("Occupied part drag did not preserve swap behavior")
 
         lod_anchor = create("33.0 LOD Anchor")
         lod_part = create("33.2 LOD Part")
         lod_part_lod1 = create("33.2 LOD Part LOD1")
-        lod_instance = next(
-            item
-            for item in materials.mesh_part_instances((lod_anchor, lod_part, lod_part_lod1), 33)
-            if item.part_index == 2
-        )
-        if operators._move_mesh_part_once(
-            33, 2, "UP", part_instance_key=lod_instance.instance_key
-        ) != 1:
-            raise AssertionError("LOD part did not move into the placeholder")
+        _drop_part(addon, (lod_anchor, lod_part, lod_part_lod1), lod_part, 33, 1)
         if not lod_part.name.startswith("33.1 ") or not lod_part_lod1.name.startswith("33.1 "):
             raise AssertionError("Moving a part into a placeholder split its LOD objects")
 
@@ -567,17 +548,7 @@ def assert_mesh_part_gap_handling(addon):
         duplicate_a["instant_edit_import_instance_id"] = "gap-duplicate-a"
         duplicate_b = create("34.2 Duplicate B")
         duplicate_b["instant_edit_import_instance_id"] = "gap-duplicate-b"
-        duplicate_instance = next(
-            item
-            for item in materials.mesh_part_instances(
-                (duplicate_zero, duplicate_a, duplicate_b), 34
-            )
-            if item.instance_key == "import:gap-duplicate-a"
-        )
-        if operators._move_mesh_part_once(
-            34, 2, "UP", part_instance_key=duplicate_instance.instance_key
-        ) != 1:
-            raise AssertionError("A duplicate instance did not move independently")
+        _drop_part(addon, (duplicate_zero, duplicate_a, duplicate_b), duplicate_a, 34, 1)
         if not duplicate_a.name.startswith("34.1 ") or not duplicate_b.name.startswith("34.2 "):
             raise AssertionError("Moving one duplicate instance changed its sibling")
 
@@ -760,34 +731,240 @@ def assert_mesh_material_quick_selectors(addon):
         print("[PASS] Mesh material dialog offers the model's other group materials")
 
 
-def assert_mesh_drag_plan(addon):
-    """Drive the drag operator's steps: nothing is renamed until the drop commits."""
+def _drop_part(addon, objects, item, group, index):
+    """Commit a Mesh Groups drop of `item` at `index` of `group` among `objects`."""
+    mesh_list = importlib.import_module(f"{addon.__name__}.mesh_list")
     materials = importlib.import_module(f"{addon.__name__}.materials")
-    operators = importlib.import_module(f"{addon.__name__}.operators")
-    context_module = importlib.import_module(f"{addon.__name__}.instant_edit.context")
-    drag_operator = operators.XIVIE_OT_drag_mesh_order
+    parts = mesh_list.list_parts(objects)
+    moving = next(part for part in parts if item in part.objects)
+    placement = mesh_list.moved_part(parts, moving.ident, group, index)
+    materials.commit_mesh_id_plan(mesh_list.placement_plan(parts, placement), objects)
 
-    class Drag:
-        _move_once = drag_operator._move_once
-        _plan_move_once = drag_operator._plan_move_once
 
-        def __init__(self, objects, group, part, maximum_group):
-            instance = next(
-                item for item in materials.mesh_part_instances(objects, group, part)
-                if objects[0] in item.objects
+def _drop_group(addon, objects, group, index):
+    """Commit a Mesh Groups drop of a whole group at slot `index`."""
+    mesh_list = importlib.import_module(f"{addon.__name__}.mesh_list")
+    materials = importlib.import_module(f"{addon.__name__}.materials")
+    parts = mesh_list.list_parts(objects)
+    placement = mesh_list.moved_group(parts, group, index)
+    materials.commit_mesh_id_plan(mesh_list.placement_plan(parts, placement), objects)
+
+
+def assert_mesh_list_geometry(addon):
+    """The list's row positions, and a drag that keeps the dragged row under the pointer."""
+    mesh_list = importlib.import_module(f"{addon.__name__}.mesh_list")
+    part = mesh_list.ListPart
+
+    # Row height, header/material gaps and group box gap, measured on screen in
+    # Blender 4.5.13 and 5.2.1. Scale 82/72 is where Blender's single-precision
+    # rounding of the row height differs from double precision.
+    for scale, pixel_size, expected in (
+        (1.0, 1.0, (20, 17, 19, 18)),
+        (1.25, 1.0, (25, 21, 23, 22)),
+        (1.5, 1.0, (29, 25, 28, 26)),
+        (1.75, 1.0, (34, 30, 33, 30)),
+        (2.0, 2.0, (40, 34, 38, 36)),
+        (1.0, 2.0, (22, 17, 19, 18)),
+        (1.1388888359069824, 1.0, (23, 19, 21, 19)),
+    ):
+        preferences = SimpleNamespace(system=SimpleNamespace(ui_scale=scale, pixel_size=pixel_size))
+        metrics = mesh_list.ListMetrics.from_preferences(preferences)
+        if (metrics.unit, metrics.header_gap, metrics.material_gap, metrics.group_gap) != expected:
+            raise AssertionError(f"List metrics at scale {scale}: {metrics}, expected {expected}")
+
+    metrics = mesh_list.ListMetrics(20, 17, 19, 18)
+    parts = [
+        part(0, 0, 0, "A", "a"),
+        part(1, 0, 1, "B", "b"),
+        part(2, 0, 3, "C", "c"),
+        part(3, 2, 0, "D", "d"),
+    ]
+    rows = [(row.kind, row.group, row.top) for row in mesh_list.layout_rows(parts, metrics)]
+    if rows != [
+        ("header", 0, 0), ("part", 0, 37), ("part", 0, 57), ("gap", 0, 77), ("part", 0, 97),
+        ("material", 0, 136),
+        ("empty", 1, 174),
+        ("header", 2, 212), ("part", 2, 249), ("material", 2, 288),
+        ("empty", 3, 326),
+    ]:
+        raise AssertionError(f"Unexpected Mesh Groups row layout: {rows}")
+    if [row.group for row in mesh_list.layout_rows(parts, metrics, maximum_group=2) if row.kind == "empty"] != [1]:
+        raise AssertionError("The trailing empty group passed a drag's fixed ceiling")
+
+    # B's row is drawn at 57. Once B has left the first group, the second
+    # group's rows start at 151 (the first group lost a row).
+    parts = [
+        part(0, 0, 0, "A", "a"),
+        part(1, 0, 1, "B", "b"),
+        part(2, 1, 0, "C", "c"),
+        part(3, 1, 1, "D", "d"),
+        part(4, 1, 2, "E", "e"),
+    ]
+    drag = mesh_list.DragSession(parts, metrics, "PART", 0, 1, "b")
+    for offset, expected in (
+        (-20, {1: (0, 0), 0: (0, 1)}),
+        (94, {1: (1, 0), 2: (1, 1), 3: (1, 2), 4: (1, 3)}),
+        (114, {1: (1, 1), 2: (1, 0), 3: (1, 2), 4: (1, 3)}),
+        (154, {1: (1, 3), 2: (1, 0), 3: (1, 1), 4: (1, 2)}),
+        (248, {1: (2, 0), 2: (1, 0), 3: (1, 1), 4: (1, 2)}),
+    ):
+        drag.update(offset)
+        placement = drag.placement
+        if any(placement[ident] != target for ident, target in expected.items()):
+            raise AssertionError(f"Part drag to {offset} px placed {placement}, expected {expected}")
+        if placement[0] != (0, 0) and offset > 0:
+            raise AssertionError("A part leaving its group moved the parts it left behind")
+
+    # Group 1's header is drawn at 134; whole groups follow the pointer too.
+    parts = [
+        part(0, 0, 0, "A", "a"),
+        part(1, 0, 1, "B", "b"),
+        part(2, 1, 0, "C", "c"),
+        part(3, 2, 0, "D", "d"),
+        part(4, 2, 1, "E", "e"),
+        part(5, 2, 2, "F", "f"),
+    ]
+    drag = mesh_list.DragSession(parts, metrics, "GROUP", 1)
+    for offset, expected in ((-134, 0), (0, 1), (154, 2), (192, 3)):
+        drag.update(offset)
+        if drag.drag_state()[1] != expected:
+            raise AssertionError(f"Group drag to {offset} px went to group {drag.drag_state()[1]}, expected {expected}")
+    if drag.placement[3] != (1, 0) or drag.placement[0] != (0, 0):
+        raise AssertionError("A group drag did not shift only the groups it passed")
+    print("[PASS] Mesh Groups rows follow the measured layout and drags follow the pointer")
+
+
+def assert_backface_duplicate(addon):
+    """Generate Duplicate with Backfaces: a flipped copy as the next part, pushing parts in the way."""
+    ui = importlib.import_module(f"{addon.__name__}.ui")
+
+    def corner_normals(obj):
+        """(face, vertex) -> corner normal."""
+        mesh = obj.data
+        normals = [tuple(item.vector) for item in mesh.corner_normals]
+        return {
+            (face.index, mesh.loops[corner].vertex_index): normals[corner]
+            for face in mesh.polygons
+            for corner in face.loop_indices
+        }
+
+    def differs(first, second, sign=1.0):
+        return any(
+            max(abs(a - sign * b) for a, b in zip(first[key], second[key])) > 1e-3 for key in second
+        )
+
+    with temporary_scene_data():
+        def create(name, import_id=None):
+            mesh = bpy.data.meshes.new(f"{name} Data")
+            mesh.from_pydata([(0, 0, 0), (1, 0, 0.2), (1, 1, 0), (0, 1, 0.3)], [], [(0, 1, 2), (0, 2, 3)])
+            # Imported meshes carry custom normals; only Edit Mode's Flip reverses them.
+            mesh.normals_split_custom_set_from_vertices(
+                [(0.3, 0.1, 0.95), (0.0, 0.3, 0.95), (-0.2, 0.0, 0.98), (0.1, -0.1, 0.99)]
             )
-            self.scope = "PART"
-            self.mesh_group = group
-            self.mesh_part = part
-            self.mesh_part_instance = instance.instance_key
-            self._dragged_objects = instance.objects
-            self._dragged_ids = {obj.as_pointer() for obj in instance.objects}
-            self._plan = {}
-            self._part_drag_group_lock = None
-            self._maximum_group = maximum_group
+            obj = bpy.data.objects.new(name, mesh)
+            bpy.context.scene.collection.objects.link(obj)
+            if import_id:
+                obj["instant_edit_import_instance_id"] = import_id
+            return obj
 
-        def report(self, _level, message):
-            raise AssertionError(message)
+        front = create("70.0 Front", "front")
+        front_lod = create("70.0 Front LOD1", "front")
+        front["xiv_material"] = "/mt_c0201e0903_top_b.mtrl"
+        front["atr_nek"] = True
+        pushed = create("70.1 Pushed")
+        chained = create("70.2 Chained")
+        after_gap = create("70.4 After Gap")
+        other_group = create("71.0 Other Group")
+        before = corner_normals(front)
+        faces_before = [tuple(face.normal) for face in front.data.polygons]
+
+        if bpy.ops.xiv_ie.duplicate_backfaces(mesh_group=70, mesh_part=0) != {"FINISHED"}:
+            raise AssertionError("Generate Duplicate with Backfaces did not finish")
+        copies = sorted((obj for obj in bpy.context.scene.objects if "Backfaces" in obj.name), key=lambda obj: obj.name)
+        names = [obj.name for obj in (front, front_lod, pushed, chained, after_gap, other_group, *copies)]
+        if names != [
+            "70.0 Front", "70.0 Front LOD1", "70.2 Pushed", "70.3 Chained", "70.4 After Gap",
+            "71.0 Other Group", "70.1 Front Backfaces", "70.1 Front Backfaces LOD1",
+        ]:
+            raise AssertionError(f"Backface duplicate numbering: {names}")
+        copy = copies[0]
+        if copy.get("xiv_material") != front["xiv_material"] or not copy.get("atr_nek"):
+            raise AssertionError("The backface duplicate lost the part's material or attributes")
+        instance_ids = {obj.get("instant_edit_import_instance_id") for obj in copies}
+        if len(instance_ids) != 1 or "front" in instance_ids:
+            raise AssertionError("The backface duplicate is not one part of its own")
+        if set(corner_normals(copy)) != set(before) or differs(corner_normals(copy), before, sign=-1.0):
+            raise AssertionError("The backface duplicate's custom normals were not flipped")
+        if any(
+            max(abs(a + b) for a, b in zip(face.normal, face_before)) > 1e-4
+            for face, face_before in zip(copy.data.polygons, faces_before)
+        ):
+            raise AssertionError("The backface duplicate's faces were not flipped")
+        if differs(corner_normals(front), before):
+            raise AssertionError("Flipping the duplicate changed the original's normals")
+        if (
+            set(bpy.context.selected_objects) != set(copies)
+            or bpy.context.view_layer.objects.active is not copy
+            or bpy.context.mode != "OBJECT"
+        ):
+            raise AssertionError("The backface duplicate was not left selected in Object Mode")
+
+    # The entry joins Blender's right-click menu, and only on part names.
+    menu_draw = bpy.types.UI_MT_button_context_menu.draw
+    if ui.draw_mesh_part_context_menu not in getattr(menu_draw, "_draw_funcs", ()):
+        raise AssertionError("The part entries were not added to Blender's button context menu")
+    if not hasattr(bpy.types, ui._PART_NAME_OPERATOR):
+        raise AssertionError("The part name operator's RNA name changed")
+
+    class Layout:
+        def __init__(self):
+            self.items = []
+
+        def separator(self):
+            self.items.append("separator")
+
+        def operator(self, idname, **_options):
+            properties = SimpleNamespace()
+            self.items.append((idname, properties))
+            return properties
+
+    def menu(identifier):
+        button = SimpleNamespace(
+            rna_type=SimpleNamespace(identifier=identifier),
+            mesh_group=70, mesh_part=0, mesh_part_instance="front",
+        )
+        owner = SimpleNamespace(layout=Layout())
+        ui.draw_mesh_part_context_menu(owner, SimpleNamespace(button_operator=button))
+        return owner.layout.items
+
+    items = menu(ui._PART_NAME_OPERATOR)
+    if (
+        len(items) != 2 or items[0] != "separator" or items[1][0] != "xiv_ie.duplicate_backfaces"
+        or vars(items[1][1]) != {"mesh_group": 70, "mesh_part": 0, "mesh_part_instance": "front"}
+    ):
+        raise AssertionError(f"Unexpected part name context menu: {items}")
+    owner = SimpleNamespace(layout=Layout())
+    ui.draw_mesh_part_context_menu(owner, SimpleNamespace())
+    if menu("XIV_IE_OT_drag_mesh_order") or owner.layout.items:
+        raise AssertionError("The backface entry showed on a button other than a part name")
+    print("[PASS] Generate Duplicate with Backfaces adds a flipped copy as the next part")
+
+
+def assert_mesh_drag_plan(addon):
+    """Drive drags by pointer offset: nothing is renamed until the drop commits."""
+    materials = importlib.import_module(f"{addon.__name__}.materials")
+    mesh_list = importlib.import_module(f"{addon.__name__}.mesh_list")
+    context_module = importlib.import_module(f"{addon.__name__}.instant_edit.context")
+    metrics = mesh_list.ListMetrics(20, 17, 19, 18)
+
+    def session(objects, item):
+        parts = mesh_list.list_parts(objects)
+        moving = next(part for part in parts if item in part.objects)
+        return mesh_list.DragSession(parts, metrics, "PART", moving.group, moving.part, moving.instance_key)
+
+    def planned(drag, objects):
+        with context_module.planned_mesh_ids(drag.plan()):
+            return [context_module.mesh_ids_from_name(obj)[:2] for obj in objects]
 
     with temporary_scene_data():
         def create(name, import_id=None):
@@ -799,11 +976,9 @@ def assert_mesh_drag_plan(addon):
                 obj["instant_edit_import_instance_id"] = import_id
             return obj
 
-        def planned(objects):
-            with context_module.planned_mesh_ids(drag._plan):
-                return [context_module.mesh_ids_from_name(obj)[:2] for obj in objects]
-
-        # The reported layout: Pubes duplicates Piercing B's ID 60.0.
+        # The reported layout: Pubes duplicates Piercing B's ID 60.0. Part rows
+        # are 20 px apart; after Pubes leaves, the empty group 61 below takes
+        # it 134 px under its old row.
         piercing_b = create("60.0 Piercing B", "piercing-b")
         pubes = create("60.0 Pubes", "pubes")
         piercing_r = create("60.1 Piercing R", "piercing-r")
@@ -811,24 +986,29 @@ def assert_mesh_drag_plan(addon):
         rows = (piercing_b, pubes, piercing_r, piercing_l)
         original_names = [obj.name for obj in rows]
 
-        drag = Drag((pubes, piercing_b, piercing_r, piercing_l), 60, 0, 61)
+        drag = session(rows, pubes)
+        if drag.update(8) or drag.plan():
+            raise AssertionError("Moving less than half a row moved the dragged part")
         expected_steps = (
-            # Inserted after Piercing R; Piercing L shifts to make room.
-            [(60, 0), (60, 2), (60, 1), (60, 3)],
-            [(60, 0), (60, 3), (60, 1), (60, 2)],
+            # One row down: inserted after Piercing R; Piercing L shifts to make room.
+            (20, [(60, 0), (60, 2), (60, 1), (60, 3)]),
+            (40, [(60, 0), (60, 3), (60, 1), (60, 2)]),
             # Leaving the group returns every passed part to its own ID.
-            [(60, 0), (61, 0), (60, 1), (60, 2)],
+            (134, [(60, 0), (61, 0), (60, 1), (60, 2)]),
         )
-        for step, expected in enumerate(expected_steps, 1):
-            if not drag._move_once(bpy.context, "DOWN"):
-                raise AssertionError(f"Drag step {step} did not move the duplicate part")
+        for offset, expected in expected_steps:
+            drag.update(offset)
             if [obj.name for obj in rows] != original_names:
-                raise AssertionError(f"Drag step {step} renamed objects before the drop")
-            if planned(rows) != expected:
-                raise AssertionError(f"Drag step {step} planned {planned(rows)}, expected {expected}")
-        if set(drag._plan) != drag._dragged_ids:
+                raise AssertionError(f"Dragging {offset} px renamed objects before the drop")
+            if planned(drag, rows) != expected:
+                raise AssertionError(f"Dragging {offset} px planned {planned(drag, rows)}, expected {expected}")
+        if set(drag.plan()) != {pubes.as_pointer()}:
             raise AssertionError("Leaving the source group kept plans for the parts it passed")
-        materials.commit_mesh_id_plan(drag._plan, rows)
+        drag.update(0)
+        if drag.plan():
+            raise AssertionError("Returning to the start of the drag did not restore the original order")
+        drag.update(134)
+        materials.commit_mesh_id_plan(drag.plan(), rows)
         if [obj.name for obj in rows] != [
             "60.0 Piercing B", "61.0 Pubes", "60.1 Piercing R", "60.2 Piercing L"
         ]:
@@ -836,9 +1016,9 @@ def assert_mesh_drag_plan(addon):
 
         # Dropped inside its group, the duplicate is resolved by insertion.
         pubes.name = "60.0 Pubes"
-        drag = Drag((pubes, piercing_b, piercing_r, piercing_l), 60, 0, 61)
-        drag._move_once(bpy.context, "DOWN")
-        materials.commit_mesh_id_plan(drag._plan, rows)
+        drag = session(rows, pubes)
+        drag.update(20)
+        materials.commit_mesh_id_plan(drag.plan(), rows)
         if [obj.name for obj in rows] != [
             "60.0 Piercing B", "60.2 Pubes", "60.1 Piercing R", "60.3 Piercing L"
         ]:
@@ -848,12 +1028,12 @@ def assert_mesh_drag_plan(addon):
         first = create("62.0 First")
         middle = create("62.1 Middle")
         last = create("62.2 Last")
-        drag = Drag((middle, first, last), 62, 1, 63)
-        drag._move_once(bpy.context, "DOWN")
-        if planned((first, middle, last)) != [(62, 0), (62, 2), (62, 1)]:
+        drag = session((first, middle, last), middle)
+        drag.update(20)
+        if planned(drag, (first, middle, last)) != [(62, 0), (62, 2), (62, 1)]:
             raise AssertionError("A unique part did not preview a swap inside its group")
-        drag._move_once(bpy.context, "DOWN")
-        materials.commit_mesh_id_plan(drag._plan, (first, middle, last))
+        drag.update(134)
+        materials.commit_mesh_id_plan(drag.plan(), (first, middle, last))
         if [obj.name for obj in (first, middle, last)] != ["62.0 First", "63.0 Middle", "62.2 Last"]:
             raise AssertionError(f"A part leaving its group renamed the parts it passed: {[obj.name for obj in (first, middle, last)]}")
         print("[PASS] Mesh part drags rename only on drop and never pass on duplicate IDs")
@@ -882,8 +1062,31 @@ def run() -> None:
         if not bpy.context.scene.xiv_ie_settings.resolve_mesh_group_conflicts:
             raise AssertionError("Offset Incoming Mesh Group IDs should default to enabled")
         bpy.context.scene.xiv_ie_settings.keep_shapekeys = True
-        if bpy.context.scene.xiv_ie_instant_edit_props.show_utilities:
-            raise AssertionError("Utilities should be collapsed by default")
+        settings = bpy.context.scene.xiv_ie_settings
+        settings.copy_uv1_to_uv2 = True
+        settings.clear_uv2 = True
+        if settings.uv2_mode != "CLEAR":
+            raise AssertionError("The UV2 choice did not show that Clear overrides Copy UV1")
+        settings.uv2_mode = "COPY_UV1"
+        if not settings.copy_uv1_to_uv2 or settings.clear_uv2:
+            raise AssertionError("Choosing Copy UV1 did not drop the conflicting Clear UV2 flag")
+        settings.clear_vertex_alpha1 = True
+        if settings.vertex_color1_mode != "CLEAR_ALPHA":
+            raise AssertionError("The vertex color 1 choice did not show Clear Alpha")
+        settings.vertex_color1_mode = "CLEAR"
+        if not settings.clear_vertex_color1 or settings.clear_vertex_alpha1:
+            raise AssertionError("Choosing Clear did not replace Clear Alpha for vertex color 1")
+        settings.uv2_mode = "KEEP"
+        settings.vertex_color1_mode = "KEEP"
+        if any(settings.get_mesh_options().values()):
+            raise AssertionError("Keep did not clear every vertex data flag")
+        settings.simple_import_armature = "EXISTING"
+        if not settings.simple_import_use_existing_skeleton:
+            raise AssertionError("The Existing armature choice did not enable the existing skeleton")
+        settings.simple_import_armature = "GENERATED"
+        if settings.simple_import_use_existing_skeleton:
+            raise AssertionError("The Generated armature choice did not disable the existing skeleton")
+        print("[PASS] Vertex data and armature choices map onto the stored option flags")
 
         armature_data = bpy.data.armatures.new("SmokeSkeletonData")
         armature = bpy.data.objects.new("SmokeSkeleton", armature_data)
@@ -1514,7 +1717,6 @@ def run() -> None:
         smoke_group_target.selection_id = "smoke-group-target"
         smoke_group_target.kind = "GROUP"
         smoke_group_target.group_name = "Smoke Group"
-        smoke_group_target.expanded = True
         smoke_option_target = instant_props.variant_targets.add()
         smoke_option_target.selection_id = "smoke-option-target"
         smoke_option_target.kind = "OPTION"
@@ -1561,17 +1763,14 @@ def run() -> None:
         }
         original_finish_job = instant_ops.finish_job
         instant_ops.finish_job = lambda _job: None
-        bundle_property = bpy.ops.xiv_ie.mashup_destination.get_rna_type().properties[
-            "bundle_external_dependencies"]
-        if bundle_property.default:
+        mashup_properties = bpy.ops.xiv_ie.mashup_destination.get_rna_type().properties
+        if mashup_properties["bundle_external_dependencies"].default:
             raise AssertionError("Mashup external dependency bundling did not default off")
-        handoff = instant_ops.mashup_name_operator_args("ACTIVE_MOD", True)
-        if handoff != {
-            "destination": "ACTIVE_MOD",
-            "bundle_external_dependencies": True,
-            "name": "Mashup",
-        }:
-            raise AssertionError("Mashup destination popup did not preserve external dependency bundling")
+        if (
+            mashup_properties["destination"].default != "ACTIVE_MOD"
+            or mashup_properties["name"].default != "Mashup"
+        ):
+            raise AssertionError("The Create Mashup dialog did not default to a named group in the active mod")
         try:
             mashup_target = instant_ops.perform_mashup_export(
                 bpy.context, "ACTIVE_MOD", "Smoke Mashup",
@@ -2058,6 +2257,8 @@ def run() -> None:
         assert_mesh_studio(addon, obj, second, added_group)
         assert_mesh_part_gap_handling(addon)
         assert_mesh_drag_plan(addon)
+        assert_mesh_list_geometry(addon)
+        assert_backface_duplicate(addon)
         assert_mesh_material_quick_selectors(addon)
 
         instant_props.export_destination = context_id

@@ -31,48 +31,49 @@ MODEL_FLAG_DEFAULTS = {
     "unknown8": False,
 }
 
-NECK_MORPH_ITEMS = [
-    ("0", "None", "Do not generate neck morph data"),
-    ("0101", "Midlander Male", ""), ("0201", "Midlander Female", ""),
-    ("0301", "Highlander Male", ""), ("0401", "Highlander Female", ""),
-    ("0501", "Elezen Male", ""), ("0601", "Elezen Female", ""),
-    ("0701", "Miqo'te Male", ""), ("0801", "Miqo'te Female", ""),
-    ("0901", "Roegadyn Male", ""), ("1001", "Roegadyn Female", ""),
-    ("1101", "Lalafell Male", ""), ("1201", "Lalafell Female", ""),
-    ("1301", "Au Ra Male", ""), ("1401", "Au Ra Female", ""),
-    ("1501", "Hrothgar Male", ""), ("1601", "Hrothgar Female", ""),
-    ("1701", "Viera Male", ""), ("1801", "Viera Female", ""),
-]
+
+def _uv2_mode_get(self) -> int:
+    # Clear wins over Copy in the exporter, so it wins here too.
+    if self.clear_uv2:
+        return 2
+    return 1 if self.copy_uv1_to_uv2 else 0
+
+
+def _uv2_mode_set(self, value: int) -> None:
+    self.copy_uv1_to_uv2 = value == 1
+    self.clear_uv2 = value == 2
+
+
+def _vertex_color1_mode_get(self) -> int:
+    # Clearing the whole color also clears its alpha in the exporter.
+    if self.clear_vertex_color1:
+        return 2
+    return 1 if self.clear_vertex_alpha1 else 0
+
+
+def _vertex_color1_mode_set(self, value: int) -> None:
+    self.clear_vertex_alpha1 = value == 1
+    self.clear_vertex_color1 = value == 2
+
+
+def _import_armature_get(self) -> int:
+    return 1 if self.simple_import_use_existing_skeleton else 0
+
+
+def _import_armature_set(self, value: int) -> None:
+    self.simple_import_use_existing_skeleton = value == 1
 
 
 class XIVIEExportSettings(PropertyGroup):
-    show_mesh_materials: BoolProperty(name="Mesh Materials", default=True)  # type: ignore
-    show_simple_export: BoolProperty(name="Simple Import/Export", default=False)  # type: ignore
-    simple_io_tab: EnumProperty(
-        name="Simple Import/Export",
-        items=[
-            ("IMPORT", "Import", "Import an MDL, FBX, or glTF file"),
-            ("EXPORT", "Export", "Export visible mesh objects"),
-        ],
-        default="EXPORT",
-    )  # type: ignore
-    show_import_options: BoolProperty(name="Import Options", default=True)  # type: ignore
-    show_export_options: BoolProperty(name="Export Options", default=True)  # type: ignore
     backup_models_on_export: BoolProperty(
-        name="Backup models on Export",
+        name="Back Up Before Overwriting",
         description="Keep timestamped backups before replacing existing MDL or FBX files",
         default=False,
     )  # type: ignore
-    show_backups: BoolProperty(name="Backup", default=False)  # type: ignore
 
     export_directory: StringProperty(name="Export Folder", subtype="DIR_PATH", default="")  # type: ignore
     export_name: StringProperty(name="File Name", default="model", maxlen=255)  # type: ignore
     model_format: EnumProperty(
-        name="Format",
-        items=[("MDL", "MDL", "FFXIV model"), ("FBX", "FBX", "Autodesk FBX"), ("GLTF", "glTF", "glTF")],
-        default="MDL",
-    )  # type: ignore
-    import_format: EnumProperty(
         name="Format",
         items=[("MDL", "MDL", "FFXIV model"), ("FBX", "FBX", "Autodesk FBX"), ("GLTF", "glTF", "glTF")],
         default="MDL",
@@ -82,25 +83,53 @@ class XIVIEExportSettings(PropertyGroup):
         description="Remove the imported armature and bind meshes to an existing Blender armature",
         default=False,
     )  # type: ignore
+    # Two-button view of simple_import_use_existing_skeleton.
+    simple_import_armature: EnumProperty(
+        name="Armature",
+        items=[
+            ("GENERATED", "Generated", "Create an armature from the imported model's bones", 0),
+            ("EXISTING", "Existing", "Remove the imported armature and bind the meshes to an existing one", 1),
+        ],
+        get=_import_armature_get,
+        set=_import_armature_set,
+    )  # type: ignore
     simple_import_set_export_directory: BoolProperty(
-        name="Set Simple Export Folder on Import",
-        description="Use the imported file's folder as the Simple Export destination after a successful import",
+        name="Use Import Folder",
+        description=(
+            "After a successful import, use the imported file's folder as the File Export folder. "
+            "Model imports from the plugin use the mod's model folder"
+        ),
         default=True,
     )  # type: ignore
     resolve_mesh_group_conflicts: BoolProperty(
-        name="Offset Incoming Mesh Group IDs",
+        name="Offset Clashing IDs",
         description="Offset incoming mesh group IDs when they conflict with existing visible groups",
         default=True,
     )  # type: ignore
     simple_import_skeleton: PointerProperty(
         type=Object,
         name="Skeleton Object",
-        description="Existing Blender armature to use for Simple Import",
+        description="Existing Blender armature to use for File Import",
         poll=lambda _self, obj: obj.type == "ARMATURE",
     )  # type: ignore
-    keep_shapekeys: BoolProperty(name="Keep Shape Keys", default=False)  # type: ignore
-    check_tris: BoolProperty(name="Check Triangulation", default=True)  # type: ignore
-    create_backfaces: BoolProperty(name="Create Backfaces", default=False)  # type: ignore
+    keep_shapekeys: BoolProperty(
+        name="Keep Shape Keys",
+        description="Export the meshes' shape keys as FFXIV shapes",
+        default=False,
+    )  # type: ignore
+    check_tris: BoolProperty(
+        name="Check Triangulation",
+        description=(
+            "Treat FBX and glTF exports as triangulated so Create Backfaces can run. "
+            "MDL exports always require triangulated meshes"
+        ),
+        default=True,
+    )  # type: ignore
+    create_backfaces: BoolProperty(
+        name="Create Backfaces",
+        description="Duplicate and flip the faces in a BACKFACES vertex group so they render from both sides",
+        default=False,
+    )  # type: ignore
     reset_scaling_on_export: BoolProperty(
         name="Reset Scaling on Export",
         description="Temporarily reset armature scaling, positioning and rotation to default values for export.",
@@ -125,18 +154,43 @@ class XIVIEExportSettings(PropertyGroup):
         default=False,
         options={"HIDDEN"},
     )  # type: ignore
-    neck_morph: EnumProperty(
-        name="Neck Morph",
-        items=NECK_MORPH_ITEMS,
-        default="0",
-    )  # type: ignore
 
     clear_uv2: BoolProperty(name="Clear UV2", default=False)  # type: ignore
     copy_uv1_to_uv2: BoolProperty(name="Copy UV1 to UV2", default=False)  # type: ignore
     clear_vertex_color1: BoolProperty(name="Clear Vertex Color 1", default=False)  # type: ignore
     clear_vertex_alpha1: BoolProperty(name="Clear Vertex Alpha 1", default=False)  # type: ignore
-    clear_vertex_color2: BoolProperty(name="Clear Vertex Color 2", default=False)  # type: ignore
-    clear_flow_data: BoolProperty(name="Clear Flow Data", default=False)  # type: ignore
+    clear_vertex_color2: BoolProperty(
+        name="Clear Vertex Color 2",
+        description="Reset vertex color 2 to black with full alpha",
+        default=False,
+    )  # type: ignore
+    clear_flow_data: BoolProperty(
+        name="Clear Flow Data",
+        description="Clear the flow data channel",
+        default=False,
+    )  # type: ignore
+    # The exporter treats these boolean pairs as one choice each (a clear
+    # overrides the other flag), so the panel edits them through these views.
+    uv2_mode: EnumProperty(
+        name="UV2",
+        items=[
+            ("KEEP", "Keep", "Export UV2 as it is", 0),
+            ("COPY_UV1", "Copy UV1", "Replace UV2 with a copy of UV1", 1),
+            ("CLEAR", "Clear", "Set every UV2 coordinate to zero", 2),
+        ],
+        get=_uv2_mode_get,
+        set=_uv2_mode_set,
+    )  # type: ignore
+    vertex_color1_mode: EnumProperty(
+        name="Vertex Color 1",
+        items=[
+            ("KEEP", "Keep", "Export vertex color 1 as it is", 0),
+            ("CLEAR_ALPHA", "Clear Alpha", "Set the alpha of vertex color 1 to opaque", 1),
+            ("CLEAR", "Clear", "Reset vertex color 1 to opaque white", 2),
+        ],
+        get=_vertex_color1_mode_get,
+        set=_vertex_color1_mode_set,
+    )  # type: ignore
 
     def get_mesh_options(self) -> dict[str, bool]:
         return {

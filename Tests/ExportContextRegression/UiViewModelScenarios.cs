@@ -60,6 +60,48 @@ internal static class UiViewModelScenarios
         kinds.Toggle(ResourceKinds.Texture);
         Require(kinds.IsAll, "removing the last kind returns to the tree view");
 
+        // ---- Texture roles ----
+        Require(textureView.TextureRole == TextureRole.Base && modelView.TextureRole == TextureRole.None &&
+                materialView.TextureRole == TextureRole.None,
+            "only texture rows have a role; a file name ending in _d is a base texture");
+        TextureRole Role(string name, string gamePath)
+            => ResourceViews.FromNode(Node("Tex", name, gamePath, @"C:\mods\Mod\" + Path.GetFileName(gamePath))).TextureRole;
+        Require(Role("g_SamplerNormal", "chara/x_d.tex") == TextureRole.Normal &&
+                Role("g_SamplerMask", "chara/x.tex") == TextureRole.Mask &&
+                Role("g_SamplerIndex", "chara/x.tex") == TextureRole.Index &&
+                Role("g_SamplerDiffuse", "chara/x.tex") == TextureRole.Base &&
+                Role("g_SamplerTileNormal", "chara/common/texture/tile_norm_array.tex") == TextureRole.Normal &&
+                Role("g_SamplerWrinklesMask", "chara/x.tex") == TextureRole.Mask &&
+                Role("g_SamplerSpecular", "chara/x_m.tex") == TextureRole.Other &&
+                Role("g_SamplerCatchlight", "chara/common/texture/sphere_d_array.tex") == TextureRole.Other,
+            "Penumbra's sampler names decide the role over the file name");
+        Require(Role("Texture #2", "chara/equipment/e0001/texture/v01_c0101e0001_top_norm.tex") == TextureRole.Normal &&
+                Role("Texture 0x1A2B3C4D", "chara/x_mask.tex") == TextureRole.Mask &&
+                Role("x_id.tex", "chara/x_id.tex") == TextureRole.Index &&
+                Role("x_base.tex", "chara/x_base.tex") == TextureRole.Base &&
+                Role("--c0101e0001_top_n.tex", "chara/--c0101e0001_top_n.tex") == TextureRole.Normal &&
+                Role("c0101h0001_hir_m.tex", "chara/c0101h0001_hir_m.tex") == TextureRole.Mask &&
+                Role("x_s.tex", "chara/x_s.tex") == TextureRole.Other &&
+                Role("vfx.atex", "vfx/common/texture/glow.atex") == TextureRole.Other,
+            "unnamed samplers and Mod Browser rows fall back to the file-name suffix");
+        Require(TextureRoleClassifier.FromUsage("diffuse") == TextureRole.Base &&
+                TextureRoleClassifier.FromUsage("index") == TextureRole.Index &&
+                TextureRoleClassifier.FromUsage("specular") == TextureRole.Other,
+            "material preview usages map onto the same roles");
+
+        // ---- Tree guide lines ----
+        var item = new TreeGuide(18, 0, 0, false);
+        var middleMaterial = item.Child(last: false);
+        var lastMaterial = item.Child(last: true);
+        Require(middleMaterial is { Level: 1, Continues: 0 } && lastMaterial.Last,
+            "an item's children start the first guide column; nothing continues before it");
+        Require(middleMaterial.Child(true).LineContinues(0) && !lastMaterial.Child(true).LineContinues(0),
+            "the item's line runs past a material's textures unless that material is its last child");
+        var deep = middleMaterial.Child(false).Child(true);
+        Require(deep is { Level: 3, Indent: 18 } && deep.LineContinues(0) && deep.LineContinues(1) &&
+                !middleMaterial.Child(true).Child(true).LineContinues(1) && !deep.LineContinues(64),
+            "each level adds its own continuation bit and keeps the item indent");
+
         // ---- Search ----
         var search = new ResourceSearch();
         Require(!search.Active && search.Matches(skeletonView), "an empty search matches everything");

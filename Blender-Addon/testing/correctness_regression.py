@@ -158,8 +158,42 @@ def active_workers_discard_previous_file(addon):
     print("[PASS] old workers cannot update a loaded file; durable revocations remain retryable")
 
 
+def duplicate_face_keeps_corner_layers_aligned(addon):
+    import numpy as np
+
+    importer = importlib.import_module(f"{addon.__name__}.io.model.importer")
+    # The second triangle is a back face reusing the first one's vertices, which
+    # Mesh.validate() removes; the corner layers must shrink with it.
+    indices = np.array([0, 1, 2, 2, 1, 0, 1, 3, 2], dtype=np.int32)
+    positions = np.zeros(4, dtype=[("position", np.float32, 4)])
+    positions["position"] = [(0, 0, 0, 1), (1, 0, 0, 1), (0, 1, 0, 1), (1, 1, 0, 1)]
+    vertex_data = np.zeros(4, dtype=[("normal", np.float32, 4), ("uv0", np.float32, 2),
+                                     ("colour0", np.uint8, 4)])
+    vertex_data["normal"] = (0, 0, 1, 0)
+    vertex_data["uv0"] = [(0.1, 0.2), (0.3, 0.4), (0.5, 0.6), (0.7, 0.8)]
+    vertex_data["colour0"] = [(10, 0, 0, 255), (20, 0, 0, 255), (30, 0, 0, 255), (40, 0, 0, 255)]
+    flags = SimpleNamespace(uv0=True, uv1=False, col_count=1, normals=True, tangents=False, flow=False)
+    mesh = importer.ModelImport._create_blend_mesh(flags, {0: positions, 1: vertex_data}, indices, 4)
+    try:
+        assert len(mesh.polygons) == 2, len(mesh.polygons)
+        vertex_indices = np.empty(len(mesh.loops), dtype=np.int32)
+        mesh.loops.foreach_get("vertex_index", vertex_indices)
+        uvs = np.empty(len(mesh.loops) * 2, dtype=np.float32)
+        mesh.uv_layers["uv0"].uv.foreach_get("vector", uvs)
+        expected_uvs = importer.get_uv0({1: vertex_data})[0][vertex_indices]
+        assert np.allclose(uvs.reshape(-1, 2), expected_uvs), (uvs, expected_uvs)
+        colours = np.empty(len(mesh.loops) * 4, dtype=np.float32)
+        mesh.color_attributes["vc0"].data.foreach_get("color", colours)
+        expected_colours = vertex_data["colour0"][vertex_indices] / 255.0
+        assert np.allclose(colours.reshape(-1, 4), expected_colours), (colours, expected_colours)
+    finally:
+        bpy.data.meshes.remove(mesh)
+    print("[PASS] duplicate back faces are dropped with their UV and colour corners")
+
+
 def run():
     with addon_session("_xiv_ie_correctness_regression") as addon:
+        duplicate_face_keeps_corner_layers_aligned(addon)
         assert_combination_failures(addon)
         assert_linked_mesh_rejected(addon)
         for stage in ("transparency", "backfaces", "shape_mismatch"):

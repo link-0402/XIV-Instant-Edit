@@ -23,19 +23,21 @@ internal sealed record ActorView(
 
     private string BuildSummary()
     {
-        int models = 0, textures = 0, materials = 0;
+        int models = 0, textures = 0, materials = 0, animations = 0;
         foreach (var root in Roots)
             foreach (var node in root.Flattened)
             {
                 if ((node.Kinds & ResourceKinds.Model) != 0) models++;
                 if ((node.Kinds & ResourceKinds.Texture) != 0) textures++;
                 if ((node.Kinds & ResourceKinds.Material) != 0) materials++;
+                if ((node.Kinds & ResourceKinds.Animation) != 0) animations++;
             }
 
-        var parts = new List<string>(3);
+        var parts = new List<string>(4);
         if (models > 0) parts.Add(models == 1 ? "1 model" : $"{models} models");
         if (textures > 0) parts.Add(textures == 1 ? "1 texture" : $"{textures} textures");
         if (materials > 0) parts.Add(materials == 1 ? "1 material" : $"{materials} materials");
+        if (animations > 0) parts.Add(animations == 1 ? "1 animation" : $"{animations} animations");
         return string.Join(" · ", parts);
     }
 
@@ -83,6 +85,10 @@ internal sealed record ResourceView(
 
     private ResourceView[]? _flattened;
     private string? _displayName;
+    private TextureRole? _textureRole;
+
+    /// <summary> What a texture row is used for; <see cref="TextureRole.None"/> for other rows. </summary>
+    public TextureRole TextureRole => _textureRole ??= TextureRoleClassifier.Classify(Kinds, Name, GamePath, ActualPath);
 
     /// <summary> This view followed by all of its descendants, depth first. </summary>
     public IReadOnlyList<ResourceView> Flattened => _flattened ??= ResourceViews.Flatten(this).ToArray();
@@ -163,8 +169,43 @@ internal static class ResourceViews
             ".mdl" => "Model",
             ".tex" or ".atex" => "Texture",
             ".mtrl" => "Material",
+            ".pap" => "Animation",
             _ => "Resource",
         };
+
+    /// <summary> Whether the row is a character animation pack that can be sent to Blender. </summary>
+    public static bool IsAnimation(ResourceView node) => (node.Kinds & ResourceKinds.Animation) != 0;
+
+    /// <summary>
+    /// An On Screen row for an animation the listener detected: its file, where it was loaded from,
+    /// and whether it is playing. Penumbra's resource tree does not report character animations.
+    /// </summary>
+    public static ResourceView FromAnimation(AnimationCapture capture, bool startup, int order)
+    {
+        var clip = startup && capture.Startup is { } linked ? linked : capture.Clip;
+        var source = capture.Sources.FirstOrDefault(s => s.GamePath == clip.GamePath);
+        var name = Services.Animations.AnimationPresentation.AnimationName(capture, startup);
+        var mod = source?.ModName ?? source?.ModDirectory;
+        return new ResourceView(
+            "Animation",
+            string.Empty,
+            capture.Playing && !startup ? name + " · playing" : name,
+            clip.GamePath,
+            source?.ResolvedPath ?? clip.GamePath,
+            mod is null ? "Game Data" : $"Loaded from: {mod}",
+            source?.ModName ?? string.Empty,
+            source?.ModDirectory ?? string.Empty,
+            source?.ModRoot ?? string.Empty,
+            source?.RelativePath ?? string.Empty,
+            null,
+            string.IsNullOrEmpty(source?.ModDirectory) ? ResourceSourceState.GameData : ResourceSourceState.LoadedMod,
+            ResourceSection.Animations.ToString(),
+            "Animation",
+            order,
+            string.Empty,
+            Array.Empty<string>(),
+            new List<ResourceView>());
+    }
 
     /// <summary> The root followed by its descendants, depth first. </summary>
     public static IEnumerable<ResourceView> Flatten(ResourceView root)

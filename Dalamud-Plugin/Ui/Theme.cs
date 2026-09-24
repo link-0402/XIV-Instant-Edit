@@ -37,6 +37,33 @@ internal static class Theme
     public static readonly Vector4 Watching = new(.65f, .83f, .7f, 1);
     public static readonly Vector4 Conflict = new(1f, .45f, .35f, 1);
 
+    // Resource kinds and texture roles: row glyphs, faint row tints and the kind chips' swatches.
+    // Normal maps take the lavender they look like; other textures stay neutral.
+    public static readonly Vector4 ModelKind = new(.36f, .80f, .84f, 1);
+    public static readonly Vector4 MaterialKind = new(.90f, .52f, .88f, 1);
+    public static readonly Vector4 AnimationKind = new(.98f, .84f, .42f, 1);
+    public static readonly Vector4 BaseTexture = new(1f, .66f, .40f, 1);
+    public static readonly Vector4 NormalTexture = new(.58f, .62f, 1f, 1);
+    public static readonly Vector4 MaskTexture = new(.76f, .88f, .40f, 1);
+    public static readonly Vector4 IndexTexture = new(1f, .50f, .60f, 1);
+    public static readonly Vector4 OtherTexture = new(.66f, .70f, .78f, 1);
+
+    /// <summary> Opacity of a row's tint: enough to tell neighbouring rows apart, not to compete with their text. </summary>
+    public const float KindTintAlpha = .10f;
+
+    /// <summary> The resource tree's guide lines between a row and its children. </summary>
+    public static readonly Vector4 TreeLine = new(.42f, .45f, .53f, 1);
+
+    public static Vector4 TextureRoleColour(TextureRole role)
+        => role switch
+        {
+            TextureRole.Base => BaseTexture,
+            TextureRole.Normal => NormalTexture,
+            TextureRole.Mask => MaskTexture,
+            TextureRole.Index => IndexTexture,
+            _ => OtherTexture,
+        };
+
     // Surfaces
     public static readonly Vector4 PanelBg = new(.075f, .085f, .105f, 1);
     public static readonly Vector4 RowAlt = new(.11f, .12f, .15f, 1);

@@ -5,11 +5,10 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 import re
+import uuid
 
 import bpy
-import numpy as np
 
-from .io.model.com.space import lin_to_srgb
 from .io.model.exp.validators import clean_material_path, USHORT_LIMIT
 from .instant_edit.context import (
     MASHUP_SOURCE_MATERIAL_PROPERTY,
@@ -114,7 +113,6 @@ class MeshPartInstance:
     part_index: int
     instance_key: str
     objects: tuple
-    is_placeholder: bool = False
 
 
 def mesh_part_objects(objects, mesh_index: int, part_index: int) -> tuple:
@@ -199,31 +197,6 @@ def mesh_part_instances(
             ),
         )
     )
-
-
-def mesh_part_slots(objects, mesh_index: int) -> tuple[MeshPartInstance, ...]:
-    """Return real part rows plus one display-only row for each internal gap."""
-    instances = mesh_part_instances(objects, mesh_index)
-    if not instances:
-        return ()
-
-    slots = []
-    previous_part = None
-    for instance in instances:
-        if previous_part is not None and instance.part_index > previous_part + 1:
-            placeholder_part = previous_part + 1
-            slots.append(
-                MeshPartInstance(
-                    mesh_index,
-                    placeholder_part,
-                    f"placeholder:{mesh_index}.{placeholder_part}",
-                    (),
-                    True,
-                )
-            )
-        slots.append(instance)
-        previous_part = instance.part_index
-    return tuple(slots)
 
 
 def mesh_part_instance_objects(
@@ -322,20 +295,6 @@ def convert_suffix_mesh_names(objects) -> int:
             obj.name = old_name
         raise
     return len(candidates)
-
-
-def mesh_part_tags(objects) -> str:
-    """Return the common tag text for a part, or a useful mixed-value marker."""
-    values = {
-        str(_property(obj, "tags", "")).strip()
-        for obj in objects
-        if str(_property(obj, "tags", "")).strip()
-    }
-    if not values:
-        return ""
-    if len(values) == 1:
-        return next(iter(values))
-    return "<multiple>"
 
 
 def mesh_part_attributes(objects) -> tuple[str, ...]:
@@ -472,90 +431,30 @@ def set_mesh_part_attribute(
     return attribute
 
 
-def flow_data_count(objects) -> int:
-    return sum("xiv_flow" in obj.data.color_attributes for obj in objects)
-
-
-def mesh_flow_enabled(objects) -> bool:
-    objects = tuple(objects)
-    return bool(objects and _property(objects[0], "xiv_flow", False))
-
-
-def set_mesh_flow_enabled(objects, enabled: bool) -> None:
-    for obj in objects:
-        obj["xiv_flow"] = bool(enabled)
-
-
-def ensure_flow_data(objects) -> int:
-    """Create the neutral XIV flow colour channel used by the MDL exporter."""
-    updated = 0
-    for obj in objects:
-        if "xiv_flow" in obj.data.color_attributes:
-            continue
-
-        source = obj.data.color_attributes.get("vc2")
-        if source is not None:
-            if source.data_type == "BYTE_COLOR":
-                rgba = np.ones(len(source.data) * 4, dtype=np.float32)
-                source.data.foreach_get("color", rgba)
-                domain = source.domain
-                obj.data.color_attributes.remove(source)
-                layer = obj.data.color_attributes.new(
-                    "xiv_flow",
-                    domain=domain,
-                    type="FLOAT_COLOR",
-                )
-                layer.data.foreach_set("color", lin_to_srgb(rgba))
-            else:
-                source.name = "xiv_flow"
-        else:
-            count = len(obj.data.loops)
-            rgba = np.tile(np.array((0.5, 0.5, 1.0, 1.0), dtype=np.float32), count)
-            layer = obj.data.color_attributes.new(
-                "xiv_flow",
-                domain="CORNER",
-                type="FLOAT_COLOR",
-            )
-            layer.data.foreach_set("color", rgba)
-        updated += 1
-    return updated
-
-
-def normalize_mesh_tags(value: str) -> str:
-    """Normalize comma-separated tags while preserving their entered order."""
-    tags = []
-    seen = set()
-    for tag in str(value or "").split(","):
-        tag = " ".join(tag.strip().split())
-        if tag and tag.casefold() not in seen:
-            tags.append(tag)
-            seen.add(tag.casefold())
-    return ", ".join(tags)
-
-
-def set_mesh_part_tags(
-    objects,
-    mesh_index: int,
-    part_index: int,
-    value: str,
-    instance_key: str | None = None,
-) -> str:
-    tags = normalize_mesh_tags(value)
-    for obj in mesh_part_instance_objects(objects, mesh_index, part_index, instance_key):
-        if tags:
-            obj["instant_edit_tags"] = tags
-        elif "instant_edit_tags" in obj:
-            del obj["instant_edit_tags"]
-    return tags
-
-
-def _rename_mesh_object(obj, mesh_index: int, part_index: int, label: str, lod: int | None) -> None:
-    obj.name = _mesh_object_name(mesh_index, part_index, label, lod)
-
-
 def _mesh_object_name(mesh_index: int, part_index: int, label: str, lod: int | None) -> str:
     lod_suffix = f" LOD{lod}" if lod else ""
     return f"{mesh_index}.{part_index} {label}{lod_suffix}"
+
+
+def backface_copies(objects) -> list:
+    """Copy one part's objects (every LOD) as a new part named "<name> Backfaces".
+
+    The copies keep the part's IDs, collections and properties, and share a new
+    import instance id so they form one part of their own for the caller to
+    renumber.
+    """
+    instance_id = uuid.uuid4().hex
+    copies = []
+    for obj in objects:
+        group, part, lod = mesh_ids_from_name(obj)
+        copy = obj.copy()
+        copy.data = obj.data.copy()
+        copy["instant_edit_import_instance_id"] = instance_id
+        for collection in obj.users_collection:
+            collection.objects.link(copy)
+        copy.name = _mesh_object_name(group, part, f"{mesh_display_name(obj)} Backfaces", lod)
+        copies.append(copy)
+    return copies
 
 
 def _planned_object_name(obj) -> str:
@@ -644,215 +543,6 @@ def _rename_mesh_targets(targets, objects=None) -> int:
             obj.name = old_name
         raise
     return len(desired)
-
-
-def rename_mesh_part(
-    objects,
-    mesh_index: int,
-    part_index: int,
-    value: str,
-    instance_key: str | None = None,
-) -> str:
-    """Rename one part across every visible LOD without changing its export ID."""
-    label = " ".join(str(value or "").strip().split())
-    if not label:
-        raise ValueError("Part name cannot be empty")
-    targets = mesh_part_instance_objects(objects, mesh_index, part_index, instance_key)
-    if not targets:
-        raise ValueError(f"Mesh part {mesh_index}.{part_index} is no longer visible")
-    lods = []
-    for obj in targets:
-        _group, _part, lod = mesh_ids_from_name(obj)
-        lods.append((obj, lod))
-    for obj, _lod in lods:
-        obj.name = f"__xiv_ie_rename_{obj.as_pointer()}"
-    for obj, lod in lods:
-        _rename_mesh_object(obj, mesh_index, part_index, label, lod)
-    return label
-
-
-def _swap_mesh_ids(objects, first: tuple[int, int], second: tuple[int, int], swap_group: bool) -> int:
-    targets = []
-    for obj in objects:
-        try:
-            group, part, lod = mesh_ids_from_name(obj)
-        except Exception:
-            continue
-        if (group in {first[0], second[0]} if swap_group else (group, part) in {first, second}):
-            targets.append((obj, group, part, lod, mesh_display_name(obj)))
-    renames = []
-    for obj, group, part, lod, label in targets:
-        if swap_group:
-            new_group = second[0] if group == first[0] else first[0]
-            new_part = part
-        else:
-            new_group = group
-            new_part = second[1] if part == first[1] else first[1]
-        renames.append((obj, new_group, new_part, lod, label))
-    return _rename_mesh_targets(renames, objects)
-
-
-def swap_mesh_groups(objects, first_group: int, second_group: int) -> int:
-    return _swap_mesh_ids(
-        objects,
-        (first_group, 0),
-        (second_group, 0),
-        swap_group=True,
-    )
-
-
-def swap_mesh_parts(objects, mesh_index: int, first_part: int, second_part: int) -> int:
-    return _swap_mesh_ids(
-        objects,
-        (mesh_index, first_part),
-        (mesh_index, second_part),
-        swap_group=False,
-    )
-
-
-def swap_mesh_part_instances(
-    objects,
-    mesh_index: int,
-    first_part: int,
-    first_instance_key: str,
-    second_part: int,
-    second_instance_key: str,
-) -> int:
-    """Swap IDs for two selected part instances without touching duplicates."""
-    first_objects = mesh_part_instance_objects(
-        objects, mesh_index, first_part, first_instance_key
-    )
-    second_objects = mesh_part_instance_objects(
-        objects, mesh_index, second_part, second_instance_key
-    )
-    if not first_objects or not second_objects:
-        return 0
-
-    renames = []
-    for obj in first_objects:
-        _group, _part, lod = mesh_ids_from_name(obj)
-        renames.append((obj, mesh_index, second_part, lod, mesh_display_name(obj)))
-    for obj in second_objects:
-        _group, _part, lod = mesh_ids_from_name(obj)
-        renames.append((obj, mesh_index, first_part, lod, mesh_display_name(obj)))
-    return _rename_mesh_targets(renames, objects)
-
-
-def move_mesh_part_to_index(
-    objects,
-    mesh_index: int,
-    source_part: int,
-    target_part: int,
-    instance_key: str | None = None,
-) -> int:
-    """Move one complete part instance into an otherwise empty part index."""
-    if target_part < 0:
-        raise ValueError("Mesh part indices cannot be negative.")
-
-    source_objects = mesh_part_instance_objects(
-        objects, mesh_index, source_part, instance_key
-    )
-    if not source_objects:
-        raise ValueError(f"Mesh part {mesh_index}.{source_part} is no longer visible")
-
-    source_ids = {obj.as_pointer() for obj in source_objects}
-    for obj in objects:
-        if obj.as_pointer() in source_ids:
-            continue
-        try:
-            group, part, _lod = mesh_ids_from_name(obj)
-        except Exception:
-            continue
-        if group == mesh_index and part == target_part:
-            raise ValueError(
-                f"Mesh part {mesh_index}.{target_part} is already occupied."
-            )
-
-    if source_part == target_part:
-        return 0
-
-    renames = []
-    for obj in source_objects:
-        _group, _part, lod = mesh_ids_from_name(obj)
-        renames.append(
-            (obj, mesh_index, target_part, lod, mesh_display_name(obj))
-        )
-    return _rename_mesh_targets(renames, objects)
-
-
-def insert_mesh_part_instance(
-    objects,
-    mesh_index: int,
-    source_part: int,
-    target_part: int,
-    instance_key: str,
-) -> int:
-    """Insert a part instance at target_part, shifting later parts to make room.
-
-    Used for duplicate IDs: the source ID stays taken by the duplicate's
-    sibling, so a swap would pass the conflict on to the other part. Parts
-    from target_part onward move up by one until a free ID absorbs the shift.
-    """
-    source_objects = mesh_part_instance_objects(
-        objects, mesh_index, source_part, instance_key
-    )
-    if not source_objects:
-        raise ValueError(f"Mesh part {mesh_index}.{source_part} is no longer visible")
-
-    source_ids = {obj.as_pointer() for obj in source_objects}
-    occupied = defaultdict(list)
-    for obj in objects:
-        if obj.as_pointer() in source_ids:
-            continue
-        try:
-            group, part, lod = mesh_ids_from_name(obj)
-        except Exception:
-            continue
-        if group == mesh_index:
-            occupied[part].append((obj, lod))
-
-    renames = []
-    for obj in source_objects:
-        _group, _part, lod = mesh_ids_from_name(obj)
-        renames.append((obj, mesh_index, target_part, lod, mesh_display_name(obj)))
-    part = target_part
-    while part in occupied:
-        for obj, lod in occupied[part]:
-            renames.append((obj, mesh_index, part + 1, lod, mesh_display_name(obj)))
-        part += 1
-    return _rename_mesh_targets(renames, objects)
-
-
-def move_mesh_part_to_group(
-    objects,
-    source_group: int,
-    source_part: int,
-    target_group: int,
-    instance_key: str | None = None,
-) -> int:
-    """Move one complete part, including every LOD, to another group."""
-    source_objects = mesh_part_instance_objects(
-        objects, source_group, source_part, instance_key
-    )
-    if not source_objects:
-        raise ValueError(f"Mesh part {source_group}.{source_part} is no longer visible")
-
-    used_parts = set()
-    for obj in objects:
-        try:
-            group, part, _lod = mesh_ids_from_name(obj)
-        except Exception:
-            continue
-        if group == target_group:
-            used_parts.add(part)
-    target_part = next(index for index in range(len(used_parts) + 1) if index not in used_parts)
-
-    renames = []
-    for obj in source_objects:
-        _group, _part, lod = mesh_ids_from_name(obj)
-        renames.append((obj, target_group, target_part, lod, mesh_display_name(obj)))
-    _rename_mesh_targets(renames, objects)
-    return target_part
 
 
 def compact_mesh_part_indices(collections) -> int:
@@ -948,27 +638,6 @@ def group_mesh_objects(objects) -> list[MaterialGroup]:
 
 def visible_material_groups() -> list[MaterialGroup]:
     return group_mesh_objects(visible_meshobj())
-
-
-def material_group_slots(
-    groups: list[MaterialGroup],
-    maximum_group: int | None = None,
-) -> list[MaterialGroup]:
-    """Return every numeric group slot through the current trailing destination."""
-    if not groups:
-        return []
-    occupied = {group.mesh_index: group for group in groups}
-    highest_slot = max(occupied) + 1
-    if maximum_group is not None:
-        highest_slot = max(max(occupied), min(highest_slot, maximum_group))
-    return [
-        occupied.get(index, MaterialGroup(index, ()))
-        for index in range(highest_slot + 1)
-    ]
-
-
-def visible_material_group_slots(maximum_group: int | None = None) -> list[MaterialGroup]:
-    return material_group_slots(visible_material_groups(), maximum_group)
 
 
 def material_paths(objects) -> list[str]:

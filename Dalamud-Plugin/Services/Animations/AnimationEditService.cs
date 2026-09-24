@@ -17,18 +17,24 @@ internal sealed class AnimationEditService : IDisposable
     private readonly AnimationJournalStore journals;
     private readonly AnimationCommitService commits;
     private readonly AnimationCatalog catalog;
+    private readonly AnimationSkeletonIndex skeletons;
     private readonly IPluginLog log;
+    private readonly CancellationTokenSource lifetime = new();
     private CancellationTokenSource? cancellation;
     private Task work = Task.CompletedTask;
     private bool disposed;
     private ImmutableArray<AnimationEditJournal> recovery;
     private LivePoseOffsetBackup? offsetBackup;
     public AnimationObserver Observer { get; }
+    /// <summary>PAP files no character is playing, such as a mod's animations in the Mod Browser.</summary>
+    public AnimationFiles Files { get; }
     public bool Busy => !work.IsCompleted;
     public bool CanCancel { get; private set; }
     public string Status { get; private set; } = "Select an animation and the offsets to bake.";
     public ImmutableArray<AnimationEditJournal> Recovery => recovery;
     public AnimationEditResult? LastResult { get; private set; }
+    /// <summary>Whether the most recent operation of any kind ended in an error.</summary>
+    public bool LastFailed { get; private set; }
     public bool CanReapplyOffsets => offsetBackup != null;
     public void StartObservation() => Observer.Start();
     public void StopObservation() => Observer.Stop();
@@ -46,11 +52,30 @@ internal sealed class AnimationEditService : IDisposable
         offsetBackup = journals.LoadOffsetBackup();
         commits = new AnimationCommitService(penumbra, resources, backups, journals);
         baker = new AnimationBakeService(native, framework);
-        Observer = new AnimationObserver(framework, objects, penumbra, native, resources, poses, catalog,
-            new AnimationSkeletonIndex(penumbra, resources, framework, log, () => TextureFiles.EnsureCacheRoot(configuration.TextureCacheDirectory)), log);
+        skeletons = new AnimationSkeletonIndex(penumbra, resources, framework, log, () => TextureFiles.EnsureCacheRoot(configuration.TextureCacheDirectory));
+        Observer = new AnimationObserver(framework, objects, penumbra, native, resources, poses, catalog, skeletons, log);
+        Files = new AnimationFiles(framework, objects, penumbra, resources, skeletons);
         Observer.CharacterChanged += Cancel;
     }
     public void Cancel() { if (CanCancel) cancellation?.Cancel(); }
+
+    /// <summary>The skeleton library saved in the cache folder, which source skeletons are matched from.</summary>
+    public SkeletonLibraryStatus SkeletonLibrary => skeletons.Status;
+    public DateTime? SavedSkeletonLibraryUtc() => skeletons.SavedLibraryUtc();
+
+    /// <summary>Builds the skeleton library again, then matches every listed animation to a skeleton again.</summary>
+    public void RebuildSkeletonLibrary() => _ = RebuildSkeletonLibraryAsync();
+
+    private async Task RebuildSkeletonLibraryAsync()
+    {
+        try
+        {
+            await skeletons.RebuildAsync(lifetime.Token);
+            if (!disposed) await framework.RunOnFrameworkThread(Observer.RefreshSkeletonMatches);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception e) { log.Warning(e, "Could not rebuild the skeleton library."); }
+    }
 
     public void Refresh(AnimationCapture capture, Action<AnimationCapture> accept) => Launch(async token =>
     {
@@ -131,7 +156,7 @@ internal sealed class AnimationEditService : IDisposable
         if (Busy || disposed) return;
         if (clip != null) Observer.ReportOperationError(clip, null);
         cancellation?.Dispose(); cancellation = new CancellationTokenSource();
-        var token = cancellation.Token; CanCancel = true;
+        var token = cancellation.Token; CanCancel = true; LastFailed = false;
         work = Task.Run(async () =>
         {
             try
@@ -146,6 +171,7 @@ internal sealed class AnimationEditService : IDisposable
             }
             catch (Exception e)
             {
+                LastFailed = true;
                 Status = e.InnerException?.Message ?? e.Message; log.Warning(e, "Animation edit operation failed.");
                 if (clip != null) await framework.RunOnFrameworkThread(() => Observer.ReportOperationError(clip, Status));
                 if (jobId is { } id) LastResult = new AnimationEditResult(id, false, Status);
@@ -294,6 +320,40 @@ internal sealed class AnimationEditService : IDisposable
         journal.State = "Completed"; journals.Save(journal); Status = journal.Message;
     }, request.Id, request.Capture.Clip);
 
+    /// <summary>
+    /// Samples the clip's animation file on the skeleton it was made for and hands the take to
+    /// <paramref name="deliver"/>, whose message becomes the status. Nothing in game changes.
+    /// </summary>
+    public void SendToBlender(AnimationCapture capture, bool startup, Func<AnimationTake, CancellationToken, Task<string>> deliver) => Launch(async token =>
+    {
+        var clip = startup ? capture.Startup ?? throw new InvalidOperationException("No linked startup animation was identified.") : capture.Clip;
+        if (clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: { } source })
+            throw new InvalidOperationException(clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for first.");
+        Status = "Reading the animation file…";
+        var (resource, pap) = await resources.ReadAsync(capture.CollectionId, clip.GamePath, token);
+        var (_, skeleton) = await resources.ReadSkeletonAsync(capture.CollectionId, source.Source, token);
+        var name = AnimationPresentation.ExportName(capture, startup);
+        var facts = new Dictionary<string, string>
+        {
+            ["gamePath"] = clip.GamePath,
+            ["clip"] = clip.Name,
+            ["skeleton"] = source.Source.Resource.GamePath,
+            ["mod"] = resource.ModName ?? resource.ModDirectory ?? "",
+        };
+        var take = await AnimationClipExport.SampleAsync(framework, pap, skeleton, clip, source, name, facts, message => Status = message, token);
+        Status = "Sending the animation to Blender…";
+        Status = await deliver(take, token);
+    });
+
+    /// <summary>Samples a clip of a PAP file on the chosen skeleton and hands the take to <paramref name="deliver"/>.</summary>
+    public void SendFileToBlender(AnimationFileClip clip, SkeletonCandidate skeleton, Func<AnimationTake, CancellationToken, Task<string>> deliver) => Launch(async token =>
+    {
+        Status = $"Reading {clip.Source.DisplayName}…";
+        var take = await Files.SampleAsync(clip, skeleton, message => Status = message, token);
+        Status = "Sending the animation to Blender…";
+        Status = await deliver(take, token);
+    });
+
     public void RestoreOffsets(AnimationEditJournal journal) => Launch(async _ =>
     {
         await CheckActorAsync(journal.Request.Capture, false);
@@ -343,7 +403,7 @@ internal sealed class AnimationEditService : IDisposable
     }
     public void Dispose()
     {
-        disposed = true; cancellation?.Cancel(); Observer.CharacterChanged -= Cancel; Observer.Dispose();
+        disposed = true; cancellation?.Cancel(); lifetime.Cancel(); Observer.CharacterChanged -= Cancel; Observer.Dispose();
         baker.Dispose();
     }
 }

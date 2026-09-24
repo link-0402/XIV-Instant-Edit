@@ -19,8 +19,14 @@ AnimationRenameFixture.Run(Check, Reject);
 AnimationBonesFixture.Run(Check);
 ChartSkeletonFixture.Run(Check);
 EmbeddedSkeletonFixture.Run(Check, Reject);
+AnimationExportFixture.Run(Check, Reject);
+AnimationExportFixture.Presentation(Check);
+AnimationExportFixture.Rows(Check);
 if (args is ["--skeleton-repair-xml", var animationXml, var skeletonXml])
     EmbeddedSkeletonFixture.InspectXml(animationXml, skeletonXml, Check);
+// Writes the fixture take as the plugin sends it, for reading back in Blender.
+if (args is ["--write-sample-take", var takePath])
+    File.WriteAllBytes(takePath, AnimationTakeFormat.Write(AnimationExportFixture.SampleTake(), "Skeleton", false, "1.2.4"));
 static byte[] Timeline(string code, string? path = null, int field = 20, int size = 24)
 {
     var text = Encoding.UTF8.GetBytes((path ?? "") + "\0");

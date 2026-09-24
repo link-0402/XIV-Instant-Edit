@@ -90,8 +90,10 @@ them back to physics.
 1. Open the **Animations** tab and play the animation (an emote, idle or movement)
    on your character. Ready animations appear in the list on the left.
 2. Select it. The **Source** card shows the file, the live skeleton and the source
-   skeleton the animation was made for; pick one if several candidates match, or use
-   **Rescan skeletons** after installing new skeleton mods.
+   skeleton the animation was made for; pick one if several candidates match. Source
+   skeletons come from a library of every skeleton in your mods, built once and saved
+   in the cache folder. After installing, updating or removing skeleton mods, use
+   **Rebuild skeleton library** in Settings.
 3. Under **Current LivePose Adjustments**, tick the bones and components to bake.
    **Animated Bones** lets you untick bones the animation should stop driving.
 4. Under **Bake**, choose a new mod or an in-place replacement and press
@@ -99,6 +101,39 @@ them back to physics.
 5. Every edit is journaled for a week. **Undo last edit** reverts it and restores the
    live offsets it cleared; the **Recent edits** card lists older edits and reopens on
    its own when an interrupted edit needs attention.
+
+## How to: Animations in Blender
+
+The **Animations** tab sends animations to Blender as a new action on your scene
+armature, named under **Animation export** in the toolbar's options popover. Without an
+object of that name, Blender uses the active armature, or the scene's only one. Bones are
+matched by name, so use the FFXIV skeleton your meshes are weighted to. LivePose is not
+needed.
+
+- **Record live pose** records a character's skeleton on every frame, the way the game
+  renders it: the animation plus bone physics, Customize+ and LivePose. Use it to check
+  clothing for clipping in motion, for example while walking; the countdown gives you time
+  to start moving. In GPose, **You** is your posed copy and **Current target** is the GPose
+  target, such as an actor Brio plays an animation on. Recordings are sampled at 60 frames
+  per second.
+- **Send animation to Blender**, under a selected animation, samples its file at its own
+  frame rate on the skeleton it was made for. Physics bones keep their rest pose.
+- **Animation files in the Mod Browser**: the **Animations** filter lists a mod's character
+  animation packs (`.pap`). The run action (or right-click, "Send animation to Blender")
+  opens a dialog to pick the clip, since a pack often holds a loop and its start, and the
+  skeleton it was made for, found from your skeleton mods and the pack's race. Nothing has
+  to play in game.
+- **Detected animations in On Screen**: with the **Animations** filter on, the animations the
+  listener detects on your character, playing and recent, appear under your character and
+  can be sent the same way.
+
+Blender keys the animation at the scene's frame rate, starting at the scene's start frame,
+and moves the scene's end frame to its last frame; set the scene to 60 fps to keep every
+recorded sample. Each bone receives the game bone's movement relative to its reference
+pose, turned into the bone's own rest orientation, so armatures imported with other bone
+orientations (glTF, FBX) work. Bones the armature lacks are listed in the result. Bone
+scale is only keyed with **Key bone scale** on, so Customize+ scaling applied in Blender
+stays in place.
 
 ## Additional notes
 
@@ -119,6 +154,7 @@ The Blender plugin manages it's mappings to mods via the automatically created "
 - Simple Importer / Exporter for general FBX and MDL files with various QoL functions and automations optimized for FFXIV workflows
 - One-click import and export for textures
 - Animation editing: bake LivePose adjustments, repair skeletons, exclude bones, with undo and recovery
+- Animations in Blender: record a character's live pose including bone physics, or send an animation your character plays or any mod's animation file, as an action on your armature
 
 ### Material preview
 

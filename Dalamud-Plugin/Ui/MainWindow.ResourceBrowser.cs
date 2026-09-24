@@ -14,7 +14,8 @@ namespace InstantEdit.Ui;
 
 public sealed partial class MainWindow
 {
-    private const ImGuiTableFlags ResourceTableFlags = ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.BordersOuter |
+    // No RowBg: rows are told apart by their kind and texture-role tints instead of stripes.
+    private const ImGuiTableFlags ResourceTableFlags = ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.BordersOuter |
                                                         ImGuiTableFlags.Resizable | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.Hideable;
     private const string RowMenuPopup = "##row-menu";
 
@@ -23,10 +24,17 @@ public sealed partial class MainWindow
         (ResourceKinds.Model, "Models"),
         (ResourceKinds.Texture, "Textures"),
         (ResourceKinds.Material, "Materials"),
+        (ResourceKinds.Animation, "Animations"),
     ];
 
     /// <summary> The kinds each chip counts; index 0 is the "All" chip, which counts every editable row. </summary>
-    private static readonly ResourceKinds[] KindChipCounts = [ResourceKinds.Editable, ResourceKinds.Model, ResourceKinds.Texture, ResourceKinds.Material];
+    private static readonly ResourceKinds[] KindChipCounts = [ResourceKinds.Editable, ResourceKinds.Model, ResourceKinds.Texture, ResourceKinds.Material, ResourceKinds.Animation];
+
+    // The chips' legend dots; the texture dot is split between the texture roles' colours.
+    private static readonly Vector4[] ModelSwatch = [Theme.ModelKind];
+    private static readonly Vector4[] MaterialSwatch = [Theme.MaterialKind];
+    private static readonly Vector4[] AnimationSwatch = [Theme.AnimationKind];
+    private static readonly Vector4[] TextureSwatch = [Theme.BaseTexture, Theme.NormalTexture, Theme.MaskTexture, Theme.IndexTexture];
 
     // View-model state: drawing must not rebuild, re-classify, or re-search the resource
     // tree every frame. The views are replaced when the snapshot or the vanilla toggle changes.
@@ -36,6 +44,8 @@ public sealed partial class MainWindow
     private readonly ExpansionState _expansion = new();
     private IReadOnlyList<OnScreenObject>? _actorSnapshot;
     private bool _actorSnapshotIncludesVanilla;
+    private List<(OnScreenObject Entity, List<ResourceView> Roots)> _actorBase = [];
+    private System.Collections.Immutable.ImmutableArray<AnimationCapture> _actorAnimations = [];
     private List<ActorView> _actors = [];
 
     private enum RowLayout
@@ -65,11 +75,14 @@ public sealed partial class MainWindow
         {
             ImGui.SameLine(0, Theme.Gap);
             var (kind, label) = KindChips[i];
-            if (Widgets.Chip(label, counts[i + 1], _kinds.Contains(kind)))
+            if (Widgets.Chip(label, counts[i + 1], _kinds.Contains(kind), KindSwatch(kind)))
                 _kinds.Toggle(kind);
         }
         ImGui.SameLine(0, Theme.Gap);
-        Widgets.HelpTip("All shows the resource tree. Pick one or more kinds to list just those rows.");
+        Widgets.HelpTip(showVanillaToggle
+            ? "All shows the resource tree. Pick one or more kinds to list just those rows. " +
+              "Animations lists what your character plays, detected while this filter or the Animations tab is open."
+            : "All shows the resource tree. Pick one or more kinds to list just those rows.");
 
         if (!showVanillaToggle)
             return;
@@ -98,6 +111,10 @@ public sealed partial class MainWindow
                 Widgets.EmptyState(FontAwesomeIcon.Sync, "Refreshing resources…", "Collecting the on-screen resource list from Penumbra.");
             else if (emptyMessage is not null)
                 Widgets.EmptyState(FontAwesomeIcon.FolderOpen, "Nothing to show", emptyMessage);
+            else if (_kinds.Selected == ResourceKinds.Animation && !_search.Active)
+                Widgets.EmptyState(FontAwesomeIcon.Running, "No animations detected yet", animations is null
+                    ? animationError ?? "Animation integration is unavailable."
+                    : "Play an emote, idle or walk. Animations your character plays appear here while this filter is on.");
             else if (_search.Active || _kinds.IsFlat)
                 Widgets.EmptyState(FontAwesomeIcon.Search, "No matching resources", "Clear the search or choose other kinds.");
             else
@@ -135,6 +152,7 @@ public sealed partial class MainWindow
         DrawSection(actor, ResourceSection.CharacterFeatures, "Character features", ExpansionState.SectionKey(actorId, ResourceSection.CharacterFeatures));
         DrawSection(actor, ResourceSection.Gear, "Gear", ExpansionState.SectionKey(actorId, ResourceSection.Gear));
         DrawSection(actor, ResourceSection.Other, "Other", ExpansionState.SectionKey(actorId, ResourceSection.Other));
+        DrawSection(actor, ResourceSection.Animations, "Animations", ExpansionState.SectionKey(actorId, ResourceSection.Animations));
     }
 
     private bool DrawActorHeader(ActorView actor, bool expanded)
@@ -170,7 +188,55 @@ public sealed partial class MainWindow
         if ((kinds & ResourceKinds.Model) != 0) return FontAwesomeIcon.Cube;
         if ((kinds & ResourceKinds.Texture) != 0) return FontAwesomeIcon.Image;
         if ((kinds & ResourceKinds.Material) != 0) return FontAwesomeIcon.Palette;
+        if ((kinds & ResourceKinds.Animation) != 0) return FontAwesomeIcon.Running;
         return FontAwesomeIcon.File;
+    }
+
+    private static Vector4[] KindSwatch(ResourceKinds kind)
+        => kind switch
+        {
+            ResourceKinds.Model => ModelSwatch,
+            ResourceKinds.Material => MaterialSwatch,
+            ResourceKinds.Animation => AnimationSwatch,
+            _ => TextureSwatch,
+        };
+
+    /// <summary>
+    /// The colour that marks a row: models and materials by kind, textures by role, with the
+    /// same precedence as <see cref="KindGlyph"/>; null for other resources.
+    /// </summary>
+    private static Vector4? RowColour(ResourceView node)
+    {
+        if ((node.Kinds & ResourceKinds.Model) != 0) return Theme.ModelKind;
+        if ((node.Kinds & ResourceKinds.Texture) != 0) return Theme.TextureRoleColour(node.TextureRole);
+        if ((node.Kinds & ResourceKinds.Material) != 0) return Theme.MaterialKind;
+        if ((node.Kinds & ResourceKinds.Animation) != 0) return Theme.AnimationKind;
+        return null;
+    }
+
+    /// <summary> What the row's colour stands for, shown when hovering its glyph. </summary>
+    private static string RowColourLabel(ResourceView node)
+    {
+        if ((node.Kinds & ResourceKinds.Model) != 0) return "Model";
+        if ((node.Kinds & ResourceKinds.Texture) != 0) return TextureRoleClassifier.Label(node.TextureRole) + " texture";
+        if ((node.Kinds & ResourceKinds.Material) != 0) return "Material";
+        if ((node.Kinds & ResourceKinds.Animation) != 0) return "Animation";
+        return ResourceViews.KindLabel(node.Type);
+    }
+
+    /// <summary> Washes the current table row in its colour; rows of other resources stay plain. </summary>
+    private static void TintRow(ResourceView node)
+    {
+        if (RowColour(node) is { } colour)
+            ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ImGui.GetColorU32(Theme.WithAlpha(colour, Theme.KindTintAlpha)));
+    }
+
+    /// <summary> The row's kind glyph in its colour, with a tooltip naming the kind or texture role. </summary>
+    private static void DrawRowGlyph(ResourceView node)
+    {
+        Widgets.Icon(KindGlyph(node.Kinds), RowColour(node) ?? Theme.Muted);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(RowColourLabel(node));
     }
 
     private static void SetupColumns(RowLayout layout)
@@ -216,7 +282,7 @@ public sealed partial class MainWindow
             var index = 0;
             foreach (var root in actor.Roots)
                 if (_kinds.AdmitsSubtree(root))
-                    DrawNode(actor, root, $"mod:{index++}", 0, false, false, RowLayout.Mod);
+                    DrawNode(actor, root, $"mod:{index++}", new TreeGuide(0, 0, 0, false), false, false, RowLayout.Mod);
         }
     }
 
@@ -232,12 +298,13 @@ public sealed partial class MainWindow
         ImGui.TableNextRow();
         ImGui.TableSetColumnIndex(0);
         var flat = _kinds.IsFlat;
-        var expanded = _expansion.IsExpanded(key, flat, !flat && _search.Active);
+        // Sections start open; only the rows beneath them start collapsed.
+        var expanded = _expansion.IsExpanded(key, true, !flat && _search.Active);
         if (Widgets.GhostIconButton("##section-toggle", expanded ? FontAwesomeIcon.CaretDown : FontAwesomeIcon.CaretRight, expanded ? "Collapse" : "Expand"))
-            _expansion.Toggle(key, expanded, flat);
+            _expansion.Toggle(key, expanded, true);
         ImGui.SameLine(0, Theme.Gap);
         if (ImGui.Selectable($"{label}##section-label", false, ImGuiSelectableFlags.SpanAllColumns, new Vector2(0, ImGui.GetFrameHeight())))
-            _expansion.Toggle(key, expanded, flat);
+            _expansion.Toggle(key, expanded, true);
         if (!expanded)
             return;
         if (flat)
@@ -251,7 +318,7 @@ public sealed partial class MainWindow
         else
         {
             for (var i = 0; i < ordered.Count; i++)
-                DrawNode(actor, ordered[i], $"{key}:{i}", 3, filterBySearch, searchActive, RowLayout.OnScreen);
+                DrawNode(actor, ordered[i], $"{key}:{i}", new TreeGuide(Theme.TreeIndent, 0, 0, false), filterBySearch, searchActive, RowLayout.OnScreen);
         }
     }
 
@@ -260,11 +327,12 @@ public sealed partial class MainWindow
     {
         using var id = ImRaii.PushId(SafeId(scope));
         ImGui.TableNextRow();
+        TintRow(resource);
         ImGui.TableSetColumnIndex(0);
         ImGui.SetCursorPosX(ImGui.GetCursorPosX() + Theme.TreeIndent);
         DrawSlotIcon(Safe(item.Slot, ResourceViews.KindLabel(item.Type)), item.Icon, item.Section);
         ImGui.SameLine(0, Theme.Gap);
-        Widgets.Icon(KindGlyph(resource.Kinds), Theme.Muted);
+        DrawRowGlyph(resource);
         ImGui.SameLine(0, Theme.Gap);
         var name = Safe(resource.DisplayName, "Unnamed resource");
         var context = ReferenceEquals(item, resource) ? string.Empty : Safe(item.DisplayName);
@@ -284,8 +352,52 @@ public sealed partial class MainWindow
         DrawRowMenu(actor, resource);
     }
 
+    /// <summary> One tree column: an arrow or slot icon and the gap after it. </summary>
+    private static float TreeStep => ImGui.GetFrameHeight() + Theme.Gap;
+
+    /// <summary>
+    /// A row's arrow, relative to the item row's arrow. Item rows carry a slot icon after their
+    /// arrow; below them, each row's arrow sits under its parent's kind glyph.
+    /// </summary>
+    private static float TreeArrowOffset(int level) => level == 0 ? 0 : (level + 1) * TreeStep;
+
+    /// <summary> The row's kind glyph, relative to the item row's arrow. </summary>
+    private static float TreeGlyphOffset(int level) => TreeArrowOffset(level) + (level == 0 ? 2 : 1) * TreeStep;
+
+    /// <summary>
+    /// Draws a row's guide lines: the lines of ancestors that have rows still to come, and the
+    /// connector from the parent's line to this row, ending at its arrow or, for a row without
+    /// one, running through the empty arrow slot to its glyph. A parent's line hangs from the
+    /// centre of the slot beside its glyph: the slot icon of an item, the arrow of anything below.
+    /// Must be called at the start of the row's first cell.
+    /// </summary>
+    private static void DrawTreeGuides(TreeGuide guide, bool hasArrow)
+    {
+        if (guide.Level == 0)
+            return;
+        var origin = ImGui.GetCursorScreenPos();
+        var frame = ImGui.GetFrameHeight();
+        var padding = ImGui.GetStyle().CellPadding.Y;
+        var top = origin.Y - padding;
+        var bottom = origin.Y + frame + padding;
+        var middle = MathF.Floor(origin.Y + frame / 2) + .5f;
+        var drawList = ImGui.GetWindowDrawList();
+        var colour = ImGui.GetColorU32(Theme.TreeLine);
+        var thickness = Math.Max(1, MathF.Floor(Theme.Scale));
+        float LineX(int column) => MathF.Floor(origin.X + guide.Indent + (column + 1) * TreeStep + frame / 2) + .5f;
+
+        for (var column = 0; column < guide.Level - 1; column++)
+            if (guide.LineContinues(column))
+                drawList.AddLine(new Vector2(LineX(column), top), new Vector2(LineX(column), bottom), colour, thickness);
+
+        var x = LineX(guide.Level - 1);
+        drawList.AddLine(new Vector2(x, top), new Vector2(x, guide.Last ? middle : bottom), colour, thickness);
+        var end = origin.X + guide.Indent + (hasArrow ? TreeArrowOffset(guide.Level) : TreeGlyphOffset(guide.Level)) - Theme.Scaled(3);
+        drawList.AddLine(new Vector2(x, middle), new Vector2(end, middle), colour, thickness);
+    }
+
     /// <summary> One row of the tree view, followed by its admitted children when expanded. </summary>
-    private void DrawNode(ActorView actor, ResourceView node, string scope, int depth, bool filterBySearch, bool autoExpandSearch, RowLayout layout)
+    private void DrawNode(ActorView actor, ResourceView node, string scope, TreeGuide guide, bool filterBySearch, bool autoExpandSearch, RowLayout layout)
     {
         var key = ExpansionState.NodeKey(scope, node);
         using var id = ImRaii.PushId(key);
@@ -297,23 +409,34 @@ public sealed partial class MainWindow
         var expanded = _expansion.IsExpanded(key, false, autoExpandSearch);
 
         ImGui.TableNextRow();
+        TintRow(node);
         ImGui.TableSetColumnIndex(0);
-        // ImGui's persistent Indent state is reset while changing table rows/cells.
-        // Offset this cell's cursor directly so every tree level moves right.
-        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + Math.Max(0, depth - 2) * Theme.TreeIndent);
+        DrawTreeGuides(guide, hasChildren);
+        // ImGui's persistent Indent state is reset while changing table rows/cells, so each
+        // element is placed at its column's offset from the cell start.
+        var start = ImGui.GetCursorPosX() + guide.Indent;
+        ImGui.SetCursorPosX(start + TreeArrowOffset(guide.Level));
         if (hasChildren)
         {
-            if (Widgets.GhostIconButton("##expand", expanded ? FontAwesomeIcon.CaretDown : FontAwesomeIcon.CaretRight, expanded ? "Collapse" : "Expand"))
+            // A square arrow keeps both carets centred on the guide line that hangs from it.
+            if (Widgets.GhostIconButton("##expand", expanded ? FontAwesomeIcon.CaretDown : FontAwesomeIcon.CaretRight, expanded ? "Collapse" : "Expand",
+                    new Vector2(ImGui.GetFrameHeight())))
                 _expansion.Toggle(key, expanded, false);
         }
         else
         {
             ImGui.Dummy(new Vector2(ImGui.GetFrameHeight()));
         }
-        ImGui.SameLine(0, Theme.Gap);
-        DrawSlotIcon(presentation, node.Icon, node.Section);
-        ImGui.SameLine(0, Theme.Gap);
-        Widgets.Icon(KindGlyph(node.Kinds), Theme.Muted);
+        // Only the item row shows its slot; the rows below it belong to that slot.
+        if (guide.Level == 0)
+        {
+            ImGui.SameLine(0, 0);
+            ImGui.SetCursorPosX(start + TreeStep);
+            DrawSlotIcon(presentation, node.Icon, node.Section);
+        }
+        ImGui.SameLine(0, 0);
+        ImGui.SetCursorPosX(start + TreeGlyphOffset(guide.Level));
+        DrawRowGlyph(node);
         ImGui.SameLine(0, Theme.Gap);
         if (ImGui.Selectable($"{Safe(node.DisplayName, "Unnamed resource")}##label", false, ImGuiSelectableFlags.None, new Vector2(0, ImGui.GetFrameHeight())) && hasChildren)
             _expansion.Toggle(key, expanded, false);
@@ -326,15 +449,21 @@ public sealed partial class MainWindow
 
         if (!expanded || !hasChildren)
             return;
+        // The last visible child ends its parent's guide line, so count the visible ones first.
+        var visible = 0;
+        foreach (var child in node.Children)
+            if (_kinds.AdmitsSubtree(child) && (!filterBySearch || _search.Matches(child)))
+                visible++;
         // Child IDs count every type-matching child, including ones the search hides.
         var childIndex = 0;
+        var drawn = 0;
         foreach (var child in node.Children)
         {
             if (!_kinds.AdmitsSubtree(child))
                 continue;
             var i = childIndex++;
             if (!filterBySearch || _search.Matches(child))
-                DrawNode(actor, child, $"{scope}:{i}", depth + 1, filterBySearch, autoExpandSearch, layout);
+                DrawNode(actor, child, $"{scope}:{i}", guide.Child(++drawn == visible), filterBySearch, autoExpandSearch, layout);
         }
     }
 
@@ -364,23 +493,28 @@ public sealed partial class MainWindow
         DrawRowActions(actor, node);
     }
 
+    /// <summary>
+    /// The row's source as a pill in the row's own colour, so the column matches the row. The
+    /// text tone tells the sources apart: a mod is bright, game data muted, an unattributed file dim.
+    /// </summary>
     private void DrawSourceBadge(ResourceView node)
     {
+        var colour = RowColour(node) ?? Theme.Muted;
         if (node.SourceModName.Length > 0)
         {
-            if (Widgets.Badge(node.SourceModName, Theme.ModSource))
+            if (Widgets.Badge(node.SourceModName, colour, Theme.Label))
                 ImGui.SetTooltip(node.OptionMapping.Length > 0
                     ? $"Mod: {node.SourceModName}\nDirectory: {node.SourceModDirectory}\nOption: {node.OptionMapping}"
                     : $"Mod: {node.SourceModName}\nDirectory: {node.SourceModDirectory}");
         }
         else if (node.SourceState == ResourceSourceState.GameData)
         {
-            if (Widgets.Badge("Game Data", Theme.GameSource))
+            if (Widgets.Badge("Game Data", colour, Theme.Muted))
                 ImGui.SetTooltip("Loaded from the game's own files (no mod replaces it).");
         }
         else
         {
-            if (Widgets.Badge(Safe(node.SourceLabel, "Unavailable"), Theme.Hint))
+            if (Widgets.Badge(Safe(node.SourceLabel, "Unavailable"), colour, Theme.Hint))
                 ImGui.SetTooltip("The file could not be attributed to a mod; it cannot be edited here.");
         }
     }
@@ -402,6 +536,13 @@ public sealed partial class MainWindow
                         : "This texture has no verified writable mod source.",
                     available && Volatile.Read(ref _textureBusy) == 0))
                 StartTextureEdit(node, actor);
+            ImGui.SameLine(0, Theme.Scaled(2));
+        }
+        else if (ResourceViews.IsAnimation(node))
+        {
+            var blocked = AnimationSendBlock(node);
+            if (Widgets.IconButton("##send-animation", FontAwesomeIcon.Running, blocked ?? "Send this animation to Blender", blocked is null))
+                OpenAnimationSend(node);
             ImGui.SameLine(0, Theme.Scaled(2));
         }
 
@@ -426,7 +567,14 @@ public sealed partial class MainWindow
             if (ImGui.MenuItem("Edit texture"))
                 StartTextureEdit(node, actor);
         }
-        if (safeModel || texture)
+        var animation = ResourceViews.IsAnimation(node);
+        if (animation)
+        {
+            using var disabled = ImRaii.Disabled(AnimationSendBlock(node) is not null);
+            if (ImGui.MenuItem("Send animation to Blender"))
+                OpenAnimationSend(node);
+        }
+        if (safeModel || texture || animation)
             ImGui.Separator();
 
         using (ImRaii.Disabled(node.GamePath.Length == 0))
@@ -519,27 +667,41 @@ public sealed partial class MainWindow
         if (ImGui.IsItemHovered()) ImGui.SetTooltip(slot);
     }
 
-    /// <summary> The On Screen view model, rebuilt only when the snapshot or the vanilla toggle changes. </summary>
+    /// <summary>
+    /// The On Screen view model: Penumbra's resources, rebuilt only when the snapshot or the vanilla
+    /// toggle changes, plus the animations the listener detected, re-added when those change.
+    /// </summary>
     private List<ActorView> ReadActors()
     {
         var items = _onScreen.Items;
         var includeVanilla = _config.IncludeVanillaResources;
-        if (ReferenceEquals(items, _actorSnapshot) && includeVanilla == _actorSnapshotIncludesVanilla)
+        var detected = animations?.Observer.History ?? [];
+        var baseChanged = !ReferenceEquals(items, _actorSnapshot) || includeVanilla != _actorSnapshotIncludesVanilla;
+        if (!baseChanged && detected == _actorAnimations)
             return _actors;
 
-        var result = new List<ActorView>(items.Count);
-        foreach (var entity in items)
+        if (baseChanged)
         {
-            var parsed = OnScreenService.ProjectVisibleResourceNodes(
-                    entity.ResourceRoots,
-                    includeVanilla)
-                .Select(ResourceViews.FromNode)
-                .ToList();
-            result.Add(new ActorView(entity, entity.PresentationCategory.ToString(), Safe(entity.Name), parsed, entity.ObjectIndex));
+            var bases = new List<(OnScreenObject, List<ResourceView>)>(items.Count);
+            foreach (var entity in items)
+                bases.Add((entity, OnScreenService.ProjectVisibleResourceNodes(entity.ResourceRoots, includeVanilla)
+                    .Select(ResourceViews.FromNode)
+                    .ToList()));
+            _actorBase = bases;
+        }
+
+        _animationRows.Clear();
+        var result = new List<ActorView>(_actorBase.Count);
+        foreach (var (entity, roots) in _actorBase)
+        {
+            var animationRows = DetectedAnimationRows(entity, detected);
+            result.Add(new ActorView(entity, entity.PresentationCategory.ToString(), Safe(entity.Name),
+                animationRows.Count == 0 ? roots : [.. roots, .. animationRows], entity.ObjectIndex));
         }
 
         _actorSnapshot = items;
         _actorSnapshotIncludesVanilla = includeVanilla;
+        _actorAnimations = detected;
         _actors = result;
         _search.Invalidate();
         return result;

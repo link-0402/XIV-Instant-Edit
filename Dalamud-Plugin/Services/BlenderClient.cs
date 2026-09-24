@@ -40,6 +40,7 @@ public sealed class BlenderClient : IDisposable
     public const string TextureCacheCapability = "instant-edit.texture-cache.v1";
     public const string CacheSettingsCapability = "instant-edit.cache-settings.v1";
     public const string VanillaContextCapability = "instant-edit.vanilla-context.v1";
+    public const string AnimationImportCapability = "instant-edit.animation-import.v1";
 
     private readonly HttpClient _http;
     private readonly IPluginLog _log;
@@ -219,6 +220,103 @@ public sealed class BlenderClient : IDisposable
 
     public async Task<bool> SupportsVanillaContextAsync(int port, CancellationToken cancellationToken = default)
         => await SupportsCapabilityAsync(port, VanillaContextCapability, cancellationToken).ConfigureAwait(false);
+
+    public async Task<bool> SupportsAnimationImportAsync(int port, CancellationToken cancellationToken = default)
+        => await SupportsCapabilityAsync(port, AnimationImportCapability, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// Sends an encoded take (see <c>AnimationTakeFormat</c>) to Blender, which keys it onto a
+    /// scene armature and reports the result once its main thread has done so.
+    /// </summary>
+    public async Task<BlenderAnimationResult> SendAnimationAsync(int port, byte[] take, CancellationToken cancellationToken = default)
+    {
+        if (port is < 1 or > 65535)
+            throw new ArgumentOutOfRangeException(nameof(port));
+        using var content = new ByteArrayContent(take);
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+        HttpResponseMessage response;
+        try
+        {
+            response = await _http.PostAsync($"http://127.0.0.1:{port}/animation", content, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRequestException e)
+        {
+            var failure = BridgeFailure.Create(
+                "blender_addon", "animation_import", "transport", "blender_connection_failed",
+                "The animation could not reach Blender's XIV Instant Edit listener.",
+                "Start Blender, verify the configured port, and send the animation again.");
+            _log?.Error(e, $"Blender bridge failure {failure.DiagnosticId}: animation_import/transport/{failure.Code}.");
+            throw new BlenderBridgeException(failure, inner: e);
+        }
+        catch (OperationCanceledException e) when (!cancellationToken.IsCancellationRequested)
+        {
+            var failure = BridgeFailure.Create(
+                "blender_addon", "animation_import", "transport", "blender_request_timeout",
+                "Blender did not answer while receiving the animation.",
+                "Check whether Blender is busy, then send the animation again.");
+            _log?.Error(e, $"Blender bridge failure {failure.DiagnosticId}: animation_import/transport/{failure.Code}.");
+            throw new BlenderBridgeException(failure, inner: e);
+        }
+
+        using (response)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                return ParseAnimationResponse(response.StatusCode, body);
+            }
+            catch (BlenderBridgeException exception)
+            {
+                var failure = exception.Failure;
+                _log?.Error(exception,
+                    $"Blender bridge failure {failure.DiagnosticId}: HTTP {(int)response.StatusCode}; " +
+                    $"{failure.Operation}/{failure.Stage}/{failure.Code}; response={exception.RawResponse}");
+                throw;
+            }
+        }
+    }
+
+    internal static BlenderAnimationResult ParseAnimationResponse(HttpStatusCode status, string responseBody)
+    {
+        if ((int)status is < 200 or >= 300)
+            throw new BlenderBridgeException(BridgeFailure.FromResponse(status, responseBody, "animation_import"), responseBody);
+        try
+        {
+            using var document = JsonDocument.Parse(responseBody);
+            var root = document.RootElement;
+            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("applied", out var applied))
+            {
+                if (applied.ValueKind == JsonValueKind.True)
+                {
+                    static string Text(JsonElement e, string name) =>
+                        e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+                    static int Number(JsonElement e, string name) =>
+                        e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n) ? n : 0;
+                    var missing = root.TryGetProperty("missingBones", out var list) && list.ValueKind == JsonValueKind.Array
+                        ? list.EnumerateArray().Where(v => v.ValueKind == JsonValueKind.String).Select(v => v.GetString()!).ToArray()
+                        : [];
+                    return new BlenderAnimationResult(true, Text(root, "action"), Text(root, "armature"), Number(root, "frames"),
+                        root.TryGetProperty("frameRate", out var rate) && rate.ValueKind == JsonValueKind.Number ? rate.GetDouble() : 0,
+                        Number(root, "frameStart"), Number(root, "frameEnd"), Number(root, "matchedBones"),
+                        Number(root, "missingBoneCount"), missing);
+                }
+                if (applied.ValueKind == JsonValueKind.False && root.TryGetProperty("queued", out var queued) &&
+                    queued.ValueKind == JsonValueKind.True)
+                    return new BlenderAnimationResult(false);
+            }
+        }
+        catch (JsonException e)
+        {
+            throw new BlenderBridgeException(BridgeFailure.Create(
+                "blender_addon", "animation_import", "response_parsing", "invalid_success_response",
+                "Blender accepted the animation but returned an invalid confirmation.",
+                "Update and restart the XIV Instant Edit Blender add-on, then send the animation again.", (int)status), responseBody, e);
+        }
+        throw new BlenderBridgeException(BridgeFailure.Create(
+            "blender_addon", "animation_import", "response_parsing", "invalid_success_response",
+            "Blender accepted the animation but did not confirm what it did with it.",
+            "Update and restart the XIV Instant Edit Blender add-on, then send the animation again.", (int)status), responseBody);
+    }
 
     private async Task<bool> SupportsCapabilityAsync(
         int port,

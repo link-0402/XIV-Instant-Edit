@@ -8,6 +8,16 @@ using InstantEdit.Models;
 
 namespace InstantEdit.Services.Animations;
 
+internal enum SkeletonLibraryState { NotLoaded, Loading, Building, Ready, Failed }
+
+/// <summary>
+/// Where the skeleton library stands, for Settings. Missing and changed count the library's
+/// files that were removed or rewritten since it was built; new skeleton mods are only found
+/// by a rebuild.
+/// </summary>
+internal sealed record SkeletonLibraryStatus(SkeletonLibraryState State, int Skeletons = 0, int Files = 0, int Missing = 0,
+    int Changed = 0, DateTime? BuiltUtc = null, int Progress = 0, int Total = 0, string? Error = null);
+
 internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, AnimationResources resources, IFramework framework,
     IPluginLog log, Func<string> configuredCacheRoot)
 {
@@ -20,12 +30,9 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
     private string? cacheDirectory;
     private int revision;
     private int loadedRevision = -1;
-    public void Rescan()
-    {
-        Interlocked.Increment(ref revision);
-        lock (libraryLock) { sessionLibrary = []; sessionLibraryBuild = null; }
-    }
+    private volatile SkeletonLibraryStatus status = new(SkeletonLibraryState.NotLoaded);
     public int Revision => Volatile.Read(ref revision);
+    public SkeletonLibraryStatus Status => status;
     private static readonly JsonSerializerOptions Json = new() { IncludeFields = true };
     // Base/body animation skeletons are accepted down this tree. The graph is
     // deliberately limited to the supplied chart; unlisted model IDs retain
@@ -164,12 +171,45 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
         lock (cacheLock) return cacheDirectory ??= Path.Combine(configuredCacheRoot(), "skeleton-library");
     }
 
-    /// <summary>Starts the once-per-plugin-session Penumbra skeleton library build.</summary>
+    private string LibraryPath() => Path.Combine(CacheDirectory(), "session-library.json");
+
+    /// <summary>When the saved library was written, or null when none is saved in the cache folder.</summary>
+    public DateTime? SavedLibraryUtc()
+    {
+        try
+        {
+            var path = LibraryPath();
+            return File.Exists(path) ? File.GetLastWriteTimeUtc(path) : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Loads the skeleton library saved in the cache folder, or builds and saves it when none was
+    /// saved yet. A saved library is used as it is; only <see cref="RebuildAsync"/> builds it again.
+    /// </summary>
     public void StartSessionLibrary(CancellationToken lifetimeToken)
     {
         var build = GetSessionLibraryBuild(lifetimeToken);
-        _ = build.ContinueWith(task => log.Warning(task.Exception, "Could not build the session skeleton library."),
+        _ = build.ContinueWith(task => log.Warning(task.Exception, "Could not load or build the skeleton library."),
             CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// Builds the library again from every skeleton in the installed mods and saves it, for
+    /// example after installing, updating or removing skeleton mods. The current library stays
+    /// in use until the new one is complete. While a load or build runs, returns that instead.
+    /// </summary>
+    public Task RebuildAsync(CancellationToken token)
+    {
+        lock (libraryLock)
+        {
+            if (sessionLibraryBuild is { IsCompleted: false } running) return running;
+            return sessionLibraryBuild = BuildSessionLibraryAsync(token, true);
+        }
     }
 
     private Task GetSessionLibraryBuild(CancellationToken lifetimeToken)
@@ -183,49 +223,59 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
 
     private async Task LoadOrBuildSessionLibraryAsync(CancellationToken token)
     {
-        var roots = await penumbra.AnimationSkeletonRootsAsync();
-        var mappingFingerprint = await Task.Run(() => ModMappingFingerprint(roots, token), token);
-        var loaded = await LoadSessionLibraryAsync(token, mappingFingerprint);
-        if (loaded is { } library)
+        status = new(SkeletonLibraryState.Loading);
+        if (await LoadSessionLibraryAsync(token) is { } loaded)
         {
-            lock (libraryLock) sessionLibrary = library;
-            log.Debug($"Loaded cached session skeleton library with {library.Length} unique skeletons.");
+            lock (libraryLock) sessionLibrary = loaded.Library;
+            status = new(SkeletonLibraryState.Ready, loaded.Library.Length, loaded.Library.Sum(entry => entry.Sources.Length),
+                loaded.Missing, loaded.Changed, loaded.BuiltUtc);
+            log.Debug($"Loaded the saved skeleton library with {loaded.Library.Length} unique skeletons.");
             return;
         }
-        await BuildSessionLibraryAsync(roots, mappingFingerprint, token);
+        // Nothing saved yet, or the saved file is unreadable: build it this once.
+        await BuildSessionLibraryAsync(token, false);
     }
 
-    private async Task<ImmutableArray<SessionSkeleton>?> LoadSessionLibraryAsync(CancellationToken token, string mappingFingerprint)
+    private sealed record LoadedLibrary(ImmutableArray<SessionSkeleton> Library, int Missing, int Changed, DateTime BuiltUtc);
+
+    private async Task<LoadedLibrary?> LoadSessionLibraryAsync(CancellationToken token)
     {
         try
         {
-            var path = Path.Combine(CacheDirectory(), "session-library.json");
+            var path = LibraryPath();
             if (!File.Exists(path) || new FileInfo(path).Length > 64 * 1024 * 1024) return null;
-            return TryLoadSessionLibraryJson(await File.ReadAllTextAsync(path, token), resolvedPath =>
-            {
-                if (!File.Exists(resolvedPath)) return (false, 0, DateTime.MinValue);
-                var info = new FileInfo(resolvedPath);
-                return (true, info.Length, info.LastWriteTimeUtc);
-            }, out var library, mappingFingerprint) ? library : null;
+            var json = await File.ReadAllTextAsync(path, token);
+            return await Task.Run(() => TryLoadSessionLibraryJson(json, FileState, out var library, out var missing, out var changed, out var built)
+                ? new LoadedLibrary(library, missing, changed, built)
+                : null, token);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or JsonException or InvalidDataException)
         {
-            log.Debug(e, "Could not load the cached session skeleton library.");
+            log.Debug(e, "Could not load the saved skeleton library.");
             return null;
         }
     }
 
+    private static (bool Exists, long Length, DateTime Write) FileState(string resolvedPath)
+    {
+        if (!File.Exists(resolvedPath)) return (false, 0, DateTime.MinValue);
+        var info = new FileInfo(resolvedPath);
+        return (true, info.Length, info.LastWriteTimeUtc);
+    }
+
+    /// <summary>
+    /// Reads a saved library. It stays authoritative until it is rebuilt: files removed since
+    /// the build are left out and counted as missing, rewritten files are kept and counted as changed.
+    /// </summary>
     internal static bool TryLoadSessionLibraryJson(string json,
         Func<string, (bool Exists, long Length, DateTime Write)> fileState,
-        out ImmutableArray<SessionSkeleton> library, string? mappingFingerprint = null)
+        out ImmutableArray<SessionSkeleton> library, out int missing, out int changed, out DateTime builtUtc)
     {
-        library = [];
+        library = []; missing = 0; changed = 0; builtUtc = DateTime.MinValue;
         try
         {
             var cached = JsonSerializer.Deserialize<CachedLibrary>(json, Json);
             if (cached is not { Version: 3 } || cached.Skeletons.IsDefault || cached.Skeletons.Length > 4096)
-                return false;
-            if (mappingFingerprint != null && !string.Equals(cached.MappingFingerprint, mappingFingerprint, StringComparison.Ordinal))
                 return false;
             var result = ImmutableArray.CreateBuilder<SessionSkeleton>(cached.Skeletons.Length);
             foreach (var entry in cached.Skeletons)
@@ -235,41 +285,70 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
                 var sources = ImmutableArray.CreateBuilder<SkeletonSource>(entry.Sources.Length);
                 foreach (var item in entry.Sources)
                 {
+                    if (item.Source.Kind != SkeletonSourceKind.Mod) return false;
                     var state = fileState(item.Source.Resource.ResolvedPath);
-                    if (item.Source.Kind != SkeletonSourceKind.Mod || !state.Exists || state.Length != item.Length || state.Write != item.Write)
-                        return false;
+                    if (!state.Exists) { missing++; continue; }
+                    if (state.Length != item.Length || state.Write != item.Write) changed++;
                     sources.Add(item.Source);
                 }
-                result.Add(new(entry.Skeleton, sources.ToImmutable()));
+                if (sources.Count > 0) result.Add(new(entry.Skeleton, sources.ToImmutable()));
             }
             library = result.ToImmutable();
+            builtUtc = cached.BuiltUtc;
             return true;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or JsonException or InvalidDataException or NotSupportedException or NullReferenceException)
         {
+            missing = 0; changed = 0;
             return false;
         }
     }
 
-    private async Task BuildSessionLibraryAsync(IEnumerable<(string Directory, string Root)> roots,
-        string mappingFingerprint, CancellationToken token)
+    /// <summary>Builds and saves the library. A rebuild moves the revision on, so earlier matches are made again.</summary>
+    private async Task BuildSessionLibraryAsync(CancellationToken token, bool rebuild)
     {
-        var sources = await Task.Run(() => Scan(roots, token), token);
-        var candidates = await ReadCandidatesAsync(sources, source => Describe(Guid.Empty, source, null, token),
-            (source, error) => log.Debug($"Skeleton library candidate {source.Resource.ResolvedPath}: {error.Message}"), token);
-        var library = DeduplicateLibrary(candidates);
-        lock (libraryLock) sessionLibrary = library;
-        await SaveLibraryAsync(library, mappingFingerprint, token);
-        log.Debug($"Built session skeleton library with {library.Length} unique skeletons from {sources.Length} registered files.");
+        var previous = status;
+        try
+        {
+            status = new(SkeletonLibraryState.Building);
+            var roots = await penumbra.AnimationSkeletonRootsAsync();
+            var sources = await Task.Run(() => Scan(roots, token), token);
+            var progress = 0;
+            status = new(SkeletonLibraryState.Building, Total: sources.Length);
+            // One skeleton at a time, so the progress count is simply incremented.
+            var candidates = await ReadCandidatesAsync(sources, async source =>
+                {
+                    try { return await Describe(Guid.Empty, source, null, token); }
+                    finally { status = status with { Progress = ++progress }; }
+                },
+                (source, error) => log.Debug($"Skeleton library candidate {source.Resource.ResolvedPath}: {error.Message}"), token);
+            var library = DeduplicateLibrary(candidates);
+            var built = DateTime.UtcNow;
+            var saveError = await SaveLibraryAsync(library, built, token);
+            lock (libraryLock) sessionLibrary = library;
+            if (rebuild) Interlocked.Increment(ref revision);
+            status = new(SkeletonLibraryState.Ready, library.Length, library.Sum(entry => entry.Sources.Length), BuiltUtc: built, Error: saveError);
+            log.Debug($"Built the skeleton library with {library.Length} unique skeletons from {sources.Length} registered files.");
+        }
+        catch (OperationCanceledException)
+        {
+            status = previous;
+            throw;
+        }
+        catch (Exception e)
+        {
+            status = previous with { State = SkeletonLibraryState.Failed, Error = e.Message, Progress = 0, Total = 0 };
+            throw;
+        }
     }
 
-    private async Task SaveLibraryAsync(ImmutableArray<SessionSkeleton> library, string mappingFingerprint, CancellationToken token)
+    /// <summary>Saves the library to the cache folder. Returns why it could not be saved, or null.</summary>
+    private async Task<string?> SaveLibraryAsync(ImmutableArray<SessionSkeleton> library, DateTime built, CancellationToken token)
     {
         try
         {
-            var directory = CacheDirectory();
-            Directory.CreateDirectory(directory);
-            var path = Path.Combine(directory, "session-library.json");
+            var path = LibraryPath();
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             var temporary = path + ".tmp";
             var entries = library.Select(entry => new CachedLibraryEntry(entry.Skeleton,
                 entry.Sources.Select(source =>
@@ -278,42 +357,15 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
                     return new CachedLibrarySource(source, info.Exists ? info.Length : -1,
                         info.Exists ? info.LastWriteTimeUtc : DateTime.MinValue);
                 }).ToImmutableArray())).ToImmutableArray();
-            await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(new CachedLibrary(3, DateTime.UtcNow, entries, mappingFingerprint), Json), token);
+            await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(new CachedLibrary(3, built, entries), Json), token);
             File.Move(temporary, path, true);
+            return null;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException)
         {
-            log.Debug(e, "Could not cache the session skeleton library.");
+            log.Warning(e, "Could not save the skeleton library to the cache folder.");
+            return "It could not be saved to the cache folder, so it is built again next session: " + e.Message;
         }
-    }
-
-    internal static string ModMappingFingerprint(IEnumerable<(string Directory, string Root)> roots, CancellationToken token)
-    {
-        var builder = new StringBuilder();
-        foreach (var (directory, root) in roots.OrderBy(item => item.Directory, StringComparer.OrdinalIgnoreCase)
-                     .ThenBy(item => item.Root, StringComparer.OrdinalIgnoreCase))
-        {
-            token.ThrowIfCancellationRequested();
-            try
-            {
-                if (!Directory.Exists(root)) continue;
-                foreach (var json in Directory.EnumerateFiles(root, "*.json", SearchOption.TopDirectoryOnly)
-                             .Where(p => Path.GetFileName(p) is "default_mod.json" or "meta.json" ||
-                                         Path.GetFileName(p).StartsWith("group_", StringComparison.OrdinalIgnoreCase))
-                             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
-                {
-                    token.ThrowIfCancellationRequested();
-                    var info = new FileInfo(json);
-                    builder.Append(directory).Append('\0').Append(Path.GetFileName(json)).Append('\0')
-                        .Append(info.Length).Append('\0').Append(info.LastWriteTimeUtc.Ticks).Append('\0');
-                    if (info.Length <= 16 * 1024 * 1024)
-                        builder.Append(AnimationPap.Hash(File.ReadAllBytes(json)));
-                    builder.Append('\0');
-                }
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { }
-        }
-        return AnimationPap.Hash(Encoding.UTF8.GetBytes(builder.ToString()));
     }
 
     internal static ImmutableArray<SkeletonSource> Scan(IEnumerable<(string Directory, string Root)> roots, CancellationToken token)

@@ -70,7 +70,7 @@ internal static unsafe class AnimationSkeleton
 
     internal static SkeletonDescription SelectSource(ImmutableArray<Variant> variants, string fingerprint)
         => variants.FirstOrDefault(v => v.Skeleton.Fingerprint == fingerprint)?.Skeleton
-            ?? throw new InvalidDataException("The selected source skeleton is no longer present in its SKLB. Rescan skeletons.");
+            ?? throw new InvalidDataException("The selected source skeleton is no longer present in its SKLB. Rebuild the skeleton library in Settings.");
 
     public static BoneTransform Transform(hkQsTransformf t) => new(AnimationNative.Translation(t), AnimationNative.Rotation(t), AnimationNative.Scale(t));
     public static hkQsTransformf Transform(BoneTransform t)

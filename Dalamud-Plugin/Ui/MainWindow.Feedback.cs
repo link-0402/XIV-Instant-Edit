@@ -19,7 +19,7 @@ public sealed partial class MainWindow
             var service = animations;
             if (service is null)
                 return new FeedbackState(string.Empty, FeedbackSeverity.Error);
-            return new FeedbackState(service.Status, service.LastResult is { Success: false } && !service.Busy
+            return new FeedbackState(service.Status, service.LastFailed && !service.Busy
                 ? FeedbackSeverity.Error
                 : FeedbackSeverity.Success);
         }
