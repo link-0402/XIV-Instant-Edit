@@ -14,6 +14,7 @@ public sealed partial class MainWindow
     private string _textureModName = "";
     private Guid? _discardTexture;
     private int _textureBusy;
+    private readonly Dictionary<Guid, float> _sessionCardHeights = new();
 
     private static bool IsTextureRow(ResourceView resource)
         => resource.GamePath.EndsWith(".tex", StringComparison.OrdinalIgnoreCase);
@@ -67,7 +68,8 @@ public sealed partial class MainWindow
         ImGui.Spacing();
         Widgets.HintWrapped("Save the TGA file to update the texture in game. You can also change its resolution. " + (_config.RecompressTextures
             ? "Saves keep the original compression."
-            : "Saves are written uncompressed (BGRA32).") + " Change this under Options.");
+            : "Saves are written uncompressed (BGRA32).") + " Change this under Options. " +
+            "Save a copy under another name in the same folder to add it as a Penumbra option named after the file.");
         if (_textures.StartupError.Length > 0)
         {
             ImGui.Spacing();
@@ -100,9 +102,9 @@ public sealed partial class MainWindow
     {
         using var id = ImRaii.PushId(s.Id.ToString("N"));
         var style = ImGui.GetStyle();
-        var lines = s.LastSaved is null ? 4 : 5;
-        var textHeight = lines * ImGui.GetTextLineHeightWithSpacing() + ImGui.GetFrameHeightWithSpacing();
-        var height = Math.Max(Theme.ThumbSize, textHeight) + style.WindowPadding.Y * 2;
+        // The estimate covers a row appearing this frame; the height measured last frame covers
+        // fonts (mono paths, icon buttons) that run taller than the estimate assumes.
+        var height = Math.Max(EstimateSessionCardHeight(s), _sessionCardHeights.GetValueOrDefault(s.Id));
         using var background = ImRaii.PushColor(ImGuiCol.ChildBg, Theme.RowAlt);
         using var card = ImRaii.Child("##session-card", new Vector2(0, height), true, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
         if (!card.Success)
@@ -128,13 +130,26 @@ public sealed partial class MainWindow
             ImGui.TextColored(Theme.Info, SessionViews.DestinationLine(s));
         else
         {
+            ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Hint, "Destination");
             ImGui.SameLine(0, Theme.Gap);
             Widgets.PathText(s.TargetFile, s.TargetFile);
         }
+        ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Hint, "Working file");
         ImGui.SameLine(0, Theme.Gap);
         Widgets.PathText(s.WorkingFile, s.WorkingFile);
+        foreach (var variant in s.Variants)
+        {
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Hint, "Variant");
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.TextColored(Theme.Text, variant.Name);
+            if (ImGui.IsItemHovered() && variant.Status.Length > 0)
+                ImGui.SetTooltip(variant.Status);
+            ImGui.SameLine(0, Theme.Gap);
+            Widgets.PathText(Path.GetFileName(variant.RelativePath), s.VariantTargetFile(variant));
+        }
         if (s.LastSaved is { } saved)
             ImGui.TextColored(Theme.Muted, $"Last saved {saved.ToLocalTime():g}");
 
@@ -162,6 +177,17 @@ public sealed partial class MainWindow
             if (Widgets.IconButton("##discard", FontAwesomeIcon.Trash, "Discard the session's working files…"))
                 _discardTexture = s.Id;
         }
+        var contentBottom = Math.Max(ImGui.GetCursorPosY() - style.ItemSpacing.Y, style.WindowPadding.Y + Theme.ThumbSize);
+        _sessionCardHeights[s.Id] = contentBottom + style.WindowPadding.Y;
+    }
+
+    /// <summary> Header, path rows and buttons sit at frame height; the status and last-saved lines are plain text. </summary>
+    private static float EstimateSessionCardHeight(TextureEditSession s)
+    {
+        var framedRows = (s.NeedsMod ? 2 : 3) + s.Variants.Count;
+        var textRows = (s.NeedsMod ? 2 : 1) + (s.LastSaved is null ? 0 : 1);
+        var content = framedRows * ImGui.GetFrameHeightWithSpacing() + textRows * ImGui.GetTextLineHeightWithSpacing() + ImGui.GetFrameHeight();
+        return Math.Max(Theme.ThumbSize, content) + ImGui.GetStyle().WindowPadding.Y * 2;
     }
 
     private void DrawTextureDialogs()

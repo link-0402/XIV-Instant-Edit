@@ -70,7 +70,13 @@ Additionally, it supports full software-independent texture editing as well as a
    enabled in the captured collection on the first changed save. To save
    uncompressed instead, turn off **Recompress saved textures** in the toolbar's
    options popover.
-5. Sessions pause when the game or plugin restarts. Opening the texture again
+5. To make variants, save a copy of the TGA under another name in the same folder
+   (for example `Red.tga`). Instant Edit writes it next to the original TEX, adds it as
+   an option named after the file to a `<texture> variants` group in the mod, and
+   selects that option in the captured collection. The group's **Original** option shows
+   the edited texture; saving the main TGA switches back to it. Saving a variant again
+   updates it.
+6. Sessions pause when the game or plugin restarts. Opening the texture again
    (or the open action on its card in **Sessions**) resumes it.
 
 ## How to: Animation Editing

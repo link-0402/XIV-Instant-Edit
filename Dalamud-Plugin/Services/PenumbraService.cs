@@ -116,6 +116,7 @@ public sealed partial class PenumbraService
     private readonly GetCurrentModSettings       _getCurrentModSettings;
     private readonly TrySetMod                   _trySetMod;
     private readonly TrySetModPriority            _trySetModPriority;
+    private readonly TrySetModSetting             _trySetModSetting;
     private readonly RedrawObject               _redrawObject;
     private readonly IFramework                  _framework;
     private readonly IPluginLog                 _log;
@@ -151,6 +152,7 @@ public sealed partial class PenumbraService
         _getCurrentModSettings = new GetCurrentModSettings(pi);
         _trySetMod       = new TrySetMod(pi);
         _trySetModPriority = new TrySetModPriority(pi);
+        _trySetModSetting = new TrySetModSetting(pi);
         _redrawObject    = new RedrawObject(pi);
         SubscribeToResourceChanges(pi);
     }
