@@ -8,6 +8,7 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using InstantEdit.Services;
+using InstantEdit.Services.Previews;
 
 namespace InstantEdit.Ui;
 
@@ -54,12 +55,13 @@ public sealed partial class MainWindow : Window, IDisposable
         ResourceSourceAttributor resourceSources, BlenderClient blender,
         IDataManager data, IChatGui chat, IPluginLog log, Action saveConfig, Action restartExportListener, IUiBuilder uiBuilder,
         ITextureProvider textureProvider, TextureEditService textures, INotificationManager notifications,
-        Action openChangelog, Action openSettings)
+        PreviewService previews, Action openChangelog, Action openSettings)
         : base("XIV Instant Edit##Main")
     {
         _config = config; _penumbra = penumbra; _onScreen = onScreen; _blender = blender; _data = data; _chat = chat; _log = log;
         _textures = textures;
         _notifications = notifications;
+        _previews = previews;
         _pluginVersion = BlenderClient.CurrentPluginVersion;
         _resourceSources = resourceSources;
         _materialPreviews = new MaterialPreviewBundleBuilder(data, log, _resourceSources);
@@ -179,6 +181,7 @@ public sealed partial class MainWindow : Window, IDisposable
     public override void Draw()
     {
         PumpAutoRefresh();
+        _previews.Pump();
         var activeTab = DrawToolbar();
         var stripHeight = ImGui.GetFrameHeight();
         var contentHeight = Math.Max(1, ImGui.GetContentRegionAvail().Y - stripHeight - ImGui.GetStyle().ItemSpacing.Y);
