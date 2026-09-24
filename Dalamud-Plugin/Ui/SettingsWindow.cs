@@ -69,6 +69,10 @@ public sealed class SettingsWindow : Window
         if (ImGui.InputTextWithHint("##texture-editor", "Full path to Photoshop.exe or another TGA editor", ref editor, 2048))
         { _config.TextureEditorPath = editor.Trim().Trim('"'); Save(); }
         ImGui.TextWrapped("Open a texture, edit it, then save your changes to the same file (in-place as a 32-bit TGA with alpha).");
+        ImGui.Spacing(); ImGui.Separator(); ImGui.Text("On Screen");
+        var autoRefresh = _config.AutoRefreshOnScreen;
+        if (ImGui.Checkbox("Refresh automatically when Penumbra changes", ref autoRefresh)) { _config.AutoRefreshOnScreen = autoRefresh; Save(); }
+        Widgets.Hint("Reloads the on-screen list a second after a mod setting changes or a character is redrawn.");
         ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Notifications");
         var showNotifications = _config.ShowNotifications;
         if (ImGui.Checkbox("Show notifications", ref showNotifications)) { _config.ShowNotifications = showNotifications; Save(); }

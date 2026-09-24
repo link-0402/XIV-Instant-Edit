@@ -14,35 +14,33 @@ public sealed partial class MainWindow
     private Guid? _discardTexture;
     private int _textureBusy;
 
-    private void DrawTextureAction(ResourceView resource, ActorView actor)
+    private static bool IsTextureRow(ResourceView resource)
+        => resource.GamePath.EndsWith(".tex", StringComparison.OrdinalIgnoreCase);
+
+    private static bool TextureEditAvailable(ResourceView resource)
+        => resource.SourceState is ResourceSourceState.GameData or ResourceSourceState.LoadedMod;
+
+    /// <summary> Opens (or resumes) a texture edit session for the row's texture. </summary>
+    private void StartTextureEdit(ResourceView resource, ActorView actor)
     {
-        if (!resource.GamePath.EndsWith(".tex", StringComparison.OrdinalIgnoreCase)) return;
-        var available = resource.SourceState is ResourceSourceState.GameData or ResourceSourceState.LoadedMod;
-        using (ImRaii.Disabled(!available || Volatile.Read(ref _textureBusy) != 0))
+        if (!IsTextureRow(resource) || !TextureEditAvailable(resource) || Volatile.Read(ref _textureBusy) != 0)
+            return;
+        var request = new TextureEditRequest(resource.GamePath, resource.ActualPath,
+            resource.SourceState == ResourceSourceState.GameData ? "" : resource.SourceModDirectory,
+            resource.SourceModRootPath, resource.SourceRelativePath,
+            actor.Entity?.ObjectIndex, actor.Entity?.Address.ToInt64() ?? 0);
+        if (resource.SourceState == ResourceSourceState.GameData)
         {
-            if (ImGui.SmallButton("Edit texture"))
+            // Reopen existing vanilla work without asking for a second destination.
+            var existing = _textures.FindReusable(request);
+            if (existing is not null) TextureAction(() => _textures.OpenEditorAsync(existing.Id));
+            else
             {
-                var request = new TextureEditRequest(resource.GamePath, resource.ActualPath,
-                    resource.SourceState == ResourceSourceState.GameData ? "" : resource.SourceModDirectory,
-                    resource.SourceModRootPath, resource.SourceRelativePath,
-                    actor.Entity?.ObjectIndex, actor.Entity?.Address.ToInt64() ?? 0);
-                if (resource.SourceState == ResourceSourceState.GameData)
-                {
-                    // Reopen existing vanilla work without asking for a second destination.
-                    var existing = _textures.FindReusable(request);
-                    if (existing is not null) TextureAction(() => _textures.OpenEditorAsync(existing.Id));
-                    else
-                    {
-                        _newTexture = request;
-                        _textureModName = Sanitize("Texture Edit " + Path.GetFileNameWithoutExtension(resource.GamePath));
-                    }
-                }
-                else TextureAction(async () => { await _textures.StartAsync(request).ConfigureAwait(false); });
+                _newTexture = request;
+                _textureModName = Sanitize("Texture Edit " + Path.GetFileNameWithoutExtension(resource.GamePath));
             }
         }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled)) ImGui.SetTooltip(available
-            ? "Open as a 32-bit TGA in your configured editor. Shared references to this texture will also change."
-            : "This texture has no verified writable mod source.");
+        else TextureAction(async () => { await _textures.StartAsync(request).ConfigureAwait(false); });
     }
 
     private void DrawTextureSessions()

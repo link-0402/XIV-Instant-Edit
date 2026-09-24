@@ -152,6 +152,7 @@ public sealed partial class PenumbraService
         _trySetMod       = new TrySetMod(pi);
         _trySetModPriority = new TrySetModPriority(pi);
         _redrawObject    = new RedrawObject(pi);
+        SubscribeToResourceChanges(pi);
     }
 
     /// <summary> Whether Penumbra is loaded and the resource tree IPC is available. </summary>

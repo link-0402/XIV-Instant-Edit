@@ -62,6 +62,9 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>Mirror warnings, errors and model handoff results as Dalamud notifications.</summary>
     public bool ShowNotifications { get; set; } = true;
 
+    /// <summary>Refresh the On Screen list a second after Penumbra reports a mod-setting change or a redraw.</summary>
+    public bool AutoRefreshOnScreen { get; set; } = true;
+
     /// <summary>Legacy v9 context payload retained only for one-time migration or storage fallback.</summary>
     public List<PersistedExportContext> ExportContexts { get; set; } = [];
 

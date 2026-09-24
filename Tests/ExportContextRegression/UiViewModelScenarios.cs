@@ -81,6 +81,9 @@ internal static class UiViewModelScenarios
         var actor = new ActorView(entity, "Player", "Player Name", [modelView, skeletonView], 2);
         search.Text = "player";
         Require(search.ActorIdentityMatches(actor), "actor identity matches the category or name");
+        Require(actor.Header == "Player  ·  Player Name" && actor.Summary == "1 model · 1 texture · 1 material"
+                && new ActorView(null, "Mod", "", [], 0).Summary.Length == 0,
+            "actor headers and summaries are built once from the rows");
 
         // ---- Counter ----
         var counter = new ResourceTypeCounter();
