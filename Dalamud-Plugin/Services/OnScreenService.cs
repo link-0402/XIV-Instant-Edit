@@ -60,6 +60,16 @@ public sealed class OnScreenService : IDisposable
         get { lock (_lock) return _items; }
     }
 
+    /// <summary>
+    /// Whether a change to the actor at this address can alter the snapshot: it is one of
+    /// the listed actors, or nothing has been captured yet. Safe to call from any thread.
+    /// </summary>
+    public bool ShowsActor(nint address)
+    {
+        var items = Items;
+        return items.Count == 0 || items.Any(item => item.Address == address);
+    }
+
     public void RequestRefresh()
     {
         lock (_lock)

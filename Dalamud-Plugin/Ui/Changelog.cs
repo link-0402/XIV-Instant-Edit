@@ -29,7 +29,7 @@ internal static class ChangelogCatalog
             Entry("The Mod Browser is a resizable list and detail view with Open in Penumbra."),
             Entry("Texture edit sessions are cards grouped by mod, with thumbnails and icon actions."),
             Entry("Animations: rescan skeletons, restore offsets, undo the last edit, and a recovery list of recent edits that reopens interrupted ones."),
-            Entry("The on-screen list refreshes automatically when Penumbra changes, and warnings, errors and handoff results also appear as Dalamud notifications; both can be turned off in Settings."),
+            Entry("The on-screen list refreshes automatically when Penumbra or Glamourer changes your character, and warnings, errors and handoff results also appear as Dalamud notifications; both can be turned off in Settings."),
             Important("Fixed newly created vanilla mods (from model exports and texture edits) never being enabled in the collection.")),
         Release("1.2.4",
             Entry("Fixed a model import issue that could distort unusually dense meshes."),

@@ -21,6 +21,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly ModelBackupStore          _backups;
     private readonly PenumbraService         _penumbra;
     private readonly OnScreenService         _onScreen;
+    private readonly GlamourerService        _glamourer;
     private readonly ExportContextRegistry   _contexts;
     private readonly BlenderClient           _blender;
     private readonly TextureEditService      _textures;
@@ -107,6 +108,7 @@ public sealed class Plugin : IDalamudPlugin
         // so both share its mod index and cached stable identifiers.
         var resourceSources = new ResourceSourceAttributor(_penumbra, log);
         _onScreen  = new OnScreenService(objects, clientState, framework, _penumbra, resourceSources, log);
+        _glamourer = new GlamourerService(pi, log);
         _contexts  = new ExportContextRegistry(
             pluginInstanceId,
             persistedContexts,
@@ -160,6 +162,7 @@ public sealed class Plugin : IDalamudPlugin
             () => _settingsWindow!.Open());
         _window.AttachAnimations(_animations, animationError);
         _exportServer.ImportFailureReceived += _window.ReportImportFailure;
+        _glamourer.AppearanceChanged += _window.OnGlamourerAppearanceChanged;
         _setupWindow = new FirstTimeSetupWindow(
             _config,
             SaveConfiguration,
@@ -293,6 +296,8 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.RemoveWindow(_changelogWindow);
         _windowSystem.RemoveWindow(_setupWindow);
         _windowSystem.RemoveWindow(_settingsWindow);
+        _glamourer.AppearanceChanged -= _window.OnGlamourerAppearanceChanged;
+        _glamourer.Dispose();
         _window.Dispose();
         _textures.FileChanged -= _previews.Invalidate;
         _previews.Dispose();
