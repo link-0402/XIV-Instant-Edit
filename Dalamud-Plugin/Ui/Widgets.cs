@@ -77,6 +77,32 @@ internal static class Widgets
             ImGui.SetTooltip(tooltip);
     }
 
+    /// <summary> Width a <see cref="StatusDot"/> with this text occupies, for right-aligned layouts. </summary>
+    public static float StatusDotWidth(string name, string value)
+        => ImGui.CalcTextSize("●").X + Theme.Scaled(3) + ImGui.CalcTextSize($"{name}: {value}").X;
+
+    /// <summary> A toolbar tab: icon + label, filled when active. Returns true when clicked. </summary>
+    public static bool TabButton(FontAwesomeIcon icon, string label, bool active)
+    {
+        using var colour = ImRaii.PushColor(ImGuiCol.Button, Theme.Selection, active)
+            .Push(ImGuiCol.ButtonHovered, Theme.WithAlpha(Theme.Selection, .85f), active);
+        return ImGuiComponents.IconButtonWithText(icon, label, null, null, null, null);
+    }
+
+    /// <summary> A small rotating arc that signals background work. Occupies one frame-height square. </summary>
+    public static void Spinner()
+    {
+        var size = new Vector2(ImGui.GetFrameHeight());
+        var position = ImGui.GetCursorScreenPos();
+        ImGui.Dummy(size);
+        var centre = position + size / 2;
+        var radius = size.X * .32f;
+        var start = (float)(ImGui.GetTime() * 5.0 % (Math.PI * 2));
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.PathArcTo(centre, radius, start, start + MathF.PI * 1.5f, 16);
+        drawList.PathStroke(ImGui.GetColorU32(Theme.Accent), ImDrawFlags.None, Theme.Scaled(2));
+    }
+
     /// <summary> Height a <see cref="Banner"/> needs for the text at the current width. </summary>
     public static float BannerHeight(string text)
     {

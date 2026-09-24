@@ -59,6 +59,9 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>Keep the main window visible when the user hides the game UI with Scroll Lock.</summary>
     public bool KeepVisibleWhenUiHidden { get; set; }
 
+    /// <summary>Mirror warnings, errors and model handoff results as Dalamud notifications.</summary>
+    public bool ShowNotifications { get; set; } = true;
+
     /// <summary>Legacy v9 context payload retained only for one-time migration or storage fallback.</summary>
     public List<PersistedExportContext> ExportContexts { get; set; } = [];
 

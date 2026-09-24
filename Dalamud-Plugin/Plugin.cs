@@ -43,7 +43,8 @@ public sealed class Plugin : IDalamudPlugin
         ITextureProvider textureProvider,
         IObjectTable objects,
         IFramework framework,
-        ISigScanner sigScanner)
+        ISigScanner sigScanner,
+        INotificationManager notifications)
     {
         _pi       = pi;
         _commands = commands;
@@ -149,6 +150,7 @@ public sealed class Plugin : IDalamudPlugin
             _pi.UiBuilder,
             textureProvider,
             _textures,
+            notifications,
             _changelogWindow.Open,
             () => _settingsWindow!.Open());
         _window.AttachAnimations(_animations, animationError);
