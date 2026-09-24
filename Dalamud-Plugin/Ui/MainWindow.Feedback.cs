@@ -30,16 +30,6 @@ public sealed partial class MainWindow
             : new FeedbackState(latest.Text, latest.Severity);
     }
 
-    private static void DrawFeedback(FeedbackState feedback)
-    {
-        if (feedback.Text.Length == 0)
-            return;
-        Widgets.Banner("##instant-edit-feedback", feedback.Severity, feedback.Text);
-    }
-
-    private static float GetFeedbackHeight(FeedbackState feedback)
-        => feedback.Text.Length == 0 ? 0 : Widgets.BannerHeight(feedback.Text);
-
     private void SetStatus(string text, FeedbackSeverity severity) => _feed.Report(StatusChannel.Models, severity, text);
     private void SetTextureStatus(string text, FeedbackSeverity severity) => _feed.Report(StatusChannel.Textures, severity, text);
     private static string Sanitize(string name) => UiText.Sanitize(name);

@@ -24,8 +24,6 @@ public sealed partial class MainWindow
         animations = service;
         animationError = error;
     }
-    public override void OnOpen() { }
-    public override void OnClose() => animations?.StopObservation();
 
     private void SelectAnimation(AnimationCapture capture, bool startup = false)
     {
@@ -112,14 +110,6 @@ public sealed partial class MainWindow
             DrawAnimatedBones(capture);
             ImGui.Spacing();
             DrawAnimationActions(capture);
-        }
-        if (animations.Busy)
-        {
-            ImGui.SameLine();
-            using (ImRaii.Disabled(!animations.CanCancel))
-            {
-                if (ImGui.Button("Cancel")) animations.Cancel();
-            }
         }
     }
 
