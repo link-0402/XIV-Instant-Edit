@@ -71,6 +71,24 @@ agent.
   behavior. When reload/redraw fails after a commit, show that the texture was
   saved and allow Retry to refresh it without re-encoding unchanged pixels.
 
+## Variants
+
+- Save a copy of the working TGA as `Red.tga` in the session folder. Confirm
+  `<texture>_Red.tex` appears beside the destination, the mod gains a Single group
+  `<texture> variants` with **Original** and **Red**, Red is selected in the captured
+  collection and the actor shows it. Other collections using the mod keep Original.
+- Save `Red.tga` again: the same TEX updates (with a backup) and no option is added.
+  Save `Blue.tga`: it joins the same group. `Original.tga` and names Penumbra cannot
+  use report a status instead of committing.
+- With Red selected, save the main TGA. It must commit without a mapping conflict and
+  switch the group back to Original.
+- Rename the group and the Red option in Penumbra, reload, and save Red again: the
+  renamed option is updated and selected, not duplicated.
+- On a vanilla texture, save a variant before the main TGA. The mod is created with the
+  unchanged texture, registered, enabled, and the variant is added and selected.
+- With a variant showing, use the brush action on that texture in On Screen: the
+  existing session reopens and the variant's TGA opens in the editor.
+
 ## Implementation validation environment
 
 The local environment uses Blender 5.2.1 LTS. The model export smoke suite fails
