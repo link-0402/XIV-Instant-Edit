@@ -10,7 +10,8 @@ plus a standalone Simple Import/Export panel.
 - Creates isolated import collections and preserves the authorized Penumbra
   export destination.
 - Supports generated import armatures or a named existing scene armature.
-- Displays and assigns the FFXIV material path for every visible mesh group.
+- Displays and assigns the FFXIV material path for every visible mesh group,
+  with quick selectors for the materials used by the model's other mesh groups.
 - Highlights only the mesh-part rows whose normalized export material is
   missing or differs from the first part used by their mesh group.
 - Optionally builds import-local, packed Principled BSDF previews from the

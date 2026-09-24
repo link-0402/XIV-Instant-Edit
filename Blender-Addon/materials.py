@@ -1089,3 +1089,29 @@ def material_suggestions(group: MaterialGroup) -> list[tuple[str, str]]:
         suffix = "part" if count == 1 else "parts"
         suggestions.append((path, f"{count} {suffix}"))
     return suggestions
+
+
+def other_group_materials(objects, mesh_index: int) -> list[tuple[str, tuple[int, ...]]]:
+    """Return the materials of a model's other mesh groups and the groups using each.
+
+    The material dialog offers these as quick selectors so one group can reuse
+    another group's material.  Paths are deduplicated with the same identity
+    rules as the group consistency checks and ordered by their first group.
+    """
+    usage = {}
+    for group in group_mesh_objects(objects):
+        if group.mesh_index == mesh_index:
+            continue
+        for path in material_paths(group.objects):
+            _path, groups = usage.setdefault(_material_identity_key(path), (path, []))
+            groups.append(group.mesh_index)
+    return [(path, tuple(groups)) for path, groups in usage.values()]
+
+
+def matching_material_path(value: str, paths) -> str | None:
+    """Return the entry of ``paths`` that ``value`` would export as, if any."""
+    try:
+        identity = _material_identity_key(normalize_material_path(value))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return next((path for path in paths if _material_identity_key(path) == identity), None)
