@@ -29,6 +29,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly AnimationEditService?   _animations;
     private readonly AnimationRecorder       _recorder;
     private readonly ExportServer            _exportServer;
+    private readonly Services.Painter.PainterJobService _painterJobs;
     private readonly WindowSystem            _windowSystem;
     private readonly MainWindow              _window;
     private readonly ChangelogWindow         _changelogWindow;
@@ -109,6 +110,8 @@ public sealed class Plugin : IDalamudPlugin
         // One attributor serves the On Screen snapshot and the Edit/material-preview flows,
         // so both share its mod index and cached stable identifiers.
         var resourceSources = new ResourceSourceAttributor(_penumbra, log);
+        // A new, deleted or renamed mod must show up in the next attribution, not up to 5 s later.
+        _penumbra.ModsChanged += resourceSources.Invalidate;
         _onScreen  = new OnScreenService(objects, clientState, framework, _penumbra, resourceSources, log);
         _glamourer = new GlamourerService(pi, log);
         _contexts  = new ExportContextRegistry(
@@ -118,7 +121,11 @@ public sealed class Plugin : IDalamudPlugin
             {
                 if (_contextStore is not null)
                 {
-                    _contextStore.Persist(contexts);
+                    // A failed write must not fail the request that caused it (an export may already be
+                    // applied). The store keeps the pending change, and the next save writes it again.
+                    try { _contextStore.Persist(contexts); }
+                    catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                    { _log.Warning(error, "Could not save export contexts; the next change retries."); }
                     return;
                 }
                 lock (_configLock)
@@ -142,6 +149,17 @@ public sealed class Plugin : IDalamudPlugin
         if (_config.AutomaticCacheCleanup)
             _textures.RequestCacheCleanup();
         _exportServer = new ExportServer(_config, _penumbra, _contexts, log);
+        var painterStore = new Services.Painter.PainterJobStore(configDirectory);
+        painterStore.Load();
+        if (painterStore.LoadError.Length > 0)
+            log.Warning(painterStore.LoadError);
+        Func<string, CancellationToken, Task<byte[]?>> readGameFile =
+            async (gamePath, token) => (await data.GetFileAsync<Lumina.Data.FileResource>(gamePath, token).ConfigureAwait(false))?.Data;
+        Action<Exception, string> logPainter = (error, message) => log.Warning(error, message);
+        _painterJobs = new Services.Painter.PainterJobService(_config, _textures,
+            new Services.Painter.PainterProjectBuilder(new MaterialPreviewBundleBuilder(data, log, resourceSources), readGameFile, logPainter),
+            new Services.Painter.PainterClient(), painterStore, readGameFile, logPainter);
+        _exportServer.AttachPainter(_painterJobs);
         _previews = new PreviewService(textureProvider, data, log, () => _config.RenderModelThumbnails);
         _textures.FileChanged += _previews.Invalidate;
         _changelogWindow = new ChangelogWindow(_config, BlenderClient.CurrentPluginVersion, SaveConfiguration);
@@ -165,6 +183,7 @@ public sealed class Plugin : IDalamudPlugin
             () => _settingsWindow!.Open());
         _window.AttachAnimations(_animations, animationError);
         _window.AttachRecorder(_recorder);
+        _window.AttachPainter(_painterJobs);
         _exportServer.ImportFailureReceived += _window.ReportImportFailure;
         _glamourer.AppearanceChanged += _window.OnGlamourerAppearanceChanged;
         _setupWindow = new FirstTimeSetupWindow(
@@ -309,6 +328,7 @@ public sealed class Plugin : IDalamudPlugin
         _previews.Dispose();
         _onScreen.Dispose();
         _animations?.Dispose();
+        _painterJobs.Dispose();
         _textures.Dispose();
         _exportServer.ImportFailureReceived -= _window.ReportImportFailure;
         _exportServer.Dispose();

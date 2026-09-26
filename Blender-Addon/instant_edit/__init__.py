@@ -201,9 +201,13 @@ def register() -> None:
 
     if not start_server(port):
         error = get_server_error() or "the port may already be in use"
-        props = get_instant_edit_props()
-        props.last_status = f"XIV Instant Edit listener unavailable on port {port}: {error}"
-        print(props.last_status)
+        message = f"XIV Instant Edit listener unavailable on port {port}: {error}"
+        try:
+            get_instant_edit_props().last_status = message
+        except (AttributeError, RuntimeError):
+            # Blender's startup context has no scene yet; the connection panel still reports it.
+            pass
+        print(message)
     bpy.app.timers.register(poll_import_queue, first_interval=1.0, persistent=True)
     bpy.app.timers.register(
         poll_material_coverage_results,

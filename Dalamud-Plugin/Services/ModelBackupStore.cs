@@ -42,7 +42,7 @@ public sealed partial class ModelBackupStore
         var original = Path.GetFileName(targetFile);
         for (var attempt = 0; attempt < 8; attempt++)
         {
-            var name = $"{original}.{DateTimeOffset.UtcNow:yyyyMMdd'T'HHmmss.ffffff'Z'}.bak";
+            var name = string.Create(CultureInfo.InvariantCulture, $"{original}.{DateTimeOffset.UtcNow:yyyyMMdd'T'HHmmss.ffffff'Z'}.bak");
             var path = Path.Combine(target.Directory, name);
             try
             {

@@ -55,12 +55,15 @@ def get_colours(streams: dict[int, NDArray], count: int) -> list[NDArray]:
     return col_arrays
 
 def get_bitangents(streams: dict[int, NDArray]) -> NDArray:
-    stream_tangents   = xiv_to_blend_space(streams[1]["tangent"])
+    # The inverse of the exporter's encoding: flip axes after converting the bytes to floats
+    # (negating a byte wraps), keep the sign out of the normalisation, and read the sign the
+    # way byte_sign writes it (255 for a positive sign).
+    stream_tangents   = streams[1]["tangent"]
     bitangents        = np.zeros(stream_tangents.shape, dtype=single)
-    bitangents[:, :3] = byte_to_vector(stream_tangents[:, :3])
-    bitangents[:, 3]  = np.where(stream_tangents[:, 3] == 255, -1.0, 1.0)
+    bitangents[:, :3] = xiv_to_blend_space(byte_to_vector(stream_tangents[:, :3]))
+    bitangents[:, 3]  = np.where(stream_tangents[:, 3] >= 128, 1.0, -1.0)
 
-    return normalise_vectors(bitangents)
+    return bitangents
     
 def get_flow(flow_vectors: NDArray, normals: NDArray, bitangents: NDArray) -> NDArray:
     flow_vectors = xiv_to_blend_space(byte_to_vector(flow_vectors))[:, :3]

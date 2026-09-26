@@ -521,7 +521,8 @@ public sealed partial class PenumbraService
         char slot,
         string usage,
         int textureIndex,
-        IReadOnlyDictionary<string, string> mappings)
+        IReadOnlyDictionary<string, string> mappings,
+        IReadOnlyDictionary<string, string>? reserved = null)
     {
         var modelPath = NormalizeGamePath(activeModelGamePath);
         var marker = modelPath.LastIndexOf("/model/", StringComparison.OrdinalIgnoreCase);
@@ -546,7 +547,8 @@ public sealed partial class PenumbraService
             var discriminator = suffix == 1 ? string.Empty : $"_{suffix}";
             var candidate = $"{directory}/{baseName}{discriminator}.tex";
             var dx11Candidate = Dx11TexturePath(candidate, 0x8000);
-            if (!mappings.ContainsKey(candidate) && !mappings.ContainsKey(dx11Candidate))
+            if (!mappings.ContainsKey(candidate) && !mappings.ContainsKey(dx11Candidate) &&
+                reserved?.ContainsKey(candidate) != true && reserved?.ContainsKey(dx11Candidate) != true)
                 return candidate;
         }
         throw new InvalidDataException("No canonical texture collision name is available.");
@@ -624,7 +626,7 @@ public sealed partial class PenumbraService
                 ? materialSlot[0]
                 : 'a';
             target = AllocateMashupTexturePath(
-                activeModelGamePath, slot, usage, textureIndex, mappings);
+                activeModelGamePath, slot, usage, textureIndex, mappings, textureHashByGamePath);
         }
 
         if (MashupTexturePathConflicts(target, textures, textureHashByGamePath))

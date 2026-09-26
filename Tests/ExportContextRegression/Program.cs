@@ -162,6 +162,7 @@ try
     CollectionActivationScenarios.Run();
     UiViewModelScenarios.Run();
     AnimationRowScenarios.Run();
+    PainterScenarios.Run(testRoot);
 
     // ---- Backup safety, export-context authorization, and revocation ----
     var originalRoot = Path.Combine(testRoot, "OriginalMod");
@@ -2005,8 +2006,10 @@ try
             cleanupV4Meta["Groups"]![0]!["Options"]![0]!["CustomOption"]!.GetValue<string>() == "keep" &&
             DateTimeOffset.Parse(cleanupV4Meta["LastWrite"]!.GetValue<string>()) > cleanupLastWrite &&
             File.ReadAllText(Path.Combine(cleanupV4Root, "group_001.json")) == ignoredGroupJson &&
-            !File.Exists(Path.Combine(cleanupV4Root, "legacy", "unused.mtrl")),
-        "v4 cleanup normalizes embedded mappings while preserving GUIDs, optional fields, extensions, and stray legacy JSON");
+            !File.Exists(Path.Combine(cleanupV4Root, "legacy", "first.tex")) &&
+            !File.Exists(Path.Combine(cleanupV4Root, "legacy", "second.tex")) &&
+            File.Exists(Path.Combine(cleanupV4Root, "legacy", "unused.mtrl")),
+        "v4 cleanup normalizes embedded mappings while preserving GUIDs, optional fields, extensions, stray legacy JSON, and unmapped files");
 
     // ---- Cleanup failure handling ----
     var cleanupFailureRoot = Path.Combine(testRoot, "CleanupFailure");

@@ -47,6 +47,9 @@ public sealed class ExportContextRegistry : IDisposable
     private readonly object _persistenceLock = new();
     private readonly Dictionary<string, ContextEntry> _contexts = new(StringComparer.Ordinal);
     private readonly Action<IReadOnlyList<PersistedExportContext>>? _persist;
+    // Saved contexts this build can't load (newer or invalid). They are saved back unchanged,
+    // since leaving them out of a save records them as deleted.
+    private readonly List<PersistedExportContext> _unloadable = [];
     private readonly ModelBackupStore? _backups;
     private static readonly TimeSpan ReceiptRetention = TimeSpan.FromDays(1);
     private const int MaxCompletedReceiptsPerContext = 128;
@@ -69,8 +72,13 @@ public sealed class ExportContextRegistry : IDisposable
         {
             foreach (var saved in persisted)
             {
-                if (saved is null || !IsSafePersistedContext(saved))
+                if (saved is null)
                     continue;
+                if (!IsSafePersistedContext(saved))
+                {
+                    _unloadable.Add(saved);
+                    continue;
+                }
 
                 var context = RuntimeContext(saved);
                 _contexts[context.ContextId] = new ContextEntry
@@ -944,6 +952,7 @@ public sealed class ExportContextRegistry : IDisposable
                 }
                 snapshot = _contexts.Values
                     .Select(entry => PersistedExportContext.FromContext(entry.Context))
+                    .Concat(_unloadable)
                     .ToList();
             }
 

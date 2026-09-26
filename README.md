@@ -10,6 +10,7 @@ Additionally, it supports full software-independent texture editing as well as a
 - [Penumbra](https://github.com/xivdev/Penumbra) 1.7.1.0+
 - [Blender](https://www.blender.org/) 4.5.0+ for model editing
 - (optional) an Image Editing Software of your choice (with TGA format support)
+- (optional) [Adobe Substance 3D Painter](https://www.adobe.com/products/substance3d/apps/painter.html) 10.0.1+ for painting textures on the model
 - (optional) the LivePose Dalamud plugin for animation editing (baking pose adjustments)
 
 ## Installation
@@ -79,6 +80,33 @@ Additionally, it supports full software-independent texture editing as well as a
    (or the open action on its card in **Sessions**) resumes it.
 
 Note that textures must be saves as a flattened TGA file. You can either do so manually or use one of the save scripts for Photoshop, GIMP and Krita here: https://github.com/link-0402/XIV-Instant-Edit/tree/main/Tools. Other image editing software might not support similar scripts or already saves a flattened copy with the usual Ctrl + S shortcut.
+
+## How to: Texture painting in Substance Painter
+
+1. In Settings, tick **Paint textures in Substance Painter** and press **Install Painter plugin**.
+   Then start Painter and enable it once under **Python > xiv_instant_edit**. After updating
+   Instant Edit, press **Update Painter plugin** and restart Painter.
+2. In **On Screen**, use the paint-roller action (or right-click, "Paint textures in Substance
+   Painter") on a model. This only exists in On Screen: it uses exactly the materials and
+   textures your character renders, including skin and texture-only mods.
+3. The dialog lists each material and its textures. Ticked textures are sent back; the others
+   stay in Painter for reference, with the reason shown (for example shared game textures).
+   Models that share a material, such as the body parts sharing your skin texture, can be
+   added so you can paint across them. For vanilla textures, enter a name for the new mod.
+4. **Send to Painter** opens the project in Painter, starting it if needed. Each material is a
+   texture set, and the current textures are its bottom **XIV original** layer. Painter's
+   channels follow each shader: base color, normal, opacity, roughness, specular level and AO
+   where they fit, and labelled user channels for the rest. Paint on layers above it.
+5. Press **Send to game** in Painter's **XIV Instant Edit** panel. The textures go back
+   through texture sessions (with backups and the original compression), and the game
+   reloads and redraws once. Textures you haven't changed are left alone, and undoing all
+   changes in Painter restores the original file exactly. Painter's own save and export
+   are not changed.
+6. Save the Painter project wherever you like. Reopening it later links it again; the project
+   is listed under **Sessions**, where it can also be discarded.
+
+Where a texture is also used by meshes outside the project, only the areas under this
+project's UV islands are taken from Painter, so fill layers can't overwrite the rest.
 
 ## How to: Animation Editing
 
@@ -153,6 +181,7 @@ The Blender plugin manages it's mappings to mods via the automatically created "
 - Seamlessly integrates into any existing Blender scene, independent of body, devkit, etc.
 - Simple Importer / Exporter for general FBX and MDL files with various QoL functions and automations optimized for FFXIV workflows
 - One-click import and export for textures
+- Texture painting in Substance Painter from On Screen, with one-click sending back to the game
 - Animation editing: bake LivePose adjustments, repair skeletons, exclude bones, with undo and recovery
 - Animations in Blender: record a character's live pose including bone physics, or send an animation your character plays or any mod's animation file, as an action on your armature
 

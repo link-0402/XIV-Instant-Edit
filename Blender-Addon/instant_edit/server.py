@@ -248,7 +248,26 @@ class _ImportHandler(BaseHTTPRequestHandler):
         super().setup()
         self.connection.settimeout(REQUEST_TIMEOUT_SECONDS)
 
+    def _refuse_browser_request(self) -> bool:
+        """Refuse what a web page could send (CSRF, DNS rebinding); the plugin is a local client."""
+        host = (self.headers.get("Host") or "").strip().lower()
+        hostname = host.rsplit(":", 1)[0] if ":" in host else host
+        if (
+            (not host or hostname in ("127.0.0.1", "localhost"))
+            and self.headers.get("Origin") is None
+            and self.headers.get("Sec-Fetch-Site") is None
+        ):
+            return False
+        self._respond(403, {
+            "ok": False,
+            "code": "request_forbidden",
+            "message": "The Blender bridge only accepts requests from local applications.",
+        })
+        return True
+
     def do_GET(self) -> None:
+        if self._refuse_browser_request():
+            return
         if self.path.rstrip("/") == "/status":
             self._respond(200, _status_payload())
         else:
@@ -260,6 +279,8 @@ class _ImportHandler(BaseHTTPRequestHandler):
             ))
 
     def do_POST(self) -> None:
+        if self._refuse_browser_request():
+            return
         endpoint = self.path.rstrip("/")
         if endpoint == "/animation":
             self._handle_animation()
@@ -707,6 +728,13 @@ class _ImportHandler(BaseHTTPRequestHandler):
         pass
 
 
+class _BridgeServer(ThreadingHTTPServer):
+    # With SO_REUSEADDR, Windows lets a second Blender bind the same port without an error, and
+    # the plugin then reaches either one. SO_EXCLUSIVEADDRUSE exists only on Windows.
+    allow_reuse_address = not hasattr(socket, "SO_EXCLUSIVEADDRUSE")
+    allow_reuse_port = False
+
+
 def start_server(port: int = 42424) -> bool:
     """Starts the HTTP listener that receives import commands from the XIV Instant Edit plugin."""
     global _server, _thread, _port, _server_error
@@ -717,7 +745,7 @@ def start_server(port: int = 42424) -> bool:
         stop_server()
 
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", port), _ImportHandler)
+        server = _BridgeServer(("127.0.0.1", port), _ImportHandler)
     except OSError as e:
         _server = None
         _thread = None

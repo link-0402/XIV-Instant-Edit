@@ -52,7 +52,9 @@ def target_folder(
     if not value:
         return None, "Simple Export folder"
     try:
-        folder = Path(value).expanduser().resolve()
+        # File Export resolves blend-relative ("//") folders, and its backups live there.
+        import bpy
+        folder = Path(bpy.path.abspath(value)).expanduser().resolve()
     except OSError:
         return None, "Simple Export folder"
     if not folder.is_dir():

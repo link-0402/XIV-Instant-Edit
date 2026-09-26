@@ -443,8 +443,12 @@ def material_coverage_missing_materials(
     ref=None,
     *,
     cache_only: bool = False,
+    blocking: bool = False,
 ) -> tuple[str, ...]:
-    """Return missing non-active materials cached for the export composition."""
+    """Return missing non-active materials cached for the export composition.
+
+    With ``blocking``, a missing or stale answer is fetched from the plugin now instead of in
+    the background, so a confirmation that depends on it can't be skipped."""
     try:
         ref = ref or export_destination_context(context)
         objects, refs, materials, _ = _collect_export_context_materials(context, ref)
@@ -463,6 +467,21 @@ def material_coverage_missing_materials(
         if cache_only:
             return ()
 
+        if blocking:
+            contributors = _material_coverage_contributor_payload(ref, refs, materials)
+            if not contributors:
+                return ()
+            try:
+                missing_materials = tuple(_request_material_coverage(
+                    ref.callback_port, _material_coverage_payload(ref, contributors)))
+            except Exception:
+                # The export itself reports a plugin it can't reach.
+                return ()
+            with _material_coverage_lock:
+                _material_coverage_cache[cache_key] = (
+                    time.monotonic() + MATERIAL_COVERAGE_CACHE_SECONDS, missing_materials)
+            return missing_materials
+
         if not probe_running:
             contributors = _material_coverage_contributor_payload(ref, refs, materials)
             if not contributors:
@@ -477,16 +496,19 @@ def material_coverage_missing_materials(
         return ()
 
 
-def material_coverage_warning_state(context: Context, ref=None, *, cache_only: bool = False) -> bool:
+def material_coverage_warning_state(
+    context: Context, ref=None, *, cache_only: bool = False, blocking: bool = False,
+) -> bool:
     """Return whether the current export composition is missing non-active materials."""
-    return bool(material_coverage_missing_materials(context, ref, cache_only=cache_only))
+    return bool(material_coverage_missing_materials(
+        context, ref, cache_only=cache_only, blocking=blocking))
 
 
-def unsafe_export_warning_state(context: Context, ref=None) -> bool:
+def unsafe_export_warning_state(context: Context, ref=None, *, blocking: bool = False) -> bool:
     """Return whether a non-mashup Quick Export needs explicit confirmation."""
     if getattr(get_instant_edit_props(), "variant_target", "") == MASHUP_TARGET:
         return False
-    return material_coverage_warning_state(context, ref)
+    return material_coverage_warning_state(context, ref, blocking=blocking)
 
 
 def save_new_mod_target_state(context: Context, ref=None) -> tuple[bool, bool, str]:
@@ -1398,16 +1420,20 @@ def _mashup_context_metadata(payload: dict, target_file_path: str) -> dict:
 def _mashup_duplicate_name(obj, context_id: str) -> str:
     """Create a unique name that retains the object's YAA mesh identity."""
     info = mesh_name_info(obj)
-    label = info.label or "Mashup"
     lod = f" LOD{info.lod}" if info.lod else ""
-    # Keep LOD at the end: mesh_name_info uses the terminal LOD suffix when
-    # recovering the YAA identity from the renamed duplicate.
-    base = f"{info.mesh_group}.{info.mesh_part} {label} [Mashup {context_id[:8]}]{lod}"
-    candidate = base
+    prefix = f"{info.mesh_group}.{info.mesh_part} "
+    tag = f" [Mashup {context_id[:8]}]"
+    # Keep LOD at the very end, after any counter: mesh_name_info reads the terminal LOD
+    # suffix to recover the YAA identity. Blender 4.5 cuts names at 63 bytes, so shorten
+    # the label rather than lose the suffix.
+    room = 63 - len(f"{prefix}{tag} 9999{lod}".encode("utf-8"))
+    label = (info.label or "Mashup").encode("utf-8")[:max(room, 1)].decode("utf-8", "ignore").rstrip()
+    base = f"{prefix}{label or 'Mashup'}{tag}"
+    candidate = f"{base}{lod}"
     suffix = 2
     existing = {item.name for item in bpy.data.objects}
     while candidate in existing:
-        candidate = f"{base} {suffix}"
+        candidate = f"{base} {suffix}{lod}"
         suffix += 1
     return candidate
 
@@ -1453,14 +1479,47 @@ def _create_mashup_output_context(
         raise
 
 
-def _persist_mashup_assignments(export_objects, object_contexts, assignments) -> None:
+MASHUP_ALIAS_CONTEXT_PROPERTY = "instant_edit_mashup_alias_context"
+
+
+def _persist_mashup_assignments(export_objects, object_contexts, assignments, alias_context_id) -> None:
     """Keep active-mod mashup aliases while retaining source materials for planning."""
     for obj in export_objects:
         context_id, source_material = object_contexts[obj.as_pointer()]
         alias = assignments[(context_id, source_material.casefold())]
         obj[MASHUP_SOURCE_MATERIAL_PROPERTY] = source_material
+        # The aliases only resolve in the mod the mashup was written into.
+        obj[MASHUP_ALIAS_CONTEXT_PROPERTY] = alias_context_id
         obj["xiv_material"] = alias
         obj["instant_edit_xiv_material"] = alias
+
+
+def _use_mashup_source_materials(export_objects, context_id) -> list:
+    """Export mashup-aliased objects with their source material outside the mashup's Context."""
+    saved = []
+    for obj in export_objects:
+        source_material = obj.get(MASHUP_SOURCE_MATERIAL_PROPERTY)
+        alias_context_id = obj.get(MASHUP_ALIAS_CONTEXT_PROPERTY)
+        if not source_material or not alias_context_id or alias_context_id == context_id:
+            continue
+        properties = [(name, name in obj, obj.get(name))
+                      for name in ("xiv_material", "instant_edit_xiv_material")]
+        saved.append((obj, properties))
+        for name, existed, _previous in properties:
+            if name == "xiv_material" or existed:
+                obj[name] = source_material
+    return saved
+
+
+def _restore_object_materials(saved) -> None:
+    for obj, properties in reversed(saved):
+        if obj.name not in bpy.data.objects:
+            continue
+        for name, existed, previous in properties:
+            if existed:
+                obj[name] = previous
+            else:
+                obj.pop(name, None)
 
 
 class RefreshVariantTargets(Operator):
@@ -1612,7 +1671,7 @@ class QuickExport(Operator):
             return bpy.ops.xiv_ie.mashup_destination("INVOKE_DEFAULT")
         if props.variant_target == SAVE_NEW_MOD_TARGET:
             return bpy.ops.xiv_ie.save_new_mod_name("INVOKE_DEFAULT", name="")
-        self._confirm_unsafe_export = unsafe_export_warning_state(context)
+        self._confirm_unsafe_export = unsafe_export_warning_state(context, blocking=True)
         if self._confirm_unsafe_export:
             # invoke_confirm never calls draw(); a props dialog shows the materials.
             return context.window_manager.invoke_props_dialog(
@@ -2261,8 +2320,7 @@ def restore_quick_backup(context: Context, backup_name: str) -> dict:
     return result
 
 
-def clear_quick_backups(context: Context) -> dict:
-    ref = export_destination_context(context)
+def _send_plugin_clear(ref) -> dict:
     selected = selected_variant_target(get_instant_edit_props())
     backup_target_id = getattr(selected, "backup_target_id", "") or ref.backup_target_id
     payload = {
@@ -2273,10 +2331,37 @@ def clear_quick_backups(context: Context) -> dict:
         "capability": ref.capability,
         "backupTargetId": backup_target_id,
     }
-    body, status = _post_json(ref.callback_port, "/backup/clear", payload)
-    if status != 200:
-        raise _plugin_error_from_body(body, status, "/backup/clear")
-    return _decode_plugin_response(body, status, "/backup/clear")
+    try:
+        status, body = post_json(
+            ref.callback_port, "/backup/clear", payload,
+            timeout=15, max_response_size=MAX_PLUGIN_RESPONSE_SIZE)
+        if not 200 <= status < 300:
+            raise _plugin_error_from_body(body, status, "/backup/clear")
+        return _decode_plugin_response(body, status, "/backup/clear")
+    except PluginResponseTooLarge as error:
+        raise _plugin_response_too_large(error, "/backup/clear") from error
+    except (URLError, TimeoutError, OSError) as error:
+        raise _plugin_transport_error(
+            error,
+            "/backup/clear",
+            "The Dalamud plugin could not be reached while clearing the backups.",
+            "Start XIV Instant Edit in the game and retry.",
+        ) from error
+
+
+def clear_quick_backups(context: Context) -> dict:
+    """Delete the Quick Export target's managed backups through the plugin."""
+    ref = export_destination_context(context)
+    try:
+        return _send_plugin_clear(ref)
+    except PluginResponseError as error:
+        if error.status != 410 and not (error.status == 401 and error.code == "plugin_instance_mismatch"):
+            raise
+        from .recovery import reattach_collection
+
+        if not reattach_collection(ref.collection, context.scene):
+            raise ValueError(f"plugin returned HTTP {error.status} ({error.code}); context recovery failed") from error
+        return _send_plugin_clear(export_destination_context(context))
 
 
 # ---- Export destination resolution and attribute-group detection ----
@@ -2561,7 +2646,7 @@ def perform_mashup_export(
                 else:
                     obj.pop(property_name, None)
         if persist_active_assignments:
-            _persist_mashup_assignments(export_objects, object_contexts, assignments)
+            _persist_mashup_assignments(export_objects, object_contexts, assignments, ref.context_id)
         try:
             finish_job(temp_dir)
         except OSError as error:
@@ -2632,7 +2717,11 @@ def perform_instant_export(
     mdl_path = temp_dir / f"model_{export_id}.mdl"
     try:
         get_settings().model_format = "MDL"
-        export_result(mdl_path.with_suffix(""), "MDL", export_objects=export_objects)
+        saved_materials = _use_mashup_source_materials(export_objects, ref.context_id)
+        try:
+            export_result(mdl_path.with_suffix(""), "MDL", export_objects=export_objects)
+        finally:
+            _restore_object_materials(saved_materials)
         if not mdl_path.is_file():
             raise ValueError("Export produced no .mdl file.")
 

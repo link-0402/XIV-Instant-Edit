@@ -74,6 +74,9 @@ public sealed class TextureEditService : IDisposable
     /// <summary> Raised (on the service's worker) with the destination path after a save or restore replaced it. </summary>
     public event Action<string>? FileChanged;
 
+    /// <summary> Sessions this returns true for are never removed as stale (a Painter project still links them). </summary>
+    internal Func<Guid, bool>? KeepSession { get; set; }
+
     private void RaiseFileChanged(string path)
     {
         try
@@ -178,6 +181,8 @@ public sealed class TextureEditService : IDisposable
             {
                 var session = runtime.Session;
                 if (runtime.Enabled || !session.Paused || !IsStaleSession(session, cutoff)) continue;
+                // A Painter project can send to this texture again whenever it is reopened.
+                if (KeepSession?.Invoke(session.Id) == true) continue;
                 runtime.Dispose();
                 try
                 {
@@ -254,11 +259,14 @@ public sealed class TextureEditService : IDisposable
         finally { _gate.Release(); }
     }
 
-    /// <summary>A session that finished opening and has no source conflict continues when its texture is opened again.</summary>
+    /// <summary>
+    /// A session that finished opening and has no source conflict continues when its texture is opened again.
+    /// A vanilla session belongs to its destination mod, so it only continues within the same Painter project.
+    /// </summary>
     internal static bool IsReusableFor(TextureEditSession session, TextureEditRequest request)
         => !session.Conflict && session.PixelHash.Length > 0 &&
            (string.IsNullOrEmpty(request.ModDirectory)
-               ? session.NewModName.Length > 0 && session.GamePath == request.GamePath && session.CollectionId.HasValue &&
+               ? session.NewModName.Length > 0 && session.JobId == request.JobId && session.GamePath == request.GamePath && session.CollectionId.HasValue &&
                  session.ObjectIndex == request.ObjectIndex && session.ActorAddress == request.ActorAddress
                : string.Equals(session.TargetFile, request.ActualPath, StringComparison.OrdinalIgnoreCase) ||
                  VariantShowing(session, request) is not null);
@@ -381,7 +389,7 @@ public sealed class TextureEditService : IDisposable
         try
         {
             var s = Get(id).Session;
-            if (!s.NeedsMod) s.Status = await _backend.RefreshAsync(s, null, _life.Token).ConfigureAwait(false);
+            if (!s.NeedsMod) s.Status = await RefreshOneAsync(s, null).ConfigureAwait(false);
             Persist();
         }
         finally { _gate.Release(); }
@@ -414,7 +422,7 @@ public sealed class TextureEditService : IDisposable
             // Intentionally keep the artist's working image and pixel baseline unchanged.
             s.Status = "Backup restored. Session paused; working TGA retained.";
             Persist();
-            var refresh = await _backend.RefreshAsync(s, s.OriginalOptionId, _life.Token).ConfigureAwait(false);
+            var refresh = await RefreshOneAsync(s, s.OriginalOptionId).ConfigureAwait(false);
             if (refresh.Contains("attention", StringComparison.Ordinal)) s.Status += " " + refresh;
             Persist();
         }
@@ -431,6 +439,7 @@ public sealed class TextureEditService : IDisposable
     public async Task DiscardAsync(Guid id)
     {
         var runtime = Get(id);
+        var wasEnabled = runtime.Enabled;
         runtime.Enabled = false;
         runtime.Changed();
         await _gate.WaitAsync(_life.Token).ConfigureAwait(false);
@@ -449,6 +458,14 @@ public sealed class TextureEditService : IDisposable
             }
             _sessions.TryRemove(id, out _);
             Persist();
+        }
+        catch when (_sessions.ContainsKey(id))
+        {
+            // The session is still listed, so keep it working as before instead of ignoring saves.
+            runtime.Enabled = wasEnabled;
+            if (wasEnabled) ArmWatcher(runtime);
+            runtime.Changed();
+            throw;
         }
         finally { _gate.Release(); }
     }
@@ -725,7 +742,7 @@ public sealed class TextureEditService : IDisposable
         RaiseFileChanged(s.VariantTargetFile(variant));
         if (!PersistCommit(runtime)) return;
         _life.Token.ThrowIfCancellationRequested();
-        var refresh = await _backend.RefreshAsync(s, variant.OptionId, _life.Token).ConfigureAwait(false);
+        var refresh = await RefreshOneAsync(s, variant.OptionId).ConfigureAwait(false);
         variant.Status = refresh;
         s.Status = $"Variant \"{name}\": {refresh}";
         Persist();
@@ -747,7 +764,7 @@ public sealed class TextureEditService : IDisposable
         s.Height = header.Height;
         Persist();
         // Registers the mod with Penumbra, which the variant commit's destination check requires.
-        s.Status = await _backend.RefreshAsync(s, null, _life.Token).ConfigureAwait(false);
+        s.Status = await RefreshOneAsync(s, null).ConfigureAwait(false);
         Persist();
     }
 
@@ -836,12 +853,191 @@ public sealed class TextureEditService : IDisposable
         s.Height = height;
         s.LastSaved = DateTimeOffset.UtcNow;
         s.Status = result.Message;
+        PropagateFingerprint(s, result.MappingFingerprint);
         RaiseFileChanged(s.TargetFile);
         if (!PersistCommit(runtime)) return;
         _life.Token.ThrowIfCancellationRequested();
         // With variants, the edited texture shows only while the group's Original option is selected.
-        s.Status = await _backend.RefreshAsync(s, s.OriginalOptionId, _life.Token).ConfigureAwait(false);
+        s.Status = await RefreshOneAsync(s, s.OriginalOptionId).ConfigureAwait(false);
         Persist();
+    }
+
+    private Task<string> RefreshOneAsync(TextureEditSession session, Guid? showOption)
+        => _backend.RefreshAsync([new TextureRefresh(session, showOption)], _life.Token);
+
+    /// <summary>
+    /// Adding a file to a Painter project's shared mod rewrites its metadata; the project's other
+    /// sessions in that mod take the new fingerprint instead of reporting a mapping conflict.
+    /// </summary>
+    private void PropagateFingerprint(TextureEditSession source, string fingerprint)
+    {
+        if (fingerprint.Length == 0 || source.JobId is null)
+            return;
+        foreach (var other in _sessions.Values.Select(r => r.Session))
+            if (!ReferenceEquals(other, source) && other.JobId == source.JobId && !other.NeedsMod &&
+                string.Equals(other.ModRoot, source.ModRoot, StringComparison.OrdinalIgnoreCase))
+                other.MappingFingerprint = fingerprint;
+    }
+
+    /// <summary>
+    /// Applies textures exported by Substance Painter as one batch: each goes through its session's
+    /// usual convert, backup and commit, then every affected mod reloads once and actors redraw once.
+    /// </summary>
+    internal async Task<IReadOnlyList<ExternalTextureResult>> ApplyExternalAsync(IReadOnlyList<ExternalTextureSave> saves, CancellationToken token)
+    {
+        var results = new List<ExternalTextureResult>();
+        var refresh = new List<TextureEditSession>();
+        await _gate.WaitAsync(_life.Token).ConfigureAwait(false);
+        try
+        {
+            EnsureReady();
+            foreach (var save in saves)
+            {
+                token.ThrowIfCancellationRequested();
+                if (!_sessions.TryGetValue(save.SessionId, out var runtime))
+                {
+                    results.Add(new ExternalTextureResult(save.SessionId, ExternalTextureOutcome.Failed, "The texture session no longer exists."));
+                    continue;
+                }
+                var s = runtime.Session;
+                try
+                {
+                    if (s.Conflict)
+                        throw new TextureConflictException(s.Status);
+                    ResumeIfPaused(runtime);
+                    var outcome = save.Tga is null
+                        ? await RestoreOriginalAsync(runtime).ConfigureAwait(false)
+                        : await ApplyExternalSaveAsync(runtime, save.Tga).ConfigureAwait(false);
+                    results.Add(new ExternalTextureResult(save.SessionId, outcome, s.Status));
+                    if (outcome is ExternalTextureOutcome.Applied or ExternalTextureOutcome.Restored)
+                        refresh.Add(s);
+                }
+                catch (Exception error) when (error is not OperationCanceledException || !_life.IsCancellationRequested)
+                {
+                    if (error is not OperationCanceledException)
+                        ReportSaveFailure(runtime, error);
+                    results.Add(new ExternalTextureResult(save.SessionId, ExternalTextureOutcome.Failed,
+                        error is OperationCanceledException ? "The save was interrupted." : error.Message));
+                }
+            }
+            if (refresh.Count > 0)
+            {
+                var status = await _backend.RefreshAsync(refresh.Select(s => new TextureRefresh(s, s.OriginalOptionId)).ToList(), _life.Token).ConfigureAwait(false);
+                foreach (var s in refresh)
+                    s.Status = status;
+                Persist();
+            }
+        }
+        finally { _gate.Release(); }
+        return results;
+    }
+
+    // Callers hold the queue gate.
+    private async Task<ExternalTextureOutcome> ApplyExternalSaveAsync(Runtime runtime, byte[] tga)
+    {
+        var s = runtime.Session;
+        var (width, height) = TextureFiles.ValidateTga(tga);
+        var format = TextureFiles.SaveFormat(s, _config.RecompressTextures);
+        TextureFiles.ValidateEncodable(format, width, height);
+        bool Current() => runtime.Enabled && !_life.IsCancellationRequested;
+        var hash = TextureFiles.Hash(tga);
+        var snapshot = Path.Combine(s.Directory, "snapshot.tga");
+        var pixels = Path.Combine(s.Directory, "pixels.tex");
+        var output = Path.Combine(s.Directory, "converted.tex");
+        TextureFiles.EnsureLocalPath(snapshot);
+        File.WriteAllBytes(snapshot, tga);
+        await _backend.ConvertAsync(snapshot, pixels, TextureType.RgbaTex, false).ConfigureAwait(false);
+        _life.Token.ThrowIfCancellationRequested();
+        var rawPixels = TextureFiles.Read(pixels);
+        var pixelHeader = TextureFiles.ReadTex(rawPixels);
+        if (pixelHeader.Width != width || pixelHeader.Height != height) throw new IOException("Decoded dimensions do not match the exported image.");
+        var pixelHash = TextureFiles.PixelHash(rawPixels);
+        if (pixelHash == s.PixelHash && format == s.SavedFormat)
+        {
+            MirrorWorkingFile(runtime, tga, hash);
+            s.Status = "Painter texture unchanged";
+            Persist();
+            return ExternalTextureOutcome.Unchanged;
+        }
+        s.Status = "Converting Painter texture…";
+        Publish();
+        await _backend.ConvertAsync(snapshot, output, TextureFiles.OutputType(format), s.MipMaps).ConfigureAwait(false);
+        _life.Token.ThrowIfCancellationRequested();
+        if (!Current()) throw new OperationCanceledException("The session was paused.");
+        var converted = TextureFiles.Read(output);
+        TextureFiles.ValidateOutput(converted, format, width, height, s.MipMaps);
+        var result = await _backend.CommitAsync(s, converted, Current, _life.Token).ConfigureAwait(false);
+        s.LastCommittedHash = result.Hash;
+        s.LastBackup = result.Backup;
+        s.PixelHash = pixelHash;
+        s.SavedFormat = format;
+        s.Width = width;
+        s.Height = height;
+        s.LastSaved = DateTimeOffset.UtcNow;
+        s.Status = "Saved from Substance Painter";
+        PropagateFingerprint(s, result.MappingFingerprint);
+        RaiseFileChanged(s.TargetFile);
+        MirrorWorkingFile(runtime, tga, hash);
+        if (!PersistCommit(runtime)) throw new IOException(s.Status);
+        return ExternalTextureOutcome.Applied;
+    }
+
+    /// <summary>
+    /// Painter's export matched its first, untouched export: the texture should be the captured
+    /// original again. Nothing happens while the destination still holds it.
+    /// </summary>
+    private async Task<ExternalTextureOutcome> RestoreOriginalAsync(Runtime runtime)
+    {
+        var s = runtime.Session;
+        var originalPath = Path.Combine(s.Directory, "original.tex");
+        var original = TextureFiles.Read(originalPath);
+        if (s.NeedsMod || (File.Exists(s.TargetFile) && TextureFiles.Hash(TextureFiles.Read(s.TargetFile)) == TextureFiles.Hash(original)))
+            return ExternalTextureOutcome.Unchanged;
+        var header = TextureFiles.ReadTex(original);
+        var result = await _backend.CommitAsync(s, original, () => runtime.Enabled && !_life.IsCancellationRequested, _life.Token).ConfigureAwait(false);
+        s.LastCommittedHash = result.Hash;
+        s.LastBackup = result.Backup;
+        s.SavedFormat = header.Format;
+        s.Width = header.Width;
+        s.Height = header.Height;
+        s.LastSaved = DateTimeOffset.UtcNow;
+        s.Status = "Original restored from Substance Painter";
+        PropagateFingerprint(s, result.MappingFingerprint);
+        RaiseFileChanged(s.TargetFile);
+        // The working image follows, so a later editor save starts from what the game shows.
+        var snapshot = Path.Combine(s.Directory, "snapshot.tga");
+        var pixels = Path.Combine(s.Directory, "pixels.tex");
+        await _backend.ConvertAsync(originalPath, snapshot, TextureType.Targa, false).ConfigureAwait(false);
+        await _backend.ConvertAsync(snapshot, pixels, TextureType.RgbaTex, false).ConfigureAwait(false);
+        var tga = TextureFiles.Read(snapshot);
+        s.PixelHash = TextureFiles.PixelHash(TextureFiles.Read(pixels));
+        MirrorWorkingFile(runtime, tga, TextureFiles.Hash(tga));
+        if (!PersistCommit(runtime)) throw new IOException(s.Status);
+        return ExternalTextureOutcome.Restored;
+    }
+
+    /// <summary>
+    /// Writes an applied image over the working TGA and records it, so the watcher treats it as
+    /// already saved. If the file is locked the old image and hash stay, which the watcher ignores too.
+    /// </summary>
+    private void MirrorWorkingFile(Runtime runtime, byte[] tga, string hash)
+    {
+        var s = runtime.Session;
+        if (s.WorkingHash == hash)
+            return;
+        try
+        {
+            TextureFiles.EnsureLocalPath(s.WorkingFile);
+            File.WriteAllBytes(s.WorkingFile, tga);
+            s.WorkingHash = hash;
+            runtime.FailedHash = "";
+            runtime.Failures = 0;
+            runtime.RetryAt = 0;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            _log(error, "The working TGA could not be updated after a Painter save; the game already has the new texture.");
+        }
     }
 
     private Runtime Get(Guid id) => _sessions.TryGetValue(id, out var runtime) ? runtime : throw new IOException("Texture session no longer exists.");

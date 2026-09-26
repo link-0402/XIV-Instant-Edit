@@ -318,6 +318,35 @@ def resample(times: np.ndarray, samples: np.ndarray, fps: float):
     return offsets, result
 
 
+def _armature_to_game(reference_model, bones, armature_matrix) -> np.ndarray:
+    """Armature space to game space (linear part).
+
+    The armature object's world matrix carries the import's axis and unit conversion, but also
+    any turn or scale someone gives the object afterwards. The matched bones' rest heads show the
+    conversion itself, so when they disagree with the world matrix by more than a rest pose with
+    other proportions can explain, the transform fitted to the heads wins."""
+    world = np.linalg.inv(np.linalg.inv(np.asarray(armature_matrix, dtype=np.float64)) @ GAME_TO_BLENDER)
+    heads = np.array([np.asarray(rest, dtype=np.float64)[:3, 3] for rest, _bone, _ancestor in bones])
+    targets = np.array([reference_model[bone][:3, 3] for _rest, bone, _ancestor in bones])
+    if len(heads) < 3:
+        return world
+    source = heads - heads.mean(axis=0)
+    target = targets - targets.mean(axis=0)
+    u, s, vt = np.linalg.svd(target.T @ source)
+    if s[0] <= 0 or s[1] <= 1e-6 * s[0]:
+        return world
+    d = 1.0 if np.linalg.det(u @ vt) >= 0 else -1.0
+    rotation = u @ np.diag([1.0, 1.0, d]) @ vt
+    scale = (s[0] + s[1] + d * s[2]) / (source ** 2).sum()
+    world_scale = np.cbrt(abs(np.linalg.det(world[:3, :3])))
+    cosine = (np.trace((world[:3, :3] / world_scale).T @ rotation) - 1) / 2
+    if np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))) < 15.0 and 2 / 3 < scale / world_scale < 1.5:
+        return world
+    fitted = np.eye(4)
+    fitted[:3, :3] = scale * rotation
+    return fitted
+
+
 def pose_bases(take: Take, samples: np.ndarray, armature_matrix, bones):
     """Pose-bone matrices (matrix_basis) for ``bones`` at every sample.
 
@@ -326,8 +355,7 @@ def pose_bases(take: Take, samples: np.ndarray, armature_matrix, bones):
     a long recording never holds every bone's matrices at once."""
     reference_local = _matrices(take.reference)
     reference_model = _model_space(reference_local, take.parents)
-    game_to_armature = np.linalg.inv(np.asarray(armature_matrix, dtype=np.float64)) @ GAME_TO_BLENDER
-    armature_to_game = np.linalg.inv(game_to_armature)
+    armature_to_game = _armature_to_game(reference_model, bones, armature_matrix)
     model_cache = {}
 
     def model(bone: int) -> np.ndarray:
@@ -500,6 +528,11 @@ def apply_take(take: Take, context=None) -> dict:
     animation_data = armature.animation_data or armature.animation_data_create()
     previous_action = animation_data.action
     previous_slot = getattr(animation_data, "action_slot", None)
+    if (previous_action is not None and not previous_action.use_fake_user
+            and previous_action.users <= 1):
+        # Replacing it drops the action's only user, and Blender would discard the
+        # user's animation on save. A fake user keeps it.
+        previous_action.use_fake_user = True
     action = bpy.data.actions.new(_unique_action_name(take.name))
     action.use_fake_user = True
     animation_data.action = action

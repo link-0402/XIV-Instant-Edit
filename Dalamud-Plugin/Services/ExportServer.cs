@@ -326,6 +326,11 @@ public sealed class ExportServer : IDisposable
 
     public event Action<BridgeFailure>? ImportFailureReceived;
 
+    /// <summary> Serves the /painter/* requests from the Substance Painter plugin. </summary>
+    private Painter.PainterJobService? _painter;
+
+    internal void AttachPainter(Painter.PainterJobService painter) => _painter = painter;
+
     public ExportServer(
         Configuration config,
         PenumbraService penumbra,
@@ -557,6 +562,9 @@ public sealed class ExportServer : IDisposable
 
         if (method == "POST" && path.TrimEnd('/') == "/export")
             return await HandleExportAsync(request).ConfigureAwait(false);
+
+        if (method == "POST" && path.StartsWith("/painter/", StringComparison.Ordinal) && _painter is { } painter)
+            return painter.Handle(path.TrimEnd('/'), request.Body);
 
         return Error(404, "endpoint_not_found", "the requested bridge endpoint was not found");
     }

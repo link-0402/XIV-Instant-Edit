@@ -82,6 +82,8 @@ internal static class TextureEditScenarios
             await WatcherAsync(Path.Combine(root, "watcher"));
             await CacheCleanupAsync(Path.Combine(root, "cache-cleanup"));
             AtomicReplacement(Path.Combine(root, "atomic"));
+            await PainterBatchAsync(Path.Combine(root, "painter"));
+            PainterJobMod(Path.Combine(root, "painter-mod"));
         }
         finally
         {
@@ -455,6 +457,82 @@ internal static class TextureEditScenarios
         }
     }
 
+    /// <summary> Textures Substance Painter sends back are applied as one batch through their sessions. </summary>
+    private static async Task PainterBatchAsync(string root)
+    {
+        using var f = new Fixture(root, (uint)TexFile.TextureFormat.BC7);
+        var job = Guid.NewGuid();
+        var firstId = await f.Service.StartAsync(f.Request with { JobId = job }, false);
+        var secondTarget = Path.Combine(f.Backend.ModRoot, "Files", "chara", "second.tex");
+        var secondId = await f.Service.StartAsync(new TextureEditRequest("chara/second.tex", secondTarget, "Mod", f.Backend.ModRoot,
+            "Files/chara/second.tex", null, 0, JobId: job), false);
+        Check(firstId != secondId && f.Service.Sessions.Count == 2, "a Painter project opens one session per texture");
+
+        var red = Tga(8, 8, 77);
+        var blue = Tga(8, 8, 88);
+        var refreshes = f.Backend.Refreshes;
+        var results = await f.Service.ApplyExternalAsync([new ExternalTextureSave(firstId, red), new ExternalTextureSave(secondId, blue)], CancellationToken.None);
+        Check(results.All(r => r.Outcome == ExternalTextureOutcome.Applied) && f.Backend.Commits == 2, "both exported textures are committed");
+        Check(f.Backend.Refreshes == refreshes + 1 && f.Backend.RefreshedMods[^1] == 1, "the batch reloads its mod once and redraws once");
+        Check(File.ReadAllBytes(f.Backend.Target)[80] == 77 && File.ReadAllBytes(secondTarget)[80] == 88, "each session wrote its own file");
+        var first = f.Service.Sessions.Single(s => s.Id == firstId);
+        Check(File.ReadAllBytes(first.WorkingFile).SequenceEqual(red) && first.WorkingHash == TextureFiles.Hash(red),
+            "the applied image replaces the working TGA");
+
+        results = await f.Service.ApplyExternalAsync([new ExternalTextureSave(firstId, red), new ExternalTextureSave(secondId, blue)], CancellationToken.None);
+        Check(results.All(r => r.Outcome == ExternalTextureOutcome.Unchanged) && f.Backend.Commits == 2 && f.Backend.Refreshes == refreshes + 1,
+            "sending the same pixels again commits and redraws nothing");
+
+        await f.Service.ProcessPendingAsync(force: true);
+        Check(f.Backend.Commits == 2, "the watcher treats the mirrored working TGA as already saved");
+
+        results = await f.Service.ApplyExternalAsync([new ExternalTextureSave(firstId, null)], CancellationToken.None);
+        Check(results.Single().Outcome == ExternalTextureOutcome.Restored && File.ReadAllBytes(f.Backend.Target).SequenceEqual(f.Backend.Original),
+            "matching Painter's untouched export restores the captured original exactly");
+        Check(File.ReadAllBytes(secondTarget)[80] == 88, "a restore leaves the project's other textures alone");
+        results = await f.Service.ApplyExternalAsync([new ExternalTextureSave(firstId, null)], CancellationToken.None);
+        Check(results.Single().Outcome == ExternalTextureOutcome.Unchanged, "restoring an untouched texture does nothing");
+
+        results = await f.Service.ApplyExternalAsync([new ExternalTextureSave(Guid.NewGuid(), red)], CancellationToken.None);
+        Check(results.Single().Outcome == ExternalTextureOutcome.Failed, "a missing session is reported, not thrown");
+        results = await f.Service.ApplyExternalAsync([new ExternalTextureSave(secondId, Tga(6, 8, 1))], CancellationToken.None);
+        Check(results.Single().Outcome == ExternalTextureOutcome.Failed && File.ReadAllBytes(secondTarget)[80] == 88,
+            "an image the texture's compression can't hold is refused and the file stays");
+
+        // A Painter project keeps its sessions even when they look stale.
+        f.Service.KeepSession = id => id == firstId;
+        await f.Service.SetPausedAsync(firstId, true);
+        await f.Service.SetPausedAsync(secondId, true);
+        SetStale(first.Directory);
+        SetStale(f.Service.Sessions.Single(s => s.Id == secondId).Directory);
+        await f.Service.CleanupStaleSessionsAsync();
+        Check(f.Service.Sessions.Any(s => s.Id == firstId), "cleanup keeps sessions a Painter project links");
+        Check(TextureEditService.IsReusableFor(first with { PixelHash = "x", NewModName = "M", CollectionId = Guid.NewGuid(), ObjectIndex = null }, f.Request with { ModDirectory = "", JobId = job }) &&
+              !TextureEditService.IsReusableFor(first with { PixelHash = "x", NewModName = "M", CollectionId = Guid.NewGuid(), ObjectIndex = null }, f.Request with { ModDirectory = "" }),
+            "a vanilla session is only reused inside its own Painter project");
+    }
+
+    /// <summary> A Painter project's vanilla textures share one mod, found again by its identifier. </summary>
+    private static void PainterJobMod(string root)
+    {
+        var job = Guid.NewGuid();
+        var modRoot = Path.Combine(root, "Painter Top");
+        Directory.CreateDirectory(modRoot);
+        var first = Tex((uint)TexFile.TextureFormat.BC7, 8, 8, 4, 5);
+        PenumbraService.StageGameTextureMod(modRoot, "Painter Top", "chara/equipment/e0001/texture/a_base.tex", first, job);
+        Check(PenumbraService.ReadModStableIdentifierForRegression(modRoot) == job, "the project's mod carries the job id as its identifier");
+        var before = PenumbraService.TextureMappingFingerprint(modRoot);
+        PenumbraService.AddGameTextureToMod(modRoot, "chara/equipment/e0001/texture/a_norm.tex", Tex((uint)TexFile.TextureFormat.BC7, 8, 8, 4, 6));
+        var meta = JsonDocument.Parse(File.ReadAllText(Path.Combine(modRoot, "meta.json"))).RootElement;
+        var files = meta.GetProperty("DefaultData").GetProperty("Files");
+        Check(files.GetProperty("chara/equipment/e0001/texture/a_base.tex").GetString() == "Files/chara/equipment/e0001/texture/a_base.tex" &&
+              files.GetProperty("chara/equipment/e0001/texture/a_norm.tex").GetString() == "Files/chara/equipment/e0001/texture/a_norm.tex",
+            "a later vanilla texture joins the mod's default option");
+        Check(File.Exists(Path.Combine(modRoot, "Files", "chara", "equipment", "e0001", "texture", "a_norm.tex")) &&
+              PenumbraService.TextureMappingFingerprint(modRoot) != before, "the file is written and the mapping fingerprint changes");
+        Check(PenumbraService.ReadModStableIdentifierForRegression(modRoot) == job, "adding a file keeps the identifier");
+    }
+
     private static void SetStale(string directory)
     {
         var stale = DateTime.UtcNow - TimeSpan.FromDays(2);
@@ -524,9 +602,17 @@ internal static class TextureEditScenarios
         public Task<TextureSource> CaptureAsync(TextureEditRequest request, CancellationToken token)
         {
             var h = TextureFiles.ReadTex(Original);
+            // Each game path gets its own file in the mod, so a batch can hold several textures.
+            var relative = "Files/" + request.GamePath;
+            var target = Path.Combine(ModRoot, relative.Replace('/', Path.DirectorySeparatorChar));
+            if (!_vanilla && !File.Exists(target))
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.WriteAllBytes(target, Original);
+            }
             return Task.FromResult(new TextureSource(Original, new TextureEditSession
             {
-                GamePath = request.GamePath, ModDirectory = "Mod", ModRoot = ModRoot, RelativePath = "Files/chara/test.tex",
+                GamePath = request.GamePath, ModDirectory = "Mod", ModRoot = ModRoot, RelativePath = relative, JobId = request.JobId,
                 NewModName = request.NewModName, NeedsMod = _vanilla, CollectionId = Guid.NewGuid(),
                 Format = h.Format, Width = 8, Height = 8, MipMaps = true, LastCommittedHash = _vanilla ? "" : TextureFiles.Hash(Original),
                 MappingFingerprint = File.Exists(Path.Combine(ModRoot, "meta.json")) ? PenumbraService.TextureMappingFingerprint(ModRoot) : "",
@@ -566,8 +652,8 @@ internal static class TextureEditScenarios
             }
             else
             {
-                if (TextureFiles.Hash(File.ReadAllBytes(Target)) != s.LastCommittedHash) throw new TextureConflictException("Destination changed");
-                backup = TextureFiles.Replace(Target, ModRoot, s.RelativePath, "Mod", tex, s.LastCommittedHash, _backups, current, token);
+                if (TextureFiles.Hash(File.ReadAllBytes(s.TargetFile)) != s.LastCommittedHash) throw new TextureConflictException("Destination changed");
+                backup = TextureFiles.Replace(s.TargetFile, ModRoot, s.RelativePath, "Mod", tex, s.LastCommittedHash, _backups, current, token);
             }
             Interlocked.Increment(ref Commits);
             return Task.FromResult(new TextureCommit(TextureFiles.Hash(tex), backup, "Saved"));
@@ -578,11 +664,15 @@ internal static class TextureEditScenarios
             Interlocked.Increment(ref VariantCommits);
             return Task.FromResult(result);
         }
-        public Task<string> RefreshAsync(TextureEditSession s, Guid? showOption, CancellationToken token)
+        public Task<string> RefreshAsync(IReadOnlyList<TextureRefresh> items, CancellationToken token)
         {
-            LastShown = showOption;
+            LastShown = items[^1].ShowOption;
+            Interlocked.Increment(ref Refreshes);
+            RefreshedMods.Add(items.Select(item => item.Session.ModDirectory).Distinct().Count());
             return Task.FromResult(RefreshWarning ? "Texture saved; refresh needs attention" : "Saved and redrawn");
         }
+        public int Refreshes;
+        public readonly List<int> RefreshedMods = [];
     }
 
     private static byte[] Tga(int width, int height, byte value)

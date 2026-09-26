@@ -265,6 +265,8 @@ public sealed partial class MainWindow
             return;
         SetupColumns(RowLayout.Mod);
 
+        // A mod has no actor identity for the search to match, so the search filters its rows.
+        var filterBySearch = _search.Active;
         if (_kinds.IsFlat)
         {
             var row = 0;
@@ -273,7 +275,7 @@ public sealed partial class MainWindow
                 if (!_kinds.AdmitsSubtree(root))
                     continue;
                 foreach (var resource in root.Flattened)
-                    if (_kinds.Admits(resource))
+                    if (_kinds.Admits(resource) && (!filterBySearch || _search.Matches(resource)))
                         DrawFlatNode(actor, root, resource, $"mod:flat:{row++}", RowLayout.Mod);
             }
         }
@@ -281,8 +283,8 @@ public sealed partial class MainWindow
         {
             var index = 0;
             foreach (var root in actor.Roots)
-                if (_kinds.AdmitsSubtree(root))
-                    DrawNode(actor, root, $"mod:{index++}", new TreeGuide(0, 0, 0, false), false, false, RowLayout.Mod);
+                if (_kinds.AdmitsSubtree(root) && (!filterBySearch || _search.Matches(root)))
+                    DrawNode(actor, root, $"mod:{index++}", new TreeGuide(0, 0, 0, false), filterBySearch, filterBySearch, RowLayout.Mod);
         }
     }
 
@@ -526,6 +528,13 @@ public sealed partial class MainWindow
             if (Widgets.IconButton("##edit-model", FontAwesomeIcon.Pen, "Edit this model in Blender"))
                 TryEditNode(node, actor);
             ImGui.SameLine(0, Theme.Scaled(2));
+            if (CanPaint(actor, node))
+            {
+                if (Widgets.IconButton("##paint-model", FontAwesomeIcon.PaintRoller, "Paint this model's textures in Substance Painter",
+                        Volatile.Read(ref _painterBusy) == 0))
+                    StartPainter(actor, node);
+                ImGui.SameLine(0, Theme.Scaled(2));
+            }
         }
         else if (IsTextureRow(node))
         {
@@ -561,6 +570,12 @@ public sealed partial class MainWindow
         var texture = IsTextureRow(node);
         if (safeModel && ImGui.MenuItem("Edit model in Blender"))
             TryEditNode(node, actor);
+        if (CanPaint(actor, node))
+        {
+            using var disabled = ImRaii.Disabled(Volatile.Read(ref _painterBusy) != 0);
+            if (ImGui.MenuItem("Paint textures in Substance Painter"))
+                StartPainter(actor, node);
+        }
         if (texture)
         {
             using var disabled = ImRaii.Disabled(!TextureEditAvailable(node) || Volatile.Read(ref _textureBusy) != 0);

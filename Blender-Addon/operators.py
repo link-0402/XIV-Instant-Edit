@@ -504,7 +504,7 @@ class XIVIE_OT_clear_backups(Operator):
     bl_idname = "xiv_ie.clear_backups"
     bl_label = "Clear All Backups"
     bl_description = "Delete all recognized model backups in the current target folder"
-    bl_options = {"REGISTER", "UNDO"}
+    # Not REGISTER: Repeat Last would delete another target's backups without the confirmation.
 
     folder_label: StringProperty(options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
     backup_count: IntProperty(default=0, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
@@ -725,6 +725,8 @@ def _flip_normals_in_edit_mode(context: Context, objects) -> None:
     try:
         if any(obj.mode != "EDIT" for obj in objects):
             raise RuntimeError("the duplicate could not enter Edit Mode")
+        # Hidden faces are neither selected nor flipped, so reveal them on the copy first.
+        bpy.ops.mesh.reveal()
         bpy.ops.mesh.select_all(action="SELECT")
         bpy.ops.mesh.flip_normals()
     finally:

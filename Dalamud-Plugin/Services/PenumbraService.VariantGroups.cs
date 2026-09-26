@@ -91,6 +91,7 @@ public sealed partial class PenumbraService
                 sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath, sourceModStableId)).ConfigureAwait(false);
             if (resolved.Target is null)
                 return new SourceOptionCapture(null, "unknown", resolved.Error);
+            await LeaveFrameworkThread();
             var option = ResolveSourceOption(resolved.Target.Folder, sourceGamePath, resolved.Target.RelativePath);
             if (preferredMemberships is { Count: > 0 })
             {
@@ -129,6 +130,7 @@ public sealed partial class PenumbraService
                             pair => (IReadOnlyList<string>)pair.Value.ToArray(), StringComparer.OrdinalIgnoreCase)
                         : null;
                 }).ConfigureAwait(false);
+                await LeaveFrameworkThread();
                 if (settings is not null)
                 {
                     var selectedOptions = new List<SourceOptionResolution>();
@@ -606,6 +608,27 @@ public sealed partial class PenumbraService
 
     private static bool SameGamePath(string left, string right)
         => string.Equals(left.Replace('\\', '/'), right.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Whether the default data or an option not named <paramref name="optionName"/> maps <paramref name="file"/>.</summary>
+    private static bool IsMappedOutsideOption(JsonObject meta, string modRoot, string file, string optionName)
+    {
+        var relative = Path.GetRelativePath(modRoot, file).Replace('\\', '/');
+        bool Maps(JsonNode? container) => container is JsonObject value && value["Files"] is JsonObject files &&
+            files.Any(pair => string.Equals(JsonString(pair.Value)?.Replace('\\', '/').TrimStart('/'), relative,
+                StringComparison.OrdinalIgnoreCase));
+        if (Maps(meta["DefaultData"]))
+            return true;
+        if (meta["Groups"] is not JsonArray groups)
+            return false;
+        foreach (var group in groups.OfType<JsonObject>())
+            foreach (var key in new[] { "Options", "Containers" })
+                if (group[key] is JsonArray options)
+                    foreach (var option in options.OfType<JsonObject>())
+                        if (Maps(option) &&
+                            !string.Equals(JsonString(option["Name"]), optionName, StringComparison.OrdinalIgnoreCase))
+                            return true;
+        return false;
+    }
 
     private static string? JsonString(JsonNode? node)
         => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;

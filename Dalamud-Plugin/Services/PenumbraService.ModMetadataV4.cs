@@ -491,10 +491,15 @@ public sealed partial class PenumbraService
                 TouchV4ModMetadata(meta);
                 WriteJsonAtomic(Path.Combine(root, "meta.json"), meta);
 
+                // Only files an old mapping pointed at can have become redundant; readmes,
+                // images and unmapped extras belong to the mod and stay.
+                var previouslyMapped = mappings.Select(mapping => mapping.OldRelativePath)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
                 foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).ToArray())
                 {
                     var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
-                    if (IsModMetadataFile(relative) || desiredFiles.ContainsKey(relative))
+                    if (IsModMetadataFile(relative) || desiredFiles.ContainsKey(relative) ||
+                        !previouslyMapped.Contains(relative))
                         continue;
                     File.Delete(file);
                 }
@@ -645,10 +650,12 @@ public sealed partial class PenumbraService
             }
             CopyDirectoryContents(snapshot, root);
         }
-        finally
+        catch (Exception e)
         {
-            TryDeleteCleanupSnapshot(snapshot);
+            // The snapshot is now the only intact copy of the mod, so it stays.
+            throw new IOException($"Could not restore the mod from its cleanup snapshot, kept at {snapshot}: {e.Message}", e);
         }
+        TryDeleteCleanupSnapshot(snapshot);
     }
 
     private static void TryDeleteCleanupSnapshot(string snapshot)

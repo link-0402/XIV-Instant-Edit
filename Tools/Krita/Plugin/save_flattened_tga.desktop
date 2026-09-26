@@ -5,4 +5,4 @@ X-KDE-Library=save_flattened_tga
 X-Python-2-Compatible=false
 X-Krita-Manual=
 Name=Save Flattened TGA
-Comment=Export a flattened 32-bit TGA over the file this document was opened from, without altering the open document's layers.
+Comment=Export a flattened 32-bit TGA over the file this document was opened from, or next to it under a name you enter, without altering the open document's layers.

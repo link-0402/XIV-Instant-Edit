@@ -76,6 +76,7 @@ public sealed partial class MainWindow
             Widgets.Banner("##texture-startup-error", FeedbackSeverity.Error, _textures.StartupError);
         }
         ImGui.Spacing();
+        DrawPainterJobs();
 
         var sessions = _textures.Sessions;
         if (sessions.Count == 0)

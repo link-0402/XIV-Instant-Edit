@@ -8,13 +8,39 @@ internal sealed class AnimationJournalStore
     public static readonly TimeSpan Retention = TimeSpan.FromDays(7);
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, IncludeFields = true };
     private readonly string root;
+    private readonly Action<string>? warn;
     private string OffsetBackupPath => Path.Combine(root, "livepose-offset-backup.json");
-    public AnimationJournalStore(string configDirectory)
+    public AnimationJournalStore(string configDirectory, Action<string>? warn = null)
     {
         root = Path.Combine(Path.GetFullPath(configDirectory), "AnimationEdits");
+        this.warn = warn;
         TextureFiles.EnsureLocalPath(root);
         Directory.CreateDirectory(root);
         Cleanup();
+    }
+    /// <summary>Moves recovery records an older version kept under <paramref name="legacyDirectory"/>.</summary>
+    public static void ImportLegacy(string legacyDirectory, string configDirectory)
+    {
+        var legacy = Path.Combine(Path.GetFullPath(legacyDirectory), "AnimationEdits");
+        var root = Path.Combine(Path.GetFullPath(configDirectory), "AnimationEdits");
+        if (!Directory.Exists(legacy) || PathRules.SamePhysicalPath(legacy, root)) return;
+        TextureFiles.EnsureLocalPath(root);
+        Directory.CreateDirectory(root);
+        foreach (var source in Directory.EnumerateFileSystemEntries(legacy).ToArray())
+        {
+            var target = Path.Combine(root, Path.GetFileName(source));
+            if (File.Exists(target) || Directory.Exists(target)) continue;
+            if (!Directory.Exists(source)) { File.Move(source, target); continue; }
+            try { Directory.Move(source, target); }
+            catch (IOException)
+            {
+                // Directory.Move cannot cross volumes; job folders hold only files.
+                Directory.CreateDirectory(target);
+                foreach (var file in Directory.EnumerateFiles(source))
+                    File.Copy(file, Path.Combine(target, Path.GetFileName(file)));
+                Directory.Delete(source, recursive: true);
+            }
+        }
     }
     public void Cleanup(DateTime? now = null)
     {
@@ -33,7 +59,9 @@ internal sealed class AnimationJournalStore
             {
                 continue;
             }
-            Directory.Delete(dir, recursive: true);
+            try { Directory.Delete(dir, recursive: true); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            { warn?.Invoke($"Could not delete the expired animation record {Path.GetFileName(dir)}: {e.Message}"); }
         }
     }
     public string DirectoryFor(Guid id)
@@ -50,12 +78,20 @@ internal sealed class AnimationJournalStore
             if (!Guid.TryParseExact(Path.GetFileName(dir), "N", out var id)) continue;
             var path = Path.Combine(DirectoryFor(id), "journal.json");
             if (!File.Exists(path)) continue;
-            TextureFiles.EnsureLocalPath(path);
-            if (new FileInfo(path).Length > 16 * 1024 * 1024) throw new InvalidDataException("An animation recovery record exceeds 16 MiB.");
-            var record = JsonSerializer.Deserialize<AnimationEditJournal>(File.ReadAllText(path), Json)
-                ?? throw new InvalidDataException("Invalid animation recovery record.");
-            if (record.Version is not (1 or 2 or 3) || record.Id != id || record.Request?.Id != id) throw new InvalidDataException("Unsupported animation recovery record.");
-            result.Add(record);
+            try
+            {
+                TextureFiles.EnsureLocalPath(path);
+                if (new FileInfo(path).Length > 16 * 1024 * 1024) throw new InvalidDataException("An animation recovery record exceeds 16 MiB.");
+                var record = JsonSerializer.Deserialize<AnimationEditJournal>(File.ReadAllText(path), Json)
+                    ?? throw new InvalidDataException("Invalid animation recovery record.");
+                if (record.Version is not (1 or 2 or 3) || record.Id != id || record.Request?.Id != id) throw new InvalidDataException("Unsupported animation recovery record.");
+                result.Add(record);
+            }
+            catch (Exception e) when (e is IOException or JsonException or InvalidDataException or UnauthorizedAccessException)
+            {
+                // One unreadable record must not take the others, and the Animations panel, down with it.
+                warn?.Invoke($"Skipped the animation recovery record {id:N}: {e.Message}");
+            }
         }
         return result.OrderByDescending(r => r.CreatedUtc).ToArray();
     }

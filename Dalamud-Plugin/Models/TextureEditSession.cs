@@ -2,8 +2,9 @@ using Penumbra.Api.Enums;
 
 namespace InstantEdit.Models;
 
+/// <param name="JobId">The Substance Painter project this texture belongs to; its vanilla textures share one new mod.</param>
 public sealed record TextureEditRequest(string GamePath, string ActualPath, string ModDirectory,
-    string ModRoot, string RelativePath, int? ObjectIndex, long ActorAddress, string NewModName = "");
+    string ModRoot, string RelativePath, int? ObjectIndex, long ActorAddress, string NewModName = "", Guid? JobId = null);
 
 public sealed record TextureEditSession
 {
@@ -16,6 +17,11 @@ public sealed record TextureEditSession
     public string RelativePath { get; set; } = "";
     public string MappingFingerprint { get; set; } = "";
     public string NewModName { get; init; } = "";
+    /// <summary>
+    /// The Substance Painter project that opened this session. Its vanilla sessions share one new mod,
+    /// whose Penumbra identifier is this id; the first commit creates it and later ones add their file.
+    /// </summary>
+    public Guid? JobId { get; init; }
     public bool NeedsMod { get; set; }
     public bool SetupPending { get; set; }
     public int? ObjectIndex { get; init; }
@@ -71,7 +77,17 @@ public sealed record TextureVariant
 }
 
 internal sealed record TextureSource(byte[] Bytes, TextureEditSession Session);
-internal sealed record TextureCommit(string Hash, string Backup, string Message);
+/// <param name="MappingFingerprint">The mod's new metadata fingerprint when the commit changed its mappings; otherwise empty.</param>
+internal sealed record TextureCommit(string Hash, string Backup, string Message, string MappingFingerprint = "");
+/// <param name="ShowOption">The variant-group option to select in the session's collection, if any.</param>
+internal sealed record TextureRefresh(TextureEditSession Session, Guid? ShowOption);
+
+/// <summary> A texture Substance Painter exported for a session: a 32-bit TGA, or null to go back to the captured original. </summary>
+internal sealed record ExternalTextureSave(Guid SessionId, byte[]? Tga);
+
+internal enum ExternalTextureOutcome { Applied, Unchanged, Restored, Failed }
+
+internal sealed record ExternalTextureResult(Guid SessionId, ExternalTextureOutcome Outcome, string Message);
 internal sealed record TextureVariantCommit(string Hash, string Backup, string RelativePath,
     Guid GroupId, Guid OriginalOptionId, Guid OptionId, string MappingFingerprint);
 
@@ -83,6 +99,9 @@ internal interface ITextureEditBackend
     /// <summary>Writes a variant TEX into the session's existing mod and maps it in the session's variant group.</summary>
     Task<TextureVariantCommit> CommitVariantAsync(TextureEditSession session, TextureVariant variant, byte[] tex,
         Func<bool> stillCurrent, CancellationToken token);
-    /// <summary>Reloads and redraws; <paramref name="showOption"/> selects that variant-group option in the session's collection.</summary>
-    Task<string> RefreshAsync(TextureEditSession session, Guid? showOption, CancellationToken token);
+    /// <summary>
+    /// Reloads each affected mod once, applies collection setup and option selections, then redraws
+    /// every captured actor and the player's entities once.
+    /// </summary>
+    Task<string> RefreshAsync(IReadOnlyList<TextureRefresh> items, CancellationToken token);
 }

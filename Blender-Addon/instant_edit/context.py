@@ -65,7 +65,8 @@ class MeshNameInfo:
 
 _MESH_ID_PREFIX = re.compile(r"^(\d+)\.(\d+)(?:\s+(.*))?$")
 _MESH_ID_SUFFIX = re.compile(r"^(.+?)\s+(\d+)\.(\d+)$")
-_LOD_SUFFIX = re.compile(r"\s+LOD(\d+)$", re.IGNORECASE)
+# Blender puts a duplicate's ".001" after the LOD suffix.
+_LOD_SUFFIX = re.compile(r"\s+LOD(\d+)(?:\.\d+)?$", re.IGNORECASE)
 
 
 _planned_mesh_ids: dict[int, tuple[int, int]] | None = None

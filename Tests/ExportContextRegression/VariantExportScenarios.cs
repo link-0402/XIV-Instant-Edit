@@ -239,7 +239,7 @@ internal static class VariantExportScenarios
         var imc = groups.Single(group => group["Type"]?.GetValue<string>() == "Imc");
         var atr = groups.Single(group => group["Type"]?.GetValue<string>() == "Multi");
         Require(imc["Name"]!.GetValue<string>() == requestedName + " (2)" &&
-                imc["AllVariants"]!.GetValue<bool>() && !imc["OnlyAttributes"]!.GetValue<bool>() &&
+                imc["AllVariants"]!.GetValue<bool>() && imc["OnlyAttributes"]!.GetValue<bool>() &&
                 imc["Identifier"]!["PrimaryId"]!.GetValue<int>() == 1 &&
                 imc["Identifier"]!["ObjectType"]!.GetValue<string>() == "Equipment" &&
                 imc["Identifier"]!["EquipSlot"]!.GetValue<string>() == "Body" &&

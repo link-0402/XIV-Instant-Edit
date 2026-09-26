@@ -106,6 +106,7 @@ public sealed partial class MainWindow : Window, IDisposable
     {
         _penumbra.ResourcesChanged -= OnResourcesChanged;
         _feed.Reported -= Notify;
+        DetachPainter();
         _lifetimeCts.Cancel();
         _modLoadCts?.Cancel();
         _modLoadCts?.Dispose();
@@ -227,6 +228,7 @@ public sealed partial class MainWindow : Window, IDisposable
             animations?.StopObservation();
         DrawTextureDialogs();
         DrawAnimationSendDialog();
+        DrawPainterDialogs();
         DrawStatusStrip(GetFeedback(activeTab));
         DrawWindowOptionsExtension();
     }
@@ -287,8 +289,10 @@ public sealed partial class MainWindow : Window, IDisposable
             _ => ("Offline", "Start Blender and enable the XIV Instant Edit add-on to edit models."),
         };
 
+        var painterDot = PainterEnabled ? PainterDot(PainterState, _pluginVersion) : default;
         var rightWidth = Widgets.StatusDotWidth("Penumbra", penumbraValue) + Theme.Scaled(10)
                          + Widgets.StatusDotWidth("Blender", blenderValue) + Theme.Scaled(10)
+                         + (PainterEnabled ? Widgets.StatusDotWidth("Painter", painterDot.Value) + Theme.Scaled(10) : 0)
                          + frame + style.ItemSpacing.X + frame;
         ImGui.SameLine();
         var rightStart = ImGui.GetWindowContentRegionMax().X - rightWidth;
@@ -301,6 +305,12 @@ public sealed partial class MainWindow : Window, IDisposable
         ImGui.AlignTextToFramePadding();
         Widgets.StatusDot("Blender", ConnectionColour(blender), blenderValue, blenderDetail);
         ImGui.SameLine(0, Theme.Scaled(10));
+        if (PainterEnabled)
+        {
+            ImGui.AlignTextToFramePadding();
+            Widgets.StatusDot("Painter", painterDot.Colour, painterDot.Value, painterDot.Detail);
+            ImGui.SameLine(0, Theme.Scaled(10));
+        }
         var refreshing = _onScreen.IsRefreshing;
         if (Widgets.IconButton("##refresh", FontAwesomeIcon.Sync, refreshing ? "Refreshing the on-screen resource list…" : "Refresh the on-screen resource list", !refreshing))
             RequestRefresh();

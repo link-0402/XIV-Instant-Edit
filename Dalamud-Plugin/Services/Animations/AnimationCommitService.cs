@@ -6,7 +6,7 @@ using InstantEdit.Models;
 namespace InstantEdit.Services.Animations;
 
 internal sealed class AnimationCommitService(PenumbraService penumbra, AnimationResources resources,
-    ModelBackupStore backups, AnimationJournalStore store)
+    ModelBackupStore backups, AnimationJournalStore store, ModelBackupStore? legacyBackups = null)
 {
     public async Task<AnimationEditJournal> PrepareAsync(AnimationBakeRequest request, AnimationDependencyManifest manifest,
         ImmutableDictionary<string, byte[]> outputs, CancellationToken token)
@@ -265,9 +265,20 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                     // undone" looks like here: the old path keeps its pre-edit bytes
                     // for as long as the rename is in effect, so it cannot tell the
                     // two states apart on its own.
-                    if (!File.Exists(file.Target)) continue;
+                    if (!File.Exists(file.Target))
+                    {
+                        // While the edit is still in effect, its output can only be gone because
+                        // something replaced it, such as a later in-place edit of the same clip.
+                        if (journal.State is "Activated" or "ClearingOffsets" or "Completed")
+                            throw new IOException($"{file.Target} no longer exists, most likely because a later edit replaced it. Undo that edit first.");
+                        continue;
+                    }
                     RequireHash(file.Target, file.AfterHash);
                     RequireHash(ResolveBackup(file), file.BeforeHash);
+                    // Undo writes the backup to the original path; never over a file changed since.
+                    var oldTarget = OldTargetPath(file);
+                    if (File.Exists(oldTarget) && HashFile(oldTarget) != file.BeforeHash)
+                        throw new IOException($"{oldTarget} was changed after this job. Undo will not overwrite it.");
                     continue;
                 }
                 var hash = HashFile(file.Target);
@@ -303,7 +314,12 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
         // original path, not the fresh one this edit wrote to.
         var relative = file.RenamedFromRelativePath is { Length: > 0 } renamedFrom ? renamedFrom : file.RelativePath;
         var target = backups.Describe(file.ModDirectory, relative);
-        return backups.Resolve(target.Id, Path.GetFileName(file.Backup));
+        try { return backups.Resolve(target.Id, Path.GetFileName(file.Backup)); }
+        catch (FileNotFoundException) when (legacyBackups is not null)
+        {
+            // Edits made before backups moved out of the cache keep theirs in the shared store.
+            return legacyBackups.Resolve(target.Id, Path.GetFileName(file.Backup));
+        }
     }
     /// <summary>The physical path of the original file a rename replaced, still inside its mod root.</summary>
     private static string OldTargetPath(AnimationFileChange file)
