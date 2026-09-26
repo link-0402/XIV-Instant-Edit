@@ -31,6 +31,8 @@ VANILLA_CONTEXT_CAPABILITY = "instant-edit.vanilla-context.v1"
 STRUCTURED_ERRORS_CAPABILITY = "instant-edit.structured-errors.v1"
 IMPORT_STATUS_CAPABILITY = "instant-edit.import-status.v1"
 ANIMATION_IMPORT_CAPABILITY = "instant-edit.animation-import.v1"
+# Imports may carry the model's game skeleton (see skeleton.py).
+IMPORT_SKELETON_CAPABILITY = "instant-edit.import-skeleton.v1"
 MAX_ANIMATION_QUEUE_SIZE = 4
 # How long an animation request waits for Blender's main thread to key it, so the plugin
 # can report the result. Blender busy with a modal tool keeps the request queued instead.
@@ -76,6 +78,7 @@ def _status_payload() -> dict:
             STRUCTURED_ERRORS_CAPABILITY,
             IMPORT_STATUS_CAPABILITY,
             ANIMATION_IMPORT_CAPABILITY,
+            IMPORT_SKELETON_CAPABILITY,
         ],
     }
 
@@ -222,6 +225,21 @@ def _notify_import_failure(data: dict, failure: dict) -> None:
         name="XIV Instant Edit import failure callback",
         daemon=True,
     ).start()
+
+
+def _stage_import_skeleton(data: dict) -> dict:
+    """Write a staged import's skeleton into its cache job, where the queued import reads it."""
+    from .cache import remove_job
+    from .skeleton import stage_skeleton
+
+    try:
+        return stage_skeleton(data)
+    except OSError as error:
+        remove_job(data.get("cacheJobDirectory", ""))
+        raise CacheStagingError(
+            "file_staging", "skeleton_staging_failed",
+            "Blender could not write the model's skeleton into its cache.",
+            "Verify the configured cache directory is writable, then retry the import.") from error
 
 
 def _request_metadata(data: dict | None) -> dict:
@@ -387,7 +405,7 @@ class _ImportHandler(BaseHTTPRequestHandler):
             data = self._validate_import(data)
             from .cache import stage_import
 
-            data = stage_import(data)
+            data = _stage_import_skeleton(stage_import(data))
         except (socket.timeout, TimeoutError):
             self._respond(408, _failure(
                 408, "import", "request_receipt", "request_body_timeout",
@@ -682,6 +700,12 @@ class _ImportHandler(BaseHTTPRequestHandler):
                 "request_validation", "resource_manifest_mismatch",
                 "The resource manifest version and status do not agree.",
                 "Update both XIV Instant Edit components and retry.")
+        # Optional: the model's game skeleton. Without it the armature gets placeholder bones.
+        skeleton = data.get("skeleton")
+        if skeleton is not None:
+            from .skeleton import parse_skeleton
+
+            skeleton = parse_skeleton(skeleton).to_payload()
 
         return {
             **data,
@@ -713,6 +737,7 @@ class _ImportHandler(BaseHTTPRequestHandler):
             "objectIndex": object_index,
             "name": display_name,
             "importOptions": import_options,
+            "skeleton": skeleton,
         }
 
 
@@ -889,6 +914,7 @@ def poll_import_queue() -> float:
                     armature_target=data.get("importOptions", {}).get("targetObject", "Skeleton"),
                     apply_textures_and_materials=data.get("importOptions", {}).get("applyTexturesAndMaterials", False),
                     preview_manifest_path=data.get("previewManifestPath", ""),
+                    skeleton_path=data.get("skeletonPath", ""),
                     cache_job_directory=data.get("cacheJobDirectory", ""),
                 )
                 if result != {"FINISHED"}:

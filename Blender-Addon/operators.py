@@ -114,29 +114,20 @@ def _simple_import_create_armature(
     mesh_objects: list,
     imported_objects: list | None = None,
 ):
-    """Create the generated armature used by plugin-driven MDL imports."""
-    model = XIVModel.from_file(str(file_path))
-    armature_data = bpy.data.armatures.new("InstantEditArmature")
-    armature_obj = bpy.data.objects.new("InstantEditArmature", armature_data)
-    target_collection = context.collection or context.scene.collection
-    target_collection.objects.link(armature_obj)
-    if imported_objects is not None:
-        imported_objects.append(armature_obj)
+    """Create the armature for an MDL imported from disk: the game's skeleton when the running
+    plugin finds one for the file's name, else the model's bones without a rest pose.
 
+    Returns (armature, note for the report or an empty string)."""
+    from .instant_edit.skeleton import create_armature, request_skeleton
+
+    model = XIVModel.from_file(str(file_path))
+    game_skeleton, reason = request_skeleton(file_path)
+    target_collection = context.collection or context.scene.collection
     previous_selection = tuple(context.selected_objects)
     previous_active = context.view_layer.objects.active
-    for obj in previous_selection:
-        obj.select_set(False)
-    context.view_layer.objects.active = armature_obj
-    armature_obj.select_set(True)
-    bpy.ops.object.mode_set(mode="EDIT")
-    try:
-        for bone_name in model.bones:
-            edit_bone = armature_data.edit_bones.new(bone_name)
-            edit_bone.head = (0, 0, 0)
-            edit_bone.tail = (0, 0, 0.1)
-    finally:
-        bpy.ops.object.mode_set(mode="OBJECT")
+    armature_obj, report = create_armature(
+        context, target_collection, "InstantEditArmature", model.bones, mesh_objects, game_skeleton,
+        created_objects=imported_objects)
 
     for obj in mesh_objects:
         obj.parent = armature_obj
@@ -151,7 +142,9 @@ def _simple_import_create_armature(
         if previous_active is not None and previous_active.name in bpy.data.objects
         else armature_obj
     )
-    return armature_obj
+    if game_skeleton is None:
+        return armature_obj, f"bones have no rest pose: {reason}" if report.placeholders else ""
+    return armature_obj, report.summary()
 
 
 def _simple_import_remove_objects(objects: list) -> None:
@@ -305,6 +298,7 @@ class XIVIE_OT_simple_import(Operator):
             return {"CANCELLED"}
 
         imported_objects = []
+        skeleton_note = ""
         try:
             if import_format == "MDL":
                 from .io.model import ModelImport
@@ -321,7 +315,7 @@ class XIVIE_OT_simple_import(Operator):
                 if use_existing_skeleton:
                     imported_objects = _simple_import_bind_existing_skeleton(imported_objects, skeleton)
                 elif mesh_objects:
-                    _simple_import_create_armature(
+                    _armature, skeleton_note = _simple_import_create_armature(
                         context,
                         file_path,
                         mesh_objects,
@@ -361,9 +355,11 @@ class XIVIE_OT_simple_import(Operator):
         refresh_error = refresh_variant_targets_after_operation(context)
         count_text = f" ({imported_count} mesh object{'s' if imported_count != 1 else ''})" if imported_count else ""
         message = f"Imported {file_path.name}{count_text}"
+        if skeleton_note:
+            message += f"; {skeleton_note}"
         if refresh_error is not None:
             message += f"; Penumbra targets could not refresh: {refresh_error}"
-        self.report({"WARNING"} if refresh_error is not None else {"INFO"}, message)
+        self.report({"WARNING"} if refresh_error is not None or skeleton_note else {"INFO"}, message)
         return {"FINISHED"}
 
 

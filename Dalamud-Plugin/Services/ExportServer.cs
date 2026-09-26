@@ -13,7 +13,7 @@ namespace InstantEdit.Services;
 /// Minimal HTTP server that receives export results from Blender's Quick Export button
 /// and applies them to Penumbra as the persistent XIV Instant Edit mod.
 /// </summary>
-public sealed class ExportServer : IDisposable
+public sealed partial class ExportServer : IDisposable
 {
     internal sealed class ExportRequest
     {
@@ -566,6 +566,9 @@ public sealed class ExportServer : IDisposable
         if (method == "POST" && path.StartsWith("/painter/", StringComparison.Ordinal) && _painter is { } painter)
             return painter.Handle(path.TrimEnd('/'), request.Body);
 
+        if (method == "POST" && path.TrimEnd('/') == "/skeleton")
+            return await HandleSkeletonAsync(request).ConfigureAwait(false);
+
         return Error(404, "endpoint_not_found", "the requested bridge endpoint was not found");
     }
 
@@ -585,6 +588,7 @@ public sealed class ExportServer : IDisposable
                 "instant-edit.backup-restore.v1",
                 "instant-edit.structured-errors.v1",
                 "instant-edit.import-status.v1",
+                SkeletonCapability,
             },
         }));
 
@@ -1743,6 +1747,7 @@ public sealed class ExportServer : IDisposable
             "/mashup/plan" => "mashup_plan",
             "/mashup/export" => "mashup_export",
             "/export" => "export",
+            "/skeleton" => "skeleton",
             _ => "http_request",
         };
 

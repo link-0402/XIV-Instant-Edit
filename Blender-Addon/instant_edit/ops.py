@@ -33,6 +33,7 @@ from .material_preview import (cleanup_preview_bundle, discard_preview_data,
                                load_preview_manifest)
 from .cache import create_job, finish_job
 from .diagnostics import record_failure, record_protocol_failure, record_remote_failure
+from .skeleton import create_armature, load_skeleton
 
 
 # ---- Dalamud plugin HTTP transport ----
@@ -1077,6 +1078,8 @@ class InstantImport(Operator):
     armature_target: bpy.props.StringProperty(default="Skeleton", options={'HIDDEN'})  # type: ignore
     apply_textures_and_materials: bpy.props.BoolProperty(default=False, options={'HIDDEN'})  # type: ignore
     preview_manifest_path: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
+    # The game skeleton the plugin sent (see skeleton.stage_skeleton); empty for placeholder bones.
+    skeleton_path: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
     cache_job_directory: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
 
     @classmethod
@@ -1091,6 +1094,7 @@ class InstantImport(Operator):
         collection = None
         preview_package = None
         preview_validation_warning = ""
+        skeleton_note = ""
         if not file_path.is_file():
             props.last_status = "Import failed: file not found."
             self.report({"ERROR"}, "Model file not found.")
@@ -1162,7 +1166,7 @@ class InstantImport(Operator):
                     created_objects,
                 )
             else:
-                self._create_armature(
+                skeleton_note = self._create_armature(
                     context,
                     file_path,
                     imported_meshes,
@@ -1199,6 +1203,8 @@ class InstantImport(Operator):
                 f"Imported {file_path.name} with preview warnings: {warning_text}"
                 if warning_text else f"Imported {file_path.name}"
             )
+            if skeleton_note:
+                props.last_status += f"; {skeleton_note}"
             context_selection_changed = _preselect_sole_export_context(
                 props, context, self.context_id)
         except Exception as e:
@@ -1230,7 +1236,7 @@ class InstantImport(Operator):
             props.last_status += f"; Penumbra targets could not refresh: {refresh_error}"
         if preview_validation_warning or (preview_package is not None and preview_package.warnings):
             self.report({"WARNING"}, props.last_status)
-        elif refresh_error is not None:
+        elif refresh_error is not None or skeleton_note:
             self.report({"WARNING"}, props.last_status)
         else:
             self.report({"INFO"}, "Model imported!")
@@ -1290,33 +1296,11 @@ class InstantImport(Operator):
         collection,
         metadata=None,
         created_objects=None,
-    ) -> None:
-        """Creates an armature containing every bone of the model and parents the
-        returned imported mesh to it, so the standard export pipeline can run."""
+    ) -> str:
+        """Creates an armature with the game's skeleton and every bone of the model, and parents
+        the returned imported mesh to it, so the standard export pipeline can run. Returns a note
+        for the status line, or an empty string."""
         model = XIVModel.from_file(str(file_path))
-
-        armature_data = bpy.data.armatures.new("InstantEditArmature")
-        armature_obj  = bpy.data.objects.new("InstantEditArmature", armature_data)
-        collection.objects.link(armature_obj)
-        if created_objects is not None:
-            created_objects.append(armature_obj)
-        if metadata:
-            tag_object(armature_obj, metadata)
-
-        for obj in tuple(context.selected_objects):
-            obj.select_set(False)
-        context.view_layer.objects.active = armature_obj
-        armature_obj.select_set(True)
-
-        bpy.ops.object.mode_set(mode="EDIT")
-        try:
-            for bone_name in model.bones:
-                edit_bone = armature_data.edit_bones.new(bone_name)
-                edit_bone.head = (0, 0, 0)
-                edit_bone.tail = (0, 0, 0.1)
-        finally:
-            bpy.ops.object.mode_set(mode="OBJECT")
-
         for obj in tuple(mesh_objects):
             if (
                 obj.type != "MESH"
@@ -1326,9 +1310,24 @@ class InstantImport(Operator):
                 raise ValueError("import returned an object outside its staging collection")
             if obj.parent:
                 raise ValueError("import returned an already-parented mesh")
+
+        game_skeleton, skeleton_error = None, ""
+        if self.skeleton_path:
+            try:
+                game_skeleton = load_skeleton(self.skeleton_path)
+            except Exception as error:
+                skeleton_error = f"the game skeleton could not be read ({error}); bones have no rest pose"
+        armature_obj, report = create_armature(
+            context, collection, "InstantEditArmature", model.bones, mesh_objects, game_skeleton,
+            created_objects=created_objects)
+        if metadata:
+            tag_object(armature_obj, metadata)
+
+        for obj in tuple(mesh_objects):
             obj.parent = armature_obj
             modifier   = obj.modifiers.new(name="Armature", type="ARMATURE")
             modifier.object = armature_obj
+        return skeleton_error or report.summary()
 
 
 # ---- Mashup export context management ----

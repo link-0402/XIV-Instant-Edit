@@ -135,8 +135,9 @@ them back to physics.
 The **Animations** tab sends animations to Blender as a new action on your scene
 armature, named under **Animation export** in the toolbar's options popover. Without an
 object of that name, Blender uses the active armature, or the scene's only one. Bones are
-matched by name, so use the FFXIV skeleton your meshes are weighted to. LivePose is not
-needed.
+matched by name, so use the FFXIV skeleton your meshes are weighted to, such as the
+armature a model sent from the plugin comes with, which has the game's rest pose. LivePose
+is not needed.
 
 - **Record live pose** records a character's skeleton on every frame, the way the game
   renders it: the animation plus bone physics, Customize+ and LivePose. Use it to check

@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
+using InstantEdit.Services.Skeletons;
 
 namespace InstantEdit.Services;
 
@@ -41,6 +42,7 @@ public sealed class BlenderClient : IDisposable
     public const string CacheSettingsCapability = "instant-edit.cache-settings.v1";
     public const string VanillaContextCapability = "instant-edit.vanilla-context.v1";
     public const string AnimationImportCapability = "instant-edit.animation-import.v1";
+    public const string ImportSkeletonCapability = "instant-edit.import-skeleton.v1";
 
     private readonly HttpClient _http;
     private readonly IPluginLog _log;
@@ -224,6 +226,10 @@ public sealed class BlenderClient : IDisposable
     public async Task<bool> SupportsAnimationImportAsync(int port, CancellationToken cancellationToken = default)
         => await SupportsCapabilityAsync(port, AnimationImportCapability, cancellationToken).ConfigureAwait(false);
 
+    /// <summary>Returns whether the connected add-on builds armatures from an import's game skeleton.</summary>
+    public async Task<bool> SupportsImportSkeletonAsync(int port, CancellationToken cancellationToken = default)
+        => await SupportsCapabilityAsync(port, ImportSkeletonCapability, cancellationToken).ConfigureAwait(false);
+
     /// <summary>
     /// Sends an encoded take (see <c>AnimationTakeFormat</c>) to Blender, which keys it onto a
     /// scene armature and reports the result once its main thread has done so.
@@ -378,7 +384,8 @@ public sealed class BlenderClient : IDisposable
         string? targetCollectionName = null,
         SourceOptionLocator? sourceOption = null,
         string sourceOptionStatus = "unknown",
-        Guid? sourceModStableId = null)
+        Guid? sourceModStableId = null,
+        ModelSkeletonPayload? skeleton = null)
     {
         if (port is < 1 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(port));
@@ -407,7 +414,7 @@ public sealed class BlenderClient : IDisposable
 
         return await SendImportAsync(
             port, importFilePath, name, context, cancellationToken,
-            importOptions, previewManifestPath).ConfigureAwait(false);
+            importOptions, previewManifestPath, skeleton).ConfigureAwait(false);
     }
 
     public async Task<bool> SendGameImportAsync(
@@ -423,7 +430,8 @@ public sealed class BlenderClient : IDisposable
         CancellationToken cancellationToken = default,
         BlenderImportOptions? importOptions = null,
         string? previewManifestPath = null,
-        ResourceDependencyManifest? resourceManifest = null)
+        ResourceDependencyManifest? resourceManifest = null,
+        ModelSkeletonPayload? skeleton = null)
     {
         if (port is < 1 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(port));
@@ -441,7 +449,7 @@ public sealed class BlenderClient : IDisposable
 
         return await SendImportAsync(
             port, importFilePath, name, context, cancellationToken,
-            importOptions, previewManifestPath).ConfigureAwait(false);
+            importOptions, previewManifestPath, skeleton).ConfigureAwait(false);
     }
 
     private async Task<bool> SendImportAsync(
@@ -451,7 +459,8 @@ public sealed class BlenderClient : IDisposable
         InstantEditImportContext context,
         CancellationToken cancellationToken,
         BlenderImportOptions? importOptions,
-        string? previewManifestPath)
+        string? previewManifestPath,
+        ModelSkeletonPayload? skeleton)
     {
 
         try
@@ -488,6 +497,8 @@ public sealed class BlenderClient : IDisposable
                 backupDirectory = context.BackupDirectory,
                 previewManifestPath,
                 importOptions = importOptions ?? BlenderImportOptions.Generated,
+                // The model's game skeleton, for the generated armature's rest pose; null without one.
+                skeleton,
             });
 
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");

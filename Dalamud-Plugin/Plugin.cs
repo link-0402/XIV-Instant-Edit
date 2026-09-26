@@ -6,6 +6,7 @@ using Dalamud.Plugin.Services;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Previews;
+using InstantEdit.Services.Skeletons;
 using InstantEdit.Ui;
 
 namespace InstantEdit;
@@ -184,6 +185,10 @@ public sealed class Plugin : IDalamudPlugin
         _window.AttachAnimations(_animations, animationError);
         _window.AttachRecorder(_recorder);
         _window.AttachPainter(_painterJobs);
+        // Game skeletons for Blender's armatures: sent with imports, and asked for by the add-on.
+        var skeletons = new ModelSkeletonResolver(_penumbra, data, framework, objects, log);
+        _window.AttachSkeletons(skeletons);
+        _exportServer.Skeletons = skeletons;
         _exportServer.ImportFailureReceived += _window.ReportImportFailure;
         _glamourer.AppearanceChanged += _window.OnGlamourerAppearanceChanged;
         _setupWindow = new FirstTimeSetupWindow(
