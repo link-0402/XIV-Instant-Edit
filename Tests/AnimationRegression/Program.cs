@@ -22,11 +22,15 @@ EmbeddedSkeletonFixture.Run(Check, Reject);
 AnimationExportFixture.Run(Check, Reject);
 AnimationExportFixture.Presentation(Check);
 AnimationExportFixture.Rows(Check);
+ModelSkeletonFixture.Run(Check, Reject);
 if (args is ["--skeleton-repair-xml", var animationXml, var skeletonXml])
     EmbeddedSkeletonFixture.InspectXml(animationXml, skeletonXml, Check);
 // Writes the fixture take as the plugin sends it, for reading back in Blender.
 if (args is ["--write-sample-take", var takePath])
     File.WriteAllBytes(takePath, AnimationTakeFormat.Write(AnimationExportFixture.SampleTake(), "Skeleton", false, "1.2.4"));
+// Writes the fixture skeleton as an import request carries it, for building an armature in Blender.
+if (args is ["--write-sample-skeleton", var skeletonPath])
+    File.WriteAllText(skeletonPath, ModelSkeletonFixture.SamplePayload());
 static byte[] Timeline(string code, string? path = null, int field = 20, int size = 24)
 {
     var text = Encoding.UTF8.GetBytes((path ?? "") + "\0");

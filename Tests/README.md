@@ -19,8 +19,8 @@ dotnet build Dalamud-Plugin/InstantEdit.csproj -c Release -p:SkipDistributionPac
 PowerShell users should check `$LASTEXITCODE` after each command.
 
 `run_blender_suites.py` runs `bridge_regression`, `smoke_export`,
-`correctness_regression` and `animation_regression`, or the suite names and script
-paths you pass, as
+`correctness_regression`, `animation_regression` and `skeleton_regression`, or the
+suite names and script paths you pass, as
 `blender --background --factory-startup --python-exit-code 1 --python <script>`.
 Pass `--blender <path>` to test a Blender that is not on PATH. Each script gets
 a new temporary Blender user profile. The fixtures call
@@ -61,6 +61,13 @@ updates the distribution archives or extension repository index.
   missing bones, and Euler and axis-angle bones), resampling to the scene frame
   rate, target armature selection, rollback of a failed keying, and the
   `/animation` endpoint.
+- `skeleton_regression.py`: the game skeleton sent with imports. Skeleton
+  validation, rest matrices (the bind pose turned Z up, including bones pointing
+  along -Y and bones below a bone scaled to nothing), the generated armature's
+  bones and parents, model bones the skeleton lacks, placeholder bones without a
+  skeleton, posing, exports of a posed armature, removing YAS groups, combining
+  generated armatures, animation takes keyed on it, the import bridge (validation,
+  staging, the operator) and Import Model File asking the plugin.
 - `ExportContextRegression`: named session-store and variant-export scenarios,
   plus authorization, backups, resource bundling, migration, mod metadata, and
   collection activation (`CollectionActivationScenarios.cs`: enabling a new mod
@@ -84,7 +91,10 @@ updates the distribution archives or extension repository index.
   and PAP backup conflict protection, plus the binary take sent to Blender and the
   resampling of recordings, On Screen rows for detected animations, and action
   names for Mod Browser files. Native Havok and actual IPC acceptance are
-  documented in [animation editing acceptance](AnimationEditing.md).
+  documented in [animation editing acceptance](AnimationEditing.md). Also the
+  game skeletons sent with imports: which skeleton files a model uses, EST tables
+  and a collection's EST edits, the connect bone in skeleton file headers, merging
+  partial skeletons, and the JSON the add-on reads.
 - `ChangelogRegression`: release catalog ordering and uniqueness, version-aware
   auto-open behavior, and configuration persistence for the last-seen release.
 
@@ -96,6 +106,10 @@ the fixture take and parse it with `animation.parse_take` in Blender:
 ```powershell
 dotnet run --project Tests/AnimationRegression -c Release -p:SkipDistributionPackage=true -- --write-sample-take "sample.take"
 ```
+
+Likewise, `--write-sample-skeleton "skeleton.json"` writes the fixture skeleton as
+an import request carries it, for `skeleton.parse_skeleton` and
+`skeleton.create_armature` in Blender.
 
 For local skeleton-repair diagnosis, export a predictive PAP's Havok payload and
 its source SKLB payload to XML with XAT, then run:

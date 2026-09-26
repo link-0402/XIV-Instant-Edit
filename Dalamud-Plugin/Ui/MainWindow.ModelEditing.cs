@@ -9,12 +9,50 @@ using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Services.Skeletons;
 using Lumina.Data;
 
 namespace InstantEdit.Ui;
 
 public sealed partial class MainWindow
 {
+    private ModelSkeletonResolver? _skeletons;
+
+    internal void AttachSkeletons(ModelSkeletonResolver? value) => _skeletons = value;
+
+    /// <summary>
+    /// The model's game skeleton for Blender's generated armature, and a warning for the status
+    /// line. Nothing for an existing armature, or when the add-on can't take a skeleton; Blender
+    /// then gives the model's bones no rest pose, as before.
+    /// </summary>
+    private async Task<(ModelSkeletonPayload? Skeleton, string? Warning)> ResolveSkeletonAsync(
+        ActorView actor, MdlFile model, int blenderPort, BlenderImportOptions importOptions,
+        CancellationToken cancellationToken)
+    {
+        var resolver = _skeletons;
+        if (resolver is null || importOptions.ArmatureMode == BlenderImportOptions.ExistingMode ||
+            ModelSkeletonPaths.Parse(model.GamePath) is null ||
+            !await _blender.SupportsImportSkeletonAsync(blenderPort, cancellationToken).ConfigureAwait(false))
+            return (null, null);
+        try
+        {
+            // An on-screen character lends its live skeleton; a browsed mod uses the files.
+            var result = actor.Entity is { } entity
+                ? await resolver.ResolveAsync(model.GamePath, entity.ObjectIndex, entity.Address, cancellationToken).ConfigureAwait(false)
+                : await resolver.ResolveAsync(model.GamePath, actor.ImportObjectIndex, 0, cancellationToken).ConfigureAwait(false);
+            return (result.Skeleton?.ToPayload(), result.Problem ?? result.Skeleton?.Warnings.FirstOrDefault());
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception e)
+        {
+            _log.Warning(e, "Could not resolve the model's game skeleton.");
+            return (null, "the game skeleton could not be read, so its bones have no rest pose.");
+        }
+    }
+
     private void TryEditNode(ResourceView node, ActorView actor)
     {
         if (!node.IsModel || !ResourceViews.IsSafeModel(node))
@@ -150,6 +188,8 @@ public sealed partial class MainWindow
                     };
                 }
             }
+            var (skeleton, skeletonWarning) = await ResolveSkeletonAsync(
+                actor, model, blenderPort, importOptions, cancellationToken).ConfigureAwait(false);
             if (source.SourceState == ResourceSourceState.GameData)
             {
                 handoffCached = await _blender.SendGameImportAsync(
@@ -165,6 +205,7 @@ public sealed partial class MainWindow
                     importOptions: importOptions,
                     previewManifestPath: preview?.ManifestPath,
                     resourceManifest: resourceManifest,
+                    skeleton: skeleton,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
             }
             else
@@ -200,6 +241,7 @@ public sealed partial class MainWindow
                     sourceOption: sourceOption.Locator,
                     sourceOptionStatus: sourceOption.Status,
                     sourceModStableId: source.SourceModStableId,
+                    skeleton: skeleton,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
             }
             var hasPreviewWarning = preview is { Warnings.Count: > 0 };
@@ -210,8 +252,9 @@ public sealed partial class MainWindow
                     ? string.Join("; ", dependencyWarnings.Take(3))
                     : "exact material/texture sources could not be captured; re-import after resolving the missing resources.")}"
                 : string.Empty;
-            var hasWarning = hasPreviewWarning || hasMashupWarning;
-            var status = $"Sent {model.FileName} to Blender.{warning}{mashupWarning}";
+            var skeletonNote = skeletonWarning is null ? string.Empty : $" Skeleton: {skeletonWarning}";
+            var hasWarning = hasPreviewWarning || hasMashupWarning || skeletonWarning is not null;
+            var status = $"Sent {model.FileName} to Blender.{warning}{mashupWarning}{skeletonNote}";
             SetStatus(status, hasWarning ? FeedbackSeverity.Warning : FeedbackSeverity.Success);
             _chat.Print($"XIV Instant Edit: {model.FileName} sent to Blender.");
         }

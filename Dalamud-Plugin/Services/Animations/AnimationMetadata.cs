@@ -184,7 +184,7 @@ internal static partial class AnimationMetadata
         _ => throw new InvalidDataException("Invalid body slot in Penumbra metadata."),
     };
 
-    private static (string Gender, string Race) GenderRaceNames(ushort value)
+    internal static (string Gender, string Race) GenderRaceNames(ushort value)
     {
         var code = value / 100;
         var suffix = value % 100;

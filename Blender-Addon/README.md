@@ -10,6 +10,14 @@ plus a File Import / Export panel for working without the plugin.
 - Creates isolated import collections and preserves the authorized Penumbra
   export destination.
 - Supports generated import armatures or a named existing scene armature.
+  A generated armature has the game's skeleton, which the plugin sends with the
+  import: the rest pose and hierarchy of the model's race skeleton, with your
+  skeleton mods and the face, hair, headgear or top skeleton the model uses (an
+  on-screen character's own skeleton when it can). Bones point along the game
+  bone's Y axis, as in TexTools FBX imports and devkits. Model bones the skeleton
+  lacks are placed at their weighted vertices and reported. **Import Model File**
+  asks the running plugin for the skeleton when the file is named like a game
+  model (`c0201e0123_top.mdl`); otherwise the bones sit at the origin.
 - Receives animations from the plugin's **Animations** tab, either a recording
   of a character's live pose (including the game's bone physics) or a sampled
   animation file, and keys them as a new action on the named scene armature

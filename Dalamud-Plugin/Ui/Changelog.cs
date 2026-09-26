@@ -49,6 +49,7 @@ internal static class ChangelogCatalog
             Entry("Texture editing: you can now change a texture's resolution (up to 8192 × 8192) or save it without compression. Edit sessions are shown as cards with a thumbnail and quick actions."),
             Entry("The On Screen list now refreshes on its own when you change mods in Penumbra or your appearance in Glamourer. You can turn this off in Settings."),
             Entry("Blender add-on:"),
+            Entry("Models sent to Blender get an armature with the game's skeleton: its rest pose and bone hierarchy, with your skeleton mods, instead of bones stacked at the origin. Posing, animations and Customize+ templates now move imported models the way the game does. Import Model File asks the plugin for the skeleton when the file is named like the game's.", 1),
             Entry("SimpleHeels support: add a heels offset to a mesh part yourself, or let the add-on calculate it from how far the model reaches below the floor.", 1),
             Entry("The material dialog lists the materials already used by the model's other mesh groups, so you can reuse one without typing its path.", 1),
             Entry("Dragging mesh parts to reorder them previews the new order and applies it when you let go, and can now separate parts that share the same number.", 1),
