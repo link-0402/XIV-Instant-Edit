@@ -50,6 +50,7 @@ public sealed partial class PenumbraService
                     resolved.Code,
                     resolved.Error ?? "The original Penumbra mod is no longer available.");
 
+            await LeaveFrameworkThread();
             if (!string.Equals(Path.GetExtension(originalName), ".mdl", StringComparison.OrdinalIgnoreCase))
                 return new ExportResult(false, "invalid_restore", "The backup target is invalid.");
             if (_backups is null || targetRelativePath is null)
@@ -61,7 +62,8 @@ public sealed partial class PenumbraService
             {
                 var option = ReadVariantTargets(resolved.Target.Folder, sourceGamePath, sourceModDirectory, _backups)
                     .SelectMany(group => group.Options)
-                    .SingleOrDefault(candidate => string.Equals(candidate.BackupTargetId, backupTargetId, StringComparison.Ordinal));
+                    // Options that share one model file share its backups, so any of them will do.
+                    .FirstOrDefault(candidate => string.Equals(candidate.BackupTargetId, backupTargetId, StringComparison.Ordinal));
                 if (option is null)
                     return new ExportResult(false, "invalid_backup_target", "The backup does not belong to this export context.");
                 effectiveRelativePath = option.ModelPath;
@@ -387,6 +389,7 @@ public sealed partial class PenumbraService
                 sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath, sourceModStableId)).ConfigureAwait(false);
             if (resolved.Target is null)
                 return new ExportResult(false, resolved.Code, resolved.Error ?? "The source mod is unavailable.");
+            await LeaveFrameworkThread();
             var validIds = ReadVariantTargets(resolved.Target.Folder, sourceGamePath, sourceModDirectory, _backups)
                 .SelectMany(group => group.Options)
                 .Select(option => option.BackupTargetId)

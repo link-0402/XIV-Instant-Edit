@@ -218,6 +218,23 @@ public sealed partial class PenumbraService
             }
         }).ConfigureAwait(false);
 
+    /// <summary>
+    /// Resumes on the thread pool. An await on RunOnFrameworkThread continues inline on the game
+    /// thread that ran the work, so the file work that usually follows would stall the frame.
+    /// </summary>
+    private static ThreadPoolHop LeaveFrameworkThread() => default;
+
+    private readonly struct ThreadPoolHop : System.Runtime.CompilerServices.ICriticalNotifyCompletion
+    {
+        public ThreadPoolHop GetAwaiter() => this;
+        public bool IsCompleted => false;
+        public void GetResult() { }
+        public void OnCompleted(Action continuation)
+            => ThreadPool.QueueUserWorkItem(static run => run(), continuation, preferLocal: false);
+        public void UnsafeOnCompleted(Action continuation)
+            => ThreadPool.UnsafeQueueUserWorkItem(static run => run(), continuation, preferLocal: false);
+    }
+
     /// <summary>Capture the effective source-mod manipulations for one collection.</summary>
     public async Task<JsonArray?> CaptureEffectiveManipulationsAsync(
         Guid collectionId,
@@ -240,6 +257,7 @@ public sealed partial class PenumbraService
                     pair => (IReadOnlyList<string>)pair.Value.ToArray(),
                     StringComparer.OrdinalIgnoreCase);
             }).ConfigureAwait(false);
+            await LeaveFrameworkThread();
             return selections is null
                 ? null
                 : CaptureEffectiveManipulations(modRoot, selections);

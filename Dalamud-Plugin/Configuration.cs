@@ -22,6 +22,15 @@ public sealed class Configuration : IPluginConfiguration
 
     public string TextureEditorPath { get; set; } = "";
 
+    /// <summary> Show the Substance Painter action in On Screen, its status dot and its Sessions cards. </summary>
+    public bool PainterIntegrationEnabled { get; set; }
+
+    /// <summary> Port the XIV Instant Edit plugin inside Substance Painter listens on. </summary>
+    public int PainterPort { get; set; } = 42426;
+
+    /// <summary> Substance Painter executable, started when a project is sent while Painter is closed; empty searches the usual folders. </summary>
+    public string PainterExecutablePath { get; set; } = "";
+
     /// <summary>Re-encode texture saves in their original TEX format instead of uncompressed BGRA32.</summary>
     public bool RecompressTextures { get; set; } = true;
 

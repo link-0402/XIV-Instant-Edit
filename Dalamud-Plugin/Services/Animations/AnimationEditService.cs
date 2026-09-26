@@ -47,10 +47,16 @@ internal sealed class AnimationEditService : IDisposable
         poses = new LivePoseAdapter(pi, objects);
         catalog = new AnimationCatalog(data);
         resources = new AnimationResources(penumbra, data, framework, log);
-        journals = new AnimationJournalStore(TextureFiles.EnsureCacheRoot(configuration.TextureCacheDirectory));
+        // Journals, the LivePose offset backup and the pre-edit file backups are the only
+        // copies Undo relies on, so they live in the config folder: temp cleaners empty
+        // the default %TEMP% cache (issue #8). Records from older versions move over once.
+        var recoveryRoot = pi.ConfigDirectory.FullName;
+        try { AnimationJournalStore.ImportLegacy(TextureFiles.CacheRootFor(configuration.TextureCacheDirectory), recoveryRoot); }
+        catch (Exception error) { log.Warning(error, "Could not move animation recovery records out of the cache."); }
+        journals = new AnimationJournalStore(recoveryRoot, message => log.Warning("{Message}", message));
         recovery = journals.Load().ToImmutableArray();
         offsetBackup = journals.LoadOffsetBackup();
-        commits = new AnimationCommitService(penumbra, resources, backups, journals);
+        commits = new AnimationCommitService(penumbra, resources, new ModelBackupStore(recoveryRoot), journals, backups);
         baker = new AnimationBakeService(native, framework);
         skeletons = new AnimationSkeletonIndex(penumbra, resources, framework, log, () => TextureFiles.EnsureCacheRoot(configuration.TextureCacheDirectory));
         Observer = new AnimationObserver(framework, objects, penumbra, native, resources, poses, catalog, skeletons, log);

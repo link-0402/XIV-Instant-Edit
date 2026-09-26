@@ -66,7 +66,8 @@ def decl_from_blend_mesh(submeshes: list[Object], export_flow=False) -> VertexDe
     uv_count  = 1
     has_flow  = False
     for obj in submeshes:
-        if "xiv_flow" in obj and obj["xiv_flow"]:
+        # Imported flow data lives in the "xiv_flow" colour layer; the property can switch it off.
+        if obj.get("xiv_flow", "xiv_flow" in obj.data.color_attributes):
             has_flow = True
 
         col_count = max(col_count, len([layer for layer in obj.data.color_attributes 
@@ -262,7 +263,7 @@ class CreateLOD:
         except:
             raise XIVMeshError(f"Missing material path.")
 
-        mesh_flow = blend_objs[0]["xiv_flow"] if "xiv_flow" in blend_objs[0] else False
+        mesh_flow = bool(blend_objs[0].get("xiv_flow", "xiv_flow" in blend_objs[0].data.color_attributes))
         vert_decl = decl_from_blend_mesh(blend_objs, mesh_flow)
         self.model.vertex_declarations.append(vert_decl)
 
@@ -354,10 +355,20 @@ class CreateLOD:
             raise XIVMeshError(f"Exceeds the {USHORT_LIMIT} vertices limit.")
         submesh.attribute_idx_mask       = attribute_bitmask(obj)
 
-        if obj.vertex_groups:
-            bonemap = self._create_blend_arrays(obj, submesh_streams, source_vertices)
-            submesh.bone_start_idx = len(self.model.submesh_bonemaps)
-            submesh.bone_count     = len(bonemap)
+        if not obj.vertex_groups and obj.parent_type == 'BONE' and obj.parent_bone:
+            # A bone-parented object follows that bone in Blender, so weight it fully
+            # to the bone instead of exporting weightless vertices.
+            obj.vertex_groups.new(name=obj.parent_bone).add(list(range(len(obj.data.vertices))), 1.0, 'REPLACE')
+            self.export_stats[obj.name].append(f"Weighted to its parent bone {obj.parent_bone}.")
+
+        if not obj.vertex_groups:
+            raise XIVMeshError(
+                f"{obj.name} has no vertex groups for the skeleton, so it would not show in game. "
+                "Weight it to the armature or parent it to a bone."
+            )
+        bonemap = self._create_blend_arrays(obj, submesh_streams, source_vertices)
+        submesh.bone_start_idx = len(self.model.submesh_bonemaps)
+        submesh.bone_count     = len(bonemap)
         
         for shape_name, pos in shapes.items():
             shape_data = create_shape_data(self.mesh, pos, indices, submesh_streams, vert_decl)

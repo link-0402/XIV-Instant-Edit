@@ -61,7 +61,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
         {
             GamePath = request.GamePath, ResolvedGamePath = resolvedGamePath,
             ModDirectory = modDirectory, ModRoot = modRoot, RelativePath = relative,
-            NewModName = request.NewModName, NeedsMod = vanilla, SetupPending = vanilla,
+            NewModName = request.NewModName, JobId = request.JobId, NeedsMod = vanilla, SetupPending = vanilla,
             ObjectIndex = request.ObjectIndex, ActorAddress = request.ActorAddress, ActorId = actor.Id, ActorName = actor.Name,
             CollectionId = collection?.Id, CollectionName = collection?.Name ?? "",
             Format = header.Format, Width = header.Width, Height = header.Height, MipMaps = header.Mips > 1,
@@ -143,6 +143,19 @@ public sealed partial class PenumbraService : ITextureEditBackend
         {
             token.ThrowIfCancellationRequested();
             string backup = "";
+            if (session.NeedsMod && session.JobId is { } job && Directory.Exists(session.ModRoot))
+            {
+                // Another texture of the same Painter project created the mod; this one joins it.
+                if (ReadModStableIdentifier(session.ModRoot) != job)
+                    throw new TextureConflictException("Another mod now uses this Painter project's mod name. Rename one of them, then reopen the texture.");
+                await ValidateLiveTextureMappingAsync(session, session.ResolvedGamePath, false).ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+                if (!stillCurrent()) throw new OperationCanceledException("A newer save is pending.");
+                AddGameTextureToMod(session.ModRoot, session.GamePath, tex);
+                session.NeedsMod = false;
+                session.MappingFingerprint = TextureMappingFingerprint(session.ModRoot);
+                return new TextureCommit(TextureFiles.Hash(tex), "", "Texture saved", session.MappingFingerprint);
+            }
             if (session.NeedsMod)
             {
                 await EnsureNewTextureModNameAsync(session.ModDirectory, session.ModRoot).ConfigureAwait(false);
@@ -154,7 +167,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
                 Directory.CreateDirectory(staging);
                 try
                 {
-                    StageGameTextureMod(staging, session.ModDirectory, session.GamePath, tex);
+                    StageGameTextureMod(staging, session.ModDirectory, session.GamePath, tex, session.JobId);
                     token.ThrowIfCancellationRequested();
                     if (!stillCurrent()) throw new OperationCanceledException("A newer save is pending.");
                     var mappingFingerprint = TextureMappingFingerprint(staging);
@@ -188,7 +201,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
         finally { _exportGate.Release(); }
     }
 
-    async Task<string> ITextureEditBackend.RefreshAsync(TextureEditSession session, Guid? showOption, CancellationToken token)
+    async Task<string> ITextureEditBackend.RefreshAsync(IReadOnlyList<TextureRefresh> items, CancellationToken token)
     {
         var warnings = new List<string>();
         try
@@ -196,61 +209,80 @@ public sealed partial class PenumbraService : ITextureEditBackend
             token.ThrowIfCancellationRequested();
             // Resolve names off the framework thread: meta.json can be large, and the artist may
             // have renamed the group or option in Penumbra since it was created.
-            var select = showOption.HasValue && session is { VariantGroupId: not null, CollectionId: not null, NeedsMod: false };
-            var selection = select ? ReadTextureVariantSelection(session.ModRoot, session.VariantGroupId!.Value, showOption!.Value) : null;
-            if (select && selection is null)
-                warnings.Add("The variant option no longer exists in Penumbra; select it there manually.");
+            var selections = new List<(TextureEditSession Session, (string Group, string Option) Selected)>();
+            foreach (var (session, showOption) in items)
+            {
+                var select = showOption.HasValue && session is { VariantGroupId: not null, CollectionId: not null, NeedsMod: false };
+                var selection = select ? ReadTextureVariantSelection(session.ModRoot, session.VariantGroupId!.Value, showOption!.Value) : null;
+                if (select && selection is null)
+                    warnings.Add("The variant option no longer exists in Penumbra; select it there manually.");
+                else if (selection is { } selected)
+                    selections.Add((session, selected));
+            }
+            var mods = items.Select(item => item.Session).GroupBy(s => s.ModDirectory, StringComparer.OrdinalIgnoreCase).ToList();
             // Adding an already registered mod is unnecessary; this also retries registration after a failed first save.
-            var registered = await _framework.RunOnFrameworkThread(() => GetMods().Any(m => m.Directory == session.ModDirectory)).ConfigureAwait(false);
-            if (!registered && session.SetupPending)
+            var registered = await _framework.RunOnFrameworkThread(() =>
+                GetMods().Select(m => m.Directory).ToHashSet(StringComparer.Ordinal)).ConfigureAwait(false);
+            foreach (var mod in mods.Where(mod => !registered.Contains(mod.Key) && mod.Any(s => s.SetupPending)))
             {
                 token.ThrowIfCancellationRequested();
-                var added = await AddNewModAsync(session.ModDirectory).ConfigureAwait(false);
+                var added = await AddNewModAsync(mod.Key).ConfigureAwait(false);
                 if (added is not null) warnings.Add(added.Message);
             }
             await _framework.RunOnFrameworkThread(() =>
             {
-                token.ThrowIfCancellationRequested();
-                var reload = ReloadModOnFramework(session.ModDirectory);
-                if (reload is not null) warnings.Add(reload.Message);
-                if (session.SetupPending && session.CollectionId is { } collection)
+                foreach (var mod in mods)
                 {
-                    var configure = ConfigureModForCollectionOnFramework(session.ModDirectory, collection, session.CollectionName,
-                        setPriority: false, priority: 0, redraw: false);
-                    if (!configure.Success) warnings.Add(configure.Message);
-                    warnings.AddRange(configure.WarningList);
-                    if (configure.Success && warnings.Count == 0) session.SetupPending = false;
+                    token.ThrowIfCancellationRequested();
+                    var reload = ReloadModOnFramework(mod.Key);
+                    if (reload is not null) warnings.Add(reload.Message);
+                    foreach (var target in mod.Where(s => s.SetupPending && s.CollectionId.HasValue).GroupBy(s => s.CollectionId!.Value))
+                    {
+                        var configure = ConfigureModForCollectionOnFramework(mod.Key, target.Key, target.First().CollectionName,
+                            setPriority: false, priority: 0, redraw: false);
+                        if (!configure.Success) warnings.Add(configure.Message);
+                        warnings.AddRange(configure.WarningList);
+                        if (configure.Success && warnings.Count == 0)
+                            foreach (var session in target) session.SetupPending = false;
+                    }
                 }
-                if (selection is { } selected && session.CollectionId is { } target)
+                foreach (var (session, selected) in selections)
                 {
-                    var result = _trySetModSetting.Invoke(target, session.ModDirectory, selected.Group, selected.Option, session.ModDirectory);
+                    var result = _trySetModSetting.Invoke(session.CollectionId!.Value, session.ModDirectory, selected.Group, selected.Option, session.ModDirectory);
                     if (result is not (PenumbraApiEc.Success or PenumbraApiEc.NothingChanged))
                         warnings.Add($"Could not select \"{selected.Option}\" in {session.CollectionName} ({result}).");
                 }
-                try
+                var redrawn = new HashSet<int>();
+                foreach (var session in items.Select(item => item.Session))
                 {
-                    if (MatchesTextureActor(session))
+                    try
                     {
-                        if (session.ObjectIndex != _objects?.LocalPlayer?.ObjectIndex) _redrawObject.Invoke(session.ObjectIndex!.Value);
+                        if (MatchesTextureActor(session))
+                        {
+                            if (session.ObjectIndex != _objects?.LocalPlayer?.ObjectIndex && redrawn.Add(session.ObjectIndex!.Value))
+                                _redrawObject.Invoke(session.ObjectIndex!.Value);
+                        }
+                        else if (session.ObjectIndex.HasValue) warnings.Add("Selected actor is no longer present; its redraw was skipped.");
                     }
-                    else if (session.ObjectIndex.HasValue) warnings.Add("Selected actor is no longer present; its redraw was skipped.");
+                    catch (Exception error) { warnings.Add("Selected actor redraw failed: " + error.Message); }
                 }
-                catch (Exception error) { warnings.Add("Selected actor redraw failed: " + error.Message); }
                 var owned = RedrawPlayerOwnedEntitiesOnFramework();
                 if (owned is not null) warnings.Add(owned);
             }).ConfigureAwait(false);
         }
         catch (Exception error) { warnings.Add(error.Message); }
-        return warnings.Count == 0 ? "Texture saved and redrawn" : "Texture saved; refresh needs attention: " + string.Join(" ", warnings.Distinct());
+        var noun = items.Count == 1 ? "Texture" : "Textures";
+        return warnings.Count == 0 ? $"{noun} saved and redrawn" : $"{noun} saved; refresh needs attention: " + string.Join(" ", warnings.Distinct());
     }
 
-    internal static void StageGameTextureMod(string staging, string name, string gamePath, byte[] bytes)
+    /// <param name="identifier">The mod's Penumbra identifier; a Painter project passes its job id so its later textures can find the mod.</param>
+    internal static void StageGameTextureMod(string staging, string name, string gamePath, byte[] bytes, Guid? identifier = null)
     {
         if (!IsSafeNewModName(name) || !IsSafeGameResourcePath(gamePath, ".tex")) throw new IOException("Invalid vanilla texture destination.");
         _ = TextureFiles.ReadTex(bytes);
         var relative = "Files/" + gamePath;
         WriteBytesAtomic(staging, relative, bytes);
-        WriteJsonAtomic(Path.Combine(staging, "meta.json"), CreateV4ModMetadata(
+        var meta = CreateV4ModMetadata(
             name,
             "XIV Instant Edit",
             $"Texture edit for {gamePath}",
@@ -259,7 +291,29 @@ public sealed partial class PenumbraService : ITextureEditBackend
         {
             ["Files"] = new JsonObject { [gamePath] = relative },
             ["FileSwaps"] = new JsonObject(), ["Manipulations"] = new JsonArray(),
-        }));
+        });
+        if (identifier is { } id) meta["Identifier"] = id.ToString("D");
+        WriteJsonAtomic(Path.Combine(staging, "meta.json"), meta);
+    }
+
+    /// <summary> Adds a vanilla texture override to an existing mod's default option (a Painter project's shared mod). </summary>
+    internal static void AddGameTextureToMod(string modRoot, string gamePath, byte[] bytes)
+    {
+        if (!IsSafeGameResourcePath(gamePath, ".tex")) throw new IOException("Invalid vanilla texture destination.");
+        _ = TextureFiles.ReadTex(bytes);
+        TextureFiles.EnsureLocalPath(modRoot);
+        var meta = LoadV4ModMetadata(modRoot);
+        if (meta["DefaultData"] is not JsonObject defaults) throw new InvalidDataException("The mod has no default option.");
+        if (defaults["Files"] is not JsonObject files)
+        {
+            files = new JsonObject();
+            defaults["Files"] = files;
+        }
+        var relative = "Files/" + gamePath;
+        WriteBytesAtomic(modRoot, relative, bytes);
+        files[gamePath] = relative;
+        TouchV4ModMetadata(meta);
+        WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
     }
 
     private static void DeleteTextureStaging(string path, string expected)

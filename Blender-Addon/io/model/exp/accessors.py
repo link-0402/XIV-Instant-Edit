@@ -115,10 +115,11 @@ def get_uvs(obj: Object, loop_count: int, uv_count: int) -> tuple[list, list[NDA
 
 
 def get_col_attributes(obj: Object, loop_vertices: NDArray, loop_count: int, col_count: int) -> list[NDArray]:
-    layers = [
-        layer for layer in obj.data.color_attributes
-        if layer.name.lower().startswith(XIV_COL)
-    ][:col_count]
+    # Match layers to colour sets by name (vc0, vc1), not by Blender's attribute order.
+    layers = sorted(
+        (layer for layer in obj.data.color_attributes if layer.name.lower().startswith(XIV_COL)),
+        key=lambda layer: layer.name.lower(),
+    )[:col_count]
 
     col_arrays: list[NDArray] = []
     for layer in layers:

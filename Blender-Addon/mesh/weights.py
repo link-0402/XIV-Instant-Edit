@@ -135,7 +135,13 @@ def _get_group_parent(obj: Object, skeleton: Object, prefix: set[str]) -> dict[i
         if not v_group.name.startswith(prefix):
             continue
         
-        parent = skeleton.data.bones.get(v_group.name).parent.name
+        bone = skeleton.data.bones.get(v_group.name).parent
+        # A filtered parent without its own group is removed with the other filtered
+        # groups, so climb to the first ancestor whose weights survive.
+        while (bone.parent is not None and bone.name.startswith(prefix)
+               and obj.vertex_groups.get(bone.name) is None):
+            bone = bone.parent
+        parent = bone.name
         parent_group = obj.vertex_groups.get(parent)
 
         if parent_group:
@@ -197,16 +203,12 @@ def _create_missing_parents(obj: Object, skeleton: Object, group_to_parent: dict
         if parent in added_parents:
             continue
 
-        v_group     = obj.vertex_groups[group_idx].name
-        parent_name = skeleton.data.bones.get(v_group).parent.name
         new_group   = obj.vertex_groups.new(name=parent)
 
-        added_parents.add(parent_name)
+        added_parents.add(parent)
 
-        parent = new_group.index
-
-        for group in parent_to_group[parent_name]:
-            group_to_parent[group] = parent
+        for group in parent_to_group[parent]:
+            group_to_parent[group] = new_group.index
 
 
 def combine_v_groups(obj: Object, v_groups: list[int]) -> VertexGroup:

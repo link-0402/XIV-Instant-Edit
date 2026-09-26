@@ -20,7 +20,7 @@ internal static class TextureFiles
     // Keep in sync with OWNED_ROOT_DIRECTORIES/OWNED_ROOT_FILES in Blender-Addon/instant_edit/cache.py.
     private static readonly HashSet<string> OwnedRootDirectories = new(StringComparer.OrdinalIgnoreCase)
     {
-        "imports", "exports", "backups", "texture-edits", "AnimationEdits", "skeleton-library", "Contexts",
+        "imports", "exports", "backups", "texture-edits", "AnimationEdits", "skeleton-library", "Contexts", "painter",
     };
     private static readonly HashSet<string> OwnedRootFiles = new(StringComparer.OrdinalIgnoreCase)
     {

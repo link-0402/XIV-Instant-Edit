@@ -282,8 +282,10 @@ class XIVModel:
         return model
     
     def to_file(self, file_path: str) -> None:
+        # Serialise and validate first, so a failure can't leave the target truncated.
+        data = self.to_bytes()
         with open(file_path, 'wb') as model:
-            model.write(self.to_bytes())
+            model.write(data)
 
     def to_bytes(self) -> bytes:
 

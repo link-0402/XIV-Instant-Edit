@@ -19,6 +19,14 @@ DEFAULT_STATUS = "Pick a model in-game via the XIV Instant Edit plugin to get st
 _LAST_EXPORT_DESTINATION = NO_EXPORT_CONTEXT
 
 
+def _destination_number(context_id: str) -> int:
+    # Blender stores an enum by number, and an item without one is numbered by
+    # its list position, which shifts when Contexts are added or removed.
+    import zlib
+
+    return zlib.crc32(context_id.encode("utf-8")) & 0x7FFFFFFF or 1
+
+
 def _export_destination_items(_self, context):
     global _EXPORT_DESTINATION_ITEMS
     from .context import context_collections, _value
@@ -28,6 +36,7 @@ def _export_destination_items(_self, context):
         NO_EXPORT_CONTEXT,
         "Select Context",
         "Choose the imported model destination for Quick Export",
+        0,
     )
     if scene is None:
         _EXPORT_DESTINATION_ITEMS = [sentinel]
@@ -43,13 +52,19 @@ def _export_destination_items(_self, context):
         model_name = game_path.replace("\\", "/").rsplit("/", 1)[-1] or context_id
         mod_name = str(_value(collection, "source_mod_name", ""))
         label = f"{model_name} ({mod_name})" if mod_name else model_name
-        items.append((context_id, label, f"Overwrite the imported model at {game_path}"))
+        items.append((
+            context_id,
+            label,
+            f"Overwrite the imported model at {game_path}",
+            _destination_number(context_id),
+        ))
     identifiers = {item[0] for item in items}
     if _LAST_EXPORT_DESTINATION not in identifiers:
         items.append((
             _LAST_EXPORT_DESTINATION,
             "Removed Context",
             "This Context was removed and will be deselected automatically",
+            _destination_number(_LAST_EXPORT_DESTINATION),
         ))
     # Blender requires dynamically generated enum strings to remain alive for
     # as long as the enum is in use.

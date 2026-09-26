@@ -526,7 +526,8 @@ public sealed partial class PenumbraService
         var result = existing?.DeepClone() as JsonObject ?? new JsonObject();
         result["Type"] = "Imc";
         result["AllVariants"] = true;
-        result["OnlyAttributes"] = false;
+        // Only the attribute mask changes; every variant keeps its own materials, decals and VFX.
+        result["OnlyAttributes"] = true;
         result["Identifier"] = new JsonObject
         {
             ["PrimaryId"] = identity.Id,

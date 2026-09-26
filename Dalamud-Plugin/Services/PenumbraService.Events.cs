@@ -10,6 +10,9 @@ public sealed partial class PenumbraService : IDisposable
     private OpenMainWindow? _openMainWindow;
     private EventSubscriber<ModSettingChange, Guid, string, bool>? _modSettingChanged;
     private EventSubscriber<nint, int>? _gameObjectRedrawn;
+    private EventSubscriber<string>? _modAdded;
+    private EventSubscriber<string>? _modDeleted;
+    private EventSubscriber<string, string>? _modMoved;
 
     /// <summary>
     /// Raised, on Penumbra's thread, when a mod setting changed in any collection or a game
@@ -17,11 +20,20 @@ public sealed partial class PenumbraService : IDisposable
     /// </summary>
     public event Action? ResourcesChanged;
 
+    /// <summary>
+    /// Raised, on Penumbra's thread, when a mod was added, deleted or moved. Handlers must be
+    /// cheap and must not call back into Penumbra.
+    /// </summary>
+    public event Action? ModsChanged;
+
     private void SubscribeToResourceChanges(IDalamudPluginInterface pi)
     {
         _openMainWindow = new OpenMainWindow(pi);
         _modSettingChanged = ModSettingChanged.Subscriber(pi, (_, _, _, _) => RaiseResourcesChanged());
         _gameObjectRedrawn = GameObjectRedrawn.Subscriber(pi, (_, _) => RaiseResourcesChanged());
+        _modAdded = ModAdded.Subscriber(pi, _ => RaiseModsChanged());
+        _modDeleted = ModDeleted.Subscriber(pi, _ => RaiseModsChanged());
+        _modMoved = ModMoved.Subscriber(pi, (_, _) => RaiseModsChanged());
     }
 
     private void RaiseResourcesChanged()
@@ -33,6 +45,18 @@ public sealed partial class PenumbraService : IDisposable
         catch (Exception e)
         {
             _log.Debug($"A resource change handler failed: {e.Message}");
+        }
+    }
+
+    private void RaiseModsChanged()
+    {
+        try
+        {
+            ModsChanged?.Invoke();
+        }
+        catch (Exception e)
+        {
+            _log.Debug($"A mod list change handler failed: {e.Message}");
         }
     }
 

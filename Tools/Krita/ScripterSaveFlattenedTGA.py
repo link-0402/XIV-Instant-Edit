@@ -6,11 +6,18 @@
 # document, so your open document's layers are left untouched.
 #
 # For a permanent Tools > Scripts menu entry + keyboard shortcut instead of
-# pasting this in each time, see Plugin/ in this folder.
+# pasting this in each time, see Plugin/ in this folder. The plugin also has a
+# second action that saves a copy under a name you enter, for Instant Edit's
+# texture variants.
 
 from krita import Krita, InfoObject
-from PyQt5.QtWidgets import QMessageBox
 import os
+
+# Krita 5 ships PyQt5 and Krita 6 PyQt6 (and refuses to import PyQt5).
+try:
+    from PyQt5.QtWidgets import QMessageBox
+except ImportError:
+    from PyQt6.QtWidgets import QMessageBox
 
 
 def save_flattened_tga():

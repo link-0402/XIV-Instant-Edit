@@ -84,7 +84,8 @@ public sealed partial class PenumbraService
                     false,
                     resolved.Code,
                     resolved.Error ?? "The original Penumbra mod is no longer available.");
-            _ = LoadV4ModMetadata(resolved.Target.Folder);
+            await LeaveFrameworkThread();
+            var meta = LoadV4ModMetadata(resolved.Target.Folder);
             if (createAttributeGroups && attributeTags is { Count: > 0 })
             {
                 var attributeError = ValidateAttributeGroups(
@@ -105,6 +106,12 @@ public sealed partial class PenumbraService
                     return new ExportResult(false, optionTarget.Code, optionTarget.Error);
                 targetFile = optionTarget.FilePath!;
             }
+            // A new variant gets its own file; never overwrite a model the mod already uses.
+            else if (variantName is not null && File.Exists(targetFile) &&
+                     (PathRules.SamePhysicalPath(targetFile, resolved.Target.FilePath) ||
+                      IsMappedOutsideOption(meta, resolved.Target.Folder, targetFile, variantName)))
+                return new ExportResult(false, "invalid_variant_name",
+                    $"The mod already uses {variantName}.mdl. Choose a different variant name.");
             JsonObject? sourceOptionTemplate = null;
             if (setupVariantInPenumbra && !string.Equals(variantTarget, "option", StringComparison.Ordinal))
             {
@@ -218,6 +225,7 @@ public sealed partial class PenumbraService
             if (resolved.Target is null)
                 return new VariantTargetsResult(false, resolved.Code,
                     resolved.Error ?? "The original Penumbra mod is no longer available.", []);
+            await LeaveFrameworkThread();
             return new VariantTargetsResult(true, "variant_targets_loaded", "Compatible Penumbra targets loaded.",
                 ReadVariantTargets(resolved.Target.Folder, sourceGamePath, resolved.Target.Directory, _backups));
         }
@@ -264,6 +272,7 @@ public sealed partial class PenumbraService
                 TryGetModList(out var mods) ? mods : null).ConfigureAwait(false);
             if (modList is null)
                 return new NewModelModResult(new ExportResult(false, "penumbra_unavailable", "Could not retrieve the Penumbra mod list."));
+            await LeaveFrameworkThread();
             var finalFolder = Path.GetFullPath(Path.Combine(root, modName));
             if (!IsPathWithin(finalFolder, root) || modList.Keys.Any(key =>
                     string.Equals(key, modName, StringComparison.OrdinalIgnoreCase)) ||

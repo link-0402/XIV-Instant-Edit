@@ -98,6 +98,8 @@ def copy_mesh_object(source_obj: Object, depsgraph: Depsgraph, export=True) -> O
             collection.objects.link(new_obj)
 
         new_obj.parent = source_obj.parent
+        # Setting the parent resets the parent inverse, which would move the copy.
+        new_obj.matrix_parent_inverse = source_obj.matrix_parent_inverse.copy()
     
         # If we don't do this, we will crash later if the original mesh had an invalid driver.
         if new_obj.animation_data:

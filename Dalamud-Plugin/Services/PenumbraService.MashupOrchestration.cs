@@ -71,6 +71,7 @@ public sealed partial class PenumbraService
                     return new ExportResult(false, resolution.Code,
                         resolution.Error ?? "The active Penumbra mod is no longer available.");
                 activeTarget = resolution.Target;
+                await LeaveFrameworkThread();
             }
 
             var modelBytes = await File.ReadAllBytesAsync(exportedFile).ConfigureAwait(false);
@@ -340,6 +341,14 @@ public sealed partial class PenumbraService
 
         var texturePhysicalByHash = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var textureHashByGamePath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Unbundled textures stay at their game paths (vanilla or external files the
+        // materials keep loading), so a retargeted texture must not claim those paths.
+        foreach (var entry in materialEntries)
+            foreach (var texture in entry.Material.Textures)
+                if (!ShouldBundleMashupDependency(
+                        participantDirectories, texture.Resource, entry.BundleExternalDependencies))
+                    textureHashByGamePath.TryAdd(
+                        NormalizeGamePath(texture.EffectiveGamePath), texture.Resource.Sha256.ToLowerInvariant());
 
         async Task<string?> BundleTextureAtOriginalPathAsync(TextureDependency texture)
         {
@@ -608,6 +617,7 @@ public sealed partial class PenumbraService
                 () => GetRegisteredManifestRoots(locator.SourceModDirectory!, locator.SourceModStableId)).ConfigureAwait(false);
             if (roots.Length == 0)
                 return null;
+            await LeaveFrameworkThread();
             return await ReadVerifiedModManifestResourceAsync(locator, roots).ConfigureAwait(false);
         }
 
@@ -855,6 +865,7 @@ public sealed partial class PenumbraService
             TryGetModList(out var mods) ? mods : null).ConfigureAwait(false);
         if (modList is null)
             return new ExportResult(false, "penumbra_unavailable", "Could not retrieve the Penumbra mod list.");
+        await LeaveFrameworkThread();
         var conflicts = modList.Keys.Any(key =>
             string.Equals(key, modName, StringComparison.OrdinalIgnoreCase));
         var finalFolder = Path.Combine(root, modName);
@@ -910,12 +921,21 @@ public sealed partial class PenumbraService
                     warnings.Add(addError.Message);
                 else
                 {
-                    var configure = await _framework.RunOnFrameworkThread(
-                        () => ConfigureModOnFramework(
+                    // Enable it in the collection captured with the Context, like a new-mod export:
+                    // the object index may belong to another actor, or none, by now.
+                    var configure = activeContext.TargetCollectionId is { } collectionId && collectionId != Guid.Empty
+                        ? await _framework.RunOnFrameworkThread(() => ConfigureModForCollectionOnFramework(
                             modName,
-                            activeContext.ObjectIndex,
+                            collectionId,
+                            activeContext.TargetCollectionName ?? "captured collection",
                             setPriority: true,
-                            priority: 0)).ConfigureAwait(false);
+                            priority: 0)).ConfigureAwait(false)
+                        : await _framework.RunOnFrameworkThread(
+                            () => ConfigureModOnFramework(
+                                modName,
+                                activeContext.ObjectIndex,
+                                setPriority: true,
+                                priority: 0)).ConfigureAwait(false);
                     if (!configure.Success)
                         warnings.Add(configure.Message);
                     else

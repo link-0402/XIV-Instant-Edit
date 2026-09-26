@@ -39,7 +39,7 @@ public sealed record MaterialImportBundleResult(
 /// The HTTP bridge transports only the manifest path; all bundle paths are relative and
 /// validated again by the Blender add-on.
 /// </summary>
-public sealed class MaterialPreviewBundleBuilder
+public sealed partial class MaterialPreviewBundleBuilder
 {
     public const string Schema = "instant-edit.material-preview";
     public const int Version = 1;
