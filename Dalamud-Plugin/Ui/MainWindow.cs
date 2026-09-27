@@ -65,6 +65,7 @@ public sealed partial class MainWindow : Window, IDisposable
         _pluginVersion = BlenderClient.CurrentPluginVersion;
         _resourceSources = resourceSources;
         _materialPreviews = new MaterialPreviewBundleBuilder(data, log, _resourceSources);
+        _kinds = _screenKinds;
         _saveConfig = saveConfig;
         _openChangelog = openChangelog;
         _openSettings = openSettings;
@@ -107,6 +108,7 @@ public sealed partial class MainWindow : Window, IDisposable
         _penumbra.ResourcesChanged -= OnResourcesChanged;
         _feed.Reported -= Notify;
         DetachPainter();
+        DetachGameFiles();
         _lifetimeCts.Cancel();
         _modLoadCts?.Cancel();
         _modLoadCts?.Dispose();
@@ -205,6 +207,9 @@ public sealed partial class MainWindow : Window, IDisposable
                     case MainTab.ModBrowser:
                         DrawModsTab();
                         break;
+                    case MainTab.GameFiles:
+                        DrawGameFilesTab();
+                        break;
                     case MainTab.TextureEdits:
                         DrawTextureSessions();
                         break;
@@ -220,15 +225,14 @@ public sealed partial class MainWindow : Window, IDisposable
         }
 
         _activeTab = activeTab;
-        // The listener runs for the Animations tab, and for On Screen while its Animations filter
-        // is on. It is not started otherwise: until a skeleton library is saved, its first match builds one.
-        if (activeTab == MainTab.OnScreen && _kinds.Contains(ResourceKinds.Animation))
-            animations?.StartObservation();
-        else if (!animationsTabActive)
+        // The listener runs only while the Animations tab is open: until a skeleton library is
+        // saved, its first match builds one.
+        if (!animationsTabActive)
             animations?.StopObservation();
         DrawTextureDialogs();
         DrawAnimationSendDialog();
         DrawPainterDialogs();
+        DrawGameFileExportDialog();
         DrawStatusStrip(GetFeedback(activeTab));
         DrawWindowOptionsExtension();
     }
@@ -268,6 +272,8 @@ public sealed partial class MainWindow : Window, IDisposable
         if (Widgets.TabButton(FontAwesomeIcon.Eye, "On Screen", active == MainTab.OnScreen)) active = MainTab.OnScreen;
         ImGui.SameLine(0, Theme.Gap);
         if (Widgets.TabButton(FontAwesomeIcon.FolderOpen, "Mod Browser", active == MainTab.ModBrowser)) active = MainTab.ModBrowser;
+        ImGui.SameLine(0, Theme.Gap);
+        if (Widgets.TabButton(FontAwesomeIcon.Database, "Game Files", active == MainTab.GameFiles)) active = MainTab.GameFiles;
         ImGui.SameLine(0, Theme.Gap);
         if (Widgets.TabButton(FontAwesomeIcon.Images, SessionsTabLabel(), active == MainTab.TextureEdits)) active = MainTab.TextureEdits;
         if (ShowAnimationsTab)
@@ -364,8 +370,12 @@ public sealed partial class MainWindow : Window, IDisposable
     /// <summary> The bottom row: latest message for the active tab, busy indicator, and the history popover. </summary>
     private void DrawStatusStrip(FeedbackState feedback)
     {
-        var busy = Volatile.Read(ref _editing) != 0 || Volatile.Read(ref _textureBusy) != 0 || _onScreen.IsRefreshing || (animations?.Busy ?? false);
-        var canCancel = animations is { Busy: true, CanCancel: true };
+        var exporting = _gameExport?.Busy ?? false;
+        var busy = Volatile.Read(ref _editing) != 0 || Volatile.Read(ref _textureBusy) != 0 || _onScreen.IsRefreshing || (animations?.Busy ?? false) || exporting;
+        var animationCancel = animations is { Busy: true, CanCancel: true };
+        // Cancel stops the Game Files export on its own tab, or when no animation work can be cancelled.
+        var cancelExport = exporting && (_activeTab == MainTab.GameFiles || !animationCancel);
+        var canCancel = animationCancel || cancelExport;
         var style = ImGui.GetStyle();
         var frame = ImGui.GetFrameHeight();
         using var strip = ImRaii.Child("##instant-edit-status-strip", new Vector2(0, frame), false,
@@ -412,7 +422,12 @@ public sealed partial class MainWindow : Window, IDisposable
             ImGui.TextColored(Theme.Muted, "Working…");
             ImGui.SameLine();
             if (canCancel && ImGui.SmallButton("Cancel"))
-                animations!.Cancel();
+            {
+                if (cancelExport)
+                    _gameExport!.Cancel();
+                else
+                    animations!.Cancel();
+            }
             if (canCancel)
                 ImGui.SameLine();
         }

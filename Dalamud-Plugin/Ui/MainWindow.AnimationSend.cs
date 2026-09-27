@@ -8,9 +8,9 @@ using InstantEdit.Services.Animations;
 namespace InstantEdit.Ui;
 
 /// <summary>
-/// The "Send animation to Blender" dialog for rows of the resource browsers: a PAP file from the
-/// Mod Browser, whose clip and source skeleton are chosen here, or an animation the listener
-/// detected on your character, whose skeleton the listener already matched.
+/// The "Send animation to Blender" dialog behind the pen of an animation row: a PAP file from the
+/// Mod Browser, whose clip and source skeleton are chosen here, or an animation in the Animations
+/// tab, which the listener detected on your character and whose skeleton it already matched.
 /// </summary>
 public sealed partial class MainWindow
 {
@@ -38,7 +38,7 @@ public sealed partial class MainWindow
     }
 
     private AnimationSendState? animationSend;
-    // Listener rows in On Screen and the animation they stand for.
+    // Rows of the Animations tab and the detected animation each stands for.
     private readonly Dictionary<ResourceView, (string CaptureId, bool Startup)> _animationRows = new(ReferenceEqualityComparer.Instance);
 
     /// <summary> Why an animation row cannot be sent, or null when it can. </summary>
@@ -166,7 +166,7 @@ public sealed partial class MainWindow
 
         ImGui.Spacing();
         Widgets.HintWrapped($"Blender keys the clip onto \"{AnimationArmature}\" at its own frame rate. " +
-                            "Physics bones keep their rest pose; record the live pose in the Animations tab to include them.");
+                            "Physics bones keep their rest pose; use Record live pose in the Animations tab to include them.");
         DrawSendButtons(state, service, skeleton is null ? null : () => service.SendFileToBlender(clip, skeleton, DeliverAnimationAsync));
     }
 
@@ -208,7 +208,7 @@ public sealed partial class MainWindow
         }
         ImGui.Spacing();
         Widgets.HintWrapped($"Blender keys the animation onto \"{AnimationArmature}\" at its own frame rate. " +
-                            "Physics bones keep their rest pose; record the live pose in the Animations tab to include them.");
+                            "Physics bones keep their rest pose; use Record live pose to include them.");
         DrawSendButtons(state, service, skeleton is null ? null : () => service.SendToBlender(capture, state.Startup, DeliverAnimationAsync));
     }
 
@@ -312,21 +312,4 @@ public sealed partial class MainWindow
 
     private static string ErrorText(AggregateException? error)
         => error?.GetBaseException().Message ?? "Unknown error.";
-
-    /// <summary>
-    /// On Screen rows for the animations the listener detected on an on-screen character, in the
-    /// Animations tab's order: what is playing first, then recent animations with a matched skeleton.
-    /// </summary>
-    private List<ResourceView> DetectedAnimationRows(OnScreenObject entity, IEnumerable<AnimationCapture> detected)
-    {
-        var rows = new List<ResourceView>();
-        var order = 0;
-        foreach (var item in AnimationPresentation.ListItems(detected.Where(c => c.ActorAddress == (long)entity.Address)))
-        {
-            var row = ResourceViews.FromAnimation(item.Capture, item.Startup, order++);
-            _animationRows[row] = (item.Capture.Id, item.Startup);
-            rows.Add(row);
-        }
-        return rows;
-    }
 }

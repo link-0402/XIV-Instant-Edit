@@ -16,7 +16,7 @@ from bpy.types import Operator, Context
 
 from ..io.model      import ModelImport
 from ..materials     import attribute_group_data, compact_mesh_part_indices, group_mesh_objects
-from ..mesh.export   import export_result, get_export_stats, check_triangulation
+from ..mesh.export   import export_result, get_export_stats, check_triangulation, check_weights, flush_edit_mode
 from ..mesh.objects  import visible_meshobj
 from ..properties    import get_settings
 from ..xivpy.model   import XIVModel
@@ -660,6 +660,7 @@ def export_target_issues(
             for name in names
         ]
         not_triangulated = check_triangulation(export_objects)
+        unweighted = check_weights(export_objects)
 
         if invalid_names:
             issues.append((
@@ -685,6 +686,11 @@ def export_target_issues(
             issues.append((
                 "ERROR",
                 _named_readiness_issue("Not triangulated", not_triangulated),
+            ))
+        if unweighted:
+            issues.append((
+                "ERROR",
+                _named_readiness_issue("No bone weights", unweighted),
             ))
 
     selection = getattr(props, "variant_target", "NEW_GROUP")
@@ -2431,6 +2437,19 @@ def detected_attribute_group_tags(context: Context) -> tuple[str, ...]:
     return tags
 
 
+def raise_unless_exportable(export_objects) -> None:
+    """Refuse meshes the game cannot use: faces must be triangles and meshes need bone weights."""
+    flush_edit_mode(export_objects)
+    not_triangulated = check_triangulation(export_objects)
+    if not_triangulated:
+        raise ValueError("Not Triangulated: " + ", ".join(not_triangulated) + ".")
+    unweighted = check_weights(export_objects)
+    if unweighted:
+        raise ValueError(
+            "No bone weights: " + ", ".join(unweighted)
+            + ". Weight them to the armature's bones before exporting.")
+
+
 # ---- Mashup export execution ----
 
 
@@ -2464,9 +2483,7 @@ def perform_mashup_export(
         raise ValueError(
             "Visible mesh names must use 'group.part Name' or 'Name group.part': "
             + ", ".join(unrecognized))
-    not_triangulated = check_triangulation(export_objects)
-    if not_triangulated:
-        raise ValueError("Not Triangulated: " + ", ".join(not_triangulated) + ".")
+    raise_unless_exportable(export_objects)
     attribute_tags, attribute_masks = (
         attribute_group_data(export_objects, use_lods=get_settings().use_lods)
         if getattr(get_instant_edit_props(), "create_attribute_groups", False)
@@ -2702,9 +2719,7 @@ def perform_instant_export(
             "Visible mesh names must use 'group.part Name' or 'Name group.part': "
             + ", ".join(unrecognized)
         )
-    not_triangulated = check_triangulation(export_objects)
-    if not_triangulated:
-        raise ValueError("Not Triangulated: " + ", ".join(not_triangulated) + ".")
+    raise_unless_exportable(export_objects)
     attribute_tags, attribute_masks = (
         attribute_group_data(export_objects, use_lods=get_settings().use_lods)
         if getattr(props, "create_attribute_groups", False)

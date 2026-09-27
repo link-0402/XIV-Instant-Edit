@@ -14,7 +14,11 @@ public sealed record PainterModelRef(string GamePath, string SourcePath, bool Va
 
 /// <summary> Everything needed to open a Painter project for one On Screen model. </summary>
 public sealed record PainterRequest(int ObjectIndex, long ActorAddress, string ActorName, PainterModelRef Model,
-    IReadOnlyList<PainterModelRef> OtherModels, IReadOnlyCollection<MaterialResourceCandidate> Resources);
+    IReadOnlyList<PainterModelRef> OtherModels, IReadOnlyCollection<MaterialResourceCandidate> Resources)
+{
+    /// <summary> What the character draws right now; null when it couldn't be read, and then every part counts. </summary>
+    public PainterLiveCharacter? Live { get; init; }
+}
 
 public sealed class PainterDraftTexture
 {
@@ -45,6 +49,13 @@ public sealed class PainterDraftSet
     public required IReadOnlyList<PainterDraftTexture> Textures { get; init; }
     /// <summary> Why the material couldn't be read; empty when it was. </summary>
     public string Problem { get; init; } = "";
+    /// <summary> Why the material's meshes stay out of Painter; empty when they go in. </summary>
+    public string SkipReason { get; init; } = "";
+    /// <inheritdoc cref="TexturePlanMaterial.Flags"/>
+    public uint? Flags { get; init; }
+    /// <inheritdoc cref="TexturePlanMaterial.AlphaThreshold"/>
+    public float? AlphaThreshold { get; init; }
+    public TexturePlanColorSet? ColorSet { get; init; }
     public string Label => string.Join(", ", MaterialPaths.Select(Path.GetFileName));
 }
 
@@ -54,7 +65,12 @@ public sealed class PainterDraftModel
     public required ModelMesh Mesh { get; init; }
     /// <summary> Texture set of each of the model's materials, by the material name the model stores. </summary>
     public required IReadOnlyDictionary<string, string> SetByMaterial { get; init; }
+    /// <summary> The character's enabled attributes for this model; empty when unknown, and then every part counts. </summary>
+    public IReadOnlyList<uint> AttributeMasks { get; init; } = [];
     public bool Selected { get; set; }
+
+    /// <summary> Whether the character draws the submesh. </summary>
+    public bool Draws(ModelSubmesh submesh) => PainterVisibility.Draws(AttributeMasks, submesh);
 }
 
 public sealed class PainterDraft
@@ -83,6 +99,9 @@ internal sealed record PainterProjectFiles(List<PainterTarget> Targets, string M
 internal sealed class PainterProjectBuilder
 {
     public const string ManifestSchema = "instant-edit.painter-job";
+    // Version 2 adds square sets (uvScale) and display settings; Painter plugins that only read
+    // version 1 would place a square set's seeds wrongly, so they refuse it instead.
+    public const int ManifestVersion = 2;
     private readonly MaterialPreviewBundleBuilder _builder;
     private readonly Func<string, CancellationToken, Task<byte[]?>> _readGameFile;
     private readonly Action<Exception, string> _log;
@@ -103,8 +122,21 @@ internal sealed class PainterProjectBuilder
         var plan = await _builder.BuildTexturePlanAsync(mainBytes, request.Model.GamePath, request.Resources, token).ConfigureAwait(false);
         warnings.AddRange(plan.Warnings);
 
-        var sets = BuildSets(plan, out var setByMaterial);
-        var main = new PainterDraftModel { Model = request.Model, Mesh = mesh, SetByMaterial = setByMaterial, Selected = true };
+        var masks = VisibleMasks(request.Live, request.Model, mesh);
+        if (masks.Count == 0)
+            warnings.Add("Instant Edit couldn't tell which parts of the model the character shows, so Painter gets all of them.");
+        bool Draws(ModelSubmesh submesh) => submesh.Indices.Length >= 3 && PainterVisibility.Draws(masks, submesh);
+        var hidden = mesh.Meshes.Sum(part => part.Submeshes.Count(s => s.Indices.Length >= 3 && !Draws(s)));
+        if (hidden > 0)
+            warnings.Add(hidden == 1
+                ? "1 part of the model is turned off on this character (by its gear, customization or mod options) and stays out of Painter."
+                : $"{hidden} parts of the model are turned off on this character (by its gear, customization or mod options) and stay out of Painter.");
+        var drawnMaterials = mesh.Meshes.Where(part => part.Submeshes.Any(Draws))
+            .Select(part => mesh.Materials[part.MaterialIndex])
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var sets = BuildSets(plan, drawnMaterials, out var setByMaterial);
+        var main = new PainterDraftModel { Model = request.Model, Mesh = mesh, SetByMaterial = setByMaterial, AttributeMasks = masks, Selected = true };
         var setByMaterialPath = sets.SelectMany(set => set.MaterialPaths.Select(path => (path, set.Name)))
             .GroupBy(pair => pair.path, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First().Name, StringComparer.OrdinalIgnoreCase);
@@ -124,7 +156,12 @@ internal sealed class PainterProjectBuilder
                     .ToDictionary(material => material.ModelMaterial, material => setByMaterialPath[material.GamePath], StringComparer.OrdinalIgnoreCase);
                 if (shared.Count == 0)
                     continue;
-                siblings.Add(new PainterDraftModel { Model = other, Mesh = ModelMeshReader.Read(bytes), SetByMaterial = shared });
+                var otherMesh = ModelMeshReader.Read(bytes);
+                siblings.Add(new PainterDraftModel
+                {
+                    Model = other, Mesh = otherMesh, SetByMaterial = shared,
+                    AttributeMasks = VisibleMasks(request.Live, other, otherMesh),
+                });
             }
             catch (Exception error) when (error is not OperationCanceledException)
             {
@@ -141,29 +178,52 @@ internal sealed class PainterProjectBuilder
         };
     }
 
-    private static List<PainterDraftSet> BuildSets(ModelTexturePlan plan, out Dictionary<string, string> setByMaterial)
+    /// <summary>
+    /// The character's attribute masks for a model, or none (every part counts) when they're unknown
+    /// or would hide the whole model, as right after a gear change, before the game sets them.
+    /// </summary>
+    private static IReadOnlyList<uint> VisibleMasks(PainterLiveCharacter? live, PainterModelRef model, ModelMesh mesh)
+    {
+        var masks = live?.MasksFor(model) ?? [];
+        return masks.Count > 0 && mesh.Meshes.Any(part => part.Submeshes.Any(s => s.Indices.Length >= 3 && PainterVisibility.Draws(masks, s)))
+            ? masks
+            : [];
+    }
+
+    /// <param name="drawnMaterials">Model material names the character draws; textures of the others can't be painted.</param>
+    private static List<PainterDraftSet> BuildSets(ModelTexturePlan plan, ISet<string> drawnMaterials, out Dictionary<string, string> setByMaterial)
     {
         setByMaterial = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var sets = new List<(PainterDraftSet Set, string Signature)>();
         var owners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        // Materials drawing with identical textures share one texture set, so painting either paints both.
+        var groups = new List<(string Signature, List<TexturePlanMaterial> Materials)>();
         foreach (var material in plan.Materials)
         {
             var textures = material.Textures.Where(t => t.Problem.Length == 0).DistinctBy(t => t.SourcePath, StringComparer.OrdinalIgnoreCase).ToList();
-            // Materials drawing with identical textures share one texture set, so painting either paints both.
             var signature = material.ShaderPackage + "|" + string.Join("|", textures.Select(t => t.SourcePath.ToLowerInvariant()).Order());
-            var existing = material.GamePath.Length > 0 && textures.Count > 0 ? sets.FirstOrDefault(s => s.Signature == signature).Set : null;
-            if (existing is not null)
-            {
-                ((List<string>)existing.MaterialPaths).Add(material.GamePath);
-                setByMaterial[material.ModelMaterial] = existing.Name;
-                continue;
-            }
+            var existing = material.GamePath.Length > 0 && textures.Count > 0 ? groups.FindIndex(g => g.Signature == signature) : -1;
+            if (existing >= 0)
+                groups[existing].Materials.Add(material);
+            else
+                groups.Add((signature, [material]));
+        }
+
+        var sets = new List<PainterDraftSet>();
+        foreach (var (_, materials) in groups)
+        {
+            var material = materials[0];
+            var skip = PainterRules.SkippedShaderReason(material.ShaderPackage);
+            var drawn = materials.Any(m => drawnMaterials.Contains(m.ModelMaterial));
             var name = PainterRules.UniqueName(Path.GetFileNameWithoutExtension(material.GamePath.Length > 0 ? material.GamePath : material.ModelMaterial), names, "material");
             var draftTextures = new List<PainterDraftTexture>();
             foreach (var texture in material.Textures)
             {
-                var reason = texture.Problem.Length > 0 ? texture.Problem : PainterRules.EditReason(texture);
+                var reason = texture.Problem.Length > 0 ? texture.Problem
+                    : skip.Length > 0 ? skip
+                    : !drawn ? "Not drawn on this character."
+                    : PainterRules.EditReason(texture);
                 if (reason.Length == 0 && owners.TryGetValue(texture.SourcePath, out var owner))
                     reason = $"Also used by {owner}; it is sent back from there.";
                 else if (reason.Length == 0)
@@ -181,18 +241,22 @@ internal sealed class PainterProjectBuilder
                     Selected = reason.Length == 0 && texture.Usage != "index",
                 });
             }
-            var set = new PainterDraftSet
+            sets.Add(new PainterDraftSet
             {
                 Name = name,
                 ShaderPackage = material.ShaderPackage,
-                MaterialPaths = new List<string> { material.GamePath.Length > 0 ? material.GamePath : material.ModelMaterial },
+                MaterialPaths = materials.Select(m => m.GamePath.Length > 0 ? m.GamePath : m.ModelMaterial).ToList(),
                 Textures = draftTextures,
                 Problem = material.Problem,
-            };
-            sets.Add((set, signature));
-            setByMaterial[material.ModelMaterial] = name;
+                SkipReason = skip,
+                Flags = material.Flags,
+                AlphaThreshold = material.AlphaThreshold,
+                ColorSet = material.ColorSet,
+            });
+            foreach (var member in materials)
+                setByMaterial[member.ModelMaterial] = name;
         }
-        return sets.Select(s => s.Set).ToList();
+        return sets;
     }
 
     public async Task<byte[]> ReadModelAsync(PainterModelRef model, CancellationToken token)
@@ -219,11 +283,11 @@ internal sealed class PainterProjectBuilder
         Directory.CreateDirectory(Path.Combine(jobDir, "mesh"));
         Directory.CreateDirectory(Path.Combine(jobDir, "seeds"));
 
-        // Channel layout for each texture set.
+        // Channel layout for each texture set whose meshes go to Painter.
         var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var layouts = new List<(PainterDraftSet Set, PainterSetLayout Layout, Dictionary<PainterTextureInput, PainterDraftTexture> Sources)>();
         var seedIndex = 0;
-        foreach (var set in draft.Sets)
+        foreach (var set in draft.Sets.Where(set => set.SkipReason.Length == 0))
         {
             var sources = new Dictionary<PainterTextureInput, PainterDraftTexture>(ReferenceEqualityComparer.Instance);
             var inputs = new List<PainterTextureInput>();
@@ -241,42 +305,14 @@ internal sealed class PainterProjectBuilder
             layouts.Add((set, layout, sources));
         }
 
-        // Seed images, one decode per texture.
-        var seedFiles = new Dictionary<string, List<JsonObject>>(StringComparer.Ordinal);
-        foreach (var (set, layout, sources) in layouts)
-        {
-            var list = new List<JsonObject>();
-            seedFiles[set.Name] = list;
-            foreach (var group in PainterChannelMap.Seeds(layout).GroupBy(seed => seed.Texture, ReferenceEqualityComparer.Instance))
-            {
-                token.ThrowIfCancellationRequested();
-                var texture = sources[(PainterTextureInput)group.Key!];
-                RgbaImage image;
-                try { image = await _builder.DecodeTextureAsync(texture.Texture, token).ConfigureAwait(false); }
-                catch (Exception error) when (error is not OperationCanceledException)
-                {
-                    warnings.Add($"{Path.GetFileName(texture.Texture.GamePath)} could not be decoded: {error.Message}");
-                    continue;
-                }
-                foreach (var seed in group)
-                {
-                    var bytes = seed.Kind switch
-                    {
-                        PainterSeedKind.Color => TgaImage.WriteRgb24(image),
-                        PainterSeedKind.Normal => TgaImage.WriteRgb24(PainterChannelMap.NormalSeed(image)),
-                        _ => TgaImage.WriteChannel(image, seed.Component),
-                    };
-                    await File.WriteAllBytesAsync(Path.Combine(jobDir, "seeds", seed.FileName), bytes, token).ConfigureAwait(false);
-                    list.Add(new JsonObject { ["channel"] = seed.Channel, ["file"] = "seeds/" + seed.FileName, ["colorSpace"] = seed.ColorSpace });
-                }
-            }
-        }
-
-        // Mesh: the model, plus the selected siblings' meshes that use one of its texture sets.
+        // Mesh: what the character draws of the model, and of the selected siblings the meshes that
+        // use one of its texture sets. Parts it has turned off stay out, as do skipped materials.
         var modelStem = PainterRules.UniqueName(Path.GetFileNameWithoutExtension(draft.Request.Model.GamePath), new HashSet<string>(), "model");
         var setNames = draft.Sets.Select(set => set.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var skipped = draft.Sets.Where(set => set.SkipReason.Length > 0).Select(set => set.Name).ToHashSet(StringComparer.Ordinal);
         var groups = new List<ObjGroup>();
         var coverage = new Dictionary<string, List<PainterCoverageModel>>(StringComparer.Ordinal);
+        var partlyHidden = new HashSet<string>(StringComparer.Ordinal);
         foreach (var model in new[] { draft.Main }.Concat(draft.Siblings.Where(s => s.Selected)))
         {
             var stem = Path.GetFileNameWithoutExtension(model.Model.GamePath);
@@ -293,8 +329,22 @@ internal sealed class PainterProjectBuilder
                     setName = PainterRules.UniqueName(Path.GetFileNameWithoutExtension(materialName), setNames, "unmapped");
                     ((Dictionary<string, string>)model.SetByMaterial)[materialName] = setName;
                 }
+                if (skipped.Contains(setName))
+                    continue;
+                var drawn = false;
                 foreach (var submesh in part.Submeshes)
+                {
+                    if (!model.Draws(submesh))
+                    {
+                        // Painter can't paint its texels, so they keep what the texture has.
+                        partlyHidden.Add(setName);
+                        continue;
+                    }
                     groups.Add(new ObjGroup(ObjWriter.GroupName(stem, part, submesh, model.Mesh.Attributes), part, submesh, setName));
+                    drawn = true;
+                }
+                if (!drawn)
+                    continue;
                 if (!meshesBySet.TryGetValue(setName, out var meshes))
                     meshesBySet[setName] = meshes = [];
                 meshes.Add(part.MeshIndex);
@@ -303,19 +353,73 @@ internal sealed class PainterProjectBuilder
             {
                 if (!coverage.TryGetValue(setName, out var models))
                     coverage[setName] = models = [];
-                models.Add(new PainterCoverageModel(model.Model.SourcePath, model.Model.Vanilla, meshes));
+                models.Add(new PainterCoverageModel(model.Model.SourcePath, model.Model.Vanilla, meshes, model.AttributeMasks));
             }
         }
+        var twoSided = new HashSet<string>(StringComparer.Ordinal);
+        var meshGroups = ObjWriter.WithoutBackFaceCopies(groups, twoSided);
+        // Painter only creates texture sets for materials the mesh draws with.
+        var drawnSets = meshGroups.Select(g => g.Material).ToHashSet(StringComparer.Ordinal);
+        foreach (var entry in layouts.Where(entry => !drawnSets.Contains(entry.Set.Name) && entry.Layout.Textures.Any(t => t.Exported)))
+            warnings.Add($"{entry.Set.Label} isn't drawn on this character at full detail, so its textures stay out of Painter.");
+        layouts.RemoveAll(entry => !drawnSets.Contains(entry.Set.Name));
+        var uvScales = layouts.ToDictionary(entry => entry.Set.Name, entry => (entry.Layout.ScaleU, entry.Layout.ScaleV), StringComparer.Ordinal);
         var meshFile = Path.Combine(jobDir, "mesh", modelStem + ".obj");
         await using (var obj = new StreamWriter(meshFile, false, new UTF8Encoding(false)))
-            ObjWriter.Write(obj, modelStem + ".mtl", groups);
+            ObjWriter.Write(obj, modelStem + ".mtl", meshGroups, uvScales);
         await using (var mtl = new StreamWriter(Path.Combine(jobDir, "mesh", modelStem + ".mtl"), false, new UTF8Encoding(false)))
-            ObjWriter.WriteMaterialLibrary(mtl, groups.Select(g => g.Material));
-        // Painter only creates texture sets for materials the mesh draws with.
-        var drawn = groups.Select(g => g.Material).ToHashSet(StringComparer.Ordinal);
-        foreach (var entry in layouts.Where(entry => !drawn.Contains(entry.Set.Name) && entry.Layout.Textures.Any(t => t.Exported)))
-            warnings.Add($"{entry.Set.Label} has no triangles at full detail, so its textures stay out of Painter.");
-        layouts.RemoveAll(entry => !drawn.Contains(entry.Set.Name));
+            ObjWriter.WriteMaterialLibrary(mtl, meshGroups.Select(g => g.Material));
+
+        // Seed images, one decode per texture, and a base color preview for sets whose color the
+        // game doesn't take from a texture.
+        var seedFiles = new Dictionary<string, List<JsonObject>>(StringComparer.Ordinal);
+        var previewed = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (set, layout, sources) in layouts)
+        {
+            var list = new List<JsonObject>();
+            seedFiles[set.Name] = list;
+            var decoded = new Dictionary<PainterTextureInput, RgbaImage?>(ReferenceEqualityComparer.Instance);
+            async Task<RgbaImage?> Decode(PainterTextureInput input)
+            {
+                if (decoded.TryGetValue(input, out var cached))
+                    return cached;
+                var texture = sources[input];
+                try { cached = await _builder.DecodeTextureAsync(texture.Texture, token).ConfigureAwait(false); }
+                catch (Exception error) when (error is not OperationCanceledException)
+                {
+                    warnings.Add($"{Path.GetFileName(texture.Texture.GamePath)} could not be decoded: {error.Message}");
+                    cached = null;
+                }
+                decoded[input] = cached;
+                return cached;
+            }
+
+            foreach (var group in PainterChannelMap.Seeds(layout).GroupBy(seed => seed.Texture, ReferenceEqualityComparer.Instance))
+            {
+                token.ThrowIfCancellationRequested();
+                if (await Decode((PainterTextureInput)group.Key!).ConfigureAwait(false) is not { } image)
+                    continue;
+                foreach (var seed in group)
+                {
+                    var bytes = seed.Kind switch
+                    {
+                        PainterSeedKind.Color => TgaImage.WriteRgb24(image),
+                        PainterSeedKind.Normal => TgaImage.WriteRgb24(PainterChannelMap.NormalSeed(image)),
+                        _ => TgaImage.WriteChannel(image, seed.Component),
+                    };
+                    await File.WriteAllBytesAsync(Path.Combine(jobDir, "seeds", seed.FileName), bytes, token).ConfigureAwait(false);
+                    list.Add(new JsonObject { ["channel"] = seed.Channel, ["file"] = "seeds/" + seed.FileName, ["colorSpace"] = seed.ColorSpace });
+                }
+            }
+
+            if (await PreviewAsync(set, layout, Decode, draft.Request.Live?.Colors).ConfigureAwait(false) is { } preview)
+            {
+                var file = $"p{previewed.Count:D3}.rgb.tga";
+                await File.WriteAllBytesAsync(Path.Combine(jobDir, "seeds", file), TgaImage.WriteRgb24(preview), token).ConfigureAwait(false);
+                list.Add(new JsonObject { ["channel"] = "BaseColor", ["file"] = "seeds/" + file, ["colorSpace"] = "color" });
+                previewed.Add(set.Name);
+            }
+        }
 
         // Targets, with the texture sets whose meshes decide which texels Painter may change.
         var unselectedShared = draft.Siblings.Where(s => !s.Selected).SelectMany(s => s.SetByMaterial.Values).ToHashSet(StringComparer.Ordinal);
@@ -329,15 +433,20 @@ internal sealed class PainterProjectBuilder
             foreach (var texture in layout.Textures.Where(t => t.Exported))
             {
                 var draftTexture = sources[texture.Texture];
-                var protect = unselectedShared.Contains(set.Name) || usersBySource.GetValueOrDefault(draftTexture.Texture.SourcePath) > 1;
+                var protect = unselectedShared.Contains(set.Name) || partlyHidden.Contains(set.Name)
+                    || usersBySource.GetValueOrDefault(draftTexture.Texture.SourcePath) > 1;
+                var width = PainterChannelMap.NextPowerOfTwo(texture.Texture.Width);
+                var height = PainterChannelMap.NextPowerOfTwo(texture.Texture.Height);
                 targets.Add(new PainterTarget
                 {
                     Key = texture.Texture.Key,
                     TextureSet = set.Name,
                     GamePath = draftTexture.Texture.GamePath,
                     SessionId = sessions[draftTexture],
-                    Width = PainterChannelMap.NextPowerOfTwo(texture.Texture.Width),
-                    Height = PainterChannelMap.NextPowerOfTwo(texture.Texture.Height),
+                    Width = width,
+                    Height = height,
+                    ExportWidth = width * layout.ScaleU,
+                    ExportHeight = height * layout.ScaleV,
                     Protect = protect,
                     Coverage = protect ? coverage.GetValueOrDefault(set.Name) ?? [] : [],
                 });
@@ -350,31 +459,51 @@ internal sealed class PainterProjectBuilder
             }
         }
 
+        var textureSets = new JsonArray();
+        foreach (var (set, layout, _) in layouts)
+        {
+            var display = PainterDisplay.For(set.Flags, set.AlphaThreshold, layout.Uses("Opacity"), twoSided.Contains(set.Name));
+            if (seedFiles[set.Name].Count == 0 && !layout.Textures.Any(t => t.Exported) && display == PainterDisplay.Default)
+                continue;
+            var channels = layout.AddChannels.ToList();
+            if (previewed.Contains(set.Name) && channels.All(c => c.Type != "BaseColor"))
+                channels.Insert(0, new PainterChannelSpec("BaseColor", "sRGB8", ""));
+            var entry = new JsonObject
+            {
+                ["name"] = set.Name,
+                ["label"] = set.Label,
+                ["width"] = layout.Size,
+                ["height"] = layout.Size,
+                ["removeChannels"] = new JsonArray(layout.RemoveChannels.Select(c => (JsonNode)JsonValue.Create(c)!).ToArray()),
+                ["channels"] = new JsonArray(channels.Select(c => (JsonNode)new JsonObject
+                {
+                    ["type"] = c.Type, ["format"] = c.Format, ["label"] = c.Label,
+                }).ToArray()),
+                ["seeds"] = new JsonArray(seedFiles[set.Name].Select(s => (JsonNode)s).ToArray()),
+            };
+            if (layout.ScaleU != 1 || layout.ScaleV != 1)
+                entry["uvScale"] = new JsonArray(layout.ScaleU, layout.ScaleV);
+            if (display != PainterDisplay.Default)
+                entry["display"] = new JsonObject
+                {
+                    ["alpha"] = display.Alpha,
+                    ["threshold"] = Math.Round(display.Threshold, 4),
+                    ["doubleSided"] = display.DoubleSided,
+                };
+            textureSets.Add(entry);
+        }
+
         var manifest = new JsonObject
         {
             ["schema"] = ManifestSchema,
-            ["version"] = 1,
+            ["version"] = ManifestVersion,
             ["jobId"] = jobId.ToString("N"),
             ["capability"] = capability,
             ["callbackPort"] = callbackPort,
             ["pluginVersion"] = pluginVersion,
             ["displayName"] = displayName,
             ["mesh"] = "mesh/" + modelStem + ".obj",
-            ["textureSets"] = new JsonArray(layouts
-                .Where(entry => seedFiles[entry.Set.Name].Count > 0 || entry.Layout.Textures.Any(t => t.Exported))
-                .Select(entry => (JsonNode)new JsonObject
-                {
-                    ["name"] = entry.Set.Name,
-                    ["label"] = entry.Set.Label,
-                    ["width"] = entry.Layout.Width,
-                    ["height"] = entry.Layout.Height,
-                    ["removeChannels"] = new JsonArray(entry.Layout.RemoveChannels.Select(c => (JsonNode)JsonValue.Create(c)!).ToArray()),
-                    ["channels"] = new JsonArray(entry.Layout.AddChannels.Select(c => (JsonNode)new JsonObject
-                    {
-                        ["type"] = c.Type, ["format"] = c.Format, ["label"] = c.Label,
-                    }).ToArray()),
-                    ["seeds"] = new JsonArray(seedFiles[entry.Set.Name].Select(s => (JsonNode)s).ToArray()),
-                }).ToArray()),
+            ["textureSets"] = textureSets,
             ["targets"] = manifestTargets,
             ["export"] = PainterChannelMap.ExportConfig(layouts.Select(entry => entry.Layout)),
         };
@@ -383,5 +512,32 @@ internal sealed class PainterProjectBuilder
             await File.WriteAllTextAsync(manifestPath, manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
                 new UTF8Encoding(false), token).ConfigureAwait(false);
         return new PainterProjectFiles(targets, manifestPath, warnings);
+    }
+
+    /// <summary>
+    /// A base color image for a set whose color doesn't come from a texture, or null: hair.shpk
+    /// takes the character's hair colors, and the character shaders their colorset through the
+    /// index texture. Painter only shows it; nothing sends it back.
+    /// </summary>
+    private static async Task<RgbaImage?> PreviewAsync(PainterDraftSet set, PainterSetLayout layout,
+        Func<PainterTextureInput, Task<RgbaImage?>> decode, PainterCharacterColors? colors)
+    {
+        if (layout.Uses("BaseColor"))
+            return null;
+        if (set.ShaderPackage.Equals("hair.shpk", StringComparison.OrdinalIgnoreCase))
+        {
+            var normal = layout.Textures.Select(t => t.Texture).FirstOrDefault(t => t.Usage == "normal");
+            return normal is not null && await decode(normal).ConfigureAwait(false) is { } image
+                ? PainterPreviews.Hair(image, colors ?? PainterPreviews.DefaultColors)
+                : null;
+        }
+        if (set.ColorSet is { Rows: > 0 } colorSet && PainterChannelMap.IsCharacterShader(set.ShaderPackage))
+        {
+            var index = layout.Textures.Select(t => t.Texture).FirstOrDefault(t => t.Usage == "index");
+            return index is not null && await decode(index).ConfigureAwait(false) is { } image
+                ? PainterPreviews.ColorSet(image, colorSet)
+                : null;
+        }
+        return null;
     }
 }

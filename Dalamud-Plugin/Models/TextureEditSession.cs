@@ -3,8 +3,13 @@ using Penumbra.Api.Enums;
 namespace InstantEdit.Models;
 
 /// <param name="JobId">The Substance Painter project this texture belongs to; its vanilla textures share one new mod.</param>
+/// <param name="CollectionObjectIndex">
+/// For a vanilla texture edited without an actor (from Game Files): the object whose collection
+/// gets the new mod. The session keeps no actor, so the texture needn't be one the object renders.
+/// </param>
 public sealed record TextureEditRequest(string GamePath, string ActualPath, string ModDirectory,
-    string ModRoot, string RelativePath, int? ObjectIndex, long ActorAddress, string NewModName = "", Guid? JobId = null);
+    string ModRoot, string RelativePath, int? ObjectIndex, long ActorAddress, string NewModName = "", Guid? JobId = null,
+    int? CollectionObjectIndex = null);
 
 public sealed record TextureEditSession
 {

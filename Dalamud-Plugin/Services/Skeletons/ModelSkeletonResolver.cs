@@ -125,22 +125,12 @@ internal sealed class ModelSkeletonResolver(PenumbraService penumbra, IDataManag
     {
         var validObject = objectIndex is >= 0 and <= ushort.MaxValue;
         var collection = validObject ? await penumbra.GetCollectionTargetAsync(objectIndex) : null;
-        var paths = new List<string> { ModelSkeletonPaths.BasePath(key) };
-        if (ModelSkeletonPaths.Extra(key) is { } extra)
-        {
-            var entry = await EstEntryAsync(extra, key.GenderRace, validObject ? objectIndex : -1, token);
-            if (entry > 0)
-            {
-                paths.Add(ModelSkeletonPaths.PartialPath(key.Id, extra.Slot, entry));
-                if (extra.Note != null) warnings.Add(extra.Note);
-            }
-            else if (extra.Slot is EstSlot.Face or EstSlot.Hair)
-            {
-                warnings.Add($"The game names no {extra.Slot.ToString().ToLowerInvariant()} skeleton for {key.Id} set {extra.Set}.");
-            }
-        }
+        var extra = ModelSkeletonPaths.Extra(key);
+        var entry = extra != null ? await EstEntryAsync(extra, key.GenderRace, validObject ? objectIndex : -1, token) : 0;
+        var files = ModelSkeletonPaths.Files(key, (ushort)entry);
+        warnings.AddRange(files.Warnings);
         var parts = new List<SkeletonPart>();
-        foreach (var path in paths)
+        foreach (var path in files.Files)
         {
             token.ThrowIfCancellationRequested();
             byte[] bytes;

@@ -151,8 +151,6 @@ public sealed partial class MainWindow
         }
 
         ImGui.TextColored(Theme.Text, draft.Request.Model.FileName);
-        ImGui.SameLine(0, Theme.Gap);
-        ImGui.TextColored(Theme.Muted, draft.Request.ActorName);
         Widgets.HintWrapped("Painter gets the mesh and one texture set per material, with the current textures as its bottom layer. " +
                             "Press Send to game in Painter's XIV Instant Edit panel to apply the ticked textures; each goes through a texture session with a backup.");
         ImGui.Spacing();

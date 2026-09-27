@@ -163,6 +163,28 @@ internal static class ResourceViews
             importObjectIndex);
     }
 
+    /// <summary> A Game Files row: a vanilla file read from the game's own data, with no actor or mod behind it. </summary>
+    public static ResourceView GameFile(string gamePath, string name)
+        => new(
+            ResourceType(gamePath),
+            string.Empty,
+            name,
+            gamePath,
+            gamePath,
+            "Game Data",
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            null,
+            ResourceSourceState.GameData,
+            ResourceSection.Other.ToString(),
+            ResourceType(gamePath),
+            0,
+            string.Empty,
+            Array.Empty<string>(),
+            new List<ResourceView>());
+
     public static string ResourceType(string gamePath)
         => Path.GetExtension(gamePath).ToLowerInvariant() switch
         {
@@ -177,29 +199,28 @@ internal static class ResourceViews
     public static bool IsAnimation(ResourceView node) => (node.Kinds & ResourceKinds.Animation) != 0;
 
     /// <summary>
-    /// An On Screen row for an animation the listener detected: its file, where it was loaded from,
-    /// and whether it is playing. Penumbra's resource tree does not report character animations.
+    /// An Animations tab row for an animation the listener detected: its file and where it was
+    /// loaded from. Penumbra's resource tree does not report character animations.
     /// </summary>
     public static ResourceView FromAnimation(AnimationCapture capture, bool startup, int order)
     {
         var clip = startup && capture.Startup is { } linked ? linked : capture.Clip;
         var source = capture.Sources.FirstOrDefault(s => s.GamePath == clip.GamePath);
-        var name = Services.Animations.AnimationPresentation.AnimationName(capture, startup);
         var mod = source?.ModName ?? source?.ModDirectory;
         return new ResourceView(
             "Animation",
             string.Empty,
-            capture.Playing && !startup ? name + " · playing" : name,
+            Services.Animations.AnimationPresentation.AnimationName(capture, startup),
             clip.GamePath,
             source?.ResolvedPath ?? clip.GamePath,
             mod is null ? "Game Data" : $"Loaded from: {mod}",
-            source?.ModName ?? string.Empty,
+            mod ?? string.Empty,
             source?.ModDirectory ?? string.Empty,
             source?.ModRoot ?? string.Empty,
             source?.RelativePath ?? string.Empty,
             null,
             string.IsNullOrEmpty(source?.ModDirectory) ? ResourceSourceState.GameData : ResourceSourceState.LoadedMod,
-            ResourceSection.Animations.ToString(),
+            ResourceSection.Other.ToString(),
             "Animation",
             order,
             string.Empty,

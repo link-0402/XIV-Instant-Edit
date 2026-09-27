@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using InstantEdit.Services.Previews;
 
 namespace InstantEdit.Services.Painter;
@@ -15,7 +16,12 @@ public static class ObjWriter
 {
     public const float Scale = 100f;
 
-    public static void Write(TextWriter obj, string materialLibrary, IReadOnlyList<ObjGroup> groups)
+    /// <param name="uvScales">
+    /// Per material, how often the texture fits its square texture set across and down: UVs shrink
+    /// by it into the set's top-left corner.
+    /// </param>
+    public static void Write(TextWriter obj, string materialLibrary, IReadOnlyList<ObjGroup> groups,
+        IReadOnlyDictionary<string, (int U, int V)>? uvScales = null)
     {
         var c = CultureInfo.InvariantCulture;
         obj.WriteLine("# XIV Instant Edit mesh for Substance Painter");
@@ -38,12 +44,13 @@ public static class ObjWriter
                     obj.WriteLine(p.Z.ToString("R", c));
                 }
                 var (tileU, tileV) = TileOffset(mesh.Uvs);
+                var (scaleU, scaleV) = uvScales is not null && uvScales.TryGetValue(group.Material, out var scale) ? scale : (1, 1);
                 for (var v = 0; v < mesh.Uvs.Length; v++)
                 {
                     var uv = mesh.Uvs[v];
                     obj.Write("vt ");
-                    obj.Write((uv.X - tileU).ToString("R", c)); obj.Write(' ');
-                    obj.WriteLine((1f - (uv.Y - tileV)).ToString("R", c));
+                    obj.Write(((uv.X - tileU) / scaleU).ToString("R", c)); obj.Write(' ');
+                    obj.WriteLine((1f - (uv.Y - tileV) / scaleV).ToString("R", c));
                 }
                 for (var v = 0; v < mesh.Normals.Length; v++)
                 {
@@ -90,6 +97,61 @@ public static class ObjWriter
         }
         return (MathF.Floor((minU + maxU) / 2), MathF.Floor((minV + maxV) / 2));
     }
+
+    /// <summary>
+    /// The groups without triangles that repeat an earlier triangle of the same material, either as
+    /// is or with reversed winding. Models draw double-sided cards (brows, lashes, hair) as a front
+    /// and a reversed back copy; Painter shows both copies fighting over the same place, while the
+    /// texels they paint are the same. Materials that lost back copies are added to
+    /// <paramref name="twoSided"/>, to be drawn double-sided instead.
+    /// </summary>
+    public static IReadOnlyList<ObjGroup> WithoutBackFaceCopies(IReadOnlyList<ObjGroup> groups, ISet<string> twoSided)
+    {
+        var seen = new Dictionary<string, HashSet<(Vector3, Vector3, Vector3)>>(StringComparer.Ordinal);
+        var result = new List<ObjGroup>(groups.Count);
+        foreach (var group in groups)
+        {
+            if (!seen.TryGetValue(group.Material, out var triangles))
+                seen[group.Material] = triangles = [];
+            var positions = group.Mesh.Positions;
+            var indices = group.Submesh.Indices;
+            var kept = new List<int>(indices.Length);
+            for (var i = 0; i + 2 < indices.Length; i += 3)
+            {
+                var a = positions[indices[i]];
+                var b = positions[indices[i + 1]];
+                var c = positions[indices[i + 2]];
+                if (triangles.Contains(Canonical(a, c, b)) && !triangles.Contains(Canonical(a, b, c)))
+                {
+                    twoSided.Add(group.Material);
+                    continue;
+                }
+                if (!triangles.Add(Canonical(a, b, c)))
+                    continue;
+                kept.Add(indices[i]);
+                kept.Add(indices[i + 1]);
+                kept.Add(indices[i + 2]);
+            }
+            if (kept.Count == indices.Length - indices.Length % 3)
+                result.Add(group);
+            else if (kept.Count > 0)
+                result.Add(group with { Submesh = group.Submesh with { Indices = kept.ToArray() } });
+        }
+        return result;
+    }
+
+    // The triangle's corners, starting from the smallest, so rotations of one winding compare equal.
+    private static (Vector3, Vector3, Vector3) Canonical(Vector3 a, Vector3 b, Vector3 c)
+    {
+        var first = (a, b, c);
+        var second = (b, c, a);
+        var third = (c, a, b);
+        var best = Less(second.Item1, first.Item1) ? second : first;
+        return Less(third.Item1, best.Item1) ? third : best;
+    }
+
+    private static bool Less(Vector3 x, Vector3 y)
+        => x.X != y.X ? x.X < y.X : x.Y != y.Y ? x.Y < y.Y : x.Z < y.Z;
 
     public static void WriteMaterialLibrary(TextWriter mtl, IEnumerable<string> materials)
     {

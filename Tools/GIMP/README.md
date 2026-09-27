@@ -19,13 +19,21 @@ option like Photoshop's Save As dialog. The script gets the same effect by:
    `gimp-image-get-filename`, not hardcoded).
 5. Deleting the duplicate.
 
-## Install
+## Install from Instant Edit
 
-1. Copy `SaveFlattenedTGA.scm` into GIMP's scripts folder:
-   - Windows: `%APPDATA%\GIMP\2.10\scripts\`
-   - macOS/Linux: `~/.config/GIMP/2.10/scripts/`
-2. `Filters > Script-Fu > Refresh Scripts` (or restart GIMP).
-3. It now appears as `File > Export > Save Flattened TGA (In Place)`.
+The first-time setup and **Settings > Texture editing** find GIMP and offer **Install save
+scripts**, which copies `SaveFlattenedTGA.scm` into the scripts folder of the GIMP version
+found (`%APPDATA%\GIMP\<version>\scripts\`). Restart GIMP afterwards.
+
+## Install by hand
+
+1. Copy `SaveFlattenedTGA.scm` into GIMP's scripts folder, named after GIMP's
+   major and minor version:
+   - Windows: `%APPDATA%\GIMP\3.0\scripts\` (GIMP 3.0), `%APPDATA%\GIMP\2.10\scripts\` (GIMP 2.10)
+   - macOS/Linux: `~/.config/GIMP/3.0/scripts/`, `~/.config/GIMP/2.10/scripts/`
+2. Restart GIMP (GIMP 2.10 can also use `Filters > Script-Fu > Refresh Scripts`).
+3. It now appears as `File > Export > Save Flattened TGA (In Place)`, next to
+   `Save Flattened TGA As Variant...`.
 4. (Optional) `Edit > Keyboard Shortcuts...` → search "Save Flattened" →
    assign a shortcut.
 
@@ -39,4 +47,6 @@ version is the `PRECISION-U8-NON-LINEAR` constant on the
 `gimp-image-convert-precision` call — the script's header comment explains
 how to look up the correct name via the Procedure Browser if it errors.
 
-GIMP 3.0 changed significant parts of the scripting API; this targets 2.10.x.
+GIMP 3.0 changed significant parts of the scripting API. The script works in
+both 2.10 and 3: where they differ, it checks which procedure exists before
+calling it.

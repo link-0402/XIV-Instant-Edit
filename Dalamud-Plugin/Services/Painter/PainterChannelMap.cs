@@ -24,8 +24,23 @@ internal sealed record PainterTextureLayout(PainterTextureInput Texture, IReadOn
 
 internal sealed record PainterChannelSpec(string Type, string Format, string Label);
 
+/// <param name="Width">Texture width the set is laid out for; Painter gets a square set of <see cref="Size"/>.</param>
 internal sealed record PainterSetLayout(string Name, int Width, int Height, IReadOnlyList<PainterTextureLayout> Textures,
-    IReadOnlyList<string> RemoveChannels, IReadOnlyList<PainterChannelSpec> AddChannels);
+    IReadOnlyList<string> RemoveChannels, IReadOnlyList<PainterChannelSpec> AddChannels)
+{
+    /// <summary>
+    /// Painter shows every texture set as a square, so a non-square texture would look squashed:
+    /// the set is square instead, and the texture fills its top-left Width × Height corner.
+    /// </summary>
+    public int Size => Math.Max(Width, Height);
+
+    /// <summary> How many times the texture's width fits the square set; the mesh's U is divided by it. </summary>
+    public int ScaleU => Size / Width;
+
+    public int ScaleV => Size / Height;
+
+    public bool Uses(string channel) => Textures.Any(t => t.Components.Any(c => c.Channel == channel));
+}
 
 internal enum PainterSeedKind { Color, Normal, Channel }
 
@@ -60,6 +75,9 @@ internal static class PainterChannelMap
         "charactertattoo.shpk" => Family.Tattoo,
         _ => Family.Other,
     };
+
+    /// <summary> Shaders that color by their colorset, picked per texel by the index texture. </summary>
+    public static bool IsCharacterShader(string shaderPackage) => FamilyOf(shaderPackage) is Family.Character or Family.CharacterLegacy;
 
     /// <summary> Components the TEX format stores; the others can't carry edits. </summary>
     public static int[] StoredComponents(uint format) => (TexFile.TextureFormat)format switch
@@ -199,8 +217,12 @@ internal static class PainterChannelMap
         return seeds;
     }
 
-    /// <summary> The export map for one texture: a TGA named after its key, each channel read from its Painter home. </summary>
-    public static JsonObject ExportMap(PainterTextureLayout layout)
+    /// <summary>
+    /// The export map for one texture: a TGA named after its key, each channel read from its Painter
+    /// home. In a square set laid out for a non-square texture, the whole set is exported at the
+    /// size that makes its top-left corner the texture's own size; Instant Edit crops that corner.
+    /// </summary>
+    public static JsonObject ExportMap(PainterTextureLayout layout, int scaleU = 1, int scaleV = 1)
     {
         var channels = new JsonArray();
         for (var component = 0; component < 4; component++)
@@ -228,7 +250,7 @@ internal static class PainterChannelMap
                 ["bitDepth"] = "8",
                 ["dithering"] = false,
                 ["paddingAlgorithm"] = "infinite",
-                ["sizeLog2"] = new JsonArray(Log2(NextPowerOfTwo(layout.Texture.Width)), Log2(NextPowerOfTwo(layout.Texture.Height))),
+                ["sizeLog2"] = new JsonArray(Log2(NextPowerOfTwo(layout.Texture.Width) * scaleU), Log2(NextPowerOfTwo(layout.Texture.Height) * scaleV)),
             },
         };
     }
@@ -247,7 +269,7 @@ internal static class PainterChannelMap
             foreach (var layout in set.Textures.Where(l => l.Exported))
             {
                 var preset = $"xiv_{set.Name}__{layout.Texture.Key}";
-                presets.Add(new JsonObject { ["name"] = preset, ["maps"] = new JsonArray(ExportMap(layout)) });
+                presets.Add(new JsonObject { ["name"] = preset, ["maps"] = new JsonArray(ExportMap(layout, set.ScaleU, set.ScaleV)) });
                 list.Add(new JsonObject { ["rootPath"] = set.Name, ["exportPreset"] = preset });
             }
         }

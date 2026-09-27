@@ -4,12 +4,15 @@ using InstantEdit.Services;
 namespace InstantEdit.Ui;
 
 /// <summary>
-/// Which resource kinds the browser shows. With nothing selected it shows every editable
-/// kind as a tree; with one or more kinds selected it shows only those, flattened.
+/// Which resource kinds a browser shows. With nothing selected it shows every kind it lists
+/// as a tree; with one or more kinds selected it shows only those, flattened.
 /// </summary>
-internal sealed class ResourceKindSelection
+internal sealed class ResourceKindSelection(ResourceKinds listed = ResourceKinds.Editable)
 {
     public ResourceKinds Selected { get; private set; } = ResourceKinds.None;
+
+    /// <summary> Every kind the browser lists; rows of other kinds never show, whatever is selected. </summary>
+    public ResourceKinds Listed { get; } = listed;
 
     /// <summary> True when no explicit kind is selected (the tree view). </summary>
     public bool IsAll => Selected == ResourceKinds.None;
@@ -18,7 +21,7 @@ internal sealed class ResourceKindSelection
     public bool IsFlat => !IsAll;
 
     /// <summary> The kinds a row must intersect to be shown. </summary>
-    public ResourceKinds Admitted => IsAll ? ResourceKinds.Editable : Selected;
+    public ResourceKinds Admitted => (IsAll ? ResourceKinds.Editable : Selected) & Listed;
 
     public bool Contains(ResourceKinds kind) => (Selected & kind) != 0;
 
@@ -169,7 +172,6 @@ internal sealed class ExpansionState
         {
             ResourceSection.CharacterFeatures => ":features",
             ResourceSection.Gear => ":gear",
-            ResourceSection.Animations => ":animations",
             _ => ":other",
         };
 

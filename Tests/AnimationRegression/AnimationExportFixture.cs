@@ -126,11 +126,12 @@ internal static class AnimationExportFixture
         reject(() => AnimationTakeTiming.Resample([0], [new float[3]], Bones.Length, 60), "a recorded frame must match the skeleton");
     }
 
-    /// <summary>On Screen rows for animations the listener detected, and action names for PAP files sent from the Mod Browser.</summary>
+    /// <summary>Animations tab rows for animations the listener detected, and action names for PAP files sent from the Mod Browser.</summary>
     public static void Rows(Action<bool, string> check)
     {
         const string loopPath = "chara/human/c0801/animation/a0001/bt_common/emote/dance01_loop.pap";
         const string startPath = "chara/human/c0801/animation/a0001/bt_common/emote/dance01_start.pap";
+        const string idlePath = "chara/human/c0801/animation/a0001/bt_common/emote/pose04_loop.pap";
         var modded = new AnimationResource(loopPath, @"C:\mods\Dance\dance01_loop.pap", "hash", "DanceMod", @"C:\mods\Dance", "dance01_loop.pap", "Dance Mod");
         var vanilla = new AnimationResource(startPath, startPath, "hash2");
         var loop = new AnimationClip(loopPath, "cbem_dance01lp", 0, 0, 42, "chara/human/c0801/skeleton/base/b0001/skl_c0801b0001.sklb");
@@ -139,14 +140,40 @@ internal static class AnimationExportFixture
             [modded, vanilla], new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""), DateTime.UtcNow, true);
 
         var row = InstantEdit.Ui.ResourceViews.FromAnimation(capture, false, 0);
-        check(row.Name == "Dance · playing" && row.GamePath == loopPath && row.ActualPath == modded.ResolvedPath &&
-              row.SourceModName == "Dance Mod" && row.SourceModDirectory == "DanceMod" && row.SourceState == ResourceSourceState.LoadedMod &&
-              row.Kinds == InstantEdit.Ui.ResourceKinds.Animation && row.SectionValue == ResourceSection.Animations,
-            "a detected animation becomes an On Screen animation row with its mod, file and playing state");
+        check(row.Name == "Dance" && row.GamePath == loopPath && row.ActualPath == modded.ResolvedPath &&
+              row.SourceModName == "Dance Mod" && row.SourceModDirectory == "DanceMod" && row.SourceRelativePath == "dance01_loop.pap" &&
+              row.SourceState == ResourceSourceState.LoadedMod && row.Kinds == InstantEdit.Ui.ResourceKinds.Animation,
+            "a detected animation becomes an Animations tab row with its mod and file");
         var startup = InstantEdit.Ui.ResourceViews.FromAnimation(capture with { Playing = false }, true, 1);
         check(startup.GamePath == startPath && startup.SourceState == ResourceSourceState.GameData && startup.ActualPath == startPath &&
-              startup.SourceLabel == "Game Data" && !startup.Name.Contains("playing") && startup.Order == 1,
+              startup.SourceLabel == "Game Data" && startup.SourceModName.Length == 0 && startup.Order == 1,
             "a startup row names its own file, and a vanilla file reads as game data");
+        var unnamed = InstantEdit.Ui.ResourceViews.FromAnimation(capture with { Sources = [modded with { ModName = null }, vanilla] }, false, 0);
+        check(unnamed.SourceModName == "DanceMod", "a mod without a known name is shown by its folder");
+
+        // The list: what is playing, each with its startup, then what played recently with a matched skeleton.
+        var skeleton = new SkeletonCandidate(new SkeletonSource(SkeletonSourceKind.Game, vanilla),
+            new SkeletonDescription("skl_c0801b0001", "print", [], [], [], []), 0, "exact match");
+        var matched = new SkeletonResolution(SkeletonResolutionState.Matched, [skeleton], skeleton);
+        var idle = new AnimationCapture("idle", 1, 1, Guid.NewGuid(), "Test", "Idle",
+            loop with { GamePath = idlePath, Resolution = matched }, null, [idlePath], [modded with { GamePath = idlePath }],
+            new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""), DateTime.UtcNow, false);
+        var unmatched = idle with { Id = "unmatched", Clip = idle.Clip with { Resolution = new(SkeletonResolutionState.Searching, []) } };
+        var rows = InstantEdit.Ui.AnimationRows.Build([capture, idle, unmatched]);
+        check(rows.Length == 3 &&
+              rows[0] is { Startup: false, Group: InstantEdit.Ui.AnimationGroup.Playing, Playing: true } && rows[0].Clip == loop &&
+              rows[1] is { Startup: true, Group: InstantEdit.Ui.AnimationGroup.Playing, Playing: false } && rows[1].Clip == start &&
+              rows[2] is { Startup: false, Group: InstantEdit.Ui.AnimationGroup.Recent, Playing: false } && rows[2].Capture == idle &&
+              rows.Select(r => r.Key).Distinct().Count() == 3 && rows.Select(r => r.View.Order).SequenceEqual([0, 1, 2]),
+            "the playing animation comes first with its startup, then recent ones whose skeleton was matched");
+
+        var search = new InstantEdit.Ui.ResourceSearch { Text = "dance01_start" };
+        var found = InstantEdit.Ui.AnimationRows.Filter(rows, search);
+        check(found.Count == 2 && found.All(r => r.Capture == capture),
+            "searching for a startup keeps the animation it leads into");
+        search.Text = "Dance Mod";
+        check(InstantEdit.Ui.AnimationRows.Filter(rows, search).Count == 3 && InstantEdit.Ui.AnimationRows.Filter(rows, new()).Count == 3,
+            "a search for the mod finds each animation from it, and no search shows them all");
 
         var source = new AnimationFileSource("chara/human/c0801/animation/a0001/bt_common/emote/dance01.pap", @"C:\mods\Dance\dance01.pap", "dance01.pap");
         check(AnimationFiles.ExportName(new AnimationFileClip(source, "cbem_dance01", 0, 1, false)) == "dance01 (cbem_dance01)" &&

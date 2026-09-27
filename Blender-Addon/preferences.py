@@ -94,7 +94,7 @@ class XIVIEPreferences(AddonPreferences):
         max=65535,
     )  # type: ignore
 
-    def draw(self, _context) -> None:
+    def draw(self, context) -> None:
         layout = self.layout
         layout.label(text="XIV Instant Edit Connection")
         layout.prop(self, "instant_edit_blender_port")
@@ -105,6 +105,22 @@ class XIVIEPreferences(AddonPreferences):
         layout.label(text=f"Managed folder: {cache_root()}")
         layout.label(text=f"Diagnostics: {diagnostics_root()}")
         layout.operator("xiv_ie.clean_cache", icon="TRASH")
+        layout.separator()
+        self._draw_shortcuts(context)
+
+    def _draw_shortcuts(self, context) -> None:
+        import rna_keymap_ui
+        from .keymaps import SHORTCUTS, user_shortcut
+
+        layout = self.layout
+        layout.label(text="Keyboard Shortcuts")
+        keyconfig = context.window_manager.keyconfigs.user
+        for idname, label in SHORTCUTS:
+            keymap, item = user_shortcut(context, idname)
+            if item is None:
+                layout.label(text=f"{label}: restart Blender to assign a key.", icon="INFO")
+                continue
+            rna_keymap_ui.draw_kmi([], keyconfig, keymap, item, layout, 0)
 
 
 def get_prefs() -> XIVIEPreferences:

@@ -1,12 +1,10 @@
 # Modified for XIV Instant Edit, 2026.
 import re
 import bpy
-import bmesh
 import numpy as np
 
 from numpy.typing          import NDArray
 from bpy.types             import Object, Depsgraph, ShapeKey
-from bmesh.types           import BMFace, BMesh
 from collections           import defaultdict
 from collections.abc       import Iterable 
    
@@ -14,107 +12,28 @@ from ..logging             import YetAnotherLogger
 from ...properties         import get_settings
 from .com.space            import lin_to_srgb       
 from ...mesh.shapes        import get_shape_mix
-from .com.exceptions       import XIVMeshParentError
-from ...mesh.weights       import remove_vertex_groups
+from .com.exceptions       import XIVMeshError, XIVMeshParentError
 from ...mesh.objects       import visible_meshobj, safe_object_delete, copy_mesh_object, quick_copy
 from ...mesh.face_order    import get_original_faces, sequential_faces
 from ...xivpy.model.vertex import XIV_COL
 
+# The MDL exporter drops smaller weights (exp/weights.normalise_weights).
+WEIGHT_THRESHOLD = 1e-6
 
-def create_backfaces(obj:Object) -> None:
-    """Assumes the mesh is triangulated to get the faces from _get_backfaces."""
-    
-    if "BACKFACES" not in obj.vertex_groups:
-        return
-    
+
+def unweighted_vertices(obj: Object) -> tuple[int, int]:
+    """Count the vertices faces use, and those among them without a weight above WEIGHT_THRESHOLD."""
     mesh = obj.data
-    old_poly_count = len(mesh.polygons) 
+    loop_vertices = np.empty(len(mesh.loops), dtype=np.int32)
+    mesh.loops.foreach_get("vertex_index", loop_vertices)
+    used = np.zeros(len(mesh.vertices), dtype=bool)
+    used[loop_vertices] = True
+    weighted = np.fromiter(
+        (any(group.weight > WEIGHT_THRESHOLD for group in vertex.groups) for vertex in mesh.vertices),
+        dtype=bool, count=len(mesh.vertices),
+    )
+    return int(np.count_nonzero(used)), int(np.count_nonzero(used & ~weighted))
 
-    bm = bmesh.new()
-    try:
-        bm.from_mesh(mesh)
-
-        bm.verts.ensure_lookup_table()
-        bm.faces.ensure_lookup_table()
-
-        bf_idx    = obj.vertex_groups["BACKFACES"].index
-        backfaces = _get_backfaces(bm, bf_idx)
-    
-        dupe_faces = [
-            geo for geo in
-            bmesh.ops.duplicate(bm, geom=backfaces[:])["geom"]
-            if isinstance(geo, bmesh.types.BMFace)
-            ]
-
-        bmesh.ops.reverse_faces(bm, faces=dupe_faces)
-
-        bm.to_mesh(mesh)
-    finally:
-        bm.free()
-
-    normals = []
-    for face_idx, face in enumerate(mesh.polygons):
-        if face_idx >= old_poly_count:
-            normals.extend([(0, 0, 0)] * face.loop_total)
-        else:
-            for i in range(face.loop_total):
-                loop_idx = face.loop_start + i
-                normals.append(tuple(mesh.loops[loop_idx].normal))
-
-    mesh.normals_split_custom_set(normals)
-
-def backfaces_with_shapes(obj: Object) -> None:
-    key_blocks = obj.data.shape_keys.key_blocks
-
-    temp_obj = {}
-    verts    = len(obj.data.vertices)
-    shape_co = np.zeros(verts * 3, dtype=np.float32)
-    try:
-        for key in key_blocks[1:]:
-            temp_copy = quick_copy(obj)
-            temp_obj[key.name] = temp_copy
-        
-            key.data.foreach_get("co", shape_co)
-
-            temp_copy.shape_key_clear()
-            temp_copy.data.vertices.foreach_set("co", shape_co)
-            create_backfaces(temp_copy)
-    
-        obj.shape_key_clear()
-        create_backfaces(obj)
-        obj.shape_key_add(name="Basis")
-
-        verts = len(obj.data.vertices)
-        shape_co = np.zeros(verts * 3, dtype=np.float32)
-
-        for key_name, copy in temp_obj.items():
-            copy: Object
-            copy.data.vertices.foreach_get("co", shape_co)
-
-            new_shape = obj.shape_key_add(name=key_name)
-            new_shape.data.foreach_set("co", shape_co)
-
-    finally:
-        for copy in temp_obj.values():
-            safe_object_delete(copy)
-
-
-def _get_backfaces(bm: BMesh, bf_idx: int) -> list[BMFace]:
-    deform_layer = bm.verts.layers.deform.active
-
-    vertex_weights = np.zeros(len(bm.verts), dtype=np.float32)
-    for idx, vert in enumerate(bm.verts):
-        vertex_weights[idx] = vert[deform_layer].get(bf_idx, 0)
-    
-    face_indices = np.array([[v.index for v in face.verts] for face in bm.faces])
-    face_weights = vertex_weights[face_indices] 
-    faces_mask   = np.any(face_weights > 0, axis=1)
-
-    bm.faces.ensure_lookup_table()
-
-    backfaces = [bm.faces[idx] for idx, is_backface in enumerate(faces_mask) if is_backface]
-    
-    return backfaces
 
 def colour_layer_correction(obj: Object) -> None:
     '''This function corrects linear colour data that's been wrongly stored as sRGB during FBX import.'''
@@ -141,10 +60,13 @@ def colour_layer_correction(obj: Object) -> None:
     for convert, name, domain, data, rgba in layer_data:
         layer = obj.data.color_attributes.new(name, domain=domain, type=data)
         
-        # Here we apply the opposite conversion to restore the linear data. 
+        # Here we apply the opposite conversion to restore the linear data.
         # Due to the gamma curve we won't get the exact values back, but an approximation.
+        # Blender converts only the colour; alpha is stored as is and must stay that way.
         if convert:
-            rgba = lin_to_srgb(rgba)
+            rgba = rgba.reshape(-1, 4)
+            rgba[:, :3] = lin_to_srgb(rgba[:, :3])
+            rgba = rgba.ravel()
 
         layer.data.foreach_set("color", rgba)
 
@@ -165,9 +87,6 @@ class SceneHandler:
         self.depsgraph : Depsgraph       = depsgraph
         self.shapekeys : bool            = props.keep_shapekeys
         self.xiv_mdl   : bool            = props.model_format == 'MDL'
-        self.is_tris   : bool            = props.check_tris or self.xiv_mdl
-        self.backfaces : bool            = (props.create_backfaces and self.is_tris)
-        self.remove_yas: str             = props.remove_yas
         self.batch     : bool            = batch
         self.source_objects              = source_objects
         self.delete    : list[Object]    = []
@@ -197,15 +116,15 @@ class SceneHandler:
                 continue
             shape_key    = self.sort_shape_keys(obj) if self.shapekeys and obj.data.shape_keys else []
             transparency = ("xiv_transparency" in obj and obj["xiv_transparency"])
-            backfaces    = (self.is_tris and self.backfaces and obj.vertex_groups.get("BACKFACES"))
 
             self.meshes[obj] = {
-                'shape'       : shape_key, 
+                'shape'       : shape_key,
                 'shape_values': [(key.name, key.value) for key in shape_key],
-                'transparency': transparency, 
-                'backfaces'   : backfaces,
+                'transparency': transparency,
                 'old_name'    : obj.name,
                 'hidden'      : obj.hide_get(),
+                # Hiding deselects; restore_meshes selects it again.
+                'selected'    : obj.select_get(),
                 'armature'    : armature,
                 }
 
@@ -235,8 +154,8 @@ class SceneHandler:
     def process_scene(self) -> list[Object]:
         fixed_transp: dict[Object, Object]              = {}
         shape_keys  : list[tuple[Object, Object, list]] = []
-        backfaces   : list[Object]                      = []
         dupes       : list[Object]                      = []
+        names       : dict[Object, str]                 = {}
 
         if not self.depsgraph:
             self.depsgraph = bpy.context.evaluated_depsgraph_get()
@@ -269,19 +188,15 @@ class SceneHandler:
 
             if stats["shape"]:
                 shape_keys.append((dupe, obj, stats["shape"]))
-            
-            if stats["backfaces"]:
-                backfaces.append(dupe)
-            
+
             dupes.append(dupe)
-        
+            names[dupe] = stats["old_name"]
+
         if shape_keys:
             self.handle_shape_keys(shape_keys)
-            
-        if backfaces:
-            self.handle_backfaces(backfaces)
 
         self.handle_vertex_groups(dupes)
+        self.check_weights(dupes, names)
 
         for obj in self.meshes:
             obj.hide_set(state=True)
@@ -416,66 +331,36 @@ class SceneHandler:
                     self.delete.remove(copy)
                     safe_object_delete(copy)
 
-    def handle_backfaces(self, backfaces: Iterable[Object]):
-        if self.logger:
-            self.logger.log("Creating backfaces...", 2)
-
-        for dupe in backfaces:
-            if self.logger:
-                self.logger.last_item = f"{dupe.name}"
-
-            if dupe.data.shape_keys:
-                backfaces_with_shapes(dupe)    
-            else:
-                create_backfaces(dupe)
-
     def handle_vertex_groups(self, dupes: Iterable[Object]):
         if self.logger:
             self.logger.log("Cleaning vertex groups...", 2)
 
-        prefix = self._get_yas_filter()
         for dupe in dupes:
-            for v_group in dupe.vertex_groups:
-                if not dupe.parent.data.bones.get(v_group.name):
-                    dupe.vertex_groups.remove(v_group)
-            if prefix:
-                remove_vertex_groups(dupe, dupe.parent, prefix)
+            # Collect first: removing while iterating skips the group after each removed one.
+            bones = dupe.parent.data.bones
+            for name in [group.name for group in dupe.vertex_groups if not bones.get(group.name)]:
+                dupe.vertex_groups.remove(dupe.vertex_groups[name])
 
-    def _get_yas_filter(self) -> tuple[str]:
-        excluded_groups = set()
+    def check_weights(self, dupes: Iterable[Object], names: dict[Object, str]) -> None:
+        """Refuse meshes with vertices the game would leave behind: each needs a bone weight.
 
-        genitalia = [
-            'iv_kuritto',                   
-            'iv_inshin_l',               
-            'iv_inshin_r',               
-            'iv_omanko', 
-            'iv_koumon',                      
-            'iv_koumon_l',                 
-            'iv_koumon_r',
-
-            'iv_kintama_phys_l',              
-            'iv_kintama_phys_r',    
-            'iv_kougan_l',
-            'iv_kougan_r',
-           
-            'iv_funyachin_phy_b',        
-            'iv_funyachin_phy_c',        
-            'iv_funyachin_phy_d',     
-            'iv_ochinko_a',                 
-            'iv_ochinko_b',              
-            'iv_ochinko_c',              
-            'iv_ochinko_d',                 
-            'iv_ochinko_e',         
-            'iv_ochinko_f',
-            ]
-        
-        if self.remove_yas == "REMOVE":
-            return ("iv_", "ya_")
-        
-        elif self.remove_yas == "NO_GEN":
-            excluded_groups.update(genitalia)
-
-        return tuple(excluded_groups)
+        Runs on the evaluated copies after non-bone groups are gone, so weights from
+        modifiers count and weights on groups that are no bone do not.
+        """
+        unweighted = []
+        for dupe in dupes:
+            # A bone-parented mesh without groups follows its bone; the MDL writer weights it fully.
+            if not dupe.vertex_groups and dupe.parent_type == 'BONE' and dupe.parent_bone:
+                continue
+            used, count = unweighted_vertices(dupe)
+            if count:
+                name = names.get(dupe, dupe.name)
+                unweighted.append(f"{name} (all)" if count == used else f"{name} ({count:,} of {used:,})")
+        if unweighted:
+            raise XIVMeshError(
+                "Vertices without bone weights: " + ", ".join(unweighted)
+                + ". Weight every vertex to the armature's bones before exporting."
+            )
 
     def restore_meshes(self) -> None:
         """We're trying a lot."""
@@ -490,6 +375,8 @@ class SceneHandler:
             try:
                 obj.name = self.meshes[obj]["old_name"]
                 obj.hide_set(state=self.meshes[obj]["hidden"])
+                if self.meshes[obj].get("selected") and not obj.hide_get():
+                    obj.select_set(True)
                 if obj.data.shape_keys:
                     key_blocks = obj.data.shape_keys.key_blocks
                     for key_name, value in self.meshes[obj].get("shape_values", ()):

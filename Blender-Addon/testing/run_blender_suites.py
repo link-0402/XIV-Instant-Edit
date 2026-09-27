@@ -19,7 +19,8 @@ import sys
 import tempfile
 
 TESTING = Path(__file__).resolve().parent
-SUITES = ("bridge_regression", "smoke_export", "correctness_regression", "animation_regression", "skeleton_regression")
+SUITES = ("bridge_regression", "smoke_export", "correctness_regression", "animation_regression", "skeleton_regression",
+          "vertex_tools_regression")
 # blender_fixtures.addon_session refuses to run unless Blender's user
 # directories are inside the directory named by this variable.
 PROFILE_VARIABLE = "XIV_IE_TEST_PROFILE"

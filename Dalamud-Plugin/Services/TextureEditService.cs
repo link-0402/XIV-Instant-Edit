@@ -163,9 +163,25 @@ public sealed class TextureEditService : IDisposable
         _ = Task.Run(async () =>
         {
             try { await CleanupStaleSessionsAsync().ConfigureAwait(false); }
-            catch (OperationCanceledException) when (_life.IsCancellationRequested) { }
+            catch (OperationCanceledException) when (_life.IsCancellationRequested) { return; }
             catch (Exception error) { _log(error, "Texture cache cleanup failed; existing sessions were retained."); }
+            RunAdditionalCacheCleanup();
         });
+    }
+
+    /// <summary>
+    /// More automatic cache cleanup, such as old Game Files exports. It runs on a background thread
+    /// after the stale texture sessions', whenever automatic cleanup is on: at startup, hourly and
+    /// when the cache settings change.
+    /// </summary>
+    internal Action? AdditionalCacheCleanup { get; set; }
+
+    private void RunAdditionalCacheCleanup()
+    {
+        if (!_config.AutomaticCacheCleanup || AdditionalCacheCleanup is not { } cleanup) return;
+        try { cleanup(); }
+        catch (OperationCanceledException) { }
+        catch (Exception error) { _log(error, "Cache cleanup failed; the remaining files were kept."); }
     }
 
     internal async Task<int> CleanupStaleSessionsAsync()
@@ -566,6 +582,8 @@ public sealed class TextureEditService : IDisposable
                 try { await CleanupStaleSessionsAsync().ConfigureAwait(false); }
                 catch (OperationCanceledException) when (_life.IsCancellationRequested) { throw; }
                 catch (Exception error) { _log(error, "Texture cache cleanup failed; existing sessions were retained."); }
+                // Off the loop, so a large cleanup doesn't hold up texture saves.
+                _ = Task.Run(RunAdditionalCacheCleanup);
             }
         }
         catch (OperationCanceledException) when (_life.IsCancellationRequested) { }

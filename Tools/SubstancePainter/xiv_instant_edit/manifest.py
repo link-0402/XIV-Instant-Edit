@@ -9,7 +9,8 @@ import re
 from dataclasses import dataclass, field
 
 SCHEMA = "instant-edit.painter-job"
-VERSION = 1
+# Version 2 adds square texture sets (uvScale) and display settings; version 1 jobs still open.
+VERSIONS = (1, 2)
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 
 _JOB_ID = re.compile(r"^[0-9a-f]{32}$")
@@ -22,6 +23,8 @@ _CHANNELS = {
 _FORMATS = {"sRGB8", "L8", "RGB8", "L16", "RGB16", "L16F", "RGB16F", "L32F", "RGB32F"}
 _COLOR_SPACES = {"color", "data", "normal"}
 _SIZES = {128, 256, 512, 1024, 2048, 4096, 8192}
+_UV_SCALES = {1, 2, 4, 8, 16, 32, 64}
+_ALPHA_MODES = {"opaque", "test", "blend"}
 
 
 class ManifestError(ValueError):
@@ -43,6 +46,15 @@ class SeedSpec:
 
 
 @dataclass(frozen=True)
+class DisplaySpec:
+    """How the game draws the material: its transparency and whether back faces show."""
+
+    alpha: str = "opaque"
+    threshold: float = 0.5
+    double_sided: bool = False
+
+
+@dataclass(frozen=True)
 class TextureSetSpec:
     name: str
     label: str
@@ -51,6 +63,9 @@ class TextureSetSpec:
     remove_channels: tuple
     channels: tuple
     seeds: tuple
+    # A non-square texture sits in one corner of a square texture set, so the seeds repeat this often.
+    uv_scale: tuple = (1, 1)
+    display: DisplaySpec = DisplaySpec()
 
 
 @dataclass(frozen=True)
@@ -114,8 +129,12 @@ def load(manifest_path: str) -> JobManifest:
 
 def parse(data, job_dir: str) -> JobManifest:
     _require(isinstance(data, dict), "The job file must contain an object.")
-    _require(data.get("schema") == SCHEMA and data.get("version") == VERSION,
+    _require(data.get("schema") == SCHEMA, "This job was written by an incompatible Instant Edit version.")
+    version = data.get("version")
+    _require(isinstance(version, int) and not isinstance(version, bool) and version >= 1,
              "This job was written by an incompatible Instant Edit version.")
+    _require(version in VERSIONS, "This job needs a newer XIV Instant Edit plugin in Painter. "
+             "Update it from Instant Edit's Settings, then restart Painter.")
     job_id = data.get("jobId")
     _require(isinstance(job_id, str) and _JOB_ID.match(job_id) is not None, "The job id is invalid.")
     _require(os.path.basename(os.path.normpath(job_dir)).lower() == job_id,
@@ -158,9 +177,14 @@ def parse(data, job_dir: str) -> JobManifest:
             _require(path.lower().endswith(".tga"), "Seeds must be TGA files.")
             seeds.append(SeedSpec(seed["channel"], path, seed["colorSpace"]))
         _require(len({seed.channel for seed in seeds}) == len(seeds), f"Texture set {name} seeds a channel twice.")
+        uv_scale = raw.get("uvScale", [1, 1])
+        _require(isinstance(uv_scale, list) and len(uv_scale) == 2
+                 and all(isinstance(s, int) and not isinstance(s, bool) and s in _UV_SCALES for s in uv_scale),
+                 f"Texture set {name} has an invalid UV scale.")
         label = raw.get("label", name)
         texture_sets.append(TextureSetSpec(name, label if isinstance(label, str) else name, width, height,
-                                           tuple(removed), tuple(channels), tuple(seeds)))
+                                           tuple(removed), tuple(channels), tuple(seeds), tuple(uv_scale),
+                                           _display(raw.get("display"), name)))
 
     targets = []
     keys = set()
@@ -180,6 +204,19 @@ def parse(data, job_dir: str) -> JobManifest:
     _require("exportPath" not in export, "The export configuration must not set an export path.")
     return JobManifest(job_id, capability, port, plugin_version, display_name, os.path.abspath(job_dir), mesh,
                        tuple(texture_sets), tuple(targets), export)
+
+
+def _display(raw, name: str) -> DisplaySpec:
+    if raw is None:
+        return DisplaySpec()
+    _require(isinstance(raw, dict), f"Texture set {name} has an invalid display setting.")
+    alpha = raw.get("alpha", "opaque")
+    threshold = raw.get("threshold", 0.5)
+    double_sided = raw.get("doubleSided", False)
+    _require(alpha in _ALPHA_MODES and isinstance(double_sided, bool)
+             and isinstance(threshold, (int, float)) and not isinstance(threshold, bool) and 0 <= threshold <= 1,
+             f"Texture set {name} has an invalid display setting.")
+    return DisplaySpec(alpha, float(threshold), double_sided)
 
 
 def export_config(manifest: JobManifest, export_path: str) -> dict:

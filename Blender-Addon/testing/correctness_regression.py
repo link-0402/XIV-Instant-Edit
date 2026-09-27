@@ -31,9 +31,6 @@ def export_failure_restores_scene(addon, stage):
     obj.shape_key_add(name="shp_two").value = 0.75
     settings = bpy.context.scene.xiv_ie_settings
     settings.keep_shapekeys = True
-    settings.create_backfaces = stage == "backfaces"
-    if stage == "backfaces":
-        obj.vertex_groups.new(name="BACKFACES").add([0, 1, 2], 1.0, "REPLACE")
     if stage == "transparency":
         obj["xiv_transparency"] = True
     if stage == "shape_mismatch":
@@ -43,7 +40,7 @@ def export_failure_restores_scene(addon, stage):
     before_objects = {item.as_pointer() for item in bpy.data.objects}
     before_meshes = {item.as_pointer() for item in bpy.data.meshes}
     before_name = obj.name
-    target = {"transparency": "sequential_faces", "backfaces": "create_backfaces"}.get(stage)
+    target = {"transparency": "sequential_faces"}.get(stage)
     if target:
         failure = patch.object(handler, target, side_effect=RuntimeError("injected preparation failure"))
     else:
@@ -196,7 +193,7 @@ def run():
         duplicate_face_keeps_corner_layers_aligned(addon)
         assert_combination_failures(addon)
         assert_linked_mesh_rejected(addon)
-        for stage in ("transparency", "backfaces", "shape_mismatch"):
+        for stage in ("transparency", "shape_mismatch"):
             export_failure_restores_scene(addon, stage)
         file_load_restarts_schedulers(addon)
         active_workers_discard_previous_file(addon)

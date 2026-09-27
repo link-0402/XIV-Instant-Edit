@@ -27,6 +27,7 @@ internal sealed class PainterJobService : IDisposable
     private readonly PainterJobStore _store;
     private readonly Func<string, CancellationToken, Task<byte[]?>> _readGameFile;
     private readonly Action<Exception, string> _log;
+    private readonly PainterLiveReader? _live;
     private readonly ConcurrentDictionary<string, SendState> _sends = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _life = new();
 
@@ -40,9 +41,10 @@ internal sealed class PainterJobService : IDisposable
         public DateTimeOffset Started { get; } = DateTimeOffset.UtcNow;
     }
 
+    /// <param name="live">Reads what the character draws; without it every part of a model goes to Painter.</param>
     internal PainterJobService(Configuration config, TextureEditService textures, PainterProjectBuilder builder,
         PainterClient client, PainterJobStore store, Func<string, CancellationToken, Task<byte[]?>> readGameFile,
-        Action<Exception, string> log)
+        Action<Exception, string> log, PainterLiveReader? live = null)
     {
         _config = config;
         _textures = textures;
@@ -51,6 +53,7 @@ internal sealed class PainterJobService : IDisposable
         _store = store;
         _readGameFile = readGameFile;
         _log = log;
+        _live = live;
         _textures.KeepSession = _store.LinksSession;
     }
 
@@ -63,8 +66,19 @@ internal sealed class PainterJobService : IDisposable
 
     // ---- Preparing the dialog --------------------------------------------------------------
 
-    public Task<PainterDraft> PrepareAsync(PainterRequest request, CancellationToken token = default)
-        => _builder.PrepareAsync(request, token);
+    public async Task<PainterDraft> PrepareAsync(PainterRequest request, CancellationToken token = default)
+    {
+        PainterLiveCharacter? live = null;
+        if (_live is not null)
+        {
+            try { live = await _live.ReadAsync(request.ObjectIndex, request.ActorAddress).ConfigureAwait(false); }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                _log(error, "Could not read which parts the character draws.");
+            }
+        }
+        return await _builder.PrepareAsync(request with { Live = live }, token).ConfigureAwait(false);
+    }
 
     // ---- Creating a job --------------------------------------------------------------------
 
@@ -113,7 +127,7 @@ internal sealed class PainterJobService : IDisposable
             return new PainterCreateResult(null, "None of the selected textures could be opened. " + string.Join(" ", warnings), warnings);
 
         var capability = PainterJobStore.NewCapability();
-        var displayName = $"{request.ActorName} – {Path.GetFileName(request.Model.GamePath)}";
+        var displayName = Path.GetFileName(request.Model.GamePath);
         var files = await _builder.WriteJobAsync(draft, sessions, jobDir, jobId, capability, _config.ListenPort,
             BlenderClient.CurrentPluginVersion, displayName, token).ConfigureAwait(false);
         warnings.AddRange(files.Warnings);
@@ -291,7 +305,7 @@ internal sealed class PainterJobService : IDisposable
         {
             try
             {
-                var hashes = files.ToDictionary(file => file.Key, file => TgaImage.Read(TextureFiles.Read(file.Path)).PixelHash(), StringComparer.OrdinalIgnoreCase);
+                var hashes = files.ToDictionary(file => file.Key, file => ReadExport(job, file.Key, file.Path).PixelHash(), StringComparer.OrdinalIgnoreCase);
                 _store.Update(() =>
                 {
                     foreach (var target in job.Targets)
@@ -357,7 +371,7 @@ internal sealed class PainterJobService : IDisposable
             {
                 var target = job.Targets.First(t => string.Equals(t.Key, key, StringComparison.OrdinalIgnoreCase));
                 targets[target.SessionId] = target;
-                var image = TgaImage.Read(TextureFiles.Read(path));
+                var image = ReadExport(job, key, path);
                 if (target.BaselineHash.Length > 0 && image.PixelHash() == target.BaselineHash)
                 {
                     saves.Add(new ExternalTextureSave(target.SessionId, null));
@@ -433,7 +447,7 @@ internal sealed class PainterJobService : IDisposable
                 meshCache[model.Source] = mesh = ModelMeshReader.Read(bytes);
             }
             foreach (var part in mesh.Meshes.Where(part => model.Meshes.Contains(part.MeshIndex)))
-                foreach (var submesh in part.Submeshes)
+                foreach (var submesh in part.Submeshes.Where(model.Draws))
                     for (var i = 0; i + 2 < submesh.Indices.Length; i += 3)
                         triangles.Add((part.Uvs[submesh.Indices[i]], part.Uvs[submesh.Indices[i + 1]], part.Uvs[submesh.Indices[i + 2]]));
         }
@@ -441,6 +455,21 @@ internal sealed class PainterJobService : IDisposable
             return painter;
         var coverage = UvCoverage.Rasterize(painter.Width, painter.Height, triangles, UvCoverage.MarginFor(painter.Width, painter.Height));
         return coverage.Merge(painter, current);
+    }
+
+    /// <summary>
+    /// A texture Painter exported for a target. From a square set laid out for a non-square texture
+    /// the file is the whole set, and the texture is its top-left corner.
+    /// </summary>
+    internal static RgbaImage ReadExport(PainterJob job, string key, string path)
+    {
+        var target = job.Targets.First(t => string.Equals(t.Key, key, StringComparison.OrdinalIgnoreCase));
+        var image = TgaImage.Read(TextureFiles.Read(path));
+        if (target.ExportWidth <= 0 || target.ExportHeight <= 0)
+            return image;
+        if (image.Width != target.ExportWidth || image.Height != target.ExportHeight)
+            throw new InvalidDataException($"Painter exported {key} at {image.Width}×{image.Height} instead of {target.ExportWidth}×{target.ExportHeight}.");
+        return image.Width == target.Width && image.Height == target.Height ? image : image.Crop(target.Width, target.Height);
     }
 
     /// <summary> The request's files, each checked to be one of the job's targets inside the expected folder. </summary>

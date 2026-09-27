@@ -1,12 +1,18 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using InstantEdit.Services.Previews;
 
 namespace InstantEdit.Services.Painter;
 
 /// <summary> A model whose meshes a texture set covers, re-read when a shared texture needs its UV coverage. </summary>
 /// <param name="Source">Absolute file for modded models; the game path for vanilla ones.</param>
-internal sealed record PainterCoverageModel(string Source, bool Vanilla, IReadOnlyList<int> Meshes);
+/// <param name="AttributeMasks">The character's enabled attributes for the model when the project was made; empty when unknown.</param>
+internal sealed record PainterCoverageModel(string Source, bool Vanilla, IReadOnlyList<int> Meshes, IReadOnlyList<uint>? AttributeMasks = null)
+{
+    /// <summary> Whether the project drew this submesh: all of its attributes were enabled. </summary>
+    public bool Draws(ModelSubmesh submesh) => PainterVisibility.Draws(AttributeMasks, submesh);
+}
 
 /// <summary> One texture a Painter project sends back, and the session that applies it. </summary>
 internal sealed record PainterTarget
@@ -17,6 +23,9 @@ internal sealed record PainterTarget
     public Guid SessionId { get; init; }
     public int Width { get; init; }
     public int Height { get; init; }
+    /// <summary> Size of Painter's file: the texture is its top-left corner, all of it unless the set was made square. 0 for older projects. </summary>
+    public int ExportWidth { get; init; }
+    public int ExportHeight { get; init; }
     /// <summary> Pixel hash of Painter's first, untouched export; a send that matches it means "the original". </summary>
     public string BaselineHash { get; set; } = "";
     /// <summary> Other meshes use this texture too, so only this project's UV area is taken from Painter. </summary>

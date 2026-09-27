@@ -166,9 +166,16 @@ class Plugin:
             logging.error("XIV Instant Edit: " + traceback.format_exc())
             self._report_setup(job, False, f"Setting up the project failed: {error}")
             return
+        try:
+            warning = painter_job.apply_display(job)
+        except Exception as error:
+            logging.error("XIV Instant Edit: " + traceback.format_exc())
+            warning = f"Transparency isn't shown: {error}"
         self.job = state
         self.panel.set_job(state.display_name)
         self.panel.show()
+        if warning:
+            self._log(warning, error=True)
         self._log("Project ready. Paint, then press Send to game.")
         project.execute_when_not_busy(lambda: self._baseline(state))
 

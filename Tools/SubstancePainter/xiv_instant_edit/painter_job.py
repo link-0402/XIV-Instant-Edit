@@ -3,6 +3,7 @@
 Everything here calls Painter's API and must run on Painter's main thread.
 """
 
+import copy
 import os
 from dataclasses import dataclass, field
 
@@ -74,8 +75,9 @@ class JobState:
 
 
 def _name(texture_set) -> str:
+    # A property in current Painter versions and a method in older ones; calling the property warns.
     name = texture_set.name
-    return name() if callable(name) else name
+    return str(name) if isinstance(name, str) else name()
 
 
 def find_texture_set(name: str):
@@ -129,6 +131,12 @@ def create_project(job: manifest_module.JobManifest) -> None:
     project.create(mesh_file_path=job.mesh_path, settings=settings)
 
 
+def _tile_offset(scale: int) -> float:
+    """Painter scales a fill's UVs around the tile center and offsets them first; this offset puts
+    the repeated seed's corner on the UV origin, so one copy fills the texture's corner exactly."""
+    return 0.5 - 0.5 / scale
+
+
 def _bottom_position(stack):
     roots = layerstack.get_root_layer_nodes(stack)
     if roots:
@@ -169,12 +177,60 @@ def setup_texture_sets(job: manifest_module.JobManifest) -> dict:
                 filtering_mode=layerstack.FilteringMode.Nearest,
                 uv_wrapping_mode=layerstack.UVWrapMode.Repeat,
                 uv_transformation=layerstack.UVTransformationParams(
-                    scale_mode=layerstack.ScaleMode.Factors, scale=[1.0, 1.0], rotation=0.0, offset=[0.0, 0.0]),
+                    scale_mode=layerstack.ScaleMode.Factors, scale=[float(s) for s in spec.uv_scale],
+                    rotation=0.0, offset=[_tile_offset(s) for s in spec.uv_scale]),
             ))
             for seed, res in imported:
                 apply_color_space(fill.set_source(_channel_type(seed.channel), res.identifier()), seed.color_space)
         layers[spec.name] = fill.uid()
     return layers
+
+
+_SHADER = "asm-metal-rough"
+
+
+def _instance_name(display: manifest_module.DisplaySpec) -> str:
+    parts = {"blend": ["XIV alpha blend"], "test": [f"XIV alpha test {display.threshold:.2f}"]}.get(display.alpha, ["XIV opaque"])
+    if display.double_sided:
+        parts.append("two-sided")
+    return ", ".join(parts)
+
+
+def apply_display(job: manifest_module.JobManifest) -> str:
+    """Gives texture sets shader instances that draw them like the game: see-through where its
+    opacity says so, and from both sides where it has no back-face culling. Painter's Adobe
+    Standard Material shader does both through parameters. Returns a warning, or "" when done.
+    """
+    wanted = {spec.name: spec.display for spec in job.texture_sets if spec.display != manifest_module.DisplaySpec()}
+    if not wanted:
+        return ""
+    import json
+
+    import substance_painter.js as js
+
+    data = js.evaluate("alg.shaders.shaderInstancesToObject()")
+    shaders = data.get("shaders") if isinstance(data, dict) else None
+    if not isinstance(shaders, dict) or not shaders or not isinstance(data.get("texturesets"), dict):
+        return "Painter did not report its shaders, so transparency isn't shown."
+    base = next(iter(shaders.values()))
+    if base.get("shader") != _SHADER:
+        # Other shaders name their parameters differently; start the instances from the defaults.
+        base = {"shader": _SHADER, "parameters": {}}
+    for name, display in wanted.items():
+        instance_name = _instance_name(display)
+        if instance_name not in shaders:
+            instance = copy.deepcopy(base)
+            instance["shaderInstance"] = instance_name
+            parameters = instance.setdefault("parameters", {})
+            parameters.setdefault("Geometry", {})["doubleSided"] = display.double_sided
+            opacity = parameters.setdefault("Geometry/Opacity", {})
+            opacity["alphaBlendEnabled"] = display.alpha == "blend"
+            opacity["alpha_test_enabled"] = display.alpha == "test"
+            opacity["alpha_test_threshold"] = display.threshold
+            shaders[instance_name] = instance
+        data["texturesets"][name] = {"shader": instance_name}
+    js.evaluate("alg.shaders.shaderInstancesFromObject(" + json.dumps(data) + ")")
+    return ""
 
 
 def store(job: JobState) -> None:

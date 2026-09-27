@@ -5,6 +5,7 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.GameFiles;
 using InstantEdit.Services.Previews;
 using InstantEdit.Services.Skeletons;
 using InstantEdit.Ui;
@@ -31,10 +32,13 @@ public sealed class Plugin : IDalamudPlugin
     private readonly AnimationRecorder       _recorder;
     private readonly ExportServer            _exportServer;
     private readonly Services.Painter.PainterJobService _painterJobs;
+    private readonly GameFileBrowserService  _gameFiles;
+    private readonly GameFileExportService   _gameExport;
     private readonly WindowSystem            _windowSystem;
     private readonly MainWindow              _window;
     private readonly ChangelogWindow         _changelogWindow;
     private readonly FirstTimeSetupWindow   _setupWindow;
+    private readonly ToolSetupViews         _toolSetup;
     private readonly SettingsWindow          _settingsWindow;
 
     public string Name => "XIV Instant Edit";
@@ -147,8 +151,6 @@ public sealed class Plugin : IDalamudPlugin
             log.Warning(error, "Could not initialize animation editing; other features remain available.");
         }
         _recorder = new AnimationRecorder(framework, objects, clientState, targets);
-        if (_config.AutomaticCacheCleanup)
-            _textures.RequestCacheCleanup();
         _exportServer = new ExportServer(_config, _penumbra, _contexts, log);
         var painterStore = new Services.Painter.PainterJobStore(configDirectory);
         painterStore.Load();
@@ -159,7 +161,8 @@ public sealed class Plugin : IDalamudPlugin
         Action<Exception, string> logPainter = (error, message) => log.Warning(error, message);
         _painterJobs = new Services.Painter.PainterJobService(_config, _textures,
             new Services.Painter.PainterProjectBuilder(new MaterialPreviewBundleBuilder(data, log, resourceSources), readGameFile, logPainter),
-            new Services.Painter.PainterClient(), painterStore, readGameFile, logPainter);
+            new Services.Painter.PainterClient(), painterStore, readGameFile, logPainter,
+            new Services.Painter.PainterLiveReader(framework, objects));
         _exportServer.AttachPainter(_painterJobs);
         _previews = new PreviewService(textureProvider, data, log, () => _config.RenderModelThumbnails);
         _textures.FileChanged += _previews.Invalidate;
@@ -189,13 +192,30 @@ public sealed class Plugin : IDalamudPlugin
         var skeletons = new ModelSkeletonResolver(_penumbra, data, framework, objects, log);
         _window.AttachSkeletons(skeletons);
         _exportServer.Skeletons = skeletons;
+        // Vanilla models for the Game Files tab, and exports of their files to a folder.
+        _gameFiles = new GameFileBrowserService(data, log);
+        _gameExport = new GameFileExportService(_gameFiles, skeletons, log, BlenderClient.CurrentPluginVersion);
+        _window.AttachGameFiles(_gameFiles, _gameExport);
+        // Automatic cache cleanup also removes old exports from the cache's export folder.
+        _textures.AdditionalCacheCleanup = () =>
+        {
+            var (files, bytes) = _gameExport.CleanCache(TextureFiles.CacheRootFor(_config.TextureCacheDirectory));
+            if (files > 0)
+                _log.Information($"Cache cleanup removed {files:N0} old Game Files export files ({bytes / (double)(1L << 20):0.0} MB).");
+        };
+        if (_config.AutomaticCacheCleanup)
+            _textures.RequestCacheCleanup();
         _exportServer.ImportFailureReceived += _window.ReportImportFailure;
         _glamourer.AppearanceChanged += _window.OnGlamourerAppearanceChanged;
+        // Blender, texture editor and Painter setup, shared by first-time setup and Settings.
+        _toolSetup = new ToolSetupViews(_config, SaveConfiguration, _blender, _log);
         _setupWindow = new FirstTimeSetupWindow(
             _config,
             SaveConfiguration,
             _window.RequestCacheSynchronization,
             _window.Open,
+            _pi,
+            _toolSetup,
             _log);
         _settingsWindow = new SettingsWindow(
             _config,
@@ -204,6 +224,7 @@ public sealed class Plugin : IDalamudPlugin
             _log,
             _window.RequestCacheSynchronization,
             OpenSetupFromSettings,
+            _toolSetup,
             cacheStartupError);
         _settingsWindow.AttachAnimations(_animations, animationError);
 
@@ -215,6 +236,8 @@ public sealed class Plugin : IDalamudPlugin
 
         _pi.UiBuilder.Draw += _windowSystem.Draw;
         _pi.UiBuilder.Draw += _setupWindow.DrawFileDialog;
+        _pi.UiBuilder.Draw += _toolSetup.DrawFileDialog;
+        _pi.UiBuilder.Draw += _window.DrawFileDialog;
         _pi.UiBuilder.OpenMainUi += OpenMainUi;
         _pi.UiBuilder.OpenConfigUi += _settingsWindow.Open;
 
@@ -319,6 +342,8 @@ public sealed class Plugin : IDalamudPlugin
         _commands.RemoveHandler("/ie");
         _pi.UiBuilder.Draw -= _windowSystem.Draw;
         _pi.UiBuilder.Draw -= _setupWindow.DrawFileDialog;
+        _pi.UiBuilder.Draw -= _toolSetup.DrawFileDialog;
+        _pi.UiBuilder.Draw -= _window.DrawFileDialog;
         _pi.UiBuilder.OpenMainUi -= OpenMainUi;
         _pi.UiBuilder.OpenConfigUi -= _settingsWindow.Open;
         _windowSystem.RemoveWindow(_window);
@@ -328,7 +353,10 @@ public sealed class Plugin : IDalamudPlugin
         _glamourer.AppearanceChanged -= _window.OnGlamourerAppearanceChanged;
         _glamourer.Dispose();
         _recorder.Dispose();
+        _textures.AdditionalCacheCleanup = null;
+        _gameExport.Dispose();
         _window.Dispose();
+        _gameFiles.Dispose();
         _textures.FileChanged -= _previews.Invalidate;
         _previews.Dispose();
         _onScreen.Dispose();

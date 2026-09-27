@@ -950,6 +950,58 @@ def assert_backface_duplicate(addon):
     print("[PASS] Generate Duplicate with Backfaces adds a flipped copy as the next part")
 
 
+def assert_links_menu(addon):
+    """The globe at the right end of the Instant Edit header opens Luci_xiv's links."""
+    ui = importlib.import_module(f"{addon.__name__}.ui")
+    if not hasattr(bpy.types, "XIVIE_MT_links"):
+        raise AssertionError("The links menu is not registered")
+
+    class Layout:
+        def __init__(self):
+            self.items = []
+            self.emboss = "NORMAL"
+            self.alert = False
+
+        def row(self, **_options):
+            child = Layout()
+            self.items.append(child)
+            return child
+
+        def popover(self, panel, **options):
+            self.items.append(("popover", panel, options.get("icon")))
+
+        def menu(self, menu, **options):
+            self.items.append(("menu", menu, options.get("icon"), self.emboss))
+
+        def operator(self, idname, **options):
+            properties = SimpleNamespace()
+            self.items.append((idname, options.get("text"), options.get("icon"), properties))
+            return properties
+
+    def flatten(layout):
+        for item in layout.items:
+            yield from flatten(item) if isinstance(item, Layout) else (item,)
+
+    owner = SimpleNamespace(layout=Layout())
+    ui.XIVIE_MT_links.draw(owner, bpy.context)
+    links = [(text, icon, properties.url) for _idname, text, icon, properties in owner.layout.items]
+    if links != [
+        ("XIV Mod Archive", "PACKAGE", "https://www.xivmodarchive.com/user/124593"),
+        ("GitHub", "SCRIPT", "https://github.com/link-0402/XIV-Instant-Edit"),
+        ("Bluesky", "COMMUNITY", "https://bsky.app/profile/xiv-luci.bsky.social"),
+        ("Ko-fi", "FUND", "https://ko-fi.com/luci_xiv"),
+    ] or any(idname != "wm.url_open" for idname, *_rest in owner.layout.items):
+        raise AssertionError(f"Unexpected links menu: {owner.layout.items}")
+
+    owner = SimpleNamespace(layout=Layout())
+    ui.XIVIE_PT_session.draw_header_preset(owner, bpy.context)
+    header = list(flatten(owner.layout))
+    if header[-1] != ("menu", "XIVIE_MT_links", "URL", "NONE") or header[0][:2] != (
+            "popover", "XIVIE_PT_connection_popover"):
+        raise AssertionError(f"The links are not the unembossed last item of the Instant Edit header: {header}")
+    print("[PASS] The Instant Edit header links to Luci_xiv's pages")
+
+
 def assert_mesh_drag_plan(addon):
     """Drive drags by pointer offset: nothing is renamed until the drop commits."""
     materials = importlib.import_module(f"{addon.__name__}.materials")
@@ -1047,8 +1099,9 @@ def run() -> None:
         assert_mesh_group_conflict_resolution(addon)
         assert_mesh_name_conversion(addon)
 
-        if bpy.context.scene.xiv_ie_settings.create_backfaces:
-            raise AssertionError("Create Backfaces should default to disabled")
+        for removed in ("create_backfaces", "check_tris", "remove_yas", "uv2_mode", "clear_flow_data"):
+            if hasattr(bpy.context.scene.xiv_ie_settings, removed):
+                raise AssertionError(f"The removed export option {removed} is still registered")
         if bpy.context.scene.xiv_ie_settings.backup_models_on_export:
             raise AssertionError("Backup models on Export should default to disabled")
         if bpy.context.scene.xiv_ie_settings.keep_shapekeys:
@@ -1063,30 +1116,13 @@ def run() -> None:
             raise AssertionError("Offset Incoming Mesh Group IDs should default to enabled")
         bpy.context.scene.xiv_ie_settings.keep_shapekeys = True
         settings = bpy.context.scene.xiv_ie_settings
-        settings.copy_uv1_to_uv2 = True
-        settings.clear_uv2 = True
-        if settings.uv2_mode != "CLEAR":
-            raise AssertionError("The UV2 choice did not show that Clear overrides Copy UV1")
-        settings.uv2_mode = "COPY_UV1"
-        if not settings.copy_uv1_to_uv2 or settings.clear_uv2:
-            raise AssertionError("Choosing Copy UV1 did not drop the conflicting Clear UV2 flag")
-        settings.clear_vertex_alpha1 = True
-        if settings.vertex_color1_mode != "CLEAR_ALPHA":
-            raise AssertionError("The vertex color 1 choice did not show Clear Alpha")
-        settings.vertex_color1_mode = "CLEAR"
-        if not settings.clear_vertex_color1 or settings.clear_vertex_alpha1:
-            raise AssertionError("Choosing Clear did not replace Clear Alpha for vertex color 1")
-        settings.uv2_mode = "KEEP"
-        settings.vertex_color1_mode = "KEEP"
-        if any(settings.get_mesh_options().values()):
-            raise AssertionError("Keep did not clear every vertex data flag")
         settings.simple_import_armature = "EXISTING"
         if not settings.simple_import_use_existing_skeleton:
             raise AssertionError("The Existing armature choice did not enable the existing skeleton")
         settings.simple_import_armature = "GENERATED"
         if settings.simple_import_use_existing_skeleton:
             raise AssertionError("The Generated armature choice did not disable the existing skeleton")
-        print("[PASS] Vertex data and armature choices map onto the stored option flags")
+        print("[PASS] Removed export options stay gone and the armature choice maps onto its flag")
 
         armature_data = bpy.data.armatures.new("SmokeSkeletonData")
         armature = bpy.data.objects.new("SmokeSkeleton", armature_data)
@@ -1923,6 +1959,10 @@ def run() -> None:
         mannequin_mesh.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
         mannequin = bpy.data.objects.new("Mannequin", mannequin_mesh)
         bpy.context.collection.objects.link(mannequin)
+        # Exports refuse meshes without bone weights, so weight it like the model.
+        mannequin_rig = importlib.import_module(f"{addon.__name__}.mesh.export").armature_for_object(obj)
+        mannequin.parent = mannequin_rig
+        mannequin.vertex_groups.new(name=mannequin_rig.data.bones[0].name).add([0, 1, 2], 1.0, "REPLACE")
 
         def capture_simple_export(_path, _format, export_objects=None):
             scope_capture.append(tuple(export_objects or ()))
@@ -1994,7 +2034,7 @@ def run() -> None:
             smoke_shape.data[0].co[index] - obj.data.shape_keys.key_blocks[0].data[0].co[index]
             for index in range(3)
         )
-        if export_module._armature_for_object(obj) is not armature:
+        if export_module.armature_for_object(obj) is not armature:
             raise AssertionError("Smoke mesh is not associated with the expected armature")
         modifier_armature = armature.copy()
         modifier_armature.data = armature.data.copy()
@@ -2008,7 +2048,7 @@ def run() -> None:
             if copied_modifier.type == "ARMATURE":
                 copied_modifier.object = modifier_armature
         bpy.context.collection.objects.link(modifier_mesh)
-        if export_module._armature_for_object(modifier_mesh) is not modifier_armature:
+        if export_module.armature_for_object(modifier_mesh) is not modifier_armature:
             raise AssertionError("Modifier-only mesh did not resolve its first valid armature")
         with export_module._clean_export_state(
             [obj, modifier_mesh], reset_scaling=True
@@ -2153,7 +2193,6 @@ def run() -> None:
             settings.export_directory = temp_dir
             settings.export_name = "smoke"
             settings.model_format = "MDL"
-            settings.create_backfaces = False
             settings.backup_models_on_export = True
             result = bpy.ops.xiv_ie.simple_export()
             target = Path(temp_dir) / "smoke.mdl"
@@ -2259,6 +2298,7 @@ def run() -> None:
         assert_mesh_drag_plan(addon)
         assert_mesh_list_geometry(addon)
         assert_backface_duplicate(addon)
+        assert_links_menu(addon)
         assert_mesh_material_quick_selectors(addon)
 
         instant_props.export_destination = context_id

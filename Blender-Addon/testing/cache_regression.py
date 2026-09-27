@@ -43,6 +43,7 @@ def run() -> None:
         (root / ".instant-edit-cache.json").unlink()
         (root / "Contexts").mkdir()
         (root / "Contexts" / f"{uuid.uuid4().hex}.json").write_text("{}", encoding="utf-8")
+        (root / "game-exports" / "chara").mkdir(parents=True)
         (root / "TextureSessions.json").write_text("[]", encoding="utf-8")
         (root / f".pending-context-revocations.json.{uuid.uuid4().hex}.tmp").write_text("{", encoding="utf-8")
         assert cache.ensure_cache_root() == root

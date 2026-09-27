@@ -42,5 +42,21 @@ internal static class AnimationRowScenarios
             "the Mod Browser lists a mod's animation packs as sendable animation rows with their option");
         Require(view.Summary == "1 model · 1 animation", "a mod's summary counts its animations");
         Require(!ResourceViews.IsAnimation(view.Roots.Single(r => r.Type == "Model")), "models are not animation rows");
+
+        // Animations your character plays have their own tab; On Screen lists no animation rows.
+        var onScreen = ResourceKindChipSet.OnScreen;
+        var modBrowser = ResourceKindChipSet.ModBrowser;
+        Require(onScreen.Chips.All(chip => chip.Kind != ResourceKinds.Animation) && (onScreen.Listed & ResourceKinds.Animation) == 0 &&
+                modBrowser.Chips.Any(chip => chip.Kind == ResourceKinds.Animation) && modBrowser.Listed == ResourceKinds.Editable,
+            "On Screen offers no Animations filter, and the Mod Browser keeps it");
+        Require(onScreen.Counts.SequenceEqual([onScreen.Listed, ResourceKinds.Model, ResourceKinds.Texture, ResourceKinds.Material]) &&
+                modBrowser.Counts.Count == modBrowser.Chips.Count + 1 && modBrowser.Counts[0] == ResourceKinds.Editable,
+            "the All chip counts every listed row, followed by one count per chip");
+        var screenKinds = new ResourceKindSelection(onScreen.Listed);
+        Require(!screenKinds.Admits(row) && !screenKinds.AdmitsSubtree(row) && screenKinds.AdmitsSubtree(view.Roots.Single(r => r.Type == "Model")),
+            "On Screen never shows an animation row, even if Penumbra reported one");
+        screenKinds.Toggle(ResourceKinds.Model);
+        Require(screenKinds.Admitted == ResourceKinds.Model && new ResourceKindSelection(modBrowser.Listed).Admits(row),
+            "a kind filter narrows what the browser lists, and the Mod Browser lists animation rows");
     }
 }

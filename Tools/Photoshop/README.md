@@ -13,6 +13,18 @@ path you had open while recording. A script can query `activeDocument`
 at run time, so it always saves back to wherever the current document
 actually lives.
 
+Works in Photoshop CC or newer (developed with Photoshop 2025). Photoshop Elements has
+no scripting, so it can't run these.
+
+## Install from Instant Edit
+
+The first-time setup and **Settings > Texture editing** find Photoshop and offer **Install save
+scripts**, which copies `SaveFlattenedTGA.jsx` and `SaveFlattenedTGAVariant.jsx` into
+Photoshop's `Presets\Scripts` folder. That folder is in Program Files, so Windows asks for
+administrator permission first. Restart Photoshop afterwards; the scripts are under
+`File > Scripts`. The setup offers **Update save scripts** when the installed copies differ from
+the ones your Instant Edit version ships.
+
 ## One-off use (no install)
 
 `File > Scripts > Browse...` → select `SaveFlattenedTGA.jsx`. Runs immediately

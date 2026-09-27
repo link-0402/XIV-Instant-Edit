@@ -27,10 +27,12 @@ public sealed partial class MainWindow
     {
         if (!IsTextureRow(resource) || !TextureEditAvailable(resource) || Volatile.Read(ref _textureBusy) != 0)
             return;
+        // Game Files rows have no actor; their new mod goes to the import object's collection.
         var request = new TextureEditRequest(resource.GamePath, resource.ActualPath,
             resource.SourceState == ResourceSourceState.GameData ? "" : resource.SourceModDirectory,
             resource.SourceModRootPath, resource.SourceRelativePath,
-            actor.Entity?.ObjectIndex, actor.Entity?.Address.ToInt64() ?? 0);
+            actor.Entity?.ObjectIndex, actor.Entity?.Address.ToInt64() ?? 0,
+            CollectionObjectIndex: actor.Entity is null && resource.SourceState == ResourceSourceState.GameData ? actor.ImportObjectIndex : null);
         if (resource.SourceState == ResourceSourceState.GameData)
         {
             // Reopen existing vanilla work without asking for a second destination.

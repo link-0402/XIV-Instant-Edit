@@ -95,6 +95,31 @@ class ManifestTests(unittest.TestCase):
         with self.assertRaises(manifest.ManifestError):
             manifest.load(os.path.join(self.job_dir, "other.json"))
 
+    def test_job_versions(self):
+        self.assertEqual(manifest.load(self.write(job_data(version=2))).job_id, JOB_ID)
+        with self.assertRaises(manifest.ManifestError) as newer:
+            manifest.load(self.write(job_data(version=3)))
+        self.assertIn("newer XIV Instant Edit plugin", str(newer.exception))
+        for version in (0, "2", True, None):
+            with self.assertRaises(manifest.ManifestError, msg=repr(version)):
+                manifest.load(self.write(job_data(version=version)))
+
+    def test_display_and_uv_scale_are_read_with_defaults(self):
+        data = job_data()
+        data["textureSets"][0]["uvScale"] = [2, 1]
+        data["textureSets"][0]["display"] = {"alpha": "blend", "threshold": 1, "doubleSided": True}
+        spec = manifest.load(self.write(data)).texture_sets[0]
+        self.assertEqual((spec.uv_scale, spec.display), ((2, 1), manifest.DisplaySpec("blend", 1.0, True)))
+        plain = manifest.load(self.write(job_data())).texture_sets[0]
+        self.assertEqual((plain.uv_scale, plain.display), ((1, 1), manifest.DisplaySpec()))
+        for key, value in (("uvScale", [3, 1]), ("uvScale", [2]), ("uvScale", ["2", 1]), ("uvScale", [True, 1]),
+                           ("display", {"alpha": "glow"}), ("display", {"threshold": 2}),
+                           ("display", {"doubleSided": "yes"}), ("display", "blend")):
+            bad = job_data()
+            bad["textureSets"][0][key] = value
+            with self.assertRaises(manifest.ManifestError, msg=f"{key}={value}"):
+                manifest.load(self.write(bad))
+
     def test_export_config_gets_the_folder_and_results_map_to_targets(self):
         job = manifest.load(self.write(job_data()))
         config = manifest.export_config(job, "C:\\cache\\export\\1")
@@ -212,7 +237,7 @@ class ClientTests(unittest.TestCase):
 def install_painter_stub():
     """A minimal stand-in for Painter's API, enough to import painter_job."""
     package = types.ModuleType("substance_painter")
-    names = ["colormanagement", "export", "layerstack", "project", "resource", "textureset"]
+    names = ["colormanagement", "export", "js", "layerstack", "project", "resource", "textureset"]
     for name in names:
         module = types.ModuleType(f"substance_painter.{name}")
         setattr(package, name, module)
@@ -235,6 +260,22 @@ def install_painter_stub():
         })
 
     package.export.export_project_textures = export_project_textures
+
+    # alg.shaders as the JS API reports a new project's single instance.
+    package.js.shaders = {}
+    package.js.calls = []
+
+    def evaluate(code):
+        package.js.calls.append(code)
+        if code == "alg.shaders.shaderInstancesToObject()":
+            return json.loads(json.dumps(package.js.shaders))
+        prefix = "alg.shaders.shaderInstancesFromObject("
+        if code.startswith(prefix):
+            package.js.shaders = json.loads(code[len(prefix):-1])
+            return {}
+        raise AssertionError(code)
+
+    package.js.evaluate = evaluate
     return package
 
 
@@ -262,6 +303,50 @@ class PainterJobTests(unittest.TestCase):
             files = self.painter_job.run_export(self.state(), temp)
         self.assertEqual([key for key, _ in files], ["--top_norm", "top_base"])
         self.assertEqual(self.painter.export.calls[-1]["exportPath"], temp.replace("\\", "/"))
+
+    def test_tile_offset_puts_a_seed_copy_on_the_origin(self):
+        # Painter offsets a fill's UVs, then scales them around the tile center (measured in Painter).
+        for scale in (1, 2, 4, 8):
+            offset = self.painter_job._tile_offset(scale)
+            self.assertAlmostEqual(((0 + offset - 0.5) * scale + 0.5) % 1, 0, msg=scale)
+
+    def job(self, displays):
+        sets = [{"name": name, "width": 1024, "height": 1024, "display": display} for name, display in displays.items()]
+        for entry in sets:
+            if entry["display"] is None:
+                del entry["display"]
+        return manifest.parse(job_data(textureSets=sets, targets=[]), os.path.join("C:/cache/painter", JOB_ID))
+
+    def main_shader(self, shader="asm-metal-rough"):
+        return {"shaders": {"Main shader": {"shader": shader, "shaderInstance": "Main shader",
+                                            "parameters": {"Base Surface": {"specularIoR": 1.5}, "Geometry": {"doubleSided": False}}}},
+                "texturesets": {"lashes": {"shader": "Main shader"}, "skin": {"shader": "Main shader"}, "body": {"shader": "Main shader"}}}
+
+    def test_display_gives_sets_matching_shader_instances(self):
+        self.painter.js.shaders = self.main_shader()
+        job = self.job({"lashes": {"alpha": "blend", "doubleSided": True}, "skin": {"alpha": "test", "threshold": 0.5}, "body": None})
+        self.assertEqual(self.painter_job.apply_display(job), "")
+        shaders = self.painter.js.shaders
+        blend = shaders["shaders"]["XIV alpha blend, two-sided"]
+        self.assertEqual(blend["parameters"]["Geometry/Opacity"]["alphaBlendEnabled"], True)
+        self.assertEqual(blend["parameters"]["Geometry"]["doubleSided"], True)
+        self.assertEqual(blend["parameters"]["Base Surface"], {"specularIoR": 1.5})
+        test = shaders["shaders"]["XIV alpha test 0.50"]["parameters"]["Geometry/Opacity"]
+        self.assertEqual((test["alpha_test_enabled"], test["alpha_test_threshold"], test["alphaBlendEnabled"]), (True, 0.5, False))
+        self.assertEqual({name: entry["shader"] for name, entry in shaders["texturesets"].items()},
+                         {"lashes": "XIV alpha blend, two-sided", "skin": "XIV alpha test 0.50", "body": "Main shader"})
+
+    def test_display_starts_from_the_standard_material_under_other_shaders(self):
+        self.painter.js.shaders = self.main_shader("pbr-metal-rough")
+        self.painter_job.apply_display(self.job({"lashes": {"alpha": "blend"}}))
+        blend = self.painter.js.shaders["shaders"]["XIV alpha blend"]
+        self.assertEqual(blend["shader"], "asm-metal-rough")
+        self.assertNotIn("Base Surface", blend["parameters"])
+
+    def test_default_display_leaves_painter_alone(self):
+        self.painter.js.calls.clear()
+        self.assertEqual(self.painter_job.apply_display(self.job({"body": None})), "")
+        self.assertEqual(self.painter.js.calls, [])
 
 
 if __name__ == "__main__":

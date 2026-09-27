@@ -24,8 +24,6 @@ public enum ResourceSection
     CharacterFeatures,
     Gear,
     Other,
-    /// <summary> Animations the listener detected on a character; not part of Penumbra's tree. </summary>
-    Animations,
 }
 
 /// <summary>

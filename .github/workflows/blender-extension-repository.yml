@@ -59,6 +59,9 @@ jobs:
       - name: Run skeleton regressions
         run: python3 Blender-Addon/testing/run_blender_suites.py skeleton_regression
 
+      - name: Run vertex tools regressions
+        run: python3 Blender-Addon/testing/run_blender_suites.py vertex_tools_regression
+
       - name: Run cache regressions
         run: python3 Blender-Addon/testing/cache_regression.py
 
