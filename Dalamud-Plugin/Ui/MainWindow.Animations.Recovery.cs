@@ -58,19 +58,29 @@ public sealed partial class MainWindow
             _ => (Theme.Warning, journal.State),
         };
 
-    /// <summary> Recent animation edits with undo and offset restoration; opens itself when an edit needs attention. </summary>
-    private void DrawRecoveryCard()
+    /// <summary> How many recorded edits did not finish and need an undo; none while an edit is still running. </summary>
+    private int RecoveryAttention()
+    {
+        if (animations is null || animations.Busy) return 0;
+        var attention = 0;
+        foreach (var journal in animations.Recovery)
+            if (NeedsAttention(journal)) attention++;
+        return attention;
+    }
+
+    /// <summary> The Recent edits tab: animation edits with undo and offset restoration. </summary>
+    private void DrawRecovery()
     {
         if (animations is null) return;
         var journals = animations.Recovery;
-        var attention = 0;
-        foreach (var journal in journals)
-            if (NeedsAttention(journal)) attention++;
-        var label = attention > 0
-            ? $"Recovery · {attention} edit{(attention == 1 ? "" : "s")} need{(attention == 1 ? "s" : "")} attention###animation-recovery"
-            : "Recent edits###animation-recovery";
-        if (!ImGui.CollapsingHeader(label, attention > 0 ? ImGuiTreeNodeFlags.DefaultOpen : ImGuiTreeNodeFlags.None))
-            return;
+        var attention = RecoveryAttention();
+        if (attention > 0)
+        {
+            Widgets.Banner("##animation-recovery-attention", FeedbackSeverity.Warning, attention == 1
+                ? "An edit did not finish. Undo it below to restore its files and the live offsets it cleared."
+                : $"{attention} edits did not finish. Undo them below to restore their files and the live offsets they cleared.");
+            ImGui.Spacing();
+        }
         if (journals.IsEmpty)
         {
             Widgets.Hint("No animation edits recorded in the last 7 days.");

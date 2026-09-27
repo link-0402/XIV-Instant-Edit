@@ -20,7 +20,22 @@ public sealed record TexturePlanTexture(uint SamplerId, string Usage, int UvSet,
 
 /// <summary> A material the model draws with, and the textures it samples. </summary>
 public sealed record TexturePlanMaterial(string ModelMaterial, string GamePath, string SourcePath, string ShaderPackage,
-    IReadOnlyList<TexturePlanTexture> Textures, string Problem);
+    IReadOnlyList<TexturePlanTexture> Textures, string Problem)
+{
+    /// <summary> Shader-header flags: 0x01 hides back faces, 0x10 blends by opacity instead of cutting it off. </summary>
+    public uint? Flags { get; init; }
+
+    /// <summary> g_AlphaThreshold: materials that don't blend discard texels whose opacity is below it. </summary>
+    public float? AlphaThreshold { get; init; }
+
+    public TexturePlanColorSet? ColorSet { get; init; }
+}
+
+/// <summary> A material's colorset table, rows of <see cref="RowWidth"/> values (16 legacy, 32 Dawntrail). </summary>
+public sealed record TexturePlanColorSet(int RowWidth, float[] Values)
+{
+    public int Rows => Values.Length / RowWidth;
+}
 
 public sealed record ModelTexturePlan(string ModelGamePath, IReadOnlyList<TexturePlanMaterial> Materials, IReadOnlyList<string> Warnings);
 
@@ -109,9 +124,65 @@ public sealed partial class MaterialPreviewBundleBuilder
                     header.Format, header.Width, header.Height, problem));
             }
             materials.Add(new TexturePlanMaterial(modelMaterial, materialPath, material.Value.SourcePath,
-                ReadString(mtrl.Strings, mtrl.FileHeader.ShaderPackageNameOffset), textures, ""));
+                ReadString(mtrl.Strings, mtrl.FileHeader.ShaderPackageNameOffset), textures, "")
+            {
+                Flags = metadata.Flags,
+                AlphaThreshold = ReadShaderConstant(material.Value.Bytes, mtrl, AlphaThresholdConstant),
+                ColorSet = ReadPlanColorSet(material.Value.Bytes, mtrl),
+            });
         }
         return new ModelTexturePlan(NormaliseGamePath(modelGamePath), materials, BoundWarnings(warnings));
+    }
+
+    // g_AlphaThreshold (xivModdingFramework's ConstantId 699138595).
+    private const uint AlphaThresholdConstant = 0x29AC0223;
+
+    /// <summary> A shader constant's first value; null when the material doesn't set it. </summary>
+    private static float? ReadShaderConstant(byte[] bytes, MtrlFile mtrl, uint id)
+    {
+        // Same layout ReadMaterialMetadata has already validated for this material.
+        var header = checked(DataSetOffset(mtrl) + mtrl.FileHeader.DataSetSize);
+        if (header < 0 || header + 12 > bytes.Length)
+            return null;
+        var valueBytes = BitConverter.ToUInt16(bytes, header);
+        var keyCount = BitConverter.ToUInt16(bytes, header + 2);
+        var constantCount = BitConverter.ToUInt16(bytes, header + 4);
+        var samplerCount = BitConverter.ToUInt16(bytes, header + 6);
+        var constants = header + 12 + keyCount * 8;
+        var values = constants + constantCount * 8 + samplerCount * 12;
+        if (values + valueBytes > bytes.Length)
+            return null;
+        for (var i = 0; i < constantCount; i++)
+        {
+            var at = constants + i * 8;
+            if (BitConverter.ToUInt32(bytes, at) != id)
+                continue;
+            var offset = BitConverter.ToUInt16(bytes, at + 4);
+            var size = BitConverter.ToUInt16(bytes, at + 6);
+            if (size < sizeof(float) || offset % sizeof(float) != 0 || offset + sizeof(float) > valueBytes)
+                return null;
+            var value = BitConverter.ToSingle(bytes, values + offset);
+            return float.IsFinite(value) ? value : null;
+        }
+        return null;
+    }
+
+    private static TexturePlanColorSet? ReadPlanColorSet(byte[] bytes, MtrlFile mtrl)
+    {
+        // The table sizes ReadColorSet accepts; dye tables that follow it are left out.
+        var (tableBytes, rowWidth) = mtrl.FileHeader.DataSetSize switch
+        {
+            512 or 544 or 1024 => (mtrl.FileHeader.DataSetSize == 1024 ? 1024 : 512, 16),
+            2048 or 2112 or 2176 => (2048, 32),
+            _ => (0, 0),
+        };
+        var offset = DataSetOffset(mtrl);
+        if (tableBytes == 0 || offset < 0 || offset + tableBytes > bytes.Length)
+            return null;
+        var values = new float[tableBytes / 2];
+        for (var i = 0; i < values.Length; i++)
+            values[i] = JsonSafe((float)BitConverter.UInt16BitsToHalf(BitConverter.ToUInt16(bytes, offset + i * 2)), (float)Half.MaxValue);
+        return new TexturePlanColorSet(rowWidth, values);
     }
 
     /// <summary> Decodes a planned texture's top mip to RGBA, re-reading it from where the plan found it. </summary>

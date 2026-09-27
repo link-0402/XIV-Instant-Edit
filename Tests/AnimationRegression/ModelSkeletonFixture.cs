@@ -165,6 +165,30 @@ internal static class ModelSkeletonFixture
               EstTable.Override(metadata, EstSlot.Head, 101, 1) == null,
             "a collection's EST edits override the game's table for their race, set and slot only");
 
+        // The skeleton files a vanilla model uses, as Game Files exports write them.
+        var estReads = new List<string>();
+        var vanilla = new VanillaSkeletonFiles(path =>
+        {
+            estReads.Add(path);
+            return path == EstTable.GamePath(EstSlot.Hair) ? Est((113, 101, 114), (1, 101, 3)) : null;
+        });
+        check(vanilla.For("chara/human/c0101/obj/hair/h0113/model/c0101h0113_hir.mdl") is
+              { Files: ["chara/human/c0101/skeleton/base/b0001/skl_c0101b0001.sklb", "chara/human/c0101/skeleton/hair/h0114/skl_c0101h0114.sklb"],
+                Extra: { Slot: EstSlot.Hair, Set: 113 }, Entry: 114, Warnings.Length: 0 },
+            "a vanilla hairstyle uses its race's body and the hair skeleton the game's EST table names");
+        check(vanilla.For("chara/human/c0101/obj/hair/h0007/model/c0101h0007_hir.mdl") is
+              { Files: ["chara/human/c0101/skeleton/base/b0001/skl_c0101b0001.sklb"], Entry: 0, Warnings: [_] },
+            "a hairstyle the EST table has no entry for uses the body alone, with a warning");
+        check(vanilla.For("chara/accessory/a0001/model/c0201a0001_ear.mdl") is
+              { Files: ["chara/human/c0201/skeleton/base/b0001/skl_c0201b0001.sklb"], Extra: null, Entry: 0 } &&
+              vanilla.For("chara/human/c0701/obj/tail/t0001/model/c0701t0001_til.mdl") is { Files.Length: 1, Extra: null } &&
+              vanilla.For("chara/weapon/w0101/obj/body/b0001/model/w0101b0001.mdl") is
+              { Files: ["chara/weapon/w0101/skeleton/base/b0001/skl_w0101b0001.sklb"], Extra: null },
+            "accessories and tails use the race's body, weapons their own base skeleton");
+        check(vanilla.For("chara/equipment/e0005/model/c0101e0005_met.mdl") is { Files.Length: 1, Extra.Slot: EstSlot.Head, Entry: 0, Warnings.Length: 0 } &&
+              estReads.Count(path => path == EstTable.GamePath(EstSlot.Hair)) == 1 && vanilla.For("my edit.mdl") == null,
+            "headgear without a met skeleton needs no warning; each EST table is read once");
+
         // The bone a partial skeleton file hangs from.
         check(SkeletonFileHeader.ConnectBone(SklbHeader("0031", 46)) == 46 &&
               SkeletonFileHeader.ConnectBone(SklbHeader("0031", ushort.MaxValue)) == null &&

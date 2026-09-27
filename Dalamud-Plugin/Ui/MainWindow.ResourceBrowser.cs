@@ -19,17 +19,6 @@ public sealed partial class MainWindow
                                                         ImGuiTableFlags.Resizable | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.Hideable;
     private const string RowMenuPopup = "##row-menu";
 
-    private static readonly (ResourceKinds Kind, string Label)[] KindChips =
-    [
-        (ResourceKinds.Model, "Models"),
-        (ResourceKinds.Texture, "Textures"),
-        (ResourceKinds.Material, "Materials"),
-        (ResourceKinds.Animation, "Animations"),
-    ];
-
-    /// <summary> The kinds each chip counts; index 0 is the "All" chip, which counts every editable row. </summary>
-    private static readonly ResourceKinds[] KindChipCounts = [ResourceKinds.Editable, ResourceKinds.Model, ResourceKinds.Texture, ResourceKinds.Material, ResourceKinds.Animation];
-
     // The chips' legend dots; the texture dot is split between the texture roles' colours.
     private static readonly Vector4[] ModelSwatch = [Theme.ModelKind];
     private static readonly Vector4[] MaterialSwatch = [Theme.MaterialKind];
@@ -38,14 +27,15 @@ public sealed partial class MainWindow
 
     // View-model state: drawing must not rebuild, re-classify, or re-search the resource
     // tree every frame. The views are replaced when the snapshot or the vanilla toggle changes.
-    private readonly ResourceKindSelection _kinds = new();
+    // On Screen and the Mod Browser keep their own kind filters; _kinds is the drawn browser's.
+    private readonly ResourceKindSelection _screenKinds = new(ResourceKindChipSet.OnScreen.Listed);
+    private readonly ResourceKindSelection _modKinds = new(ResourceKindChipSet.ModBrowser.Listed);
+    private ResourceKindSelection _kinds;
     private readonly ResourceSearch _search = new();
     private readonly ResourceTypeCounter _counter = new();
     private readonly ExpansionState _expansion = new();
     private IReadOnlyList<OnScreenObject>? _actorSnapshot;
     private bool _actorSnapshotIncludesVanilla;
-    private List<(OnScreenObject Entity, List<ResourceView> Roots)> _actorBase = [];
-    private System.Collections.Immutable.ImmutableArray<AnimationCapture> _actorAnimations = [];
     private List<ActorView> _actors = [];
 
     private enum RowLayout
@@ -57,32 +47,30 @@ public sealed partial class MainWindow
     private void DrawOnScreenTab()
     {
         ImGui.Spacing();
+        _kinds = _screenKinds;
         var actors = ReadActors();
-        DrawFilterBar(actors, showVanillaToggle: true);
+        DrawFilterBar(actors, ResourceKindChipSet.OnScreen, showVanillaToggle: true);
         ImGui.Spacing();
         DrawResources(actors);
     }
 
     /// <summary> Search, kind chips and (on screen) the vanilla toggle. </summary>
-    private void DrawFilterBar(IReadOnlyList<ActorView> actors, bool showVanillaToggle)
+    private void DrawFilterBar(IReadOnlyList<ActorView> actors, ResourceKindChipSet chips, bool showVanillaToggle)
     {
         Widgets.SearchBox("##resource-filter", ref _filter, "Search names, mods and paths");
         _search.Text = _filter;
-        var counts = _counter.Count(actors, KindChipCounts);
+        var counts = _counter.Count(actors, chips.Counts);
         if (Widgets.Chip("All", counts[0], _kinds.IsAll))
             _kinds.Clear();
-        for (var i = 0; i < KindChips.Length; i++)
+        for (var i = 0; i < chips.Chips.Count; i++)
         {
             ImGui.SameLine(0, Theme.Gap);
-            var (kind, label) = KindChips[i];
+            var (kind, label) = chips.Chips[i];
             if (Widgets.Chip(label, counts[i + 1], _kinds.Contains(kind), KindSwatch(kind)))
                 _kinds.Toggle(kind);
         }
         ImGui.SameLine(0, Theme.Gap);
-        Widgets.HelpTip(showVanillaToggle
-            ? "All shows the resource tree. Pick one or more kinds to list just those rows. " +
-              "Animations lists what your character plays, detected while this filter or the Animations tab is open."
-            : "All shows the resource tree. Pick one or more kinds to list just those rows.");
+        Widgets.HelpTip("All shows the resource tree. Pick one or more kinds to list just those rows.");
 
         if (!showVanillaToggle)
             return;
@@ -111,10 +99,6 @@ public sealed partial class MainWindow
                 Widgets.EmptyState(FontAwesomeIcon.Sync, "Refreshing resources…", "Collecting the on-screen resource list from Penumbra.");
             else if (emptyMessage is not null)
                 Widgets.EmptyState(FontAwesomeIcon.FolderOpen, "Nothing to show", emptyMessage);
-            else if (_kinds.Selected == ResourceKinds.Animation && !_search.Active)
-                Widgets.EmptyState(FontAwesomeIcon.Running, "No animations detected yet", animations is null
-                    ? animationError ?? "Animation integration is unavailable."
-                    : "Play an emote, idle or walk. Animations your character plays appear here while this filter is on.");
             else if (_search.Active || _kinds.IsFlat)
                 Widgets.EmptyState(FontAwesomeIcon.Search, "No matching resources", "Clear the search or choose other kinds.");
             else
@@ -152,7 +136,6 @@ public sealed partial class MainWindow
         DrawSection(actor, ResourceSection.CharacterFeatures, "Character features", ExpansionState.SectionKey(actorId, ResourceSection.CharacterFeatures));
         DrawSection(actor, ResourceSection.Gear, "Gear", ExpansionState.SectionKey(actorId, ResourceSection.Gear));
         DrawSection(actor, ResourceSection.Other, "Other", ExpansionState.SectionKey(actorId, ResourceSection.Other));
-        DrawSection(actor, ResourceSection.Animations, "Animations", ExpansionState.SectionKey(actorId, ResourceSection.Animations));
     }
 
     private bool DrawActorHeader(ActorView actor, bool expanded)
@@ -300,13 +283,16 @@ public sealed partial class MainWindow
         ImGui.TableNextRow();
         ImGui.TableSetColumnIndex(0);
         var flat = _kinds.IsFlat;
-        // Sections start open; only the rows beneath them start collapsed.
-        var expanded = _expansion.IsExpanded(key, true, !flat && _search.Active);
+        // Sections start open, except Other (body connectors and the like are rarely edited);
+        // the rows beneath them start collapsed. A search also opens Other in the flat view,
+        // so its matches do not hide behind the collapsed header.
+        var defaultExpanded = section != ResourceSection.Other;
+        var expanded = _expansion.IsExpanded(key, defaultExpanded, _search.Active && (!flat || !defaultExpanded));
         if (Widgets.GhostIconButton("##section-toggle", expanded ? FontAwesomeIcon.CaretDown : FontAwesomeIcon.CaretRight, expanded ? "Collapse" : "Expand"))
-            _expansion.Toggle(key, expanded, true);
+            _expansion.Toggle(key, expanded, defaultExpanded);
         ImGui.SameLine(0, Theme.Gap);
         if (ImGui.Selectable($"{label}##section-label", false, ImGuiSelectableFlags.SpanAllColumns, new Vector2(0, ImGui.GetFrameHeight())))
-            _expansion.Toggle(key, expanded, true);
+            _expansion.Toggle(key, expanded, defaultExpanded);
         if (!expanded)
             return;
         if (flat)
@@ -550,7 +536,7 @@ public sealed partial class MainWindow
         else if (ResourceViews.IsAnimation(node))
         {
             var blocked = AnimationSendBlock(node);
-            if (Widgets.IconButton("##send-animation", FontAwesomeIcon.Running, blocked ?? "Send this animation to Blender", blocked is null))
+            if (Widgets.IconButton("##send-animation", FontAwesomeIcon.Pen, blocked ?? "Send this animation to Blender", blocked is null))
                 OpenAnimationSend(node);
             ImGui.SameLine(0, Theme.Scaled(2));
         }
@@ -559,8 +545,11 @@ public sealed partial class MainWindow
             ImGui.OpenPopup(RowMenuPopup);
     }
 
-    /// <summary> The row's context menu; opened by right-click on the name or the ⋯ button. </summary>
-    private void DrawRowMenu(ActorView actor, ResourceView node)
+    /// <summary>
+    /// The row's context menu; opened by right-click on the name or the ⋯ button.
+    /// <paramref name="extraItems"/> adds a view's own items after the edit actions.
+    /// </summary>
+    private void DrawRowMenu(ActorView actor, ResourceView node, Action? extraItems = null)
     {
         using var popup = ImRaii.Popup(RowMenuPopup);
         if (!popup.Success)
@@ -589,7 +578,8 @@ public sealed partial class MainWindow
             if (ImGui.MenuItem("Send animation to Blender"))
                 OpenAnimationSend(node);
         }
-        if (safeModel || texture || animation)
+        extraItems?.Invoke();
+        if (safeModel || texture || animation || extraItems is not null)
             ImGui.Separator();
 
         using (ImRaii.Disabled(node.GamePath.Length == 0))
@@ -682,41 +672,25 @@ public sealed partial class MainWindow
         if (ImGui.IsItemHovered()) ImGui.SetTooltip(slot);
     }
 
-    /// <summary>
-    /// The On Screen view model: Penumbra's resources, rebuilt only when the snapshot or the vanilla
-    /// toggle changes, plus the animations the listener detected, re-added when those change.
-    /// </summary>
+    /// <summary> The On Screen view model: Penumbra's resources, rebuilt only when the snapshot or the vanilla toggle changes. </summary>
     private List<ActorView> ReadActors()
     {
         var items = _onScreen.Items;
         var includeVanilla = _config.IncludeVanillaResources;
-        var detected = animations?.Observer.History ?? [];
-        var baseChanged = !ReferenceEquals(items, _actorSnapshot) || includeVanilla != _actorSnapshotIncludesVanilla;
-        if (!baseChanged && detected == _actorAnimations)
+        if (ReferenceEquals(items, _actorSnapshot) && includeVanilla == _actorSnapshotIncludesVanilla)
             return _actors;
 
-        if (baseChanged)
+        var result = new List<ActorView>(items.Count);
+        foreach (var entity in items)
         {
-            var bases = new List<(OnScreenObject, List<ResourceView>)>(items.Count);
-            foreach (var entity in items)
-                bases.Add((entity, OnScreenService.ProjectVisibleResourceNodes(entity.ResourceRoots, includeVanilla)
-                    .Select(ResourceViews.FromNode)
-                    .ToList()));
-            _actorBase = bases;
-        }
-
-        _animationRows.Clear();
-        var result = new List<ActorView>(_actorBase.Count);
-        foreach (var (entity, roots) in _actorBase)
-        {
-            var animationRows = DetectedAnimationRows(entity, detected);
-            result.Add(new ActorView(entity, entity.PresentationCategory.ToString(), Safe(entity.Name),
-                animationRows.Count == 0 ? roots : [.. roots, .. animationRows], entity.ObjectIndex));
+            var roots = OnScreenService.ProjectVisibleResourceNodes(entity.ResourceRoots, includeVanilla)
+                .Select(ResourceViews.FromNode)
+                .ToList();
+            result.Add(new ActorView(entity, entity.PresentationCategory.ToString(), Safe(entity.Name), roots, entity.ObjectIndex));
         }
 
         _actorSnapshot = items;
         _actorSnapshotIncludesVanilla = includeVanilla;
-        _actorAnimations = detected;
         _actors = result;
         _search.Invalidate();
         return result;

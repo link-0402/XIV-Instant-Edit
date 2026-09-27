@@ -4,8 +4,9 @@ id = "xiv_instant_edit"
 version = "1.2.4"
 name = "XIV Instant Edit"
 tagline = "Instant FFXIV model editing and focused model export"
-maintainer = "Luci"
+maintainer = "Luci_xiv"
 type = "add-on"
+website = "https://github.com/link-0402/XIV-Instant-Edit"
 
 tags = ["Import-Export", "Modeling", "Mesh", "Rigging", "User Interface"]
 blender_version_min = "4.5.0"

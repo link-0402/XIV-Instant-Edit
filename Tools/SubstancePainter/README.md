@@ -9,8 +9,9 @@ and this plugin's **Send to game** button sends the painted textures back.
 The easy way: in Instant Edit's Settings, tick **Paint textures in Substance Painter** and
 press **Install Painter plugin**. It copies this folder, plus a `config.json` with the ports,
 to `Documents\Adobe\Adobe Substance 3D Painter\python\plugins\xiv_instant_edit`. The
-installed copy always matches your Instant Edit version. After an Instant Edit update, press
-**Update Painter plugin** and restart Painter.
+installed copy always matches your Instant Edit build. When Settings offers **Update Painter
+plugin** (after an Instant Edit update, or when the installed files differ from the build's),
+press it and restart Painter.
 
 By hand: copy the `xiv_instant_edit` folder into that `plugins` folder yourself.
 
@@ -30,8 +31,32 @@ plugins toolbar.
    channel layout and hands the files to Instant Edit, which applies the changed ones and
    redraws. The panel lists the result for each texture.
 4. Save the project wherever you like. Reopening it later links it to Instant Edit again.
+   Until the first save Painter calls it "Untitled (Read only)"; saving works normally.
 
 The plugin never exports on save and doesn't change Painter's own export dialog.
+
+## What Painter shows
+
+The project is set up to look like the character does in game:
+
+- **Only what the character draws.** Parts of the model it has turned off (by gear,
+  customization or mod options) stay out, and their texels keep what the texture has. Eye
+  occlusion shading, which the game draws over the eyes, stays out too.
+- **Transparency and back faces.** Each texture set gets a shader instance of Painter's Adobe
+  Standard Material that follows its material: alpha blending for translucent materials (lashes,
+  brows), alpha testing at the material's threshold for the others, and double-sided drawing
+  where the game shows back faces. Brows, lashes and hair modelled as a front and a reversed back
+  copy keep only one copy, drawn from both sides, so the two don't flicker against each other.
+- **True texture proportions.** Painter shows every texture set as a square, so a set for
+  non-square textures (a 1024×2048 face, say) is made square, and the textures fill its top-left
+  corner at their own proportions. Exports are cropped back to the texture's size.
+- **Color where the game doesn't use a texture.** Hair shaders (hair, brows, lashes) get the
+  character's hair and highlight colors in base color; gear that colors by colorset gets the
+  colorset colors its index texture picks. That base color is only for viewing: nothing sends
+  it back, so edit the channels that are (normal, mask, index) to change those materials.
+
+Mirrored parts, such as left and right brows or teeth that share one area of the texture,
+overlap in the 2D view; switch it to a single channel to see the flat texture.
 
 ## Channels
 

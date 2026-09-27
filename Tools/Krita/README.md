@@ -14,10 +14,18 @@ it was opened from, without touching the open document's layers.
    read from `doc.fileName()` — never a hardcoded path.
 5. `clone.close()` discards the clone.
 
-Krita's scripting API (`krita` module) is well-documented and stable across
-4.x/5.x, so this is more confidently correct than the GIMP version — but I
-still haven't run it against a live Krita install, so test it on a spare
-texture copy first.
+It supports Krita 5.x and 6.x: Krita 5 ships PyQt5 and Krita 6 PyQt6, and the
+plugin imports whichever is there. Krita's scripting API (`krita` module) is
+well-documented and stable across versions, so this is more confidently
+correct than the GIMP version — but I still haven't run it against a live
+Krita install, so test it on a spare texture copy first.
+
+## Install from Instant Edit
+
+The first-time setup and **Settings > Texture editing** find Krita and offer **Install save
+scripts**. It copies the plugin into the `pykrita` folder of Krita's resource folder (the one
+set in Krita's settings, `%APPDATA%\krita` by default) and enables it in `kritarc`, so it is
+active after the next Krita start without a visit to the Python Plugin Manager.
 
 ## Option A — one-off, no install
 

@@ -38,12 +38,18 @@ MAX_ANIMATION_QUEUE_SIZE = 4
 # can report the result. Blender busy with a modal tool keeps the request queued instead.
 ANIMATION_APPLY_WAIT_SECONDS = 20
 
+# While the port is taken, for instance by another Blender, Blender tries it again this often.
+LISTENER_RETRY_SECONDS = 3.0
+LISTENER_UNAVAILABLE = "XIV Instant Edit listener unavailable"
+
 _import_queue: Queue = Queue(maxsize=MAX_IMPORT_QUEUE_SIZE)
 _animation_queue: Queue = Queue(maxsize=MAX_ANIMATION_QUEUE_SIZE)
 _server              = None
 _thread               = None
 _port                 = 42424
 _server_error         = ""
+# Whether the add-on wants a listener: start_server sets it and stop_server clears it.
+_listener_wanted      = False
 
 
 def _load_addon_version(manifest_path: Path | None = None) -> str | None:
@@ -762,12 +768,13 @@ class _BridgeServer(ThreadingHTTPServer):
 
 def start_server(port: int = 42424) -> bool:
     """Starts the HTTP listener that receives import commands from the XIV Instant Edit plugin."""
-    global _server, _thread, _port, _server_error
+    global _server, _thread, _port, _server_error, _listener_wanted
 
     if _server is not None:
         if port == _port:
             return True
         stop_server()
+    _listener_wanted = True
 
     try:
         server = _BridgeServer(("127.0.0.1", port), _ImportHandler)
@@ -798,6 +805,43 @@ def start_server(port: int = 42424) -> bool:
     return True
 
 
+def retry_server() -> bool:
+    """Listen on the wanted port if it is free now; return whether this call started the listener.
+
+    start_server already reported why the port was unavailable, so retries stay quiet.
+    """
+    global _server, _thread, _server_error
+
+    if not _listener_wanted or _server is not None:
+        return False
+    try:
+        server = _BridgeServer(("127.0.0.1", _port), _ImportHandler)
+    except OSError as error:
+        _server_error = str(error)
+        return False
+    _server = server
+    _server_error = ""
+    _thread = threading.Thread(target=_server.serve_forever, daemon=True)
+    _thread.start()
+    print(f"XIV Instant Edit: listening on port {_port}, which became free")
+    return True
+
+
+def poll_listener() -> float:
+    """Timer callback: take over the port once it is free, such as after another Blender closed."""
+    try:
+        if retry_server():
+            props = getattr(bpy.context.scene, "xiv_ie_instant_edit_props", None)
+            if props is not None and props.last_status.startswith(LISTENER_UNAVAILABLE):
+                props.last_status = f"Listening for the plugin on port {_port} again."
+            for window in bpy.context.window_manager.windows:
+                for area in window.screen.areas:
+                    area.tag_redraw()
+    except (AttributeError, ReferenceError, RuntimeError) as error:
+        print(f"XIV Instant Edit: could not update the listener status: {sanitize_text(error)}")
+    return LISTENER_RETRY_SECONDS
+
+
 def set_server_port(port: int) -> bool:
     return start_server(port)
 
@@ -812,8 +856,9 @@ def server_status() -> tuple[bool, int, str]:
 
 
 def stop_server() -> None:
-    global _server, _thread, _port
+    global _server, _thread, _port, _listener_wanted
 
+    _listener_wanted = False
     if _server is not None:
         try:
             _server.shutdown()

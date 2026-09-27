@@ -19,8 +19,8 @@ dotnet build Dalamud-Plugin/InstantEdit.csproj -c Release -p:SkipDistributionPac
 PowerShell users should check `$LASTEXITCODE` after each command.
 
 `run_blender_suites.py` runs `bridge_regression`, `smoke_export`,
-`correctness_regression`, `animation_regression` and `skeleton_regression`, or the
-suite names and script paths you pass, as
+`correctness_regression`, `animation_regression`, `skeleton_regression` and
+`vertex_tools_regression`, or the suite names and script paths you pass, as
 `blender --background --factory-startup --python-exit-code 1 --python <script>`.
 Pass `--blender <path>` to test a Blender that is not on PATH. Each script gets
 a new temporary Blender user profile. The fixtures call
@@ -46,12 +46,12 @@ updates the distribution archives or extension repository index.
 
 ## Coverage organization
 
-- `bridge_regression.py`: manifest status, model stream options, isolated
-  material previews, then the import/context/target-selection workflow.
+- `bridge_regression.py`: manifest status, model limits and zero flow values,
+  isolated material previews, then the import/context/target-selection workflow.
 - `smoke_export.py`: UV seams, mesh IDs and naming, isolated Simple Import folder
   handling, Mesh Studio operations, combined rest rigs and visible mesh bindings,
   and actual MDL export/round-trip workflows (including newly weighted bones).
-- `correctness_regression.py`: injected transparency, backface, and shape-key
+- `correctness_regression.py`: injected transparency and shape-key
   preparation failures; armature-combination validation and rollback; scheduled
   and active workers across file loads; durable
   revocation retries and stale-result rejection.
@@ -65,9 +65,14 @@ updates the distribution archives or extension repository index.
   validation, rest matrices (the bind pose turned Z up, including bones pointing
   along -Y and bones below a bone scaled to nothing), the generated armature's
   bones and parents, model bones the skeleton lacks, placeholder bones without a
-  skeleton, posing, exports of a posed armature, removing YAS groups, combining
+  skeleton, posing, exports of a posed armature, YAS groups kept as bones, combining
   generated armatures, animation takes keyed on it, the import bridge (validation,
   staging, the operator) and Import Model File asking the plugin.
+- `vertex_tools_regression.py`: the Vertex Data tools checked in exported MDL
+  streams (UV2, vertex colors and alpha, zero flow and its import round trip),
+  the triangulation and bone-weight export checks, the Pose section's armature,
+  actions and rest pose toggle, the shortcuts, the listener taking over a freed
+  port, and that every sidebar icon exists.
 - `ExportContextRegression`: named session-store and variant-export scenarios,
   plus authorization, backups, resource bundling, migration, mod metadata, and
   collection activation (`CollectionActivationScenarios.cs`: enabling a new mod
@@ -75,6 +80,15 @@ updates the distribution archives or extension repository index.
   (`UiViewModelScenarios.cs`: kind filters, search, expansion keys, status feed,
   session grouping and the mod-view builder, all without ImGui), and which `.pap`
   files the browsers list as sendable character animations (`AnimationRowScenarios.cs`).
+  `ToolSetupScenarios.cs` covers setup's tool detection and installers without
+  touching the machine: Steam library lists, open commands, Painter's log (install
+  and plugin folders), the add-on copies in Blender's extension folders and the
+  Blender setup script's report, `kritarc` edits, and that the Blender setup script
+  and the Photoshop, GIMP and Krita save scripts are embedded byte for byte. The
+  real Blender install (`install_blender_addon.py`) is checked by hand against a
+  throwaway profile: create the folder first and point `BLENDER_USER_RESOURCES`
+  at it, since Blender falls back to your real preferences when that folder
+  doesn't exist yet.
 - `BlenderStatusRegression`: grouped connection states and bridge response,
   import handoff, diagnostic behavior, cache synchronization, and texture-session
   regressions in `TextureEditScenarios.cs`. Texture tests exercise the production

@@ -27,8 +27,10 @@ from .materials import (
     mesh_display_name,
     mesh_part_attributes,
 )
+from .keymaps import draw_shortcut
 from .mesh_list import layout_rows, lod_zero_objects, scene_parts
 from .operators import active_mesh_drag_plan, active_mesh_drag_state
+from .pose import pose_actions, pose_armature, shown_action
 from .properties import get_settings
 from .backups import list_backups, target_folder
 
@@ -133,11 +135,27 @@ def _export_destination_display(ref, props=None) -> str:
     return f"{directory}/{variant_name}.mdl" if separator else f"{variant_name}.mdl"
 
 
-def _display_wrap_width(context: Context) -> int:
-    """Estimate the sidebar's available text width in characters."""
+# Label text at 100% interface scale: 5.25 pixels per character measured, plus room for wide
+# letters. A sidebar line loses the tab column and panel padding; a popover line its padding.
+_CHARACTER_WIDTH = 5.8
+_SIDEBAR_OVERHEAD = 36
+_POPOVER_PADDING = 20
+
+
+def _display_wrap_width(context: Context, units: int = 0) -> int:
+    """Estimate how many characters fit on a line of the sidebar, or of a popover ``units`` wide.
+
+    A popover's units scale with the interface, so its width in characters does not.
+    """
+    if units:
+        return max(24, int((units * 20 - _POPOVER_PADDING) / _CHARACTER_WIDTH))
     region_width = int(getattr(getattr(context, "region", None), "width", 0) or 0)
     if region_width:
-        return max(28, min(72, region_width // 8))
+        try:
+            scale = float(context.preferences.system.ui_scale) or 1.0
+        except (AttributeError, TypeError, ValueError):
+            scale = 1.0
+        return max(24, min(72, int((region_width / scale - _SIDEBAR_OVERHEAD) / _CHARACTER_WIDTH)))
     return 42
 
 
@@ -179,12 +197,28 @@ def _wrap_display_value(value: str, width: int) -> list[str]:
     return lines
 
 
-def _draw_wrapped_label(layout, context: Context, text: str, icon: str = "NONE", indent: int = 4) -> None:
-    """Draw a sentence across as many labels as the sidebar width needs."""
+def _draw_wrapped_label(layout, context: Context, text: str, icon: str = "NONE", indent: int = 4,
+                        units: int = 0) -> None:
+    """Draw a sentence across as many labels as the sidebar (or a popover ``units`` wide) needs."""
     column = layout.column(align=True)
-    width = max(20, _display_wrap_width(context) - indent)
+    width = max(20, _display_wrap_width(context, units) - indent)
     for index, line in enumerate(_wrap_display_value(text, width) or (text,)):
         column.label(text=line, icon=icon if index == 0 else ("BLANK1" if icon != "NONE" else "NONE"))
+
+
+def _split_row(layout, label: str):
+    """A row laid out like use_property_split: its label right-aligned in the first 40%."""
+    split = layout.split(factor=0.4, align=True)
+    left = split.row(align=True)
+    left.alignment = "RIGHT"
+    left.label(text=label)
+    return split.row(align=True)
+
+
+def _draw_hint(layout, context: Context, text: str, icon: str = "INFO") -> None:
+    column = layout.column(align=True)
+    column.active = False
+    _draw_wrapped_label(column, context, text, icon)
 
 
 _MATERIAL_WARNING_RE = re.compile(
@@ -220,10 +254,10 @@ def _status_icon(message: str) -> str:
     return "INFO"
 
 
-def _draw_status_popover_body(layout, context: Context, message: str, icon: str = "NONE") -> None:
+def _draw_status_popover_body(layout, context: Context, message: str, icon: str = "NONE", units: int = 0) -> None:
     """Word-wrap a status message across multiple labels inside a popover."""
     column = layout.column(align=True)
-    width = _display_wrap_width(context)
+    width = _display_wrap_width(context, units)
     first = True
     for segment in _issue_display_lines(message):
         for line in _wrap_display_value(segment, width) or (segment,):
@@ -396,7 +430,7 @@ class XIVIE_PT_last_status_popover(Panel):
     def draw(self, context: Context) -> None:
         layout = self.layout
         message = get_instant_edit_props().last_status or "No status yet."
-        _draw_status_popover_body(layout, context, message)
+        _draw_status_popover_body(layout, context, message, units=self.bl_ui_units_x)
         layout.separator()
         layout.operator("xiv_ie.copy_status", text="Copy to Clipboard", icon="COPYDOWN")
 
@@ -417,11 +451,13 @@ class XIVIE_PT_connection_popover(Panel):
             row = layout.row()
             row.alert = True
             row.label(text=f"Not listening on port {port}", icon="CANCEL")
-            _draw_wrapped_label(layout, context, error or "The listener could not start.", "BLANK1")
+            units = self.bl_ui_units_x
+            _draw_wrapped_label(layout, context, error or "The listener could not start.", "BLANK1", units=units)
             _draw_wrapped_label(
                 layout, context,
-                "Close the program that uses this port, or choose another port in the preferences.",
-                "BLANK1",
+                "Blender keeps trying and connects once the port is free, such as when the other "
+                "Blender closes. Or choose another port in the preferences.",
+                "BLANK1", units=units,
             )
         layout.separator()
         row = layout.row(align=True)
@@ -455,7 +491,7 @@ class XIVIE_PT_context_details_popover(Panel):
             "Not created yet" if ref.destination_state == "new_mod_required"
             else _export_destination_display(ref, get_instant_edit_props())
         )
-        width = max(24, _display_wrap_width(context) - 6)
+        width = max(24, _display_wrap_width(context, self.bl_ui_units_x) - 6)
         for title, value, icon in (
             source,
             ("Imported File", _import_file_display(ref), "IMPORT"),
@@ -488,7 +524,10 @@ class XIVIE_PT_export_scope_popover(Panel):
         layout.prop(props, "export_scope", text="Parts")
         if props.export_scope == "VISIBLE_NO_MANNEQUIN":
             layout.prop(props, "export_excluded_mesh", text="Except")
-        layout.column(heading="Penumbra").prop(props, "create_attribute_groups", text="Attribute Group")
+        draw_shortcut(layout, context, "xiv_ie.instant_export", "Shortcut")
+        toggles = layout.column(align=True)
+        toggles.use_property_split = False
+        toggles.prop(props, "create_attribute_groups", text="Create Penumbra Attribute Group")
 
 
 # ---- Instant Edit (session) panel ---------------------------------------------------
@@ -652,6 +691,26 @@ def _draw_scope_summary(layout, props) -> None:
         column.label(text=text, icon=icon)
 
 
+# Luci_xiv's pages: (label, icon, URL).
+LINKS = (
+    ("XIV Mod Archive", "PACKAGE", "https://www.xivmodarchive.com/user/124593"),
+    ("GitHub", "SCRIPT", "https://github.com/link-0402/XIV-Instant-Edit"),
+    ("Bluesky", "COMMUNITY", "https://bsky.app/profile/xiv-luci.bsky.social"),
+    ("Ko-fi", "FUND", "https://ko-fi.com/luci_xiv"),
+)
+
+
+class XIVIE_MT_links(Menu):
+    """XIV Instant Edit on GitHub, and Luci_xiv's mods, Bluesky and Ko-fi"""
+
+    bl_idname = "XIVIE_MT_links"
+    bl_label = "Links"
+
+    def draw(self, context: Context) -> None:
+        for label, icon, url in LINKS:
+            self.layout.operator("wm.url_open", text=label, icon=icon).url = url
+
+
 class XIVIE_PT_session(Panel):
     bl_idname = "XIVIE_PT_session"
     bl_label = "Instant Edit"
@@ -663,8 +722,13 @@ class XIVIE_PT_session(Panel):
     def draw_header_preset(self, context: Context) -> None:
         running, _port, _error = server_status()
         row = self.layout.row(align=True)
-        row.alert = not running
-        row.popover("XIVIE_PT_connection_popover", text="", icon="LINKED" if running else "UNLINKED")
+        status = row.row(align=True)
+        status.alert = not running
+        status.popover("XIVIE_PT_connection_popover", text="", icon="LINKED" if running else "UNLINKED")
+        # The links sit at the right end of the header, unembossed, as in Luci_xiv's other add-ons.
+        links = row.row(align=True)
+        links.emboss = "NONE"
+        links.menu("XIVIE_MT_links", text="", icon="URL")
 
     def draw(self, context: Context) -> None:
         layout = self.layout
@@ -925,34 +989,111 @@ class XIVIE_PT_mesh_groups(Panel):
             _draw_mesh_groups(self.layout, context)
 
 
-# ---- File Import / Export, Options, Backups, Tools --------------------------------
+# ---- Pose panel ---------------------------------------------------------------------
 
 
-class XIVIE_PT_file_io(Panel):
-    bl_idname = "XIVIE_PT_file_io"
-    bl_label = "File Import / Export"
+class XIVIE_MT_pose_actions(Menu):
+    bl_idname = "XIVIE_MT_pose_actions"
+    bl_label = "Pose Action"
+    bl_options = {"SEARCH_ON_KEY_PRESS"}
+
+    def draw(self, context: Context) -> None:
+        layout = self.layout
+        armature = pose_armature(context)
+        if armature is None:
+            layout.label(text="There is no armature to pose.", icon="INFO")
+            return
+        shown = shown_action(armature)
+        layout.operator(
+            "xiv_ie.show_pose_action", text="No Action",
+            icon="RADIOBUT_ON" if shown is None else "RADIOBUT_OFF",
+        ).action = ""
+        actions = pose_actions(armature)
+        if not actions:
+            layout.label(text=f"No action keys the bones of {armature.name}.", icon="INFO")
+            return
+        layout.separator()
+        for action in actions:
+            layout.operator(
+                "xiv_ie.show_pose_action", text=action.name,
+                icon="RADIOBUT_ON" if action == shown else "RADIOBUT_OFF",
+            ).action = action.name
+
+
+class XIVIE_PT_pose(Panel):
+    bl_idname = "XIVIE_PT_pose"
+    bl_label = "Pose"
     bl_category = CATEGORY
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_options = {"DEFAULT_CLOSED"}
     bl_order = 2
 
+    def draw_header_preset(self, context: Context) -> None:
+        armature = pose_armature(context)
+        if armature is not None:
+            # Pressed while posed; a click shows the rest pose.
+            self.layout.operator(
+                "xiv_ie.toggle_rest_pose", text="", icon="POSE_HLT",
+                depress=armature.data.pose_position == "POSE",
+            )
+
+    def draw(self, context: Context) -> None:
+        layout = self.layout
+        settings = get_settings()
+        armature = pose_armature(context)
+        column = layout.column()
+        column.use_property_split = True
+        column.use_property_decorate = False
+        # Left empty, the field shows the armature it found.
+        column.prop(settings, "pose_armature", text="Armature",
+                    placeholder=armature.name if armature is not None else "None found")
+        if armature is None:
+            _draw_hint(layout, context, "Select an armature, or a mesh weighted to one.")
+            return
+
+        shown = shown_action(armature)
+        _split_row(column, "Action").menu(
+            "XIVIE_MT_pose_actions", text=shown.name if shown is not None else "No Action", icon="ACTION")
+        if shown is not None:
+            start, end = (int(round(value)) for value in shown.frame_range)
+            if end > start:
+                column.prop(context.scene, "frame_current", text=f"Frame ({start}-{end})")
+
+        layout.row(align=True).prop(armature.data, "pose_position", expand=True)
+        shortcut = layout.column()
+        shortcut.use_property_split = True
+        shortcut.use_property_decorate = False
+        draw_shortcut(shortcut, context, "xiv_ie.toggle_rest_pose", "Toggle Shortcut")
+        _draw_hint(layout, context, "Exports always use the rest pose.")
+
+
+# ---- Simple Export / Import, Options, Backups, Tools ------------------------------
+
+
+class XIVIE_PT_file_io(Panel):
+    bl_idname = "XIVIE_PT_file_io"
+    bl_label = "Simple Export / Import"
+    bl_category = CATEGORY
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_options = {"DEFAULT_CLOSED"}
+    bl_order = 3
+
     def draw(self, context: Context) -> None:
         layout = self.layout
         settings = get_settings()
         props = get_instant_edit_props()
-        layout.operator("xiv_ie.simple_import", text="Import MDL, FBX or glTF...", icon="IMPORT")
+        layout.row(align=True).prop(settings, "simple_io_tab", expand=True)
         column = layout.column()
         column.use_property_split = True
         column.use_property_decorate = False
-        column.row(align=True).prop(settings, "simple_import_armature", expand=True)
-        if settings.simple_import_use_existing_skeleton:
-            column.prop(settings, "simple_import_skeleton", text="Skeleton")
-
-        layout.separator(type="LINE")
-        column = layout.column()
-        column.use_property_split = True
-        column.use_property_decorate = False
+        if settings.simple_io_tab == "IMPORT":
+            column.row(align=True).prop(settings, "simple_import_armature", expand=True)
+            if settings.simple_import_use_existing_skeleton:
+                column.prop(settings, "simple_import_skeleton", text="Skeleton")
+            layout.operator("xiv_ie.simple_import", text="Import MDL, FBX or glTF...", icon="IMPORT")
+            return
         column.prop(settings, "export_directory", text="Folder")
         column.prop(settings, "export_name", text="File Name")
         column.row(align=True).prop(settings, "model_format", expand=True)
@@ -969,7 +1110,7 @@ class XIVIE_PT_options(Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_options = {"DEFAULT_CLOSED"}
-    bl_order = 3
+    bl_order = 4
 
     def draw(self, context: Context) -> None:
         pass
@@ -984,12 +1125,10 @@ class XIVIE_PT_options_import(Panel):
     bl_region_type = "UI"
 
     def draw(self, context: Context) -> None:
-        layout = self.layout
-        layout.use_property_split = True
-        layout.use_property_decorate = False
         settings = get_settings()
-        layout.column(heading="Mesh Groups").prop(settings, "resolve_mesh_group_conflicts")
-        layout.column(heading="Export Folder").prop(settings, "simple_import_set_export_directory")
+        column = self.layout.column(align=True)
+        column.prop(settings, "resolve_mesh_group_conflicts")
+        column.prop(settings, "simple_import_set_export_directory")
 
 
 class XIVIE_PT_options_export(Panel):
@@ -1002,39 +1141,64 @@ class XIVIE_PT_options_export(Panel):
 
     def draw(self, context: Context) -> None:
         layout = self.layout
-        layout.use_property_split = True
-        layout.use_property_decorate = False
         settings = get_settings()
-        for heading, name, text in (
-            ("Keep", "keep_shapekeys", "Shape Keys"),
-            ("Check", "check_tris", "Triangulation"),
-            ("Create", "create_backfaces", "Backfaces"),
-            ("Reset", "reset_scaling_on_export", "Armature Scaling"),
-            ("Calculate", "calculate_heels_offset", "Heels Offset"),
-        ):
-            layout.column(heading=heading).prop(settings, name, text=text)
-        layout.prop(settings, "remove_yas")
+        column = layout.column(align=True)
+        column.prop(settings, "keep_shapekeys")
+        column.prop(settings, "reset_scaling_on_export")
+        column.prop(settings, "calculate_heels_offset")
+        _draw_hint(layout, context, "Every export requires triangulated meshes with bone weights.")
 
 
-class XIVIE_PT_options_vertex_data(Panel):
-    bl_idname = "XIVIE_PT_options_vertex_data"
+# ---- Vertex Data popover ------------------------------------------------------------
+
+# (title, icon, what the data does, actions): the sections of TexTools' Modify
+# Model Vertices dialog that the add-on offers.
+_VERTEX_DATA_SECTIONS = (
+    ("UV2", "GROUP_UVS",
+     "Places decals such as crests and is usually empty. Hair checks opacity through it, "
+     "so there it should match UV1.",
+     (("CLEAR_UV2", "Clear UV2"), ("COPY_UV1_TO_UV2", "Copy UV1 to UV2"))),
+    ("Vertex Color 1", "GROUP_VCOL",
+     "Mask data whose use depends on the shader; white and opaque unless authored. "
+     "Clearing it on skin or hair can cause seams or odd shadows.",
+     (("CLEAR_COLOR1", "Clear Color"), ("CLEAR_ALPHA1", "Clear Alpha"))),
+    ("Vertex Color 2", "GROUP_VCOL",
+     "Fake wind; black unless the model should sway.",
+     (("CLEAR_COLOR2", "Clear Color"),)),
+    ("Hair Flow", "STRANDS",
+     "The direction of the hair strands, which shapes highlights. Clearing it gives a "
+     "generic, sharper highlight.",
+     (("CLEAR_FLOW", "Clear Flow Data"),)),
+)
+_VERTEX_DATA_WRAP = 52
+
+
+class XIVIE_PT_vertex_data_popover(Panel):
+    bl_idname = "XIVIE_PT_vertex_data_popover"
     bl_label = "Vertex Data"
-    bl_parent_id = "XIVIE_PT_options"
-    bl_category = CATEGORY
     bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_options = {"DEFAULT_CLOSED"}
+    bl_region_type = "HEADER"
+    bl_ui_units_x = 18
 
     def draw(self, context: Context) -> None:
         layout = self.layout
-        layout.use_property_split = True
-        layout.use_property_decorate = False
-        settings = get_settings()
-        layout.prop(settings, "uv2_mode")
-        layout.prop(settings, "vertex_color1_mode")
-        column = layout.column(heading="Clear")
-        column.prop(settings, "clear_vertex_color2", text="Vertex Color 2")
-        column.prop(settings, "clear_flow_data", text="Flow Data")
+        count = sum(obj.type == "MESH" for obj in context.selected_objects)
+        if context.mode != "OBJECT":
+            layout.label(text="Switch to Object Mode to change vertex data.", icon="INFO")
+        elif not count:
+            layout.label(text="Select the meshes to change.", icon="INFO")
+        else:
+            layout.label(text=f"Changes the {count} selected mesh{'es' if count != 1 else ''}.", icon="RESTRICT_SELECT_OFF")
+        for title, icon, description, actions in _VERTEX_DATA_SECTIONS:
+            layout.separator()
+            layout.label(text=title, icon=icon)
+            text = layout.column(align=True)
+            text.active = False
+            for line in textwrap.wrap(description, _VERTEX_DATA_WRAP):
+                text.label(text=line)
+            row = layout.row(align=True)
+            for action, label in actions:
+                row.operator("xiv_ie.vertex_data", text=label).action = action
 
 
 def _grouped_backups(entries) -> list:
@@ -1052,7 +1216,7 @@ class XIVIE_PT_backups(Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_options = {"DEFAULT_CLOSED"}
-    bl_order = 4
+    bl_order = 5
 
     def draw_header(self, context: Context) -> None:
         self.layout.prop(get_settings(), "backup_models_on_export", text="")
@@ -1075,7 +1239,7 @@ class XIVIE_PT_backups(Panel):
         if folder is None:
             _draw_wrapped_label(
                 layout, context,
-                "Choose a File Export folder to see its backups." if source == "Simple Export folder"
+                "Choose a Simple Export folder to see its backups." if source == "Simple Export folder"
                 else f"The {source} is unavailable.",
                 "INFO",
             )
@@ -1102,10 +1266,11 @@ class XIVIE_PT_tools(Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_options = {"DEFAULT_CLOSED"}
-    bl_order = 5
+    bl_order = 6
 
     def draw(self, context: Context) -> None:
         layout = self.layout
+        layout.popover("XIVIE_PT_vertex_data_popover", text="Vertex Data", icon="GROUP_VCOL")
         layout.operator("xiv_ie.combine_armatures", text="Combine Armatures...", icon="ARMATURE_DATA")
         column = layout.column(align=True)
         column.operator("xiv_ie.convert_mesh_names", text="Move Mesh IDs to Front", icon="SORTALPHA")

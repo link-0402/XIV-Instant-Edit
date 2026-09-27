@@ -143,7 +143,7 @@ public sealed partial class MainWindow
             var dir = Path.Combine(handoffRoot, Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(dir);
             handoffDirectory = dir;
-            var file = Path.Combine(dir, $"{Sanitize(actor.Name)}-{actor.ImportObjectIndex}-{model.FileName}");
+            var file = Path.Combine(dir, model.FileName);
             await File.WriteAllBytesAsync(file, bytes).ConfigureAwait(false);
             var resources = source.SourceState == ResourceSourceState.GameData
                 ? Array.Empty<MaterialResourceCandidate>()
@@ -198,7 +198,7 @@ public sealed partial class MainWindow
                     model.GamePath,
                     model.LocalPath,
                     actor.ImportObjectIndex,
-                    $"{actor.Name} {model.FileName}",
+                    model.FileName,
                     listenPort,
                     collection?.Id,
                     collection?.Name,
@@ -226,7 +226,7 @@ public sealed partial class MainWindow
                     file,
                     model.GamePath,
                     actor.ImportObjectIndex,
-                    $"{actor.Name} {model.FileName}",
+                    model.FileName,
                     listenPort,
                     source.ActualPath,
                     source.SourceModDirectory,

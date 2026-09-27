@@ -290,9 +290,8 @@ def check_export(addon, armature, body, pose_bone):
             "the export restores the pose afterwards")
 
 
-def check_yas_removal(addon, context):
-    """Removing YAS groups on export moves their weights to the parent bone, which placeholder
-    bones never had."""
+def check_yas_groups_kept(addon, context):
+    """Exports keep YAS groups as bones with their own weights; nothing folds them into parents."""
     skeleton = module("instant_edit.skeleton")
     export_module = importlib.import_module(f"{addon.__name__}.mesh.export")
     model_module = importlib.import_module(f"{addon.__name__}.xivpy.model")
@@ -318,15 +317,13 @@ def check_yas_removal(addon, context):
             "a YAS bone the skeleton lacks hangs from the bone it shares its weights with")
     settings = context.scene.xiv_ie_settings
     settings.model_format = "MDL"
-    settings.remove_yas = "REMOVE"
-    try:
-        with tempfile.TemporaryDirectory(prefix="xiv-ie-skeleton-yas-") as folder:
-            target = Path(folder) / "yas"
-            export_module.export_result(target, "MDL", export_objects=[body])
-            model = model_module.XIVModel.from_file(str(target) + ".mdl")
-    finally:
-        settings.remove_yas = "KEEP"
-    require(model.bones == ["j_kosi"], "exporting without YAS groups moves their weights to their parent bones")
+    require(not hasattr(settings, "remove_yas"), "there is no export option that removes YAS groups")
+    with tempfile.TemporaryDirectory(prefix="xiv-ie-skeleton-yas-") as folder:
+        target = Path(folder) / "yas"
+        export_module.export_result(target, "MDL", export_objects=[body])
+        model = model_module.XIVModel.from_file(str(target) + ".mdl")
+    require(model.bones == ["j_kosi", "iv_shiri_l", "iv_unknown"],
+            "exports keep YAS groups as their own bones")
 
 
 def check_combination(context):
@@ -534,7 +531,7 @@ def run():
             pose_bone = check_posing(context, armature, body)
             check_export(addon, armature, body, pose_bone)
         with temporary_scene_data():
-            check_yas_removal(addon, context)
+            check_yas_groups_kept(addon, context)
         with temporary_scene_data():
             check_combination(context)
         with temporary_scene_data():

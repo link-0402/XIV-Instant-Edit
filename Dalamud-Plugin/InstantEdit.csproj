@@ -24,10 +24,10 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <Author>Luci</Author>
+    <Author>Luci_xiv</Author>
     <Name>XIV Instant Edit</Name>
     <Punchline>Send on-screen models straight to Blender and back.</Punchline>
-    <Description>Allows for easy and instant editing of Penumbra model files in Blender and saving them right back to the game. Requires the XIV Instant Edit Blender add-on installed (see source repository for instructions).</Description>
+    <Description>Allows for easy and instant editing of Penumbra model files in Blender and saving them right back to the game. Model editing uses the XIV Instant Edit Blender add-on, which the first-time setup installs for you.</Description>
     <RepoUrl>https://github.com/link-0402/XIV-Instant-Edit</RepoUrl>
     <IconUrl>https://raw.githubusercontent.com/link-0402/XIV-Instant-Edit/main/Dalamud-Plugin/images/icon.png</IconUrl>
     <ApplicableVersion>any</ApplicableVersion>
@@ -84,6 +84,15 @@
     <EmbeddedResource Include="Services\Animations\TmbLayouts.json" />
     <!-- The Substance Painter plugin, installed from Settings so it always matches this build. -->
     <EmbeddedResource Include="..\Tools\SubstancePainter\xiv_instant_edit\*.py" LogicalName="InstantEdit.PainterPlugin.%(Filename)%(Extension)" />
+    <!-- Run by setup in a windowless Blender to add the GitHub extension repository and install the add-on. -->
+    <EmbeddedResource Include="Services\Setup\install_blender_addon.py" LogicalName="InstantEdit.Setup.install_blender_addon.py" />
+    <!-- The add-on's manifest, for the Blender versions setup offers to install into. -->
+    <EmbeddedResource Include="..\Blender-Addon\blender_manifest.toml" LogicalName="InstantEdit.Setup.blender_manifest.toml" />
+    <!-- The Save Flattened TGA scripts, installed into the texture editors from setup and Settings. -->
+    <EmbeddedResource Include="..\Tools\Photoshop\*.jsx" LogicalName="InstantEdit.EditorScripts.Photoshop.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="..\Tools\GIMP\*.scm" LogicalName="InstantEdit.EditorScripts.GIMP.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="..\Tools\Krita\Plugin\save_flattened_tga.desktop" LogicalName="InstantEdit.EditorScripts.Krita.save_flattened_tga.desktop" />
+    <EmbeddedResource Include="..\Tools\Krita\Plugin\save_flattened_tga\*.py" LogicalName="InstantEdit.EditorScripts.Krita.save_flattened_tga/%(Filename)%(Extension)" />
   </ItemGroup>
 
   <!-- Dalamud reads a dev plugin's installer icon from images\icon.png beside the DLL; DalamudPackager leaves it out of latest.zip. -->

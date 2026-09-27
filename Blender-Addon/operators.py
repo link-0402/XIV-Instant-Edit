@@ -25,9 +25,16 @@ from .materials import (
     convert_suffix_mesh_names,
 )
 from .mesh_list import DragSession, ListMetrics, list_parts, moved_part, placement_plan, scene_parts
-from .mesh.export import check_triangulation, export_result, get_export_stats
+from .mesh.export import check_triangulation, check_weights, export_result, get_export_stats
 from .mesh.objects import visible_meshobj
 from .mesh.armatures import available_armatures, combine_armatures
+from .mesh.vertex_data import (
+    ACTIONS as VERTEX_DATA_ACTIONS,
+    action_name as vertex_data_action_name,
+    apply_vertex_data,
+    missing_data_label,
+)
+from .pose import pose_armature, show_action, toggle_rest_pose
 from .properties import get_settings
 from .xivpy.model import XIVModel
 from .backups import clear_backups, list_backups, restore_local, target_folder
@@ -216,11 +223,15 @@ class XIVIE_OT_simple_export(Operator):
         if not objects:
             self.report({"ERROR"}, "No visible mesh objects match Export Parts.")
             return {"CANCELLED"}
-        if settings.model_format == "MDL":
-            not_triangulated = check_triangulation(objects)
-            if not_triangulated:
-                self.report({"ERROR"}, "Not Triangulated: " + ", ".join(not_triangulated))
-                return {"CANCELLED"}
+        # The game only takes weighted triangles, whichever format carries them there.
+        not_triangulated = check_triangulation(objects)
+        if not_triangulated:
+            self.report({"ERROR"}, "Not Triangulated: " + ", ".join(not_triangulated))
+            return {"CANCELLED"}
+        unweighted = check_weights(objects)
+        if unweighted:
+            self.report({"ERROR"}, "No bone weights: " + ", ".join(unweighted))
+            return {"CANCELLED"}
 
         try:
             export_result(directory / name, settings.model_format, export_objects=objects)
@@ -1123,4 +1134,119 @@ class XIVIE_OT_mesh_material(Operator):
             for area in context.screen.areas:
                 area.tag_redraw()
         self.report({"INFO"}, f"Mesh group {self.mesh_group}: {path}")
+        return {"FINISHED"}
+
+
+def _selected_meshes(context: Context) -> list:
+    return [obj for obj in context.selected_objects if obj.type == "MESH"]
+
+
+class XIVIE_OT_vertex_data(Operator):
+    bl_idname = "xiv_ie.vertex_data"
+    bl_label = "Modify Vertex Data"
+    bl_description = "Change a vertex data channel of the selected meshes"
+    bl_options = {"REGISTER", "UNDO"}
+
+    action: EnumProperty(
+        name="Action",
+        items=[(identifier, name, description) for identifier, name, description in VERTEX_DATA_ACTIONS],
+        options={"SKIP_SAVE"},
+    )  # type: ignore
+
+    @classmethod
+    def description(cls, context, properties):
+        return next(
+            (f"{description}.\nApplies to the selected meshes"
+             for identifier, _name, description in VERTEX_DATA_ACTIONS if identifier == properties.action),
+            cls.bl_description,
+        )
+
+    @classmethod
+    def poll(cls, context: Context):
+        if context.mode != "OBJECT":
+            cls.poll_message_set("Switch to Object Mode to change vertex data")
+            return False
+        if not _selected_meshes(context):
+            cls.poll_message_set("Select the meshes to change")
+            return False
+        return True
+
+    def execute(self, context: Context):
+        try:
+            changed, untouched = apply_vertex_data(self.action, _selected_meshes(context))
+        except ValueError as error:
+            self.report({"ERROR"}, str(error))
+            return {"CANCELLED"}
+        name = vertex_data_action_name(self.action)
+        if not changed:
+            self.report({"WARNING"}, f"{name}: the selected meshes have {missing_data_label(self.action)}.")
+            return {"CANCELLED"}
+        message = f"{name}: {len(changed)} mesh{'es' if len(changed) != 1 else ''}"
+        if untouched:
+            names = ", ".join(obj.name for obj in untouched[:3]) + (", ..." if len(untouched) > 3 else "")
+            message += f"; {missing_data_label(self.action)} on {names}"
+        self.report({"INFO"}, message)
+        _redraw(context)
+        return {"FINISHED"}
+
+
+class XIVIE_OT_show_pose_action(Operator):
+    bl_idname = "xiv_ie.show_pose_action"
+    bl_label = "Show Action"
+    bl_description = "Pose the armature with this action; the timeline frame picks the pose"
+    bl_options = {"REGISTER", "UNDO"}
+
+    action: StringProperty(default="", options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
+
+    @classmethod
+    def description(cls, context, properties):
+        if not properties.action:
+            return "Take the action off the armature, leaving its current pose"
+        return cls.bl_description
+
+    @classmethod
+    def poll(cls, context: Context):
+        if pose_armature(context) is None:
+            cls.poll_message_set("There is no armature to pose")
+            return False
+        return True
+
+    def execute(self, context: Context):
+        armature = pose_armature(context)
+        action = bpy.data.actions.get(self.action) if self.action else None
+        if self.action and action is None:
+            self.report({"ERROR"}, f'The action "{self.action}" no longer exists.')
+            return {"CANCELLED"}
+        try:
+            show_action(context, armature, action)
+        except (AttributeError, RuntimeError, TypeError) as error:
+            self.report({"ERROR"}, f"Could not pose {armature.name}: {error}")
+            return {"CANCELLED"}
+        _redraw(context)
+        return {"FINISHED"}
+
+
+class XIVIE_OT_toggle_rest_pose(Operator):
+    bl_idname = "xiv_ie.toggle_rest_pose"
+    bl_label = "Toggle Rest Pose"
+    bl_description = "Switch the armature between its rest pose and its pose or action"
+    # Not UNDO: like a view toggle, it should not add a step in any mode.
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context: Context):
+        if pose_armature(context) is None:
+            cls.poll_message_set("There is no armature to pose")
+            return False
+        return True
+
+    def execute(self, context: Context):
+        armature = pose_armature(context)
+        try:
+            position = toggle_rest_pose(armature)
+        except (AttributeError, RuntimeError, TypeError) as error:
+            self.report({"ERROR"}, f"Could not switch {armature.name}: {error}")
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"{armature.name}: {'rest pose' if position == 'REST' else 'posed'}")
+        _redraw(context)
         return {"FINISHED"}

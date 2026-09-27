@@ -6,36 +6,11 @@ from numpy.typing    import NDArray
  
 from .accessors      import *
 from ..com.schema    import get_array_type
-from ..com.helpers   import vector_to_bytes, byte_sign
+from ..com.helpers   import vector_to_bytes, byte_sign, ZERO_FLOW_BYTES
 from ....xivpy.model import VertexDeclaration, VertexUsage, Mesh as XIVMesh
 
 
-def apply_mesh_options(streams: dict[int, NDArray], mesh_options: dict[str, bool]) -> None:
-    tex    = streams[1]
-    fields = tex.dtype.names
-
-    # The first two UV channels are packed together in "uv0".
-    if "uv0" in fields and tex["uv0"].shape[1] >= 4:
-        if mesh_options.get("copy_uv1_to_uv2", False):
-            tex["uv0"][:, 2:4] = tex["uv0"][:, 0:2]
-        if mesh_options.get("clear_uv2", False):
-            tex["uv0"][:, 2:4] = 0.0
-
-    if "colour0" in fields:
-        if mesh_options.get("clear_vertex_color1", False):
-            tex["colour0"][:] = 255
-        elif mesh_options.get("clear_vertex_alpha1", False):
-            tex["colour0"][:, 3] = 255
-
-    if "colour1" in fields and mesh_options.get("clear_vertex_color2", False):
-        tex["colour1"][:, :3] = 0
-        tex["colour1"][:, 3]  = 255
-
-    if "flow" in fields and mesh_options.get("clear_flow_data", False):
-        tex["flow"][:, :2] = 0
-        tex["flow"][:, 2:] = 255
-
-def get_submesh_streams(obj: Object, vert_decl: VertexDeclaration, mesh_flow: bool, mesh_options: dict[str, bool]=None) -> tuple[NDArray, dict[int, NDArray], dict[str, NDArray], NDArray]:
+def get_submesh_streams(obj: Object, vert_decl: VertexDeclaration, mesh_flow: bool) -> tuple[NDArray, dict[int, NDArray], dict[str, NDArray], NDArray]:
         loop_count = len(obj.data.loops)
         uv_count   = vert_decl.usage_count(VertexUsage.UV)
         col_count  = vert_decl.usage_count(VertexUsage.COLOUR)
@@ -82,9 +57,6 @@ def get_submesh_streams(obj: Object, vert_decl: VertexDeclaration, mesh_flow: bo
             elif uv_idx == 2:
                 streams[1]["uv1"] = uvs
 
-        if mesh_options:
-            apply_mesh_options(streams, mesh_options)
-
         return indices, streams, shapes, source_vertices
 
 def update_mesh_streams(mesh: XIVMesh, mesh_streams: dict[int, NDArray], mesh_geo: list[NDArray], mesh_tex: list[NDArray], stream_offset: int, bone_limit: int) -> int:
@@ -119,7 +91,7 @@ def create_stream_arrays(vert_count: int, vert_decl: VertexDeclaration) -> dict[
     for stream, array_type in array_types.items():
         vert_array = np.zeros(vert_count, array_type)
         if "flow" in vert_array.dtype.names:
-            vert_array["flow"][:, 2:] = 255
+            vert_array["flow"][:] = ZERO_FLOW_BYTES
         if "colour0" in vert_array.dtype.names:
             vert_array["colour0"][:]  = 255
         if "colour1" in vert_array.dtype.names:

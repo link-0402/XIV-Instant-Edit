@@ -27,13 +27,15 @@ public sealed partial class MainWindow
     private string AnimationArmature =>
         string.IsNullOrWhiteSpace(_config.AnimationArmatureName) ? "Skeleton" : _config.AnimationArmatureName.Trim();
 
-    private void DrawRecorderCard()
+    /// <summary> The Record live pose tab: records a character's live skeleton and sends it to Blender. </summary>
+    private void DrawRecorder()
     {
         var active = recorder;
-        if (active == null || !ImGui.CollapsingHeader("Record live pose", ImGuiTreeNodeFlags.DefaultOpen))
+        if (active == null)
             return;
         Widgets.HintWrapped($"Records a character's live skeleton, including the game's bone physics, Customize+ and LivePose, " +
                             $"and keys it onto \"{AnimationArmature}\" in Blender to test clothing against it.");
+        ImGui.Spacing();
         var progress = active.Progress;
         var sending = Volatile.Read(ref recorderSending) != 0;
         using (ImRaii.Disabled(progress != null || sending))
@@ -189,24 +191,6 @@ public sealed partial class MainWindow
         {
             throw new InvalidOperationException(e.Failure.UserMessage);
         }
-    }
-
-    /// <summary>The Blender section of a selected animation: send its file, as sampled on its own skeleton.</summary>
-    private void DrawSendToBlender(AnimationCapture capture)
-    {
-        if (!ImGui.CollapsingHeader("Blender", ImGuiTreeNodeFlags.DefaultOpen))
-            return;
-        var clip = animationStartupSelected && capture.Startup is { } startup ? startup : capture.Clip;
-        Widgets.HintWrapped($"Keys this animation onto \"{AnimationArmature}\" in Blender, sampled from its file at its own frame rate. " +
-                            "Physics bones keep their rest pose; record the live pose above to include the game's physics.");
-        var blocked = SkeletonBlock(clip);
-        using (ImRaii.Disabled(animations!.Busy || blocked != null))
-        {
-            if (ImGui.Button("Send animation to Blender"))
-                animations.SendToBlender(capture, animationStartupSelected, DeliverAnimationAsync);
-        }
-        if (blocked != null && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(blocked);
     }
 
     private void DrawAnimationExportOptions()

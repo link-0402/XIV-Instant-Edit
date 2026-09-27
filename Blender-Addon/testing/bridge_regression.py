@@ -107,7 +107,7 @@ def assert_manifest_status(server, addon_root):
 
 
 def assert_model_stream_options(package_name):
-    export_streams = importlib.import_module(f"{package_name}.io.model.exp.streams")
+    helpers = importlib.import_module(f"{package_name}.io.model.com.helpers")
     model_file = importlib.import_module(f"{package_name}.xivpy.model.file")
 
     material_model = model_file.XIVModel()
@@ -138,38 +138,20 @@ def assert_model_stream_options(package_name):
         else:
             raise AssertionError(f"unsupported MDL version 0x{version:08X} was accepted")
 
-    stream_dtype = np.dtype([
-        ("uv0", np.float32, (4,)),
-        ("colour0", np.uint8, (4,)),
-        ("colour1", np.uint8, (4,)),
-        ("flow", np.uint8, (4,)),
-    ])
-    texture_stream = np.zeros(2, dtype=stream_dtype)
-    texture_stream["uv0"][:, :2] = ((0.25, 0.75), (0.5, 0.125))
-    texture_stream["colour0"][:] = 12
-    texture_stream["colour1"][:] = 34
-    texture_stream["flow"][:] = 56
-    export_streams.apply_mesh_options({1: texture_stream}, {
-        "copy_uv1_to_uv2": True,
-        "clear_vertex_color1": True,
-        "clear_vertex_color2": True,
-        "clear_flow_data": True,
-    })
+    # Vanilla hair stores vertices without a flow as the zero vector (127, 127, 127);
+    # a flow colour at the centre is that vector's counterpart in Blender.
+    flow_bytes = np.array(
+        [[127, 127, 127, 255], [128, 128, 128, 0], [127, 254, 127, 255], [0, 0, 255, 255]], dtype=np.uint8)
     _require(
-        np.array_equal(texture_stream["uv0"][:, :2], texture_stream["uv0"][:, 2:4]),
-        "UV1 can be copied into UV2 during export",
+        helpers.zero_flow_bytes(flow_bytes).tolist() == [True, True, False, False],
+        "zero flow vectors are told apart from flow directions",
     )
-    _require(np.all(texture_stream["colour0"] == 255), "vertex color 1 can be cleared")
+    flow_colours = np.array([[0.5, 0.5], [0.55, 0.45], [1.0, 0.5], [0.5, 0.0]], dtype=np.float32)
     _require(
-        np.all(texture_stream["colour1"][:, :3] == 0) and np.all(texture_stream["colour1"][:, 3] == 255),
-        "vertex color 2 can be cleared",
+        helpers.zero_flow_colours(flow_colours).tolist() == [True, True, False, False],
+        "centre flow colours carry no direction",
     )
-    _require(
-        np.all(texture_stream["flow"][:, :2] == 0) and np.all(texture_stream["flow"][:, 2:] == 255),
-        "flow data can be reset to neutral",
-    )
-    export_streams.apply_mesh_options({1: texture_stream}, {"clear_uv2": True})
-    _require(np.all(texture_stream["uv0"][:, 2:4] == 0), "UV2 can be cleared during export")
+    _require(helpers.ZERO_FLOW_BYTES == (127, 127, 127, 255), "zero flow is written the way vanilla models store it")
 
 
 
@@ -345,6 +327,26 @@ def assert_material_previews(material_preview):
                         "colorSpace": "Non-Color",
                     }],
                 }, {
+                    "modelMaterial": "/mt_c0101f0001_etc_a.mtrl",
+                    "gamePath": "chara/human/c0101/obj/face/f0001/material/mt_c0101f0001_etc_a.mtrl",
+                    "shaderPackage": "hair.shpk",
+                    "materialFlags": 0x1D,
+                    "additionalData": "",
+                    "shaderKeys": [],
+                    "shaderConstants": [],
+                    "colorSet": None,
+                    "textures": [{
+                        "usage": "normal",
+                        "samplerId": 0x0C5EC1F1,
+                        "samplerFlags": 0,
+                        "gamePath": "chara/human/c0101/obj/face/f0001/texture/c0101f0001_etc_n.tex",
+                        "file": "normal.rgba",
+                        "width": 1,
+                        "height": 1,
+                        "uvSet": 0,
+                        "colorSpace": "Non-Color",
+                    }],
+                }, {
                     "modelMaterial": "/mt_sheer.mtrl",
                     "gamePath": "chara/equipment/e0001/material/v0001/mt_sheer.mtrl",
                     "shaderPackage": "character.shpk",
@@ -373,7 +375,7 @@ def assert_material_previews(material_preview):
                 str(model_path),
             )
             _require(
-                len(preview_package.materials) == 6,
+                len(preview_package.materials) == 7,
                 "a bounded synthetic material-preview manifest is accepted",
             )
             warning_count = len(preview_package.warnings)
@@ -556,6 +558,18 @@ def assert_material_previews(material_preview):
                 hair_material.surface_render_method == "DITHERED"
                 and not hair_material.use_backface_culling,
                 "translucent hair cards stay dithered",
+            )
+            lash_material = material_preview.create_preview_material(
+                "/mt_c0101f0001_etc_a.mtrl",
+                (0.8, 0.1, 0.8, 1.0),
+                preview_package,
+                "lash-context",
+            )
+            _require(
+                lash_material.surface_render_method == "BLENDED"
+                and not lash_material.use_transparency_overlap
+                and lash_material.use_backface_culling,
+                "hair.shpk lashes on a face blend instead of dithering",
             )
             preview_images = list(preview_package.created_images)
             _require(

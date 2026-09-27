@@ -23,7 +23,9 @@ public sealed partial class PenumbraService : ITextureEditBackend
         if (!IsSafeGameResourcePath(request.GamePath, ".tex")) throw new IOException("Select a valid TEX game resource.");
         var vanilla = string.IsNullOrEmpty(request.ModDirectory);
         var resolvedGamePath = vanilla ? NormalizeGamePath(request.ActualPath) : "";
-        var collection = request.ObjectIndex is { } index ? await GetCollectionTargetAsync(index).ConfigureAwait(false) : null;
+        var collection = (request.ObjectIndex ?? (vanilla ? request.CollectionObjectIndex : null)) is { } index
+            ? await GetCollectionTargetAsync(index).ConfigureAwait(false)
+            : null;
         var actor = await _framework.RunOnFrameworkThread(() =>
         {
             var obj = request.ObjectIndex is { } i ? _objects?[i] : null;

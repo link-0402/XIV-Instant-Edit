@@ -5,6 +5,15 @@ internal static class PainterRules
 {
     public static readonly HashSet<string> OfferedUsages = new(StringComparer.Ordinal) { "diffuse", "normal", "mask", "specular", "index" };
 
+    /// <summary>
+    /// Why a material's meshes stay out of Painter; empty when they go in. Eye occlusion is a shading
+    /// pass the game draws over the eyes: Painter would show it as an opaque card that hides them.
+    /// </summary>
+    public static string SkippedShaderReason(string shaderPackage)
+        => shaderPackage.Equals("characterocclusion.shpk", StringComparison.OrdinalIgnoreCase)
+            ? "Eye occlusion shading; Painter can't show it, so it stays out of the project."
+            : "";
+
     /// <summary> Why a planned texture can't be sent back; empty when it can. </summary>
     public static string EditReason(TexturePlanTexture texture)
     {

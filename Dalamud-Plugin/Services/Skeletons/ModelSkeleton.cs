@@ -93,6 +93,68 @@ internal static partial class ModelSkeletonPaths
         };
         return $"chara/human/{race}/skeleton/{folder}/{letter}{skeleton:D4}/skl_{race}{letter}{skeleton:D4}.sklb";
     }
+
+    /// <summary>
+    /// The skeleton files the game loads for a model: its base skeleton, then the extra skeleton
+    /// <paramref name="estEntry"/> names (the entry of the model's EST lookup, 0 for none).
+    /// </summary>
+    public static SkeletonFileSet Files(ModelSkeletonKey key, ushort estEntry)
+    {
+        var files = ImmutableArray.CreateBuilder<string>();
+        files.Add(BasePath(key));
+        var warnings = ImmutableArray.CreateBuilder<string>();
+        var extra = Extra(key);
+        if (extra != null && estEntry > 0)
+        {
+            files.Add(PartialPath(key.Id, extra.Slot, estEntry));
+            if (extra.Note != null) warnings.Add(extra.Note);
+        }
+        else if (extra is { Slot: EstSlot.Face or EstSlot.Hair })
+        {
+            warnings.Add($"The game names no {extra.Slot.ToString().ToLowerInvariant()} skeleton for {key.Id} set {extra.Set}.");
+        }
+        return new SkeletonFileSet(files.ToImmutable(), extra, extra != null ? estEntry : (ushort)0, warnings.ToImmutable());
+    }
+}
+
+/// <summary>
+/// The skeleton files the game loads for a model, the EST lookup that picks its extra skeleton when
+/// its kind has one, and that lookup's entry (0 for none).
+/// </summary>
+internal sealed record SkeletonFileSet(ImmutableArray<string> Files, EstRequest? Extra, ushort Entry,
+    ImmutableArray<string> Warnings);
+
+/// <summary>
+/// The skeleton files the game loads for vanilla models, from its own EST tables: what a model uses
+/// without skeleton mods. Each table is read once.
+/// </summary>
+internal sealed class VanillaSkeletonFiles(Func<string, byte[]?> read)
+{
+    private readonly Dictionary<EstSlot, EstTable?> tables = [];
+
+    /// <summary>The skeleton files of the model at a game path or file name; null for other models.</summary>
+    public SkeletonFileSet? For(string modelPath)
+    {
+        var key = ModelSkeletonPaths.Parse(modelPath);
+        if (key == null) return null;
+        var extra = ModelSkeletonPaths.Extra(key);
+        var entry = extra != null && Table(extra.Slot) is { } table ? table[key.GenderRace, extra.Set] : (ushort)0;
+        return ModelSkeletonPaths.Files(key, entry);
+    }
+
+    private EstTable? Table(EstSlot slot)
+    {
+        lock (tables)
+            if (tables.TryGetValue(slot, out var cached)) return cached;
+        EstTable? table = null;
+        if (read(EstTable.GamePath(slot)) is { } bytes)
+        {
+            try { table = EstTable.Parse(bytes); }
+            catch (InvalidDataException) { }
+        }
+        lock (tables) tables[slot] = table;
+        return table;
+    }
 }
 
 /// <summary>

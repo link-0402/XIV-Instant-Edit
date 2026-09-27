@@ -24,6 +24,11 @@ internal static class PainterScenarios
         NormalSeedRebuildsZ();
         RulesExplainUneditableTextures();
         JobStoreRoundTrips(Path.Combine(testRoot, "PainterJobs"));
+        NonSquareTexturesGetSquareSets(Path.Combine(testRoot, "PainterExports"));
+        BackFaceCopiesAreDropped();
+        VisibilityFollowsAttributes();
+        DisplayFollowsMaterialFlags();
+        PreviewsColorHairAndColorsets();
         PluginShipsWithTheAssembly();
     }
 
@@ -474,7 +479,8 @@ internal static class PainterScenarios
                 new PainterTarget
                 {
                     Key = "top_base", TextureSet = "mt_top", GamePath = "chara/a.tex", SessionId = session, Width = 1024, Height = 1024,
-                    Protect = true, Coverage = [new PainterCoverageModel("chara/a.mdl", true, [0, 2])],
+                    ExportWidth = 2048, ExportHeight = 1024,
+                    Protect = true, Coverage = [new PainterCoverageModel("chara/a.mdl", true, [0, 2], [0b101])],
                 },
             ],
         };
@@ -485,6 +491,22 @@ internal static class PainterScenarios
         var copy = reloaded.Find(job.Id);
         Require(copy is not null && copy.Targets[0].BaselineHash == "ABC" && copy.Targets[0].Coverage[0].Meshes.SequenceEqual([0, 2]) &&
                 copy.Targets[0].Coverage[0].Vanilla, "jobs survive a reload with their targets and coverage");
+        Require(copy!.Targets[0].ExportWidth == 2048 && copy.Targets[0].Coverage[0].AttributeMasks!.SequenceEqual([0b101u]) &&
+                !copy.Targets[0].Coverage[0].Draws(new ModelSubmesh(0, [], 0b010)) && copy.Targets[0].Coverage[0].Draws(new ModelSubmesh(0, [], 0b100)),
+            "export sizes and the character's attribute masks survive a reload");
+
+        // Projects written before square sets and attribute masks load with neither.
+        var legacy = Path.Combine(root, "legacy");
+        Directory.CreateDirectory(legacy);
+        File.WriteAllText(Path.Combine(legacy, "PainterJobs.json"), $$"""
+            {"schema":"instant-edit.painter-jobs","version":1,"jobs":[{"Id":"{{Guid.NewGuid()}}","Capability":"c","Targets":[{"Key":"k","Width":512,"Height":512,
+             "Protect":true,"Coverage":[{"Source":"chara/b.mdl","Vanilla":true,"Meshes":[1]}]}]}]}
+            """);
+        var old = new PainterJobStore(legacy);
+        old.Load();
+        var oldTarget = old.Jobs.Single().Targets[0];
+        Require(old.LoadError.Length == 0 && oldTarget.ExportWidth == 0 && oldTarget.Coverage[0].AttributeMasks is null &&
+                oldTarget.Coverage[0].Draws(new ModelSubmesh(0, [], 0b1)), "older projects load, uncropped and with every part drawn");
         Require(reloaded.Authorize(job.Id.ToString("N"), job.Capability) is not null, "the job's capability authorizes it");
         Require(reloaded.Authorize(job.Id.ToString("N"), job.Capability + "x") is null && reloaded.Authorize(Guid.NewGuid().ToString("N"), job.Capability) is null &&
                 reloaded.Authorize("not-a-guid", job.Capability) is null, "a wrong capability or job id is refused");
@@ -495,5 +517,122 @@ internal static class PainterScenarios
         broken.Load();
         Require(broken.LoadError.Length > 0, "a damaged job file is reported");
         Reject(() => broken.Save(job), "a damaged job file is not overwritten");
+    }
+
+    // ---- What Painter shows ---------------------------------------------------------------------
+
+    private static void NonSquareTexturesGetSquareSets(string root)
+    {
+        var tall = PainterChannelMap.Layout(new PainterTextureSetInput("face", "skin.shpk",
+        [
+            new PainterTextureInput("face_d", "diffuse", Bc7, 1024, 2048, "a"),
+            new PainterTextureInput("face_m", "mask", Bc7, 512, 1024, "b"),
+        ]));
+        Require(tall.Width == 1024 && tall.Height == 2048 && tall.Size == 2048 && tall.ScaleU == 2 && tall.ScaleV == 1,
+            "a 1:2 texture gets a square set twice its width, which it fills across half");
+        var maps = PainterChannelMap.ExportConfig([tall])["exportPresets"]!.AsArray().Select(p => p!["maps"]![0]!).ToList();
+        int[] SizeOf(string key) => maps.Single(m => m["fileName"]!.GetValue<string>() == key)["parameters"]!["sizeLog2"]!.AsArray()
+            .Select(v => v!.GetValue<int>()).ToArray();
+        Require(SizeOf("face_d").SequenceEqual([11, 11]) && SizeOf("face_m").SequenceEqual([10, 10]),
+            "each texture exports the whole square set at the size whose top-left corner is the texture");
+        var wide = PainterChannelMap.Layout(new PainterTextureSetInput("wide", "character.shpk",
+            [new PainterTextureInput("w", "diffuse", Bc7, 2048, 512, "a")]));
+        Require(wide.Size == 2048 && wide.ScaleU == 1 && wide.ScaleV == 4, "a 4:1 texture fills a quarter of its set's height");
+
+        var mesh = ModelMeshReader.Read(SyntheticModel());
+        var groups = mesh.Meshes.SelectMany(part => part.Submeshes.Select(submesh =>
+            new ObjGroup("g", part, submesh, part.MaterialIndex == 0 ? "tall" : "wide"))).ToList();
+        var writer = new StringWriter();
+        ObjWriter.Write(writer, "m.mtl", groups, new Dictionary<string, (int, int)> { ["tall"] = (2, 1), ["wide"] = (1, 4) });
+        var lines = writer.ToString().Split('\n').Select(line => line.TrimEnd('\r')).ToList();
+        Require(lines.Contains("vt 0.125 0.25") && lines.Contains("vt 0.375 0.75"), "U shrinks into the set's left part");
+        Require(lines.Contains("vt 0 1") && lines.Contains("vt 0.1 0.95") && lines.Contains("vt 0.2 0.9"),
+            "V shrinks into the set's top part, measured from OBJ's top");
+
+        var export = new RgbaImage(4, 2);
+        for (var i = 0; i < export.Pixels.Length; i++)
+            export.Pixels[i] = (byte)i;
+        var corner = export.Crop(2, 2);
+        Require(corner.Width == 2 && corner.Pixels.Take(8).SequenceEqual(export.Pixels.Take(8)) && corner.Pixels.Skip(8).SequenceEqual(export.Pixels.Skip(16).Take(8)),
+            "cropping keeps the top-left corner row by row");
+        Directory.CreateDirectory(root);
+        var file = Path.Combine(root, "k.tga");
+        File.WriteAllBytes(file, TgaImage.WriteBgra32(export));
+        var job = new PainterJob { Targets = [new PainterTarget { Key = "k", Width = 2, Height = 2, ExportWidth = 4, ExportHeight = 2 }] };
+        Require(PainterJobService.ReadExport(job, "k", file).PixelHash() == corner.PixelHash(), "a square set's export is cropped to its texture");
+        var older = new PainterJob { Targets = [new PainterTarget { Key = "k", Width = 4, Height = 2 }] };
+        Require(PainterJobService.ReadExport(older, "k", file).Width == 4, "older projects' exports are taken whole");
+        var wrong = new PainterJob { Targets = [new PainterTarget { Key = "k", Width = 2, Height = 2, ExportWidth = 8, ExportHeight = 4 }] };
+        Reject(() => PainterJobService.ReadExport(wrong, "k", file), "an export of another size is refused rather than cropped wrongly");
+    }
+
+    private static void BackFaceCopiesAreDropped()
+    {
+        var positions = new[] { new Vector3(0, 0, 0), new Vector3(1, 0, 0), new Vector3(0, 1, 0), new Vector3(0, 0, 0), new Vector3(1, 0, 0), new Vector3(0, 1, 0), new Vector3(5, 5, 5) };
+        var part = new ModelMeshPart(0, 0, positions, new Vector3[positions.Length], new Vector2[positions.Length],
+        [
+            // A card, its reversed back copy on separate vertices, the card again, and an unrelated triangle.
+            new ModelSubmesh(0, [0, 1, 2, 3, 5, 4, 1, 2, 0, 0, 1, 6], 0),
+        ]);
+        var other = new ModelMeshPart(1, 1, positions, new Vector3[positions.Length], new Vector2[positions.Length], [new ModelSubmesh(0, [3, 5, 4], 0)]);
+        var twoSided = new HashSet<string>();
+        var result = ObjWriter.WithoutBackFaceCopies(
+            [new ObjGroup("a", part, part.Submeshes[0], "cards"), new ObjGroup("b", other, other.Submeshes[0], "other")], twoSided);
+        Require(result[0].Submesh.Indices.SequenceEqual([0, 1, 2, 0, 1, 6]), "reversed copies and repeats of a triangle are dropped");
+        Require(result[1].Submesh.Indices.SequenceEqual([3, 5, 4]), "another material's triangles are compared separately");
+        Require(twoSided.SetEquals(["cards"]), "a material that lost back copies is drawn double-sided");
+        var untouched = ObjWriter.WithoutBackFaceCopies([new ObjGroup("b", other, other.Submeshes[0], "other")], twoSided);
+        Require(ReferenceEquals(untouched[0].Submesh, other.Submeshes[0]), "groups without copies are kept as they are");
+    }
+
+    private static void VisibilityFollowsAttributes()
+    {
+        Require(PainterVisibility.Draws(null, new ModelSubmesh(0, [], 0b11)) && PainterVisibility.Draws([], new ModelSubmesh(0, [], 0b11)),
+            "with nothing known, every part is drawn");
+        Require(PainterVisibility.Draws([0b000], new ModelSubmesh(0, [], 0)), "parts without attributes are always drawn");
+        Require(PainterVisibility.Draws([0b011], new ModelSubmesh(0, [], 0b011)) && !PainterVisibility.Draws([0b001], new ModelSubmesh(0, [], 0b011)),
+            "a part is drawn only while all of its attributes are enabled");
+        Require(PainterVisibility.Draws([0b001, 0b010], new ModelSubmesh(0, [], 0b010)), "a part drawn by any loaded copy of the model counts");
+        Require(PainterVisibility.NormalizePath(@"|1_2_3|G:\Penumbra\My Mod\A.mdl") == "g:/penumbra/my mod/a.mdl" &&
+                PainterVisibility.NormalizePath("chara/x.mdl") == "chara/x.mdl", "Penumbra's path prefix and separators are normalized");
+        var live = new PainterLiveCharacter([new PainterLiveModel("g:/penumbra/my mod/a.mdl", 0b1), new PainterLiveModel("chara/v.mdl", 0b10),
+            new PainterLiveModel("g:/penumbra/my mod/a.mdl", 0b100)], null);
+        Require(live.MasksFor(new PainterModelRef("chara/a.mdl", @"G:\Penumbra\My Mod\A.mdl", false)).SequenceEqual([0b1u, 0b100u]) &&
+                live.MasksFor(new PainterModelRef("chara/v.mdl", "chara/v.mdl", true)).SequenceEqual([0b10u]) &&
+                live.MasksFor(new PainterModelRef("chara/w.mdl", "chara/w.mdl", true)).Count == 0,
+            "loaded models match by their file, or by game path for vanilla ones");
+    }
+
+    private static void DisplayFollowsMaterialFlags()
+    {
+        Require(PainterDisplay.For(0x1D, 1f, true, false) == new PainterDisplay("blend", 0.5f, false), "translucent materials blend by opacity");
+        Require(PainterDisplay.For(0x1D, 1f, true, true).DoubleSided, "a material whose back copies were dropped shows both sides");
+        Require(PainterDisplay.For(0x0D, 0.5f, true, false) == new PainterDisplay("test", 0.5f, false), "the others cut off below the alpha threshold");
+        Require(PainterDisplay.For(0x0C, 0.25f, true, false) == new PainterDisplay("test", 0.25f, true), "without the hide flag back faces show");
+        Require(PainterDisplay.For(0x0D, 0f, true, false) == PainterDisplay.Default && PainterDisplay.For(0x0D, null, true, false) == PainterDisplay.Default,
+            "a threshold of 0 draws opaque");
+        Require(PainterDisplay.For(0x1D, 1f, false, false) == PainterDisplay.Default, "sets without an opacity channel draw opaque");
+        Require(PainterDisplay.For(null, 0.5f, true, false) == PainterDisplay.Default, "unknown flags draw opaque and single-sided");
+    }
+
+    private static void PreviewsColorHairAndColorsets()
+    {
+        var colors = new PainterCharacterColors(new Vector3(1, 0, 0), new Vector3(0, 0, 1));
+        var hair = PainterPreviews.Hair(new RgbaImage(2, 1, [128, 128, 0, 255, 128, 128, 255, 0]), colors);
+        Require(hair.Pixels.SequenceEqual(new byte[] { 255, 0, 0, 255, 0, 0, 255, 255 }), "hair color blends to the highlight color by normal blue");
+
+        var values = new float[32 * 32];
+        void Row(int row, float r, float g, float b) { values[row * 32] = r; values[row * 32 + 1] = g; values[row * 32 + 2] = b; }
+        Row(0, 1, 0, 0);
+        Row(1, 0, 1, 0);
+        Row(2, 0, 0, 1);
+        Row(3, 0.214f, 0.214f, 0.214f);
+        var index = new RgbaImage(3, 1, [0, 255, 0, 255, 0, 0, 0, 255, 17, 255, 0, 255]);
+        var preview = PainterPreviews.ColorSet(index, new TexturePlanColorSet(32, values));
+        Require(preview.Pixels.Take(4).SequenceEqual(new byte[] { 255, 0, 0, 255 }) && preview.Pixels.Skip(4).Take(4).SequenceEqual(new byte[] { 0, 255, 0, 255 }),
+            "index red picks a row pair and inverted index green blends toward its second row");
+        Require(preview.Pixels[8] == 0 && preview.Pixels[10] == 255, "index red 17 picks the second pair");
+        Require(Math.Abs(PainterPreviews.ColorSet(new RgbaImage(1, 1, [17, 0, 0, 255]), new TexturePlanColorSet(32, values)).Pixels[0] - 128) <= 1,
+            "colorset colors are linear and preview in sRGB");
     }
 }

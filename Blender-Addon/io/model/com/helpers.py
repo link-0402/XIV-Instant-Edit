@@ -25,6 +25,20 @@ def quantise_flow(flow_vectors: NDArray) -> NDArray:
 
     return np.c_[np.cos(quantised), np.sin(quantised)]
 
+# Vanilla models store a vertex without a flow direction as the zero vector.
+ZERO_FLOW_BYTES = (127, 127, 127, 255)
+# The flow colour of such a vertex: the centre, which is no direction.
+ZERO_FLOW_COLOUR = (0.5, 0.5)
+
+def zero_flow_bytes(flow_bytes: NDArray) -> NDArray:
+    """Mask of MDL flow values that are (close to) the zero vector."""
+    vectors = flow_bytes[:, :3].astype(single) / (255.0 * 0.5) - 1
+    return np.linalg.norm(vectors, axis=1) < 0.1
+
+def zero_flow_colours(flow_colours: NDArray) -> NDArray:
+    """Mask of flow colours near the centre, which carry no direction."""
+    return np.linalg.norm(flow_colours[:, :2] * 2 - 1, axis=1) < 0.25
+
 def calc_tangents_with_bitangent(normals: NDArray, bitangents: NDArray, signs: NDArray):
     raw_tangents = np.cross(normals, bitangents)
     tangents     = raw_tangents * signs[:, np.newaxis]

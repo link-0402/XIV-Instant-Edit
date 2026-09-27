@@ -13,6 +13,34 @@ internal enum ResourceKinds : byte
     Editable = Model | Texture | Material | Animation,
 }
 
+/// <summary> The kinds a resource browser lists, and the chips that filter them. </summary>
+internal sealed class ResourceKindChipSet
+{
+    private ResourceKindChipSet(ResourceKinds listed, params (ResourceKinds Kind, string Label)[] chips)
+    {
+        Listed = listed;
+        Chips = chips;
+        Counts = [listed, .. chips.Select(chip => chip.Kind)];
+    }
+
+    /// <summary> On Screen: models, textures and materials. Animations your character plays have their own tab. </summary>
+    public static ResourceKindChipSet OnScreen { get; } = new(ResourceKinds.Model | ResourceKinds.Texture | ResourceKinds.Material,
+        (ResourceKinds.Model, "Models"), (ResourceKinds.Texture, "Textures"), (ResourceKinds.Material, "Materials"));
+
+    /// <summary> The Mod Browser also lists a mod's animation files, which can be sent to Blender. </summary>
+    public static ResourceKindChipSet ModBrowser { get; } = new(ResourceKinds.Editable,
+        (ResourceKinds.Model, "Models"), (ResourceKinds.Texture, "Textures"), (ResourceKinds.Material, "Materials"),
+        (ResourceKinds.Animation, "Animations"));
+
+    /// <summary> Every kind the browser lists: what its "All" chip shows. </summary>
+    public ResourceKinds Listed { get; }
+
+    public IReadOnlyList<(ResourceKinds Kind, string Label)> Chips { get; }
+
+    /// <summary> What each chip counts; index 0 is the "All" chip, which counts every listed row. </summary>
+    public IReadOnlyList<ResourceKinds> Counts { get; }
+}
+
 /// <summary> What a texture is used for; the browser colours texture rows by it. </summary>
 internal enum TextureRole : byte
 {

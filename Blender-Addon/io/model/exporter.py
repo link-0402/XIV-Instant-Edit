@@ -73,7 +73,6 @@ class ModelExport:
                                 active_lod, 
                                 face_data, 
                                 sorted_meshes,
-                                mesh_options=self.model_flags,
                                 logger=self.logger
                             )
             

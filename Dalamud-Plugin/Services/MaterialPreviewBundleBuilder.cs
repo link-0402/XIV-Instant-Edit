@@ -831,20 +831,9 @@ public sealed partial class MaterialPreviewBundleBuilder
         };
     }
 
+    // The game's own place for the material, with gear in its first material variant.
     private static string DeriveMaterialPath(string mdlPath, string materialName)
-    {
-        mdlPath = NormaliseGamePath(mdlPath);
-        materialName = "/" + FileName(materialName);
-        var skin = System.Text.RegularExpressions.Regex.Match(materialName, @"^/mt_c(?<race>\d{4})b(?<body>\d{4})_.+\.mtrl$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        if (skin.Success)
-            return $"chara/human/c{skin.Groups["race"].Value}/obj/body/b{skin.Groups["body"].Value}/material/v0001{materialName}";
-
-        var modelDirectory = mdlPath[..Math.Max(0, mdlPath.LastIndexOf('/'))];
-        var baseDirectory = modelDirectory[..Math.Max(0, modelDirectory.LastIndexOf('/'))];
-        if (mdlPath.Contains("/face/f", StringComparison.OrdinalIgnoreCase) || mdlPath.Contains("/zear/z", StringComparison.OrdinalIgnoreCase))
-            return $"{baseDirectory}/material{materialName}";
-        return $"{baseDirectory}/material/v0001{materialName}";
-    }
+        => GameFiles.VanillaMaterialPaths.Resolve(mdlPath, materialName) ?? string.Empty;
 
     /// <param name="Flags">
     /// Shader-header material flags: 0x01 hides backfaces and 0x10 enables
@@ -946,24 +935,55 @@ public sealed partial class MaterialPreviewBundleBuilder
     {
         try
         {
-            var mtrl = LooseLuminaFile.Load<MtrlFile>(materialBytes);
-            var usages = Enumerable.Repeat("other", mtrl.TextureOffsets.Length).ToArray();
-            var metadata = ReadMaterialMetadata(materialBytes, mtrl);
-
-            foreach (var sampler in metadata.Samplers)
-            {
-                if (sampler.TextureIndex == byte.MaxValue || sampler.TextureIndex >= usages.Length)
-                    continue;
-                var usage = TextureUsage(sampler.SamplerId);
-                if (usages[sampler.TextureIndex] == "other" || usage != "other")
-                    usages[sampler.TextureIndex] = usage;
-            }
-            return usages;
+            return TextureUsages(materialBytes, LooseLuminaFile.Load<MtrlFile>(materialBytes));
         }
         catch
         {
             return Array.Empty<string>();
         }
+    }
+
+    private static string[] TextureUsages(byte[] materialBytes, MtrlFile mtrl)
+    {
+        var usages = Enumerable.Repeat("other", mtrl.TextureOffsets.Length).ToArray();
+        var metadata = ReadMaterialMetadata(materialBytes, mtrl);
+
+        foreach (var sampler in metadata.Samplers)
+        {
+            if (sampler.TextureIndex == byte.MaxValue || sampler.TextureIndex >= usages.Length)
+                continue;
+            var usage = TextureUsage(sampler.SamplerId);
+            if (usages[sampler.TextureIndex] == "other" || usage != "other")
+                usages[sampler.TextureIndex] = usage;
+        }
+        return usages;
+    }
+
+    /// <summary>
+    /// A texture a material lists: the path it stores, the file the game loads for it (the DX11
+    /// <c>--</c> file when the entry's flag says so) and the usage of the sampler that reads it,
+    /// "other" when none does or the shader section can't be read.
+    /// </summary>
+    internal sealed record MaterialTextureReference(string StoredPath, string Dx11Path, string Usage);
+
+    /// <summary>The textures a material lists, in its texture-table order, leaving out unsafe paths.</summary>
+    internal static IReadOnlyList<MaterialTextureReference> ReadMaterialTextures(byte[] materialBytes)
+    {
+        var mtrl = LooseLuminaFile.Load<MtrlFile>(materialBytes);
+        string[] usages;
+        try { usages = TextureUsages(materialBytes, mtrl); }
+        catch { usages = []; }
+        var textures = new List<MaterialTextureReference>(mtrl.TextureOffsets.Length);
+        for (var index = 0; index < mtrl.TextureOffsets.Length && index < MaxTextures; index++)
+        {
+            var offset = mtrl.TextureOffsets[index];
+            var stored = NormaliseGamePath(ReadString(mtrl.Strings, offset.Offset));
+            if (!IsSafeGameResourcePath(stored, ".tex"))
+                continue;
+            textures.Add(new MaterialTextureReference(stored, Dx11TexturePath(stored, offset.Flags),
+                index < usages.Length ? usages[index] : "other"));
+        }
+        return textures;
     }
 
     private static int DataSetOffset(MtrlFile mtrl)

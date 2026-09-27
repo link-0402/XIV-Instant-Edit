@@ -32,30 +32,6 @@ MODEL_FLAG_DEFAULTS = {
 }
 
 
-def _uv2_mode_get(self) -> int:
-    # Clear wins over Copy in the exporter, so it wins here too.
-    if self.clear_uv2:
-        return 2
-    return 1 if self.copy_uv1_to_uv2 else 0
-
-
-def _uv2_mode_set(self, value: int) -> None:
-    self.copy_uv1_to_uv2 = value == 1
-    self.clear_uv2 = value == 2
-
-
-def _vertex_color1_mode_get(self) -> int:
-    # Clearing the whole color also clears its alpha in the exporter.
-    if self.clear_vertex_color1:
-        return 2
-    return 1 if self.clear_vertex_alpha1 else 0
-
-
-def _vertex_color1_mode_set(self, value: int) -> None:
-    self.clear_vertex_alpha1 = value == 1
-    self.clear_vertex_color1 = value == 2
-
-
 def _import_armature_get(self) -> int:
     return 1 if self.simple_import_use_existing_skeleton else 0
 
@@ -71,6 +47,14 @@ class XIVIEExportSettings(PropertyGroup):
         default=False,
     )  # type: ignore
 
+    simple_io_tab: EnumProperty(
+        name="Simple Export / Import",
+        items=[
+            ("IMPORT", "Import", "Import an MDL, FBX or glTF file"),
+            ("EXPORT", "Export", "Export mesh objects to a model file"),
+        ],
+        default="EXPORT",
+    )  # type: ignore
     export_directory: StringProperty(name="Export Folder", subtype="DIR_PATH", default="")  # type: ignore
     export_name: StringProperty(name="File Name", default="model", maxlen=255)  # type: ignore
     model_format: EnumProperty(
@@ -94,22 +78,22 @@ class XIVIEExportSettings(PropertyGroup):
         set=_import_armature_set,
     )  # type: ignore
     simple_import_set_export_directory: BoolProperty(
-        name="Use Import Folder",
+        name="Use Import Folder for Simple Export",
         description=(
-            "After a successful import, use the imported file's folder as the File Export folder. "
+            "After a successful import, use the imported file's folder as the Simple Export folder. "
             "Model imports from the plugin use the mod's model folder"
         ),
         default=True,
     )  # type: ignore
     resolve_mesh_group_conflicts: BoolProperty(
-        name="Offset Clashing IDs",
+        name="Offset Clashing Mesh IDs",
         description="Offset incoming mesh group IDs when they conflict with existing visible groups",
         default=True,
     )  # type: ignore
     simple_import_skeleton: PointerProperty(
         type=Object,
         name="Skeleton Object",
-        description="Existing Blender armature to use for File Import",
+        description="Existing Blender armature to use for Simple Import",
         poll=lambda _self, obj: obj.type == "ARMATURE",
     )  # type: ignore
     keep_shapekeys: BoolProperty(
@@ -117,22 +101,9 @@ class XIVIEExportSettings(PropertyGroup):
         description="Export the meshes' shape keys as FFXIV shapes",
         default=False,
     )  # type: ignore
-    check_tris: BoolProperty(
-        name="Check Triangulation",
-        description=(
-            "Treat FBX and glTF exports as triangulated so Create Backfaces can run. "
-            "MDL exports always require triangulated meshes"
-        ),
-        default=True,
-    )  # type: ignore
-    create_backfaces: BoolProperty(
-        name="Create Backfaces",
-        description="Duplicate and flip the faces in a BACKFACES vertex group so they render from both sides",
-        default=False,
-    )  # type: ignore
     reset_scaling_on_export: BoolProperty(
-        name="Reset Scaling on Export",
-        description="Temporarily reset armature scaling, positioning and rotation to default values for export.",
+        name="Reset Armature Scaling",
+        description="Temporarily reset armature scaling, positioning and rotation to default values for export",
         default=False,
     )  # type: ignore
     calculate_heels_offset: BoolProperty(
@@ -144,63 +115,20 @@ class XIVIEExportSettings(PropertyGroup):
         ),
         default=False,
     )  # type: ignore
-    remove_yas: EnumProperty(
-        name="YAS Groups",
-        items=[("KEEP", "Keep", "Keep all groups"), ("NO_GEN", "Remove Genitalia", "Remove genital groups"), ("REMOVE", "Remove All", "Remove iv_/ya_ groups")],
-        default="KEEP",
-    )  # type: ignore
     use_lods: BoolProperty(
         name="Internal export option",
         default=False,
         options={"HIDDEN"},
     )  # type: ignore
-
-    clear_uv2: BoolProperty(name="Clear UV2", default=False)  # type: ignore
-    copy_uv1_to_uv2: BoolProperty(name="Copy UV1 to UV2", default=False)  # type: ignore
-    clear_vertex_color1: BoolProperty(name="Clear Vertex Color 1", default=False)  # type: ignore
-    clear_vertex_alpha1: BoolProperty(name="Clear Vertex Alpha 1", default=False)  # type: ignore
-    clear_vertex_color2: BoolProperty(
-        name="Clear Vertex Color 2",
-        description="Reset vertex color 2 to black with full alpha",
-        default=False,
+    pose_armature: PointerProperty(
+        type=Object,
+        name="Armature",
+        description=(
+            "Armature the Pose section shows. Leave empty to use the active object's armature, "
+            "or else the armature of the selected Context"
+        ),
+        poll=lambda _self, obj: obj.type == "ARMATURE",
     )  # type: ignore
-    clear_flow_data: BoolProperty(
-        name="Clear Flow Data",
-        description="Clear the flow data channel",
-        default=False,
-    )  # type: ignore
-    # The exporter treats these boolean pairs as one choice each (a clear
-    # overrides the other flag), so the panel edits them through these views.
-    uv2_mode: EnumProperty(
-        name="UV2",
-        items=[
-            ("KEEP", "Keep", "Export UV2 as it is", 0),
-            ("COPY_UV1", "Copy UV1", "Replace UV2 with a copy of UV1", 1),
-            ("CLEAR", "Clear", "Set every UV2 coordinate to zero", 2),
-        ],
-        get=_uv2_mode_get,
-        set=_uv2_mode_set,
-    )  # type: ignore
-    vertex_color1_mode: EnumProperty(
-        name="Vertex Color 1",
-        items=[
-            ("KEEP", "Keep", "Export vertex color 1 as it is", 0),
-            ("CLEAR_ALPHA", "Clear Alpha", "Set the alpha of vertex color 1 to opaque", 1),
-            ("CLEAR", "Clear", "Reset vertex color 1 to opaque white", 2),
-        ],
-        get=_vertex_color1_mode_get,
-        set=_vertex_color1_mode_set,
-    )  # type: ignore
-
-    def get_mesh_options(self) -> dict[str, bool]:
-        return {
-            "clear_uv2": self.clear_uv2,
-            "copy_uv1_to_uv2": self.copy_uv1_to_uv2,
-            "clear_vertex_color1": self.clear_vertex_color1,
-            "clear_vertex_alpha1": self.clear_vertex_alpha1,
-            "clear_vertex_color2": self.clear_vertex_color2,
-            "clear_flow_data": self.clear_flow_data,
-        }
 
     def get_model_flags(self) -> dict[str, bool]:
         return dict(MODEL_FLAG_DEFAULTS)

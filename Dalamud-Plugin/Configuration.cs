@@ -20,6 +20,9 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary> Port this plugin listens on for export results coming from Blender. </summary>
     public int ListenPort { get; set; } = 42428;
 
+    /// <summary> blender.exe paths the user added to setup's Blender list because they weren't found on their own. </summary>
+    public List<string> BlenderExecutables { get; set; } = [];
+
     public string TextureEditorPath { get; set; } = "";
 
     /// <summary> Show the Substance Painter action in On Screen, its status dot and its Sessions cards. </summary>
@@ -91,6 +94,24 @@ public sealed class Configuration : IPluginConfiguration
 
     /// <summary>Render a small shaded thumbnail of Dawntrail models in the hover card.</summary>
     public bool RenderModelThumbnails { get; set; } = true;
+
+    /// <summary>The folder Game Files exports last went to.</summary>
+    public string GameExportDirectory { get; set; } = "";
+
+    /// <summary>Game Files exports write each model's materials, and gear's IMC files.</summary>
+    public bool GameExportMaterials { get; set; } = true;
+
+    /// <summary>Game Files exports write the textures the materials use.</summary>
+    public bool GameExportTextures { get; set; }
+
+    /// <summary>Game Files exports write the materials of every gear and weapon variant, not just the default one.</summary>
+    public bool GameExportAllVariants { get; set; }
+
+    /// <summary>Game Files exports write each model's skeleton files and the EST tables that pick them.</summary>
+    public bool GameExportSkeletonFiles { get; set; } = true;
+
+    /// <summary>Game Files exports write each skeleton file set decoded, as Instant Edit's skeleton JSON.</summary>
+    public bool GameExportSkeletonJson { get; set; } = true;
 
     /// <summary>Legacy v9 context payload retained only for one-time migration or storage fallback.</summary>
     public List<PersistedExportContext> ExportContexts { get; set; } = [];

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFDC78"/>
+      <stop offset="1" stop-color="#E49A33"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="496" height="496" rx="100" fill="url(#bg)"/>
+  <!-- line cube -->
+  <g fill="none" stroke="#141925" stroke-width="30" stroke-linejoin="round" stroke-linecap="round">
+    <polygon points="256,92 398,174 398,338 256,420 114,338 114,174"/>
+    <polyline points="114,174 256,256 398,174"/>
+    <line x1="256" y1="256" x2="256" y2="420"/>
+  </g>
+  <!-- bolt through the cube -->
+  <polygon points="300,138 200,292 252,292 214,428 330,236 278,236"
+           fill="#141925" stroke="#F6C45A" stroke-width="22" stroke-linejoin="round" paint-order="stroke"/>
+</svg>

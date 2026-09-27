@@ -17,14 +17,15 @@ public sealed class SettingsWindow : Window
     private readonly IPluginLog _log;
     private readonly Action _requestCacheSynchronization;
     private readonly Action _openSetup;
+    private readonly ToolSetupViews _tools;
     private readonly string _cacheStartupError;
     private AnimationEditService? _animations;
     private string? _animationError;
     private DateTime? _savedSkeletonLibrary;
     private int? _pendingListenPort;
 
-    public SettingsWindow(Configuration config, Action saveConfig, Action restartExportListener, IPluginLog log,
-        Action requestCacheSynchronization, Action openSetup, string cacheStartupError = "")
+    internal SettingsWindow(Configuration config, Action saveConfig, Action restartExportListener, IPluginLog log,
+        Action requestCacheSynchronization, Action openSetup, ToolSetupViews tools, string cacheStartupError = "")
         : base("XIV Instant Edit Settings##Settings")
     {
         _config = config;
@@ -33,6 +34,7 @@ public sealed class SettingsWindow : Window
         _log = log;
         _requestCacheSynchronization = requestCacheSynchronization;
         _openSetup = openSetup;
+        _tools = tools;
         _cacheStartupError = cacheStartupError;
 
         Size = new Vector2(600, 480);
@@ -57,7 +59,11 @@ public sealed class SettingsWindow : Window
     }
 
     // Before the library is loaded this session, Settings shows when the saved one was built.
-    public override void OnOpen() => _savedSkeletonLibrary = _animations?.SavedSkeletonLibraryUtc();
+    public override void OnOpen()
+    {
+        _savedSkeletonLibrary = _animations?.SavedSkeletonLibraryUtc();
+        _tools.Refresh();
+    }
 
     public override void Draw()
     {
@@ -71,7 +77,7 @@ public sealed class SettingsWindow : Window
             return;
         }
         ImGui.SameLine();
-        Widgets.Hint("Review Penumbra, Blender, cache, and texture-editor setup.");
+        Widgets.Hint("Review the cache, Blender, texture editor and Substance Painter setup.");
         ImGui.Spacing();
         ImGui.Separator(); ImGui.Text("Connections");
         var blenderPort = _config.BlenderPort; if (ImGui.InputInt("Blender port", ref blenderPort)) { _config.BlenderPort = blenderPort; Save(); }
@@ -92,14 +98,13 @@ public sealed class SettingsWindow : Window
             }
         }
         Widgets.Hint("Quick Export writes back to the model's original Penumbra mod.");
+        ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Blender add-on");
+        _tools.DrawBlender();
         ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Texture editing");
-        var editor = _config.TextureEditorPath;
-        ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputTextWithHint("##texture-editor", "Full path to Photoshop.exe or another TGA editor", ref editor, 2048))
-        { _config.TextureEditorPath = editor.Trim().Trim('"'); Save(); }
+        _tools.DrawTextureEditors(_config.TextureEditorPath, path => { _config.TextureEditorPath = path; Save(); });
         ImGui.TextWrapped("Open a texture, edit it, then save your changes to the same file (in-place as a 32-bit TGA with alpha).");
         ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Substance Painter");
-        DrawPainterSettings();
+        _tools.DrawPainter(advanced: true);
         ImGui.Spacing(); ImGui.Separator(); ImGui.Text("On Screen");
         var autoRefresh = _config.AutoRefreshOnScreen;
         if (ImGui.Checkbox("Refresh automatically when Penumbra or Glamourer changes", ref autoRefresh)) { _config.AutoRefreshOnScreen = autoRefresh; Save(); }
@@ -130,7 +135,8 @@ public sealed class SettingsWindow : Window
             try { _requestCacheSynchronization(); }
             catch (Exception e) { _log.Debug(e.Message); }
         }
-        ImGui.TextWrapped("When enabled, completed model cache jobs and inactive texture-edit sessions older than 24 hours are removed. Active sessions and unsaved texture edits are kept.");
+        ImGui.TextWrapped("When enabled, completed model cache jobs and inactive texture-edit sessions older than 24 hours are removed, " +
+                          "and Game Files exports in the cache folder after 7 days. Active sessions and unsaved texture edits are kept.");
         try { ImGui.TextWrapped($"Managed cache: {TextureFiles.CacheRootFor(_config.TextureCacheDirectory)}"); }
         catch (Exception e) { ImGui.TextWrapped($"Cache directory is invalid: {e.Message}"); }
         if (_cacheStartupError.Length > 0)
@@ -143,63 +149,6 @@ public sealed class SettingsWindow : Window
         }
         ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Skeleton library");
         DrawSkeletonLibrary();
-    }
-
-    private int? _pendingPainterPort;
-    private string _painterInstallMessage = "";
-
-    /// <summary> Enables the On Screen Painter action and installs the matching plugin into Painter. </summary>
-    private void DrawPainterSettings()
-    {
-        var enabled = _config.PainterIntegrationEnabled;
-        if (ImGui.Checkbox("Paint textures in Substance Painter", ref enabled)) { _config.PainterIntegrationEnabled = enabled; Save(); }
-        Widgets.Hint("Adds a paint-roller action to On Screen models, a Painter status dot, and Painter projects under Sessions.");
-        if (!_config.PainterIntegrationEnabled)
-            return;
-
-        var installed = Services.Painter.PainterInstallation.InstalledVersion();
-        var current = BlenderClient.CurrentPluginVersion;
-        var upToDate = installed.Length > 0 && BlenderClient.NormalizeVersion(installed) == BlenderClient.NormalizeVersion(current);
-        if (ImGui.Button(installed.Length == 0 ? "Install Painter plugin" : upToDate ? "Reinstall Painter plugin" : "Update Painter plugin"))
-        {
-            try
-            {
-                var folder = Services.Painter.PainterInstallation.Install(_config.PainterPort, _config.ListenPort, current);
-                _painterInstallMessage = $"Installed to {folder}. In Painter, enable it once under Python > xiv_instant_edit (restart Painter after an update).";
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-            {
-                _painterInstallMessage = "Could not install the Painter plugin: " + e.Message;
-            }
-        }
-        ImGui.SameLine();
-        Widgets.Hint(installed.Length == 0
-            ? "Not installed yet."
-            : upToDate ? $"Version {installed} is installed." : $"Version {installed} is installed; this plugin is {current}.");
-        if (_painterInstallMessage.Length > 0)
-            ImGui.TextWrapped(_painterInstallMessage);
-
-        var painterPort = _pendingPainterPort ?? _config.PainterPort;
-        if (ImGui.InputInt("Painter port", ref painterPort, 0, 0)) _pendingPainterPort = painterPort;
-        if (ImGui.IsItemDeactivatedAfterEdit() && _pendingPainterPort is { } port)
-        {
-            _pendingPainterPort = null;
-            if (port is > 0 and <= 65535 && port != _config.PainterPort)
-            {
-                _config.PainterPort = port;
-                Save();
-                try { Services.Painter.PainterInstallation.UpdatePorts(_config.PainterPort, _config.ListenPort); }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _log.Debug(e.Message); }
-            }
-        }
-        var executable = _config.PainterExecutablePath;
-        ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputTextWithHint("##painter-exe", "Painter executable (empty: search the usual Adobe and Steam folders)", ref executable, 2048))
-        { _config.PainterExecutablePath = executable.Trim().Trim('"'); Save(); }
-        Widgets.Hint("Used to start Painter when a model is sent while Painter is closed. Found: " +
-                     (string.IsNullOrWhiteSpace(_config.PainterExecutablePath)
-                         ? (Services.Painter.PainterInstallation.DetectExecutable() is { Length: > 0 } found ? found : "nothing")
-                         : _config.PainterExecutablePath));
     }
 
     /// <summary>The library of every skeleton in the installed mods that animations are matched against.</summary>

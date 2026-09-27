@@ -7,7 +7,8 @@ from bpy.types       import Object
 from numpy.typing    import NDArray
 
 from ..com.space     import blend_to_xiv_space, world_to_tangent_space
-from ..com.helpers   import calc_tangents_with_bitangent, vector_to_bytes, quantise_flow, normalise_vectors
+from ..com.helpers   import (calc_tangents_with_bitangent, vector_to_bytes, quantise_flow, normalise_vectors,
+                             zero_flow_colours, ZERO_FLOW_BYTES, ZERO_FLOW_COLOUR)
 from ..com.exceptions import XIVMeshError
 
 from ....xivpy.model import XIV_COL, XIV_UV
@@ -167,7 +168,8 @@ def get_weights(obj: Object, vert_count: int, group_count: int) -> NDArray:
 
 def get_flow_colours(obj: Object, loop_vertices: NDArray, loop_count: int) -> NDArray:
     if "xiv_flow" not in obj.data.color_attributes:
-        return np.full((loop_count, 2), 0.5, single)
+        # No flow layer on this part of a flow mesh: no direction.
+        return np.tile(np.asarray(ZERO_FLOW_COLOUR, single), (loop_count, 1))
 
     flow_layer = obj.data.color_attributes["xiv_flow"]
     source_count = loop_count if flow_layer.domain == 'CORNER' else len(obj.data.vertices)
@@ -221,7 +223,10 @@ def get_flow(flow_colour: NDArray, normals: NDArray, bitangents: NDArray) -> NDA
     world_flow    = _flow_vectors(flow_colour)
     tangent_flow  = world_to_tangent_space(world_flow, tangents, bitangent_xyz, normals)
 
-    return np.c_[vector_to_bytes(tangent_flow), np.full(len(tangent_flow), 255, dtype=ubyte)]
+    flow = np.c_[vector_to_bytes(tangent_flow), np.full(len(tangent_flow), 255, dtype=ubyte)]
+    # Quantising would turn the centre colour into a direction; write the zero vector instead.
+    flow[zero_flow_colours(flow_colour)] = ZERO_FLOW_BYTES
+    return flow
 
 
 def _validate_corner_array(obj: Object, label: str, array: NDArray, loop_count: int) -> None:

@@ -1,36 +1,48 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.ImGuiFileDialog;
+using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
+using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using InstantEdit.Services;
 
 namespace InstantEdit.Ui;
 
-/// <summary>Guided setup for the external tools and shared cache used by XIV Instant Edit.</summary>
+/// <summary>Guided setup for the shared cache and the external tools used by XIV Instant Edit.</summary>
 public sealed class FirstTimeSetupWindow : Window
 {
     private const int WelcomeStep = 0;
     private const int CacheStep = 1;
-    private const int EditorStep = 2;
-    private const int StepCount = 3;
+    private const int BlenderStep = 2;
+    private const int TextureStep = 3;
+    private const int PainterStep = 4;
+    private static readonly string[] StepNames = ["Welcome", "Cache", "Blender", "Textures", "Painter"];
+
+    private sealed record PluginCheck(string Name, bool Required, bool Ready, string State, string Purpose);
 
     private readonly Configuration _config;
     private readonly Action _saveConfig;
     private readonly Action _requestCacheSynchronization;
     private readonly Action _openMainWindow;
+    private readonly IDalamudPluginInterface _pi;
     private readonly IPluginLog _log;
+    private readonly ToolSetupViews _tools;
     private readonly FileDialogManager _fileDialog = new();
     private int _step;
     private string _cacheDirectory = string.Empty;
     private string _textureEditorPath = string.Empty;
     private string _error = string.Empty;
+    private IReadOnlyList<PluginCheck> _plugins = [];
+    private DateTime _pluginsChecked = DateTime.MinValue;
 
-    public FirstTimeSetupWindow(
+    internal FirstTimeSetupWindow(
         Configuration config,
         Action saveConfig,
         Action requestCacheSynchronization,
         Action openMainWindow,
+        IDalamudPluginInterface pi,
+        ToolSetupViews tools,
         IPluginLog log)
         : base("XIV Instant Edit Setup##FirstTimeSetup")
     {
@@ -38,13 +50,17 @@ public sealed class FirstTimeSetupWindow : Window
         _saveConfig = saveConfig;
         _requestCacheSynchronization = requestCacheSynchronization;
         _openMainWindow = openMainWindow;
+        _pi = pi;
+        _tools = tools;
         _log = log;
 
         Flags = ImGuiWindowFlags.NoCollapse;
+        Size = new Vector2(640, 560);
+        SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(520, 360),
-            MaximumSize = new Vector2(760, 720),
+            MinimumSize = new Vector2(560, 420),
+            MaximumSize = new Vector2(1000, 900),
         };
     }
 
@@ -54,6 +70,8 @@ public sealed class FirstTimeSetupWindow : Window
         _textureEditorPath = _config.TextureEditorPath;
         _step = WelcomeStep;
         _error = string.Empty;
+        _pluginsChecked = DateTime.MinValue;
+        _tools.Refresh();
         IsOpen = true;
     }
 
@@ -67,26 +85,26 @@ public sealed class FirstTimeSetupWindow : Window
         ImGui.Separator();
         ImGui.Spacing();
 
-        switch (_step)
+        // The footer stays put; long steps scroll above it.
+        var footer = ImGui.GetFrameHeightWithSpacing() + ImGui.GetStyle().ItemSpacing.Y * 3 +
+                     (_error.Length > 0 ? Widgets.BannerHeight(_error) + ImGui.GetStyle().ItemSpacing.Y : 0);
+        using (var body = ImRaii.Child("##setup-step", new Vector2(0, -footer)))
         {
-            case WelcomeStep:
-                DrawWelcomeStep();
-                break;
-            case CacheStep:
-                DrawCacheStep();
-                break;
-            default:
-                DrawEditorStep();
-                break;
+            if (body.Success)
+            {
+                switch (_step)
+                {
+                    case WelcomeStep: DrawWelcomeStep(); break;
+                    case CacheStep: DrawCacheStep(); break;
+                    case BlenderStep: DrawBlenderStep(); break;
+                    case TextureStep: DrawTextureStep(); break;
+                    default: DrawPainterStep(); break;
+                }
+            }
         }
 
         if (_error.Length > 0)
-        {
-            ImGui.Spacing();
             Widgets.Banner("##setup-error", FeedbackSeverity.Error, _error);
-        }
-
-        ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
         DrawFooter();
@@ -96,14 +114,12 @@ public sealed class FirstTimeSetupWindow : Window
 
     private void DrawProgress()
     {
-        ImGui.TextColored(Theme.Label, $"Step {_step + 1} of {StepCount}");
-        ImGui.SameLine();
-        for (var i = 0; i < StepCount; i++)
+        for (var i = 0; i < StepNames.Length; i++)
         {
-            var color = i <= _step ? Theme.Accent : Theme.Inactive;
-            ImGui.TextColored(color, i == _step ? "●" : "○");
-            if (i < StepCount - 1)
-                ImGui.SameLine(0, Theme.Scaled(4));
+            if (i > 0)
+                ImGui.SameLine(0, Theme.Scaled(14));
+            var colour = i == _step ? Theme.Accent : i < _step ? Theme.Label : Theme.Inactive;
+            ImGui.TextColored(colour, $"{(i <= _step ? "●" : "○")} {StepNames[i]}");
         }
     }
 
@@ -118,20 +134,69 @@ public sealed class FirstTimeSetupWindow : Window
     {
         DrawHeading(
             "Welcome to XIV Instant Edit",
-            "This plugin provides workflows for easier and instantanous model, texture and animation editing.");
+            "Instant Edit sends the models, textures and animations you see in game to your editing software, and puts your " +
+            "changes straight back into Penumbra mods. No manual importing, exporting or file juggling.");
 
-        ImGui.BulletText("Penumbra is required to read modded resources and write exports back to mods.");
-        ImGui.BulletText("Blender and the XIV Instant Edit add-on are required for model editing.");
-        ImGui.BulletText("Texture editing support is software-independent and will work with any established Photo Editing software with TGA support.");
+        ImGui.BulletText("Models: edit what your character wears, or any game model, in Blender and export it back in one click.");
+        ImGui.BulletText("Textures: edit them in any image editor that saves TGA files, or paint them on the model in Substance Painter.");
+        ImGui.BulletText("Animations: bake LivePose adjustments into them, repair their skeletons, or send them to Blender.");
+        ImGui.BulletText("Game Files: browse the game's own models and export their files.");
         ImGui.Spacing();
-        Widgets.HintWrapped("You are required to configure a cache directory in the next step, which will be used by both the in-game plugin and the Blender add-on to save temporary export files and backups.");
+
+        Widgets.SectionHeader("Plugins");
+        foreach (var plugin in PluginChecks())
+        {
+            var colour = plugin.Ready ? Theme.Online : plugin.Required ? Theme.Offline : Theme.Inactive;
+            Widgets.StatusDot(plugin.Name, colour, plugin.State);
+            ImGui.SameLine(0, Theme.Gap);
+            Widgets.Hint((plugin.Required ? "Required. " : "Optional. ") + plugin.Purpose);
+        }
+        ImGui.Spacing();
+        Widgets.HintWrapped("The next steps choose a cache folder, then find Blender, your image editor and Substance Painter on this PC " +
+                            "and install Instant Edit's add-on, save scripts and plugin into them. Everything but the cache can be skipped " +
+                            "and set up later in Settings.");
+    }
+
+    /// <summary> Penumbra, Glamourer and LivePose, looked up at most every two seconds. </summary>
+    private IReadOnlyList<PluginCheck> PluginChecks()
+    {
+        if (DateTime.UtcNow - _pluginsChecked < TimeSpan.FromSeconds(2))
+            return _plugins;
+        _pluginsChecked = DateTime.UtcNow;
+        var installed = new Dictionary<string, (bool Loaded, string Version)>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var plugin in _pi.InstalledPlugins)
+                installed[plugin.InternalName] = (plugin.IsLoaded, plugin.Version.ToString());
+        }
+        catch (Exception error)
+        {
+            _log.Debug($"Could not list installed plugins: {error.Message}");
+        }
+        bool livePose;
+        try { livePose = _pi.GetIpcSubscriber<(int, int)>("LivePose.ApiVersion").HasFunction; }
+        catch (Exception error) { _log.Debug(error.Message); livePose = false; }
+
+        _plugins =
+        [
+            Check("Penumbra", true, "Reads modded files and writes your edits back into mods."),
+            Check("Glamourer", false, "Refreshes On Screen when your appearance changes."),
+            new PluginCheck("LivePose", false, livePose, livePose ? "available" : "not found", "Needed to bake poses into animations."),
+        ];
+        return _plugins;
+
+        PluginCheck Check(string name, bool required, string purpose)
+            => installed.TryGetValue(name, out var found)
+                ? new PluginCheck(name, required, found.Loaded, found.Loaded ? $"loaded ({found.Version})" : "installed but not enabled", purpose)
+                : new PluginCheck(name, required, false, "not installed", purpose);
     }
 
     private void DrawCacheStep()
     {
         DrawHeading(
             "Choose a cache location",
-            "The plugin and Blender add-on use this location to exchange model files and store texture-editing sessions. The managed XIV Instant Edit folder is created automatically inside the location of your choice.");
+            "The plugin and the Blender add-on exchange model files here, and texture edits keep their working files here. " +
+            "A managed XIV Instant Edit folder is created inside the folder you choose.");
 
         ImGui.Text("Cache base directory");
         ImGui.SetNextItemWidth(-1);
@@ -151,6 +216,11 @@ public sealed class FirstTimeSetupWindow : Window
                 true);
         }
         ImGui.SameLine();
+        if (ImGui.Button("Use the default"))
+            _cacheDirectory = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Your local app data folder, on the Windows drive.");
+        ImGui.SameLine();
         Widgets.Hint("The base directory may already contain other files.");
         ImGui.Spacing();
         var managedCachePath = ManagedCachePathFor(_cacheDirectory);
@@ -160,20 +230,35 @@ public sealed class FirstTimeSetupWindow : Window
             ImGui.TextWrapped(managedCachePath);
             ImGui.Spacing();
         }
-        Widgets.Hint("Setup will verify that the managed folder can be written to before it finishes.");
+        Widgets.HintWrapped("Pick a drive with a few GB free: model exports, texture sessions and the skeleton library live here. " +
+                            "Setup checks that the folder can be written to before it finishes.");
     }
 
-    private void DrawEditorStep()
+    private void DrawBlenderStep()
     {
         DrawHeading(
-            "Configure texture editing (optional)",
-            "Choose the executable for a Photo editing software that can open and save 32-bit TGA files. You can leave this blank if you only plan to edit models.");
+            "Set up Blender for model editing",
+            "Models are edited in Blender 4.5 or newer with the XIV Instant Edit add-on. Install it from GitHub below, so Blender " +
+            "keeps it up to date. You can skip this if you only edit textures or animations.");
+        _tools.DrawBlender();
+    }
 
-        ImGui.Text("Texture editor executable");
-        ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputTextWithHint("##setup-texture-editor", "Full path to Photoshop.exe or another TGA editor", ref _textureEditorPath, 2048))
-            _textureEditorPath = _textureEditorPath.Trim().Trim('"');
-        Widgets.Hint("You can configure or change this later in XIV Instant Edit Settings.");
+    private void DrawTextureStep()
+    {
+        DrawHeading(
+            "Choose a texture editor (optional)",
+            "Textures open as TGA files in the editor you choose here. Save them in place as a flattened 32-bit TGA, and the game " +
+            "updates right away. Leave this empty if you only edit models.");
+        _tools.DrawTextureEditors(_textureEditorPath, path => _textureEditorPath = path);
+    }
+
+    private void DrawPainterStep()
+    {
+        DrawHeading(
+            "Paint in Substance Painter (optional)",
+            "With Adobe Substance 3D Painter 10.0.1 or newer, On Screen models open in Painter with the exact textures your " +
+            "character uses, and Painter's Send to game button brings the painted textures back.");
+        _tools.DrawPainter(advanced: false);
     }
 
     private void DrawFooter()
@@ -192,15 +277,18 @@ public sealed class FirstTimeSetupWindow : Window
         }
 
         ImGui.SameLine();
-        if (_step == EditorStep)
+        if (_step == PainterStep)
         {
             if (ImGui.Button("Finish", new Vector2(Theme.Scaled(92), 0)))
                 Finish();
         }
-        else if (ImGui.Button("Next", new Vector2(Theme.Scaled(72), 0)))
+        else if (ImGui.Button(_step is BlenderStep or TextureStep ? "Next (or skip)" : "Next", new Vector2(Theme.Scaled(_step is BlenderStep or TextureStep ? 120 : 72), 0)))
         {
-            _error = string.Empty;
-            _step++;
+            _error = _step == CacheStep && _cacheDirectory.Trim().Trim('"').Length == 0
+                ? "Choose a cache base directory before continuing."
+                : string.Empty;
+            if (_error.Length == 0)
+                _step++;
         }
     }
 
@@ -218,7 +306,7 @@ public sealed class FirstTimeSetupWindow : Window
         var editorPath = _textureEditorPath.Trim().Trim('"');
         if (editorPath.Length > 0 && !TextureEditService.TryValidateEditorPath(editorPath, out var editorError))
         {
-            _step = EditorStep;
+            _step = TextureStep;
             _error = editorError;
             return;
         }

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
@@ -19,24 +20,26 @@ public sealed partial class MainWindow
         animationBoneFilter = "";
     }
 
+    /// <summary>
+    /// The Animated bones tab. Rebakes change the animation (and an included startup), so the list
+    /// is the animation's even while its startup row is selected.
+    /// </summary>
     private void DrawAnimatedBones(AnimationCapture capture)
     {
-        // The rebake buttons bake the loop (and an included startup), so the list is
-        // the loop's; the startup row has nothing of its own to untick.
-        if (animationStartupSelected) return;
+        Widgets.HintWrapped("Untick a bone to stop this animation from moving it, for example to give hair, cloth " +
+                            "or tail bones back to physics. Rebaking removes unticked bones from the animation.");
+        ImGui.Spacing();
         var bones = AnimationBones.Animated(capture.Clip);
-        // Another source skeleton can name the same tracks differently; only bones the
-        // animation still drives can be left out.
-        if (!bones.IsEmpty) animationExcludedBones.IntersectWith(bones);
-        if (!ImGui.CollapsingHeader("Animated Bones")) return;
         if (bones.IsEmpty)
-        {
             ImGui.TextDisabled("The bones this animation moves are listed once its source skeleton is identified.");
-            return;
-        }
-        ImGui.TextWrapped("Untick a bone to stop this animation from moving it, for example to give hair, cloth " +
-            "or tail bones back to physics. Rebaking removes unticked bones from the animation.");
+        else
+            DrawAnimatedBoneList(bones);
+        DrawRebake(capture, AnimationOperation.ExcludeBones, "Rebake without unticked bones",
+            "Write the animation without tracks for the unticked bones, handing them back to physics.");
+    }
 
+    private void DrawAnimatedBoneList(ImmutableArray<string> bones)
+    {
         ImGui.SetNextItemWidth(Math.Min(Theme.Scaled(260), ImGui.GetContentRegionAvail().X));
         ImGui.InputTextWithHint("##animated-bone-filter", "Filter bones", ref animationBoneFilter, 128);
         var filter = animationBoneFilter.Trim();

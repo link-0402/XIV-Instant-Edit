@@ -397,6 +397,15 @@ def _is_translucent(preview: PreviewMaterial) -> bool | None:
     return bool(preview.material_flags & _FLAG_TRANSLUCENT)
 
 
+def _has_overlapping_cards(preview: PreviewMaterial) -> bool:
+    """Hair and tail cards stack many alpha layers in one object and must stay
+    dithered. Faces use hair.shpk only for single-layer lashes and brows (every
+    vanilla race, Hrothgar fur included, keeps fur in skin.shpk), which blend."""
+    if preview.shader_package.casefold() != "hair.shpk":
+        return False
+    return "/obj/face/" not in preview.game_path.replace("\\", "/").casefold()
+
+
 def _opacity_source(preview: PreviewMaterial) -> tuple[str, int] | None:
     """Return the texture usage and channel that hold the material's opacity."""
     shader = preview.shader_package.casefold()
@@ -862,11 +871,10 @@ def create_preview_material(
 
     translucent = _is_translucent(preview)
     alpha_linked = _link_opacity(tree, principled, opacity, preview)
-    if translucent and alpha_linked and preview.shader_package.casefold() != "hair.shpk":
+    if translucent and alpha_linked and not _has_overlapping_cards(preview):
         # Translucent gear blends like it does in game; dithering turns sheer
         # fabric into noise. Only each object's nearest layer blends, so one
         # continuous mesh cannot sort its own triangles into the wrong order.
-        # Hair cards overlap one another and stay dithered.
         material.surface_render_method = "BLENDED"
         material.use_transparency_overlap = False
     material.use_backface_culling = (

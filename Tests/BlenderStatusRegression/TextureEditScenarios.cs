@@ -510,6 +510,13 @@ internal static class TextureEditScenarios
         Check(TextureEditService.IsReusableFor(first with { PixelHash = "x", NewModName = "M", CollectionId = Guid.NewGuid(), ObjectIndex = null }, f.Request with { ModDirectory = "", JobId = job }) &&
               !TextureEditService.IsReusableFor(first with { PixelHash = "x", NewModName = "M", CollectionId = Guid.NewGuid(), ObjectIndex = null }, f.Request with { ModDirectory = "" }),
             "a vanilla session is only reused inside its own Painter project");
+        // Game Files edits vanilla textures without an actor: the session keeps none, only the collection.
+        var gameFilesSession = first with { PixelHash = "x", NewModName = "M", CollectionId = Guid.NewGuid(), ObjectIndex = null, ActorAddress = 0, JobId = null };
+        var gameFilesRequest = f.Request with { ModDirectory = "", ObjectIndex = null, ActorAddress = 0, JobId = null, CollectionObjectIndex = 0 };
+        Check(TextureEditService.IsReusableFor(gameFilesSession, gameFilesRequest) &&
+              !TextureEditService.IsReusableFor(gameFilesSession, gameFilesRequest with { ObjectIndex = 0, ActorAddress = 1234 }) &&
+              !TextureEditService.IsReusableFor(gameFilesSession with { CollectionId = null }, gameFilesRequest),
+            "a vanilla texture opened from Game Files reuses its actor-less session, not an On Screen one");
     }
 
     /// <summary> A Painter project's vanilla textures share one mod, found again by its identifier. </summary>

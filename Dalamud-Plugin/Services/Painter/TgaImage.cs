@@ -21,6 +21,17 @@ internal sealed class RgbaImage
     public int Height { get; }
     public byte[] Pixels { get; }
 
+    /// <summary> The top-left <paramref name="width"/> × <paramref name="height"/> corner. </summary>
+    public RgbaImage Crop(int width, int height)
+    {
+        if (width < 1 || height < 1 || width > Width || height > Height)
+            throw new ArgumentOutOfRangeException(nameof(width), $"{width} x {height} doesn't fit in {Width} x {Height}.");
+        var result = new RgbaImage(width, height);
+        for (var y = 0; y < height; y++)
+            Array.Copy(Pixels, y * Width * 4, result.Pixels, y * width * 4, width * 4);
+        return result;
+    }
+
     /// <summary> SHA-256 over the size and the RGBA pixels; equal images hash equally whatever their file layout. </summary>
     public string PixelHash()
     {

@@ -42,6 +42,7 @@ public sealed partial class MainWindow
         ModBrowser,
         TextureEdits,
         Animations,
+        GameFiles,
     }
 
     private readonly record struct FeedbackState(string Text, FeedbackSeverity Severity);

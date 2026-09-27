@@ -117,7 +117,7 @@ class XIVIEInstantEditProps(PropertyGroup):
 
     export_scope: EnumProperty(
         name="Export Parts",
-        description="Choose which visible mesh objects Quick Export and File Export include",
+        description="Choose which visible mesh objects Quick Export and Simple Export include",
         default="VISIBLE",
         items=[
             ("VISIBLE", "All Visible", "Export every visible mesh object"),

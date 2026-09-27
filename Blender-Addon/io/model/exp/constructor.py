@@ -95,12 +95,11 @@ def decl_from_blend_mesh(submeshes: list[Object], export_flow=False) -> VertexDe
     return decl
 
 class CreateLOD:
-    def __init__(self, model: XIVModel, lod_level: int, face_data: bool, mesh_options: dict[str, bool]=None, logger: YetAnotherLogger = None):
+    def __init__(self, model: XIVModel, lod_level: int, face_data: bool, logger: YetAnotherLogger = None):
         self.model        = model
         self.logger       = logger
         self.lod_level    = lod_level
         self.face_data    = face_data
-        self.mesh_options = mesh_options or {}
 
         self.bbox          = BoundingBox()
         self.idx_offset    = 0
@@ -114,8 +113,8 @@ class CreateLOD:
         self.export_stats: dict[str, list[str]]                 = defaultdict(list)
 
     @classmethod
-    def construct(cls, model: XIVModel, lod_level: int, active_lod: Lod, face_data: bool, sorted_meshes: list[list[Object]], mesh_options: dict[str, bool]=None, logger: YetAnotherLogger = None ) -> 'CreateLOD':
-        lod = cls(model, lod_level, face_data, mesh_options=mesh_options, logger=logger)
+    def construct(cls, model: XIVModel, lod_level: int, active_lod: Lod, face_data: bool, sorted_meshes: list[list[Object]], logger: YetAnotherLogger = None ) -> 'CreateLOD':
+        lod = cls(model, lod_level, face_data, logger=logger)
         lod._construct(active_lod, sorted_meshes)
         return lod
 
@@ -349,7 +348,7 @@ class CreateLOD:
         
         submesh = Submesh()
         indices, submesh_streams, shapes, source_vertices = get_submesh_streams(
-            obj, vert_decl, mesh_flow, self.mesh_options
+            obj, vert_decl, mesh_flow
         )
         if vert_offset + len(source_vertices) > USHORT_LIMIT:
             raise XIVMeshError(f"Exceeds the {USHORT_LIMIT} vertices limit.")

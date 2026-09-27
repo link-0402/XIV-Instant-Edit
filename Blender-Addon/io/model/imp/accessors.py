@@ -3,7 +3,8 @@ import numpy as np
 from numpy         import single, ubyte
 from numpy.typing  import NDArray
             
-from ..com.helpers import byte_to_vector, normalise_vectors, calc_tangents_with_bitangent, quantise_flow
+from ..com.helpers import (byte_to_vector, normalise_vectors, calc_tangents_with_bitangent, quantise_flow,
+                           zero_flow_bytes, ZERO_FLOW_COLOUR)
 from ..com.space   import xiv_to_blend_space, tangent_to_world_space
 
 
@@ -66,14 +67,18 @@ def get_bitangents(streams: dict[int, NDArray]) -> NDArray:
     return bitangents
     
 def get_flow(flow_vectors: NDArray, normals: NDArray, bitangents: NDArray) -> NDArray:
+    # Normalising would give the zero vector (no direction) a direction; keep it at the centre.
+    zero         = zero_flow_bytes(flow_vectors)
     flow_vectors = xiv_to_blend_space(byte_to_vector(flow_vectors))[:, :3]
     signs        = bitangents[:, 3]
     bitangents   = bitangents[:, :3]
     tangents     = calc_tangents_with_bitangent(normals, bitangents, signs)
     world_flow   = tangent_to_world_space(flow_vectors, tangents, bitangents, normals)
     quantised    = quantise_flow(world_flow[:, :2])
-   
-    return _flow_colour(quantised)
+
+    colour = _flow_colour(quantised)
+    colour[zero, :2] = ZERO_FLOW_COLOUR
+    return colour
     
 def _flow_colour(world_flow: NDArray) -> NDArray:
     rg_col = (normalise_vectors(world_flow) + 1.0) / 2.0

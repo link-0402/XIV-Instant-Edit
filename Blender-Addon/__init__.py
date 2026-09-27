@@ -5,6 +5,7 @@ import bpy
 from . import instant_edit
 from .instant_edit import ops as instant_ops
 from .instant_edit import props as instant_props
+from .keymaps import register_keymaps, unregister_keymaps
 from .operators import (
     XIVIE_OT_copy_text,
     XIVIE_OT_drag_mesh_order,
@@ -19,6 +20,9 @@ from .operators import (
     XIVIE_OT_restore_backup,
     XIVIE_OT_import_backup,
     XIVIE_OT_clear_backups,
+    XIVIE_OT_vertex_data,
+    XIVIE_OT_show_pose_action,
+    XIVIE_OT_toggle_rest_pose,
 )
 from .preferences import (
     XIVIEPreferences,
@@ -29,6 +33,8 @@ from .preferences import (
 from .properties import XIVIEExportSettings, set_addon_properties, remove_addon_properties
 from .ui import (
     XIVIE_MT_export_targets,
+    XIVIE_MT_links,
+    XIVIE_MT_pose_actions,
     XIVIE_PT_backups,
     XIVIE_PT_connection_popover,
     XIVIE_PT_context_details_popover,
@@ -39,9 +45,10 @@ from .ui import (
     XIVIE_PT_options,
     XIVIE_PT_options_export,
     XIVIE_PT_options_import,
-    XIVIE_PT_options_vertex_data,
+    XIVIE_PT_pose,
     XIVIE_PT_session,
     XIVIE_PT_tools,
+    XIVIE_PT_vertex_data_popover,
     draw_mesh_part_context_menu,
 )
 
@@ -67,19 +74,25 @@ CLASSES = [
     XIVIE_OT_restore_backup,
     XIVIE_OT_import_backup,
     XIVIE_OT_clear_backups,
+    XIVIE_OT_vertex_data,
+    XIVIE_OT_show_pose_action,
+    XIVIE_OT_toggle_rest_pose,
     XIVIE_MT_export_targets,
+    XIVIE_MT_links,
+    XIVIE_MT_pose_actions,
     XIVIE_PT_last_status_popover,
     XIVIE_PT_connection_popover,
     XIVIE_PT_context_details_popover,
     XIVIE_PT_export_scope_popover,
+    XIVIE_PT_vertex_data_popover,
     # Top-level panels keep their bl_order; sub-panels follow their parent.
     XIVIE_PT_session,
     XIVIE_PT_mesh_groups,
+    XIVIE_PT_pose,
     XIVIE_PT_file_io,
     XIVIE_PT_options,
     XIVIE_PT_options_import,
     XIVIE_PT_options_export,
-    XIVIE_PT_options_vertex_data,
     XIVIE_PT_backups,
     XIVIE_PT_tools,
 ]
@@ -114,12 +127,14 @@ def register() -> None:
         set_addon_properties()
         instant_edit.register()
         bpy.types.UI_MT_button_context_menu.append(draw_mesh_part_context_menu)
+        register_keymaps()
     except Exception:
         unregister()
         raise
 
 
 def unregister() -> None:
+    unregister_keymaps()
     bpy.types.UI_MT_button_context_menu.remove(draw_mesh_part_context_menu)
     instant_edit.unregister()
     try:

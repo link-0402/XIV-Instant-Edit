@@ -3,7 +3,8 @@ import bpy
 from bpy.app.handlers import persistent
 
 from .props  import set_addon_properties, remove_addon_properties, get_instant_edit_props
-from .server import get_server_error, start_server, stop_server, poll_import_queue
+from .server import (LISTENER_RETRY_SECONDS, LISTENER_UNAVAILABLE, get_server_error,
+                     poll_import_queue, poll_listener, start_server, stop_server)
 from .recovery import cancel_recovery, schedule_recovery
 from .revocation import cancel_revocations, schedule_revocations
 
@@ -201,7 +202,7 @@ def register() -> None:
 
     if not start_server(port):
         error = get_server_error() or "the port may already be in use"
-        message = f"XIV Instant Edit listener unavailable on port {port}: {error}"
+        message = f"{LISTENER_UNAVAILABLE} on port {port}: {error}"
         try:
             get_instant_edit_props().last_status = message
         except (AttributeError, RuntimeError):
@@ -209,6 +210,8 @@ def register() -> None:
             pass
         print(message)
     bpy.app.timers.register(poll_import_queue, first_interval=1.0, persistent=True)
+    # Retries only after start_server failed, e.g. while another Blender holds the port.
+    bpy.app.timers.register(poll_listener, first_interval=LISTENER_RETRY_SECONDS, persistent=True)
     bpy.app.timers.register(
         poll_material_coverage_results,
         first_interval=0.25,
@@ -239,6 +242,10 @@ def unregister() -> None:
     stop_server()
     try:
         bpy.app.timers.unregister(poll_import_queue)
+    except Exception:
+        pass
+    try:
+        bpy.app.timers.unregister(poll_listener)
     except Exception:
         pass
     try:

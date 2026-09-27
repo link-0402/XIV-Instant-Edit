@@ -17,6 +17,7 @@ public sealed partial class MainWindow
     private void DrawModsTab()
     {
         ImGui.Spacing();
+        _kinds = _modKinds;
         var mods = ReadMods();
         if (_modListWidth <= 0)
             _modListWidth = Theme.Scaled(260);
@@ -66,7 +67,7 @@ public sealed partial class MainWindow
 
         if (_modViewActors.Length != 1 || !ReferenceEquals(_modViewActors[0], modView))
             _modViewActors = [modView];
-        DrawFilterBar(_modViewActors, showVanillaToggle: false);
+        DrawFilterBar(_modViewActors, ResourceKindChipSet.ModBrowser, showVanillaToggle: false);
         ImGui.Spacing();
         Widgets.Banner("##mod-ambiguity", FeedbackSeverity.Info, ModBrowserAmbiguityWarning);
         ImGui.Spacing();

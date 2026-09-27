@@ -8,6 +8,10 @@ using InstantEdit.Services.Animations;
 
 namespace InstantEdit.Ui;
 
+/// <summary>
+/// The Animations tab: what your character plays, listed like On Screen with the mod each animation
+/// comes from and a pen that sends it to Blender, and the selected animation's tools in tabs below.
+/// </summary>
 public sealed partial class MainWindow
 {
     private AnimationEditService? animations;
@@ -19,6 +23,13 @@ public sealed partial class MainWindow
     private bool animationStartupSelected;
     private bool animationIncludeStartup;
     private string animationModName = "";
+    private string animationFilter = "";
+    private readonly ResourceSearch animationSearch = new();
+    // The list's view model, rebuilt when the listener's history or the On Screen snapshot changes.
+    private ImmutableArray<AnimationCapture> animationRowSource;
+    private IReadOnlyList<OnScreenObject>? animationRowActors;
+    private ImmutableArray<AnimationRow> animationRows = [];
+    private ActorView animationActor = new(null, "Your character", string.Empty, [], 0);
 
     internal void AttachAnimations(AnimationEditService? service, string? error)
     {
@@ -37,122 +48,400 @@ public sealed partial class MainWindow
         animationModName = AnimationPresentation.DefaultModName(capture);
     }
 
+    private void ClearAnimationSelection()
+    {
+        animationSelection = null;
+        animationBones.Clear();
+        ResetAnimatedBones();
+    }
+
     private void DrawAnimations()
     {
+        ImGui.Spacing();
         if (animations == null)
         {
-            Widgets.EmptyState(FontAwesomeIcon.ExclamationTriangle, "Animation editing is unavailable", animationError ?? "Animation integration is unavailable.");
+            Widgets.Banner("##animations-unavailable", FeedbackSeverity.Warning, animationError ?? "Animation integration is unavailable.");
             ImGui.Spacing();
             // Recording reads the live skeleton directly and needs none of the editing services.
-            DrawRecorderCard();
+            DrawRecorder();
             return;
         }
         animations.StartObservation();
+        TrackAnimationSelection(animations.Observer);
+        var rows = ReadAnimationRows(animations.Observer.History);
+        Widgets.SearchBox("##animation-search", ref animationFilter, "Search animations, mods and paths");
+        animationSearch.Text = animationFilter;
+        var shown = AnimationRows.Filter(rows, animationSearch);
         ImGui.Spacing();
-        var history = animations.Observer.History;
-        if (animationSelection is { } previous && history.FirstOrDefault(c => c.Id == previous.Id) is { } currentCapture &&
-            currentCapture.Clip.BindingFingerprint == previous.Clip.BindingFingerprint && currentCapture.Clip.SourceContext == previous.Clip.SourceContext &&
-            currentCapture.Clip.SkeletonFingerprint == previous.Clip.SkeletonFingerprint)
-        {
-            // Resolution updates must not recapture offsets or change the user's selected bones,
-            // but everything else (including Sources, which an in-place edit can change without
-            // the game reloading the file) should track the observer's latest capture.
-            animationSelection = previous with
-            {
-                Clip = currentCapture.Clip, Startup = currentCapture.Startup, Playing = currentCapture.Playing,
-                Sources = currentCapture.Sources, FamilyPaths = currentCapture.FamilyPaths,
-                LoadedResourcePaths = currentCapture.LoadedResourcePaths, ResourceAliases = currentCapture.ResourceAliases,
-                UnavailableReason = currentCapture.UnavailableReason, PackagingError = currentCapture.PackagingError,
-                PoseUnavailableReason = currentCapture.PoseUnavailableReason,
-            };
-        }
-        if (animationSelection != null && animationSelection.ActorId != animations.Observer.Actor)
-        { animationSelection = null; animationBones.Clear(); ResetAnimatedBones(); }
-        if (animationSelection is { Playing: false } staleSelection && !AnimationPresentation.Ready(staleSelection))
-        { animationSelection = null; animationBones.Clear(); ResetAnimatedBones(); }
 
-        var entries = AnimationPresentation.ListItems(history);
-        var width = Math.Max(Theme.Scaled(230), Math.Min(Theme.Scaled(340), ImGui.GetContentRegionAvail().X * 0.34f));
-        var height = Math.Max(1, ImGui.GetContentRegionAvail().Y);
-        using (var list = ImRaii.Child("##character-animations", new Vector2(width, height), true))
+        var sections = shown.Select(row => row.Group).Distinct().Count();
+        var height = AnimationListHeight(shown.Count + sections, ImGui.GetContentRegionAvail().Y);
+        using (ImRaii.PushColor(ImGuiCol.ChildBg, Theme.PanelBg))
+        using (var list = ImRaii.Child("##animation-list", new Vector2(0, height), true))
         {
             if (list.Success)
-                DrawAnimationList(entries);
+                DrawAnimationList(animations.Observer.Status, rows, shown);
         }
-        ImGui.SameLine();
-        using var details = ImRaii.Child("##animation-details", new Vector2(0, height), true);
-        if (!details.Success)
-            return;
-        DrawRecorderCard();
         ImGui.Spacing();
-        if (animationSelection is not { } capture)
-        {
-            Widgets.EmptyState(FontAwesomeIcon.Running, "Select an animation",
-                "Choose a ready animation on the left to review its source, send it to Blender, adjust LivePose offsets and bake.");
-        }
-        else
-        {
-            if (ImGui.CollapsingHeader("Source", ImGuiTreeNodeFlags.DefaultOpen))
-                DrawAnimationDetails(capture);
-            ImGui.Spacing();
-            DrawSendToBlender(capture);
-            ImGui.Spacing();
-            DrawLivePoseAdjustments(capture);
-            ImGui.Spacing();
-            DrawAnimatedBones(capture);
-            ImGui.Spacing();
-            if (ImGui.CollapsingHeader("Bake", ImGuiTreeNodeFlags.DefaultOpen))
-                DrawAnimationActions(capture);
-            ImGui.Spacing();
-        }
-        DrawRecoveryCard();
+        DrawAnimationTools();
     }
 
-    private void DrawAnimationList(ImmutableArray<AnimationPresentation.ListItem> entries)
+    /// <summary>
+    /// Keeps the selection in step with the listener. Resolution updates must not recapture offsets
+    /// or change the ticked bones, but everything else (including Sources, which an in-place edit can
+    /// change without the game reloading the file) follows the latest capture.
+    /// </summary>
+    private void TrackAnimationSelection(AnimationObserver observer)
     {
-        Widgets.SectionHeader("Character animations", entries.IsEmpty ? null : $"{entries.Length}");
-        ImGui.Separator();
-        if (entries.IsEmpty)
+        if (animationSelection is { } previous && observer.History.FirstOrDefault(c => c.Id == previous.Id) is { } current &&
+            current.Clip.BindingFingerprint == previous.Clip.BindingFingerprint && current.Clip.SourceContext == previous.Clip.SourceContext &&
+            current.Clip.SkeletonFingerprint == previous.Clip.SkeletonFingerprint)
         {
-            Widgets.MutedWrapped(animations!.Observer.Status);
-            Widgets.HintWrapped("Ready animations appear here once the local player plays an emote, idle or movement animation outside combat.");
+            animationSelection = previous with
+            {
+                Clip = current.Clip, Startup = current.Startup, Playing = current.Playing,
+                Sources = current.Sources, FamilyPaths = current.FamilyPaths,
+                LoadedResourcePaths = current.LoadedResourcePaths, ResourceAliases = current.ResourceAliases,
+                UnavailableReason = current.UnavailableReason, PackagingError = current.PackagingError,
+                PoseUnavailableReason = current.PoseUnavailableReason,
+            };
+        }
+        if (animationSelection != null && animationSelection.ActorId != observer.Actor)
+            ClearAnimationSelection();
+        if (animationSelection is { Playing: false } stale && !AnimationPresentation.Ready(stale))
+            ClearAnimationSelection();
+        // Another source skeleton can name the same tracks differently; only bones the animation
+        // still drives can be left out.
+        if (animationSelection is { } selected && AnimationBones.Animated(selected.Clip) is { IsEmpty: false } animated)
+            animationExcludedBones.IntersectWith(animated);
+    }
+
+    /// <summary> The list's rows, rebuilt only when the listener's history or the On Screen snapshot changes. </summary>
+    private ImmutableArray<AnimationRow> ReadAnimationRows(ImmutableArray<AnimationCapture> history)
+    {
+        var actors = _onScreen.Items;
+        if (history == animationRowSource && ReferenceEquals(actors, animationRowActors))
+            return animationRows;
+
+        var rows = AnimationRows.Build(history);
+        _animationRows.Clear();
+        foreach (var row in rows)
+            _animationRows[row.View] = (row.Capture.Id, row.Startup);
+        // The listener follows your character: its On Screen entry names the list and gives the
+        // row menu its mod actions.
+        var address = rows.IsEmpty ? 0 : rows[0].Capture.ActorAddress;
+        var entity = actors.FirstOrDefault(actor => address != 0 && (long)actor.Address == address)
+                     ?? actors.FirstOrDefault(actor => actor.ObjectIndex == 0);
+        List<ResourceView> views = [.. rows.Select(row => row.View)];
+        animationActor = entity is null
+            ? new ActorView(null, "Your character", string.Empty, views, 0)
+            : new ActorView(entity, entity.PresentationCategory.ToString(), Safe(entity.Name), views, entity.ObjectIndex);
+
+        animationRowSource = history;
+        animationRowActors = actors;
+        animationRows = rows;
+        animationSearch.Invalidate();
+        return rows;
+    }
+
+    /// <summary> The list takes its rows' height, at most a little under half the tab, so the tools keep their room. </summary>
+    private static float AnimationListHeight(int rows, float available)
+    {
+        var style = ImGui.GetStyle();
+        var row = ImGui.GetFrameHeight() + style.CellPadding.Y * 2;
+        // The header line, the table's column headers and the frame's padding.
+        var chrome = ImGui.GetFrameHeightWithSpacing() + row + style.WindowPadding.Y * 2 + Theme.Scaled(2);
+        var minimum = chrome + row * 3;
+        return Math.Clamp(chrome + row * rows, minimum, Math.Max(minimum, available * .45f));
+    }
+
+    /// <summary> Your character's animations as a table like On Screen's: what plays now, then what played recently. </summary>
+    private void DrawAnimationList(string status, ImmutableArray<AnimationRow> rows, IReadOnlyList<AnimationRow> shown)
+    {
+        DrawAnimationListHeader(status);
+        if (shown.Count == 0)
+        {
+            if (rows.IsEmpty)
+                Widgets.EmptyState(FontAwesomeIcon.Running, "No animations detected yet",
+                    "Play an emote, idle or walk outside combat. What your character plays appears here, with the mod it comes from.");
+            else
+                Widgets.EmptyState(FontAwesomeIcon.Search, "No matching animations", "Clear the search to see every animation.");
             return;
         }
-        foreach (var entry in entries)
+
+        using var align = ImRaii.PushStyle(ImGuiStyleVar.SelectableTextAlign, new Vector2(0, .5f));
+        using var table = ImRaii.Table("##animation-table", 4, ResourceTableFlags | ImGuiTableFlags.ScrollY,
+            new Vector2(0, Math.Max(1, ImGui.GetContentRegionAvail().Y)));
+        if (!table.Success)
+            return;
+        ImGui.TableSetupScrollFreeze(0, 1);
+        ImGui.TableSetupColumn("Animation", ImGuiTableColumnFlags.WidthStretch, .34f);
+        ImGui.TableSetupColumn("Source", ImGuiTableColumnFlags.WidthStretch, .18f);
+        ImGui.TableSetupColumn("Path", ImGuiTableColumnFlags.WidthStretch, .48f);
+        ImGui.TableSetupColumn("##actions", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoHide, Theme.Scaled(58));
+        ImGui.TableHeadersRow();
+        DrawAnimationSection(shown, AnimationGroup.Playing, "Playing now");
+        DrawAnimationSection(shown, AnimationGroup.Recent, "Played recently");
+    }
+
+    /// <summary> The character the animations belong to, headed as On Screen heads its actors, and what the listener is doing. </summary>
+    private void DrawAnimationListHeader(string status)
+    {
+        DrawOpaqueRow();
+        Widgets.Icon(FontAwesomeIcon.User, Theme.Label);
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextUnformatted(animationActor.Header);
+        ImGui.SameLine(ImGui.GetContentRegionMax().X - ImGui.CalcTextSize(status).X - Theme.Gap);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, status);
+    }
+
+    /// <summary> A section row like On Screen's, followed by its animations while it is open. </summary>
+    private void DrawAnimationSection(IReadOnlyList<AnimationRow> shown, AnimationGroup group, string label)
+    {
+        var rows = shown.Where(row => row.Group == group).ToArray();
+        if (rows.Length == 0)
+            return;
+        var key = group == AnimationGroup.Playing ? "animations:playing" : "animations:recent";
+        using var id = ImRaii.PushId(key);
+        ImGui.TableNextRow();
+        ImGui.TableSetColumnIndex(0);
+        // Sections start open, and a search opens them.
+        var expanded = _expansion.IsExpanded(key, true, animationSearch.Active);
+        if (Widgets.GhostIconButton("##section-toggle", expanded ? FontAwesomeIcon.CaretDown : FontAwesomeIcon.CaretRight, expanded ? "Collapse" : "Expand"))
+            _expansion.Toggle(key, expanded, true);
+        ImGui.SameLine(0, Theme.Gap);
+        if (ImGui.Selectable($"{label}##section-label", false, ImGuiSelectableFlags.SpanAllColumns, new Vector2(0, ImGui.GetFrameHeight())))
+            _expansion.Toggle(key, expanded, true);
+        if (!expanded)
+            return;
+        foreach (var row in rows)
+            DrawAnimationRow(row);
+    }
+
+    /// <summary> One animation: its name and state, the mod and file it comes from, and the pen that sends it to Blender. </summary>
+    private void DrawAnimationRow(AnimationRow row)
+    {
+        var view = row.View;
+        using var id = ImRaii.PushId(SafeId(row.Key));
+        ImGui.TableNextRow();
+        ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ImGui.GetColorU32(Theme.WithAlpha(Theme.AnimationKind, Theme.KindTintAlpha)));
+        if (animationSelection?.Id == row.Capture.Id && animationStartupSelected == row.Startup)
+            ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg1, ImGui.GetColorU32(Theme.WithAlpha(Theme.Selection, .6f)));
+
+        ImGui.TableSetColumnIndex(0);
+        var start = ImGui.GetCursorPosX() + Theme.TreeIndent;
+        // A startup hangs under the animation it leads into.
+        if (row.Startup)
+            DrawStartupGuide();
+        ImGui.SetCursorPosX(start + (row.Startup ? TreeStep : 0));
+        Widgets.Icon(FontAwesomeIcon.Running, Theme.AnimationKind);
+        ImGui.SameLine(0, Theme.Gap);
+        var problem = SkeletonBlock(row.Clip);
+        var searching = row.Clip.Resolution?.State == SkeletonResolutionState.Searching;
+        var problemIcon = searching ? FontAwesomeIcon.HourglassHalf : FontAwesomeIcon.ExclamationTriangle;
+        var tags = (row.Playing ? BadgeWidth("playing") + Theme.Gap : 0) + (problem is null ? 0 : IconWidth(problemIcon) + Theme.Gap);
+        if (ImGui.Selectable($"{Safe(view.Name, "Animation")}##label", false, ImGuiSelectableFlags.None,
+                new Vector2(Math.Max(1, ImGui.GetContentRegionAvail().X - tags), ImGui.GetFrameHeight())))
+            SelectAnimation(row.Capture, row.Startup);
+        var hovered = ImGui.IsItemHovered();
+        ImGui.OpenPopupOnItemClick(RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
+        if (hovered)
+            DrawAnimationRowTooltip(row, problem);
+        if (row.Playing)
         {
-            if (entry.SeparatorBefore) ImGui.Separator();
-            var listCapture = entry.Capture;
-            var label = AnimationPresentation.AnimationName(listCapture, entry.Startup);
-            using var id = ImRaii.PushId(listCapture.Id + (entry.Startup ? "-startup" : "-live"));
-            var active = listCapture.Playing && !entry.Startup;
-            using var activeColour = ImRaii.PushColor(ImGuiCol.Text, Theme.Success, active);
-            if (ImGui.Selectable(label,
-                animationSelection?.Id == listCapture.Id && animationStartupSelected == entry.Startup))
-                SelectAnimation(listCapture, entry.Startup);
+            ImGui.SameLine(0, Theme.Gap);
+            Widgets.Badge("playing", Theme.Success);
+        }
+        if (problem is not null)
+        {
+            ImGui.SameLine(0, Theme.Gap);
+            Widgets.Icon(problemIcon, searching ? Theme.Muted : Theme.Warning);
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip((entry.Startup ? "Linked startup\n" : "") + (entry.Startup ? listCapture.Startup!.GamePath : listCapture.Clip.GamePath));
+                ImGui.SetTooltip(problem);
+        }
+
+        ImGui.TableSetColumnIndex(1);
+        DrawSourceBadge(view);
+        ImGui.TableSetColumnIndex(2);
+        Widgets.PathText(Safe(view.SourceRelativePath, view.GamePath), Safe(view.ActualPath));
+        ImGui.TableSetColumnIndex(3);
+        if (Widgets.IconButton("##send-animation", FontAwesomeIcon.Pen, "Send this animation to Blender"))
+            OpenAnimationSend(view);
+        ImGui.SameLine(0, Theme.Scaled(2));
+        if (Widgets.GhostIconButton("##more", FontAwesomeIcon.EllipsisH, "More actions"))
+            ImGui.OpenPopup(RowMenuPopup);
+        DrawRowMenu(animationActor, view);
+    }
+
+    /// <summary> The line joining a startup row to the animation above it, hanging from that row's glyph. </summary>
+    private static void DrawStartupGuide()
+    {
+        var origin = ImGui.GetCursorScreenPos();
+        var frame = ImGui.GetFrameHeight();
+        var x = MathF.Floor(origin.X + Theme.TreeIndent + IconWidth(FontAwesomeIcon.Running) / 2) + .5f;
+        var middle = MathF.Floor(origin.Y + frame / 2) + .5f;
+        var end = origin.X + Theme.TreeIndent + TreeStep - Theme.Scaled(3);
+        var drawList = ImGui.GetWindowDrawList();
+        var colour = ImGui.GetColorU32(Theme.TreeLine);
+        var thickness = Math.Max(1, MathF.Floor(Theme.Scale));
+        drawList.AddLine(new Vector2(x, origin.Y - ImGui.GetStyle().CellPadding.Y), new Vector2(x, middle), colour, thickness);
+        drawList.AddLine(new Vector2(x, middle), new Vector2(end, middle), colour, thickness);
+    }
+
+    private static void DrawAnimationRowTooltip(AnimationRow row, string? problem)
+    {
+        using var tooltip = ImRaii.Tooltip();
+        ImGui.TextColored(Theme.Label, row.View.Name);
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.TextColored(Theme.Muted, AnimationPresentation.AnimationState(row.Capture, row.Startup));
+        ImGui.TextColored(Theme.Hint, "Game path: " + row.Clip.GamePath);
+        if (problem is not null)
+            ImGui.TextColored(Theme.Warning, problem);
+        else if (row.Clip.Resolution?.Selected is { } source)
+            ImGui.TextUnformatted("Made for " + SkeletonLabel(source));
+    }
+
+    private static float BadgeWidth(string text) => ImGui.CalcTextSize(text).X + Theme.Scaled(12);
+
+    private static float IconWidth(FontAwesomeIcon icon)
+    {
+        using var font = ImRaii.PushFont(UiBuilder.IconFont);
+        return ImGui.CalcTextSize(icon.ToIconString()).X;
+    }
+
+    /// <summary> The selected animation's tools, one tab per task. The tabs at the right need no selection. </summary>
+    private void DrawAnimationTools()
+    {
+        if (animationSelection is { } capture)
+            DrawSelectedAnimationTitle(capture);
+        using var tabs = ImRaii.TabBar("##animation-tools");
+        if (!tabs.Success)
+            return;
+        DrawAnimationTool("Source", "see its file and the skeleton it was made for", DrawAnimationSource);
+        DrawAnimationTool("LivePose", "bake your LivePose adjustments into it", DrawLivePose);
+        DrawAnimationTool("Animated bones", "choose the bones it moves", DrawAnimatedBones);
+        DrawAnimationTool("Skeleton repair", "retarget it onto your character's skeleton", DrawSkeletonRepair);
+        DrawRecentEditsTab();
+        if (ImGui.BeginTabItem("Record live pose", ImGuiTabItemFlags.Trailing))
+        {
+            DrawToolBody(DrawRecorder);
+            ImGui.EndTabItem();
         }
     }
 
-    private void DrawAnimationDetails(AnimationCapture capture)
+    /// <summary> Names the animation the tools below work on. </summary>
+    private void DrawSelectedAnimationTitle(AnimationCapture capture)
     {
-        var selectedClip = animationStartupSelected && capture.Startup is { } startup ? startup : capture.Clip;
+        var clip = animationStartupSelected && capture.Startup is { } startup ? startup : capture.Clip;
+        var file = capture.Sources.FirstOrDefault(s => s.GamePath == clip.GamePath);
+        var playing = capture.Playing && !animationStartupSelected ? " · playing" : "";
+        Widgets.Icon(FontAwesomeIcon.Running, Theme.AnimationKind);
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Label, AnimationPresentation.AnimationName(capture, animationStartupSelected));
         ImGui.SameLine(0, Theme.Gap);
-        ImGui.TextColored(Theme.Muted, AnimationPresentation.AnimationState(capture, animationStartupSelected));
-        ImGui.TextUnformatted("Animation target: " + AnimationPresentation.ModelName(selectedClip));
-        DrawAnimationFileSource(capture, selectedClip);
-        DrawLiveSkeleton(capture.Clip);
-        DrawAnimationSource(capture, capture.Clip, false);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, $"{AnimationPresentation.AnimationState(capture, animationStartupSelected)}{playing} · " +
+                                       (file?.ModName ?? file?.ModDirectory ?? "Game Data"));
+    }
 
-        ImGui.Separator();
-        if (capture.Startup == null)
-            ImGui.TextDisabled("Startup animation: no linked startup could be identified.");
-        else
+    /// <summary> A tab for the selected animation: its tool, or a prompt to choose an animation. </summary>
+    private void DrawAnimationTool(string label, string purpose, Action<AnimationCapture> draw)
+    {
+        if (!ImGui.BeginTabItem(label, ImGuiTabItemFlags.None))
+            return;
+        DrawToolBody(() =>
         {
-            ImGui.TextUnformatted("Startup animation: " + AnimationPresentation.AnimationName(capture, true));
-            if (animationStartupSelected || capture.Startup.Resolution?.State == SkeletonResolutionState.Ambiguous)
-                DrawAnimationSource(capture, capture.Startup, true);
+            if (animationSelection is { } capture)
+                draw(capture);
+            else
+                Widgets.EmptyState(FontAwesomeIcon.Running, "Select an animation", $"Choose an animation in the list above to {purpose}.");
+        });
+        ImGui.EndTabItem();
+    }
+
+    private void DrawRecentEditsTab()
+    {
+        var attention = RecoveryAttention();
+        bool open;
+        using (ImRaii.PushColor(ImGuiCol.Text, Theme.Warning, attention > 0))
+            open = ImGui.BeginTabItem(attention > 0 ? $"Recent edits ({attention})###recent-edits" : "Recent edits###recent-edits",
+                ImGuiTabItemFlags.Trailing);
+        if (attention > 0 && ImGui.IsItemHovered())
+            ImGui.SetTooltip(attention == 1 ? "An edit did not finish and needs an undo." : $"{attention} edits did not finish and need an undo.");
+        if (!open)
+            return;
+        DrawToolBody(DrawRecovery);
+        ImGui.EndTabItem();
+    }
+
+    /// <summary> A tool tab's body, which scrolls below the tab bar. </summary>
+    private static void DrawToolBody(Action draw)
+    {
+        using var body = ImRaii.Child("##tool", Vector2.Zero, false);
+        if (!body.Success)
+            return;
+        ImGui.Spacing();
+        draw();
+    }
+
+    /// <summary> Starts a label and value table for an animation's facts. </summary>
+    private static void SetupFacts()
+    {
+        ImGui.TableSetupColumn("##fact", ImGuiTableColumnFlags.WidthFixed);
+        ImGui.TableSetupColumn("##value", ImGuiTableColumnFlags.WidthStretch);
+    }
+
+    /// <summary> Starts a fact row: its muted label, then the value's cell. </summary>
+    private static void Fact(string label)
+    {
+        ImGui.TableNextRow();
+        ImGui.TableSetColumnIndex(0);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, label);
+        ImGui.TableSetColumnIndex(1);
+        ImGui.AlignTextToFramePadding();
+    }
+
+    /// <summary> The Source tab: where the animation comes from, and the skeleton it was made for. </summary>
+    private void DrawAnimationSource(AnimationCapture capture)
+    {
+        var startup = animationStartupSelected && capture.Startup is not null;
+        var clip = startup ? capture.Startup! : capture.Clip;
+        var file = capture.Sources.FirstOrDefault(s => s.GamePath == clip.GamePath);
+        using (var facts = ImRaii.Table("##source-facts", 2, ImGuiTableFlags.SizingFixedFit))
+        {
+            if (facts.Success)
+            {
+                SetupFacts();
+                Fact("Mod");
+                ImGui.TextUnformatted(file?.ModName ?? file?.ModDirectory ?? "None, it is the game's own file");
+                Fact("File");
+                Widgets.PathText(Safe(file?.RelativePath, clip.GamePath), Safe(file?.ResolvedPath, clip.GamePath));
+                Fact("Game path");
+                Widgets.PathText(clip.GamePath, clip.GamePath);
+                Fact("Plays on");
+                ImGui.TextUnformatted(AnimationPresentation.ModelName(clip));
+                Fact(startup ? "Leads into" : "Startup");
+                if (startup)
+                    ImGui.TextUnformatted(AnimationPresentation.AnimationName(capture));
+                else if (capture.Startup is null)
+                    ImGui.TextColored(Theme.Hint, "No linked startup was identified");
+                else
+                    ImGui.TextUnformatted(AnimationPresentation.AnimationName(capture, true));
+                Fact("Live skeleton");
+                DrawLiveSkeleton(capture.Clip);
+                Fact("Made for");
+                DrawSourceSkeleton(capture, clip, startup);
+                // A rebake can include the startup, which needs its own source skeleton.
+                if (!startup && capture.Startup is { Resolution.State: SkeletonResolutionState.Ambiguous })
+                {
+                    Fact("Startup made for");
+                    DrawSourceSkeleton(capture, capture.Startup, true);
+                }
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(capture.Clip.LastOperationError))
@@ -160,7 +449,6 @@ public sealed partial class MainWindow
             ImGui.Spacing();
             Widgets.Banner("##animation-last-error", FeedbackSeverity.Warning, "Last attempt: " + capture.Clip.LastOperationError);
         }
-
         ImGui.Spacing();
         // The library is only rebuilt on request, from Settings.
         if (Widgets.IconButton("##skeleton-library", FontAwesomeIcon.Cog,
@@ -171,98 +459,115 @@ public sealed partial class MainWindow
         ImGui.TextColored(Theme.Hint, "Skeleton library in Settings");
     }
 
-    private static void DrawAnimationFileSource(AnimationCapture capture, AnimationClip clip)
-    {
-        var file = capture.Sources.FirstOrDefault(s => s.GamePath == clip.GamePath);
-        if (file == null) return;
-        ImGui.TextUnformatted("Animation file");
-        using var indent = ImRaii.PushIndent();
-        var mod = file.ModName ?? file.ModDirectory ?? "Vanilla game";
-        ImGui.TextUnformatted("Source mod: " + mod);
-        ImGui.TextUnformatted("File: " + (file.RelativePath ?? file.GamePath));
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip(file.ResolvedPath);
-    }
-
     private static void DrawLiveSkeleton(AnimationClip clip)
     {
-        ImGui.TextUnformatted("Live character skeleton");
-        using var indent = ImRaii.PushIndent();
         var skeleton = clip.TargetSkeleton;
-        var label = skeleton == null ? "Live skeleton unavailable" : $"{Path.GetFileName(clip.SkeletonPath)} · {skeleton.Bones.Length} bones";
-        ImGui.TextUnformatted(label);
-        if (ImGui.IsItemHovered() && !string.IsNullOrWhiteSpace(clip.SkeletonPath)) ImGui.SetTooltip(clip.SkeletonPath);
+        ImGui.TextUnformatted(skeleton == null ? "Unavailable" : $"{Path.GetFileName(clip.SkeletonPath)} · {skeleton.Bones.Length} bones");
+        if (ImGui.IsItemHovered() && !string.IsNullOrWhiteSpace(clip.SkeletonPath))
+            ImGui.SetTooltip(clip.SkeletonPath);
     }
 
-    private void DrawAnimationSource(AnimationCapture capture, AnimationClip clip, bool startup)
+    /// <summary>
+    /// The skeleton a clip was made for, which it is sampled and rebaked on: a choice when several
+    /// fit equally well, then the file it comes from.
+    /// </summary>
+    private void DrawSourceSkeleton(AnimationCapture capture, AnimationClip clip, bool startup)
     {
         var resolution = clip.Resolution;
         var source = resolution?.Selected ?? resolution?.Candidates.FirstOrDefault();
-        if (source == null)
+        if (resolution is null || source is null)
         {
-            if (resolution != null) ImGui.TextDisabled(resolution.Reason ?? "Preparing the animation skeleton…");
+            ImGui.TextColored(resolution?.State == SkeletonResolutionState.Incompatible ? Theme.Warning : Theme.Hint,
+                resolution?.Reason ?? "Finding the skeleton this animation was made for…");
             return;
         }
-        ImGui.TextUnformatted(startup ? "Startup animation source" : "Animation source");
-        using var indent = ImRaii.PushIndent();
-        var provider = source.Source.Resource.ModName ?? source.Source.Resource.ModDirectory ??
-            (source.Source.Kind == SkeletonSourceKind.Game ? "Vanilla game" : "Current collection");
-        ImGui.TextUnformatted("Canonical model: " + AnimationPresentation.SourceModelName(source));
-        ImGui.TextUnformatted("Physical file: " + source.Source.Resource.ResolvedPath);
-        var aliases = source.Source.MappedGamePaths.Select(AnimationSkeletonIndex.ModelFromPath).OfType<string>()
-            .Distinct(StringComparer.Ordinal).ToArray();
-        if (aliases.Length > 0) ImGui.TextDisabled("Mapped aliases: " + string.Join(", ", aliases));
-        ImGui.TextDisabled($"Skeleton: {source.Skeleton.Bones.Length} bones · provided by {provider}");
-        ImGui.SameLine(0, Theme.Gap);
-        Widgets.HelpTip("Selection rationale: " + source.Rationale + "\n" + source.Source.Resource.ResolvedPath);
-        if (source.Source.Variant.Length > 0) ImGui.TextDisabled(source.Source.Variant);
-        if (resolution!.Candidates.Length > 1)
+        if (resolution.Candidates.Length > 1)
         {
-            ImGui.TextDisabled("Choose the skeleton this animation was made for.");
-            using var busy = ImRaii.Disabled(animations!.Busy);
-            using var combo = ImRaii.Combo(startup ? "Startup animation skeleton" : "Animation skeleton",
-                resolution.Selected == null ? "Choose source skeleton" : AnimationPresentation.SourceModelName(source));
-            if (combo.Success)
+            // The animation's and its startup's choices can share a table.
+            using var id = ImRaii.PushId(startup ? "startup" : "animation");
+            using (ImRaii.Disabled(animations!.Busy))
             {
-                foreach (var candidate in resolution.Candidates)
+                ImGui.SetNextItemWidth(Math.Min(Theme.Scaled(480), ImGui.GetContentRegionAvail().X - ImGui.GetFrameHeight() - Theme.Gap));
+                using var combo = ImRaii.Combo("##skeleton", resolution.Selected is null ? "Choose the skeleton it was made for" : SkeletonLabel(source));
+                if (combo.Success)
                 {
-                    var candidateProvider = candidate.Source.Resource.ModName ?? candidate.Source.Resource.ModDirectory ??
-                        (candidate.Source.Kind == SkeletonSourceKind.Game ? "Vanilla game" : "Current collection");
-                    var variant = candidate.Source.Variant.Length == 0 ? "Main skeleton" : candidate.Source.Variant;
-                    var label = $"{AnimationPresentation.SourceModelName(candidate)} · {candidateProvider} · {Path.GetFileName(candidate.Source.Resource.ResolvedPath)} · {variant} · {candidate.Skeleton.Bones.Length} bones##{AnimationSkeletonIndex.SelectionId(candidate)}";
-                    if (ImGui.Selectable(label, candidate == resolution.Selected))
+                    foreach (var candidate in resolution.Candidates)
                     {
-                        var chosen = animations.Observer.ChooseSkeleton(clip, candidate);
-                        animationSelection = startup ? capture with { Startup = chosen } : capture with { Clip = chosen };
+                        var variant = candidate.Source.Variant.Length == 0 ? "main skeleton" : candidate.Source.Variant;
+                        if (ImGui.Selectable($"{SkeletonLabel(candidate)} · {Path.GetFileName(candidate.Source.Resource.ResolvedPath)} · {variant}##{AnimationSkeletonIndex.SelectionId(candidate)}",
+                                candidate == resolution.Selected))
+                            ChooseSourceSkeleton(capture, clip, candidate, startup);
+                        if (ImGui.IsItemHovered())
+                            ImGui.SetTooltip(candidate.Rationale + "\n" + candidate.Source.Resource.ResolvedPath);
                     }
-                    if (ImGui.IsItemHovered()) ImGui.SetTooltip(candidate.Rationale + "\n" + candidate.Source.Resource.ResolvedPath);
                 }
             }
         }
+        else
+        {
+            ImGui.TextUnformatted(SkeletonLabel(source));
+        }
+        ImGui.SameLine(0, Theme.Gap);
+        Widgets.HelpTip("Why this skeleton: " + source.Rationale);
+        if (resolution.Selected is null)
+            Widgets.HintWrapped(resolution.Reason ?? "Several skeletons fit. Choose the one this animation was made for.");
+        Widgets.PathText(source.Source.Resource.ResolvedPath, source.Source.Resource.ResolvedPath);
+        var aliases = source.Source.MappedGamePaths.Select(AnimationSkeletonIndex.ModelFromPath).OfType<string>()
+            .Distinct(StringComparer.Ordinal).ToArray();
+        if (aliases.Length > 0)
+            ImGui.TextColored(Theme.Hint, "Mapped aliases: " + string.Join(", ", aliases));
+        if (source.Source.Variant.Length > 0)
+            ImGui.TextColored(Theme.Hint, source.Source.Variant);
     }
 
-    private void DrawLivePoseAdjustments(AnimationCapture capture)
+    private void ChooseSourceSkeleton(AnimationCapture capture, AnimationClip clip, SkeletonCandidate candidate, bool startup)
     {
-        if (!ImGui.CollapsingHeader("Current LivePose Adjustments")) return;
+        try
+        {
+            var chosen = animations!.Observer.ChooseSkeleton(clip, candidate);
+            animationSelection = startup ? capture with { Startup = chosen } : capture with { Clip = chosen };
+        }
+        catch (InvalidOperationException e)
+        {
+            _feed.Report(StatusChannel.Animations, FeedbackSeverity.Warning, e.Message);
+        }
+    }
+
+    /// <summary> The LivePose tab: bakes the ticked LivePose adjustments into the animation. </summary>
+    private void DrawLivePose(AnimationCapture capture)
+    {
+        Widgets.HintWrapped("Bakes the LivePose adjustments ticked below into the animation, so the pose becomes part of it, " +
+                            "and clears them from your live pose.");
+        var poseUnavailable = capture.PoseUnavailableReason != null;
+        if (poseUnavailable)
+        {
+            ImGui.Spacing();
+            Widgets.Banner("##livepose-unavailable", FeedbackSeverity.Warning, "LivePose adjustments are unavailable: " + capture.PoseUnavailableReason);
+        }
+        ImGui.Spacing();
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Bake");
         foreach (var component in new[] { PoseComponents.Position, PoseComponents.Rotation, PoseComponents.Scale })
         {
+            ImGui.SameLine(0, Theme.Scaled(12));
             var enabled = animationComponents.HasFlag(component);
             if (ImGui.Checkbox(component.ToString(), ref enabled))
                 animationComponents = enabled ? animationComponents | component : animationComponents & ~component;
-            ImGui.SameLine();
         }
-        ImGui.NewLine();
-        var poseUnavailable = capture.PoseUnavailableReason != null;
+        DrawOffsetTools(capture, poseUnavailable);
+        ImGui.Spacing();
+        DrawAdjustedBones(capture);
+        DrawRebake(capture, AnimationOperation.BakeOffsets, "Rebake with LivePose",
+            "Bake the ticked LivePose adjustments into the animation and clear them from the live pose.");
+    }
+
+    /// <summary> Your live LivePose offsets: read them again, clear them, or put cleared ones back. </summary>
+    private void DrawOffsetTools(AnimationCapture capture, bool poseUnavailable)
+    {
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Live offsets");
+        ImGui.SameLine(0, Theme.Scaled(12));
         using (ImRaii.Disabled(animations!.Busy || poseUnavailable))
-        {
-            if (ImGui.Button("Clear all offsets")) animations.ClearOffsets(capture);
-        }
-        ImGui.SameLine();
-        using (ImRaii.Disabled(animations.Busy || !animations.CanReapplyOffsets || poseUnavailable))
-        {
-            if (ImGui.Button("Reapply offsets")) animations.ReapplyOffsets(capture);
-        }
-        ImGui.SameLine();
-        using (ImRaii.Disabled(animations.Busy || poseUnavailable))
         {
             if (ImGui.Button("Refresh offsets"))
             {
@@ -275,6 +580,22 @@ public sealed partial class MainWindow
                 });
             }
         }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Read your LivePose adjustments again, for example after changing them in LivePose.");
+        ImGui.SameLine();
+        using (ImRaii.Disabled(animations.Busy || poseUnavailable))
+        {
+            if (ImGui.Button("Clear all offsets")) animations.ClearOffsets(capture);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Remove every LivePose adjustment from your character. Reapply offsets puts them back.");
+        ImGui.SameLine();
+        using (ImRaii.Disabled(animations.Busy || !animations.CanReapplyOffsets || poseUnavailable))
+        {
+            if (ImGui.Button("Reapply offsets")) animations.ReapplyOffsets(capture);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Put back the live offsets that the last clear or bake removed.");
         ImGui.SameLine();
         var restorable = FindOffsetJournal(capture);
         using (ImRaii.Disabled(animations.Busy || restorable is null))
@@ -285,106 +606,165 @@ public sealed partial class MainWindow
             ImGui.SetTooltip(restorable is null
                 ? "No bake of this animation cleared live offsets that could be put back."
                 : $"Put back the live offsets captured before the edit from {restorable.CreatedUtc.ToLocalTime():g}.");
-        if (poseUnavailable) ImGui.TextWrapped("LivePose adjustments are unavailable: " + capture.PoseUnavailableReason);
-        ImGui.Separator();
-        foreach (var bone in capture.Pose.Bones.Where(b => b.Id.Slot == 0 && b.Id.Partial == capture.Clip.Partial))
+    }
+
+    /// <summary> The bones with LivePose adjustments on the animation's skeleton; the ticked ones are baked. </summary>
+    private void DrawAdjustedBones(AnimationCapture capture)
+    {
+        var bones = capture.Pose.Bones.Where(b => b.Id.Slot == 0 && b.Id.Partial == capture.Clip.Partial).ToArray();
+        if (bones.Length == 0)
+        {
+            Widgets.HintWrapped("Your character has no LivePose adjustments on this animation's skeleton. " +
+                                "Adjust bones in LivePose, then press Refresh offsets.");
+            return;
+        }
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, $"Adjusted bones · {animationBones.Count} of {bones.Length} ticked");
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Tick all")) animationBones.UnionWith(bones.Select(b => b.Id));
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Untick all")) animationBones.Clear();
+        var row = ImGui.GetFrameHeightWithSpacing();
+        var height = Math.Clamp(bones.Length * row + Theme.Scaled(8), row + Theme.Scaled(8), Theme.Scaled(220));
+        using var list = ImRaii.Child("##adjusted-bones", new Vector2(0, height), true);
+        if (!list.Success)
+            return;
+        foreach (var bone in bones)
         {
             using var id = ImRaii.PushId(bone.Id.Name);
             var enabled = animationBones.Contains(bone.Id);
             if (ImGui.Checkbox(AnimationPresentation.BoneName(bone.Id.Name), ref enabled))
-            { if (enabled) animationBones.Add(bone.Id); else animationBones.Remove(bone.Id); }
-            ImGui.SameLine(); ImGui.TextDisabled($"{bone.Stacks.Length} adjustment(s)");
+            {
+                if (enabled) animationBones.Add(bone.Id);
+                else animationBones.Remove(bone.Id);
+            }
+            ImGui.SameLine();
+            ImGui.TextDisabled(bone.Stacks.Length == 1 ? "1 adjustment" : $"{bone.Stacks.Length} adjustments");
         }
     }
 
-    private void DrawAnimationActions(AnimationCapture capture)
+    /// <summary> The Skeleton repair tab: retargets the animation onto your character's live skeleton. </summary>
+    private void DrawSkeletonRepair(AnimationCapture capture)
     {
-        if (!animationStartupSelected)
+        Widgets.HintWrapped("Retargets the animation onto your character's live skeleton, for example after a skeleton mod such as YAS " +
+                            "inserted bones the animation was not made for. Live offsets stay as they are.");
+        ImGui.Spacing();
+        using (var facts = ImRaii.Table("##repair-facts", 2, ImGuiTableFlags.SizingFixedFit))
         {
-            if (capture.Startup is { Resolution: { State: SkeletonResolutionState.Matched, Selected: not null } })
+            if (facts.Success)
             {
-                ImGui.Checkbox("Include startup in rebake", ref animationIncludeStartup);
-                if (ImGui.IsItemHovered()) ImGui.SetTooltip(AnimationPresentation.AnimationName(capture, true));
+                SetupFacts();
+                Fact("Live skeleton");
+                DrawLiveSkeleton(capture.Clip);
+                Fact("Made for");
+                if (SkeletonBlock(capture.Clip) is null && capture.Clip.Resolution?.Selected is { } source)
+                    ImGui.TextUnformatted(SkeletonLabel(source));
+                else
+                    ImGui.TextColored(Theme.Hint, capture.Clip.Resolution?.State == SkeletonResolutionState.Ambiguous
+                        ? "Several fit; choose one in the Source tab"
+                        : "Not identified yet");
             }
-            else if (capture.Startup != null)
-                ImGui.TextDisabled("Startup animation is not ready to include.");
         }
+        DrawRebake(capture, AnimationOperation.RepairSkeleton, "Repair skeleton",
+            "Retarget the animation onto the live skeleton, for example after a mod inserted bones.");
+    }
 
-        var includeStartup = !animationStartupSelected && animationIncludeStartup &&
-            capture.Startup is { Resolution: { State: SkeletonResolutionState.Matched, Selected: not null } };
+    /// <summary>
+    /// The end of the LivePose, Animated bones and Skeleton repair tabs: what the rebake covers and
+    /// where it is saved, then the tab's rebake button and Undo last edit.
+    /// </summary>
+    private void DrawRebake(AnimationCapture capture, AnimationOperation operation, string label, string description)
+    {
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+        if (animationStartupSelected)
+            Widgets.HintWrapped($"Rebakes change {AnimationPresentation.AnimationName(capture)}, the animation this startup leads into. " +
+                                "Include the startup to change it as well.");
+        var startupReady = capture.Startup is { Resolution: { State: SkeletonResolutionState.Matched, Selected: not null } };
+        if (capture.Startup is not null)
+        {
+            using (ImRaii.Disabled(!startupReady))
+                ImGui.Checkbox("Include startup in rebake", ref animationIncludeStartup);
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(startupReady
+                    ? AnimationPresentation.AnimationName(capture, true)
+                    : SkeletonBlock(capture.Startup) ?? "The startup animation is not ready to include.");
+        }
+        var includeStartup = animationIncludeStartup && startupReady;
 
-        if (ImGui.RadioButton("Create new mod", animationDestination == AnimationDestination.NewMod)) animationDestination = AnimationDestination.NewMod;
+        if (ImGui.RadioButton("Create new mod", animationDestination == AnimationDestination.NewMod))
+            animationDestination = AnimationDestination.NewMod;
         ImGui.SameLine();
-        if (ImGui.RadioButton("Replace in-place", animationDestination == AnimationDestination.InPlace)) animationDestination = AnimationDestination.InPlace;
-        var clips = includeStartup && capture.Startup is { } startupClip ? new[] { capture.Clip, startupClip } : new[] { capture.Clip };
-        string? blocked = capture.UnavailableReason ?? clips.Select(SkeletonBlock).FirstOrDefault(reason => reason != null);
+        if (ImGui.RadioButton("Replace in-place", animationDestination == AnimationDestination.InPlace))
+            animationDestination = AnimationDestination.InPlace;
         if (animationDestination == AnimationDestination.NewMod)
         {
             ImGui.SetNextItemWidth(Math.Min(Theme.Scaled(400), ImGui.GetContentRegionAvail().X));
             ImGui.InputText("Mod name", ref animationModName, 128);
-            blocked ??= capture.PackagingError;
         }
-        else
-        {
-            var paths = new[] { capture.Clip.GamePath, includeStartup ? capture.Startup?.GamePath : null }.OfType<string>();
-            if (paths.Any(p => !capture.Sources.Any(s => s.GamePath == p && AnimationResources.CanReplace(s))))
-                blocked ??= "This animation has no writable Penumbra source. Choose Create new mod.";
-        }
-        if (blocked != null)
-            Widgets.Banner("##bake-blocked", FeedbackSeverity.Warning, blocked);
-        // Bones unticked under Animated Bones are left out of every rebake in this row.
-        ImmutableArray<string> excluded = [.. animationExcludedBones.Order(StringComparer.Ordinal)];
-        var exclusionBlocked = AnimationBones.Problem(capture.Clip, excluded);
-        var offsetConflict = AnimationBones.OffsetConflict(excluded, animationBones.Select(b => b.Name));
-        if (exclusionBlocked != null) Widgets.Banner("##bake-exclusion", FeedbackSeverity.Warning, exclusionBlocked);
-        else if (!excluded.IsEmpty)
-        {
-            ImGui.TextDisabled($"{excluded.Length} unticked bone{(excluded.Length == 1 ? "" : "s")} will be left out of the rebake.");
-            if (offsetConflict != null) Widgets.Banner("##bake-conflict", FeedbackSeverity.Warning, offsetConflict);
-        }
-        var poseUnavailable = capture.PoseUnavailableReason != null;
-        using (ImRaii.Disabled(animations!.Busy || blocked != null || exclusionBlocked != null || offsetConflict != null ||
-            poseUnavailable || animationBones.Count == 0 || animationComponents == PoseComponents.None))
-        {
-            if (ImGui.Button("Rebake with LivePose")) animations.Edit(new AnimationBakeRequest(Guid.NewGuid(), capture, animationDestination,
-                animationModName.Trim(), includeStartup, animationBones.ToImmutableHashSet(), animationComponents, ExcludedBones: excluded));
-        }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("Bake the ticked LivePose adjustments into the animation and clear them from the live pose.");
-        ImGui.SameLine();
-        string? repairBlocked = capture.UnavailableReason ?? clips.Select(SkeletonBlock).FirstOrDefault(reason => reason != null);
-        if (animationDestination == AnimationDestination.NewMod) repairBlocked ??= capture.PackagingError;
-        else
-        {
-            var paths = clips.Select(clip => clip.GamePath);
-            if (paths.Any(p => !capture.Sources.Any(s => s.GamePath == p && AnimationResources.CanReplace(s))))
-                repairBlocked ??= "This animation has no writable Penumbra source. Choose Create new mod.";
-        }
-        using (ImRaii.Disabled(animations.Busy || repairBlocked != null || exclusionBlocked != null))
-        {
-            if (ImGui.Button("Repair skeleton")) animations.Edit(new AnimationBakeRequest(Guid.NewGuid(), capture, animationDestination,
-                animationModName.Trim(), includeStartup, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.RepairSkeleton,
-                ExcludedBones: excluded));
-        }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("Retarget the animation onto the live skeleton, for example after a mod inserted bones.");
-        ImGui.SameLine();
-        // Needs no LivePose; the source, skeleton and destination checks behind the
-        // repair button are the ones this rebake needs too.
-        using (ImRaii.Disabled(animations.Busy || repairBlocked != null || exclusionBlocked != null || excluded.IsEmpty))
-        {
-            if (ImGui.Button("Rebake without unticked bones")) animations.Edit(new AnimationBakeRequest(Guid.NewGuid(), capture,
-                animationDestination, animationModName.Trim(), includeStartup, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None,
-                AnimationOperation.ExcludeBones, ExcludedBones: excluded));
-        }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("Write the animation without tracks for the unticked bones, handing them back to physics.");
 
-        var undoable = FindUndoableLastEdit();
-        ImGui.SameLine(0, Theme.Scaled(16));
-        using (ImRaii.Disabled(animations.Busy || undoable is null))
+        var clips = includeStartup && capture.Startup is { } startupClip ? new[] { capture.Clip, startupClip } : new[] { capture.Clip };
+        // Bones unticked under Animated bones are left out of every rebake.
+        ImmutableArray<string> excluded = [.. animationExcludedBones.Order(StringComparer.Ordinal)];
+        var problem = RebakeProblem(capture, operation, clips, excluded);
+        if (problem is not null)
+            Widgets.Banner("##rebake-problem", FeedbackSeverity.Warning, problem);
+        else if (operation != AnimationOperation.ExcludeBones && !excluded.IsEmpty)
+            Widgets.Hint(excluded.Length == 1
+                ? "1 bone unticked under Animated bones will be left out as well."
+                : $"{excluded.Length} bones unticked under Animated bones will be left out as well.");
+        var missing = RebakeMissing(capture, operation, excluded);
+        using (ImRaii.Disabled(animations!.Busy || problem is not null || missing is not null))
         {
-            if (ImGui.Button("Undo last edit")) animations.Undo(undoable!);
+            if (ImGui.Button(label))
+                animations.Edit(RebakeRequest(capture, operation, includeStartup, excluded));
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(missing ?? description);
+        ImGui.SameLine(0, Theme.Scaled(16));
+        DrawUndoLastEdit();
+    }
+
+    /// <summary> What stops a rebake, shown as a warning above its button; null when nothing does. </summary>
+    private string? RebakeProblem(AnimationCapture capture, AnimationOperation operation, AnimationClip[] clips, ImmutableArray<string> excluded)
+    {
+        var problem = capture.UnavailableReason ?? clips.Select(SkeletonBlock).FirstOrDefault(reason => reason != null);
+        if (animationDestination == AnimationDestination.NewMod)
+            problem ??= capture.PackagingError;
+        else if (clips.Any(clip => !capture.Sources.Any(s => s.GamePath == clip.GamePath && AnimationResources.CanReplace(s))))
+            problem ??= "This animation has no writable Penumbra source. Choose Create new mod.";
+        problem ??= AnimationBones.Problem(capture.Clip, excluded);
+        if (operation == AnimationOperation.BakeOffsets)
+            problem ??= AnimationBones.OffsetConflict(excluded, animationBones.Select(b => b.Name));
+        return problem;
+    }
+
+    /// <summary> What a rebake still needs from you, shown on its button; null when it has everything. </summary>
+    private string? RebakeMissing(AnimationCapture capture, AnimationOperation operation, ImmutableArray<string> excluded)
+        => operation switch
+        {
+            AnimationOperation.BakeOffsets when capture.PoseUnavailableReason is not null => "LivePose adjustments are unavailable.",
+            AnimationOperation.BakeOffsets when animationBones.Count == 0 => "Tick at least one adjusted bone.",
+            AnimationOperation.BakeOffsets when animationComponents == PoseComponents.None => "Tick position, rotation or scale.",
+            AnimationOperation.ExcludeBones when excluded.IsEmpty => "Untick at least one bone the animation should stop moving.",
+            _ => null,
+        };
+
+    private AnimationBakeRequest RebakeRequest(AnimationCapture capture, AnimationOperation operation, bool includeStartup, ImmutableArray<string> excluded)
+        => operation == AnimationOperation.BakeOffsets
+            ? new AnimationBakeRequest(Guid.NewGuid(), capture, animationDestination, animationModName.Trim(), includeStartup,
+                animationBones.ToImmutableHashSet(), animationComponents, ExcludedBones: excluded)
+            : new AnimationBakeRequest(Guid.NewGuid(), capture, animationDestination, animationModName.Trim(), includeStartup,
+                ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, operation, ExcludedBones: excluded);
+
+    private void DrawUndoLastEdit()
+    {
+        var undoable = FindUndoableLastEdit();
+        using (ImRaii.Disabled(animations!.Busy || undoable is null))
+        {
+            if (ImGui.Button("Undo last edit"))
+                animations.Undo(undoable!);
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(undoable is null
@@ -394,5 +774,4 @@ public sealed partial class MainWindow
 
     private static string? SkeletonBlock(AnimationClip clip) => clip.Resolution is { State: not SkeletonResolutionState.Matched } resolution
         ? resolution.Reason ?? "A compatible animation source is still being identified." : null;
-
 }

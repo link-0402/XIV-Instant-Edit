@@ -1,5 +1,6 @@
 # Modified for XIV Instant Edit, 2026.
 import bpy
+import numpy as np
 
 from contextlib import contextmanager
 from pathlib         import Path
@@ -17,7 +18,7 @@ from ..backups       import create_backup
 _export_stats: dict[str, list[str]] = {}
 
 
-def _armature_for_object(obj):
+def armature_for_object(obj):
     """Return the armature that drives an exported mesh, if any."""
     if obj.parent and obj.parent.type == "ARMATURE":
         return obj.parent
@@ -46,7 +47,7 @@ def _clean_export_state(export_objects, reset_scaling=False):
         dict.fromkeys(
             armature
             for obj in objects
-            if (armature := _armature_for_object(obj)) is not None
+            if (armature := armature_for_object(obj)) is not None
         )
     )
     scales = (
@@ -112,29 +113,47 @@ def _clean_export_state(export_objects, reset_scaling=False):
         bpy.context.view_layer.update()
 
 def check_triangulation(objects=None) -> list[str]:
+    """Names of meshes with faces of more than three corners and no Triangulate modifier."""
     visible = list(objects) if objects is not None else visible_meshobj()
     not_triangulated = []
 
     for obj in visible:
-        tri_modifier = False
-        for modifier in reversed(obj.modifiers):
-            if modifier.type == "TRIANGULATE" and modifier.show_viewport:
-                tri_modifier = True
-                break
-
-        if not tri_modifier:
-            triangulated = True
-            for poly in obj.data.polygons:
-                verts = len(poly.vertices)
-                if verts > 3:
-                    triangulated = False
-                    break
-
-            if not triangulated:
-                not_triangulated.append(obj.name)
+        if any(modifier.type == "TRIANGULATE" and modifier.show_viewport for modifier in obj.modifiers):
+            continue
+        polygons = obj.data.polygons
+        corners  = np.empty(len(polygons), dtype=np.int32)
+        polygons.foreach_get("loop_total", corners)
+        if np.any(corners > 3):
+            not_triangulated.append(obj.name)
 
     return not_triangulated
-   
+
+def check_weights(objects=None) -> list[str]:
+    """Names of meshes without a vertex group for any bone of their armature.
+
+    A quick check for the sidebar and before an export starts; the export itself
+    then refuses every vertex without a bone weight (SceneHandler.check_weights).
+    """
+    visible = list(objects) if objects is not None else visible_meshobj()
+    unweighted = []
+
+    for obj in visible:
+        # A bone-parented mesh without groups follows its bone; the MDL writer weights it fully.
+        if not obj.vertex_groups and obj.parent_type == "BONE" and obj.parent_bone:
+            continue
+        armature = armature_for_object(obj)
+        bones    = armature.data.bones if armature is not None else ()
+        if not any(group.name in bones for group in obj.vertex_groups):
+            unweighted.append(obj.name)
+
+    return unweighted
+
+def flush_edit_mode(objects) -> None:
+    """Write Edit Mode changes into the meshes, which exports and checks read."""
+    for obj in objects or ():
+        if obj.mode == "EDIT":
+            obj.update_from_editmode()
+
 def get_export_path(directory: Path, file_name: str, subfolder: bool, body_slot:str ="") -> str:
     if subfolder:
         export_path = directory / body_slot / file_name
@@ -145,6 +164,7 @@ def get_export_path(directory: Path, file_name: str, subfolder: bool, body_slot:
 
 def export_result(file_path: Path, file_format: str, logger: YetAnotherLogger=None, batch=False, export_objects=None) -> None:
     settings = get_settings()
+    flush_edit_mode(export_objects)
     with _clean_export_state(export_objects, settings.reset_scaling_on_export):
         bpy.context.evaluated_depsgraph_get().update()
         export = FileExport(file_path, file_format, logger=logger, batch=batch, export_objects=export_objects)
@@ -263,8 +283,7 @@ class FileExport:
                                                 settings.use_lods,
                                                 [],
                                                 logger=self.logger,
-                                                **settings.get_model_flags(),
-                                                **settings.get_mesh_options()
+                                                **settings.get_model_flags()
                                             )
 
             if heels_offset is not None:

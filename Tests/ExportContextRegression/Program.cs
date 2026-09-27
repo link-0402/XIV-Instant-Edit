@@ -163,6 +163,8 @@ try
     UiViewModelScenarios.Run();
     AnimationRowScenarios.Run();
     PainterScenarios.Run(testRoot);
+    GameFileScenarios.Run(testRoot);
+    ToolSetupScenarios.Run(testRoot);
 
     // ---- Backup safety, export-context authorization, and revocation ----
     var originalRoot = Path.Combine(testRoot, "OriginalMod");
