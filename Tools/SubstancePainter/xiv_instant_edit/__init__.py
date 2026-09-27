@@ -6,7 +6,7 @@ textures in FFXIV's channel layout and hands them back to Instant Edit.
 """
 
 # Kept equal to the Dalamud plugin's version; Instant Edit reports a mismatch otherwise.
-PLUGIN_VERSION = "1.2.4"
+PLUGIN_VERSION = "2.0.0"
 
 _plugin = None
 

@@ -18,11 +18,11 @@ internal sealed record ChangelogRelease(
 
 internal static class ChangelogCatalog
 {
-    public const string CurrentVersion = "1.3.0";
+    public const string CurrentVersion = "2.0.0";
 
     public static IReadOnlyList<ChangelogRelease> Releases { get; } =
     [
-        Release("1.3.0",
+        Release("2.0.0",
             Highlight("Animation editing is now available in the new Animations tab (requires the LivePose plugin):"),
             Entry("The tab lists the animations your character plays with the mod each one comes from, and sorts the tools for the selected animation into tabs.", 1),
             Entry("Bake your LivePose adjustments into an animation, so the pose becomes part of the animation itself.", 1),
