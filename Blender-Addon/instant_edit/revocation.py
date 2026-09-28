@@ -7,7 +7,6 @@ import os
 import queue
 import threading
 import uuid
-from http.client import HTTPException
 from urllib.error import URLError
 
 import bpy
@@ -141,7 +140,7 @@ def _send(record: dict) -> bool:
                 cause="The Dalamud plugin returned a response larger than the bridge limit.",
             )
             continue
-        except (URLError, TimeoutError, OSError, ValueError, UnicodeError, HTTPException):
+        except (URLError, TimeoutError, OSError, ValueError, UnicodeError):
             continue
     return False
 

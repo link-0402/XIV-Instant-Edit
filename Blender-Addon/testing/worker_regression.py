@@ -1,5 +1,6 @@
 """Standalone regression coverage for the context revocation and recovery workers."""
 
+import contextlib
 import http.client
 import importlib.util
 from pathlib import Path
@@ -42,7 +43,7 @@ def _load_modules():
         assert spec.loader is not None
         spec.loader.exec_module(module)
         loaded[name] = module
-    return loaded["revocation"], loaded["recovery"], scene
+    return loaded["revocation"], loaded["recovery"], loaded["plugin_http"], scene
 
 
 def _drain(results):
@@ -52,27 +53,60 @@ def _drain(results):
     return items
 
 
-def revocation_survives_unexpected_failures(revocation) -> None:
+class _Reply:
+    def __init__(self, status, body):
+        self.status = status
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def getcode(self):
+        return self.status
+
+    def read(self, _size=-1):
+        return self.body
+
+
+@contextlib.contextmanager
+def _plugin_urlopen(plugin_http, body):
+    """Answer per port: port 1 breaks the HTTP exchange with each malformed reply in turn."""
+    calls = []
+    errors = (http.client.IncompleteRead(b""), http.client.BadStatusLine(""))
+    state = {"error": errors[0]}
+
+    def urlopen(request, timeout=0):
+        port = int(request.full_url.split("//", 1)[1].split("/", 1)[0].split(":")[1])
+        calls.append(port)
+        if port == 1:
+            raise state["error"]
+        return _Reply(200, body)
+
+    original = plugin_http.urllib.request.urlopen
+    plugin_http.urllib.request.urlopen = urlopen
+    try:
+        yield calls, errors, state
+    finally:
+        plugin_http.urllib.request.urlopen = original
+
+
+def revocation_survives_unexpected_failures(revocation, plugin_http) -> None:
     recorded = []
     revocation.record_failure = lambda **kwargs: recorded.append(kwargs)
     record = {"contextId": "context", "importId": "import", "capability": "capability"}
 
-    # A truncated or malformed HTTP response is a failed attempt, not a crash,
-    # and the next candidate port is still tried.
-    for error in (http.client.IncompleteRead(b""), http.client.BadStatusLine("")):
-        calls = []
-
-        def post(port, *_args, **_kwargs):
-            calls.append(port)
-            if port == 1:
-                raise error
-            return 200, b'{"ok": true}'
-
-        revocation.post_json = post
-        assert revocation._send({**record, "ports": [1, 2]}) is True and calls == [1, 2], type(error)
-        calls.clear()
-        revocation.post_json = lambda *_args, **_kwargs: (_ for _ in ()).throw(error)
-        assert revocation._send({**record, "ports": [1, 2]}) is False, type(error)
+    # A malformed HTTP reply is a failed attempt, not a crash, and the next
+    # candidate port is still tried. This goes through the real post_json.
+    with _plugin_urlopen(plugin_http, b'{"ok": true}') as (calls, errors, state):
+        for error in errors:
+            state["error"] = error
+            calls.clear()
+            assert revocation._send({**record, "ports": [1, 2]}) is True and calls == [1, 2], type(error)
+            calls.clear()
+            assert revocation._send({**record, "ports": [1, 1]}) is False and calls == [1, 1], type(error)
 
     # An unexpected error on one record neither stops the remaining records
     # nor prevents the result that clears _worker_running.
@@ -112,14 +146,21 @@ def revocation_survives_unexpected_failures(revocation) -> None:
     print("[PASS] revocation worker survives unexpected failures and always reports back")
 
 
-def recovery_survives_unexpected_failures(recovery, scene) -> None:
+def recovery_survives_unexpected_failures(recovery, plugin_http, scene) -> None:
     recorded = []
     recovery.record_failure = lambda **kwargs: recorded.append(kwargs)
     payload = {"contextId": "second"}
 
-    for error in (http.client.IncompleteRead(b""), http.client.BadStatusLine("")):
-        recovery.post_json = lambda *_args, **_kwargs: (_ for _ in ()).throw(error)
-        assert recovery._request_reattach("context", "import", "capability", [1, 2]) is None, type(error)
+    reply = b'{"ok": true, "context": {"contextId": "second"}}'
+    with _plugin_urlopen(plugin_http, reply) as (calls, errors, state):
+        for error in errors:
+            state["error"] = error
+            calls.clear()
+            assert recovery._request_reattach("context", "import", "capability", [1, 2]) == payload, type(error)
+            assert calls == [1, 2], type(error)
+            calls.clear()
+            assert recovery._request_reattach("context", "import", "capability", [1, 1]) is None, type(error)
+            assert calls == [1, 1], type(error)
 
     def request(context_id, *_args):
         if context_id == "first":
@@ -168,9 +209,9 @@ def recovery_survives_unexpected_failures(recovery, scene) -> None:
 
 
 def run() -> None:
-    revocation, recovery, scene = _load_modules()
-    revocation_survives_unexpected_failures(revocation)
-    recovery_survives_unexpected_failures(recovery, scene)
+    revocation, recovery, plugin_http, scene = _load_modules()
+    revocation_survives_unexpected_failures(revocation, plugin_http)
+    recovery_survives_unexpected_failures(recovery, plugin_http, scene)
 
 
 if __name__ == "__main__":
