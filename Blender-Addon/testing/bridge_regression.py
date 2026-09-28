@@ -723,6 +723,23 @@ def run_staging_isolation_regression(addon) -> None:
             print("[PASS] transitional import envelopes are rejected")
         else:
             raise AssertionError("a transitional import envelope was accepted")
+        scaled_import = server._ImportHandler._validate_import(
+            {**base_import, "racialScaling": {"modelRace": "c0201", "race": "c0801"}})
+        _require(
+            validated["racialScaling"] == "" and
+            server._ImportHandler._validate_import({**base_import, "racialScaling": None})["racialScaling"] == "" and
+            scaled_import["racialScaling"] == "c0201 to c0801",
+            "a racially scaled import request becomes the mesh tag \"c0201 to c0801\"; others have none",
+        )
+        for bad_scaling in ("c0201 to c0801", {"modelRace": "c0201"}, {"modelRace": "c0801", "race": "c0801"},
+                            {"modelRace": "0201", "race": "c0801"}, {"modelRace": "c0201", "race": 801}):
+            try:
+                server._ImportHandler._validate_import({**base_import, "racialScaling": bad_scaling})
+            except ValueError as error:
+                _require(getattr(error, "code", "") == "invalid_racial_scaling",
+                         f"a malformed racial scaling {bad_scaling!r} is refused")
+            else:
+                raise AssertionError(f"a malformed racial scaling was accepted: {bad_scaling!r}")
         _require(
             validated["targetFilePath"] == r"D:\Penumbra\SourceMod\models\original.mdl",
             "the original physical model target is preserved in Blender's import context",
@@ -1020,6 +1037,25 @@ def run_staging_isolation_regression(addon) -> None:
             untagged_payload["estEntries"] == [] and "estEntries" not in redraw_payload,
             "the hair EST entry is sent when tagged, empty when untagged, and absent when unknown",
         )
+        scaling_module = importlib.import_module(f"{package_name}.instant_edit.racial_scaling")
+        with temporary_scene_data():
+            tagged = [bpy.data.objects.new(name, None) for name in ("Tagged A", "Tagged B", "Plain")]
+            tagged[0][scaling_module.PROPERTY] = "c0201 to c0801"
+            tagged[1][scaling_module.PROPERTY] = "c0101 to c0801"
+            refusal = scaling_module.quick_export_refusal(tagged)
+            warning = scaling_module.simple_export_warning(tagged)
+            single = scaling_module.simple_export_warning(tagged[:1])
+            _require(
+                scaling_module.marks(tagged) == {"c0201 to c0801": ["Tagged A"], "c0101 to c0801": ["Tagged B"]} and
+                scaling_module.quick_export_refusal(tagged[2:]) == "" and scaling_module.simple_export_warning(tagged[2:]) == "" and
+                "Tagged A, Tagged B were sent racially scaled (c0101 to c0801 and c0201 to c0801) for preview only" in refusal and
+                "Plain" not in refusal and "racial scaling off" in refusal and
+                warning.startswith("Tagged A, Tagged B are racially scaled") and
+                single.startswith("Tagged A is racially scaled (c0201 to c0801) for preview."),
+                "Quick Export's refusal and Simple Export's warning name the scaled meshes and their scalings",
+            )
+            for obj in tagged:
+                bpy.data.objects.remove(obj, do_unlink=True)
 
         materials_module = importlib.import_module(f"{package_name}.materials")
         with temporary_scene_data():
@@ -1519,6 +1555,10 @@ def run_staging_isolation_regression(addon) -> None:
             "only the returned imported mesh is parented to the armature",
         )
         _require(
+            armatures[0].hide_get() and not mesh_objects[0].hide_get(),
+            "the imported armature is hidden and its mesh stays visible",
+        )
+        _require(
             any(
                 modifier.type == "ARMATURE"
                 and _same_object(modifier.object, armatures[0])
@@ -1574,6 +1614,59 @@ def run_staging_isolation_regression(addon) -> None:
                 queued[0]["capability"] == "revocation-capability",
                 "offline context revocations retain the authority needed for a later retry",
             )
+
+        _require(
+            not any(ops.racial_scaling.PROPERTY in obj for obj in created_objects),
+            "an unscaled import leaves its meshes without a racial scaling tag",
+        )
+        ops.ModelImport.from_file = staticmethod(fake_import)
+        ops.XIVModel.from_file = staticmethod(lambda file_path: FakeModel())
+        ops._request_variant_targets = fake_variant_request
+        scaled_objects = ()
+        try:
+            scaled_result = bpy.ops.xiv_ie.instant_import(
+                "EXEC_DEFAULT",
+                file_path=str(temp_path),
+                import_name="XIV Instant Edit Scaled Regression",
+                schema="instant-edit.context",
+                version=1,
+                plugin_instance_id="plugin-instance",
+                context_id="racial-scaling-context",
+                import_id="racial-scaling-import",
+                capability="capability",
+                source_game_path="chara/equipment/e6001/model/c0201e6001_top.mdl",
+                object_index=0,
+                callback_port=42428,
+                managed_destination=r"D:\Penumbra\SourceMod\models",
+                target_file_path=r"D:\Penumbra\SourceMod\models\original.mdl",
+                source_mod_directory="SourceModDirectory",
+                source_mod_name="Source Mod",
+                source_mod_root_path=r"D:\Penumbra\SourceMod",
+                target_relative_path="Files/models/original.mdl",
+                resource_manifest_version=0,
+                resource_manifest_status="capture_failed",
+                racial_scaling="c0201 to c0801",
+            )
+            scaled_staging = next(
+                collection for collection in bpy.data.collections
+                if collection.get("context_id") == "racial-scaling-context")
+            scaled_objects = tuple(scaled_staging.objects)
+            scaled_meshes = [obj for obj in scaled_objects if obj.type == "MESH"]
+            _require(
+                scaled_result == {"FINISHED"} and scaled_meshes and
+                all(obj.get(ops.racial_scaling.PROPERTY) == "c0201 to c0801" for obj in scaled_meshes) and
+                not any(ops.racial_scaling.PROPERTY in obj for obj in scaled_objects if obj.type != "MESH"),
+                "a racially scaled import tags each of its meshes with the xiv_racial_scaling custom property",
+            )
+        finally:
+            ops.ModelImport.from_file = original_import
+            ops.XIVModel.from_file = original_model_from_file
+            ops._request_variant_targets = original_variant_request
+            for obj in reversed(scaled_objects):
+                if any(_same_object(item, obj) for item in bpy.data.objects):
+                    bpy.data.objects.remove(obj, do_unlink=True)
+            for collection in [c for c in bpy.data.collections if c.get("context_id") == "racial-scaling-context"]:
+                bpy.data.collections.remove(collection, do_unlink=True)
 
         print("[RESULT] staging-isolation regression PASSED")
     finally:

@@ -42,9 +42,13 @@ internal sealed class ToolSetupViews
     private DateTime _blenderStatusAt = DateTime.MinValue;
     private bool _blenderStatusBusy;
     private string _painterMessage = "";
-    private bool? _painterFilesMatch;
-    private DateTime _painterFilesChecked = DateTime.MinValue;
+    private PainterPluginState? _painterPlugin;
+    private DateTime _painterPluginChecked = DateTime.MinValue;
+    private bool _painterPluginChecking;
     private int? _pendingPainterPort;
+
+    /// <summary> The installed Painter plugin: its version, whether its files are this build's, and its folder. </summary>
+    private sealed record PainterPluginState(string Installed, bool FilesMatch, string Folder);
 
     public ToolSetupViews(Configuration config, Action saveConfig, BlenderClient blender, IPluginLog log)
     {
@@ -60,10 +64,52 @@ internal sealed class ToolSetupViews
     public void Refresh()
     {
         lock (_lock)
+        {
             _detectedAt = DateTime.MinValue;
+            _painterPluginChecked = DateTime.MinValue;
+        }
         _blenderStatusAt = DateTime.MinValue;
-        _painterFilesMatch = null;
         PainterInstallation.Refresh();
+    }
+
+    /// <summary>
+    /// The installed Painter plugin as last read, or null before the first read. It is read again in
+    /// the background every few seconds: reading it touches files and Painter's log.
+    /// </summary>
+    private PainterPluginState? PainterPlugin()
+    {
+        lock (_lock)
+        {
+            if (_painterPluginChecking || DateTime.UtcNow - _painterPluginChecked < DetectionInterval)
+                return _painterPlugin;
+            _painterPluginChecking = true;
+        }
+        _ = Task.Run(() =>
+        {
+            PainterPluginState? found = null;
+            try
+            {
+                var installed = PainterInstallation.InstalledVersion();
+                found = new PainterPluginState(installed, installed.Length > 0 && PainterInstallation.FilesMatch(),
+                    PainterInstallation.PluginsDirectory);
+            }
+            catch (Exception error)
+            {
+                _log.Warning(error, "Could not check the Substance Painter plugin.");
+            }
+            finally
+            {
+                lock (_lock)
+                {
+                    if (found is not null)
+                        _painterPlugin = found;
+                    _painterPluginChecked = DateTime.UtcNow;
+                    _painterPluginChecking = false;
+                }
+            }
+        });
+        lock (_lock)
+            return _painterPlugin;
     }
 
     // ---- Detection -------------------------------------------------------------------------
@@ -438,8 +484,8 @@ internal sealed class ToolSetupViews
             DrawActionMessage("editor:" + editor.Executable);
         }
         ImGui.Spacing();
-        Widgets.HintWrapped("The save scripts add Save Flattened TGA, which saves the open texture back as a flattened 32-bit TGA in one " +
-                            "step and keeps your layers, and Save Flattened TGA As Variant, which saves a named variant next to it.");
+        Widgets.HintWrapped("The save scripts add two actions: 'SaveFlattenedTGA' and 'SaveFlattenedTGAVariant', which save the current texture back as a flattened 32-bit TGA in one " +
+                            "step while keeping layers in your editing copy. Saving as a variant automatically sets up a Penumbra mapping for this texture under the new name.");
     }
 
     private void DrawSaveScripts(TextureEditor editor, SaveScriptState state)
@@ -482,7 +528,7 @@ internal sealed class ToolSetupViews
 
     // ---- Substance Painter -----------------------------------------------------------------
 
-    /// <summary> The Painter integration switch, where Painter was found, and the plugin install. <paramref name="advanced"/> adds ports and an executable override. </summary>
+    /// <summary> The Painter integration switch, where Painter was found, and the plugin install. <paramref name="advanced"/> adds an executable override; Settings draws the port with <see cref="DrawPainterPort"/>. </summary>
     public void DrawPainter(bool advanced)
     {
         var enabled = _config.PainterIntegrationEnabled;
@@ -512,41 +558,53 @@ internal sealed class ToolSetupViews
         if (!_config.PainterIntegrationEnabled)
             return;
 
-        var installed = PainterInstallation.InstalledVersion();
         var current = BlenderClient.CurrentPluginVersion;
-        if (_painterFilesMatch is null || (DateTime.UtcNow - _painterFilesChecked).TotalSeconds > 5)
+        if (PainterPlugin() is not { } plugin)
+            Searching("the Painter plugin");
+        else
         {
-            _painterFilesMatch = installed.Length > 0 && PainterInstallation.FilesMatch();
-            _painterFilesChecked = DateTime.UtcNow;
-        }
-        var sameVersion = installed.Length > 0 && BlenderClient.NormalizeVersion(installed) == BlenderClient.NormalizeVersion(current);
-        var upToDate = sameVersion && _painterFilesMatch == true;
-        if (!tooOld && ImGui.Button(installed.Length == 0 ? "Install Painter plugin" : upToDate ? "Reinstall Painter plugin" : "Update Painter plugin"))
-        {
-            try
+            var installed = plugin.Installed;
+            var sameVersion = installed.Length > 0 && BlenderClient.NormalizeVersion(installed) == BlenderClient.NormalizeVersion(current);
+            var upToDate = sameVersion && plugin.FilesMatch;
+            if (!tooOld && ImGui.Button(installed.Length == 0 ? "Install Painter plugin" : upToDate ? "Reinstall Painter plugin" : "Update Painter plugin"))
             {
-                var folder = PainterInstallation.Install(_config.PainterPort, _config.ListenPort, current);
-                _painterMessage = $"Installed to {folder}. In Painter, enable it once under Python > xiv_instant_edit (restart Painter after an update).";
+                try
+                {
+                    var folder = PainterInstallation.Install(_config.PainterPort, _config.ListenPort, current);
+                    _painterMessage = $"Installed to {folder}. In Painter, enable it once under Python > xiv_instant_edit (restart Painter after an update).";
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    _painterMessage = "Could not install the Painter plugin: " + e.Message;
+                }
+                lock (_lock)
+                    _painterPluginChecked = DateTime.MinValue;
             }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-            {
-                _painterMessage = "Could not install the Painter plugin: " + e.Message;
-            }
-            _painterFilesMatch = null;
+            if (!tooOld)
+                ImGui.SameLine();
+            Widgets.Hint(installed.Length == 0 ? "Not installed yet."
+                : upToDate ? $"Version {installed} is installed."
+                : sameVersion ? $"Version {installed} is installed, but its files differ from this build's. Update it, then restart Painter."
+                : $"Version {installed} is installed; this plugin is {current}.");
+            Widgets.Hint("Plugin folder: " + plugin.Folder);
         }
-        if (!tooOld)
-            ImGui.SameLine();
-        Widgets.Hint(installed.Length == 0 ? "Not installed yet."
-            : upToDate ? $"Version {installed} is installed."
-            : sameVersion ? $"Version {installed} is installed, but its files differ from this build's. Update it, then restart Painter."
-            : $"Version {installed} is installed; this plugin is {current}.");
-        Widgets.Hint("Plugin folder: " + PainterInstallation.PluginsDirectory);
         if (_painterMessage.Length > 0)
             ImGui.TextWrapped(_painterMessage);
         if (!advanced)
             return;
 
+        var executable = _config.PainterExecutablePath;
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputTextWithHint("##painter-exe", "Painter executable (empty: use the one found above)", ref executable, 2048))
+        { _config.PainterExecutablePath = executable.Trim().Trim('"'); _saveConfig(); }
+        Widgets.Hint("Used to start Painter when a model is sent while Painter is closed.");
+    }
+
+    /// <summary> The port the Painter plugin listens on; a new one is written to the installed plugin once the field is left. </summary>
+    public void DrawPainterPort(float width)
+    {
         var painterPort = _pendingPainterPort ?? _config.PainterPort;
+        ImGui.SetNextItemWidth(width);
         if (ImGui.InputInt("Painter port", ref painterPort, 0, 0)) _pendingPainterPort = painterPort;
         if (ImGui.IsItemDeactivatedAfterEdit() && _pendingPainterPort is { } port)
         {
@@ -559,10 +617,5 @@ internal sealed class ToolSetupViews
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _log.Debug(e.Message); }
             }
         }
-        var executable = _config.PainterExecutablePath;
-        ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputTextWithHint("##painter-exe", "Painter executable (empty: use the one found above)", ref executable, 2048))
-        { _config.PainterExecutablePath = executable.Trim().Trim('"'); _saveConfig(); }
-        Widgets.Hint("Used to start Painter when a model is sent while Painter is closed.");
     }
 }

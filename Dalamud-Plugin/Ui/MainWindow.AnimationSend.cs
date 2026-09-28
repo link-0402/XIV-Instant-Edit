@@ -258,7 +258,8 @@ public sealed partial class MainWindow
     {
         var provider = candidate.Source.Resource.ModName ?? candidate.Source.Resource.ModDirectory ??
                        (candidate.Source.Kind == SkeletonSourceKind.Game ? "Vanilla game" : "Current collection");
-        return $"{AnimationPresentation.SourceModelName(candidate)} · {provider} · {candidate.Skeleton.Bones.Length} bones";
+        var bones = candidate.Source.LeadingBones > 0 ? $"its first {candidate.Skeleton.Bones.Length} bones" : $"{candidate.Skeleton.Bones.Length} bones";
+        return $"{AnimationPresentation.SourceModelName(candidate)} · {provider} · {bones}";
     }
 
     private static string ClipLabel(AnimationFileClip clip)

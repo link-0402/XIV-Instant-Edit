@@ -106,7 +106,14 @@ public sealed partial class MainWindow
             try
             {
                 var resources = await ResolvePreviewResourcesAsync(actor).ConfigureAwait(false);
-                var request = new PainterRequest(entity.ObjectIndex, entity.Address.ToInt64(), actor.Name, model, others, resources.ToList());
+                var (scaling, scalingProblem) = _config.ApplyRacialScaling && _skeletons is { } skeletons
+                    ? await skeletons.RacialScalingAsync(entity.ObjectIndex, entity.Address, _lifetimeCts.Token).ConfigureAwait(false)
+                    : (null, null);
+                var request = new PainterRequest(entity.ObjectIndex, entity.Address.ToInt64(), actor.Name, model, others, resources.ToList())
+                {
+                    RacialScaling = scaling,
+                    RacialScalingProblem = scalingProblem,
+                };
                 _painterDraft = await painter.PrepareAsync(request, _lifetimeCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
@@ -410,7 +417,7 @@ public sealed partial class MainWindow
         if (!ImGui.BeginPopupModal(PainterDiscardDialog, ImGuiWindowFlags.AlwaysAutoResize))
             return;
         Widgets.SectionHeader("Discard this Painter project?");
-        Widgets.HintWrapped("Instant Edit forgets the project: Painter can no longer send its textures, and the texture sessions and cached files it used are removed. " +
+        Widgets.HintWrapped("Instant Edit forgets the project: Painter can no longer send its textures, and the texture sessions it opened and its cached files are removed. " +
                             "The saved Painter file, the mods and their backups stay.");
         ImGui.Spacing();
         if (ImGui.Button("Discard project") && _discardPainterJob is { } id && _painter is { } painter)

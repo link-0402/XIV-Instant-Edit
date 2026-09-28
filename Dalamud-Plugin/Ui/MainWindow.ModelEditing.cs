@@ -23,23 +23,25 @@ public sealed partial class MainWindow
     /// <summary>
     /// The model's game skeleton for Blender's generated armature, and a warning for the status
     /// line. Nothing for an existing armature, or when the add-on can't take a skeleton; Blender
-    /// then gives the model's bones no rest pose, as before.
+    /// then gives the model's bones no rest pose, as before. A racially scaled model gets the
+    /// skeleton of the race it was scaled for.
     /// </summary>
     private async Task<(ModelSkeletonPayload? Skeleton, string? Warning)> ResolveSkeletonAsync(
         ActorView actor, MdlFile model, int blenderPort, BlenderImportOptions importOptions,
-        CancellationToken cancellationToken)
+        RacialScaling? scaling, CancellationToken cancellationToken)
     {
         var resolver = _skeletons;
+        var modelPath = scaling is null ? model.GamePath : ModelSkeletonPaths.WithRace(model.GamePath, scaling.CharacterRace);
         if (resolver is null || importOptions.ArmatureMode == BlenderImportOptions.ExistingMode ||
-            ModelSkeletonPaths.Parse(model.GamePath) is null ||
+            ModelSkeletonPaths.Parse(modelPath) is null ||
             !await _blender.SupportsImportSkeletonAsync(blenderPort, cancellationToken).ConfigureAwait(false))
             return (null, null);
         try
         {
             // An on-screen character lends its live skeleton; a browsed mod uses the files.
             var result = actor.Entity is { } entity
-                ? await resolver.ResolveAsync(model.GamePath, entity.ObjectIndex, entity.Address, cancellationToken).ConfigureAwait(false)
-                : await resolver.ResolveAsync(model.GamePath, actor.ImportObjectIndex, 0, cancellationToken).ConfigureAwait(false);
+                ? await resolver.ResolveAsync(modelPath, entity.ObjectIndex, entity.Address, cancellationToken).ConfigureAwait(false)
+                : await resolver.ResolveAsync(modelPath, actor.ImportObjectIndex, 0, cancellationToken).ConfigureAwait(false);
             return (result.Skeleton?.ToPayload(), result.Problem ?? result.Skeleton?.Warnings.FirstOrDefault());
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -50,6 +52,31 @@ public sealed partial class MainWindow
         {
             _log.Warning(e, "Could not resolve the model's game skeleton.");
             return (null, "the game skeleton could not be read, so its bones have no rest pose.");
+        }
+    }
+
+    /// <summary>
+    /// With racial scaling on, how a model of another race is reshaped for the character it is sent
+    /// for: the on-screen actor, or for browsed mods and game files the character they import for.
+    /// Null for models of the character's own race, and with a note when it can't be scaled.
+    /// </summary>
+    private async Task<(RacialScaling? Scaling, string? Warning)> ResolveRacialScalingAsync(
+        ActorView actor, string modelPath, CancellationToken cancellationToken)
+    {
+        if (!_config.ApplyRacialScaling || _skeletons is not { } resolver || ModelSkeletonPaths.Parse(modelPath) is not { Human: true })
+            return (null, null);
+        var (source, problem) = actor.Entity is { } entity
+            ? await resolver.RacialScalingAsync(entity.ObjectIndex, entity.Address, cancellationToken).ConfigureAwait(false)
+            : await resolver.RacialScalingAsync(actor.ImportObjectIndex, 0, cancellationToken).ConfigureAwait(false);
+        if (source is null)
+            return (null, problem);
+        try
+        {
+            return (source.For(modelPath), null);
+        }
+        catch (InvalidDataException e)
+        {
+            return (null, e.Message);
         }
     }
 
@@ -137,6 +164,21 @@ public sealed partial class MainWindow
                 ? await File.ReadAllBytesAsync(model.LocalPath, cancellationToken).ConfigureAwait(false)
                 : (await _data.GetFileAsync<FileResource>(model.LocalPath, cancellationToken).ConfigureAwait(false))?.Data
                     ?? throw new InvalidOperationException($"Game file not found: {model.LocalPath}");
+            // Blender gets the model as the character wears it, for preview: the import context
+            // records the scaling, and the plugin refuses every export from it.
+            var (scaling, scalingWarning) = await ResolveRacialScalingAsync(actor, model.GamePath, cancellationToken).ConfigureAwait(false);
+            if (scaling is not null)
+            {
+                try
+                {
+                    bytes = RacialScalingModel.Apply(bytes, scaling.Deformer);
+                }
+                catch (Exception e) when (e is InvalidDataException or NotSupportedException)
+                {
+                    scalingWarning = e.Message;
+                    scaling = null;
+                }
+            }
             CleanupStaleHandoffs();
             var handoffRoot = Path.Combine(Path.GetTempPath(), "InstantEdit", "handoff");
             Directory.CreateDirectory(handoffRoot);
@@ -189,7 +231,7 @@ public sealed partial class MainWindow
                 }
             }
             var (skeleton, skeletonWarning) = await ResolveSkeletonAsync(
-                actor, model, blenderPort, importOptions, cancellationToken).ConfigureAwait(false);
+                actor, model, blenderPort, importOptions, scaling, cancellationToken).ConfigureAwait(false);
             if (source.SourceState == ResourceSourceState.GameData)
             {
                 handoffCached = await _blender.SendGameImportAsync(
@@ -206,6 +248,7 @@ public sealed partial class MainWindow
                     previewManifestPath: preview?.ManifestPath,
                     resourceManifest: resourceManifest,
                     skeleton: skeleton,
+                    racialScaling: scaling?.ToRecord(),
                     cancellationToken: cancellationToken).ConfigureAwait(false);
             }
             else
@@ -242,6 +285,7 @@ public sealed partial class MainWindow
                     sourceOptionStatus: sourceOption.Status,
                     sourceModStableId: source.SourceModStableId,
                     skeleton: skeleton,
+                    racialScaling: scaling?.ToRecord(),
                     cancellationToken: cancellationToken).ConfigureAwait(false);
             }
             var hasPreviewWarning = preview is { Warnings.Count: > 0 };
@@ -253,8 +297,10 @@ public sealed partial class MainWindow
                     : "exact material/texture sources could not be captured; re-import after resolving the missing resources.")}"
                 : string.Empty;
             var skeletonNote = skeletonWarning is null ? string.Empty : $" Skeleton: {skeletonWarning}";
-            var hasWarning = hasPreviewWarning || hasMashupWarning || skeletonWarning is not null;
-            var status = $"Sent {model.FileName} to Blender.{warning}{mashupWarning}{skeletonNote}";
+            var scalingNote = scalingWarning is null ? string.Empty : $" Not racially scaled: {scalingWarning.TrimEnd('.')}.";
+            var scaled = scaling is null ? string.Empty : $", scaled from {scaling.Description} for preview (it can't be exported)";
+            var hasWarning = hasPreviewWarning || hasMashupWarning || skeletonWarning is not null || scalingWarning is not null;
+            var status = $"Sent {model.FileName} to Blender{scaled}.{warning}{mashupWarning}{skeletonNote}{scalingNote}";
             SetStatus(status, hasWarning ? FeedbackSeverity.Warning : FeedbackSeverity.Success);
             _chat.Print($"XIV Instant Edit: {model.FileName} sent to Blender.");
         }

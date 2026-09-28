@@ -12,7 +12,9 @@ public sealed partial class MainWindow
     private readonly TextureEditService _textures;
     private TextureEditRequest? _newTexture;
     private string _textureModName = "";
+    private const string CleanUpTexturesDialog = "Clean up texture sessions";
     private Guid? _discardTexture;
+    private bool _cleanUpTextures;
     private int _textureBusy;
     private readonly Dictionary<Guid, float> _sessionCardHeights = new();
 
@@ -77,10 +79,19 @@ public sealed partial class MainWindow
             ImGui.Spacing();
             Widgets.Banner("##texture-startup-error", FeedbackSeverity.Error, _textures.StartupError);
         }
+        var sessions = _textures.Sessions;
+        if (sessions.Count > 0 || _painter?.Jobs.Count > 0)
+        {
+            ImGui.Spacing();
+            using (ImRaii.Disabled(Volatile.Read(ref _textureBusy) != 0 || Volatile.Read(ref _painterBusy) != 0))
+                if (ImGui.Button("Clean up all sessions…"))
+                    _cleanUpTextures = true;
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip("Discard every texture session and Substance Painter project, deleting their working files. Mods and backups are kept.");
+        }
         ImGui.Spacing();
         DrawPainterJobs();
 
-        var sessions = _textures.Sessions;
         if (sessions.Count == 0)
         {
             Widgets.EmptyState(FontAwesomeIcon.Images, "No texture sessions",
@@ -237,6 +248,94 @@ public sealed partial class MainWindow
             if (ImGui.Button("Keep session")) { _discardTexture = null; ImGui.CloseCurrentPopup(); }
             ImGui.EndPopup();
         }
+        DrawCleanUpTexturesDialog();
+    }
+
+    private void DrawCleanUpTexturesDialog()
+    {
+        if (_cleanUpTextures && !ImGui.IsPopupOpen(CleanUpTexturesDialog)) ImGui.OpenPopup(CleanUpTexturesDialog);
+        ImGui.SetNextWindowSizeConstraints(Theme.Scaled(440, 0), Theme.Scaled(640, 400));
+        if (!ImGui.BeginPopupModal(CleanUpTexturesDialog, ImGuiWindowFlags.AlwaysAutoResize))
+            return;
+        var sessions = _textures.Sessions.Count;
+        var projects = _painter?.Jobs.Count ?? 0;
+        Widgets.SectionHeader("Discard all texture sessions?");
+        var sessionText = sessions switch
+        {
+            0 => "",
+            1 => "This discards the texture session: its working folder is deleted, including the TGA and any editing documents saved there. ",
+            _ => $"This discards all {sessions} texture sessions: their working folders are deleted, including the TGAs and any editing documents saved there. ",
+        };
+        var projectText = projects switch
+        {
+            0 => "",
+            1 => "The Substance Painter project is discarded as well, so Painter can no longer send its textures; the saved Painter file stays. ",
+            _ => $"The {projects} Substance Painter projects are discarded as well, so Painter can no longer send their textures; the saved Painter files stay. ",
+        };
+        Widgets.HintWrapped(sessionText + projectText + "The mods and their backups are kept.");
+        ImGui.Spacing();
+        if (ImGui.Button("Delete all working files"))
+        {
+            _cleanUpTextures = false;
+            ImGui.CloseCurrentPopup();
+            CleanUpTextureSessions();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("Keep sessions")) { _cleanUpTextures = false; ImGui.CloseCurrentPopup(); }
+        ImGui.EndPopup();
+    }
+
+    /// <summary> Discards every Painter project, then every texture session left, and reports any that stay. </summary>
+    private void CleanUpTextureSessions()
+    {
+        if (Interlocked.CompareExchange(ref _textureBusy, 1, 0) != 0) return;
+        // A Painter project being created would link sessions this is about to remove.
+        if (Interlocked.CompareExchange(ref _painterBusy, 1, 0) != 0)
+        {
+            Interlocked.Exchange(ref _textureBusy, 0);
+            return;
+        }
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var before = _textures.Sessions.Select(s => s.Id).ToList();
+                var projects = 0;
+                if (_painter is { } painter)
+                    foreach (var job in painter.Jobs.ToList())
+                    {
+                        try
+                        {
+                            await painter.DiscardAsync(job.Id).ConfigureAwait(false);
+                            projects++;
+                        }
+                        catch (Exception error) when (error is not OperationCanceledException)
+                        {
+                            _log.Warning(error, "Could not discard a Painter project while cleaning up texture sessions.");
+                        }
+                    }
+                var kept = await _textures.DiscardAllAsync().ConfigureAwait(false);
+                var discarded = before.Count(id => _textures.Sessions.All(s => s.Id != id));
+                var parts = new List<string>();
+                if (discarded > 0 || projects == 0)
+                    parts.Add(discarded == 1 ? "1 texture session" : $"{discarded} texture sessions");
+                if (projects > 0)
+                    parts.Add(projects == 1 ? "1 Painter project" : $"{projects} Painter projects");
+                var text = $"Discarded {string.Join(" and ", parts)}.";
+                if (kept.Count == 0)
+                    SetTextureStatus(text, FeedbackSeverity.Success);
+                else
+                    SetTextureStatus($"{text} {kept.Count} could not be removed; close their files and try again. {string.Join(" ", kept.Take(3))}",
+                        FeedbackSeverity.Warning);
+            }
+            catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
+            catch (Exception error) { _log.Warning(error, "Could not clean up texture sessions."); SetTextureStatus(error.Message, FeedbackSeverity.Error); }
+            finally
+            {
+                Interlocked.Exchange(ref _painterBusy, 0);
+                Interlocked.Exchange(ref _textureBusy, 0);
+            }
+        });
     }
 
     private void TextureAction(Func<Task> action)

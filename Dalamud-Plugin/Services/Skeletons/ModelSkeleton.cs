@@ -54,6 +54,18 @@ internal static partial class ModelSkeletonPaths
             : null;
     }
 
+    /// <summary>
+    /// A human model's path with the race in its file name (<c>c0201</c>e6001_top.mdl) replaced by
+    /// <paramref name="race"/>, for the skeleton that race wears the model with; other paths as given.
+    /// </summary>
+    public static string WithRace(string modelPath, ushort race)
+    {
+        if (Parse(modelPath) is not { Human: true })
+            return modelPath;
+        var name = modelPath.Replace('\\', '/').LastIndexOf('/') + 1;
+        return $"{modelPath[..name]}c{race:D4}{modelPath[(name + 5)..]}";
+    }
+
     private static string Folder(ModelSkeletonKey key) => key.Id[0] switch
     {
         'c' => "human",

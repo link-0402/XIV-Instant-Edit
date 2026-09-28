@@ -16,6 +16,7 @@ from .context import is_safe_game_model_path
 from .cache import CacheStagingError, STALE_SECONDS, cache_root
 from .diagnostics import BridgeRequestError, record_failure, sanitize_text
 from .plugin_http import post_json
+from .racial_scaling import parse_request as parse_racial_scaling
 from .validation import ValidationError, validate_string
 
 
@@ -712,6 +713,14 @@ class _ImportHandler(BaseHTTPRequestHandler):
             from .skeleton import parse_skeleton
 
             skeleton = parse_skeleton(skeleton).to_payload()
+        # Optional: the races a racially scaled model was reshaped between, as "c0201 to c0801".
+        try:
+            racial_scaling = parse_racial_scaling(data.get("racialScaling"))
+        except ValueError as error:
+            raise BridgeRequestError(
+                "request_validation", "invalid_racial_scaling",
+                f"The import's racial scaling is invalid: {error}.",
+                "Update both XIV Instant Edit components and retry.") from error
 
         return {
             **data,
@@ -744,6 +753,7 @@ class _ImportHandler(BaseHTTPRequestHandler):
             "name": display_name,
             "importOptions": import_options,
             "skeleton": skeleton,
+            "racialScaling": racial_scaling,
         }
 
 
@@ -960,6 +970,7 @@ def poll_import_queue() -> float:
                     apply_textures_and_materials=data.get("importOptions", {}).get("applyTexturesAndMaterials", False),
                     preview_manifest_path=data.get("previewManifestPath", ""),
                     skeleton_path=data.get("skeletonPath", ""),
+                    racial_scaling=data.get("racialScaling") or "",
                     cache_job_directory=data.get("cacheJobDirectory", ""),
                 )
                 if result != {"FINISHED"}:

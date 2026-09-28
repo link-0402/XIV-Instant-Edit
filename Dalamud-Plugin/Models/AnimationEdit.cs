@@ -12,6 +12,10 @@ internal enum AnimationDestination { NewMod, InPlace }
 internal enum AnimationOperation { BakeOffsets = 0, RepairSkeleton = 1, ExcludeBones = 6 }
 internal enum SkeletonResolutionState { Searching, Matched, Ambiguous, Incompatible }
 internal enum SkeletonSourceKind { Collection, Game, Mod }
+// The shared body skeleton layouts, each extending the one before it: the game's own,
+// then IVCS's iv_ bones, then YAS's ya_ bones. Animations bind bones by index, and
+// these are the indices other players' skeletons and sync plugins expect.
+internal enum SkeletonStandard { Vanilla, Ivcs, IvcsYas }
 internal sealed record BoneTransform(Vector3 Position, Quaternion Rotation, Vector3 Scale);
 internal sealed record SkeletonBone(string Name, short Parent, byte LockTranslation, BoneTransform Reference);
 internal sealed record SkeletonPartition(string Name, short Start, short Count);
@@ -22,19 +26,30 @@ internal sealed record AnimationSourceIdentity(ImmutableArray<string> MappedGame
 {
     public ImmutableArray<string> MappedGamePaths { get; init; } = MappedGamePaths.IsDefault ? [] : MappedGamePaths;
 }
-internal sealed record SkeletonSource(SkeletonSourceKind Kind, AnimationResource Resource, string Variant = "",
-    ImmutableArray<string> MappedGamePaths = default, string? CanonicalModel = null, string MappingFingerprint = "")
+// The main skeleton of one skeleton file, or with LeadingBones only its first bones: a
+// predictive animation made before a skeleton mod appended bones needs exactly those.
+// Journals saved before only main skeletons were read also name a Variant, the mapper
+// skeleton they meant; it is ignored on load.
+internal sealed record SkeletonSource(SkeletonSourceKind Kind, AnimationResource Resource,
+    ImmutableArray<string> MappedGamePaths = default, string? CanonicalModel = null, string MappingFingerprint = "",
+    int LeadingBones = 0)
 {
     public ImmutableArray<string> MappedGamePaths { get; init; } = MappedGamePaths.IsDefault ? [] : MappedGamePaths;
 }
 internal sealed record SkeletonCandidate(SkeletonSource Source, SkeletonDescription Skeleton, long Rank, string Rationale);
+/// <summary>A standard layout's skeleton for the clip's model, and where it was found.</summary>
+internal sealed record StandardSkeleton(SkeletonStandard Standard, SkeletonDescription Skeleton, string Origin);
 internal sealed record SkeletonResolution(SkeletonResolutionState State, ImmutableArray<SkeletonCandidate> Candidates,
     SkeletonCandidate? Selected = null, string? Reason = null,
     // The source-skeleton bone each of the clip's transform tracks drives, in track
     // order. Resolutions recorded before this was kept load with none.
-    ImmutableArray<short> TrackBones = default)
+    ImmutableArray<short> TrackBones = default,
+    // The standard skeletons found for the clip's model, smallest first; skeleton
+    // repair retargets onto one of them. Older resolutions load with none.
+    ImmutableArray<StandardSkeleton> Standards = default)
 {
     public ImmutableArray<short> TrackBones { get; init; } = TrackBones.IsDefault ? [] : TrackBones;
+    public ImmutableArray<StandardSkeleton> Standards { get; init; } = Standards.IsDefault ? [] : Standards;
 }
 internal sealed record PoseBoneId(string Name, int Partial, int Slot = 0);
 internal sealed record PoseIk(bool Enabled, int Type, bool EnforceConstraints, int Depth, int Iterations,
@@ -71,7 +86,10 @@ internal sealed record AnimationBakeRequest(Guid Id, AnimationCapture Capture, A
     bool AllowClosestSkeletonRepair = false,
     // Animated bones, by name, that a rebake leaves without a track so nothing in
     // the animation drives them any more. Older journals load with none.
-    ImmutableArray<string> ExcludedBones = default)
+    ImmutableArray<string> ExcludedBones = default,
+    // The standard skeleton a repair retargets onto. Repairs journaled before this
+    // retargeted onto the live skeleton and load with none.
+    SkeletonStandard? RepairTarget = null)
 {
     public ImmutableArray<string> ExcludedBones { get; init; } = ExcludedBones.IsDefault ? [] : ExcludedBones;
 }

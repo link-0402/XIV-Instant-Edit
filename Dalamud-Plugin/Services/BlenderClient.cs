@@ -304,7 +304,7 @@ public sealed class BlenderClient : IDisposable
                     return new BlenderAnimationResult(true, Text(root, "action"), Text(root, "armature"), Number(root, "frames"),
                         root.TryGetProperty("frameRate", out var rate) && rate.ValueKind == JsonValueKind.Number ? rate.GetDouble() : 0,
                         Number(root, "frameStart"), Number(root, "frameEnd"), Number(root, "matchedBones"),
-                        Number(root, "missingBoneCount"), missing);
+                        Number(root, "missingBoneCount"), missing, Number(root, "alignedBoneCount"));
                 }
                 if (applied.ValueKind == JsonValueKind.False && root.TryGetProperty("queued", out var queued) &&
                     queued.ValueKind == JsonValueKind.True)
@@ -385,7 +385,8 @@ public sealed class BlenderClient : IDisposable
         SourceOptionLocator? sourceOption = null,
         string sourceOptionStatus = "unknown",
         Guid? sourceModStableId = null,
-        ModelSkeletonPayload? skeleton = null)
+        ModelSkeletonPayload? skeleton = null,
+        RacialScalingRecord? racialScaling = null)
     {
         if (port is < 1 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(port));
@@ -410,7 +411,8 @@ public sealed class BlenderClient : IDisposable
             targetCollectionName,
             sourceOption,
             sourceOptionStatus,
-            sourceModStableId);
+            sourceModStableId,
+            racialScaling: racialScaling);
 
         return await SendImportAsync(
             port, importFilePath, name, context, cancellationToken,
@@ -431,7 +433,8 @@ public sealed class BlenderClient : IDisposable
         BlenderImportOptions? importOptions = null,
         string? previewManifestPath = null,
         ResourceDependencyManifest? resourceManifest = null,
-        ModelSkeletonPayload? skeleton = null)
+        ModelSkeletonPayload? skeleton = null,
+        RacialScalingRecord? racialScaling = null)
     {
         if (port is < 1 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(port));
@@ -445,7 +448,8 @@ public sealed class BlenderClient : IDisposable
             callbackPort,
             targetCollectionId,
             targetCollectionName,
-            resourceManifest);
+            resourceManifest,
+            racialScaling);
 
         return await SendImportAsync(
             port, importFilePath, name, context, cancellationToken,
@@ -499,6 +503,10 @@ public sealed class BlenderClient : IDisposable
                 importOptions = importOptions ?? BlenderImportOptions.Generated,
                 // The model's game skeleton, for the generated armature's rest pose; null without one.
                 skeleton,
+                // The races a racially scaled model was reshaped between; the add-on tags its meshes.
+                racialScaling = context.RacialScaling is { } scaling
+                    ? new { modelRace = $"c{scaling.ModelRace:D4}", race = $"c{scaling.CharacterRace:D4}" }
+                    : null,
             });
 
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");

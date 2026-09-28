@@ -6,6 +6,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
+using InstantEdit.Services.GameFiles;
+using InstantEdit.Services.Skeletons;
 
 namespace InstantEdit.Services;
 
@@ -485,13 +487,14 @@ public sealed partial class ExportServer : IDisposable
                 var (request, error) = ReadRequest(stream);
                 if (error is not null || request is null)
                 {
+                    var browser = error == BrowserRequestError;
                     var failure = StructuredError(
-                        400,
+                        browser ? 403 : 400,
                         "http_request",
                         "request_receipt",
                         RequestReadCode(error),
-                        error ?? "The plugin could not read the bridge request.",
-                        "Update both XIV Instant Edit components and retry.");
+                        browser ? "The plugin only accepts requests from local applications." : error ?? "The plugin could not read the bridge request.",
+                        browser ? "Send requests from Blender or Substance Painter, not a web page." : "Update both XIV Instant Edit components and retry.");
                     WriteResponse(stream, failure.Status, failure.Body);
                     return;
                 }
@@ -871,6 +874,8 @@ public sealed partial class ExportServer : IDisposable
                 return Error(409, "destination_not_ready", "a contributor Context is not ready for mashup export");
             contributors.Add(new MashupContributor(contributorContext, contributor.Materials!));
         }
+        if (RacialScalingRefusal(contributors.Select(item => item.Context).Prepend(activeContext)) is { } planScaling)
+            return Error(StatusForCode(planScaling.Code), planScaling.Code, planScaling.Message);
 
         var plan = PenumbraService.BuildMashupPlan(
             activeContext, contributors, requestPlan.BundleExternalDependencies);
@@ -924,6 +929,8 @@ public sealed partial class ExportServer : IDisposable
                 return Error(409, "destination_not_ready", "a contributor Context is not ready for mashup export");
             contributors.Add(new MashupContributor(contributorContext, contributor.Materials!));
         }
+        if (RacialScalingRefusal(contributors.Select(item => item.Context).Prepend(activeContext)) is { } exportScaling)
+            return Error(StatusForCode(exportScaling.Code), exportScaling.Code, exportScaling.Message);
 
         var plan = PenumbraService.BuildMashupPlan(
             activeContext, contributors, mashup.BundleExternalDependencies);
@@ -1103,6 +1110,10 @@ public sealed partial class ExportServer : IDisposable
                         false,
                         stageResult.Error.Value.Code,
                         stageResult.Error.Value.Message);
+                }
+                else if (RacialScalingRefusal([reservation.Context]) is { } scalingRefusal)
+                {
+                    receipt = scalingRefusal;
                 }
                 else
                 {
@@ -1616,6 +1627,19 @@ public sealed partial class ExportServer : IDisposable
         }
     }
 
+    /// <summary>
+    /// Racially scaled imports are for preview only: an export from one, or a mashup with one, is
+    /// refused before anything is written. Null when none of the imports was scaled.
+    /// </summary>
+    internal static ExportReceipt? RacialScalingRefusal(IEnumerable<InstantEditImportContext> contexts)
+    {
+        if (contexts.Select(context => context.RacialScaling).FirstOrDefault(scaling => scaling is not null) is not { } record)
+            return null;
+        return new ExportReceipt(false, "racial_scaling_preview",
+            $"This model was sent to Blender racially scaled (c{record.ModelRace:D4} to {GameRaces.Label(record.CharacterRace)}) " +
+            "for preview only, so it can't be exported. Re-import it with racial scaling off to edit and export it.");
+    }
+
     internal static void CleanupStagedExport(StagedExport? staged)
     {
         if (staged is null)
@@ -1745,6 +1769,7 @@ public sealed partial class ExportServer : IDisposable
             "request body is too large" => "request_body_too_large",
             "request is too large" => "request_too_large",
             "request body ended early" => "request_body_incomplete",
+            BrowserRequestError => "request_forbidden",
             _ => "malformed_http_request",
         };
 
@@ -1791,6 +1816,8 @@ public sealed partial class ExportServer : IDisposable
             return "receipt_lookup";
         if (code is "destination_not_ready" or "vanilla_mod_exists" or "mashup_plan_mismatch")
             return "destination_validation";
+        if (code is "racial_scaling_preview")
+            return "racial_scaling";
         return code == "internal_error" ? "processing" : "external_service";
     }
 
@@ -1813,6 +1840,8 @@ public sealed partial class ExportServer : IDisposable
             return "Select or create a valid Penumbra destination, then retry.";
         if (code is "mashup_plan_mismatch")
             return "Refresh the mashup plan and retry the export.";
+        if (code is "racial_scaling_preview")
+            return "Re-import the model with racial scaling off to edit and export it.";
         if (code == "internal_error")
             return "Retry the operation and review the Dalamud plugin log if it fails again.";
         return "Review the reported Penumbra or request details, correct them, and retry.";
@@ -1847,6 +1876,7 @@ public sealed partial class ExportServer : IDisposable
             "invalid_capability" or "plugin_instance_mismatch" => 401,
             "duplicate_export_id" => 409,
             "mashup_plan_mismatch" => 409,
+            "racial_scaling_preview" => 409,
             "vanilla_mod_exists" or "destination_not_ready" => 409,
             "export_not_found" => 404,
             "server_stopped" or "internal_error" => 500,
@@ -1883,6 +1913,8 @@ public sealed partial class ExportServer : IDisposable
         var contentLength = 0;
         foreach (var line in lines.Skip(1))
         {
+            if (IsBrowserRequestHeader(line))
+                return (null, BrowserRequestError);
             if (!line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
                 continue;
 
@@ -1910,6 +1942,28 @@ public sealed partial class ExportServer : IDisposable
             requestLine[0],
             requestLine[1],
             bytes.GetRange(bodyStart, contentLength).ToArray()), null);
+    }
+
+    private const string BrowserRequestError = "browser requests are refused";
+
+    /// <summary>
+    /// Whether a header line marks what a web page could send to loopback (CSRF, DNS rebinding):
+    /// an Origin or Sec-Fetch-Site header, or a Host other than 127.0.0.1 or localhost. Blender
+    /// and Painter, the listener's clients, send none of these.
+    /// </summary>
+    private static bool IsBrowserRequestHeader(string line)
+    {
+        var colon = line.IndexOf(':');
+        if (colon <= 0)
+            return false;
+        var name = line[..colon].Trim();
+        if (name.Equals("Origin", StringComparison.OrdinalIgnoreCase) || name.Equals("Sec-Fetch-Site", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (!name.Equals("Host", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var host = line[(colon + 1)..].Trim().ToLowerInvariant();
+        var hostname = host.Contains(':') ? host[..host.LastIndexOf(':')] : host;
+        return host.Length > 0 && hostname is not ("127.0.0.1" or "localhost");
     }
 
     private static int FindHeaderEnd(List<byte> bytes)

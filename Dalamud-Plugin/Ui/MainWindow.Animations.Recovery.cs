@@ -38,10 +38,12 @@ public sealed partial class MainWindow
         return null;
     }
 
-    private static string OperationLabel(AnimationOperation operation)
-        => operation switch
+    private static string OperationLabel(AnimationBakeRequest request)
+        => request.Operation switch
         {
-            AnimationOperation.RepairSkeleton => "skeleton repair",
+            AnimationOperation.RepairSkeleton => request.RepairTarget is { } target
+                ? $"skeleton repair onto {AnimationBones.StandardName(target)}"
+                : "skeleton repair",
             AnimationOperation.ExcludeBones => "bone exclusion",
             _ => "LivePose bake",
         };
@@ -111,7 +113,7 @@ public sealed partial class MainWindow
             ImGui.TableSetColumnIndex(1);
             ImGui.AlignTextToFramePadding();
             ImGui.TextUnformatted(AnimationPresentation.AnimationName(journal.Request.Capture, false));
-            ImGui.TextColored(Theme.Muted, $"{OperationLabel(journal.Request.Operation)} · {DestinationLabel(journal.Request)}");
+            ImGui.TextColored(Theme.Muted, $"{OperationLabel(journal.Request)} · {DestinationLabel(journal.Request)}");
 
             ImGui.TableSetColumnIndex(2);
             var (colour, state) = JournalState(journal);

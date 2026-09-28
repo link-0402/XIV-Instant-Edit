@@ -108,19 +108,6 @@ internal static unsafe class AnimationRuntime
         if (objects.LocalPlayer is not { } player) return null;
         return (((Character*)player.Address)->ContentId, player.Address, player.ObjectIndex);
     }
-    public static void CheckPartial(IObjectTable objects, AnimationClip clip)
-    {
-        if (objects.LocalPlayer is not { } player) throw new InvalidOperationException("The player is unavailable.");
-        var character = ((Character*)player.Address)->GetCharacterBase();
-        if (character == null || character->Skeleton == null || clip.Partial < 0 ||
-            character->Skeleton->PartialSkeletons == null || character->Skeleton->PartialSkeletonCount <= clip.Partial)
-            throw new InvalidOperationException("The captured partial skeleton is unavailable.");
-        var partial = &character->Skeleton->PartialSkeletons[clip.Partial];
-        var animated = partial->GetHavokAnimatedSkeleton(0);
-        if (animated == null || SkeletonFingerprint(animated->Skeleton) != clip.SkeletonFingerprint)
-            throw new InvalidOperationException("The player's skeleton changed during baking.");
-    }
-
     public static RuntimeChangeStamp? CaptureChangeStamp(IObjectTable objects)
     {
         if (objects.LocalPlayer is not { } player) return null;

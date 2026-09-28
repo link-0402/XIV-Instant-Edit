@@ -63,8 +63,8 @@ public sealed class Configuration : IPluginConfiguration
     public string AnimationArmatureName { get; set; } = "Skeleton";
 
     /// <summary>
-    /// Key bone scale in animations sent to Blender. Off leaves scaling applied in Blender,
-    /// such as a Customize+ profile, in place.
+    /// Key bone scale in animations sent to Blender, combined the way the game combines it. Off
+    /// leaves bone scaling applied in Blender in place. Recordings leave Customize+ out either way.
     /// </summary>
     public bool AnimationKeyScale { get; set; }
 
@@ -73,6 +73,13 @@ public sealed class Configuration : IPluginConfiguration
 
     /// <summary>Countdown before a live pose recording starts, in seconds.</summary>
     public float RecordingDelaySeconds { get; set; } = 3f;
+
+    /// <summary>
+    /// Send models made for another race (most female gear is c0201) to Blender and Substance Painter
+    /// reshaped for the character's race, as the game's racial deformer shows them. For preview only:
+    /// the plugin refuses exports of scaled imports.
+    /// </summary>
+    public bool ApplyRacialScaling { get; set; }
 
     /// <summary>Create display-only Blender materials from the resolved FFXIV resources.</summary>
     public bool ApplyTexturesAndMaterials { get; set; }

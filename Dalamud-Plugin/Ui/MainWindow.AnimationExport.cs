@@ -33,8 +33,9 @@ public sealed partial class MainWindow
         var active = recorder;
         if (active == null)
             return;
-        Widgets.HintWrapped($"Records a character's live skeleton, including the game's bone physics, Customize+ and LivePose, " +
-                            $"and keys it onto \"{AnimationArmature}\" in Blender to test clothing against it.");
+        Widgets.HintWrapped($"Records a character's live skeleton, including the game's bone physics and LivePose, " +
+                            $"and keys it onto \"{AnimationArmature}\" in Blender to test clothing against it. " +
+                            "Customize+ is paused on the character while it records; MagicFit adds it in Blender.");
         ImGui.Spacing();
         var progress = active.Progress;
         var sending = Volatile.Read(ref recorderSending) != 0;
@@ -69,7 +70,8 @@ public sealed partial class MainWindow
         {
             var width = Math.Min(Theme.Scaled(360), ImGui.GetContentRegionAvail().X);
             if (running.Waiting)
-                ImGui.ProgressBar(0, new Vector2(width, 0), $"Recording starts in {Math.Ceiling(-running.Elapsed):0} s");
+                // Past the countdown it still waits a few frames for Customize+ to pause.
+                ImGui.ProgressBar(0, new Vector2(width, 0), $"Recording starts in {Math.Max(0, Math.Ceiling(-running.Elapsed)):0} s");
             else
                 ImGui.ProgressBar((float)Math.Clamp(running.Elapsed / running.Duration, 0, 1), new Vector2(width, 0),
                     $"Recording {running.Character}: {running.Elapsed:0.0} / {running.Duration:0.0} s");
@@ -147,7 +149,15 @@ public sealed partial class MainWindow
         try
         {
             recorderMessage = new RecorderMessage($"Sending {take.FrameCount} frames of {take.Bones.Length} bones to Blender…", FeedbackSeverity.Info);
-            ReportRecorder(await DeliverAnimationAsync(take, token).ConfigureAwait(false), FeedbackSeverity.Success);
+            var result = await DeliverAnimationAsync(take, token).ConfigureAwait(false);
+            string? warning = null;
+            if (take.Source.TryGetValue(AnimationRecorder.CustomizePlusSource, out var customizePlus) &&
+                customizePlus != AnimationRecorder.CustomizePlusPaused)
+                warning = $"{customizePlus}, so the recording includes its changes.";
+            else if (take.Source.TryGetValue(AnimationRecorder.ScaledBonesSource, out var scaled))
+                warning = RecordingScale.Warning(scaled, _config.AnimationKeyScale);
+            ReportRecorder(warning == null ? result : $"{result} {warning}",
+                warning == null ? FeedbackSeverity.Success : FeedbackSeverity.Warning);
         }
         catch (OperationCanceledException)
         {
@@ -210,7 +220,8 @@ public sealed partial class MainWindow
             _config.AnimationKeyScale = keyScale;
             _saveConfig();
         }
-        Widgets.HintWrapped("Off leaves bone scaling applied in Blender, such as a Customize+ profile, in place. " +
-                            "On reproduces the game's scaling, including Customize+ in recordings.");
+        Widgets.HintWrapped("On keys bone scale too, and sets bones under an unevenly scaled bone to inherit scale " +
+                            "Aligned, the way the game scales them. Recordings leave Customize+ out, since MagicFit " +
+                            "adds it. Off leaves bone scaling applied in Blender in place.");
     }
 }

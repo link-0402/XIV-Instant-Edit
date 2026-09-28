@@ -60,8 +60,7 @@ internal static class AnimationClipExport
                 skeletonDocument = new AnimationNative.Document(AnimationPap.SkeletonHavok(sklb));
                 if (clip.BindingIndex < 0 || clip.BindingIndex >= document.Container->Bindings.Length)
                     throw new InvalidDataException("The animation file no longer has the captured clip.");
-                description = AnimationSkeleton.SelectSource(
-                    AnimationSkeleton.DescribeSources(skeletonDocument.Root, skeletonDocument.Container), source.Skeleton.Fingerprint);
+                description = AnimationSkeleton.SelectSource(skeletonDocument.Container, source.Skeleton.Fingerprint, source.Source.LeadingBones);
                 var binding = document.Container->Bindings[clip.BindingIndex].ptr;
                 if (clip.BindingFingerprint.Length > 0 && AnimationNative.Fingerprint(binding) != clip.BindingFingerprint)
                     throw new InvalidDataException("The animation changed since it was captured. Play the animation again.");

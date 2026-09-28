@@ -13,11 +13,15 @@ public sealed partial class MainWindow
     // drives starts ticked, and choosing another animation starts over.
     private readonly HashSet<string> animationExcludedBones = new(StringComparer.Ordinal);
     private string animationBoneFilter = "";
+    // The standard skeleton the Skeleton repair tab retargets onto. Null picks the smallest
+    // one that has every kept bone.
+    private SkeletonStandard? animationRepairTarget;
 
     private void ResetAnimatedBones()
     {
         animationExcludedBones.Clear();
         animationBoneFilter = "";
+        animationRepairTarget = null;
     }
 
     /// <summary>
@@ -31,14 +35,50 @@ public sealed partial class MainWindow
         ImGui.Spacing();
         var bones = AnimationBones.Animated(capture.Clip);
         if (bones.IsEmpty)
+        {
             ImGui.TextDisabled("The bones this animation moves are listed once its source skeleton is identified.");
+        }
         else
-            DrawAnimatedBoneList(bones);
+        {
+            DrawBonePresets(capture.Clip);
+            DrawAnimatedBoneList(capture.Clip, bones);
+        }
         DrawRebake(capture, AnimationOperation.ExcludeBones, "Rebake without unticked bones",
             "Write the animation without tracks for the unticked bones, handing them back to physics.");
     }
 
-    private void DrawAnimatedBoneList(ImmutableArray<string> bones)
+    /// <summary> Presets that tick one standard's bone groups and untick every other animated bone. </summary>
+    private void DrawBonePresets(AnimationClip clip)
+    {
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Keep only");
+        foreach (var standard in Enum.GetValues<SkeletonStandard>())
+        {
+            ImGui.SameLine();
+            var outside = AnimationBones.Outside(clip, standard);
+            using (ImRaii.Disabled(outside is null))
+            {
+                if (ImGui.SmallButton(AnimationBones.StandardName(standard)) && outside is { } untick)
+                {
+                    animationExcludedBones.Clear();
+                    animationExcludedBones.UnionWith(untick);
+                }
+            }
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(outside is not { } others
+                    ? "The game's own skeleton for this animation's model was not found, so its bones are unknown."
+                    : $"Tick {PresetGroups(standard)} and untick the other {others.Length} animated bones.");
+        }
+    }
+
+    private static string PresetGroups(SkeletonStandard standard) => standard switch
+    {
+        SkeletonStandard.Ivcs => "the game's own bones and IVCS's iv_ bones",
+        SkeletonStandard.IvcsYas => "the game's own bones, IVCS's iv_ bones and YAS's ya_ bones",
+        _ => "the game's own bones",
+    };
+
+    private void DrawAnimatedBoneList(AnimationClip clip, ImmutableArray<string> bones)
     {
         ImGui.SetNextItemWidth(Math.Min(Theme.Scaled(260), ImGui.GetContentRegionAvail().X));
         ImGui.InputTextWithHint("##animated-bone-filter", "Filter bones", ref animationBoneFilter, 128);
@@ -66,9 +106,16 @@ public sealed partial class MainWindow
                 }
             }
         }
-        ImGui.TextDisabled(animationExcludedBones.Count == 0
-            ? $"All {bones.Length} bones stay animated."
+        // Sync plugins refuse animations that bind bone indices beyond the receiving skeleton.
+        var highest = AnimationBones.HighestIndex(clip, animationExcludedBones);
+        ImGui.TextDisabled((animationExcludedBones.Count == 0
+            ? $"All {bones.Length} bones stay animated"
             : $"{bones.Length - animationExcludedBones.Count} of {bones.Length} bones stay animated; " +
-              $"{animationExcludedBones.Count} will be left out.");
+              $"{animationExcludedBones.Count} will be left out") + (highest < 0 ? "." : $" · highest bone index {highest}."));
+        // A rebake here keeps the source's own bone order; only repair moves bones onto standard indices.
+        if (clip.Resolution is { Selected: { } source, Standards: { IsEmpty: false } standards } &&
+            standards.All(s => s.Skeleton.Fingerprint != source.Skeleton.Fingerprint))
+            Widgets.HintWrapped("This animation was made for a skeleton that is not one of the standard layouts, and rebaking " +
+                                "here keeps its bone indices. Skeleton repair moves the kept bones onto standard indices.");
     }
 }

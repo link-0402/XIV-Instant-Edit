@@ -126,6 +126,54 @@ internal static class AnimationExportFixture
         reject(() => AnimationTakeTiming.Resample([0], [new float[3]], Bones.Length, 60), "a recorded frame must match the skeleton");
     }
 
+    /// <summary>
+    /// Scaling a recording shows beyond the game's own, which is what remains of Customize+ when the
+    /// recorder couldn't pause it (a temporary profile from Brio or Mare).
+    /// </summary>
+    public static void RecordingScaleCases(Action<bool, string> check)
+    {
+        ImmutableArray<AnimationTakeBone> bones =
+        [
+            new("n_root", -1, T(0)),
+            new("j_kosi", 0, T(0, 1.02f)),
+            new("j_asi_a_l", 1, T(0.1f)),
+            new("j_mune_l", 1, T(0.05f, 0.2f, 0.08f)),
+            new("iv_c_mune_l", 3, T(0.01f)),
+            new("n_sippo_a", 1, T(0, 0, -0.1f)),
+            new("n_sippo_b", 5, T(0, 0, -0.1f)),
+            new("j_hidden", 1, new BoneTransform(Vector3.Zero, Quaternion.Identity, Vector3.Zero)),
+            new("j_f_mayu_l", 0, T(0, 1.6f)),
+        ];
+        // Every bone but the face bone belongs to the body partial.
+        var body = Enumerable.Range(0, bones.Length - 1).ToArray();
+
+        float[] Frame(params (string Bone, Vector3 Scale)[] changes)
+        {
+            var frame = new float[bones.Length * AnimationTake.Stride];
+            for (var i = 0; i < bones.Length; i++)
+            {
+                var reference = bones[i].Reference;
+                var change = changes.Where(c => c.Bone == bones[i].Name).Select(c => (Vector3?)c.Scale).FirstOrDefault();
+                AnimationTake.Write(reference with { Scale = change ?? reference.Scale }, frame.AsSpan(i * AnimationTake.Stride, AnimationTake.Stride));
+            }
+            return frame;
+        }
+
+        check(RecordingScale.ScaledBones(bones, body, Frame()).Count == 0, "a recording at the reference scale has nothing scaled");
+        check(RecordingScale.ScaledBones(bones, body, Frame(("j_mune_l", new(1.2f, 1.1f, 1.1f)), ("iv_c_mune_l", new(1 / 1.2f, 1 / 1.1f, 1 / 1.1f)),
+                ("n_sippo_a", new(1.3f)), ("n_sippo_b", new(0.9f)))).Count == 0,
+            "the bust and the tail, which the game scales itself, are left out with the bones below them");
+        var scaled = RecordingScale.ScaledBones(bones, body, Frame(("j_kosi", new(1, 1.15f, 1.1f)), ("j_asi_a_l", new(1, 1.36f / 1.15f, 1.4f / 1.1f)),
+            ("n_root", new(1.005f)), ("j_hidden", new(1.5f)), ("j_f_mayu_l", new(1, 0.72f, 1))));
+        check(scaled.SequenceEqual(["j_kosi", "j_asi_a_l"]),
+            "Customize+-like scaling of body bones is found in take order, while float noise, hidden bones and bones outside the body are not");
+        check(RecordingScale.Describe(["a", "b", "c", "d", "e", "f"]) == "a, b, c, d and 2 more" && RecordingScale.Describe(["j_kosi"]) == "j_kosi",
+            "scaled bones are named briefly");
+        check(RecordingScale.Warning("j_kosi", keyScale: false).EndsWith("and send it again with Key bone scale on.") &&
+              RecordingScale.Warning("j_kosi", keyScale: true).EndsWith("off for this recording."),
+            "the warning asks for Key bone scale only while it is off");
+    }
+
     /// <summary>Animations tab rows for animations the listener detected, and action names for PAP files sent from the Mod Browser.</summary>
     public static void Rows(Action<bool, string> check)
     {

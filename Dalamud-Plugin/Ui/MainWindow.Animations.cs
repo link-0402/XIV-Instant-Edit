@@ -108,7 +108,7 @@ public sealed partial class MainWindow
         }
         if (animationSelection != null && animationSelection.ActorId != observer.Actor)
             ClearAnimationSelection();
-        if (animationSelection is { Playing: false } stale && !AnimationPresentation.Ready(stale))
+        if (animationSelection is { Playing: false } stale && !AnimationPresentation.Listed(stale))
             ClearAnimationSelection();
         // Another source skeleton can name the same tracks differently; only bones the animation
         // still drives can be left out.
@@ -322,7 +322,7 @@ public sealed partial class MainWindow
         DrawAnimationTool("Source", "see its file and the skeleton it was made for", DrawAnimationSource);
         DrawAnimationTool("LivePose", "bake your LivePose adjustments into it", DrawLivePose);
         DrawAnimationTool("Animated bones", "choose the bones it moves", DrawAnimatedBones);
-        DrawAnimationTool("Skeleton repair", "retarget it onto your character's skeleton", DrawSkeletonRepair);
+        DrawAnimationTool("Skeleton repair", "retarget it onto a standard skeleton", DrawSkeletonRepair);
         DrawRecentEditsTab();
         if (ImGui.BeginTabItem("Record live pose", ImGuiTabItemFlags.Trailing))
         {
@@ -493,8 +493,7 @@ public sealed partial class MainWindow
                 {
                     foreach (var candidate in resolution.Candidates)
                     {
-                        var variant = candidate.Source.Variant.Length == 0 ? "main skeleton" : candidate.Source.Variant;
-                        if (ImGui.Selectable($"{SkeletonLabel(candidate)} · {Path.GetFileName(candidate.Source.Resource.ResolvedPath)} · {variant}##{AnimationSkeletonIndex.SelectionId(candidate)}",
+                        if (ImGui.Selectable($"{SkeletonLabel(candidate)} · {Path.GetFileName(candidate.Source.Resource.ResolvedPath)}##{AnimationSkeletonIndex.SelectionId(candidate)}",
                                 candidate == resolution.Selected))
                             ChooseSourceSkeleton(capture, clip, candidate, startup);
                         if (ImGui.IsItemHovered())
@@ -516,8 +515,9 @@ public sealed partial class MainWindow
             .Distinct(StringComparer.Ordinal).ToArray();
         if (aliases.Length > 0)
             ImGui.TextColored(Theme.Hint, "Mapped aliases: " + string.Join(", ", aliases));
-        if (source.Source.Variant.Length > 0)
-            ImGui.TextColored(Theme.Hint, source.Source.Variant);
+        if (source.Source.LeadingBones > 0)
+            Widgets.HintWrapped($"Uses only its first {source.Source.LeadingBones} bones: no whole skeleton fits, so the animation " +
+                                "was likely made before more bones were added at the end of this skeleton.");
     }
 
     private void ChooseSourceSkeleton(AnimationCapture capture, AnimationClip clip, SkeletonCandidate candidate, bool startup)
@@ -643,30 +643,95 @@ public sealed partial class MainWindow
         }
     }
 
-    /// <summary> The Skeleton repair tab: retargets the animation onto your character's live skeleton. </summary>
+    /// <summary>
+    /// The Skeleton repair tab: retargets the animation onto a standard skeleton, never your own rig,
+    /// which skeleton mods often grow to every bone group there is.
+    /// </summary>
     private void DrawSkeletonRepair(AnimationCapture capture)
     {
-        Widgets.HintWrapped("Retargets the animation onto your character's live skeleton, for example after a skeleton mod such as YAS " +
-                            "inserted bones the animation was not made for. Live offsets stay as they are.");
+        Widgets.HintWrapped("Retargets the animation onto a standard skeleton, the game's own, IVCS or IVCS + YAS, so every bone " +
+                            "sits at the index other players' skeletons and sync plugins expect, whatever your own skeleton mod " +
+                            "adds. Only bones the animation moves are written. Live offsets stay as they are.");
         ImGui.Spacing();
+        var clip = capture.Clip;
+        var target = RepairTarget(clip);
+        var plan = target is { } chosen ? AnimationBones.Plan(clip, chosen, animationExcludedBones) : null;
         using (var facts = ImRaii.Table("##repair-facts", 2, ImGuiTableFlags.SizingFixedFit))
         {
             if (facts.Success)
             {
                 SetupFacts();
-                Fact("Live skeleton");
-                DrawLiveSkeleton(capture.Clip);
                 Fact("Made for");
-                if (SkeletonBlock(capture.Clip) is null && capture.Clip.Resolution?.Selected is { } source)
+                if (SkeletonBlock(clip) is null && clip.Resolution?.Selected is { } source)
                     ImGui.TextUnformatted(SkeletonLabel(source));
                 else
-                    ImGui.TextColored(Theme.Hint, capture.Clip.Resolution?.State == SkeletonResolutionState.Ambiguous
+                    ImGui.TextColored(Theme.Hint, clip.Resolution?.State == SkeletonResolutionState.Ambiguous
                         ? "Several fit; choose one in the Source tab"
                         : "Not identified yet");
+                Fact("Repair onto");
+                DrawRepairTargets(clip, target);
+                var animated = AnimationBones.Animated(clip).Length;
+                if (plan is not null && animated > 0)
+                {
+                    Fact("Result");
+                    ImGui.TextUnformatted(plan.Kept.IsEmpty
+                        ? $"None of the {animated} animated bones"
+                        : $"{plan.Kept.Length} of {animated} animated bones · highest bone index {plan.HighestIndex}" +
+                          $" (now {AnimationBones.HighestIndex(clip, [])})");
+                }
             }
         }
+        if (plan is { Dropped.IsEmpty: false })
+            Widgets.HintWrapped($"{plan.Dropped.Length} animated {(plan.Dropped.Length == 1 ? "bone" : "bones")} the " +
+                                $"{AnimationBones.StandardName(plan.Target.Standard)} skeleton lacks will be left out: " +
+                                string.Join(", ", plan.Dropped.Take(6).Select(AnimationPresentation.BoneName)) +
+                                (plan.Dropped.Length > 6 ? $" and {plan.Dropped.Length - 6} more." : "."));
         DrawRebake(capture, AnimationOperation.RepairSkeleton, "Repair skeleton",
-            "Retarget the animation onto the live skeleton, for example after a mod inserted bones.");
+            "Retarget the animation onto the chosen standard skeleton, writing only the bones it moves.");
+    }
+
+    /// <summary> The standard skeleton a repair retargets onto: your choice, else the smallest that has every kept bone. </summary>
+    private SkeletonStandard? RepairTarget(AnimationClip clip)
+        => animationRepairTarget is { } chosen && AnimationBones.Standard(clip, chosen) is not null
+            ? chosen
+            : AnimationBones.DefaultRepairTarget(clip, animationExcludedBones);
+
+    private void DrawRepairTargets(AnimationClip clip, SkeletonStandard? target)
+    {
+        var first = true;
+        foreach (var standard in Enum.GetValues<SkeletonStandard>())
+        {
+            if (!first) ImGui.SameLine(0, Theme.Scaled(12));
+            first = false;
+            var found = AnimationBones.Standard(clip, standard);
+            using (ImRaii.Disabled(found is null))
+            {
+                if (ImGui.RadioButton(AnimationBones.StandardName(standard), target == standard))
+                    animationRepairTarget = standard;
+            }
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(found is not null
+                    ? $"{found.Skeleton.Bones.Length} bones, from {found.Origin}"
+                    : standard == SkeletonStandard.Vanilla
+                        ? "The game's own skeleton for this animation's model was not found."
+                        : $"No {AnimationBones.StandardName(standard)} skeleton for this model is in the skeleton library. " +
+                          "Install one and rebuild the library in Settings.");
+        }
+    }
+
+    /// <summary> What stops a repair onto the chosen standard, or null when nothing does. </summary>
+    private string? RepairBlock(AnimationCapture capture, ImmutableArray<string> excluded)
+    {
+        if (RepairTarget(capture.Clip) is not { } target)
+            return "No standard skeleton was found for this animation's model.";
+        var name = AnimationBones.StandardName(target);
+        if (AnimationBones.Plan(capture.Clip, target, excluded) is not { } plan)
+            return $"No {name} skeleton was found for this animation's model.";
+        if (plan.Kept.IsEmpty)
+            return $"None of the bones this animation moves are on the {name} skeleton.";
+        if (excluded.IsEmpty && capture.Clip.Resolution?.Selected?.Skeleton.Fingerprint == plan.Target.Skeleton.Fingerprint)
+            return $"The animation was already made for the {name} skeleton.";
+        return null;
     }
 
     /// <summary>
@@ -737,6 +802,10 @@ public sealed partial class MainWindow
         problem ??= AnimationBones.Problem(capture.Clip, excluded);
         if (operation == AnimationOperation.BakeOffsets)
             problem ??= AnimationBones.OffsetConflict(excluded, animationBones.Select(b => b.Name));
+        // An included startup is repaired onto the same standard, so it needs that skeleton too.
+        if (operation == AnimationOperation.RepairSkeleton && RepairTarget(capture.Clip) is { } target &&
+            clips.Skip(1).Any(clip => AnimationBones.Standard(clip, target) is null))
+            problem ??= $"No {AnimationBones.StandardName(target)} skeleton was found for the startup. Leave it out of the rebake.";
         return problem;
     }
 
@@ -748,6 +817,7 @@ public sealed partial class MainWindow
             AnimationOperation.BakeOffsets when animationBones.Count == 0 => "Tick at least one adjusted bone.",
             AnimationOperation.BakeOffsets when animationComponents == PoseComponents.None => "Tick position, rotation or scale.",
             AnimationOperation.ExcludeBones when excluded.IsEmpty => "Untick at least one bone the animation should stop moving.",
+            AnimationOperation.RepairSkeleton => RepairBlock(capture, excluded),
             _ => null,
         };
 
@@ -756,7 +826,8 @@ public sealed partial class MainWindow
             ? new AnimationBakeRequest(Guid.NewGuid(), capture, animationDestination, animationModName.Trim(), includeStartup,
                 animationBones.ToImmutableHashSet(), animationComponents, ExcludedBones: excluded)
             : new AnimationBakeRequest(Guid.NewGuid(), capture, animationDestination, animationModName.Trim(), includeStartup,
-                ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, operation, ExcludedBones: excluded);
+                ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, operation, ExcludedBones: excluded,
+                RepairTarget: operation == AnimationOperation.RepairSkeleton ? RepairTarget(capture.Clip) : null);
 
     private void DrawUndoLastEdit()
     {
@@ -769,7 +840,7 @@ public sealed partial class MainWindow
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(undoable is null
                 ? "There is no completed edit to undo."
-                : $"Revert {AnimationPresentation.AnimationName(undoable.Request.Capture, false)} ({OperationLabel(undoable.Request.Operation)}, {DestinationLabel(undoable.Request)}) and restore its live offsets.");
+                : $"Revert {AnimationPresentation.AnimationName(undoable.Request.Capture, false)} ({OperationLabel(undoable.Request)}, {DestinationLabel(undoable.Request)}) and restore its live offsets.");
     }
 
     private static string? SkeletonBlock(AnimationClip clip) => clip.Resolution is { State: not SkeletonResolutionState.Matched } resolution

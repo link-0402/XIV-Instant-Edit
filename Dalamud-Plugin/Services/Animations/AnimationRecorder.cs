@@ -16,9 +16,10 @@ internal sealed record RecordingProgress(bool Active, bool Waiting, double Elaps
 
 /// <summary>
 /// Records a character's live skeleton on every framework update. That pose is the one the game
-/// renders: the animation with bone physics, Customize+ and LivePose applied, which is what a
-/// clipping test in Blender needs to see. Recordings are resampled to <see cref="SampleRate"/>
-/// before they leave the plugin.
+/// renders: the animation with bone physics and LivePose applied, which is what a clipping test in
+/// Blender needs to see. Customize+ is paused on the character while it records, because its
+/// changes land in that pose too and MagicFit's Customize+ adds them in Blender. Recordings are
+/// resampled to <see cref="SampleRate"/> before they leave the plugin.
 /// </summary>
 internal sealed class AnimationRecorder : IDisposable
 {
@@ -26,21 +27,33 @@ internal sealed class AnimationRecorder : IDisposable
     public const float MinimumSeconds = 0.5f;
     public const float MaximumSeconds = 30f;
     public const float MaximumDelaySeconds = 10f;
+    /// <summary>The take's source entry saying whether Customize+ was paused, or why not.</summary>
+    public const string CustomizePlusSource = "customizePlus";
+    public const string CustomizePlusPaused = "paused";
+    /// <summary>The take's source entry naming body bones something scaled while recording (see <see cref="RecordingScale"/>).</summary>
+    public const string ScaledBonesSource = "scaledBones";
     // GPose copies the player into this slot; the overworld player is hidden while posing.
     private const int GPosePlayerIndex = 201;
     private const int MaximumPartials = 16;
+    // Customize+ rebinds a paused character to the empty profile in the render that follows the
+    // pause, so the pose read at the next update is the first without its changes. The other two
+    // spare slow frames.
+    private const int CustomizePlusSettleUpdates = 3;
 
     private readonly IFramework framework;
     private readonly IObjectTable objects;
     private readonly IClientState clientState;
     private readonly ITargetManager targets;
+    private readonly CustomizePlusPause? customizePlus;
     private readonly object sync = new();
     private Session? session;
     private bool disposed;
 
-    public AnimationRecorder(IFramework framework, IObjectTable objects, IClientState clientState, ITargetManager targets)
+    public AnimationRecorder(IFramework framework, IObjectTable objects, IClientState clientState, ITargetManager targets,
+        CustomizePlusPause? customizePlus = null)
     {
         this.framework = framework; this.objects = objects; this.clientState = clientState; this.targets = targets;
+        this.customizePlus = customizePlus;
     }
 
     public bool Active { get { lock (sync) return session != null; } }
@@ -77,6 +90,7 @@ internal sealed class AnimationRecorder : IDisposable
         {
             framework.Update -= OnUpdate;
             lock (sync) if (session == created) session = null;
+            ResumeCustomizePlus(created);
         }
         // Resampling copies tens of megabytes; keep it off the framework thread.
         return await Task.Run(() => recording.Build(), token).ConfigureAwait(false);
@@ -94,6 +108,13 @@ internal sealed class AnimationRecorder : IDisposable
         lock (sync) { disposed = true; running = session; }
         running?.Fail(new OperationCanceledException("The plugin is unloading."));
         framework.Update -= OnUpdate;
+        if (running != null) ResumeCustomizePlus(running);
+    }
+
+    /// <summary>Gives the character its Customize+ profile back, once, whichever way the recording ended.</summary>
+    private void ResumeCustomizePlus(Session ended)
+    {
+        if (ended.TakePause() is { } pause) customizePlus?.Resume(pause);
     }
 
     private void OnUpdate(IFramework _)
@@ -206,7 +227,9 @@ internal sealed class AnimationRecorder : IDisposable
         return true;
     }
 
-    private sealed record Recording(Layout Layout, List<double> Times, List<float[]> Frames, string Character, DateTime Started)
+    /// <param name="CustomizePlus">"paused", why Customize+ could not be paused, or null when the character had no profile.</param>
+    private sealed record Recording(Layout Layout, List<double> Times, List<float[]> Frames, string Character, DateTime Started,
+        string? CustomizePlus)
     {
         public AnimationTake Build()
         {
@@ -218,6 +241,10 @@ internal sealed class AnimationRecorder : IDisposable
                 ["recordedFrames"] = Frames.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ["sampleRate"] = SampleRate.ToString(System.Globalization.CultureInfo.InvariantCulture),
             };
+            if (CustomizePlus != null) source[CustomizePlusSource] = CustomizePlus;
+            // The first partial is the body, whose bones Customize+ body templates scale.
+            var scaled = RecordingScale.ScaledBones(Layout.Bones, Layout.Parts[0].Bones.Select(bone => bone.Output), Frames[0]);
+            if (scaled.Count > 0) source[ScaledBonesSource] = RecordingScale.Describe(scaled);
             return new AnimationTake(AnimationTake.RecordingKind, $"Live pose {Started.ToLocalTime():HH:mm:ss}", Layout.Bones,
                 times, samples, source: source);
         }
@@ -233,6 +260,10 @@ internal sealed class AnimationRecorder : IDisposable
         private double started = double.NaN;
         private DateTime startedUtc;
         private volatile bool stopRequested;
+        // The boxed Guid of the Customize+ pause until it is resumed.
+        private object? pause;
+        private string? customizePlus;
+        private int settleUpdates;
         public TaskCompletionSource<Recording> Result { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public List<double> Times { get; } = [];
         public List<float[]> Frames { get; } = [];
@@ -243,6 +274,9 @@ internal sealed class AnimationRecorder : IDisposable
 
         public void RequestStop() => stopRequested = true;
 
+        /// <summary>The Customize+ pause to resume, or null when there is none or it was already taken.</summary>
+        public Guid? TakePause() => Interlocked.Exchange(ref pause, null) as Guid?;
+
         /// <summary>Records one frame. Returns true once the recording is complete.</summary>
         public unsafe bool Tick(AnimationRecorder owner)
         {
@@ -252,13 +286,32 @@ internal sealed class AnimationRecorder : IDisposable
             {
                 if (stopRequested) throw new OperationCanceledException("The recording was stopped before it started.");
                 if (now < delay) return false;
-                var subjectObject = owner.Resolve(subject) ?? throw new InvalidOperationException(subject == RecordingSubject.Target
-                    ? "Target a character to record." : "Your character is not available.");
-                var skeleton = SkeletonOf(subjectObject);
-                if (skeleton == null) throw new InvalidOperationException($"{subjectObject.Name.TextValue} has no skeleton to record.");
-                layout = Describe(skeleton);
-                gameObjectId = subjectObject.GameObjectId; address = subjectObject.Address; objectIndex = subjectObject.ObjectIndex;
-                Character = subjectObject.Name.TextValue;
+                if (layout == null)
+                {
+                    var subjectObject = owner.Resolve(subject) ?? throw new InvalidOperationException(subject == RecordingSubject.Target
+                        ? "Target a character to record." : "Your character is not available.");
+                    var skeleton = SkeletonOf(subjectObject);
+                    if (skeleton == null) throw new InvalidOperationException($"{subjectObject.Name.TextValue} has no skeleton to record.");
+                    layout = Describe(skeleton);
+                    gameObjectId = subjectObject.GameObjectId; address = subjectObject.Address; objectIndex = subjectObject.ObjectIndex;
+                    Character = subjectObject.Name.TextValue;
+                    string? problem = null;
+                    if (owner.customizePlus?.Pause(objectIndex, out problem) is { } paused)
+                    {
+                        // A full fence: the store must land before the check below.
+                        Interlocked.Exchange(ref pause, paused);
+                        customizePlus = CustomizePlusPaused;
+                        settleUpdates = CustomizePlusSettleUpdates;
+                        // A cancellation that ended the recording meanwhile has already looked for a pause.
+                        if (Result.Task.IsCompleted) owner.ResumeCustomizePlus(this);
+                    }
+                    else customizePlus = problem;
+                }
+                if (settleUpdates > 0)
+                {
+                    settleUpdates--;
+                    return false;
+                }
                 started = now; startedUtc = DateTime.UtcNow;
             }
             var current = owner.objects[objectIndex];
@@ -283,7 +336,7 @@ internal sealed class AnimationRecorder : IDisposable
         public void Finish()
         {
             if (Frames.Count == 0) Fail(new InvalidOperationException("No frames were recorded."));
-            else Result.TrySetResult(new Recording(layout!, Times, Frames, Character, startedUtc));
+            else Result.TrySetResult(new Recording(layout!, Times, Frames, Character, startedUtc, customizePlus));
         }
 
         public void Fail(Exception error) => Result.TrySetException(error);

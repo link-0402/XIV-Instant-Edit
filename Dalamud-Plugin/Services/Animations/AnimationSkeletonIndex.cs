@@ -21,8 +21,8 @@ internal sealed record SkeletonLibraryStatus(SkeletonLibraryState State, int Ske
 internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, AnimationResources resources, IFramework framework,
     IPluginLog log, Func<string> configuredCacheRoot)
 {
-    private readonly Dictionary<string, ImmutableArray<AnimationSkeleton.Variant>> descriptions = [];
-    private readonly Dictionary<SkeletonSource, (long Length, DateTime Write, ImmutableArray<SkeletonCandidate> Candidates)> files = [];
+    private readonly Dictionary<string, SkeletonDescription> descriptions = [];
+    private readonly Dictionary<SkeletonSource, (long Length, DateTime Write, SkeletonCandidate Candidate)> files = [];
     private readonly object libraryLock = new();
     private readonly object cacheLock = new();
     private ImmutableArray<SessionSkeleton> sessionLibrary = [];
@@ -47,7 +47,9 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
             ["c1801"] = "c0201", ["c1001"] = "c0201", ["c0401"] = "c0201",
         }.ToImmutableDictionary(StringComparer.Ordinal);
 
-    private sealed record CachedSkeleton(int Version, string SourceHash, ImmutableArray<AnimationSkeleton.Variant> Variants);
+    // Descriptions cached as version 2 also held the skeletons that mappers embed in the file,
+    // so those files are described again.
+    private sealed record CachedSkeleton(int Version, string SourceHash, SkeletonDescription Skeleton);
     private sealed record CachedLibrarySource(SkeletonSource Source, long Length, DateTime Write);
     private sealed record CachedLibraryEntry(SkeletonDescription Skeleton, ImmutableArray<CachedLibrarySource> Sources);
     private sealed record CachedLibrary(int Version, DateTime BuiltUtc, ImmutableArray<CachedLibraryEntry> Skeletons,
@@ -274,14 +276,23 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
         library = []; missing = 0; changed = 0; builtUtc = DateTime.MinValue;
         try
         {
-            var cached = JsonSerializer.Deserialize<CachedLibrary>(json, Json);
+            var root = JsonNode.Parse(json);
+            // Libraries saved before only main skeletons were read also list the skeletons
+            // that mappers embed in skeleton files, each source named by its variant. Those
+            // are left out, and so is an entry left without sources.
+            if (root is JsonObject saved && saved["Skeletons"] is JsonArray entries)
+                foreach (var entry in entries)
+                    if (entry is JsonObject item && item["Sources"] is JsonArray sources)
+                        foreach (var embedded in sources.Where(EmbeddedVariant).ToArray())
+                            sources.Remove(embedded);
+            var cached = root.Deserialize<CachedLibrary>(Json);
             if (cached is not { Version: 3 } || cached.Skeletons.IsDefault || cached.Skeletons.Length > 4096)
                 return false;
             var result = ImmutableArray.CreateBuilder<SessionSkeleton>(cached.Skeletons.Length);
             foreach (var entry in cached.Skeletons)
             {
                 AnimationSkeleton.Validate(entry.Skeleton);
-                if (entry.Sources.IsDefaultOrEmpty || entry.Sources.Length > 128) return false;
+                if (entry.Sources.IsDefault || entry.Sources.Length > 128) return false;
                 var sources = ImmutableArray.CreateBuilder<SkeletonSource>(entry.Sources.Length);
                 foreach (var item in entry.Sources)
                 {
@@ -302,6 +313,10 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
             missing = 0; changed = 0;
             return false;
         }
+
+        static bool EmbeddedVariant(JsonNode? item)
+            => item is JsonObject saved && saved["Source"] is JsonObject source && source["Variant"] is JsonValue variant &&
+               variant.TryGetValue<string>(out var name) && name.Length > 0;
     }
 
     /// <summary>Builds and saves the library. A rebuild moves the revision on, so earlier matches are made again.</summary>
@@ -413,7 +428,7 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
                     var canonical = CanonicalMappedModel(gamePaths);
                     var gamePath = gamePaths.FirstOrDefault(p => ModelFromPath(p) == canonical) ?? gamePaths.FirstOrDefault() ?? "";
                     result.Add(new(SkeletonSourceKind.Mod,
-                        new(gamePath, path, "", directory, root, Path.GetRelativePath(root, path)), "",
+                        new(gamePath, path, "", directory, root, Path.GetRelativePath(root, path)),
                         gamePaths, canonical, MappingFingerprint(gamePaths)));
                 }
             }
@@ -444,7 +459,8 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
         }
         return paths.Order(StringComparer.Ordinal).ToArray();
     }
-    private async Task<ImmutableArray<SkeletonCandidate>> Describe(Guid collection, SkeletonSource source,
+    /// <summary>A skeleton file's main skeleton, as a candidate from that file.</summary>
+    private async Task<SkeletonCandidate> Describe(Guid collection, SkeletonSource source,
         IReadOnlyDictionary<string, HashSet<string>>? paths, CancellationToken token)
     {
         var length = 0L; var write = DateTime.MinValue;
@@ -454,7 +470,7 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
             length = info.Length; write = info.LastWriteTimeUtc;
         }
         if (source.Kind != SkeletonSourceKind.Collection && files.TryGetValue(source, out var cached) && cached.Length == length && cached.Write == write)
-            return cached.Candidates;
+            return cached.Candidate;
         var read = await resources.ReadSkeletonAsync(collection, source, token);
         if (!descriptions.TryGetValue(read.Source.Resource.Hash, out var description))
         {
@@ -464,16 +480,18 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
                 if (File.Exists(path) && new FileInfo(path).Length < 4 * 1024 * 1024)
                 {
                     var disk = JsonSerializer.Deserialize<CachedSkeleton>(await File.ReadAllTextAsync(path, token), Json);
-                    if (disk is { Version: 2 } && disk.SourceHash == read.Source.Resource.Hash) description = disk.Variants;
+                    if (disk is { Version: 3, Skeleton: { } saved } && disk.SourceHash == read.Source.Resource.Hash)
+                    {
+                        AnimationSkeleton.Validate(saved);
+                        description = saved;
+                    }
                 }
-                if (!description.IsDefaultOrEmpty)
-                    foreach (var variant in description) AnimationSkeleton.Validate(variant.Skeleton);
             }
-            catch (Exception e) when (e is IOException or InvalidDataException or JsonException or ArgumentException or UnauthorizedAccessException) { description = default; }
-            if (description.IsDefaultOrEmpty)
+            catch (Exception e) when (e is IOException or InvalidDataException or JsonException or ArgumentException or UnauthorizedAccessException) { description = null; }
+            if (description == null)
             {
-                description = await framework.RunOnTick(() => { token.ThrowIfCancellationRequested(); return AnimationSkeleton.InspectSources(read.Bytes); }, delayTicks: 1);
-                try { Directory.CreateDirectory(Path.GetDirectoryName(path)!); await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new CachedSkeleton(2, read.Source.Resource.Hash, description), Json), token); }
+                description = await framework.RunOnTick(() => { token.ThrowIfCancellationRequested(); return AnimationSkeleton.Inspect(read.Bytes); }, delayTicks: 1);
+                try { Directory.CreateDirectory(Path.GetDirectoryName(path)!); await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new CachedSkeleton(3, read.Source.Resource.Hash, description), Json), token); }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException) { log.Debug(e, "Could not cache skeleton description."); }
             }
             if (descriptions.Count >= 512) descriptions.Clear();
@@ -491,10 +509,10 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
                 MappingFingerprint = MappingFingerprint(aliases),
             };
         }
-        var candidates = description.Select(v => new SkeletonCandidate(described with { Variant = v.Name }, v.Skeleton, 0, "")).ToImmutableArray();
+        var candidate = new SkeletonCandidate(described, description, 0, "");
         if (files.Count >= 4096) files.Clear();
-        files[source] = (length, write, candidates);
-        return candidates;
+        files[source] = (length, write, candidate);
+        return candidate;
     }
 
     internal static SkeletonResolution Rank(AnimationChannels channels, IEnumerable<SkeletonCandidate> candidates,
@@ -515,8 +533,8 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
             var model = candidate.Source.CanonicalModel ?? ModelFromPath(candidate.Source.Resource.GamePath);
             if (model == null) return 0;
             // Quantized animation data is encoded against one complete reference
-            // skeleton. Its PAP model is authoritative: chart ancestors and
-            // hkaSkeletonMapper endpoints are different reference poses.
+            // skeleton. Its PAP model is authoritative: chart ancestors are
+            // different reference poses.
             if (exactReferenceModel != null) return model == exactReferenceModel ? 600 : 0;
             // Facial and other specialized paths do not inherit through the
             // body chart. Keep their race/variant identity exact.
@@ -568,51 +586,60 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
                 var referenceOnlyText = referenceOnly.Length == 0 ? "0 reference-only bones" : referenceOnly.Length <= 4
                     ? $"{referenceOnly.Length} reference-only bone{(referenceOnly.Length == 1 ? "" : "s")} ({string.Join(", ", referenceOnly)})"
                     : $"{referenceOnly.Length} reference-only bones";
-                // A mapped reference pose closest to the Vanilla game variant is a
-                // better source than another race/era embedded in the same SKLB.
-                var referenceOverlap = baseline == null || c.Source.Variant.Length == 0 ? 0 :
-                    Enumerable.Range(0, Math.Min(baseline.Bones.Length, c.Skeleton.Bones.Length)).Count(i =>
-                        baseline.Bones[i].Name == c.Skeleton.Bones[i].Name && baseline.Bones[i].Parent == c.Skeleton.Bones[i].Parent &&
-                        !AnimationRetarget.Meaningful(baseline.Bones[i].Reference, c.Skeleton.Bones[i].Reference));
-                // Clips that store their own transforms should continue to prefer
-                // the main skeleton over newly discovered mapper reference poses.
-                var direct = channels.ReferenceBones == null && c.Source.Variant.Length == 0 ? 1 : 0;
-                var rank = modelScore * 10000000000000000L + name * 1000000000000000L + provenance * 10000000000000L + direct * 1000000000000L +
-                    overlap * 10000000L + referenceOverlap * 1000L - referenceOnly.Length;
+                // Among first bones that fit equally well, those of the character's own skeleton
+                // file are the ones the animation plays on.
+                var live = c.Source.LeadingBones > 0 && c.Source.Kind == SkeletonSourceKind.Collection && provenance == 2 ? 1 : 0;
+                var rank = modelScore * 10000000000000000L + name * 1000000000000000L + provenance * 10000000000000L +
+                    overlap * 10000000L + live * 100000L - referenceOnly.Length;
+                var leadingText = c.Source.LeadingBones > 0 ? $"; only its first {c.Source.LeadingBones} bones, as no whole skeleton fits" : "";
                 return c with { Rank = rank,
-                    Rationale = $"Source model {(model ?? "unconfirmed")} (score {modelScore}); skeleton name {(name == 1 ? "matches" : "unconfirmed")}; variant match {provenance}; {overlap} ordered bones/parents match; {referenceOverlap} reference poses match; {referenceOnlyText}" };
+                    Rationale = $"Source model {(model ?? "unconfirmed")} (score {modelScore}); skeleton name {(name == 1 ? "matches" : "unconfirmed")}; variant match {provenance}; {overlap} ordered bones/parents match; {referenceOnlyText}{leadingText}" };
             }).GroupBy(c => c.Skeleton.Fingerprint).Select(g => g.OrderByDescending(c => c.Rank).ThenBy(c => c.Source.Resource.ResolvedPath, StringComparer.Ordinal).First())
                 .OrderByDescending(c => c.Rank).ThenBy(c => c.Source.Resource.ResolvedPath, StringComparer.Ordinal).ToImmutableArray();
         }
         var fitting = candidates.Where(Fits);
-        if (channels.ExactReferenceModel)
-        {
-            // Mapper A/B skeletons are conversion endpoints embedded in an
-            // SKLB, not alternative authored rigs for quantized animations.
-            fitting = fitting.Where(candidate => candidate.Source.Variant.Length == 0 &&
-                (exactReferenceModel == null ||
-                 (candidate.Source.CanonicalModel ?? ModelFromPath(candidate.Source.Resource.GamePath)) == exactReferenceModel));
-        }
+        if (exactReferenceModel != null)
+            fitting = fitting.Where(candidate =>
+                (candidate.Source.CanonicalModel ?? ModelFromPath(candidate.Source.Resource.GamePath)) == exactReferenceModel);
         var ranked = RankCandidates(fitting);
+        // A predictive animation made before a skeleton mod appended bones declares fewer
+        // reference bones than the mod's skeletons now have. When no whole skeleton fits,
+        // the first bones of a longer one are the skeleton it was made for. Quantized data
+        // stays with its exact model's whole skeleton.
+        if (ranked.IsEmpty && channels is { ExactReferenceModel: false, ReferenceBones: { } leading })
+            ranked = RankCandidates(candidates.Select(c => Leading(c, leading)).OfType<SkeletonCandidate>().Where(Fits));
         if (ranked.IsEmpty)
             return new(SkeletonResolutionState.Incompatible, [], Reason: channels.ReferenceBones is { } bones
                 ? channels.ExactReferenceModel
                     ? $"The quantized animation requires the main {exactReferenceModel ?? "PAP"} skeleton ({bones} reference bones, {channels.ReferenceFloats} reference floats); no exact source was found."
-                    : $"No source skeleton, including embedded mapper skeletons, fits the predictive animation ({bones} reference bones, {channels.ReferenceFloats} reference floats). A compatible source reference pose is required before retargeting."
+                    : $"No source skeleton fits the predictive animation ({bones} reference bones, {channels.ReferenceFloats} reference floats). A compatible source reference pose is required before retargeting."
                 : "No source skeleton has valid animation track, float, and partition bindings.");
         var chosen = ranked.FirstOrDefault(c => SelectionId(c) == selectedIdentity);
         if (chosen == null && (ranked.Length == 1 || ranked[0].Rank > ranked[1].Rank)) chosen = ranked[0];
         return chosen == null ? new(SkeletonResolutionState.Ambiguous, ranked, Reason: "Several skeletons fit equally well. Choose the source skeleton.") :
             new(SkeletonResolutionState.Matched, ranked, chosen);
     }
+
+    /// <summary>A whole skeleton's first bones as a source of their own, or null when it has no more bones than that.</summary>
+    private static SkeletonCandidate? Leading(SkeletonCandidate candidate, int bones)
+    {
+        if (candidate.Source.LeadingBones != 0) return null;
+        try
+        {
+            return AnimationSkeleton.Leading(candidate.Skeleton, bones) is { } leading
+                ? candidate with { Source = candidate.Source with { LeadingBones = bones }, Skeleton = leading }
+                : null;
+        }
+        catch (InvalidDataException) { return null; } // A malformed skeleton must not stop matching the next.
+    }
     internal static async Task<List<SkeletonCandidate>> ReadCandidatesAsync(IEnumerable<SkeletonSource> sources,
-        Func<SkeletonSource, Task<ImmutableArray<SkeletonCandidate>>> read, Action<SkeletonSource, Exception> rejected, CancellationToken token)
+        Func<SkeletonSource, Task<SkeletonCandidate>> read, Action<SkeletonSource, Exception> rejected, CancellationToken token)
     {
         var candidates = new List<SkeletonCandidate>();
         foreach (var source in sources)
         {
             token.ThrowIfCancellationRequested();
-            try { candidates.AddRange(await read(source)); }
+            try { candidates.Add(await read(source)); }
             catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
             { rejected(source, e); }
         }
@@ -653,16 +680,67 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
         }
         var sources = relevant.SelectMany(p => new[]
         {
-            new SkeletonSource(SkeletonSourceKind.Game, new(p, p, ""), "", [], ModelFromPath(p), ""),
-            new SkeletonSource(SkeletonSourceKind.Collection, new(p, p, ""), "", [], ModelFromPath(p), ""),
+            new SkeletonSource(SkeletonSourceKind.Game, new(p, p, ""), [], ModelFromPath(p), ""),
+            new SkeletonSource(SkeletonSourceKind.Collection, new(p, p, ""), [], ModelFromPath(p), ""),
         }).ToArray();
         var candidates = await ReadCandidatesAsync(sources, source => Describe(collection, source, pathMap, token),
             (source, error) => log.Debug($"Skeleton candidate {source.Resource.ResolvedPath}: {error.Message}"), token);
         ImmutableArray<SessionSkeleton> library;
         lock (libraryLock) library = sessionLibrary;
         candidates.AddRange(library.Select(entry => entry.CandidateFor(expected, sourceIdentity)));
-        var baseline = candidates.FirstOrDefault(c => c.Source.Kind == SkeletonSourceKind.Game && c.Source.Resource.GamePath == expected && c.Source.Variant.Length == 0)?.Skeleton;
+        var baseline = candidates.FirstOrDefault(c => c.Source.Kind == SkeletonSourceKind.Game && c.Source.Resource.GamePath == expected)?.Skeleton;
+        // Repair targets: the live path's own skeleton files, and every library file mapped to it.
+        var mapped = candidates.Where(c => c.Source.Kind == SkeletonSourceKind.Collection).Concat(library.SelectMany(entry =>
+            entry.Sources.Select(s => new SkeletonCandidate(s, entry.Skeleton, 0, ""))));
         // Keep which bones the clip animates; the selected source names them.
-        return Rank(channels, candidates, baseline, expected, manual, sourceIdentity) with { TrackBones = channels.Bones };
+        return Rank(channels, candidates, baseline, expected, manual, sourceIdentity) with
+            { TrackBones = channels.Bones, Standards = Standards(baseline, mapped, expected) };
     }
+
+    /// <summary>
+    /// The standard skeletons for a model path: the game's own, then the best IVCS and
+    /// IVCS + YAS layouts among the main skeletons of files mapped to that path. Among
+    /// several, the one keeping the most game bones at the game's indices wins, then the one
+    /// with the most game bones, then the one whose game bones rest most like the game's, then
+    /// the one the most files share, then the first by file path. None without the game's own
+    /// skeleton.
+    /// </summary>
+    internal static ImmutableArray<StandardSkeleton> Standards(SkeletonDescription? game, IEnumerable<SkeletonCandidate> mapped, string expectedPath)
+    {
+        if (game == null) return [];
+        var reference = game.Bones.ToDictionary(b => b.Name, b => b.Reference, StringComparer.Ordinal);
+        int Leading(SkeletonDescription s) => s.Bones.Zip(game.Bones).TakeWhile(pair => pair.First.Name == pair.Second.Name).Count();
+        var usable = mapped.Where(c => SameGamePath(c.Source.Resource.GamePath, expectedPath))
+            .GroupBy(c => c.Skeleton.Fingerprint, StringComparer.Ordinal)
+            .Select(g => (g.First().Skeleton, Sources: g.Select(c => c.Source.Resource).OrderBy(r => r.ResolvedPath, StringComparer.Ordinal).ToArray()))
+            .ToArray();
+        var result = ImmutableArray.CreateBuilder<StandardSkeleton>();
+        result.Add(new(SkeletonStandard.Vanilla, game, "Game data"));
+        foreach (var standard in new[] { SkeletonStandard.Ivcs, SkeletonStandard.IvcsYas })
+        {
+            var best = usable.Where(c => AnimationBones.IsStandardLayout(c.Skeleton, game, standard))
+                .OrderByDescending(c => Leading(c.Skeleton))
+                .ThenByDescending(c => c.Skeleton.Bones.Count(b => reference.ContainsKey(b.Name)))
+                .ThenByDescending(c => c.Skeleton.Bones.Count(b => reference.TryGetValue(b.Name, out var rest) && !AnimationRetarget.Meaningful(b.Reference, rest)))
+                .ThenByDescending(c => c.Sources.Length)
+                .ThenBy(c => c.Sources[0].ResolvedPath, StringComparer.Ordinal).FirstOrDefault();
+            if (best.Skeleton != null)
+                result.Add(new(standard, best.Skeleton, Origin(best.Sources)));
+        }
+        return result.ToImmutable();
+    }
+
+    /// <summary>
+    /// Names the mods a skeleton comes from, a few at most. Characters downloaded by sync
+    /// plugins, whose folders are named Name@World, come after the mods themselves.
+    /// </summary>
+    private static string Origin(IEnumerable<AnimationResource> sources)
+    {
+        var names = sources.Select(r => r.ModName ?? r.ModDirectory ?? Path.GetFileName(r.ResolvedPath)).Distinct(StringComparer.Ordinal)
+            .OrderBy(name => name.Contains('@')).ThenBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray();
+        return names.Length <= 3 ? string.Join(", ", names) : $"{string.Join(", ", names.Take(3))} and {names.Length - 3} more";
+    }
+
+    private static bool SameGamePath(string left, string right)
+        => string.Equals(left.Replace('\\', '/'), right.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase);
 }

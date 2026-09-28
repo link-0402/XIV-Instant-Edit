@@ -4,20 +4,25 @@ using InstantEdit.Models;
 
 namespace InstantEdit.Services.Animations;
 
-/// <summary>Exact-name, rest-relative retargeting. Missing animated bones are errors, never discarded tracks.</summary>
+/// <summary>
+/// Exact-name, rest-relative retargeting. Missing animated bones are errors, never discarded
+/// tracks, unless the caller chose a target that leaves them out: a missing bone between two
+/// kept ones still moves its kept descendants, since their motion is collapsed through it.
+/// </summary>
 internal sealed class AnimationRetarget
 {
     private readonly SkeletonDescription source, target;
+    private readonly bool dropMissing;
     public int[] BoneMap { get; }
     public short[] FloatMap { get; }
     public short[] PartitionMap { get; }
     private readonly int[] sourceAncestors, targetAncestors;
     private readonly BoneTransform[] sourceRest, targetRest, sourceReferences, targetReferences;
     private readonly Matrix4x4[] targetHelpers;
-    public AnimationRetarget(SkeletonDescription source, SkeletonDescription target, AnimationChannels channels)
+    public AnimationRetarget(SkeletonDescription source, SkeletonDescription target, AnimationChannels channels, bool dropMissing = false)
     {
         AnimationSkeleton.Validate(source); AnimationSkeleton.Validate(target);
-        this.source = source; this.target = target;
+        this.source = source; this.target = target; this.dropMissing = dropMissing;
         var targetNames = target.Bones.Select((b, i) => (b.Name, i)).ToDictionary(b => b.Name, b => b.i, StringComparer.Ordinal);
         BoneMap = source.Bones.Select(b => targetNames.GetValueOrDefault(b.Name, -1)).ToArray();
         FloatMap = channels.Floats.Select(i => Unique(target.FloatNames, source.FloatNames[i], "float channel")).ToArray();
@@ -75,7 +80,7 @@ internal sealed class AnimationRetarget
     public BoneTransform[] Map(IReadOnlyList<BoneTransform> values)
     {
         if (values.Count != source.Bones.Length) throw new InvalidDataException("Source pose length changed.");
-        var missing = Enumerable.Range(0, values.Count).Where(i => BoneMap[i] < 0 && Meaningful(values[i], source.Bones[i].Reference)).Select(i => source.Bones[i].Name).ToArray();
+        var missing = dropMissing ? [] : Enumerable.Range(0, values.Count).Where(i => BoneMap[i] < 0 && Meaningful(values[i], source.Bones[i].Reference)).Select(i => source.Bones[i].Name).ToArray();
         if (missing.Length > 0) throw new InvalidDataException("Target skeleton is missing meaningful animation bones: " + string.Join(", ", missing));
         var result = target.Bones.Select(b => b.Reference).ToArray();
         var sourceForTarget = Enumerable.Repeat(-1, target.Bones.Length).ToArray();

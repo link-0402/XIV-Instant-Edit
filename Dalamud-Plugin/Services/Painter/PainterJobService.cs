@@ -99,53 +99,81 @@ internal sealed class PainterJobService : IDisposable
         var jobDir = JobDirectory(cacheRoot, jobId);
 
         // Sessions first: a texture whose session can't open stays in Painter for reference only.
+        // A texture already open in a session reuses it; only the sessions started here are the project's.
         var sessions = new Dictionary<PainterDraftTexture, Guid>();
-        foreach (var texture in selected)
-        {
-            token.ThrowIfCancellationRequested();
-            try
-            {
-                var locator = texture.Texture.Locator!;
-                var vanilla = texture.Texture.IsVanilla;
-                var textureRequest = new TextureEditRequest(
-                    texture.Texture.GamePath,
-                    vanilla ? texture.Texture.SourcePath : Path.Combine(locator.SourceModRootPath ?? "", (locator.SourceRelativePath ?? "").Replace('/', Path.DirectorySeparatorChar)),
-                    vanilla ? "" : locator.SourceModDirectory ?? "",
-                    vanilla ? "" : locator.SourceModRootPath ?? "",
-                    vanilla ? "" : locator.SourceRelativePath ?? "",
-                    request.ObjectIndex, request.ActorAddress,
-                    vanilla ? draft.NewModName : "",
-                    jobId);
-                sessions[texture] = await _textures.StartAsync(textureRequest, launchEditor: false).ConfigureAwait(false);
-            }
-            catch (Exception error) when (error is not OperationCanceledException)
-            {
-                warnings.Add($"{Path.GetFileName(texture.Texture.GamePath)}: {error.Message}");
-            }
-        }
-        if (sessions.Count == 0)
-            return new PainterCreateResult(null, "None of the selected textures could be opened. " + string.Join(" ", warnings), warnings);
-
+        var started = new HashSet<Guid>();
         var capability = PainterJobStore.NewCapability();
         var displayName = Path.GetFileName(request.Model.GamePath);
-        var files = await _builder.WriteJobAsync(draft, sessions, jobDir, jobId, capability, _config.ListenPort,
-            BlenderClient.CurrentPluginVersion, displayName, token).ConfigureAwait(false);
-        warnings.AddRange(files.Warnings);
-        if (files.Targets.Count == 0)
-            return new PainterCreateResult(null, "No texture could be prepared for Painter. " + string.Join(" ", warnings), warnings);
-
-        var job = new PainterJob
+        PainterProjectFiles files;
+        PainterJob job;
+        try
         {
-            Id = jobId,
-            Capability = capability,
-            DisplayName = displayName,
-            ActorName = request.ActorName,
-            ModelGamePath = request.Model.GamePath,
-            NewModName = draft.NeedsModName ? draft.NewModName : "",
-            Created = DateTimeOffset.UtcNow,
-            Targets = files.Targets,
-        };
-        _store.Save(job);
+            foreach (var texture in selected)
+            {
+                token.ThrowIfCancellationRequested();
+                try
+                {
+                    var locator = texture.Texture.Locator!;
+                    var vanilla = texture.Texture.IsVanilla;
+                    var textureRequest = new TextureEditRequest(
+                        texture.Texture.GamePath,
+                        vanilla ? texture.Texture.SourcePath : Path.Combine(locator.SourceModRootPath ?? "", (locator.SourceRelativePath ?? "").Replace('/', Path.DirectorySeparatorChar)),
+                        vanilla ? "" : locator.SourceModDirectory ?? "",
+                        vanilla ? "" : locator.SourceModRootPath ?? "",
+                        vanilla ? "" : locator.SourceRelativePath ?? "",
+                        request.ObjectIndex, request.ActorAddress,
+                        vanilla ? draft.NewModName : "",
+                        jobId);
+                    var existing = _textures.FindReusable(textureRequest)?.Id;
+                    var session = await _textures.StartAsync(textureRequest, launchEditor: false).ConfigureAwait(false);
+                    sessions[texture] = session;
+                    if (session != existing)
+                        started.Add(session);
+                }
+                catch (Exception error) when (error is not OperationCanceledException)
+                {
+                    warnings.Add($"{Path.GetFileName(texture.Texture.GamePath)}: {error.Message}");
+                }
+            }
+            if (sessions.Count == 0)
+                return new PainterCreateResult(null, "None of the selected textures could be opened. " + string.Join(" ", warnings), warnings);
+
+            files = await _builder.WriteJobAsync(draft, sessions, jobDir, jobId, capability, _config.ListenPort,
+                BlenderClient.CurrentPluginVersion, displayName, token).ConfigureAwait(false);
+            warnings.AddRange(files.Warnings);
+            // Sessions of textures the project left out would watch for saves that never come.
+            var targeted = files.Targets.Select(target => target.SessionId).ToHashSet();
+            var unused = started.Where(session => !targeted.Contains(session)).ToList();
+            started.IntersectWith(targeted);
+            await DiscardStartedAsync(unused).ConfigureAwait(false);
+            if (files.Targets.Count == 0)
+            {
+                DeleteQuietly(jobDir);
+                return new PainterCreateResult(null, "No texture could be prepared for Painter. " + string.Join(" ", warnings), warnings);
+            }
+
+            job = new PainterJob
+            {
+                Id = jobId,
+                Capability = capability,
+                DisplayName = displayName,
+                ActorName = request.ActorName,
+                ModelGamePath = request.Model.GamePath,
+                NewModName = draft.NeedsModName ? draft.NewModName : "",
+                Created = DateTimeOffset.UtcNow,
+                Targets = files.Targets
+                    .Select(target => started.Contains(target.SessionId) ? target : target with { SessionReused = true })
+                    .ToList(),
+            };
+            _store.Save(job);
+        }
+        catch
+        {
+            // No saved project links what was made so far.
+            await DiscardStartedAsync(started).ConfigureAwait(false);
+            DeleteQuietly(jobDir);
+            throw;
+        }
 
         var opened = await OpenInPainterAsync(job, token).ConfigureAwait(false);
         return new PainterCreateResult(jobId, opened.Length == 0 ? $"Sent {files.Targets.Count} textures to Substance Painter." : opened, warnings);
@@ -225,7 +253,8 @@ internal sealed class PainterJobService : IDisposable
         _store.Remove(jobId);
         foreach (var target in job.Targets)
         {
-            if (_store.LinksSession(target.SessionId))
+            // A reused session was open before the project and stays, with anything kept beside its TGA.
+            if (target.SessionReused || _store.LinksSession(target.SessionId))
                 continue;
             try { await _textures.DiscardAsync(target.SessionId).ConfigureAwait(false); }
             catch (IOException) { /* already gone */ }
@@ -240,6 +269,19 @@ internal sealed class PainterJobService : IDisposable
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
             _log(error, "Could not remove a Painter project's cache folder.");
+        }
+    }
+
+    /// <summary> Discards sessions a project being created started but won't use. </summary>
+    private async Task DiscardStartedAsync(IEnumerable<Guid> sessions)
+    {
+        foreach (var session in sessions.ToList())
+        {
+            try { await _textures.DiscardAsync(session).ConfigureAwait(false); }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                _log(error, "Could not discard a texture session the Painter project doesn't use.");
+            }
         }
     }
 
@@ -372,7 +414,9 @@ internal sealed class PainterJobService : IDisposable
                 var target = job.Targets.First(t => string.Equals(t.Key, key, StringComparison.OrdinalIgnoreCase));
                 targets[target.SessionId] = target;
                 var image = ReadExport(job, key, path);
-                if (target.BaselineHash.Length > 0 && image.PixelHash() == target.BaselineHash)
+                // Back to the first export means the session's original, unless the session is older
+                // than the project: then its original predates it, and the export is applied as painted.
+                if (!target.SessionReused && target.BaselineHash.Length > 0 && image.PixelHash() == target.BaselineHash)
                 {
                     saves.Add(new ExternalTextureSave(target.SessionId, null));
                     continue;

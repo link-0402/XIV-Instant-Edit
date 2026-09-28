@@ -30,6 +30,11 @@ internal sealed record PainterTarget
     public string BaselineHash { get; set; } = "";
     /// <summary> Other meshes use this texture too, so only this project's UV area is taken from Painter. </summary>
     public bool Protect { get; init; }
+    /// <summary>
+    /// The texture was already open in a session when the project started, and the project uses that
+    /// session: discarding the project leaves it, and its original predates the project.
+    /// </summary>
+    public bool SessionReused { get; init; }
     public List<PainterCoverageModel> Coverage { get; init; } = [];
 }
 

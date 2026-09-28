@@ -34,10 +34,23 @@ internal sealed class AnimationJournalStore
             try { Directory.Move(source, target); }
             catch (IOException)
             {
-                // Directory.Move cannot cross volumes; job folders hold only files.
-                Directory.CreateDirectory(target);
-                foreach (var file in Directory.EnumerateFiles(source))
-                    File.Copy(file, Path.Combine(target, Path.GetFileName(file)));
+                // Directory.Move cannot cross volumes; job folders hold only files. They are copied
+                // beside the target first: a half-copied target would be skipped on every later start.
+                var partial = target + ".importing";
+                if (Directory.Exists(partial)) Directory.Delete(partial, recursive: true);
+                Directory.CreateDirectory(partial);
+                try
+                {
+                    foreach (var file in Directory.EnumerateFiles(source))
+                        File.Copy(file, Path.Combine(partial, Path.GetFileName(file)));
+                    Directory.Move(partial, target);
+                }
+                catch
+                {
+                    try { Directory.Delete(partial, recursive: true); }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+                    throw;
+                }
                 Directory.Delete(source, recursive: true);
             }
         }
@@ -85,6 +98,11 @@ internal sealed class AnimationJournalStore
                 var record = JsonSerializer.Deserialize<AnimationEditJournal>(File.ReadAllText(path), Json)
                     ?? throw new InvalidDataException("Invalid animation recovery record.");
                 if (record.Version is not (1 or 2 or 3) || record.Id != id || record.Request?.Id != id) throw new InvalidDataException("Unsupported animation recovery record.");
+                // Staged outputs live in the record's own folder. Records moved out of an older
+                // version's cache still name the folder they were written in.
+                for (var i = 0; i < record.Files.Count; i++)
+                    if (record.Files[i].Staged is { Length: > 0 } staged)
+                        record.Files[i] = record.Files[i] with { Staged = Path.Combine(DirectoryFor(id), Path.GetFileName(staged)) };
                 result.Add(record);
             }
             catch (Exception e) when (e is IOException or JsonException or InvalidDataException or UnauthorizedAccessException)
