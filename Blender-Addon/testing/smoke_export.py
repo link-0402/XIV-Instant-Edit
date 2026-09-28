@@ -1812,12 +1812,20 @@ def run() -> None:
             or mashup_properties["name"].default != "Mashup"
         ):
             raise AssertionError("The Create Mashup dialog did not default to a named group in the active mod")
+        format_settings = bpy.context.scene.xiv_ie_settings
+        mashup_original_format = format_settings.model_format
+        format_settings.model_format = "FBX"
         try:
             mashup_target = instant_ops.perform_mashup_export(
                 bpy.context, "ACTIVE_MOD", "Smoke Mashup",
                 bundle_external_dependencies=True)
+            format_after_mashup = format_settings.model_format
         finally:
             instant_ops.finish_job = original_finish_job
+            format_settings.model_format = mashup_original_format
+        if format_after_mashup != "FBX":
+            raise AssertionError(
+                f"Mashup export overwrote the Simple Export format: {format_after_mashup}")
         mashup_model = instant_ops.XIVModel.from_file(mashup_target)
         expected_aliases = {
             "/mt_c0101e0001_top_a.mtrl",
@@ -2134,8 +2142,12 @@ def run() -> None:
         tagged_issues = instant_ops.export_target_issues(bpy.context, ref, material_coverage_warning=False)
         if not any(severity == "WARNING" and "not hair" in message for severity, message in tagged_issues):
             raise AssertionError(f"A hair skeleton tag on a gear model was not warned about: {tagged_issues}")
+        quick_format_settings = bpy.context.scene.xiv_ie_settings
+        quick_original_format = quick_format_settings.model_format
+        quick_format_settings.model_format = "GLTF"
         try:
             quick_target = instant_ops.perform_instant_export(bpy.context)
+            format_after_quick_export = quick_format_settings.model_format
         finally:
             instant_ops.reset_material_coverage_state()
             plugin_http.urllib.request.urlopen = original_urlopen
@@ -2143,9 +2155,13 @@ def run() -> None:
             for tagged in (obj, second, added_group):
                 tagged.pop("xiv_est_hair", None)
                 tagged.pop("xiv_est_race", None)
+            quick_format_settings.model_format = quick_original_format
         if export_payloads[-1].get("estEntries") != [{"slot": "Hair", "entry": 160, "race": "c0101"}]:
             raise AssertionError(f"Quick Export did not send the meshes' hair EST entry: {export_payloads[-1]}")
         print("[PASS] Quick Export sends the hair EST entry of Magic Fit's tags and warns when the model is not hair")
+        if format_after_quick_export != "GLTF":
+            raise AssertionError(
+                f"Quick Export overwrote the Simple Export format: {format_after_quick_export}")
 
         if tuple(armature.scale) != tuple(original_armature_scale):
             raise AssertionError(

@@ -16,12 +16,17 @@ def get_positions(streams: dict[int, NDArray]) -> NDArray:
     # data (borrowing bytes from a neighbouring vertex), an error that grows
     # with vertex count and was invisible on typical gear but catastrophic on
     # an unusually dense mesh.
-    return xiv_to_blend_space(streams[0]["position"])[:, :3]
+    #
+    # The submesh streams are views into the mesh's shared stream arrays, and
+    # submesh vertex ranges can overlap. Convert a copy so a vertex is never
+    # converted more than once.
+    return xiv_to_blend_space(streams[0]["position"].copy())[:, :3]
 
 def get_shape_positions(streams: dict[int, NDArray], shape_vertices: NDArray, shape_indices: NDArray) -> NDArray:
-    pos     = streams[0]["position"].copy()
-    new_pos = pos[shape_vertices]
-    pos[shape_indices] = xiv_to_blend_space(new_pos)
+    # Convert a private copy of the whole stream. The shared stream is left in
+    # XIV space, so this does not depend on get_positions() having touched it.
+    pos = xiv_to_blend_space(streams[0]["position"].copy())
+    pos[shape_indices] = pos[shape_vertices]
 
     # Same HALF4 padding column as get_positions() - drop it before this
     # reaches a shape key's foreach_set("co", ...), which is also 3-wide.
