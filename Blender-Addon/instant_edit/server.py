@@ -13,7 +13,7 @@ from queue       import Empty, Full, Queue
 import bpy
 
 from .context import is_safe_game_model_path
-from .cache import CacheStagingError, STALE_SECONDS, cache_root
+from .cache import CacheStagingError, STALE_SECONDS, cache_root, finish_job
 from .diagnostics import BridgeRequestError, record_failure, sanitize_text
 from .plugin_http import post_json
 from .validation import ValidationError, validate_string
@@ -30,6 +30,8 @@ CACHE_SETTINGS_CAPABILITY = "instant-edit.cache-settings.v1"
 VANILLA_CONTEXT_CAPABILITY = "instant-edit.vanilla-context.v1"
 STRUCTURED_ERRORS_CAPABILITY = "instant-edit.structured-errors.v1"
 IMPORT_STATUS_CAPABILITY = "instant-edit.import-status.v1"
+
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})
 
 _import_queue: Queue = Queue(maxsize=MAX_IMPORT_QUEUE_SIZE)
 _server              = None
@@ -217,6 +219,30 @@ def _notify_import_failure(data: dict, failure: dict) -> None:
     ).start()
 
 
+def _host_allowed(host_header: str | None, port: int) -> bool:
+    """True when a Host header addresses this listener by a loopback name and port."""
+    host, separator, host_port = (host_header or "").strip().lower().rpartition(":")
+    return separator == ":" and host in LOOPBACK_HOSTS and host_port == str(port)
+
+
+def _release_import_job(data: dict) -> None:
+    """Finish the staged cache job of a queued import once Blender is done with it.
+
+    The import operator normally does this itself. This covers imports that
+    fail before the operator's own cleanup runs (its poll, argument conversion
+    or an unexpected exception); an active job is never cleaned automatically,
+    so it would otherwise stay on disk until Blender restarts. Finishing a job
+    that is already finished is harmless.
+    """
+    cache_job = data.get("cacheJobDirectory", "")
+    if not cache_job:
+        return
+    try:
+        finish_job(cache_job)
+    except OSError as error:
+        print(f"XIV Instant Edit: could not remove import cache job: {sanitize_text(error)}")
+
+
 def _request_metadata(data: dict | None) -> dict:
     if not isinstance(data, dict):
         return {"pluginVersion": "unknown"}
@@ -241,7 +267,55 @@ class _ImportHandler(BaseHTTPRequestHandler):
         super().setup()
         self.connection.settimeout(REQUEST_TIMEOUT_SECONDS)
 
+    def _request_allowed(self, *, json_body: bool = False) -> bool:
+        """Refuse requests that a web page in the user's browser could have caused.
+
+        The listener has no credentials and any page can address 127.0.0.1, so
+        only requests that look like they came from the plugin are served:
+
+        * Browsers add an Origin header to cross-origin requests and to every
+          POST; the plugin's HttpClient sends none.
+        * A DNS-rebinding page reaches this port under its own hostname, so its
+          Host header is not a loopback address.
+        * Without a CORS preflight, which this server never answers, a page can
+          only send a "simple" POST (text/plain or form content types), so a
+          body must be declared as application/json.
+
+        A rejection is answered without writing a diagnostic report, so a page
+        cannot fill the report folder.
+        """
+        if self.headers.get("Origin") is not None:
+            self._respond_rejected(
+                403, "origin_not_allowed",
+                "The Blender listener does not accept requests that carry an Origin header.")
+            return False
+        if not _host_allowed(self.headers.get("Host"), self.server.server_address[1]):
+            self._respond_rejected(
+                403, "host_not_allowed",
+                "The Blender listener only accepts requests addressed to its loopback address.")
+            return False
+        if json_body and self.headers.get_content_type() != "application/json":
+            self._respond_rejected(
+                415, "unsupported_media_type",
+                "The Blender listener only accepts application/json request bodies.")
+            return False
+        return True
+
+    def _respond_rejected(self, status: int, code: str, cause: str) -> None:
+        self._respond(status, {
+            "ok": False,
+            "error": cause,
+            "component": "blender_addon",
+            "operation": "http_request",
+            "stage": "request_authorization",
+            "code": code,
+            "cause": cause,
+            "remedy": "Send requests from the XIV Instant Edit plugin directly to Blender's loopback address.",
+        })
+
     def do_GET(self) -> None:
+        if not self._request_allowed():
+            return
         if self.path.rstrip("/") == "/status":
             self._respond(200, _status_payload())
         else:
@@ -253,6 +327,8 @@ class _ImportHandler(BaseHTTPRequestHandler):
             ))
 
     def do_POST(self) -> None:
+        if not self._request_allowed(json_body=True):
+            return
         endpoint = self.path.rstrip("/")
         is_cache_settings = endpoint == "/settings/cache"
         if endpoint != "/import" and not is_cache_settings:
@@ -757,6 +833,8 @@ def poll_import_queue() -> float:
                     metadata=_request_metadata(data),
                 )
                 _notify_import_failure(data, failure)
+            finally:
+                _release_import_job(data)
     except Exception as e:
         _failure(
             None, "import", "queueing", "import_queue_processing_failed",

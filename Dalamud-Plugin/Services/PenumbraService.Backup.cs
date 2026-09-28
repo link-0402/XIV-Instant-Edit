@@ -289,9 +289,6 @@ public sealed partial class PenumbraService
         bool redraw = true)
     {
         PenumbraApiEc enabledResult;
-        if (!redraw)
-            return new ExportResult(true, $"Applied {modName} to {collectionName}.");
-
         try
         {
             enabledResult = _trySetMod.Invoke(
@@ -329,6 +326,10 @@ public sealed partial class PenumbraService
             if (priorityResult is not (PenumbraApiEc.Success or PenumbraApiEc.NothingChanged))
                 return new ExportResult(false, $"Penumbra rejected the mod priority ({priorityResult}).");
         }
+
+        // Callers that pass redraw: false redraw the affected entities themselves.
+        if (!redraw)
+            return new ExportResult(true, $"Applied {modName} to {collectionName}.");
 
         try
         {

@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from pathlib         import Path
 from bpy.types       import Context, UILayout
 
-from .objects        import visible_meshobj
+from .objects        import visible_meshobj, armature_for_object as _armature_for_object
 from ..io.model      import ModelExport, SceneHandler
 from ..io.logging    import YetAnotherLogger
 from ..io.model.data import get_neck_morphs
@@ -15,22 +15,6 @@ from ..backups       import create_backup
 
 
 _export_stats: dict[str, list[str]] = {}
-
-
-def _armature_for_object(obj):
-    """Return the armature that drives an exported mesh, if any."""
-    if obj.parent and obj.parent.type == "ARMATURE":
-        return obj.parent
-    return next(
-        (
-            modifier.object
-            for modifier in obj.modifiers
-            if modifier.type == "ARMATURE"
-            and modifier.object is not None
-            and modifier.object.type == "ARMATURE"
-        ),
-        None,
-    )
 
 
 @contextmanager

@@ -1350,12 +1350,20 @@ def run() -> None:
             "name": "Mashup",
         }:
             raise AssertionError("Mashup destination popup did not preserve external dependency bundling")
+        format_settings = bpy.context.scene.xiv_ie_settings
+        mashup_original_format = format_settings.model_format
+        format_settings.model_format = "FBX"
         try:
             mashup_target = instant_ops.perform_mashup_export(
                 bpy.context, "ACTIVE_MOD", "Smoke Mashup",
                 bundle_external_dependencies=True)
+            format_after_mashup = format_settings.model_format
         finally:
             instant_ops.finish_job = original_finish_job
+            format_settings.model_format = mashup_original_format
+        if format_after_mashup != "FBX":
+            raise AssertionError(
+                f"Mashup export overwrote the Simple Export format: {format_after_mashup}")
         mashup_model = instant_ops.XIVModel.from_file(mashup_target)
         expected_aliases = {
             "/mt_c0101e0001_top_a.mtrl",
@@ -1628,12 +1636,20 @@ def run() -> None:
                 f"expected={tuple(tuple(row) for row in original_pose)}"
             )
         bpy.context.scene.xiv_ie_settings.reset_scaling_on_export = True
+        quick_format_settings = bpy.context.scene.xiv_ie_settings
+        quick_original_format = quick_format_settings.model_format
+        quick_format_settings.model_format = "GLTF"
         try:
             quick_target = instant_ops.perform_instant_export(bpy.context)
+            format_after_quick_export = quick_format_settings.model_format
         finally:
             instant_ops.reset_material_coverage_state()
             plugin_http.urllib.request.urlopen = original_urlopen
             bpy.context.scene.xiv_ie_settings.reset_scaling_on_export = False
+            quick_format_settings.model_format = quick_original_format
+        if format_after_quick_export != "GLTF":
+            raise AssertionError(
+                f"Quick Export overwrote the Simple Export format: {format_after_quick_export}")
 
         if tuple(armature.scale) != tuple(original_armature_scale):
             raise AssertionError(

@@ -37,7 +37,7 @@ class BoundingBox:
         return box
 
     def merge(self, new_box: 'BoundingBox') -> 'BoundingBox':
-        for idx, (current_min, current_max) in enumerate(zip(self.min[:3], self.min[:3])):
+        for idx, (current_min, current_max) in enumerate(zip(self.min[:3], self.max[:3])):
             self.min[idx] = min(new_box.min[idx], current_min)
             self.max[idx] = max(new_box.max[idx], current_max)
 
