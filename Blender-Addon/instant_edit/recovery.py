@@ -138,10 +138,28 @@ def recover_saved_contexts() -> None:
 
 
 def _recover_worker(generation: int, requests: list[tuple]) -> None:
-    for context_id, import_id, capability, ports in requests:
-        payload = _request_reattach(context_id, import_id, capability, ports)
-        _recovery_results.put(("result", generation, context_id, payload))
-    _recovery_results.put(("done", generation, "", None))
+    try:
+        for context_id, import_id, capability, ports in requests:
+            try:
+                payload = _request_reattach(context_id, import_id, capability, ports)
+            except Exception as error:
+                # This context stays disconnected; the others still get a try.
+                payload = None
+                record_failure(
+                    component="blender_addon",
+                    operation="context_recovery",
+                    stage="reattach_request",
+                    code="context_reattach_failed",
+                    cause="Blender hit an unexpected error while reconnecting a saved context.",
+                    remedy="Re-import the model if the context remains disconnected.",
+                    endpoint="/context/reattach",
+                    exception=error,
+                )
+            _recovery_results.put(("result", generation, context_id, payload))
+    finally:
+        # Always post "done". Without it the poll timer never stops and this
+        # generation's entry in _recovery_counts is never released.
+        _recovery_results.put(("done", generation, "", None))
 
 
 def _poll_recovery_results():

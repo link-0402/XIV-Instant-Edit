@@ -9,6 +9,7 @@ python Blender-Addon/testing/run_blender_suites.py
 python Blender-Addon/testing/cache_regression.py
 python Blender-Addon/testing/diagnostics_regression.py
 python Blender-Addon/testing/server_diagnostics_regression.py
+python Blender-Addon/testing/worker_regression.py
 dotnet run --project Tests/ExportContextRegression -c Release -p:SkipDistributionPackage=true
 dotnet run --project Tests/BlenderStatusRegression -c Release -p:SkipDistributionPackage=true
 dotnet run --project Tests/AnimationRegression -c Release -p:SkipDistributionPackage=true
@@ -54,7 +55,10 @@ updates the distribution archives or extension repository index.
 - `correctness_regression.py`: injected transparency and shape-key
   preparation failures; armature-combination validation and rollback; scheduled
   and active workers across file loads; durable
-  revocation retries and stale-result rejection.
+  revocation retries and stale-result rejection; vertex-group cleanup, export
+  copies keeping their rig, bounding-box merging, import stream conversion,
+  Quick Export backup clearing, failed-import cache release, and Simple Export
+  format preservation.
 - `animation_regression.py`: animations from the plugin. Take validation, the
   game-to-armature conversion (checked against the game's model-space pose through
   arbitrary rest orientations, a scaled and rotated armature object, reparented and
@@ -99,7 +103,10 @@ updates the distribution archives or extension repository index.
   texture decoder, without a GPU. Animation sends cover Blender's keyed, queued
   and refused responses and the transport failure.
 - Standalone Python suites: cache ownership and cleanup, diagnostic sanitation
-  and limits, import validation, and asynchronous failure reporting.
+  and limits, import validation, asynchronous failure reporting, cache-job
+  release after failed imports, rejection of browser-originated listener
+  requests, malformed plugin replies surfacing as transport errors, and the
+  revocation and recovery workers reporting back after unexpected failures.
 - `AnimationRegression`: PAP/SKLB envelopes, complete pose-stack shape fixtures,
   component filtering, timeline/VFX dependencies, metadata scope, durable recovery,
   and PAP backup conflict protection, plus the binary take sent to Blender and the

@@ -1,6 +1,7 @@
 """Standalone regression coverage for Blender bridge validation and async failures."""
 
 import copy
+import http.client
 import importlib.util
 import json
 import os
@@ -98,6 +99,142 @@ def _expect_cache_code(server, payload, expected: str) -> None:
         assert error.stage and error.cause and error.remedy
     else:
         raise AssertionError(f"cache validation unexpectedly accepted {expected}")
+
+
+def _stub_blender(server, operator) -> None:
+    server.bpy = types.SimpleNamespace(
+        context=types.SimpleNamespace(
+            mode="OBJECT",
+            scene=types.SimpleNamespace(
+                xiv_ie_instant_edit_props=types.SimpleNamespace(last_status="")),
+        ),
+        ops=types.SimpleNamespace(
+            object=types.SimpleNamespace(mode_set=lambda **_kwargs: None),
+            xiv_ie=types.SimpleNamespace(instant_import=operator),
+        ),
+    )
+
+
+def _model_file(directory: Path) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    model = directory / "model.mdl"
+    model.write_bytes(b"\x06\x00\x00\x01model")
+    return model
+
+
+def _check_failed_imports_release_their_cache_job(server, cache, valid, temporary, captured) -> None:
+    """A failed queued import must not leave its staged job active until restart."""
+    cache.configure_cache(temporary, True)
+    model = _model_file(Path(temporary) / "job-handoff")
+
+    def raising_operator(*_args, **_kwargs):
+        raise RuntimeError("Operator poll() failed, context is incorrect")
+
+    for label, operator, code in (
+        ("cancelled", lambda *_args, **_kwargs: {"CANCELLED"}, "import_cancelled"),
+        ("raised", raising_operator, "import_processing_failed"),
+    ):
+        staged = cache.stage_import({"filePath": str(model)})
+        job = Path(staged["cacheJobDirectory"])
+        assert job.is_dir() and job.resolve() in cache._active_jobs
+        queued = {**copy.deepcopy(valid), **staged,
+                  "importOptions": server._normalise_import_options(None)}
+        _stub_blender(server, operator)
+        captured.clear()
+        server._import_queue.put_nowait(queued)
+        server.poll_import_queue()
+        assert len(captured) == 1 and captured[0][1]["code"] == code, (label, captured)
+        assert not job.exists(), f"{label} import left its cache job on disk"
+        assert job.resolve() not in cache._active_jobs, f"{label} import left its cache job active"
+
+    # An import that succeeded already finished its job; finishing again is harmless.
+    staged = cache.stage_import({"filePath": str(model)})
+    job = Path(staged["cacheJobDirectory"])
+    cache.finish_job(job)
+    _stub_blender(server, lambda *_args, **_kwargs: {"FINISHED"})
+    captured.clear()
+    server._import_queue.put_nowait({**copy.deepcopy(valid), **staged,
+                                     "importOptions": server._normalise_import_options(None)})
+    server.poll_import_queue()
+    assert not captured and not job.exists()
+
+
+def _request(port: int, method: str, path: str, body: str | None = None, headers: dict | None = None):
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        connection.request(method, path, body=body, headers=headers or {})
+        response = connection.getresponse()
+        return response.status, json.loads(response.read().decode("utf-8"))
+    finally:
+        connection.close()
+
+
+def _check_listener_rejects_browser_requests(server, cache, valid, temporary) -> None:
+    """Only plugin-style requests are served: no Origin, a loopback Host, the endpoint's body type."""
+    cache.configure_cache(temporary, True)
+    assert server.start_server(0)
+    port = server._server.server_address[1]
+    try:
+        assert _request(port, "GET", "/status")[0] == 200
+        assert _request(port, "GET", "/status", headers={"Host": f"localhost:{port}"})[0] == 200
+
+        for headers, code in (
+            ({"Host": f"attacker.example:{port}"}, "host_not_allowed"),
+            ({"Host": f"127.0.0.1.attacker.example:{port}"}, "host_not_allowed"),
+            ({"Host": f"localhost:{port + 1}"}, "host_not_allowed"),
+            ({"Host": "127.0.0.1"}, "host_not_allowed"),
+            ({"Origin": "http://attacker.example"}, "origin_not_allowed"),
+            ({"Origin": "null"}, "origin_not_allowed"),
+            ({"Sec-Fetch-Site": "cross-site"}, "origin_not_allowed"),
+        ):
+            status, body = _request(port, "GET", "/status", headers=headers)
+            assert status == 403 and body["code"] == code and body["ok"] is False, (headers, status, body)
+            assert "diagnosticId" not in body, "a rejected request must not write a diagnostic report"
+
+        plugin_headers = {"Content-Type": "application/json; charset=utf-8"}
+        cache_payload = json.dumps({
+            "schema": "instant-edit.cache-settings", "version": 1,
+            "cacheDirectory": str(Path(temporary) / "attacker-cache"), "automaticCleanup": True})
+        base_before = cache.cache_base_directory()
+        model = _model_file(Path(temporary) / "listener-handoff")
+        import_payload = json.dumps({**copy.deepcopy(valid), "filePath": str(model)})
+        imports = cache.cache_root() / "imports"
+
+        for endpoint, payload in (("/settings/cache", cache_payload), ("/import", import_payload)):
+            for headers, expected_status, code in (
+                ({"Content-Type": "text/plain"}, 415, "unsupported_media_type"),
+                ({"Content-Type": "text/plain;charset=UTF-8"}, 415, "unsupported_media_type"),
+                ({"Content-Type": "application/x-www-form-urlencoded"}, 415, "unsupported_media_type"),
+                ({"Content-Type": "multipart/form-data; boundary=x"}, 415, "unsupported_media_type"),
+                ({}, 415, "unsupported_media_type"),
+                ({**plugin_headers, "Origin": "http://attacker.example"}, 403, "origin_not_allowed"),
+                ({**plugin_headers, "Host": f"attacker.example:{port}"}, 403, "host_not_allowed"),
+            ):
+                status, body = _request(port, "POST", endpoint, payload, headers)
+                assert (status, body["code"]) == (expected_status, code), (endpoint, headers, status, body)
+                assert cache.cache_base_directory() == base_before, "a rejected request changed the cache directory"
+                assert server._import_queue.empty(), "a rejected request queued an import"
+                assert not any(imports.iterdir()), "a rejected request staged an import job"
+
+        # Animation takes are binary: /animation takes application/octet-stream and
+        # refuses the simple types a page can send.
+        for headers in ({"Content-Type": "text/plain"}, {"Content-Type": "application/json"}, {}):
+            status, body = _request(port, "POST", "/animation", "take", headers)
+            assert (status, body["code"]) == (415, "unsupported_media_type"), (headers, status, body)
+
+        # The plugin's own requests still work.
+        settings_payload = json.dumps({
+            "schema": "instant-edit.cache-settings", "version": 1,
+            "cacheDirectory": str(base_before), "automaticCleanup": True})
+        status, body = _request(port, "POST", "/settings/cache", settings_payload, plugin_headers)
+        assert status == 200 and body["ok"], (status, body)
+        status, body = _request(port, "POST", "/import", import_payload, plugin_headers)
+        assert status == 200 and body["queued"], (status, body)
+        queued = server._import_queue.get_nowait()
+        assert Path(queued["cacheJobDirectory"]).is_dir()
+        cache.remove_job(queued["cacheJobDirectory"])
+    finally:
+        server.stop_server()
 
 
 def run() -> None:
@@ -220,6 +357,11 @@ def run() -> None:
         assert report_path.is_file()
         assert r"C:\Users\Example" not in report_text
         assert json.loads(report_text)["technical"]["pluginVersion"] == "1.1.5"
+
+        _check_failed_imports_release_their_cache_job(server, cache, valid, temporary, captured)
+        print("[PASS] failed queued imports release their staged cache job")
+        _check_listener_rejects_browser_requests(server, cache, valid, temporary)
+        print("[PASS] listener rejects browser-originated requests and serves plugin requests")
 
     print("[PASS] import validation codes and asynchronous diagnostics are actionable")
 

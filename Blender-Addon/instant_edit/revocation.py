@@ -147,10 +147,28 @@ def _send(record: dict) -> bool:
 
 def _worker(generation: int, records: list[dict]) -> None:
     completed = []
-    for record in records:
-        if _send(record):
-            completed.append((record.get("contextId"), record.get("importId")))
-    _results.put((generation, completed))
+    try:
+        for record in records:
+            try:
+                if _send(record):
+                    completed.append((record.get("contextId"), record.get("importId")))
+            except Exception as error:
+                # An unexpected failure on one record must not stop the rest.
+                # It stays queued and is retried the next time revocations run.
+                record_failure(
+                    component="blender_addon",
+                    operation="context_revocation",
+                    stage="revocation_request",
+                    code="context_revocation_failed",
+                    cause="Blender hit an unexpected error while revoking a plugin context.",
+                    remedy="The revocation stays queued and is retried later.",
+                    endpoint="/context/revoke",
+                    exception=error,
+                )
+    finally:
+        # Always report back. Until this result is polled, _worker_running
+        # blocks schedule_revocations() and the poll timer never stops.
+        _results.put((generation, completed))
 
 
 def _poll_results():
