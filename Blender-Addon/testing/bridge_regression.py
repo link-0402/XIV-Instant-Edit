@@ -1115,6 +1115,49 @@ def run_staging_isolation_regression(addon) -> None:
                 "Quick Export maps A/B/C by suffix despite preceding built-in attributes",
             )
 
+            hair_mesh = bpy.data.objects.new("0.1 Hair Variants", detection_mesh_data)
+            bpy.context.collection.objects.link(hair_mesh)
+            for attribute in ("atr_hv_a", "atr_fv_b", "atr_kam", "atr_bak", "atr_lod", "atrx_bangs"):
+                hair_mesh[attribute] = True
+            materials_module = importlib.import_module(f"{package_name}.materials")
+            hair_tags, hair_masks = materials_module.attribute_group_data([hair_mesh])
+            operators_module = importlib.import_module(f"{package_name}.operators")
+            presets = operators_module._ATTRIBUTE_PRESET_ITEMS
+            _require(
+                hair_tags == ("atrx_bangs",) and hair_masks == {},
+                "hair, face and other game attributes are accepted but never get a Penumbra group",
+            )
+            _require(
+                [item[0] for item in operators_module._ATTRIBUTE_CATEGORY_ITEMS] == [
+                    "BODY_PARTS", "MV", "TV", "GV", "DV", "SV", "EV", "NV", "WV", "RV", "HV", "FV",
+                ] and
+                [item[0] for item in presets["EV"]] == [f"atr_ev_{suffix}" for suffix in "abcdefghij"] and
+                [item[0] for item in presets["HV"]] == [f"atr_hv_{suffix}" for suffix in "abcdefgh"] and
+                [item[0] for item in presets["FV"]] == [f"atr_fv_{suffix}" for suffix in "abcdefg"] and
+                presets["BODY_PARTS"][0][:2] == ("atr_nek", "Neck (atr_nek)") and
+                presets["EV"][0][1] == "A (atr_ev_a)",
+                "the Add Attribute dialog lists each category's presets on their own",
+            )
+
+            gear_mesh = bpy.data.objects.new("0.2 Ten Suffixes", detection_mesh_data)
+            bpy.context.collection.objects.link(gear_mesh)
+            for attribute in ("atr_tv_a", "atr_tv_j", "atr_vsr", "atr_lod117"):
+                gear_mesh[attribute] = True
+            gear_tags, gear_masks = materials_module.attribute_group_data([gear_mesh])
+            _require(
+                gear_tags == ("atr_tv_a", "atr_tv_j") and
+                gear_masks == {"atr_tv_a": 1, "atr_tv_j": 512},
+                "Quick Export groups _i and _j variants with IMC bits 8 and 9",
+            )
+
+            gear_mesh["atr_cape"] = True
+            try:
+                materials_module.attribute_group_data([gear_mesh])
+                refused = False
+            except ValueError as error:
+                refused = "atr_cape" in str(error)
+            _require(refused, "Quick Export still refuses custom attributes without the atrx_ prefix")
+
         class ReceiptResponse:
             def __init__(self, status, payload):
                 self.status = status

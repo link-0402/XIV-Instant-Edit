@@ -100,7 +100,24 @@ public sealed partial class PenumbraService
     private const string VariantGroupDescriptionPrefix = "Managed by XIV Instant Edit variant group: ";
     private const string AttributeGroupDescriptionPrefix = "Managed by XIV Instant Edit attribute group v1: ";
     private static readonly string[] AttributeGroupFamilies =
-        ["mv", "tv", "gv", "dv", "sv", "ev", "nv", "wv", "rv", "hv"];
+        ["mv", "tv", "gv", "dv", "sv", "ev", "nv", "wv", "rv"];
+    // Every other attribute the game's own gear, accessory, body, hair, face, tail
+    // and ear models use, typos included (surveyed from the game data 2026-09-28).
+    // The game drives them itself, so they never get a generated group. Keep in
+    // sync with GAME_ATTRIBUTE_NAMES in the Blender add-on's materials.py.
+    private static readonly HashSet<string> GameAttributeNames = new(StringComparer.Ordinal)
+    {
+        "atr_ar", "atr_arm", "atr_arm1", "atr_arm2", "atr_arm3", "atr_armc", "atr_armhh",
+        "atr_bak", "atr_bak1", "atr_bak3", "atr_bak4", "atr_bakh", "atr_blt", "atr_bv_a",
+        "atr_cn_ankle", "atr_cn_neck", "atr_cn_waist", "atr_cn_wrist", "atr_del",
+        "atr_hair", "atr_head", "atr_hig", "atr_hij", "atr_hij1", "atr_hiz", "atr_hiz1", "atr_hrn",
+        "atr_inr", "atr_kam", "atr_kam1", "atr_kam4", "atr_kam23", "atr_kam24",
+        "atr_kao", "atr_kao1", "atr_kao2", "atr_kao3", "atr_kod", "atr_kod1", "atr_kod2",
+        "atr_leg", "atr_leg1", "atr_lod", "atr_lod1", "atr_lod2", "atr_lod12",
+        "atr_lod117", "atr_lod118", "atr_lod119", "atr_lod120", "atr_lpd", "atr_mim", "atr_mv_a1",
+        "atr_nek", "atr_nek2", "atr_sne", "atr_sne1", "atr_st", "atr_sta", "atr_star",
+        "atr_tlh", "atr_tls", "atr_top", "atr_top1", "atr_top3", "atr_tv_h1", "atr_ude", "atr_ude1", "atr_vsr",
+    };
 
     private readonly IDalamudPluginInterface  _pi;
     private readonly GetGameObjectResourcePaths _getPaths;

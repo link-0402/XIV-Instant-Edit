@@ -7,9 +7,7 @@ from bpy.types import Context, Operator
 
 from .instant_edit.context import ContextValidationError
 from .materials import (
-    ATTRIBUTE_VARIANT_PRESETS,
-    FACE_ATTRIBUTE_PRESETS,
-    attribute_display_name,
+    ATTRIBUTE_PRESET_CATEGORIES,
     assign_material_path,
     backface_copies,
     commit_mesh_id_plan,
@@ -42,10 +40,27 @@ from .backups import clear_backups, list_backups, restore_local, target_folder
 
 _ACTIVE_MESH_DRAG: tuple[str, int, int, int, str] | None = None
 _ACTIVE_MESH_DRAG_PLAN: dict[int, tuple[int, int]] | None = None
-_ATTRIBUTE_PRESET_ITEMS = tuple(
-    (attribute, attribute_display_name(attribute), f"Add {attribute} to this mesh part")
-    for attribute in ATTRIBUTE_VARIANT_PRESETS + FACE_ATTRIBUTE_PRESETS
+# The Add Attribute dialog lists one category's presets at a time. Blender
+# needs dynamic enum strings kept alive, so every category's items are built once.
+_ATTRIBUTE_CATEGORY_ITEMS = tuple(
+    (category, label, f"Show the {label} attributes")
+    for category, label, _presets in ATTRIBUTE_PRESET_CATEGORIES
 )
+_ATTRIBUTE_PRESET_ITEMS = {
+    category: tuple(
+        (attribute, f"{name} ({attribute})", f"Add {attribute} to this mesh part")
+        for attribute, name in presets
+    )
+    for category, _label, presets in ATTRIBUTE_PRESET_CATEGORIES
+}
+
+
+def _attribute_preset_items(operator, _context):
+    return _ATTRIBUTE_PRESET_ITEMS.get(operator.category, ())
+
+
+def _attribute_category_changed(operator, _context):
+    operator.selection = _ATTRIBUTE_PRESET_ITEMS[operator.category][0][0]
 
 
 def active_mesh_drag_state() -> tuple[str, int, int, int, str] | None:
@@ -926,20 +941,17 @@ class XIVIE_OT_mesh_attribute(Operator):
         default="",
         maxlen=128,
     )  # type: ignore
+    # Keep category above selection: Python callers' keyword arguments are
+    # applied in this order, and selection only lists the category's presets.
+    category: EnumProperty(
+        name="Category",
+        items=_ATTRIBUTE_CATEGORY_ITEMS,
+        default="BODY_PARTS",
+        update=_attribute_category_changed,
+    )  # type: ignore
     selection: EnumProperty(
-        name="",
-        items=(
-            ("atr_nek", "Neck", ""),
-            ("atr_ude", "Elbow", ""),
-            ("atr_hij", "Wrist", ""),
-            ("atr_arm", "Glove", ""),
-            ("atr_kod", "Waist", ""),
-            ("atr_hiz", "Knee", ""),
-            ("atr_sne", "Shin", ""),
-            ("atr_leg", "Boot", ""),
-            ("atr_lpd", "Knee Pad", ""),
-        ) + _ATTRIBUTE_PRESET_ITEMS,
-        default="atr_nek",
+        name="Attribute",
+        items=_attribute_preset_items,
     )  # type: ignore
 
     @classmethod
@@ -963,7 +975,11 @@ class XIVIE_OT_mesh_attribute(Operator):
         if self.custom:
             layout.prop(self, "custom_attribute", placeholder="atrx_name or heels_offset=0.15")
         else:
-            layout.prop(self, "selection")
+            column = layout.column()
+            column.use_property_split = True
+            column.use_property_decorate = False
+            column.prop(self, "category")
+            column.prop(self, "selection")
 
     def execute(self, context: Context):
         value = self.custom_attribute if self.custom else self.selection

@@ -306,24 +306,7 @@ internal static class VariantExportScenarios
         var conflictRoot = Path.Combine(root, "Conflict");
         Directory.CreateDirectory(conflictRoot);
         var conflictMetaPath = Path.Combine(conflictRoot, "meta.json");
-        var conflictMeta = Metadata(new JsonObject
-        {
-            ["Id"] = Guid.NewGuid(), ["Name"] = "User ATR", ["Type"] = "Multi",
-            ["Options"] = new JsonArray(new JsonObject
-            {
-                ["Name"] = "Existing",
-                ["Manipulations"] = new JsonArray(new JsonObject
-                {
-                    ["Type"] = "Atr",
-                    ["Manipulation"] = new JsonObject
-                    {
-                        ["Attribute"] = "atrx_existing", ["Entry"] = true,
-                        ["Slot"] = "Body", ["Id"] = 1, ["GenderRaceCondition"] = 801,
-                    },
-                }),
-            }),
-        });
-        File.WriteAllText(conflictMetaPath, conflictMeta.ToJsonString());
+        File.WriteAllText(conflictMetaPath, Metadata(UserAtrGroup("Body", 1)).ToJsonString());
         var before = File.ReadAllText(conflictMetaPath);
         var conflict = PenumbraService.WriteAttributeGroupsForRegression(
             conflictRoot, path, ["atrx_new"], new Dictionary<string, int>());
@@ -331,35 +314,181 @@ internal static class VariantExportScenarios
                 File.ReadAllText(conflictMetaPath) == before,
             "attribute groups: unmanaged exact-identity ATR conflicts are rejected without mutation");
 
+        // Penumbra cannot load an IMC group for hair or faces (the game has no IMC
+        // file for them), so part variants on them never ask for an IMC entry.
+        const string hairPath = "chara/human/c0801/obj/hair/h0154/model/c0801h0154_hir.mdl";
         var hairRoot = Path.Combine(root, "Hair");
         Directory.CreateDirectory(hairRoot);
-        File.WriteAllText(Path.Combine(hairRoot, "meta.json"), Metadata().ToJsonString());
-        var hairImc = new JsonArray(new JsonObject
+        File.WriteAllText(Path.Combine(hairRoot, "meta.json"), Metadata(new JsonObject
         {
-            ["Type"] = "Imc",
-            ["Manipulation"] = new JsonObject
+            ["Id"] = Guid.NewGuid(), ["Name"] = "XIV Instant Edit c0801h0154_hir Parts (IMC)", ["Type"] = "Imc",
+            ["Description"] = $"Managed by XIV Instant Edit attribute group v1: imc|{hairPath}",
+            ["Identifier"] = new JsonObject
             {
-                ["ObjectType"] = "Character",
-                ["PrimaryId"] = 154,
-                ["Variant"] = 1,
-                ["BodySlot"] = "Hair",
-                ["Entry"] = new JsonObject { ["MaterialId"] = 6 },
+                ["PrimaryId"] = 154, ["SecondaryId"] = 0, ["Variant"] = 1,
+                ["ObjectType"] = "Character", ["EquipSlot"] = "Nothing", ["BodySlot"] = "Hair",
             },
-        });
+            ["DefaultEntry"] = new JsonObject { ["MaterialId"] = 6 },
+            ["Options"] = new JsonArray(),
+        }).ToJsonString());
         var hair = PenumbraService.WriteAttributeGroupsForRegression(
             hairRoot,
-            "chara/human/c0801/obj/hair/h0154/model/c0801h0154_hir.mdl",
-            ["atr_hv_a"],
-            new Dictionary<string, int> { ["atr_hv_a"] = 1 },
-            hairImc);
-        var hairGroup = JsonNode.Parse(File.ReadAllText(Path.Combine(hairRoot, "meta.json")))!["Groups"]!.AsArray()[0]!;
-        Require(hair is null && hairGroup!["Identifier"]!["ObjectType"]!.GetValue<string>() == "Character" &&
-                hairGroup["Identifier"]!["BodySlot"]!.GetValue<string>() == "Hair" &&
-                hairGroup["Identifier"]!["EquipSlot"]!.GetValue<string>() == "Nothing" &&
-                hairGroup["Identifier"]!["PrimaryId"]!.GetValue<int>() == 154 &&
-                hairGroup["DefaultEntry"]!["MaterialId"]!.GetValue<int>() == 6,
-            "attribute groups: hair paths use character/hair IMC identity");
+            hairPath,
+            ["atr_hv_a", "atr_tv_b", "atr_kam", "atr_bak", "atr_fv_e", "atrx_bangs"],
+            new Dictionary<string, int> { ["atr_hv_a"] = 1, ["atr_tv_b"] = 2 });
+        var hairMeta = JsonNode.Parse(File.ReadAllText(Path.Combine(hairRoot, "meta.json")))!;
+        Require(hair is null &&
+                hairMeta["Groups"]!.AsArray().OfType<JsonObject>()
+                    .Select(group => group["Type"]?.GetValue<string>()).SequenceEqual(["Multi"]),
+            "attribute groups: hair variants and vanilla hair attributes need no IMC entry, and an old managed IMC group is removed");
+        Require(AtrManipulations(hairMeta).Count() == 2 &&
+                AtrManipulations(hairMeta).All(atr =>
+                    atr["Slot"]!.GetValue<string>() == "Hair" && atr["Id"]!.GetValue<int>() == 154 &&
+                    atr["Attribute"]!.GetValue<string>() == "atrx_bangs"),
+            "attribute groups: hair atrx toggles target Penumbra's Hair slot, not the invalid Unknown slot");
+
+        var faceRoot = Path.Combine(root, "Face");
+        Directory.CreateDirectory(faceRoot);
+        File.WriteAllText(Path.Combine(faceRoot, "meta.json"), Metadata().ToJsonString());
+        Require(PenumbraService.WriteAttributeGroupsForRegression(
+                    faceRoot,
+                    "chara/human/c0101/obj/face/f0001/model/c0101f0001_fac.mdl",
+                    ["atr_fv_a", "atr_fv_g", "atr_mim", "atr_kao", "atrx_scar"],
+                    new Dictionary<string, int>()) is null,
+            "attribute groups: face toggles and vanilla face attributes are accepted next to atrx toggles");
+        var faceMeta = JsonNode.Parse(File.ReadAllText(Path.Combine(faceRoot, "meta.json")))!;
+        Require(AtrManipulations(faceMeta).Count() == 2 &&
+                AtrManipulations(faceMeta).All(atr =>
+                    atr["Slot"]!.GetValue<string>() == "Face" && atr["Id"]!.GetValue<int>() == 1),
+            "attribute groups: face atrx toggles target Penumbra's Face slot");
+
+        var hairConflictRoot = Path.Combine(root, "HairConflict");
+        Directory.CreateDirectory(hairConflictRoot);
+        var hairConflictMetaPath = Path.Combine(hairConflictRoot, "meta.json");
+        File.WriteAllText(hairConflictMetaPath, Metadata(UserAtrGroup("Hair", 154)).ToJsonString());
+        var hairConflictBefore = File.ReadAllText(hairConflictMetaPath);
+        Require(PenumbraService.WriteAttributeGroupsForRegression(
+                    hairConflictRoot, hairPath, ["atrx_bangs"], new Dictionary<string, int>())?
+                    .Contains("conflict", StringComparison.OrdinalIgnoreCase) == true &&
+                File.ReadAllText(hairConflictMetaPath) == hairConflictBefore,
+            "attribute groups: unmanaged Hair-slot ATR toggles for the same hair ID are conflicts");
+
+        // Exports before 2.0.0 wrote Slot "Unknown" for hair and face; Penumbra dropped those as invalid.
+        var legacyRoot = Path.Combine(root, "LegacyHair");
+        Directory.CreateDirectory(legacyRoot);
+        var legacyMetaPath = Path.Combine(legacyRoot, "meta.json");
+        var legacyMeta = Metadata(new JsonObject
+        {
+            ["Id"] = Guid.NewGuid(), ["Name"] = "XIV Instant Edit c0801h0154_hir Parts (ATR)", ["Type"] = "Multi",
+            ["Description"] = $"Managed by XIV Instant Edit attribute group v1: atr|{hairPath}",
+            ["Priority"] = 1,
+            ["Options"] = new JsonArray(new JsonObject
+            {
+                ["Id"] = Guid.NewGuid(), ["Name"] = "atrx_bangs",
+                ["Manipulations"] = new JsonArray(LegacyHairAtr("atrx_bangs", true)),
+            }),
+        });
+        legacyMeta["DefaultData"] = new JsonObject
+        {
+            ["Files"] = new JsonObject(),
+            ["FileSwaps"] = new JsonObject(),
+            ["Manipulations"] = new JsonArray(LegacyHairAtr("atrx_bangs", false)),
+        };
+        File.WriteAllText(legacyMetaPath, legacyMeta.ToJsonString());
+        Require(PenumbraService.WriteAttributeGroupsForRegression(
+                    legacyRoot, hairPath, ["atrx_bangs"], new Dictionary<string, int>()) is null,
+            "attribute groups: a legacy Unknown-slot hair export is not treated as a conflict");
+        var migrated = JsonNode.Parse(File.ReadAllText(legacyMetaPath))!;
+        Require(migrated["Groups"]!.AsArray().Count == 1 &&
+                AtrManipulations(migrated).Count() == 2 &&
+                AtrManipulations(migrated).All(atr => atr["Slot"]!.GetValue<string>() == "Hair") &&
+                !migrated["DefaultData"]!["Manipulations"]![0]!["Manipulation"]!["Entry"]!.GetValue<bool>(),
+            "attribute groups: re-exporting replaces legacy Unknown-slot hair toggles and defaults");
+
+        var captured = PenumbraService.ManipulationsWithAtrDefaults(
+            new JsonArray(LegacyHairAtr("atrx_bangs", true), LegacyHairAtr("atrx_other", false)),
+            hairPath,
+            ["atrx_bangs"]);
+        var capturedAtr = captured.OfType<JsonObject>().Select(item => item["Manipulation"]!).ToArray();
+        Require(capturedAtr.Length == 3 &&
+                capturedAtr[0]["Slot"]!.GetValue<string>() == "Hair" && capturedAtr[0]["Entry"]!.GetValue<bool>() &&
+                capturedAtr[1]["Slot"]!.GetValue<string>() == "Unknown" &&
+                capturedAtr[2]["Slot"]!.GetValue<string>() == "Hair" && !capturedAtr[2]["Entry"]!.GetValue<bool>(),
+            "attribute groups: mashups carry legacy hair toggles for exported tags over to the Hair slot");
+
+        var gameAttributesRoot = Path.Combine(root, "GameAttributesOnGear");
+        Directory.CreateDirectory(gameAttributesRoot);
+        File.WriteAllText(Path.Combine(gameAttributesRoot, "meta.json"), Metadata().ToJsonString());
+        Require(PenumbraService.WriteAttributeGroupsForRegression(
+                    gameAttributesRoot, path, ["atr_hv_a", "atr_fv_b", "atr_nek", "atr_vsr", "atr_lod117"],
+                    new Dictionary<string, int> { ["atr_hv_a"] = 1 }) is null &&
+                (JsonNode.Parse(File.ReadAllText(Path.Combine(gameAttributesRoot, "meta.json")))!["Groups"]
+                    as JsonArray)?.Count is null or 0,
+            "attribute groups: the game's own attributes, sent by older add-ons too, are accepted without a group");
+
+        var unknownRoot = Path.Combine(root, "UnknownAttribute");
+        Directory.CreateDirectory(unknownRoot);
+        File.WriteAllText(Path.Combine(unknownRoot, "meta.json"), Metadata().ToJsonString());
+        var unknownBefore = File.ReadAllText(Path.Combine(unknownRoot, "meta.json"));
+        Require(PenumbraService.WriteAttributeGroupsForRegression(
+                    unknownRoot, path, ["atr_cape"], new Dictionary<string, int>())?
+                    .Contains("must use the atrx_ prefix", StringComparison.Ordinal) == true &&
+                File.ReadAllText(Path.Combine(unknownRoot, "meta.json")) == unknownBefore,
+            "attribute groups: a custom attribute without the atrx_ prefix is still refused");
+
+        var tenSuffixRoot = Path.Combine(root, "TenSuffixes");
+        Directory.CreateDirectory(tenSuffixRoot);
+        File.WriteAllText(Path.Combine(tenSuffixRoot, "meta.json"), Metadata().ToJsonString());
+        Require(PenumbraService.WriteAttributeGroupsForRegression(
+                    tenSuffixRoot, path, ["atr_tv_a", "atr_tv_i", "atr_tv_j"],
+                    new Dictionary<string, int> { ["atr_tv_a"] = 1, ["atr_tv_i"] = 256, ["atr_tv_j"] = 512 },
+                    sourceImc) is null,
+            "attribute groups: _i and _j part variants are accepted");
+        var tenSuffixGroup = JsonNode.Parse(File.ReadAllText(Path.Combine(tenSuffixRoot, "meta.json")))!["Groups"]!
+            .AsArray().OfType<JsonObject>().Single(group => group["Type"]?.GetValue<string>() == "Imc");
+        Require(tenSuffixGroup["Options"]!.AsArray()
+                    .Select(option => (option!["Name"]!.GetValue<string>(), option["AttributeMask"]!.GetValue<int>()))
+                    .SequenceEqual([("A", 1), ("I", 256), ("J", 512)]) &&
+                tenSuffixGroup["DefaultSettings"]!.GetValue<int>() == 7,
+            "attribute groups: _i and _j use IMC attribute bits 8 and 9");
     }
+
+    private static IEnumerable<JsonObject> AtrManipulations(JsonNode meta)
+        => meta["Groups"]!.AsArray()
+            .SelectMany(group => group!["Options"]?.AsArray() ?? [])
+            .SelectMany(option => option!["Manipulations"]?.AsArray() ?? [])
+            .Concat(meta["DefaultData"]?["Manipulations"]?.AsArray() ?? [])
+            .OfType<JsonObject>()
+            .Where(item => item["Type"]?.GetValue<string>() == "Atr")
+            .Select(item => item["Manipulation"]!.AsObject());
+
+    private static JsonObject UserAtrGroup(string slot, int id) => new()
+    {
+        ["Id"] = Guid.NewGuid(), ["Name"] = "User ATR", ["Type"] = "Multi",
+        ["Options"] = new JsonArray(new JsonObject
+        {
+            ["Name"] = "Existing",
+            ["Manipulations"] = new JsonArray(new JsonObject
+            {
+                ["Type"] = "Atr",
+                ["Manipulation"] = new JsonObject
+                {
+                    ["Attribute"] = "atrx_existing", ["Entry"] = true,
+                    ["Slot"] = slot, ["Id"] = id, ["GenderRaceCondition"] = 801,
+                },
+            }),
+        }),
+    };
+
+    private static JsonObject LegacyHairAtr(string attribute, bool entry) => new()
+    {
+        ["Type"] = "Atr",
+        ["Manipulation"] = new JsonObject
+        {
+            ["Entry"] = entry, ["Attribute"] = attribute,
+            ["Slot"] = "Unknown", ["Id"] = 154, ["GenderRaceCondition"] = 0,
+        },
+    };
 
     private static void ExportReceiptsMatchOperation()
     {
