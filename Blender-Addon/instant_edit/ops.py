@@ -15,7 +15,9 @@ from pathlib   import Path
 from bpy.types import Operator, Context
 
 from ..io.model      import ModelImport
-from ..materials     import attribute_group_data, compact_mesh_part_indices, group_mesh_objects
+from ..materials     import (
+    attribute_group_data, compact_mesh_part_indices, group_mesh_objects, hair_skeleton_tags,
+)
 from ..mesh.export   import export_result, get_export_stats, check_triangulation, check_weights, flush_edit_mode
 from ..mesh.objects  import visible_meshobj
 from ..properties    import get_settings
@@ -594,6 +596,31 @@ def _material_coverage_warning_message(missing_materials) -> str:
     )
 
 
+_HAIR_MODEL_PATH = re.compile(
+    r"chara/human/(c\d{4})/obj/hair/h\d{4}/model/c\d{4}h\d{4}_hir\.mdl", re.IGNORECASE)
+
+
+def hair_skeleton_target_issue(game_path: str, entry: dict) -> str:
+    """Return why the plugin will not set a tagged hair EST entry for this Context's model.
+
+    The plugin checks every path the mod maps the model at; this mirrors the answer
+    for the path the Context was imported from.
+    """
+    match = _HAIR_MODEL_PATH.fullmatch((game_path or "").replace("\\", "/").strip())
+    if match is None:
+        return (
+            f"The meshes are weighted to hair skeleton {entry['entry']} ({entry['race']}), "
+            "but this model is not hair; no EST entry will be set."
+        )
+    race = match.group(1).lower()
+    if race != entry["race"]:
+        return (
+            f"The meshes are weighted to {entry['race']}'s hair skeleton {entry['entry']}, but this "
+            f"hair is {race}'s. Skeleton IDs differ per race, so {race} gets no EST entry."
+        )
+    return ""
+
+
 def export_target_issues(
     context: Context,
     ref=None,
@@ -692,6 +719,13 @@ def export_target_issues(
                 "ERROR",
                 _named_readiness_issue("No bone weights", unweighted),
             ))
+        est_entries, est_issue = hair_skeleton_tags(export_objects)
+        if est_issue:
+            issues.append(("WARNING", est_issue))
+        elif est_entries:
+            target_issue = hair_skeleton_target_issue(ref.source_game_path, est_entries[0])
+            if target_issue:
+                issues.append(("WARNING", target_issue))
 
     selection = getattr(props, "variant_target", "NEW_GROUP")
     if selection == MASHUP_TARGET:
@@ -746,7 +780,21 @@ def export_target_issues(
 
 
 _EXPORT_READINESS_REFRESH_SECONDS = 0.1
-_export_readiness_display_cache: dict = {"issues": (), "material_coverage_warning": False}
+_export_readiness_display_cache: dict = {
+    "issues": (), "material_coverage_warning": False, "hair_skeleton": "",
+}
+
+
+def detected_hair_skeleton(ref) -> str:
+    """Return "160 (c0801)" when Quick Export will set the meshes' tagged hair EST entry."""
+    try:
+        objects = export_objects_for_scope(ref, getattr(get_instant_edit_props(), "export_scope", "VISIBLE"))
+    except ContextValidationError:
+        return ""
+    entries, _issue = hair_skeleton_tags(objects)
+    if not entries or hair_skeleton_target_issue(ref.source_game_path, entries[0]):
+        return ""
+    return f"{entries[0]['entry']} ({entries[0]['race']})"
 
 
 def _run_export_readiness_refresh() -> None:
@@ -766,16 +814,19 @@ def _run_export_readiness_refresh() -> None:
     try:
         ref = export_destination_context(context, persist=False)
     except ContextValidationError as error:
-        issues, warning = [("ERROR", str(error))], False
+        issues, warning, hair = [("ERROR", str(error))], False, ""
     else:
         warning = material_coverage_warning_state(context, ref)
         issues = export_target_issues(context, ref, material_coverage_warning=warning)
+        hair = detected_hair_skeleton(ref)
     changed = (
         tuple(issues) != _export_readiness_display_cache["issues"]
         or warning != _export_readiness_display_cache["material_coverage_warning"]
+        or hair != _export_readiness_display_cache["hair_skeleton"]
     )
     _export_readiness_display_cache["issues"] = tuple(issues)
     _export_readiness_display_cache["material_coverage_warning"] = warning
+    _export_readiness_display_cache["hair_skeleton"] = hair
     if changed:
         try:
             for window in bpy.context.window_manager.windows:
@@ -810,9 +861,15 @@ def cached_export_readiness() -> tuple[list[tuple[str, str]], bool]:
     )
 
 
+def cached_hair_skeleton() -> str:
+    """Return the last computed hair EST entry Quick Export will set, for display."""
+    return _export_readiness_display_cache["hair_skeleton"]
+
+
 def reset_export_readiness_cache() -> None:
     _export_readiness_display_cache["issues"] = ()
     _export_readiness_display_cache["material_coverage_warning"] = False
+    _export_readiness_display_cache["hair_skeleton"] = ""
     try:
         bpy.app.timers.unregister(_run_export_readiness_refresh)
     except Exception:
@@ -1976,8 +2033,14 @@ def build_export_payload(ref, export_id: str, mdl_path: Path, byte_size: int,
                           setup_in_penumbra: bool = True,
                          new_mod_name: str | None = None,
                          attribute_tags: tuple[str, ...] = (),
-                         attribute_masks: dict[str, int] | None = None) -> dict:
-    """Build the versioned Dalamud export envelope."""
+                         attribute_masks: dict[str, int] | None = None,
+                         est_entries: list[dict] | None = None) -> dict:
+    """Build the versioned Dalamud export envelope.
+
+    ``est_entries`` is the hair EST entry from the meshes' Magic Fit tags: omitted
+    (None) the plugin leaves the mod's EST entries alone, empty it takes back the
+    entry it set before.
+    """
     payload = {
         "schema": "instant-edit.export",
         "version": VERSION,
@@ -2000,6 +2063,8 @@ def build_export_payload(ref, export_id: str, mdl_path: Path, byte_size: int,
         payload["createAttributeGroups"] = True
         payload["attributeTags"] = list(attribute_tags)
         payload["attributeMasks"] = dict(attribute_masks or {})
+    if est_entries is not None:
+        payload["estEntries"] = [dict(entry) for entry in est_entries]
     if setup_in_penumbra:
         if variant_name is not None:
             payload["variantName"] = variant_name
@@ -2489,6 +2554,7 @@ def perform_mashup_export(
         if getattr(get_instant_edit_props(), "create_attribute_groups", False)
         else ((), {})
     )
+    est_entries, est_issue = hair_skeleton_tags(export_objects)
 
     contributors = _mashup_contributor_payload(refs, materials)
     plugin_destination = "active_mod" if destination == "ACTIVE_MOD" else "new_mod"
@@ -2515,6 +2581,7 @@ def perform_mashup_export(
         if getattr(get_instant_edit_props(), "create_attribute_groups", False):
             attribute_tags, attribute_masks = attribute_group_data(
                 export_objects, use_lods=get_settings().use_lods)
+        est_entries, est_issue = hair_skeleton_tags(export_objects)
     assignments = _mashup_assignment_map(plan, materials)
 
     export_id = uuid.uuid4().hex
@@ -2560,6 +2627,8 @@ def perform_mashup_export(
             payload["createAttributeGroups"] = True
             payload["attributeTags"] = list(attribute_tags)
             payload["attributeMasks"] = dict(attribute_masks)
+        if est_entries is not None:
+            payload["estEntries"] = [dict(entry) for entry in est_entries]
         try:
             result = _send_plugin_export_to(ref, payload, "/mashup/export")
         except PluginResponseError as error:
@@ -2580,7 +2649,7 @@ def perform_mashup_export(
             payload["capability"] = ref.capability
             payload["contributors"] = _mashup_contributor_payload(refs, materials)
             result = _send_plugin_export_to(ref, payload, "/mashup/export")
-        warnings = result.get("warnings", [])
+        warnings = ([est_issue] if est_issue else []) + list(result.get("warnings", []))
         target = result.get("targetFilePath") or ref.target_file_path
         destination_name = result.get("destinationName") or name
         handoff_warnings = []
@@ -2725,6 +2794,7 @@ def perform_instant_export(
         if getattr(props, "create_attribute_groups", False)
         else ((), {})
     )
+    est_entries, est_issue = hair_skeleton_tags(export_objects)
 
     export_id = uuid.uuid4().hex
     temp_dir = create_job("exports", export_id)
@@ -2762,6 +2832,7 @@ def perform_instant_export(
             new_mod_name=new_mod_name,
             attribute_tags=attribute_tags,
             attribute_masks=attribute_masks,
+            est_entries=est_entries,
         )
         try:
             result = _send_plugin_export_to(ref, payload, "/export")
@@ -2796,6 +2867,7 @@ def perform_instant_export(
                 new_mod_name=new_mod_name,
                 attribute_tags=attribute_tags,
                 attribute_masks=attribute_masks,
+                est_entries=est_entries,
             )
             result = _send_plugin_export_to(ref, payload, "/export")
 
@@ -2822,7 +2894,7 @@ def perform_instant_export(
             f"{group.mesh_index}.({','.join(str(part) for part in group.parts)})"
             for group in export_groups
         )
-        warnings = result.get("warnings", [])
+        warnings = ([est_issue] if est_issue else []) + list(result.get("warnings", []))
         props.last_status = (
             f"Exported {group_status} to {target_file_path}{setup_status} with warnings: "
             f"{plugin_warning_summary(warnings)}"

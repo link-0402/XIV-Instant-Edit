@@ -321,7 +321,8 @@ public sealed partial class PenumbraService
         string exportedFile,
         bool backupExisting = false,
         string? modDirectory = null,
-        string? targetRelativePath = null)
+        string? targetRelativePath = null,
+        JsonObject? estState = null)
     {
         try
         {
@@ -338,7 +339,9 @@ public sealed partial class PenumbraService
             {
                 if (_backups is null || modDirectory is null || targetRelativePath is null)
                     return "Managed backup storage is unavailable.";
-                _backups.Create(fullTarget, modDirectory, targetRelativePath);
+                var backup = _backups.Create(fullTarget, modDirectory, targetRelativePath);
+                if (estState is not null)
+                    _backups.WriteEstState(backup, estState);
             }
             var temporary = Path.Combine(parent, $".instant-edit-{Guid.NewGuid():N}.tmp");
             try

@@ -1328,6 +1328,7 @@ def run() -> None:
         }
         mashup_plan_payloads = []
         mashup_export_payloads = []
+        export_payloads = []
         material_coverage_payloads = []
         material_coverage_warning = True
         material_coverage_delay = 0.2
@@ -1437,6 +1438,8 @@ def run() -> None:
                         },
                     })
                 return FakeResponse(json.dumps(response).encode("utf-8"))
+            if request.full_url.endswith("/export"):
+                export_payloads.append(json.loads(request.data.decode("utf-8")))
             return FakeResponse()
 
         plugin_http.urllib.request.urlopen = fake_urlopen
@@ -1830,6 +1833,8 @@ def run() -> None:
             raise AssertionError("Active mashup plan did not include external dependency bundling")
         if mashup_export_payloads[-1].get("bundleExternalDependencies") is not True:
             raise AssertionError("Active mashup export did not preserve external dependency bundling")
+        if mashup_export_payloads[-1].get("estEntries") != []:
+            raise AssertionError("Mashup export of untagged meshes did not ask to take back a managed EST entry")
         active_assignments = {}
         incoming_slot = "c"
         for contributor in mashup_plan_payloads[-1]["contributors"]:
@@ -2089,12 +2094,25 @@ def run() -> None:
                 f"expected={tuple(tuple(row) for row in original_pose)}"
             )
         bpy.context.scene.xiv_ie_settings.reset_scaling_on_export = True
+        # Magic Fit's Hair Weights tags: every part agrees on one hair skeleton.
+        for tagged in (obj, second, added_group):
+            tagged["xiv_est_hair"] = 160
+            tagged["xiv_est_race"] = "c0101"
+        tagged_issues = instant_ops.export_target_issues(bpy.context, ref, material_coverage_warning=False)
+        if not any(severity == "WARNING" and "not hair" in message for severity, message in tagged_issues):
+            raise AssertionError(f"A hair skeleton tag on a gear model was not warned about: {tagged_issues}")
         try:
             quick_target = instant_ops.perform_instant_export(bpy.context)
         finally:
             instant_ops.reset_material_coverage_state()
             plugin_http.urllib.request.urlopen = original_urlopen
             bpy.context.scene.xiv_ie_settings.reset_scaling_on_export = False
+            for tagged in (obj, second, added_group):
+                tagged.pop("xiv_est_hair", None)
+                tagged.pop("xiv_est_race", None)
+        if export_payloads[-1].get("estEntries") != [{"slot": "Hair", "entry": 160, "race": "c0101"}]:
+            raise AssertionError(f"Quick Export did not send the meshes' hair EST entry: {export_payloads[-1]}")
+        print("[PASS] Quick Export sends the hair EST entry of Magic Fit's tags and warns when the model is not hair")
 
         if tuple(armature.scale) != tuple(original_armature_scale):
             raise AssertionError(

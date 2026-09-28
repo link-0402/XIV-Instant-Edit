@@ -164,6 +164,17 @@ internal static class ModelSkeletonFixture
               EstTable.Override(metadata, EstSlot.Hair, 101, 1) == 0 && EstTable.Override(metadata, EstSlot.Face, 101, 2) == null &&
               EstTable.Override(metadata, EstSlot.Head, 101, 1) == null,
             "a collection's EST edits override the game's table for their race, set and slot only");
+        check(AnimationMetadata.GenderRaceNames(101) == ("Male", "Midlander") &&
+              AnimationMetadata.GenderRaceNames(701) == ("Male", "Miqote") &&
+              AnimationMetadata.GenderRaceNames(801) == ("Female", "Miqote") &&
+              AnimationMetadata.GenderRaceNames(1001) == ("Female", "Roegadyn") &&
+              AnimationMetadata.GenderRaceNames(1101) == ("Male", "Lalafell") &&
+              AnimationMetadata.GenderRaceNames(1401) == ("Female", "AuRa") &&
+              AnimationMetadata.GenderRaceNames(1801) == ("Female", "Viera") &&
+              EstTable.Override(JsonNode.Parse("""
+                  [{"Type": "Est", "Manipulation": {"Gender": "Female", "Race": "Miqote", "SetId": 108, "Slot": "Hair", "Entry": 160}}]
+                  """)!.AsArray(), EstSlot.Hair, 801, 108) == 160,
+            "gender-race codes carry Penumbra's race names: c0801 is Miqote, c1001 Roegadyn, c1101 Lalafell");
 
         // The skeleton files a vanilla model uses, as Game Files exports write them.
         var estReads = new List<string>();

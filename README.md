@@ -96,6 +96,13 @@ The add-on's own [README](Blender-Addon/README.md) describes everything in its s
    <img src="docs/images/blender/export-targets.png" alt="The export target menu" width="400">
 6. Press **Quick Export**. You'll immediately see the results in-game (if your character currently uses the model).
 
+Hair weighted to one of the game's hair skeletons with Magic Fit's **Hair Weights** (1.20.0 or newer) remembers
+that skeleton, and Quick Export sets it as the hair's EST entry (Penumbra's Extra Skeleton Parameters) in every
+option of the mod that uses the model, for the race the skeleton belongs to. The panel warns when the hair's parts
+name different skeletons, the skeleton belongs to another race, or the model isn't hair. Exporting the hair
+without a skeleton takes back only the entries Quick Export set, never ones you set yourself, and restoring a
+Quick Export backup restores the EST entries along with the model.
+
 ## How to: Texture Editing
 
 1. Type /ie to open the plugin interface ingame.
@@ -275,6 +282,7 @@ The Blender add-on keeps track of where each model came from through the automat
 - The on-screen list follows Penumbra: it refreshes when mod settings change or characters are redrawn, and rows offer copy, open folder, Open in Penumbra and Show in Mod Browser.
 - Easy export context selection. Export in-place, pick any existing mod option or easily create a new one. The plugin sets up everything for you automatically.
 - Instant creation of mashups. The plugin automatically sets up all required textures, materials and paths for you.
+- Hair weighted with Magic Fit's Hair Weights gets the matching EST entry (hair skeleton) in Penumbra on export.
 - Seamlessly integrates into any existing Blender scene, independent of body, devkit, etc.
 - Simple Importer / Exporter for general FBX and MDL files with various QoL functions and automations optimized for FFXIV workflows
 - One-click import and export for textures

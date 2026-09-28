@@ -96,6 +96,13 @@ Everything is in the **IE - Instant Edit** tab of the 3D Viewport's sidebar (pre
 - Optional material previews, built from the materials and textures the game uses for the model,
   with colorsets, masks, normal maps and transparency. They are only for viewing: Quick Export
   doesn't write them, and changing them doesn't change the game.
+- Hair weighted with Magic Fit's **Hair Weights** (version 1.20.0 or newer) carries the hair
+  skeleton it was weighted to (`xiv_est_hair` and `xiv_est_race` on the mesh objects). Quick
+  Export sets that skeleton as the hair's EST entry (Penumbra's Extra Skeleton Parameters) in
+  every option of the mod that uses the model, for the tag's race only; the export options show
+  "Sets hair EST entry". It warns when the parts disagree, the tag is another race's, or the model
+  isn't hair. Exporting the hair without a tag takes back only the entries Quick Export set, and
+  restoring a Quick Export backup restores its EST entries too. Simple Export never changes EST.
 - SimpleHeels offsets: give a mesh part the attribute `heels_offset=0.15` with its **+** button,
   or turn on **Options > Export > Calculate Heels Offset**.
 - Keyboard shortcuts for Quick Export and the rest pose toggle. They start without a key: set one

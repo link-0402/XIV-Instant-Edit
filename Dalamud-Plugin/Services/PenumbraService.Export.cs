@@ -44,7 +44,8 @@ public sealed partial class PenumbraService
         IReadOnlyList<string>? attributeTags = null,
         IReadOnlyDictionary<string, int>? attributeMasks = null,
         string? resolvedGamePath = null,
-        JsonArray? sourceManipulations = null)
+        JsonArray? sourceManipulations = null,
+        IReadOnlyList<EstEntryRequest>? estEntries = null)
     {
         resolvedGamePath ??= sourceGamePath;
         if (!IsSafeLocalModelPath(sourceFilePath))
@@ -139,13 +140,19 @@ public sealed partial class PenumbraService
                     return new ExportResult(false,
                         variantTarget == "group" ? "stale_variant_target" : "invalid_variant_group", groupError);
             }
+            var targetRelative = Path.GetRelativePath(resolved.Target.Folder, targetFile).Replace('\\', '/');
+            // The backup keeps the model's EST entries too, so restoring it undoes this export's EST change.
+            var estState = backupExisting && File.Exists(targetFile)
+                ? CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, targetRelative, _estEntries)
+                : null;
             var writeError = WriteModelToOriginalLocation(
                 resolved.Target.Folder,
                 targetFile,
                 exportedFile,
                 backupExisting,
                 resolved.Target.Directory,
-                Path.GetRelativePath(resolved.Target.Folder, targetFile).Replace('\\', '/'));
+                targetRelative,
+                estState);
             if (writeError is not null)
                 return new ExportResult(false, "write_failed", writeError);
             committedTarget = targetFile;
@@ -167,6 +174,9 @@ public sealed partial class PenumbraService
                 if (attributeError is not null)
                     warnings.Add($"Penumbra attribute group setup failed: {AttributeGroupErrorMessage(attributeError)}");
             }
+
+            warnings.AddRange(TryUpdateEstEntries(
+                resolved.Target.Folder, resolved.Target.Directory, targetRelative, estEntries));
 
             var reloadError = await _framework.RunOnFrameworkThread(
                 () => ReloadModOnFramework(resolved.Target.Directory)).ConfigureAwait(false);
@@ -247,7 +257,8 @@ public sealed partial class PenumbraService
         string modName,
         bool createAttributeGroups = false,
         IReadOnlyList<string>? attributeTags = null,
-        IReadOnlyDictionary<string, int>? attributeMasks = null)
+        IReadOnlyDictionary<string, int>? attributeMasks = null,
+        IReadOnlyList<EstEntryRequest>? estEntries = null)
     {
         if (context.SourceKind != InstantEditImportContext.GameSource ||
             context.DestinationState != InstantEditImportContext.NewModRequiredDestination)
@@ -299,10 +310,12 @@ public sealed partial class PenumbraService
                     if (attributeError is not null)
                         throw new InvalidDataException(attributeError);
                 }
+                // The staged meta.json already has the mod's identifier, which keys the EST records.
+                var estWarnings = TryUpdateEstEntries(staging, modName, relativeModel, estEntries);
                 Directory.Move(staging, finalFolder);
                 committed = true;
 
-                var warnings = new List<string>();
+                var warnings = new List<string>(estWarnings);
                 try
                 {
                     var addError = await AddNewModAsync(modName).ConfigureAwait(false);

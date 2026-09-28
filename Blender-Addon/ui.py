@@ -16,7 +16,7 @@ from .instant_edit.context import (
 )
 from .instant_edit.ops import (MASHUP_TARGET, SAVE_NEW_MOD_TARGET,
                                export_destination_context, mashup_target_state,
-                               cached_export_readiness,
+                               cached_export_readiness, cached_hair_skeleton,
                                normalise_variant_name, save_new_mod_target_state)
 from .instant_edit.props import DEFAULT_STATUS, IN_PLACE_TARGET, get_instant_edit_props
 from .instant_edit.server import server_status
@@ -685,6 +685,9 @@ def _draw_scope_summary(layout, props) -> None:
         notes.append(("Context collection only", "FILTER"))
     if props.create_attribute_groups:
         notes.append(("Creates an attribute toggle group", "OUTLINER_COLLECTION"))
+    hair_skeleton = cached_hair_skeleton()
+    if hair_skeleton:
+        notes.append((f"Sets hair EST entry {hair_skeleton}", "BONE_DATA"))
     column = layout.column(align=True)
     column.active = False
     for text, icon in notes:
