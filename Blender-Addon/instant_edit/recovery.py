@@ -3,7 +3,6 @@
 import json
 import queue
 import threading
-from http.client import HTTPException
 from urllib.error import URLError
 
 import bpy
@@ -96,7 +95,7 @@ def _request_reattach(
                 cause="The Dalamud plugin returned a response larger than the bridge limit.",
             )
             continue
-        except (URLError, TimeoutError, OSError, ValueError, UnicodeError, HTTPException):
+        except (URLError, TimeoutError, OSError, ValueError, UnicodeError):
             continue
 
     return None

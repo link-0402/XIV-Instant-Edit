@@ -1,5 +1,6 @@
 """Focused Blender failure and file-load lifecycle regressions."""
 
+import http.client
 import importlib
 import sys
 import tempfile
@@ -318,6 +319,24 @@ def clear_quick_backups_uses_the_plugin_transport(addon):
         assert error.code == "plugin_connection_failed", error.code
     else:
         raise AssertionError("an unreachable plugin did not raise a plugin error")
+
+    # Something other than the plugin answering on its port replies with a
+    # garbled status line. That must be a plugin error too, not a raw
+    # http.client exception, and it goes through the real post_json.
+    plugin_http = importlib.import_module(f"{addon.__name__}.instant_edit.plugin_http")
+
+    def garbled(*_args, **_kwargs):
+        raise http.client.BadStatusLine("NOT HTTP\r\n")
+
+    with patch.object(ops, "export_destination_context", return_value=ref), \
+            patch.object(ops, "selected_variant_target", return_value=None), \
+            patch.object(plugin_http.urllib.request, "urlopen", side_effect=garbled):
+        try:
+            ops.clear_quick_backups(bpy.context)
+        except ops.PluginResponseError as error:
+            assert error.code == "plugin_connection_failed", error.code
+        else:
+            raise AssertionError("a garbled plugin reply did not raise a plugin error")
     print("[PASS] clearing Quick Export backups reaches the plugin and reports its failures")
 
 

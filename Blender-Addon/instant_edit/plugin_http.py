@@ -2,7 +2,8 @@
 
 import json
 import urllib.request
-from urllib.error import HTTPError
+from http.client import HTTPException
+from urllib.error import HTTPError, URLError
 
 from .context import _value
 
@@ -40,7 +41,14 @@ def post_json(
     timeout: float,
     max_response_size: int,
 ) -> tuple[int, bytes]:
-    """POST JSON and return status/body for both success and HTTP error responses."""
+    """POST JSON and return status/body for both success and HTTP error responses.
+
+    A failed exchange raises OSError (URLError and TimeoutError included) or
+    PluginResponseTooLarge. A reply that is not valid HTTP, such as a garbled
+    status line from another service on the port or a truncated chunked body,
+    raises URLError like any other transport failure, so callers do not have to
+    know http.client's exception hierarchy.
+    """
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}{endpoint}",
         data=json.dumps(payload).encode("utf-8"),
@@ -48,12 +56,20 @@ def post_json(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            status = getattr(response, "status", None) or response.getcode()
-            body = response.read(max_response_size + 1)
-    except HTTPError as error:
-        status = error.code
-        body = error.read(max_response_size + 1)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                status = getattr(response, "status", None) or response.getcode()
+                body = response.read(max_response_size + 1)
+        except HTTPError as error:
+            # Reading the error body can fail the same way, and it happens
+            # inside this handler, so the outer try is what catches it.
+            status = error.code
+            body = error.read(max_response_size + 1)
+    except OSError:
+        # RemoteDisconnected is both an OSError and an HTTPException.
+        raise
+    except HTTPException as error:
+        raise URLError(f"HTTP protocol error: {error!r}") from error
     if len(body) > max_response_size:
         raise PluginResponseTooLarge(status, body)
     return status, body

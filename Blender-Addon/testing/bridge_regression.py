@@ -5,6 +5,7 @@ test import, where ``sentinels`` are user objects captured before the import.
 """
 # Modified for XIV Instant Edit, 2026.
 
+import http.client
 import importlib
 import json
 import ntpath
@@ -879,6 +880,36 @@ def run_staging_isolation_regression(addon) -> None:
         _require(
             request_counts == {"export": 1, "status": 1},
             "a lost export response is recovered by status lookup without a second write",
+        )
+
+        # A reply that is not valid HTTP (for example another service answering
+        # on the plugin port) is a lost response too, not a raw http.client error.
+        request_counts.update(export=0, status=0)
+
+        def garbled_then_receipt(request, timeout=0):
+            if request.full_url.endswith("/export"):
+                request_counts["export"] += 1
+                raise http.client.BadStatusLine("NOT HTTP\r\n")
+            return timed_out_then_receipt(request, timeout)
+
+        plugin_http.urllib.request.urlopen = garbled_then_receipt
+        try:
+            receipt = ops._send_plugin_export_to(
+                SimpleNamespace(
+                    plugin_instance_id="plugin-instance",
+                    context_id="context-id",
+                    capability="capability",
+                    callback_port=42428,
+                ),
+                redraw_payload,
+                "/export",
+            )
+        finally:
+            plugin_http.urllib.request.urlopen = original_urlopen
+        _require(
+            receipt["targetFilePath"].endswith("original.mdl") and
+            request_counts == {"export": 1, "status": 1},
+            "a reply that is not valid HTTP is recovered by status lookup like a lost response",
         )
 
         _require(

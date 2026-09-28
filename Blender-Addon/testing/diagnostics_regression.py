@@ -4,10 +4,14 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import socket
 import sys
 import tempfile
+import threading
 import time
 import types
+from http.client import HTTPException
+from urllib.error import URLError
 
 
 def _load_modules():
@@ -36,6 +40,91 @@ def _load_modules():
     assert spec.loader is not None
     spec.loader.exec_module(plugin_http)
     return loaded["cache"], loaded["diagnostics"], plugin_http
+
+
+def _serve_once(reply: bytes | None) -> int:
+    """Answer the next loopback connection with canned bytes (or none) and close it."""
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    server.settimeout(10)
+
+    def serve() -> None:
+        try:
+            connection, _address = server.accept()
+            with connection:
+                connection.settimeout(5)
+                request = b""
+                while b"\r\n\r\n" not in request:
+                    chunk = connection.recv(65536)
+                    if not chunk:
+                        return
+                    request += chunk
+                head, _separator, body = request.partition(b"\r\n\r\n")
+                length = next(
+                    (int(line.split(b":")[1]) for line in head.split(b"\r\n")
+                     if line.lower().startswith(b"content-length:")), 0)
+                while len(body) < length:
+                    chunk = connection.recv(65536)
+                    if not chunk:
+                        break
+                    body += chunk
+                if reply is not None:
+                    try:
+                        connection.sendall(reply)
+                    except OSError:
+                        pass  # the client may hang up before reading an oversized reply
+        except OSError:
+            pass
+        finally:
+            server.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    return server.getsockname()[1]
+
+
+def post_json_reports_protocol_errors_as_transport_failures(plugin_http) -> None:
+    """Callers catch OSError; a reply that is not valid HTTP must arrive as one."""
+    malformed = {
+        "a garbled status line": (b"NOT HTTP AT ALL\r\n\r\n", "BadStatusLine"),
+        "an over-long status line": (b"HTTP/1.1 200 " + b"x" * 70000 + b"\r\n\r\n", "LineTooLong"),
+        "a truncated chunked body": (
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+            b'10\r\n{"ok": tr', "IncompleteRead"),
+        # The body of an error status is read inside post_json's HTTPError handler.
+        "a truncated chunked error body": (
+            b"HTTP/1.1 500 Internal Server Error\r\nTransfer-Encoding: chunked\r\n"
+            b"Connection: close\r\n\r\n10\r\nabc", "IncompleteRead"),
+    }
+    for label, (reply, expected) in malformed.items():
+        port = _serve_once(reply)
+        try:
+            plugin_http.post_json(port, "/export", {"a": 1}, timeout=5, max_response_size=1024)
+        except OSError as error:
+            assert isinstance(error, URLError), (label, type(error).__name__)
+            assert type(error.__cause__).__name__ == expected, (label, error.__cause__)
+            assert expected in str(error), f"{label}: the original error is missing from {error}"
+        except HTTPException as error:
+            raise AssertionError(f"{label} escaped as {type(error).__name__}") from error
+        else:
+            raise AssertionError(f"{label} was not reported")
+
+    # Everything else behaves as before.
+    port = _serve_once(None)
+    try:
+        plugin_http.post_json(port, "/export", {}, timeout=5, max_response_size=1024)
+    except ConnectionResetError as error:  # RemoteDisconnected, untouched
+        assert not isinstance(error, URLError)
+    else:
+        raise AssertionError("closing without a reply was not reported")
+
+    for status, reason, body in ((200, "OK", b'{"ok":true}'), (409, "Conflict", b'{"ok":false}')):
+        port = _serve_once(
+            f"HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\n"
+            f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode() + body)
+        assert plugin_http.post_json(
+            port, "/export", {}, timeout=5, max_response_size=1024) == (status, body)
+    print("[PASS] malformed plugin replies surface as URLError, not raw http.client errors")
 
 
 def run() -> None:
@@ -89,6 +178,8 @@ def run() -> None:
             raise AssertionError("an oversized plugin response was not rejected")
         finally:
             plugin_http.urllib.request.urlopen = original_urlopen
+
+        post_json_reports_protocol_errors_as_transport_failures(plugin_http)
 
         failure = diagnostics.record_failure(
             component="blender_addon",

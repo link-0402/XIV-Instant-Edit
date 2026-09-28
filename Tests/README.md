@@ -53,8 +53,8 @@ updates the distribution archives or extension repository index.
 - Standalone Python suites: cache ownership and cleanup, diagnostic sanitation
   and limits, import validation, asynchronous failure reporting, cache-job
   release after failed imports, rejection of browser-originated listener
-  requests, and the revocation and recovery workers reporting back after
-  unexpected failures.
+  requests, malformed plugin replies surfacing as transport errors, and the
+  revocation and recovery workers reporting back after unexpected failures.
 - `AnimationRegression`: PAP/SKLB envelopes, complete pose-stack shape fixtures,
   component filtering, timeline/VFX dependencies, metadata scope, durable recovery,
   and PAP backup conflict protection. Native Havok and actual IPC acceptance are
