@@ -62,33 +62,70 @@ ATTRIBUTE_VARIANTS = {
 }
 
 # These are the model-visible attribute families that can be represented by
-# the generated Penumbra IMC group. Face attributes deliberately remain out of
-# this preset; face custom attributes can still be authored with the atrx_
-# convention and exported through the regular ATR group.
+# the generated Penumbra IMC group. Hair and face attributes deliberately remain
+# out of this preset; their custom attributes can still be authored with the
+# atrx_ convention and exported through the regular ATR group.
 ATTRIBUTE_GROUP_FAMILIES = (
-    "mv", "tv", "gv", "dv", "sv", "ev", "nv", "wv", "rv", "hv",
+    "mv", "tv", "gv", "dv", "sv", "ev", "nv", "wv", "rv",
 )
-ATTRIBUTE_GROUP_SUFFIXES = tuple("abcdefgh")
-ATTRIBUTE_VARIANT_PRESETS = tuple(
-    f"atr_{family}_{suffix}"
-    for family in ATTRIBUTE_GROUP_FAMILIES
-    for suffix in ATTRIBUTE_GROUP_SUFFIXES
-)
+# IMC attribute masks have ten bits, _a to _j.
+ATTRIBUTE_GROUP_SUFFIXES = tuple("abcdefghij")
 _ATTRIBUTE_VARIANT_PATTERN = re.compile(
-    r"^atr_(?:" + "|".join(ATTRIBUTE_GROUP_FAMILIES) + r")_(?:[a-h])$"
+    r"^atr_(?:" + "|".join(ATTRIBUTE_GROUP_FAMILIES) + r")_(?:"
+    + "|".join(ATTRIBUTE_GROUP_SUFFIXES) + r")$"
 )
 
 # Face toggles (atr_fv_a - atr_fv_g) are addable presets like the other
-# variant families above, but Glamourer already drives them directly in-game,
-# so they're kept out of ATTRIBUTE_GROUP_FAMILIES: attribute_group_data() must
-# never turn one into a generated Penumbra Option group.
+# variant families above, but Glamourer and character creation already drive
+# them in-game, so they're kept out of ATTRIBUTE_GROUP_FAMILIES:
+# attribute_group_data() must never turn one into a generated Penumbra Option group.
 FACE_ATTRIBUTE_SUFFIXES = tuple("abcdefg")
-FACE_ATTRIBUTE_PRESETS = tuple(f"atr_fv_{suffix}" for suffix in FACE_ATTRIBUTE_SUFFIXES)
 _FACE_ATTRIBUTE_PATTERN = re.compile(
     r"^atr_fv_(?:" + "|".join(FACE_ATTRIBUTE_SUFFIXES) + r")$"
 )
 
-_BUILTIN_ATTRIBUTE_NAMES = frozenset(f"atr_{name}" for name in ATTRIBUTE_NAMES)
+# Hair variants (atr_hv_a - atr_hv_h) are addable presets too, but the game has
+# no IMC file for hair and Penumbra cannot load an IMC group for it, so they
+# never get a generated Option group either.
+HAIR_ATTRIBUTE_SUFFIXES = tuple("abcdefgh")
+_HAIR_ATTRIBUTE_PATTERN = re.compile(
+    r"^atr_hv_(?:" + "|".join(HAIR_ATTRIBUTE_SUFFIXES) + r")$"
+)
+
+# The Add Attribute dialog's presets, one category at a time:
+# (category, label, ((attribute, name), ...)).
+ATTRIBUTE_PRESET_CATEGORIES = (
+    ("BODY_PARTS", "Body Parts", tuple((f"atr_{key}", name) for key, name in ATTRIBUTE_NAMES.items())),
+    *(
+        (family.upper(), ATTRIBUTE_VARIANTS[family],
+         tuple((f"atr_{family}_{suffix}", suffix.upper()) for suffix in suffixes))
+        for family, suffixes in (
+            *((family, ATTRIBUTE_GROUP_SUFFIXES) for family in ATTRIBUTE_GROUP_FAMILIES),
+            ("hv", HAIR_ATTRIBUTE_SUFFIXES),
+            ("fv", FACE_ATTRIBUTE_SUFFIXES),
+        )
+    ),
+)
+
+# Every other attribute the game's own gear, accessory, body, hair, face, tail
+# and ear models use, typos included (surveyed from the game data 2026-09-28).
+# The game drives them itself, so they're exported on the mesh but never get a
+# generated group. Keep in sync with GameAttributeNames in the plugin's
+# PenumbraService.cs.
+GAME_ATTRIBUTE_NAMES = frozenset((
+    "atr_ar", "atr_arm", "atr_arm1", "atr_arm2", "atr_arm3", "atr_armc", "atr_armhh",
+    "atr_bak", "atr_bak1", "atr_bak3", "atr_bak4", "atr_bakh", "atr_blt", "atr_bv_a",
+    "atr_cn_ankle", "atr_cn_neck", "atr_cn_waist", "atr_cn_wrist", "atr_del",
+    "atr_hair", "atr_head", "atr_hig", "atr_hij", "atr_hij1", "atr_hiz", "atr_hiz1", "atr_hrn",
+    "atr_inr", "atr_kam", "atr_kam1", "atr_kam4", "atr_kam23", "atr_kam24",
+    "atr_kao", "atr_kao1", "atr_kao2", "atr_kao3", "atr_kod", "atr_kod1", "atr_kod2",
+    "atr_leg", "atr_leg1", "atr_lod", "atr_lod1", "atr_lod2", "atr_lod12",
+    "atr_lod117", "atr_lod118", "atr_lod119", "atr_lod120", "atr_lpd", "atr_mim", "atr_mv_a1",
+    "atr_nek", "atr_nek2", "atr_sne", "atr_sne1", "atr_st", "atr_sta", "atr_star",
+    "atr_tlh", "atr_tls", "atr_top", "atr_top1", "atr_top3", "atr_tv_h1", "atr_ude", "atr_ude1", "atr_vsr",
+))
+
+_BUILTIN_ATTRIBUTE_NAMES = frozenset(f"atr_{name}" for name in ATTRIBUTE_NAMES) | GAME_ATTRIBUTE_NAMES
 
 
 @dataclass(frozen=True)
@@ -317,11 +354,13 @@ def attribute_group_data(
 
     Penumbra's IMC attribute columns are defined by the tag suffix rather than
     the attribute's position in the MDL table: _a is bit 0, _b is bit 1, and
-    so on. Body-part attributes are intentionally excluded because they are
-    vanilla visibility controls, not gear/accessory part tags. Face toggles
-    (atr_fv_*) are excluded for a different reason: Glamourer already drives
-    them directly, so they're still exported on the mesh but never get a
-    generated Option group here.
+    so on. The game's own attributes (GAME_ATTRIBUTE_NAMES, such as body
+    parts and hair pieces) are excluded because the game drives them; they
+    aren't gear or accessory part tags. Face toggles (atr_fv_*) are excluded
+    because Glamourer and character creation drive them, and hair variants
+    (atr_hv_*) because Penumbra cannot make an IMC group for hair. All of them
+    are still exported on the mesh; they just never get a generated Option
+    group here.
     """
     model_attributes: list[str] = []
     exported_lods = range(3 if use_lods else 1)
@@ -357,8 +396,11 @@ def attribute_group_data(
             masks[attribute] = 1 << ATTRIBUTE_GROUP_SUFFIXES.index(suffix)
         elif _FACE_ATTRIBUTE_PATTERN.fullmatch(attribute):
             # Exported on the mesh like any other attribute, but never turned
-            # into a Penumbra Option group: Glamourer already drives face
-            # toggles directly, so a generated group would just conflict.
+            # into a Penumbra Option group: Glamourer and character creation
+            # already drive face toggles, so a generated group would conflict.
+            continue
+        elif _HAIR_ATTRIBUTE_PATTERN.fullmatch(attribute):
+            # Also exported on the mesh only: Penumbra has no IMC group for hair.
             continue
         elif attribute.startswith("atrx_"):
             tags.append(attribute)

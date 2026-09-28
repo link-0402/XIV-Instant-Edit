@@ -281,11 +281,11 @@ def assert_mesh_studio(addon, obj, second, added_group):
         ) != {"FINISHED"} or second.get("atr_nek"):
             raise AssertionError("Mesh Studio attribute operator did not remove the attribute")
         if bpy.ops.xiv_ie.mesh_attribute(
-            mesh_group=0, mesh_part=1, attribute="NEW", selection="atr_nek"
+            mesh_group=0, mesh_part=1, attribute="NEW", category="BODY_PARTS", selection="atr_nek"
         ) != {"FINISHED"} or not second.get("atr_nek"):
             raise AssertionError("Mesh Studio attribute operator did not add the attribute")
         if bpy.ops.xiv_ie.mesh_attribute(
-            mesh_group=0, mesh_part=1, attribute="NEW", selection="atr_tv_a"
+            mesh_group=0, mesh_part=1, attribute="NEW", category="TV", selection="atr_tv_a"
         ) != {"FINISHED"} or not second.get("atr_tv_a"):
             raise AssertionError("Gear attribute preset was not added by the Mesh Studio operator")
         if bpy.ops.xiv_ie.mesh_attribute(
