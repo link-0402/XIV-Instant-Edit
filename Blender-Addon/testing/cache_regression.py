@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
 import uuid
 
 
@@ -125,6 +126,18 @@ def run() -> None:
         cache.clean_cache(cache.STALE_SECONDS)
         assert working_texture.is_file()
         assert (foreign / "keep.txt").is_file()
+
+        # The plugin keeps a hair model backup's EST entries beside it; they expire together.
+        history = root / "backups" / ("e" * 64)
+        history.mkdir(parents=True, exist_ok=True)
+        expired = history / "c0801h0108_hir.mdl.20200101T000000.000000Z.bak"
+        fresh = history / f"c0801h0108_hir.mdl.{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}.000000Z.bak"
+        for backup in (expired, fresh):
+            backup.write_bytes(b"model")
+            (history / f"{backup.name}.est.json").write_text("{}", encoding="utf-8")
+        cache.clean_cache()
+        assert not expired.exists() and not (history / f"{expired.name}.est.json").exists()
+        assert fresh.is_file() and (history / f"{fresh.name}.est.json").is_file()
 
     print("[PASS] cache staging, ownership boundaries, and cleanup")
 

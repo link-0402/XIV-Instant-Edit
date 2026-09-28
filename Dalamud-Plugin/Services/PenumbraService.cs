@@ -123,6 +123,7 @@ public sealed partial class PenumbraService
     private readonly IObjectTable?              _objects;
     private readonly IDataManager?              _data;
     private readonly ModelBackupStore?          _backups;
+    private readonly EstEntryStore?             _estEntries;
     private readonly SemaphoreSlim              _exportGate = new(1, 1);
 
     public PenumbraService(
@@ -131,7 +132,8 @@ public sealed partial class PenumbraService
         IPluginLog log,
         IObjectTable? objects = null,
         IDataManager? data = null,
-        ModelBackupStore? backups = null)
+        ModelBackupStore? backups = null,
+        EstEntryStore? estEntries = null)
     {
         _pi               = pi;
         _log             = log;
@@ -139,6 +141,7 @@ public sealed partial class PenumbraService
         _objects         = objects;
         _data            = data;
         _backups         = backups;
+        _estEntries      = estEntries;
         _getPaths        = new GetGameObjectResourcePaths(pi);
         _getObjectTrees  = new GetGameObjectResourceTrees(pi);
         _getPlayerTrees  = new GetPlayerResourceTrees(pi);

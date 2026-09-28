@@ -184,6 +184,13 @@ internal static partial class AnimationMetadata
         _ => throw new InvalidDataException("Invalid body slot in Penumbra metadata."),
     };
 
+    /// <summary>
+    /// Penumbra's <c>ModelRace</c> names by gender-race code pair, (code + 1) / 2: c01/c02 Midlander,
+    /// c07/c08 Miqo'te, c09/c10 Roegadyn, c11/c12 Lalafell. The codes do not follow the enum's order.
+    /// </summary>
+    internal static readonly string[] RaceNamesByCode =
+        ["", "Midlander", "Highlander", "Elezen", "Miqote", "Roegadyn", "Lalafell", "AuRa", "Hrothgar", "Viera"];
+
     internal static (string Gender, string Race) GenderRaceNames(ushort value)
     {
         var code = value / 100;
@@ -193,8 +200,7 @@ internal static partial class AnimationMetadata
         if (code is < 1 or > 18)
             throw new InvalidDataException("Invalid gender-race code in Penumbra metadata.");
 
-        string[] races = ["", "Midlander", "Highlander", "Elezen", "Lalafell", "Miqote", "Roegadyn", "AuRa", "Hrothgar", "Viera"];
-        var race = races[(code + 1) / 2];
+        var race = RaceNamesByCode[(code + 1) / 2];
         var gender = suffix switch
         {
             1 => (code & 1) is 1 ? "Male" : "Female",
@@ -270,9 +276,8 @@ internal static partial class AnimationMetadata
                     if (!match.Success || part != match.Groups[2].Value || entry != int.Parse(match.Groups[3].Value)) continue;
                     var code = int.Parse(match.Groups[1].Value) / 100;
                     var race = (code + 1) / 2;
-                    string[] raceNames = ["", "Midlander", "Highlander", "Elezen", "Lalafell", "Miqote", "Roegadyn", "AuRa", "Hrothgar", "Viera"];
-                    if (race < 1 || race >= raceNames.Length) throw new InvalidDataException("Unsupported player race for EST metadata.");
-                    applicable |= payload["Race"]?.GetValue<string>() == raceNames[race] &&
+                    if (race < 1 || race >= RaceNamesByCode.Length) throw new InvalidDataException("Unsupported player race for EST metadata.");
+                    applicable |= payload["Race"]?.GetValue<string>() == RaceNamesByCode[race] &&
                         payload["Gender"]?.GetValue<string>() == (code % 2 == 1 ? "Male" : "Female");
                 }
             }

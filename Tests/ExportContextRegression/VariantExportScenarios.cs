@@ -399,6 +399,7 @@ internal static class VariantExportScenarios
             ["attribute toggle"] = request => request.CreateAttributeGroups = false,
             ["attribute tags"] = request => request.AttributeTags = ["atr_tv_b"],
             ["attribute masks"] = request => request.AttributeMasks = new Dictionary<string, int> { ["atr_tv_a"] = 2 },
+            ["EST entries"] = request => request.EstEntries = [new EstEntryRequest { Slot = "Hair", Entry = 160, Race = "c0801" }],
         };
         foreach (var (name, change) in changes)
         {

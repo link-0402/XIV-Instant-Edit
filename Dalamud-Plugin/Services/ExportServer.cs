@@ -73,6 +73,10 @@ public sealed partial class ExportServer : IDisposable
 
         [JsonPropertyName("attributeMasks")]
         public Dictionary<string, int>? AttributeMasks { get; set; }
+
+        /// <summary>EST entries the meshes need; null leaves the mod's alone, empty takes back the plugin's own.</summary>
+        [JsonPropertyName("estEntries")]
+        public List<EstEntryRequest>? EstEntries { get; set; }
     }
 
     private sealed class ReattachRequest
@@ -145,6 +149,9 @@ public sealed partial class ExportServer : IDisposable
 
         [JsonPropertyName("attributeMasks")]
         public Dictionary<string, int>? AttributeMasks { get; set; }
+
+        [JsonPropertyName("estEntries")]
+        public List<EstEntryRequest>? EstEntries { get; set; }
     }
 
     private sealed class MashupPlanRequest
@@ -939,6 +946,7 @@ public sealed partial class ExportServer : IDisposable
             mashup.CreateAttributeGroups,
             mashup.AttributeTags,
             mashup.AttributeMasks,
+            mashup.EstEntries,
         }, JsonOpts);
         var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintSource)));
         if (!_contexts.TryBeginExport(
@@ -973,7 +981,8 @@ public sealed partial class ExportServer : IDisposable
                     mashup.BundleExternalDependencies,
                     mashup.CreateAttributeGroups,
                     mashup.AttributeTags,
-                    mashup.AttributeMasks).ConfigureAwait(false);
+                    mashup.AttributeMasks,
+                    mashup.EstEntries).ConfigureAwait(false);
                 if (result.Success && result.PathRemap is { } pathRemap)
                     _contexts.RemapModPaths(
                         pathRemap.ModDirectory,
@@ -1110,7 +1119,8 @@ public sealed partial class ExportServer : IDisposable
                         export.NewModName,
                         export.CreateAttributeGroups,
                         export.AttributeTags,
-                        export.AttributeMasks).ConfigureAwait(false);
+                        export.AttributeMasks,
+                        export.EstEntries).ConfigureAwait(false);
                 }
             }
             catch (Exception e)
@@ -1139,7 +1149,8 @@ public sealed partial class ExportServer : IDisposable
             string? newModName,
             bool createAttributeGroups,
             IReadOnlyList<string>? attributeTags,
-            IReadOnlyDictionary<string, int>? attributeMasks)
+            IReadOnlyDictionary<string, int>? attributeMasks,
+            IReadOnlyList<EstEntryRequest>? estEntries)
         {
             if (target.DestinationState == InstantEditImportContext.NewModRequiredDestination)
             {
@@ -1148,7 +1159,7 @@ public sealed partial class ExportServer : IDisposable
                 if (setupVariantInPenumbra || variantName is not null || variantTarget is not null || backupExisting)
                     return new ExportReceipt(false, "invalid_pending_export", "a first vanilla export cannot target variants or backups");
                 var created = await _penumbra.CreateGameModelModAsync(
-                    target, filePath, newModName, createAttributeGroups, attributeTags, attributeMasks)
+                    target, filePath, newModName, createAttributeGroups, attributeTags, attributeMasks, estEntries)
                     .ConfigureAwait(false);
                 if (!created.Result.Success)
                     return new ExportReceipt(false, created.Result.Code, created.Result.Message, created.Result.WarningList);
@@ -1203,7 +1214,8 @@ public sealed partial class ExportServer : IDisposable
                 attributeTags,
                 attributeMasks,
                 target.ResolvedGamePath,
-                target.ResourceManifest?.Manipulations).ConfigureAwait(false);
+                target.ResourceManifest?.Manipulations,
+                estEntries).ConfigureAwait(false);
             return new ExportReceipt(
                 result.Success,
                 result.Code,
@@ -1228,6 +1240,7 @@ public sealed partial class ExportServer : IDisposable
             request.CreateAttributeGroups,
             request.AttributeTags,
             request.AttributeMasks,
+            request.EstEntries,
         })));
 
     private T? DeserializeRequest<T>(
@@ -1269,7 +1282,7 @@ public sealed partial class ExportServer : IDisposable
         }
     }
 
-    private static string? ValidateEnvelope(ExportRequest request)
+    internal static string? ValidateEnvelope(ExportRequest request)
     {
         if (!string.Equals(request.Schema, "instant-edit.export", StringComparison.Ordinal))
             return request.Version is 1 or 2 or 3 ? "unsupported_schema" : "unsupported_version";
@@ -1304,7 +1317,8 @@ public sealed partial class ExportServer : IDisposable
             string.IsNullOrWhiteSpace(request.VariantTargetId))
             return "missing_variant_target";
         return ValidateAttributeGroupEnvelope(
-            request.CreateAttributeGroups, request.AttributeTags, request.AttributeMasks);
+                   request.CreateAttributeGroups, request.AttributeTags, request.AttributeMasks) ??
+               PenumbraService.ValidateEstEntryRequests(request.EstEntries);
     }
 
     /// <summary>Shared preamble for envelopes with exactly one supported schema/version pair.</summary>
@@ -1394,7 +1408,8 @@ public sealed partial class ExportServer : IDisposable
                 return "invalid_contributors";
         }
         return ValidateAttributeGroupEnvelope(
-            request.CreateAttributeGroups, request.AttributeTags, request.AttributeMasks);
+                   request.CreateAttributeGroups, request.AttributeTags, request.AttributeMasks) ??
+               PenumbraService.ValidateEstEntryRequests(request.EstEntries);
     }
 
     private static string? ValidateAttributeGroupEnvelope(

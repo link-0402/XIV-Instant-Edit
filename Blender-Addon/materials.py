@@ -374,6 +374,61 @@ def attribute_group_data(
     return tuple(tags), masks
 
 
+# Magic Fit's Hair Weights tags the hair meshes it weights with the hair skeleton it
+# used: the EST entry (160 loads skl_c0801h0160.sklb) and the race it belongs to.
+EST_HAIR_PROPERTY = "xiv_est_hair"
+EST_RACE_PROPERTY = "xiv_est_race"
+_EST_RACE_PATTERN = re.compile(r"c(?:0[1-9]|1[0-8])01")
+
+
+def hair_skeleton_tags(objects) -> tuple[list[dict] | None, str]:
+    """Return the hair EST entry the meshes' Magic Fit tags ask for, and any problem.
+
+    ``[]`` means no mesh carries a tag (Hair Weights removes them when it weights
+    without a hair skeleton), so the plugin takes back an entry it set before. One
+    entry means every tagged mesh agrees; untagged parts use body bones only and
+    fit any hair skeleton. ``None`` comes with a message when tags disagree or are
+    malformed: the plugin then leaves the mod's EST entries as they are.
+    """
+    tagged: dict[tuple[int, str], list[str]] = {}
+    invalid: list[str] = []
+    for obj in objects:
+        if getattr(obj, "type", None) != "MESH":
+            continue
+        entry = obj.get(EST_HAIR_PROPERTY)
+        race = obj.get(EST_RACE_PROPERTY)
+        if entry is None and race is None:
+            continue
+        if isinstance(entry, float) and entry.is_integer():
+            entry = int(entry)
+        if (
+            isinstance(entry, bool) or not isinstance(entry, int) or not 1 <= entry <= 9999
+            or not isinstance(race, str) or not _EST_RACE_PATTERN.fullmatch(race)
+        ):
+            invalid.append(obj.name)
+            continue
+        tagged.setdefault((entry, race), []).append(obj.name)
+    if invalid:
+        return None, (
+            f"Invalid hair skeleton tags ({EST_HAIR_PROPERTY}/{EST_RACE_PROPERTY}) on "
+            f"{', '.join(sorted(invalid)[:3])}{'…' if len(invalid) > 3 else ''}; "
+            "the EST entry is left unchanged."
+        )
+    if len(tagged) > 1:
+        described = "; ".join(
+            f"{entry} ({race}) on {', '.join(sorted(names)[:2])}{'…' if len(names) > 2 else ''}"
+            for (entry, race), names in sorted(tagged.items())
+        )
+        return None, (
+            f"The meshes are weighted to different hair skeletons: {described}. "
+            "Weight them all to one; the EST entry is left unchanged."
+        )
+    if not tagged:
+        return [], ""
+    ((entry, race),) = tagged
+    return [{"slot": "Hair", "entry": entry, "race": race}], ""
+
+
 def attribute_display_name(attribute: str) -> str:
     """Turn common XIV attribute keys into Mesh Studio's compact labels."""
     if attribute.startswith("atr_"):

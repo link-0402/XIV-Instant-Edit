@@ -81,12 +81,36 @@ public sealed partial class PenumbraService
                 (File.Exists(targetPath) && (File.GetAttributes(targetPath) & FileAttributes.ReparsePoint) != 0))
                 return new ExportResult(false, "destination_unsafe", "The backup target contains an unsupported reparse point.");
 
-            var writeError = RestoreModelBackup(targetPath, backupPath, sourceModDirectory, effectiveRelativePath);
+            // The hair's EST entries go with the model both ways: the backup taken of the
+            // current file keeps today's, and the restored backup's own are put back.
+            JsonObject? currentEst = null;
+            try
+            {
+                currentEst = CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, effectiveRelativePath, _estEntries);
+            }
+            catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException)
+            {
+                _log.Warning(e, "Could not read the EST entries to keep with the pre-restore backup.");
+            }
+            var restoredEst = _backups.ReadEstState(backupPath);
+            var writeError = RestoreModelBackup(targetPath, backupPath, sourceModDirectory, effectiveRelativePath, currentEst);
             if (writeError is not null)
                 return new ExportResult(false, "restore_write_failed", writeError);
             committedTarget = targetPath;
 
             var warnings = new List<string>();
+            if (restoredEst is not null)
+            {
+                try
+                {
+                    warnings.AddRange(RestoreEstState(resolved.Target.Folder, resolved.Target.Directory, restoredEst, _estEntries));
+                }
+                catch (Exception e)
+                {
+                    _log.Error(e, "Could not restore the backup's EST entries.");
+                    warnings.Add($"The backup's EST entries could not be restored: {e.Message}");
+                }
+            }
 
             var reloadError = await _framework.RunOnFrameworkThread(
                 () => ReloadModOnFramework(resolved.Target.Directory)).ConfigureAwait(false);
@@ -124,12 +148,17 @@ public sealed partial class PenumbraService
         }
     }
 
-    private string? RestoreModelBackup(string targetFile, string backupFile, string modDirectory, string targetRelativePath)
+    private string? RestoreModelBackup(
+        string targetFile, string backupFile, string modDirectory, string targetRelativePath, JsonObject? estState = null)
     {
         try
         {
-            if (File.Exists(targetFile))
-                _backups?.Create(targetFile, modDirectory, targetRelativePath);
+            if (File.Exists(targetFile) && _backups is not null)
+            {
+                var backup = _backups.Create(targetFile, modDirectory, targetRelativePath);
+                if (estState is not null)
+                    _backups.WriteEstState(backup, estState);
+            }
             var temporary = Path.Combine(Path.GetDirectoryName(targetFile)!, $".instant-edit-restore-{Guid.NewGuid():N}.tmp");
             try
             {

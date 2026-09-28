@@ -1004,6 +1004,82 @@ def run_staging_isolation_regression(addon) -> None:
             attribute_payload["attributeMasks"] == {"atr_tv_a": 1},
             "attribute group settings are carried in the export envelope",
         )
+        est_ref = SimpleNamespace(
+            plugin_instance_id="plugin-instance",
+            context_id="context-id",
+            capability="capability",
+        )
+        est_payload = ops.build_export_payload(
+            est_ref, "est-export-id", Path(tempfile.gettempdir()) / "est-test.mdl", 1, "0" * 64,
+            instant_props, None, est_entries=[{"slot": "Hair", "entry": 160, "race": "c0801"}])
+        untagged_payload = ops.build_export_payload(
+            est_ref, "est-export-id", Path(tempfile.gettempdir()) / "est-test.mdl", 1, "0" * 64,
+            instant_props, None, est_entries=[])
+        _require(
+            est_payload["estEntries"] == [{"slot": "Hair", "entry": 160, "race": "c0801"}] and
+            untagged_payload["estEntries"] == [] and "estEntries" not in redraw_payload,
+            "the hair EST entry is sent when tagged, empty when untagged, and absent when unknown",
+        )
+
+        materials_module = importlib.import_module(f"{package_name}.materials")
+        with temporary_scene_data():
+            def tagged_mesh(name, entry=None, race=None):
+                data = bpy.data.meshes.new(f"{name}Data")
+                data.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+                mesh = bpy.data.objects.new(name, data)
+                bpy.context.collection.objects.link(mesh)
+                if entry is not None:
+                    mesh["xiv_est_hair"] = entry
+                if race is not None:
+                    mesh["xiv_est_race"] = race
+                return mesh
+
+            hair_b = tagged_mesh("0.0 Maeve _hir_b", 160, "c0801")
+            hair_c = tagged_mesh("0.1 Maeve _hir_c", 160, "c0801")
+            untagged = tagged_mesh("1.0 Maeve ribbon")
+            armature = bpy.data.objects.new("Tagged Armature", bpy.data.armatures.new("TaggedArmatureData"))
+            armature["xiv_est_hair"] = 999
+            _require(
+                materials_module.hair_skeleton_tags([untagged]) == ([], "") and
+                materials_module.hair_skeleton_tags([hair_b, hair_c, untagged, armature]) == (
+                    [{"slot": "Hair", "entry": 160, "race": "c0801"}], ""),
+                "hair skeleton tags: untagged meshes ask for none, and agreeing parts for one entry",
+            )
+            hair_c["xiv_est_hair"] = 160.0
+            _require(
+                materials_module.hair_skeleton_tags([hair_b, hair_c])[0] == [
+                    {"slot": "Hair", "entry": 160, "race": "c0801"}],
+                "hair skeleton tags: a whole-number float entry is read as its integer",
+            )
+            hair_c["xiv_est_hair"] = 150
+            entries, issue = materials_module.hair_skeleton_tags([hair_b, hair_c])
+            _require(
+                entries is None and "150 (c0801)" in issue and "160 (c0801)" in issue,
+                "hair skeleton tags: disagreeing parts send nothing and name both skeletons",
+            )
+            del hair_c["xiv_est_hair"]
+            entries, issue = materials_module.hair_skeleton_tags([hair_b, hair_c])
+            _require(
+                entries is None and hair_c.name in issue,
+                "hair skeleton tags: a race without an entry is reported as invalid",
+            )
+            for bad_entry, bad_race in ((0, "c0801"), (10000, "c0801"), (160.5, "c0801"), (160, "c0804"), (160, 801)):
+                hair_c["xiv_est_hair"] = bad_entry
+                hair_c["xiv_est_race"] = bad_race
+                _require(
+                    materials_module.hair_skeleton_tags([hair_c])[0] is None,
+                    f"hair skeleton tags: entry {bad_entry!r} with race {bad_race!r} is refused",
+                )
+
+        maeve = "chara/human/c0801/obj/hair/h0108/model/c0801h0108_hir.mdl"
+        tag = {"slot": "Hair", "entry": 160, "race": "c0801"}
+        _require(
+            ops.hair_skeleton_target_issue(maeve, tag) == "" and
+            "c1401" in ops.hair_skeleton_target_issue(maeve.replace("c0801", "c1401"), tag) and
+            "not hair" in ops.hair_skeleton_target_issue(
+                "chara/equipment/e0001/model/c0801e0001_top.mdl", tag),
+            "hair skeleton tags: the Context's path warns about another race or a model that is not hair",
+        )
 
         with temporary_scene_data():
             detection_mesh_data = bpy.data.meshes.new("AttributeDetectionMeshData")

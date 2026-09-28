@@ -63,6 +63,7 @@ internal static class ChangelogCatalog
             Entry("Blender add-on:"),
             Entry("Models sent to Blender get an armature with the game's skeleton: its rest pose and bone hierarchy, with your skeleton mods, instead of bones stacked at the origin. Posing, animations and Customize+ templates now move imported models the way the game does. Import Model File asks the plugin for the skeleton when the file is named like the game's.", 1),
             Entry("SimpleHeels support: add a heels offset to a mesh part yourself, or let the add-on calculate it from how far the model reaches below the floor.", 1),
+            Entry("Hair weighted to a hair skeleton with Magic Fit's Hair Weights gets the matching EST entry in Penumbra on Quick Export, in every option that uses the model. Exporting it without one takes back only the entry Quick Export set, and restoring a backup restores the entry too.", 1),
             Entry("The material dialog lists the materials already used by the model's other mesh groups, so you can reuse one without typing its path.", 1),
             Entry("Reordering mesh parts: click a part's grip, move the pointer and click again to drop it. The list previews the new order under the pointer, and can now separate parts that share the same number.", 1),
             Entry("Material previews now show roughness, metalness and glow, and see-through materials such as sheer fabric display correctly.", 1),

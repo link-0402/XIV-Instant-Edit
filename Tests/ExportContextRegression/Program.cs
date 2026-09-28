@@ -157,6 +157,7 @@ Directory.CreateDirectory(testRoot);
 try
 {
     VariantExportScenarios.Run(testRoot);
+    EstEntryScenarios.Run(testRoot);
     CheckSessionStore(testRoot);
     SelectorStabilityScenarios.Run(testRoot);
     CollectionActivationScenarios.Run();

@@ -303,6 +303,11 @@ def clean_cache(older_than_seconds: float | None = None) -> tuple[int, int]:
                 bytes_removed += candidate.stat().st_size
                 candidate.unlink()
                 removed += 1
+                # The plugin keeps a hair model backup's EST entries beside it.
+                est_state = candidate.with_name(candidate.name + ".est.json")
+                if est_state.is_file() and not est_state.is_symlink():
+                    bytes_removed += est_state.stat().st_size
+                    est_state.unlink()
             except (OSError, ValueError):
                 continue
 

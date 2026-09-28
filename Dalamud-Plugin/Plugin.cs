@@ -111,7 +111,8 @@ public sealed class Plugin : IDalamudPlugin
         }
         pi.UiBuilder.DisableUserUiHide = _config.KeepVisibleWhenUiHidden;
         _backups   = new ModelBackupStore(storageRoot);
-        _penumbra  = new PenumbraService(pi, framework, log, objects, data, _backups);
+        _penumbra  = new PenumbraService(pi, framework, log, objects, data, _backups,
+            new EstEntryStore(configDirectory));
         // One attributor serves the On Screen snapshot and the Edit/material-preview flows,
         // so both share its mod index and cached stable identifiers.
         var resourceSources = new ResourceSourceAttributor(_penumbra, log);

@@ -58,6 +58,62 @@ public sealed partial class ModelBackupStore
         throw new IOException("Could not allocate a managed backup filename.");
     }
 
+    /// <summary>
+    /// The hair EST entries that belong with a model backup, kept beside it as
+    /// <c>&lt;backup&gt;.est.json</c>. Restoring the backup puts them back.
+    /// </summary>
+    public void WriteEstState(string backupPath, System.Text.Json.Nodes.JsonObject state)
+    {
+        var path = EstStatePath(backupPath);
+        var temporary = path + ".tmp";
+        try
+        {
+            File.WriteAllText(temporary, state.ToJsonString());
+            File.Move(temporary, path, true);
+        }
+        finally
+        {
+            if (File.Exists(temporary))
+                File.Delete(temporary);
+        }
+    }
+
+    public System.Text.Json.Nodes.JsonObject? ReadEstState(string backupPath)
+    {
+        var path = EstStatePath(backupPath);
+        if (!File.Exists(path) || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            return null;
+        try
+        {
+            return System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path)) as System.Text.Json.Nodes.JsonObject;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
+    private string EstStatePath(string backupPath)
+    {
+        var full = Path.GetFullPath(backupPath);
+        if (!PathRules.IsPathWithin(full, _root) || !BackupNameRegex().IsMatch(Path.GetFileName(full)))
+            throw new ArgumentException("The managed backup path is invalid.");
+        return full + EstStateSuffix;
+    }
+
+    private const string EstStateSuffix = ".est.json";
+
+    // A backup's EST state goes with it: once the .bak is gone (expired, cleared, or removed by the add-on) so is this.
+    private static void DeleteOrphanedEstStates(string directory)
+    {
+        foreach (var path in Directory.EnumerateFiles(directory, "*" + EstStateSuffix, SearchOption.TopDirectoryOnly))
+        {
+            var backup = path[..^EstStateSuffix.Length];
+            if (BackupNameRegex().IsMatch(Path.GetFileName(backup)) && !File.Exists(backup))
+                File.Delete(path);
+        }
+    }
+
     public string Resolve(string targetId, string backupName)
     {
         if (!TargetIdRegex().IsMatch(targetId) || !BackupNameRegex().IsMatch(backupName) ||
@@ -80,6 +136,7 @@ public sealed partial class ModelBackupStore
         foreach (var path in Directory.EnumerateFiles(directory, "*.bak", SearchOption.TopDirectoryOnly))
             if (BackupNameRegex().IsMatch(Path.GetFileName(path)))
                 File.Delete(path);
+        DeleteOrphanedEstStates(directory);
         if (!Directory.EnumerateFileSystemEntries(directory).Any())
             Directory.Delete(directory);
     }
@@ -102,6 +159,7 @@ public sealed partial class ModelBackupStore
                         DateTimeStyles.AssumeUniversal, out var created) && created < cutoff)
                     File.Delete(path);
             }
+            DeleteOrphanedEstStates(directory);
             if (!Directory.EnumerateFileSystemEntries(directory).Any())
                 Directory.Delete(directory);
         }

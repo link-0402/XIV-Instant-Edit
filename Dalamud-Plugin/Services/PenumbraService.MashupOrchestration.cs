@@ -29,7 +29,8 @@ public sealed partial class PenumbraService
         bool bundleExternalDependencies = false,
         bool createAttributeGroups = false,
         IReadOnlyList<string>? attributeTags = null,
-        IReadOnlyDictionary<string, int>? attributeMasks = null)
+        IReadOnlyDictionary<string, int>? attributeMasks = null,
+        IReadOnlyList<EstEntryRequest>? estEntries = null)
     {
         if (_data is null)
             return new ExportResult(false, "mashup_unavailable", "Game data access is unavailable.");
@@ -98,10 +99,10 @@ public sealed partial class PenumbraService
 
             return destination == "active_mod"
                 ? await CommitMashupToActiveModAsync(activeTarget!, activeContext, prepared, exportId, name, description,
-                    createAttributeGroups, attributeTags, attributeMasks)
+                    createAttributeGroups, attributeTags, attributeMasks, estEntries)
                     .ConfigureAwait(false)
                 : await CommitMashupToNewModAsync(activeContext, prepared, exportId, name, description,
-                    createAttributeGroups, attributeTags, attributeMasks)
+                    createAttributeGroups, attributeTags, attributeMasks, estEntries)
                     .ConfigureAwait(false);
         }
         catch (Exception e)
@@ -748,7 +749,8 @@ public sealed partial class PenumbraService
         string description,
         bool createAttributeGroups,
         IReadOnlyList<string>? attributeTags,
-        IReadOnlyDictionary<string, int>? attributeMasks)
+        IReadOnlyDictionary<string, int>? attributeMasks,
+        IReadOnlyList<EstEntryRequest>? estEntries)
     {
         _ = LoadV4ModMetadata(target.Folder);
         var outputManipulations = createAttributeGroups && attributeTags is { Count: > 0 }
@@ -789,6 +791,10 @@ public sealed partial class PenumbraService
                 warnings.Add($"Penumbra attribute group setup failed: {AttributeGroupErrorMessage(attributeWarnings)}");
             var cleanup = NormalizeAndDeduplicateMod(target.Folder, target.Directory);
             warnings.AddRange(cleanup.Warnings);
+            var mashupModel = prepared.Mappings[NormalizeGamePath(activeContext.GamePath)];
+            if (cleanup.PathRemap?.RelativePaths.TryGetValue(mashupModel, out var remappedMashupModel) == true)
+                mashupModel = remappedMashupModel;
+            warnings.AddRange(TryUpdateEstEntries(target.Folder, target.Directory, mashupModel, estEntries));
             try
             {
                 var reloadError = await _framework.RunOnFrameworkThread(
@@ -854,7 +860,8 @@ public sealed partial class PenumbraService
         string description,
         bool createAttributeGroups,
         IReadOnlyList<string>? attributeTags,
-        IReadOnlyDictionary<string, int>? attributeMasks)
+        IReadOnlyDictionary<string, int>? attributeMasks,
+        IReadOnlyList<EstEntryRequest>? estEntries)
     {
         if (!IsSafeNewModName(modName))
             return new ExportResult(false, "invalid_mod_name", "The Penumbra mod name is invalid.");
@@ -914,6 +921,10 @@ public sealed partial class PenumbraService
             var warnings = ExternalMashupWarnings(prepared.RequiredExternalMods).ToList();
             var cleanup = NormalizeAndDeduplicateMod(finalFolder, modName);
             warnings.AddRange(cleanup.Warnings);
+            var mashupModel = prepared.Mappings[NormalizeGamePath(activeContext.GamePath)];
+            if (cleanup.PathRemap?.RelativePaths.TryGetValue(mashupModel, out var remappedMashupModel) == true)
+                mashupModel = remappedMashupModel;
+            warnings.AddRange(TryUpdateEstEntries(finalFolder, modName, mashupModel, estEntries));
             try
             {
                 var addError = await AddNewModAsync(modName).ConfigureAwait(false);
