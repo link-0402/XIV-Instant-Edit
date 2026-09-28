@@ -61,14 +61,25 @@ public sealed partial class PenumbraService
         IReadOnlyList<string> tags,
         IReadOnlyDictionary<string, int>? masks,
         JsonArray? sourceManipulations)
+        => WriteAttributeGroupsCore(
+            modFolder, resolvedGamePath, tags, masks,
+            identity => ResolveAttributeGroupImcEntry(resolvedGamePath, identity, sourceManipulations));
+
+    private static string? WriteAttributeGroupsCore(
+        string modFolder,
+        string resolvedGamePath,
+        IReadOnlyList<string> tags,
+        IReadOnlyDictionary<string, int>? masks,
+        Func<AttributeModelIdentity, JsonObject?> resolveImcEntry)
     {
+        var inputError = NormalizeAttributeGroupInput(
+            resolvedGamePath, tags, masks, out var identity, out var suffixMasks, out _);
+        if (inputError is not null)
+            return inputError;
         JsonObject? defaultImcEntry = null;
-        if (tags.Any(tag => TryGetStandardAttributeSuffix(tag, out _)))
+        if (identity is not null && suffixMasks.Count > 0)
         {
-            var identity = ParseAttributeModelIdentity(resolvedGamePath);
-            if (identity is not null)
-                defaultImcEntry = ResolveAttributeGroupImcEntry(
-                    resolvedGamePath, identity, sourceManipulations);
+            defaultImcEntry = resolveImcEntry(identity);
             if (defaultImcEntry is null)
                 return "attribute_group_imc_unavailable: Could not resolve the current IMC entry for this model. Re-import it with game data available, then retry the export.";
         }
@@ -105,7 +116,7 @@ public sealed partial class PenumbraService
 
             var logicalPart = identity.AtrSlot switch
             {
-                "Head" or "Ears" or "Hair" or "Face" => 0,
+                "Head" or "Ears" => 0,
                 "Body" or "Neck" => 1,
                 "Hands" or "Wrists" => 2,
                 "Legs" or "RFinger" => 3,
@@ -270,17 +281,9 @@ public sealed partial class PenumbraService
         IReadOnlyList<string> tags,
         IReadOnlyDictionary<string, int>? masks,
         JsonArray? sourceManipulations = null)
-    {
-        var identity = ParseAttributeModelIdentity(resolvedGamePath);
-        var defaultImcEntry = identity is null
-            ? null
-            : CapturedImcEntry(identity, sourceManipulations);
-        var error = PrepareAttributeGroups(
-            modFolder, resolvedGamePath, tags, masks, defaultImcEntry, out var prepared);
-        if (error is not null)
-            return error;
-        return prepared is null ? null : CommitAttributeGroups(prepared);
-    }
+        => WriteAttributeGroupsCore(
+            modFolder, resolvedGamePath, tags, masks,
+            identity => CapturedImcEntry(identity, sourceManipulations));
 
     private static string? NormalizeAttributeGroupInput(
         string resolvedGamePath,
@@ -312,6 +315,10 @@ public sealed partial class PenumbraService
 
             if (TryGetStandardAttributeSuffix(tag, out var suffix))
             {
+                // The game has no IMC file for hair or faces, and Penumbra
+                // cannot load an IMC group for them.
+                if (identity.ObjectType == "Character")
+                    continue;
                 // IMC columns are semantic suffix bits, not positions in the
                 // model's attribute table. Canonicalize this here as well as
                 // in Blender so older payloads cannot shift A/B/C to D/E/F.
@@ -327,10 +334,12 @@ public sealed partial class PenumbraService
                 continue;
             }
 
-            // Built-in body-part attributes are valid model attributes but are
-            // deliberately not part of the generated Penumbra groups.
-            if (tag is "atr_nek" or "atr_ude" or "atr_hij" or "atr_arm" or "atr_kod" or
-                "atr_hiz" or "atr_sne" or "atr_leg" or "atr_lpd")
+            // The game's own attributes, including the hair variants and the face
+            // toggles that Glamourer and character creation drive, are valid model
+            // attributes but are deliberately not part of the generated Penumbra
+            // groups. Add-ons before 2.0.0 still send atr_hv_.
+            if (GameAttributeNames.Contains(tag) ||
+                Regex.IsMatch(tag, "^atr_(?:hv_[a-h]|fv_[a-g])$", RegexOptions.CultureInvariant))
                 continue;
 
             return $"attribute_group_invalid: Custom attribute {tag} must use the atrx_ prefix; it was not emitted as a Penumbra toggle.";
@@ -343,9 +352,10 @@ public sealed partial class PenumbraService
     private static bool TryGetStandardAttributeSuffix(string tag, out string suffix)
     {
         suffix = "";
+        // IMC attribute masks have ten bits, _a to _j.
         var match = Regex.Match(
             tag,
-            "^atr_(?:" + string.Join("|", AttributeGroupFamilies) + ")_(?<suffix>[a-h])$",
+            "^atr_(?:" + string.Join("|", AttributeGroupFamilies) + ")_(?<suffix>[a-j])$",
             RegexOptions.CultureInvariant);
         if (!match.Success)
             return false;
@@ -412,8 +422,8 @@ public sealed partial class PenumbraService
             "wrs" => "Wrists",
             "rir" => "RFinger",
             "ril" => "LFinger",
-            "hir" => "Hair",
-            "fac" => "Face",
+            // The human branch already names its slot after Penumbra's HumanSlot.
+            "Hair" or "Face" => slot,
             _ => "Unknown",
         };
         equipSlot = equipSlot switch
@@ -651,7 +661,8 @@ public sealed partial class PenumbraService
             if (manipulations[index] is not JsonObject item ||
                 !TryGetAtrManipulation(item, out var manipulation, out var attribute) ||
                 !previousTags.Contains(attribute) ||
-                !AtrManipulationMatchesIdentity(manipulation, identity) ||
+                !(AtrManipulationMatchesIdentity(manipulation, identity) ||
+                  IsLegacyHumanAtrManipulation(manipulation, identity)) ||
                 !IsFalse(manipulation["Entry"]))
                 continue;
             manipulations.RemoveAt(index);
@@ -665,7 +676,7 @@ public sealed partial class PenumbraService
                 manipulations.Add(BuildAtrManipulation(identity, tag, false));
     }
 
-    private static JsonArray ManipulationsWithAtrDefaults(
+    internal static JsonArray ManipulationsWithAtrDefaults(
         JsonArray? sourceManipulations,
         string resolvedGamePath,
         IReadOnlyList<string>? tags)
@@ -674,6 +685,13 @@ public sealed partial class PenumbraService
         var identity = ParseAttributeModelIdentity(resolvedGamePath);
         if (identity is null || tags is null)
             return result;
+        // Source mods exported by older versions carry this model's toggles on
+        // the invalid Unknown slot; move them to the real one so they apply.
+        foreach (var item in result.OfType<JsonObject>())
+            if (TryGetAtrManipulation(item, out var manipulation, out var attribute) &&
+                tags.Contains(attribute, StringComparer.Ordinal) &&
+                IsLegacyHumanAtrManipulation(manipulation, identity))
+                manipulation["Slot"] = identity.AtrSlot;
         foreach (var tag in tags.Where(tag => tag.StartsWith("atrx_", StringComparison.Ordinal))
                      .Distinct(StringComparer.Ordinal).OrderBy(tag => tag, StringComparer.Ordinal))
             if (!result.OfType<JsonObject>().Any(item =>
@@ -706,6 +724,16 @@ public sealed partial class PenumbraService
         JsonObject manipulation,
         AttributeModelIdentity identity)
         => string.Equals(JsonString(manipulation["Slot"]), identity.AtrSlot, StringComparison.Ordinal) &&
+           JsonIntFlexible(manipulation["Id"]) == identity.Id &&
+           JsonIntFlexible(manipulation["GenderRaceCondition"]) == 0;
+
+    // Before 2.0.0, hair and face exports wrote Slot "Unknown" with the model ID.
+    // Penumbra drops that combination as invalid, so these entries never did anything.
+    private static bool IsLegacyHumanAtrManipulation(
+        JsonObject manipulation,
+        AttributeModelIdentity identity)
+        => identity.ObjectType == "Character" &&
+           string.Equals(JsonString(manipulation["Slot"]), "Unknown", StringComparison.Ordinal) &&
            JsonIntFlexible(manipulation["Id"]) == identity.Id &&
            JsonIntFlexible(manipulation["GenderRaceCondition"]) == 0;
 
