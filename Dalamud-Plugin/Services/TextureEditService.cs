@@ -486,6 +486,50 @@ public sealed class TextureEditService : IDisposable
         finally { _gate.Release(); }
     }
 
+    /// <summary>
+    /// Discards every session as <see cref="DiscardAsync"/> does, writing the catalog once.
+    /// Returns the sessions that could not be removed, each as its texture and why.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> DiscardAllAsync()
+    {
+        var runtimes = _sessions.Values.Select(runtime => (Runtime: runtime, WasEnabled: runtime.Enabled)).ToArray();
+        // Stop in-flight conversions before waiting for the queue.
+        foreach (var (runtime, _) in runtimes)
+        {
+            runtime.Enabled = false;
+            runtime.Changed();
+        }
+        await _gate.WaitAsync(_life.Token).ConfigureAwait(false);
+        var removed = false;
+        var kept = new List<string>();
+        try
+        {
+            foreach (var (runtime, wasEnabled) in runtimes)
+            {
+                var s = runtime.Session;
+                if (!_sessions.ContainsKey(s.Id)) continue;
+                runtime.Dispose();
+                try
+                {
+                    DeleteOwnedWorkingDirectory(s);
+                    removed |= _sessions.TryRemove(s.Id, out _);
+                }
+                catch (Exception error)
+                {
+                    // The session is still listed, so keep it working as before instead of ignoring saves.
+                    runtime.Enabled = wasEnabled;
+                    if (wasEnabled) ArmWatcher(runtime);
+                    runtime.Changed();
+                    kept.Add($"{Path.GetFileName(s.GamePath)}: {error.Message}");
+                    _log(error, "Could not discard a texture session; it was retained.");
+                }
+            }
+            if (removed) Persist();
+        }
+        finally { _gate.Release(); }
+        return kept;
+    }
+
     private static bool IsStaleSession(TextureEditSession session, DateTime cutoff)
     {
         try

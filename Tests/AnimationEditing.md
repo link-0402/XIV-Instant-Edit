@@ -339,8 +339,46 @@ physics then takes over an untracked bone is the in-game claim still to verify.
   it did not bake.
 - [ ] With **Include startup in rebake**, confirm the startup loses the same bones
   where it animates them, and nothing else.
-- [ ] Repair pins every live bone the source never animated, YAS physics bones
-  included, and those are not in the source's list to untick. Repair, select the
-  repaired clip once it plays, and confirm its list now holds the live rig's bones
-  so the pinned physics bones can be unticked and released.
+- [ ] **Keep only** Vanilla, IVCS and IVCS + YAS each tick exactly that preset's
+  groups and untick every other animated bone; the highest bone index under the
+  list follows the ticks.
+
+## Standard-skeleton repair (2026-09-28)
+
+Repair used to retarget onto the live rig and pin every live bone the source never
+animated. With an all-in-one rig such as NFLB + YAS (455 bones for c0801), every
+repaired clip bound all 455 bones, up to index 454, and sync plugins refused it:
+they reject animations binding indices beyond the receiving skeleton. The Curves
+Idle `pose05_loop.pap` and `pose05_start.pap` show it: both bind bones 0-454 of the
+`c0801` rig.
+
+Repair now retargets onto a standard skeleton, never the live rig: the game's own
+(read from game data), IVCS or IVCS + YAS (the best main skeleton of that layout
+mapped to the live path in the skeleton library). Only the source's own tracks are
+written, plus a kept bone that only moves because a left-out bone above it moves.
+Bones the chosen standard lacks are left out rather than refused.
+
+Surveyed layouts (c0801, from the saved skeleton library): the game skeleton has
+106 bones, `n_hara_noanim_trans` last at 105. IVCS 2.3 keeps the first 105 and adds
+62 iv_ bones at 105-166, with `n_hara_noanim_trans` at 167. YAS is IVCS without
+that bone plus 5 ya_ bones at 167-171. NFLB + YAS keeps 0-153, then moves 13 IVCS
+physics bones to 397-440, YAS to 447-451 and `n_hara_noanim_trans` to 454.
+Trimming a rebake in the NFLB layout therefore still binds index 454; only repair
+restores standard indices.
+
+Offline, with the plugin's own code against the real library, game skeleton and the
+Curves Idle track list: repair onto Vanilla writes 106 tracks up to index 105,
+IVCS 168 up to 167, IVCS + YAS 172 up to 171. The rig's shared bones rest within
+0.04 degrees and 0.15 mm of the standards, so the rest-relative transfer does not
+visibly change motion. All 385 animation regressions pass.
+
+- [ ] Select Curves Idle, **Keep only** Vanilla, then **Repair skeleton** onto
+  Vanilla into a new mod. Confirm the idle plays as before on the NFLB rig, the
+  output binds 106 bones, and a sync plugin sends it without an invalid-bone
+  warning.
+- [ ] Repeat onto IVCS and IVCS + YAS; confirm the chosen skeleton's origin and
+  bone count in the target tooltip, and that the left-out list names the nf_ bones.
+- [ ] Select a vanilla emote made for the game's skeleton with Vanilla chosen: the
+  disabled button's tooltip must say it was already made for that skeleton. Repair
+  a clip with its startup included; both parts must bind the same standard.
 - [ ] Undo and confirm the unticked bones are animated again.

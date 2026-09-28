@@ -66,6 +66,44 @@ internal sealed class ModelSkeletonResolver(PenumbraService penumbra, IDataManag
     }
 
     /// <summary>
+    /// What reshapes other races' models for the human character at <paramref name="objectIndex"/>,
+    /// as the game does when it wears them: the character's race and the <c>human.pbd</c> its
+    /// collection loads, so skeleton mods' deformers apply. With the object's address, only that
+    /// character counts. A problem instead when it isn't a human character or the file can't be read.
+    /// </summary>
+    public async Task<(RacialScalingSource? Source, string? Problem)> RacialScalingAsync(int objectIndex, nint characterAddress,
+        CancellationToken token)
+    {
+        var race = await framework.RunOnFrameworkThread(() => CharacterRace(objectIndex, characterAddress));
+        if (race is null)
+            return (null, "the character has no human race to scale for");
+        try
+        {
+            var collection = objectIndex is >= 0 and <= ushort.MaxValue ? await penumbra.GetCollectionTargetAsync(objectIndex) : null;
+            return (new RacialScalingSource(race.Value, await ReadAsync(collection?.Id, RacialDeformer.GamePath, token)), null);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
+        {
+            log.Warning(e, "Could not read the racial deformer file.");
+            return (null, $"the racial deformer file could not be read: {e.Message}");
+        }
+    }
+
+    /// <summary> The gender-race code (801 for c0801) of a human character, or null. </summary>
+    private unsafe ushort? CharacterRace(int objectIndex, nint address)
+    {
+        if (objectIndex is < 0 or > ushort.MaxValue || objects[objectIndex] is not ICharacter character ||
+            character.Address == 0 || (address != 0 && character.Address != address))
+            return null;
+        var drawObject = ((Character*)character.Address)->GetCharacterBase();
+        if (drawObject == null || drawObject->GetModelType() != CharacterBase.ModelType.Human)
+            return null;
+        var race = ((Human*)drawObject)->RaceSexId;
+        return GameFiles.GameRaces.Find(race) is null ? null : race;
+    }
+
+    /// <summary>
     /// The live skeleton of a character of the model's race: all its partial skeletons, with each
     /// Havok skeleton's reference pose (the bind pose, not the animated pose). Null when the object
     /// changed, isn't a character of that race, or has no readable skeleton.
@@ -206,12 +244,11 @@ internal sealed class ModelSkeletonResolver(PenumbraService penumbra, IDataManag
         var hash = AnimationPap.Hash(bytes);
         lock (sync)
             if (descriptions.TryGetValue(hash, out var cached)) return cached;
-        var variants = await framework.RunOnTick(() =>
+        var main = await framework.RunOnTick(() =>
         {
             token.ThrowIfCancellationRequested();
-            return AnimationSkeleton.InspectSources(bytes);
+            return AnimationSkeleton.Inspect(bytes);
         }, delayTicks: 1, cancellationToken: token);
-        var main = variants.FirstOrDefault(variant => variant.Name.Length == 0)?.Skeleton ?? variants[0].Skeleton;
         lock (sync)
         {
             if (descriptions.Count >= MaximumCachedSkeletons) descriptions.Clear();

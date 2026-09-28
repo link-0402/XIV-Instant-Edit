@@ -12,7 +12,7 @@ from .streams         import create_stream_arrays, get_submesh_streams, update_m
 from .accessors       import get_weights, get_xiv_uv_layers
 from ...logging       import YetAnotherLogger
 from .validators      import clean_material_path, USHORT_LIMIT
-from ..com.helpers    import normalised_int_array 
+from ..com.helpers    import normalised_int_array, WEIGHT_THRESHOLD, unweighted_message
 from ..com.exceptions import XIVModelError, XIVMeshError
 
 from ....xivpy.model  import (XIVModel, Mesh as XIVMesh, Submesh,
@@ -111,6 +111,8 @@ class CreateLOD:
 
         self.shape_meshes: dict[str, list[tuple[int, NDArray]]] = defaultdict(list)
         self.export_stats: dict[str, list[str]]                 = defaultdict(list)
+        # Meshes with vertices the game would leave behind; the LOD is refused once all are read.
+        self.unweighted  : list[str]                            = []
 
     @classmethod
     def construct(cls, model: XIVModel, lod_level: int, active_lod: Lod, face_data: bool, sorted_meshes: list[list[Object]], logger: YetAnotherLogger = None ) -> 'CreateLOD':
@@ -147,7 +149,10 @@ class CreateLOD:
             active_lod.water_mesh_idx        += 1
             active_lod.shadow_mesh_idx       += 1
             active_lod.vertical_fog_mesh_idx += 1
-        
+
+        if self.unweighted:
+            raise XIVMeshError(unweighted_message(self.unweighted))
+
         if self.model.mdl_bounding_box:
             self.model.mdl_bounding_box.merge(self.bbox)
         else:
@@ -262,7 +267,8 @@ class CreateLOD:
         except:
             raise XIVMeshError(f"Missing material path.")
 
-        mesh_flow = bool(blend_objs[0].get("xiv_flow", "xiv_flow" in blend_objs[0].data.color_attributes))
+        # Any part with flow gives the mesh its flow stream; the parts without flow write no direction.
+        mesh_flow = any(obj.get("xiv_flow", "xiv_flow" in obj.data.color_attributes) for obj in blend_objs)
         vert_decl = decl_from_blend_mesh(blend_objs, mesh_flow)
         self.model.vertex_declarations.append(vert_decl)
 
@@ -431,8 +437,16 @@ class CreateLOD:
         source_vert_count = len(obj.data.vertices)
         vert_count    = len(source_vertices)
         group_count   = len(obj.vertex_groups)
-        weight_matrix = get_weights(obj, source_vert_count, group_count)[source_vertices]
+        weights       = get_weights(obj, source_vert_count, group_count)
+        weight_matrix = weights[source_vertices]
         empty_groups  = check_empty()
+
+        # Every vertex a face uses needs a bone weight (SceneHandler.check_weights leaves this to the MDL writer).
+        used     = np.unique(source_vertices)
+        missing  = int(np.count_nonzero(~(np.max(weights, axis=1, initial=0.0) > WEIGHT_THRESHOLD)[used]))
+        if missing:
+            self.unweighted.append(
+                f"{obj.name} (all)" if missing == len(used) else f"{obj.name} ({missing:,} of {len(used):,})")
 
         blend_weights = np.zeros((vert_count, 8), dtype=single)
         blend_indices = np.zeros((vert_count, 8), dtype=ubyte)

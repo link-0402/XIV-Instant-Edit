@@ -181,7 +181,7 @@ public sealed class FirstTimeSetupWindow : Window
         [
             Check("Penumbra", true, "Reads modded files and writes your edits back into mods."),
             Check("Glamourer", false, "Refreshes On Screen when your appearance changes."),
-            new PluginCheck("LivePose", false, livePose, livePose ? "available" : "not found", "Needed to bake poses into animations."),
+            new PluginCheck("LivePose", false, livePose, livePose ? "available" : "not found", "Required to bake pose offsets into animations."),
         ];
         return _plugins;
 
@@ -256,8 +256,8 @@ public sealed class FirstTimeSetupWindow : Window
     {
         DrawHeading(
             "Paint in Substance Painter (optional)",
-            "With Adobe Substance 3D Painter 10.0.1 or newer, On Screen models open in Painter with the exact textures your " +
-            "character uses, and Painter's Send to game button brings the painted textures back.");
+            "With Adobe Substance 3D Painter 10.0.1 or newer, On Screen models open in Painter with the current texture configuration " +
+            "and Painter's Send to game button saves the painted textures back to the game.");
         _tools.DrawPainter(advanced: false);
     }
 

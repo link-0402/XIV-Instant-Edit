@@ -12,6 +12,7 @@ from .operators import (
     XIVIE_OT_duplicate_backfaces,
     XIVIE_OT_mesh_attribute,
     XIVIE_OT_mesh_material,
+    XIVIE_OT_remove_hidden_vertices,
     XIVIE_OT_select_mesh_part,
     XIVIE_OT_convert_mesh_names,
     XIVIE_OT_combine_armatures,
@@ -22,6 +23,7 @@ from .operators import (
     XIVIE_OT_clear_backups,
     XIVIE_OT_vertex_data,
     XIVIE_OT_show_pose_action,
+    XIVIE_OT_delete_pose_action,
     XIVIE_OT_toggle_rest_pose,
 )
 from .preferences import (
@@ -66,6 +68,7 @@ CLASSES = [
     XIVIE_OT_duplicate_backfaces,
     XIVIE_OT_mesh_attribute,
     XIVIE_OT_mesh_material,
+    XIVIE_OT_remove_hidden_vertices,
     XIVIE_OT_select_mesh_part,
     XIVIE_OT_convert_mesh_names,
     XIVIE_OT_combine_armatures,
@@ -76,6 +79,7 @@ CLASSES = [
     XIVIE_OT_clear_backups,
     XIVIE_OT_vertex_data,
     XIVIE_OT_show_pose_action,
+    XIVIE_OT_delete_pose_action,
     XIVIE_OT_toggle_rest_pose,
     XIVIE_MT_export_targets,
     XIVIE_MT_links,

@@ -92,6 +92,20 @@ public sealed record SourceOptionLocator
     public required string OptionName { get; init; }
 }
 
+/// <summary>
+/// The racial scaling a model was sent to Blender with, for preview only: its vertices were moved
+/// from the model's race (<see cref="ModelRace"/>, 201 for c0201) onto the character's
+/// (<see cref="CharacterRace"/>), and the plugin refuses every export from the import.
+/// </summary>
+public sealed record RacialScalingRecord
+{
+    [JsonPropertyName("modelRace")]
+    public required ushort ModelRace { get; init; }
+
+    [JsonPropertyName("characterRace")]
+    public required ushort CharacterRace { get; init; }
+}
+
 /// <summary> Versioned, plugin-owned context sent to the Blender add-on. </summary>
 public sealed record InstantEditImportContext
 {
@@ -195,6 +209,10 @@ public sealed record InstantEditImportContext
     [JsonIgnore]
     public string SourceOptionStatus { get; init; } = "unknown";
 
+    /// <summary>The racial scaling the model was sent with for preview, which refuses its exports; null when it went unscaled.</summary>
+    [JsonIgnore]
+    public RacialScalingRecord? RacialScaling { get; init; }
+
     [JsonIgnore]
     public DateTimeOffset LastTouchedAtUtc { get; init; } = DateTimeOffset.UtcNow;
 }
@@ -274,6 +292,9 @@ public sealed record PersistedExportContext
     [JsonPropertyName("sourceOptionStatus")]
     public string SourceOptionStatus { get; init; } = "unknown";
 
+    [JsonPropertyName("racialScaling")]
+    public RacialScalingRecord? RacialScaling { get; init; }
+
     [JsonPropertyName("lastTouchedAtUtc")]
     public DateTimeOffset LastTouchedAtUtc { get; init; } = DateTimeOffset.UtcNow;
 
@@ -303,6 +324,7 @@ public sealed record PersistedExportContext
             ResourceManifestStatus = context.ResourceManifestStatus,
             SourceOption = context.SourceOption,
             SourceOptionStatus = context.SourceOptionStatus,
+            RacialScaling = context.RacialScaling,
             LastTouchedAtUtc = context.LastTouchedAtUtc,
         };
 }

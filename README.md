@@ -60,7 +60,7 @@ as the texture editor; save flattened TGAs by hand there.
 
 ### Install the Blender add-on
 
-The first-time setup and **Settings > Blender add-on** do this for you. To do it by hand:
+The first-time setup and **Settings > Editors** do this for you. To do it by hand:
 
 1. Open **Edit > Preferences > Get Extensions** in Blender.
 2. Click **Repositories**, click **+**, and choose **Add Remote Repository**.
@@ -78,7 +78,7 @@ The add-on's own [README](Blender-Addon/README.md) describes everything in its s
 
 ![A sweater and jeans sent from the game to Blender, with the add-on's sidebar](docs/images/blender/overview.png)
 
-1. Type /ie to open the plugin interface ingame. The on-screen list loads on its own; the refresh button in the toolbar reloads it.
+1. Type /ie to open the plugin interface ingame (/iesettings opens its settings). The on-screen list loads on its own; the refresh button in the toolbar reloads it.
 2. Start Blender. Verify the toolbar shows Blender as "Online".
 3. Verify the model options both in-game (the sliders button in the toolbar) and inside the add-on, then use the pencil action (or right-click, "Edit model in Blender") on the model you want to import. Hover a model for a summary and thumbnail before importing it.
 4. Edit the model as you normally would.
@@ -127,8 +127,29 @@ Quick Export backup restores the EST entries along with the model.
    updates it.
 6. Sessions pause when the game or plugin restarts. Opening the texture again
    (or the open action on its card in **Sessions**) resumes it.
+7. The trash action on a card discards that session's working files. **Clean up all sessions...**
+   at the top of **Sessions** discards every session and Substance Painter project at once, after
+   asking. The mods and their backups are kept.
 
-Note that textures must be saved as a flattened TGA file. You can either do so manually or use the Save Flattened TGA scripts for Photoshop, GIMP and Krita: the first-time setup and **Settings > Texture editing** install them into the editors they find, and they're also in [Tools](https://github.com/link-0402/XIV-Instant-Edit/tree/main/Tools) for installing by hand. Other image editing software might not support similar scripts or already saves a flattened copy with the usual Ctrl + S shortcut (Paint.NET does).
+Note that textures must be saved as a flattened TGA file. You can either do so manually or use the Save Flattened TGA scripts for Photoshop, GIMP and Krita: the first-time setup and **Settings > Editors** install them into the editors they find, and they're also in [Tools](https://github.com/link-0402/XIV-Instant-Edit/tree/main/Tools) for installing by hand. Other image editing software might not support similar scripts or already saves a flattened copy with the usual Ctrl + S shortcut (Paint.NET does).
+
+### Racial scaling
+
+Most gear is made for one race and worn by others: the female races wear the Hyur Midlander (c0201)
+model of most gear, and the game reshapes it for each of them with its racial deformer. With
+**Apply racial scaling for model import** ticked in the model import options, a model of another
+race goes to Blender and Substance Painter reshaped the same way, for the race of the character it
+comes from, so it lines up with that race's own face, hair and tail. Blender builds the armature
+from that race's skeleton. Browsed mods and Game Files rows use the first character in On Screen.
+
+Scaled models are for preview only, since the file other races load must keep its own race's
+shape. Models of the character's own race (faces, hair, tails) are never changed.
+- Every mesh of a scaled import carries an `xiv_racial_scaling` entry in Blender's Custom
+  Properties, such as `c0201 to c0801`, and the export panel lists these meshes as an error.
+- Quick Export, new mods and mashups refuse scaled imports and tagged meshes. Re-import the model
+  with racial scaling off to edit and export it.
+- Simple Export still writes tagged meshes, after asking, and warns that the file keeps the
+  scaled shape.
 
 ## How to: Texture painting in Substance Painter
 
@@ -182,10 +203,16 @@ them back to physics.
    - **LivePose**: tick the bones and components of your LivePose adjustments, then
      **Rebake with LivePose**.
    - **Animated bones**: untick bones the animation should stop driving, then
-     **Rebake without unticked bones**. Unticked bones are left out of the other
-     rebakes too.
-   - **Skeleton repair**: **Repair skeleton** retargets the animation onto your live
-     skeleton, for example after a skeleton mod inserted bones.
+     **Rebake without unticked bones**. **Keep only** Vanilla, IVCS or IVCS + YAS
+     unticks every bone outside those groups at once. Unticked bones are left out of
+     the other rebakes too. This rebake keeps the bone indices of the skeleton the
+     animation was made for; the list shows the highest one.
+   - **Skeleton repair**: **Repair skeleton** retargets the animation onto a standard
+     skeleton: the game's own, IVCS or IVCS + YAS, found in the skeleton library. Only
+     the bones the animation moves get tracks, at the indices other players' skeletons
+     and sync plugins expect, however many bones your own skeleton mod adds. Bones the
+     chosen skeleton lacks are left out. It picks the smallest skeleton that has every
+     ticked bone, so **Keep only** followed by a repair trims an oversized animation.
 
    Each of these tabs ends with the choice of a new mod or an in-place replacement.
 4. Every edit is journaled for a week. **Undo last edit** reverts it and restores the
@@ -202,11 +229,14 @@ armature a model sent from the plugin comes with, which has the game's rest pose
 is not needed.
 
 - **Record live pose**, a tab at the right of the Animations tab, records a character's
-  skeleton on every frame, the way the game renders it: the animation plus bone physics,
-  Customize+ and LivePose. Use it to check clothing for clipping in motion, for example
-  while walking; the countdown gives you time to start moving. In GPose, **You** is your
-  posed copy and **Current target** is the GPose target, such as an actor Brio plays an
-  animation on. Recordings are sampled at 60 frames per second.
+  skeleton on every frame, the way the game renders it: the animation plus bone physics
+  and LivePose. Customize+ is paused on the character while it records, so that MagicFit
+  can add the template in Blender without applying it twice. Use it to check clothing for
+  clipping in motion, for example while walking; the countdown gives you time to start
+  moving. In GPose, **You** is your posed copy and **Current target** is the GPose target,
+  such as an actor Brio plays an animation on. The recorder can only pause a character's
+  own Customize+ profile, not one Brio or Mare applied; if the body is still scaled, the
+  result says so. Recordings are sampled at 60 frames per second.
 - **The pen button** of an animation in the list (or right-click, "Send animation to
   Blender") samples its file at its own frame rate on the skeleton it was made for. Physics
   bones keep their rest pose.
@@ -221,8 +251,10 @@ and moves the scene's end frame to its last frame; set the scene to 60 fps to ke
 recorded sample. Each bone receives the game bone's movement relative to its reference
 pose, turned into the bone's own rest orientation, so armatures imported with other bone
 orientations (glTF, FBX) work. Bones the armature lacks are listed in the result. Bone
-scale is only keyed with **Key bone scale** on, so Customize+ scaling applied in Blender
-stays in place.
+scale is only keyed with **Key bone scale** on, so scaling applied in Blender stays in place
+otherwise. Keyed scale works the way the game's does: a bone's scale never moves the bones below
+it, and bones under an unevenly scaled bone are set to inherit scale **Aligned**, which
+scales them along their own axes as the game does.
 
 ## How to: Game Files and exports
 
@@ -266,6 +298,40 @@ With **Automatic cache cleanup** on (Settings), files in the cache's `game-expor
 export has written for 7 days are removed, and so are the folders that leaves empty. Exporting a
 model again renews its files. Choose a folder outside the cache to keep exports.
 
+## How to: Fixing the neck seam
+
+The face and the body are separate models that meet in a ring at the neck. When their materials,
+textures or models don't match there, a seam shows. In On Screen, open the face model's **⋯** menu
+and choose **Fix neck seam…**. The plugin compares both sides along that ring the way the game's
+skin shader draws them, and lists what differs (hover a row for details):
+
+- **Neck connection data**: Dawntrail face models carry connection vertices that the game snaps
+  the body's neck edge to. Custom faces saved without them leave the edges apart.
+- **Skin detail tile**: the skin pore pattern. The face samples it with its second UV set and the
+  body with its first, so equal settings can still give different pore sizes. The plugin compares
+  them in tiles per metre.
+- **Colour, skin tone influence, specular, roughness, subsurface** and the **surface normal**
+  built from each side's normal map.
+
+Tick the fixes to use and press **Create preview mod**. For the skin settings, the slider picks
+where the face and body materials meet: at the left only the body material changes to match the
+face, at the right only the face changes to match the body, and in between both move (the pore
+tile meets at a size between the two). The lines under the slider show the resulting values. The
+face material applies to the whole face and the body material to the whole body. The texture fix
+shifts the face textures towards the body's values at the seam and fades out above it (2 cm by
+default).
+
+The fixed files go into a new mod, **Neck Seam Preview - (character)**, enabled in the character's
+collection above your other mods. Your mods stay unchanged. Changed face textures get new paths
+while previewing, so other materials that share them don't change.
+
+Look at the character in game (**Measure again** shows the seam with the preview), then:
+
+- **Apply to my mods** writes the fixed files over the files the face and body use in their mods,
+  with backups kept for a week. Every character and option that uses those files changes too.
+  Files from game data go into a new **Neck Seam Fix** mod instead. The preview mod is removed.
+- **Discard preview** removes the preview mod.
+
 ## Additional notes
 
 The plugin window has a toolbar with the tabs, Penumbra and Blender status dots, a
@@ -283,10 +349,12 @@ The Blender add-on keeps track of where each model came from through the automat
 - Easy export context selection. Export in-place, pick any existing mod option or easily create a new one. The plugin sets up everything for you automatically.
 - Instant creation of mashups. The plugin automatically sets up all required textures, materials and paths for you.
 - Hair weighted with Magic Fit's Hair Weights gets the matching EST entry (hair skeleton) in Penumbra on export.
+- Racial scaling: preview shared gear in Blender and Substance Painter shaped for your character's race.
 - Seamlessly integrates into any existing Blender scene, independent of body, devkit, etc.
 - Simple Importer / Exporter for general FBX and MDL files with various QoL functions and automations optimized for FFXIV workflows
 - One-click import and export for textures
 - Texture painting in Substance Painter from On Screen, with one-click sending back to the game
+- Neck seam check and fix: compares face and body at the neck as the skin shader draws them, previews the fix as a new mod, then applies it to your mods
 - Animation editing: bake LivePose adjustments, repair skeletons, exclude bones, with undo and recovery
 - Animations in Blender: record a character's live pose including bone physics, or send an animation your character plays or any mod's animation file, as an action on your armature
 

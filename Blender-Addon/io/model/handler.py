@@ -13,12 +13,10 @@ from ...properties         import get_settings
 from .com.space            import lin_to_srgb       
 from ...mesh.shapes        import get_shape_mix
 from .com.exceptions       import XIVMeshError, XIVMeshParentError
+from .com.helpers          import WEIGHT_THRESHOLD, unweighted_message
 from ...mesh.objects       import visible_meshobj, safe_object_delete, copy_mesh_object, quick_copy
 from ...mesh.face_order    import get_original_faces, sequential_faces
 from ...xivpy.model.vertex import XIV_COL
-
-# The MDL exporter drops smaller weights (exp/weights.normalise_weights).
-WEIGHT_THRESHOLD = 1e-6
 
 
 def unweighted_vertices(obj: Object) -> tuple[int, int]:
@@ -345,22 +343,27 @@ class SceneHandler:
         """Refuse meshes with vertices the game would leave behind: each needs a bone weight.
 
         Runs on the evaluated copies after non-bone groups are gone, so weights from
-        modifiers count and weights on groups that are no bone do not.
+        modifiers count and weights on groups that are no bone do not. For an MDL, the
+        writer counts the vertices of weighted meshes from the weights it reads anyway
+        (CreateLOD._create_blend_arrays), so only meshes without any group are refused here.
         """
         unweighted = []
         for dupe in dupes:
             # A bone-parented mesh without groups follows its bone; the MDL writer weights it fully.
             if not dupe.vertex_groups and dupe.parent_type == 'BONE' and dupe.parent_bone:
                 continue
+            name = names.get(dupe, dupe.name)
+            if not dupe.vertex_groups:
+                if len(dupe.data.polygons):
+                    unweighted.append(f"{name} (all)")
+                continue
+            if self.xiv_mdl:
+                continue
             used, count = unweighted_vertices(dupe)
             if count:
-                name = names.get(dupe, dupe.name)
                 unweighted.append(f"{name} (all)" if count == used else f"{name} ({count:,} of {used:,})")
         if unweighted:
-            raise XIVMeshError(
-                "Vertices without bone weights: " + ", ".join(unweighted)
-                + ". Weight every vertex to the armature's bones before exporting."
-            )
+            raise XIVMeshError(unweighted_message(unweighted))
 
     def restore_meshes(self) -> None:
         """We're trying a lot."""

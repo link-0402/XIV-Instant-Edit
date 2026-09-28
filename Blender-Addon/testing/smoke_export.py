@@ -938,9 +938,11 @@ def assert_backface_duplicate(addon):
         return owner.layout.items
 
     items = menu(ui._PART_NAME_OPERATOR)
+    part = {"mesh_group": 70, "mesh_part": 0, "mesh_part_instance": "front"}
     if (
-        len(items) != 2 or items[0] != "separator" or items[1][0] != "xiv_ie.duplicate_backfaces"
-        or vars(items[1][1]) != {"mesh_group": 70, "mesh_part": 0, "mesh_part_instance": "front"}
+        len(items) != 3 or items[0] != "separator" or items[1][0] != "xiv_ie.duplicate_backfaces"
+        or vars(items[1][1]) != part or items[2][0] != "xiv_ie.remove_hidden_vertices"
+        or vars(items[2][1]) != {"part_only": True, **part}
     ):
         raise AssertionError(f"Unexpected part name context menu: {items}")
     owner = SimpleNamespace(layout=Layout())
@@ -2003,6 +2005,16 @@ def run() -> None:
                 instant_props.export_scope = "CURRENT_COLLECTION"
                 if bpy.ops.xiv_ie.simple_export() != {"FINISHED"} or scope_capture[-1] != (obj,):
                     raise AssertionError("Simple Export XIV Instant Edit Collection ignored the selected Context")
+
+                # Racially scaled meshes are previews, but Simple Export still writes them (after a warning).
+                scaling_property = importlib.import_module(f"{addon.__name__}.instant_edit.racial_scaling").PROPERTY
+                obj[scaling_property] = "c0201 to c0801"
+                try:
+                    if bpy.ops.xiv_ie.simple_export() != {"FINISHED"} or scope_capture[-1] != (obj,):
+                        raise AssertionError("Simple Export refused a racially scaled mesh")
+                finally:
+                    del obj[scaling_property]
+                print("[PASS] Simple Export still writes racially scaled meshes")
         finally:
             operators.export_result = original_simple_export_result
             settings.model_format = original_model_format
@@ -2094,6 +2106,27 @@ def run() -> None:
                 f"expected={tuple(tuple(row) for row in original_pose)}"
             )
         bpy.context.scene.xiv_ie_settings.reset_scaling_on_export = True
+        # Racially scaled meshes are previews: Quick Export refuses them before writing anything.
+        scaling_property = importlib.import_module(f"{addon.__name__}.instant_edit.racial_scaling").PROPERTY
+        obj[scaling_property] = "c0201 to c0801"
+        payloads_before = len(export_payloads)
+        try:
+            scaled_issues = instant_ops.export_target_issues(bpy.context, ref, material_coverage_warning=False)
+            if not any(severity == "ERROR" and "Racially scaled (c0201 to c0801) for preview only" in message and obj.name in message
+                       for severity, message in scaled_issues):
+                raise AssertionError(f"Export readiness did not report the racially scaled mesh: {scaled_issues}")
+            try:
+                instant_ops.perform_instant_export(bpy.context)
+            except ValueError as error:
+                if "racially scaled (c0201 to c0801) for preview only" not in str(error):
+                    raise AssertionError(f"Quick Export refused a racially scaled mesh for another reason: {error}")
+            else:
+                raise AssertionError("Quick Export wrote a racially scaled mesh")
+            if len(export_payloads) != payloads_before:
+                raise AssertionError("Quick Export sent a racially scaled mesh to the plugin")
+        finally:
+            del obj[scaling_property]
+        print("[PASS] Quick Export refuses racially scaled meshes and readiness reports them")
         # Magic Fit's Hair Weights tags: every part agrees on one hair skeleton.
         for tagged in (obj, second, added_group):
             tagged["xiv_est_hair"] = 160

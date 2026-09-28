@@ -167,8 +167,8 @@ def get_weights(obj: Object, vert_count: int, group_count: int) -> NDArray:
 
 
 def get_flow_colours(obj: Object, loop_vertices: NDArray, loop_count: int) -> NDArray:
-    if "xiv_flow" not in obj.data.color_attributes:
-        # No flow layer on this part of a flow mesh: no direction.
+    if "xiv_flow" not in obj.data.color_attributes or not obj.get("xiv_flow", True):
+        # No flow layer on this part of a flow mesh, or switched off: no direction.
         return np.tile(np.asarray(ZERO_FLOW_COLOUR, single), (loop_count, 1))
 
     flow_layer = obj.data.color_attributes["xiv_flow"]

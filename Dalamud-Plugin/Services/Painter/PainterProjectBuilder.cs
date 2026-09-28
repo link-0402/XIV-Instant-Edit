@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using InstantEdit.Services.Previews;
+using InstantEdit.Services.Skeletons;
 
 namespace InstantEdit.Services.Painter;
 
@@ -18,6 +19,12 @@ public sealed record PainterRequest(int ObjectIndex, long ActorAddress, string A
 {
     /// <summary> What the character draws right now; null when it couldn't be read, and then every part counts. </summary>
     public PainterLiveCharacter? Live { get; init; }
+
+    /// <summary> With racial scaling on, what reshapes other races' models for the character; null when it is off or unavailable. </summary>
+    internal RacialScalingSource? RacialScaling { get; init; }
+
+    /// <summary> Why racial scaling is on but <see cref="RacialScaling"/> is missing; null otherwise. </summary>
+    internal string? RacialScalingProblem { get; init; }
 }
 
 public sealed class PainterDraftTexture
@@ -118,7 +125,9 @@ internal sealed class PainterProjectBuilder
     {
         var warnings = new List<string>();
         var mainBytes = await ReadModelAsync(request.Model, token).ConfigureAwait(false);
-        var mesh = ModelMeshReader.Read(mainBytes);
+        if (request.RacialScalingProblem is { } problem && ModelSkeletonPaths.Parse(request.Model.GamePath) is { Human: true })
+            warnings.Add($"Racial scaling is on but can't apply: {problem.TrimEnd('.')}. The models keep their own race's shape.");
+        var mesh = ModelMeshReader.Read(Scaled(request, request.Model, mainBytes, warnings));
         var plan = await _builder.BuildTexturePlanAsync(mainBytes, request.Model.GamePath, request.Resources, token).ConfigureAwait(false);
         warnings.AddRange(plan.Warnings);
 
@@ -156,7 +165,7 @@ internal sealed class PainterProjectBuilder
                     .ToDictionary(material => material.ModelMaterial, material => setByMaterialPath[material.GamePath], StringComparer.OrdinalIgnoreCase);
                 if (shared.Count == 0)
                     continue;
-                var otherMesh = ModelMeshReader.Read(bytes);
+                var otherMesh = ModelMeshReader.Read(Scaled(request, other, bytes, warnings));
                 siblings.Add(new PainterDraftModel
                 {
                     Model = other, Mesh = otherMesh, SetByMaterial = shared,
@@ -176,6 +185,30 @@ internal sealed class PainterProjectBuilder
             Request = request, Main = main, Siblings = siblings, Sets = sets, Warnings = warnings,
             NewModName = PenumbraService.IsSafeNewModName(modName) ? modName : "Painter Edit",
         };
+    }
+
+    /// <summary>
+    /// A model of another race reshaped for the character when racial scaling is on, as the game
+    /// shows it on the character, so it lines up with the character's own face, hair and body in
+    /// Painter; otherwise, or when it can't be scaled, as it is, with a note.
+    /// </summary>
+    private static byte[] Scaled(PainterRequest request, PainterModelRef model, byte[] bytes, List<string> notes)
+    {
+        if (request.RacialScaling is not { } source)
+            return bytes;
+        try
+        {
+            if (source.For(model.GamePath) is not { } scaling)
+                return bytes;
+            var scaled = RacialScalingModel.Apply(bytes, scaling.Deformer);
+            notes.Add($"{model.FileName} is scaled from {scaling.Description}, as the character wears it.");
+            return scaled;
+        }
+        catch (Exception error) when (error is InvalidDataException or NotSupportedException)
+        {
+            notes.Add($"{model.FileName} keeps its own race's shape: {error.Message}");
+            return bytes;
+        }
     }
 
     /// <summary>

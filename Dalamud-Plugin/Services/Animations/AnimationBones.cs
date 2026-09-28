@@ -4,6 +4,8 @@ using InstantEdit.Models;
 
 namespace InstantEdit.Services.Animations;
 
+internal sealed record RepairPlan(StandardSkeleton Target, ImmutableArray<string> Kept, ImmutableArray<string> Dropped, int HighestIndex);
+
 /// <summary>
 /// Which bones an animation drives, and leaving chosen ones out of a rebake. A bone
 /// with no transform track is not driven by the animation at all: it samples at its
@@ -46,6 +48,103 @@ internal static class AnimationBones
         return both.Length == 0 ? null :
             "Selected for LivePose baking but unticked under Animated Bones: " +
             $"{string.Join(", ", both.Select(AnimationPresentation.BoneName))}. Tick the bone again, or deselect its offset.";
+    }
+
+    /// <summary>The highest bone index a rebake that leaves out these bones writes, or -1 when none is left.</summary>
+    public static int HighestIndex(AnimationClip clip, IReadOnlyCollection<string> excluded)
+    {
+        if (clip.Resolution is not { Selected: { } selected } resolution) return -1;
+        var set = excluded.ToHashSet(StringComparer.Ordinal);
+        var bones = selected.Skeleton.Bones;
+        return resolution.TrackBones.Where(i => i >= 0 && i < bones.Length && !set.Contains(bones[i].Name))
+            .Select(i => (int)i).DefaultIfEmpty(-1).Max();
+    }
+
+    public static string StandardName(SkeletonStandard standard) => standard switch
+    {
+        SkeletonStandard.Ivcs => "IVCS",
+        SkeletonStandard.IvcsYas => "IVCS + YAS",
+        _ => "Vanilla",
+    };
+
+    public static StandardSkeleton? Standard(AnimationClip clip, SkeletonStandard standard)
+        => clip.Resolution?.Standards.FirstOrDefault(s => s.Standard == standard);
+
+    /// <summary>
+    /// Whether a bone belongs to a standard's groups: the game's own bones, then IVCS's
+    /// iv_ bones, then YAS's ya_ bones.
+    /// </summary>
+    public static bool InStandard(string name, SkeletonStandard standard, IReadOnlySet<string> vanilla)
+        => vanilla.Contains(name) ||
+           standard >= SkeletonStandard.Ivcs && name.StartsWith("iv_", StringComparison.Ordinal) ||
+           standard == SkeletonStandard.IvcsYas && name.StartsWith("ya_", StringComparison.Ordinal);
+
+    /// <summary>
+    /// The animated bones a preset unticks: every one outside the standard's groups. Null
+    /// until the game's own skeleton for the clip's model is known.
+    /// </summary>
+    public static ImmutableArray<string>? Outside(AnimationClip clip, SkeletonStandard standard)
+    {
+        if (Standard(clip, SkeletonStandard.Vanilla) is not { } game) return null;
+        var vanilla = game.Skeleton.Bones.Select(b => b.Name).ToHashSet(StringComparer.Ordinal);
+        return [.. Animated(clip).Where(name => !InStandard(name, standard, vanilla))];
+    }
+
+    // How many of the game's last bones a mod layout may lack at the game's indices. The game
+    // appended n_hara_noanim_trans after IVCS and YAS fixed their layouts; a small allowance
+    // covers such patch additions without accepting a rig that reshuffles the game's bones.
+    private const int LateGameBones = 4;
+
+    /// <summary>
+    /// Whether a skeleton is laid out as the standard: only bones of the standard's groups,
+    /// with IVCS's (and for IVCS + YAS, YAS's) among them, and the game's bones leading at
+    /// the game's own indices, except that up to <see cref="LateGameBones"/> of the game's
+    /// last bones may be missing there or follow later.
+    /// </summary>
+    public static bool IsStandardLayout(SkeletonDescription skeleton, SkeletonDescription game, SkeletonStandard standard)
+    {
+        var gameNames = game.Bones.Select(b => b.Name).ToArray();
+        var names = skeleton.Bones.Select(b => b.Name).ToArray();
+        if (standard == SkeletonStandard.Vanilla) return names.SequenceEqual(gameNames, StringComparer.Ordinal);
+        var vanilla = gameNames.ToHashSet(StringComparer.Ordinal);
+        if (!names.All(name => InStandard(name, standard, vanilla)) ||
+            !names.Any(name => name.StartsWith("iv_", StringComparison.Ordinal)) ||
+            standard == SkeletonStandard.IvcsYas && !names.Any(name => name.StartsWith("ya_", StringComparison.Ordinal)))
+            return false;
+        var leading = names.TakeWhile(vanilla.Contains).Count();
+        return leading >= gameNames.Length - LateGameBones && leading <= gameNames.Length &&
+               names.Take(leading).SequenceEqual(gameNames.Take(leading), StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// The standard a repair picks unless you choose: the smallest found whose skeleton has
+    /// every bone kept, else the largest found. Null when none was found.
+    /// </summary>
+    public static SkeletonStandard? DefaultRepairTarget(AnimationClip clip, IReadOnlyCollection<string> excluded)
+    {
+        var standards = clip.Resolution?.Standards ?? [];
+        if (standards.IsEmpty) return null;
+        var set = excluded.ToHashSet(StringComparer.Ordinal);
+        var kept = Animated(clip).Where(name => !set.Contains(name)).ToArray();
+        return standards.OrderBy(s => s.Standard).FirstOrDefault(s =>
+            s.Skeleton.Bones.Select(b => b.Name).ToHashSet(StringComparer.Ordinal).IsSupersetOf(kept))?.Standard
+            ?? standards.Max(s => s.Standard);
+    }
+
+    /// <summary>
+    /// What a repair onto the standard writes: the kept animated bones its skeleton has, the
+    /// ones it lacks and leaves out, and the highest bone index the output binds. Null when
+    /// the standard's skeleton was not found.
+    /// </summary>
+    public static RepairPlan? Plan(AnimationClip clip, SkeletonStandard standard, IReadOnlyCollection<string> excluded)
+    {
+        if (Standard(clip, standard) is not { } target) return null;
+        var index = target.Skeleton.Bones.Select((bone, i) => (bone.Name, i)).ToDictionary(b => b.Name, b => b.i, StringComparer.Ordinal);
+        var set = excluded.ToHashSet(StringComparer.Ordinal);
+        var bones = Animated(clip).Where(name => !set.Contains(name)).ToArray();
+        ImmutableArray<string> kept = [.. bones.Where(index.ContainsKey)];
+        return new(target, kept, [.. bones.Where(name => !index.ContainsKey(name))],
+            kept.Select(name => index[name]).DefaultIfEmpty(-1).Max());
     }
 
     /// <summary>Indices of the named bones in a skeleton. Names it does not have are skipped.</summary>

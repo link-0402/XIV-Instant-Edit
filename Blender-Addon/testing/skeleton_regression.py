@@ -461,6 +461,7 @@ def check_bridge(addon, context):
             max_difference(armature.data.bones["j_kao"].matrix_local, expected["j_kao"]) < 1e-5 and
             armature.data.bones["j_kao"].parent.name == "j_sebo_a",
             "Instant Import builds its armature from the skeleton the plugin sent")
+    require(armature.hide_get() and not mesh.hide_get(), "Instant Import hides only its armature")
     require("iv_extra" in props.last_status, "Instant Import reports model bones the skeleton lacks")
 
 

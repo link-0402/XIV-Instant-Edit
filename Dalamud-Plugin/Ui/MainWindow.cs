@@ -233,6 +233,7 @@ public sealed partial class MainWindow : Window, IDisposable
         DrawAnimationSendDialog();
         DrawPainterDialogs();
         DrawGameFileExportDialog();
+        DrawNeckSeamDialog();
         DrawStatusStrip(GetFeedback(activeTab));
         DrawWindowOptionsExtension();
     }
@@ -371,7 +372,8 @@ public sealed partial class MainWindow : Window, IDisposable
     private void DrawStatusStrip(FeedbackState feedback)
     {
         var exporting = _gameExport?.Busy ?? false;
-        var busy = Volatile.Read(ref _editing) != 0 || Volatile.Read(ref _textureBusy) != 0 || _onScreen.IsRefreshing || (animations?.Busy ?? false) || exporting;
+        var busy = Volatile.Read(ref _editing) != 0 || Volatile.Read(ref _textureBusy) != 0 || Volatile.Read(ref _neckSeamBusy) != 0 ||
+                   _onScreen.IsRefreshing || (animations?.Busy ?? false) || exporting;
         var animationCancel = animations is { Busy: true, CanCancel: true };
         // Cancel stops the Game Files export on its own tab, or when no animation work can be cancelled.
         var cancelExport = exporting && (_activeTab == MainTab.GameFiles || !animationCancel);
@@ -532,6 +534,16 @@ public sealed partial class MainWindow : Window, IDisposable
         {
             Widgets.HintWrapped("Each import creates its own InstantEditArmature. This armature is only safe for import and export and is not suited for posing, animation or scaling.");
         }
+
+        var racialScaling = _config.ApplyRacialScaling;
+        if (ImGui.Checkbox("Apply racial scaling for model import", ref racialScaling))
+        {
+            _config.ApplyRacialScaling = racialScaling;
+            SaveModelOptions();
+        }
+        Widgets.HintWrapped("Models made for another race, like the c0201 gear most female races wear, go to Blender and Substance Painter " +
+                            "shaped for the character's race, with its skeleton, as the game shows them on it. Browsed mods and game files use " +
+                            "the first on-screen character. For preview only: Quick Export refuses scaled models, and Simple Export warns first.");
 
         var applyTexturesAndMaterials = _config.ApplyTexturesAndMaterials;
         if (ImGui.Checkbox("Apply textures and materials", ref applyTexturesAndMaterials))

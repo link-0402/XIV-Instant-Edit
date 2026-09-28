@@ -96,7 +96,7 @@ internal static class SkeletonRepairFixture
         var malformed = Candidate(S("invalid", B("root", 0)), "invalid-container.sklb");
         var failures = new List<string>();
         var loaded = AnimationSkeletonIndex.ReadCandidatesAsync(new[] { malformed.Source, candidate.Source },
-            s => s == malformed.Source ? Task.FromException<ImmutableArray<SkeletonCandidate>>(new InvalidDataException("Invalid Havok animation container.")) : Task.FromResult(ImmutableArray.Create(candidate)),
+            s => s == malformed.Source ? Task.FromException<SkeletonCandidate>(new InvalidDataException("Invalid Havok animation container.")) : Task.FromResult(candidate),
             (s, e) => failures.Add(e.Message), CancellationToken.None).GetAwaiter().GetResult();
         check(loaded.Count == 1 && loaded[0] == candidate && failures.SequenceEqual(new[] { "Invalid Havok animation container." }),
             "invalid Havok container exceptions stay local to the candidate and scanning continues");
@@ -146,6 +146,58 @@ internal static class SkeletonRepairFixture
             compact.Capture.Startup!.Resolution!.Candidates.Length == 1 && compact.Capture.Clip.Resolution.Selected == selectedResolution.Selected &&
             compact.Capture.Clip.TargetSkeleton == target,
             "recovery retains selected source and destination identities without serializing the whole skeleton index");
+        // Repair retargets onto standard skeletons found among the files mapped to the live
+        // path, never onto the live rig, which all-in-one skeleton mods grow to every group.
+        var rigs = (Game: AnimationBonesFixture.Rigs.Game, Ivcs: AnimationBonesFixture.Rigs.Ivcs,
+            Yas: AnimationBonesFixture.Rigs.Yas, AllInOne: AnimationBonesFixture.Rigs.AllInOne);
+        const string live = "chara/human/c0801/skeleton/base/b0001/skl_c0801b0001.sklb";
+        SkeletonCandidate Mapped(SkeletonDescription s, string file, string path = live) =>
+            new(new(SkeletonSourceKind.Mod, new(path, file, file, file, "root", file)), s, 0, "");
+        var standards = AnimationSkeletonIndex.Standards(rigs.Game, [
+            Mapped(rigs.AllInOne, "nflb.sklb"),
+            Mapped(rigs.Yas, "yas.sklb"),
+            Mapped(rigs.Ivcs with { Fingerprint = "ivcs-before-late-bone", Bones = rigs.Ivcs.Bones.RemoveAt(9) }, "ivcs-old.sklb"),
+            Mapped(rigs.Ivcs, "ivcs.sklb"),
+            Mapped(rigs.Ivcs with { Fingerprint = "other-race" }, "other.sklb", "chara/human/c0101/skeleton/base/b0001/skl_c0101b0001.sklb"),
+        ], live);
+        check(standards.Select(s => s.Standard).SequenceEqual([SkeletonStandard.Vanilla, SkeletonStandard.Ivcs, SkeletonStandard.IvcsYas]) &&
+              standards[0].Skeleton == rigs.Game && standards[1].Skeleton == rigs.Ivcs && standards[2].Skeleton == rigs.Yas && standards[2].Origin == "yas.sklb",
+            "standards are the game's skeleton and the main IVCS and YAS layouts mapped to the live path; the all-in-one rig is none");
+        check(AnimationSkeletonIndex.Standards(null, [Mapped(rigs.Ivcs, "ivcs.sklb")], live).IsEmpty &&
+              AnimationSkeletonIndex.Standards(rigs.Game, [], live).Single().Standard == SkeletonStandard.Vanilla,
+            "without the game's own skeleton there is no standard; without mods there is only the game's");
+
+        var everyTrack = channels with { OriginalSkeleton = "c0801", Bones = [.. Enumerable.Range(0, rigs.AllInOne.Bones.Length).Select(i => (short)i)], ReferenceBones = null };
+        var toGame = new AnimationRetarget(rigs.AllInOne, rigs.Game, everyTrack, dropMissing: true);
+        check(toGame.MapTracks(everyTrack.Bones).SequenceEqual(new short[] { 0, 1, 2, 3, 4, 5, 6 }),
+            "a repair of an every-bone animation onto the game's skeleton binds only its bones, the late bone back at the game's index");
+        check(new AnimationRetarget(rigs.AllInOne, rigs.Yas, everyTrack, dropMissing: true).MapTracks(everyTrack.Bones)
+                .SequenceEqual(new short[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 }),
+            "a repair onto IVCS + YAS moves IVCS physics and YAS bones back to their standard indices");
+        var earMoves = rigs.AllInOne.Bones.Select(b => b.Reference).ToArray();
+        earMoves[8] = earMoves[8] with { Position = earMoves[8].Position + Vector3.UnitY };
+        reject(() => new AnimationRetarget(rigs.AllInOne, rigs.Game, everyTrack).Map(earMoves),
+            "without a chosen target, a moving bone the target lacks still blocks retargeting");
+        check(toGame.Map(earMoves).SequenceEqual(rigs.Game.Bones.Select(b => b.Reference)),
+            "a repair onto a chosen standard leaves out a moving bone that standard lacks");
+        var withMid = S("with-mid", B("root", -1), B("nf_mid", 0, 1), B("j_kao", 1, 1));
+        var withoutMid = S("without-mid", B("root", -1), B("j_kao", 0, 2));
+        var midChannels = channels with { Bones = [0, 1], ReferenceBones = null };
+        var dropMid = new AnimationRetarget(withMid, withoutMid, midChannels, dropMissing: true);
+        check(dropMid.MapTracks(midChannels.Bones).SequenceEqual(new short[] { 0 }) &&
+              Math.Abs(dropMid.Map(new[] { T(), T(1.5f), T(1) })[1].Position.X - 2.5f) < 1e-6,
+            "a left-out moving bone still moves the kept bone below it, which the bake then tracks");
+
+        var repairRequest = request with
+        {
+            RepairTarget = SkeletonStandard.Ivcs,
+            Capture = request.Capture with { Clip = request.Capture.Clip with { Resolution = selectedResolution with { Standards = standards } } },
+        };
+        check(AnimationCommitService.RecoveryRequest(repairRequest).Capture.Clip.Resolution!.Standards.Single().Standard == SkeletonStandard.Ivcs &&
+              AnimationCommitService.RecoveryRequest(repairRequest with { Operation = AnimationOperation.ExcludeBones, RepairTarget = null })
+                  .Capture.Clip.Resolution!.Standards.IsEmpty,
+            "recovery keeps only the standard skeleton a repair used");
+
         var frames = AnimationPoseRules.SampleCount(1, 25);
         check(frames >= 31 && (frames - 1) % 24 == 0, "uniform bake grid includes every source sample even below thirty frames per second");
 
@@ -164,6 +216,11 @@ internal static class SkeletonRepairFixture
             using var cancel = new CancellationTokenSource(); cancel.Cancel();
             try { AnimationSkeletonIndex.Scan(new[] { ("Disabled mod", temp) }, cancel.Token); throw new Exception("Expected cancellation"); }
             catch (OperationCanceledException) { check(true, "skeleton scan respects cancellation"); }
+            var journals = new AnimationJournalStore(temp);
+            journals.Save(new AnimationEditJournal { Id = repairRequest.Id, Request = AnimationCommitService.RecoveryRequest(repairRequest) });
+            var reloaded = new AnimationJournalStore(temp).Load().Single().Request;
+            check(reloaded.RepairTarget == SkeletonStandard.Ivcs && reloaded.Capture.Clip.Resolution!.Standards.Single().Skeleton.Fingerprint == "ivcs",
+                "a repair journal keeps its target and that standard's skeleton");
             var options = new JsonSerializerOptions { IncludeFields = true };
             var roundtrip = JsonSerializer.Deserialize<SkeletonDescription>(JsonSerializer.Serialize(source, options), options)!;
             check(roundtrip.Bones.SequenceEqual(source.Bones) && roundtrip.Fingerprint == source.Fingerprint, "skeleton cache round-trips reference transforms and hierarchy");

@@ -222,7 +222,7 @@ public sealed partial class MainWindow
             ImGui.SetTooltip(RowColourLabel(node));
     }
 
-    private static void SetupColumns(RowLayout layout)
+    private void SetupColumns(RowLayout layout)
     {
         if (layout == RowLayout.OnScreen)
         {
@@ -236,8 +236,23 @@ public sealed partial class MainWindow
             ImGui.TableSetupColumn("Path", ImGuiTableColumnFlags.WidthStretch, .42f);
             ImGui.TableSetupColumn("Option", ImGuiTableColumnFlags.WidthStretch, .22f);
         }
-        ImGui.TableSetupColumn("##actions", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoHide, Theme.Scaled(58));
+        ImGui.TableSetupColumn("##actions", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoHide, ActionsColumnWidth());
         ImGui.TableHeadersRow();
+    }
+
+    /// <summary>
+    /// Room for the widest row's buttons: a model's edit, its paint roller when Painter is on, and ⋯
+    /// (see <see cref="DrawRowActions"/>). Icon buttons are as wide as their glyph plus frame padding.
+    /// </summary>
+    private float ActionsColumnWidth()
+    {
+        var padding = ImGui.GetStyle().FramePadding.X * 2;
+        using var font = ImRaii.PushFont(UiBuilder.IconFont);
+        float Button(FontAwesomeIcon icon) => ImGui.CalcTextSize(icon.ToIconString()).X + padding;
+        var width = Button(FontAwesomeIcon.Pen) + Theme.Scaled(2) + Button(FontAwesomeIcon.EllipsisH);
+        if (PainterEnabled)
+            width += Button(FontAwesomeIcon.PaintRoller) + Theme.Scaled(2);
+        return MathF.Max(width, Theme.Scaled(58));
     }
 
     private void DrawModTable(ActorView actor)
@@ -578,8 +593,11 @@ public sealed partial class MainWindow
             if (ImGui.MenuItem("Send animation to Blender"))
                 OpenAnimationSend(node);
         }
+        var neckSeam = CanFixNeckSeam(actor, node);
+        if (neckSeam && ImGui.MenuItem("Fix neck seam…"))
+            OpenNeckSeam(actor.Entity!);
         extraItems?.Invoke();
-        if (safeModel || texture || animation || extraItems is not null)
+        if (safeModel || texture || animation || neckSeam || extraItems is not null)
             ImGui.Separator();
 
         using (ImRaii.Disabled(node.GamePath.Length == 0))

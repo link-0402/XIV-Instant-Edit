@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Numerics;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 
@@ -92,5 +93,19 @@ internal static class ObservationPerformanceFixture
         var wrongVersion = json.Replace("\"Version\":3", "\"Version\":2", StringComparison.Ordinal);
         check(!AnimationSkeletonIndex.TryLoadSessionLibraryJson(wrongVersion, state, out _, out _, out _, out _),
             "version-mismatched session-library files are rejected");
+        // Libraries saved before only main skeletons were read also list the skeletons
+        // mappers embed, each source named by its variant.
+        var legacy = JsonNode.Parse(json)!;
+        var entry = legacy["Skeletons"]![0]!;
+        var mapperSource = entry["Sources"]![0]!.DeepClone();
+        mapperSource["Source"]!["Variant"] = "Mapper 0 A (entry 2)";
+        var mapperOnly = entry.DeepClone();
+        mapperOnly["Skeleton"]!["Fingerprint"] = "mapper-only";
+        mapperOnly["Sources"] = new JsonArray(mapperSource.DeepClone());
+        entry["Sources"]!.AsArray().Add(mapperSource);
+        legacy["Skeletons"]!.AsArray().Add(mapperOnly);
+        check(AnimationSkeletonIndex.TryLoadSessionLibraryJson(legacy.ToJsonString(), state, out var mainOnly, out var gone, out _, out _) &&
+              mainOnly.Length == 1 && mainOnly[0].Sources.Length == 1 && gone == 0,
+            "a saved library's mapper skeletons are left out on load, without a rebuild or counting them as removed");
     }
 }

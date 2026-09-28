@@ -26,6 +26,7 @@ from .materials import (
 )
 from .mesh_list import DragSession, ListMetrics, list_parts, moved_part, placement_plan, scene_parts
 from .mesh.export import check_triangulation, check_weights, export_result, get_export_stats
+from .mesh.hidden import hidden_vertices, remove_vertices
 from .mesh.objects import visible_meshobj
 from .mesh.armatures import available_armatures, combine_armatures
 from .mesh.vertex_data import (
@@ -34,7 +35,7 @@ from .mesh.vertex_data import (
     apply_vertex_data,
     missing_data_label,
 )
-from .pose import pose_armature, show_action, toggle_rest_pose
+from .pose import delete_action, pose_armature, show_action, shown_action, toggle_rest_pose
 from .properties import get_settings
 from .xivpy.model import XIVModel
 from .backups import clear_backups, list_backups, restore_local, target_folder
@@ -193,6 +194,34 @@ class XIVIE_OT_simple_export(Operator):
             return False
         return True
 
+    @staticmethod
+    def _objects(context: Context) -> list:
+        """The meshes Export Parts picks. Raises ContextValidationError without a needed Context."""
+        from .instant_edit.ops import export_destination_context, export_objects_for_scope
+
+        scope = getattr(context.scene.xiv_ie_instant_edit_props, "export_scope", "VISIBLE")
+        ref = export_destination_context(context) if scope == "CURRENT_COLLECTION" else None
+        return export_objects_for_scope(ref, scope)
+
+    def invoke(self, context: Context, event):
+        # Racially scaled meshes are for preview; confirm before writing their scaled shape.
+        from .instant_edit.racial_scaling import simple_export_warning
+
+        try:
+            warning = simple_export_warning(self._objects(context))
+        except ContextValidationError:
+            warning = ""
+        if not warning:
+            return self.execute(context)
+        return context.window_manager.invoke_confirm(
+            self,
+            event,
+            title="Export Racially Scaled Meshes?",
+            message=warning,
+            confirm_text="Export",
+            icon="WARNING",
+        )
+
     def execute(self, context: Context):
         settings = get_settings()
         directory = Path(bpy.path.abspath(settings.export_directory)).resolve()
@@ -207,12 +236,9 @@ class XIVIE_OT_simple_export(Operator):
         suffix = {"MDL": ".mdl", "FBX": ".fbx", "GLTF": ".gltf"}[settings.model_format]
         if name.lower().endswith(suffix):
             name = name[:-len(suffix)]
-        from .instant_edit.ops import export_destination_context, export_objects_for_scope
-
         scope = getattr(context.scene.xiv_ie_instant_edit_props, "export_scope", "VISIBLE")
         try:
-            ref = export_destination_context(context) if scope == "CURRENT_COLLECTION" else None
-            objects = export_objects_for_scope(ref, scope)
+            objects = self._objects(context)
         except ContextValidationError as error:
             message = (
                 "Select a Context before exporting the XIV Instant Edit Collection."
@@ -232,6 +258,9 @@ class XIVIE_OT_simple_export(Operator):
         if unweighted:
             self.report({"ERROR"}, "No bone weights: " + ", ".join(unweighted))
             return {"CANCELLED"}
+        from .instant_edit.racial_scaling import simple_export_warning
+
+        scaled = simple_export_warning(objects)
 
         try:
             export_result(directory / name, settings.model_format, export_objects=objects)
@@ -244,9 +273,11 @@ class XIVIE_OT_simple_export(Operator):
 
         refresh_error = refresh_variant_targets_after_operation(context)
         message = f"Exported {name}{suffix}"
+        if scaled:
+            message += f". {scaled}"
         if refresh_error is not None:
             message += f"; Penumbra targets could not refresh: {refresh_error}"
-        self.report({"WARNING"} if refresh_error is not None else {"INFO"}, message)
+        self.report({"WARNING"} if refresh_error is not None or scaled else {"INFO"}, message)
         return {"FINISHED"}
 
 
@@ -799,6 +830,95 @@ class XIVIE_OT_duplicate_backfaces(Operator):
         return {"FINISHED"}
 
 
+class XIVIE_OT_remove_hidden_vertices(Operator):
+    bl_idname = "xiv_ie.remove_hidden_vertices"
+    bl_label = "Remove Hidden Vertices"
+    bl_description = "Delete the vertices of the selected meshes that no camera angle can see"
+    bl_options = {"REGISTER", "UNDO"}
+
+    # Set by the Mesh Groups right-click menu, which works on that part only.
+    part_only: BoolProperty(default=False, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
+    mesh_group: IntProperty(default=0, min=0, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
+    mesh_part: IntProperty(default=0, min=0, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
+    mesh_part_instance: StringProperty(default="", options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
+    hidden_by: EnumProperty(
+        name="Hidden By",
+        items=(
+            ("VISIBLE", "Visible Meshes",
+             "Every visible mesh can hide vertices, like clothes covering the body. "
+             "Hide meshes the game does not draw together with these first, such as a mannequin"),
+            ("SELF", "Only Itself", "Only a mesh's own faces can hide its vertices"),
+        ),
+        default="VISIBLE",
+    )  # type: ignore
+    margin: IntProperty(
+        name="Margin",
+        description=(
+            "Keep this many rings of hidden vertices around the visible ones, so no gap opens "
+            "where an animation moves the covering mesh"
+        ),
+        default=2,
+        min=0,
+        soft_max=5,
+        max=20,
+    )  # type: ignore
+
+    @classmethod
+    def description(cls, context, properties):
+        target = "this part" if properties.part_only else "the selected meshes"
+        return (
+            f"Delete the vertices of {target} that no camera angle can see, with the faces that use them.\n"
+            "Tests the rest pose and each shp_ shape key the way the game draws them: see-through materials "
+            "hide nothing, and neither does the back of a face whose material culls backfaces"
+        )
+
+    @classmethod
+    def poll(cls, context: Context):
+        if context.mode != "OBJECT":
+            cls.poll_message_set("Switch to Object Mode to remove hidden vertices")
+            return False
+        return True
+
+    def _targets(self, context: Context) -> list:
+        if self.part_only:
+            objects = mesh_part_instance_objects(
+                visible_meshobj(), self.mesh_group, self.mesh_part, self.mesh_part_instance or None,
+            )
+            return [obj for obj in objects if obj.name in context.view_layer.objects]
+        return _selected_meshes(context)
+
+    def execute(self, context: Context):
+        targets = self._targets(context)
+        if not targets:
+            if self.part_only:
+                self.report({"ERROR"}, f"Mesh part {self.mesh_group}.{self.mesh_part} is no longer visible.")
+            else:
+                self.report({"ERROR"}, "Select the meshes to clean up.")
+            return {"CANCELLED"}
+        visible = [obj for obj in context.visible_objects if obj.type == "MESH"]
+        window_manager = context.window_manager
+        window_manager.progress_begin(0, 1000)
+        try:
+            found = hidden_vertices(
+                targets,
+                visible if self.hidden_by == "VISIBLE" else None,
+                margin=self.margin,
+                progress=lambda fraction: window_manager.progress_update(int(fraction * 1000)),
+            )
+            removed = {obj: remove_vertices(obj, indices) for obj, indices in found.items()}
+        finally:
+            window_manager.progress_end()
+        total = sum(removed.values())
+        changed = [obj for obj, count in removed.items() if count]
+        if not total:
+            self.report({"INFO"}, "No hidden vertices to remove")
+            return {"FINISHED"}
+        where = changed[0].name if len(changed) == 1 else f"{len(changed)} meshes"
+        self.report({"INFO"}, f"Removed {total:,} hidden vertices from {where}")
+        _redraw(context)
+        return {"FINISHED"}
+
+
 class XIVIE_OT_copy_text(Operator):
     bl_idname = "xiv_ie.copy_text"
     bl_label = "Copy"
@@ -1222,6 +1342,44 @@ class XIVIE_OT_show_pose_action(Operator):
         except (AttributeError, RuntimeError, TypeError) as error:
             self.report({"ERROR"}, f"Could not pose {armature.name}: {error}")
             return {"CANCELLED"}
+        _redraw(context)
+        return {"FINISHED"}
+
+
+class XIVIE_OT_delete_pose_action(Operator):
+    bl_idname = "xiv_ie.delete_pose_action"
+    bl_label = "Delete Action"
+    bl_description = "Delete the shown action from the file; the bones it posed go back to their rest pose"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: Context):
+        armature = pose_armature(context)
+        if armature is None or shown_action(armature) is None:
+            cls.poll_message_set("The armature shows no action")
+            return False
+        return True
+
+    def invoke(self, context: Context, event):
+        action = shown_action(pose_armature(context))
+        return context.window_manager.invoke_confirm(
+            self,
+            event,
+            title="Delete Action?",
+            message=f'Delete "{action.name}" from the file? The bones it posed go back to their rest pose.',
+            confirm_text="Delete",
+            icon="WARNING",
+        )
+
+    def execute(self, context: Context):
+        action = shown_action(pose_armature(context))
+        name = action.name
+        try:
+            delete_action(action)
+        except (ReferenceError, RuntimeError) as error:
+            self.report({"ERROR"}, f'Could not delete "{name}": {error}')
+            return {"CANCELLED"}
+        self.report({"INFO"}, f'Deleted the action "{name}"')
         _redraw(context)
         return {"FINISHED"}
 

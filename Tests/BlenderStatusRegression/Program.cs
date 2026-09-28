@@ -318,6 +318,17 @@ try
         importEnvelope["backupDirectory"]?.GetValue<string>() is { Length: > 0 } backupDirectory &&
         Path.GetFileName(backupDirectory) == importEnvelope["backupTargetId"]?.GetValue<string>(),
         "source import requests serialize the managed backup target metadata");
+    Require(importEnvelope.ContainsKey("racialScaling") && importEnvelope["racialScaling"] is null,
+        "an unscaled import tells Blender it has no racial scaling");
+    await importClient.SendGameImportAsync(
+        42424, Path.Combine(importRoot, "scaled.mdl"),
+        "chara/equipment/e6001/model/c0201e6001_top.mdl", "chara/equipment/e6001/model/c0201e6001_top.mdl", 0, "Scaled", 42425,
+        racialScaling: new RacialScalingRecord { ModelRace = 201, CharacterRace = 801 });
+    var scaledEnvelope = JsonNode.Parse(importHandler.LastBody!)!.AsObject();
+    Require(scaledEnvelope["racialScaling"]?["modelRace"]?.GetValue<string>() == "c0201" &&
+            scaledEnvelope["racialScaling"]?["race"]?.GetValue<string>() == "c0801" &&
+            scaledEnvelope["racialScaling"]!.AsObject().Count == 2,
+        "a racially scaled import tells Blender both races, so the add-on can tag its meshes");
 }
 finally
 {
@@ -335,6 +346,12 @@ Require(
     keyed.Describe().Contains("\"Live pose 19:42:07\" on \"Skeleton\"", StringComparison.Ordinal) &&
     keyed.Describe().Contains("6 bones are not in the armature (n_hara, iv_ochinko_a, iv_ochinko_b, iv_ochinko_c, …)", StringComparison.Ordinal),
     "the animation summary names the action and the first bones the armature lacks");
+Require(keyed.AlignedBoneCount == 0 && !keyed.Describe().Contains("Aligned", StringComparison.Ordinal),
+    "an animation that changed no bone's Inherit Scale says nothing about it");
+var aligned = BlenderClient.ParseAnimationResponse(HttpStatusCode.OK,
+    """{"ok":true,"queued":false,"applied":true,"action":"Live pose 19:43:10","armature":"Skeleton","frames":301,"frameRate":60.0,"frameStart":1,"frameEnd":301,"matchedBones":444,"missingBoneCount":0,"missingBones":[],"alignedBoneCount":4,"alignedBones":["j_sebo_a","j_asi_a_l","j_asi_b_l","j_asi_c_l"]}""");
+Require(aligned.AlignedBoneCount == 4 && aligned.Describe().EndsWith("4 bones now inherit scale Aligned, so they scale the game's way.", StringComparison.Ordinal),
+    "the animation summary says how many bones Blender set to inherit scale Aligned");
 var queuedAnimation = BlenderClient.ParseAnimationResponse(HttpStatusCode.Accepted, """{"ok":true,"queued":true,"applied":false}""");
 Require(!queuedAnimation.Applied && queuedAnimation.Describe().Contains("idle", StringComparison.Ordinal),
     "an animation Blender could not key yet is reported as queued");

@@ -34,10 +34,16 @@ internal static class AnimationPresentation
 
     public static bool Ready(AnimationCapture capture) => capture.Clip.Resolution is { State: SkeletonResolutionState.Matched, Selected: not null };
 
+    /// <summary>
+    /// Whether an animation stays listed after it stops playing: once its skeleton is matched, or
+    /// while several fit equally well, so the source skeleton can still be chosen afterwards.
+    /// </summary>
+    public static bool Listed(AnimationCapture capture) => Ready(capture) || capture.Clip.Resolution?.State == SkeletonResolutionState.Ambiguous;
+
     public static ImmutableArray<ListItem> ListItems(IEnumerable<AnimationCapture> history)
     {
         var current = history.Where(c => c.Playing).ToArray();
-        var recent = history.Where(c => !c.Playing && Ready(c)).ToArray();
+        var recent = history.Where(c => !c.Playing && Listed(c)).ToArray();
         var result = ImmutableArray.CreateBuilder<ListItem>();
         // The current animation is useful immediately. Skeleton matching stays in
         // the background and never leaks Searching/Incompatible state into the list.

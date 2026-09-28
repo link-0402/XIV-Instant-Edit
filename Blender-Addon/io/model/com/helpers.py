@@ -4,6 +4,14 @@ from numpy        import single, ubyte
 from numpy.typing import NDArray
 
 
+# The MDL exporter drops smaller weights (exp/weights.normalise_weights).
+WEIGHT_THRESHOLD = 1e-6
+
+def unweighted_message(meshes: list[str]) -> str:
+    """The refusal for meshes with vertices the game would leave behind, as "Name (3 of 10)"."""
+    return ("Vertices without bone weights: " + ", ".join(meshes)
+            + ". Weight every vertex to the armature's bones before exporting.")
+
 def byte_to_vector(byte_vectors: NDArray) -> NDArray:
     floats = (byte_vectors.astype(single) / (255.0 * 0.5)) - 1
     return normalise_vectors(floats)

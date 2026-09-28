@@ -3,13 +3,20 @@
 The plugin sends a take: the game-local transform of every bone (relative to its parent, in
 FFXIV's Y-up space) for each sampled frame, together with the skeleton's hierarchy and reference
 pose. A take is either an animation file sampled on the skeleton it was made for, or a recording
-of a character's live skeleton, which includes the game's bone physics, Customize+ and LivePose.
+of a character's live skeleton, which includes the game's bone physics and LivePose. The plugin
+pauses Customize+ while it records, since MagicFit's Customize+ adds it here.
 
 Bones are matched by name. Each matched pose bone receives the change from the game's reference
 pose, re-expressed in that bone's own rest orientation. Scene armatures are imported with their
 own bone orientations (glTF, FBX), which this absorbs. With a rest pose built from the same
 skeleton the result is exact; with other proportions every bone still turns, and moves, by the
 same amount around its own head.
+
+Scale is keyed only when the take asks for it. The game combines a bone's transform with its
+parent's the Havok way, not as matrices: the parent's scale multiplies the child's along the
+child's own axes, and never moves the child. Blender moves a child with its parent's scale, so
+keyed positions are divided by that scale. Bones under an unevenly scaled parent are set to
+inherit scale Aligned, which scales them the game's way; Full would shear them.
 """
 
 from __future__ import annotations
@@ -37,6 +44,8 @@ MAX_DURATION_SECONDS = 3600.0
 MAX_OUTPUT_FRAMES = 200_000
 # Channels whose values stay within this range over the whole take get a single key.
 CONSTANT_TOLERANCE = 1e-6
+# Scales this close to one count as unscaled; the game's own carry float noise near 1e-7.
+SCALE_TOLERANCE = 1e-4
 UNDO_MESSAGE = "XIV Instant Edit animation"
 METADATA_PROPERTY = "xiv_instant_edit"
 
@@ -237,6 +246,78 @@ def _model_space(local: np.ndarray, parents: np.ndarray) -> np.ndarray:
     return model
 
 
+def _quat_multiply(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Products a·b of (..., 4) quaternions in the game's (x, y, z, w) order."""
+    ax, ay, az, aw = np.moveaxis(a, -1, 0)
+    bx, by, bz, bw = np.moveaxis(b, -1, 0)
+    return np.stack((
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    ), axis=-1)
+
+
+def _quat_rotate(q: np.ndarray, v: np.ndarray) -> np.ndarray:
+    """(..., 3) vectors turned by (..., 4) unit quaternions in (x, y, z, w) order."""
+    t = 2.0 * np.cross(q[..., 0:3], v)
+    return v + q[..., 3:4] * t + np.cross(q[..., 0:3], t)
+
+
+def _unit(q: np.ndarray) -> np.ndarray:
+    return q / np.linalg.norm(q, axis=-1, keepdims=True)
+
+
+def _divide(values, by, fallback) -> np.ndarray:
+    """``values / by`` per component, and ``fallback`` where ``by`` is about zero: mod skeletons
+    hide bones by scaling them to nothing."""
+    shape = np.broadcast_shapes(np.shape(values), np.shape(by))
+    by = np.broadcast_to(by, shape)
+    result = np.array(np.broadcast_to(fallback, shape), dtype=np.float64)
+    np.divide(np.broadcast_to(values, shape), by, out=result, where=np.abs(by) > 1e-8)
+    return result
+
+
+def _compose(parent: np.ndarray, local: np.ndarray) -> np.ndarray:
+    """The game's product parent·local of (..., 10) transforms (Havok's hkQsTransform::setMul).
+
+    Unlike a matrix product, the parent's scale multiplies the child's axis by axis and never
+    moves the child: position = parent position + parent turn · child position."""
+    result = np.empty(np.broadcast_shapes(parent.shape, local.shape))
+    turn = _unit(parent[..., 3:7])
+    result[..., 0:3] = parent[..., 0:3] + _quat_rotate(turn, local[..., 0:3])
+    result[..., 3:7] = _unit(_quat_multiply(turn, local[..., 3:7]))
+    result[..., 7:10] = parent[..., 7:10] * local[..., 7:10]
+    return result
+
+
+def _relative(parent: np.ndarray, child: np.ndarray) -> np.ndarray:
+    """``child`` in ``parent``'s frame, the game's parent⁻¹·child (hkQsTransform::setMulInverseMul),
+    so that composing ``parent`` with the result gives ``child`` again."""
+    result = np.empty(np.broadcast_shapes(parent.shape, child.shape))
+    inverse = _unit(parent[..., 3:7]) * np.array([-1.0, -1.0, -1.0, 1.0])
+    result[..., 0:3] = _quat_rotate(inverse, child[..., 0:3] - parent[..., 0:3])
+    result[..., 3:7] = _unit(_quat_multiply(inverse, child[..., 3:7]))
+    result[..., 7:10] = _divide(child[..., 7:10], parent[..., 7:10], 1.0)
+    return result
+
+
+def _havok_model(local: np.ndarray, parents: np.ndarray) -> np.ndarray:
+    """(..., bones, 10) parent-relative transforms composed to model space the game's way."""
+    model = np.empty(np.shape(local))
+    for bone, parent in enumerate(parents):
+        model[..., bone, :] = (local[..., bone, :] if parent < 0
+                               else _compose(model[..., parent, :], local[..., bone, :]))
+    return model
+
+
+def _rigid(values: np.ndarray) -> np.ndarray:
+    """``values`` without their scale: Blender rest bones hold none."""
+    rigid = np.array(values, dtype=np.float64)
+    rigid[..., 7:10] = 1.0
+    return rigid
+
+
 def _quaternions(rotation: np.ndarray) -> np.ndarray:
     """(n, 3, 3) rotation matrices to (n, 4) quaternions in Blender's (w, x, y, z) order."""
     r = rotation
@@ -347,42 +428,84 @@ def _armature_to_game(reference_model, bones, armature_matrix) -> np.ndarray:
     return fitted
 
 
-def pose_bases(take: Take, samples: np.ndarray, armature_matrix, bones):
+def pose_bases(take: Take, samples: np.ndarray, armature_matrix, bones, key_scale: bool = False):
     """Pose-bone matrices (matrix_basis) for ``bones`` at every sample.
 
     ``bones`` are (rest matrix in armature space, take bone index, index of the bone's nearest
-    matched ancestor in the scene armature or -1). Yields one (frames, 4, 4) array per bone, so
-    a long recording never holds every bone's matrices at once."""
-    reference_local = _matrices(take.reference)
-    reference_model = _model_space(reference_local, take.parents)
-    armature_to_game = _armature_to_game(reference_model, bones, armature_matrix)
-    model_cache = {}
+    matched ancestor in the scene armature or -1). Yields, one bone at a time so that a long
+    recording never holds every bone's matrices at once, its (frames, 4, 4) bases and the
+    (frames, 3) scale Blender gives its matched ancestor, or None where that stays one.
+
+    A basis is the bone's change from the game's reference pose, relative to its ancestor, with
+    transforms combined the game's way (see `_compose`). With ``key_scale`` the ancestor's keyed
+    scale would also push the bone away from it, which the game never does, so the bone's
+    position is divided by that scale."""
+    reference_model = _havok_model(take.reference, take.parents)
+    rest_model = _matrices(_rigid(reference_model))
+    armature_to_game = _armature_to_game(rest_model, bones, armature_matrix)
+    scaled = key_scale and not np.allclose(samples[..., 7:10], 1.0, rtol=0.0, atol=SCALE_TOLERANCE)
+    model_cache, scale_cache = {}, {}
 
     def model(bone: int) -> np.ndarray:
         # Model space is only needed where the scene armature parents a bone differently.
         if bone not in model_cache:
             parent = int(take.parents[bone])
-            local = _matrices(samples[:, bone])
-            model_cache[bone] = local if parent < 0 else model(parent) @ local
+            local = samples[:, bone]
+            model_cache[bone] = local if parent < 0 else _compose(model(parent), local)
         return model_cache[bone]
+
+    def model_scale(bone: int) -> np.ndarray:
+        if bone not in scale_cache:
+            parent = int(take.parents[bone])
+            local = samples[:, bone, 7:10]
+            scale_cache[bone] = local if parent < 0 else model_scale(parent) * local
+        return scale_cache[bone]
 
     for rest, bone, ancestor in bones:
         if ancestor == take.parents[bone]:
-            delta = np.linalg.inv(reference_local[bone]) @ _matrices(samples[:, bone])
+            reference, pose = take.reference[bone], samples[:, bone]
+        elif ancestor < 0:
+            reference, pose = reference_model[bone], model(bone)
         else:
             # Take the game transform relative to the bone the armature parents it to.
-            if ancestor < 0:
-                reference, pose = reference_model[bone], model(bone)
+            reference = _relative(reference_model[ancestor], reference_model[bone])
+            pose = _relative(model(ancestor), model(bone))
+        inherited = None
+        if scaled and ancestor >= 0:
+            # The ancestor's keyed scales multiply up to its game scale relative to its reference.
+            inherited = _divide(model_scale(ancestor), reference_model[ancestor, 7:10], 1.0)
+            if np.allclose(inherited, 1.0, rtol=0.0, atol=SCALE_TOLERANCE):
+                inherited = None
             else:
-                reference = np.linalg.inv(reference_model[ancestor]) @ reference_model[bone]
-                pose = np.linalg.inv(model(ancestor)) @ model(bone)
-            delta = np.linalg.inv(reference) @ pose
+                pose = pose.copy()
+                pose[:, 0:3] = _divide(pose[:, 0:3], inherited, pose[:, 0:3])
+        delta = _matrices(_relative(reference, pose))
         # The pose bone's rest orientation as seen from the game bone. Only the linear part
         # is used: a rest pose built from other proportions only moves the bone's head.
         orientation = np.eye(4)
-        orientation[:3, :3] = (np.linalg.inv(reference_model[bone]) @ armature_to_game
+        orientation[:3, :3] = (np.linalg.inv(rest_model[bone]) @ armature_to_game
                                @ np.asarray(rest, dtype=np.float64))[:3, :3]
-        yield np.linalg.inv(orientation) @ delta @ orientation
+        yield np.linalg.inv(orientation) @ delta @ orientation, inherited
+
+
+def _scales_like_game(mode: str, inherited: np.ndarray) -> bool:
+    """Whether a bone whose Inherit Scale is ``mode`` scales like the game's while Blender scales
+    its parent by ``inherited`` (frames, 3). The game multiplies the parent's scale into the
+    child's along the child's own axes, as Aligned does; with even scaling, only the None modes
+    differ from it."""
+    if mode == "ALIGNED":
+        return True
+    uneven = float(np.ptp(inherited, axis=-1).max()) > SCALE_TOLERANCE * max(1.0, float(np.abs(inherited).max()))
+    return not uneven and mode not in ("NONE", "NONE_LEGACY")
+
+
+def _set_inherit_scale(armature, name: str, mode: str) -> None:
+    armature.data.bones[name].inherit_scale = mode
+    if armature.mode == "EDIT":
+        # Leaving Edit Mode writes the edit bones back over the bones.
+        edit_bone = armature.data.edit_bones.get(name)
+        if edit_bone is not None:
+            edit_bone.inherit_scale = mode
 
 
 # ----------------------------------------------------------------------
@@ -519,7 +642,8 @@ def apply_take(take: Take, context=None) -> dict:
     fps = scene.render.fps / scene.render.fps_base
     offsets, samples = resample(take.times, take.samples, fps)
     bases = pose_bases(take, samples, armature.matrix_world,
-                       [(bone.matrix_local, position, ancestor) for bone, position, ancestor in matched])
+                       [(bone.matrix_local, position, ancestor) for bone, position, ancestor in matched],
+                       key_scale=take.key_scale)
     count = len(offsets)
 
     frame_start = scene.frame_start
@@ -538,11 +662,15 @@ def apply_take(take: Take, context=None) -> dict:
     animation_data.action = action
     linear = _linear_interpolation()
     skipped = []
+    aligned = []  # (bone name, the Inherit Scale it had)
     try:
-        for (bone, _position, _ancestor), basis in zip(matched, bases):
+        for (bone, _position, _ancestor), (basis, inherited) in zip(matched, bases):
             if not np.isfinite(basis).all():
                 skipped.append(bone.name)
                 continue
+            if inherited is not None and not _scales_like_game(bone.inherit_scale, inherited):
+                aligned.append((bone.name, bone.inherit_scale))
+                _set_inherit_scale(armature, bone.name, "ALIGNED")
             location, rotation, scale = _decompose(basis)
             pose_bone = armature.pose.bones[bone.name]
             _key(action, armature, bone.name, "location", frames, location, linear)
@@ -552,6 +680,8 @@ def apply_take(take: Take, context=None) -> dict:
                 _key(action, armature, bone.name, "scale", frames, scale, linear)
     except Exception:
         # Leave the armature as it was: its previous action, or none at all.
+        for name, mode in aligned:
+            _set_inherit_scale(armature, name, mode)
         animation_data.action = previous_action
         if previous_action is not None and previous_slot is not None:
             animation_data.action_slot = previous_slot
@@ -594,6 +724,8 @@ def apply_take(take: Take, context=None) -> dict:
         "missingBones": missing[:24],
         "skippedBones": skipped[:24],
         "keyedScale": bool(take.key_scale),
+        "alignedBoneCount": len(aligned),
+        "alignedBones": [name for name, _mode in aligned][:24],
     }
 
 
@@ -603,4 +735,6 @@ def summary(result: dict) -> str:
             f'{result["matchedBones"]} bones, frames {result["frameStart"]}-{result["frameEnd"]}')
     if result["missingBoneCount"]:
         text += f'; {result["missingBoneCount"]} game bones are not in the armature'
+    if result.get("alignedBoneCount"):
+        text += f'; {result["alignedBoneCount"]} bones now inherit scale Aligned, as in the game'
     return text

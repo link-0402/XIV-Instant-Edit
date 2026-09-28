@@ -118,7 +118,8 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                     clip.BindingIndex >= doc.Container->Animations.Length)
                     throw new InvalidDataException("The animation or skeleton selection is ambiguous.");
                 var expectedSource = clip.Resolution?.Selected?.Skeleton.Fingerprint ?? clip.SkeletonFingerprint;
-                sourceDescription = AnimationSkeleton.SelectSource(AnimationSkeleton.DescribeSources(skeletonDoc.Root, skeletonDoc.Container), expectedSource);
+                sourceDescription = AnimationSkeleton.SelectSource(skeletonDoc.Container, expectedSource,
+                    clip.Resolution?.Selected?.Source.LeadingBones ?? 0);
                 var sourceSkeleton = AnimationSkeleton.Materialize(sourceDescription, arena);
                 originalBinding = doc.Container->Bindings[clip.BindingIndex].ptr;
                 originalAnimation = originalBinding->Animation.ptr;
@@ -126,18 +127,22 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                     throw new InvalidDataException("The selected animation binding changed. Refresh the capture.");
                 if (doc.Container->Animations[clip.BindingIndex].ptr != originalAnimation)
                     throw new InvalidDataException("PAP animation and binding order disagree.");
-                // Repair maps source bone names onto the complete live rig. YAS
-                // and other inserted helpers can shift numeric indices even when
-                // every original game bone is still present.
+                // Repair maps source bone names onto a standard skeleton (the game's
+                // own, IVCS or IVCS + YAS), never the live rig: skeleton mods that
+                // pile every group into one rig move bones to indices far beyond what
+                // other players' skeletons have, and sync plugins refuse such files.
+                // Bones the chosen standard lacks are left out by that choice.
                 targetDescription = request.Operation == AnimationOperation.RepairSkeleton
-                    ? clip.TargetSkeleton ?? throw new InvalidDataException("The live target skeleton is unavailable.")
+                    ? (request.RepairTarget is { } standard ? AnimationBones.Standard(clip, standard)?.Skeleton : null)
+                        ?? throw new InvalidDataException("The skeleton to repair onto was not found. Refresh the capture.")
                     : sourceDescription;
                 AnimationSkeleton.Validate(targetDescription);
                 // Unticked bones are named, so they resolve on whichever skeleton the
-                // output is written against - the source's own, or the live rig on repair.
+                // output is written against - the source's own, or the standard on repair.
                 excluded = AnimationBones.Indices(targetDescription, request.ExcludedBones);
                 retarget = sourceDescription.Fingerprint == targetDescription.Fingerprint ? null :
-                    new AnimationRetarget(sourceDescription, targetDescription, AnimationSkeleton.Channels(originalBinding));
+                    new AnimationRetarget(sourceDescription, targetDescription, AnimationSkeleton.Channels(originalBinding),
+                        dropMissing: request.Operation == AnimationOperation.RepairSkeleton);
                 skeleton = retarget == null ? sourceSkeleton : AnimationSkeleton.Materialize(targetDescription, arena);
                 sampler = new AnimationNative.Sampler(sourceSkeleton, originalBinding);
                 var rawBinding = arena.BorrowBinding(originalBinding);
@@ -208,6 +213,9 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 {
                     AnimationNative.CheckTransform(values[i]);
                     if (!AnimationNative.Near(values[i], mappedValues[i], 0.000001f)) affected.Add(i);
+                    // A kept bone the source never tracked still moves when a moving bone
+                    // the target lacks sat above it; only a track keeps that motion.
+                    if (retarget != null && !AnimationNative.Near(mappedValues[i], skeleton->ReferencePose[i], 0.000001f)) affected.Add(i);
                     if (frame > 0 && Quaternion.Dot(AnimationNative.Rotation(expected[^1][i]), AnimationNative.Rotation(values[i])) < 0)
                     { var q = AnimationNative.Rotation(values[i]); fixed (hkQsTransformf* p = &values[i]) AnimationNative.SetRotation(p, new Quaternion(-q.X, -q.Y, -q.Z, -q.W)); }
                 }
@@ -234,14 +242,8 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             var tracks = new List<short>(retarget?.MapTracks(sourceTracks) ?? sourceTracks);
             if (tracks.Distinct().Count() != tracks.Count) throw new InvalidDataException("Duplicate track bindings are unsupported.");
             tracks.AddRange(affected.Order().Where(i => !tracks.Contains((short)i)).Select(i => (short)i));
-            // Repair retargets onto the live rig, which usually has far more bones than
-            // the source ever animated (YAS/IVCS physics and prop chains). Left without
-            // any track at all, those bones are whatever the game's own bone-physics
-            // system makes of an undriven reference pose, which is where the reported
-            // warping comes from. Give every such bone an explicit, pinned reference
-            // track instead of omitting it.
-            if (retarget != null && request.Operation == AnimationOperation.RepairSkeleton)
-                tracks.AddRange(Enumerable.Range(0, skeleton->Bones.Length).Where(i => !tracks.Contains((short)i)).Select(i => (short)i));
+            // Bones the animation never moved get no track, repair included: a track per
+            // bone of the target skeleton would bind bones no animation should drive.
             // Unticked bones get no track at all, whatever added them above, so nothing
             // in this animation drives them and in-game physics can move them again.
             AnimationBones.Exclude(tracks, expected,

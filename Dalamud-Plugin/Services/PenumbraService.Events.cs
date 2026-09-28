@@ -68,7 +68,13 @@ public sealed partial class PenumbraService : IDisposable
     {
         _modSettingChanged?.Dispose();
         _gameObjectRedrawn?.Dispose();
+        _modAdded?.Dispose();
+        _modDeleted?.Dispose();
+        _modMoved?.Dispose();
         _modSettingChanged = null;
         _gameObjectRedrawn = null;
+        _modAdded = null;
+        _modDeleted = null;
+        _modMoved = null;
     }
 }

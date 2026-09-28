@@ -36,6 +36,7 @@ from .material_preview import (cleanup_preview_bundle, discard_preview_data,
 from .cache import create_job, finish_job
 from .diagnostics import record_failure, record_protocol_failure, record_remote_failure
 from .skeleton import create_armature, load_skeleton
+from . import racial_scaling
 
 
 # ---- Dalamud plugin HTTP transport ----
@@ -591,7 +592,7 @@ def _material_coverage_warning_message(missing_materials) -> str:
     if len(names) > 12:
         shown += f", +{len(names) - 12} more"
     return (
-        f"Warning: missing files for material{'s' if len(names) != 1 else ''}: {shown}. "
+        f"Warning: missing files for material{'s' if len(names) != 1 else ''} in this context: {shown}. "
         "Use Create Mashup to include them."
     )
 
@@ -718,6 +719,14 @@ def export_target_issues(
             issues.append((
                 "ERROR",
                 _named_readiness_issue("No bone weights", unweighted),
+            ))
+        scaled = racial_scaling.marks(export_objects)
+        if scaled:
+            issues.append((
+                "ERROR",
+                _named_readiness_issue(
+                    f"Racially scaled ({' and '.join(sorted(scaled))}) for preview only; re-import unscaled to export",
+                    [name for names in scaled.values() for name in names]),
             ))
         est_entries, est_issue = hair_skeleton_tags(export_objects)
         if est_issue:
@@ -1143,6 +1152,8 @@ class InstantImport(Operator):
     preview_manifest_path: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
     # The game skeleton the plugin sent (see skeleton.stage_skeleton); empty for placeholder bones.
     skeleton_path: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
+    # "c0201 to c0801" when the plugin sent the model racially scaled; stamped on every mesh.
+    racial_scaling: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
     cache_job_directory: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
 
     @classmethod
@@ -1240,6 +1251,7 @@ class InstantImport(Operator):
 
             for obj in imported_meshes:
                 tag_object(obj, context_metadata)
+            racial_scaling.mark(imported_meshes, self.racial_scaling)
 
             props.game_path    = self.source_game_path
             props.object_index = self.object_index
@@ -1390,6 +1402,8 @@ class InstantImport(Operator):
             obj.parent = armature_obj
             modifier   = obj.modifiers.new(name="Armature", type="ARMATURE")
             modifier.object = armature_obj
+        # Keep the bones out of the viewport; the hidden armature still deforms its meshes.
+        armature_obj.hide_set(True)
         return skeleton_error or report.summary()
 
 
@@ -2503,7 +2517,11 @@ def detected_attribute_group_tags(context: Context) -> tuple[str, ...]:
 
 
 def raise_unless_exportable(export_objects) -> None:
-    """Refuse meshes the game cannot use: faces must be triangles and meshes need bone weights."""
+    """Refuse meshes the game cannot use: faces must be triangles and meshes need bone weights.
+    Racially scaled meshes are refused too: they are sent for preview only."""
+    refusal = racial_scaling.quick_export_refusal(export_objects)
+    if refusal:
+        raise ValueError(refusal)
     flush_edit_mode(export_objects)
     not_triangulated = check_triangulation(export_objects)
     if not_triangulated:

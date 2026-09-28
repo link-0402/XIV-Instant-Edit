@@ -1,4 +1,4 @@
-"""Vertex Data tools, export requirements, Pose tools, shortcuts and the listener retry."""
+"""Vertex Data tools, hidden vertex removal, export requirements, Pose tools, shortcuts and the listener retry."""
 
 import importlib
 import re
@@ -9,6 +9,7 @@ from pathlib import Path
 
 import bpy
 import numpy as np
+from mathutils import Vector
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from blender_fixtures import addon_session, temporary_scene_data
@@ -175,6 +176,13 @@ def check_vertex_data_tools() -> None:
         flow_bytes = streams[0][1]["flow"].view(np.uint8)
         require(not np.any(np.all(flow_bytes == np.array((127, 127, 127, 255), np.uint8), axis=1)),
                 "a flow direction still exports as a direction")
+        plain = part("0.0 No Flow", armature)
+        second = part("0.1 Second Flow", armature)
+        colour_layer(second, "xiv_flow", (1.0, 0.5, 1.0, 1.0))
+        _model, streams, _path = export([plain, second], folder, "mixed")
+        zero_rows = np.all(streams[0][1]["flow"].view(np.uint8) == np.array((127, 127, 127, 255), np.uint8), axis=1)
+        require(zero_rows.any() and not zero_rows.all(),
+                "a later part's flow exports even when the mesh's first part has none")
 
         legacy = part("0.0 Legacy", armature, uv_names=("UVMap",))
         byte_colour = colour_layer(legacy, "vc0", (0.25, 0.5, 0.75, 0.5), data_type="BYTE_COLOR")
@@ -201,6 +209,233 @@ def check_vertex_data_tools() -> None:
             require(not bpy.ops.xiv_ie.vertex_data.poll(), "the vertex data tools wait for Object Mode")
         finally:
             bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def material(name: str, *, culled: bool = True, alpha: float = 1.0):
+    result = bpy.data.materials.new(name)
+    if result.node_tree is None:
+        result.use_nodes = True
+    result.use_backface_culling = culled
+    principled = next(node for node in result.node_tree.nodes if node.type == "BSDF_PRINCIPLED")
+    principled.inputs["Alpha"].default_value = alpha
+    return result
+
+
+def box(centre, half, *, open_top: bool = False):
+    """A box's vertices and outward-facing quads; ``half`` is a size or a size per axis."""
+    half = (half, half, half) if isinstance(half, (int, float)) else half
+    points = [
+        tuple(c + s * h for c, s, h in zip(centre, (sx, sy, sz), half))
+        for sz in (-1, 1) for sy in (-1, 1) for sx in (-1, 1)
+    ]
+    faces = [(0, 2, 3, 1), (0, 1, 5, 4), (2, 6, 7, 3), (0, 4, 6, 2), (1, 3, 7, 5)]
+    if not open_top:
+        faces.append((4, 5, 7, 6))
+    return points, faces
+
+
+def grid(z: float, half: float = 1.0, cells: int = 10, *, up: bool = True):
+    """A square grid at height ``z`` facing up or down."""
+    coords = np.linspace(-half, half, cells + 1).tolist()
+    points = [(x, y, z) for y in coords for x in coords]
+    faces = []
+    for row in range(cells):
+        for column in range(cells):
+            corner = row * (cells + 1) + column
+            quad = (corner, corner + 1, corner + cells + 2, corner + cells + 1)
+            faces.append(quad if up else quad[::-1])
+    return points, faces
+
+
+def mesh_object(name: str, *pieces, surface=None, location=(0.0, 0.0, 0.0)):
+    points, faces = [], []
+    for piece_points, piece_faces in pieces:
+        faces += [tuple(index + len(points) for index in face) for face in piece_faces]
+        points += piece_points
+    mesh = bpy.data.meshes.new(name)
+    mesh.from_pydata(points, [], faces)
+    mesh.update()
+    if surface is not None:
+        mesh.materials.append(surface)
+    obj = bpy.data.objects.new(name, mesh)
+    obj.location = location
+    bpy.context.scene.collection.objects.link(obj)
+    bpy.context.view_layer.update()
+    return obj
+
+
+def remove_hidden(*objects, **options) -> set:
+    select_only(*objects)
+    options.setdefault("margin", 0)
+    return bpy.ops.xiv_ie.remove_hidden_vertices(**options)
+
+
+def check_remove_hidden_vertices() -> None:
+    with temporary_scene_data():
+        opaque = material("Opaque")
+        two_sided = material("Two Sided", culled=False)
+        sheer = material("Sheer", alpha=0.5)
+
+        with temporary_scene_data():
+            nested = mesh_object("0.0 Nested", box((0, 0, 0), 1.0), box((0, 0, 0), 0.3), surface=opaque)
+            require(remove_hidden(nested, hidden_by="SELF") == {"FINISHED"}
+                    and len(nested.data.vertices) == 8 and len(nested.data.polygons) == 6
+                    and all(max(abs(value) for value in vertex.co) == 1.0 for vertex in nested.data.vertices),
+                    "a box sealed inside the same mesh is removed and the shell stays")
+
+        with temporary_scene_data():
+            shell = mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=opaque)
+            inner = mesh_object("0.1 Inner", box((0, 0, 0), 0.3), surface=opaque)
+            require(remove_hidden(inner, hidden_by="SELF") == {"FINISHED"} and len(inner.data.vertices) == 8,
+                    "Only Itself ignores the other meshes")
+            require(remove_hidden(inner, hidden_by="VISIBLE") == {"FINISHED"} and len(inner.data.vertices) == 0,
+                    "Visible Meshes removes a mesh another mesh encloses")
+            shell.hide_set(True)
+            other = mesh_object("0.2 Other", box((0, 0, 0), 0.2), surface=opaque)
+            remove_hidden(other)
+            require(len(other.data.vertices) == 8, "a mesh hidden in the viewport hides nothing")
+
+        for label, up, surface, kept in (
+            ("a face turned towards an opening", True, opaque, 25),
+            ("a face whose culled back is all that the opening shows", False, opaque, 0),
+            ("a two-sided face whose back the opening shows", False, two_sided, 25),
+        ):
+            with temporary_scene_data():
+                mesh_object("0.0 Cup", box((0, 0, 0), 1.0, open_top=True), surface=opaque)
+                plane = mesh_object("0.1 Plane", grid(-0.5, 0.5, 4, up=up), surface=surface)
+                remove_hidden(plane)
+                require(len(plane.data.vertices) == kept, f"{label} keeps {kept} of 25 vertices")
+
+        for label, surface, transparent in (("a see-through material", sheer, False),
+                                            ("a mesh sorted for transparency", opaque, True)):
+            with temporary_scene_data():
+                shell = mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=surface)
+                shell["xiv_transparency"] = transparent
+                inner = mesh_object("0.1 Inner", box((0, 0, 0), 0.3), surface=opaque)
+                remove_hidden(inner)
+                require(len(inner.data.vertices) == 8, f"{label} hides nothing")
+
+        for label, flip in (("a mannequin on the same spot", False), ("a Backfaces copy", True)):
+            with temporary_scene_data():
+                body = mesh_object("0.0 Body", box((0, 0, 0), 0.5), surface=opaque)
+                copy = mesh_object("Mannequin", box((0, 0, 0), 0.5), surface=opaque)
+                if flip:
+                    copy.data.flip_normals()
+                remove_hidden(body)
+                require(len(body.data.vertices) == 8, f"{label} does not hide a mesh")
+
+        with temporary_scene_data():
+            skin = mesh_object("0.0 Skin", grid(0.0), surface=opaque)
+            mesh_object("0.1 Cover", box((-0.7, 0.0, 0.2), (0.8, 1.5, 0.3)), surface=opaque)
+            data = skin.data
+            normals = [Vector((vertex.co.x * 0.3, vertex.co.y * 0.3, 1.0)).normalized() for vertex in data.vertices]
+            data.normals_split_custom_set_from_vertices(normals)
+            uv = data.uv_layers.new(name="uv0")
+            for loop in data.loops:
+                uv.uv[loop.index].vector = data.vertices[loop.vertex_index].co.xy
+            group = skin.vertex_groups.new(name="j_kosi")
+            for vertex in data.vertices:
+                group.add([vertex.index], (vertex.co.x + 1.0) / 2.0, "REPLACE")
+            skin.shape_key_add(name="Basis")
+            lowered = skin.shape_key_add(name="shp_low")
+            for point in lowered.data:
+                point.co.z -= 0.05
+
+            require(remove_hidden(skin, margin=2) == {"FINISHED"}
+                    and len(data.vertices) == 88 and min(vertex.co.x for vertex in data.vertices) > -0.41,
+                    "a margin of two rings of covered vertices stays next to the visible ones")
+            require(remove_hidden(skin, margin=0) == {"FINISHED"} and len(data.vertices) == 66
+                    and len(data.polygons) == 50 and min(vertex.co.x for vertex in data.vertices) > -0.01,
+                    "only vertices whose faces are all covered go; the faces the cover's edge crosses stay")
+            corner_normals = [Vector(normal.vector) for normal in data.corner_normals]
+            require(all(
+                (corner_normals[loop.index]
+                 - Vector((data.vertices[loop.vertex_index].co.x * 0.3,
+                           data.vertices[loop.vertex_index].co.y * 0.3, 1.0)).normalized()).length < 1e-3
+                for loop in data.loops), "the remaining custom normals are unchanged")
+            uv = data.uv_layers["uv0"]
+            require(all((Vector(uv.uv[loop.index].vector) - data.vertices[loop.vertex_index].co.xy).length < 1e-6
+                        for loop in data.loops), "the remaining UVs are unchanged")
+            require(all(abs(group.weight(vertex.index) - (vertex.co.x + 1.0) / 2.0) < 1e-6 for vertex in data.vertices),
+                    "the remaining weights are unchanged")
+            require(all(abs(point.co.z - (vertex.co.z - 0.05)) < 1e-6
+                        for point, vertex in zip(data.shape_keys.key_blocks["shp_low"].data, data.vertices)),
+                    "the remaining shape key offsets are unchanged")
+
+        with temporary_scene_data():
+            mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=opaque)
+            inner = mesh_object("0.1 Inner", box((0, 0, 0), 0.3), surface=opaque)
+            inner.shape_key_add(name="Basis")
+            outside = inner.shape_key_add(name="shp_out")
+            for point in outside.data:
+                point.co.x += 3.0
+            remove_hidden(inner)
+            require(len(inner.data.vertices) == 8, "a shp_ shape key that brings vertices into view keeps them")
+            outside.name = "Sculpt Helper"
+            remove_hidden(inner)
+            require(len(inner.data.vertices) == 0, "shape keys the game never applies do not count")
+
+        with temporary_scene_data():
+            shell = mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=opaque)
+            shell.shape_key_add(name="Basis")
+            away = shell.shape_key_add(name="shp_open")
+            for point in away.data:
+                point.co.z += 5.0
+            inner = mesh_object("0.1 Inner", box((0, 0, 0), 0.3), surface=opaque)
+            remove_hidden(inner)
+            require(len(inner.data.vertices) == 8, "a shp_ shape key that moves the cover away keeps what it covers")
+
+        with temporary_scene_data():
+            mesh_object("0.0 Shell LOD1", box((0, 0, 0), 1.0), surface=opaque)
+            inner = mesh_object("0.1 Inner", box((0, 0, 0), 0.3), surface=opaque)
+            remove_hidden(inner)
+            require(len(inner.data.vertices) == 8, "another LOD's meshes do not hide a part")
+
+        with temporary_scene_data():
+            shell = mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=opaque)
+            shell.scale = (-1.0, 1.0, 1.0)
+            bpy.context.view_layer.update()
+            inner = mesh_object("0.1 Inner", box((0, 0, 0), 0.3), surface=opaque)
+            remove_hidden(inner)
+            require(len(inner.data.vertices) == 0, "a mirrored mesh still hides what it encloses")
+
+        with temporary_scene_data():
+            mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=opaque)
+            inner = mesh_object("0.1 Inner", box((0, 0, 0), 0.3), surface=opaque)
+            twin = bpy.data.objects.new("0.2 Twin", inner.data)
+            twin.location = (5.0, 0.0, 0.0)
+            bpy.context.scene.collection.objects.link(twin)
+            bpy.context.view_layer.update()
+            remove_hidden(inner)
+            require(len(inner.data.vertices) == 8, "a mesh another object shows in the open keeps its vertices")
+
+        with temporary_scene_data():
+            mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=opaque)
+            first = mesh_object("0.1 Inner A", box((-0.5, 0, 0), 0.2), surface=opaque)
+            second = mesh_object("0.2 Inner B", box((0.5, 0, 0), 0.2), surface=opaque)
+            select_only(first, second)
+            require(bpy.ops.xiv_ie.remove_hidden_vertices(
+                part_only=True, mesh_group=0, mesh_part=1, margin=0) == {"FINISHED"}
+                and len(first.data.vertices) == 0 and len(second.data.vertices) == 8,
+                "the right-click entry cleans only its own part")
+            require(remove_hidden(first, second) == {"FINISHED"} and len(second.data.vertices) == 0,
+                    "the Tools button cleans every selected mesh")
+            first.select_set(False)
+            second.select_set(False)
+            try:
+                outcome = str(bpy.ops.xiv_ie.remove_hidden_vertices())
+            except RuntimeError as error:
+                outcome = str(error)
+            require("Select the meshes" in outcome, "the Tools button asks for a selection when there is none")
+
+        with temporary_scene_data():
+            obj = mesh_object("0.0 Edited", box((0, 0, 0), 0.3), surface=opaque)
+            select_only(obj)
+            bpy.ops.object.mode_set(mode="EDIT")
+            try:
+                require(not bpy.ops.xiv_ie.remove_hidden_vertices.poll(), "removing hidden vertices waits for Object Mode")
+            finally:
+                bpy.ops.object.mode_set(mode="OBJECT")
 
 
 def check_export_requirements() -> None:
@@ -262,23 +497,34 @@ def check_pose_tools() -> None:
         body = part("0.0 Posed Body", armature)
         walk = bpy.data.actions.new("Walk")
         unrelated = bpy.data.actions.new("Unrelated")
+        imported = bpy.data.actions.new("Imported Walk")
+        fbx = bpy.data.actions.new("GameSkeleton|GameSkeleton.001|GameSkeleton|FF Walk")
         try:
             data = armature.animation_data_create()
-            data.action = walk
-            curve = walk.fcurve_ensure_for_datablock(armature, 'pose.bones["j_kosi"].location', index=0)
-            curve.keyframe_points.insert(1, 0.0)
-            curve.keyframe_points.insert(20, 1.0)
+            for action in (walk, imported, fbx):
+                data.action = action
+                curve = action.fcurve_ensure_for_datablock(armature, 'pose.bones["j_kosi"].location', index=0)
+                curve.keyframe_points.insert(1, 0.0)
+                curve.keyframe_points.insert(20, 1.0)
             data.action = None
             other_data = other.animation_data_create()
             other_data.action = unrelated
             other_curve = unrelated.fcurve_ensure_for_datablock(other, 'pose.bones["j_other"].location', index=0)
             other_curve.keyframe_points.insert(1, 0.0)
             other_data.action = None
+            # Like MagicFit's Customize+ rig: a hidden copy whose Action constraints play fixed values.
+            rig_bone = rig("C+ Pose Rig").pose.bones["j_kosi"]
+            carry = rig_bone.constraints.new("ACTION")
+            carry.action = imported
 
             select_only(body)
             context = bpy.context
             require(pose.pose_armature(context) == armature, "the Pose section finds the active mesh's armature")
-            require(pose.pose_actions(armature) == [walk], "only actions that key the armature's bones are offered")
+            require(pose.pose_actions(armature) == [walk],
+                    "only actions that key the armature's bones are offered, and not those a rig's constraints play")
+            rig_bone.constraints.remove(carry)
+            require(pose.pose_actions(armature) == [imported, walk],
+                    "actions made outside the plugin, such as static poses, are offered too, but not FBX imports")
             context.scene.frame_set(50)
             require(bpy.ops.xiv_ie.show_pose_action(action="Walk") == {"FINISHED"}
                     and armature.animation_data.action == walk
@@ -295,12 +541,23 @@ def check_pose_tools() -> None:
                     and armature.animation_data.action is None and walk.use_fake_user,
                     "taking an action off keeps it from being discarded on save")
 
+            require(not bpy.ops.xiv_ie.delete_pose_action.poll(), "there is nothing to delete without a shown action")
+            require(bpy.ops.xiv_ie.show_pose_action(action="Walk") == {"FINISHED"}, "the action is shown again")
+            context.scene.frame_set(20)
+            require(armature.pose.bones["j_kosi"].location.x > 0.5, "the shown action poses the bone")
+            require(bpy.ops.xiv_ie.delete_pose_action() == {"FINISHED"}
+                    and "Walk" not in bpy.data.actions and armature.animation_data.action is None
+                    and tuple(armature.pose.bones["j_kosi"].location) == (0.0, 0.0, 0.0)
+                    and "Imported Walk" in bpy.data.actions,
+                    "deleting removes the shown action despite its fake user and puts its bones back at rest")
+
             context.scene.xiv_ie_settings.pose_armature = other
             require(pose.pose_armature(context) == other, "a chosen armature wins over the detected one")
             context.scene.xiv_ie_settings.pose_armature = None
         finally:
-            for action in (walk, unrelated):
-                if action.name in bpy.data.actions:
+            for name in ("Walk", "Unrelated", "Imported Walk", fbx.name):
+                action = bpy.data.actions.get(name)
+                if action is not None:
                     bpy.data.actions.remove(action)
 
 
@@ -354,6 +611,7 @@ def check_ui_icons() -> None:
 def run() -> None:
     with addon_session(PACKAGE):
         check_vertex_data_tools()
+        check_remove_hidden_vertices()
         check_export_requirements()
         check_pose_tools()
         check_shortcuts()

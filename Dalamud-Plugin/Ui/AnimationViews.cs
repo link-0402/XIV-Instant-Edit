@@ -9,7 +9,10 @@ internal enum AnimationGroup
 {
     /// <summary> Playing now, each followed by the startup that leads into it. </summary>
     Playing,
-    /// <summary> Played earlier with a matched skeleton, so it can still be sent or edited. </summary>
+    /// <summary>
+    /// Played earlier with a matched skeleton, so it can still be sent or edited, or with several
+    /// fitting equally well, so the one it was made for can still be chosen.
+    /// </summary>
     Recent,
 }
 
@@ -31,7 +34,7 @@ internal sealed record AnimationRow(AnimationCapture Capture, bool Startup, Anim
 /// <summary> Builds and searches the Animations tab's rows. No ImGui or Dalamud dependencies. </summary>
 internal static class AnimationRows
 {
-    /// <summary> What is playing, each followed by its startup, then recent animations with a matched skeleton. </summary>
+    /// <summary> What is playing, each followed by its startup, then recent animations with a matched or ambiguous skeleton. </summary>
     public static ImmutableArray<AnimationRow> Build(IEnumerable<AnimationCapture> history)
     {
         var rows = ImmutableArray.CreateBuilder<AnimationRow>();

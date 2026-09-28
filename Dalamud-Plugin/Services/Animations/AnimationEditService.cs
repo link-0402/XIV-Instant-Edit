@@ -211,12 +211,9 @@ internal sealed class AnimationEditService : IDisposable
             throw new InvalidDataException(conflict);
         if (request.Capture.UnavailableReason != null) throw new InvalidOperationException(request.Capture.UnavailableReason);
         if (request.IncludeStartup && request.Capture.Startup == null) throw new InvalidOperationException("No unique startup was identified.");
-        // Plain PAP rebakes use only the explicitly selected source skeleton
-        // and never touch the current rig. Repair retargets onto the live
-        // skeleton (to rebuild tracks around inserted bones like YAS's), so
-        // it needs a live-skeleton staleness guard.
-        var requiresLiveSkeleton = request.Operation == AnimationOperation.RepairSkeleton;
-        await CheckActorAsync(request.Capture, requiresLiveSkeleton);
+        // Rebakes use only the selected source skeleton and, on repair, a standard
+        // skeleton; none of them touches the current rig.
+        await CheckActorAsync(request.Capture, false);
         if (request.Operation == AnimationOperation.BakeOffsets) await framework.RunOnFrameworkThread(() => poses.ValidateRoundTrip(request.Capture.Pose));
         await resources.CheckAsync(request.Capture.CollectionId, request.Capture.Sources, token);
         Status = "Capturing effective animation sources and dependencies…";
@@ -225,6 +222,11 @@ internal sealed class AnimationEditService : IDisposable
             if (clip.Resolution is { } resolution &&
                 (resolution.Selected == null || resolution.State != SkeletonResolutionState.Matched))
                 throw new InvalidOperationException(resolution.Reason ?? "Choose a compatible processing skeleton first.");
+        if (request.Operation == AnimationOperation.RepairSkeleton &&
+            clips.FirstOrDefault(clip => request.RepairTarget is not { } target || AnimationBones.Standard(clip, target) == null) is { } unrepairable)
+            throw new InvalidOperationException(request.RepairTarget is { } missing
+                ? $"No {AnimationBones.StandardName(missing)} skeleton was found for {unrepairable.GamePath}."
+                : "Choose the skeleton to repair onto first.");
         await resources.CheckSkeletonsAsync(request.Capture, clips, token);
         var packagedPaths = clips.Select(clip => clip.GamePath).Distinct(StringComparer.Ordinal).ToArray();
         AnimationDependencyManifest manifest;
@@ -246,7 +248,7 @@ internal sealed class AnimationEditService : IDisposable
         var dir = journals.DirectoryFor(request.Id); Directory.CreateDirectory(dir);
         foreach (var clip in clips.Distinct())
         {
-            await CheckActorAsync(request.Capture, requiresLiveSkeleton);
+            await CheckActorAsync(request.Capture, false);
             var source = outputs.TryGetValue(clip.GamePath, out var prior) ? prior : manifest.Files[clip.GamePath];
             var skeletonBytes = clip.Resolution?.Selected is { } selected
                 ? (await resources.ReadSkeletonAsync(request.Capture.CollectionId, selected.Source, token)).Bytes
@@ -255,7 +257,6 @@ internal sealed class AnimationEditService : IDisposable
                 () =>
                 {
                     CheckIdentityOnFramework(request.Capture, true);
-                    if (requiresLiveSkeleton) AnimationRuntime.CheckPartial(objects, request.Capture.Clip);
                     if (request.Operation == AnimationOperation.BakeOffsets) poses.CheckModule(request.Capture.Pose);
                 });
         }
@@ -263,13 +264,9 @@ internal sealed class AnimationEditService : IDisposable
         recovery = recovery.Insert(0, journal);
         await commits.CommitAsync(journal, manifest, async () =>
         {
-            await CheckActorAsync(request.Capture, requiresLiveSkeleton);
+            await CheckActorAsync(request.Capture, false);
             await resources.CheckSkeletonsAsync(request.Capture, clips, token);
-            await framework.RunOnFrameworkThread(() =>
-            {
-                CheckIdentityOnFramework(request.Capture, true);
-                if (requiresLiveSkeleton) AnimationRuntime.CheckPartial(objects, request.Capture.Clip);
-            });
+            await framework.RunOnFrameworkThread(() => CheckIdentityOnFramework(request.Capture, true));
         }, message =>
         {
             Status = message;

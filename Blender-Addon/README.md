@@ -63,7 +63,8 @@ Everything is in the **IE - Instant Edit** tab of the 3D Viewport's sidebar (pre
 - To reorder, click a part's or group's grip, move the pointer, and click again to drop it. The
   list shows the new order under the pointer; parts whose material doesn't match their group turn
   red.
-- Right-click a part's name for **Generate Duplicate with Backfaces**.
+- Right-click a part's name for **Generate Duplicate with Backfaces**, or for **Remove Hidden
+  Vertices** on that part alone.
 - New meshes join a group by name: `group.part Name`, for example `2.1 Collar`, as in Yet Another
   Addon. **Tools > Move Mesh IDs to Front** converts TexTools' `Collar 2.1` names.
 
@@ -84,9 +85,11 @@ Everything is in the **IE - Instant Edit** tab of the 3D Viewport's sidebar (pre
 - **Backups**: tick the header box to keep a copy of a model before an export replaces it. The
   list imports or restores them.
 - **Tools**: **Vertex Data**, like TexTools' Modify Model Vertices (clear UV2 or copy UV1 into it,
-  clear vertex colors or their alpha, clear hair flow, on the selected meshes), **Combine
-  Armatures**, the mesh naming helpers, **Clear All Contexts**, and the cache and diagnostics
-  folders.
+  clear vertex colors or their alpha, clear hair flow, on the selected meshes), **Remove Hidden
+  Vertices** (deletes what no camera angle can see on the selected meshes, such as skin under a
+  top; its redo panel chooses whether other visible meshes can hide them and how many rings of
+  hidden vertices stay at the edges), **Combine Armatures**, the mesh naming helpers, **Clear All
+  Contexts**, and the cache and diagnostics folders.
 
 ### Also
 

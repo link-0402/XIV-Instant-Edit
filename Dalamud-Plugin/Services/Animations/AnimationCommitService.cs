@@ -87,7 +87,13 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
     internal static AnimationBakeRequest RecoveryRequest(AnimationBakeRequest request)
     {
         AnimationClip Compact(AnimationClip clip) => clip.Resolution is { } resolution ? clip with
-        { Resolution = resolution with { Candidates = resolution.Selected is { } selected ? [selected] : [] } } : clip;
+        {
+            Resolution = resolution with
+            {
+                Candidates = resolution.Selected is { } selected ? [selected] : [],
+                Standards = [.. resolution.Standards.Where(s => s.Standard == request.RepairTarget)],
+            },
+        } : clip;
         return request with { Capture = request.Capture with { Clip = Compact(request.Capture.Clip),
             Startup = request.Capture.Startup == null ? null : Compact(request.Capture.Startup) } };
     }

@@ -151,7 +151,7 @@ public sealed class Plugin : IDalamudPlugin
             animationError = "Animation integration is unavailable: " + error.Message;
             log.Warning(error, "Could not initialize animation editing; other features remain available.");
         }
-        _recorder = new AnimationRecorder(framework, objects, clientState, targets);
+        _recorder = new AnimationRecorder(framework, objects, clientState, targets, new CustomizePlusPause(pi, framework, log));
         _exportServer = new ExportServer(_config, _penumbra, _contexts, log);
         var painterStore = new Services.Painter.PainterJobStore(configDirectory);
         painterStore.Load();
@@ -197,6 +197,8 @@ public sealed class Plugin : IDalamudPlugin
         _gameFiles = new GameFileBrowserService(data, log);
         _gameExport = new GameFileExportService(_gameFiles, skeletons, log, BlenderClient.CurrentPluginVersion);
         _window.AttachGameFiles(_gameFiles, _gameExport);
+        // Neck seam checks and preview mods; open previews are remembered in the config folder.
+        _window.AttachNeckSeam(new Services.NeckSeam.NeckSeamService(_penumbra, data, log, configDirectory, () => _config.RecompressTextures));
         // Automatic cache cleanup also removes old exports from the cache's export folder.
         _textures.AdditionalCacheCleanup = () =>
         {
@@ -245,6 +247,10 @@ public sealed class Plugin : IDalamudPlugin
         _commands.AddHandler("/ie", new CommandInfo(OnCommand)
         {
             HelpMessage = "Opens the XIV Instant Edit window. Use /ie refresh to refresh the on-screen list.",
+        });
+        _commands.AddHandler("/iesettings", new CommandInfo((_, _) => _settingsWindow.Open())
+        {
+            HelpMessage = "Opens the XIV Instant Edit settings.",
         });
 
         try
@@ -341,6 +347,7 @@ public sealed class Plugin : IDalamudPlugin
     public void Dispose()
     {
         _commands.RemoveHandler("/ie");
+        _commands.RemoveHandler("/iesettings");
         _pi.UiBuilder.Draw -= _windowSystem.Draw;
         _pi.UiBuilder.Draw -= _setupWindow.DrawFileDialog;
         _pi.UiBuilder.Draw -= _toolSetup.DrawFileDialog;

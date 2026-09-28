@@ -69,6 +69,8 @@ internal static class AnimationBonesFixture
         check(untouched.SequenceEqual(new short[] { 3, 0, 2 }) && AnimationSkeleton.Transform(frames[0][3]) == T(13),
             "a rebake with nothing unticked changes no track and no expected sample");
 
+        Standards(check);
+
         var temp = Path.Combine(Path.GetTempPath(), "ie-animated-bones-regression-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(temp);
         try
@@ -96,5 +98,84 @@ internal static class AnimationBonesFixture
                 "an older journal loads with no bones left out and no recorded tracks");
         }
         finally { Directory.Delete(temp, true); }
+    }
+
+    /// <summary>
+    /// The shapes found in real skeleton mods, shrunk: the game's own skeleton ends with
+    /// n_hara_noanim_trans, IVCS appends iv_ bones and carries that game bone last, YAS
+    /// appends ya_ bones after IVCS's and lacks it, and an all-in-one rig like NFLB + YAS
+    /// moves IVCS's physics bones, YAS's bones and n_hara_noanim_trans far behind its own.
+    /// </summary>
+    internal static class Rigs
+    {
+        static BoneTransform T(float x) => new(new(x, 0, 0), Quaternion.Identity, Vector3.One);
+        static SkeletonDescription S(string fingerprint, params string[] names) => new("skeleton", fingerprint,
+            [.. names.Select((name, i) => new SkeletonBone(name, (short)(i == 0 ? -1 : 0), 0, T(i)))], [], [], []);
+        public static readonly string[] Legacy = ["n_root", "n_hara", "j_kosi", "j_sebo_a", "j_kubi", "j_kao"];
+        public static readonly SkeletonDescription Game = S("game", [.. Legacy, "n_hara_noanim_trans"]);
+        public static readonly SkeletonDescription Ivcs = S("ivcs", [.. Legacy, "iv_ko_c_l", "iv_shiri_l", "iv_kyokin_phys_l", "n_hara_noanim_trans"]);
+        public static readonly SkeletonDescription Yas = S("yas", [.. Legacy, "iv_ko_c_l", "iv_shiri_l", "iv_kyokin_phys_l", "ya_shiri_phys_l"]);
+        public static readonly SkeletonDescription AllInOne = S("nflb", [.. Legacy, "iv_ko_c_l", "iv_shiri_l", "nf_ear_a", "nf_ear_b",
+            "iv_kyokin_phys_l", "nf_tail", "ya_shiri_phys_l", "n_hara_noanim_trans"]);
+    }
+
+    private static void Standards(Action<bool, string> check)
+    {
+        var game = Rigs.Game;
+        check(AnimationBones.IsStandardLayout(game, game, SkeletonStandard.Vanilla) &&
+              AnimationBones.IsStandardLayout(Rigs.Ivcs, game, SkeletonStandard.Ivcs) &&
+              AnimationBones.IsStandardLayout(Rigs.Yas, game, SkeletonStandard.IvcsYas),
+            "the game's skeleton, IVCS with the game's late bone last, and YAS without it are standard layouts");
+        check(!AnimationBones.IsStandardLayout(Rigs.Ivcs, game, SkeletonStandard.IvcsYas) &&
+              !AnimationBones.IsStandardLayout(Rigs.Yas, game, SkeletonStandard.Ivcs) &&
+              !AnimationBones.IsStandardLayout(Rigs.Ivcs, game, SkeletonStandard.Vanilla),
+            "a layout counts only as the standard whose bone groups it has");
+        check(Enum.GetValues<SkeletonStandard>().All(s => !AnimationBones.IsStandardLayout(Rigs.AllInOne, game, s)),
+            "an all-in-one rig with bones outside every group is no standard layout");
+        var shuffled = Rigs.Ivcs with { Fingerprint = "shuffled", Bones = [Rigs.Ivcs.Bones[0], Rigs.Ivcs.Bones[6], .. Rigs.Ivcs.Bones.RemoveAt(6).Skip(1)] };
+        check(!AnimationBones.IsStandardLayout(shuffled, game, SkeletonStandard.Ivcs),
+            "iv_ bones placed among the game's bones move them off the game's indices, so the layout is refused");
+
+        var resource = new AnimationResource("chara/human/c0801/animation/a0001/bt_common/emote/pose05_loop.pap", "idle.pap", "hash");
+        var source = new SkeletonCandidate(new(SkeletonSourceKind.Mod, resource), Rigs.AllInOne, 0, "");
+        StandardSkeleton[] all = [new(SkeletonStandard.Vanilla, game, "Game data"), new(SkeletonStandard.Ivcs, Rigs.Ivcs, "IVCS"),
+            new(SkeletonStandard.IvcsYas, Rigs.Yas, "YAS")];
+        // An earlier repair onto the all-in-one live rig tracked every one of its bones.
+        var everyBone = new SkeletonResolution(SkeletonResolutionState.Matched, [source], source,
+            TrackBones: [.. Enumerable.Range(0, Rigs.AllInOne.Bones.Length).Select(i => (short)i)], Standards: [.. all]);
+        var clip = new AnimationClip(resource.GamePath, "loop", 0, 0, 1, "chara/human/c0801/skeleton/base/b0001/skl_c0801b0001.sklb", Resolution: everyBone);
+
+        check(AnimationBones.Outside(clip, SkeletonStandard.Vanilla)!.Value.SequenceEqual(
+                  ["iv_ko_c_l", "iv_shiri_l", "nf_ear_a", "nf_ear_b", "iv_kyokin_phys_l", "nf_tail", "ya_shiri_phys_l"]) &&
+              AnimationBones.Outside(clip, SkeletonStandard.Ivcs)!.Value.SequenceEqual(["nf_ear_a", "nf_ear_b", "nf_tail", "ya_shiri_phys_l"]) &&
+              AnimationBones.Outside(clip, SkeletonStandard.IvcsYas)!.Value.SequenceEqual(["nf_ear_a", "nf_ear_b", "nf_tail"]),
+            "each preset unticks the animated bones outside its groups, keeping the game's late bone as vanilla");
+        check(AnimationBones.Outside(clip with { Resolution = everyBone with { Standards = [] } }, SkeletonStandard.Vanilla) == null,
+            "presets are unavailable until the game's own skeleton names the vanilla bones");
+
+        var vanillaOnly = AnimationBones.Outside(clip, SkeletonStandard.Vanilla)!.Value;
+        check(AnimationBones.HighestIndex(clip, []) == 13 && AnimationBones.HighestIndex(clip, vanillaOnly) == 13,
+            "trimming in the source's own layout keeps the game's late bone at the all-in-one rig's high index");
+        check(AnimationBones.HighestIndex(clip, vanillaOnly.Add("n_hara_noanim_trans")) == 5 &&
+              AnimationBones.HighestIndex(clip, [.. AnimationBones.Animated(clip)]) == -1,
+            "the highest index follows the kept bones, and is -1 when none is kept");
+
+        check(AnimationBones.DefaultRepairTarget(clip, []) == SkeletonStandard.IvcsYas,
+            "with bones no standard has, repair defaults to the largest standard found");
+        check(AnimationBones.DefaultRepairTarget(clip, vanillaOnly) == SkeletonStandard.Vanilla &&
+              AnimationBones.DefaultRepairTarget(clip, AnimationBones.Outside(clip, SkeletonStandard.Ivcs)!.Value) == SkeletonStandard.Ivcs,
+            "after a preset, repair defaults to the smallest standard that has every kept bone");
+        check(AnimationBones.DefaultRepairTarget(clip with { Resolution = everyBone with { Standards = [] } }, []) == null,
+            "without standard skeletons there is no repair target");
+
+        var onVanilla = AnimationBones.Plan(clip, SkeletonStandard.Vanilla, [])!;
+        check(onVanilla.Kept.SequenceEqual([.. Rigs.Legacy, "n_hara_noanim_trans"]) && onVanilla.Dropped.Length == 7 && onVanilla.HighestIndex == 6,
+            "a repair onto the game's skeleton keeps its bones at the game's indices and leaves the rest out");
+        var onYas = AnimationBones.Plan(clip, SkeletonStandard.IvcsYas, ["iv_shiri_l"])!;
+        check(onYas.Kept.Length == 9 && !onYas.Kept.Contains("iv_shiri_l") && onYas.Dropped.SequenceEqual(["nf_ear_a", "nf_ear_b", "nf_tail", "n_hara_noanim_trans"]) &&
+              onYas.HighestIndex == 9,
+            "a repair onto IVCS + YAS moves YAS's bone back to its standard index, skips unticked bones and drops bones YAS lacks");
+        check(AnimationBones.Plan(clip with { Resolution = everyBone with { Standards = [all[0]] } }, SkeletonStandard.Ivcs, []) == null,
+            "a standard that was not found has no repair plan");
     }
 }

@@ -222,7 +222,7 @@ def _draw_hint(layout, context: Context, text: str, icon: str = "INFO") -> None:
 
 
 _MATERIAL_WARNING_RE = re.compile(
-    r"^(?P<prefix>Warning: missing files for materials?:) (?P<materials>.+)\. "
+    r"^(?P<prefix>Warning: missing files for materials? in this context:) (?P<materials>.+)\. "
     r"(?P<guidance>Use Create Mashup to include them\.)$"
 )
 
@@ -896,6 +896,11 @@ def draw_mesh_part_context_menu(self, context: Context) -> None:
     duplicate.mesh_group = button.mesh_group
     duplicate.mesh_part = button.mesh_part
     duplicate.mesh_part_instance = button.mesh_part_instance
+    remove = layout.operator("xiv_ie.remove_hidden_vertices", icon="HIDE_ON")
+    remove.part_only = True
+    remove.mesh_group = button.mesh_group
+    remove.mesh_part = button.mesh_part
+    remove.mesh_part_instance = button.mesh_part_instance
 
 
 def _draw_mesh_groups(layout, context: Context) -> None:
@@ -1056,8 +1061,9 @@ class XIVIE_PT_pose(Panel):
             return
 
         shown = shown_action(armature)
-        _split_row(column, "Action").menu(
-            "XIVIE_MT_pose_actions", text=shown.name if shown is not None else "No Action", icon="ACTION")
+        row = _split_row(column, "Action")
+        row.menu("XIVIE_MT_pose_actions", text=shown.name if shown is not None else "No Action", icon="ACTION")
+        row.operator("xiv_ie.delete_pose_action", text="", icon="TRASH")
         if shown is not None:
             start, end = (int(round(value)) for value in shown.frame_range)
             if end > start:
@@ -1274,6 +1280,7 @@ class XIVIE_PT_tools(Panel):
     def draw(self, context: Context) -> None:
         layout = self.layout
         layout.popover("XIVIE_PT_vertex_data_popover", text="Vertex Data", icon="GROUP_VCOL")
+        layout.operator("xiv_ie.remove_hidden_vertices", text="Remove Hidden Vertices", icon="HIDE_ON")
         layout.operator("xiv_ie.combine_armatures", text="Combine Armatures...", icon="ARMATURE_DATA")
         column = layout.column(align=True)
         column.operator("xiv_ie.convert_mesh_names", text="Move Mesh IDs to Front", icon="SORTALPHA")

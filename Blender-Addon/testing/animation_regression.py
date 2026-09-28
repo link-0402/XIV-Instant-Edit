@@ -138,10 +138,12 @@ def orientation_offsets(seed=11):
             for name in NAMES}
 
 
-def build_armature(name="Skeleton", world=Matrix.Identity(4), bones=None, parents=None, head_offsets=None):
-    """An armature whose rest pose is the game reference pose, with other bone orientations."""
+def build_armature(name="Skeleton", world=Matrix.Identity(4), bones=None, parents=None, head_offsets=None,
+                   game_axes=False):
+    """An armature whose rest pose is the game reference pose, with other bone orientations, or
+    with the game's own bone axes, as the add-on's imports have them."""
     reference_model = model_matrices([reference for _, _, reference in SKELETON])
-    offsets = orientation_offsets()
+    offsets = {name: Matrix.Identity(4) for name in NAMES} if game_axes else orientation_offsets()
     data = bpy.data.armatures.new(name + " Data")
     obj = bpy.data.objects.new(name, data)
     bpy.context.scene.collection.objects.link(obj)
@@ -201,6 +203,79 @@ def check_pose(obj, frame_values, bones, tolerance, message):
         worst_angle = max(worst_angle, angle_between(game_turn, scene_turn))
     require(worst_position < tolerance and worst_angle < tolerance,
             f"{message} (head error {worst_position:.2e}, angle error {worst_angle:.2e})")
+
+
+# The game's own way of combining bone transforms (Havok's hkQsTransform), written independently
+# of the add-on: a parent's scale multiplies the child's per axis and never moves the child.
+
+
+def split(values):
+    """A take transform as (position, turn, scale)."""
+    return Vector(values[0:3]), Quaternion((values[6], values[3], values[4], values[5])), Vector(values[7:10])
+
+
+def join(position, turn, scale):
+    return list(position) + [turn.x, turn.y, turn.z, turn.w] + list(scale)
+
+
+def havok_compose(parent, local):
+    (tp, qp, sp), (tl, ql, sl) = parent, local
+    return tp + qp @ tl, qp @ ql, Vector((sp.x * sl.x, sp.y * sl.y, sp.z * sl.z))
+
+
+def havok_relative(parent, child):
+    (tp, qp, sp), (tc, qc, sc) = parent, child
+    inverse = qp.inverted()
+    return (inverse @ (tc - tp), inverse @ qc,
+            Vector(c / p if abs(p) > 1e-8 else 1.0 for c, p in zip(sc, sp)))
+
+
+def havok_models(frame):
+    """A frame of take transforms composed to model space the game's way."""
+    models = []
+    for bone, parent in enumerate(PARENTS):
+        local = split(frame[bone])
+        models.append(local if parent < 0 else havok_compose(models[parent], local))
+    return models
+
+
+def customize(models, edits):
+    """Customize+'s edits in model space: a bone scales along its own axes and moves along its
+    turned axes, unscaled, while its children stay where they are."""
+    edited = list(models)
+    for name, (translation, scaling) in edits.items():
+        position, turn, scale = models[NAMES.index(name)]
+        edited[NAMES.index(name)] = (position + turn @ Vector(translation), turn,
+                                     Vector((scale.x * scaling[0], scale.y * scaling[1], scale.z * scaling[2])))
+    return edited
+
+
+def recorded(models):
+    """What the recorder reads: each bone relative to its parent, the game's way."""
+    return [join(*(models[bone] if parent < 0 else havok_relative(models[parent], models[bone])))
+            for bone, parent in enumerate(PARENTS)]
+
+
+def pose_errors(obj, models, bones, keyed_scale=True):
+    """How far pose bone heads are from the game joints, and bone axes from the game bone's axes,
+    scaled like them or unscaled when scale is not keyed. Needs an armature with the game's bone axes."""
+    worst_head = worst_axis = 0.0
+    for bone in bones:
+        position, turn, scale = models[NAMES.index(bone)]
+        if not keyed_scale:
+            scale = Vector((1.0, 1.0, 1.0))
+        expected = K @ Matrix.Translation(position) @ turn.to_matrix().to_4x4() @ Matrix.Diagonal((*scale, 1.0))
+        actual = obj.matrix_world @ obj.pose.bones[bone].matrix
+        worst_head = max(worst_head, (actual.to_translation() - expected.to_translation()).length)
+        for axis in range(3):
+            worst_axis = max(worst_axis, (actual.col[axis].xyz - expected.col[axis].xyz).length)
+    return worst_head, worst_axis
+
+
+def check_scaled_pose(obj, models, bones, tolerance, message, keyed_scale=True):
+    worst_head, worst_axis = pose_errors(obj, models, bones, keyed_scale)
+    require(worst_head < tolerance and worst_axis < tolerance,
+            f"{message} (head error {worst_head:.2e}, axis error {worst_axis:.2e})")
 
 
 # ----------------------------------------------------------------------
@@ -332,6 +407,98 @@ def run_conversion_cases(animation):
         require(any(curve.data_path.endswith(".scale") for curve in _fcurves(rig.animation_data.action)),
                 "scale is keyed when the take asks for it")
         scene.render.fps = 30
+
+
+# Uneven scaling like a Customize+ body template: (translation, scaling) per bone.
+CUSTOMIZE = {
+    "j_kosi": ((0.0, 0.0, 0.0), (1.0, 1.15, 1.1)),
+    "j_asi_a_l": ((0.01, 0.0, 0.01), (1.0, 1.36, 1.4)),
+    "j_asi_b_l": ((0.0, 0.01, 0.01), (1.0, 1.15, 1.29)),
+    "j_mune_l": ((0.0, 0.0, 0.0), (1.12, 1.55, 1.55)),
+}
+
+
+def run_scale_cases(animation):
+    scene = bpy.context.scene
+    scene.render.fps, scene.render.fps_base = 30, 1.0
+    scene.frame_start = 1
+    times, frames = moving_frames(31)
+    # A recording of a character whose bones something scales in model space after the animation:
+    # the scaled bones' children keep their places, so the recorded locals compensate.
+    customized = [customize(havok_models(frame), CUSTOMIZE) for frame in frames]
+    body = take_body(times=times, frames=[recorded(models) for models in customized], name="Scaled take", key_scale=True)
+    below_uneven = {"j_sebo_a", "j_asi_a_l", "j_asi_b_l", "j_asi_c_l"}
+
+    with temporary_scene_data():
+        rig = build_armature(game_axes=True)
+        result = animation.apply_take(animation.parse_take(body))
+        for frame in (1, 9, 31):
+            scene.frame_set(frame)
+            check_scaled_pose(rig, customized[frame - 1], NAMES, 2e-4,
+                              f"frame {frame} with keyed scale reproduces the game's scaled pose: joints where the game "
+                              "puts them and bone axes scaled like the game's")
+        aligned = {bone.name for bone in rig.data.bones if bone.inherit_scale == "ALIGNED"}
+        require(aligned == below_uneven and result["alignedBoneCount"] == len(below_uneven)
+                and set(result["alignedBones"]) == below_uneven and "inherit scale Aligned" in animation.summary(result),
+                "bones under an unevenly scaled parent, and only those, now inherit scale Aligned and the result says so")
+        for name in below_uneven:
+            rig.data.bones[name].inherit_scale = "FULL"
+        scene.frame_set(9)
+        _head, sheared = pose_errors(rig, customized[8], NAMES)
+        require(sheared > 1e-2, f"with Full inheritance those bones would scale unlike the game's (axis error {sheared:.2e})")
+
+    with temporary_scene_data():
+        rig = build_armature(game_axes=True)
+        unkeyed = take_body(times=times, frames=[recorded(models) for models in customized], name="Unscaled take")
+        result = animation.apply_take(animation.parse_take(unkeyed))
+        scene.frame_set(17)
+        check_scaled_pose(rig, customized[16], NAMES, 2e-4,
+                          "without keyed scale the joints still sit where the game puts them and bones turn like "
+                          "the game's, at their own scale", keyed_scale=False)
+        require(result["alignedBoneCount"] == 0 and all(bone.inherit_scale == "FULL" for bone in rig.data.bones),
+                "without keyed scale the armature's Inherit Scale is left alone")
+
+    with temporary_scene_data():
+        # A scale in the hips' local transform, as an animation track or a pose tool sets it: every
+        # bone below inherits it, axis by axis, without moving.
+        grown = [list(map(list, frame)) for frame in frames]
+        for frame in grown:
+            frame[NAMES.index("j_kosi")][7:10] = [1.2, 0.9, 1.1]
+        rig = build_armature(game_axes=True)
+        rig.data.bones["j_mune_l"].inherit_scale = "NONE"
+        result = animation.apply_take(animation.parse_take(take_body(times=times, frames=grown, name="Grown", key_scale=True)))
+        scene.frame_set(23)
+        check_scaled_pose(rig, havok_models(grown[22]), NAMES, 2e-4,
+                          "a scaled parent passes its scale down the way the game does, even to a bone set to "
+                          "inherit no scale")
+        require(result["alignedBoneCount"] == 5, "every bone under the unevenly scaled hips inherits scale Aligned")
+
+    with temporary_scene_data():
+        # The scene armature has no j_asi_b_l: its child hangs straight from the scaled thigh.
+        rig = build_armature(bones=[n for n in NAMES if n != "j_asi_b_l"], parents={"j_asi_c_l": "j_asi_a_l"},
+                             game_axes=True)
+        animation.apply_take(animation.parse_take(body))
+        scene.frame_set(5)
+        check_scaled_pose(rig, customized[4], [n for n in NAMES if n != "j_asi_b_l"], 2e-4,
+                          "a bone parented differently in the scene still gets the game's scaled pose")
+
+    with temporary_scene_data():
+        # Mod skeletons hide bones by scaling them to nothing, in the reference pose too.
+        references = [list(reference) for _, _, reference in SKELETON]
+        hidden = NAMES.index("j_sebo_a")
+        references[hidden][7:10] = [0.0, 0.0, 0.0]
+        vanished = [list(map(list, frame)) for frame in frames]
+        for frame in vanished:
+            frame[hidden][7:10] = [0.0, 0.0, 0.0]
+        rig = build_armature(game_axes=True)
+        animation.apply_take(animation.parse_take(
+            take_body(references=references, times=times, frames=vanished, name="Hidden bone", key_scale=True)))
+        scene.frame_set(12)
+        models = havok_models(vanished[11])
+        check_scaled_pose(rig, models, [n for n in NAMES if n not in ("j_sebo_a", "j_mune_l")], 2e-4,
+                          "a bone scaled to nothing in the reference pose doesn't break the take")
+        worst = max((rig.pose.bones[n].head - (K @ models[NAMES.index(n)][0])).length for n in ("j_sebo_a", "j_mune_l"))
+        require(worst < 2e-4, f"bones below a hidden bone keep their places (head error {worst:.2e})")
 
 
 def run_failure_cases(animation):
@@ -473,6 +640,7 @@ if __name__ == "__main__":
         server_module = importlib.import_module(f"{PACKAGE}.instant_edit.server")
         run_parse_cases(animation_module)
         run_conversion_cases(animation_module)
+        run_scale_cases(animation_module)
         run_failure_cases(animation_module)
         run_target_cases(animation_module)
         run_endpoint_cases(server_module)

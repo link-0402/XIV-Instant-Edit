@@ -81,6 +81,7 @@ internal static class TextureEditScenarios
             await VanillaVariantAsync(Path.Combine(root, "vanilla-variant"));
             await WatcherAsync(Path.Combine(root, "watcher"));
             await CacheCleanupAsync(Path.Combine(root, "cache-cleanup"));
+            await DiscardAllAsync(Path.Combine(root, "discard-all"));
             AtomicReplacement(Path.Combine(root, "atomic"));
             await PainterBatchAsync(Path.Combine(root, "painter"));
             PainterJobMod(Path.Combine(root, "painter-mod"));
@@ -455,6 +456,36 @@ internal static class TextureEditScenarios
             for (var i = 0; i < 20 && Directory.Exists(s.Directory); i++) await Task.Delay(100);
             Check(!Directory.Exists(s.Directory), "background cleanup removes stale paused texture sessions");
         }
+    }
+
+    /// <summary> Clean up all sessions removes every working folder; a session whose files are in use stays listed. </summary>
+    private static async Task DiscardAllAsync(string root)
+    {
+        using var f = new Fixture(root, (uint)TexFile.TextureFormat.BC7);
+        var firstId = await f.Service.StartAsync(f.Request, false);
+        var secondTarget = Path.Combine(f.Backend.ModRoot, "Files", "chara", "second.tex");
+        var secondId = await f.Service.StartAsync(new TextureEditRequest("chara/second.tex", secondTarget, "Mod", f.Backend.ModRoot,
+            "Files/chara/second.tex", null, 0), false);
+        await f.Service.SetPausedAsync(secondId, true);
+        var first = f.Service.Sessions.Single(s => s.Id == firstId);
+        var second = f.Service.Sessions.Single(s => s.Id == secondId);
+        File.WriteAllBytes(Path.Combine(second.Directory, "artist-source.psd"), [1, 2, 3]);
+
+        var locked = Path.Combine(first.Directory, "open-in-editor.psd");
+        IReadOnlyList<string> kept;
+        using (new FileStream(locked, FileMode.Create, FileAccess.ReadWrite, FileShare.None))
+            kept = await f.Service.DiscardAllAsync();
+        Check(kept.Count == 1 && kept[0].StartsWith("test.tex: ", StringComparison.Ordinal) &&
+              f.Service.Sessions.Select(s => s.Id).SequenceEqual([firstId]),
+            "clean up all reports a session whose files are in use and keeps it listed");
+        Check(!Directory.Exists(second.Directory), "clean up all deletes the other working folders, artist documents included");
+        using (var restored = new TextureEditService(f.Backend, f.Config, f.ConfigDir, f.Backups, (_, _) => { }, false))
+            Check(restored.Sessions.Select(s => s.Id).SequenceEqual([firstId]), "the catalog keeps only the session that stayed");
+
+        kept = await f.Service.DiscardAllAsync();
+        Check(kept.Count == 0 && f.Service.Sessions.Count == 0 && !Directory.Exists(first.Directory),
+            "cleaning up again once the files are closed removes the rest");
+        Check(File.Exists(f.Backend.Target) && File.Exists(secondTarget), "clean up all leaves the mod files alone");
     }
 
     /// <summary> Textures Substance Painter sends back are applied as one batch through their sessions. </summary>

@@ -18,13 +18,12 @@ AnimationSlotFixture.Run(Check);
 AnimationRenameFixture.Run(Check, Reject);
 AnimationBonesFixture.Run(Check);
 ChartSkeletonFixture.Run(Check);
-EmbeddedSkeletonFixture.Run(Check, Reject);
+MainSkeletonFixture.Run(Check, Reject);
 AnimationExportFixture.Run(Check, Reject);
 AnimationExportFixture.Presentation(Check);
 AnimationExportFixture.Rows(Check);
+AnimationExportFixture.RecordingScaleCases(Check);
 ModelSkeletonFixture.Run(Check, Reject);
-if (args is ["--skeleton-repair-xml", var animationXml, var skeletonXml])
-    EmbeddedSkeletonFixture.InspectXml(animationXml, skeletonXml, Check);
 // Writes the fixture take as the plugin sends it, for reading back in Blender.
 if (args is ["--write-sample-take", var takePath])
     File.WriteAllBytes(takePath, AnimationTakeFormat.Write(AnimationExportFixture.SampleTake(), "Skeleton", false, "1.2.4"));
@@ -176,6 +175,14 @@ var resolvingCurrent = unavailable with { Id = "resolving", Playing = true, Star
 var listItems = AnimationPresentation.ListItems([standing, resolvingCurrent, recentReady, unavailable]);
 Check(listItems.Length == 4 && !listItems[0].Startup && listItems[1].Startup && listItems[2].Capture.Id == "resolving" && listItems[3].SeparatorBefore,
     "animation list shows active rows immediately while keeping unresolved recent clips hidden");
+// A clip several skeletons fit equally well waits for a choice, which must outlast its playback.
+var recentAmbiguous = recentReady with { Id = "ambiguous", Clip = recentReady.Clip with
+{ Resolution = new(SkeletonResolutionState.Ambiguous, [presentationCandidate, presentationCandidate]) } };
+var recentIncompatible = recentReady with { Id = "incompatible", Clip = recentReady.Clip with
+{ Resolution = new(SkeletonResolutionState.Incompatible, []) } };
+Check(AnimationPresentation.ListItems([recentAmbiguous, recentIncompatible]) is [{ Capture.Id: "ambiguous", Startup: false }] &&
+      AnimationPresentation.Listed(recentAmbiguous) && !AnimationPresentation.Listed(recentIncompatible) && !AnimationPresentation.Ready(recentAmbiguous),
+    "a recent clip awaiting a skeleton choice stays listed and selectable, an incompatible one does not");
 var waitingStartup = standing with { Startup = standing.Startup! with { Resolution = new(SkeletonResolutionState.Searching, []) } };
 Check(AnimationPresentation.ListItems([waitingStartup]) is [{ Startup: false }, { Startup: true }],
     "a detected startup remains visible with its active loop while its skeleton is prepared");
@@ -471,6 +478,21 @@ try
     Check(!Enum.IsDefined(legacyLoaded.Request.Operation) &&
           legacyLoaded.Files.Single() is { RelativePath: "files/pose-1/chara/x.pap", AfterHash: "after", RenamedFromRelativePath: null },
         "journals written by removed animation operations still load for undo");
+    // Records moved out of an older version's cache (issue #8) must still pass the undo's
+    // staging check, which wants their staged outputs in the record's new folder.
+    var legacyRoot = Path.Combine(temp, "legacy-cache");
+    var legacyFolder = Path.Combine(legacyRoot, "AnimationEdits", request.Id.ToString("N"));
+    Directory.CreateDirectory(legacyFolder);
+    legacyJournal["Files"]![0]!["Staged"] = Path.Combine(legacyFolder, "0.staged");
+    File.WriteAllText(Path.Combine(legacyFolder, "journal.json"), legacyJournal.ToJsonString());
+    File.WriteAllBytes(Path.Combine(legacyFolder, "0.staged"), papBytes);
+    var migratedRoot = Path.Combine(temp, "migrated-config");
+    AnimationJournalStore.ImportLegacy(legacyRoot, migratedRoot);
+    var migratedStore = new AnimationJournalStore(migratedRoot);
+    var migratedStaged = migratedStore.Load().Single().Files.Single().Staged;
+    Check(!Directory.Exists(legacyFolder) && File.Exists(migratedStaged) &&
+          migratedStaged == Path.Combine(migratedStore.DirectoryFor(request.Id), "0.staged"),
+        "journals moved out of the cache point at their staged outputs in the config folder");
     var file = Path.Combine(temp, "test.pap"); File.WriteAllBytes(file, papBytes);
     var backups = new ModelBackupStore(temp); var backup = backups.Create(file, "test", "files/test.pap");
     var target = backups.Describe("test", "files/test.pap");

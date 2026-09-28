@@ -1,7 +1,12 @@
-"""Wires the listener, the dock and Painter's events together. Runs on Painter's main thread."""
+"""Wires the listener, the dock and Painter's events together. Runs on Painter's main thread.
+
+Calls to Instant Edit run on worker threads, since each waits up to its timeout for an answer;
+their results come back to the main thread through the timer.
+"""
 
 import os
 import queue
+import threading
 import time
 import traceback
 import uuid
@@ -40,6 +45,10 @@ class Plugin:
         self.pending = None
         self.pending_deadline = 0.0
         self.send = None
+        # A Send between the button and Instant Edit taking the textures (linking, exporting).
+        self.sending = False
+        # (callback, result, error) of finished worker calls, run by the timer.
+        self.results = queue.Queue()
 
     # Lifecycle -----------------------------------------------------------------------------
 
@@ -87,6 +96,17 @@ class Plugin:
     def _ports(self, job) -> list:
         return client.candidate_ports(job.callback_port, self.settings.plugin_port)
 
+    def _in_background(self, call, done) -> None:
+        """Runs call() on a worker thread, then done(result, error) on the main thread."""
+        def work():
+            try:
+                result, error = call(), None
+            except Exception as caught:
+                result, error = None, caught
+            self.results.put((done, result, error))
+
+        threading.Thread(target=work, name="xiv-instant-edit-call", daemon=True).start()
+
     def _log(self, text: str, error: bool = False) -> None:
         (logging.error if error else logging.info)("XIV Instant Edit: " + text)
         if self.panel is not None:
@@ -104,11 +124,17 @@ class Plugin:
             "projectOpen": is_open,
             "jobId": self.job.job_id if self.job is not None else "",
             "settingUp": self.pending is not None,
-            "sending": self.send is not None,
+            "sending": self.sending or self.send is not None,
         })
 
     def _tick(self) -> None:
         try:
+            while True:
+                try:
+                    done, result, error = self.results.get_nowait()
+                except queue.Empty:
+                    break
+                done(result, error)
             if self.pending is not None and time.monotonic() > self.pending_deadline:
                 job, self.pending = self.pending, None
                 self._report_setup(job, False, "Painter did not finish loading the mesh in time.")
@@ -196,10 +222,13 @@ class Plugin:
             "files": [{"key": key, "path": path} for key, path in (files or [])],
             "painterVersion": _painter_version(), "pluginVersion": self.settings.version,
         }
-        try:
-            client.call(self._ports(job), "/painter/baseline", payload)
-        except (client.PluginUnavailable, client.PluginRefused) as error:
-            self._log(f"Could not reach Instant Edit: {error}", error=True)
+        ports = self._ports(job)
+
+        def done(_result, error) -> None:
+            if error is not None:
+                self._log(f"Could not reach Instant Edit: {error}", error=True)
+
+        self._in_background(lambda: client.call(ports, "/painter/baseline", payload), done)
 
     # Existing projects ---------------------------------------------------------------------
 
@@ -216,6 +245,7 @@ class Plugin:
     def _on_project_closing(self, _event) -> None:
         self.job = None
         self.send = None
+        self.sending = False
         if self.panel is not None:
             self.panel.set_job(None)
             self.panel.set_busy(False)
@@ -225,28 +255,32 @@ class Plugin:
         self.job = state
         self.panel.set_job(state.display_name if state is not None else None)
         if state is not None:
-            try:
-                self._attach(state)
-                self._log("Linked to Instant Edit.")
-            except (client.PluginUnavailable, client.PluginRefused) as error:
-                self._log(str(error), error=True)
+            self._attach(state, lambda error: self._log(str(error), error=True) if error is not None
+                         else self._log("Linked to Instant Edit."))
 
-    def _attach(self, state) -> None:
+    def _attach(self, state, then) -> None:
+        """Links the project to Instant Edit in the background; then(error or None) runs afterwards."""
         payload = {
             "schema": "instant-edit.painter-attach", "version": 1,
             "jobId": state.job_id, "capability": state.capability,
             "projectPath": project.file_path() or "",
             "painterVersion": _painter_version(), "pluginVersion": self.settings.version,
         }
-        _, _, body = client.call(self._ports(state), "/painter/attach", payload, timeout=3.0)
-        job_dir = body.get("jobDir")
-        if isinstance(job_dir, str) and job_dir:
-            state.job_dir = job_dir
+        ports = self._ports(state)
+
+        def done(result, error) -> None:
+            if error is None:
+                job_dir = result[2].get("jobDir")
+                if isinstance(job_dir, str) and job_dir:
+                    state.job_dir = job_dir
+            then(error)
+
+        self._in_background(lambda: client.call(ports, "/painter/attach", payload, timeout=3.0), done)
 
     # Sending -------------------------------------------------------------------------------
 
     def send_to_game(self) -> None:
-        if self.send is not None:
+        if self.sending or self.send is not None:
             self._log("A send is still being applied.")
             return
         state = self.job or self._current_job()
@@ -254,59 +288,89 @@ class Plugin:
             self._log("This project was not opened from Instant Edit.", error=True)
             return
         self.job = state
-        try:
-            self._attach(state)
-        except (client.PluginUnavailable, client.PluginRefused) as error:
-            self._log(str(error), error=True)
+        self.sending = True
+        self.panel.set_busy(True)
+        self.panel.set_status("Linking to Instant Edit…")
+        self._attach(state, lambda error: self._confirm_and_export(state, error))
+
+    def _confirm_and_export(self, state, error) -> None:
+        if error is not None or not self.sending or state is not self.job:
+            # Unreachable, or the project closed while linking.
+            self._stop_sending(str(error) if error is not None else "")
             return
         missing = painter_job.missing_base_layers(state)
         if missing and not self.panel.confirm(
                 "XIV Instant Edit",
                 "The \"XIV original\" layer was deleted in: " + ", ".join(missing) + ".\n\n"
                 "Those textures will be replaced by only what is painted now. Send anyway?"):
+            self._stop_sending("")
             return
-        self.panel.set_busy(True)
         self.panel.set_status("Exporting textures…")
         project.execute_when_not_busy(lambda: self._export_and_send(state))
+
+    def _stop_sending(self, error: str) -> None:
+        self.sending = False
+        if self.panel is not None:
+            self.panel.set_busy(False)
+            self.panel.set_status("")
+        if error:
+            self._log(error, error=True)
 
     def _export_and_send(self, state) -> None:
         send_id = uuid.uuid4().hex
         try:
             files = painter_job.run_export(state, os.path.join(state.job_dir, "export", send_id))
-            payload = {
-                "schema": "instant-edit.painter-send", "version": 1,
-                "jobId": state.job_id, "capability": state.capability, "sendId": send_id,
-                "files": [{"key": key, "path": path} for key, path in files],
-            }
-            port, _, _ = client.call(self._ports(state), "/painter/send", payload, timeout=10.0)
         except Exception as error:
-            self.panel.set_busy(False)
-            self.panel.set_status("")
-            self._log(f"Send failed: {error}", error=True)
+            self._stop_sending(f"Send failed: {error}")
             return
-        now = time.monotonic()
-        self.send = {"id": send_id, "job": state, "ports": [port], "next_poll": now + POLL_INTERVAL_SECONDS,
-                     "deadline": now + SEND_TIMEOUT_SECONDS}
-        self.panel.set_status("Applying in game…")
+        payload = {
+            "schema": "instant-edit.painter-send", "version": 1,
+            "jobId": state.job_id, "capability": state.capability, "sendId": send_id,
+            "files": [{"key": key, "path": path} for key, path in files],
+        }
+        ports = self._ports(state)
+
+        def done(result, error) -> None:
+            if error is not None:
+                self._stop_sending(f"Send failed: {error}")
+                return
+            self.sending = False
+            now = time.monotonic()
+            self.send = {"id": send_id, "job": state, "ports": [result[0]], "next_poll": now + POLL_INTERVAL_SECONDS,
+                         "deadline": now + SEND_TIMEOUT_SECONDS, "polling": False}
+            self.panel.set_busy(True)
+            self.panel.set_status("Applying in game…")
+
+        self._in_background(lambda: client.call(ports, "/painter/send", payload, timeout=10.0), done)
 
     def _poll_send(self) -> None:
         send = self.send
-        send["next_poll"] = time.monotonic() + POLL_INTERVAL_SECONDS
+        if send["polling"]:
+            return
+        send["polling"] = True
         state = send["job"]
         payload = {"schema": "instant-edit.painter-send-status", "version": 1,
                    "jobId": state.job_id, "capability": state.capability, "sendId": send["id"]}
-        try:
-            _, _, body = client.call(send["ports"], "/painter/send/status", payload, timeout=3.0)
-        except (client.PluginUnavailable, client.PluginRefused) as error:
-            if time.monotonic() > send["deadline"]:
-                self._finish_send(f"Lost contact with Instant Edit: {error}", [], failed=True)
-            return
-        if body.get("state") == "pending":
-            if time.monotonic() > send["deadline"]:
-                self._finish_send("Instant Edit is still applying the textures; check its Sessions tab.", [], failed=True)
-            return
-        self._finish_send(str(body.get("message") or ""), body.get("results") or [],
-                          failed=body.get("state") != "done")
+        ports = send["ports"]
+
+        def done(result, error) -> None:
+            send["polling"] = False
+            send["next_poll"] = time.monotonic() + POLL_INTERVAL_SECONDS
+            if self.send is not send:
+                return  # The project closed meanwhile.
+            if error is not None:
+                if time.monotonic() > send["deadline"]:
+                    self._finish_send(f"Lost contact with Instant Edit: {error}", [], failed=True)
+                return
+            body = result[2]
+            if body.get("state") == "pending":
+                if time.monotonic() > send["deadline"]:
+                    self._finish_send("Instant Edit is still applying the textures; check its Sessions tab.", [], failed=True)
+                return
+            self._finish_send(str(body.get("message") or ""), body.get("results") or [],
+                              failed=body.get("state") != "done")
+
+        self._in_background(lambda: client.call(ports, "/painter/send/status", payload, timeout=3.0), done)
 
     def _finish_send(self, message: str, results: list, failed: bool) -> None:
         self.send = None

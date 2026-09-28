@@ -1,5 +1,6 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
@@ -11,6 +12,17 @@ namespace InstantEdit.Ui;
 /// <summary>Dedicated Dalamud configuration surface; kept separate from model selection.</summary>
 public sealed class SettingsWindow : Window
 {
+    private enum SettingsTab { Editors, Cache, Interface, Advanced }
+
+    // Most important first: the editors files are handed to, where the files live, display toggles, then ports.
+    private static readonly (SettingsTab Tab, FontAwesomeIcon Icon, string Label)[] Tabs =
+    [
+        (SettingsTab.Editors, FontAwesomeIcon.Tools, "Editors"),
+        (SettingsTab.Cache, FontAwesomeIcon.Hdd, "Cache"),
+        (SettingsTab.Interface, FontAwesomeIcon.Desktop, "Interface"),
+        (SettingsTab.Advanced, FontAwesomeIcon.Plug, "Advanced"),
+    ];
+
     private readonly Configuration _config;
     private readonly Action _saveConfig;
     private readonly Action _restartExportListener;
@@ -23,6 +35,7 @@ public sealed class SettingsWindow : Window
     private string? _animationError;
     private DateTime? _savedSkeletonLibrary;
     private int? _pendingListenPort;
+    private SettingsTab _tab;
 
     internal SettingsWindow(Configuration config, Action saveConfig, Action restartExportListener, IPluginLog log,
         Action requestCacheSynchronization, Action openSetup, ToolSetupViews tools, string cacheStartupError = "")
@@ -36,12 +49,14 @@ public sealed class SettingsWindow : Window
         _openSetup = openSetup;
         _tools = tools;
         _cacheStartupError = cacheStartupError;
+        // A cache that failed to open blocks most features, so Settings opens where it is fixed.
+        _tab = cacheStartupError.Length > 0 ? SettingsTab.Cache : SettingsTab.Editors;
 
-        Size = new Vector2(600, 480);
+        Size = new Vector2(640, 520);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(520, 360),
+            MinimumSize = new Vector2(560, 380),
             MaximumSize = new Vector2(1000, 900),
         };
         AllowPinning = true;
@@ -68,94 +83,124 @@ public sealed class SettingsWindow : Window
     public override void Draw()
     {
         ImGui.TextColored(Theme.Accent, "XIV INSTANT EDIT SETTINGS");
-        ImGui.TextColored(Theme.Muted, "Connection and export preferences");
+        ImGui.TextColored(Theme.Muted, "Changes are saved as you make them.");
         ImGui.Spacing();
-        if (ImGui.Button("Run first-time setup again"))
-        {
-            IsOpen = false;
-            _openSetup();
+        if (DrawTabs())
             return;
-        }
-        ImGui.SameLine();
-        Widgets.Hint("Review the cache, Blender, texture editor and Substance Painter setup.");
+        ImGui.Separator();
         ImGui.Spacing();
-        ImGui.Separator(); ImGui.Text("Connections");
-        var blenderPort = _config.BlenderPort; if (ImGui.InputInt("Blender port", ref blenderPort)) { _config.BlenderPort = blenderPort; Save(); }
-        ImGui.TextWrapped("Model editing requires Blender. Texture editing works after its cache has synchronized once.");
-        var listenPort = _pendingListenPort ?? _config.ListenPort;
-        if (ImGui.InputInt("Listener port", ref listenPort, 0, 0)) _pendingListenPort = listenPort;
-        // Restart once the field is left, not for every digit typed on the way to the new port.
-        if (ImGui.IsItemDeactivatedAfterEdit() && _pendingListenPort is { } port)
+
+        using var body = ImRaii.Child("##settings-tab", Vector2.Zero, false);
+        if (!body.Success)
+            return;
+        switch (_tab)
         {
-            _pendingListenPort = null;
-            if (port != _config.ListenPort)
-            {
-                _config.ListenPort = port;
-                Save();
-                RestartListener();
-                try { Services.Painter.PainterInstallation.UpdatePorts(_config.PainterPort, _config.ListenPort); }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _log.Debug(e.Message); }
-            }
+            case SettingsTab.Cache: DrawCacheTab(); break;
+            case SettingsTab.Interface: DrawInterfaceTab(); break;
+            case SettingsTab.Advanced: DrawAdvancedTab(); break;
+            default: DrawEditorsTab(); break;
         }
-        Widgets.Hint("Quick Export writes back to the model's original Penumbra mod.");
-        ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Blender add-on");
+    }
+
+    /// <summary> The tab row, with the setup wizard's button at its right edge. Returns true when the wizard was opened instead. </summary>
+    private bool DrawTabs()
+    {
+        for (var i = 0; i < Tabs.Length; i++)
+        {
+            if (i > 0)
+                ImGui.SameLine(0, Theme.Gap);
+            if (Widgets.TabButton(Tabs[i].Icon, Tabs[i].Label, _tab == Tabs[i].Tab))
+                _tab = Tabs[i].Tab;
+        }
+
+        const string setup = "Run setup again";
+        ImGui.SameLine();
+        var start = ImGui.GetWindowContentRegionMax().X - ImGui.CalcTextSize(setup).X - ImGui.GetStyle().FramePadding.X * 2;
+        if (start > ImGui.GetCursorPosX())
+            ImGui.SetCursorPosX(start);
+        var open = ImGui.Button(setup);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Review the cache, Blender, texture editor and Substance Painter setup.");
+        if (!open)
+            return false;
+        IsOpen = false;
+        _openSetup();
+        return true;
+    }
+
+    // ---- Editors ---------------------------------------------------------------------------
+
+    private void DrawEditorsTab()
+    {
+        Widgets.SectionHeader("Blender", "model editing");
+        Widgets.MutedWrapped("Model editing requires Blender with the XIV Instant Edit add-on. Quick Export writes back to the model's original Penumbra mod.");
+        ImGui.Spacing();
         _tools.DrawBlender();
-        ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Texture editing");
+
+        Divider();
+        Widgets.SectionHeader("Texture editor", "texture editing");
+        Widgets.MutedWrapped("Open a texture, edit it, then save your changes to the same file (in place, as a 32-bit TGA with alpha). " +
+                             "Texture editing works after the cache has synchronized once.");
+        ImGui.Spacing();
         _tools.DrawTextureEditors(_config.TextureEditorPath, path => { _config.TextureEditorPath = path; Save(); });
-        ImGui.TextWrapped("Open a texture, edit it, then save your changes to the same file (in-place as a 32-bit TGA with alpha).");
-        ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Substance Painter");
+
+        Divider();
+        Widgets.SectionHeader("Substance Painter", "optional");
         _tools.DrawPainter(advanced: true);
-        ImGui.Spacing(); ImGui.Separator(); ImGui.Text("On Screen");
-        var autoRefresh = _config.AutoRefreshOnScreen;
-        if (ImGui.Checkbox("Refresh automatically when Penumbra or Glamourer changes", ref autoRefresh)) { _config.AutoRefreshOnScreen = autoRefresh; Save(); }
-        Widgets.Hint("Reloads the on-screen list a second after a mod setting changes or a character is redrawn.");
-        ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Previews");
-        var thumbnails = _config.RenderModelThumbnails;
-        if (ImGui.Checkbox("Render model thumbnails on hover", ref thumbnails)) { _config.RenderModelThumbnails = thumbnails; Save(); }
-        Widgets.Hint("Draws a small shaded view of Dawntrail (V6) models in the hover card. Textures and materials always preview.");
-        ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Notifications");
-        var showNotifications = _config.ShowNotifications;
-        if (ImGui.Checkbox("Show notifications", ref showNotifications)) { _config.ShowNotifications = showNotifications; Save(); }
-        Widgets.Hint("Warnings, errors and model handoff results also appear as Dalamud notifications, even while the window is closed.");
-        ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Cache");
-        var cacheDirectory = _config.TextureCacheDirectory;
-        ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputTextWithHint("Cache directory", "Base folder shared by the in-game plugin and Blender add-on", ref cacheDirectory, 4096))
-        {
-            _config.TextureCacheDirectory = cacheDirectory.Trim().Trim('"');
-            Save();
-            try { _requestCacheSynchronization(); }
-            catch (Exception e) { _log.Debug(e.Message); }
-        }
-        var automaticCleanup = _config.AutomaticCacheCleanup;
-        if (ImGui.Checkbox("Automatic cache cleanup", ref automaticCleanup))
-        {
-            _config.AutomaticCacheCleanup = automaticCleanup;
-            Save();
-            try { _requestCacheSynchronization(); }
-            catch (Exception e) { _log.Debug(e.Message); }
-        }
-        ImGui.TextWrapped("When enabled, completed model cache jobs and inactive texture-edit sessions older than 24 hours are removed, " +
-                          "and Game Files exports in the cache folder after 7 days. Active sessions and unsaved texture edits are kept.");
-        try { ImGui.TextWrapped($"Managed cache: {TextureFiles.CacheRootFor(_config.TextureCacheDirectory)}"); }
-        catch (Exception e) { ImGui.TextWrapped($"Cache directory is invalid: {e.Message}"); }
+    }
+
+    // ---- Cache -----------------------------------------------------------------------------
+
+    private void DrawCacheTab()
+    {
         if (_cacheStartupError.Length > 0)
         {
-            ImGui.Spacing();
             Widgets.Banner("##settings-cache-error", FeedbackSeverity.Error,
                 $"The cache could not be opened when the plugin loaded: {_cacheStartupError} " +
                 "Choose another cache directory (or empty this one), then reload the plugin. " +
                 "Model backups are kept in the plugin's config folder until then.");
+            ImGui.Spacing();
         }
-        ImGui.Spacing(); ImGui.Separator(); ImGui.Text("Skeleton library");
+
+        Widgets.SectionHeader("Cache folder");
+        Widgets.MutedWrapped("The plugin and the Blender add-on exchange model files here, and texture edits keep their working files here.");
+        ImGui.Spacing();
+        var cacheDirectory = _config.TextureCacheDirectory;
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputTextWithHint("##cache-directory", "Base folder shared by the in-game plugin and Blender add-on", ref cacheDirectory, 4096))
+        {
+            _config.TextureCacheDirectory = cacheDirectory.Trim().Trim('"');
+            Save();
+            SynchronizeCache();
+        }
+        try { Widgets.HintWrapped($"Managed cache: {TextureFiles.CacheRootFor(_config.TextureCacheDirectory)}"); }
+        catch (Exception e)
+        {
+            using var wrap = ImRaii.TextWrapPos(0f);
+            ImGui.TextColored(Theme.Error, $"Cache directory is invalid: {e.Message}");
+        }
+        ImGui.Spacing();
+        var automaticCleanup = _config.AutomaticCacheCleanup;
+        if (Toggle("Automatic cache cleanup", ref automaticCleanup,
+                "Completed model cache jobs and inactive texture-edit sessions older than 24 hours are removed, and Game Files " +
+                "exports in the cache folder after 7 days. Active sessions and unsaved texture edits are kept."))
+        {
+            _config.AutomaticCacheCleanup = automaticCleanup;
+            Save();
+            SynchronizeCache();
+        }
+
+        Divider();
+        Widgets.SectionHeader("Skeleton library", "animations");
         DrawSkeletonLibrary();
     }
 
-    /// <summary>The library of every skeleton in the installed mods that animations are matched against.</summary>
+    /// <summary>The library of the installed mods' full skeletons, each once, that animations are matched against.</summary>
     private void DrawSkeletonLibrary()
     {
-        ImGui.TextWrapped("Animations are matched to the skeleton they were made for from a library of every skeleton in your " +
-                          "Penumbra mods. It is built once, saved in the cache folder, and only built again with this button.");
+        Widgets.MutedWrapped("Animations are matched to the skeleton they were made for from a library of the full skeletons in your " +
+                             "Penumbra mods, each kept once. It is built once, saved in the cache folder, and only built again with this button.");
+        ImGui.Spacing();
         var service = _animations;
         if (service is null)
         {
@@ -202,6 +247,101 @@ public sealed class SettingsWindow : Window
         }
 
         static string Files(int count) => count == 1 ? "1 file" : $"{count} files";
+    }
+
+    // ---- Interface -------------------------------------------------------------------------
+
+    private void DrawInterfaceTab()
+    {
+        Widgets.SectionHeader("Lists");
+        var autoRefresh = _config.AutoRefreshOnScreen;
+        if (Toggle("Refresh On Screen when Penumbra or Glamourer changes", ref autoRefresh,
+                "Reloads the on-screen list a second after a mod setting changes or a character is redrawn."))
+        {
+            _config.AutoRefreshOnScreen = autoRefresh;
+            Save();
+        }
+        ImGui.Spacing();
+        var thumbnails = _config.RenderModelThumbnails;
+        if (Toggle("Render model thumbnails on hover", ref thumbnails,
+                "Draws a small shaded view of Dawntrail (V6) models in the hover card. Textures and materials always preview."))
+        {
+            _config.RenderModelThumbnails = thumbnails;
+            Save();
+        }
+
+        Divider();
+        Widgets.SectionHeader("Notifications");
+        var showNotifications = _config.ShowNotifications;
+        if (Toggle("Show notifications", ref showNotifications,
+                "Warnings, errors and model handoff results also appear as Dalamud notifications, even while the window is closed."))
+        {
+            _config.ShowNotifications = showNotifications;
+            Save();
+        }
+    }
+
+    // ---- Advanced --------------------------------------------------------------------------
+
+    private void DrawAdvancedTab()
+    {
+        Widgets.SectionHeader("Ports");
+        Widgets.MutedWrapped("The plugin, Blender and Substance Painter talk to each other over these local ports. " +
+                             "Change one only when another program already uses it.");
+        ImGui.Spacing();
+
+        var portWidth = Theme.Scaled(110);
+        var blenderPort = _config.BlenderPort;
+        ImGui.SetNextItemWidth(portWidth);
+        if (ImGui.InputInt("Blender port", ref blenderPort, 0, 0)) { _config.BlenderPort = blenderPort; Save(); }
+        Widgets.Hint("Must match Blender Listen Port in the add-on's preferences.");
+        ImGui.Spacing();
+
+        var listenPort = _pendingListenPort ?? _config.ListenPort;
+        ImGui.SetNextItemWidth(portWidth);
+        if (ImGui.InputInt("Listener port", ref listenPort, 0, 0)) _pendingListenPort = listenPort;
+        // Restart once the field is left, not for every digit typed on the way to the new port.
+        if (ImGui.IsItemDeactivatedAfterEdit() && _pendingListenPort is { } port)
+        {
+            _pendingListenPort = null;
+            if (port != _config.ListenPort)
+            {
+                _config.ListenPort = port;
+                Save();
+                RestartListener();
+                try { Services.Painter.PainterInstallation.UpdatePorts(_config.PainterPort, _config.ListenPort); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _log.Debug(e.Message); }
+            }
+        }
+        Widgets.Hint("Blender and Substance Painter send their exports back to this port.");
+        ImGui.Spacing();
+
+        _tools.DrawPainterPort(portWidth);
+        Widgets.Hint("The XIV Instant Edit plugin inside Substance Painter listens on this port.");
+    }
+
+    // ---- Shared ----------------------------------------------------------------------------
+
+    /// <summary> A checkbox with its explanation wrapped under the label. Returns true when it was toggled. </summary>
+    private static bool Toggle(string label, ref bool value, string hint)
+    {
+        var changed = ImGui.Checkbox(label, ref value);
+        using (ImRaii.PushIndent(ImGui.GetFrameHeight() + ImGui.GetStyle().ItemInnerSpacing.X, false))
+            Widgets.HintWrapped(hint);
+        return changed;
+    }
+
+    private static void Divider()
+    {
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+    }
+
+    private void SynchronizeCache()
+    {
+        try { _requestCacheSynchronization(); }
+        catch (Exception e) { _log.Debug(e.Message); }
     }
 
     private void Save()

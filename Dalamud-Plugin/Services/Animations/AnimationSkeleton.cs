@@ -1,13 +1,11 @@
 using System.Collections.Immutable;
 using System.Numerics;
 using System.Text;
-using System.Runtime.InteropServices;
 using FFXIVClientStructs.Havok.Animation;
 using FFXIVClientStructs.Havok.Animation.Animation;
 using FFXIVClientStructs.Havok.Animation.Rig;
 using FFXIVClientStructs.Havok.Common.Base.Container.String;
 using FFXIVClientStructs.Havok.Common.Base.Math.QsTransform;
-using FFXIVClientStructs.Havok.Common.Serialize.Util;
 using InstantEdit.Models;
 
 namespace InstantEdit.Services.Animations;
@@ -19,58 +17,53 @@ internal sealed record AnimationChannels(string OriginalSkeleton, ImmutableArray
 /// <summary>Owned managed descriptions are the only skeleton data allowed across framework ticks.</summary>
 internal static unsafe class AnimationSkeleton
 {
-    internal sealed record Variant(string Name, SkeletonDescription Skeleton);
-
-    // hkaSkeletonMapper begins with hkReferencedObject (0x10), followed by
-    // hkaSkeletonMapperData's two hkRefPtr<hkaSkeleton> fields. We only read
-    // these references; all transforms and ownership remain in the loaded graph.
-    [StructLayout(LayoutKind.Explicit, Size = 0x20)]
-    internal struct MapperSkeletons
+    /// <summary>
+    /// A skeleton file's main skeleton, the first in its container. The skeletons that
+    /// hkaSkeletonMapper entries embed are conversion endpoints, not full skeletons, and
+    /// are never read.
+    /// </summary>
+    internal static SkeletonDescription DescribeMain(hkaAnimationContainer* container)
     {
-        [FieldOffset(0x10)] public hkaSkeleton* A;
-        [FieldOffset(0x18)] public hkaSkeleton* B;
-    }
-
-    internal static ImmutableArray<Variant> DescribeSources(hkRootLevelContainer* root, hkaAnimationContainer* container)
-    {
-        if (root == null || container == null) throw new InvalidDataException("Missing skeleton container.");
+        if (container == null) throw new InvalidDataException("Missing skeleton container.");
         AnimationNative.ValidateArray(container->Skeletons, 16, "skeletons");
-        AnimationNative.ValidateArray(root->NamedVariants, 256, "named variants");
-        var result = ImmutableArray.CreateBuilder<Variant>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        void Add(hkaSkeleton* skeleton, string name)
-        {
-            if (skeleton == null) return;
-            try
-            {
-                var description = Describe(skeleton);
-                if (seen.Add(description.Fingerprint)) result.Add(new(name, description));
-            }
-            catch (InvalidDataException) { } // A bad embedded variant must not hide valid sources.
-        }
-        for (var i = 0; i < container->Skeletons.Length; i++)
-            Add(container->Skeletons[i].ptr, i == 0 ? "" : $"Skeleton {i + 1}");
-        for (var i = 0; i < root->NamedVariants.Length; i++)
-        {
-            var variant = root->NamedVariants[i];
-            if (variant.ClassName.String != "hkaSkeletonMapper" || variant.Variant.ptr == null) continue;
-            var mapper = (MapperSkeletons*)variant.Variant.ptr;
-            Add(mapper->A, $"Mapper {variant.Name.String} A (entry {i + 1})");
-            Add(mapper->B, $"Mapper {variant.Name.String} B (entry {i + 1})");
-        }
-        if (result.Count == 0) throw new InvalidDataException("No valid source skeleton in resource.");
-        return result.ToImmutable();
+        if (container->Skeletons.Length == 0 || container->Skeletons[0].ptr == null)
+            throw new InvalidDataException("No skeleton in resource.");
+        return Describe(container->Skeletons[0].ptr);
     }
 
-    public static ImmutableArray<Variant> InspectSources(byte[] bytes)
+    /// <summary>The main skeleton of a skeleton file's bytes.</summary>
+    public static SkeletonDescription Inspect(byte[] bytes)
     {
         using var doc = new AnimationNative.Document(AnimationPap.SkeletonHavok(bytes));
-        return DescribeSources(doc.Root, doc.Container);
+        return DescribeMain(doc.Container);
     }
 
-    internal static SkeletonDescription SelectSource(ImmutableArray<Variant> variants, string fingerprint)
-        => variants.FirstOrDefault(v => v.Skeleton.Fingerprint == fingerprint)?.Skeleton
-            ?? throw new InvalidDataException("The selected source skeleton is no longer present in its SKLB. Rebuild the skeleton library in Settings.");
+    /// <summary>
+    /// The file's main skeleton, or its first <paramref name="leadingBones"/> bones when that
+    /// many were chosen, when it is still the one chosen as the source.
+    /// </summary>
+    internal static SkeletonDescription SelectSource(hkaAnimationContainer* container, string fingerprint, int leadingBones = 0)
+    {
+        var main = DescribeMain(container);
+        var source = leadingBones > 0 ? Leading(main, leadingBones) : main;
+        return source?.Fingerprint == fingerprint ? source
+            : throw new InvalidDataException("The selected source skeleton is no longer in its SKLB. Rebuild the skeleton library in Settings.");
+    }
+
+    /// <summary>
+    /// A skeleton's first <paramref name="bones"/> bones as a skeleton of their own, or null when it
+    /// has no more bones than that or a partition spans the cut. Parents come before their
+    /// children, so the leading bones keep a whole hierarchy. Skeleton mods such as IVCS add
+    /// bones at the end, so this is the skeleton an animation made before the addition was made
+    /// for; its fingerprint is that of a file holding exactly these bones.
+    /// </summary>
+    internal static SkeletonDescription? Leading(SkeletonDescription skeleton, int bones)
+    {
+        if (bones < 1 || bones >= skeleton.Bones.Length || skeleton.Partitions.Any(p => p.Start + p.Count > bones)) return null;
+        var leading = skeleton with { Bones = [.. skeleton.Bones.Take(bones)] };
+        using var arena = new AnimationNative.Arena();
+        return leading with { Fingerprint = AnimationRuntime.SkeletonFingerprint(Materialize(leading, arena)) };
+    }
 
     public static BoneTransform Transform(hkQsTransformf t) => new(AnimationNative.Translation(t), AnimationNative.Rotation(t), AnimationNative.Scale(t));
     public static hkQsTransformf Transform(BoneTransform t)
@@ -139,12 +132,6 @@ internal static unsafe class AnimationSkeleton
         return native;
     }
     public static hkStringPtr String(string text, AnimationNative.Arena arena) => new() { StringAndFlag = arena.Copy<byte>(Encoding.UTF8.GetBytes(text + "\0")).Data };
-    public static SkeletonDescription Inspect(byte[] bytes)
-    {
-        using var doc = new AnimationNative.Document(AnimationPap.SkeletonHavok(bytes));
-        if (doc.Container->Skeletons.Length != 1) throw new InvalidDataException("No unique skeleton in resource.");
-        return Describe(doc.Container->Skeletons[0].ptr);
-    }
     public static AnimationChannels Channels(hkaAnimationBinding* b)
     {
         _ = AnimationNative.Fingerprint(b); // Checks all buffers before copying them.

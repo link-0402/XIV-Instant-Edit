@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using InstantEdit.Models;
+using InstantEdit.Services.Skeletons;
 
 namespace InstantEdit.Services;
 
@@ -106,7 +107,8 @@ public sealed class ExportContextRegistry : IDisposable
         SourceOptionLocator? sourceOption = null,
         string sourceOptionStatus = "unknown",
         Guid? sourceModStableId = null,
-        string? resolvedGamePath = null)
+        string? resolvedGamePath = null,
+        RacialScalingRecord? racialScaling = null)
     {
         if (!PenumbraService.IsSafeGamePath(gamePath) ||
             (resolvedGamePath is not null && !PenumbraService.IsSafeGamePath(resolvedGamePath)) ||
@@ -114,7 +116,8 @@ public sealed class ExportContextRegistry : IDisposable
             !PenumbraService.IsSafeModName(sourceModDirectory) || callbackPort is < 1 or > 65535 ||
             targetCollectionId == Guid.Empty ||
             sourceModStableId == Guid.Empty ||
-            (targetCollectionName is not null && targetCollectionName.Length > 512))
+            (targetCollectionName is not null && targetCollectionName.Length > 512) ||
+            !RacialScaling.IsSafe(racialScaling))
             throw new ArgumentException("The import target is not safe.");
 
         if (!PenumbraService.IsSafeLocalModelPath(targetFilePath))
@@ -161,6 +164,7 @@ public sealed class ExportContextRegistry : IDisposable
             BackupDirectory = backupTarget?.Directory,
             SourceOption = sourceOption,
             SourceOptionStatus = sourceOptionStatus,
+            RacialScaling = racialScaling,
             LastTouchedAtUtc = DateTimeOffset.UtcNow,
         };
 
@@ -185,13 +189,15 @@ public sealed class ExportContextRegistry : IDisposable
         int callbackPort,
         Guid? targetCollectionId = null,
         string? targetCollectionName = null,
-        ResourceDependencyManifest? resourceManifest = null)
+        ResourceDependencyManifest? resourceManifest = null,
+        RacialScalingRecord? racialScaling = null)
     {
         if (!PenumbraService.IsSafeGamePath(gamePath) ||
             !PenumbraService.IsSafeGamePath(resolvedGamePath) ||
             objectIndex is < 0 or > ushort.MaxValue || callbackPort is < 1 or > 65535 ||
             targetCollectionId == Guid.Empty ||
-            (targetCollectionName is not null && targetCollectionName.Length > 512))
+            (targetCollectionName is not null && targetCollectionName.Length > 512) ||
+            !RacialScaling.IsSafe(racialScaling))
             throw new ArgumentException("The game-data import target is not safe.");
 
         var safeManifest = IsSafeResourceManifest(resourceManifest) ? resourceManifest : null;
@@ -211,6 +217,7 @@ public sealed class ExportContextRegistry : IDisposable
             CallbackPort = callbackPort,
             ResourceManifest = safeManifest,
             ResourceManifestStatus = safeManifest is not null ? "ready" : "capture_failed",
+            RacialScaling = racialScaling,
             LastTouchedAtUtc = DateTimeOffset.UtcNow,
         };
 
@@ -851,6 +858,7 @@ public sealed class ExportContextRegistry : IDisposable
             BackupDirectory = backupTarget?.Directory,
             SourceOption = saved.SourceOption,
             SourceOptionStatus = saved.SourceOptionStatus,
+            RacialScaling = saved.RacialScaling,
             LastTouchedAtUtc = saved.LastTouchedAtUtc,
         };
     }
@@ -867,7 +875,9 @@ public sealed class ExportContextRegistry : IDisposable
             (saved.SourceOption is { } option &&
              (string.IsNullOrWhiteSpace(option.Membership) || option.Membership.Length > 512 ||
               option.GroupName is null || option.GroupName.Length > 512 ||
-              option.OptionName is null || option.OptionName.Length > 512)))
+              option.OptionName is null || option.OptionName.Length > 512)) ||
+            // A scaling that can't be read makes the context unusable rather than its exports unscaled.
+            !RacialScaling.IsSafe(saved.RacialScaling))
             return false;
         if (saved.Version < 2)
             return PenumbraService.IsSafeModName(saved.SourceModDirectory) &&

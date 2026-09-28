@@ -125,19 +125,6 @@ Likewise, `--write-sample-skeleton "skeleton.json"` writes the fixture skeleton 
 an import request carries it, for `skeleton.parse_skeleton` and
 `skeleton.create_armature` in Blender.
 
-For local skeleton-repair diagnosis, export a predictive PAP's Havok payload and
-its source SKLB payload to XML with XAT, then run:
-
-```powershell
-dotnet run --project Tests/AnimationRegression -c Release -p:SkipDistributionPackage=true -- --skeleton-repair-xml "startup.xml" "skeleton.xml"
-```
-
-This optional fixture reads the exported skeletons and mapper endpoints, runs
-production discovery/ranking, validates the original predictive buffers and
-binding against the selected source, and retargets its reference pose. It does
-not invoke native decompression, compression, or live game playback. The XML
-inputs remain local and are not bundled with the regression suite.
-
 The automated suites check compilation, serialized contracts, validation,
 state transitions, export/import results, authorization, path safety, backup
 protection, and failure restoration. They intentionally avoid exact UI labels,
