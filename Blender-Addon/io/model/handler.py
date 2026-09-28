@@ -16,7 +16,8 @@ from .com.space            import lin_to_srgb
 from ...mesh.shapes        import get_shape_mix
 from .com.exceptions       import XIVMeshParentError
 from ...mesh.weights       import remove_vertex_groups
-from ...mesh.objects       import visible_meshobj, safe_object_delete, copy_mesh_object, quick_copy
+from ...mesh.objects       import (visible_meshobj, safe_object_delete, copy_mesh_object, quick_copy,
+                                   armature_for_object)
 from ...mesh.face_order    import get_original_faces, sequential_faces
 from ...xivpy.model.vertex import XIV_COL
 
@@ -185,13 +186,7 @@ class SceneHandler:
         no_skeleton = []
 
         for obj in visible_obj:
-            armature = obj.parent if obj.parent and obj.parent.type == "ARMATURE" else next(
-                (
-                    modifier.object for modifier in obj.modifiers
-                    if modifier.type == "ARMATURE" and modifier.object is not None
-                ),
-                None,
-            )
+            armature = armature_for_object(obj)
             if armature is None:
                 no_skeleton.append(obj.name)
                 continue

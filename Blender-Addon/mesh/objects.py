@@ -51,6 +51,25 @@ def get_object_from_mesh(mesh_name:str) -> Object | Literal[False]:
             return obj
     return False
 
+def armature_for_object(obj: Object) -> Object | None:
+    """Return the armature that drives a mesh, if any.
+
+    An armature parent wins; otherwise the first Armature modifier that points
+    at an armature object is used, so meshes rigged only by modifier resolve too.
+    """
+    if obj.parent and obj.parent.type == "ARMATURE":
+        return obj.parent
+    return next(
+        (
+            modifier.object
+            for modifier in obj.modifiers
+            if modifier.type == "ARMATURE"
+            and modifier.object is not None
+            and modifier.object.type == "ARMATURE"
+        ),
+        None,
+    )
+
 def safe_object_delete(obj: Object) -> None:
     """Safely delete an object with proper reference cleanup."""
     if not obj or obj.name not in bpy.data.objects:
@@ -111,10 +130,12 @@ def copy_mesh_object(source_obj: Object, depsgraph: Depsgraph, export=True) -> O
         new_obj.modifiers.clear()
         new_obj.shape_key_clear()
 
-        # Assuming TT FBX import needs an armature modifier.
+        # Assuming TT FBX import needs an armature modifier. The rig comes from
+        # the source, which may be rigged by modifier only or parented to a
+        # non-armature object; only an armature object may be assigned.
         if export:
             armature        = new_obj.modifiers.new(name="Armature", type="ARMATURE")
-            armature.object = source_obj.parent
+            armature.object = armature_for_object(source_obj)
 
         return new_obj
     except Exception:

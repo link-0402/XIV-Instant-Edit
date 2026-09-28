@@ -8,6 +8,7 @@ import re
 import threading
 import uuid
 import time
+from contextlib import contextmanager
 from queue import Empty, Queue
 from urllib.error import URLError
 
@@ -982,6 +983,16 @@ def _restore_object_state(context: Context, state: tuple) -> None:
         bpy.ops.object.mode_set(mode=mode)
 
 
+def _finish_import_job(cache_job_directory: str) -> None:
+    """Release an import's staged cache job; a job that is already gone is fine."""
+    if not cache_job_directory:
+        return
+    try:
+        finish_job(cache_job_directory)
+    except OSError as error:
+        print(f"XIV Instant Edit: could not remove import cache job: {error}")
+
+
 def _remove_staging_objects(objects: list, collection) -> None:
     """Remove only objects recorded as belonging to this failed import."""
     seen = set()
@@ -1071,6 +1082,8 @@ class InstantImport(Operator):
         preview_package = None
         preview_validation_warning = ""
         if not file_path.is_file():
+            # Return before the try/finally below, so release the staged job here.
+            _finish_import_job(self.cache_job_directory)
             props.last_status = "Import failed: file not found."
             self.report({"ERROR"}, "Model file not found.")
             return {"CANCELLED"}
@@ -1188,13 +1201,11 @@ class InstantImport(Operator):
             return {"CANCELLED"}
 
         finally:
-            _restore_object_state(context, user_state)
-            cleanup_preview_bundle(preview_package)
-            if self.cache_job_directory:
-                try:
-                    finish_job(self.cache_job_directory)
-                except OSError as error:
-                    print(f"XIV Instant Edit: could not remove import cache job: {error}")
+            try:
+                _restore_object_state(context, user_state)
+                cleanup_preview_bundle(preview_package)
+            finally:
+                _finish_import_job(self.cache_job_directory)
 
         # Changing the selector already invokes the same refresh through the
         # property update callback. Avoid issuing that bridge request twice,
@@ -2242,10 +2253,22 @@ def clear_quick_backups(context: Context) -> dict:
         "capability": ref.capability,
         "backupTargetId": backup_target_id,
     }
-    body, status = _post_json(ref.callback_port, "/backup/clear", payload)
-    if status != 200:
-        raise _plugin_error_from_body(body, status, "/backup/clear")
-    return _decode_plugin_response(body, status, "/backup/clear")
+    try:
+        status, body = post_json(
+            ref.callback_port, "/backup/clear", payload,
+            timeout=15, max_response_size=MAX_PLUGIN_RESPONSE_SIZE)
+        if not 200 <= status < 300:
+            raise _plugin_error_from_body(body, status, "/backup/clear")
+        return _decode_plugin_response(body, status, "/backup/clear")
+    except PluginResponseTooLarge as error:
+        raise _plugin_response_too_large(error, "/backup/clear") from error
+    except (URLError, TimeoutError, OSError) as error:
+        raise _plugin_transport_error(
+            error,
+            "/backup/clear",
+            "The Dalamud plugin could not be reached while clearing the backups.",
+            "Start XIV Instant Edit in the game and retry.",
+        ) from error
 
 
 # ---- Export destination resolution and attribute-group detection ----
@@ -2317,6 +2340,23 @@ def detected_attribute_group_tags(context: Context) -> tuple[str, ...]:
 
 
 # ---- Mashup export execution ----
+
+
+@contextmanager
+def _exporting_as_mdl():
+    """Make the scene's export format MDL for one export, then restore it.
+
+    Quick Export and mashups always write MDL, but SceneHandler reads the
+    format from the scene settings. The setting also belongs to Simple Export,
+    so the user's choice must survive.
+    """
+    settings = get_settings()
+    previous = settings.model_format
+    settings.model_format = "MDL"
+    try:
+        yield
+    finally:
+        settings.model_format = previous
 
 
 def perform_mashup_export(
@@ -2402,8 +2442,8 @@ def perform_mashup_export(
                     obj[property_name] = alias
             saved_materials.append((obj, properties))
 
-        get_settings().model_format = "MDL"
-        export_result(mdl_path.with_suffix(""), "MDL", export_objects=export_objects)
+        with _exporting_as_mdl():
+            export_result(mdl_path.with_suffix(""), "MDL", export_objects=export_objects)
         if not mdl_path.is_file():
             raise ValueError("Mashup export produced no .mdl file.")
         data = mdl_path.read_bytes()
@@ -2600,8 +2640,8 @@ def perform_instant_export(
     temp_dir = create_job("exports", export_id)
     mdl_path = temp_dir / f"model_{export_id}.mdl"
     try:
-        get_settings().model_format = "MDL"
-        export_result(mdl_path.with_suffix(""), "MDL", export_objects=export_objects)
+        with _exporting_as_mdl():
+            export_result(mdl_path.with_suffix(""), "MDL", export_objects=export_objects)
         if not mdl_path.is_file():
             raise ValueError("Export produced no .mdl file.")
 
