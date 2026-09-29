@@ -8,10 +8,24 @@ namespace InstantEdit.Services.NeckSeam;
 internal sealed record NeckSeamMaterialInput(string GamePath, byte[] Bytes, IReadOnlyDictionary<string, byte[]> Textures);
 
 /// <summary> A loaded model and the materials Penumbra resolved for it. </summary>
-internal sealed record NeckSeamModelInput(string GamePath, byte[] Bytes, IReadOnlyList<NeckSeamMaterialInput> Materials);
+internal sealed record NeckSeamModelInput(string GamePath, byte[] Bytes, IReadOnlyList<NeckSeamMaterialInput> Materials)
+{
+    /// <summary> The character's enabled-attribute mask for the model, when the game was read; null counts every part as drawn. </summary>
+    public uint? Attributes { get; init; }
+    /// <summary> The enabled shape-key mask, such as Penumbra's shpx_ connector shapes; null applies none. </summary>
+    public uint? Shapes { get; init; }
 
-/// <summary> Everything the analysis reads: the face, the models that may carry the body's neck, and human.pbd. </summary>
-internal sealed record NeckSeamInput(NeckSeamModelInput Face, IReadOnlyList<NeckSeamModelInput> Bodies, byte[]? RacialDeformers);
+    public SkinModel Read() => SkinModel.Read(Bytes, Attributes, Shapes);
+}
+
+/// <summary>
+/// Everything the analysis reads: the face (null when none is loaded), the models that carry body
+/// skin, human.pbd, and the character's race (code like 801) when the game was read.
+/// </summary>
+internal sealed record NeckSeamInput(NeckSeamModelInput? Face, IReadOnlyList<NeckSeamModelInput> Bodies, byte[]? RacialDeformers)
+{
+    public int? CharacterRace { get; init; }
+}
 
 internal enum NeckSeamSeverity
 {
@@ -27,9 +41,14 @@ internal enum NeckSeamFixKind
     NeckMorph,
     Material,
     Textures,
+    Weld,
+    Normals,
 }
 
-/// <summary> One measured seam property: the face and body side, how bad the difference is, and what fixes it. </summary>
+/// <summary>
+/// One measured seam property: the value on each side (the face and the body at the neck, the first
+/// and second part at a body seam), how bad the difference is, and what fixes it.
+/// </summary>
 internal sealed record NeckSeamFinding(string Title, string Face, string Body, NeckSeamSeverity Severity, string Detail, NeckSeamFixKind Fix);
 
 /// <summary> The measured seam: findings for the dialog and everything the fixer needs. </summary>
@@ -119,14 +138,17 @@ internal static class NeckSeamAnalyzer
         public required float[] BodySign { get; init; }
         public required float[] Gap { get; init; }
         public required float[] Arc { get; init; }
+        /// <summary> Whether the samples run around a closed loop (the neck) or along an open edge. </summary>
+        public bool Closed { get; init; } = true;
         public int Count => Positions.Length;
     }
 
     public static NeckSeamReport Analyze(NeckSeamInput input)
     {
-        var faceRace = RaceOf(input.Face.GamePath) ?? throw new InvalidDataException("The face model's race could not be read from its path.");
-        var faceModel = SkinModel.Read(input.Face.Bytes);
-        var (faceMesh, faceMaterialInput, faceMaterial) = FindSkinMesh(input.Face, faceModel, m => m.IsFaceSkin)
+        var faceInput = input.Face ?? throw new InvalidDataException("This character has no face model loaded.");
+        var faceRace = RaceOf(faceInput.GamePath) ?? throw new InvalidDataException("The face model's race could not be read from its path.");
+        var faceModel = faceInput.Read();
+        var (faceMesh, faceMaterialInput, faceMaterial) = FindSkinMesh(faceInput, faceModel, m => m.IsFaceSkin)
             ?? throw new InvalidDataException("The face model has no mesh with a face skin (skin.shpk) material.");
         var faceTopology = new SeamTopology(faceMesh.Positions, faceMesh.Triangles);
         var faceRing = LowestLoop(faceMesh.Positions, faceTopology)
@@ -143,7 +165,7 @@ internal static class NeckSeamAnalyzer
         foreach (var bodyInput in input.Bodies)
         {
             SkinModel model;
-            try { model = SkinModel.Read(bodyInput.Bytes); }
+            try { model = bodyInput.Read(); }
             catch (Exception e) when (e is InvalidDataException or NotSupportedException) { continue; }
             var bodyRace = RaceOf(bodyInput.GamePath) ?? faceRace;
             var deformer = bodyRace != faceRace && input.RacialDeformers is { } pbd
@@ -227,10 +249,11 @@ internal static class NeckSeamAnalyzer
             if (TextureBytes(faceMaterialInput, faceMaterial, sampler) is { } faceTex)
             {
                 faceTextures[sampler] = faceTex;
-                faceImages[sampler] = SeamTextures.Decode(faceTex.Bytes);
+                faceImages[sampler] = SeamTextures.Decode(faceTex.Bytes, faceMaterial.FlagsFor(sampler));
             }
+            // Body samplers wrap, and vanilla body UVs run from 1 to 2.
             if (TextureBytes(body.Material, body.Side.Material, sampler) is { } bodyTex)
-                bodyImages[sampler] = SeamTextures.DecodeAtMost(bodyTex.Bytes, BodyTextureEdge);
+                bodyImages[sampler] = SeamTextures.DecodeAtMost(bodyTex.Bytes, BodyTextureEdge, body.Side.Material.FlagsFor(sampler));
         }
 
         // ---- Material ----------------------------------------------------------------------------
@@ -347,7 +370,7 @@ internal static class NeckSeamAnalyzer
 
         return new NeckSeamReport
         {
-            FaceModelPath = PathRules.NormalizeGamePath(input.Face.GamePath),
+            FaceModelPath = PathRules.NormalizeGamePath(faceInput.GamePath),
             FaceMaterialPath = PathRules.NormalizeGamePath(faceMaterialInput.GamePath),
             BodyModelPath = PathRules.NormalizeGamePath(body.Model.GamePath),
             BodyMaterialPath = PathRules.NormalizeGamePath(body.Material.GamePath),
@@ -359,7 +382,7 @@ internal static class NeckSeamAnalyzer
             HasNeckMorphs = hasMorphs,
             Seam = seam,
             FaceSide = face,
-            FaceModelBytes = input.Face.Bytes,
+            FaceModelBytes = faceInput.Bytes,
             FaceMaterialBytes = faceMaterialInput.Bytes,
             BodyMaterialBytes = body.Material.Bytes,
             FaceTextures = faceTextures,
@@ -536,7 +559,7 @@ internal static class NeckSeamAnalyzer
         return (new Stat(gaps.Average(), gaps.Max()), new Stat(angles.Average(), angles.Max()), weightDiff, colors);
     }
 
-    private static Dictionary<string, float> Weights(SkinMesh mesh, int vertex)
+    internal static Dictionary<string, float> Weights(SkinMesh mesh, int vertex)
     {
         var result = new Dictionary<string, float>(StringComparer.Ordinal);
         for (var i = 0; i < mesh.Influences; i++)
@@ -694,7 +717,7 @@ internal static class NeckSeamAnalyzer
         return new Vector2(local.X + 0.5f, local.Y + 0.5f);
     }
 
-    /// <summary> Gaussian smoothing along the closed seam, by arc length. </summary>
+    /// <summary> Gaussian smoothing along the seam by arc length: around a closed seam, or within an open one's ends. </summary>
     internal static Vector4[] Smooth(Seam seam, Vector4[] values, float metres = SmoothingMetres)
     {
         var count = values.Length;
@@ -706,13 +729,21 @@ internal static class NeckSeamAnalyzer
         var kernel = new float[radius * 2 + 1];
         for (var k = -radius; k <= radius; k++)
             kernel[k + radius] = MathF.Exp(-0.5f * k * k / (sigma * sigma));
-        var total = kernel.Sum();
         var result = new Vector4[count];
         for (var i = 0; i < count; i++)
         {
             var sum = Vector4.Zero;
+            var total = 0f;
             for (var k = -radius; k <= radius; k++)
-                sum += values[((i + k) % count + count) % count] * kernel[k + radius];
+            {
+                var j = i + k;
+                if (seam.Closed)
+                    j = (j % count + count) % count;
+                else if (j < 0 || j >= count)
+                    continue;
+                sum += values[j] * kernel[k + radius];
+                total += kernel[k + radius];
+            }
             result[i] = sum / total;
         }
         return result;

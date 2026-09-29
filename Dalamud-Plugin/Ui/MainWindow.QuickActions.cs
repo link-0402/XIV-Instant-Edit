@@ -19,9 +19,9 @@ public sealed partial class MainWindow
         using var scroll = ImRaii.Child("##quick-actions", Vector2.Zero, false);
         if (!scroll.Success)
             return;
-        QuickActionCard("##quick-neck-seam", FontAwesomeIcon.UserCheck, "Fix neck seam",
-            "Compares your character's face and body where they meet at the neck, the way the game's skin shader draws them, " +
-            "and builds a preview mod that fixes the connection data, skin settings and textures.",
+        QuickActionCard("##quick-neck-seam", FontAwesomeIcon.UserCheck, "Fix skin seams",
+            "Compares your character's skin where its models meet, the way the game's skin shader draws them: the face and body at the neck, " +
+            "and the body parts at the wrists, waist and ankles. Builds a preview mod that closes gaps and fixes normals, skin settings and textures.",
             DrawNeckSeamAction);
     }
 
@@ -29,14 +29,14 @@ public sealed partial class MainWindow
     {
         if (_neckSeam is null)
         {
-            Widgets.Hint("Unavailable: the neck seam tools did not start.");
+            Widgets.Hint("Unavailable: the skin seam tools did not start.");
             return;
         }
         if (NeckSeamCharacter() is not { } character)
         {
             Widgets.HintWrapped(_onScreen.IsRefreshing
                 ? "Looking for your character"
-                : "Your character has no face model loaded. Refresh the list once your character is drawn.");
+                : "Your character has no face or body models loaded. Refresh the list once your character is drawn.");
             return;
         }
 
@@ -49,7 +49,7 @@ public sealed partial class MainWindow
             Widgets.HintWrapped("A preview mod is active. Open the check to apply it to your mods or discard it.");
     }
 
-    /// <summary> Your character when it has a face model, looked up again only when the snapshot changes. </summary>
+    /// <summary> Your character when it has a face or body part model, looked up again only when the snapshot changes. </summary>
     private OnScreenObject? NeckSeamCharacter()
     {
         var items = _onScreen.Items;
@@ -57,7 +57,7 @@ public sealed partial class MainWindow
         {
             _quickSnapshot = items;
             _neckSeamCharacter = items.FirstOrDefault(item => item.PresentationCategory == ActorPresentationCategory.Player
-                                                              && NeckSeamCapture.HasFaceModel(item.ResourceRoots));
+                                                              && NeckSeamCapture.HasSkinModels(item.ResourceRoots));
         }
         return _neckSeamCharacter;
     }

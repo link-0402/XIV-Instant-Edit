@@ -18,10 +18,16 @@ internal sealed record ChangelogRelease(
 
 internal static class ChangelogCatalog
 {
-    public const string CurrentVersion = "2.0.0";
+    public const string CurrentVersion = "2.1.0";
 
     public static IReadOnlyList<ChangelogRelease> Releases { get; } =
     [
+        Release("2.1.0",
+            Highlight("Quick Actions: Fix neck seam is now Fix skin seams. Besides the neck, it checks where the top meets the gloves at the wrists and the legs at the waist, and where the legs meet the shoes at the ankles."),
+            Entry("It compares only the skin the game draws, with the shape keys body mods use to join their parts, and finds gaps between the edges, vertex normals that differ, different skin materials, and textures that don't continue across the seam.", 1),
+            Entry("Gaps of up to 5 mm can be closed, normals matched, skin settings brought together and textures blended across the seam, with a slider for which part changes. Parts made for different bodies, whose edges lie further apart, are named without a fix.", 1),
+            Entry("All fixes go into one preview mod first, as for the neck. Applying a changed model changes it for every character and outfit that uses it.", 1),
+            Entry("Fixed the neck check reading vanilla body textures at their edge instead of at the neck, since vanilla body UVs run from 1 to 2. It reported a normal difference of about 11 degrees on vanilla bodies, and its texture blend moved the face towards the wrong values.")),
         Release("2.0.0",
             Highlight("Animation editing is now available in the new Animations tab (requires the LivePose plugin):"),
             Entry("The tab lists the animations your character plays with the mod each one comes from, and sorts the tools for the selected animation into tabs.", 1),

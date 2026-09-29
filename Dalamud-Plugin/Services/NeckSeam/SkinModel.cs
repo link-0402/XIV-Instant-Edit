@@ -26,18 +26,27 @@ internal sealed class SkinMesh
     public required int Influences { get; init; }
     /// <summary> Bone names of the mesh's bone table, which the blend indices index. </summary>
     public required string[] Bones { get; init; }
-    /// <summary> Every triangle of the mesh (all submeshes), three vertex indices each. </summary>
+    /// <summary>
+    /// The triangles the game draws, three vertex indices each: the submeshes whose attributes are all
+    /// enabled, with the enabled shape keys' replacement vertices. Every triangle when no masks are known.
+    /// </summary>
     public required int[] Triangles { get; init; }
+    /// <summary> Whether positions are stored as half floats, which round to about 1 mm a metre from the origin. </summary>
+    public bool HalfPositions { get; init; }
     public int VertexCount => Positions.Length;
 }
 
 /// <summary> One neck morph (connection vertex) entry of a face model. </summary>
 internal readonly record struct NeckMorph(Vector3 Position, Vector3 Normal, byte BoneA, byte BoneB);
 
+/// <summary> New model-space data for one LOD 0 vertex; null leaves that element as it is. </summary>
+internal readonly record struct SkinVertexChange(int Mesh, int Vertex, Vector3? Position, Vector3? Normal, Vector3? Binormal);
+
 /// <summary>
-/// The parts of a Dawntrail (V6) model the neck seam work needs: LOD-0 skin meshes with positions,
-/// normals, binormals, both UV sets, vertex colour and weights, and the neck morph table. Layout
-/// follows the add-on's xivpy reader (file.py, headers.py, lod.py, mesh.py).
+/// The parts of a Dawntrail (V6) model the seam work needs: LOD-0 skin meshes with positions,
+/// normals, binormals, both UV sets, vertex colour and weights, the triangles drawn for a character's
+/// enabled attributes and shape keys, and the neck morph table. Layout follows the add-on's xivpy
+/// reader (file.py, headers.py, lod.py, mesh.py, shapes.py).
 /// </summary>
 internal sealed class SkinModel
 {
@@ -60,6 +69,8 @@ internal sealed class SkinModel
     private readonly int _lodTable;
     private readonly int _neckMorphTable;
     private readonly int _lodCount;
+    private readonly int _meshTable;
+    private readonly List<Element>[] _declarations;
 
     public IReadOnlyList<SkinMesh> Meshes { get; }
     public IReadOnlyList<string> Materials { get; }
@@ -67,25 +78,39 @@ internal sealed class SkinModel
     /// <summary> Bone tables as indices into <see cref="Bones"/>. </summary>
     public IReadOnlyList<ushort[]> BoneTables { get; }
     public IReadOnlyList<NeckMorph> NeckMorphs { get; }
+    /// <summary> Attribute names, in the order the enabled-attribute mask's bits follow. </summary>
+    public IReadOnlyList<string> Attributes { get; }
+    /// <summary> Shape key names, in the order the enabled-shape mask's bits follow. </summary>
+    public IReadOnlyList<string> Shapes { get; }
 
-    private SkinModel(byte[] bytes, int meshHeader, int lodTable, int neckMorphTable, int lodCount, IReadOnlyList<SkinMesh> meshes,
-        IReadOnlyList<string> materials, IReadOnlyList<string> bones, IReadOnlyList<ushort[]> boneTables, IReadOnlyList<NeckMorph> neckMorphs)
+    private SkinModel(byte[] bytes, int meshHeader, int lodTable, int neckMorphTable, int lodCount, int meshTable, List<Element>[] declarations,
+        IReadOnlyList<SkinMesh> meshes, IReadOnlyList<string> materials, IReadOnlyList<string> bones, IReadOnlyList<ushort[]> boneTables,
+        IReadOnlyList<NeckMorph> neckMorphs, IReadOnlyList<string> attributes, IReadOnlyList<string> shapes)
     {
         _bytes = bytes;
         _meshHeader = meshHeader;
         _lodTable = lodTable;
         _neckMorphTable = neckMorphTable;
         _lodCount = lodCount;
+        _meshTable = meshTable;
+        _declarations = declarations;
         Meshes = meshes;
         Materials = materials;
         Bones = bones;
         BoneTables = boneTables;
         NeckMorphs = neckMorphs;
+        Attributes = attributes;
+        Shapes = shapes;
     }
 
     private readonly record struct Element(byte Stream, byte Offset, byte Type, byte Usage, byte UsageIndex);
 
-    public static SkinModel Read(byte[] bytes)
+    /// <summary> A submesh's index range (relative to its mesh's first index) and the attributes it needs. </summary>
+    private readonly record struct Submesh(long Start, long Count, uint Attributes);
+
+    /// <param name="attributes">The character's enabled-attribute mask for this model; null draws every submesh.</param>
+    /// <param name="shapes">The enabled shape-key mask; null applies none.</param>
+    public static SkinModel Read(byte[] bytes, uint? attributes = null, uint? shapes = null)
     {
         Require(bytes.Length >= FileHeaderSize + 8, "file header");
         if (U32(bytes, 0) != V6)
@@ -145,8 +170,10 @@ internal sealed class SkinModel
         cursor += 3 * LodSize + ((flags2 & 0x10) != 0 ? 3 * ExtraLodSize : 0);
         var meshTable = cursor;
         cursor += meshCount * MeshSize;
+        var attributeTable = cursor;
         cursor += attributeCount * 4;
         cursor += terrainShadowMeshCount * 20;
+        var submeshTable = cursor;
         cursor += submeshCount * 16;
         cursor += terrainShadowSubmeshCount * 12;
         var materialTable = cursor;
@@ -155,6 +182,9 @@ internal sealed class SkinModel
         cursor += boneCount * 4;
         var boneTables = cursor;
         cursor += boneTableCount * 4 + boneTableArrayCount * 2;
+        var shapeTable = cursor;
+        var shapeMeshTable = shapeTable + shapeCount * 16;
+        var shapeValueTable = shapeMeshTable + shapeMeshCount * 12;
         cursor += shapeCount * 16 + shapeMeshCount * 12 + shapeValueCount * 4;
         Require(cursor + 4 <= bytes.Length, "submesh bone map");
         cursor = checked(cursor + 4 + (int)U32(bytes, cursor));
@@ -169,6 +199,8 @@ internal sealed class SkinModel
 
         var materials = ReadNames(bytes, materialTable, materialCount, stringBlock, stringSize);
         var bones = ReadNames(bytes, boneNameTable, boneCount, stringBlock, stringSize);
+        var attributeNames = ReadNames(bytes, attributeTable, attributeCount, stringBlock, stringSize);
+        var shapeNames = ReadNames(bytes, shapeTable, shapeCount, stringBlock, stringSize, stride: 16);
         var tables = new ushort[boneTableCount][];
         for (var t = 0; t < boneTableCount; t++)
         {
@@ -194,6 +226,31 @@ internal sealed class SkinModel
                 new Vector3(F32(bytes, at + 16), F32(bytes, at + 20), F32(bytes, at + 24)), bytes[at + 28], bytes[at + 29]);
         }
 
+        // LOD 0 shape key edits of the enabled shapes: (mesh start index, index position in the mesh, replacing vertex).
+        var shapeEdits = new List<(uint MeshStart, int At, int Vertex)>();
+        if (shapes is { } enabledShapes && shapeCount > 0)
+        {
+            Require(shapeValueTable + (long)shapeValueCount * 4 <= bytes.Length, "shape key table");
+            for (var s = 0; s < Math.Min(shapeCount, 32); s++)
+            {
+                if ((enabledShapes & (1u << s)) == 0)
+                    continue;
+                int first = U16(bytes, shapeTable + s * 16 + 4), count = U16(bytes, shapeTable + s * 16 + 10);
+                for (var sm = first; sm < first + count; sm++)
+                {
+                    if (sm >= shapeMeshCount)
+                        throw new InvalidDataException("A shape key names a shape mesh outside the table.");
+                    var at = shapeMeshTable + sm * 12;
+                    var meshStart = U32(bytes, at);
+                    long valueCount = U32(bytes, at + 4), valueOffset = U32(bytes, at + 8);
+                    if (valueOffset + valueCount > shapeValueCount)
+                        throw new InvalidDataException("A shape mesh names values outside the table.");
+                    for (var v = valueOffset; v < valueOffset + valueCount; v++)
+                        shapeEdits.Add((meshStart, U16(bytes, (int)(shapeValueTable + v * 4)), U16(bytes, (int)(shapeValueTable + v * 4 + 2))));
+                }
+            }
+        }
+
         int lod0Mesh = U16(bytes, lodTable);
         int lod0Count = U16(bytes, lodTable + 2);
         if (lod0Mesh + lod0Count > meshCount)
@@ -206,6 +263,7 @@ internal sealed class SkinModel
             int vertexCount = U16(bytes, mesh);
             var indexCount = U32(bytes, mesh + 4);
             int materialIndex = U16(bytes, mesh + 8);
+            int submeshIndex = U16(bytes, mesh + 10), meshSubmeshes = U16(bytes, mesh + 12);
             int boneTableIndex = U16(bytes, mesh + 14);
             var startIndex = U32(bytes, mesh + 16);
             if (vertexCount == 0 || indexCount < 3 || m >= declarationCount)
@@ -214,15 +272,26 @@ internal sealed class SkinModel
                 throw new InvalidDataException("A mesh uses a material outside the material table.");
             if (startIndex + (long)indexCount > indexTotal)
                 throw new InvalidDataException("A mesh reads past the index buffer.");
+            if (submeshIndex + meshSubmeshes > submeshCount)
+                throw new InvalidDataException("A mesh names submeshes outside the submesh table.");
+            var submeshes = new Submesh[meshSubmeshes];
+            for (var s = 0; s < meshSubmeshes; s++)
+            {
+                var at = submeshTable + (submeshIndex + s) * 16;
+                submeshes[s] = new Submesh(U32(bytes, at) - (long)startIndex, U32(bytes, at + 4), U32(bytes, at + 8));
+            }
             meshes.Add(ReadMesh(bytes, vertexOffset, indexOffset, mesh, m, vertexCount, indexCount, startIndex, declarations[m],
-                materials[materialIndex], boneTableIndex < tables.Length ? tables[boneTableIndex].Select(b => bones[b]).ToArray() : []));
+                materials[materialIndex], boneTableIndex < tables.Length ? tables[boneTableIndex].Select(b => bones[b]).ToArray() : [],
+                submeshes, attributes, shapeEdits.Where(e => e.MeshStart == startIndex).Select(e => (e.At, e.Vertex))));
         }
 
-        return new SkinModel(bytes, meshHeader, lodTable, neckMorphTable, lodCount, meshes, materials, bones, tables, morphs);
+        return new SkinModel(bytes, meshHeader, lodTable, neckMorphTable, lodCount, meshTable, declarations, meshes, materials, bones, tables, morphs,
+            attributeNames, shapeNames);
     }
 
     private static SkinMesh ReadMesh(byte[] bytes, uint vertexOffset, uint indexOffset, int mesh, int meshIndex, int count, uint indexCount,
-        uint startIndex, List<Element> elements, string material, string[] bones)
+        uint startIndex, List<Element> elements, string material, string[] bones, Submesh[] submeshes, uint? attributes,
+        IEnumerable<(int At, int Vertex)> shapeEdits)
     {
         var positions = new Vector3[count];
         var normals = new Vector3[count];
@@ -239,7 +308,7 @@ internal sealed class SkinModel
                 influences = 8;
         var indices = new byte[count * influences];
         var weights = new float[count * influences];
-        bool hasPosition = false, hasUv2 = false;
+        bool hasPosition = false, hasUv2 = false, halfPositions = false;
 
         foreach (var element in elements)
         {
@@ -247,6 +316,7 @@ internal sealed class SkinModel
             {
                 case UsagePosition:
                     hasPosition = true;
+                    halfPositions = element.Type == TypeHalf4;
                     Decode(bytes, vertexOffset, mesh, element, count, (v, at) => positions[v] = ReadVector3(bytes, at, element.Type));
                     break;
                 case UsageNormal:
@@ -294,20 +364,41 @@ internal sealed class SkinModel
         if (!hasPosition)
             throw new NotSupportedException("A mesh has no position stream.");
 
-        var triangles = new int[indexCount - indexCount % 3];
-        for (var i = 0; i < triangles.Length; i++)
+        var indexList = new int[indexCount];
+        for (var i = 0; i < indexList.Length; i++)
         {
             int vertex = U16(bytes, (int)(indexOffset + (startIndex + i) * 2));
             if (vertex >= count)
                 throw new InvalidDataException("An index points outside its mesh.");
-            triangles[i] = vertex;
+            indexList[i] = vertex;
+        }
+        // A shape key swaps index entries for its replacement vertices, which follow the mesh's own.
+        foreach (var (at, vertex) in shapeEdits)
+            if (at < indexList.Length && vertex < count)
+                indexList[at] = vertex;
+        int[] triangles;
+        if (attributes is not { } enabled || submeshes.Length == 0)
+            triangles = indexList[..(indexList.Length - indexList.Length % 3)];
+        else
+        {
+            var drawn = new List<int>(indexList.Length);
+            foreach (var submesh in submeshes)
+            {
+                if ((submesh.Attributes & ~enabled) != 0)
+                    continue;
+                if (submesh.Start < 0 || submesh.Start + submesh.Count > indexList.Length)
+                    throw new InvalidDataException("A submesh reads past its mesh's indexList.");
+                for (var i = submesh.Start; i < submesh.Start + submesh.Count - submesh.Count % 3; i++)
+                    drawn.Add(indexList[i]);
+            }
+            triangles = drawn.ToArray();
         }
 
         return new SkinMesh
         {
             MeshIndex = meshIndex, Material = material, Positions = positions, Normals = normals, Binormals = binormals, BinormalSigns = signs,
             Uv1 = uv1, Uv2 = uv2, HasUv2 = hasUv2, Colors = colors, BlendIndices = indices, BlendWeights = weights, Influences = influences,
-            Bones = bones, Triangles = triangles,
+            Bones = bones, Triangles = triangles, HalfPositions = halfPositions,
         };
     }
 
@@ -365,6 +456,66 @@ internal sealed class SkinModel
         return result;
     }
 
+    /// <summary>
+    /// A copy of this model with <paramref name="changes"/> written into LOD 0's vertex buffer, each
+    /// in its element's own format (the binormal keeps its handedness byte, four-component elements
+    /// their fourth). Everything else stays byte for byte, the bounding boxes included: seam fixes move
+    /// vertices by millimetres.
+    /// </summary>
+    public byte[] WithVertexChanges(IEnumerable<SkinVertexChange> changes)
+    {
+        var result = (byte[])_bytes.Clone();
+        var vertexOffset = U32(result, 16);
+        foreach (var change in changes)
+        {
+            if (change.Mesh < 0 || change.Mesh >= _declarations.Length)
+                throw new ArgumentOutOfRangeException(nameof(changes), "A vertex change names a mesh outside the model.");
+            var mesh = _meshTable + change.Mesh * MeshSize;
+            if (change.Vertex < 0 || change.Vertex >= U16(result, mesh))
+                throw new ArgumentOutOfRangeException(nameof(changes), "A vertex change names a vertex outside its mesh.");
+            foreach (var element in _declarations[change.Mesh])
+            {
+                var value = element.Usage switch
+                {
+                    UsagePosition => change.Position,
+                    UsageNormal => change.Normal,
+                    UsageBinormal when element.Type == TypeNByte4 => change.Binormal,
+                    _ => null,
+                };
+                if (value is not { } v)
+                    continue;
+                var at = (int)(vertexOffset + U32(result, mesh + 20 + element.Stream * 4) + (long)change.Vertex * result[mesh + 32 + element.Stream] + element.Offset);
+                switch (element.Type)
+                {
+                    case TypeSingle3 or TypeSingle4:
+                        Require(at + 12 <= result.Length, "vertex buffer");
+                        WriteF32(result, at, v.X);
+                        WriteF32(result, at + 4, v.Y);
+                        WriteF32(result, at + 8, v.Z);
+                        break;
+                    case TypeHalf4:
+                        Require(at + 6 <= result.Length, "vertex buffer");
+                        BinaryPrimitives.WriteHalfLittleEndian(result.AsSpan(at), (Half)v.X);
+                        BinaryPrimitives.WriteHalfLittleEndian(result.AsSpan(at + 2), (Half)v.Y);
+                        BinaryPrimitives.WriteHalfLittleEndian(result.AsSpan(at + 4), (Half)v.Z);
+                        break;
+                    case TypeNByte4:
+                        Require(at + 3 <= result.Length, "vertex buffer");
+                        result[at] = UNorm(v.X);
+                        result[at + 1] = UNorm(v.Y);
+                        result[at + 2] = UNorm(v.Z);
+                        break;
+                    default:
+                        throw new NotSupportedException($"Vertex element type {element.Type} can't be written.");
+                }
+            }
+        }
+        return result;
+    }
+
+    /// <summary> A −1..1 component as the byte <see cref="ReadVector3"/> reads back (b / 127.5 − 1). </summary>
+    private static byte UNorm(float value) => (byte)Math.Clamp((int)MathF.Round((value + 1f) * 127.5f), 0, 255);
+
     private static void Shift(byte[] bytes, int at, int delta)
     {
         var value = U32(bytes, at);
@@ -412,12 +563,12 @@ internal sealed class SkinModel
         _ => throw new NotSupportedException($"Unsupported UV layout (type {type})."),
     };
 
-    private static IReadOnlyList<string> ReadNames(byte[] bytes, int table, int count, int block, int blockSize)
+    private static IReadOnlyList<string> ReadNames(byte[] bytes, int table, int count, int block, int blockSize, int stride = 4)
     {
         var names = new string[count];
         for (var i = 0; i < count; i++)
         {
-            var offset = (int)U32(bytes, table + i * 4);
+            var offset = (int)U32(bytes, table + i * stride);
             if (offset >= blockSize)
                 throw new InvalidDataException("A name points outside the string table.");
             var start = block + offset;

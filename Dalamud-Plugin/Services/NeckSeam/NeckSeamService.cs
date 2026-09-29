@@ -7,20 +7,25 @@ using Penumbra.Api.Enums;
 
 namespace InstantEdit.Services.NeckSeam;
 
-/// <summary> A measured seam and the actor and files it was measured on. </summary>
-internal sealed record NeckSeamAnalysis(NeckSeamReport Report, NeckSeamCaptured Captured, string ActorName, ushort ObjectIndex, nint Address)
+/// <summary> The measured skin seams (the neck, when it could be measured, and the body seams) and the actor and files they were measured on. </summary>
+internal sealed record NeckSeamAnalysis(NeckSeamReport? Report, NeckSeamCaptured Captured, string ActorName, ushort ObjectIndex, nint Address)
 {
-    /// <summary> Mod directories of neck seam previews among the face's files: measured with a preview active. </summary>
+    /// <summary> Mod directories of skin seam previews among the measured files: measured with a preview active. </summary>
     public IReadOnlyList<string> PreviewSources { get; init; } = [];
+    /// <summary> Why the neck wasn't measured (no face, the neck covered) when <see cref="Report"/> is null. </summary>
+    public string NeckError { get; init; } = string.Empty;
+    public BodySeamReport? Body { get; init; }
+    public string BodyError { get; init; } = string.Empty;
 }
 
 /// <summary> What applying or creating a preview did, with follow-up warnings. </summary>
 internal sealed record NeckSeamOutcome(string Message, IReadOnlyList<string> Warnings);
 
 /// <summary>
-/// The neck seam workflow: measure the seam of an on-screen character, put the fixed face files in a
-/// new preview mod, then either write them over the source mods' files (with managed backups) or
-/// delete the preview. Previews are remembered across plugin reloads.
+/// The skin seam workflow: measure where an on-screen character's models meet (the face and body at
+/// the neck, the body parts at the wrists, waist and ankles), put the fixed files in a new preview
+/// mod, then either write them over the source mods' files (with managed backups) or delete the
+/// preview. Previews are remembered across plugin reloads.
 /// </summary>
 internal sealed class NeckSeamService
 {
@@ -28,13 +33,17 @@ internal sealed class NeckSeamService
     private readonly IDataManager _data;
     private readonly IPluginLog _log;
     private readonly Func<bool> _recompress;
+    private readonly PainterLiveReader? _live;
 
-    public NeckSeamService(PenumbraService penumbra, IDataManager data, IPluginLog log, string configDirectory, Func<bool> recompress)
+    /// <param name="live">Reads which parts and shape keys the game draws, so only drawn skin is compared.</param>
+    public NeckSeamService(PenumbraService penumbra, IDataManager data, IPluginLog log, string configDirectory, Func<bool> recompress,
+        PainterLiveReader? live = null)
     {
         _penumbra = penumbra;
         _data = data;
         _log = log;
         _recompress = recompress;
+        _live = live;
         Store = new NeckSeamPreviewStore(configDirectory);
         Store.Load();
         if (Store.LoadError.Length > 0)
@@ -51,15 +60,37 @@ internal sealed class NeckSeamService
         byte[]? pbd = null;
         try { pbd = (await _data.GetFileAsync<FileResource>(RacialDeformer.GamePath, token).ConfigureAwait(false))?.Data; }
         catch (Exception e) when (e is not OperationCanceledException) { _log.Debug(e, "Could not read the racial deformer file."); }
+        PainterLiveCharacter? live = null;
+        if (_live is not null)
+        {
+            try { live = await _live.ReadAsync(actor.ObjectIndex, actor.Address).ConfigureAwait(false); }
+            catch (Exception e) when (e is not OperationCanceledException) { _log.Debug(e, "Could not read which parts the character draws."); }
+        }
         return await Task.Run(() =>
         {
-            var captured = NeckSeamCapture.Capture(actor.ResourceRoots, Read, pbd);
+            var captured = NeckSeamCapture.Capture(actor.ResourceRoots, Read, pbd, live);
             token.ThrowIfCancellationRequested();
-            var report = NeckSeamAnalyzer.Analyze(captured.Input);
+            NeckSeamReport? report = null;
+            var neckError = string.Empty;
+            try { report = NeckSeamAnalyzer.Analyze(captured.Input); }
+            catch (Exception e) when (e is InvalidDataException or NotSupportedException) { neckError = e.Message; }
+            token.ThrowIfCancellationRequested();
+            BodySeamReport? body = null;
+            var bodyError = string.Empty;
+            // The body seams are measured apart from the neck, so a model they can't handle leaves the neck's check usable.
+            try { body = BodySeamAnalyzer.Analyze(captured.Input); }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                _log.Warning(e, "Could not measure the body seams.");
+                bodyError = e.Message;
+            }
             var previews = Store.Previews.Select(p => p.ModDirectory).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var previewSources = captured.Sources.Values.Where(s => previews.Contains(s.ModDirectory)).Select(s => s.ModDirectory)
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            return new NeckSeamAnalysis(report, captured, actor.Name, actor.ObjectIndex, actor.Address) { PreviewSources = previewSources };
+            return new NeckSeamAnalysis(report, captured, actor.Name, actor.ObjectIndex, actor.Address)
+            {
+                PreviewSources = previewSources, NeckError = neckError, Body = body, BodyError = bodyError,
+            };
         }, token).ConfigureAwait(false);
     }
 
@@ -76,98 +107,91 @@ internal sealed class NeckSeamService
         }
         catch (Exception e)
         {
-            _log.Debug(e, "Could not read {Path} for the neck seam.", path);
+            _log.Debug(e, "Could not read {Path} for the skin seams.", path);
             return null;
         }
     }
 
-    public static Task<NeckSeamFix> BuildFixAsync(NeckSeamAnalysis analysis, NeckSeamFixOptions options, CancellationToken token)
-        => Task.Run(() => NeckSeamFixer.Build(analysis.Report, options), token);
+    /// <summary>
+    /// Builds the selected fixes: the neck's (null options leave it out), then the body seams', whose
+    /// skin material changes build on the neck's change to the same body material.
+    /// </summary>
+    public static Task<SkinSeamFix> BuildFixAsync(NeckSeamAnalysis analysis, NeckSeamFixOptions? neck,
+        IReadOnlyDictionary<BodySeamKind, BodySeamFixOptions> body, CancellationToken token)
+        => Task.Run(() =>
+        {
+            var neckFix = analysis.Report is { } report && neck is not null ? NeckSeamFixer.Build(report, neck) : null;
+            token.ThrowIfCancellationRequested();
+            var materialBase = neckFix?.BodyMaterial is { } bodyMaterial && analysis.Report is { } neckReport
+                ? new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase) { [neckReport.BodyMaterialPath] = bodyMaterial }
+                : null;
+            var bodyFix = analysis.Body is { } bodyReport && body.Count > 0 ? BodySeamFixer.Build(bodyReport, body, materialBase) : null;
+            return new SkinSeamFix(neckFix, bodyFix);
+        }, token);
 
     /// <summary>
-    /// Puts the fixed face files in a new Penumbra mod enabled for the character. Changed textures get
-    /// new game paths (the face material in the mod points at them), so other materials that share
-    /// the original textures don't change while previewing.
+    /// Puts the fixed files in a new Penumbra mod enabled for the character. Changed textures get new
+    /// game paths (the materials in the mod point at them), so other materials that share the original
+    /// textures don't change while previewing.
     /// </summary>
-    public async Task<(NeckSeamPreview Preview, NeckSeamOutcome Outcome)> CreatePreviewAsync(NeckSeamAnalysis analysis, NeckSeamFix fix, CancellationToken token)
+    public async Task<(NeckSeamPreview Preview, NeckSeamOutcome Outcome)> CreatePreviewAsync(NeckSeamAnalysis analysis, SkinSeamFix fix, CancellationToken token)
     {
         if (fix.Empty)
             throw new InvalidOperationException("The selected fixes don't change anything.");
         if (analysis.PreviewSources.Count > 0)
-            throw new InvalidOperationException("A neck seam preview is active for this character. Apply or discard it first, then measure again.");
-        var report = analysis.Report;
+            throw new InvalidOperationException("A skin seam preview is active for this character. Apply or discard it first, then measure again.");
+        var plan = SkinSeamPreviewPlan.Build(analysis, fix);
         var id = Guid.NewGuid();
         var tag = id.ToString("N")[..8];
         var files = new List<(string GamePath, byte[] Bytes)>();
         var records = new List<NeckSeamPreviewFile>();
         NeckSeamSource SourceOf(string gamePath) => analysis.Captured.Source(gamePath)
-            ?? throw new InvalidDataException($"The source of {gamePath} is unknown; measure the seam again.");
+            ?? throw new InvalidDataException($"The source of {gamePath} is unknown; measure the seams again.");
+        NeckSeamPreviewFile Record(string kind, string gamePath, string previewPath, byte[] bytes) => new()
+        {
+            Kind = kind, GamePath = gamePath, PreviewGamePath = previewPath, PreviewRelativePath = "Files/" + previewPath,
+            PreviewSha256 = NeckSeamCapture.Hash(bytes), Source = SourceOf(gamePath),
+        };
 
-        var material = SkinMaterial.Read(report.FaceMaterialBytes);
-        var rewrites = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var work = Path.Combine(Path.GetTempPath(), "InstantEdit", "neck-seam", id.ToString("N"));
         Directory.CreateDirectory(work);
         try
         {
-            foreach (var texture in fix.Textures)
+            for (var i = 0; i < plan.Textures.Count; i++)
             {
-                var index = material.Samplers[texture.Sampler];
-                var stored = material.Textures[index];
-                var previewStored = PreviewTexturePath(stored, tag);
-                var previewRequested = PathRules.Dx11TexturePath(previewStored, material.TextureFlags[index]);
-                var bytes = await EncodeAsync(texture, work, token).ConfigureAwait(false);
-                rewrites[stored] = previewStored;
+                var texture = plan.Textures[i];
+                var previewRequested = plan.PreviewPath(texture, tag) ?? throw new InvalidDataException($"No material in the fix names {texture.GamePath}.");
+                var bytes = await EncodeAsync(texture.Image, texture.Original, $"{i}-{NeckSeamFixer.Label(texture.Sampler)}", work, token).ConfigureAwait(false);
                 files.Add((previewRequested, bytes));
-                records.Add(new NeckSeamPreviewFile
-                {
-                    Kind = "face " + NeckSeamFixer.Label(texture.Sampler) + " texture", GamePath = texture.GamePath, PreviewGamePath = previewRequested,
-                    PreviewRelativePath = "Files/" + previewRequested, PreviewSha256 = NeckSeamCapture.Hash(bytes), Source = SourceOf(texture.GamePath),
-                });
+                records.Add(Record(texture.Kind, texture.GamePath, previewRequested, bytes));
             }
         }
         finally
         {
             try { Directory.Delete(work, true); }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _log.Debug(e, "Could not remove the neck seam work folder."); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _log.Debug(e, "Could not remove the skin seam work folder."); }
         }
 
-        var materialBytes = fix.Material ?? (rewrites.Count > 0 ? report.FaceMaterialBytes : null);
-        if (materialBytes is not null)
+        var changed = plan.Textures.Select(t => t.GamePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var material in plan.Materials)
         {
-            var previewMaterial = rewrites.Count > 0 ? PenumbraService.RewriteMaterialTexturePaths(materialBytes, rewrites) : materialBytes;
-            files.Add((report.FaceMaterialPath, previewMaterial));
-            records.Add(new NeckSeamPreviewFile
+            var rewrites = SkinSeamPreviewPlan.Rewrites(material.Bytes, changed, tag);
+            var previewMaterial = rewrites.Count > 0 ? PenumbraService.RewriteMaterialTexturePaths(material.Bytes, rewrites) : material.Bytes;
+            files.Add((material.GamePath, previewMaterial));
+            records.Add(Record(material.Kind, material.GamePath, material.GamePath, previewMaterial) with
             {
-                Kind = "face material", GamePath = report.FaceMaterialPath, PreviewGamePath = report.FaceMaterialPath,
-                PreviewRelativePath = "Files/" + report.FaceMaterialPath, PreviewSha256 = NeckSeamCapture.Hash(previewMaterial),
-                Source = SourceOf(report.FaceMaterialPath),
                 TextureRewrites = rewrites.ToDictionary(p => p.Value, p => p.Key, StringComparer.OrdinalIgnoreCase),
             });
         }
-        if (fix.BodyMaterial is not null)
+        foreach (var model in plan.Models)
         {
-            // The body's skin material is shared by every body part, so its path is kept: the whole body previews the change.
-            files.Add((report.BodyMaterialPath, fix.BodyMaterial));
-            records.Add(new NeckSeamPreviewFile
-            {
-                Kind = "body material", GamePath = report.BodyMaterialPath, PreviewGamePath = report.BodyMaterialPath,
-                PreviewRelativePath = "Files/" + report.BodyMaterialPath, PreviewSha256 = NeckSeamCapture.Hash(fix.BodyMaterial),
-                Source = SourceOf(report.BodyMaterialPath),
-            });
-        }
-        if (fix.Model is not null)
-        {
-            files.Add((report.FaceModelPath, fix.Model));
-            records.Add(new NeckSeamPreviewFile
-            {
-                Kind = "face model", GamePath = report.FaceModelPath, PreviewGamePath = report.FaceModelPath,
-                PreviewRelativePath = "Files/" + report.FaceModelPath, PreviewSha256 = NeckSeamCapture.Hash(fix.Model), Source = SourceOf(report.FaceModelPath),
-            });
+            files.Add((model.GamePath, model.Bytes));
+            records.Add(Record(model.Kind, model.GamePath, model.GamePath, model.Bytes));
         }
 
-        var description = "Neck seam preview made by XIV Instant Edit for " + analysis.ActorName + ":\n" + string.Join("\n", fix.Changes) +
-                          "\n\nApply or discard it from the neck seam dialog (the face model's ⋯ menu on the On Screen tab).";
-        var mod = await _penumbra.CreateNeckSeamModAsync($"Neck Seam Preview - {analysis.ActorName}", description, files, analysis.ObjectIndex, token)
+        var description = "Skin seam preview made by XIV Instant Edit for " + analysis.ActorName + ":\n" + string.Join("\n", fix.Changes) +
+                          "\n\nApply or discard it from the skin seam check on XIV Instant Edit's Quick Actions tab.";
+        var mod = await _penumbra.CreateNeckSeamModAsync($"Skin Seam Preview - {analysis.ActorName}", description, files, analysis.ObjectIndex, token)
             .ConfigureAwait(false);
         var preview = new NeckSeamPreview
         {
@@ -187,13 +211,14 @@ internal sealed class NeckSeamService
         return (slash < 0 ? "" : normalized[..(slash + 1)]) + name + "_ns" + tag + ".tex";
     }
 
-    private async Task<byte[]> EncodeAsync(NeckSeamTextureOutput texture, string work, CancellationToken token)
+    /// <param name="label">A name for the work files, unique within the preview.</param>
+    private async Task<byte[]> EncodeAsync(SeamImage image, byte[] original, string label, string work, CancellationToken token)
     {
         var type = TextureType.RgbaTex;
         var mips = true;
         try
         {
-            var header = TextureFiles.ReadTex(texture.Original);
+            var header = TextureFiles.ReadTex(original);
             mips = header.Mips > 1;
             if (_recompress())
                 type = TextureFiles.OutputType(header.Format);
@@ -202,10 +227,9 @@ internal sealed class NeckSeamService
         {
             // Formats the texture editor can't preserve are saved uncompressed.
         }
-        var label = NeckSeamFixer.Label(texture.Sampler);
         var tga = Path.Combine(work, label + ".tga");
         var output = Path.Combine(work, label + ".tex");
-        await File.WriteAllBytesAsync(tga, TgaImage.WriteBgra32(new RgbaImage(texture.Image.Width, texture.Image.Height, texture.Image.Rgba)), token)
+        await File.WriteAllBytesAsync(tga, TgaImage.WriteBgra32(new RgbaImage(image.Width, image.Height, image.Rgba)), token)
             .ConfigureAwait(false);
         await ((ITextureEditBackend)_penumbra).ConvertAsync(tga, output, type, mips).ConfigureAwait(false);
         var bytes = await File.ReadAllBytesAsync(output, token).ConfigureAwait(false);
@@ -219,7 +243,7 @@ internal sealed class NeckSeamService
 
     /// <summary>
     /// Writes the preview's files over their sources: mod files in place (backed up first), game data
-    /// into a new "Neck Seam Fix" mod. The face material gets its original texture paths back, since
+    /// into a new "Skin Seam Fix" mod. The materials get their original texture paths back, since
     /// the textures themselves are replaced. Then the preview mod is deleted.
     /// </summary>
     public async Task<NeckSeamOutcome> ApplyAsync(NeckSeamPreview preview)
@@ -252,8 +276,8 @@ internal sealed class NeckSeamService
         string? fixMod = null;
         if (gameFiles.Count > 0)
         {
-            var created = await _penumbra.CreateNeckSeamModAsync($"Neck Seam Fix - {preview.ActorName}",
-                "Neck seam fix made by XIV Instant Edit for game files " + preview.ActorName + " uses.", gameFiles, preview.ObjectIndex,
+            var created = await _penumbra.CreateNeckSeamModAsync($"Skin Seam Fix - {preview.ActorName}",
+                "Skin seam fix made by XIV Instant Edit for game files " + preview.ActorName + " uses.", gameFiles, preview.ObjectIndex,
                 CancellationToken.None).ConfigureAwait(false);
             fixMod = created.ModDirectory;
             warnings.AddRange(created.Warnings);
@@ -267,7 +291,7 @@ internal sealed class NeckSeamService
             parts.Add($"wrote {modWrites.Count} file{(modWrites.Count == 1 ? "" : "s")} into {string.Join(", ", modWrites.Select(w => w.Source.ModName).Distinct())} (backups kept for 7 days)");
         if (fixMod is not null)
             parts.Add($"put {gameFiles.Count} game file{(gameFiles.Count == 1 ? "" : "s")} in the mod {fixMod}");
-        return new NeckSeamOutcome(parts.Count == 0 ? "Nothing needed writing; the preview is removed." : "Neck seam fix applied: " + string.Join("; ", parts) + ".",
+        return new NeckSeamOutcome(parts.Count == 0 ? "Nothing needed writing; the preview is removed." : "Skin seam fix applied: " + string.Join("; ", parts) + ".",
             warnings);
     }
 

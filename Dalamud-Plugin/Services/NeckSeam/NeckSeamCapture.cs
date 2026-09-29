@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using InstantEdit.Models;
+using InstantEdit.Services.Painter;
 
 namespace InstantEdit.Services.NeckSeam;
 
@@ -37,43 +38,71 @@ internal sealed record NeckSeamCaptured(NeckSeamInput Input, IReadOnlyDictionary
 }
 
 /// <summary>
-/// Collects the neck seam analysis input from an On Screen snapshot: the face model with its
-/// materials and their textures, and every other model that has a body skin material. Textures a
-/// material names but the tree doesn't list come from game data. Dalamud-free; reading is delegated.
+/// Collects the skin seam analysis input from an On Screen snapshot: the face model with its
+/// materials and their textures, and every other model that has a body skin material, with its
+/// skin materials and their textures. Textures a material names but the tree doesn't list come from
+/// game data. Dalamud-free; reading is delegated.
 /// </summary>
 internal static class NeckSeamCapture
 {
     public const long MaxFileBytes = 256L * 1024 * 1024;
 
     /// <param name="read">Reads a resolved file: a full path, or a game path for game data. Null when unavailable.</param>
-    public static NeckSeamCaptured Capture(IReadOnlyList<ResourceNode> roots, Func<string, byte[]?> read, byte[]? racialDeformers)
+    /// <param name="live">What the game draws for the character: each loaded model's enabled attributes and shape keys, and its race. Null counts every part as drawn.</param>
+    public static NeckSeamCaptured Capture(IReadOnlyList<ResourceNode> roots, Func<string, byte[]?> read, byte[]? racialDeformers,
+        PainterLiveCharacter? live = null)
     {
         var models = Flatten(roots).Where(node => node.GamePath.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase)).ToList();
-        var faceNode = models.FirstOrDefault(node => NeckSeamAnalyzer.IsFaceModel(node.GamePath))
-            ?? throw new InvalidDataException("This character has no face model loaded.");
         var sources = new Dictionary<string, NeckSeamSource>(StringComparer.OrdinalIgnoreCase);
-        var faceBytes = ReadNode(faceNode, read, sources)
-            ?? throw new InvalidDataException("The face model could not be read.");
-        var face = new NeckSeamModelInput(faceNode.GamePath, faceBytes, Materials(faceNode, read, sources, _ => true, recordTextures: true));
+        var faceNode = models.FirstOrDefault(node => NeckSeamAnalyzer.IsFaceModel(node.GamePath));
+        NeckSeamModelInput? face = null;
+        if (faceNode is not null)
+        {
+            var faceBytes = ReadNode(faceNode, read, sources)
+                ?? throw new InvalidDataException("The face model could not be read.");
+            face = WithLive(new NeckSeamModelInput(faceNode.GamePath, faceBytes, Materials(faceNode, read, sources, _ => true, recordTextures: true)),
+                faceNode, live);
+        }
 
         var bodies = new List<NeckSeamModelInput>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { faceNode.GamePath + "\n" + faceNode.ActualPath };
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (faceNode is not null)
+            seen.Add(faceNode.GamePath + "\n" + faceNode.ActualPath);
         foreach (var node in models)
         {
             if (!seen.Add(node.GamePath + "\n" + node.ActualPath))
                 continue;
-            // Body skin materials are recorded too: the skin settings can meet on the body's side.
-            var skins = Materials(node, read, sources, material => material.IsBodySkin, recordTextures: false);
-            if (skins.Count == 0 || ReadNode(node, read, null) is not { } bytes)
+            // Body skin materials, their textures and the models are recorded too: the neck's skin settings can
+            // meet on the body's side, and the body seams' fixes write models, materials and textures.
+            var skins = Materials(node, read, sources, material => material.IsBodySkin, recordTextures: true);
+            if (skins.Count == 0 || ReadNode(node, read, sources) is not { } bytes)
                 continue;
-            bodies.Add(new NeckSeamModelInput(node.GamePath, bytes, skins));
+            bodies.Add(WithLive(new NeckSeamModelInput(node.GamePath, bytes, skins), node, live));
         }
-        return new NeckSeamCaptured(new NeckSeamInput(face, bodies, racialDeformers), sources);
+        var race = live is { Race: > 0 } ? live.Race : face is null ? null : NeckSeamAnalyzer.RaceOf(face.GamePath);
+        return new NeckSeamCaptured(new NeckSeamInput(face, bodies, racialDeformers) { CharacterRace = race }, sources);
+    }
+
+    /// <summary> The model's enabled attributes and shape keys, when the game draws the file the tree names. </summary>
+    private static NeckSeamModelInput WithLive(NeckSeamModelInput input, ResourceNode node, PainterLiveCharacter? live)
+    {
+        if (live is null)
+            return input;
+        var actual = PainterVisibility.NormalizePath(node.ActualPath);
+        var game = PainterVisibility.NormalizePath(node.GamePath);
+        var model = live.Models.FirstOrDefault(m => m.Slot >= 0 && (m.Path == actual || m.Path == game))
+                    ?? live.Models.FirstOrDefault(m => m.Path == actual || m.Path == game);
+        return model is null ? input : input with { Attributes = model.EnabledAttributes, Shapes = model.EnabledShapes };
     }
 
     /// <summary> Whether the tree has the face model <see cref="Capture"/> needs. </summary>
     public static bool HasFaceModel(IReadOnlyList<ResourceNode> roots)
         => Flatten(roots).Any(node => node.GamePath.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase) && NeckSeamAnalyzer.IsFaceModel(node.GamePath));
+
+    /// <summary> Whether the tree has a face or a body part model (top, gloves, legs or shoes) whose seams can be measured. </summary>
+    public static bool HasSkinModels(IReadOnlyList<ResourceNode> roots)
+        => Flatten(roots).Any(node => node.GamePath.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase) &&
+                                      (NeckSeamAnalyzer.IsFaceModel(node.GamePath) || BodySeamAnalyzer.SlotOf(node.GamePath) is not null));
 
     private static IEnumerable<ResourceNode> Flatten(IEnumerable<ResourceNode> nodes)
     {

@@ -167,6 +167,7 @@ try
     GameFileScenarios.Run(testRoot);
     ToolSetupScenarios.Run(testRoot);
     NeckSeamScenarios.Run(testRoot);
+    BodySeamScenarios.Run(testRoot);
     RacialScalingScenarios.Run(testRoot);
 
     // ---- Backup safety, export-context authorization, and revocation ----
