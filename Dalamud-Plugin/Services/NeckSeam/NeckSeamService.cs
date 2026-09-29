@@ -1,6 +1,7 @@
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using InstantEdit.Services.Painter;
+using InstantEdit.Services.PreviewMods;
 using InstantEdit.Services.Skeletons;
 using Lumina.Data;
 using Penumbra.Api.Enums;
@@ -24,7 +25,11 @@ internal sealed record NeckSeamOutcome(string Message, IReadOnlyList<string> War
 /// </summary>
 internal sealed class NeckSeamService
 {
+    /// <summary> The mod name used when a character's name can't name a folder. </summary>
+    private const string FixModFallback = "Neck Seam Fix";
+    private const string Recheck = "Measure the seam again";
     private readonly PenumbraService _penumbra;
+    private readonly PreviewModService _previews;
     private readonly IDataManager _data;
     private readonly IPluginLog _log;
     private readonly Func<bool> _recompress;
@@ -32,6 +37,7 @@ internal sealed class NeckSeamService
     public NeckSeamService(PenumbraService penumbra, IDataManager data, IPluginLog log, string configDirectory, Func<bool> recompress)
     {
         _penumbra = penumbra;
+        _previews = new PreviewModService(penumbra);
         _data = data;
         _log = log;
         _recompress = recompress;
@@ -167,8 +173,8 @@ internal sealed class NeckSeamService
 
         var description = "Neck seam preview made by XIV Instant Edit for " + analysis.ActorName + ":\n" + string.Join("\n", fix.Changes) +
                           "\n\nApply or discard it from the neck seam dialog (the face model's ⋯ menu on the On Screen tab).";
-        var mod = await _penumbra.CreateNeckSeamModAsync($"Neck Seam Preview - {analysis.ActorName}", description, files, analysis.ObjectIndex, token)
-            .ConfigureAwait(false);
+        var mod = await _previews.CreateAsync($"Neck Seam Preview - {analysis.ActorName}", description,
+            files.Select(file => PreviewModEntry.At(file.GamePath, file.Bytes)).ToList(), analysis.ObjectIndex, FixModFallback, token).ConfigureAwait(false);
         var preview = new NeckSeamPreview
         {
             Id = id, ModDirectory = mod.ModDirectory, ModIdentifier = mod.Identifier, CollectionId = mod.CollectionId, CollectionName = mod.CollectionName,
@@ -224,70 +230,30 @@ internal sealed class NeckSeamService
     /// </summary>
     public async Task<NeckSeamOutcome> ApplyAsync(NeckSeamPreview preview)
     {
-        var folder = await PreviewFolderAsync(preview).ConfigureAwait(false);
-        var modWrites = new List<(NeckSeamSource Source, byte[] Bytes)>();
-        var gameFiles = new List<(string GamePath, byte[] Bytes)>();
-        foreach (var file in preview.Files)
-        {
-            var path = Path.GetFullPath(Path.Combine(folder, file.PreviewRelativePath.Replace('/', Path.DirectorySeparatorChar)));
-            if (!PathRules.IsPathWithin(path, folder) || !File.Exists(path))
-                throw new IOException($"The preview mod lost its {file.Kind}. Discard the preview and make a new one.");
-            var bytes = await File.ReadAllBytesAsync(path).ConfigureAwait(false);
-            if (!string.Equals(NeckSeamCapture.Hash(bytes), file.PreviewSha256, StringComparison.OrdinalIgnoreCase))
-                throw new IOException($"The preview mod's {file.Kind} was edited. Discard the preview and make a new one.");
-            if (file.TextureRewrites.Count > 0)
-                bytes = PenumbraService.RewriteMaterialTexturePaths(bytes, file.TextureRewrites);
-            if (file.Source.IsModFile)
-            {
-                if (!string.Equals(NeckSeamCapture.Hash(bytes), file.Source.Sha256, StringComparison.OrdinalIgnoreCase))
-                    modWrites.Add((file.Source, bytes));
-            }
-            else
-                gameFiles.Add((file.GamePath, bytes));
-        }
-
-        var warnings = new List<string>();
-        if (modWrites.Count > 0)
-            warnings.AddRange(await _penumbra.WriteNeckSeamSourcesAsync(modWrites, preview.ObjectIndex).ConfigureAwait(false));
-        string? fixMod = null;
-        if (gameFiles.Count > 0)
-        {
-            var created = await _penumbra.CreateNeckSeamModAsync($"Neck Seam Fix - {preview.ActorName}",
-                "Neck seam fix made by XIV Instant Edit for game files " + preview.ActorName + " uses.", gameFiles, preview.ObjectIndex,
-                CancellationToken.None).ConfigureAwait(false);
-            fixMod = created.ModDirectory;
-            warnings.AddRange(created.Warnings);
-        }
-        var (_, delete) = await _penumbra.DeleteNeckSeamModAsync(preview.ModDirectory, preview.ModIdentifier, preview.ObjectIndex).ConfigureAwait(false);
-        if (delete is not null)
-            warnings.Add(delete);
+        var result = await _previews.ApplyAsync(Shared(preview), $"Neck Seam Fix - {preview.ActorName}",
+            "Neck seam fix made by XIV Instant Edit for game files " + preview.ActorName + " uses.", FixModFallback, Recheck).ConfigureAwait(false);
         Store.Remove(preview.Id);
-        var parts = new List<string>();
-        if (modWrites.Count > 0)
-            parts.Add($"wrote {modWrites.Count} file{(modWrites.Count == 1 ? "" : "s")} into {string.Join(", ", modWrites.Select(w => w.Source.ModName).Distinct())} (backups kept for 7 days)");
-        if (fixMod is not null)
-            parts.Add($"put {gameFiles.Count} game file{(gameFiles.Count == 1 ? "" : "s")} in the mod {fixMod}");
-        return new NeckSeamOutcome(parts.Count == 0 ? "Nothing needed writing; the preview is removed." : "Neck seam fix applied: " + string.Join("; ", parts) + ".",
-            warnings);
+        return new NeckSeamOutcome(result.Describe("Neck seam fix applied"), result.Warnings);
     }
 
     public async Task<NeckSeamOutcome> DiscardAsync(NeckSeamPreview preview)
     {
-        var (removed, warning) = await _penumbra.DeleteNeckSeamModAsync(preview.ModDirectory, preview.ModIdentifier, preview.ObjectIndex).ConfigureAwait(false);
-        if (removed)
+        var result = await _previews.DiscardAsync(Shared(preview)).ConfigureAwait(false);
+        if (result.Removed)
             Store.Remove(preview.Id);
-        return new NeckSeamOutcome(removed ? $"Discarded the preview mod {preview.ModDirectory}." : "The preview mod could not be deleted.",
-            warning is null ? [] : [warning]);
+        return new NeckSeamOutcome(result.Message, result.Warnings);
     }
 
-    private async Task<string> PreviewFolderAsync(NeckSeamPreview preview)
+    /// <summary> The preview as the shared preview-mod workflow sees it. </summary>
+    private static PreviewMod Shared(NeckSeamPreview preview) => new()
     {
-        var root = await _penumbra.NeckSeamModRootAsync().ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(root) || !PenumbraService.IsSafeModName(preview.ModDirectory))
-            throw new IOException("Penumbra's mod directory is unavailable.");
-        var folder = Path.GetFullPath(Path.Combine(root, preview.ModDirectory));
-        if (!Directory.Exists(folder) || PenumbraService.ReadModStableIdentifierForRegression(folder) != preview.ModIdentifier)
-            throw new IOException($"The preview mod {preview.ModDirectory} is gone or was replaced. Discard it and make a new preview.");
-        return folder;
-    }
+        Id = preview.Id, ModDirectory = preview.ModDirectory, ModIdentifier = preview.ModIdentifier, CollectionId = preview.CollectionId,
+        CollectionName = preview.CollectionName, ActorName = preview.ActorName, ObjectIndex = preview.ObjectIndex, Created = preview.Created,
+        Changes = preview.Changes,
+        Files = preview.Files.Select(file => new PreviewModFile
+        {
+            Kind = file.Kind, GamePath = file.GamePath, PreviewRelativePath = file.PreviewRelativePath, PreviewSha256 = file.PreviewSha256,
+            Source = file.Source, TextureRewrites = file.TextureRewrites,
+        }).ToList(),
+    };
 }
