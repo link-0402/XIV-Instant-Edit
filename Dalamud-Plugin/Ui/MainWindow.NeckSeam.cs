@@ -26,9 +26,6 @@ public sealed partial class MainWindow
 
     internal void AttachNeckSeam(NeckSeamService service) => _neckSeam = service;
 
-    private bool CanFixNeckSeam(ActorView actor, ResourceView node)
-        => _neckSeam is not null && actor.Entity is not null && node.IsModel && NeckSeamAnalyzer.IsFaceModel(node.GamePath);
-
     private void OpenNeckSeam(OnScreenObject actor)
     {
         _neckSeamActor = actor;
@@ -42,7 +39,7 @@ public sealed partial class MainWindow
     {
         if (_neckSeam is not { } service || _neckSeamActor is not { } actor || Interlocked.CompareExchange(ref _neckSeamBusy, 1, 0) != 0)
             return;
-        _neckSeamBusyText = "Measuring the neck seam…";
+        _neckSeamBusyText = "Measuring the neck seam";
         _neckSeamError = string.Empty;
         _neckSeamAnalysis = null;
         _neckSeamFix = null;
@@ -73,7 +70,7 @@ public sealed partial class MainWindow
     {
         if (_neckSeam is not { } service || _neckSeamAnalysis is not { } analysis || Interlocked.CompareExchange(ref _neckSeamBusy, 1, 0) != 0)
             return;
-        _neckSeamBusyText = "Building the fixed files…";
+        _neckSeamBusyText = "Building the fixed files";
         _neckSeamError = string.Empty;
         var options = new NeckSeamFixOptions(_neckSeamMorph, _neckSeamMaterial, _neckSeamTextures, _neckSeamBandCm / 100f, _neckSeamMeet);
         _ = Task.Run(async () =>
@@ -82,7 +79,7 @@ public sealed partial class MainWindow
             {
                 var fix = await NeckSeamService.BuildFixAsync(analysis, options, _lifetimeCts.Token).ConfigureAwait(false);
                 _neckSeamFix = fix;
-                _neckSeamBusyText = "Creating the preview mod…";
+                _neckSeamBusyText = "Creating the preview mod";
                 var (_, outcome) = await service.CreatePreviewAsync(analysis, fix, _lifetimeCts.Token).ConfigureAwait(false);
                 ReportNeckSeam(outcome);
             }
@@ -100,7 +97,7 @@ public sealed partial class MainWindow
     {
         if (_neckSeam is not { } service || Interlocked.CompareExchange(ref _neckSeamBusy, 1, 0) != 0)
             return;
-        _neckSeamBusyText = apply ? "Writing the fix into your mods…" : "Removing the preview mod…";
+        _neckSeamBusyText = apply ? "Writing the fix into your mods" : "Removing the preview mod";
         _neckSeamError = string.Empty;
         _neckSeamConfirmApply = false;
         _ = Task.Run(async () =>
@@ -213,7 +210,7 @@ public sealed partial class MainWindow
         {
             if (!_neckSeamConfirmApply)
             {
-                if (ImGui.Button("Apply to my mods…"))
+                if (ImGui.Button("Apply to my mods"))
                     _neckSeamConfirmApply = true;
                 ImGui.SameLine();
                 if (ImGui.Button("Discard preview"))

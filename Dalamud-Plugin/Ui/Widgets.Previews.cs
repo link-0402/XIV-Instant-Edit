@@ -113,7 +113,7 @@ internal static partial class Widgets
                     ImGui.TextColored(Theme.Warning, $"Preview unavailable: {entry.Error}");
                 break;
             default:
-                ImGui.TextColored(Theme.Muted, "Loading preview…");
+                ImGui.TextColored(Theme.Muted, "Loading preview");
                 break;
         }
     }

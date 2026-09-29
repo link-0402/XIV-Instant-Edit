@@ -57,7 +57,7 @@ public sealed partial class MainWindow
                 failed = _modLoadFailed;
             }
             if (loading)
-                Widgets.EmptyState(FontAwesomeIcon.Sync, "Scanning the mod…", "Reading the mod's files and option groups.");
+                Widgets.EmptyState(FontAwesomeIcon.Sync, "Scanning the mod", "Reading the mod's files and option groups.");
             else if (failed)
                 Widgets.EmptyState(FontAwesomeIcon.ExclamationTriangle, "Could not read the selected mod", "Its meta.json may be missing or older than Penumbra 1.7.1. Reload the mod in Penumbra and try again.");
             else

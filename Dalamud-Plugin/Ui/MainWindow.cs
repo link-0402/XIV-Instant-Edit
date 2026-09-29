@@ -217,6 +217,9 @@ public sealed partial class MainWindow : Window, IDisposable
                         animationsTabActive = true;
                         DrawAnimations();
                         break;
+                    case MainTab.QuickActions:
+                        DrawQuickActionsTab();
+                        break;
                     default:
                         DrawOnScreenTab();
                         break;
@@ -282,6 +285,8 @@ public sealed partial class MainWindow : Window, IDisposable
             ImGui.SameLine(0, Theme.Gap);
             if (Widgets.TabButton(FontAwesomeIcon.Running, "Animations", active == MainTab.Animations)) active = MainTab.Animations;
         }
+        ImGui.SameLine(0, Theme.Gap);
+        if (Widgets.TabButton(FontAwesomeIcon.Bolt, "Quick Actions", active == MainTab.QuickActions)) active = MainTab.QuickActions;
 
         var penumbra = false;
         try { penumbra = _penumbra.Available; } catch (Exception e) { _log.Debug(e.Message); }
@@ -319,7 +324,7 @@ public sealed partial class MainWindow : Window, IDisposable
             ImGui.SameLine(0, Theme.Scaled(10));
         }
         var refreshing = _onScreen.IsRefreshing;
-        if (Widgets.IconButton("##refresh", FontAwesomeIcon.Sync, refreshing ? "Refreshing the on-screen resource list…" : "Refresh the on-screen resource list", !refreshing))
+        if (Widgets.IconButton("##refresh", FontAwesomeIcon.Sync, refreshing ? "Refreshing the on-screen resource list" : "Refresh the on-screen resource list", !refreshing))
             RequestRefresh();
         ImGui.SameLine();
         if (Widgets.IconButton("##options", FontAwesomeIcon.SlidersH, "Model import, texture and animation export options"))
@@ -387,7 +392,7 @@ public sealed partial class MainWindow : Window, IDisposable
 
         var rightWidth = frame;
         if (busy)
-            rightWidth += frame + style.ItemSpacing.X + ImGui.CalcTextSize("Working…").X + style.ItemSpacing.X;
+            rightWidth += frame + style.ItemSpacing.X + ImGui.CalcTextSize("Working").X + style.ItemSpacing.X;
         if (canCancel)
             rightWidth += ImGui.CalcTextSize("Cancel").X + style.FramePadding.X * 2 + style.ItemSpacing.X;
         var messageWidth = Math.Max(1, ImGui.GetContentRegionAvail().X - rightWidth - style.ItemSpacing.X);
@@ -421,7 +426,7 @@ public sealed partial class MainWindow : Window, IDisposable
             Widgets.Spinner();
             ImGui.SameLine();
             ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, "Working…");
+            ImGui.TextColored(Theme.Muted, "Working");
             ImGui.SameLine();
             if (canCancel && ImGui.SmallButton("Cancel"))
             {

@@ -96,7 +96,7 @@ public sealed partial class MainWindow
         if (actors.Count == 0)
         {
             if (emptyMessage is null && _onScreen.IsRefreshing)
-                Widgets.EmptyState(FontAwesomeIcon.Sync, "Refreshing resources…", "Collecting the on-screen resource list from Penumbra.");
+                Widgets.EmptyState(FontAwesomeIcon.Sync, "Refreshing resources", "Collecting the on-screen resource list from Penumbra.");
             else if (emptyMessage is not null)
                 Widgets.EmptyState(FontAwesomeIcon.FolderOpen, "Nothing to show", emptyMessage);
             else if (_search.Active || _kinds.IsFlat)
@@ -593,11 +593,8 @@ public sealed partial class MainWindow
             if (ImGui.MenuItem("Send animation to Blender"))
                 OpenAnimationSend(node);
         }
-        var neckSeam = CanFixNeckSeam(actor, node);
-        if (neckSeam && ImGui.MenuItem("Fix neck seam…"))
-            OpenNeckSeam(actor.Entity!);
         extraItems?.Invoke();
-        if (safeModel || texture || animation || neckSeam || extraItems is not null)
+        if (safeModel || texture || animation || extraItems is not null)
             ImGui.Separator();
 
         using (ImRaii.Disabled(node.GamePath.Length == 0))

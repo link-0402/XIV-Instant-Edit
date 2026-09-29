@@ -43,6 +43,7 @@ public sealed partial class MainWindow
         TextureEdits,
         Animations,
         GameFiles,
+        QuickActions,
     }
 
     private readonly record struct FeedbackState(string Text, FeedbackSeverity Severity);

@@ -58,7 +58,7 @@ internal static class ChangelogCatalog
             Entry("Messages appear in a status bar at the bottom, with a history of recent ones. Warnings, errors and Blender import and export results can also pop up as notifications.", 1),
             Highlight("Hover to preview: textures show the image (hold Shift for a larger view with transparency), materials show their textures, and models show their details, with a small 3D preview for Dawntrail models."),
             Highlight("Texture variants: save a copy of your texture under a new name, and it becomes an option in Penumbra that you can switch to."),
-            Highlight("Fix neck seams: choose Fix neck seam… in a face model's menu on the On Screen tab to compare the face and body where they meet, the way the game's skin shader draws them."),
+            Highlight("Quick Actions: a new tab for tasks that work on a whole character. The first one fixes neck seams: it compares your character's face and body where they meet, the way the game's skin shader draws them."),
             Entry("It checks the face model's neck connection data, the skin detail tile and skin settings, and the colour, masks and normal maps on both sides of the seam.", 1),
             Entry("A slider picks where the face's and body's skin settings meet: change only the body, only the face, or both part of the way.", 1),
             Entry("The fix goes into a new preview mod first. If you like the result, apply it to your mods (backups are kept for a week) or discard it.", 1),

@@ -219,7 +219,7 @@ internal sealed class ToolSetupViews
         Widgets.Spinner();
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
-        Widgets.Hint($"Looking for {what}…");
+        Widgets.Hint($"Looking for {what}");
     }
 
     // ---- Blender ---------------------------------------------------------------------------
@@ -247,7 +247,7 @@ internal sealed class ToolSetupViews
             ImGui.Spacing();
         }
 
-        if (ImGui.Button("Add a Blender that isn't listed…"))
+        if (ImGui.Button("Add a Blender that isn't listed"))
         {
             var start = detection.Blenders.Count > 0
                 ? Path.GetDirectoryName(Path.GetDirectoryName(detection.Blenders[0].Executable)!)!
@@ -421,7 +421,7 @@ internal sealed class ToolSetupViews
             Widgets.Spinner();
             ImGui.SameLine(0, Theme.Gap);
             ImGui.AlignTextToFramePadding();
-            Widgets.Hint("Installing from GitHub…");
+            Widgets.Hint("Installing from GitHub");
         }
         else if (running)
         {
@@ -445,7 +445,7 @@ internal sealed class ToolSetupViews
         if (ImGui.InputTextWithHint("##texture-editor-path", "Full path to Photoshop.exe or another TGA editor", ref edited, 2048))
             setPath(edited.Trim().Trim('"'));
         ImGui.SameLine();
-        if (ImGui.Button("Browse…##texture-editor"))
+        if (ImGui.Button("Browse##texture-editor"))
         {
             var start = Directory.Exists(Path.GetDirectoryName(path) ?? "") ? Path.GetDirectoryName(path)! : Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
             _fileDialog.OpenFileDialog("Choose the texture editor", "Programs{.exe}", (success, files) =>

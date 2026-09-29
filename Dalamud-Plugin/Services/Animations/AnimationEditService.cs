@@ -216,7 +216,7 @@ internal sealed class AnimationEditService : IDisposable
         await CheckActorAsync(request.Capture, false);
         if (request.Operation == AnimationOperation.BakeOffsets) await framework.RunOnFrameworkThread(() => poses.ValidateRoundTrip(request.Capture.Pose));
         await resources.CheckAsync(request.Capture.CollectionId, request.Capture.Sources, token);
-        Status = "Capturing effective animation sources and dependencies…";
+        Status = "Capturing effective animation sources and dependencies";
         var clips = request.IncludeStartup ? new[] { request.Capture.Clip, request.Capture.Startup! } : [request.Capture.Clip];
         foreach (var clip in clips)
             if (clip.Resolution is { } resolution &&
@@ -332,7 +332,7 @@ internal sealed class AnimationEditService : IDisposable
         var clip = startup ? capture.Startup ?? throw new InvalidOperationException("No linked startup animation was identified.") : capture.Clip;
         if (clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: { } source })
             throw new InvalidOperationException(clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for first.");
-        Status = "Reading the animation file…";
+        Status = "Reading the animation file";
         var (resource, pap) = await resources.ReadAsync(capture.CollectionId, clip.GamePath, token);
         var (_, skeleton) = await resources.ReadSkeletonAsync(capture.CollectionId, source.Source, token);
         var name = AnimationPresentation.ExportName(capture, startup);
@@ -344,16 +344,16 @@ internal sealed class AnimationEditService : IDisposable
             ["mod"] = resource.ModName ?? resource.ModDirectory ?? "",
         };
         var take = await AnimationClipExport.SampleAsync(framework, pap, skeleton, clip, source, name, facts, message => Status = message, token);
-        Status = "Sending the animation to Blender…";
+        Status = "Sending the animation to Blender";
         Status = await deliver(take, token);
     });
 
     /// <summary>Samples a clip of a PAP file on the chosen skeleton and hands the take to <paramref name="deliver"/>.</summary>
     public void SendFileToBlender(AnimationFileClip clip, SkeletonCandidate skeleton, Func<AnimationTake, CancellationToken, Task<string>> deliver) => Launch(async token =>
     {
-        Status = $"Reading {clip.Source.DisplayName}…";
+        Status = $"Reading {clip.Source.DisplayName}";
         var take = await Files.SampleAsync(clip, skeleton, message => Status = message, token);
-        Status = "Sending the animation to Blender…";
+        Status = "Sending the animation to Blender";
         Status = await deliver(take, token);
     });
 

@@ -756,7 +756,7 @@ public sealed class TextureEditService : IDisposable
         bool Current() => runtime.Enabled && !_life.IsCancellationRequested &&
             generation == Interlocked.Read(ref runtime.VariantGeneration) && TextureFiles.Hash(TextureFiles.Read(file)) == hash;
         if (!Current()) return;
-        s.Status = $"Converting variant \"{name}\"…";
+        s.Status = $"Converting variant \"{name}\"";
         Publish();
         var work = Path.Combine(s.Directory, VariantWorkFolder);
         TextureFiles.EnsureLocalPath(work);
@@ -878,7 +878,7 @@ public sealed class TextureEditService : IDisposable
         bool Current() => runtime.Enabled && !_life.IsCancellationRequested && generation == Interlocked.Read(ref runtime.Generation) &&
             TextureFiles.Hash(TextureFiles.Read(s.WorkingFile)) == hash;
         if (!Current()) return;
-        s.Status = "Converting saved texture…";
+        s.Status = "Converting saved texture";
         Publish();
         var snapshot = Path.Combine(s.Directory, "snapshot.tga");
         var pixels = Path.Combine(s.Directory, "pixels.tex");
@@ -1021,7 +1021,7 @@ public sealed class TextureEditService : IDisposable
             Persist();
             return ExternalTextureOutcome.Unchanged;
         }
-        s.Status = "Converting Painter texture…";
+        s.Status = "Converting Painter texture";
         Publish();
         await _backend.ConvertAsync(snapshot, output, TextureFiles.OutputType(format), s.MipMaps).ConfigureAwait(false);
         _life.Token.ThrowIfCancellationRequested();

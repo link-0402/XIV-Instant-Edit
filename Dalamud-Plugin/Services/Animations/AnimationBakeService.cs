@@ -41,7 +41,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 var created = new Session(native, source, skeleton, clip, request, path + ".motion");
                 active.Add(created); return created;
             });
-            status("Checking the original animation round trip…");
+            status("Checking the original animation round trip");
             await framework.RunOnFrameworkThread(() => { Check(token); session.Save(path); });
             var unchanged = await File.ReadAllBytesAsync(path, token);
             await framework.RunOnFrameworkThread(() => { Check(token); session.ValidateUnchanged(unchanged); });

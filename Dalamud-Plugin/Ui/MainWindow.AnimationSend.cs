@@ -120,7 +120,7 @@ public sealed partial class MainWindow
         var inspection = state.Inspection!;
         if (!inspection.IsCompleted)
         {
-            Waiting("Reading the animation file…");
+            Waiting("Reading the animation file");
             DrawSendButtons(state, service, null);
             return;
         }
@@ -157,7 +157,7 @@ public sealed partial class MainWindow
         SkeletonCandidate? skeleton = null;
         var resolution = state.Resolution!;
         if (!resolution.IsCompleted)
-            Waiting("Finding the skeleton this animation was made for…");
+            Waiting("Finding the skeleton this animation was made for");
         else if (!resolution.IsCompletedSuccessfully)
             Widgets.Banner("##animation-file-skeleton-error", FeedbackSeverity.Error,
                 "No skeleton could be matched: " + ErrorText(resolution.Exception));
@@ -192,7 +192,7 @@ public sealed partial class MainWindow
         switch (clip.Resolution)
         {
             case null or { State: SkeletonResolutionState.Searching }:
-                Waiting(clip.Resolution?.Reason ?? "Finding the skeleton this animation was made for…");
+                Waiting(clip.Resolution?.Reason ?? "Finding the skeleton this animation was made for");
                 break;
             case { State: SkeletonResolutionState.Incompatible } incompatible:
                 Widgets.Banner("##animation-detected-incompatible", FeedbackSeverity.Warning,

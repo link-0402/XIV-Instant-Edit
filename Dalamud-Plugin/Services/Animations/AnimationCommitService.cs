@@ -127,7 +127,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
             // Dependency and metadata reads can span several ticks; recheck the live destination last.
             await checkActor();
             token.ThrowIfCancellationRequested();
-            status("Committing validated animation files…");
+            status("Committing validated animation files");
             journal.State = "Committing"; store.Save(journal);
             // Cancellation ends here: complete or roll back this durable transaction.
             try
@@ -181,7 +181,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                 }
                 journal.State = "Committed"; store.Save(journal);
                 await checkActor();
-                status("Activating and verifying animation resources…");
+                status("Activating and verifying animation resources");
                 await penumbra.ActivateAnimationAsync(journal);
                 await VerifyActivationAsync(journal.Files,
                     path => penumbra.ResolveAnimationPathAsync(journal.Request.Capture.CollectionId, path),
