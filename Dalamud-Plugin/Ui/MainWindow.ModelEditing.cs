@@ -9,6 +9,7 @@ using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Services.CharacterSend;
 using InstantEdit.Services.Skeletons;
 using Lumina.Data;
 
@@ -68,6 +69,17 @@ public sealed partial class MainWindow
         var (source, problem) = actor.Entity is { } entity
             ? await resolver.RacialScalingAsync(entity.ObjectIndex, entity.Address, cancellationToken).ConfigureAwait(false)
             : await resolver.RacialScalingAsync(actor.ImportObjectIndex, 0, cancellationToken).ConfigureAwait(false);
+        return RacialScalingFor(source, problem, modelPath);
+    }
+
+    /// <summary>
+    /// With racial scaling on, how a model is reshaped by a character's racial scaling
+    /// <paramref name="source"/>, or <paramref name="problem"/> when the character has none.
+    /// </summary>
+    private (RacialScaling? Scaling, string? Warning) RacialScalingFor(RacialScalingSource? source, string? problem, string modelPath)
+    {
+        if (!_config.ApplyRacialScaling || ModelSkeletonPaths.Parse(modelPath) is not { Human: true })
+            return (null, null);
         if (source is null)
             return (null, problem);
         try
@@ -139,34 +151,99 @@ public sealed partial class MainWindow
         BlenderImportOptions importOptions,
         CancellationToken cancellationToken)
     {
+        try
+        {
+            await EnsureBlenderReadyForImportAsync(
+                blenderPort, importOptions, source.SourceState == ResourceSourceState.GameData, cancellationToken).ConfigureAwait(false);
+            var sent = await SendModelToBlenderAsync(
+                actor, model, source, blenderPort, listenPort, importOptions, null, cancellationToken).ConfigureAwait(false);
+            SetStatus(sent.Status, sent.HasWarning ? FeedbackSeverity.Warning : FeedbackSeverity.Success);
+            _chat.Print($"XIV Instant Edit: {model.FileName} sent to Blender.");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Plugin/window shutdown cancels outstanding handoffs without touching UI services.
+        }
+        catch (Exception e)
+        {
+            _log.Error(e, "Failed to send model to Blender.");
+            SetStatus($"Failed: {e.Message}", FeedbackSeverity.Error);
+            _chat.PrintError($"XIV Instant Edit: could not send model to Blender: {e.Message}");
+        }
+        finally
+        {
+            Volatile.Write(ref _editing, 0);
+        }
+    }
+
+    /// <summary>
+    /// Throws with a user-facing message unless Blender runs this version of the add-on, shares the
+    /// plugin's cache, and takes imports with these options (and of game data, with <paramref name="gameData"/>).
+    /// </summary>
+    private async Task EnsureBlenderReadyForImportAsync(int blenderPort, BlenderImportOptions importOptions, bool gameData,
+        CancellationToken cancellationToken)
+    {
+        var blenderStatus = await CheckBlenderStatusAsync(blenderPort, cancellationToken).ConfigureAwait(false);
+        if (!blenderStatus.Reachable)
+            throw new InvalidOperationException("Blender is offline. Start Blender and enable the XIV Instant Edit add-on before editing.");
+        if (blenderStatus.Classify(_pluginVersion) != BlenderConnectionState.Online)
+            throw new InvalidOperationException(BlenderClient.VersionMismatchMessage(_pluginVersion));
+        if (!await SynchronizeBlenderCacheAsync(blenderStatus, blenderPort, cancellationToken).ConfigureAwait(false))
+            throw new InvalidOperationException("Blender's cache could not be synchronized. Update and restart the XIV Instant Edit add-on, then retry.");
+        if (importOptions.ArmatureMode == BlenderImportOptions.ExistingMode &&
+            !await _blender.SupportsImportOptionsAsync(blenderPort, cancellationToken).ConfigureAwait(false))
+            throw new InvalidOperationException("The XIV Instant Edit add-on is too old for custom import options. Update the add-on and restart Blender.");
+        if (importOptions.ApplyTexturesAndMaterials &&
+            !await _blender.SupportsMaterialPreviewAsync(blenderPort, cancellationToken).ConfigureAwait(false))
+            throw new InvalidOperationException("The XIV Instant Edit add-on is too old for texture and material previews. Update the add-on and restart Blender.");
+        if (gameData && !await _blender.SupportsVanillaContextAsync(blenderPort, cancellationToken).ConfigureAwait(false))
+            throw new InvalidOperationException("The XIV Instant Edit add-on is too old for vanilla model contexts. Update the add-on and restart Blender.");
+    }
+
+    /// <summary> What sending one model to Blender produced. </summary>
+    /// <param name="Status">The status line a send of this model alone reports.</param>
+    /// <param name="Notes">Its warnings, each on its own, for the summary of a send of several models.</param>
+    private sealed record ModelSendResult(string FileName, string Status, bool HasWarning, IReadOnlyList<string> Notes, bool Scaled);
+
+    /// <summary>
+    /// A model of a whole-character send: its entry, the character's skeleton for body models
+    /// (a weapon's own is looked up), and what the send resolved once for all of its models.
+    /// </summary>
+    private sealed record CharacterModelSend(
+        CharacterImportEntry Entry,
+        ModelSkeletonPayload? Skeleton,
+        RacialScalingSource? Scaling,
+        string? ScalingProblem,
+        IReadOnlyCollection<MaterialResourceCandidate> PreviewResources,
+        PenumbraCollectionTarget? Collection);
+
+    /// <summary>
+    /// Sends one model to Blender as an import with its own context. Throws with a user-facing
+    /// message when it can't be sent. Blender's readiness is checked by the caller.
+    /// </summary>
+    private async Task<ModelSendResult> SendModelToBlenderAsync(
+        ActorView actor,
+        MdlFile model,
+        ResourceView source,
+        int blenderPort,
+        int listenPort,
+        BlenderImportOptions importOptions,
+        CharacterModelSend? character,
+        CancellationToken cancellationToken)
+    {
         string? handoffDirectory = null;
         var handoffCached = false;
         try
         {
-            var blenderStatus = await CheckBlenderStatusAsync(blenderPort, cancellationToken).ConfigureAwait(false);
-            if (!blenderStatus.Reachable)
-                throw new InvalidOperationException("Blender is offline. Start Blender and enable the XIV Instant Edit add-on before editing.");
-            if (blenderStatus.Classify(_pluginVersion) != BlenderConnectionState.Online)
-                throw new InvalidOperationException(BlenderClient.VersionMismatchMessage(_pluginVersion));
-            if (!await SynchronizeBlenderCacheAsync(blenderStatus, blenderPort, cancellationToken).ConfigureAwait(false))
-                throw new InvalidOperationException("Blender's cache could not be synchronized. Update and restart the XIV Instant Edit add-on, then retry.");
-            if (importOptions.ArmatureMode == BlenderImportOptions.ExistingMode &&
-                !await _blender.SupportsImportOptionsAsync(blenderPort, cancellationToken).ConfigureAwait(false))
-                throw new InvalidOperationException("The XIV Instant Edit add-on is too old for custom import options. Update the add-on and restart Blender.");
-            if (importOptions.ApplyTexturesAndMaterials &&
-                !await _blender.SupportsMaterialPreviewAsync(blenderPort, cancellationToken).ConfigureAwait(false))
-                throw new InvalidOperationException("The XIV Instant Edit add-on is too old for texture and material previews. Update the add-on and restart Blender.");
-            if (source.SourceState == ResourceSourceState.GameData &&
-                !await _blender.SupportsVanillaContextAsync(blenderPort, cancellationToken).ConfigureAwait(false))
-                throw new InvalidOperationException("The XIV Instant Edit add-on is too old for vanilla model contexts. Update the add-on and restart Blender.");
-
             var bytes = model.IsFilePath
                 ? await File.ReadAllBytesAsync(model.LocalPath, cancellationToken).ConfigureAwait(false)
                 : (await _data.GetFileAsync<FileResource>(model.LocalPath, cancellationToken).ConfigureAwait(false))?.Data
                     ?? throw new InvalidOperationException($"Game file not found: {model.LocalPath}");
             // Blender gets the model as the character wears it, for preview: the import context
             // records the scaling, and the plugin refuses every export from it.
-            var (scaling, scalingWarning) = await ResolveRacialScalingAsync(actor, model.GamePath, cancellationToken).ConfigureAwait(false);
+            var (scaling, scalingWarning) = character is null
+                ? await ResolveRacialScalingAsync(actor, model.GamePath, cancellationToken).ConfigureAwait(false)
+                : RacialScalingFor(character.Scaling, character.ScalingProblem, model.GamePath);
             if (scaling is not null)
             {
                 try
@@ -189,7 +266,7 @@ public sealed partial class MainWindow
             await File.WriteAllBytesAsync(file, bytes).ConfigureAwait(false);
             var resources = source.SourceState == ResourceSourceState.GameData
                 ? Array.Empty<MaterialResourceCandidate>()
-                : await ResolvePreviewResourcesAsync(actor).ConfigureAwait(false);
+                : character?.PreviewResources ?? await ResolvePreviewResourcesAsync(actor).ConfigureAwait(false);
             var previewModelPath = source.SourceState == ResourceSourceState.GameData
                 ? model.LocalPath
                 : model.GamePath;
@@ -205,8 +282,9 @@ public sealed partial class MainWindow
             var preview = materialBundle.Preview;
             var resourceManifest = materialBundle.ResourceManifest;
             var dependencyWarnings = materialBundle.DependencyWarnings.ToList();
-            var collection = await _penumbra.GetCollectionTargetAsync(
-                actor.ImportObjectIndex).ConfigureAwait(false);
+            var collection = character is not null
+                ? character.Collection
+                : await _penumbra.GetCollectionTargetAsync(actor.ImportObjectIndex).ConfigureAwait(false);
             if (source.SourceState != ResourceSourceState.GameData && resourceManifest is not null)
             {
                 var manipulations = collection is not null &&
@@ -230,8 +308,11 @@ public sealed partial class MainWindow
                     };
                 }
             }
-            var (skeleton, skeletonWarning) = await ResolveSkeletonAsync(
-                actor, model, blenderPort, importOptions, scaling, cancellationToken).ConfigureAwait(false);
+            // A character's body models share the armature built from the character's whole skeleton.
+            var (skeleton, skeletonWarning) = character is { Entry.Role: CharacterImportEntry.BodyRole }
+                ? (character.Skeleton, null)
+                : await ResolveSkeletonAsync(
+                    actor, model, blenderPort, importOptions, scaling, cancellationToken).ConfigureAwait(false);
             if (source.SourceState == ResourceSourceState.GameData)
             {
                 handoffCached = await _blender.SendGameImportAsync(
@@ -249,6 +330,7 @@ public sealed partial class MainWindow
                     resourceManifest: resourceManifest,
                     skeleton: skeleton,
                     racialScaling: scaling?.ToRecord(),
+                    character: character?.Entry,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
             }
             else
@@ -286,39 +368,28 @@ public sealed partial class MainWindow
                     sourceModStableId: source.SourceModStableId,
                     skeleton: skeleton,
                     racialScaling: scaling?.ToRecord(),
+                    character: character?.Entry,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
             }
-            var hasPreviewWarning = preview is { Warnings.Count: > 0 };
-            var hasMashupWarning = resourceManifest is null;
-            var warning = hasPreviewWarning ? $" Preview warning: {preview!.WarningSummary}" : string.Empty;
-            var mashupWarning = hasMashupWarning
-                ? $" Mashup warning: {(dependencyWarnings.Count > 0
+            var notes = new List<string>();
+            if (preview is { Warnings.Count: > 0 })
+                notes.Add($"Preview warning: {preview.WarningSummary}");
+            if (resourceManifest is null)
+                notes.Add($"Mashup warning: {(dependencyWarnings.Count > 0
                     ? string.Join("; ", dependencyWarnings.Take(3))
-                    : "exact material/texture sources could not be captured; re-import after resolving the missing resources.")}"
-                : string.Empty;
-            var skeletonNote = skeletonWarning is null ? string.Empty : $" Skeleton: {skeletonWarning}";
-            var scalingNote = scalingWarning is null ? string.Empty : $" Not racially scaled: {scalingWarning.TrimEnd('.')}.";
+                    : "exact material/texture sources could not be captured; re-import after resolving the missing resources.")}");
+            if (skeletonWarning is not null)
+                notes.Add($"Skeleton: {skeletonWarning}");
+            if (scalingWarning is not null)
+                notes.Add($"Not racially scaled: {scalingWarning.TrimEnd('.')}.");
             var scaled = scaling is null ? string.Empty : $", scaled from {scaling.Description} for preview (it can't be exported)";
-            var hasWarning = hasPreviewWarning || hasMashupWarning || skeletonWarning is not null || scalingWarning is not null;
-            var status = $"Sent {model.FileName} to Blender{scaled}.{warning}{mashupWarning}{skeletonNote}{scalingNote}";
-            SetStatus(status, hasWarning ? FeedbackSeverity.Warning : FeedbackSeverity.Success);
-            _chat.Print($"XIV Instant Edit: {model.FileName} sent to Blender.");
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            // Plugin/window shutdown cancels outstanding handoffs without touching UI services.
-        }
-        catch (Exception e)
-        {
-            _log.Error(e, "Failed to send model to Blender.");
-            SetStatus($"Failed: {e.Message}", FeedbackSeverity.Error);
-            _chat.PrintError($"XIV Instant Edit: could not send model to Blender: {e.Message}");
+            var status = $"Sent {model.FileName} to Blender{scaled}.{string.Concat(notes.Select(note => " " + note))}";
+            return new ModelSendResult(model.FileName, status, notes.Count > 0, notes, scaling is not null);
         }
         finally
         {
             if (handoffCached && handoffDirectory is not null)
                 TryDeleteOwnedHandoff(handoffDirectory);
-            Volatile.Write(ref _editing, 0);
         }
     }
 

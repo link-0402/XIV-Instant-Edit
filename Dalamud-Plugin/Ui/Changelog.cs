@@ -18,10 +18,18 @@ internal sealed record ChangelogRelease(
 
 internal static class ChangelogCatalog
 {
-    public const string CurrentVersion = "2.0.0";
+    public const string CurrentVersion = "2.1.0";
 
     public static IReadOnlyList<ChangelogRelease> Releases { get; } =
     [
+        Release("2.1.0",
+            Highlight("Send my character to Blender, a new Quick Actions card: every model your character shows, its body, face, hair, tail or ears and all gear, goes to Blender in one click, bound to one armature with your character's whole skeleton."),
+            Entry("Pick the pose: the rest pose, your current pose (one frame of your live pose, with the game's bone physics and LivePose, and Customize+ paused), or the animation your character plays. The pose becomes an action on the character's armature.", 1),
+            Entry("The armature is named like the animation armature in the options, so animations you send later from the Animations tab land on it too.", 1),
+            Entry("The model import options apply as for single models, including texture and material previews and racial scaling. Each model keeps its own context, so Quick Export still writes it back to its own mod.", 1),
+            Entry("Weapons are optional. Each gets an armature of its own, hung from the bone that holds it in the game, so it follows the pose, and still exports where its own skeleton puts it.", 1),
+            Entry("Sending your character again replaces the armature and models your last send of that character left in Blender. Models you sent one by one stay.", 1),
+            Entry("Blender add-on: queued imports now run one at a time with a redraw in between, so a whole character appears model by model, and an animation sent while models are still importing waits for them.")),
         Release("2.0.0",
             Highlight("Animation editing is now available in the new Animations tab (requires the LivePose plugin):"),
             Entry("The tab lists the animations your character plays with the mod each one comes from, and sorts the tools for the selected animation into tabs.", 1),

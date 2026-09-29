@@ -96,6 +96,12 @@ Everything is in the **IE - Instant Edit** tab of the 3D Viewport's sidebar (pre
 - Imported models get the game's skeleton as their armature: the race's rest pose and bone
   hierarchy, with your skeleton mods and the hair, face, headgear or top skeleton the model uses.
   Bones point along the game bone's Y axis, as in TexTools FBX exports and devkits.
+- A character sent with the plugin's **Send my character to Blender** (Quick Actions) lands in one
+  `XIV Instant Edit Character [name]` collection: one armature with the character's whole skeleton
+  that every body model is bound to, each model in its own `Instant Edit [...]` collection so it
+  still exports on its own, and weapons on armatures of their own, hung from the bone that holds
+  them. A pose or animation sent with it is an action on that armature. Sending the character
+  again replaces the collection; objects you added to it move to the scene.
 - Optional material previews, built from the materials and textures the game uses for the model,
   with colorsets, masks, normal maps and transparency. They are only for viewing: Quick Export
   doesn't write them, and changing them doesn't change the game.

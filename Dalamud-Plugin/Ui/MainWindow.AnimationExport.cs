@@ -150,12 +150,7 @@ public sealed partial class MainWindow
         {
             recorderMessage = new RecorderMessage($"Sending {take.FrameCount} frames of {take.Bones.Length} bones to Blender", FeedbackSeverity.Info);
             var result = await DeliverAnimationAsync(take, token).ConfigureAwait(false);
-            string? warning = null;
-            if (take.Source.TryGetValue(AnimationRecorder.CustomizePlusSource, out var customizePlus) &&
-                customizePlus != AnimationRecorder.CustomizePlusPaused)
-                warning = $"{customizePlus}, so the recording includes its changes.";
-            else if (take.Source.TryGetValue(AnimationRecorder.ScaledBonesSource, out var scaled))
-                warning = RecordingScale.Warning(scaled, _config.AnimationKeyScale);
+            var warning = RecordingWarning(take);
             ReportRecorder(warning == null ? result : $"{result} {warning}",
                 warning == null ? FeedbackSeverity.Success : FeedbackSeverity.Warning);
         }
@@ -179,8 +174,30 @@ public sealed partial class MainWindow
         _feed.Report(StatusChannel.Animations, severity, text);
     }
 
+    /// <summary>
+    /// What a recording carries that the user should know: Customize+ could not be paused, or
+    /// something else scaled the body while it recorded. Null when neither.
+    /// </summary>
+    private string? RecordingWarning(AnimationTake take)
+    {
+        if (take.Source.TryGetValue(AnimationRecorder.CustomizePlusSource, out var customizePlus) &&
+            customizePlus != AnimationRecorder.CustomizePlusPaused)
+            return $"{customizePlus}, so the recording includes its changes.";
+        return take.Source.TryGetValue(AnimationRecorder.ScaledBonesSource, out var scaled)
+            ? RecordingScale.Warning(scaled, _config.AnimationKeyScale)
+            : null;
+    }
+
     /// <summary>Encodes a take and sends it to Blender. Returns what Blender did with it, or throws with a user-facing message.</summary>
-    private async Task<string> DeliverAnimationAsync(AnimationTake take, CancellationToken token)
+    private Task<string> DeliverAnimationAsync(AnimationTake take, CancellationToken token)
+        => DeliverTakeAsync(take, null, token);
+
+    /// <summary>
+    /// Encodes a take and sends it to Blender, onto the armature of the character send
+    /// <paramref name="targetCharacter"/> names, else the configured armature. Returns what Blender
+    /// did with it, or throws with a user-facing message.
+    /// </summary>
+    private async Task<string> DeliverTakeAsync(AnimationTake take, string? targetCharacter, CancellationToken token)
     {
         var port = _config.BlenderPort;
         var status = await CheckBlenderStatusAsync(port, token).ConfigureAwait(false);
@@ -192,7 +209,8 @@ public sealed partial class MainWindow
             throw new InvalidOperationException("The XIV Instant Edit add-on is too old to receive animations. Update the add-on and restart Blender.");
         var armature = AnimationArmature;
         var keyScale = _config.AnimationKeyScale;
-        var body = await Task.Run(() => AnimationTakeFormat.Write(take, armature, keyScale, _pluginVersion), token).ConfigureAwait(false);
+        var body = await Task.Run(() => AnimationTakeFormat.Write(take, armature, keyScale, _pluginVersion, targetCharacter), token)
+            .ConfigureAwait(false);
         try
         {
             return (await _blender.SendAnimationAsync(port, body, token).ConfigureAwait(false)).Describe();

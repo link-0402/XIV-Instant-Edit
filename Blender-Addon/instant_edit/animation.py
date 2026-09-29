@@ -24,6 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 import math
+import re
 import struct
 
 import numpy as np
@@ -48,6 +49,7 @@ CONSTANT_TOLERANCE = 1e-6
 SCALE_TOLERANCE = 1e-4
 UNDO_MESSAGE = "XIV Instant Edit animation"
 METADATA_PROPERTY = "xiv_instant_edit"
+_SEND_ID = re.compile(r"[0-9a-f]{32}")
 
 # FFXIV is Y-up, Blender Z-up: the model importer maps game (x, y, z) to (x, -z, y).
 GAME_TO_BLENDER = np.array([
@@ -72,6 +74,8 @@ class Take:
     times: np.ndarray         # (frames,) seconds, strictly increasing
     samples: np.ndarray       # (frames, bones, 10)
     source: dict = field(default_factory=dict)
+    # The character send whose armature the take belongs on (see character.py); "" for none.
+    target_character: str = ""
 
     @property
     def duration(self) -> float:
@@ -149,6 +153,9 @@ def parse_take(body) -> Take:
         _reject("invalid_animation_kind", "The animation kind is not supported.")
     name = _text(header, "name", max_length=256, required=True)
     target = _text(header, "targetObject", max_length=128)
+    target_character = header.get("targetCharacter") or ""
+    if not isinstance(target_character, str) or (target_character and not _SEND_ID.fullmatch(target_character)):
+        _reject("invalid_target_character", "The animation's character send is invalid.")
     plugin_version = _text(header, "pluginVersion", max_length=32)
     key_scale = header.get("keyScale", False)
     loop = header.get("loop", False)
@@ -210,6 +217,7 @@ def parse_take(body) -> Take:
         times=times,
         samples=samples,
         source=_source(header.get("source")),
+        target_character=target_character,
     )
 
 
@@ -512,10 +520,19 @@ def _set_inherit_scale(armature, name: str, mode: str) -> None:
 # Scene application.
 
 
-def resolve_target(context, name: str):
-    """The armature a take is keyed onto: the named object, else the active armature, else the
-    scene's only armature."""
+def resolve_target(context, name: str, character: str = ""):
+    """The armature a take is keyed onto: a character send's armature when the take names the
+    send, else the named object, else the active armature, else the scene's only armature."""
     scene = context.scene
+    if character:
+        from .character import body_armature
+
+        armature = body_armature(scene, character)
+        if armature is None:
+            raise AnimationApplyError(
+                "animation_character_missing", "The armature of the character send is not in the scene.",
+                "Send your character to Blender again.")
+        return armature
     if name:
         obj = scene.objects.get(name)
         if obj is not None:
@@ -616,7 +633,7 @@ def apply_take(take: Take, context=None) -> dict:
 
     context = context or bpy.context
     scene = context.scene
-    armature = resolve_target(context, take.target_object)
+    armature = resolve_target(context, take.target_object, take.target_character)
     if armature.library is not None or not armature.is_editable:
         raise AnimationApplyError(
             "animation_target_not_editable", f'Armature "{armature.name}" is linked and cannot be animated here.',
@@ -701,8 +718,10 @@ def apply_take(take: Take, context=None) -> dict:
         "keyedScale": bool(take.key_scale),
         "source": dict(take.source),
     }
-    scene.frame_end = frame_end
-    scene.frame_set(min(max(scene.frame_current, frame_start), frame_end))
+    # A single pose leaves the scene's frame range as it is; its keys hold on every frame.
+    if count > 1:
+        scene.frame_end = frame_end
+    scene.frame_set(min(max(scene.frame_current, frame_start), max(frame_end, scene.frame_end)))
 
     matched_names = {bone.name for bone, _, _ in matched}
     missing = [name for name in take.bones if name not in matched_names]
