@@ -34,6 +34,8 @@ Penumbra mods.
   - Paint its whole skin in Substance Painter.
   - Measure the [Simple Heels](https://github.com/Caraxi/SimpleHeels) offset that keeps its heels from sinking into the
     ground.
+  - Send it to Blender in one click: every model it shows on one armature with its skeleton, in its rest pose, the pose
+    it stands in or the animation it plays, and each model still exports back on its own.
 - **Racial scaling**: preview gear made for another race shaped for yours in Blender and Painter.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Racial-Scaling)
 

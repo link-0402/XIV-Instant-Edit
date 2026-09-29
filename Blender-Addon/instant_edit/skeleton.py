@@ -79,10 +79,15 @@ class ArmatureReport:
     placeholders: list[str] = field(default_factory=list)  # bones without a rest pose (no skeleton)
     added: list[str] = field(default_factory=list)         # model bones no skeleton has
     unweighted: list[str] = field(default_factory=list)    # of those, bones without weighted vertices
+    blocked: list[str] = field(default_factory=list)       # model bones an existing armature couldn't take
 
     def summary(self) -> str:
-        if self.skeleton is None:
-            return "bones have no rest pose (no game skeleton was sent)" if self.placeholders else ""
+        if self.blocked:
+            names = ", ".join(self.blocked[:6]) + (f" (+{len(self.blocked) - 6} more)" if len(self.blocked) > 6 else "")
+            return (f"the armature is not in the view layer, so {len(self.blocked)} bone"
+                    f"{'s' if len(self.blocked) != 1 else ''} the model weights could not be added: {names}")
+        if self.skeleton is None and self.placeholders:
+            return "bones have no rest pose (no game skeleton was sent)"
         if not self.added:
             return ""
         names = ", ".join(self.added[:6]) + (f" (+{len(self.added) - 6} more)" if len(self.added) > 6 else "")
@@ -377,3 +382,63 @@ def create_armature(context, collection, name: str, bone_names, mesh_objects,
     finally:
         bpy.ops.object.mode_set(mode="OBJECT")
     return armature, report
+
+
+def add_bones(context, armature, bone_names, mesh_objects, skeleton: GameSkeleton | None = None) -> ArmatureReport:
+    """Add the bones in ``bone_names`` that an existing armature lacks.
+
+    They are placed like create_armature's model bones that no skeleton has: at the weighted centre
+    of their vertices in ``mesh_objects``, on the game's axes, under the bone they share the most
+    weight with. Edit Mode needs the armature shown; it is hidden again afterwards if it was. An
+    armature outside the view layer can't enter Edit Mode, so the report lists the bones instead."""
+    import bpy
+    from mathutils import Matrix
+
+    report = ArmatureReport(skeleton=skeleton)
+    bones = armature.data.bones
+    missing = [bone for bone in dict.fromkeys(bone_names) if bones.get(bone) is None]
+    if not missing:
+        return report
+    known = {bone.name for bone in bones}
+    rests = {bone.name: np.array(bone.matrix_local, dtype=np.float64) for bone in bones}
+    placements = _added_bone_rests(missing, known, rests, mesh_objects,
+                                   np.linalg.inv(np.array(armature.matrix_world, dtype=np.float64)))
+
+    disabled = armature.hide_viewport
+    hidden = False
+    try:
+        # The view layer's object list can lag behind a collection just excluded from it, so
+        # showing and activating the armature is what tells whether Edit Mode is possible.
+        hidden = armature.hide_get()
+        armature.hide_viewport = False
+        armature.hide_set(False)
+        for obj in tuple(context.selected_objects):
+            obj.select_set(False)
+        context.view_layer.objects.active = armature
+        armature.select_set(True)
+        bpy.ops.object.mode_set(mode="EDIT")
+    except RuntimeError:
+        armature.hide_viewport = disabled
+        try:
+            armature.hide_set(hidden)
+        except RuntimeError:
+            pass
+        report.blocked = missing
+        return report
+    report.added = missing
+    report.unweighted = [bone for bone in missing if not placements[bone][2]]
+    try:
+        edit_bones = armature.data.edit_bones
+        for bone_name in missing:
+            rest, parent, _weighted = placements[bone_name]
+            edit_bone = edit_bones.new(bone_name)
+            edit_bone.head = (0.0, 0.0, 0.0)
+            edit_bone.tail = (0.0, BONE_LENGTH, 0.0)
+            edit_bone.matrix = Matrix(rest.tolist())
+            if parent is not None:
+                edit_bone.parent = edit_bones[parent]
+    finally:
+        bpy.ops.object.mode_set(mode="OBJECT")
+        armature.hide_set(hidden)
+        armature.hide_viewport = disabled
+    return report

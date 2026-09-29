@@ -1,5 +1,6 @@
 using Dalamud.Configuration;
 using InstantEdit.Models;
+using InstantEdit.Services.CharacterSend;
 
 namespace InstantEdit;
 
@@ -119,6 +120,12 @@ public sealed class Configuration : IPluginConfiguration
 
     /// <summary>Game Files exports write each skeleton file set decoded, as Instant Edit's skeleton JSON.</summary>
     public bool GameExportSkeletonJson { get; set; } = true;
+
+    /// <summary>The pose Quick Actions' Send my character to Blender leaves the character's armature in.</summary>
+    public CharacterPose CharacterSendPose { get; set; } = CharacterPose.Rest;
+
+    /// <summary>Send my character to Blender sends the character's weapons too.</summary>
+    public bool CharacterSendWeapons { get; set; }
 
     /// <summary>Legacy v9 context payload retained only for one-time migration or storage fallback.</summary>
     public List<PersistedExportContext> ExportContexts { get; set; } = [];

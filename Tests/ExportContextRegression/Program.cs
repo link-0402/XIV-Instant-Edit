@@ -171,6 +171,7 @@ try
     BodySeamScenarios.Run(testRoot);
     RacialScalingScenarios.Run(testRoot);
     HeelsOffsetScenarios.Run();
+    CharacterSendScenarios.Run();
 
     // ---- Backup safety, export-context authorization, and revocation ----
     var originalRoot = Path.Combine(testRoot, "OriginalMod");
