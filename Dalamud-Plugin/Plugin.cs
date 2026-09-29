@@ -198,7 +198,10 @@ public sealed class Plugin : IDalamudPlugin
         _gameExport = new GameFileExportService(_gameFiles, skeletons, log, BlenderClient.CurrentPluginVersion);
         _window.AttachGameFiles(_gameFiles, _gameExport);
         // Neck seam checks and preview mods; open previews are remembered in the config folder.
-        _window.AttachNeckSeam(new Services.NeckSeam.NeckSeamService(_penumbra, data, log, configDirectory, () => _config.RecompressTextures));
+        var neckSeam = new Services.NeckSeam.NeckSeamService(_penumbra, data, log, configDirectory, () => _config.RecompressTextures);
+        _window.AttachNeckSeam(neckSeam);
+        // Character weight: texture memory and triangles as sync plugins count them, and smaller textures in a preview mod.
+        _window.AttachCharacterWeight(new Services.CharacterWeight.CharacterWeightService(_penumbra, data, log, configDirectory, [neckSeam.Store]));
         // Automatic cache cleanup also removes old exports from the cache's export folder.
         _textures.AdditionalCacheCleanup = () =>
         {
