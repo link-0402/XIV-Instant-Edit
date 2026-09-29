@@ -29,6 +29,9 @@ public sealed record TexturePlanMaterial(string ModelMaterial, string GamePath, 
     public float? AlphaThreshold { get; init; }
 
     public TexturePlanColorSet? ColorSet { get; init; }
+
+    /// <summary> The material's shader keys, key id to value; skin.shpk tells face and body skin apart by one. </summary>
+    public IReadOnlyDictionary<uint, uint> ShaderKeys { get; init; } = new Dictionary<uint, uint>();
 }
 
 /// <summary> A material's colorset table, rows of <see cref="RowWidth"/> values (16 legacy, 32 Dawntrail). </summary>
@@ -129,6 +132,7 @@ public sealed partial class MaterialPreviewBundleBuilder
                 Flags = metadata.Flags,
                 AlphaThreshold = ReadShaderConstant(material.Value.Bytes, mtrl, AlphaThresholdConstant),
                 ColorSet = ReadPlanColorSet(material.Value.Bytes, mtrl),
+                ShaderKeys = ReadShaderKeys(material.Value.Bytes, mtrl),
             });
         }
         return new ModelTexturePlan(NormaliseGamePath(modelGamePath), materials, BoundWarnings(warnings));
@@ -136,6 +140,21 @@ public sealed partial class MaterialPreviewBundleBuilder
 
     // g_AlphaThreshold (xivModdingFramework's ConstantId 699138595).
     private const uint AlphaThresholdConstant = 0x29AC0223;
+
+    private static Dictionary<uint, uint> ReadShaderKeys(byte[] bytes, MtrlFile mtrl)
+    {
+        // Same layout ReadMaterialMetadata has already validated for this material.
+        var keys = new Dictionary<uint, uint>();
+        var header = checked(DataSetOffset(mtrl) + mtrl.FileHeader.DataSetSize);
+        if (header < 0 || header + 12 > bytes.Length)
+            return keys;
+        var keyCount = BitConverter.ToUInt16(bytes, header + 2);
+        if (header + 12 + keyCount * 8 > bytes.Length)
+            return keys;
+        for (var i = 0; i < keyCount; i++)
+            keys[BitConverter.ToUInt32(bytes, header + 12 + i * 8)] = BitConverter.ToUInt32(bytes, header + 16 + i * 8);
+        return keys;
+    }
 
     /// <summary> A shader constant's first value; null when the material doesn't set it. </summary>
     private static float? ReadShaderConstant(byte[] bytes, MtrlFile mtrl, uint id)

@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Services.NeckSeam;
 using InstantEdit.Services.Painter;
 using InstantEdit.Services.Previews;
 using Lumina.Data.Files;
@@ -29,6 +30,9 @@ internal static class PainterScenarios
         VisibilityFollowsAttributes();
         DisplayFollowsMaterialFlags();
         PreviewsColorHairAndColorsets();
+        SkinMaterialsAreTold();
+        SkinProjectsTakeEveryBodyPart();
+        OptionalSetsStayOutUntilTicked();
         PluginShipsWithTheAssembly();
     }
 
@@ -634,5 +638,122 @@ internal static class PainterScenarios
         Require(preview.Pixels[8] == 0 && preview.Pixels[10] == 255, "index red 17 picks the second pair");
         Require(Math.Abs(PainterPreviews.ColorSet(new RgbaImage(1, 1, [17, 0, 0, 255]), new TexturePlanColorSet(32, values)).Pixels[0] - 128) <= 1,
             "colorset colors are linear and preview in sRGB");
+    }
+
+    // ---- Skin projects --------------------------------------------------------------------------
+
+    private const string BodySkinPath = "chara/human/c0201/obj/body/b0001/material/v0001/mt_c0201b0001_a.mtrl";
+    private const string FaceSkinPath = "chara/human/c0801/obj/face/f0001/material/mt_c0801f0001_fac_a.mtrl";
+
+    private static TexturePlanTexture Sourced(string usage, string gamePath)
+        => new(0, usage, 0, gamePath, gamePath, new SourceResourceLocator { Kind = "game", GamePath = gamePath, Sha256 = "" }, Bc7, 1024, 1024, "");
+
+    /// <summary> A read material whose first texture is its diffuse and the others normal maps. </summary>
+    private static TexturePlanMaterial Material(string name, string gamePath, string shader, uint? skinType, params string[] textures)
+        => new(name, gamePath, gamePath, shader, textures.Select((texture, i) => Sourced(i == 0 ? "diffuse" : "normal", texture)).ToList(), "")
+        {
+            ShaderKeys = skinType is { } type ? new Dictionary<uint, uint> { [SkinMaterial.SkinTypeKey] = type } : new Dictionary<uint, uint>(),
+        };
+
+    /// <summary> A model with one mesh per material; each submesh is one triangle with the given attribute mask. </summary>
+    private static ModelMesh Parts(params (string Material, uint[] Submeshes)[] parts)
+        => new(parts.Select((part, index) => new ModelMeshPart(index, index, new Vector3[3], new Vector3[3], new Vector2[3],
+                part.Submeshes.Select((mask, s) => new ModelSubmesh(s, [0, 1, 2], mask)).ToList())).ToList(),
+            parts.Select(part => part.Material).ToList(), ["atr_a", "atr_b"]);
+
+    private static PainterSkinCandidate Candidate(string path, ModelMesh mesh, IReadOnlyList<uint> masks, params TexturePlanMaterial[] materials)
+        => new(new PainterModelRef(path, path, true), mesh, new ModelTexturePlan(path, materials, []), masks);
+
+    private static void SkinMaterialsAreTold()
+    {
+        var body = Material("/b.mtrl", "b", "skin.shpk", SkinMaterial.SkinTypeBody);
+        var hrothgar = Material("/h.mtrl", "h", "skin.shpk", SkinMaterial.SkinTypeBodyHrothgar);
+        var face = Material("/f.mtrl", "f", "skin.shpk", null);
+        var emissive = Material("/e.mtrl", "e", "Skin.shpk", SkinMaterial.SkinTypeFaceEmissive);
+        var gear = Material("/g.mtrl", "g", "character.shpk", SkinMaterial.SkinTypeBody);
+        Require(PainterSkin.IsBodySkin(body) && PainterSkin.IsBodySkin(hrothgar) && !PainterSkin.IsFaceSkin(body), "skin.shpk's body types are body skin");
+        Require(PainterSkin.IsFaceSkin(face) && PainterSkin.IsFaceSkin(emissive) && !PainterSkin.IsBodySkin(face),
+            "skin.shpk without the skin type key, or with a face type, is face skin");
+        Require(!PainterSkin.IsBodySkin(gear) && !PainterSkin.IsFaceSkin(gear), "other shaders are no skin, whatever their keys");
+        var triangles = PainterSkin.DrawnTriangles(Parts(("/b.mtrl", [0, 1, 2]), ("/g.mtrl", [0])), [0b01]);
+        Require(triangles["/B.MTRL"] == 2 && triangles["/g.mtrl"] == 1, "drawn triangles leave out parts whose attributes are off, by material name");
+        Require(PainterRules.TextureSources([Material("/x.mtrl", "x", "skin.shpk", null, "a.tex", "b.tex"),
+                new TexturePlanMaterial("/y.mtrl", "", "", "", [Planned("diffuse", "c.tex")], "")]).SequenceEqual(["a.tex", "b.tex"]),
+            "texture sources are the files read, leaving out textures that weren't");
+    }
+
+    private static void SkinProjectsTakeEveryBodyPart()
+    {
+        var body = Material("/mt_c0201b0001_a.mtrl", BodySkinPath, "skin.shpk", SkinMaterial.SkinTypeBody, "body_base.tex", "body_norm.tex");
+        // A model of another race names the body skin for its own race; it resolves to the same file.
+        var raceBody = body with { ModelMaterial = "/mt_c0101b0001_a.mtrl" };
+        var underwear = Material("/mt_c0201e0000_top_a.mtrl", "chara/equipment/e0000/material/v0001/mt_c0201e0000_top_a.mtrl", "character.shpk", null, "top_norm.tex");
+        var face = Material("/mt_c0801f0001_fac_a.mtrl", FaceSkinPath, "skin.shpk", null, "face_base.tex");
+        var iris = Material("/mt_c0801f0001_iri_a.mtrl", "chara/human/c0801/obj/face/f0001/material/mt_c0801f0001_iri_a.mtrl", "iris.shpk", null, "eye.tex");
+        var hair = Material("/mt_c0801h0001_hir_a.mtrl", "chara/human/c0801/obj/hair/h0001/material/v0001/mt_c0801h0001_hir_a.mtrl", "hair.shpk", null, "hair.tex");
+        var candidates = new List<PainterSkinCandidate>
+        {
+            Candidate("chara/equipment/e0000/model/c0201e0000_glv.mdl", Parts((body.ModelMaterial, [0])), [], body),
+            Candidate("chara/equipment/e0000/model/c0201e0000_top.mdl", Parts((body.ModelMaterial, [0, 1]), (underwear.ModelMaterial, [0])), [], body, underwear),
+            // The legs' skin is all turned off by an attribute.
+            Candidate("chara/equipment/e0000/model/c0201e0000_dwn.mdl", Parts((body.ModelMaterial, [2])), [0b01], body),
+            Candidate("chara/equipment/e0000/model/c0101e0000_sho.mdl", Parts((raceBody.ModelMaterial, [0])), [], raceBody),
+            Candidate("chara/human/c0801/obj/hair/h0001/model/c0801h0001_hir.mdl", Parts((hair.ModelMaterial, [0])), [], hair),
+            Candidate("chara/human/c0801/obj/face/f0001/model/c0801f0001_fac.mdl", Parts((face.ModelMaterial, [0, 1]), (iris.ModelMaterial, [0])), [], face, iris),
+        };
+        var selection = PainterSkin.Select(candidates);
+        Require(selection.Materials.Select(m => m.GamePath).SequenceEqual([BodySkinPath, FaceSkinPath]),
+            "the project paints the body skin once and the face skin, nothing else");
+        Require(selection.Models.Select(m => m.Candidate).SequenceEqual([1, 0, 2, 3, 5]),
+            "the model showing the most skin leads, the other body parts follow in order and the face comes last");
+        Require(selection.Models[0].DrawnTriangles == 2 && selection.Models[2].DrawnTriangles == 0,
+            "skin the character turns off isn't counted, but its model still joins");
+        Require(selection.Models[0].Materials.SequenceEqual([body.ModelMaterial]) && selection.Models[3].Materials.SequenceEqual([raceBody.ModelMaterial]),
+            "each model joins with only its skin materials, by the name it stores");
+        Require(selection.Models[4].Face && selection.Models[4].Materials.SequenceEqual([face.ModelMaterial]) && !selection.Models.Take(4).Any(m => m.Face),
+            "only the face model brings the face skin");
+
+        var covered = PainterSkin.Select([candidates[2], candidates[4], candidates[5]]);
+        Require(covered.Models.Count == 0 && covered.Materials.Count == 0, "without body skin drawn anywhere there is nothing to paint, face or not");
+        var ownSkin = Material("/mt_c0201e6001_top_b.mtrl", "chara/equipment/e6001/material/v0001/mt_c0201e6001_top_b.mtrl", "skin.shpk",
+            SkinMaterial.SkinTypeBody, "gear_skin.tex");
+        var gear = PainterSkin.Select([candidates[1], Candidate("chara/equipment/e6001/model/c0201e6001_top.mdl", Parts((ownSkin.ModelMaterial, [0])), [], ownSkin)]);
+        Require(gear.Materials.Count == 2 && gear.Models.Count == 2, "gear with a body skin material of its own joins with it");
+
+        var sets = PainterProjectBuilder.BuildSets(selection.Materials, _ => true, out var setByMaterial);
+        Require(sets.Count == 2 && sets[0].AlwaysShared && !sets[1].AlwaysShared,
+            "body skin sets keep the texels outside the project's UV islands, which models it doesn't know draw too; the face's don't");
+        Require(setByMaterial[body.ModelMaterial] == sets[0].Name && sets[0].Textures.All(t => t.Editable && t.Selected == (t.Texture.Usage != "index")),
+            "the skin's own textures are ticked");
+    }
+
+    private static void OptionalSetsStayOutUntilTicked()
+    {
+        var body = Material("/mt_c0201b0001_a.mtrl", BodySkinPath, "skin.shpk", SkinMaterial.SkinTypeBody, "body_base.tex");
+        var face = Material("/mt_c0801f0001_fac_a.mtrl", FaceSkinPath, "skin.shpk", null, "face_base.tex", "face_norm.tex");
+        var sets = PainterProjectBuilder.BuildSets([body, face], _ => true, out _);
+        var main = new PainterDraftModel
+        {
+            Model = new PainterModelRef("chara/equipment/e0000/model/c0201e0000_top.mdl", "chara/equipment/e0000/model/c0201e0000_top.mdl", true),
+            Mesh = Parts((body.ModelMaterial, [0])), Selected = true,
+            SetByMaterial = new Dictionary<string, string> { [body.ModelMaterial] = sets[0].Name },
+        };
+        var faceModel = new PainterDraftModel
+        {
+            Model = new PainterModelRef("chara/human/c0801/obj/face/f0001/model/c0801f0001_fac.mdl", "chara/human/c0801/obj/face/f0001/model/c0801f0001_fac.mdl", true),
+            Mesh = Parts((face.ModelMaterial, [0])),
+            SetByMaterial = new Dictionary<string, string> { [face.ModelMaterial] = sets[1].Name },
+        };
+        var draft = new PainterDraft
+        {
+            Request = new PainterRequest(0, 0, "Test", main.Model, [faceModel.Model], []) { Scope = PainterScope.Skin },
+            Main = main, Siblings = [faceModel], Sets = sets, Warnings = [], Title = "Test's skin",
+        };
+        Require(draft.InProject(sets[0]) && !draft.InProject(sets[1]), "a set only an unticked model draws stays out of the project");
+        Require(draft.SelectedTextures.Count() == 1 && sets[0].Textures.Contains(draft.SelectedTextures.Single()) && draft.NeedsModName,
+            "its ticked textures aren't sent; the body's vanilla texture needs a new mod");
+        faceModel.Selected = true;
+        Require(draft.InProject(sets[1]) && draft.SelectedTextures.Count() == 3, "ticking the model brings its set and its ticked textures in");
+        Require(sets[1].Textures.All(t => t.Selected), "the face's textures were ticked all along, so they come back as they were");
     }
 }

@@ -24,6 +24,7 @@ public sealed partial class MainWindow
             "and the body parts at the wrists, waist and ankles. Builds a preview mod that closes gaps and fixes normals, skin settings and textures.",
             DrawNeckSeamAction);
         DrawCharacterWeightCard();
+        DrawPaintSkinCard();
     }
 
     private void DrawNeckSeamAction()

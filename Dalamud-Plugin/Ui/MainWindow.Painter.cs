@@ -16,6 +16,7 @@ public sealed partial class MainWindow
     private PainterJobService? _painter;
     private PainterDraft? _painterDraft;
     private string _painterDraftError = "";
+    private string _painterLoadingText = "";
     private int _painterBusy;
     private bool _openPainterDialog;
     private Guid? _discardPainterJob;
@@ -91,26 +92,35 @@ public sealed partial class MainWindow
 
     private void StartPainter(ActorView actor, ResourceView node)
     {
-        if (_painter is not { } painter || actor.Entity is not { } entity || Interlocked.CompareExchange(ref _painterBusy, 1, 0) != 0)
-            return;
-        _painterDraft = null;
-        _painterDraftError = "";
-        _openPainterDialog = true;
-        var model = ModelRef(node);
         var others = actor.Roots.SelectMany(ResourceViews.Flatten)
             .Where(other => other.IsModel && ResourceViews.IsSafeModel(other) && !ReferenceEquals(other, node))
             .Select(ModelRef)
             .ToList();
+        PreparePainter(actor, ModelRef(node), others, PainterScope.Model, _config.ApplyRacialScaling, "Reading the model, its materials and textures");
+    }
+
+    /// <summary> Opens the dialog and prepares its draft in the background. </summary>
+    /// <param name="scale">Whether models of another race are reshaped for the actor, as the game shows them on it.</param>
+    private void PreparePainter(ActorView actor, PainterModelRef model, IReadOnlyList<PainterModelRef> others, PainterScope scope, bool scale,
+        string loadingText)
+    {
+        if (_painter is not { } painter || actor.Entity is not { } entity || Interlocked.CompareExchange(ref _painterBusy, 1, 0) != 0)
+            return;
+        _painterDraft = null;
+        _painterDraftError = "";
+        _painterLoadingText = loadingText;
+        _openPainterDialog = true;
         _ = Task.Run(async () =>
         {
             try
             {
                 var resources = await ResolvePreviewResourcesAsync(actor).ConfigureAwait(false);
-                var (scaling, scalingProblem) = _config.ApplyRacialScaling && _skeletons is { } skeletons
+                var (scaling, scalingProblem) = scale && _skeletons is { } skeletons
                     ? await skeletons.RacialScalingAsync(entity.ObjectIndex, entity.Address, _lifetimeCts.Token).ConfigureAwait(false)
                     : (null, null);
                 var request = new PainterRequest(entity.ObjectIndex, entity.Address.ToInt64(), actor.Name, model, others, resources.ToList())
                 {
+                    Scope = scope,
                     RacialScaling = scaling,
                     RacialScalingProblem = scalingProblem,
                 };
@@ -119,7 +129,7 @@ public sealed partial class MainWindow
             catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
             catch (Exception error)
             {
-                _log.Warning(error, "Could not prepare the model for Substance Painter.");
+                _log.Warning(error, "Could not prepare the Substance Painter project.");
                 _painterDraftError = error.Message;
             }
             finally { Interlocked.Exchange(ref _painterBusy, 0); }
@@ -149,7 +159,7 @@ public sealed partial class MainWindow
             if (_painterDraftError.Length > 0)
                 Widgets.Banner("##painter-error", FeedbackSeverity.Error, _painterDraftError);
             else
-                Widgets.HintWrapped("Reading the model, its materials and textures");
+                Widgets.HintWrapped(_painterLoadingText);
             ImGui.Spacing();
             if (ImGui.Button("Close"))
                 ImGui.CloseCurrentPopup();
@@ -157,9 +167,14 @@ public sealed partial class MainWindow
             return;
         }
 
-        ImGui.TextColored(Theme.Text, draft.Request.Model.FileName);
-        Widgets.HintWrapped("Painter gets the mesh and one texture set per material, with the current textures as its bottom layer. " +
-                            "Press Send to game in Painter's XIV Instant Edit panel to apply the ticked textures; each goes through a texture session with a backup.");
+        var skin = draft.Request.Scope == PainterScope.Skin;
+        ImGui.TextColored(Theme.Text, draft.Title);
+        Widgets.HintWrapped(skin
+            ? "Painter gets every part of your character that shows skin, with the body skin as one texture set and the current textures as its bottom layer, " +
+              "so paint can cross the wrists, waist and ankles. Tick the face to paint across the neck too. " +
+              "Press Send to game in Painter's XIV Instant Edit panel to apply the ticked textures; each goes through a texture session with a backup."
+            : "Painter gets the mesh and one texture set per material, with the current textures as its bottom layer. " +
+              "Press Send to game in Painter's XIV Instant Edit panel to apply the ticked textures; each goes through a texture session with a backup.");
         ImGui.Spacing();
 
         using (var list = ImRaii.Child("##painter-list", new Vector2(Theme.Scaled(720), Theme.Scaled(380)), true))
@@ -167,18 +182,27 @@ public sealed partial class MainWindow
             if (list.Success)
             {
                 foreach (var set in draft.Sets)
-                    DrawPainterSet(set);
-                if (draft.Siblings.Count > 0)
+                    DrawPainterSet(set, draft.InProject(set));
+                if (skin)
+                {
+                    Widgets.SectionHeader("Models", "every model that shows your skin");
+                    using (ImRaii.Disabled())
+                    {
+                        var always = true;
+                        ImGui.Checkbox($"{draft.Main.Model.FileName}##painter-main", ref always);
+                    }
+                    if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                        ImGui.SetTooltip("Shows the most skin, so it is always part of the project.");
+                    DrawPainterModelSets(draft.Main);
+                    foreach (var sibling in draft.Siblings)
+                        DrawPainterSibling(sibling);
+                    ImGui.Spacing();
+                }
+                else if (draft.Siblings.Count > 0)
                 {
                     Widgets.SectionHeader("Models sharing these materials", "their areas can be painted in the same texture set");
                     foreach (var sibling in draft.Siblings)
-                    {
-                        var selected = sibling.Selected;
-                        if (ImGui.Checkbox($"{sibling.Model.FileName}##sibling-{sibling.Model.SourcePath}", ref selected))
-                            sibling.Selected = selected;
-                        ImGui.SameLine(0, Theme.Gap);
-                        ImGui.TextColored(Theme.Muted, string.Join(", ", sibling.SetByMaterial.Values.Distinct()));
-                    }
+                        DrawPainterSibling(sibling);
                     ImGui.Spacing();
                 }
                 if (draft.Warnings.Count > 0)
@@ -233,7 +257,8 @@ public sealed partial class MainWindow
         ImGui.EndPopup();
     }
 
-    private static void DrawPainterSet(PainterDraftSet set)
+    /// <param name="inProject">Whether a ticked model draws the set; its textures can't be ticked otherwise.</param>
+    private static void DrawPainterSet(PainterDraftSet set, bool inProject)
     {
         Widgets.SectionHeader(set.Label, set.ShaderPackage);
         if (set.Textures.Count == 0)
@@ -242,6 +267,9 @@ public sealed partial class MainWindow
             ImGui.Spacing();
             return;
         }
+        if (!inProject)
+            Widgets.HintWrapped("Tick its model below to paint it too.");
+        using var outside = ImRaii.Disabled(!inProject);
         foreach (var texture in set.Textures)
         {
             using var id = ImRaii.PushId($"{set.Name}|{texture.Texture.SamplerId:X8}|{texture.Texture.GamePath}");
@@ -266,6 +294,25 @@ public sealed partial class MainWindow
             }
         }
         ImGui.Spacing();
+    }
+
+    private static void DrawPainterSibling(PainterDraftModel sibling)
+    {
+        var selected = sibling.Selected;
+        if (ImGui.Checkbox($"{sibling.Model.FileName}##sibling-{sibling.Model.SourcePath}", ref selected))
+            sibling.Selected = selected;
+        DrawPainterModelSets(sibling);
+    }
+
+    /// <summary> After a model's checkbox: the texture sets it draws, and the builder's note about it. </summary>
+    private static void DrawPainterModelSets(PainterDraftModel model)
+    {
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.TextColored(Theme.Muted, string.Join(", ", model.SetByMaterial.Values.Distinct()));
+        if (model.Note.Length == 0)
+            return;
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.TextColored(Theme.Hint, model.Note);
     }
 
     private static Vector4 RoleColour(string usage) => usage switch

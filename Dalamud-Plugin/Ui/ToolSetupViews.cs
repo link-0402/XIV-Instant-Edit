@@ -533,7 +533,7 @@ internal sealed class ToolSetupViews
     {
         var enabled = _config.PainterIntegrationEnabled;
         if (ImGui.Checkbox("Paint textures in Substance Painter", ref enabled)) { _config.PainterIntegrationEnabled = enabled; _saveConfig(); }
-        Widgets.Hint("Adds a paint-roller action to On Screen models, a Painter status dot, and Painter projects under Sessions.");
+        Widgets.Hint("Adds a paint-roller action to On Screen models, Paint my skin to Quick Actions, a Painter status dot, and Painter projects under Sessions.");
 
         var detection = CurrentDetection();
         var configured = _config.PainterExecutablePath;
