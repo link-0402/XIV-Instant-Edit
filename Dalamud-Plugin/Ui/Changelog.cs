@@ -18,10 +18,15 @@ internal sealed record ChangelogRelease(
 
 internal static class ChangelogCatalog
 {
-    public const string CurrentVersion = "2.0.0";
+    public const string CurrentVersion = "2.1.0";
 
     public static IReadOnlyList<ChangelogRelease> Releases { get; } =
     [
+        Release("2.1.0",
+            Highlight("Quick Actions: Character weight totals what your character costs other players in texture memory (VRAM) and triangles, counted the way Lightless, PlayerSync and other Mare-based sync plugins count them, next to their default warning and auto-pause limits."),
+            Entry("It ranks every texture and model your character renders by what it costs, counting each file once, and flags uncompressed textures, textures over 4096 pixels and textures without mipmaps.", 1),
+            Entry("Tick textures to compress them (BC7, or BC5 for index maps, the same rule as Mod Optimizer) or halve their size; uncompressed ones come ticked. The planned totals update as you choose.", 1),
+            Entry("The smaller textures go into a preview mod first. Apply them to your mods (backups are kept for a week) or discard them; changed game files go into a new mod. A file several options share changes for all of them.", 1)),
         Release("2.0.0",
             Highlight("Animation editing is now available in the new Animations tab (requires the LivePose plugin):"),
             Entry("The tab lists the animations your character plays with the mod each one comes from, and sorts the tools for the selected animation into tabs.", 1),
