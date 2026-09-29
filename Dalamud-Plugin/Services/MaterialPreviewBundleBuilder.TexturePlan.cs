@@ -117,7 +117,7 @@ public sealed partial class MaterialPreviewBundleBuilder
                 }
                 var problem = "";
                 TextureHeader header = default;
-                try { header = TextureFiles.ReadTex(resolved.Value.Bytes); }
+                try { header = TextureFiles.ReadOriginal(resolved.Value.Bytes).Header; }
                 catch (Exception e) { problem = $"The texture is not a supported TEX file: {e.Message}"; }
                 var locator = CreateLocator(gamePath, new ResolvedResource(resolved.Value.Bytes, resolved.Value.Rooted ? resolved.Value.SourcePath : null), candidates);
                 textures.Add(new TexturePlanTexture(sampler.SamplerId, usage, uvSet, gamePath, resolved.Value.SourcePath, locator,
@@ -194,7 +194,7 @@ public sealed partial class MaterialPreviewBundleBuilder
         else
             bytes = (await _data.GetFileAsync<FileResource>(texture.SourcePath, cancellationToken).ConfigureAwait(false))?.Data
                 ?? throw new FileNotFoundException($"Game file not found: {texture.SourcePath}");
-        var tex = LooseLuminaFile.Load<TexFile>(NormalizeTextureMipOffsets(bytes));
+        var tex = LooseLuminaFile.Load<TexFile>(TextureFiles.NormalizeMipOffsets(bytes));
         var width = (int)tex.Header.Width;
         var height = (int)tex.Header.Height;
         var rgba = tex.GetRgbaImageData();

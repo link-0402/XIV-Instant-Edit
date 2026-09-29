@@ -18,10 +18,12 @@ internal sealed record ChangelogRelease(
 
 internal static class ChangelogCatalog
 {
-    public const string CurrentVersion = "2.0.0";
+    public const string CurrentVersion = "2.1.0";
 
     public static IReadOnlyList<ChangelogRelease> Releases { get; } =
     [
+        Release("2.1.0",
+            Entry("Fixed texture editing and Substance Painter refusing many older mod textures whose header lists the wrong mip offsets, such as Bibo+ skin textures. The game draws them normally, and now they can be edited, painted and sent back. Restoring one writes it with a corrected header, and the neck seam fix keeps their compression instead of saving them uncompressed.")),
         Release("2.0.0",
             Highlight("Animation editing is now available in the new Animations tab (requires the LivePose plugin):"),
             Entry("The tab lists the animations your character plays with the mod each one comes from, and sorts the tools for the selected animation into tabs.", 1),

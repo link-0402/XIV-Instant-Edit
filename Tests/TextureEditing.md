@@ -28,6 +28,12 @@ agent.
   option back on and confirm the next save restores the original compression.
 - Confirm existing non-mipmapped textures remain single-level. Mipmapped inputs
   should regenerate the full size-appropriate chain, capped at 13 levels.
+- Open a mod texture whose header lists mip offsets written for uncompressed data,
+  such as Bibo+ `chara/bibo_viera_base.tex` (BC7), both with the brush and from a
+  Substance Painter project. The session must open with a TGA matching what the
+  game draws, and saves must keep BC7. Restore backup, and a Painter send of the
+  untouched image after a change, must write the same pixels back with a header
+  whose offsets describe its data; the game must still draw it the same.
 - Confirm 24-bit/missing-alpha saves, BC saves whose size is not divisible by 4,
   truncated saves and unsupported source layouts/formats produce actionable
   status without replacing the destination. Fix the working file and verify the
@@ -62,7 +68,8 @@ agent.
   reuse that destination. A taken mod name must never be overwritten.
 - Verify a modded texture outside a conventional `Files` folder works when its
   source belongs to the registered mod root. Check shared file references too.
-- Verify backups precede replacements and Restore backup restores bytes exactly,
+- Verify backups precede replacements and Restore backup restores bytes exactly
+  (except the corrected header of a texture with mismatched mip offsets),
   pauses the session, and retains the working TGA. Test a locked destination;
   the prior file must survive. Discard must delete only the selected working
   directory, retaining the mod and managed backups.

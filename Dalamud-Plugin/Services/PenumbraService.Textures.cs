@@ -58,7 +58,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
             await ValidateTextureDestinationAsync(modDirectory, modRoot, relative, request.ActualPath, token).ConfigureAwait(false);
             bytes = TextureFiles.Read(request.ActualPath);
         }
-        var header = TextureFiles.ReadTex(bytes);
+        var header = TextureFiles.ReadOriginal(bytes).Header;
         var session = new TextureEditSession
         {
             GamePath = request.GamePath, ResolvedGamePath = resolvedGamePath,
