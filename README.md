@@ -32,6 +32,8 @@ Penumbra mods.
   - Check its weight: the texture memory and triangles Lightless, PlayerSync and other sync plugins count, the files
     that cost the most, and a preview mod that compresses or halves the heaviest textures.
   - Paint its whole skin in Substance Painter.
+  - Measure the [Simple Heels](https://github.com/Caraxi/SimpleHeels) offset that keeps its heels from sinking into the
+    ground.
 - **Racial scaling**: preview gear made for another race shaped for yours in Blender and Painter.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Racial-Scaling)
 
