@@ -35,6 +35,10 @@ internal static class PainterRules
         return "";
     }
 
+    /// <summary> The files the materials' textures are read from, as the plan's texture source paths. </summary>
+    public static IEnumerable<string> TextureSources(IEnumerable<TexturePlanMaterial> materials)
+        => materials.SelectMany(material => material.Textures).Select(texture => texture.SourcePath).Where(source => source.Length > 0);
+
     /// <summary> A file- and Painter-safe name from a file stem, unique within <paramref name="used"/>. </summary>
     public static string UniqueName(string stem, ISet<string> used, string fallback)
     {

@@ -17,6 +17,8 @@ Penumbra mods.
 - **Textures**: edit textures in Photoshop, GIMP, Krita, Paint.NET or any TGA editor, including variants as Penumbra
   options. [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-Textures)
 - **Substance Painter**: paint on the model with the exact textures your character uses and send them back to the game.
+  Paint my skin, in Quick Actions, opens every body part that shows skin at once, and the face if you tick it, so
+  tattoos and body paint can cross the wrists, waist, ankles and neck.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Painting-in-Substance-Painter)
 - **Animations**: bake LivePose adjustments into animations, repair their skeletons, give bones back to physics, and
   send animations or a recorded live pose to Blender.
@@ -24,8 +26,9 @@ Penumbra mods.
   [In Blender](https://github.com/link-0402/XIV-Instant-Edit/wiki/Animations-in-Blender)
 - **Game Files**: browse the game's own models, edit them, or batch-export their files and skeletons.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Game-Files)
-- **Quick Actions**: fix the seam between your character's face and body.
-  [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Fixing-the-Neck-Seam)
+- **Quick Actions**: fix the seam between your character's face and body
+  ([guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Fixing-the-Neck-Seam)), or paint your whole skin in
+  Substance Painter.
 - **Racial scaling**: preview gear made for another race shaped for yours in Blender and Painter.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Racial-Scaling)
 
