@@ -168,6 +168,7 @@ try
     ToolSetupScenarios.Run(testRoot);
     NeckSeamScenarios.Run(testRoot);
     RacialScalingScenarios.Run(testRoot);
+    HeelsOffsetScenarios.Run();
 
     // ---- Backup safety, export-context authorization, and revocation ----
     var originalRoot = Path.Combine(testRoot, "OriginalMod");

@@ -133,9 +133,9 @@ internal static class RacialScalingScenarios
 
     // ---- The model ------------------------------------------------------------------------------------
 
-    private sealed record Vertex(Vector3 Position, Vector3 Normal, byte[] Bones, byte[] Weights);
+    internal sealed record Vertex(Vector3 Position, Vector3 Normal, byte[] Bones, byte[] Weights);
 
-    private static readonly Vertex[] Vertices =
+    internal static readonly Vertex[] Vertices =
     [
         new(new Vector3(0.1f, 1.4f, 0.05f), Vector3.UnitZ, [0, 0, 0, 0, 0, 0, 0, 0], [255, 0, 0, 0, 0, 0, 0, 0]),
         new(new Vector3(-0.1f, 1.3f, 0.02f), Vector3.Normalize(new Vector3(1, 1, 0)), [0, 1, 0, 0, 0, 0, 0, 0], [128, 127, 0, 0, 0, 0, 0, 0]),
@@ -149,7 +149,7 @@ internal static class RacialScalingScenarios
     /// Its boxes follow the add-on: the model box, the first box with its bottom at the origin, and
     /// boxes for j_kubi and j_sebo_c; j_te_l's is left unset, as by a writer that doesn't measure it.
     /// </summary>
-    private static byte[] Model()
+    internal static byte[] Model()
     {
         (byte Stream, byte Offset, byte Type, byte Usage)[][] declarations =
         [
@@ -336,7 +336,7 @@ internal static class RacialScalingScenarios
         (float)BitConverter.Int16BitsToHalf(BinaryPrimitives.ReadInt16LittleEndian(bytes.AsSpan(at + 4))));
 
     /// <summary> c0801's matrices for c0201 models: a skewed j_kubi, a shrunk and raised j_sebo_c; j_te_l doesn't move. </summary>
-    private static RacialDeformer Deformer() => RacialDeformer.Create(Pbd(
+    internal static RacialDeformer Deformer() => RacialDeformer.Create(Pbd(
     [
         (201, -1, []),
         (801, 0,
@@ -346,7 +346,7 @@ internal static class RacialScalingScenarios
         ]),
     ]), 801, 201);
 
-    private static Vector3 Expected(RacialDeformer deformer, Vertex vertex, int influences)
+    internal static Vector3 Expected(RacialDeformer deformer, Vertex vertex, int influences)
     {
         var table = Bones.Select(deformer.For).ToArray();
         var weights = vertex.Weights[..influences].Select(w => w / 255f).ToArray();

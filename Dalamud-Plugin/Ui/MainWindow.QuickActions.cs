@@ -23,6 +23,7 @@ public sealed partial class MainWindow
             "Compares your character's face and body where they meet at the neck, the way the game's skin shader draws them, " +
             "and builds a preview mod that fixes the connection data, skin settings and textures.",
             DrawNeckSeamAction);
+        DrawHeelsOffsetCard();
     }
 
     private void DrawNeckSeamAction()

@@ -18,10 +18,15 @@ internal sealed record ChangelogRelease(
 
 internal static class ChangelogCatalog
 {
-    public const string CurrentVersion = "2.0.0";
+    public const string CurrentVersion = "2.1.0";
 
     public static IReadOnlyList<ChangelogRelease> Releases { get; } =
     [
+        Release("2.1.0",
+            Highlight("Quick Actions: the new Heels offset card measures how far your shoes reach below the ground and gives the offset to enter in Simple Heels, so heels stand on the ground instead of sinking into it."),
+            Entry("It measures the feet model your character draws, the way your character wears it: reshaped for your race, without the parts your outfit hides, with the shapes it turns on, in the standard pose and at your height. Animations and Customize+ scaling are left out.", 1),
+            Entry("Copy the offset and paste it into a Simple Heels Equipment Offsets entry; the card names the entry to add and shows what Simple Heels applies right now. It also shows an offset the shoes' model already stores for Simple Heels.", 1),
+            Entry("Copy as model attribute gives the heels_offset attribute for mod files, which Simple Heels applies to whoever wears the model.", 1)),
         Release("2.0.0",
             Highlight("Animation editing is now available in the new Animations tab (requires the LivePose plugin):"),
             Entry("The tab lists the animations your character plays with the mod each one comes from, and sorts the tools for the selected animation into tabs.", 1),
