@@ -103,7 +103,7 @@ internal sealed class PainterJobService : IDisposable
         var sessions = new Dictionary<PainterDraftTexture, Guid>();
         var started = new HashSet<Guid>();
         var capability = PainterJobStore.NewCapability();
-        var displayName = Path.GetFileName(request.Model.GamePath);
+        var displayName = draft.Title;
         PainterProjectFiles files;
         PainterJob job;
         try
@@ -158,7 +158,7 @@ internal sealed class PainterJobService : IDisposable
                 Capability = capability,
                 DisplayName = displayName,
                 ActorName = request.ActorName,
-                ModelGamePath = request.Model.GamePath,
+                ModelGamePath = draft.Main.Model.GamePath,
                 NewModName = draft.NeedsModName ? draft.NewModName : "",
                 Created = DateTimeOffset.UtcNow,
                 Targets = files.Targets
@@ -186,7 +186,7 @@ internal sealed class PainterJobService : IDisposable
     {
         var manifest = Path.Combine(JobDirectory(_textures.EnsureConfiguredCache(), job.Id), "job.json");
         if (!File.Exists(manifest))
-            return Fail(job, "The project's files were removed from the cache. Open the model from On Screen again.");
+            return Fail(job, "The project's files were removed from the cache. Open it from On Screen or Quick Actions again.");
         var status = await _client.GetStatusAsync(_config.PainterPort, TimeSpan.FromSeconds(1), token).ConfigureAwait(false);
         if (!status.Reachable)
         {
@@ -302,7 +302,7 @@ internal sealed class PainterJobService : IDisposable
         }
         var job = _store.Authorize(Text(request, "jobId"), Text(request, "capability"));
         if (job is null)
-            return Error(404, "unknown_project", "Instant Edit doesn't know this Painter project. Open the model from On Screen again.");
+            return Error(404, "unknown_project", "Instant Edit doesn't know this Painter project. Open it from On Screen or Quick Actions again.");
         try
         {
             return path switch

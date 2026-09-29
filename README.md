@@ -17,6 +17,8 @@ Penumbra mods.
 - **Textures**: edit textures in Photoshop, GIMP, Krita, Paint.NET or any TGA editor, including variants as Penumbra
   options. [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-Textures)
 - **Substance Painter**: paint on the model with the exact textures your character uses and send them back to the game.
+  Paint my skin, in Quick Actions, opens every body part that shows skin at once, and the face if you tick it, so
+  tattoos and body paint can cross the wrists, waist, ankles and neck.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Painting-in-Substance-Painter)
 - **Animations**: bake LivePose adjustments into animations, repair their skeletons, give bones back to physics, and
   send animations or a recorded live pose to Blender.
@@ -29,6 +31,7 @@ Penumbra mods.
     wrists, waist and ankles. [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Fixing-the-Neck-Seam)
   - Check its weight: the texture memory and triangles Lightless, PlayerSync and other sync plugins count, the files
     that cost the most, and a preview mod that compresses or halves the heaviest textures.
+  - Paint its whole skin in Substance Painter.
 - **Racial scaling**: preview gear made for another race shaped for yours in Blender and Painter.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Racial-Scaling)
 
