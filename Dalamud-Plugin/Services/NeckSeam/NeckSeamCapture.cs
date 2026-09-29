@@ -1,33 +1,11 @@
 using System.Security.Cryptography;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using InstantEdit.Models;
+using InstantEdit.Services.PreviewMods;
 
 namespace InstantEdit.Services.NeckSeam;
 
 /// <summary> Where one file the seam analysis read came from, with its hash at that moment. </summary>
-internal sealed record NeckSeamSource
-{
-    /// <summary> The path the game requested. </summary>
-    public required string GamePath { get; init; }
-    /// <summary> The resolved file: a full path for mod files, a game path for game data. </summary>
-    public required string ActualPath { get; init; }
-    public required ResourceSourceState State { get; init; }
-    public string ModName { get; init; } = string.Empty;
-    public string ModDirectory { get; init; } = string.Empty;
-    public string ModRootPath { get; init; } = string.Empty;
-    public string RelativePath { get; init; } = string.Empty;
-    public Guid? ModStableId { get; init; }
-    public required string Sha256 { get; init; }
-
-    /// <summary> A file inside a loaded Penumbra mod, which the fix can be written back to. </summary>
-    [JsonIgnore]
-    public bool IsModFile => State == ResourceSourceState.LoadedMod && ModDirectory.Length > 0 && RelativePath.Length > 0 && Path.IsPathRooted(ActualPath);
-
-    /// <summary> "Mod name: relative path", or the game path for game data. </summary>
-    [JsonIgnore]
-    public string Label => IsModFile ? $"{ModName}: {RelativePath}" : $"Game data: {GamePath}";
-}
+internal sealed record NeckSeamSource : PreviewSource;
 
 /// <summary> The analysis input gathered from an actor's resource tree, and the sources of the files a fix can change. </summary>
 internal sealed record NeckSeamCaptured(NeckSeamInput Input, IReadOnlyDictionary<string, NeckSeamSource> Sources)
@@ -179,7 +157,7 @@ internal sealed record NeckSeamPreviewFile
 }
 
 /// <summary> A neck seam preview mod the plugin created and has not applied or discarded yet. </summary>
-internal sealed record NeckSeamPreview
+internal sealed record NeckSeamPreview : IPreviewModRecord
 {
     public required Guid Id { get; init; }
     public required string ModDirectory { get; init; }
@@ -194,62 +172,5 @@ internal sealed record NeckSeamPreview
 }
 
 /// <summary> Previews persisted in the plugin's config folder, so a reload can still apply or discard them. </summary>
-internal sealed class NeckSeamPreviewStore
-{
-    private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, Converters = { new JsonStringEnumConverter() } };
-    private readonly string _path;
-    private readonly object _lock = new();
-    private List<NeckSeamPreview> _previews = [];
-
-    public NeckSeamPreviewStore(string configDirectory) => _path = Path.Combine(configDirectory, "NeckSeamPreviews.json");
-
-    public string LoadError { get; private set; } = string.Empty;
-
-    public IReadOnlyList<NeckSeamPreview> Previews
-    {
-        get { lock (_lock) return _previews.ToArray(); }
-    }
-
-    public void Load()
-    {
-        lock (_lock)
-        {
-            try
-            {
-                _previews = File.Exists(_path) ? JsonSerializer.Deserialize<List<NeckSeamPreview>>(File.ReadAllText(_path), Json) ?? [] : [];
-            }
-            catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException)
-            {
-                LoadError = $"Could not read the neck seam previews: {e.Message}";
-                _previews = [];
-            }
-        }
-    }
-
-    public void Add(NeckSeamPreview preview)
-    {
-        lock (_lock)
-        {
-            _previews.RemoveAll(p => p.Id == preview.Id);
-            _previews.Add(preview);
-            Save();
-        }
-    }
-
-    public void Remove(Guid id)
-    {
-        lock (_lock)
-        {
-            _previews.RemoveAll(p => p.Id == id);
-            Save();
-        }
-    }
-
-    private void Save()
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-        var temporary = _path + ".tmp";
-        File.WriteAllText(temporary, JsonSerializer.Serialize(_previews, Json));
-        File.Move(temporary, _path, true);
-    }
-}
+internal sealed class NeckSeamPreviewStore(string configDirectory)
+    : PreviewModStore<NeckSeamPreview>(configDirectory, "NeckSeamPreviews.json", "neck seam previews");
