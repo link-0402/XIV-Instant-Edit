@@ -111,6 +111,88 @@ internal static class TextureFiles
             : OwnedRootFiles.Contains(name) || OwnedRootTemporary.IsMatch(name);
     }
 
+    /// <summary>
+    /// Reads a TEX the plugin didn't write, a mod's or the game's. Its mip offsets are normalized
+    /// first (<see cref="NormalizeMipOffsets"/>), so textures the game draws normally are accepted.
+    /// Returns those bytes, whose header describes their data, to keep and write back instead of the
+    /// input. Files the plugin writes are checked with <see cref="ReadTex"/> as they are.
+    /// </summary>
+    public static (byte[] Bytes, TextureHeader Header) ReadOriginal(byte[] bytes)
+    {
+        var normalized = NormalizeMipOffsets(bytes);
+        return (normalized, ReadTex(normalized));
+    }
+
+    /// <summary>
+    /// Some texture tools write TEX headers whose mip offset table does not describe the data, such
+    /// as uncompressed-size offsets for BC7 mips or small bogus values, or claim a last mip the file
+    /// doesn't hold. Penumbra reads the mips contiguously after the header and the game draws them,
+    /// but Lumina and <see cref="ReadTex"/> locate each mip from that table. When the stored
+    /// table cannot hold the mips, rebuild it for contiguous 2D mips after the first surface,
+    /// keeping only the levels that fit in the file, and keep the LOD mip indices within them as
+    /// Penumbra's import does. Consistent files are returned as they are.
+    /// </summary>
+    public static byte[] NormalizeMipOffsets(byte[] bytes)
+    {
+        const int headerSize = 80;
+        const int lodTable = 16;
+        const int offsetTable = 28;
+        const uint textureTypeMask = 0x13C00000;
+        const uint textureType2D = 0x00800000;
+        if (bytes.Length < headerSize ||
+            (BinaryPrimitives.ReadUInt32LittleEndian(bytes) & textureTypeMask) != textureType2D)
+            return bytes;
+
+        // Mirrors Lumina's TexFile.SliceSize: format bits 4-7 hold log2(bits
+        // per pixel) and bits 12-15 the type, where 3 and 6 are BC formats.
+        var format = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(4));
+        int width = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(8));
+        int height = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(10));
+        var mipCount = Math.Clamp(bytes[14] & 0x7F, 1, 13);
+        var bitsPerPixel = 1L << (int)((format >> 4) & 0xF);
+        var blockCompressed = ((format >> 12) & 0xF) is 3 or 6;
+        long SurfaceSize(int mip)
+        {
+            long w = Math.Max(1, width >> mip), h = Math.Max(1, height >> mip);
+            return blockCompressed
+                ? Math.Max(1, (w + 3) / 4) * Math.Max(1, (h + 3) / 4) * bitsPerPixel * 2
+                : w * h * bitsPerPixel / 8;
+        }
+
+        var offsets = new long[mipCount];
+        for (var mip = 0; mip < mipCount; mip++)
+            offsets[mip] = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offsetTable + mip * 4));
+        var consistent = offsets[0] >= headerSize;
+        for (var mip = 0; consistent && mip < mipCount; mip++)
+        {
+            var end = offsets[mip] + SurfaceSize(mip);
+            consistent = end <= bytes.Length && (mip == mipCount - 1 || offsets[mip + 1] >= end);
+        }
+        if (consistent)
+            return bytes;
+
+        var start = offsets[0] >= headerSize && offsets[0] + SurfaceSize(0) <= bytes.Length ? offsets[0] : headerSize;
+        if (start + SurfaceSize(0) > bytes.Length)
+            return bytes;
+        var normalized = (byte[])bytes.Clone();
+        var kept = 0;
+        for (var offset = start; kept < mipCount && offset + SurfaceSize(kept) <= bytes.Length; kept++)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(normalized.AsSpan(offsetTable + kept * 4), (uint)offset);
+            offset += SurfaceSize(kept);
+        }
+        normalized.AsSpan(offsetTable + kept * 4, (13 - kept) * 4).Clear();
+        normalized[14] = (byte)((bytes[14] & 0x80) | kept);
+        // The same limits as Penumbra's TexFileParser.FixMipOffsets.
+        var lowest = BinaryPrimitives.ReadUInt32LittleEndian(normalized.AsSpan(lodTable + 8));
+        if (lowest >= kept)
+            BinaryPrimitives.WriteUInt32LittleEndian(normalized.AsSpan(lodTable + 8), (uint)(kept - 1));
+        var middle = BinaryPrimitives.ReadUInt32LittleEndian(normalized.AsSpan(lodTable + 4));
+        if (middle >= kept)
+            BinaryPrimitives.WriteUInt32LittleEndian(normalized.AsSpan(lodTable + 4), (uint)(kept > 2 ? kept - 2 : kept - 1));
+        return normalized;
+    }
+
     public static TextureHeader ReadTex(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length < 80 || bytes.Length > MaxBytes) throw new InvalidDataException("TEX file is truncated or too large.");

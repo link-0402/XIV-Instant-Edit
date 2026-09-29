@@ -224,7 +224,7 @@ internal sealed class NeckSeamService
         var mips = true;
         try
         {
-            var header = TextureFiles.ReadTex(original);
+            var header = TextureFiles.ReadOriginal(original).Header;
             mips = header.Mips > 1;
             if (_recompress())
                 type = TextureFiles.OutputType(header.Format);

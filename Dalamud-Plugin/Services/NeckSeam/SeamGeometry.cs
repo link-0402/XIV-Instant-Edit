@@ -278,7 +278,7 @@ internal static class SeamTextures
     /// </summary>
     public static SeamImage DecodeAtMost(byte[] tex, int maxEdge, uint samplerFlags = 0)
     {
-        var bytes = MaterialPreviewBundleBuilder.NormalizeTextureMipOffsets(tex);
+        var bytes = TextureFiles.NormalizeMipOffsets(tex);
         if (bytes.Length < HeaderSize)
             return Decode(tex, samplerFlags);
         var format = BitConverter.ToUInt32(bytes, 4);
