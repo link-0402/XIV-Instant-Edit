@@ -113,9 +113,16 @@ internal static class AnimationTakeFormat
         [property: JsonPropertyName("loop")] bool Loop,
         [property: JsonPropertyName("source")] IReadOnlyDictionary<string, string> Source,
         [property: JsonPropertyName("bones")] Bone[] Bones,
-        [property: JsonPropertyName("times")] IReadOnlyList<double> Times);
+        [property: JsonPropertyName("times")] IReadOnlyList<double> Times,
+        [property: JsonPropertyName("targetCharacter"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? TargetCharacter = null);
 
-    public static byte[] Write(AnimationTake take, string targetObject, bool keyScale, string pluginVersion)
+    /// <param name="targetCharacter">
+    /// The character send whose armature the take belongs on (see CharacterImportEntry): Blender
+    /// keys it there whatever <paramref name="targetObject"/> names. Null for the named armature.
+    /// </param>
+    public static byte[] Write(AnimationTake take, string targetObject, bool keyScale, string pluginVersion,
+        string? targetCharacter = null)
     {
         var bones = take.Bones.Select(b =>
         {
@@ -125,7 +132,7 @@ internal static class AnimationTakeFormat
             return new Bone(b.Name, b.Parent, reference);
         }).ToArray();
         var header = JsonSerializer.SerializeToUtf8Bytes(new Header(Schema, Version, pluginVersion, take.Kind, take.Name,
-            targetObject.Trim(), keyScale, take.Loop, take.Source, bones, take.Times));
+            targetObject.Trim(), keyScale, take.Loop, take.Source, bones, take.Times, targetCharacter));
         var start = 12 + header.Length;
         var padding = (4 - start % 4) % 4;
         var size = (long)start + padding + (long)take.Samples.Length * sizeof(float);

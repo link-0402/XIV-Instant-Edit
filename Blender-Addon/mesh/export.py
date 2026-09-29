@@ -5,6 +5,7 @@ import numpy as np
 from contextlib import contextmanager
 from pathlib         import Path
 from bpy.types       import Context, UILayout
+from mathutils       import Matrix
 
 from .heels          import apply_calculated_heels_offset
 from .objects        import visible_meshobj, armature_for_object
@@ -12,6 +13,7 @@ from ..io.model      import ModelExport, SceneHandler
 from ..io.logging    import YetAnotherLogger
 from ..properties    import get_settings
 from ..backups       import create_backup
+from ..instant_edit.character import is_hung_weapon
 
 
 
@@ -24,7 +26,9 @@ def _clean_export_state(export_objects, reset_scaling=False):
 
     Blender users may pose or scale an imported model for display. FFXIV MDL
     exports must be evaluated from the armature rest pose. Scale neutralization
-    is optional; every affected value is restored even if export fails.
+    is optional; every affected value is restored even if export fails. A
+    weapon armature hung from a character's bone exports at the origin, where
+    its own skeleton puts the model, not in the character's hand.
     """
     objects = tuple(dict.fromkeys(export_objects or ()))
     armatures = tuple(
@@ -57,6 +61,7 @@ def _clean_export_state(export_objects, reset_scaling=False):
         )
         for armature in armatures
     ]
+    hung = [(armature, armature.matrix_basis.copy()) for armature in armatures if is_hung_weapon(armature)]
 
     try:
         for obj, _scale in scales:
@@ -68,6 +73,11 @@ def _clean_export_state(export_objects, reset_scaling=False):
                 bone.rotation_mode = "QUATERNION"
                 bone.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
                 bone.scale = (1.0, 1.0, 1.0)
+        if hung:
+            # Setting the world matrix reads the parent bone's current place.
+            bpy.context.view_layer.update()
+            for armature, _basis in hung:
+                armature.matrix_world = Matrix.Identity(4)
         bpy.context.view_layer.update()
         yield
     finally:
@@ -94,6 +104,9 @@ def _clean_export_state(export_objects, reset_scaling=False):
         for obj, scale in scales:
             if obj.name in bpy.data.objects:
                 obj.scale = scale
+        for armature, basis in hung:
+            if armature.name in bpy.data.objects:
+                armature.matrix_basis = basis
         bpy.context.view_layer.update()
 
 def check_triangulation(objects=None) -> list[str]:

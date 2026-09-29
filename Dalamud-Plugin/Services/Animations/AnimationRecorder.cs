@@ -71,10 +71,18 @@ internal sealed class AnimationRecorder : IDisposable
     /// Waits <paramref name="delaySeconds"/>, then records <paramref name="seconds"/> of the
     /// subject's live skeleton. <see cref="Stop"/> ends the recording early and keeps what it has.
     /// </summary>
-    public async Task<AnimationTake> RecordAsync(RecordingSubject subject, float seconds, float delaySeconds, CancellationToken token)
+    public Task<AnimationTake> RecordAsync(RecordingSubject subject, float seconds, float delaySeconds, CancellationToken token)
+        => RunAsync(subject, Math.Clamp(seconds, MinimumSeconds, MaximumSeconds), Math.Clamp(delaySeconds, 0, MaximumDelaySeconds), token);
+
+    /// <summary>
+    /// The subject's live pose now, as a recording of one frame: the pose the game renders, with
+    /// Customize+ paused on the character as for any recording.
+    /// </summary>
+    public Task<AnimationTake> CapturePoseAsync(RecordingSubject subject, CancellationToken token)
+        => RunAsync(subject, 0, 0, token);
+
+    private async Task<AnimationTake> RunAsync(RecordingSubject subject, float seconds, float delaySeconds, CancellationToken token)
     {
-        seconds = Math.Clamp(seconds, MinimumSeconds, MaximumSeconds);
-        delaySeconds = Math.Clamp(delaySeconds, 0, MaximumDelaySeconds);
         var created = new Session(subject, seconds, delaySeconds, token);
         lock (sync)
         {

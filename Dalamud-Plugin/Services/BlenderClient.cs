@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
+using InstantEdit.Services.CharacterSend;
 using InstantEdit.Services.Skeletons;
 
 namespace InstantEdit.Services;
@@ -19,6 +20,8 @@ public sealed record BlenderStatus(bool Reachable, string? AddonVersion)
 {
     public string? CacheRoot { get; init; }
     public bool CacheSettingsSupported { get; init; }
+    /// <summary> Imports Blender has queued or is running; -1 when the add-on doesn't say. </summary>
+    public int PendingImports { get; init; } = -1;
     public BlenderConnectionState Classify(string expectedPluginVersion)
     {
         if (!Reachable)
@@ -43,6 +46,8 @@ public sealed class BlenderClient : IDisposable
     public const string VanillaContextCapability = "instant-edit.vanilla-context.v1";
     public const string AnimationImportCapability = "instant-edit.animation-import.v1";
     public const string ImportSkeletonCapability = "instant-edit.import-skeleton.v1";
+    /// <summary> Imports of a whole-character send share one armature, animations can name it, and /status counts pending imports. </summary>
+    public const string CharacterImportCapability = "instant-edit.character-import.v1";
 
     private readonly HttpClient _http;
     private readonly IPluginLog _log;
@@ -127,10 +132,14 @@ public sealed class BlenderClient : IDisposable
                         c.ValueKind == JsonValueKind.String && c.GetString() == TextureCacheCapability) &&
                     document.RootElement.TryGetProperty("cacheRoot", out var cache) && cache.ValueKind == JsonValueKind.String
                     ? cache.GetString() : null;
+                var pendingImports = document.RootElement.TryGetProperty("pendingImports", out var pending) &&
+                    pending.ValueKind == JsonValueKind.Number && pending.TryGetInt32(out var count) && count >= 0
+                    ? count : -1;
                 return new BlenderStatus(true, string.IsNullOrWhiteSpace(version) ? null : version.Trim())
                 {
                     CacheRoot = cacheRoot,
                     CacheSettingsSupported = cacheSettingsSupported,
+                    PendingImports = pendingImports,
                 };
             }
             catch (JsonException)
@@ -229,6 +238,10 @@ public sealed class BlenderClient : IDisposable
     /// <summary>Returns whether the connected add-on builds armatures from an import's game skeleton.</summary>
     public async Task<bool> SupportsImportSkeletonAsync(int port, CancellationToken cancellationToken = default)
         => await SupportsCapabilityAsync(port, ImportSkeletonCapability, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>Returns whether the connected add-on binds a whole-character send to one armature.</summary>
+    public async Task<bool> SupportsCharacterImportAsync(int port, CancellationToken cancellationToken = default)
+        => await SupportsCapabilityAsync(port, CharacterImportCapability, cancellationToken).ConfigureAwait(false);
 
     /// <summary>
     /// Sends an encoded take (see <c>AnimationTakeFormat</c>) to Blender, which keys it onto a
@@ -386,7 +399,8 @@ public sealed class BlenderClient : IDisposable
         string sourceOptionStatus = "unknown",
         Guid? sourceModStableId = null,
         ModelSkeletonPayload? skeleton = null,
-        RacialScalingRecord? racialScaling = null)
+        RacialScalingRecord? racialScaling = null,
+        CharacterImportEntry? character = null)
     {
         if (port is < 1 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(port));
@@ -416,7 +430,7 @@ public sealed class BlenderClient : IDisposable
 
         return await SendImportAsync(
             port, importFilePath, name, context, cancellationToken,
-            importOptions, previewManifestPath, skeleton).ConfigureAwait(false);
+            importOptions, previewManifestPath, skeleton, character).ConfigureAwait(false);
     }
 
     public async Task<bool> SendGameImportAsync(
@@ -434,7 +448,8 @@ public sealed class BlenderClient : IDisposable
         string? previewManifestPath = null,
         ResourceDependencyManifest? resourceManifest = null,
         ModelSkeletonPayload? skeleton = null,
-        RacialScalingRecord? racialScaling = null)
+        RacialScalingRecord? racialScaling = null,
+        CharacterImportEntry? character = null)
     {
         if (port is < 1 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(port));
@@ -453,7 +468,7 @@ public sealed class BlenderClient : IDisposable
 
         return await SendImportAsync(
             port, importFilePath, name, context, cancellationToken,
-            importOptions, previewManifestPath, skeleton).ConfigureAwait(false);
+            importOptions, previewManifestPath, skeleton, character).ConfigureAwait(false);
     }
 
     private async Task<bool> SendImportAsync(
@@ -464,7 +479,8 @@ public sealed class BlenderClient : IDisposable
         CancellationToken cancellationToken,
         BlenderImportOptions? importOptions,
         string? previewManifestPath,
-        ModelSkeletonPayload? skeleton)
+        ModelSkeletonPayload? skeleton,
+        CharacterImportEntry? character)
     {
 
         try
@@ -507,6 +523,8 @@ public sealed class BlenderClient : IDisposable
                 racialScaling = context.RacialScaling is { } scaling
                     ? new { modelRace = $"c{scaling.ModelRace:D4}", race = $"c{scaling.CharacterRace:D4}" }
                     : null,
+                // The whole-character send the model belongs to, whose armature it shares; null for single imports.
+                character,
             });
 
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");

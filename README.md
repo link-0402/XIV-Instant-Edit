@@ -24,8 +24,10 @@ Penumbra mods.
   [In Blender](https://github.com/link-0402/XIV-Instant-Edit/wiki/Animations-in-Blender)
 - **Game Files**: browse the game's own models, edit them, or batch-export their files and skeletons.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Game-Files)
-- **Quick Actions**: fix the seam between your character's face and body.
-  [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Fixing-the-Neck-Seam)
+- **Quick Actions**: fix the seam between your character's face and body
+  ([guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Fixing-the-Neck-Seam)), or send your whole character to
+  Blender in one click: every model it shows on one armature with its skeleton, in its rest pose, the pose it stands in
+  or the animation it plays, and each model still exports back on its own.
 - **Racial scaling**: preview gear made for another race shaped for yours in Blender and Painter.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Racial-Scaling)
 

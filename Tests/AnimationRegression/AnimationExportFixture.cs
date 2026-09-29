@@ -86,6 +86,11 @@ internal static class AnimationExportFixture
               (string?)header["targetObject"] == "Skeleton" && (bool?)header["keyScale"] == true && (bool?)header["loop"] == false &&
               (string?)header["pluginVersion"] == "1.2.4" && (string?)header["source"]?["character"] == "Regression",
             "the take header names its schema, kind, target armature and options");
+        check(!header.ContainsKey("targetCharacter"), "a take for the named armature names no character send");
+        var sendBytes = AnimationTakeFormat.Write(take, "Skeleton", false, "1.2.4", new string('a', 32));
+        var sendHeader = JsonNode.Parse(sendBytes.AsSpan(12, BinaryPrimitives.ReadInt32LittleEndian(sendBytes.AsSpan(8))))!.AsObject();
+        check((string?)sendHeader["targetCharacter"] == new string('a', 32) && (string?)sendHeader["targetObject"] == "Skeleton",
+            "a take for a character send names the send whose armature it belongs on");
         var bones = header["bones"]!.AsArray();
         check(bones.Count == 3 && (string?)bones[1]!["name"] == "j_kosi" && (int?)bones[1]!["parent"] == 0 &&
               bones[1]!["reference"]!.AsArray().Count == AnimationTake.Stride &&
@@ -103,6 +108,9 @@ internal static class AnimationExportFixture
         var (times, resampled) = AnimationTakeTiming.Resample(recorded, frames, Bones.Length, 60);
         check(times.Length == 4 && times.SequenceEqual([0, 1 / 60d, 2 / 60d, 3 / 60d]),
             "a recording is resampled at the take rate over its own length");
+        var (poseTimes, pose) = AnimationTakeTiming.Resample([0.4], [Frame(0.1f)], Bones.Length, 60);
+        check(poseTimes.SequenceEqual([0d]) && Near(pose, Frame(0.1f)),
+            "a one-frame recording, a character send's current pose, stays one frame at time zero");
         var width = Bones.Length * AnimationTake.Stride;
         check(Near(resampled.AsSpan(0, width), frames[0]), "the first resampled frame is the first recorded frame");
         var middle = AnimationTake.Read(resampled.AsSpan(width + AnimationTake.Stride, AnimationTake.Stride));

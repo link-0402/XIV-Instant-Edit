@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using Dalamud.Game.ClientState.Objects.SubKinds;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
@@ -7,6 +8,7 @@ using FFXIVClientStructs.FFXIV.Client.Graphics.Scene;
 using FFXIVClientStructs.Havok.Animation.Rig;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.CharacterSend;
 
 namespace InstantEdit.Services.Skeletons;
 
@@ -44,7 +46,7 @@ internal sealed class ModelSkeletonResolver(PenumbraService penumbra, IDataManag
         {
             if (characterAddress != 0 && key.Human)
             {
-                var live = await framework.RunOnFrameworkThread(() => ReadCharacter(key, objectIndex, characterAddress, warnings));
+                var live = await framework.RunOnFrameworkThread(() => ReadCharacter(key.GenderRace, objectIndex, characterAddress, warnings));
                 if (live != null) return new(live, null);
                 warnings.Clear();
             }
@@ -54,6 +56,34 @@ internal sealed class ModelSkeletonResolver(PenumbraService penumbra, IDataManag
         catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
         {
             log.Warning(e, $"Could not read the game skeleton of {modelPath}.");
+            return new(null, $"The game skeleton could not be read: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The whole skeleton of the human character at <paramref name="objectIndex"/>, for one armature
+    /// that every model the character shows binds to: all of its partial skeletons (body, face,
+    /// hair, headgear and top) read live and merged by bone name. When the live skeleton can't be
+    /// read, the race's body skeleton from the files, with a warning.
+    /// </summary>
+    public async Task<ModelSkeletonResult> ResolveCharacterAsync(int objectIndex, nint characterAddress, CancellationToken token)
+    {
+        var warnings = new List<string>();
+        try
+        {
+            var live = await framework.RunOnFrameworkThread(() => ReadCharacter(null, objectIndex, characterAddress, warnings));
+            if (live != null) return new(live, null);
+            var race = await framework.RunOnFrameworkThread(() => CharacterRace(objectIndex, characterAddress));
+            if (race is null) return new(null, "The character has no human skeleton to read.");
+            warnings.Clear();
+            warnings.Add("The live skeleton could not be read, so the armature has the body's bones only; " +
+                         "face and hair bones sit at their vertices.");
+            return new(await ReadFilesAsync(new ModelSkeletonKey($"c{race:D4}", 'b', 1, ""), objectIndex, warnings, token), null);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
+        {
+            log.Warning(e, "Could not read the character's game skeleton.");
             return new(null, $"The game skeleton could not be read: {e.Message}");
         }
     }
@@ -90,6 +120,22 @@ internal sealed class ModelSkeletonResolver(PenumbraService penumbra, IDataManag
         }
     }
 
+    /// <summary>
+    /// The character at <paramref name="objectIndex"/> as a character send needs it: its name, home
+    /// world and, with <paramref name="weapons"/>, where its weapons hang on its skeleton. Null when
+    /// the object changed or isn't a character.
+    /// </summary>
+    public Task<CharacterSnapshot?> CharacterSnapshotAsync(int objectIndex, nint characterAddress, bool weapons)
+        => framework.RunOnFrameworkThread(() =>
+        {
+            if (objectIndex is < 0 or > ushort.MaxValue || objects[objectIndex] is not ICharacter character ||
+                character.Address != characterAddress || characterAddress == 0)
+                return null;
+            var world = character is IPlayerCharacter player ? player.HomeWorld.RowId : 0;
+            return new CharacterSnapshot(character.Name.TextValue, world,
+                weapons ? CharacterWeaponReader.Read(characterAddress) : []);
+        });
+
     /// <summary> The gender-race code (801 for c0801) of a human character, or null. </summary>
     private unsafe ushort? CharacterRace(int objectIndex, nint address)
     {
@@ -104,18 +150,21 @@ internal sealed class ModelSkeletonResolver(PenumbraService penumbra, IDataManag
     }
 
     /// <summary>
-    /// The live skeleton of a character of the model's race: all its partial skeletons, with each
-    /// Havok skeleton's reference pose (the bind pose, not the animated pose). Null when the object
-    /// changed, isn't a character of that race, or has no readable skeleton.
+    /// The live skeleton of a character of <paramref name="race"/> (any race when null): all its
+    /// partial skeletons, with each Havok skeleton's reference pose (the bind pose, not the animated
+    /// pose). Null when the object changed, isn't a human character of that race, or has no
+    /// readable skeleton.
     /// </summary>
-    private unsafe ModelSkeleton? ReadCharacter(ModelSkeletonKey key, int objectIndex, nint address, List<string> warnings)
+    private unsafe ModelSkeleton? ReadCharacter(ushort? race, int objectIndex, nint address, List<string> warnings)
     {
         if (objectIndex is < 0 or > ushort.MaxValue || objects[objectIndex] is not ICharacter character ||
             character.Address != address || address == 0)
             return null;
         var drawObject = ((Character*)address)->GetCharacterBase();
-        if (drawObject == null || drawObject->GetModelType() != CharacterBase.ModelType.Human ||
-            ((Human*)drawObject)->RaceSexId != key.GenderRace)
+        if (drawObject == null || drawObject->GetModelType() != CharacterBase.ModelType.Human)
+            return null;
+        var liveRace = ((Human*)drawObject)->RaceSexId;
+        if (race is { } wanted && liveRace != wanted)
             return null;
         var skeleton = drawObject->Skeleton;
         if (skeleton == null || skeleton->PartialSkeletons == null || skeleton->PartialSkeletonCount is 0 or > MaximumPartials)
@@ -146,7 +195,7 @@ internal sealed class ModelSkeletonResolver(PenumbraService penumbra, IDataManag
             }
             parts.Add(new SkeletonPart(path, description, p == 0 ? -1 : partial->ConnectedParentBoneIndex));
         }
-        return new ModelSkeleton(ModelSkeleton.CharacterSource, key.Id, parts.Select(part => part.Path).ToImmutableArray(),
+        return new ModelSkeleton(ModelSkeleton.CharacterSource, $"c{liveRace:D4}", parts.Select(part => part.Path).ToImmutableArray(),
             ModelSkeletonMerge.Merge(parts, warnings), warnings.ToImmutableArray());
     }
 

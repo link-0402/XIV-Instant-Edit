@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using InstantEdit;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Services.CharacterSend;
 using InstantEdit.TestSupport;
 using Newtonsoft.Json;
 using static InstantEdit.TestSupport.Assertions;
@@ -173,6 +174,15 @@ var settingsStatus = await ProbeAsync(() => new HttpResponseMessage(HttpStatusCo
     Content = new StringContent($"{{\"addonVersion\":\"{BlenderClient.CurrentPluginVersion}\",\"capabilities\":[\"{BlenderClient.CacheSettingsCapability}\"]}}"),
 });
 Require(settingsStatus.CacheSettingsSupported, "the add-on advertises the central cache-settings endpoint");
+Require(settingsStatus.PendingImports == -1, "an add-on that doesn't count its pending imports reports none known");
+foreach (var (pending, expected) in new[] { ("3", 3), ("0", 0), ("-2", -1), ("\"3\"", -1) })
+{
+    var pendingStatus = await ProbeAsync(() => new HttpResponseMessage(HttpStatusCode.OK)
+    {
+        Content = new StringContent($"{{\"addonVersion\":\"{BlenderClient.CurrentPluginVersion}\",\"pendingImports\":{pending}}}"),
+    });
+    Require(pendingStatus.PendingImports == expected, "Blender's count of pending imports is read when it is a count");
+}
 
 var cacheHandler = new StubHandler(() => new HttpResponseMessage(HttpStatusCode.OK)
 {
@@ -329,6 +339,21 @@ try
             scaledEnvelope["racialScaling"]?["race"]?.GetValue<string>() == "c0801" &&
             scaledEnvelope["racialScaling"]!.AsObject().Count == 2,
         "a racially scaled import tells Blender both races, so the add-on can tag its meshes");
+    Require(importEnvelope.ContainsKey("character") && importEnvelope["character"] is null,
+        "a single import belongs to no character send");
+    await importClient.SendGameImportAsync(
+        42424, Path.Combine(importRoot, "weapon.mdl"),
+        "chara/weapon/w0101/obj/body/b0001/model/w0101b0001.mdl", "chara/weapon/w0101/obj/body/b0001/model/w0101b0001.mdl",
+        0, "Weapon", 42425,
+        character: new CharacterImportEntry(new string('a', 32), "Name@73", "Name", CharacterImportEntry.WeaponRole, "Skeleton",
+            new CharacterAttach("n_buki_r", [0.01f, 0.1f, 0, 0, 0, 0, 1, 1, 1, 1])));
+    var characterEnvelope = JsonNode.Parse(importHandler.LastBody!)!.AsObject();
+    Require(characterEnvelope["character"]?["sendId"]?.GetValue<string>() == new string('a', 32) &&
+            characterEnvelope["character"]?["role"]?.GetValue<string>() == "weapon" &&
+            characterEnvelope["character"]?["armatureName"]?.GetValue<string>() == "Skeleton" &&
+            characterEnvelope["character"]?["attach"]?["bone"]?.GetValue<string>() == "n_buki_r" &&
+            characterEnvelope["character"]?["attach"]?["offset"]?.AsArray().Count == 10,
+        "an import of a character send tells Blender the send, its armature and where a weapon hangs");
 }
 finally
 {
