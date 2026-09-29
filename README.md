@@ -301,8 +301,8 @@ model again renews its files. Choose a folder outside the cache to keep exports.
 ## How to: Fixing the neck seam
 
 The face and the body are separate models that meet in a ring at the neck. When their materials,
-textures or models don't match there, a seam shows. In On Screen, open the face model's **⋯** menu
-and choose **Fix neck seam…**. The plugin compares both sides along that ring the way the game's
+textures or models don't match there, a seam shows. Open the **Quick Actions** tab and press
+**Check and fix** under **Fix neck seam**. The plugin compares both sides along that ring the way the game's
 skin shader draws them, and lists what differs (hover a row for details):
 
 - **Neck connection data**: Dawntrail face models carry connection vertices that the game snaps
@@ -354,7 +354,7 @@ The Blender add-on keeps track of where each model came from through the automat
 - Simple Importer / Exporter for general FBX and MDL files with various QoL functions and automations optimized for FFXIV workflows
 - One-click import and export for textures
 - Texture painting in Substance Painter from On Screen, with one-click sending back to the game
-- Neck seam check and fix: compares face and body at the neck as the skin shader draws them, previews the fix as a new mod, then applies it to your mods
+- Neck seam check and fix (Quick Actions tab): compares face and body at the neck as the skin shader draws them, previews the fix as a new mod, then applies it to your mods
 - Animation editing: bake LivePose adjustments, repair skeletons, exclude bones, with undo and recovery
 - Animations in Blender: record a character's live pose including bone physics, or send an animation your character plays or any mod's animation file, as an action on your armature
 

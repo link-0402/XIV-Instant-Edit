@@ -149,7 +149,7 @@ public sealed partial class MainWindow
             if (_painterDraftError.Length > 0)
                 Widgets.Banner("##painter-error", FeedbackSeverity.Error, _painterDraftError);
             else
-                Widgets.HintWrapped("Reading the model, its materials and textures…");
+                Widgets.HintWrapped("Reading the model, its materials and textures");
             ImGui.Spacing();
             if (ImGui.Button("Close"))
                 ImGui.CloseCurrentPopup();
@@ -294,7 +294,7 @@ public sealed partial class MainWindow
     {
         if (_painter is not { } painter || Interlocked.CompareExchange(ref _painterBusy, 1, 0) != 0)
             return;
-        SetTextureStatus("Preparing the Painter project…", FeedbackSeverity.Info);
+        SetTextureStatus("Preparing the Painter project", FeedbackSeverity.Info);
         _ = Task.Run(async () =>
         {
             try
@@ -393,11 +393,11 @@ public sealed partial class MainWindow
                     var start = new ProcessStartInfo(exe) { UseShellExecute = false };
                     start.ArgumentList.Add(job.ProjectPath);
                     Process.Start(start);
-                    SetTextureStatus("Opening the project in Substance Painter…", FeedbackSeverity.Info);
+                    SetTextureStatus("Opening the project in Substance Painter", FeedbackSeverity.Info);
                     return;
                 }
                 var error = await painter.OpenInPainterAsync(job, _lifetimeCts.Token).ConfigureAwait(false);
-                SetTextureStatus(error.Length == 0 ? "Opening the project in Substance Painter…" : error,
+                SetTextureStatus(error.Length == 0 ? "Opening the project in Substance Painter" : error,
                     error.Length == 0 ? FeedbackSeverity.Info : FeedbackSeverity.Warning);
             }
             catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }

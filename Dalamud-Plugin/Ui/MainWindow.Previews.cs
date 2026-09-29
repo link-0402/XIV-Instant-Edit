@@ -51,7 +51,7 @@ public sealed partial class MainWindow
                     ImGui.TextColored(Theme.Warning, $"Model unavailable: {entry.Error}");
                 return;
             case PreviewState.Loading:
-                ImGui.TextColored(Theme.Muted, "Reading model…");
+                ImGui.TextColored(Theme.Muted, "Reading model");
                 return;
         }
 
@@ -146,7 +146,7 @@ public sealed partial class MainWindow
         if (large)
         {
             if (entry.State == PreviewState.Ready)
-                ImGui.TextColored(Theme.Hint, entry.Value?.Alpha is null ? "Colour · alpha (building…)" : "Colour · alpha");
+                ImGui.TextColored(Theme.Hint, entry.Value?.Alpha is null ? "Colour · alpha (building)" : "Colour · alpha");
         }
         else
         {
@@ -169,7 +169,7 @@ public sealed partial class MainWindow
                     ImGui.TextColored(Theme.Warning, $"Material unavailable: {entry.Error}");
                 return;
             case PreviewState.Loading:
-                ImGui.TextColored(Theme.Muted, "Reading material…");
+                ImGui.TextColored(Theme.Muted, "Reading material");
                 return;
         }
 

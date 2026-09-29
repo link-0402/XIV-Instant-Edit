@@ -224,11 +224,11 @@ public sealed class SettingsWindow : Window
                     : "Not built yet. It is built the first time an animation is matched, or now with the button.");
                 break;
             case SkeletonLibraryState.Loading:
-                Widgets.HintWrapped("Loading the saved library…");
+                Widgets.HintWrapped("Loading the saved library");
                 break;
             case SkeletonLibraryState.Building:
                 Widgets.HintWrapped(library.Total == 0
-                    ? "Building: looking for skeletons in your mods…"
+                    ? "Building: looking for skeletons in your mods"
                     : $"Building: {library.Progress} of {library.Total} skeleton files read. Animations are matched once it is done.");
                 break;
             case SkeletonLibraryState.Ready:

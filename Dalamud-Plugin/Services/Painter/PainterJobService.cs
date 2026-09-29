@@ -200,7 +200,7 @@ internal sealed class PainterJobService : IDisposable
         _store.Update(() =>
         {
             job.State = PainterJobState.Sent;
-            job.Message = "Opening in Substance Painter…";
+            job.Message = "Opening in Substance Painter";
         });
         return "";
     }

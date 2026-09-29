@@ -71,6 +71,10 @@ internal static class NeckSeamCapture
         return new NeckSeamCaptured(new NeckSeamInput(face, bodies, racialDeformers), sources);
     }
 
+    /// <summary> Whether the tree has the face model <see cref="Capture"/> needs. </summary>
+    public static bool HasFaceModel(IReadOnlyList<ResourceNode> roots)
+        => Flatten(roots).Any(node => node.GamePath.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase) && NeckSeamAnalyzer.IsFaceModel(node.GamePath));
+
     private static IEnumerable<ResourceNode> Flatten(IEnumerable<ResourceNode> nodes)
     {
         foreach (var node in nodes)

@@ -84,7 +84,7 @@ public sealed partial class MainWindow
         {
             ImGui.Spacing();
             using (ImRaii.Disabled(Volatile.Read(ref _textureBusy) != 0 || Volatile.Read(ref _painterBusy) != 0))
-                if (ImGui.Button("Clean up all sessions…"))
+                if (ImGui.Button("Clean up all sessions"))
                     _cleanUpTextures = true;
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
                 ImGui.SetTooltip("Discard every texture session and Substance Painter project, deleting their working files. Mods and backups are kept.");
@@ -188,7 +188,7 @@ public sealed partial class MainWindow
                     !s.NeedsMod && !s.Conflict))
                 TextureAction(() => _textures.RestoreAsync(s.Id));
             ImGui.SameLine(0, Theme.Scaled(12));
-            if (Widgets.IconButton("##discard", FontAwesomeIcon.Trash, "Discard the session's working files…"))
+            if (Widgets.IconButton("##discard", FontAwesomeIcon.Trash, "Discard the session's working files"))
                 _discardTexture = s.Id;
         }
         var contentBottom = Math.Max(ImGui.GetCursorPosY() - style.ItemSpacing.Y, style.WindowPadding.Y + Theme.ThumbSize);

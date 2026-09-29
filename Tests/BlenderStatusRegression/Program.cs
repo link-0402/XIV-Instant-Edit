@@ -344,7 +344,7 @@ Require(
     "an animation Blender keyed reports its action, armature, frames and bone match");
 Require(
     keyed.Describe().Contains("\"Live pose 19:42:07\" on \"Skeleton\"", StringComparison.Ordinal) &&
-    keyed.Describe().Contains("6 bones are not in the armature (n_hara, iv_ochinko_a, iv_ochinko_b, iv_ochinko_c, …)", StringComparison.Ordinal),
+    keyed.Describe().Contains("6 bones are not in the armature (n_hara, iv_ochinko_a, iv_ochinko_b, iv_ochinko_c, and more)", StringComparison.Ordinal),
     "the animation summary names the action and the first bones the armature lacks");
 Require(keyed.AlignedBoneCount == 0 && !keyed.Describe().Contains("Aligned", StringComparison.Ordinal),
     "an animation that changed no bone's Inherit Scale says nothing about it");

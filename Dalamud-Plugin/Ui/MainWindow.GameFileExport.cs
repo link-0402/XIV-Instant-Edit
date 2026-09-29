@@ -97,7 +97,7 @@ public sealed partial class MainWindow
         if (ImGui.InputTextWithHint("##game-export-folder", @"For example: D:\XIV exports", ref _gameExportRoot, 4096))
             _gameExportRoot = _gameExportRoot.Trim().Trim('"');
         ImGui.SameLine();
-        if (ImGui.Button("Browse…##game-export"))
+        if (ImGui.Button("Browse##game-export"))
         {
             // The picker is its own window, which this modal would block: step aside until it closes.
             ImGui.CloseCurrentPopup();
@@ -231,7 +231,7 @@ public sealed partial class MainWindow
             _config.GameExportSkeletonFiles, _config.GameExportSkeletonJson && export.CanDecodeSkeletons);
         var count = _gameExportModels.Count;
         if (export.Start(_gameExportModels, root, options))
-            SetStatus(count == 1 ? $"Exporting 1 model to {root}…" : $"Exporting {count:N0} models to {root}…", FeedbackSeverity.Info);
+            SetStatus(count == 1 ? $"Exporting 1 model to {root}" : $"Exporting {count:N0} models to {root}", FeedbackSeverity.Info);
         else
             SetStatus("Another export is still running.", FeedbackSeverity.Warning);
     }

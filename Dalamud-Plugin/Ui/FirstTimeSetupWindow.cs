@@ -203,7 +203,7 @@ public sealed class FirstTimeSetupWindow : Window
         if (ImGui.InputTextWithHint("##setup-cache-directory", "For example: D:\\XIV\\InstantEdit", ref _cacheDirectory, 4096))
             _cacheDirectory = _cacheDirectory.Trim().Trim('"');
 
-        if (ImGui.Button("Browse..."))
+        if (ImGui.Button("Browse"))
         {
             _fileDialog.OpenFolderDialog(
                 "Choose cache base directory",

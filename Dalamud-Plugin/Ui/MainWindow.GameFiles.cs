@@ -115,7 +115,7 @@ public sealed partial class MainWindow
         if (state.Entries.IsEmpty)
         {
             if (state.Loading)
-                Widgets.EmptyState(FontAwesomeIcon.Sync, "Scanning the game's files…", "Checking every race and ID once; this takes a moment.");
+                Widgets.EmptyState(FontAwesomeIcon.Sync, "Scanning the game's files", "Checking every race and ID once; this takes a moment.");
             else if (state.Error.Length > 0)
                 Widgets.EmptyState(FontAwesomeIcon.ExclamationTriangle, "Could not list these models", state.Error);
             else
@@ -140,12 +140,12 @@ public sealed partial class MainWindow
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
         var total = state.Entries.Length;
-        ImGui.TextColored(Theme.Muted, state.Loading ? "scanning…"
+        ImGui.TextColored(Theme.Muted, state.Loading ? "scanning"
             : visible.Count == total ? (total == 1 ? "1 model" : $"{total:N0} models")
             : $"{visible.Count:N0} of {total:N0} models");
 
         var ticked = _gameSelection.Count;
-        var exportLabel = ticked == 0 ? "Export selected…" : $"Export selected ({ticked:N0})…";
+        var exportLabel = ticked == 0 ? "Export selected" : $"Export selected ({ticked:N0})";
         var right = ImGui.CalcTextSize(exportLabel).X + style.FramePadding.X * 2 + (frame + style.ItemSpacing.X) * 2;
         ImGui.SameLine(Math.Max(ImGui.GetCursorPosX(), ImGui.GetContentRegionMax().X - right));
         if (Widgets.IconButton("##game-rescan", FontAwesomeIcon.Sync, "Scan the game's files for this category again", !state.Loading))
@@ -404,7 +404,7 @@ public sealed partial class MainWindow
         {
             using (ImRaii.Disabled(_gameExport is not { Busy: false }))
             {
-                if (ImGui.MenuItem("Export this model's files…"))
+                if (ImGui.MenuItem("Export this model's files"))
                     OpenGameExport([entry]);
             }
             if (ImGui.MenuItem(ticked ? "Untick for export" : "Tick for export"))

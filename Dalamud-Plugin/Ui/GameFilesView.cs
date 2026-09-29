@@ -222,7 +222,7 @@ internal sealed class GameFileRowList
     private static void AddDetails(List<GameFileRow> lines, GameModelEntry entry, GameFileDependencyState state, SkeletonFileSet? skeleton)
     {
         if (state.Loading)
-            lines.Add(new GameFileRow(GameFileRowKind.Note, entry, "", "Reading the model's materials…", "", true));
+            lines.Add(new GameFileRow(GameFileRowKind.Note, entry, "", "Reading the model's materials", "", true));
         else if (state.Dependencies is not { } dependencies)
             lines.Add(new GameFileRow(GameFileRowKind.Note, entry, "", "The materials could not be read", state.Error, false));
         else

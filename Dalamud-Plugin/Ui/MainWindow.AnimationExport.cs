@@ -148,7 +148,7 @@ public sealed partial class MainWindow
         if (Interlocked.CompareExchange(ref recorderSending, 1, 0) != 0) return;
         try
         {
-            recorderMessage = new RecorderMessage($"Sending {take.FrameCount} frames of {take.Bones.Length} bones to Blender…", FeedbackSeverity.Info);
+            recorderMessage = new RecorderMessage($"Sending {take.FrameCount} frames of {take.Bones.Length} bones to Blender", FeedbackSeverity.Info);
             var result = await DeliverAnimationAsync(take, token).ConfigureAwait(false);
             string? warning = null;
             if (take.Source.TryGetValue(AnimationRecorder.CustomizePlusSource, out var customizePlus) &&

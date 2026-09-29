@@ -478,7 +478,7 @@ public sealed partial class MainWindow
         if (resolution is null || source is null)
         {
             ImGui.TextColored(resolution?.State == SkeletonResolutionState.Incompatible ? Theme.Warning : Theme.Hint,
-                resolution?.Reason ?? "Finding the skeleton this animation was made for…");
+                resolution?.Reason ?? "Finding the skeleton this animation was made for");
             return;
         }
         if (resolution.Candidates.Length > 1)

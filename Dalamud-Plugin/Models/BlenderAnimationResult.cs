@@ -19,7 +19,7 @@ public sealed record BlenderAnimationResult(bool Applied, string Action = "", st
             var names = MissingBones ?? [];
             var shown = string.Join(", ", names.Take(4));
             text += $" {MissingBoneCount} bone{(MissingBoneCount == 1 ? " is" : "s are")} not in the armature" +
-                    (shown.Length == 0 ? "." : $" ({shown}{(MissingBoneCount > 4 ? ", …" : "")}).");
+                    (shown.Length == 0 ? "." : $" ({shown}{(MissingBoneCount > 4 ? ", and more" : "")}).");
         }
         if (AlignedBoneCount > 0)
             text += $" {AlignedBoneCount} bone{(AlignedBoneCount == 1 ? " now inherits" : "s now inherit")} scale Aligned, " +

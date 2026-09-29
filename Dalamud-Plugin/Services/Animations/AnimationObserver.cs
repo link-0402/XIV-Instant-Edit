@@ -41,7 +41,7 @@ internal sealed class AnimationObserver : IDisposable
     private ImmutableArray<AnimationCapture> history = [];
     public ImmutableArray<AnimationCapture> History => history;
     public ulong Actor => actor;
-    public string Status { get; private set; } = "Waiting for the local player…";
+    public string Status { get; private set; } = "Waiting for the local player";
     public event Action? CharacterChanged;
 
     public AnimationObserver(IFramework framework, IObjectTable objects, PenumbraService penumbra,
@@ -250,7 +250,7 @@ internal sealed class AnimationObserver : IDisposable
                 if (skeletonPaths.Length == 0 && AnimationDependencies.SafeGamePath(binding.SkeletonResource)) skeletonPaths = [binding.SkeletonResource];
                 var clip = new AnimationClip(match.Resource.GamePath, match.Entry.Name, match.Entry.Binding,
                     binding.Partial, timeline.Id, skeletonPaths.FirstOrDefault() ?? "", binding.SkeletonFingerprint,
-                    binding.Skeleton, new(SkeletonResolutionState.Searching, [], Reason: "Finding a compatible source skeleton…"), binding.Fingerprint,
+                    binding.Skeleton, new(SkeletonResolutionState.Searching, [], Reason: "Finding a compatible source skeleton"), binding.Fingerprint,
                     $"{collection.Id}:{match.Resource.Hash}:{match.Resource.ResolvedPath}:{sourceIdentity.MappingFingerprint}:{sourceIdentity.CanonicalModel}",
                     SourceIdentity: sourceIdentity,
                     Duration: candidates.First(candidate => candidate.Resource == match.Resource).Durations?.GetValueOrDefault(match.Entry.Binding) ?? 0,
@@ -458,7 +458,7 @@ internal sealed class AnimationObserver : IDisposable
         // Recent animations are not observed again; send them back through matching.
         history = history.Select(c => c with
         {
-            Clip = c.Clip with { Resolution = new(SkeletonResolutionState.Searching, [], Reason: "Finding a compatible source skeleton…") },
+            Clip = c.Clip with { Resolution = new(SkeletonResolutionState.Searching, [], Reason: "Finding a compatible source skeleton") },
             Startup = c.Startup == null ? null : c.Startup with { Resolution = new(SkeletonResolutionState.Searching, []) },
         }).ToImmutableArray();
         // A match still running from before the rebuild stops at its revision check.
