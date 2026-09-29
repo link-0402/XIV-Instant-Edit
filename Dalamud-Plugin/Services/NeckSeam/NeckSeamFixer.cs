@@ -99,7 +99,8 @@ internal static class NeckSeamFixer
         _ => "other",
     };
 
-    private readonly record struct Texel(float Distance, int Seam, NeckSeamAnalyzer.TangentFrame Frame);
+    /// <summary> A texel near the seam: its distance to the seam, the nearest seam sample and its shading frame. </summary>
+    internal readonly record struct Texel(float Distance, int Seam, NeckSeamAnalyzer.TangentFrame Frame);
 
     private static Dictionary<uint, SeamImage> Blend(NeckSeamReport report, bool snapped, float band, out int changed)
     {
@@ -138,10 +139,13 @@ internal static class NeckSeamFixer
             target = NeckSeamAnalyzer.Smooth(seam, dst).Select(v => NeckSeamAnalyzer.SafeNormalize(new Vector3(v.X, v.Y, v.Z), Vector3.UnitY)).ToArray();
         }
 
-        foreach (var group in face.Where(p => report.TexturesToBlend.Contains(p.Key)).GroupBy(p => (p.Value.Width, p.Value.Height)))
+        var surface = new SeamSurface(report.FaceSide.Positions, report.FaceSide.Normals, report.FaceSide.Binormals, report.FaceSide.Mesh.BinormalSigns,
+            report.FaceSide.Mesh.Uv1, report.FaceSide.Mesh.Triangles);
+        foreach (var group in face.Where(p => report.TexturesToBlend.Contains(p.Key))
+                     .GroupBy(p => (p.Value.Width, p.Value.Height, p.Value.AddressU, p.Value.AddressV)))
         {
-            var (width, height) = group.Key;
-            var field = Field(report.FaceSide, seam, width, height, band);
+            var width = group.Key.Width;
+            var field = Field(surface, seam.Positions, group.First().Value, band);
             foreach (var (sampler, original) in group)
             {
                 var image = original.Clone();
@@ -183,7 +187,7 @@ internal static class NeckSeamFixer
         return result;
     }
 
-    private static float Falloff(float distance, float band)
+    internal static float Falloff(float distance, float band)
     {
         var x = Math.Clamp(distance / band, 0f, 1f);
         return 1f - x * x * (3f - 2f * x);
@@ -203,38 +207,42 @@ internal static class NeckSeamFixer
     }
 
     /// <summary>
-    /// For each face texel within <paramref name="band"/> of the seam: its distance to the seam, the
-    /// nearest seam sample and its tangent frame. Texels are found by rasterizing the face triangles
-    /// near the seam in UV space; the result then spreads into texels no face triangle covers.
+    /// For each texel of <paramref name="image"/> within <paramref name="band"/> of the seam: its
+    /// distance to the seam, the nearest seam sample and its tangent frame. Texels are found by
+    /// rasterizing the surface's triangles near the seam in UV space, moved into the image's tile the
+    /// way its sampler addresses them; the result then spreads into texels no triangle covers.
     /// </summary>
-    private static Dictionary<int, Texel> Field(NeckSeamAnalyzer.Side face, NeckSeamAnalyzer.Seam seam, int width, int height, float band)
+    /// <param name="occupied">Texels other surfaces sharing the texture cover (see <see cref="Cover"/>), which the spread leaves alone.</param>
+    internal static Dictionary<int, Texel> Field(SeamSurface surface, Vector3[] seam, SeamImage image, float band, bool[]? occupied = null)
     {
-        var mesh = face.Mesh;
-        var triangles = mesh.Triangles;
-        var occupied = new bool[width * height];
+        int width = image.Width, height = image.Height;
+        var triangles = surface.Triangles;
+        var positions = surface.Positions;
+        occupied ??= new bool[width * height];
         var field = new Dictionary<int, Texel>();
         for (var t = 0; t + 2 < triangles.Length; t += 3)
         {
             int a = triangles[t], b = triangles[t + 1], c = triangles[t + 2];
-            var centroid = (face.Positions[a] + face.Positions[b] + face.Positions[c]) / 3;
-            var radius = MathF.Max(Vector3.Distance(centroid, face.Positions[a]),
-                MathF.Max(Vector3.Distance(centroid, face.Positions[b]), Vector3.Distance(centroid, face.Positions[c])));
+            var centroid = (positions[a] + positions[b] + positions[c]) / 3;
+            var radius = MathF.Max(Vector3.Distance(centroid, positions[a]),
+                MathF.Max(Vector3.Distance(centroid, positions[b]), Vector3.Distance(centroid, positions[c])));
             var candidates = new List<int>();
-            for (var s = 0; s < seam.Count; s++)
-                if (Vector3.Distance(seam.Positions[s], centroid) <= band + radius)
+            for (var s = 0; s < seam.Length; s++)
+                if (Vector3.Distance(seam[s], centroid) <= band + radius)
                     candidates.Add(s);
             var near = candidates.Count > 0;
-            Rasterize(mesh.Uv1[a], mesh.Uv1[b], mesh.Uv1[c], width, height, (pixel, w0, w1, w2) =>
+            var (uvA, uvB, uvC) = image.IntoTile(surface.Uv[a], surface.Uv[b], surface.Uv[c]);
+            Rasterize(uvA, uvB, uvC, width, height, (pixel, w0, w1, w2) =>
             {
                 occupied[pixel] = true;
                 if (!near)
                     return;
-                var p = face.Positions[a] * w0 + face.Positions[b] * w1 + face.Positions[c] * w2;
+                var p = positions[a] * w0 + positions[b] * w1 + positions[c] * w2;
                 var best = float.MaxValue;
                 var nearest = -1;
                 foreach (var s in candidates)
                 {
-                    var d = Vector3.DistanceSquared(p, seam.Positions[s]);
+                    var d = Vector3.DistanceSquared(p, seam[s]);
                     if (d < best)
                     {
                         best = d;
@@ -244,9 +252,9 @@ internal static class NeckSeamFixer
                 var distance = MathF.Sqrt(best);
                 if (nearest < 0 || distance >= band || (field.TryGetValue(pixel, out var existing) && existing.Distance <= distance))
                     return;
-                var normal = face.Normals[a] * w0 + face.Normals[b] * w1 + face.Normals[c] * w2;
-                var binormal = face.Binormals[a] * w0 + face.Binormals[b] * w1 + face.Binormals[c] * w2;
-                field[pixel] = new Texel(distance, nearest, NeckSeamAnalyzer.Frame(normal, binormal, mesh.BinormalSigns[a]));
+                var normal = surface.Normals[a] * w0 + surface.Normals[b] * w1 + surface.Normals[c] * w2;
+                var binormal = surface.Binormals[a] * w0 + surface.Binormals[b] * w1 + surface.Binormals[c] * w2;
+                field[pixel] = new Texel(distance, nearest, NeckSeamAnalyzer.Frame(normal, binormal, surface.Signs[a]));
             });
         }
 
@@ -275,8 +283,19 @@ internal static class NeckSeamFixer
         return field;
     }
 
+    /// <summary> Marks the texels of <paramref name="image"/> that the surface's triangles cover. </summary>
+    internal static void Cover(SeamSurface surface, SeamImage image, bool[] occupied)
+    {
+        var triangles = surface.Triangles;
+        for (var t = 0; t + 2 < triangles.Length; t += 3)
+        {
+            var (uvA, uvB, uvC) = image.IntoTile(surface.Uv[triangles[t]], surface.Uv[triangles[t + 1]], surface.Uv[triangles[t + 2]]);
+            Rasterize(uvA, uvB, uvC, image.Width, image.Height, (pixel, _, _, _) => occupied[pixel] = true);
+        }
+    }
+
     /// <summary> Calls <paramref name="visit"/> for every texel centre inside the UV triangle, with its barycentric weights. </summary>
-    private static void Rasterize(Vector2 uvA, Vector2 uvB, Vector2 uvC, int width, int height, Action<int, float, float, float> visit)
+    internal static void Rasterize(Vector2 uvA, Vector2 uvB, Vector2 uvC, int width, int height, Action<int, float, float, float> visit)
     {
         var size = new Vector2(width, height);
         Vector2 a = uvA * size, b = uvB * size, c = uvC * size;

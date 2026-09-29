@@ -36,7 +36,7 @@ internal static class NeckSeamScenarios
 
     // ---- Materials ------------------------------------------------------------------------------------
 
-    private static byte[] Material(string[] textures, (uint Key, uint Value)[] keys, (uint Id, float[] Values)[] constants)
+    internal static byte[] Material(string[] textures, (uint Key, uint Value)[] keys, (uint Id, float[] Values)[] constants)
     {
         var strings = new MemoryStream();
         strings.Write(Encoding.UTF8.GetBytes("skin.shpk\0"));
@@ -324,7 +324,7 @@ internal static class NeckSeamScenarios
 
     // ---- Analysis and fix ----------------------------------------------------------------------------
 
-    private static byte[] Texture(byte r, byte g, byte b, byte a, int size = 32)
+    internal static byte[] Texture(byte r, byte g, byte b, byte a, int size = 32)
     {
         var bytes = new byte[80 + size * size * 4];
         BinaryPrimitives.WriteUInt32LittleEndian(bytes, 0x00800000);
@@ -345,7 +345,7 @@ internal static class NeckSeamScenarios
         return bytes;
     }
 
-    private static ResourceNode Node(string gamePath, string actualPath, string mod, IReadOnlyList<ResourceNode>? children = null) => new()
+    internal static ResourceNode Node(string gamePath, string actualPath, string mod, IReadOnlyList<ResourceNode>? children = null) => new()
     {
         Type = "Resource", Icon = "", Name = Path.GetFileName(gamePath), GamePath = gamePath, ActualPath = actualPath,
         Children = children ?? [], SourceState = ResourceSourceState.LoadedMod, SourceLabel = mod, SourceModName = mod,
@@ -390,8 +390,8 @@ internal static class NeckSeamScenarios
         Require(captured.Input.Bodies.Count == 1 && captured.Source(FaceMaterialPath)?.ModName == "Skin Mod" &&
                 captured.Source(FaceTextures[2])?.Sha256 == NeckSeamCapture.Hash(files[F("face_mask.tex")]) &&
                 captured.Source(FaceModelPath)?.IsModFile == true && captured.Source(BodyMaterialPath)?.ModName == "Skin Mod" &&
-                captured.Source(BodyTextures[0]) is null,
-            "neck seam: capture finds the face and the body skin model and records the face's files and the body material with their mods and hashes");
+                captured.Source(BodyTextures[0])?.ModName == "Skin Mod" && captured.Source(BodyModelPath)?.ModName == "Body Mod",
+            "neck seam: capture finds the face and the body skin model and records their models, materials and textures with their mods and hashes");
 
         var report = NeckSeamAnalyzer.Analyze(captured.Input);
         NeckSeamFinding Finding(string title) => report.Findings.Single(f => f.Title == title);
