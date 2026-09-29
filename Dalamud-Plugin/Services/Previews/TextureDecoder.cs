@@ -32,7 +32,7 @@ public static class TextureDecoder
         byte[] bgra;
         try
         {
-            tex = MaterialPreviewBundleBuilder.LooseLuminaFile.Load<TexFile>(MaterialPreviewBundleBuilder.NormalizeTextureMipOffsets(bytes));
+            tex = MaterialPreviewBundleBuilder.LooseLuminaFile.Load<TexFile>(TextureFiles.NormalizeMipOffsets(bytes));
             bgra = tex.ImageData;
         }
         catch (Exception e) when (e is not InvalidDataException and not NotSupportedException)
@@ -53,7 +53,7 @@ public static class TextureDecoder
     /// <summary>
     /// Lumina pads a short mip with zeros instead of failing, so check here that the first mip
     /// level (the one previewed) is entirely present. Mirrors the size rules of
-    /// <see cref="MaterialPreviewBundleBuilder.NormalizeTextureMipOffsets"/>.
+    /// <see cref="TextureFiles.NormalizeMipOffsets"/>.
     /// </summary>
     private static void RequireFirstMip(byte[] bytes)
     {

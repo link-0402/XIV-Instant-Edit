@@ -191,7 +191,7 @@ internal sealed class CharacterWeightService
     /// <summary>
     /// One texture's new file: Penumbra decodes it, the size is halved here if asked, and Penumbra
     /// encodes the result with a full mip chain. The source is copied into the work folder first, so
-    /// what gets converted is exactly what was hashed.
+    /// what gets converted is exactly what was hashed, with miswritten mip offsets corrected.
     /// </summary>
     private async Task<byte[]> EncodeAsync(WeightTexture texture, ShrinkChoice choice, string work, CancellationToken token)
     {
@@ -202,7 +202,7 @@ internal sealed class CharacterWeightService
         Directory.CreateDirectory(work);
         var input = Path.Combine(work, "source.tex");
         var output = Path.Combine(work, "output.tex");
-        await File.WriteAllBytesAsync(input, source, token).ConfigureAwait(false);
+        await File.WriteAllBytesAsync(input, TextureFiles.NormalizeMipOffsets(source), token).ConfigureAwait(false);
         var backend = (ITextureEditBackend)_penumbra;
         if (choice.Halvings > 0)
         {

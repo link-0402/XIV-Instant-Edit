@@ -856,15 +856,68 @@ try
     BitConverter.TryWriteBytes(misplacedMips.AsSpan(32, 4), 83u);
     for (var i = 80; i < 96; i += 4)
         misplacedMips.AsSpan(i, 4).Fill((byte)(i - 60));
-    var normalizedMips = MaterialPreviewBundleBuilder.NormalizeTextureMipOffsets(misplacedMips);
+    var normalizedMips = TextureFiles.NormalizeMipOffsets(misplacedMips);
     var decodedMips = MaterialPreviewBundleBuilder.LooseLuminaFile.Load<Lumina.Data.Files.TexFile>(normalizedMips)
         .ImageData;
     Require(BitConverter.ToUInt32(normalizedMips, 32) == 96 && decodedMips.Length == 16 &&
             decodedMips[0] == 20 && decodedMips[15] == 32,
         "texture previews rebuild mip offsets that do not describe the stored surfaces");
     var ordinaryMips = (byte[])normalizedMips.Clone();
-    Require(ReferenceEquals(MaterialPreviewBundleBuilder.NormalizeTextureMipOffsets(ordinaryMips), ordinaryMips),
+    Require(ReferenceEquals(TextureFiles.NormalizeMipOffsets(ordinaryMips), ordinaryMips),
         "texture previews keep consistent mip offset tables unchanged");
+
+    // Old mods ship textures like Bibo+'s bibo_viera_base.tex: BC7 with mip offsets written for
+    // uncompressed data, and a header claiming one more mip than the file holds. The game draws
+    // them, so texture editing and Painter read originals with their offsets normalized.
+    static byte[] TexWithOffsets(uint format, int size, int mips, int dataBytes, Func<int, uint> offset)
+    {
+        var bytes = new byte[80 + dataBytes];
+        BitConverter.TryWriteBytes(bytes.AsSpan(0, 4), 0x00800000u);
+        BitConverter.TryWriteBytes(bytes.AsSpan(4, 4), format);
+        BitConverter.TryWriteBytes(bytes.AsSpan(8, 2), (ushort)size);
+        BitConverter.TryWriteBytes(bytes.AsSpan(10, 2), (ushort)size);
+        BitConverter.TryWriteBytes(bytes.AsSpan(12, 2), (ushort)1);
+        bytes[14] = (byte)mips;
+        // LOD mip indices 0, 1 and 2, as mod tools write them.
+        BitConverter.TryWriteBytes(bytes.AsSpan(20, 4), 1u);
+        BitConverter.TryWriteBytes(bytes.AsSpan(24, 4), 2u);
+        for (var mip = 0; mip < mips; mip++)
+            BitConverter.TryWriteBytes(bytes.AsSpan(28 + mip * 4, 4), offset(mip));
+        for (var i = 80; i < bytes.Length; i++)
+            bytes[i] = (byte)(i * 7);
+        return bytes;
+    }
+    // 64 × 64 BC7 mips 64 to 2 take 4096, 1024, 256, 64, 16 and 16 bytes; the 1 × 1 mip is missing.
+    uint UncompressedOffset(int mip) => (uint)(80 + Enumerable.Range(0, mip).Sum(m => (64 >> m) * (64 >> m) * 4));
+    var vieraBase = TexWithOffsets(0x6432, 64, 7, 4096 + 1024 + 256 + 64 + 16 + 16, UncompressedOffset);
+    Reject(() => TextureFiles.ReadTex(vieraBase), "the strict check for files the plugin writes refuses uncompressed-size BC7 offsets");
+    var (vieraBytes, vieraHeader) = TextureFiles.ReadOriginal(vieraBase);
+    Require(vieraHeader == new TextureHeader(0x6432, 64, 64, 6) &&
+            Enumerable.Range(0, 7).Select(mip => BitConverter.ToUInt32(vieraBytes, 28 + mip * 4))
+                .SequenceEqual([80u, 4176u, 5200u, 5456u, 5520u, 5536u, 0u]),
+        "an original with uncompressed-size BC7 offsets is read with contiguous offsets for the mips it holds");
+    Require(TextureFiles.ReadTex(vieraBytes) == vieraHeader && vieraBytes.Length == vieraBase.Length &&
+            vieraBytes.AsSpan(80).SequenceEqual(vieraBase.AsSpan(80)),
+        "the normalized original keeps its data and passes the strict check, so it can be written back");
+    Require(BitConverter.ToUInt32(vieraBase, 32) == UncompressedOffset(1) && vieraBase[14] == 7,
+        "reading an original leaves the caller's bytes as they were");
+    Require(ReferenceEquals(TextureFiles.ReadOriginal(vieraBytes).Bytes, vieraBytes),
+        "an original whose offsets describe its data is kept as it is");
+    Reject(() => TextureFiles.ReadOriginal(vieraBase[..4000]), "an original without its whole first mip is still refused");
+
+    // Other tools wrote small bogus offsets and left spare bytes after the data.
+    var bogusOffsets = TexWithOffsets(0x1450, 8, 4, 256 + 64 + 16 + 4 + 80, mip => (uint)(80 + mip));
+    var (bogusBytes, bogusHeader) = TextureFiles.ReadOriginal(bogusOffsets);
+    Require(bogusHeader == new TextureHeader(0x1450, 8, 8, 4) && BitConverter.ToUInt32(bogusBytes, 40) == 416 &&
+            bogusBytes.Length == bogusOffsets.Length,
+        "small bogus BGRA offsets are rebuilt, keeping the spare bytes after the data");
+
+    var topMipOnly = TexWithOffsets(0x6432, 64, 7, 4096, UncompressedOffset);
+    topMipOnly[14] |= 0x80;
+    var (topMipBytes, topMipHeader) = TextureFiles.ReadOriginal(topMipOnly);
+    Require(topMipHeader.Mips == 1 && topMipBytes[14] == 0x81 &&
+            BitConverter.ToUInt32(topMipBytes, 20) == 0 && BitConverter.ToUInt32(topMipBytes, 24) == 0,
+        "an original holding only its first mip keeps its mip flag and its LOD mip indices point at that mip");
 
     // ---- Mashup source-manifest remapping and cross-root verification ----
     var manifestSourceRoot = Path.Combine(testRoot, "ManifestSource");
