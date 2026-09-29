@@ -25,7 +25,7 @@ public sealed class Configuration : IPluginConfiguration
 
     public string TextureEditorPath { get; set; } = "";
 
-    /// <summary> Show the Substance Painter action in On Screen, its status dot and its Sessions cards. </summary>
+    /// <summary> Show the Substance Painter action in On Screen, Paint my skin in Quick Actions, its status dot and its Sessions cards. </summary>
     public bool PainterIntegrationEnabled { get; set; }
 
     /// <summary> Port the XIV Instant Edit plugin inside Substance Painter listens on. </summary>

@@ -13,10 +13,24 @@ public sealed record PainterModelRef(string GamePath, string SourcePath, bool Va
     public string FileName => Path.GetFileName(GamePath);
 }
 
-/// <summary> Everything needed to open a Painter project for one On Screen model. </summary>
+/// <summary> What a Painter project paints. </summary>
+public enum PainterScope
+{
+    /// <summary> One model's materials; other models sharing them can join. </summary>
+    Model,
+
+    /// <summary> The character's skin: every model that draws the body skin, and the face if it's ticked. </summary>
+    Skin,
+}
+
+/// <summary> Everything needed to open a Painter project for one On Screen model, or for the character's skin. </summary>
+/// <param name="Model">The model to paint; for <see cref="PainterScope.Skin"/>, just one of the character's models.</param>
+/// <param name="OtherModels">The character's other models.</param>
 public sealed record PainterRequest(int ObjectIndex, long ActorAddress, string ActorName, PainterModelRef Model,
     IReadOnlyList<PainterModelRef> OtherModels, IReadOnlyCollection<MaterialResourceCandidate> Resources)
 {
+    public PainterScope Scope { get; init; } = PainterScope.Model;
+
     /// <summary> What the character draws right now; null when it couldn't be read, and then every part counts. </summary>
     public PainterLiveCharacter? Live { get; init; }
 
@@ -63,6 +77,11 @@ public sealed class PainterDraftSet
     /// <inheritdoc cref="TexturePlanMaterial.AlphaThreshold"/>
     public float? AlphaThreshold { get; init; }
     public TexturePlanColorSet? ColorSet { get; init; }
+    /// <summary>
+    /// Models the project can't know about draw its textures too: every model that shows skin shares
+    /// the body skin's textures, so only the project's UV islands are taken from Painter.
+    /// </summary>
+    public bool AlwaysShared { get; init; }
     public string Label => string.Join(", ", MaterialPaths.Select(Path.GetFileName));
 }
 
@@ -70,11 +89,15 @@ public sealed class PainterDraftModel
 {
     public required PainterModelRef Model { get; init; }
     public required ModelMesh Mesh { get; init; }
-    /// <summary> Texture set of each of the model's materials, by the material name the model stores. </summary>
+    /// <summary> Texture set of each of the model's materials in the project, by the material name the model stores. </summary>
     public required IReadOnlyDictionary<string, string> SetByMaterial { get; init; }
     /// <summary> The character's enabled attributes for this model; empty when unknown, and then every part counts. </summary>
     public IReadOnlyList<uint> AttributeMasks { get; init; } = [];
     public bool Selected { get; set; }
+    /// <summary> Every material goes to Painter: one the plan couldn't resolve gets a texture set of its own. </summary>
+    public bool Whole { get; init; }
+    /// <summary> What the dialog says about the model; empty when nothing. </summary>
+    public string Note { get; init; } = "";
 
     /// <summary> Whether the character draws the submesh. </summary>
     public bool Draws(ModelSubmesh submesh) => PainterVisibility.Draws(AttributeMasks, submesh);
@@ -87,10 +110,19 @@ public sealed class PainterDraft
     public required IReadOnlyList<PainterDraftModel> Siblings { get; init; }
     public required IReadOnlyList<PainterDraftSet> Sets { get; init; }
     public required IReadOnlyList<string> Warnings { get; init; }
+    /// <summary> What the project is called in the dialog, in Painter and under Sessions. </summary>
+    public required string Title { get; init; }
     public string NewModName { get; set; } = "";
+    /// <summary> Textures (by source path) that materials outside the project sample too, so only the project's UV islands are taken from Painter. </summary>
+    public IReadOnlySet<string> OutsideTextures { get; init; } = new HashSet<string>();
+
+    public IEnumerable<PainterDraftModel> Models => Siblings.Prepend(Main);
+
+    /// <summary> Whether a ticked model draws with the set; a set only unticked models use stays out of the project. </summary>
+    public bool InProject(PainterDraftSet set) => Models.Any(model => model.Selected && model.SetByMaterial.Values.Contains(set.Name));
 
     public IEnumerable<PainterDraftTexture> SelectedTextures
-        => Sets.SelectMany(set => set.Textures).Where(texture => texture.Selected && texture.Editable);
+        => Sets.Where(InProject).SelectMany(set => set.Textures).Where(texture => texture.Selected && texture.Editable);
 
     public bool NeedsModName => SelectedTextures.Any(texture => texture.Texture.IsVanilla);
 }
@@ -121,7 +153,10 @@ internal sealed class PainterProjectBuilder
         _log = log;
     }
 
-    public async Task<PainterDraft> PrepareAsync(PainterRequest request, CancellationToken token = default)
+    public Task<PainterDraft> PrepareAsync(PainterRequest request, CancellationToken token = default)
+        => request.Scope == PainterScope.Skin ? PrepareSkinAsync(request, token) : PrepareModelAsync(request, token);
+
+    private async Task<PainterDraft> PrepareModelAsync(PainterRequest request, CancellationToken token)
     {
         var warnings = new List<string>();
         var mainBytes = await ReadModelAsync(request.Model, token).ConfigureAwait(false);
@@ -144,13 +179,15 @@ internal sealed class PainterProjectBuilder
             .Select(part => mesh.Materials[part.MaterialIndex])
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var sets = BuildSets(plan, drawnMaterials, out var setByMaterial);
-        var main = new PainterDraftModel { Model = request.Model, Mesh = mesh, SetByMaterial = setByMaterial, AttributeMasks = masks, Selected = true };
-        var setByMaterialPath = sets.SelectMany(set => set.MaterialPaths.Select(path => (path, set.Name)))
-            .GroupBy(pair => pair.path, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First().Name, StringComparer.OrdinalIgnoreCase);
+        var sets = BuildSets(plan.Materials, material => drawnMaterials.Contains(material.ModelMaterial), out var setByMaterial);
+        var main = new PainterDraftModel
+        {
+            Model = request.Model, Mesh = mesh, SetByMaterial = setByMaterial, AttributeMasks = masks, Selected = true, Whole = true,
+        };
+        var setByMaterialPath = SetByMaterialPath(sets);
 
         var siblings = new List<PainterDraftModel>();
+        var outside = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var other in request.OtherModels.DistinctBy(m => m.SourcePath, StringComparer.OrdinalIgnoreCase))
         {
             token.ThrowIfCancellationRequested();
@@ -163,6 +200,8 @@ internal sealed class PainterProjectBuilder
                 var shared = otherPlan.Materials
                     .Where(material => material.GamePath.Length > 0 && setByMaterialPath.ContainsKey(material.GamePath))
                     .ToDictionary(material => material.ModelMaterial, material => setByMaterialPath[material.GamePath], StringComparer.OrdinalIgnoreCase);
+                // Its other materials may sample the project's textures in places the project doesn't paint.
+                outside.UnionWith(PainterRules.TextureSources(otherPlan.Materials.Where(material => !shared.ContainsKey(material.ModelMaterial))));
                 if (shared.Count == 0)
                     continue;
                 var otherMesh = ModelMeshReader.Read(Scaled(request, other, bytes, warnings));
@@ -182,10 +221,104 @@ internal sealed class PainterProjectBuilder
         var modName = "Painter " + Path.GetFileNameWithoutExtension(request.Model.GamePath);
         return new PainterDraft
         {
-            Request = request, Main = main, Siblings = siblings, Sets = sets, Warnings = warnings,
-            NewModName = PenumbraService.IsSafeNewModName(modName) ? modName : "Painter Edit",
+            Request = request, Main = main, Siblings = siblings, Sets = sets, Warnings = warnings, Title = request.Model.FileName,
+            NewModName = PenumbraService.IsSafeNewModName(modName) ? modName : "Painter Edit", OutsideTextures = outside,
         };
     }
+
+    /// <summary>
+    /// The character's skin: every model that draws the body skin material, ticked when it shows
+    /// some, so painting can cross the wrists, waist and ankles, and the face with its own texture
+    /// set, unticked. Only the skin materials go to Painter.
+    /// </summary>
+    private async Task<PainterDraft> PrepareSkinAsync(PainterRequest request, CancellationToken token)
+    {
+        var warnings = new List<string>();
+        var candidates = new List<PainterSkinCandidate>();
+        var files = new List<byte[]>();
+        foreach (var model in request.OtherModels.Prepend(request.Model).DistinctBy(m => m.SourcePath, StringComparer.OrdinalIgnoreCase))
+        {
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                var bytes = await ReadModelAsync(model, token).ConfigureAwait(false);
+                var plan = await _builder.BuildTexturePlanAsync(bytes, model.GamePath, request.Resources, token).ConfigureAwait(false);
+                var mesh = ModelMeshReader.Read(bytes);
+                candidates.Add(new PainterSkinCandidate(model, mesh, plan, VisibleMasks(request.Live, model, mesh)));
+                files.Add(bytes);
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                // A model that can't be read is left out; its skin, if any, keeps what the texture has.
+                _log(error, $"Could not check {model.FileName} for skin.");
+            }
+        }
+
+        var selection = PainterSkin.Select(candidates);
+        if (selection.Models.Count == 0)
+            throw new InvalidDataException("None of your character's models shows body skin right now. " +
+                                           "To paint only the face, use the paint roller on the face model in On Screen.");
+        var sets = BuildSets(selection.Materials, _ => true, out _);
+        var setByMaterialPath = SetByMaterialPath(sets);
+
+        if (request.RacialScalingProblem is { } problem)
+            warnings.Add($"Racial scaling can't apply: {problem.TrimEnd('.')}. Models made for another race keep that race's shape.");
+        var scaled = new Dictionary<string, int>(StringComparer.Ordinal);
+        var hidden = 0;
+        var models = new List<PainterDraftModel>();
+        var joined = new Dictionary<int, IReadOnlyDictionary<string, string>>();
+        foreach (var skin in selection.Models)
+        {
+            var candidate = candidates[skin.Candidate];
+            var setByMaterial = candidate.Plan.Materials
+                .Where(m => skin.Materials.Contains(m.ModelMaterial, StringComparer.OrdinalIgnoreCase) && setByMaterialPath.ContainsKey(m.GamePath))
+                .ToDictionary(m => m.ModelMaterial, m => setByMaterialPath[m.GamePath], StringComparer.OrdinalIgnoreCase);
+            joined[skin.Candidate] = setByMaterial;
+            warnings.AddRange(candidate.Plan.Warnings);
+            var (bytes, scaling, keeps) = Scale(request, candidate.Model, files[skin.Candidate]);
+            if (scaling is not null)
+                scaled[scaling] = scaled.GetValueOrDefault(scaling) + 1;
+            if (keeps is not null)
+                warnings.Add($"{candidate.Model.FileName} keeps its own race's shape: {keeps}");
+            var mesh = ReferenceEquals(bytes, files[skin.Candidate]) ? candidate.Mesh : ModelMeshReader.Read(bytes);
+            if (!skin.Face)
+                hidden += mesh.Meshes.Where(part => setByMaterial.ContainsKey(mesh.Materials[part.MaterialIndex]))
+                    .Sum(part => part.Submeshes.Count(s => s.Indices.Length >= 3 && !PainterVisibility.Draws(candidate.Masks, s)));
+            models.Add(new PainterDraftModel
+            {
+                Model = candidate.Model, Mesh = mesh, SetByMaterial = setByMaterial, AttributeMasks = candidate.Masks,
+                Selected = models.Count == 0 || (!skin.Face && skin.DrawnTriangles > 0),
+                Note = skin.Face ? "own texture set, to paint across the neck"
+                    : skin.DrawnTriangles == 0 ? "its skin is turned off on your character"
+                    : "",
+            });
+        }
+        foreach (var (scaling, count) in scaled)
+            warnings.Add(count == 1 ? $"1 model is scaled from {scaling}, as the character wears it."
+                : $"{count} models are scaled from {scaling}, as the character wears them.");
+        if (hidden > 0)
+            warnings.Add("Skin your gear or customization turns off stays out of Painter and keeps what the texture has there.");
+
+        // Materials the project leaves out (gear, the face's eyes and brows) may sample its textures elsewhere.
+        var outside = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var inProject = joined.GetValueOrDefault(i);
+            outside.UnionWith(PainterRules.TextureSources(candidates[i].Plan.Materials.Where(m => inProject?.ContainsKey(m.ModelMaterial) != true)));
+        }
+
+        var title = request.ActorName.Length > 0 ? $"{request.ActorName}'s skin" : "Skin";
+        return new PainterDraft
+        {
+            Request = request, Main = models[0], Siblings = models.Skip(1).ToList(), Sets = sets, Warnings = warnings.Distinct().ToList(),
+            Title = title, NewModName = "Painter Skin", OutsideTextures = outside,
+        };
+    }
+
+    private static Dictionary<string, string> SetByMaterialPath(IEnumerable<PainterDraftSet> sets)
+        => sets.SelectMany(set => set.MaterialPaths.Select(path => (path, set.Name)))
+            .GroupBy(pair => pair.path, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().Name, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// A model of another race reshaped for the character when racial scaling is on, as the game
@@ -194,20 +327,28 @@ internal sealed class PainterProjectBuilder
     /// </summary>
     private static byte[] Scaled(PainterRequest request, PainterModelRef model, byte[] bytes, List<string> notes)
     {
+        var (result, scaling, keeps) = Scale(request, model, bytes);
+        if (scaling is not null)
+            notes.Add($"{model.FileName} is scaled from {scaling}, as the character wears it.");
+        if (keeps is not null)
+            notes.Add($"{model.FileName} keeps its own race's shape: {keeps}");
+        return result;
+    }
+
+    /// <returns> The model's bytes, what it was scaled from and to (null when it wasn't), and why it couldn't be (null when nothing went wrong). </returns>
+    private static (byte[] Bytes, string? Scaling, string? Problem) Scale(PainterRequest request, PainterModelRef model, byte[] bytes)
+    {
         if (request.RacialScaling is not { } source)
-            return bytes;
+            return (bytes, null, null);
         try
         {
             if (source.For(model.GamePath) is not { } scaling)
-                return bytes;
-            var scaled = RacialScalingModel.Apply(bytes, scaling.Deformer);
-            notes.Add($"{model.FileName} is scaled from {scaling.Description}, as the character wears it.");
-            return scaled;
+                return (bytes, null, null);
+            return (RacialScalingModel.Apply(bytes, scaling.Deformer), scaling.Description, null);
         }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException)
         {
-            notes.Add($"{model.FileName} keeps its own race's shape: {error.Message}");
-            return bytes;
+            return (bytes, null, error.Message);
         }
     }
 
@@ -223,8 +364,9 @@ internal sealed class PainterProjectBuilder
             : [];
     }
 
-    /// <param name="drawnMaterials">Model material names the character draws; textures of the others can't be painted.</param>
-    private static List<PainterDraftSet> BuildSets(ModelTexturePlan plan, ISet<string> drawnMaterials, out Dictionary<string, string> setByMaterial)
+    /// <param name="drawn">Whether the character draws the material; textures of the others can't be painted.</param>
+    internal static List<PainterDraftSet> BuildSets(IReadOnlyList<TexturePlanMaterial> planned, Func<TexturePlanMaterial, bool> drawn,
+        out Dictionary<string, string> setByMaterial)
     {
         setByMaterial = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -232,7 +374,7 @@ internal sealed class PainterProjectBuilder
 
         // Materials drawing with identical textures share one texture set, so painting either paints both.
         var groups = new List<(string Signature, List<TexturePlanMaterial> Materials)>();
-        foreach (var material in plan.Materials)
+        foreach (var material in planned)
         {
             var textures = material.Textures.Where(t => t.Problem.Length == 0).DistinctBy(t => t.SourcePath, StringComparer.OrdinalIgnoreCase).ToList();
             var signature = material.ShaderPackage + "|" + string.Join("|", textures.Select(t => t.SourcePath.ToLowerInvariant()).Order());
@@ -248,14 +390,14 @@ internal sealed class PainterProjectBuilder
         {
             var material = materials[0];
             var skip = PainterRules.SkippedShaderReason(material.ShaderPackage);
-            var drawn = materials.Any(m => drawnMaterials.Contains(m.ModelMaterial));
+            var shown = materials.Any(drawn);
             var name = PainterRules.UniqueName(Path.GetFileNameWithoutExtension(material.GamePath.Length > 0 ? material.GamePath : material.ModelMaterial), names, "material");
             var draftTextures = new List<PainterDraftTexture>();
             foreach (var texture in material.Textures)
             {
                 var reason = texture.Problem.Length > 0 ? texture.Problem
                     : skip.Length > 0 ? skip
-                    : !drawn ? "Not drawn on this character."
+                    : !shown ? "Not drawn on this character."
                     : PainterRules.EditReason(texture);
                 if (reason.Length == 0 && owners.TryGetValue(texture.SourcePath, out var owner))
                     reason = $"Also used by {owner}; it is sent back from there.";
@@ -285,6 +427,7 @@ internal sealed class PainterProjectBuilder
                 Flags = material.Flags,
                 AlphaThreshold = material.AlphaThreshold,
                 ColorSet = material.ColorSet,
+                AlwaysShared = materials.Any(PainterSkin.IsBodySkin),
             });
             foreach (var member in materials)
                 setByMaterial[member.ModelMaterial] = name;
@@ -320,7 +463,7 @@ internal sealed class PainterProjectBuilder
         var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var layouts = new List<(PainterDraftSet Set, PainterSetLayout Layout, Dictionary<PainterTextureInput, PainterDraftTexture> Sources)>();
         var seedIndex = 0;
-        foreach (var set in draft.Sets.Where(set => set.SkipReason.Length == 0))
+        foreach (var set in draft.Sets.Where(set => set.SkipReason.Length == 0 && draft.InProject(set)))
         {
             var sources = new Dictionary<PainterTextureInput, PainterDraftTexture>(ReferenceEqualityComparer.Instance);
             var inputs = new List<PainterTextureInput>();
@@ -340,7 +483,8 @@ internal sealed class PainterProjectBuilder
 
         // Mesh: what the character draws of the model, and of the selected siblings the meshes that
         // use one of its texture sets. Parts it has turned off stay out, as do skipped materials.
-        var modelStem = PainterRules.UniqueName(Path.GetFileNameWithoutExtension(draft.Request.Model.GamePath), new HashSet<string>(), "model");
+        var modelStem = PainterRules.UniqueName(draft.Request.Scope == PainterScope.Skin ? "skin" : Path.GetFileNameWithoutExtension(draft.Main.Model.GamePath),
+            new HashSet<string>(), "model");
         var setNames = draft.Sets.Select(set => set.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var skipped = draft.Sets.Where(set => set.SkipReason.Length > 0).Select(set => set.Name).ToHashSet(StringComparer.Ordinal);
         var groups = new List<ObjGroup>();
@@ -356,7 +500,7 @@ internal sealed class PainterProjectBuilder
                 var setName = model.SetByMaterial.TryGetValue(materialName, out var mapped) ? mapped : null;
                 if (setName is null)
                 {
-                    if (model != draft.Main)
+                    if (!model.Whole)
                         continue;
                     // A material the plan couldn't resolve still gets a texture set, so the mesh stays visible.
                     setName = PainterRules.UniqueName(Path.GetFileNameWithoutExtension(materialName), setNames, "unmapped");
@@ -466,8 +610,9 @@ internal sealed class PainterProjectBuilder
             foreach (var texture in layout.Textures.Where(t => t.Exported))
             {
                 var draftTexture = sources[texture.Texture];
-                var protect = unselectedShared.Contains(set.Name) || partlyHidden.Contains(set.Name)
-                    || usersBySource.GetValueOrDefault(draftTexture.Texture.SourcePath) > 1;
+                var protect = set.AlwaysShared || unselectedShared.Contains(set.Name) || partlyHidden.Contains(set.Name)
+                    || usersBySource.GetValueOrDefault(draftTexture.Texture.SourcePath) > 1
+                    || draft.OutsideTextures.Contains(draftTexture.Texture.SourcePath);
                 var width = PainterChannelMap.NextPowerOfTwo(texture.Texture.Width);
                 var height = PainterChannelMap.NextPowerOfTwo(texture.Texture.Height);
                 targets.Add(new PainterTarget

@@ -18,10 +18,16 @@ internal sealed record ChangelogRelease(
 
 internal static class ChangelogCatalog
 {
-    public const string CurrentVersion = "2.0.0";
+    public const string CurrentVersion = "2.1.0";
 
     public static IReadOnlyList<ChangelogRelease> Releases { get; } =
     [
+        Release("2.1.0",
+            Highlight("Quick Actions: Paint my skin opens every part of your character that shows skin in Substance Painter as one project. The body, hands, legs and feet share the body skin's textures, so tattoos, freckles and body paint can cross the wrists, waist and ankles."),
+            Entry("Tick the face in the dialog to paint across the neck too. It joins with its own texture set.", 1),
+            Entry("Body parts made for another race are always shaped for yours here, so they meet your face at the neck.", 1),
+            Entry("Skin your gear or customization turns off stays out of Painter and keeps what the texture has there.", 1),
+            Entry("Substance Painter: sending back a texture that other models or materials use too, such as the body skin, now only changes it where the project's models draw it. Before, the rest of the texture could be overwritten.")),
         Release("2.0.0",
             Highlight("Animation editing is now available in the new Animations tab (requires the LivePose plugin):"),
             Entry("The tab lists the animations your character plays with the mod each one comes from, and sorts the tools for the selected animation into tabs.", 1),
