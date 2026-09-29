@@ -50,6 +50,29 @@ internal sealed class SeamTopology
 
     public static long EdgeKey(int a, int b) => a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
 
+    /// <summary> Every edge used by a single triangle, as welded ids (the smaller first), whether or not it closes a loop. </summary>
+    public IEnumerable<(int A, int B)> BoundaryEdges()
+    {
+        foreach (var (key, uses) in _edgeUses)
+            if (uses == 1)
+                yield return ((int)(key >> 32), (int)(key & 0xFFFFFFFF));
+    }
+
+    private List<int>[]? _members;
+
+    /// <summary> The vertices at a welded id's position, split by UV or normal seams. </summary>
+    public IReadOnlyList<int> Members(int welded)
+    {
+        if (_members is null)
+        {
+            var members = new List<int>[Representative.Length];
+            for (var v = 0; v < Weld.Length; v++)
+                (members[Weld[v]] ??= []).Add(v);
+            _members = members;
+        }
+        return _members[welded];
+    }
+
     /// <summary>
     /// Closed loops of edges used by a single triangle, as welded ids in walking order. Open chains
     /// (where the boundary is not a simple loop) are left out.
@@ -114,7 +137,23 @@ internal sealed class SeamTopology
     }
 }
 
-/// <summary> An 8-bit RGBA image (rows top-down) sampled with the game's UV convention (v down). </summary>
+/// <summary>
+/// How a material's sampler reads a texture outside 0..1. The sampler flags hold U in bits 0-1 and V
+/// in bits 2-3 (Penumbra.GameData SamplerFlags). Skin bodies wrap, and vanilla body UVs run from 1 to
+/// 2; faces mirror.
+/// </summary>
+internal enum SeamAddress
+{
+    Wrap,
+    Mirror,
+    Clamp,
+    Border,
+}
+
+/// <summary> The vertex data a texture blend rasterizes: positions in the pose, the shading frame inputs and the texture's UV set. </summary>
+internal sealed record SeamSurface(Vector3[] Positions, Vector3[] Normals, Vector3[] Binormals, float[] Signs, Vector2[] Uv, int[] Triangles);
+
+/// <summary> An 8-bit RGBA image (rows top-down) sampled with the game's UV convention (v down) and its sampler's addressing. </summary>
 internal sealed class SeamImage
 {
     public SeamImage(int width, int height, byte[] rgba)
@@ -129,10 +168,12 @@ internal sealed class SeamImage
     public int Width { get; }
     public int Height { get; }
     public byte[] Rgba { get; }
+    public SeamAddress AddressU { get; init; }
+    public SeamAddress AddressV { get; init; }
 
-    public SeamImage Clone() => new(Width, Height, (byte[])Rgba.Clone());
+    public SeamImage Clone() => new(Width, Height, (byte[])Rgba.Clone()) { AddressU = AddressU, AddressV = AddressV };
 
-    public static SeamImage FromBgra(byte[] bgra, int width, int height)
+    public static SeamImage FromBgra(byte[] bgra, int width, int height, uint samplerFlags = 0)
     {
         var rgba = new byte[bgra.Length];
         for (var i = 0; i + 3 < bgra.Length; i += 4)
@@ -142,7 +183,7 @@ internal sealed class SeamImage
             rgba[i + 2] = bgra[i];
             rgba[i + 3] = bgra[i + 3];
         }
-        return new SeamImage(width, height, rgba);
+        return new SeamImage(width, height, rgba) { AddressU = (SeamAddress)(samplerFlags & 3), AddressV = (SeamAddress)((samplerFlags >> 2) & 3) };
     }
 
     public Vector4 Texel(int x, int y)
@@ -162,15 +203,59 @@ internal sealed class SeamImage
 
     private static byte ToByte(float value) => (byte)Math.Clamp((int)MathF.Round(value * 255f), 0, 255);
 
-    /// <summary> Bilinear sample at a UV, clamped to the image. </summary>
+    /// <summary> Bilinear sample at a UV, addressed outside 0..1 the way the sampler does it (clamped for Clamp and Border). </summary>
     public Vector4 Sample(Vector2 uv)
     {
-        var x = Math.Clamp(uv.X * Width - 0.5f, 0f, Width - 1.001f);
-        var y = Math.Clamp(uv.Y * Height - 0.5f, 0f, Height - 1.001f);
-        int x0 = (int)x, y0 = (int)y;
-        int x1 = Math.Min(x0 + 1, Width - 1), y1 = Math.Min(y0 + 1, Height - 1);
-        float fx = x - x0, fy = y - y0;
+        var x = uv.X * Width - 0.5f;
+        var y = uv.Y * Height - 0.5f;
+        if (!float.IsFinite(x) || !float.IsFinite(y))
+            return Texel(0, 0);
+        var left = MathF.Floor(x);
+        var top = MathF.Floor(y);
+        float fx = x - left, fy = y - top;
+        int x0 = Index(left, Width, AddressU), x1 = Index(left + 1, Width, AddressU);
+        int y0 = Index(top, Height, AddressV), y1 = Index(top + 1, Height, AddressV);
         return Texel(x0, y0) * (1 - fx) * (1 - fy) + Texel(x1, y0) * fx * (1 - fy) + Texel(x0, y1) * (1 - fx) * fy + Texel(x1, y1) * fx * fy;
+    }
+
+    private static int Index(float texel, int size, SeamAddress mode)
+    {
+        var i = (long)Math.Clamp(texel, -1e9f, 1e9f);
+        switch (mode)
+        {
+            case SeamAddress.Wrap:
+                return (int)((i % size + size) % size);
+            case SeamAddress.Mirror:
+                var period = 2L * size;
+                var m = (i % period + period) % period;
+                return (int)(m < size ? m : period - 1 - m);
+            default:
+                return (int)Math.Clamp(i, 0, size - 1);
+        }
+    }
+
+    /// <summary>
+    /// A UV triangle moved into the image's 0..1 tile the way the sampler reads it, in one piece: a
+    /// wrapped body UV of 1.2 lands at 0.2, a mirrored 1.2 at 0.8. Clamped UVs stay where they are.
+    /// </summary>
+    public (Vector2 A, Vector2 B, Vector2 C) IntoTile(Vector2 a, Vector2 b, Vector2 c)
+    {
+        var centre = (a + b + c) / 3;
+        float tileU = MathF.Floor(centre.X), tileV = MathF.Floor(centre.Y);
+        Vector2 Move(Vector2 uv) => new(Axis(uv.X, tileU, AddressU), Axis(uv.Y, tileV, AddressV));
+        return (Move(a), Move(b), Move(c));
+    }
+
+    private static float Axis(float value, float tile, SeamAddress mode)
+    {
+        if (!float.IsFinite(tile) || MathF.Abs(tile) > 1e6f)
+            return value;
+        return mode switch
+        {
+            SeamAddress.Wrap => value - tile,
+            SeamAddress.Mirror => ((long)tile & 1) == 0 ? value - tile : 1 - (value - tile),
+            _ => value,
+        };
     }
 }
 
@@ -179,10 +264,11 @@ internal static class SeamTextures
 {
     private const int HeaderSize = 80;
 
-    public static SeamImage Decode(byte[] tex)
+    /// <param name="samplerFlags">The flags of the material sampler that reads the texture, for its addressing.</param>
+    public static SeamImage Decode(byte[] tex, uint samplerFlags = 0)
     {
         var decoded = Previews.TextureDecoder.Decode(tex, int.MaxValue);
-        return SeamImage.FromBgra(decoded.Bgra, decoded.Width, decoded.Height);
+        return SeamImage.FromBgra(decoded.Bgra, decoded.Width, decoded.Height, samplerFlags);
     }
 
     /// <summary>
@@ -190,11 +276,11 @@ internal static class SeamTextures
     /// when the file has no smaller level that fits), avoiding a full decode of a 4K texture that is
     /// only sampled along a seam.
     /// </summary>
-    public static SeamImage DecodeAtMost(byte[] tex, int maxEdge)
+    public static SeamImage DecodeAtMost(byte[] tex, int maxEdge, uint samplerFlags = 0)
     {
         var bytes = MaterialPreviewBundleBuilder.NormalizeTextureMipOffsets(tex);
         if (bytes.Length < HeaderSize)
-            return Decode(tex);
+            return Decode(tex, samplerFlags);
         var format = BitConverter.ToUInt32(bytes, 4);
         int width = BitConverter.ToUInt16(bytes, 8), height = BitConverter.ToUInt16(bytes, 10);
         var mips = Math.Clamp(bytes[14] & 0x7F, 1, 13);
@@ -202,14 +288,14 @@ internal static class SeamTextures
         while (mip + 1 < mips && Math.Max(width >> mip, height >> mip) > maxEdge)
             mip++;
         if (mip == 0)
-            return Decode(bytes);
+            return Decode(bytes, samplerFlags);
         var bitsPerPixel = 1L << (int)((format >> 4) & 0xF);
         var blockCompressed = ((format >> 12) & 0xF) is 3 or 6;
         long w = Math.Max(1, width >> mip), h = Math.Max(1, height >> mip);
         var size = blockCompressed ? Math.Max(1, (w + 3) / 4) * Math.Max(1, (h + 3) / 4) * bitsPerPixel * 2 : w * h * bitsPerPixel / 8;
         long offset = BitConverter.ToUInt32(bytes, 28 + mip * 4);
         if (offset < HeaderSize || offset + size > bytes.Length)
-            return Decode(bytes);
+            return Decode(bytes, samplerFlags);
         var single = new byte[HeaderSize + size];
         bytes.AsSpan(0, HeaderSize).CopyTo(single);
         BitConverter.TryWriteBytes(single.AsSpan(8), (ushort)w);
@@ -218,6 +304,6 @@ internal static class SeamTextures
         single.AsSpan(16, 64).Clear();
         BitConverter.TryWriteBytes(single.AsSpan(28), (uint)HeaderSize);
         bytes.AsSpan((int)offset, (int)size).CopyTo(single.AsSpan(HeaderSize));
-        return Decode(single);
+        return Decode(single, samplerFlags);
     }
 }

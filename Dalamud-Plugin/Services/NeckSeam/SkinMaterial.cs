@@ -57,6 +57,8 @@ internal sealed class SkinMaterial
     public IReadOnlyDictionary<uint, uint> Keys { get; }
     /// <summary> Sampler id → index into the material's texture table. </summary>
     public IReadOnlyDictionary<uint, int> Samplers { get; }
+    /// <summary> Sampler id → its flags, which hold how it addresses UVs outside 0..1 (see <see cref="SeamAddress"/>). </summary>
+    public IReadOnlyDictionary<uint, uint> SamplerFlags { get; }
     /// <summary> The stored texture paths, in texture-table order. </summary>
     public IReadOnlyList<string> Textures { get; }
     public IReadOnlyList<ushort> TextureFlags { get; }
@@ -67,7 +69,8 @@ internal sealed class SkinMaterial
     public bool IsBodySkin => IsSkin && SkinType is SkinTypeBody or SkinTypeBodyHrothgar;
 
     private SkinMaterial(byte[] bytes, int shaderHeader, (uint, ushort, ushort)[] constants, int values, int valueSize, string shader,
-        IReadOnlyDictionary<uint, uint> keys, IReadOnlyDictionary<uint, int> samplers, IReadOnlyList<string> textures, IReadOnlyList<ushort> flags)
+        IReadOnlyDictionary<uint, uint> keys, IReadOnlyDictionary<uint, int> samplers, IReadOnlyDictionary<uint, uint> samplerFlags,
+        IReadOnlyList<string> textures, IReadOnlyList<ushort> flags)
     {
         _bytes = bytes;
         _shaderHeader = shaderHeader;
@@ -77,6 +80,7 @@ internal sealed class SkinMaterial
         ShaderPackage = shader;
         Keys = keys;
         Samplers = samplers;
+        SamplerFlags = samplerFlags;
         Textures = textures;
         TextureFlags = flags;
     }
@@ -124,15 +128,22 @@ internal sealed class SkinMaterial
                 throw new InvalidDataException("A material constant points outside the value data.");
         }
         var samplers = new Dictionary<uint, int>();
+        var samplerFlags = new Dictionary<uint, uint>();
         for (var i = 0; i < samplerCount; i++, cursor += 12)
             if (bytes[cursor + 8] < textureCount)
+            {
                 samplers[U32(bytes, cursor)] = bytes[cursor + 8];
+                samplerFlags[U32(bytes, cursor)] = U32(bytes, cursor + 4);
+            }
 
-        return new SkinMaterial(bytes, shaderHeader, constants, values, valueSize, ReadString(shaderName), keys, samplers, textures, flags);
+        return new SkinMaterial(bytes, shaderHeader, constants, values, valueSize, ReadString(shaderName), keys, samplers, samplerFlags, textures, flags);
     }
 
     /// <summary> The texture a sampler reads, as stored in the material; null when the sampler is absent. </summary>
     public string? TextureFor(uint sampler) => Samplers.TryGetValue(sampler, out var index) ? Textures[index] : null;
+
+    /// <summary> A sampler's flags; 0 (wrap) when the sampler is absent. </summary>
+    public uint FlagsFor(uint sampler) => SamplerFlags.GetValueOrDefault(sampler);
 
     /// <summary> The path the game requests for a sampler's texture (the DX11 "--" file when flagged). </summary>
     public string? RequestedTextureFor(uint sampler)
