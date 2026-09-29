@@ -85,6 +85,7 @@ internal static class TextureEditScenarios
             AtomicReplacement(Path.Combine(root, "atomic"));
             await PainterBatchAsync(Path.Combine(root, "painter"));
             PainterJobMod(Path.Combine(root, "painter-mod"));
+            await MisplacedMipsAsync(Path.Combine(root, "misplaced-mips"));
         }
         finally
         {
@@ -571,6 +572,64 @@ internal static class TextureEditScenarios
         Check(PenumbraService.ReadModStableIdentifierForRegression(modRoot) == job, "adding a file keeps the identifier");
     }
 
+    /// <summary>
+    /// Old mods ship textures whose mip offsets were written for uncompressed data (Bibo+'s
+    /// bibo_viera_base.tex). Sessions open them, and every write of such an original, from a
+    /// restore or a Painter send, carries a header that describes its data.
+    /// </summary>
+    private static async Task MisplacedMipsAsync(string root)
+    {
+        var bc7 = (uint)TexFile.TextureFormat.BC7;
+        var intact = Tex(bc7, 8, 8, 3, 12);
+        var broken = UncompressedOffsets(intact);
+        Reject(() => TextureFiles.ReadTex(broken), "the strict TEX check refuses BC7 mip offsets written for uncompressed data");
+        using (var f = new Fixture(Path.Combine(root, "mod"), bc7, original: broken))
+        {
+            var id = await f.Service.StartAsync(f.Request, false);
+            var s = f.Service.Sessions.Single();
+            Check(!s.Paused && s.Format == bc7 && s.MipMaps && File.ReadAllBytes(Path.Combine(s.Directory, "original.tex")).SequenceEqual(intact) &&
+                  f.Backend.TargaInputs.Single().SequenceEqual(intact) && File.ReadAllBytes(s.TargetFile).SequenceEqual(broken),
+                "a session opens such a texture and keeps and converts it with offsets that describe its data; the mod file stays");
+
+            var results = await f.Service.ApplyExternalAsync([new ExternalTextureSave(id, null)], CancellationToken.None);
+            Check(results.Single().Outcome == ExternalTextureOutcome.Unchanged && f.Backend.Commits == 0 &&
+                  File.ReadAllBytes(s.TargetFile).SequenceEqual(broken),
+                "an untouched Painter texture leaves the mod file with its own offsets alone");
+
+            File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 90));
+            await f.Service.ProcessPendingAsync(true);
+            s = f.Service.Sessions.Single();
+            Check(f.Backend.Commits == 1 && !s.Conflict && TextureFiles.ReadTex(File.ReadAllBytes(s.TargetFile)).Mips == 4 &&
+                  File.ReadAllBytes(s.LastBackup).SequenceEqual(broken),
+                "the first save replaces the mod file it captured and backs it up unchanged");
+
+            await f.Service.RestoreAsync(id);
+            Check(File.ReadAllBytes(s.TargetFile).SequenceEqual(intact) && f.Service.Sessions.Single() is { Paused: true, Width: 8, Height: 8 },
+                "restoring that backup writes the texture back with offsets that describe its data");
+
+            results = await f.Service.ApplyExternalAsync([new ExternalTextureSave(id, null)], CancellationToken.None);
+            Check(results.Single().Outcome == ExternalTextureOutcome.Unchanged && f.Backend.Commits == 2,
+                "the restored texture counts as the captured original");
+            results = await f.Service.ApplyExternalAsync([new ExternalTextureSave(id, Tga(8, 8, 91))], CancellationToken.None);
+            var applied = results.Single().Outcome;
+            results = await f.Service.ApplyExternalAsync([new ExternalTextureSave(id, null)], CancellationToken.None);
+            Check(applied == ExternalTextureOutcome.Applied && results.Single().Outcome == ExternalTextureOutcome.Restored &&
+                  f.Backend.Commits == 4 && File.ReadAllBytes(s.TargetFile).SequenceEqual(intact),
+                "a Painter send back to the untouched image restores the original with offsets that describe its data");
+        }
+
+        using (var f = new Fixture(Path.Combine(root, "vanilla"), bc7, vanilla: true, original: broken))
+        {
+            await f.Service.StartAsync(f.Request, false);
+            var s = f.Service.Sessions.Single();
+            File.WriteAllBytes(Path.Combine(s.Directory, "Red.tga"), Tga(8, 8, 92));
+            await f.Service.ProcessPendingAsync(true);
+            s = f.Service.Sessions.Single();
+            Check(!s.NeedsMod && s.Variants.Single().RelativePath.Length > 0 && File.ReadAllBytes(s.TargetFile).SequenceEqual(intact),
+                "a variant of such a texture creates its mod with the original's offsets normalized");
+        }
+    }
+
     private static void SetStale(string directory)
     {
         var stale = DateTime.UtcNow - TimeSpan.FromDays(2);
@@ -593,14 +652,15 @@ internal static class TextureEditScenarios
         public readonly ModelBackupStore Backups;
         public readonly string ConfigDir;
         public readonly TextureEditRequest Request;
-        public Fixture(string root, uint format, bool vanilla = false, bool watch = false, TimeSpan? cleanupInterval = null, bool withMeta = false)
+        public Fixture(string root, uint format, bool vanilla = false, bool watch = false, TimeSpan? cleanupInterval = null, bool withMeta = false,
+            byte[]? original = null)
         {
             ConfigDir = Path.Combine(root, "config"); Directory.CreateDirectory(ConfigDir);
             var cacheDirectory = Path.Combine(root, "cache");
             MakeCache(cacheDirectory);
             Config = new Configuration { TextureCacheDirectory = cacheDirectory };
             Backups = new ModelBackupStore(ConfigDir);
-            Backend = new FakeBackend(root, format, Backups, vanilla, withMeta);
+            Backend = new FakeBackend(root, format, Backups, vanilla, withMeta, original);
             Request = new TextureEditRequest("chara/test.tex", vanilla ? "chara/test.tex" : Backend.Target,
                 vanilla ? "" : "Mod", Backend.ModRoot, "Files/chara/test.tex", null, 0, vanilla ? "Mod" : "");
             Service = new TextureEditService(Backend, Config, ConfigDir, Backups, (_, _) => { }, watch, cleanupInterval);
@@ -621,11 +681,13 @@ internal static class TextureEditScenarios
         public TextureType LastFormat;
         public bool FailConversion, RefreshWarning;
         public Action? OnEncode;
-        public FakeBackend(string root, uint format, ModelBackupStore backups, bool vanilla, bool withMeta = false)
+        /// <summary>The TEX files converted to TGA, as the converter received them.</summary>
+        public readonly List<byte[]> TargaInputs = [];
+        public FakeBackend(string root, uint format, ModelBackupStore backups, bool vanilla, bool withMeta = false, byte[]? original = null)
         {
             _backups = backups; _vanilla = vanilla;
             ModRoot = Path.Combine(root, "Mod"); Target = Path.Combine(ModRoot, "Files", "chara", "test.tex");
-            Original = Tex(format, 8, 8, 4, 12);
+            Original = original ?? Tex(format, 8, 8, 4, 12);
             if (vanilla) return;
             if (withMeta)
             {
@@ -639,7 +701,8 @@ internal static class TextureEditScenarios
         }
         public Task<TextureSource> CaptureAsync(TextureEditRequest request, CancellationToken token)
         {
-            var h = TextureFiles.ReadTex(Original);
+            // As PenumbraService captures: the header of the normalized file, the bytes and hash as stored.
+            var h = TextureFiles.ReadOriginal(Original).Header;
             // Each game path gets its own file in the mod, so a batch can hold several textures.
             var relative = "Files/" + request.GamePath;
             var target = Path.Combine(ModRoot, relative.Replace('/', Path.DirectorySeparatorChar));
@@ -659,7 +722,11 @@ internal static class TextureEditScenarios
         public Task ConvertAsync(string input, string output, TextureType format, bool mipMaps)
         {
             if (FailConversion) throw new IOException("Simulated converter failure");
-            if (format == TextureType.Targa) File.WriteAllBytes(output, Tga(8, 8, 12));
+            if (format == TextureType.Targa)
+            {
+                TargaInputs.Add(File.ReadAllBytes(input));
+                File.WriteAllBytes(output, Tga(8, 8, 12));
+            }
             else
             {
                 var tga = File.ReadAllBytes(input);
@@ -737,6 +804,21 @@ internal static class TextureEditScenarios
         var offset = 80;
         for (var m = 0; m < mips; m++) { BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(28 + m * 4), (uint)offset); offset += sizes[m]; }
         bytes.AsSpan(80).Fill(value);
+        return bytes;
+    }
+
+    /// <summary> The texture as old mod tools wrote it: offsets for uncompressed mips, and one more mip claimed than stored. </summary>
+    private static byte[] UncompressedOffsets(byte[] tex)
+    {
+        var bytes = (byte[])tex.Clone();
+        int width = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(8)), height = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(10));
+        var mips = ++bytes[14];
+        var offset = 80;
+        for (var m = 0; m < mips; m++)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(28 + m * 4), (uint)offset);
+            offset += Math.Max(1, width >> m) * Math.Max(1, height >> m) * 4;
+        }
         return bytes;
     }
 }

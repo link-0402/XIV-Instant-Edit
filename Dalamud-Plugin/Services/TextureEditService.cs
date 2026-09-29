@@ -245,7 +245,9 @@ public sealed class TextureEditService : IDisposable
             try
             {
                 var original = Path.Combine(session.Directory, "original.tex");
-                File.WriteAllBytes(original, source.Bytes);
+                // Kept with its mip offsets normalized, so Penumbra can convert it and restoring it
+                // writes a header that describes its data.
+                File.WriteAllBytes(original, TextureFiles.NormalizeMipOffsets(source.Bytes));
                 await _backend.ConvertAsync(original, session.WorkingFile, TextureType.Targa, false).ConfigureAwait(false);
                 _life.Token.ThrowIfCancellationRequested();
                 var tga = TextureFiles.Read(session.WorkingFile);
@@ -422,9 +424,9 @@ public sealed class TextureEditService : IDisposable
             var target = _backups.Describe(s.ModDirectory, s.RelativePath);
             var source = string.IsNullOrEmpty(s.LastBackup) ? Path.Combine(s.Directory, "original.tex")
                 : _backups.Resolve(target.Id, Path.GetFileName(s.LastBackup));
-            var original = TextureFiles.Read(source);
             // Earlier saves may have been resized or stored uncompressed, so the backup's size can differ.
-            var h = TextureFiles.ReadTex(original);
+            // A backup of the captured file is restored with its mip offsets normalized.
+            var (original, h) = TextureFiles.ReadOriginal(TextureFiles.Read(source));
             if (!TextureFiles.IsSessionFormat(h.Format, s)) throw new IOException("The backup does not match this session.");
             _life.Token.ThrowIfCancellationRequested();
             var result = await _backend.CommitAsync(s, original, () => !_life.IsCancellationRequested, _life.Token).ConfigureAwait(false);
@@ -816,8 +818,7 @@ public sealed class TextureEditService : IDisposable
     /// </summary>
     private async Task CreateModFromOriginalAsync(TextureEditSession s, Func<bool> current)
     {
-        var original = TextureFiles.Read(Path.Combine(s.Directory, "original.tex"));
-        var header = TextureFiles.ReadTex(original);
+        var (original, header) = TextureFiles.ReadOriginal(TextureFiles.Read(Path.Combine(s.Directory, "original.tex")));
         var result = await _backend.CommitAsync(s, original, current, _life.Token).ConfigureAwait(false);
         s.LastCommittedHash = result.Hash;
         s.LastBackup = result.Backup;
@@ -1052,8 +1053,10 @@ public sealed class TextureEditService : IDisposable
     {
         var s = runtime.Session;
         var originalPath = Path.Combine(s.Directory, "original.tex");
-        var original = TextureFiles.Read(originalPath);
-        if (s.NeedsMod || (File.Exists(s.TargetFile) && TextureFiles.Hash(TextureFiles.Read(s.TargetFile)) == TextureFiles.Hash(original)))
+        var original = TextureFiles.NormalizeMipOffsets(TextureFiles.Read(originalPath));
+        // The destination can still hold the captured file with the mip offsets its mod wrote.
+        if (s.NeedsMod || (File.Exists(s.TargetFile) &&
+                TextureFiles.Hash(TextureFiles.NormalizeMipOffsets(TextureFiles.Read(s.TargetFile))) == TextureFiles.Hash(original)))
             return ExternalTextureOutcome.Unchanged;
         var header = TextureFiles.ReadTex(original);
         var result = await _backend.CommitAsync(s, original, () => runtime.Enabled && !_life.IsCancellationRequested, _life.Token).ConfigureAwait(false);
