@@ -9,12 +9,12 @@ namespace InstantEdit.Ui;
 
 public sealed partial class MainWindow
 {
-    private const string NeckSeamDialog = "Neck seam##neck-seam";
+    private const string NeckSeamDialog = "Skin seams##neck-seam";
     private NeckSeamService? _neckSeam;
     private bool _openNeckSeamDialog;
     private OnScreenObject? _neckSeamActor;
     private NeckSeamAnalysis? _neckSeamAnalysis;
-    private NeckSeamFix? _neckSeamFix;
+    private SkinSeamFix? _neckSeamFix;
     private string _neckSeamError = string.Empty;
     private string _neckSeamBusyText = string.Empty;
     private int _neckSeamBusy;
@@ -23,6 +23,16 @@ public sealed partial class MainWindow
     /// <summary> Where the skin settings meet: 0 keeps the face's (only the body changes), 1 takes the body's (only the face changes). </summary>
     private float _neckSeamMeet = 0.5f;
     private bool _neckSeamConfirmApply;
+    /// <summary> The fixes chosen for each body seam, replaced whole on every measurement. </summary>
+    private Dictionary<BodySeamKind, BodySeamChoice> _bodySeamChoices = new();
+
+    /// <summary> One body seam's ticked fixes and where its two parts meet (0 keeps the first part, 1 the second). </summary>
+    private sealed class BodySeamChoice
+    {
+        public bool Weld, Normals, Material, Textures;
+        public float Meet = 0.5f;
+        public float BandCm = NeckSeamFixer.DefaultBand * 100;
+    }
 
     internal void AttachNeckSeam(NeckSeamService service) => _neckSeam = service;
 
@@ -39,7 +49,7 @@ public sealed partial class MainWindow
     {
         if (_neckSeam is not { } service || _neckSeamActor is not { } actor || Interlocked.CompareExchange(ref _neckSeamBusy, 1, 0) != 0)
             return;
-        _neckSeamBusyText = "Measuring the neck seam";
+        _neckSeamBusyText = "Measuring the skin seams";
         _neckSeamError = string.Empty;
         _neckSeamAnalysis = null;
         _neckSeamFix = null;
@@ -51,19 +61,48 @@ public sealed partial class MainWindow
             try
             {
                 var analysis = await service.AnalyzeAsync(current, _lifetimeCts.Token).ConfigureAwait(false);
-                _neckSeamMorph = analysis.Report.NeckMorphs.Count > 0;
-                _neckSeamMaterial = analysis.Report.Material.Any;
-                _neckSeamTextures = analysis.Report.TexturesDiffer;
+                if (analysis.Report is { } report)
+                {
+                    _neckSeamMorph = report.NeckMorphs.Count > 0;
+                    _neckSeamMaterial = report.Material.Any;
+                    _neckSeamTextures = report.TexturesDiffer;
+                }
+                _bodySeamChoices = (analysis.Body?.Seams ?? []).ToDictionary(seam => seam.Kind, seam => new BodySeamChoice
+                {
+                    Weld = seam.CanWeld, Normals = seam.NormalsDiffer, Material = seam.MaterialDiffers, Textures = seam.TexturesDiffer,
+                });
                 _neckSeamAnalysis = analysis;
             }
             catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
             catch (Exception error)
             {
-                _log.Warning(error, "Could not measure the neck seam.");
+                _log.Warning(error, "Could not measure the skin seams.");
                 _neckSeamError = error.Message;
             }
             finally { Interlocked.Exchange(ref _neckSeamBusy, 0); }
         });
+    }
+
+    /// <summary> The fixes ticked across all seams, one line each, for the create button's tooltip; empty when none is. </summary>
+    private List<string> SelectedSkinSeamFixes(NeckSeamAnalysis analysis)
+    {
+        var lines = new List<string>();
+        if (analysis.Report is { } report)
+        {
+            if (_neckSeamMorph && report.NeckMorphs.Count > 0) lines.Add("Neck: add connection data to the face model");
+            if (_neckSeamMaterial && report.Material.Any) lines.Add("Neck: bring the skin settings together");
+            if (_neckSeamTextures && report.TexturesDiffer) lines.Add("Neck: blend the face textures into the body");
+        }
+        foreach (var seam in analysis.Body?.Seams ?? [])
+        {
+            if (!_bodySeamChoices.TryGetValue(seam.Kind, out var choice))
+                continue;
+            if (choice.Weld && seam.CanWeld) lines.Add($"{seam.Title}: close the gap between the edges");
+            if (choice.Normals && seam.NormalsDiffer) lines.Add($"{seam.Title}: match the vertex normals");
+            if (choice.Material && seam.MaterialDiffers) lines.Add($"{seam.Title}: bring the skin materials together");
+            if (choice.Textures && seam.TexturesDiffer) lines.Add($"{seam.Title}: blend the skin textures");
+        }
+        return lines;
     }
 
     private void CreateNeckSeamPreview()
@@ -72,12 +111,16 @@ public sealed partial class MainWindow
             return;
         _neckSeamBusyText = "Building the fixed files";
         _neckSeamError = string.Empty;
-        var options = new NeckSeamFixOptions(_neckSeamMorph, _neckSeamMaterial, _neckSeamTextures, _neckSeamBandCm / 100f, _neckSeamMeet);
+        var neck = analysis.Report is not null && (_neckSeamMorph || _neckSeamMaterial || _neckSeamTextures)
+            ? new NeckSeamFixOptions(_neckSeamMorph, _neckSeamMaterial, _neckSeamTextures, _neckSeamBandCm / 100f, _neckSeamMeet)
+            : null;
+        var body = _bodySeamChoices.Where(p => p.Value.Weld || p.Value.Normals || p.Value.Material || p.Value.Textures)
+            .ToDictionary(p => p.Key, p => new BodySeamFixOptions(p.Value.Weld, p.Value.Normals, p.Value.Material, p.Value.Textures, p.Value.BandCm / 100f, p.Value.Meet));
         _ = Task.Run(async () =>
         {
             try
             {
-                var fix = await NeckSeamService.BuildFixAsync(analysis, options, _lifetimeCts.Token).ConfigureAwait(false);
+                var fix = await NeckSeamService.BuildFixAsync(analysis, neck, body, _lifetimeCts.Token).ConfigureAwait(false);
                 _neckSeamFix = fix;
                 _neckSeamBusyText = "Creating the preview mod";
                 var (_, outcome) = await service.CreatePreviewAsync(analysis, fix, _lifetimeCts.Token).ConfigureAwait(false);
@@ -86,7 +129,7 @@ public sealed partial class MainWindow
             catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
             catch (Exception error)
             {
-                _log.Warning(error, "Could not create the neck seam preview.");
+                _log.Warning(error, "Could not create the skin seam preview.");
                 _neckSeamError = error.Message;
             }
             finally { Interlocked.Exchange(ref _neckSeamBusy, 0); }
@@ -110,7 +153,7 @@ public sealed partial class MainWindow
             }
             catch (Exception error)
             {
-                _log.Warning(error, apply ? "Could not apply the neck seam fix." : "Could not discard the neck seam preview.");
+                _log.Warning(error, apply ? "Could not apply the skin seam fix." : "Could not discard the skin seam preview.");
                 _neckSeamError = error.Message;
             }
             finally { Interlocked.Exchange(ref _neckSeamBusy, 0); }
@@ -128,8 +171,8 @@ public sealed partial class MainWindow
             _openNeckSeamDialog = false;
             ImGui.OpenPopup(NeckSeamDialog);
         }
-        ImGui.SetNextWindowSize(Theme.Scaled(760, 640), ImGuiCond.Appearing);
-        ImGui.SetNextWindowSizeConstraints(Theme.Scaled(560, 360), Theme.Scaled(1100, 1000));
+        ImGui.SetNextWindowSize(Theme.Scaled(780, 680), ImGuiCond.Appearing);
+        ImGui.SetNextWindowSizeConstraints(Theme.Scaled(560, 380), Theme.Scaled(1100, 1000));
         var open = true;
         if (!ImGui.BeginPopupModal(NeckSeamDialog, ref open))
             return;
@@ -155,12 +198,8 @@ public sealed partial class MainWindow
         var analysis = _neckSeamAnalysis;
         var preview = actor is null ? null : _neckSeam?.PreviewFor(actor.Name);
         ImGui.TextColored(Theme.Text, actor?.Name ?? "Character");
-        if (analysis is not null)
-        {
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.TextColored(Theme.Muted, analysis.Report.FaceModelPath);
-        }
-        Widgets.HintWrapped("Compares the face and the body where they meet at the neck, the way the game's skin shader draws them, and fixes the face side to match the body.");
+        Widgets.HintWrapped("Compares the skin where your character's models meet, the way the game's skin shader draws them: the face and body at the " +
+                            "neck, and the body parts at the wrists, waist and ankles. Only skin the game draws counts.");
 
         var footer = ImGui.GetFrameHeightWithSpacing() + ImGui.GetStyle().ItemSpacing.Y;
         using (var body = ImRaii.Child("##neck-seam-body", new Vector2(0, -footer), false))
@@ -179,7 +218,7 @@ public sealed partial class MainWindow
                 if (preview is not null)
                     DrawNeckSeamPreview(preview, busy);
                 if (analysis is not null)
-                    DrawNeckSeamReport(analysis, busy, preview is not null);
+                    DrawSkinSeamTabs(analysis, fixing: preview is null && analysis.PreviewSources.Count == 0);
             }
         }
 
@@ -190,6 +229,21 @@ public sealed partial class MainWindow
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip("Measure with the files the character uses now (with a preview active, that is the preview).");
+        if (analysis is not null && preview is null && analysis.PreviewSources.Count == 0)
+        {
+            ImGui.SameLine();
+            var selected = SelectedSkinSeamFixes(analysis);
+            using (ImRaii.Disabled(busy || selected.Count == 0))
+            {
+                if (ImGui.Button("Create preview mod"))
+                    CreateNeckSeamPreview();
+            }
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(selected.Count == 0
+                    ? "Tick a fix in one of the tabs first."
+                    : "Puts the fixed files in a new Penumbra mod enabled for this character. Your mods stay unchanged until you apply the fix.\n\n" +
+                      string.Join("\n", selected.Select(line => "• " + line)));
+        }
         ImGui.SameLine();
         var closeWidth = ImGui.CalcTextSize("Close").X + ImGui.GetStyle().FramePadding.X * 2;
         ImGui.SetCursorPosX(ImGui.GetWindowContentRegionMax().X - closeWidth);
@@ -203,8 +257,14 @@ public sealed partial class MainWindow
         foreach (var change in preview.Changes)
             Widgets.MutedWrapped("• " + change);
         if (_neckSeamFix is { } fix)
-            foreach (var line in NeckSeamViews.Expected(fix))
-                Widgets.MutedWrapped("• " + line);
+        {
+            if (fix.Neck is { } neck)
+                foreach (var line in NeckSeamViews.Expected(neck))
+                    Widgets.MutedWrapped("• Neck: " + line);
+            if (fix.Body is { } body)
+                foreach (var line in NeckSeamViews.Expected(body))
+                    Widgets.MutedWrapped("• " + line);
+        }
         ImGui.Spacing();
         using (ImRaii.Disabled(busy))
         {
@@ -221,6 +281,8 @@ public sealed partial class MainWindow
                 Widgets.SectionHeader("Apply the fix", "backups are kept for 7 days");
                 foreach (var line in NeckSeamViews.ApplyLines(preview))
                     Widgets.MutedWrapped("• " + line);
+                if (NeckSeamViews.ModelWarning(preview) is { } models)
+                    Widgets.HintWrapped(models);
                 Widgets.HintWrapped("Every character, option and collection that uses these files changes too. The preview mod is removed afterwards.");
                 using (ImRaii.PushColor(ImGuiCol.Button, Theme.WithAlpha(Theme.Important, .45f)))
                 {
@@ -237,25 +299,165 @@ public sealed partial class MainWindow
         ImGui.Spacing();
     }
 
-    private void DrawNeckSeamReport(NeckSeamAnalysis analysis, bool busy, bool previewActive)
+    /// <summary> One tab per seam; a tab's label shows how many of its findings need a look, in the colour of the worst. </summary>
+    private void DrawSkinSeamTabs(NeckSeamAnalysis analysis, bool fixing)
     {
-        var report = analysis.Report;
+        using var tabs = ImRaii.TabBar("##skin-seams");
+        if (!tabs.Success)
+            return;
+        SkinSeamTab("Neck", analysis.Report?.Findings, () => DrawNeckSeamTab(analysis, fixing));
+        foreach (var kind in BodySeamAnalyzer.Kinds)
+        {
+            var seam = analysis.Body?.Seam(kind);
+            SkinSeamTab(BodySeamAnalyzer.Title(kind), seam?.Findings, () => DrawBodySeamTab(analysis, kind, seam, fixing));
+        }
+    }
+
+    private static void SkinSeamTab(string title, IReadOnlyList<NeckSeamFinding>? findings, Action draw)
+    {
+        var worst = findings is { Count: > 0 } ? findings.Max(f => f.Severity) : NeckSeamSeverity.Ok;
+        bool open;
+        using (ImRaii.PushColor(ImGuiCol.Text, Theme.Severity(NeckSeamViews.Feedback(worst)).Accent, worst is NeckSeamSeverity.Problem or NeckSeamSeverity.Warning))
+            open = ImGui.BeginTabItem(NeckSeamViews.TabLabel(title, findings));
+        if (!open)
+            return;
+        ImGui.Spacing();
+        draw();
+        ImGui.EndTabItem();
+    }
+
+    private void DrawNeckSeamTab(NeckSeamAnalysis analysis, bool fixing)
+    {
+        if (analysis.Report is not { } report)
+        {
+            Widgets.HintWrapped("The neck wasn't measured: " + analysis.NeckError);
+            return;
+        }
         var (accent, _, icon) = Theme.Severity(NeckSeamViews.Feedback(report.Worst));
         ImGui.TextColored(accent, icon);
         ImGui.SameLine(0, Theme.Gap);
         ImGui.TextColored(Theme.Text, NeckSeamViews.Summary(report));
-        Widgets.MutedWrapped($"Body: {report.BodyModelPath} · {report.BodyMaterialPath}");
+        Widgets.MutedWrapped($"Face: {report.FaceModelPath} · Body: {report.BodyModelPath} · {report.BodyMaterialPath}");
         ImGui.Spacing();
+        DrawSeamFindings("##neck-seam-findings", report.Findings, "Face", "Body");
 
-        using (var table = ImRaii.Table("##neck-seam-findings", 3, ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.RowBg))
+        if (!fixing)
+            return;
+        ImGui.Spacing();
+        Widgets.SectionHeader("Fix");
+        if (!report.AnyFix)
+        {
+            Widgets.HintWrapped("Nothing here can be fixed automatically.");
+            return;
+        }
+        FixOption("Add neck connection data to the face model", ref _neckSeamMorph, report.NeckMorphs.Count > 0,
+            $"Adds {report.NeckMorphs.Count} connection vertices from the face's neck edge, so the game joins the body's edge to the face.");
+        FixOption("Bring the face's and body's skin settings together", ref _neckSeamMaterial, report.Material.Any,
+            "Changes the skin detail tile's size, strength and pattern, and other skin settings, so the face and body material meet. " +
+            "The face material applies to the whole face and the body material to the whole body.");
+        if (report.Material.Any)
+        {
+            using var indent = ImRaii.PushIndent();
+            using var disabled = ImRaii.Disabled(!_neckSeamMaterial);
+            MeetSlider("##neck-seam-meet", ref _neckSeamMeet, "face", "body",
+                "Where the settings meet. Left keeps the face as it is and changes the body to match it, right changes only the face, the middle moves both halfway.");
+            foreach (var line in NeckSeamViews.MaterialPlan(report.Material, _neckSeamMeet))
+                Widgets.MutedWrapped("• " + line);
+        }
+        FixOption("Blend the face textures into the body at the neck", ref _neckSeamTextures, report.TexturesDiffer,
+            "Shifts the face's colour, mask and normal map towards the body's values at the seam, fading out above it.");
+        if (report.TexturesDiffer)
+        {
+            using var indent = ImRaii.PushIndent();
+            using var disabled = ImRaii.Disabled(!_neckSeamTextures);
+            ImGui.SetNextItemWidth(Theme.Scaled(220));
+            ImGui.SliderFloat("Blend height##neck-seam-band", ref _neckSeamBandCm, 0.5f, 6f, "%.1f cm");
+        }
+    }
+
+    private void DrawBodySeamTab(NeckSeamAnalysis analysis, BodySeamKind kind, BodySeam? seam, bool fixing)
+    {
+        if (seam is null)
+        {
+            Widgets.HintWrapped(analysis.Body?.Notes.GetValueOrDefault(kind) ??
+                                (analysis.BodyError.Length > 0 ? "The body seams weren't measured: " + analysis.BodyError : "Not measured."));
+            return;
+        }
+        string first = seam.A.Label.ToLowerInvariant(), second = seam.B.Label.ToLowerInvariant();
+        var (accent, _, icon) = Theme.Severity(NeckSeamViews.Feedback(seam.Worst));
+        ImGui.TextColored(accent, icon);
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.TextColored(Theme.Text, NeckSeamViews.BodySummary(seam));
+        Widgets.MutedWrapped($"{seam.A.Label}: {seam.A.ModelPath} · {seam.B.Label}: {seam.B.ModelPath}");
+        ImGui.Spacing();
+        DrawSeamFindings($"##body-seam-findings-{kind}", seam.Findings, seam.A.Label, seam.B.Label);
+
+        if (!fixing)
+            return;
+        ImGui.Spacing();
+        Widgets.SectionHeader("Fix");
+        if (!seam.AnyFix || !_bodySeamChoices.TryGetValue(kind, out var choice))
+        {
+            Widgets.HintWrapped("Nothing here can be fixed automatically.");
+            return;
+        }
+        FixOption($"Close the gap between the edges##weld-{kind}", ref choice.Weld, seam.CanWeld,
+            "Moves the two parts' edges onto each other, and the skin just behind them a little, so no crease forms.");
+        FixOption($"Match the vertex normals along the edges##normals-{kind}", ref choice.Normals, seam.NormalsDiffer,
+            "Gives both edges the same vertex normals, so the lighting runs on smoothly across the seam.");
+        FixOption($"Bring the two skin materials together##material-{kind}", ref choice.Material, seam.MaterialDiffers,
+            $"Changes the skin detail tile's size, strength and pattern, and other skin settings, so the {first}'s and the {second}'s materials meet. " +
+            "Each material applies to every part that uses it.");
+        if (seam.Material is { Any: true } match && choice.Material)
+        {
+            using var indent = ImRaii.PushIndent();
+            foreach (var line in NeckSeamViews.MaterialPlan(match, choice.Meet, first, second))
+                Widgets.MutedWrapped("• " + line);
+        }
+        FixOption($"Blend the skin textures across the seam##textures-{kind}", ref choice.Textures, seam.TexturesDiffer,
+            "Shifts both parts' colour, mask and normal map towards each other at the seam, fading out away from it.");
+        if (seam.TexturesDiffer)
+        {
+            using var indent = ImRaii.PushIndent();
+            using var disabled = ImRaii.Disabled(!choice.Textures);
+            ImGui.SetNextItemWidth(Theme.Scaled(220));
+            ImGui.SliderFloat($"Blend width##band-{kind}", ref choice.BandCm, 0.5f, 6f, "%.1f cm");
+        }
+        using (ImRaii.Disabled(!(choice.Weld && seam.CanWeld || choice.Normals && seam.NormalsDiffer || choice.Material && seam.MaterialDiffers ||
+                                   choice.Textures && seam.TexturesDiffer)))
+            MeetSlider($"##meet-{kind}", ref choice.Meet, first, second,
+                $"Where the two parts meet. Left keeps the {first} as it is and changes only the {second}, right changes only the {first}, the middle moves both halfway.");
+        if (choice.Weld && seam.CanWeld || choice.Normals && seam.NormalsDiffer)
+            Widgets.HintWrapped("Changing a model changes it for every character and outfit that uses it.");
+    }
+
+    /// <summary> The meeting point slider between two labelled ends: left changes only the second side, right only the first. </summary>
+    private static void MeetSlider(string id, ref float meet, string first, string second, string tooltip)
+    {
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Adjust " + second);
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.SetNextItemWidth(Theme.Scaled(260));
+        ImGui.SliderFloat(id, ref meet, 0f, 1f, NeckSeamViews.MeetLabel(meet, first, second));
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(tooltip);
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Adjust " + first);
+    }
+
+    /// <summary> A findings table: the check, the value on each side, and the finding's detail on hover. </summary>
+    private static void DrawSeamFindings(string id, IReadOnlyList<NeckSeamFinding> findings, string first, string second)
+    {
+        using (var table = ImRaii.Table(id, 3, ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.RowBg))
         {
             if (table.Success)
             {
                 ImGui.TableSetupColumn("Check", ImGuiTableColumnFlags.WidthStretch, .46f);
-                ImGui.TableSetupColumn("Face", ImGuiTableColumnFlags.WidthStretch, .27f);
-                ImGui.TableSetupColumn("Body", ImGuiTableColumnFlags.WidthStretch, .27f);
+                ImGui.TableSetupColumn(first, ImGuiTableColumnFlags.WidthStretch, .27f);
+                ImGui.TableSetupColumn(second, ImGuiTableColumnFlags.WidthStretch, .27f);
                 ImGui.TableHeadersRow();
-                foreach (var finding in report.Findings)
+                foreach (var finding in findings)
                 {
                     ImGui.TableNextRow();
                     ImGui.TableSetColumnIndex(0);
@@ -280,55 +482,6 @@ public sealed partial class MainWindow
             }
         }
         Widgets.Hint("Hover a row for what it measures.");
-
-        if (previewActive || analysis.PreviewSources.Count > 0)
-            return;
-        ImGui.Spacing();
-        Widgets.SectionHeader("Fix");
-        if (!report.AnyFix)
-        {
-            Widgets.HintWrapped("Nothing here can be fixed automatically.");
-            return;
-        }
-        FixOption("Add neck connection data to the face model", ref _neckSeamMorph, report.NeckMorphs.Count > 0,
-            $"Adds {report.NeckMorphs.Count} connection vertices from the face's neck edge, so the game joins the body's edge to the face.");
-        FixOption("Bring the face's and body's skin settings together", ref _neckSeamMaterial, report.Material.Any,
-            "Changes the skin detail tile's size, strength and pattern, and other skin settings, so the face and body material meet. " +
-            "The face material applies to the whole face and the body material to the whole body.");
-        if (report.Material.Any)
-        {
-            using var indent = ImRaii.PushIndent();
-            using var disabled = ImRaii.Disabled(!_neckSeamMaterial);
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, "Adjust body");
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.SetNextItemWidth(Theme.Scaled(260));
-            ImGui.SliderFloat("##neck-seam-meet", ref _neckSeamMeet, 0f, 1f, NeckSeamViews.MeetLabel(_neckSeamMeet));
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Where the settings meet. Left keeps the face as it is and changes the body to match it, right changes only the face, " +
-                                 "the middle moves both halfway.");
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, "Adjust face");
-            foreach (var line in NeckSeamViews.MaterialPlan(report.Material, _neckSeamMeet))
-                Widgets.MutedWrapped("• " + line);
-        }
-        FixOption("Blend the face textures into the body at the neck", ref _neckSeamTextures, report.TexturesDiffer,
-            "Shifts the face's colour, mask and normal map towards the body's values at the seam, fading out above it.");
-        if (report.TexturesDiffer)
-        {
-            using var indent = ImRaii.PushIndent();
-            using var disabled = ImRaii.Disabled(!_neckSeamTextures);
-            ImGui.SetNextItemWidth(Theme.Scaled(220));
-            ImGui.SliderFloat("Blend height##neck-seam-band", ref _neckSeamBandCm, 0.5f, 6f, "%.1f cm");
-        }
-        ImGui.Spacing();
-        using (ImRaii.Disabled(busy || !(_neckSeamMorph || _neckSeamMaterial || _neckSeamTextures)))
-        {
-            if (ImGui.Button("Create preview mod"))
-                CreateNeckSeamPreview();
-        }
-        Widgets.HintWrapped("Puts the fixed files in a new Penumbra mod enabled for this character. Your mods stay unchanged until you apply the fix.");
     }
 
     private static void FixOption(string label, ref bool value, bool available, string help)

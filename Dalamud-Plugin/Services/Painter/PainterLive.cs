@@ -7,13 +7,17 @@ using InstantEdit.Services.Previews;
 
 namespace InstantEdit.Services.Painter;
 
-/// <summary> A model the character has loaded, and which of its attributes are enabled. </summary>
+/// <summary> A model the character has loaded, and which of its attributes and shape keys are enabled. </summary>
 /// <param name="Path">The loaded file as <see cref="PainterVisibility.NormalizePath"/> writes it.</param>
-public sealed record PainterLiveModel(string Path, uint EnabledAttributes);
+/// <param name="Slot">The character's model slot (1 body, 2 hands, 3 legs, 4 feet); -1 for weapons.</param>
+public sealed record PainterLiveModel(string Path, uint EnabledAttributes, uint EnabledShapes = 0, int Slot = -1);
 
 /// <summary> What an on-screen character draws right now: its loaded models and its own colors. </summary>
 public sealed record PainterLiveCharacter(IReadOnlyList<PainterLiveModel> Models, PainterCharacterColors? Colors)
 {
+    /// <summary> The character's race and sex code (such as 801 for c0801); 0 when it isn't a human. </summary>
+    public int Race { get; init; }
+
     /// <summary> The enabled-attribute masks of each loaded copy of a model; empty when it isn't loaded. </summary>
     public IReadOnlyList<uint> MasksFor(PainterModelRef model)
     {
@@ -61,30 +65,32 @@ internal sealed class PainterLiveReader(IFramework framework, IObjectTable objec
         if (drawObject == null)
             return null;
         var models = new List<PainterLiveModel>();
-        AddModels(drawObject, models);
+        AddModels(drawObject, models, own: true);
         // Weapons are character bases of their own, attached as children.
         var first = drawObject->DrawObject.Object.ChildObject;
         var child = first;
         for (var i = 0; child != null && i < MaximumChildren; i++)
         {
             if (child->GetObjectType() == ObjectType.CharacterBase)
-                AddModels((CharacterBase*)child, models);
+                AddModels((CharacterBase*)child, models, own: false);
             child = child->NextSiblingObject;
             if (child == first)
                 break;
         }
 
         PainterCharacterColors? colors = null;
+        var race = 0;
         if (drawObject->GetModelType() == CharacterBase.ModelType.Human)
         {
             var buffer = ((Human*)drawObject)->CustomizeParameterTypedCBuffer.TryGetBuffer();
             if (buffer.Length > 0)
                 colors = new PainterCharacterColors(Display(buffer[0].MainColor), Display(buffer[0].MeshColor));
+            race = ((Human*)drawObject)->RaceSexId;
         }
-        return new PainterLiveCharacter(models, colors);
+        return new PainterLiveCharacter(models, colors) { Race = race };
     }
 
-    private static unsafe void AddModels(CharacterBase* character, List<PainterLiveModel> models)
+    private static unsafe void AddModels(CharacterBase* character, List<PainterLiveModel> models, bool own)
     {
         if (character->Models == null)
             return;
@@ -96,7 +102,8 @@ internal sealed class PainterLiveReader(IFramework framework, IObjectTable objec
                 continue;
             var path = model->ModelResourceHandle->FileName.ToString();
             if (path.Length > 0)
-                models.Add(new PainterLiveModel(PainterVisibility.NormalizePath(path), model->EnabledAttributeIndexMask));
+                models.Add(new PainterLiveModel(PainterVisibility.NormalizePath(path), model->EnabledAttributeIndexMask, model->EnabledShapeKeyIndexMask,
+                    own ? slot : -1));
         }
     }
 
