@@ -127,7 +127,7 @@ Quick Export backup restores the EST entries along with the model.
    updates it.
 6. Sessions pause when the game or plugin restarts. Opening the texture again
    (or the open action on its card in **Sessions**) resumes it.
-7. The trash action on a card discards that session's working files. **Clean up all sessions...**
+7. The trash action on a card discards that session's working files. **Clean up all sessions**
    at the top of **Sessions** discards every session and Substance Painter project at once, after
    asking. The mods and their backups are kept.
 
