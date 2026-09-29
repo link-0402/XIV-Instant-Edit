@@ -37,7 +37,7 @@ from .material_preview import (cleanup_preview_bundle, discard_preview_data,
 from .cache import create_job, finish_job
 from .diagnostics import record_failure, record_protocol_failure, record_remote_failure
 from .skeleton import create_armature, load_skeleton
-from . import racial_scaling
+from . import character as character_send, racial_scaling
 
 
 # ---- Dalamud plugin HTTP transport ----
@@ -1165,6 +1165,9 @@ class InstantImport(Operator):
     skeleton_path: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
     # "c0201 to c0801" when the plugin sent the model racially scaled; stamped on every mesh.
     racial_scaling: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
+    # A model of a whole-character send, as JSON (see character.py): it binds to the send's
+    # shared armature instead of the armature mode's.
+    character: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
     cache_job_directory: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
 
     @classmethod
@@ -1180,6 +1183,7 @@ class InstantImport(Operator):
         preview_package = None
         preview_validation_warning = ""
         skeleton_note = ""
+        character = None
         if not file_path.is_file():
             # Return before the try/finally below, so release the staged job here.
             _finish_import_job(self.cache_job_directory)
@@ -1190,6 +1194,7 @@ class InstantImport(Operator):
         try:
             if self.schema != SCHEMA or self.version not in SUPPORTED_VERSIONS:
                 raise ValueError("Import context has an unsupported schema or version")
+            character = character_send.from_property(self.character)
             context_metadata = {
                 "context_id": self.context_id,
                 "schema": self.schema,
@@ -1244,7 +1249,17 @@ class InstantImport(Operator):
                 material_preview=preview_package,
                 material_context_key=self.context_id or collection.name,
             )
-            if self.armature_mode == "existing":
+            if character is not None:
+                skeleton_note = self._bind_character(
+                    context,
+                    file_path,
+                    imported_meshes,
+                    collection,
+                    context_metadata,
+                    created_objects,
+                    character,
+                )
+            elif self.armature_mode == "existing":
                 self._bind_existing_armature(
                     context,
                     imported_meshes,
@@ -1297,6 +1312,11 @@ class InstantImport(Operator):
                 props, context, self.context_id)
         except Exception as e:
             _remove_staging_objects(created_objects, collection)
+            if character is not None:
+                try:
+                    character_send.discard_if_empty(context.scene, character)
+                except Exception as cleanup_error:
+                    print(f"XIV Instant Edit: could not remove an empty character collection: {cleanup_error}")
             discard_preview_data(preview_package)
             props.last_status = f"Import failed: {e}"
             self.report({"ERROR"}, f"Import failed: {e}")
@@ -1387,22 +1407,8 @@ class InstantImport(Operator):
         the returned imported mesh to it, so the standard export pipeline can run. Returns a note
         for the status line, or an empty string."""
         model = XIVModel.from_file(str(file_path))
-        for obj in tuple(mesh_objects):
-            if (
-                obj.type != "MESH"
-                or collection not in obj.users_collection
-                or (created_objects is not None and obj not in created_objects)
-            ):
-                raise ValueError("import returned an object outside its staging collection")
-            if obj.parent:
-                raise ValueError("import returned an already-parented mesh")
-
-        game_skeleton, skeleton_error = None, ""
-        if self.skeleton_path:
-            try:
-                game_skeleton = load_skeleton(self.skeleton_path)
-            except Exception as error:
-                skeleton_error = f"the game skeleton could not be read ({error}); bones have no rest pose"
+        _check_unbound_meshes(mesh_objects, collection, created_objects)
+        game_skeleton, skeleton_error = self._load_game_skeleton()
         armature_obj, report = create_armature(
             context, collection, "InstantEditArmature", model.bones, mesh_objects, game_skeleton,
             created_objects=created_objects)
@@ -1416,6 +1422,57 @@ class InstantImport(Operator):
         # Keep the bones out of the viewport; the hidden armature still deforms its meshes.
         armature_obj.hide_set(True)
         return skeleton_error or report.summary()
+
+    def _bind_character(
+        self,
+        context: Context,
+        file_path: Path,
+        mesh_objects,
+        collection,
+        metadata,
+        created_objects,
+        character,
+    ) -> str:
+        """Binds a model of a whole-character send (see character.py): body models to the send's
+        shared armature, a weapon to an armature of its own hung from the bone that holds it. A
+        new send of the character first replaces its previous one. Returns a note for the status
+        line, or an empty string."""
+        character_send.replace_previous(context.scene, character)
+        if character.role == character_send.WEAPON:
+            note = self._create_armature(context, file_path, mesh_objects, collection, metadata, created_objects)
+            armature = next((obj for obj in reversed(created_objects) if obj.type == "ARMATURE"), None)
+            hang_note = (character_send.hang_weapon(context, character, armature, mesh_objects)
+                         if armature is not None else "")
+            character_send.adopt_collection(context.scene, character, collection)
+            return "; ".join(part for part in (note, hang_note) if part)
+        model = XIVModel.from_file(str(file_path))
+        _check_unbound_meshes(mesh_objects, collection, created_objects)
+        game_skeleton, skeleton_error = self._load_game_skeleton()
+        note = character_send.bind_body(
+            context, character, collection, mesh_objects, model.bones, game_skeleton, created_objects)
+        return skeleton_error or note
+
+    def _load_game_skeleton(self):
+        """The game skeleton the plugin sent, or None, and why it could not be read."""
+        if not self.skeleton_path:
+            return None, ""
+        try:
+            return load_skeleton(self.skeleton_path), ""
+        except Exception as error:
+            return None, f"the game skeleton could not be read ({error}); bones have no rest pose"
+
+
+def _check_unbound_meshes(mesh_objects, collection, created_objects) -> None:
+    """Refuses imported meshes that are not this import's own, unparented, staged meshes."""
+    for obj in tuple(mesh_objects):
+        if (
+            obj.type != "MESH"
+            or collection not in obj.users_collection
+            or (created_objects is not None and obj not in created_objects)
+        ):
+            raise ValueError("import returned an object outside its staging collection")
+        if obj.parent:
+            raise ValueError("import returned an already-parented mesh")
 
 
 # ---- Mashup export context management ----

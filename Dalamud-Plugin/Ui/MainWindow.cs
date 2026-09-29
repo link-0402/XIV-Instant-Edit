@@ -228,9 +228,10 @@ public sealed partial class MainWindow : Window, IDisposable
         }
 
         _activeTab = activeTab;
-        // The listener runs only while the Animations tab is open: until a skeleton library is
-        // saved, its first match builds one.
-        if (!animationsTabActive)
+        // The listener runs only while the Animations tab is open, or Quick Actions waits to send
+        // your character in the animation it plays: until a skeleton library is saved, its first
+        // match builds one.
+        if (!animationsTabActive && !(activeTab == MainTab.QuickActions && CharacterSendListens))
             animations?.StopObservation();
         DrawTextureDialogs();
         DrawAnimationSendDialog();

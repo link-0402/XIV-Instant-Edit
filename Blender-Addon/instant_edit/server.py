@@ -14,6 +14,7 @@ import bpy
 
 from .context import is_safe_game_model_path
 from .cache import CacheStagingError, STALE_SECONDS, cache_root, finish_job
+from .character import parse_request as parse_character, to_property as character_property
 from .diagnostics import BridgeRequestError, record_failure, sanitize_text
 from .plugin_http import post_json
 from .racial_scaling import parse_request as parse_racial_scaling
@@ -22,6 +23,9 @@ from .validation import ValidationError, validate_string
 
 MAX_IMPORT_BODY_SIZE = 1024 * 1024
 MAX_IMPORT_QUEUE_SIZE = 32
+# How often the queue is checked, and how soon the next queued import runs after one.
+IMPORT_POLL_SECONDS = 0.5
+NEXT_IMPORT_SECONDS = 0.01
 REQUEST_TIMEOUT_SECONDS = 5
 IMPORT_OPTIONS_CAPABILITY = "instant-edit.import-options.v1"
 MATERIAL_PREVIEW_CAPABILITY = "instant-edit.material-preview.v1"
@@ -34,6 +38,9 @@ IMPORT_STATUS_CAPABILITY = "instant-edit.import-status.v1"
 ANIMATION_IMPORT_CAPABILITY = "instant-edit.animation-import.v1"
 # Imports may carry the model's game skeleton (see skeleton.py).
 IMPORT_SKELETON_CAPABILITY = "instant-edit.import-skeleton.v1"
+# Imports may belong to a whole-character send that shares one armature (see character.py), and
+# animations may name that send's armature; /status reports how many imports are still pending.
+CHARACTER_IMPORT_CAPABILITY = "instant-edit.character-import.v1"
 MAX_ANIMATION_QUEUE_SIZE = 4
 # How long an animation request waits for Blender's main thread to key it, so the plugin
 # can report the result. Blender busy with a modal tool keeps the request queued instead.
@@ -88,7 +95,10 @@ def _status_payload() -> dict:
             IMPORT_STATUS_CAPABILITY,
             ANIMATION_IMPORT_CAPABILITY,
             IMPORT_SKELETON_CAPABILITY,
+            CHARACTER_IMPORT_CAPABILITY,
         ],
+        # Imports queued or running: a character send waits for its models before its pose.
+        "pendingImports": _import_queue.unfinished_tasks,
     }
 
 
@@ -783,6 +793,14 @@ class _ImportHandler(BaseHTTPRequestHandler):
                 "request_validation", "invalid_racial_scaling",
                 f"The import's racial scaling is invalid: {error}.",
                 "Update both XIV Instant Edit components and retry.") from error
+        # Optional: the whole-character send this model belongs to.
+        try:
+            character = parse_character(data.get("character"))
+        except ValueError as error:
+            raise BridgeRequestError(
+                "request_validation", "invalid_character",
+                f"The import's character send is invalid: {error}.",
+                "Update both XIV Instant Edit components and retry.") from error
 
         return {
             **data,
@@ -816,6 +834,7 @@ class _ImportHandler(BaseHTTPRequestHandler):
             "importOptions": import_options,
             "skeleton": skeleton,
             "racialScaling": racial_scaling,
+            "character": character,
         }
 
 
@@ -986,83 +1005,95 @@ def process_animation_queue() -> None:
             job["done"].set()
 
 
-def poll_import_queue() -> float:
-    """Timer callback that runs pending imports on Blender's main thread."""
+def _run_queued_import(data: dict) -> None:
+    """Run one queued import through the import operator; the plugin hears of a failure."""
     try:
-        process_animation_queue()
-        while True:
-            try:
-                data = _import_queue.get_nowait()
-            except Empty:
-                break
-            try:
-                if bpy.context.mode != "OBJECT":
-                    bpy.ops.object.mode_set(mode="OBJECT")
+        if bpy.context.mode != "OBJECT":
+            bpy.ops.object.mode_set(mode="OBJECT")
 
-                result = bpy.ops.xiv_ie.instant_import(
-                    "EXEC_DEFAULT",
-                    file_path=data.get("filePath", ""),
-                    object_index=int(data.get("objectIndex", -1)),
-                    import_name=data.get("name", ""),
-                    callback_port=data.get("callbackPort", 0),
-                    schema=data.get("schema", ""),
-                    version=int(data.get("version", 0)),
-                    plugin_instance_id=data.get("pluginInstanceId", ""),
-                    context_id=data.get("contextId", ""),
-                    capability=data.get("capability", ""),
-                    source_game_path=data.get("sourceGamePath", ""),
-                    source_kind=data.get("sourceKind", "mod"),
-                    resolved_game_path=data.get("resolvedGamePath", data.get("sourceGamePath", "")),
-                    destination_state=data.get("destinationState", "ready"),
-                    managed_destination=data.get("managedDestination", ""),
-                    target_file_path=data.get("targetFilePath", ""),
-                    source_mod_directory=data.get("sourceModDirectory", ""),
-                    source_mod_stable_id=data.get("sourceModStableId", ""),
-                    source_mod_name=data.get("sourceModName", ""),
-                    source_mod_root_path=data.get("sourceModRootPath", ""),
-                    target_relative_path=data.get("targetRelativePath", ""),
-                    target_collection_id=data.get("targetCollectionId", ""),
-                    target_collection_name=data.get("targetCollectionName", ""),
-                    resource_manifest_version=int(data.get("resourceManifestVersion", 0)),
-                    resource_manifest_status=data.get("resourceManifestStatus", "capture_failed"),
-                    backup_target_id=data.get("backupTargetId", ""),
-                    backup_directory=data.get("backupDirectory", ""),
-                    import_id=data.get("importId", ""),
-                    armature_mode=data.get("importOptions", {}).get("armatureMode", "generated"),
-                    armature_target=data.get("importOptions", {}).get("targetObject", "Skeleton"),
-                    apply_textures_and_materials=data.get("importOptions", {}).get("applyTexturesAndMaterials", False),
-                    preview_manifest_path=data.get("previewManifestPath", ""),
-                    skeleton_path=data.get("skeletonPath", ""),
-                    racial_scaling=data.get("racialScaling") or "",
-                    cache_job_directory=data.get("cacheJobDirectory", ""),
-                )
-                if result != {"FINISHED"}:
-                    props = getattr(bpy.context.scene, "xiv_ie_instant_edit_props", None)
-                    reported = getattr(props, "last_status", "") if props is not None else ""
-                    cause = reported.removeprefix("Import failed:").strip() or \
-                        "Blender cancelled the queued model import."
-                    failure = _failure(
-                        None, "import", "import_processing", "import_cancelled",
-                        cause,
-                        "Correct the reported Blender scene or model issue, then retry the import.",
-                        endpoint="/import/status",
-                        metadata={
-                            **_request_metadata(data),
-                            "operatorResult": ",".join(sorted(result)),
-                        },
-                    )
-                    _notify_import_failure(data, failure)
-            except Exception as e:
-                failure = _failure(
-                    None, "import", "import_processing", "import_processing_failed",
-                    "Blender encountered an unexpected error while processing the queued import.",
-                    "Review the diagnostic report, correct the model or scene issue, and retry.",
-                    endpoint="/import/status", exception=e,
-                    metadata=_request_metadata(data),
-                )
-                _notify_import_failure(data, failure)
-            finally:
-                _release_import_job(data)
+        result = bpy.ops.xiv_ie.instant_import(
+            "EXEC_DEFAULT",
+            file_path=data.get("filePath", ""),
+            object_index=int(data.get("objectIndex", -1)),
+            import_name=data.get("name", ""),
+            callback_port=data.get("callbackPort", 0),
+            schema=data.get("schema", ""),
+            version=int(data.get("version", 0)),
+            plugin_instance_id=data.get("pluginInstanceId", ""),
+            context_id=data.get("contextId", ""),
+            capability=data.get("capability", ""),
+            source_game_path=data.get("sourceGamePath", ""),
+            source_kind=data.get("sourceKind", "mod"),
+            resolved_game_path=data.get("resolvedGamePath", data.get("sourceGamePath", "")),
+            destination_state=data.get("destinationState", "ready"),
+            managed_destination=data.get("managedDestination", ""),
+            target_file_path=data.get("targetFilePath", ""),
+            source_mod_directory=data.get("sourceModDirectory", ""),
+            source_mod_stable_id=data.get("sourceModStableId", ""),
+            source_mod_name=data.get("sourceModName", ""),
+            source_mod_root_path=data.get("sourceModRootPath", ""),
+            target_relative_path=data.get("targetRelativePath", ""),
+            target_collection_id=data.get("targetCollectionId", ""),
+            target_collection_name=data.get("targetCollectionName", ""),
+            resource_manifest_version=int(data.get("resourceManifestVersion", 0)),
+            resource_manifest_status=data.get("resourceManifestStatus", "capture_failed"),
+            backup_target_id=data.get("backupTargetId", ""),
+            backup_directory=data.get("backupDirectory", ""),
+            import_id=data.get("importId", ""),
+            armature_mode=data.get("importOptions", {}).get("armatureMode", "generated"),
+            armature_target=data.get("importOptions", {}).get("targetObject", "Skeleton"),
+            apply_textures_and_materials=data.get("importOptions", {}).get("applyTexturesAndMaterials", False),
+            preview_manifest_path=data.get("previewManifestPath", ""),
+            skeleton_path=data.get("skeletonPath", ""),
+            racial_scaling=data.get("racialScaling") or "",
+            character=character_property(data.get("character")),
+            cache_job_directory=data.get("cacheJobDirectory", ""),
+        )
+        if result != {"FINISHED"}:
+            props = getattr(bpy.context.scene, "xiv_ie_instant_edit_props", None)
+            reported = getattr(props, "last_status", "") if props is not None else ""
+            cause = reported.removeprefix("Import failed:").strip() or \
+                "Blender cancelled the queued model import."
+            failure = _failure(
+                None, "import", "import_processing", "import_cancelled",
+                cause,
+                "Correct the reported Blender scene or model issue, then retry the import.",
+                endpoint="/import/status",
+                metadata={
+                    **_request_metadata(data),
+                    "operatorResult": ",".join(sorted(result)),
+                },
+            )
+            _notify_import_failure(data, failure)
+    except Exception as e:
+        failure = _failure(
+            None, "import", "import_processing", "import_processing_failed",
+            "Blender encountered an unexpected error while processing the queued import.",
+            "Review the diagnostic report, correct the model or scene issue, and retry.",
+            endpoint="/import/status", exception=e,
+            metadata=_request_metadata(data),
+        )
+        _notify_import_failure(data, failure)
+    finally:
+        _release_import_job(data)
+        _import_queue.task_done()
+
+
+def poll_import_queue() -> float:
+    """Timer callback that runs pending imports on Blender's main thread, one per call.
+
+    The next import follows at once, but Blender redraws in between, so the models of a character
+    send appear one by one instead of after one long freeze. Animations are keyed once no import
+    is left, so an animation sent after its models, such as a character send's pose, finds their
+    armature."""
+    try:
+        try:
+            data = _import_queue.get_nowait()
+        except Empty:
+            process_animation_queue()
+            return IMPORT_POLL_SECONDS
+        _run_queued_import(data)
+        return NEXT_IMPORT_SECONDS
     except Exception as e:
         _failure(
             None, "import", "queueing", "import_queue_processing_failed",
@@ -1072,4 +1103,4 @@ def poll_import_queue() -> float:
             metadata={"exceptionMessage": sanitize_text(e)},
         )
 
-    return 0.5
+    return IMPORT_POLL_SECONDS
