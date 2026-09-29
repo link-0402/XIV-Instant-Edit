@@ -13,9 +13,10 @@ namespace InstantEdit.Services;
 /// checks before its immutable, pruned snapshot is published.
 /// </summary>
 /// <remarks>
-/// Collection runs on a worker, like Penumbra's own On-Screen tab: Penumbra builds the
-/// player-scoped trees on the calling thread and marshals only its object-table enumeration
-/// to the framework thread. The object-table joins here make one short framework visit.
+/// Collection runs on a worker that makes one framework visit. Penumbra's tree IPCs must be
+/// called inside that visit: they read each character's ObjectIndex on the calling thread,
+/// which Dalamud rejects off the main thread (with Dev Mode on since 15.0.3.6, always from
+/// API 16). Pruning and source attribution stay on the worker.
 /// </remarks>
 public sealed class OnScreenService : IDisposable
 {
@@ -107,17 +108,14 @@ public sealed class OnScreenService : IDisposable
         }
     }
 
-    /// <summary> Runs on a worker; only <see cref="JoinObjectTable"/> visits the framework thread. </summary>
+    /// <summary> Runs on a worker; only <see cref="CollectTrees"/> visits the framework thread. </summary>
     private List<OnScreenObject> CollectSnapshot()
     {
         var token = _lifetime.Token;
-        var trees = _penumbra.GetPlayerResourceTrees();
-        var resolvedPaths = _penumbra.GetPlayerResourcePaths();
-        token.ThrowIfCancellationRequested();
 
         // Block this worker, not the frame, until the next framework tick. Awaiting instead
         // would resume the pruning below inline on the framework thread that completes it.
-        var joined = _framework.RunOnTick(() => JoinObjectTable(trees, resolvedPaths), cancellationToken: token)
+        var joined = _framework.RunOnTick(CollectTrees, cancellationToken: token)
             .GetAwaiter().GetResult();
 
         var result = new List<OnScreenObject>(joined.Count);
@@ -159,12 +157,10 @@ public sealed class OnScreenService : IDisposable
     }
 
     /// <summary>
-    /// Joins Penumbra's trees to the object table on the framework thread and recovers
-    /// missing owned objects. Only plain values leave this method.
+    /// Fetches Penumbra's player trees on the framework thread, joins them to the object
+    /// table and recovers missing owned objects. Only plain values leave this method.
     /// </summary>
-    private List<JoinedTree> JoinObjectTable(
-        IReadOnlyDictionary<ushort, ResourceTreeDto> trees,
-        IReadOnlyDictionary<ushort, Dictionary<string, HashSet<string>>> resolvedPaths)
+    private List<JoinedTree> CollectTrees()
     {
         // IClientState has no LocalPlayer property in the installed Dalamud API. It is
         // injected to gate snapshots on a live client; IObjectTable.LocalPlayer is the
@@ -172,6 +168,9 @@ public sealed class OnScreenService : IDisposable
         if (_lifetime.IsCancellationRequested || !_clientState.IsLoggedIn ||
             _objects.LocalPlayer is not { Address: not 0 } localPlayer)
             return [];
+
+        var trees = _penumbra.GetPlayerResourceTrees();
+        var resolvedPaths = _penumbra.GetPlayerResourcePaths();
 
         var treeEntries = trees
             .Select(entry => new TreeEntry(entry.Key, entry.Value, resolvedPaths.GetValueOrDefault(entry.Key)))
