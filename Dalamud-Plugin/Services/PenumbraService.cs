@@ -413,8 +413,8 @@ public sealed partial class PenumbraService
     /// <summary>
     /// Gets Penumbra's local-player-owned resource trees, including the public UI
     /// labels and icons. The returned index is the current object-table index.
-    /// Penumbra marshals only its object-table enumeration to the framework thread and
-    /// builds the trees on the calling thread, so call this from a worker.
+    /// Call it on the framework thread: Penumbra builds the trees on the calling thread and
+    /// reads each character's ObjectIndex there, which Dalamud rejects on other threads.
     /// </summary>
     public IReadOnlyDictionary<ushort, ResourceTreeDto> GetPlayerResourceTrees()
     {
@@ -427,15 +427,15 @@ public sealed partial class PenumbraService
         }
         catch (Exception e)
         {
-            _log.Debug($"Could not retrieve Penumbra player resource trees: {e.Message}");
+            _log.Warning($"Could not retrieve Penumbra player resource trees: {e.Message}");
             return new Dictionary<ushort, ResourceTreeDto>();
         }
     }
 
     /// <summary>
     /// Gets the resolved resource paths of the local player and their owned objects, keyed
-    /// by object-table index. Like <see cref="GetPlayerResourceTrees"/>, this is safe (and
-    /// intended) to call from a worker.
+    /// by object-table index. Like <see cref="GetPlayerResourceTrees"/>, call it on the
+    /// framework thread.
     /// </summary>
     public IReadOnlyDictionary<ushort, Dictionary<string, HashSet<string>>> GetPlayerResourcePaths()
     {
@@ -448,7 +448,7 @@ public sealed partial class PenumbraService
         }
         catch (Exception e)
         {
-            _log.Debug($"Could not retrieve Penumbra player resource paths: {e.Message}");
+            _log.Warning($"Could not retrieve Penumbra player resource paths: {e.Message}");
             return new Dictionary<ushort, Dictionary<string, HashSet<string>>>();
         }
     }
