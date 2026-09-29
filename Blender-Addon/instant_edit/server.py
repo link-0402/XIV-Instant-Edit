@@ -238,6 +238,9 @@ def _notify_import_failure(data: dict, failure: dict) -> None:
 
 def _stage_import_skeleton(data: dict) -> dict:
     """Write a staged import's skeleton into its cache job, where the queued import reads it."""
+    if data.get("skeleton") is None:
+        # Nothing to stage; skip importing the skeleton module, which needs numpy.
+        return {key: value for key, value in data.items() if key != "skeleton"}
     from .cache import remove_job
     from .skeleton import stage_skeleton
 
@@ -947,13 +950,14 @@ def _set_last_status(text: str) -> None:
 
 def process_animation_queue() -> None:
     """Key the animations received since the last call. Runs on Blender's main thread."""
-    from .animation import AnimationApplyError, apply_take, summary
-
     while True:
         try:
             job = _animation_queue.get_nowait()
         except Empty:
             return
+        # Imported per job, not per poll: the animation module needs numpy.
+        from .animation import AnimationApplyError, apply_take, summary
+
         take = job["take"]
         metadata = {
             "pluginVersion": take.plugin_version or "unknown",
