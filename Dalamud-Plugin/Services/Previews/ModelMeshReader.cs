@@ -5,13 +5,31 @@ using System.Text;
 namespace InstantEdit.Services.Previews;
 
 /// <summary> LOD-0 geometry of a model with normals, the first UV set and submesh attributes. </summary>
-public sealed record ModelMesh(IReadOnlyList<ModelMeshPart> Meshes, IReadOnlyList<string> Materials, IReadOnlyList<string> Attributes);
+public sealed record ModelMesh(IReadOnlyList<ModelMeshPart> Meshes, IReadOnlyList<string> Materials, IReadOnlyList<string> Attributes)
+{
+    /// <summary> The model's shapes in its shape order, when read with them; empty otherwise. </summary>
+    public IReadOnlyList<ModelShape> Shapes { get; init; } = [];
+}
 
 /// <summary> One mesh: its vertices and the triangles of each submesh, indexed into those vertices. </summary>
 public sealed record ModelMeshPart(int MeshIndex, int MaterialIndex, Vector3[] Positions, Vector3[] Normals, Vector2[] Uvs,
     IReadOnlyList<ModelSubmesh> Submeshes);
 
-public sealed record ModelSubmesh(int SubmeshIndex, int[] Indices, uint AttributeMask);
+public sealed record ModelSubmesh(int SubmeshIndex, int[] Indices, uint AttributeMask)
+{
+    /// <summary> Where the submesh's indices start among its mesh's indices, which shape values count in. </summary>
+    public int MeshIndexStart { get; init; }
+}
+
+/// <summary> A shape and the LOD-0 meshes it changes. </summary>
+public sealed record ModelShape(string Name, IReadOnlyList<ModelShapeMesh> Meshes);
+
+/// <summary>
+/// One mesh's part of a shape: while the shape is on, the mesh's index at <see cref="Indices"/>[i]
+/// (counted from the mesh's first index) draws vertex <see cref="Vertices"/>[i] instead. Shape
+/// vertices are stored after the mesh's own, so they are in <see cref="ModelMeshPart.Positions"/> too.
+/// </summary>
+public sealed record ModelShapeMesh(int MeshIndex, int[] Indices, int[] Vertices);
 
 /// <summary>
 /// Reads the full LOD-0 mesh of a Dawntrail (V6) model, without the decimation the thumbnail reader
@@ -32,6 +50,8 @@ public static class ModelMeshReader
     private const int TerrainShadowMeshSize = 20;
     private const int SubmeshSize = 16;
     private const int TerrainShadowSubmeshSize = 12;
+    private const int ShapeSize = 16;
+    private const int ShapeMeshSize = 12;
 
     private const byte UsagePosition = 0;
     private const byte UsageNormal = 3;
@@ -46,7 +66,8 @@ public static class ModelMeshReader
 
     private readonly record struct Element(byte Stream, byte Offset, byte Type);
 
-    public static ModelMesh Read(byte[] bytes)
+    /// <param name="shapes">Also read the shapes and their LOD-0 index replacements.</param>
+    public static ModelMesh Read(byte[] bytes, bool shapes = false)
     {
         Require(bytes.Length >= FileHeaderSize + StringHeaderSize, "file header");
         var version = BinaryPrimitives.ReadUInt32LittleEndian(bytes);
@@ -124,6 +145,7 @@ public static class ModelMeshReader
         var indexTotal = (int)(indexBufferSize / 2);
 
         var parts = new List<ModelMeshPart>();
+        var meshStarts = new Dictionary<uint, (int Mesh, uint IndexCount, int VertexCount)>();
         for (var m = lod0MeshIndex; m < lod0MeshIndex + lod0MeshCount; m++)
         {
             var mesh = meshTable + m * MeshSize;
@@ -139,6 +161,7 @@ public static class ModelMeshReader
                 throw new InvalidDataException("A mesh uses a material outside the material table.");
             if (m >= declarationCount || positions[m] is not { } position)
                 throw new NotSupportedException("A mesh has no position stream.");
+            meshStarts.TryAdd(startIndex, (m, indexCount, vertexCount));
 
             var meshPositions = new Vector3[vertexCount];
             var meshNormals = new Vector3[vertexCount];
@@ -180,7 +203,7 @@ public static class ModelMeshReader
                         throw new InvalidDataException("An index points outside its mesh.");
                     triangleIndices[i] = vertex;
                 }
-                submeshes.Add(new ModelSubmesh(index, triangleIndices, mask));
+                submeshes.Add(new ModelSubmesh(index, triangleIndices, mask) { MeshIndexStart = (int)(start - startIndex) });
             }
             if (submeshes.Count > 0)
                 parts.Add(new ModelMeshPart(m, materialIndex, meshPositions, meshNormals, meshUvs, submeshes));
@@ -188,7 +211,71 @@ public static class ModelMeshReader
 
         if (parts.Count == 0)
             throw new NotSupportedException("LOD 0 has no renderable triangles.");
-        return new ModelMesh(parts, materials, attributes);
+        return new ModelMesh(parts, materials, attributes)
+        {
+            Shapes = shapes ? ReadShapes(bytes, meshHeader, materialTable + materialCount * 4, stringBlock, (int)stringSize, meshStarts) : [],
+        };
+    }
+
+    /// <summary>
+    /// The shape table and each shape's LOD-0 meshes, which follow the bone names and bone tables.
+    /// A shape mesh names its mesh by the mesh's first index; its values count indices from there.
+    /// </summary>
+    private static List<ModelShape> ReadShapes(byte[] bytes, int meshHeader, int boneNameTable, int stringBlock, int stringSize,
+        Dictionary<uint, (int Mesh, uint IndexCount, int VertexCount)> meshStarts)
+    {
+        int boneCount = U16(bytes, meshHeader + 12);
+        int boneTableCount = U16(bytes, meshHeader + 14);
+        int shapeCount = U16(bytes, meshHeader + 16);
+        int shapeMeshCount = U16(bytes, meshHeader + 18);
+        int shapeValueCount = U16(bytes, meshHeader + 20);
+        int boneTableArrayCount = U16(bytes, meshHeader + 44);
+        var shapeTable = checked(boneNameTable + boneCount * 4 + boneTableCount * 4 + boneTableArrayCount * 2);
+        var shapeMeshTable = checked(shapeTable + shapeCount * ShapeSize);
+        var shapeValueTable = checked(shapeMeshTable + shapeMeshCount * ShapeMeshSize);
+        Require(shapeValueTable + shapeValueCount * 4 <= bytes.Length, "shape table");
+
+        var shapes = new List<ModelShape>(shapeCount);
+        for (var s = 0; s < shapeCount; s++)
+        {
+            var shape = shapeTable + s * ShapeSize;
+            var nameOffset = U32(bytes, shape);
+            if (nameOffset >= stringSize)
+                throw new InvalidDataException("A shape name points outside the string table.");
+            var nameEnd = Array.IndexOf(bytes, (byte)0, stringBlock + (int)nameOffset, stringSize - (int)nameOffset);
+            if (nameEnd < 0)
+                throw new InvalidDataException("A shape name in the string table is not terminated.");
+            var name = Encoding.UTF8.GetString(bytes, stringBlock + (int)nameOffset, nameEnd - stringBlock - (int)nameOffset);
+            // LOD 0's range of shape meshes; the other LODs' follow in the same table.
+            int first = U16(bytes, shape + 4);
+            int count = U16(bytes, shape + 10);
+            Require(first + count <= shapeMeshCount, "shape mesh range");
+            var meshes = new List<ModelShapeMesh>();
+            for (var sm = first; sm < first + count; sm++)
+            {
+                var shapeMesh = shapeMeshTable + sm * ShapeMeshSize;
+                var meshStart = U32(bytes, shapeMesh);
+                var valueCount = U32(bytes, shapeMesh + 4);
+                var valueOffset = U32(bytes, shapeMesh + 8);
+                if (valueOffset + (long)valueCount > shapeValueCount)
+                    throw new InvalidDataException("A shape reads past the shape values.");
+                if (!meshStarts.TryGetValue(meshStart, out var mesh))
+                    continue;
+                var indices = new int[valueCount];
+                var vertices = new int[valueCount];
+                for (var v = 0; v < valueCount; v++)
+                {
+                    var value = shapeValueTable + (int)(valueOffset + v) * 4;
+                    indices[v] = U16(bytes, value);
+                    vertices[v] = U16(bytes, value + 2);
+                    if (indices[v] >= mesh.IndexCount || vertices[v] >= mesh.VertexCount)
+                        throw new InvalidDataException("A shape points outside its mesh.");
+                }
+                meshes.Add(new ModelShapeMesh(mesh.Mesh, indices, vertices));
+            }
+            shapes.Add(new ModelShape(name, meshes));
+        }
+        return shapes;
     }
 
     private static void DecodeStream(byte[] bytes, uint vertexOffset, int mesh, Element element, int vertexCount,

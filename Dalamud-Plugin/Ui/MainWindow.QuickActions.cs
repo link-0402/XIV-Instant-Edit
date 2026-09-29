@@ -25,6 +25,7 @@ public sealed partial class MainWindow
             DrawNeckSeamAction);
         DrawCharacterWeightCard();
         DrawPaintSkinCard();
+        DrawHeelsOffsetCard();
     }
 
     private void DrawNeckSeamAction()

@@ -34,6 +34,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly Services.Painter.PainterJobService _painterJobs;
     private readonly GameFileBrowserService  _gameFiles;
     private readonly GameFileExportService   _gameExport;
+    private readonly Services.Heels.HeelsOffsetService _heels;
     private readonly WindowSystem            _windowSystem;
     private readonly MainWindow              _window;
     private readonly ChangelogWindow         _changelogWindow;
@@ -203,6 +204,9 @@ public sealed class Plugin : IDalamudPlugin
         _window.AttachNeckSeam(neckSeam);
         // Character weight: texture memory and triangles as sync plugins count them, and smaller textures in a preview mod.
         _window.AttachCharacterWeight(new Services.CharacterWeight.CharacterWeightService(_penumbra, data, log, configDirectory, [neckSeam.Store]));
+        // Heels offsets for Simple Heels, measured on the shoes your character draws.
+        _heels = new Services.Heels.HeelsOffsetService(pi, framework, objects, data, skeletons, log);
+        _window.AttachHeelsOffset(_heels);
         // Automatic cache cleanup also removes old exports from the cache's export folder.
         _textures.AdditionalCacheCleanup = () =>
         {
@@ -368,6 +372,7 @@ public sealed class Plugin : IDalamudPlugin
         _textures.AdditionalCacheCleanup = null;
         _gameExport.Dispose();
         _window.Dispose();
+        _heels.Dispose();
         _gameFiles.Dispose();
         _textures.FileChanged -= _previews.Invalidate;
         _previews.Dispose();
