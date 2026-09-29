@@ -33,7 +33,7 @@ Penumbra mods.
 
 - [XIVLauncher](https://goatcorp.github.io/) with Dalamud enabled
 - [Penumbra](https://github.com/xivdev/Penumbra) 1.7.1.0 or newer
-- [Blender](https://www.blender.org/) 4.5.0 or newer (below 5.3.0) for model editing
+- [Blender](https://www.blender.org/) 4.5.0 or newer for model editing
 - Optional: an image editor that saves 32-bit TGA files, [Substance 3D Painter](https://www.adobe.com/products/substance3d/apps/painter.html)
   10.0.1 or newer, and the LivePose plugin for animation editing
 
