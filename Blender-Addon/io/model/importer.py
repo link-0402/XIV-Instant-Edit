@@ -41,6 +41,19 @@ def visible_mesh_group_ids(objects=None) -> set[int]:
     return groups
 
 
+def occupied_mesh_group_ids(context) -> set[int]:
+    """The groups an import must not reuse: those of visible meshes, and of parts a character
+    send imported hidden, which export with their model's visible parts."""
+    from ...instant_edit.character import is_game_hidden
+
+    visible = tuple(obj for obj in getattr(context, "visible_objects", ()) if obj.type == "MESH")
+    hidden = tuple(
+        obj for obj in getattr(getattr(context, "scene", None), "objects", ())
+        if obj.type == "MESH" and is_game_hidden(obj)
+    )
+    return visible_mesh_group_ids(visible + hidden)
+
+
 def material_object_label(material_path: str) -> str:
     """Return the compact object label derived from an FFXIV material path."""
     name = (material_path or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
@@ -186,15 +199,10 @@ class ModelImport:
             for mesh_idx, mesh in enumerate(model.meshes[:mesh_count])
             if mesh.vertex_count > 0
         }
-        existing_visible_objects = tuple(
-            obj
-            for obj in getattr(bpy.context, "visible_objects", ())
-            if obj.type == "MESH"
-        )
         settings = getattr(getattr(bpy.context, "scene", None), "xiv_ie_settings", None)
         resolve_mesh_group_conflicts = getattr(settings, "resolve_mesh_group_conflicts", True)
         self.mesh_group_offset = (
-            mesh_group_conflict_offset(incoming_groups, visible_mesh_group_ids(existing_visible_objects))
+            mesh_group_conflict_offset(incoming_groups, occupied_mesh_group_ids(bpy.context))
             if resolve_mesh_group_conflicts
             else 0
         )
