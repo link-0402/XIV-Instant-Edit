@@ -76,15 +76,20 @@ internal sealed class NeckSeamService
         {
             var captured = NeckSeamCapture.Capture(actor.ResourceRoots, Read, pbd, live);
             token.ThrowIfCancellationRequested();
+            // The clothing and seam connectors around the seams, read once for the neck and the body seams.
+            var around = SeamSurroundings.None;
+            try { around = SeamSurroundings.Read(captured.Input, captured.Input.CharacterRace); }
+            catch (Exception e) when (e is not OperationCanceledException) { _log.Warning(e, "Could not read the clothing and seam connectors around the seams."); }
+            token.ThrowIfCancellationRequested();
             NeckSeamReport? report = null;
             var neckError = string.Empty;
-            try { report = NeckSeamAnalyzer.Analyze(captured.Input); }
+            try { report = NeckSeamAnalyzer.Analyze(captured.Input, around); }
             catch (Exception e) when (e is InvalidDataException or NotSupportedException) { neckError = e.Message; }
             token.ThrowIfCancellationRequested();
             BodySeamReport? body = null;
             var bodyError = string.Empty;
             // The body seams are measured apart from the neck, so a model they can't handle leaves the neck's check usable.
-            try { body = BodySeamAnalyzer.Analyze(captured.Input); }
+            try { body = BodySeamAnalyzer.Analyze(captured.Input, around); }
             catch (Exception e) when (e is not OperationCanceledException)
             {
                 _log.Warning(e, "Could not measure the body seams.");
@@ -240,6 +245,22 @@ internal sealed class NeckSeamService
         await ((ITextureEditBackend)_penumbra).ConvertAsync(tga, output, type, mips).ConfigureAwait(false);
         var bytes = await File.ReadAllBytesAsync(output, token).ConfigureAwait(false);
         _ = TextureFiles.ReadTex(bytes);
+        // Where the blend didn't reach, the original's own blocks go back in, so a fix never recompresses the rest of the texture.
+        try
+        {
+            var before = SeamTextures.Decode(original);
+            if (before.Width == image.Width && before.Height == image.Height)
+            {
+                var changed = new bool[image.Width * image.Height];
+                for (var i = 0; i < changed.Length; i++)
+                    changed[i] = !before.Rgba.AsSpan(i * 4, 4).SequenceEqual(image.Rgba.AsSpan(i * 4, 4));
+                bytes = TextureFiles.KeepUnchanged(original, bytes, changed);
+            }
+        }
+        catch (Exception e) when (e is InvalidDataException or NotSupportedException)
+        {
+            _log.Debug(e, "Could not keep the original blocks of {Label}; the whole texture is re-encoded.", label);
+        }
         return bytes;
     }
 
@@ -258,6 +279,21 @@ internal sealed class NeckSeamService
             "Skin seam fix made by XIV Instant Edit for game files " + preview.ActorName + " uses.", FixModFallback, Recheck).ConfigureAwait(false);
         Store.Remove(preview.Id);
         return new NeckSeamOutcome(result.Describe("Skin seam fix applied"), result.Warnings);
+    }
+
+    /// <summary>
+    /// The kept backups of the mod files the analysis read (models, skin materials and textures),
+    /// grouped by when they were made, newest first: each apply of a fix makes one group.
+    /// </summary>
+    public IReadOnlyList<PreviewBackupGroup> Backups(NeckSeamAnalysis analysis) => _previews.Backups(analysis.Captured.Sources.Values);
+
+    /// <summary> Puts a group's files back as they were before its backups were made. The current files are backed up first, so this can be undone the same way. </summary>
+    public async Task<NeckSeamOutcome> RestoreAsync(PreviewBackupGroup group, ushort objectIndex)
+    {
+        var warnings = await _previews.RestoreAsync(group, objectIndex, Recheck).ConfigureAwait(false);
+        var mods = group.Files.Select(f => f.Source.ModName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        return new NeckSeamOutcome($"Restored {group.Files.Count} file{(group.Files.Count == 1 ? "" : "s")} in {string.Join(", ", mods)} " +
+                                   $"as they were before {group.Created.ToLocalTime():d MMM, HH:mm}. The files replaced are backed up too.", warnings);
     }
 
     public async Task<NeckSeamOutcome> DiscardAsync(NeckSeamPreview preview)

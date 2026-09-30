@@ -395,6 +395,9 @@ internal static class NeckSeamScenarios
 
         var report = NeckSeamAnalyzer.Analyze(captured.Input);
         NeckSeamFinding Finding(string title) => report.Findings.Single(f => f.Title == title);
+        var proxy = captured.Input.Bodies[0] with { GamePath = "chara/human/c0801/obj/body/b0003/model/c0801b0003_top.mdl" };
+        Require(NeckSeamAnalyzer.Analyze(captured.Input with { Bodies = [proxy, .. captured.Input.Bodies] }).BodyModelPath == BodyModelPath,
+            "neck seam: a human body model (a seam connector, the low-poly body) is never the neck's body, even listed first with its ring on the face's");
         Require(report.RingVertices == RingSize && report.BodyModelPath == BodyModelPath && Finding("Neck ring fit").Severity == NeckSeamSeverity.Ok,
             "neck seam: the face's lowest open edge is the neck ring and the body's top edge lies on it");
         Require(Finding("Neck connection data").Fix == NeckSeamFixKind.NeckMorph && report.NeckMorphs.Count == RingSize &&

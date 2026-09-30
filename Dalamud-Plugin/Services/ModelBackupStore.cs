@@ -7,6 +7,9 @@ namespace InstantEdit.Services;
 
 public sealed record ManagedBackupTarget(string Id, string Directory);
 
+/// <summary> One kept backup of a mod file: its target, its file name in the store, and when it was made. </summary>
+public sealed record ManagedBackup(string TargetId, string Name, DateTimeOffset Created);
+
 /// <summary>Plugin-owned backup history, isolated from Penumbra mod folders.</summary>
 public sealed partial class ModelBackupStore
 {
@@ -113,6 +116,26 @@ public sealed partial class ModelBackupStore
             if (BackupNameRegex().IsMatch(Path.GetFileName(backup)) && !File.Exists(backup))
                 File.Delete(path);
         }
+    }
+
+    /// <summary> The backups kept of a mod file, newest first; none when the target isn't one the store backs up. </summary>
+    public IReadOnlyList<ManagedBackup> List(string modDirectory, string targetRelativePath)
+    {
+        ManagedBackupTarget target;
+        try { target = Describe(modDirectory, targetRelativePath); }
+        catch (ArgumentException) { return []; }
+        if (!Directory.Exists(target.Directory) || (File.GetAttributes(target.Directory) & FileAttributes.ReparsePoint) != 0)
+            return [];
+        var backups = new List<ManagedBackup>();
+        foreach (var path in Directory.EnumerateFiles(target.Directory, "*.bak", SearchOption.TopDirectoryOnly))
+        {
+            var name = Path.GetFileName(path);
+            var match = BackupNameRegex().Match(name);
+            if (match.Success && DateTimeOffset.TryParseExact(match.Groups["stamp"].Value, "yyyyMMdd'T'HHmmss.ffffff'Z'", CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal, out var created))
+                backups.Add(new ManagedBackup(target.Id, name, created));
+        }
+        return backups.OrderByDescending(b => b.Created).ToList();
     }
 
     public string Resolve(string targetId, string backupName)

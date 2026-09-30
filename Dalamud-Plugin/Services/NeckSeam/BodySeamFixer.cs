@@ -163,7 +163,9 @@ internal static class BodySeamFixer
     /// moves to the meeting points, then the other part's edge lands exactly on that edge's new line,
     /// which closes the gap even where the two edges have different vertex counts. A part that stores
     /// half floats goes first, onto positions it can hold, since only full-precision positions can
-    /// follow another edge exactly.
+    /// follow another edge exactly. Where one part's edge rests on the other's skin (an overlap), only
+    /// that edge changes: it is laid onto the skin under it and takes that skin's normals, since the
+    /// skin under it continues past the edge and has nothing to meet halfway.
     /// </summary>
     private static void Geometry(BodySeam seam, bool weld, bool normals, float meet, Dictionary<BodySeamPart, Dictionary<int, VertexEdit>> edits,
         List<string> changes)
@@ -173,8 +175,27 @@ internal static class BodySeamFixer
         var movedB = new Dictionary<int, Vector3>();
         var normalsA = 0;
         var normalsB = 0;
+        var laid = new Dictionary<BodySeamPart, int>();
         foreach (var chain in seam.Chains)
         {
+            if (chain.Outer is { } outer)
+            {
+                var inner = outer == a ? b : a;
+                var moved = outer == a ? movedA : movedB;
+                foreach (var welded in chain.A)
+                {
+                    var landing = chain.Landing[welded];
+                    var vertex = outer.Topology.Representative[welded];
+                    if (weld)
+                        moved[welded] = Held(outer, vertex, landing.Point.Point) - outer.Positions[vertex];
+                    if (normals)
+                    {
+                        Set(edits, outer, welded, null, inner.NormalAt(landing.Point));
+                        laid[outer] = laid.GetValueOrDefault(outer) + 1;
+                    }
+                }
+                continue;
+            }
             if (weld)
             {
                 var halfA = chain.A.Any(w => Half(a, a.Topology.Representative[w]));
@@ -247,6 +268,8 @@ internal static class BodySeamFixer
             changes.Add($"{a.Label} model: give {normalsA} edge vertices at the {where} the normals both parts meet at");
         if (normalsB > 0)
             changes.Add($"{b.Label} model: give {normalsB} edge vertices at the {where} the normals both parts meet at");
+        foreach (var (outer, count) in laid)
+            changes.Add($"{outer.Label} model: give {count} edge vertices at the {where} the normals of the {(outer == a ? b : a).Label.ToLowerInvariant()} skin under them");
     }
 
     private static Vector3 Meet(Vector3 first, Vector3 second, float meet) => NeckSeamAnalyzer.SafeNormalize(Vector3.Lerp(first, second, meet), first);
@@ -555,6 +578,22 @@ internal static class BodySeamFixer
         float gap = 0, angle = 0;
         foreach (var chain in seam.Chains)
         {
+            if (chain.Outer is { } outer)
+            {
+                // The outer edge against the skin under it (which the fix leaves as it is).
+                var inner = outer == seam.A ? seam.B : seam.A;
+                foreach (var welded in chain.A)
+                {
+                    var landing = chain.Landing[welded].Point;
+                    var p = Position(outer, outer.Topology.Representative[welded]);
+                    var own = Vector3.Zero;
+                    foreach (var member in outer.Topology.Members(welded))
+                        own += Normal(outer, member);
+                    gap = Math.Max(gap, inner.Space.Nearest(p, 0.02f)?.Distance ?? Vector3.Distance(p, landing.Point));
+                    angle = Math.Max(angle, NeckSeamAnalyzer.AngleDegrees(own, inner.NormalAt(landing)));
+                }
+                continue;
+            }
             foreach (var welded in chain.A)
             {
                 var vertex = seam.A.Topology.Representative[welded];
