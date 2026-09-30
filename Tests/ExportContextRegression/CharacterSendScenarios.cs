@@ -3,13 +3,15 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services.CharacterSend;
+using InstantEdit.Services.Painter;
 using InstantEdit.Ui;
 using static InstantEdit.TestSupport.Assertions;
 
 /// <summary>
 /// Send my character to Blender without the game: which of a character's models a send takes and in
-/// what order, the names and import entries it sends with them, which bone holds a weapon and where
-/// the weapon sits on it, and the send's summary.
+/// what order, which of them the game draws now and with what parts and shapes, the names and import
+/// entries it sends with them, which bone holds a weapon and where the weapon sits on it, and the
+/// send's summary.
 /// </summary>
 internal static class CharacterSendScenarios
 {
@@ -25,6 +27,8 @@ internal static class CharacterSendScenarios
     public static void Run()
     {
         CheckModels();
+        CheckDrawState();
+        CheckPartMasks();
         CheckNames();
         CheckEntry();
         CheckWeaponPlacement();
@@ -82,6 +86,92 @@ internal static class CharacterSendScenarios
                 CharacterSendPlan.RoleOf(@"chara\weapon\w0101\obj\body\b0001\model\w0101b0001.mdl") == CharacterModelRole.Weapon,
             "only character models have a role");
         Require(armed[3].FileName == "c0201e6001_top.mdl", "a model's file name comes from its game path");
+
+        var connector = Node(ConnectorPath, @"C:\mods\Body\connectors.mdl", section: ResourceSection.Other, order: int.MaxValue);
+        var alias = Node(ConnectorPath.Replace("b0002", "b0006"), @"C:\MODS\Body\connectors.mdl", section: ResourceSection.Other,
+            order: int.MaxValue);
+        Require(CharacterSendPlan.Models([connector, alias], includeWeapons: false) is [{ Node.GamePath: ConnectorPath }],
+            "a file the character loads under two game paths goes once, since it draws the same under each");
+    }
+
+    private const string SmallclothesTopPath = "chara/equipment/e0000/model/c0201e0000_top.mdl";
+    private const string SmallclothesLegsPath = "chara/equipment/e0000/model/c0201e0000_dwn.mdl";
+    private const string LowPolyPath = "chara/human/c0801/obj/body/b0003/model/c0801b0003_top.mdl";
+    private const string ConnectorPath = "chara/human/c0201/obj/body/b0002/model/c0201b0002_top.mdl";
+
+    private static void CheckDrawState()
+    {
+        var face = Game(FacePath, ResourceSection.CharacterFeatures, 0);
+        var top = Node(TopPath, @"C:\mods\Robe\top.mdl", order: 1);
+        var underTop = Node(SmallclothesTopPath, @"C:\mods\Body\top.mdl", order: 1);
+        var legs = Node(SmallclothesLegsPath, @"C:\mods\Body\dwn.mdl", order: 3);
+        var stale = Node(FeetPath, @"C:\mods\Old\sho.mdl", order: 4);
+        var lowPoly = Game(LowPolyPath, ResourceSection.Other, int.MaxValue);
+        var connector = Node(ConnectorPath, @"C:\mods\Body\connectors.mdl", section: ResourceSection.Other, order: int.MaxValue);
+        var weapon = Game(WeaponPath, ResourceSection.Gear, 10);
+        ResourceNode[] roots = [face, top, underTop, legs, stale, lowPoly, connector, weapon];
+
+        static string Drawn(string file) => PainterVisibility.NormalizePath(file);
+        var live = new PainterLiveCharacter(
+        [
+            new PainterLiveModel(Drawn(FacePath), 0xFFFFFFEF, 0, 11),
+            new PainterLiveModel(Drawn(@"C:\mods\Robe\top.mdl"), 0xFFFFFFD7, 0b1, 1),
+            // Smallclothes loaded next to the gear of their slot.
+            new PainterLiveModel(Drawn(@"C:\mods\Body\top.mdl"), 0xFFFFFFFF, 0, 17),
+            new PainterLiveModel(Drawn(@"C:\mods\Body\dwn.mdl"), 0xFFFFFFFF, 0b10, 3),
+            new PainterLiveModel(Drawn(LowPolyPath), 0xFFFFFFFF, 0, 15),
+            // One connector file in two slots, each with other bands on.
+            new PainterLiveModel(Drawn(@"C:\mods\Body\connectors.mdl"), 0xFFFFFFF2, 0b1, 13),
+            new PainterLiveModel(Drawn(@"C:\mods\Body\connectors.mdl"), 0xFFFFFFF8, 0b100, 14),
+            // Drawn since the list was made.
+            new PainterLiveModel(Drawn(@"C:\mods\New\glv.mdl"), 0xFFFFFFFF, 0, 2),
+            new PainterLiveModel(Drawn(WeaponPath), 0xFFFFFFFE, 0),
+            // Held by another object attached to the character, such as a parasol.
+            new PainterLiveModel(Drawn(@"C:\mods\Parasol\parasol.mdl"), 0xFFFFFFFF, 0),
+        ], null);
+
+        var plan = CharacterDrawState.Plan(CharacterSendPlan.Models(roots, includeWeapons: false), roots, live);
+        Require(plan.Known && plan.Models.Select(model => model.Model.Node.GamePath).SequenceEqual([FacePath, TopPath, SmallclothesLegsPath, ConnectorPath]),
+            "a send takes the models the character draws: its face, its gear, smallclothes where no gear is, and seam connectors");
+        var reasons = plan.LeftOut.ToDictionary(model => model.FileName, model => model.Reason);
+        Require(reasons.Count == 3 && reasons["c0801b0003_top.mdl"] == CharacterDrawState.LowPolyReason &&
+                reasons["c0201e0000_top.mdl"] == CharacterDrawState.SmallclothesReason &&
+                reasons["c0201e6001_sho.mdl"] == CharacterDrawState.NotDrawnReason,
+            "the low-poly body, smallclothes loaded next to gear of their slot, and models no longer drawn are left out");
+        var drawnConnector = plan.Models[3];
+        Require(drawnConnector.AttributeMasks.SequenceEqual([0xFFFFFFF2u, 0xFFFFFFF8u]) && drawnConnector.Shapes == 0b101u &&
+                plan.Models[1] is { AttributeMasks: [0xFFFFFFD7u], Shapes: 0b1u },
+            "each model carries the attributes of every copy the character draws, and every shape key the game has on");
+        var armed = CharacterDrawState.Plan(CharacterSendPlan.Models(roots, includeWeapons: true), roots, live);
+        Require(plan.Missing.SequenceEqual(["glv.mdl"]) && armed.Missing.SequenceEqual(["glv.mdl"]),
+            "a model the character draws in its own slots that the On Screen list lacks is named; attached objects aren't listed, so they don't count");
+        Require(armed.Models[^1] is { Model.Role: CharacterModelRole.Weapon, AttributeMasks: [0xFFFFFFFEu] },
+            "a weapon takes the draw state of the weapon's own model");
+        var weaponAsBody = new PainterLiveCharacter([new PainterLiveModel(Drawn(FacePath), 0, 0)], null);
+        Require(CharacterDrawState.Plan([new CharacterSendModel(face, CharacterModelRole.Body)], [face], weaponAsBody).Models.Count == 0,
+            "a body model matches only the character's own slots, not a weapon's");
+
+        var unknown = CharacterDrawState.Plan(CharacterSendPlan.Models(roots, includeWeapons: false), roots, null);
+        Require(!unknown.Known && unknown.Models.Count == 7 && unknown.Models.All(model => model.AttributeMasks.Count == 0 && model.Shapes is null) &&
+                unknown.LeftOut.Count == 0 && unknown.Missing.Count == 0,
+            "without the draw state every model of the list goes, with every part");
+
+        uint[] parts = [0, 0b01, 0b10, 0b11];
+        Require(CharacterDrawState.Count(parts, [0b01]) == (2, 2) && CharacterDrawState.Count(parts, [0b01, 0b10]) == (3, 1) &&
+                CharacterDrawState.Count(parts, []) == (4, 0),
+            "a part is drawn when one drawn copy enables all of its attributes; without masks every part is");
+        Require(CharacterDrawState.IsLowPolyBody(@"chara\human\c1401\obj\body\b0003\model\c1401b0003_top.mdl") &&
+                !CharacterDrawState.IsLowPolyBody(ConnectorPath),
+            "the low-poly body is the human body model b0003 of any race");
+    }
+
+    private static void CheckPartMasks()
+    {
+        var model = PainterScenarios.SyntheticModel();
+        Require(CharacterDrawState.PartMasks(model) is [0b01u, 0b10u],
+            "a model's parts are its LOD-0 submeshes with their attribute masks, as the add-on imports them");
+        Require(CharacterDrawState.PartMasks(new byte[16]) is null && CharacterDrawState.PartMasks(model[..200]) is null,
+            "a file that isn't a whole model has no known parts");
     }
 
     private static void CheckNames()
@@ -111,6 +201,13 @@ internal static class CharacterSendScenarios
             CharacterImportEntry.BodyRole, "Skeleton")))!.AsObject();
         Require(body["role"]?.GetValue<string>() == "body" && body.ContainsKey("attach") && body["attach"] is null,
             "a body model hangs from no bone");
+        Require(body["enabledAttributes"] is null && body["enabledShapes"] is null,
+            "a model whose draw state isn't known sends none, so every part is drawn");
+        var drawn = JsonNode.Parse(JsonSerializer.Serialize(new CharacterImportEntry(new string('a', 32), "Name@73", "Name",
+            CharacterImportEntry.BodyRole, "Skeleton", EnabledAttributes: [0xFFFFFFF2u, 7u], EnabledShapes: 5u)))!.AsObject();
+        Require(drawn["enabledAttributes"]?.AsArray().Select(mask => mask!.GetValue<uint>()).SequenceEqual([0xFFFFFFF2u, 7u]) == true &&
+                drawn["enabledShapes"]?.GetValue<uint>() == 5u,
+            "a model's draw state goes as the masks the add-on reads");
     }
 
     private static Matrix4x4 Full(BoneTransform transform) => CharacterWeaponPlacer.Matrix(transform, rigid: false);
@@ -198,5 +295,20 @@ internal static class CharacterSendScenarios
             "the summary lists a few model warnings and counts the rest, without an ellipsis");
         var posed = CharacterSendPlan.Summary(Outcome([Sent("a.mdl")], CharacterPose.Animation, poseResult: "Keyed it."));
         Require(!posed.Warned && posed.Text.Contains("Keyed it.", StringComparison.Ordinal), "the summary says what Blender did with the pose");
+
+        var live = CharacterSendPlan.Summary(Outcome([Sent("a.mdl")]) with
+        {
+            HiddenParts = 3,
+            LeftOut = [new("c0801b0003_top.mdl", CharacterDrawState.LowPolyReason), new("c0201e0000_top.mdl", CharacterDrawState.SmallclothesReason)],
+        });
+        Require(!live.Warned && live.Text.Contains("3 parts your character doesn't show now came over hidden", StringComparison.Ordinal) &&
+                live.Text.Contains("Left out 2 models", StringComparison.Ordinal) &&
+                live.Text.Contains($"c0801b0003_top.mdl ({CharacterDrawState.LowPolyReason})", StringComparison.Ordinal),
+            "the summary counts the hidden parts and names what it left out, without a warning");
+        Require(CharacterSendPlan.Summary(Outcome([Sent("a.mdl")]) with { DrawStateKnown = false }).Warned,
+            "a send that couldn't read what the character draws warns");
+        var missing = CharacterSendPlan.Summary(Outcome([Sent("a.mdl")]) with { Missing = ["glv.mdl"] });
+        Require(missing.Warned && missing.Text.Contains("glv.mdl", StringComparison.Ordinal) && missing.Text.Contains("Refresh the list", StringComparison.Ordinal),
+            "a model the character draws that the list lacks makes the summary a warning with what to do");
     }
 }

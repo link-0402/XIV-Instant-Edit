@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using InstantEdit.Models;
+using InstantEdit.Services.Painter;
 using InstantEdit.Services.Skeletons;
 
 namespace InstantEdit.Services.CharacterSend;
@@ -27,7 +28,10 @@ internal enum CharacterModelRole
 /// <summary>
 /// The <c>character</c> field of an import request (see Blender-Addon/instant_edit/character.py):
 /// the send the model belongs to, the character it shows (a key to recognize its earlier sends by,
-/// and a name), the name the send's armature gets, and whether the model is a weapon.
+/// and a name), the name the send's armature gets, whether the model is a weapon, and what the
+/// game draws of it: the enabled attributes of each copy the character draws (a part is drawn when
+/// one of them enables all of its attributes) and the shape keys the game has on, both by the
+/// model's own attribute and shape order. Null draw state means unknown: every part is drawn.
 /// </summary>
 public sealed record CharacterImportEntry(
     [property: JsonPropertyName("sendId")] string SendId,
@@ -35,7 +39,9 @@ public sealed record CharacterImportEntry(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("role")] string Role,
     [property: JsonPropertyName("armatureName")] string ArmatureName,
-    [property: JsonPropertyName("attach")] CharacterAttach? Attach = null)
+    [property: JsonPropertyName("attach")] CharacterAttach? Attach = null,
+    [property: JsonPropertyName("enabledAttributes")] IReadOnlyList<uint>? EnabledAttributes = null,
+    [property: JsonPropertyName("enabledShapes")] uint? EnabledShapes = null)
 {
     public const string BodyRole = "body";
     public const string WeaponRole = "weapon";
@@ -68,7 +74,20 @@ internal sealed record CharacterSentModel(string FileName, IReadOnlyList<string>
 /// <param name="RecordingWarning">What a current-pose recording carries that it shouldn't, such as Customize+.</param>
 internal sealed record CharacterSendOutcome(string Name, CharacterPose Pose, IReadOnlyList<CharacterSentModel> Sent,
     IReadOnlyList<string> Failed, string? PoseResult, string? PoseError, string? RecordingWarning,
-    IReadOnlyList<string> WeaponNotes, IReadOnlyList<string> SkeletonWarnings);
+    IReadOnlyList<string> WeaponNotes, IReadOnlyList<string> SkeletonWarnings)
+{
+    /// <summary> Models of the list the character doesn't show now, left out of the send. </summary>
+    public IReadOnlyList<CharacterLeftOutModel> LeftOut { get; init; } = [];
+
+    /// <summary> Parts of the sent models the game hides now; they go to Blender hidden. </summary>
+    public int HiddenParts { get; init; }
+
+    /// <summary> Files the character draws that the On Screen list lacks. </summary>
+    public IReadOnlyList<string> Missing { get; init; } = [];
+
+    /// <summary> Whether the character's draw state was read; without it every model and part was sent. </summary>
+    public bool DrawStateKnown { get; init; } = true;
+}
 
 /// <summary> A send's status line, and whether anything in it deserves a warning. </summary>
 internal sealed record CharacterSendSummary(string Text, bool Warned);
@@ -85,20 +104,22 @@ internal static class CharacterSendPlan
     public const int MaximumArmatureName = 63;
 
     /// <summary>
-    /// The models to send from a character's resource tree: every model in the character's own
-    /// folders (<c>chara/human</c>, <c>chara/equipment</c>, <c>chara/accessory</c>) and, when asked
-    /// for, its weapons, each file once, in the order On Screen lists them, with weapons last. Only
-    /// models On Screen can edit are taken: files of a loaded mod, and game data.
+    /// The models a send can take from a character's resource tree: every model in the character's
+    /// own folders (<c>chara/human</c>, <c>chara/equipment</c>, <c>chara/accessory</c>) and, when
+    /// asked for, its weapons, each file once (a file loaded under several game paths draws the same
+    /// under each), in the order On Screen lists them, with weapons last. Only models On Screen can
+    /// edit are taken: files of a loaded mod, and game data. <see cref="CharacterDrawState"/> keeps
+    /// those the game draws.
     /// </summary>
     public static IReadOnlyList<CharacterSendModel> Models(IEnumerable<ResourceNode> roots, bool includeWeapons)
     {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         var models = new List<(CharacterSendModel Model, int Order)>();
         foreach (var node in Flatten(roots))
         {
             if (!IsSendable(node) || RoleOf(node.GamePath) is not { } role || role == CharacterModelRole.Weapon && !includeWeapons)
                 continue;
-            if (seen.Add($"{node.GamePath}\n{node.ActualPath}"))
+            if (seen.Add(PainterVisibility.NormalizePath(node.ActualPath)))
                 models.Add((new CharacterSendModel(node, role), models.Count));
         }
         return models
@@ -162,9 +183,9 @@ internal static class CharacterSendPlan
     }
 
     /// <summary>
-    /// The status line of a send: how many models went over and how they are posed, then what
-    /// went wrong or needs a look. Racially scaled models are mentioned without warning, as for
-    /// single sends.
+    /// The status line of a send: how many models went over and how they are posed, what of the
+    /// character it left out or sent hidden because the game doesn't show it, then what went wrong
+    /// or needs a look. Racially scaled models are mentioned without warning, as for single sends.
     /// </summary>
     public static CharacterSendSummary Summary(CharacterSendOutcome outcome)
     {
@@ -192,6 +213,18 @@ internal static class CharacterSendPlan
             parts.Add(scaled == 1
                 ? "1 model was reshaped for the character's race for preview, so it can't be exported."
                 : $"{scaled} models were reshaped for the character's race for preview, so they can't be exported.");
+        if (outcome.HiddenParts > 0)
+            parts.Add(outcome.HiddenParts == 1
+                ? "1 part your character doesn't show now came over hidden; Quick Export still writes it."
+                : $"{outcome.HiddenParts} parts your character doesn't show now came over hidden; Quick Export still writes them.");
+        if (outcome.LeftOut.Count > 0)
+            parts.Add($"Left out {ModelCount(outcome.LeftOut.Count)} your character doesn't show: " +
+                      $"{Listed(outcome.LeftOut.Select(model => $"{model.FileName} ({model.Reason})").ToList())}.");
+        if (!outcome.DrawStateKnown)
+            Warn("What your character draws couldn't be read, so every model and part in the On Screen list went over.");
+        if (outcome.Missing.Count > 0)
+            Warn($"Your character draws {ModelCount(outcome.Missing.Count)} the On Screen list doesn't have yet ({Listed(outcome.Missing)}). " +
+                 "Refresh the list and send again.");
         if (outcome.Failed.Count > 0)
             Warn($"{outcome.Failed.Count} could not be sent: {Listed(outcome.Failed)}.");
         if (outcome.SkeletonWarnings.Count > 0)
@@ -206,6 +239,8 @@ internal static class CharacterSendPlan
 
     private static string Listed(IReadOnlyList<string> items, int shown = 3)
         => string.Join("; ", items.Take(shown)) + (items.Count > shown ? $"; and {items.Count - shown} more" : "");
+
+    private static string ModelCount(int count) => count == 1 ? "1 model" : $"{count} models";
 
     private static int SectionOrder(ResourceSection section) => section switch
     {

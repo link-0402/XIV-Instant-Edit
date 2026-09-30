@@ -1183,6 +1183,8 @@ class InstantImport(Operator):
         preview_package = None
         preview_validation_warning = ""
         skeleton_note = ""
+        # What a character send hid of the model because the game doesn't draw it; not a warning.
+        drawn_note = ""
         character = None
         if not file_path.is_file():
             # Return before the try/finally below, so release the staged job here.
@@ -1250,7 +1252,7 @@ class InstantImport(Operator):
                 material_context_key=self.context_id or collection.name,
             )
             if character is not None:
-                skeleton_note = self._bind_character(
+                skeleton_note, drawn_note = self._bind_character(
                     context,
                     file_path,
                     imported_meshes,
@@ -1306,8 +1308,9 @@ class InstantImport(Operator):
                 f"Imported {file_path.name} with preview warnings: {warning_text}"
                 if warning_text else f"Imported {file_path.name}"
             )
-            if skeleton_note:
-                props.last_status += f"; {skeleton_note}"
+            for note in (skeleton_note, drawn_note):
+                if note:
+                    props.last_status += f"; {note}"
             context_selection_changed = _preselect_sole_export_context(
                 props, context, self.context_id)
         except Exception as e:
@@ -1345,7 +1348,7 @@ class InstantImport(Operator):
         elif refresh_error is not None or skeleton_note:
             self.report({"WARNING"}, props.last_status)
         else:
-            self.report({"INFO"}, "Model imported!")
+            self.report({"INFO"}, props.last_status if drawn_note else "Model imported!")
         return {"FINISHED"}
 
     def _bind_existing_armature(
@@ -1432,25 +1435,28 @@ class InstantImport(Operator):
         metadata,
         created_objects,
         character,
-    ) -> str:
+    ) -> tuple[str, str]:
         """Binds a model of a whole-character send (see character.py): body models to the send's
-        shared armature, a weapon to an armature of its own hung from the bone that holds it. A
-        new send of the character first replaces its previous one. Returns a note for the status
-        line, or an empty string."""
+        shared armature, a weapon to an armature of its own hung from the bone that holds it, then
+        shows the model as the game draws it. A new send of the character first replaces its
+        previous one. Returns a warning for the status line and what the game hides of the model,
+        each an empty string when there is nothing to say."""
         character_send.replace_previous(context.scene, character)
+        model = XIVModel.from_file(str(file_path))
         if character.role == character_send.WEAPON:
             note = self._create_armature(context, file_path, mesh_objects, collection, metadata, created_objects)
             armature = next((obj for obj in reversed(created_objects) if obj.type == "ARMATURE"), None)
             hang_note = (character_send.hang_weapon(context, character, armature, mesh_objects)
                          if armature is not None else "")
             character_send.adopt_collection(context.scene, character, collection)
-            return "; ".join(part for part in (note, hang_note) if part)
-        model = XIVModel.from_file(str(file_path))
+            drawn_note = character_send.apply_draw_state(model, mesh_objects, character)
+            return "; ".join(part for part in (note, hang_note) if part), drawn_note
         _check_unbound_meshes(mesh_objects, collection, created_objects)
         game_skeleton, skeleton_error = self._load_game_skeleton()
         note = character_send.bind_body(
             context, character, collection, mesh_objects, model.bones, game_skeleton, created_objects)
-        return skeleton_error or note
+        drawn_note = character_send.apply_draw_state(model, mesh_objects, character)
+        return skeleton_error or note, drawn_note
 
     def _load_game_skeleton(self):
         """The game skeleton the plugin sent, or None, and why it could not be read."""
@@ -2555,8 +2561,10 @@ def export_destination_context(
 
 
 def export_objects_for_scope(ref, scope: str) -> list:
-    """Return the mesh objects selected by a shared Quick/Simple export scope."""
-    objects = visible_meshobj()
+    """Return the mesh objects selected by a shared Quick/Simple export scope: its visible meshes,
+    with the parts of their models a character send imported hidden because the game didn't draw
+    them (see character.with_game_hidden_parts), so a model always exports whole."""
+    objects = character_send.with_game_hidden_parts(bpy.context.scene, visible_meshobj())
     if scope == "VISIBLE_NO_MANNEQUIN":
         excluded = getattr(get_instant_edit_props(), "export_excluded_mesh", None)
         if excluded is not None:

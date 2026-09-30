@@ -1,8 +1,9 @@
 """Whole-character sends from the plugin: the character entry of an import, the send's shared
 armature (built by its first import from the character's skeleton, extended by later models), a
 weapon's own armature hung from the bone that holds it and exported at the origin, a new send of
-the same character replacing the previous one, poses keyed onto the send's armature, and the import
-queue running imports before animations. Run through run_blender_suites.py."""
+the same character replacing the previous one, poses keyed onto the send's armature, the import
+queue running imports before animations, and models shown as the game draws them (hidden parts
+hidden but exported, the game's shape keys on but not exported). Run through run_blender_suites.py."""
 
 import importlib
 import json
@@ -97,10 +98,15 @@ def max_difference(a, b):
     return max(abs(a[i][j] - b[i][j]) for i in range(4) for j in range(4))
 
 
-def entry(send_id=SEND_A, role="body", key=KEY, name="Firstname Lastname", armature="Skeleton", attach=None):
+def entry(send_id=SEND_A, role="body", key=KEY, name="Firstname Lastname", armature="Skeleton", attach=None,
+          attributes=None, shapes=None):
     value = {"sendId": send_id, "key": key, "name": name, "role": role, "armatureName": armature}
     if attach is not None:
         value["attach"] = attach
+    if attributes is not None:
+        value["enabledAttributes"] = attributes
+    if shapes is not None:
+        value["enabledShapes"] = shapes
     return value
 
 
@@ -141,7 +147,10 @@ class Importer:
         self.count = 0
 
     def run(self, context_id, character=None, bones=(), vertices=(), groups=None, skeleton=None, name=None,
-            fail_armature=False):
+            fail_armature=False, parts=None, attributes=(), shapes=()):
+        """``parts``: (part name, its attributes, its shape keys as {name: vertex offset}) for a model
+        of several parts; one part without attributes otherwise. ``attributes`` and ``shapes`` are the
+        model's own, in the order the game's masks follow."""
         ops = module("instant_edit.ops")
         skeleton_module = module("instant_edit.skeleton")
         character_module = module("instant_edit.character")
@@ -156,15 +165,29 @@ class Importer:
         label = name or f"Model {self.count}"
 
         def fake_import(file_path, import_name, collection=None, context_metadata=None, **kwargs):
-            obj = mesh_object(f"0.0 {import_name}", vertices, groups or {}, collection)
-            kwargs["created_objects"].append(obj)
-            return (obj,)
+            created = []
+            for part_name, part_attributes, part_shapes in parts or [(f"0.0 {import_name}", (), {})]:
+                obj = mesh_object(part_name, vertices, groups or {}, collection)
+                for attribute in part_attributes:
+                    obj[attribute] = True
+                if part_shapes:
+                    obj.shape_key_add(name="Basis")
+                    for shape_name, offset in part_shapes.items():
+                        key = obj.shape_key_add(name=shape_name)
+                        for point in key.data:
+                            point.co = point.co + Vector(offset)
+                        key.value = 0.0
+                kwargs["created_objects"].append(obj)
+                created.append(obj)
+            return tuple(created)
 
         def broken_armature(*_args, **_kwargs):
             raise RuntimeError("armature failure")
 
+        model = SimpleNamespace(bones=list(bones), attributes=list(attributes),
+                                shapes=[SimpleNamespace(name=shape) for shape in shapes])
         with patch.object(ops.ModelImport, "from_file", staticmethod(fake_import)), \
-                patch.object(ops.XIVModel, "from_file", staticmethod(lambda _path: SimpleNamespace(bones=list(bones)))), \
+                patch.object(ops.XIVModel, "from_file", staticmethod(lambda _path: model)), \
                 patch.object(ops, "refresh_variant_targets_after_operation", lambda _context: None), \
                 patch.object(skeleton_module, "create_armature",
                              broken_armature if fail_armature else skeleton_module.create_armature):
@@ -189,6 +212,9 @@ class Importer:
                 resource_manifest_version=0, resource_manifest_status="capture_failed",
                 skeleton_path=skeleton_path,
                 character=character_module.to_property(character_module.parse_request(character)) if character else "")
+        if parts:
+            names = {part_name for part_name, _attributes, _shapes in parts}
+            return result, sorted((obj for obj in bpy.data.objects if obj.name in names), key=lambda obj: obj.name)
         mesh = next((obj for obj in bpy.data.objects if obj.name.startswith(f"0.0 {label}")), None)
         return result, mesh
 
@@ -236,6 +262,21 @@ def check_parsing():
             "a weapon scaled to nothing is refused")
     rejects(entry(role="weapon", attach={"bone": "n_buki_r", "offset": [True] + WEAPON_OFFSET[1:]}),
             "a weapon place holding booleans is refused")
+
+    drawn = character.from_property(character.to_property(character.parse_request(
+        entry(attributes=[0xFFFFFFF2, 7], shapes=5))))
+    require(drawn.enabled_attributes == (0xFFFFFFF2, 7) and drawn.enabled_shapes == 5,
+            "a model's draw state, the masks of each drawn copy and its shape keys, survives the operator property")
+    unknown = character.from_property(character.to_property(character.parse_request(entry(attributes=None, shapes=None))))
+    require(unknown.enabled_attributes == () and unknown.enabled_shapes is None and restored.enabled_attributes == (),
+            "an entry without a draw state draws every part and turns no shape key on")
+    rejects(entry(attributes=5), "enabled attributes that are not a list are refused")
+    rejects(entry(attributes=[-1]), "a negative attribute mask is refused")
+    rejects(entry(attributes=[1 << 32]), "an attribute mask wider than the game's 32 bits is refused")
+    rejects(entry(attributes=[True]), "an attribute mask that is a boolean is refused")
+    rejects(entry(attributes=[1] * 17), "more attribute masks than a model has copies is refused")
+    rejects(entry(shapes="5"), "enabled shapes that are not a number are refused")
+    rejects(entry(shapes=1 << 32), "a shape mask wider than the game's 32 bits is refused")
 
 
 def check_queue(context):
@@ -496,6 +537,105 @@ def check_failure_cleanup(context, importer):
             "a failed first import of a send leaves no empty character collection behind")
 
 
+SEND_F = "f" * 32
+# A model's attributes and shapes, in the order the game's masks follow.
+DRAW_ATTRIBUTES = ["atr_nek", "atr_tv_a", "atr_tv_b", "atr_gv_a", "atr_gv_e"]
+DRAW_SHAPES = ["shp_brw_a", "shpx_wr_yab"]
+DRAW_PARTS = [
+    ("0.0 Body", (), {"shp_brw_a": (0.0, 0.0, 0.01), "shpx_wr_yab": (0.02, 0.0, 0.0)}),
+    ("0.1 Neck", ("atr_nek",), {}),
+    ("1.0 Robe A", ("atr_tv_a",), {}),
+    ("2.0 Robe B", ("atr_tv_b",), {}),
+    ("3.0 Long Nails", ("atr_gv_a", "atr_gv_e"), {}),
+    ("4.0 Fingertips", ("atr_gv_e",), {}),
+]
+
+
+def _exportable(obj):
+    """Give a test mesh what an MDL export needs besides triangles and weights."""
+    mesh = obj.data
+    uv = mesh.uv_layers.new(name="uv0")
+    uv.uv.foreach_set("vector", [0.5] * (2 * len(mesh.loops)))
+    colour = mesh.color_attributes.new(name="vc0", type="FLOAT_COLOR", domain="CORNER")
+    colour.data.foreach_set("color", [1.0] * (4 * len(mesh.loops)))
+    mesh.materials.append(bpy.data.materials.get("DrawnMaterial") or bpy.data.materials.new("DrawnMaterial"))
+
+
+def check_draw_state(addon, context, importer):
+    """A model sent as the game draws it: the parts it hides are imported hidden and marked, the
+    shape keys it has on are on, and exports still write the whole model with those keys off."""
+    character = module("instant_edit.character")
+    ops = module("instant_edit.ops")
+    io_model = importlib.import_module(f"{addon.__name__}.io.model")
+    model_module = importlib.import_module(f"{addon.__name__}.xivpy.model")
+    export_module = importlib.import_module(f"{addon.__name__}.mesh.export")
+    importer_module = importlib.import_module(f"{addon.__name__}.io.model.importer")
+    kao = rigid_model(CHARACTER)["j_kao"].translation
+    vertices = [kao + Vector((0.02, 0, 0)), kao + Vector((0, 0.03, 0.01)), kao + Vector((0, 0, 0.05))]
+    # The send's first model, without a draw state: every part is drawn. The model under test comes
+    # second, so selecting the sole Context doesn't replace its status line.
+    _result, first = importer.run(
+        "context-drawn-first", entry(send_id=SEND_F, key="Drawn@73", name="Drawn"), bones=["j_kao"],
+        skeleton=payload(CHARACTER), name="First", vertices=vertices, groups={"j_kao": [(0, 1.0), (1, 1.0), (2, 1.0)]})
+    require(first is not None and not character.is_game_hidden(first) and not first.hide_get(),
+            "a model sent without a draw state shows every part")
+    # Two copies of the model are drawn, one with nail option a and one with e; none has both.
+    result, objects = importer.run(
+        "context-drawn", entry(send_id=SEND_F, key="Drawn@73", name="Drawn", attributes=[0b01101, 0b10101], shapes=0b10),
+        bones=["j_kao"], skeleton=payload(CHARACTER), vertices=vertices, groups={"j_kao": [(0, 1.0), (1, 1.0), (2, 1.0)]},
+        parts=DRAW_PARTS, attributes=DRAW_ATTRIBUTES, shapes=DRAW_SHAPES)
+    by_name = {obj.name: obj for obj in objects}
+    hidden = {name for name, obj in by_name.items() if character.is_game_hidden(obj)}
+    require(result == {"FINISHED"} and len(by_name) == 6 and hidden == {"1.0 Robe A", "3.0 Long Nails"}
+            and all(obj.hide_get() == (name in hidden) for name, obj in by_name.items()),
+            "parts the game doesn't draw are imported hidden and marked; a part is drawn when one drawn copy enables all of its attributes")
+    require("2 parts the character doesn't show now are hidden" in context.scene.xiv_ie_instant_edit_props.last_status,
+            "the status line counts the hidden parts")
+    body = by_name["0.0 Body"]
+    keys = body.data.shape_keys.key_blocks
+    require(keys["shpx_wr_yab"].value == 1.0 and keys["shp_brw_a"].value == 0.0
+            and body.get(character.GAME_SHAPES_PROPERTY) == "shpx_wr_yab",
+            "the shape keys the game has on are turned on and remembered")
+    require(importer_module.occupied_mesh_group_ids(context) == {0, 1, 2, 3, 4}
+            and importer_module.visible_mesh_group_ids() == {0, 2, 4},
+            "later imports keep clear of the groups of hidden parts too, which export with their model")
+
+    ref = module("instant_edit.context").validate_context("context-drawn", context.scene)
+    require({obj.name for obj in ops.export_objects_for_scope(ref, "VISIBLE")} == set(by_name) | {first.name}
+            and {obj.name for obj in ops.export_objects_for_scope(ref, "CURRENT_COLLECTION")} == set(by_name),
+            "every export scope takes a model's hidden parts with its visible ones")
+    shown = [obj for obj in objects if obj.name not in hidden]
+    for obj in shown:
+        obj.hide_set(True)
+    require({obj.name for obj in ops.export_objects_for_scope(ref, "VISIBLE")} == {first.name},
+            "a model with every visible part hidden by hand exports nothing, not its hidden parts either")
+    for obj in shown:
+        obj.hide_set(False)
+
+    for obj in objects:
+        _exportable(obj)
+    settings = context.scene.xiv_ie_settings
+    settings.model_format = "MDL"
+    original = {tuple(round(c, 4) for c in co) for co in vertices}
+    for keep in (False, True):
+        settings.keep_shapekeys = keep
+        with tempfile.TemporaryDirectory(prefix="xiv-ie-character-") as folder:
+            target = Path(folder) / "drawn"
+            export_module.export_result(target, "MDL", export_objects=ops.export_objects_for_scope(ref, "CURRENT_COLLECTION"))
+            model = model_module.XIVModel.from_file(str(target) + ".mdl")
+            imported = io_model.ModelImport.from_file(str(target) + ".mdl", "Drawn Roundtrip", select_objects=False)
+            positions = {tuple(round(c, 4) for c in v.co) for obj in imported for v in obj.data.vertices}
+            for obj in imported:
+                bpy.data.objects.remove(obj, do_unlink=True)
+        require(len(model.submeshes) == 6 and set(DRAW_ATTRIBUTES) <= set(model.attributes),
+                f"keep shape keys {keep}: the export writes the whole model, its hidden parts and their attributes too")
+        require(positions == original and ({shape.name for shape in model.shapes} == set(DRAW_SHAPES)) == keep,
+                f"keep shape keys {keep}: the model's basis is written without the shape keys the game turns on")
+        require(all(obj.hide_get() == (obj.name in hidden) for obj in objects) and keys["shpx_wr_yab"].value == 1.0,
+                f"keep shape keys {keep}: afterwards the hidden parts are hidden again and the game's shape keys on again")
+    settings.keep_shapekeys = False
+
+
 def check_add_bones_outside_view_layer(context):
     skeleton = module("instant_edit.skeleton")
     game = skeleton.parse_skeleton(payload(CHARACTER))
@@ -522,6 +662,8 @@ def run():
             check_pose(context, armature)
             check_replace(context, importer)
             check_failure_cleanup(context, importer)
+        with temporary_scene_data(), tempfile.TemporaryDirectory(prefix="xiv-ie-character-jobs-") as folder:
+            check_draw_state(addon, context, Importer(folder))
         with temporary_scene_data():
             check_add_bones_outside_view_layer(context)
     print("[RESULT] character regression PASSED")

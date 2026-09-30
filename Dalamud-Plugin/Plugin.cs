@@ -197,6 +197,8 @@ public sealed class Plugin : IDalamudPlugin
         var skeletons = new ModelSkeletonResolver(_penumbra, data, framework, objects, log);
         _window.AttachSkeletons(skeletons);
         _exportServer.Skeletons = skeletons;
+        // What your character draws right now, for Send my character.
+        _window.AttachCharacterDrawState(new Services.Painter.PainterLiveReader(framework, objects));
         // Vanilla models for the Game Files tab, and exports of their files to a folder.
         _gameFiles = new GameFileBrowserService(data, log);
         _gameExport = new GameFileExportService(_gameFiles, skeletons, log, BlenderClient.CurrentPluginVersion);
