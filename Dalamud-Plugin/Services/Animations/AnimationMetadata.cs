@@ -10,6 +10,18 @@ internal static partial class AnimationMetadata
 {
     public static JsonArray Decode(string encoded)
     {
+        var bytes = Decompress(encoded);
+        return bytes[0] switch
+        {
+            0 => JsonNode.Parse(bytes.AsSpan(1)) as JsonArray
+                ?? throw new InvalidDataException("Unsupported Penumbra metadata shape."),
+            1 => DecodeV1(bytes.AsSpan(1)),
+            _ => throw new InvalidDataException($"Unsupported Penumbra metadata serialization version {bytes[0]}.")
+        };
+    }
+
+    private static byte[] Decompress(string encoded)
+    {
         if (encoded.Length > 8 * 1024 * 1024) throw new InvalidDataException("The collection metadata snapshot is too large.");
         using var compressed = new MemoryStream(Convert.FromBase64String(encoded));
         using var gzip = new GZipStream(compressed, CompressionMode.Decompress);
@@ -23,13 +35,58 @@ internal static partial class AnimationMetadata
         }
         var bytes = output.ToArray();
         if (bytes.Length < 2) throw new InvalidDataException("Unsupported Penumbra metadata serialization version.");
-        return bytes[0] switch
+        return bytes;
+    }
+
+    /// <summary> An EQDP manipulation: the set, Penumbra's EquipSlot value, the gender-race code (such as 201) and the entry. </summary>
+    internal readonly record struct EqdpManipulation(int SetId, byte Slot, int GenderRace, ushort Entry);
+
+    /// <summary>
+    /// The EQDP manipulations in Penumbra's metadata, which decide which race's model a character
+    /// loads for a set. <see cref="Decode"/> leaves them out: animation packaging doesn't need them.
+    /// </summary>
+    internal static IReadOnlyList<EqdpManipulation> DecodeEqdp(string encoded)
+    {
+        var bytes = Decompress(encoded);
+        var result = new List<EqdpManipulation>();
+        switch (bytes[0])
         {
-            0 => JsonNode.Parse(bytes.AsSpan(1)) as JsonArray
-                ?? throw new InvalidDataException("Unsupported Penumbra metadata shape."),
-            1 => DecodeV1(bytes.AsSpan(1)),
-            _ => throw new InvalidDataException($"Unsupported Penumbra metadata serialization version {bytes[0]}.")
-        };
+            case 0:
+                var items = JsonNode.Parse(bytes.AsSpan(1)) as JsonArray ?? throw new InvalidDataException("Unsupported Penumbra metadata shape.");
+                foreach (var item in items)
+                {
+                    if (item?["Type"]?.GetValue<string>() != "Eqdp" || item["Manipulation"] is not JsonObject manipulation)
+                        continue;
+                    var slotName = manipulation["Slot"]?.GetValue<string>();
+                    var slot = Enumerable.Range(1, 25).FirstOrDefault(value => EquipSlotName((byte)value) == slotName);
+                    var race = Array.IndexOf(RaceNamesByCode, manipulation["Race"]?.GetValue<string>());
+                    var gender = manipulation["Gender"]?.GetValue<string>();
+                    if (slot <= 0 || race <= 0 || gender is not ("Male" or "Female"))
+                        continue;
+                    result.Add(new EqdpManipulation(manipulation["SetId"]?.GetValue<int>() ?? -1, (byte)slot,
+                        (race * 2 - (gender == "Male" ? 1 : 0)) * 100 + 1, (ushort)(manipulation["Entry"]?.GetValue<int>() ?? 0)));
+                }
+                break;
+            case 1:
+                if (!bytes.AsSpan(1).StartsWith("META0001"u8))
+                    throw new InvalidDataException("Unsupported Penumbra metadata serialization shape.");
+                var reader = new MetadataReader(bytes.AsSpan(9));
+                reader.SkipRecords(reader.ReadCount("IMC"), 14, "IMC");
+                reader.SkipRecords(reader.ReadCount("EQP"), 12, "EQP");
+                var count = reader.ReadCount("EQDP");
+                for (var i = 0; i < count; ++i)
+                {
+                    var setId = reader.ReadUInt16();
+                    var slot = reader.ReadByte();
+                    reader.ReadByte(); // padding in EqdpIdentifier
+                    var genderRace = reader.ReadUInt16();
+                    result.Add(new EqdpManipulation(setId, slot, genderRace, reader.ReadUInt16()));
+                }
+                break;
+            default:
+                throw new InvalidDataException($"Unsupported Penumbra metadata serialization version {bytes[0]}.");
+        }
+        return result;
     }
 
     // Penumbra 5.15 switched the metadata IPC payload from JSON (v0) to the

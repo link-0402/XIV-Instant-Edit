@@ -19,11 +19,16 @@ public sealed record PainterLiveCharacter(IReadOnlyList<PainterLiveModel> Models
     public int Race { get; init; }
 
     /// <summary> The enabled-attribute masks of each loaded copy of a model; empty when it isn't loaded. </summary>
-    public IReadOnlyList<uint> MasksFor(PainterModelRef model)
+    public IReadOnlyList<uint> MasksFor(PainterModelRef model) => Loaded(model).Select(m => m.EnabledAttributes).ToList();
+
+    /// <summary> The enabled shapes of the model's first loaded copy; none when it isn't loaded. </summary>
+    public uint ShapesFor(PainterModelRef model) => Loaded(model).Select(m => m.EnabledShapes).FirstOrDefault();
+
+    private IEnumerable<PainterLiveModel> Loaded(PainterModelRef model)
     {
         var source = PainterVisibility.NormalizePath(model.SourcePath);
         var game = PainterVisibility.NormalizePath(model.GamePath);
-        return Models.Where(m => m.Path == source || m.Path == game).Select(m => m.EnabledAttributes).ToList();
+        return Models.Where(m => m.Path == source || m.Path == game);
     }
 }
 

@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.IO.Compression;
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -31,7 +32,9 @@ internal static class PainterScenarios
         DisplayFollowsMaterialFlags();
         PreviewsColorHairAndColorsets();
         SkinMaterialsAreTold();
-        SkinProjectsTakeEveryBodyPart();
+        SmallclothesFollowTheGamesRules();
+        SkinProjectsNeedOneBodyMaterial();
+        SkinLookupFollowsTheCollection(Path.Combine(testRoot, "PainterSkin"));
         OptionalSetsStayOutUntilTicked();
         PluginShipsWithTheAssembly();
     }
@@ -661,8 +664,8 @@ internal static class PainterScenarios
                 part.Submeshes.Select((mask, s) => new ModelSubmesh(s, [0, 1, 2], mask)).ToList())).ToList(),
             parts.Select(part => part.Material).ToList(), ["atr_a", "atr_b"]);
 
-    private static PainterSkinCandidate Candidate(string path, ModelMesh mesh, IReadOnlyList<uint> masks, params TexturePlanMaterial[] materials)
-        => new(new PainterModelRef(path, path, true), mesh, new ModelTexturePlan(path, materials, []), masks);
+    private static PainterSkinCandidate Candidate(string part, string path, ModelMesh mesh, IReadOnlyList<uint> masks, params TexturePlanMaterial[] materials)
+        => new(part, new PainterModelRef(path, path, true), mesh, new ModelTexturePlan(path, materials, []), masks);
 
     private static void SkinMaterialsAreTold()
     {
@@ -682,49 +685,275 @@ internal static class PainterScenarios
             "texture sources are the files read, leaving out textures that weren't");
     }
 
-    private static void SkinProjectsTakeEveryBodyPart()
+    private static void SmallclothesFollowTheGamesRules()
     {
-        var body = Material("/mt_c0201b0001_a.mtrl", BodySkinPath, "skin.shpk", SkinMaterial.SkinTypeBody, "body_base.tex", "body_norm.tex");
-        // A model of another race names the body skin for its own race; it resolves to the same file.
-        var raceBody = body with { ModelMaterial = "/mt_c0101b0001_a.mtrl" };
-        var underwear = Material("/mt_c0201e0000_top_a.mtrl", "chara/equipment/e0000/material/v0001/mt_c0201e0000_top_a.mtrl", "character.shpk", null, "top_norm.tex");
-        var face = Material("/mt_c0801f0001_fac_a.mtrl", FaceSkinPath, "skin.shpk", null, "face_base.tex");
-        var iris = Material("/mt_c0801f0001_iri_a.mtrl", "chara/human/c0801/obj/face/f0001/material/mt_c0801f0001_iri_a.mtrl", "iris.shpk", null, "eye.tex");
-        var hair = Material("/mt_c0801h0001_hir_a.mtrl", "chara/human/c0801/obj/hair/h0001/material/v0001/mt_c0801h0001_hir_a.mtrl", "hair.shpk", null, "hair.tex");
-        var candidates = new List<PainterSkinCandidate>
+        Require(PainterSmallclothes.Fallback(801) == 201 && PainterSmallclothes.Fallback(1401) == 201 && PainterSmallclothes.Fallback(701) == 101 &&
+                PainterSmallclothes.Fallback(201) == 101 && PainterSmallclothes.Fallback(1501) == 901 && PainterSmallclothes.Fallback(1201) == 1101 &&
+                PainterSmallclothes.Fallback(1304) == 1301 && PainterSmallclothes.Fallback(1804) == 104,
+            "races fall back like Penumbra's GenderRace.Fallback");
+        // Miqo'te women have hands of their own, Midlander women's feet, and only the legs' material flag.
+        ushort Entry(int race) => race switch
         {
-            Candidate("chara/equipment/e0000/model/c0201e0000_glv.mdl", Parts((body.ModelMaterial, [0])), [], body),
-            Candidate("chara/equipment/e0000/model/c0201e0000_top.mdl", Parts((body.ModelMaterial, [0, 1]), (underwear.ModelMaterial, [0])), [], body, underwear),
-            // The legs' skin is all turned off by an attribute.
-            Candidate("chara/equipment/e0000/model/c0201e0000_dwn.mdl", Parts((body.ModelMaterial, [2])), [0b01], body),
-            Candidate("chara/equipment/e0000/model/c0101e0000_sho.mdl", Parts((raceBody.ModelMaterial, [0])), [], raceBody),
-            Candidate("chara/human/c0801/obj/hair/h0001/model/c0801h0001_hir.mdl", Parts((hair.ModelMaterial, [0])), [], hair),
-            Candidate("chara/human/c0801/obj/face/f0001/model/c0801f0001_fac.mdl", Parts((face.ModelMaterial, [0, 1]), (iris.ModelMaterial, [0])), [], face, iris),
+            801 => (ushort)(1 << (PainterBodySlot.Hands.EqdpShift + 1) | 1 << PainterBodySlot.Legs.EqdpShift),
+            201 => (ushort)(1 << (PainterBodySlot.Feet.EqdpShift + 1)),
+            _ => (ushort)0,
         };
-        var selection = PainterSkin.Select(candidates);
-        Require(selection.Materials.Select(m => m.GamePath).SequenceEqual([BodySkinPath, FaceSkinPath]),
-            "the project paints the body skin once and the face skin, nothing else");
-        Require(selection.Models.Select(m => m.Candidate).SequenceEqual([1, 0, 2, 3, 5]),
-            "the model showing the most skin leads, the other body parts follow in order and the face comes last");
-        Require(selection.Models[0].DrawnTriangles == 2 && selection.Models[2].DrawnTriangles == 0,
-            "skin the character turns off isn't counted, but its model still joins");
-        Require(selection.Models[0].Materials.SequenceEqual([body.ModelMaterial]) && selection.Models[3].Materials.SequenceEqual([raceBody.ModelMaterial]),
-            "each model joins with only its skin materials, by the name it stores");
-        Require(selection.Models[4].Face && selection.Models[4].Materials.SequenceEqual([face.ModelMaterial]) && !selection.Models.Take(4).Any(m => m.Face),
-            "only the face model brings the face skin");
+        Require(PainterSmallclothes.ModelRace(801, PainterBodySlot.Hands, Entry) == 801 && PainterSmallclothes.ModelRace(801, PainterBodySlot.Feet, Entry) == 201 &&
+                PainterSmallclothes.ModelRace(801, PainterBodySlot.Legs, Entry) == 101 && PainterSmallclothes.ModelRace(101, PainterBodySlot.Body, _ => 0) == 101,
+            "a slot takes the race's own smallclothes when its EQDP model flag is set, else its fallback's, else Midlander Male's");
+        Require(PainterSmallclothes.ApplyEqdp(0b11_1111_1111, PainterBodySlot.Hands, 0) == 0b11_1100_1111 &&
+                PainterSmallclothes.ApplyEqdp(0, PainterBodySlot.Hands, 0xFFFF) == 0b11_0000,
+            "an EQDP manipulation replaces only its slot's two bits");
 
-        var covered = PainterSkin.Select([candidates[2], candidates[4], candidates[5]]);
-        Require(covered.Models.Count == 0 && covered.Materials.Count == 0, "without body skin drawn anywhere there is nothing to paint, face or not");
-        var ownSkin = Material("/mt_c0201e6001_top_b.mtrl", "chara/equipment/e6001/material/v0001/mt_c0201e6001_top_b.mtrl", "skin.shpk",
-            SkinMaterial.SkinTypeBody, "gear_skin.tex");
-        var gear = PainterSkin.Select([candidates[1], Candidate("chara/equipment/e6001/model/c0201e6001_top.mdl", Parts((ownSkin.ModelMaterial, [0])), [], ownSkin)]);
-        Require(gear.Materials.Count == 2 && gear.Models.Count == 2, "gear with a body skin material of its own joins with it");
+        // Three blocks of four entries: the first stored, the second collapsed, the third stored after the first.
+        var eqdp = new byte[12 + 8 * 2];
+        BinaryPrimitives.WriteUInt16LittleEndian(eqdp.AsSpan(2), 4);
+        BinaryPrimitives.WriteUInt16LittleEndian(eqdp.AsSpan(4), 3);
+        BinaryPrimitives.WriteUInt16LittleEndian(eqdp.AsSpan(8), 0xFFFF);
+        BinaryPrimitives.WriteUInt16LittleEndian(eqdp.AsSpan(10), 4);
+        for (var i = 0; i < 8; i++)
+            BinaryPrimitives.WriteUInt16LittleEndian(eqdp.AsSpan(12 + i * 2), (ushort)(100 + i));
+        Require(PainterSmallclothes.EqdpEntry(eqdp, 0) == 100 && PainterSmallclothes.EqdpEntry(eqdp, 3) == 103, "EQDP entries of a stored block");
+        Require(PainterSmallclothes.EqdpEntry(eqdp, 5) == 0 && PainterSmallclothes.EqdpEntry(eqdp, 12) == 0,
+            "a collapsed block's sets, and sets past the last block, have empty entries");
+        Require(PainterSmallclothes.EqdpEntry(eqdp, 9) == 105, "EQDP block offsets count entries");
 
-        var sets = PainterProjectBuilder.BuildSets(selection.Materials, _ => true, out var setByMaterial);
+        // Parts 1, 2 and 4, variants 0 and 1.
+        var imc = new byte[4 + 2 * 3 * 6];
+        BinaryPrimitives.WriteUInt16LittleEndian(imc, 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(imc.AsSpan(2), 0b10110);
+        BinaryPrimitives.WriteUInt16LittleEndian(imc.AsSpan(4 + 1 * 6 + 2), 0x7C00 | 0x2D3);
+        BinaryPrimitives.WriteUInt16LittleEndian(imc.AsSpan(4 + 5 * 6 + 2), 0x155);
+        Require(PainterSmallclothes.ImcAttributes(imc, 0, 2) == 0x2D3 && PainterSmallclothes.ImcAttributes(imc, 1, 4) == 0x155,
+            "an IMC entry is found by its part's place among the file's parts; its attributes are the low ten bits");
+        Reject(() => PainterSmallclothes.ImcAttributes(imc, 0, 3), "an IMC part the file lacks is refused");
+        Require(PainterSmallclothes.EnabledAttributes(["atr_gv_a", "atr_gv_b", "atr_ude", "atrx_custom", "atr_tv_b", "atr_gv_k", "atr_gv_c"],
+                    PainterBodySlot.Hands, 0b101) == ~(1u << 1),
+            "only the slot's own variant attributes whose IMC bit is off are turned off");
+
+        var shapes = PainterSmallclothes.ConnectorShapes([
+            ["shpx_wr_a", "shpx_wa_b", "shp_brw", "shpx_an_x", "shpx_wr_"],
+            ["shpx_wr_", "shpx_wr_a"],
+            ["shpx_wa_b", "shpx_an_c", "shpx_wr_a"],
+            ["shpx_an_c", "shpx_wa_b"],
+        ]);
+        Require(shapes.SequenceEqual([0b11u, 0b10u, 0b11u, 0b1u]),
+            "connector shapes turn on where both neighbours have them: wrists on torso and hands, waist on torso and legs, ankles on legs and feet");
+
+        // Two triangles; the first shape moves the second triangle's first corner, the second the first triangle's.
+        var positions = new[] { Vector3.Zero, Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ, new Vector3(2, 0, 0) };
+        var shaped = new ModelMesh([new ModelMeshPart(0, 0, positions, new Vector3[5], new Vector2[5],
+            [new ModelSubmesh(0, [0, 1, 2], 0), new ModelSubmesh(1, [1, 3, 2], 0) { MeshIndexStart = 3 }])], ["/m.mtrl"], [])
+        {
+            Shapes = [new ModelShape("shpx_wr_a", [new ModelShapeMesh(0, [3], [4])]), new ModelShape("shpx_wr_b", [new ModelShapeMesh(0, [0], [3])])],
+        };
+        var applied = PainterSmallclothes.WithShapes(shaped, 0b01);
+        Require(applied.Meshes[0].Submeshes[0].Indices.SequenceEqual([0, 1, 2]) && applied.Meshes[0].Submeshes[1].Indices.SequenceEqual([4, 3, 2]),
+            "an enabled shape swaps the mesh indices it names for its own vertices");
+        Require(PainterSmallclothes.WithShapes(shaped, 0b11).Meshes[0].Submeshes[0].Indices.SequenceEqual([3, 1, 2]) &&
+                ReferenceEquals(PainterSmallclothes.WithShapes(shaped, 0), shaped),
+            "every enabled shape applies; without any the mesh stays as it is");
+
+        var folder = PainterSmallclothes.SkinFolder([
+            "chara/human/c0201/obj/body/b0001/material/v0001/mt_c0201b0001_a.mtrl",
+            "chara/human/c0201/obj/body/b0001/material/v0001/mt_c0201b0001_bibo.mtrl",
+            "chara/human/c0101/obj/body/b0001/material/v0001/mt_c0101b0001_a.mtrl",
+            "chara/human/c0201/obj/body/b0001/material/v0001/mt_c0101b0001_a.mtrl",
+            "chara/human/c0101/obj/body/b0001/material/v0001/mt_c0101b0001_a.mtrl",
+            "chara/human/c0801/obj/face/f0001/material/mt_c0801f0001_fac_a.mtrl",
+        ]);
+        Require(folder == new PainterSkinFolder("chara/human/c0201/obj/body/b0001/material/v0001", 201, 1),
+            "the skin folder is the one most loaded body materials come from; names of another race don't count");
+        Require(PainterSmallclothes.SkinMaterialPath("/mt_c0101b0001_bibo.mtrl", folder!) == "chara/human/c0201/obj/body/b0001/material/v0001/mt_c0201b0001_bibo.mtrl" &&
+                PainterSmallclothes.SkinMaterialPath("mt_c0801b0001_A.mtrl", folder!) == "chara/human/c0201/obj/body/b0001/material/v0001/mt_c0201b0001_a.mtrl" &&
+                PainterSmallclothes.SkinMaterialPath("/mt_c0201e0000_top_a.mtrl", folder!) is null,
+            "body material names of any race load from the character's own skin folder; other names aren't looked up");
+        Require(PainterSmallclothes.FolderOfName("/mt_c0801b0001_a.mtrl") == new PainterSkinFolder("chara/human/c0801/obj/body/b0001/material/v0001", 801, 1) &&
+                PainterSmallclothes.FolderOfName("/mt_c0201e0000_top_a.mtrl") is null,
+            "without loaded body skin, a body material name gives its folder");
+        Require(PainterBodySlot.Hands.ModelPath(801) == "chara/equipment/e0000/model/c0801e0000_glv.mdl" &&
+                PainterSmallclothes.EqdpPath(1401) == "chara/xls/charadb/equipmentdeformerparameter/c1401.eqdp",
+            "smallclothes model and EQDP paths");
+    }
+
+    private static void SkinProjectsNeedOneBodyMaterial()
+    {
+        var skin = Material("/mt_c0201b0001_a.mtrl", BodySkinPath, "skin.shpk", SkinMaterial.SkinTypeBody, "body_base.tex", "body_norm.tex");
+        // A model of another race names the body skin for its own race; it loads the same file.
+        var raceSkin = skin with { ModelMaterial = "/mt_c0101b0001_a.mtrl" };
+        var extra = Material("/mt_c0201b0001_b.mtrl", "chara/human/c0201/obj/body/b0001/material/v0001/mt_c0201b0001_b.mtrl", "skin.shpk",
+            SkinMaterial.SkinTypeBody, "extra_base.tex");
+        var underwear = Material("/mt_c0201e0000_top_a.mtrl", "chara/equipment/e0000/material/v0001/mt_c0201e0000_top_a.mtrl", "character.shpk", null, "top_norm.tex");
+        var torso = Candidate("Torso", "chara/equipment/e0000/model/c0201e0000_top.mdl",
+            Parts((skin.ModelMaterial, [0, 0, 0]), (extra.ModelMaterial, [0, 0, 0, 0]), (underwear.ModelMaterial, [0])), [], skin, extra, underwear);
+        var hands = Candidate("Hands", "chara/equipment/e0000/model/c0201e0000_glv.mdl", Parts((skin.ModelMaterial, [0])), [], skin);
+        // The legs' extra skin is turned off by an attribute.
+        var legs = Candidate("Legs", "chara/equipment/e0000/model/c0101e0000_dwn.mdl",
+            Parts((raceSkin.ModelMaterial, [0]), (extra.ModelMaterial, [0b10])), [0b01], raceSkin, extra);
+        var feet = Candidate("Feet", "chara/equipment/e0000/model/c0201e0000_sho.mdl", Parts((skin.ModelMaterial, [0])), [], skin);
+        var shared = PainterSkin.SharedBodyMaterial([torso, hands, legs, feet], out var problem);
+        Require(shared == skin && problem.Length == 0, "the body skin every part draws is painted, even where one part draws more of another");
+
+        PainterSkinCandidate Both(string part) => Candidate(part, $"{part}.mdl", Parts((skin.ModelMaterial, [0]), (extra.ModelMaterial, [0])), [], skin, extra);
+        Require(PainterSkin.SharedBodyMaterial([torso, Both("Hands"), Both("Legs"), Both("Feet")], out _) == extra,
+            "of several shared skins, the one drawing the most triangles is painted");
+
+        var otherHands = Candidate("Hands", "chara/equipment/e0000/model/c0201e0000_glv.mdl", Parts((extra.ModelMaterial, [0])), [], extra);
+        Require(PainterSkin.SharedBodyMaterial([torso, otherHands, legs, feet], out problem) is null &&
+                problem.Contains("don't share one skin material") && problem.Contains("hands: mt_c0201b0001_b.mtrl"),
+            "body parts without one shared skin are refused, naming what each draws");
+        var coveredLegs = Candidate("Legs", "chara/equipment/e0000/model/c0201e0000_dwn.mdl", Parts((skin.ModelMaterial, [0b10])), [0b01], skin);
+        Require(PainterSkin.SharedBodyMaterial([torso, hands, coveredLegs, feet], out problem) is null &&
+                problem.Contains("legs smallclothes model (c0201e0000_dwn.mdl) draws no body skin"),
+            "a part drawing no body skin is refused");
+
+        const string faceModel = "chara/human/c0801/obj/face/f0001/model/c0801f0001_fac.mdl";
+        var faceA = Material("/mt_c0801f0001_fac_a.mtrl", FaceSkinPath, "skin.shpk", null, "face_base.tex");
+        var faceB = Material("/mt_c0801f0001_fac_b.mtrl", "chara/human/c0801/obj/face/f0001/material/mt_c0801f0001_fac_b.mtrl", "skin.shpk", null, "teeth.tex");
+        var neck = Material("/mt_c0801f0001_fac_e.mtrl", "chara/human/c0801/obj/face/f0001/material/mt_c0801f0001_fac_e.mtrl", "skin.shpk",
+            SkinMaterial.SkinTypeBody, "neck.tex");
+        var iris = Material("/mt_c0801f0001_iri_a.mtrl", "chara/human/c0801/obj/face/f0001/material/mt_c0801f0001_iri_a.mtrl", "iris.shpk", null, "eye.tex");
+        var face = Candidate("Head", faceModel,
+            Parts((neck.ModelMaterial, [0]), (faceB.ModelMaterial, [0]), (faceA.ModelMaterial, [0]), (iris.ModelMaterial, [0])), [], neck, faceB, faceA, iris);
+        Require(PainterSkin.HeadMaterial(face) == faceA, "the head is the face's _fac_a skin, wherever it comes");
+        var hiddenA = Candidate("Head", faceModel,
+            Parts((neck.ModelMaterial, [0]), (faceB.ModelMaterial, [0]), (faceA.ModelMaterial, [0b10])), [0b01], neck, faceB, faceA);
+        Require(PainterSkin.HeadMaterial(hiddenA) == faceB,
+            "without a drawn _fac_a, the head is the first mesh's face skin; body skin on the face model isn't the head");
+        Require(PainterSkin.HeadMaterial(Candidate("Head", faceModel, Parts((iris.ModelMaterial, [0])), [], iris)) is null, "a face without face skin has no head");
+
+        var sets = PainterProjectBuilder.BuildSets([skin, faceA], _ => true, out var setByMaterial);
         Require(sets.Count == 2 && sets[0].AlwaysShared && !sets[1].AlwaysShared,
             "body skin sets keep the texels outside the project's UV islands, which models it doesn't know draw too; the face's don't");
-        Require(setByMaterial[body.ModelMaterial] == sets[0].Name && sets[0].Textures.All(t => t.Editable && t.Selected == (t.Texture.Usage != "index")),
+        Require(setByMaterial[skin.ModelMaterial] == sets[0].Name && sets[0].Textures.All(t => t.Editable && t.Selected == (t.Texture.Usage != "index")),
             "the skin's own textures are ticked");
+    }
+
+    /// <summary> A model with one triangle per material, each in a mesh of its own whose one submesh has the given attribute mask. </summary>
+    private static byte[] TriangleModel(string[] attributes, params (string Material, uint Mask)[] parts)
+    {
+        var vertices = new byte[3 * 44];
+        for (var v = 0; v < 3; v++)
+        {
+            WriteF32(vertices, v * 44, v == 1 ? 1 : 0, v == 2 ? 1 : 0, 0, 1);
+            WriteF32(vertices, v * 44 + 16, 0, 0, 1);
+            WriteF32(vertices, v * 44 + 28, 0.25f * v, 0.5f, 0, 0);
+        }
+        var meshes = parts.Select((part, m) => new MeshSpec([new Element(0, 0, 3, 0), new Element(0, 16, 2, 3), new Element(0, 28, 3, 4)],
+            [vertices], [44], 3, [0, 1, 2], (ushort)m, [(0, 3, part.Mask)])).ToArray();
+        return BuildModel(meshes, attributes, parts.Select(part => part.Material).ToArray(), Enumerable.Range(0, parts.Length).ToArray());
+    }
+
+    /// <summary> Penumbra's version 0 metadata encoding: a version byte and the manipulations as JSON, gzipped. </summary>
+    private static string Metadata(string json)
+    {
+        using var output = new MemoryStream();
+        using (var gzip = new GZipStream(output, CompressionMode.Compress, true))
+        {
+            gzip.WriteByte(0);
+            gzip.Write(Encoding.UTF8.GetBytes(json));
+        }
+        return Convert.ToBase64String(output.ToArray());
+    }
+
+    private static void SkinLookupFollowsTheCollection(string root)
+    {
+        Directory.CreateDirectory(root);
+        const string skinFolder = "chara/human/c0801/obj/body/b0001/material/v0001";
+        const string extraTexture = "chara/human/c0801/obj/body/b0001/texture/extra_base.tex";
+        var torsoFile = Path.Combine(root, "c0201e0000_top.mdl");
+        File.WriteAllBytes(torsoFile, TriangleModel([], ("/mt_c0201b0001_a.mtrl", 0), ("/mt_c0201e0000_top_a.mtrl", 0)));
+        var extraFile = Path.Combine(root, "mt_c0801b0001_b.mtrl");
+        File.WriteAllBytes(extraFile, NeckSeamScenarios.Material([extraTexture], [(SkinMaterial.SkinTypeKey, SkinMaterial.SkinTypeBody)], []));
+        var extraTextureFile = Path.Combine(root, "extra_base.tex");
+
+        static byte[] Eqdp(int entry)
+        {
+            var file = new byte[10];
+            BinaryPrimitives.WriteUInt16LittleEndian(file.AsSpan(2), 1);
+            BinaryPrimitives.WriteUInt16LittleEndian(file.AsSpan(4), 1);
+            BinaryPrimitives.WriteUInt16LittleEndian(file.AsSpan(8), (ushort)entry);
+            return file;
+        }
+        var imc = new byte[4 + 5 * 6];
+        BinaryPrimitives.WriteUInt16LittleEndian(imc.AsSpan(2), 0x1F);
+        BinaryPrimitives.WriteUInt16LittleEndian(imc.AsSpan(4 + 2 * 6 + 2), 0b01);
+        var game = new Dictionary<string, byte[]>
+        {
+            // Miqo'te women have hands of their own; Midlander women have a torso, legs and feet.
+            [PainterSmallclothes.EqdpPath(801)] = Eqdp(1 << 5),
+            [PainterSmallclothes.EqdpPath(201)] = Eqdp(1 << 3 | 1 << 7 | 1 << 9),
+            [PainterSmallclothes.ImcPath] = imc,
+            ["chara/equipment/e0000/model/c0801e0000_glv.mdl"] = TriangleModel(["atr_gv_a", "atr_gv_b"], ("/mt_c0801b0001_a.mtrl", 0b10)),
+            ["chara/equipment/e0000/model/c0801e0000_dwn.mdl"] = TriangleModel([], ("/mt_c0201b0001_a.mtrl", 0), ("/mt_c0201b0001_b.mtrl", 0)),
+            ["chara/equipment/e0000/model/c0101e0000_sho.mdl"] = TriangleModel(["atr_sv_a"], ("/mt_c0101b0001_a.mtrl", 0)),
+        };
+        var mods = new Dictionary<string, string>
+        {
+            ["chara/equipment/e0000/model/c0201e0000_top.mdl"] = torsoFile,
+            [$"{skinFolder}/mt_c0801b0001_b.mtrl"] = extraFile,
+            [extraTexture] = extraTextureFile,
+        };
+        // The collection gives Miqo'te women legs of their own, takes Midlander women's feet away and shows the hands' second part.
+        var meta = Metadata("""
+            [{"Type":"Eqdp","Manipulation":{"Entry":128,"Gender":"Female","Race":"Miqote","SetId":0,"Slot":"Legs"}},
+             {"Type":"Eqdp","Manipulation":{"Entry":0,"Gender":"Female","Race":"Midlander","SetId":0,"Slot":"Feet"}},
+             {"Type":"Imc","Manipulation":{"ObjectType":"Equipment","PrimaryId":0,"Variant":0,"EquipSlot":"Hands","Entry":{"AttributeMask":2}}}]
+            """);
+        var collection = Guid.NewGuid();
+        var asked = new List<string>();
+        var penumbra = new PainterSkinPenumbra(_ => Task.FromResult<Guid?>(collection), _ => Task.FromResult<string?>(meta), (id, paths) =>
+        {
+            asked.AddRange(paths);
+            return Task.FromResult(paths.Select(path => id == collection ? mods.GetValueOrDefault(path) ?? path : null).ToArray());
+        });
+        var resolver = new PainterSkinResolver(penumbra, (path, _) => Task.FromResult(game.GetValueOrDefault(path)),
+            (error, message) => throw new InvalidOperationException(message, error));
+
+        var face = new PainterModelRef("chara/human/c0801/obj/face/f0001/model/c0801f0001_fac.mdl", "chara/human/c0801/obj/face/f0001/model/c0801f0001_fac.mdl", true);
+        var loaded = new MaterialResourceCandidate($"{skinFolder}/mt_c0801b0001_a.mtrl", Path.Combine(root, "mt_c0801b0001_a.mtrl"));
+        var request = new PainterRequest(3, 0, "Test", face, [], [loaded])
+        {
+            Scope = PainterScope.Skin, Live = new PainterLiveCharacter([new PainterLiveModel(face.GamePath, 0b1, 0b10)], null) { Race = 801 },
+        };
+        var result = resolver.ResolveAsync(request, default).GetAwaiter().GetResult();
+        var skin = result.Skin!;
+        Require(skin.Body.Select(part => (part.Part, part.Model.GamePath)).SequenceEqual([
+                ("Torso", "chara/equipment/e0000/model/c0201e0000_top.mdl"), ("Hands", "chara/equipment/e0000/model/c0801e0000_glv.mdl"),
+                ("Legs", "chara/equipment/e0000/model/c0801e0000_dwn.mdl"), ("Feet", "chara/equipment/e0000/model/c0101e0000_sho.mdl")]),
+            "each body slot takes the smallclothes of the race EQDP picks, with the collection's EQDP manipulations applied");
+        Require(skin.Body[0].Model == new PainterModelRef("chara/equipment/e0000/model/c0201e0000_top.mdl", torsoFile, false) && skin.Body[1].Model.Vanilla,
+            "smallclothes load from the collection's mods, else from game data");
+        Require(skin.Body[1].Masks.SequenceEqual([~1u]) && skin.Body[3].Masks.SequenceEqual([~1u]) && skin.Body[0].Masks.SequenceEqual([uint.MaxValue]),
+            "variant parts follow the collection's IMC manipulation, else the game's IMC file");
+        Require(skin.Body[0].MaterialPaths.Count == 1 && skin.Body[0].MaterialPaths["/mt_c0201b0001_a.mtrl"] == $"{skinFolder}/mt_c0801b0001_a.mtrl" &&
+                skin.Body[2].MaterialPaths["/mt_c0201b0001_b.mtrl"] == $"{skinFolder}/mt_c0801b0001_b.mtrl",
+            "body material names load from the character's own skin folder; the underwear isn't looked up");
+        Require(skin.Head is { Part: "Head" } head && head.Model == face && head.Masks.SequenceEqual([0b1u]) && head.Shapes == 0b10,
+            "the head is the face the character draws, as it draws it");
+        Require(result.Resources.Contains(loaded) && result.Resources.Any(r => r.GamePath == $"{skinFolder}/mt_c0801b0001_b.mtrl" && r.ActualPath == extraFile) &&
+                result.Resources.Any(r => r.GamePath == extraTexture && r.ActualPath == extraTextureFile) &&
+                !asked.Contains($"{skinFolder}/mt_c0801b0001_a.mtrl") && !result.Resources.Any(r => r.GamePath.Contains("e0000")),
+            "skin materials the character doesn't load now come from the collection with their textures; loaded ones aren't asked again");
+
+        // Wearing nothing, the character draws these smallclothes: their parts and shapes are the game's.
+        var undressed = request with
+        {
+            Live = request.Live! with
+            {
+                Models = [.. request.Live!.Models, new PainterLiveModel(PainterVisibility.NormalizePath(torsoFile), 0b101, 0b1, 1),
+                    new PainterLiveModel("chara/equipment/e0000/model/c0801e0000_glv.mdl", 0b10, 0, 2),
+                    new PainterLiveModel("chara/equipment/e0000/model/c0801e0000_dwn.mdl", 0b1, 0b100, 3),
+                    new PainterLiveModel("chara/equipment/e0000/model/c0101e0000_sho.mdl", 0, 0, 4)],
+            },
+        };
+        var drawn = resolver.ResolveAsync(undressed, default).GetAwaiter().GetResult().Skin!;
+        Require(drawn.AsDrawn && !skin.AsDrawn &&
+                drawn.Body.Select(part => (part.Masks.Single(), part.Shapes)).SequenceEqual([(0b101u, 0b1u), (0b10u, 0u), (0b1u, 0b100u), (0u, 0u)]),
+            "with nothing worn in any body slot, the smallclothes' parts and shapes are the ones the game draws");
+        var dressed = request with { Live = request.Live! with { Models = [.. undressed.Live!.Models.Where(m => m.Slot != 3)] } };
+        Require(resolver.ResolveAsync(dressed, default).GetAwaiter().GetResult().Skin! is { AsDrawn: false } rules && rules.Body[1].Masks.SequenceEqual([~1u]),
+            "gear in any body slot changes what the others show, so then every part follows the rules");
     }
 
     private static void OptionalSetsStayOutUntilTicked()
@@ -735,13 +964,13 @@ internal static class PainterScenarios
         var main = new PainterDraftModel
         {
             Model = new PainterModelRef("chara/equipment/e0000/model/c0201e0000_top.mdl", "chara/equipment/e0000/model/c0201e0000_top.mdl", true),
-            Mesh = Parts((body.ModelMaterial, [0])), Selected = true,
+            Mesh = Parts((body.ModelMaterial, [0])), Selected = true, Part = "Torso",
             SetByMaterial = new Dictionary<string, string> { [body.ModelMaterial] = sets[0].Name },
         };
         var faceModel = new PainterDraftModel
         {
             Model = new PainterModelRef("chara/human/c0801/obj/face/f0001/model/c0801f0001_fac.mdl", "chara/human/c0801/obj/face/f0001/model/c0801f0001_fac.mdl", true),
-            Mesh = Parts((face.ModelMaterial, [0])),
+            Mesh = Parts((face.ModelMaterial, [0])), Part = "Head",
             SetByMaterial = new Dictionary<string, string> { [face.ModelMaterial] = sets[1].Name },
         };
         var draft = new PainterDraft
