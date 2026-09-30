@@ -34,6 +34,17 @@ def unweighted_vertices(obj: Object) -> tuple[int, int]:
     return int(np.count_nonzero(used)), int(np.count_nonzero(used & ~weighted))
 
 
+def exportable_shape_keys(obj: Object) -> list[ShapeKey]:
+    """The shape keys Keep Shape Keys exports: the shp ones, except the rue ones."""
+    shape_keys = getattr(obj.data, "shape_keys", None)
+    if shape_keys is None:
+        return []
+    return [
+        key for key in shape_keys.key_blocks
+        if key.name.startswith("shp") and key.name[5:8] != "rue"
+    ]
+
+
 def colour_layer_correction(obj: Object) -> None:
     '''This function corrects linear colour data that's been wrongly stored as sRGB during FBX import.'''
     verts  = len(obj.data.vertices)
@@ -140,15 +151,7 @@ class SceneHandler:
             raise XIVMeshParentError(f"Missing Skeleton Parent: {', '.join(no_skeleton)}.")
 
     def sort_shape_keys(self, obj: Object) -> list[ShapeKey]:
-        shape_keys = []
-        for key in obj.data.shape_keys.key_blocks:
-            if not key.name.startswith("shp"):
-                continue
-            if key.name[5:8] == "rue":
-                continue
-            shape_keys.append(key)
-
-        return shape_keys
+        return exportable_shape_keys(obj)
 
     def process_scene(self) -> list[Object]:
         fixed_transp: dict[Object, Object]              = {}

@@ -9,7 +9,7 @@ from mathutils       import Matrix
 
 from .heels          import apply_calculated_heels_offset
 from .objects        import visible_meshobj, armature_for_object
-from ..io.model      import ModelExport, SceneHandler
+from ..io.model      import ModelExport, SceneHandler, exportable_shape_keys
 from ..io.logging    import YetAnotherLogger
 from ..properties    import get_settings
 from ..backups       import create_backup
@@ -144,6 +144,44 @@ def check_weights(objects=None) -> list[str]:
             unweighted.append(obj.name)
 
     return unweighted
+
+def check_dropped_shape_keys(objects=None) -> list[str]:
+    """Names of meshes whose shape keys an export leaves out because Keep Shape Keys is off.
+
+    Meshes on a body material are skipped: devkit body parts carry shape keys
+    that are meant to be left out.
+    """
+    if get_settings().keep_shapekeys:
+        return []
+    from ..materials import export_material_path, is_body_material
+
+    visible = list(objects) if objects is not None else visible_meshobj()
+    return [
+        obj.name for obj in visible
+        if exportable_shape_keys(obj) and not is_body_material(export_material_path(obj))
+    ]
+
+def dropped_shape_keys_warning(objects=None) -> str:
+    """One sentence naming the meshes check_dropped_shape_keys finds, or "" when there are none."""
+    names = check_dropped_shape_keys(objects)
+    if not names:
+        return ""
+    shown = ", ".join(names[:5])
+    if len(names) > 5:
+        shown += f", +{len(names) - 5} more"
+    return f"Keep Shape Keys is off, so the export leaves out the shape keys of {shown}."
+
+def draw_dropped_shape_keys(layout: UILayout, names: list[str]) -> None:
+    """Draw check_dropped_shape_keys' meshes into an export confirmation dialog."""
+    if not names:
+        return
+    layout.label(text="Keep Shape Keys is off, so these meshes export without their shape keys:", icon="ERROR")
+    column = layout.column(align=True)
+    for name in names[:12]:
+        column.label(text=name, icon="MESH_DATA")
+    if len(names) > 12:
+        column.label(text=f"+{len(names) - 12} more meshes", icon="BLANK1")
+    layout.label(text="Turn on Keep Shape Keys in Options > Export to keep them.", icon="BLANK1")
 
 def flush_edit_mode(objects) -> None:
     """Write Edit Mode changes into the meshes, which exports and checks read."""
