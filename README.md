@@ -32,8 +32,9 @@ Penumbra mods.
   - Check its weight: the texture memory and triangles Lightless, PlayerSync and other sync plugins count, the files
     that cost the most, and a preview mod that compresses or halves the heaviest textures.
   - Paint its whole skin in Substance Painter.
-  - Measure the [Simple Heels](https://github.com/Caraxi/SimpleHeels) offset that keeps its heels from sinking into the
-    ground.
+  - Fix its [Simple Heels](https://github.com/Caraxi/SimpleHeels) offset: measure how far its shoes reach below the
+    ground and write the offset into their model, so heels stand on the ground instead of sinking into it. It can fix
+    every pair it puts on automatically.
   - Send it to Blender in one click: every model it shows on one armature with its skeleton, in its rest pose, the pose
     it stands in or the animation it plays, and each model still exports back on its own.
 - **Racial scaling**: preview gear made for another race shaped for yours in Blender and Painter.
