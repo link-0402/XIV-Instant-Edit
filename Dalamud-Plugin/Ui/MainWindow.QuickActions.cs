@@ -23,7 +23,7 @@ public sealed partial class MainWindow
             "Compares your character's skin where its models meet, the way the game's skin shader draws them: the face and body at the neck, " +
             "and the body parts at the wrists, waist and ankles. Builds a preview mod that closes gaps and fixes normals, skin settings and textures.",
             DrawNeckSeamAction);
-        DrawCharacterWeightCard();
+        DrawTextureCompressionCard();
         DrawPaintSkinCard();
         DrawHeelsOffsetCard();
         DrawSendCharacterCard();

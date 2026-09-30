@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace InstantEdit.Services.CharacterWeight;
+namespace InstantEdit.Services.TextureCompression;
 
 /// <summary> What a TEX header says about a texture: format, size, mipmaps and layout. </summary>
 internal readonly record struct TexInfo(uint Attributes, uint Format, int Width, int Height, int Depth, int Mips, int ArraySize)
@@ -86,6 +86,16 @@ internal static class TextureCost
 
     /// <summary> Colour formats that block compression makes smaller while keeping all four channels. </summary>
     public static bool IsCompressibleColour(uint format) => format is Bgra8 or Bgrx8 or Bgra4 or Bgr5A1;
+
+    /// <summary> The top level of an uncompressed BGRA32 TEX, which is what Penumbra decodes textures to, without copying it. </summary>
+    public static (ArraySegment<byte> Pixels, int Width, int Height) TopLevelBgra(byte[] tex)
+    {
+        var header = TextureFiles.ReadTex(tex);
+        if (header.Format != Bgra8)
+            throw new InvalidDataException("Penumbra did not return BGRA32 pixels.");
+        var offset = (int)BinaryPrimitives.ReadUInt32LittleEndian(tex.AsSpan(28));
+        return (new ArraySegment<byte>(tex, offset, checked(header.Width * header.Height * 4)), header.Width, header.Height);
+    }
 
     public static string FormatName(uint format) => format switch
     {

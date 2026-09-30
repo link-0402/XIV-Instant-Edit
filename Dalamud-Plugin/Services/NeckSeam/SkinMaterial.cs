@@ -68,6 +68,9 @@ internal sealed class SkinMaterial
     public bool IsFaceSkin => IsSkin && SkinType is SkinTypeFace or SkinTypeFaceEmissive;
     public bool IsBodySkin => IsSkin && SkinType is SkinTypeBody or SkinTypeBodyHrothgar;
 
+    /// <summary> The material's shader flags: 0x10 blends transparency instead of cutting it out, 0x01 hides back faces. </summary>
+    public uint MaterialFlags => U32(_bytes, _shaderHeader + 8);
+
     private SkinMaterial(byte[] bytes, int shaderHeader, (uint, ushort, ushort)[] constants, int values, int valueSize, string shader,
         IReadOnlyDictionary<uint, uint> keys, IReadOnlyDictionary<uint, int> samplers, IReadOnlyDictionary<uint, uint> samplerFlags,
         IReadOnlyList<string> textures, IReadOnlyList<ushort> flags)

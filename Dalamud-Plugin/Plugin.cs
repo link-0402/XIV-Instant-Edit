@@ -35,6 +35,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly GameFileBrowserService  _gameFiles;
     private readonly GameFileExportService   _gameExport;
     private readonly Services.Heels.HeelsOffsetService _heels;
+    private readonly Services.TextureCompression.TextureCompressionService _compression;
     private readonly WindowSystem            _windowSystem;
     private readonly MainWindow              _window;
     private readonly ChangelogWindow         _changelogWindow;
@@ -208,12 +209,13 @@ public sealed class Plugin : IDalamudPlugin
         var neckSeam = new Services.NeckSeam.NeckSeamService(_penumbra, data, log, configDirectory, () => _config.RecompressTextures,
             new Services.Painter.PainterLiveReader(framework, objects));
         _window.AttachNeckSeam(neckSeam);
-        // Character weight: texture memory and triangles as sync plugins count them, and smaller textures in a preview mod.
-        var characterWeight = new Services.CharacterWeight.CharacterWeightService(_penumbra, data, log, configDirectory, [neckSeam.Store]);
-        _window.AttachCharacterWeight(characterWeight);
+        // Automatic texture compression: the character's uncompressed mod textures, checked and backed up in the cache folder.
+        _compression = new Services.TextureCompression.TextureCompressionService(_config, SaveConfiguration, _penumbra, _onScreen, _textures,
+            framework, objects, clientState, condition, data, log, pi, configDirectory, [neckSeam.Store]);
+        _window.AttachTextureCompression(_compression);
         // Simple Heels offsets, measured on the model your character's feet are in and written into it; preview mods' files are left alone.
         _heels = new Services.Heels.HeelsOffsetService(pi, framework, objects, clientState, condition, data, skeletons, _penumbra, resourceSources,
-            [neckSeam.Store, characterWeight.Store], () => _config.AutoFixHeels, log);
+            [neckSeam.Store], () => _config.AutoFixHeels, log);
         _window.AttachHeelsOffset(_heels);
         // Automatic cache cleanup also removes old exports from the cache's export folder.
         _textures.AdditionalCacheCleanup = () =>
@@ -380,6 +382,7 @@ public sealed class Plugin : IDalamudPlugin
         _textures.AdditionalCacheCleanup = null;
         _gameExport.Dispose();
         _window.Dispose();
+        _compression.Dispose();
         _heels.Dispose();
         _gameFiles.Dispose();
         _textures.FileChanged -= _previews.Invalidate;
