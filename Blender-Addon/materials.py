@@ -33,7 +33,17 @@ MATERIAL_PRESETS = {
     "yet another toenail": "/mt_c0201b0001_yatoe.mtrl",
 }
 
+# A race's body material, shared by its body, hands, legs and feet; devkits add
+# suffixed ones such as _b, _bibo, _bibopube or _yafinger.
+_BODY_MATERIAL = re.compile(r"^mt_c\d{4}b0001(?:_[a-z0-9_]+)?\.mtrl$", re.IGNORECASE)
+
 _CUSTOM_ATTRIBUTE = re.compile(r"^[a-z0-9_]+$")
+
+
+def is_body_material(path: str) -> bool:
+    """Return whether a material path names a race's body material (mt_c####b0001*.mtrl)."""
+    file_name = (path or "").replace("\\", "/").rsplit("/", 1)[-1]
+    return _BODY_MATERIAL.fullmatch(file_name) is not None
 
 ATTRIBUTE_NAMES = {
     "nek": "Neck",

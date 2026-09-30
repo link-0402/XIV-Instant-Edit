@@ -116,6 +116,50 @@ def assert_mesh_group_conflict_resolution(addon) -> None:
                 bpy.data.meshes.remove(mesh)
 
 
+def assert_dropped_shape_keys_warning(addon) -> None:
+    export = importlib.import_module(f"{addon.__name__}.mesh.export")
+    settings = bpy.context.scene.xiv_ie_settings
+    objects = []
+
+    def create(name: str, material: str, keys=()):
+        mesh = bpy.data.meshes.new(f"{name} Data")
+        mesh.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+        obj = bpy.data.objects.new(name, mesh)
+        bpy.context.collection.objects.link(obj)
+        obj["xiv_material"] = material
+        for key in keys:
+            obj.shape_key_add(name=key)
+        objects.append(obj)
+        return obj
+
+    try:
+        gear = create("0.0 Gear", "/mt_c0201e6023_top_a.mtrl", ("Basis", "shp_wa_"))
+        body = create("1.0 Body", "/mt_c0201b0001_bibo.mtrl", ("Basis", "shp_yab_c"))
+        nails = create("2.0 Nails", "mt_c0201b0001_yafinger.mtrl", ("Basis", "shp_yab_c"))
+        unexported = create("3.0 Sculpt", "/mt_c0201e6023_top_a.mtrl", ("Basis", "Sculpt"))
+        plain = create("4.0 Plain", "/mt_c0201e6023_top_a.mtrl")
+
+        settings.keep_shapekeys = False
+        dropped = export.check_dropped_shape_keys(objects)
+        if dropped != [gear.name]:
+            raise AssertionError(
+                f"Only the gear's shp keys should warn; body-material meshes and non-shp keys don't: {dropped}")
+        if gear.name not in export.dropped_shape_keys_warning(objects):
+            raise AssertionError("The warning sentence does not name the mesh losing its shape keys")
+        if export.check_dropped_shape_keys([body, nails, unexported, plain]):
+            raise AssertionError("Meshes without exportable shape keys or on the body material warned")
+        settings.keep_shapekeys = True
+        if export.check_dropped_shape_keys(objects) or export.dropped_shape_keys_warning(objects):
+            raise AssertionError("Keep Shape Keys on still warns about dropped shape keys")
+    finally:
+        settings.keep_shapekeys = False
+        for obj in objects:
+            mesh = obj.data
+            bpy.data.objects.remove(obj, do_unlink=True)
+            bpy.data.meshes.remove(mesh)
+    print("[PASS] Exports without Keep Shape Keys warn about shp keys, except on the body material")
+
+
 def assert_mesh_name_conversion(addon) -> None:
     objects = []
 
@@ -1100,6 +1144,7 @@ def run() -> None:
         assert_corner_aware_uv_export(addon)
         assert_mesh_group_conflict_resolution(addon)
         assert_mesh_name_conversion(addon)
+        assert_dropped_shape_keys_warning(addon)
 
         for removed in ("create_backfaces", "check_tris", "remove_yas", "uv2_mode", "clear_flow_data"):
             if hasattr(bpy.context.scene.xiv_ie_settings, removed):

@@ -23,7 +23,8 @@ from .materials import (
     convert_suffix_mesh_names,
 )
 from .mesh_list import DragSession, ListMetrics, list_parts, moved_part, placement_plan, scene_parts
-from .mesh.export import check_triangulation, check_weights, export_result, get_export_stats
+from .mesh.export import (check_triangulation, check_weights, dropped_shape_keys_warning, export_result,
+                          get_export_stats)
 from .mesh.hidden import hidden_vertices, remove_vertices
 from .mesh.objects import visible_meshobj
 from .mesh.armatures import available_armatures, combine_armatures
@@ -220,19 +221,22 @@ class XIVIE_OT_simple_export(Operator):
 
     def invoke(self, context: Context, event):
         # Racially scaled meshes are for preview; confirm before writing their scaled shape.
+        # Confirm too before leaving out shape keys while Keep Shape Keys is off.
         from .instant_edit.racial_scaling import simple_export_warning
 
         try:
-            warning = simple_export_warning(self._objects(context))
+            objects = self._objects(context)
         except ContextValidationError:
-            warning = ""
-        if not warning:
+            objects = []
+        scaled = simple_export_warning(objects)
+        dropped = dropped_shape_keys_warning(objects)
+        if not scaled and not dropped:
             return self.execute(context)
         return context.window_manager.invoke_confirm(
             self,
             event,
-            title="Export Racially Scaled Meshes?",
-            message=warning,
+            title="Export Racially Scaled Meshes?" if scaled else "Export Without Shape Keys?",
+            message=" ".join(warning for warning in (scaled, dropped) if warning),
             confirm_text="Export",
             icon="WARNING",
         )
@@ -276,6 +280,7 @@ class XIVIE_OT_simple_export(Operator):
         from .instant_edit.racial_scaling import simple_export_warning
 
         scaled = simple_export_warning(objects)
+        dropped = dropped_shape_keys_warning(objects)
 
         try:
             export_result(directory / name, settings.model_format, export_objects=objects)
@@ -288,11 +293,11 @@ class XIVIE_OT_simple_export(Operator):
 
         refresh_error = refresh_variant_targets_after_operation(context)
         message = f"Exported {name}{suffix}"
-        if scaled:
-            message += f". {scaled}"
+        if scaled or dropped:
+            message += ". " + " ".join(warning for warning in (scaled, dropped) if warning)
         if refresh_error is not None:
             message += f"; Penumbra targets could not refresh: {refresh_error}"
-        self.report({"WARNING"} if refresh_error is not None or scaled else {"INFO"}, message)
+        self.report({"WARNING"} if refresh_error is not None or scaled or dropped else {"INFO"}, message)
         return {"FINISHED"}
 
 

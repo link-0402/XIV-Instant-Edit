@@ -18,8 +18,10 @@ from bpy.types import Operator, Context
 from ..io.model      import ModelImport
 from ..materials     import (
     attribute_group_data, compact_mesh_part_indices, group_mesh_objects, hair_skeleton_tags,
+    is_body_material,
 )
-from ..mesh.export   import export_result, get_export_stats, check_triangulation, check_weights, flush_edit_mode
+from ..mesh.export   import (export_result, get_export_stats, check_triangulation, check_weights,
+                             check_dropped_shape_keys, draw_dropped_shape_keys, flush_edit_mode)
 from ..mesh.objects  import visible_meshobj
 from ..properties    import get_settings
 from ..xivpy.model   import XIVModel
@@ -67,10 +69,6 @@ UNSAFE_EXPORT_WARNING = (
     "This output may not work correctly without a mashup."
 )
 MATERIAL_COVERAGE_CACHE_SECONDS = 10.0
-_SHARED_BODY_MATERIAL = re.compile(
-    r"^mt_c\d{4}b0001(?:_[a-z0-9_]+)?\.mtrl$",
-    re.IGNORECASE,
-)
 _material_coverage_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
 _material_coverage_pending: set[str] = set()
 _material_coverage_results: Queue = Queue()
@@ -395,7 +393,7 @@ def _is_general_material(material: str) -> bool:
     file_name = _normalize_mashup_material(material).rsplit("/", 1)[-1]
     lowered = file_name.casefold()
     return (
-        _SHARED_BODY_MATERIAL.fullmatch(file_name) is not None
+        is_body_material(file_name)
         or "pube" in lowered
         or "piercing" in lowered
     )
@@ -507,6 +505,16 @@ def material_coverage_warning_state(
     """Return whether the current export composition is missing non-active materials."""
     return bool(material_coverage_missing_materials(
         context, ref, cache_only=cache_only, blocking=blocking))
+
+
+def quick_export_dropped_shape_keys(context: Context) -> list[str]:
+    """Meshes of the current Export Parts that Quick Export writes without their shape keys."""
+    try:
+        ref = export_destination_context(context, persist=False)
+        objects = export_objects_for_scope(ref, getattr(get_instant_edit_props(), "export_scope", "VISIBLE"))
+    except ContextValidationError:
+        return []
+    return check_dropped_shape_keys(objects)
 
 
 def unsafe_export_warning_state(context: Context, ref=None, *, blocking: bool = False) -> bool:
@@ -728,6 +736,12 @@ def export_target_issues(
                 _named_readiness_issue(
                     f"Racially scaled ({' and '.join(sorted(scaled))}) for preview only; re-import unscaled to export",
                     [name for names in scaled.values() for name in names]),
+            ))
+        dropped_shape_keys = check_dropped_shape_keys(export_objects)
+        if dropped_shape_keys:
+            issues.append((
+                "WARNING",
+                _named_readiness_issue("Shape keys left out (Keep Shape Keys is off)", dropped_shape_keys),
             ))
         est_entries, est_issue = hair_skeleton_tags(export_objects)
         if est_issue:
@@ -1822,15 +1836,18 @@ class QuickExport(Operator):
         if props.variant_target == SAVE_NEW_MOD_TARGET:
             return bpy.ops.xiv_ie.save_new_mod_name("INVOKE_DEFAULT", name="")
         self._confirm_unsafe_export = unsafe_export_warning_state(context, blocking=True)
-        if self._confirm_unsafe_export:
-            # invoke_confirm never calls draw(); a props dialog shows the materials.
+        self._dropped_shape_keys = quick_export_dropped_shape_keys(context)
+        if self._confirm_unsafe_export or self._dropped_shape_keys:
+            # invoke_confirm never calls draw(); a props dialog shows the materials and meshes.
             return context.window_manager.invoke_props_dialog(
-                self, width=460, title="Export Without Mashup?", confirm_text="Export Anyway")
+                self, width=460,
+                title="Export Without Mashup?" if self._confirm_unsafe_export else "Export Without Shape Keys?",
+                confirm_text="Export Anyway")
         return self.execute(context)
 
     def draw(self, context):
+        layout = self.layout
         if getattr(self, "_confirm_unsafe_export", False):
-            layout = self.layout
             missing_materials = material_coverage_missing_materials(
                 context, cache_only=True)
             layout.label(text="The output mod is missing files for these materials:", icon="ERROR")
@@ -1841,6 +1858,7 @@ class QuickExport(Operator):
                 column.label(text=f"+{len(missing_materials) - 12} more materials", icon="BLANK1")
             layout.label(text=UNSAFE_EXPORT_WARNING, icon="BLANK1")
             layout.label(text="Choose Create Mashup as the target to include them.", icon="BLANK1")
+        draw_dropped_shape_keys(layout, getattr(self, "_dropped_shape_keys", []))
 
     def execute(self, context: Context):
         try:
@@ -1897,6 +1915,7 @@ class MashupDestination(Operator):
         note = layout.row()
         note.active = False
         note.label(text="Shared skin, pube, and piercing materials stay external.", icon="INFO")
+        draw_dropped_shape_keys(layout, getattr(self, "_dropped_shape_keys", []))
 
     def invoke(self, context: Context, _event):
         try:
@@ -1904,6 +1923,7 @@ class MashupDestination(Operator):
         except Exception as error:
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
+        self._dropped_shape_keys = quick_export_dropped_shape_keys(context)
         return context.window_manager.invoke_props_dialog(
             self, width=460, title="Create Mashup", confirm_text="Create Mashup")
 
@@ -1935,10 +1955,12 @@ class SaveNewModName(Operator):
 
     def draw(self, _context):
         self.layout.prop(self, "name", text="Mod Name", placeholder="Name of the new mod")
+        draw_dropped_shape_keys(self.layout, getattr(self, "_dropped_shape_keys", []))
 
     def invoke(self, context: Context, _event):
+        self._dropped_shape_keys = quick_export_dropped_shape_keys(context)
         return context.window_manager.invoke_props_dialog(
-            self, width=430, title="Save as New Mod", confirm_text="Save")
+            self, width=460 if self._dropped_shape_keys else 430, title="Save as New Mod", confirm_text="Save")
 
     def execute(self, context: Context):
         try:
@@ -1964,10 +1986,13 @@ class VanillaModName(Operator):
 
     def draw(self, _context):
         self.layout.prop(self, "name", text="Mod Name", placeholder="Name of the new mod")
+        draw_dropped_shape_keys(self.layout, getattr(self, "_dropped_shape_keys", []))
 
     def invoke(self, context: Context, _event):
+        self._dropped_shape_keys = quick_export_dropped_shape_keys(context)
         return context.window_manager.invoke_props_dialog(
-            self, width=430, title="Create Penumbra Mod", confirm_text="Create Mod")
+            self, width=460 if self._dropped_shape_keys else 430, title="Create Penumbra Mod",
+            confirm_text="Create Mod")
 
     def execute(self, context: Context):
         try:
