@@ -2,7 +2,6 @@ using System.Buffers.Binary;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
-using InstantEdit.Models;
 using InstantEdit.Services.Painter;
 using InstantEdit.Services.Previews;
 using InstantEdit.Services.Skeletons;
@@ -11,13 +10,19 @@ namespace InstantEdit.Services.Heels;
 
 /// <summary>
 /// A Simple Heels offset stored in a model as an attribute, which Simple Heels applies to whoever wears
-/// the model: <c>heels_offset=0.05</c>, or the form TexTools and Penumbra keep, <c>heels_offset_a_af</c>,
-/// with the letters a to j for digits, <c>_</c> for the point and <c>n_</c> for a minus. Simple Heels
-/// scales it by the character's height.
+/// the model: <c>heels_offset=0.05</c>, or the TexTools-safe spelling <c>heels_offset_a_af</c>, with the
+/// letters a to j for digits, <c>_</c> for the point and <c>n_</c> for a minus. Simple Heels scales it by
+/// the character's height.
 /// </summary>
 internal sealed record HeelsModelOffset(string Attribute, float Value)
 {
     private const string Prefix = "heels_offset";
+
+    /// <summary>
+    /// Whether an attribute is a heels offset in any spelling, readable or not: the attributes Fix offset
+    /// replaces, as Simple Heels' model editor and the Blender add-on replace them.
+    /// </summary>
+    public static bool IsOffset(string attribute) => attribute.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase);
 
     /// <summary> The first offset attribute Simple Heels can read, read the way it reads them (Plugin.CheckModelSlot). </summary>
     public static HeelsModelOffset? Find(IEnumerable<string> attributes)
@@ -46,14 +51,11 @@ internal sealed record HeelsModelOffset(string Attribute, float Value)
         return null;
     }
 
-    /// <summary> The TexTools-safe attribute for an offset, as Simple Heels' Copy Attribute button writes it. </summary>
-    public static string AttributeFor(float value)
-    {
-        var text = new StringBuilder(Prefix + "_");
-        foreach (var c in Round(value).ToString("0.0###", CultureInfo.InvariantCulture).Replace("-", "n_").Replace(".", "_"))
-            text.Append(c is >= '0' and <= '9' ? (char)('a' + (c - '0')) : c);
-        return text.ToString();
-    }
+    /// <summary>
+    /// The attribute Fix offset writes for an offset: <c>heels_offset=0.119</c>, with 2 to 4 decimals, as the
+    /// Blender add-on writes it. Most heels mods use this spelling.
+    /// </summary>
+    public static string AttributeFor(float value) => $"{Prefix}={Round(value).ToString("0.00##", CultureInfo.InvariantCulture)}";
 
     /// <summary> An offset to type or paste into Simple Heels: four decimals, a tenth of a millimetre. </summary>
     public static string Format(float value) => Round(value).ToString("0.0000", CultureInfo.InvariantCulture);
@@ -67,11 +69,12 @@ internal sealed record HeelsModelOffset(string Attribute, float Value)
 }
 
 /// <summary>
-/// A feet model measured unanimated, in the standard pose the game's models are made in: the height of
-/// its lowest drawn point above the character's origin, where the character stands (in the character's
-/// model space), and the offset the model stores for Simple Heels, if any.
+/// A model holding a character's feet, measured unanimated, in the standard pose the game's models are
+/// made in: the height of its lowest drawn point above the character's origin, where the character
+/// stands (in the character's model space), and the offset the model stores for Simple Heels, if any.
 /// </summary>
-internal sealed record HeelsMeasurement(float Lowest, int DrawnParts, int HiddenParts, HeelsModelOffset? ModelOffset)
+/// <param name="OffsetAttributes">How many heels offset attributes the model has in any spelling, readable or not.</param>
+internal sealed record HeelsMeasurement(float Lowest, int DrawnParts, int HiddenParts, HeelsModelOffset? ModelOffset, int OffsetAttributes = 0)
 {
     /// <summary> How far to lift the character, in model units, so that the lowest point stands on the ground. </summary>
     public float Offset => -Lowest;
@@ -80,16 +83,16 @@ internal sealed record HeelsMeasurement(float Lowest, int DrawnParts, int Hidden
 internal static class HeelsMeasure
 {
     /// <summary>
-    /// Measures a feet model as the character wears it: reshaped by <paramref name="deformer"/> when it
-    /// is another race's model, without the parts <paramref name="enabledAttributes"/> turns off (null
-    /// counts every part), and with the shapes <paramref name="enabledShapes"/> turns on. The ground is
-    /// the model origin: the game's bare feet stand on it, and so do the offsets mod authors store
-    /// (checked on the heels in a real mod library).
+    /// Measures a model as the character wears it: reshaped by <paramref name="deformer"/> when it is
+    /// another race's model, without the parts <paramref name="enabledAttributes"/> turns off (null counts
+    /// every part), and with the shapes <paramref name="enabledShapes"/> turns on. The ground is the model
+    /// origin: the game's bare feet stand on it, and so do the offsets mod authors store (checked on the
+    /// heels in a real mod library, and on dresses whose authors set the hem on the ground).
     /// </summary>
     public static HeelsMeasurement Measure(byte[] model, RacialDeformer? deformer, uint? enabledAttributes, uint enabledShapes)
     {
         if (model.Length < 4 || BinaryPrimitives.ReadUInt32LittleEndian(model) != ModelInfo.V6)
-            throw new NotSupportedException("The feet model isn't a Dawntrail model, which the measurement needs.");
+            throw new NotSupportedException("The model isn't a Dawntrail model, which the measurement needs.");
         var bytes = deformer is { BoneCount: > 0 } ? RacialScalingModel.Apply(model, deformer) : model;
         var mesh = ModelMeshReader.Read(bytes, shapes: enabledShapes != 0);
 
@@ -130,58 +133,129 @@ internal static class HeelsMeasure
             }
         }
         if (drawn == 0 || !float.IsFinite(lowest))
-            throw new InvalidDataException("No part of the feet model is drawn.");
-        return new HeelsMeasurement(lowest, drawn, hidden, HeelsModelOffset.Find(mesh.Attributes));
+            throw new InvalidDataException("No part of the model is drawn.");
+        return new HeelsMeasurement(lowest, drawn, hidden, HeelsModelOffset.Find(mesh.Attributes), mesh.Attributes.Count(HeelsModelOffset.IsOffset));
     }
 
     /// <summary>
-    /// The feet model among an On Screen character's resources whose file is <paramref name="drawnFile"/>
-    /// (as <see cref="PainterVisibility.NormalizePath"/> writes it): the one the character draws in its feet
-    /// slot. A node with the feet slot's game path wins over a copy without one. Null when the list
-    /// predates the character's current shoes.
+    /// The file behind the model a character draws in <paramref name="slot"/>, from Penumbra's resolved paths
+    /// for the character (file to the game paths it serves): the file that is <paramref name="drawnFile"/> (as
+    /// <see cref="PainterVisibility.NormalizePath"/> writes it), with the slot's game path, whose race code
+    /// says which race the model was made for. Null when Penumbra doesn't list the file.
     /// </summary>
-    public static ResourceNode? FeetNode(IReadOnlyList<ResourceNode> roots, string drawnFile)
+    public static (string ActualPath, string GamePath)? Resolve(IReadOnlyDictionary<string, HashSet<string>>? resolved, string drawnFile,
+        HeelsSlot slot)
     {
-        ResourceNode? found = null;
-        foreach (var node in Flatten(roots))
+        if (resolved is null)
+            return null;
+        (string, string)? found = null;
+        foreach (var (actualPath, gamePaths) in resolved.OrderBy(entry => entry.Key, StringComparer.Ordinal))
         {
-            if (!node.ActualPath.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase) || PainterVisibility.NormalizePath(node.ActualPath) != drawnFile)
+            if (!actualPath.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase) || PainterVisibility.NormalizePath(actualPath) != drawnFile)
                 continue;
-            if (IsFeetPath(node.GamePath))
-                return node;
-            found ??= node;
+            var paths = gamePaths.Select(PathRules.NormalizeGamePath).Where(path => path.Length > 0).Order(StringComparer.Ordinal).ToList();
+            if (paths.FirstOrDefault(path => path.EndsWith(slot.Suffix(), StringComparison.OrdinalIgnoreCase)) is { } slotPath)
+                return (actualPath, slotPath);
+            found ??= (actualPath, paths.FirstOrDefault() ?? string.Empty);
         }
         return found;
     }
-
-    /// <summary> The path whose race code says which race the model was made for: the game path, else the file's name. </summary>
-    public static string RacePath(ResourceNode node)
-        => node.GamePath.Length > 0 ? node.GamePath : Path.GetFileName(node.ActualPath);
-
-    private static bool IsFeetPath(string gamePath) => gamePath.EndsWith("_sho.mdl", StringComparison.OrdinalIgnoreCase);
-
-    private static IEnumerable<ResourceNode> Flatten(IEnumerable<ResourceNode> nodes)
-    {
-        foreach (var node in nodes)
-        {
-            yield return node;
-            foreach (var child in Flatten(node.Children))
-                yield return child;
-        }
-    }
 }
 
-/// <summary> What Simple Heels calls things and reports, so the card can point at the entry to add. </summary>
-internal static class SimpleHeels
+/// <summary> The model slots that can hold a character's feet, numbered as a human's models are. </summary>
+internal enum HeelsSlot
 {
-    /// <summary> The Item sheet's UI category of the feet items Simple Heels lists as footwear. </summary>
-    public const uint FeetCategory = 38;
+    Top = 1,
+    Legs = 3,
+    Feet = 4,
+}
+
+internal static class HeelsSlots
+{
+    /// <summary>
+    /// Where a character's feet are: the feet model, else the legs when their gear hides the feet, else a
+    /// one-piece body when its gear hides the legs too. The game draws no model in a slot gear hides.
+    /// </summary>
+    public static readonly IReadOnlyList<HeelsSlot> FeetOrder = [HeelsSlot.Feet, HeelsSlot.Legs, HeelsSlot.Top];
+
+    /// <summary> The slots whose model offsets Simple Heels reads before this one's: it takes the body's, then the legs', then the feet's. </summary>
+    public static IEnumerable<HeelsSlot> ReadBefore(this HeelsSlot slot) => slot switch
+    {
+        HeelsSlot.Feet => [HeelsSlot.Top, HeelsSlot.Legs],
+        HeelsSlot.Legs => [HeelsSlot.Top],
+        _ => [],
+    };
+
+    public static string Name(this HeelsSlot slot) => slot switch
+    {
+        HeelsSlot.Top => "body",
+        HeelsSlot.Legs => "legs",
+        _ => "feet",
+    };
+
+    public static string Suffix(this HeelsSlot slot) => slot switch
+    {
+        HeelsSlot.Top => "_top.mdl",
+        HeelsSlot.Legs => "_dwn.mdl",
+        _ => "_sho.mdl",
+    };
+}
+
+/// <summary> What Fix offset does with a measured model. </summary>
+internal enum HeelsFixAction
+{
+    /// <summary> The model's offset is right, or it stands on the ground and has none. </summary>
+    None,
+    /// <summary> The model gets <see cref="HeelsFixPlan.Attribute"/> as its only heels offset. </summary>
+    Write,
+    /// <summary> The model doesn't stand on the ground, so no offset can be right. </summary>
+    Refuse,
+}
+
+/// <param name="Attribute">The attribute to write, for <see cref="HeelsFixAction.Write"/>.</param>
+/// <param name="Reason">Why nothing is written, for the other actions.</param>
+internal sealed record HeelsFixPlan(HeelsFixAction Action, string Attribute, string Reason);
+
+internal static class HeelsFix
+{
+    /// <summary> Within 1 mm a model stands on the ground, and an offset it stores is right. </summary>
+    public const float Tolerance = 0.001f;
 
     /// <summary>
-    /// The name Simple Heels' Equipment Offsets list gives a feet model: the names of the feet items that
-    /// use it, in sheet order, joined as its ShoeModel.Name joins them.
+    /// The highest a model's lowest point may float: the bare feet of body mods float up to 2.4 cm. Legs
+    /// that end at the ankle float 14 cm, so they hold no feet.
     /// </summary>
-    public static string FeetName(ushort modelId, IReadOnlyList<string> items) => modelId == 0
+    public const float MaxAboveGround = 0.05f;
+
+    /// <summary> The deepest a model may reach: the deepest heels among 1,185 shoe models of a large mod library reach 21 cm. </summary>
+    public const float MaxBelowGround = 0.3f;
+
+    public static HeelsFixPlan Plan(HeelsMeasurement measurement, HeelsSlot slot)
+    {
+        if (measurement.Lowest > MaxAboveGround)
+            return new HeelsFixPlan(HeelsFixAction.Refuse, string.Empty,
+                $"The {slot.Name()} model's lowest point is {Centimetres(measurement.Lowest)} above the ground, so it doesn't stand on the ground and no offset fits it.");
+        if (measurement.Lowest < -MaxBelowGround)
+            return new HeelsFixPlan(HeelsFixAction.Refuse, string.Empty,
+                $"The {slot.Name()} model reaches {Centimetres(-measurement.Lowest)} below the ground, deeper than any heel. Check it for stray vertices.");
+        if (measurement.OffsetAttributes == 1 && measurement.ModelOffset is { } stored && MathF.Abs(stored.Value - measurement.Offset) < Tolerance)
+            return new HeelsFixPlan(HeelsFixAction.None, string.Empty, $"The model's offset, {stored.Attribute}, is right already.");
+        if (measurement.OffsetAttributes == 0 && MathF.Abs(measurement.Offset) < Tolerance)
+            return new HeelsFixPlan(HeelsFixAction.None, string.Empty, $"The {slot.Name()} model stands on the ground already and needs no offset.");
+        return new HeelsFixPlan(HeelsFixAction.Write, HeelsModelOffset.AttributeFor(measurement.Offset), string.Empty);
+    }
+
+    public static string Centimetres(float metres) => (metres * 100).ToString("0.0", CultureInfo.InvariantCulture) + " cm";
+}
+
+/// <summary> What Simple Heels calls things and reports. </summary>
+internal static class SimpleHeels
+{
+    /// <summary>
+    /// The name Simple Heels' Equipment Offsets list gives a model: the names of the items that use it, in
+    /// sheet order, joined as its ShoeModel.Name joins them.
+    /// </summary>
+    public static string ItemName(HeelsSlot slot, ushort modelId, IReadOnlyList<string> items) => modelId == 0 && slot == HeelsSlot.Feet
         ? "Smallclothes (Barefoot)"
         : items.Count switch
         {

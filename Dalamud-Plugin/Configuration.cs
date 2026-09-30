@@ -127,6 +127,12 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>Send my character to Blender sends the character's weapons too.</summary>
     public bool CharacterSendWeapons { get; set; }
 
+    /// <summary>
+    /// Quick Actions' heels offset: write the Simple Heels offset into every feet model the local player
+    /// puts on (or the legs or body model when gear hides the feet), without pressing Fix offset.
+    /// </summary>
+    public bool AutoFixHeels { get; set; }
+
     /// <summary>Legacy v9 context payload retained only for one-time migration or storage fallback.</summary>
     public List<PersistedExportContext> ExportContexts { get; set; } = [];
 
