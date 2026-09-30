@@ -43,6 +43,7 @@ internal static class NeckSeamCapture
         }
 
         var bodies = new List<NeckSeamModelInput>();
+        var clothing = new List<NeckSeamModelInput>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (faceNode is not null)
             seen.Add(faceNode.GamePath + "\n" + faceNode.ActualPath);
@@ -53,12 +54,25 @@ internal static class NeckSeamCapture
             // Body skin materials, their textures and the models are recorded too: the neck's skin settings can
             // meet on the body's side, and the body seams' fixes write models, materials and textures.
             var skins = Materials(node, read, sources, material => material.IsBodySkin, recordTextures: true);
-            if (skins.Count == 0 || ReadNode(node, read, sources) is not { } bytes)
+            if (skins.Count == 0)
+            {
+                // Gear without skin still draws clothing that can cover another part's seam.
+                if (IsGear(node.GamePath) && ReadNode(node, read, null) is { } clothBytes)
+                    clothing.Add(WithLive(new NeckSeamModelInput(node.GamePath, clothBytes, []), node, live));
+                continue;
+            }
+            if (ReadNode(node, read, sources) is not { } bytes)
                 continue;
             bodies.Add(WithLive(new NeckSeamModelInput(node.GamePath, bytes, skins), node, live));
         }
         var race = live is { Race: > 0 } ? live.Race : face is null ? null : NeckSeamAnalyzer.RaceOf(face.GamePath);
-        return new NeckSeamCaptured(new NeckSeamInput(face, bodies, racialDeformers) { CharacterRace = race }, sources);
+        return new NeckSeamCaptured(new NeckSeamInput(face, bodies, racialDeformers) { CharacterRace = race, Clothing = clothing }, sources);
+    }
+
+    private static bool IsGear(string gamePath)
+    {
+        var path = PathRules.NormalizeGamePath(gamePath);
+        return path.StartsWith("chara/equipment/", StringComparison.OrdinalIgnoreCase) || path.StartsWith("chara/accessory/", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary> The model's enabled attributes and shape keys, when the game draws the file the tree names. </summary>

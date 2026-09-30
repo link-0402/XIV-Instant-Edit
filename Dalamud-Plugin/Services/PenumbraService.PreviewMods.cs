@@ -208,6 +208,75 @@ public sealed partial class PenumbraService
         return warnings;
     }
 
+    /// <summary> The managed backups kept of a mod file a preview can write, newest first. </summary>
+    internal IReadOnlyList<ManagedBackup> ManagedBackupsFor(PreviewSource source)
+        => _backups is not null && source.IsModFile ? _backups.List(source.ModDirectory, source.RelativePath) : [];
+
+    /// <summary>
+    /// Puts managed backups back over their mod files. Each file must still sit at its place in its
+    /// registered mod. The current file is backed up first, so a restore can be undone the same way,
+    /// then replaced; the mods are reloaded and the character redrawn.
+    /// </summary>
+    /// <param name="recheck">What to do after a file moved, such as "Measure the seams again".</param>
+    internal async Task<IReadOnlyList<string>> RestorePreviewSourcesAsync(IReadOnlyList<(PreviewSource Source, ManagedBackup Backup)> restores, int objectIndex,
+        string recheck)
+    {
+        if (_backups is null)
+            throw new IOException("Managed backup storage is unavailable, so nothing can be restored.");
+        await _exportGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var targets = new List<(string File, PreviewSource Source, string Backup)>();
+            foreach (var (source, backup) in restores)
+            {
+                if (!source.IsModFile || !IsSafeModName(source.ModDirectory) || !IsSafeRelativeResourcePath(source.RelativePath))
+                    throw new IOException($"{source.Label} is not a writable mod file.");
+                if (!string.Equals(_backups.Describe(source.ModDirectory, source.RelativePath).Id, backup.TargetId, StringComparison.Ordinal))
+                    throw new IOException($"The backup {backup.Name} doesn't belong to {source.Label}.");
+                var scan = await _framework.RunOnFrameworkThread(() => ResolveModScanOnFramework(source.ModDirectory, source.ModStableId)).ConfigureAwait(false)
+                    ?? throw new TextureConflictException($"The mod {source.ModName} is no longer registered in Penumbra.");
+                var file = Path.GetFullPath(source.ActualPath);
+                var root = scan.CandidateRoots.FirstOrDefault(candidate =>
+                    string.Equals(Path.GetFullPath(Path.Combine(candidate, source.RelativePath.Replace('/', Path.DirectorySeparatorChar))), file,
+                        StringComparison.OrdinalIgnoreCase));
+                if (root is null || !IsSafeModResourceFile(root, file) || !File.Exists(file))
+                    throw new TextureConflictException($"{source.Label} moved or is no longer part of its mod. {recheck}.");
+                var backupPath = _backups.Resolve(backup.TargetId, backup.Name);
+                if ((File.GetAttributes(backupPath) & FileAttributes.ReparsePoint) != 0 || new FileInfo(backupPath).Length == 0)
+                    throw new IOException($"The backup {backup.Name} can't be read.");
+                targets.Add((file, source, backupPath));
+            }
+
+            foreach (var (file, source, backupPath) in targets)
+            {
+                _backups.Create(file, source.ModDirectory, source.RelativePath);
+                var temporary = file + $".instant-edit-{Guid.NewGuid():N}.tmp";
+                try
+                {
+                    File.Copy(backupPath, temporary, false);
+                    File.Move(temporary, file, true);
+                }
+                finally
+                {
+                    if (File.Exists(temporary))
+                        File.Delete(temporary);
+                }
+            }
+        }
+        finally
+        {
+            _exportGate.Release();
+        }
+
+        var warnings = new List<string>();
+        foreach (var mod in restores.Select(r => r.Source.ModDirectory).Distinct(StringComparer.OrdinalIgnoreCase))
+            if (await _framework.RunOnFrameworkThread(() => ReloadModOnFramework(mod)).ConfigureAwait(false) is { } reload)
+                warnings.Add(reload.Message);
+        if (await RedrawPreviewActorAsync(objectIndex).ConfigureAwait(false) is { } redraw)
+            warnings.Add(redraw);
+        return warnings;
+    }
+
     /// <summary>
     /// For files of one mod: the options that map each one, and whether it is mapped from more than
     /// one game path. Empty when the mod's metadata can't be read.

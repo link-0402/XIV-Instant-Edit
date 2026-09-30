@@ -25,6 +25,8 @@ internal sealed record NeckSeamModelInput(string GamePath, byte[] Bytes, IReadOn
 internal sealed record NeckSeamInput(NeckSeamModelInput? Face, IReadOnlyList<NeckSeamModelInput> Bodies, byte[]? RacialDeformers)
 {
     public int? CharacterRace { get; init; }
+    /// <summary> Loaded gear models without skin, whose clothing can cover a seam (their materials aren't read). </summary>
+    public IReadOnlyList<NeckSeamModelInput> Clothing { get; init; } = [];
 }
 
 internal enum NeckSeamSeverity
@@ -97,6 +99,10 @@ internal static class NeckSeamAnalyzer
     public const float SnapRadius = 0.005f;
     public const int SamplesPerEdge = 64;
     public const float SmoothingMetres = 0.010f;
+    /// <summary> Neck loops this much closer than the best so far replace it (0.01 mm), so rounding never decides between two tops. </summary>
+    private const float TieDistance = 0.00001f;
+    /// <summary> Normal-mapped normals smoothed over 1 cm that differ by more than this across the neck show as a seam. </summary>
+    private const float NormalMapLimit = 1.5f;
     private const float DensityBand = 0.03f;
     private const int BodyTextureEdge = 1024;
     private static readonly Regex FaceModel = new(@"^chara/human/c(?<race>\d{4})/obj/face/f\d{4}/model/c\d{4}f\d{4}_fac\.mdl$",
@@ -143,7 +149,8 @@ internal static class NeckSeamAnalyzer
         public int Count => Positions.Length;
     }
 
-    public static NeckSeamReport Analyze(NeckSeamInput input)
+    /// <param name="around">The clothing and seam connectors around the seams, when the caller read them already.</param>
+    public static NeckSeamReport Analyze(NeckSeamInput input, SeamSurroundings? around = null)
     {
         var faceInput = input.Face ?? throw new InvalidDataException("This character has no face model loaded.");
         var faceRace = RaceOf(faceInput.GamePath) ?? throw new InvalidDataException("The face model's race could not be read from its path.");
@@ -160,9 +167,13 @@ internal static class NeckSeamAnalyzer
         };
         var ringPoints = faceRing.Select(w => faceMesh.Positions[faceTopology.Representative[w]]).ToArray();
 
-        // The body side: of every body skin mesh, the open loop that lies on the face's ring.
+        // The body side: of every gear body skin mesh, the open loop that lies on the face's ring. The human body
+        // models are the game's seam connectors (whose neck band starts exactly at the ring) and its low-poly body,
+        // never the skin at the neck. Loops within a hundredth of a millimetre tie, and a top wins the tie, so the
+        // pick doesn't hang on rounding.
         (Side Side, NeckSeamModelInput Model, NeckSeamMaterialInput Material, float Distance)? best = null;
-        foreach (var bodyInput in input.Bodies)
+        foreach (var bodyInput in input.Bodies.Where(b => !SeamSurroundings.IsHumanBodyModel(b.GamePath))
+                     .OrderBy(b => BodySeamAnalyzer.SlotOf(b.GamePath) == "top" ? 0 : 1).ThenBy(b => PathRules.NormalizeGamePath(b.GamePath), StringComparer.Ordinal))
         {
             SkinModel model;
             try { model = bodyInput.Read(); }
@@ -187,7 +198,7 @@ internal static class NeckSeamAnalyzer
                 {
                     var points = loop.Select(w => positions[topology.Representative[w]]).ToArray();
                     var distance = ringPoints.Average(p => points.Min(q => Vector3.Distance(p, q)));
-                    if (best is null || distance < best.Value.Distance)
+                    if (best is null || distance < best.Value.Distance - TieDistance)
                         best = (new Side
                         {
                             Mesh = mesh, Material = parsed, Positions = positions, Normals = normals, Binormals = binormals, Topology = topology, Ring = loop,
@@ -355,18 +366,29 @@ internal static class NeckSeamAnalyzer
             Channel("Subsurface scattering", SkinMaterial.MaskSampler, subsurface.Face, subsurface.Body, 0.03f, "Mask blue at the seam.");
         if (channels.Normal is { } normal)
         {
-            var off = normal.Max > 1.5f;
+            var off = normal.Max > NormalMapLimit;
             if (off)
                 blend.Add(SkinMaterial.NormalSampler);
             findings.Add(new NeckSeamFinding("Surface normal at the seam", Deg(normal.Mean) + " avg", Deg(normal.Max) + " max",
-                off ? NeckSeamSeverity.Problem : NeckSeamSeverity.Ok,
-                "The angle between the face's and the body's normal-mapped surface along the seam, as the shader builds it (with the connection snap applied). " +
+                normal.Max > 2 * NormalMapLimit ? NeckSeamSeverity.Problem : off ? NeckSeamSeverity.Warning : NeckSeamSeverity.Ok,
+                "The angle between the face's and the body's normal-mapped surface along the seam, as the shader builds it (with the connection snap applied), " +
+                "smoothed over 1 cm so single pores don't count. " +
                 $"The normal maps tilt the surface {Deg(normal.FaceTilt)} (face) and {Deg(normal.BodyTilt)} (body) away from the mesh there.",
                 off ? NeckSeamFixKind.Textures : NeckSeamFixKind.None));
         }
         if (channels.LipMask > 0.05f)
             findings.Add(new NeckSeamFinding("Lip mask at the neck", $"{channels.LipMask:0.00}", "—", NeckSeamSeverity.Warning,
                 "The face's normal map alpha (the lip colour mask) isn't zero at the neck, so lip colour tints the seam.", NeckSeamFixKind.None));
+
+        // ---- Around the seam: the game's neck connector, and clothing over the neck ----
+        around ??= SeamSurroundings.Read(input, faceRace);
+        var faceSkin = (new SeamSpace(face.Positions, face.Mesh.Triangles), NormalsOf(face.Normals, face.Mesh.Triangles));
+        var bodySkin = (new SeamSpace(body.Side.Positions, body.Side.Mesh.Triangles), NormalsOf(body.Side.Normals, body.Side.Mesh.Triangles));
+        if (BodySeamAnalyzer.ConnectorFinding("neck", "at the neck", [faceSkin, bodySkin], seam.Positions,
+                PathRules.NormalizeGamePath(body.Material.GamePath), gap: !hasMorphs && vertexGap.Max > BodySeamAnalyzer.GapFloor, around) is { Finding: var connector })
+            findings.Add(connector);
+        BodySeamAnalyzer.Clothing(findings, around.Covered(face.Ring.Select(w => (face.Positions[face.Topology.Representative[w]],
+            face.Normals[face.Topology.Representative[w]])).ToList()), "at the neck");
 
         return new NeckSeamReport
         {
@@ -559,6 +581,14 @@ internal static class NeckSeamAnalyzer
         return (new Stat(gaps.Average(), gaps.Max()), new Stat(angles.Average(), angles.Max()), weightDiff, colors);
     }
 
+    /// <summary> A surface's normal at a point on it, blended from its triangle's corners. </summary>
+    private static Func<SurfacePoint, Vector3> NormalsOf(Vector3[] normals, int[] triangles) => point =>
+    {
+        var t = 3 * point.Triangle;
+        return SafeNormalize(normals[triangles[t]] * point.Weights.X + normals[triangles[t + 1]] * point.Weights.Y + normals[triangles[t + 2]] * point.Weights.Z,
+            normals[triangles[t]]);
+    };
+
     internal static Dictionary<string, float> Weights(SkinMesh mesh, int vertex)
     {
         var result = new Dictionary<string, float>(StringComparer.Ordinal);
@@ -659,21 +689,29 @@ internal static class NeckSeamAnalyzer
         NormalStats? normal = null;
         if (faceNormal is not null && bodyNormal is not null)
         {
-            var faceWorld = new Vector3[seam.Count];
-            var bodyWorld = new Vector3[seam.Count];
+            // Smoothed over a centimetre along the seam, as the blend that fixes it works, so single pores don't count.
+            var faceWorld = new Vector4[seam.Count];
+            var bodyWorld = new Vector4[seam.Count];
             float sum = 0, max = 0, faceTilt = 0, bodyTilt = 0;
             for (var i = 0; i < seam.Count; i++)
             {
                 var n = seam.FaceNormal[i];
                 var fFrame = Frame(n, seam.FaceBinormal[i], seam.FaceSign[i]);
                 var bFrame = Frame(snapped ? n : seam.BodyNormal[i], seam.BodyBinormal[i], seam.BodySign[i]);
-                faceWorld[i] = ToWorld(faceNormal[i], fFrame);
-                bodyWorld[i] = ToWorld(bodyNormal[i], bFrame);
-                var angle = AngleDegrees(faceWorld[i], bodyWorld[i]);
+                var f = ToWorld(faceNormal[i], fFrame);
+                var b = ToWorld(bodyNormal[i], bFrame);
+                faceWorld[i] = new Vector4(f, 0);
+                bodyWorld[i] = new Vector4(b, 0);
+                faceTilt += AngleDegrees(f, fFrame.N);
+                bodyTilt += AngleDegrees(b, bFrame.N);
+            }
+            var faceSmooth = Smooth(seam, faceWorld);
+            var bodySmooth = Smooth(seam, bodyWorld);
+            for (var i = 0; i < seam.Count; i++)
+            {
+                var angle = AngleDegrees(new Vector3(faceSmooth[i].X, faceSmooth[i].Y, faceSmooth[i].Z), new Vector3(bodySmooth[i].X, bodySmooth[i].Y, bodySmooth[i].Z));
                 sum += angle;
                 max = Math.Max(max, angle);
-                faceTilt += AngleDegrees(faceWorld[i], fFrame.N);
-                bodyTilt += AngleDegrees(bodyWorld[i], bFrame.N);
             }
             normal = new NormalStats(sum / seam.Count, max, faceTilt / seam.Count, bodyTilt / seam.Count);
         }
