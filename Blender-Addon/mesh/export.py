@@ -159,10 +159,29 @@ def get_export_path(directory: Path, file_name: str, subfolder: bool, body_slot:
 
     return export_path
 
+@contextmanager
+def _showing(export_objects):
+    """Show hidden meshes an export was given for its duration: parts a character send imported
+    hidden because the game didn't draw them still belong to their model."""
+    view_layer = bpy.context.view_layer
+    hidden = [
+        obj for obj in dict.fromkeys(export_objects or ())
+        if obj.name in view_layer.objects and obj.hide_get()
+    ]
+    for obj in hidden:
+        obj.hide_set(False)
+    try:
+        yield
+    finally:
+        for obj in hidden:
+            if obj.name in view_layer.objects:
+                obj.hide_set(True)
+
+
 def export_result(file_path: Path, file_format: str, logger: YetAnotherLogger=None, batch=False, export_objects=None) -> None:
     settings = get_settings()
     flush_edit_mode(export_objects)
-    with _clean_export_state(export_objects, settings.reset_scaling_on_export):
+    with _showing(export_objects), _clean_export_state(export_objects, settings.reset_scaling_on_export):
         bpy.context.evaluated_depsgraph_get().update()
         export = FileExport(file_path, file_format, logger=logger, batch=batch, export_objects=export_objects)
         export.export_template()

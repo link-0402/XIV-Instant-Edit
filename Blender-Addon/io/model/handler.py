@@ -99,6 +99,8 @@ class SceneHandler:
         if self.logger:
             self.logger.log("Preparing meshes...", 2)
 
+        from ...instant_edit.character import game_shape_keys
+
         visible_obj = list(self.source_objects) if self.source_objects is not None else visible_meshobj()
         no_skeleton = []
 
@@ -108,11 +110,15 @@ class SceneHandler:
                 no_skeleton.append(obj.name)
                 continue
             shape_key    = self.sort_shape_keys(obj) if self.shapekeys and obj.data.shape_keys else []
+            # Shape keys a character send turned on because the game had them on stay off in the
+            # model, whether or not its shape keys are kept: the game turns them on itself.
+            kept_names   = {key.name for key in shape_key}
+            game_keys    = [key for key in game_shape_keys(obj) if key.name not in kept_names]
             transparency = ("xiv_transparency" in obj and obj["xiv_transparency"])
 
             self.meshes[obj] = {
                 'shape'       : shape_key,
-                'shape_values': [(key.name, key.value) for key in shape_key],
+                'shape_values': [(key.name, key.value) for key in (*shape_key, *game_keys)],
                 'transparency': transparency,
                 'old_name'    : obj.name,
                 'hidden'      : obj.hide_get(),
@@ -125,7 +131,7 @@ class SceneHandler:
             # a separate key. Snapshotting above must happen before this mutation
             # so restore_meshes can recover even when a later preparation step
             # or the exporter itself raises.
-            for key in shape_key:
+            for key in (*shape_key, *game_keys):
                 key.value = 0
             
             obj.name = "temp_export"

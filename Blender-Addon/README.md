@@ -102,6 +102,11 @@ Everything is in the **IE - Instant Edit** tab of the 3D Viewport's sidebar (pre
   still exports on its own, and weapons on armatures of their own, hung from the bone that holds
   them. A pose or animation sent with it is an action on that armature. Sending the character
   again replaces the collection; objects you added to it move to the scene.
+- It arrives as the game draws it. Parts the game hides, such as a mod's other variants or skin
+  under gear, come in hidden (`xiv_ie_game_hidden`) and still export with the rest of their
+  model, so Quick Export keeps the model whole; delete a part to leave it out. The shape keys the
+  game has on are turned on; exports write the model without them, since the game turns them on
+  itself.
 - Optional material previews, built from the materials and textures the game uses for the model,
   with colorsets, masks, normal maps and transparency. They are only for viewing: Quick Export
   doesn't write them, and changing them doesn't change the game.

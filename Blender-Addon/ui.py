@@ -7,6 +7,7 @@ from typing import NamedTuple
 
 from bpy.types import Context, Menu, Panel
 
+from .instant_edit.character import is_game_hidden
 from .instant_edit.context import (
     ContextValidationError,
     _value,
@@ -675,14 +676,19 @@ def _draw_export_button(layout, props, ref) -> None:
     row.popover("XIVIE_PT_export_scope_popover", text="", icon="PREFERENCES")
 
 
-def _draw_scope_summary(layout, props) -> None:
-    """Point out non-default Quick Export options that live in the popover."""
+def _draw_scope_summary(layout, props, ref) -> None:
+    """Point out non-default Quick Export options that live in the popover, and the model's parts
+    a character send hid because the game didn't draw them, which export all the same."""
     notes = []
     if props.export_scope == "VISIBLE_NO_MANNEQUIN":
         excluded = props.export_excluded_mesh
         notes.append((f"Except {excluded.name}" if excluded is not None else "No mesh excluded yet", "FILTER"))
     elif props.export_scope == "CURRENT_COLLECTION":
         notes.append(("Context collection only", "FILTER"))
+    hidden = sum(1 for obj in ref.collection.objects
+                 if obj.type == "MESH" and is_game_hidden(obj) and not obj.visible_get())
+    if hidden:
+        notes.append((f"Also exports {hidden} part{'' if hidden == 1 else 's'} hidden in game", "HIDE_ON"))
     if props.create_attribute_groups:
         notes.append(("Creates an attribute toggle group", "OUTLINER_COLLECTION"))
     hair_skeleton = cached_hair_skeleton()
@@ -767,7 +773,7 @@ class XIVIE_PT_session(Panel):
             _draw_destination(layout, props, ref, needs_option)
         _draw_readiness(layout, context, props, ref)
         _draw_export_button(layout, props, ref)
-        _draw_scope_summary(layout, props)
+        _draw_scope_summary(layout, props, ref)
         _draw_status_row(layout, props)
 
 

@@ -6,15 +6,17 @@ using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.CharacterSend;
+using InstantEdit.Services.Painter;
 using InstantEdit.Services.Skeletons;
 
 namespace InstantEdit.Ui;
 
 /// <summary>
-/// Quick Actions' Send my character to Blender: every model your character shows goes to Blender
-/// as one scene, bound to one armature built from your character's whole skeleton, in its rest pose,
-/// its current pose or the animation it plays. Each model is an import of its own with its own
-/// context, so Quick Export still writes each one back on its own.
+/// Quick Actions' Send my character to Blender: your character as the game draws it now goes to
+/// Blender as one scene, bound to one armature built from your character's whole skeleton, in its
+/// rest pose, its current pose or the animation it plays. The models its draw object holds go over
+/// with the parts and shape keys the game has on; parts it hides go over hidden. Each model is an
+/// import of its own with its own context, so Quick Export still writes each one back on its own.
 /// </summary>
 public sealed partial class MainWindow
 {
@@ -31,6 +33,9 @@ public sealed partial class MainWindow
     private volatile string _characterSendProgress = string.Empty;
     private volatile CharacterSendMessage? _characterSendMessage;
     private CancellationTokenSource? _characterSendCancellation;
+    private PainterLiveReader? _characterDrawState;
+
+    internal void AttachCharacterDrawState(PainterLiveReader? reader) => _characterDrawState = reader;
 
     /// <summary> Whether the card keeps the Animations tab's listener running, to see the animation your character plays. </summary>
     private bool CharacterSendListens => _config.CharacterSendPose == CharacterPose.Animation;
@@ -39,9 +44,9 @@ public sealed partial class MainWindow
     {
         ImGui.Spacing();
         QuickActionCard("##quick-send-character", FontAwesomeIcon.Cubes, "Send my character to Blender",
-            "Sends every model your character shows (body, face, hair, tail or ears, and all gear) to Blender as one scene, " +
-            "bound to one armature with your character's skeleton, with the model import options. Each model keeps its own " +
-            "context, so Quick Export still writes it back on its own.",
+            "Sends your character to Blender as the game draws it now: every model it shows (body, face, hair, tail or ears, " +
+            "and all gear) as one scene, bound to one armature with your character's skeleton, with the model import options. " +
+            "Parts it hides come over hidden. Each model keeps its own context, so Quick Export still writes it back whole.",
             DrawSendCharacterAction);
     }
 
@@ -234,6 +239,11 @@ public sealed partial class MainWindow
             _characterSendProgress = "Reading your character";
             var snapshot = await resolver.CharacterSnapshotAsync(character.ObjectIndex, character.Address, request.Weapons).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("Your character changed since the On Screen list was made. Refresh it and try again.");
+            // What the game draws now: the models the character's draw object holds, and their parts and shapes.
+            var plan = CharacterDrawState.Plan(models, character.ResourceRoots,
+                await ReadCharacterDrawStateAsync(character).ConfigureAwait(false));
+            if (plan.Models.Count == 0)
+                throw new InvalidOperationException("Your character draws none of the models in the On Screen list. Refresh it and try again.");
             var skeletonResult = await resolver.ResolveCharacterAsync(character.ObjectIndex, character.Address, token).ConfigureAwait(false);
             var skeleton = skeletonResult.Skeleton
                 ?? throw new InvalidOperationException(skeletonResult.Problem ?? "Your character's skeleton could not be read.");
@@ -255,23 +265,41 @@ public sealed partial class MainWindow
             var sent = new List<CharacterSentModel>();
             var failed = new List<string>();
             var weaponNotes = new List<string>();
-            for (var i = 0; i < models.Count; i++)
+            var leftOut = plan.LeftOut.ToList();
+            var hiddenParts = 0;
+            for (var i = 0; i < plan.Models.Count; i++)
             {
                 token.ThrowIfCancellationRequested();
-                var item = models[i];
-                _characterSendProgress = $"Sending model {i + 1} of {models.Count}: {item.FileName}";
+                var drawn = plan.Models[i];
+                var item = drawn.Model;
+                _characterSendProgress = $"Sending model {i + 1} of {plan.Models.Count}: {item.FileName}";
                 var weapon = item.Role == CharacterModelRole.Weapon;
-                var entry = new CharacterImportEntry(sendId, key, snapshot.Name,
-                    weapon ? CharacterImportEntry.WeaponRole : CharacterImportEntry.BodyRole, armatureName,
-                    weapon ? WeaponAttach(item, snapshot.Weapons, weaponNotes) : null);
                 var view = ResourceViews.FromNode(item.Node);
                 var model = new MdlFile { GamePath = view.GamePath, LocalPath = view.ActualPath };
                 try
                 {
+                    var bytes = await ReadModelBytesAsync(model, token).ConfigureAwait(false);
+                    var hidden = 0;
+                    if (plan.Known && CharacterDrawState.PartMasks(bytes) is { } parts)
+                    {
+                        var (shown, turnedOff) = CharacterDrawState.Count(parts, drawn.AttributeMasks);
+                        if (shown == 0)
+                        {
+                            // A model the game draws nothing of, such as a seam connector with every band off.
+                            leftOut.Add(new CharacterLeftOutModel(item.FileName, CharacterDrawState.NoPartReason));
+                            continue;
+                        }
+                        hidden = turnedOff;
+                    }
+                    var entry = new CharacterImportEntry(sendId, key, snapshot.Name,
+                        weapon ? CharacterImportEntry.WeaponRole : CharacterImportEntry.BodyRole, armatureName,
+                        weapon ? WeaponAttach(item, snapshot.Weapons, weaponNotes) : null,
+                        drawn.AttributeMasks.Count > 0 ? drawn.AttributeMasks : null, drawn.Shapes);
                     var result = await SendModelToBlenderAsync(actor, model, view, port, _config.ListenPort, importOptions,
-                        new CharacterModelSend(entry, skeletonPayload, scaling, scalingProblem, previewResources, collection),
+                        new CharacterModelSend(entry, skeletonPayload, scaling, scalingProblem, previewResources, collection, bytes),
                         token).ConfigureAwait(false);
                     sent.Add(new CharacterSentModel(result.FileName, result.Notes, result.Scaled));
+                    hiddenParts += hidden;
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)
                 {
@@ -284,7 +312,7 @@ public sealed partial class MainWindow
                 }
             }
             if (sent.Count == 0)
-                throw new InvalidOperationException($"No model reached Blender. {failed.FirstOrDefault()}");
+                throw new InvalidOperationException($"No model reached Blender. {failed.FirstOrDefault() ?? "Your character shows no part of its models now."}");
 
             string? poseResult = null, poseError = null;
             if (take is not null)
@@ -306,7 +334,10 @@ public sealed partial class MainWindow
             }
             var summary = CharacterSendPlan.Summary(new CharacterSendOutcome(snapshot.Name, request.Pose, sent, failed,
                 poseResult, poseError, request.Pose == CharacterPose.Current && take is not null ? RecordingWarning(take) : null,
-                weaponNotes, skeleton.Warnings));
+                weaponNotes, skeleton.Warnings)
+            {
+                LeftOut = leftOut, HiddenParts = hiddenParts, Missing = plan.Missing, DrawStateKnown = plan.Known,
+            });
             ReportCharacterSend(summary.Text, summary.Warned ? FeedbackSeverity.Warning : FeedbackSeverity.Success);
             _chat.Print($"XIV Instant Edit: {sent.Count} models of {snapshot.Name} sent to Blender.");
         }
@@ -324,6 +355,22 @@ public sealed partial class MainWindow
         {
             Volatile.Write(ref _editing, 0);
             Volatile.Write(ref _characterSendRunning, 0);
+        }
+    }
+
+    /// <summary> What the game draws on your character now; null when it can't be read, and then the send takes the whole list. </summary>
+    private async Task<PainterLiveCharacter?> ReadCharacterDrawStateAsync(OnScreenObject character)
+    {
+        if (_characterDrawState is not { } reader)
+            return null;
+        try
+        {
+            return await reader.ReadAsync(character.ObjectIndex, character.Address).ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            _log.Warning(e, "Could not read what the character draws.");
+            return null;
         }
     }
 

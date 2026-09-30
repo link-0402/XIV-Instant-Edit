@@ -207,7 +207,8 @@ public sealed partial class MainWindow
 
     /// <summary>
     /// A model of a whole-character send: its entry, the character's skeleton for body models
-    /// (a weapon's own is looked up), and what the send resolved once for all of its models.
+    /// (a weapon's own is looked up), what the send resolved once for all of its models, and the
+    /// model file the send already read.
     /// </summary>
     private sealed record CharacterModelSend(
         CharacterImportEntry Entry,
@@ -215,7 +216,8 @@ public sealed partial class MainWindow
         RacialScalingSource? Scaling,
         string? ScalingProblem,
         IReadOnlyCollection<MaterialResourceCandidate> PreviewResources,
-        PenumbraCollectionTarget? Collection);
+        PenumbraCollectionTarget? Collection,
+        byte[]? Bytes = null);
 
     /// <summary>
     /// Sends one model to Blender as an import with its own context. Throws with a user-facing
@@ -235,10 +237,7 @@ public sealed partial class MainWindow
         var handoffCached = false;
         try
         {
-            var bytes = model.IsFilePath
-                ? await File.ReadAllBytesAsync(model.LocalPath, cancellationToken).ConfigureAwait(false)
-                : (await _data.GetFileAsync<FileResource>(model.LocalPath, cancellationToken).ConfigureAwait(false))?.Data
-                    ?? throw new InvalidOperationException($"Game file not found: {model.LocalPath}");
+            var bytes = character?.Bytes ?? await ReadModelBytesAsync(model, cancellationToken).ConfigureAwait(false);
             // Blender gets the model as the character wears it, for preview: the import context
             // records the scaling, and the plugin refuses every export from it.
             var (scaling, scalingWarning) = character is null
@@ -392,6 +391,13 @@ public sealed partial class MainWindow
                 TryDeleteOwnedHandoff(handoffDirectory);
         }
     }
+
+    /// <summary> The model's file: a mod file from disk, or a game file from the game's data. </summary>
+    private async Task<byte[]> ReadModelBytesAsync(MdlFile model, CancellationToken cancellationToken)
+        => model.IsFilePath
+            ? await File.ReadAllBytesAsync(model.LocalPath, cancellationToken).ConfigureAwait(false)
+            : (await _data.GetFileAsync<FileResource>(model.LocalPath, cancellationToken).ConfigureAwait(false))?.Data
+                ?? throw new InvalidOperationException($"Game file not found: {model.LocalPath}");
 
     private static void CleanupStaleHandoffs()
     {

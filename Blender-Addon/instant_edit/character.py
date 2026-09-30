@@ -21,6 +21,13 @@ same character first removes the previous one: its collections, the objects impo
 and its Instant Edit contexts, which the plugin is told to forget. Objects that someone put into
 those collections themselves are moved to the scene's own collection instead.
 
+A send shows the character as the game draws it now. The entry names the attributes the game
+enables on each copy of the model it draws and the shape keys it has on, by the model's own
+attribute and shape order. Parts the game doesn't draw (a mod's other variants, parts gear turns
+off, seam connector bands that are off) are imported hidden and marked, and exports still write
+them with the model's visible parts, so Quick Export keeps the model whole. The shape keys the game
+has on are turned on; exports leave them off, since the game turns them on by itself.
+
 Validation needs neither bpy nor numpy, so the server can check requests anywhere.
 """
 
@@ -38,6 +45,10 @@ SEND_PROPERTY = "xiv_ie_character_send"
 KEY_PROPERTY = "xiv_ie_character_key"
 NAME_PROPERTY = "xiv_ie_character_name"
 ROLE_PROPERTY = "xiv_ie_character_role"
+# A part the game didn't draw on the character when it was sent: imported hidden, exported anyway.
+GAME_HIDDEN_PROPERTY = "xiv_ie_game_hidden"
+# The shape keys a send turned on because the game had them on, one name per line.
+GAME_SHAPES_PROPERTY = "xiv_ie_game_shapes"
 COLLECTION_KIND = "character"
 BODY = "body"
 WEAPON = "weapon"
@@ -49,6 +60,9 @@ MAX_BONE_NAME_LENGTH = 128
 MAX_ARMATURE_NAME_LENGTH = 63
 # Translation xyz, rotation xyzw, scale xyz, as in skeletons and animation takes.
 STRIDE = 10
+# The game's attribute and shape masks are 32 bits; a model file loaded in a few slots has a few.
+MASK_BITS = 32
+MAX_MASKS = 16
 _SEND_ID = re.compile(r"[0-9a-f]{32}")
 
 
@@ -64,6 +78,10 @@ class CharacterImport:
     # game's Y-up space (translation, rotation x/y/z/w, scale). Empty when the game named none.
     attach_bone: str = ""
     attach_offset: tuple[float, ...] = ()
+    # What the game draws of the model: the attributes each drawn copy enables, and the shape keys
+    # it has on. Empty and None when unknown: every part is drawn and no shape key is on.
+    enabled_attributes: tuple[int, ...] = ()
+    enabled_shapes: int | None = None
 
 
 def _text(value, name: str, max_length: int, *, required: bool = True) -> str:
@@ -91,6 +109,10 @@ def _offset(value) -> list[float]:
     return values
 
 
+def _is_mask(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 1 << MASK_BITS
+
+
 def parse_request(value) -> dict | None:
     """The import request's character entry, checked, or None without one.
 
@@ -113,6 +135,13 @@ def parse_request(value) -> dict | None:
             "bone": _text(attach.get("bone"), "attach bone", MAX_BONE_NAME_LENGTH),
             "offset": _offset(attach.get("offset")),
         }
+    attributes = value.get("enabledAttributes")
+    if attributes is not None and (not isinstance(attributes, list) or len(attributes) > MAX_MASKS
+                                   or not all(_is_mask(mask) for mask in attributes)):
+        raise ValueError("the attributes the game enables on the model are invalid")
+    shapes = value.get("enabledShapes")
+    if shapes is not None and not _is_mask(shapes):
+        raise ValueError("the shape keys the game has on for the model are invalid")
     return {
         "sendId": send_id,
         "key": _text(value.get("key"), "key", MAX_KEY_LENGTH),
@@ -120,6 +149,8 @@ def parse_request(value) -> dict | None:
         "role": role,
         "armatureName": _text(value.get("armatureName"), "armature name", MAX_ARMATURE_NAME_LENGTH),
         "attach": attach,
+        "enabledAttributes": attributes,
+        "enabledShapes": shapes,
     }
 
 
@@ -142,6 +173,8 @@ def from_property(text: str) -> CharacterImport | None:
         armature_name=entry["armatureName"],
         attach_bone=attach.get("bone", ""),
         attach_offset=tuple(attach.get("offset", ())),
+        enabled_attributes=tuple(entry["enabledAttributes"] or ()),
+        enabled_shapes=entry["enabledShapes"],
     )
 
 
@@ -335,3 +368,83 @@ def hang_weapon(context, character: CharacterImport, armature, mesh_objects=()) 
 def is_hung_weapon(armature) -> bool:
     """Whether an armature is a weapon that hangs from a character bone (see hang_weapon)."""
     return armature.get(ROLE_PROPERTY) == WEAPON and armature.parent is not None
+
+
+def _enabled(names, mask: int) -> set[str]:
+    return {name for index, name in enumerate(names) if index < MASK_BITS and mask >> index & 1}
+
+
+def apply_draw_state(model, mesh_objects, character: CharacterImport) -> str:
+    """Show an imported model as the game draws it on the character: a part is drawn when one of
+    the drawn copies enables all of its attributes. Other parts are hidden and marked, so exports
+    still write them (see with_game_hidden_parts); the shape keys the game has on are turned on.
+    ``model`` is the model's XIVModel, whose attribute and shape order the masks follow. Returns a
+    note for the status line, or ""."""
+    hidden = 0
+    if character.enabled_attributes:
+        attributes = [str(name) for name in model.attributes]
+        drawn = [_enabled(attributes, mask) for mask in character.enabled_attributes]
+        for obj in mesh_objects:
+            # The importer marks each part with its attributes.
+            own = {name for name in attributes if obj.get(name)}
+            if not own or any(own <= enabled for enabled in drawn):
+                continue
+            obj[GAME_HIDDEN_PROPERTY] = True
+            try:
+                obj.hide_set(True)
+            except RuntimeError:
+                # Outside the view layer it is out of sight anyway.
+                pass
+            hidden += 1
+    if character.enabled_shapes:
+        shapes = _enabled([str(shape.name) for shape in model.shapes], character.enabled_shapes)
+        for obj in mesh_objects:
+            keys = obj.data.shape_keys
+            turned_on = [key for key in keys.key_blocks if key.name in shapes] if keys is not None else []
+            for key in turned_on:
+                key.value = 1.0
+            if turned_on:
+                obj[GAME_SHAPES_PROPERTY] = "\n".join(key.name for key in turned_on)
+    if not hidden:
+        return ""
+    return ("1 part the character doesn't show now is hidden" if hidden == 1
+            else f"{hidden} parts the character doesn't show now are hidden")
+
+
+def is_game_hidden(obj) -> bool:
+    """Whether a part was imported hidden because the game didn't draw it (see apply_draw_state)."""
+    return bool(obj.get(GAME_HIDDEN_PROPERTY))
+
+
+def game_shape_keys(obj) -> list:
+    """The shape keys a send turned on because the game had them on (see apply_draw_state)."""
+    keys = getattr(obj.data, "shape_keys", None) if obj.type == "MESH" else None
+    names = obj.get(GAME_SHAPES_PROPERTY)
+    if keys is None or not isinstance(names, str):
+        return []
+    return [key for name in names.split("\n") if (key := keys.key_blocks.get(name)) is not None]
+
+
+def with_game_hidden_parts(scene, objects) -> list:
+    """The meshes an export writes: ``objects``, and the parts a character send imported hidden
+    because the game didn't draw them, of every model with visible parts among ``objects``, so the
+    export keeps the model whole. A part deleted from the scene is gone from the model."""
+    from .context import ContextValidationError, context_id_for_object
+
+    def context_of(obj) -> str:
+        try:
+            return context_id_for_object(obj)
+        except ContextValidationError:
+            return ""
+
+    objects = list(objects)
+    contexts = {context_of(obj) for obj in objects} - {""}
+    present = {obj.as_pointer() for obj in objects}
+    hidden = [
+        obj for obj in scene.objects
+        if obj.type == "MESH" and is_game_hidden(obj) and obj.as_pointer() not in present
+        and context_of(obj) in contexts
+    ]
+    if not hidden:
+        return objects
+    return sorted([*objects, *hidden], key=lambda obj: obj.name)
