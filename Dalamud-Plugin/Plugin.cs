@@ -164,7 +164,10 @@ public sealed class Plugin : IDalamudPlugin
         _painterJobs = new Services.Painter.PainterJobService(_config, _textures,
             new Services.Painter.PainterProjectBuilder(new MaterialPreviewBundleBuilder(data, log, resourceSources), readGameFile, logPainter),
             new Services.Painter.PainterClient(), painterStore, readGameFile, logPainter,
-            new Services.Painter.PainterLiveReader(framework, objects));
+            new Services.Painter.PainterLiveReader(framework, objects),
+            new Services.Painter.PainterSkinResolver(new Services.Painter.PainterSkinPenumbra(
+                async index => (await _penumbra.GetCollectionTargetAsync(index).ConfigureAwait(false))?.Id,
+                _penumbra.MetaManipulationsAsync, _penumbra.ResolveCollectionPathsAsync), readGameFile, logPainter));
         _exportServer.AttachPainter(_painterJobs);
         _previews = new PreviewService(textureProvider, data, log, () => _config.RenderModelThumbnails);
         _textures.FileChanged += _previews.Invalidate;

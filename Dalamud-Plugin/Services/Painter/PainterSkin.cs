@@ -3,24 +3,14 @@ using InstantEdit.Services.Previews;
 
 namespace InstantEdit.Services.Painter;
 
-/// <summary> A model the character has loaded, read for a skin project. </summary>
-/// <param name="Masks">The character's enabled attributes for the model; empty when every part counts.</param>
-internal sealed record PainterSkinCandidate(PainterModelRef Model, ModelMesh Mesh, ModelTexturePlan Plan, IReadOnlyList<uint> Masks);
-
-/// <summary> A model that joins a skin project. </summary>
-/// <param name="Candidate">Its index in the candidates.</param>
-/// <param name="Face">The face model, which brings the face skin's own texture set.</param>
-/// <param name="Materials">Its material names, as the model stores them, that the project paints.</param>
-/// <param name="DrawnTriangles">Triangles the character draws with those materials.</param>
-internal sealed record PainterSkinModel(int Candidate, bool Face, IReadOnlyList<string> Materials, int DrawnTriangles);
-
-/// <summary> What a skin project paints: its materials (one per game path) and the models drawing them, the main one first. </summary>
-internal sealed record PainterSkinSelection(IReadOnlyList<TexturePlanMaterial> Materials, IReadOnlyList<PainterSkinModel> Models);
+/// <summary> A part of a skin project as read: its model, mesh (shapes applied), texture plan and enabled attributes. </summary>
+/// <param name="Part">Torso, Hands, Legs, Feet or Head.</param>
+/// <param name="Masks">The enabled attributes; empty when every part counts.</param>
+internal sealed record PainterSkinCandidate(string Part, PainterModelRef Model, ModelMesh Mesh, ModelTexturePlan Plan, IReadOnlyList<uint> Masks);
 
 /// <summary>
-/// Picks what a skin project paints: every body skin material (skin.shpk's body types) a model of
-/// the character draws, so the parts that meet at the wrists, waist and ankles are painted together,
-/// and the face model's face skin, which has its own material and textures. Dalamud-free.
+/// What a skin project paints of its parts: the body skin material the smallclothes of all four
+/// body slots share, and the face's own skin. Nothing else goes to Painter. Dalamud-free.
 /// </summary>
 internal static class PainterSkin
 {
@@ -50,49 +40,60 @@ internal static class PainterSkin
         return triangles;
     }
 
-    /// <summary>
-    /// The body skin materials the character draws somewhere, and every model using one of them: the
-    /// model drawing the most skin leads, and models whose skin is all turned off join with none
-    /// drawn. Then the face model, when it draws face skin. No models when no body skin is drawn.
-    /// </summary>
-    public static PainterSkinSelection Select(IReadOnlyList<PainterSkinCandidate> candidates)
+    /// <summary> A part's drawn body skin materials, by game path, with the triangles drawn with each. </summary>
+    private static Dictionary<string, int> BodySkins(PainterSkinCandidate part)
     {
-        var drawn = candidates.Select(candidate => DrawnTriangles(candidate.Mesh, candidate.Masks)).ToList();
-        var materials = new List<TexturePlanMaterial>();
-        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        for (var i = 0; i < candidates.Count; i++)
-            foreach (var material in candidates[i].Plan.Materials.Where(IsBodySkin))
-                if (material.GamePath.Length > 0 && drawn[i].GetValueOrDefault(material.ModelMaterial) > 0 && paths.Add(material.GamePath))
-                    materials.Add(material);
-        if (materials.Count == 0)
-            return new PainterSkinSelection([], []);
+        var drawn = DrawnTriangles(part.Mesh, part.Masks);
+        var skins = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var material in part.Plan.Materials.Where(m => IsBodySkin(m) && m.GamePath.Length > 0))
+            if (drawn.GetValueOrDefault(material.ModelMaterial) is > 0 and var triangles)
+                skins[material.GamePath] = skins.GetValueOrDefault(material.GamePath) + triangles;
+        return skins;
+    }
 
-        var models = new List<PainterSkinModel>();
-        for (var i = 0; i < candidates.Count; i++)
+    /// <summary>
+    /// The body skin material every body part draws, so paint can cross from one to the next: the
+    /// one drawing the most triangles when they share several. Null, with the reason, when a part
+    /// draws no body skin or the parts don't share one.
+    /// </summary>
+    public static TexturePlanMaterial? SharedBodyMaterial(IReadOnlyList<PainterSkinCandidate> parts, out string problem)
+    {
+        problem = "";
+        var skins = parts.Select(BodySkins).ToList();
+        for (var i = 0; i < parts.Count; i++)
+            if (skins[i].Count == 0)
+            {
+                problem = $"The {parts[i].Part.ToLowerInvariant()} smallclothes model ({parts[i].Model.FileName}) draws no body skin, " +
+                          "so the body parts don't share a skin material to paint across.";
+                return null;
+            }
+        var shared = skins.Skip(1).Aggregate(skins[0].Keys.ToHashSet(StringComparer.OrdinalIgnoreCase), (common, next) =>
         {
-            var names = candidates[i].Plan.Materials.Where(m => IsBodySkin(m) && paths.Contains(m.GamePath)).Select(m => m.ModelMaterial).ToList();
-            if (names.Count > 0)
-                models.Add(new PainterSkinModel(i, false, names, names.Sum(name => drawn[i].GetValueOrDefault(name))));
+            common.IntersectWith(next.Keys);
+            return common;
+        });
+        if (shared.Count == 0)
+        {
+            var uses = parts.Select((part, i) => $"{part.Part.ToLowerInvariant()}: {string.Join(" and ", skins[i].Keys.Select(Path.GetFileName))}");
+            problem = "Your character's body parts don't share one skin material, so paint couldn't cross from one to the next (" +
+                      string.Join(", ", uses) + "). Pick body options that use the same skin material in Penumbra.";
+            return null;
         }
-        var main = models.MaxBy(model => model.DrawnTriangles)!;
-        models.Remove(main);
-        models.Insert(0, main);
+        var path = shared.MaxBy(p => skins.Sum(s => s.GetValueOrDefault(p)))!;
+        return parts.SelectMany(part => part.Plan.Materials).First(m => string.Equals(m.GamePath, path, StringComparison.OrdinalIgnoreCase));
+    }
 
-        for (var i = 0; i < candidates.Count; i++)
-        {
-            if (!NeckSeamAnalyzer.IsFaceModel(candidates[i].Model.GamePath))
-                continue;
-            var faces = candidates[i].Plan.Materials
-                .Where(m => IsFaceSkin(m) && m.GamePath.Length > 0 && drawn[i].GetValueOrDefault(m.ModelMaterial) > 0 && !paths.Contains(m.GamePath))
-                .ToList();
-            if (faces.Count == 0)
-                continue;
-            foreach (var face in faces.Where(face => paths.Add(face.GamePath)))
-                materials.Add(face);
-            models.Add(new PainterSkinModel(i, true, faces.Select(m => m.ModelMaterial).ToList(),
-                faces.Sum(m => drawn[i].GetValueOrDefault(m.ModelMaterial))));
-            break;
-        }
-        return new PainterSkinSelection(materials, models);
+    /// <summary>
+    /// The face's own skin: the _fac_a material every vanilla face draws its skin with, or else the
+    /// face skin of the face's first mesh. Other face skin materials (horns, ears, teeth) stay out.
+    /// </summary>
+    public static TexturePlanMaterial? HeadMaterial(PainterSkinCandidate face)
+    {
+        var drawn = DrawnTriangles(face.Mesh, face.Masks);
+        var skins = face.Plan.Materials.Where(m => IsFaceSkin(m) && m.GamePath.Length > 0 && drawn.GetValueOrDefault(m.ModelMaterial) > 0).ToList();
+        return skins.FirstOrDefault(m => m.ModelMaterial.EndsWith("_fac_a.mtrl", StringComparison.OrdinalIgnoreCase))
+               ?? face.Mesh.Meshes.Select(part => face.Mesh.Materials[part.MaterialIndex])
+                   .Select(name => skins.FirstOrDefault(m => string.Equals(m.ModelMaterial, name, StringComparison.OrdinalIgnoreCase)))
+                   .FirstOrDefault(m => m is not null);
     }
 }
