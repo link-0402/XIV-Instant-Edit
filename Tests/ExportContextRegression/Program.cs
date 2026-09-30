@@ -167,7 +167,8 @@ try
     GameFileScenarios.Run(testRoot);
     ToolSetupScenarios.Run(testRoot);
     NeckSeamScenarios.Run(testRoot);
-    CharacterWeightScenarios.Run(testRoot);
+    PreviewModScenarios.Run(testRoot);
+    TextureCompressionScenarios.Run(testRoot);
     BodySeamScenarios.Run(testRoot);
     RacialScalingScenarios.Run(testRoot);
     HeelsOffsetScenarios.Run();

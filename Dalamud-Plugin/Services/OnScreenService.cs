@@ -124,28 +124,8 @@ public sealed class OnScreenService : IDisposable
             token.ThrowIfCancellationRequested();
             try
             {
-                IReadOnlyList<ResourceNode> roots = (entry.Tree.Nodes ?? [])
-                    .Select(CopyPrunedNode)
-                    .Where(node => node is not null)
-                    .Cast<ResourceNode>()
-                    .OrderBy(node => SectionOrder(node.ResourceSection))
-                    .ThenBy(node => node.SortOrder)
-                    .ToArray();
-                var treeRootCount = roots.Count;
-                roots = AddMissingResolvedModels(roots, entry.ResolvedPaths, _sourceAttributor.AttributionFor);
-                if (roots.Count > treeRootCount)
-                    _log.Debug($"Supplemented {roots.Count - treeRootCount} model resource(s) omitted from Penumbra's tree DTO for object {entry.ObjectIndex}.");
-                if (roots.Count == 0)
-                    continue;
-
-                result.Add(new OnScreenObject
-                {
-                    ObjectIndex = entry.ObjectIndex,
-                    Address = entry.Address,
-                    Name = entry.Name,
-                    PresentationCategory = entry.Category,
-                    ResourceRoots = roots,
-                });
+                if (ToOnScreenObject(entry) is { } item)
+                    result.Add(item);
             }
             catch (Exception e)
             {
@@ -154,6 +134,59 @@ public sealed class OnScreenService : IDisposable
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Captures the local player's resource tree alone, without replacing the On Screen snapshot.
+    /// Blocks the calling worker for one framework visit, so call it off the framework thread.
+    /// </summary>
+    public OnScreenObject? CaptureLocalPlayer(CancellationToken token)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, _lifetime.Token);
+        var entry = _framework.RunOnTick(CollectLocalPlayerTree, cancellationToken: linked.Token)
+            .GetAwaiter().GetResult();
+        return entry is null ? null : ToOnScreenObject(entry);
+    }
+
+    /// <summary> The local player's tree alone, fetched on the framework thread like <see cref="CollectTrees"/>. </summary>
+    private JoinedTree? CollectLocalPlayerTree()
+    {
+        if (_lifetime.IsCancellationRequested || !_clientState.IsLoggedIn ||
+            _objects.LocalPlayer is not { Address: not 0 } localPlayer)
+            return null;
+        ushort[] index = [localPlayer.ObjectIndex];
+        if (_penumbra.GetResourceTrees(index) is not [{ } tree])
+            return null;
+        var paths = _penumbra.GetResourcePaths(index);
+        return new JoinedTree(localPlayer.ObjectIndex, localPlayer.Address, localPlayer.Name.TextValue ?? "Unknown",
+            ActorPresentationCategory.Player, tree, paths.Length > 0 ? paths[0] : null);
+    }
+
+    /// <summary> An immutable, pruned and attributed copy of one joined tree; null when nothing in it is kept. </summary>
+    private OnScreenObject? ToOnScreenObject(JoinedTree entry)
+    {
+        IReadOnlyList<ResourceNode> roots = (entry.Tree.Nodes ?? [])
+            .Select(CopyPrunedNode)
+            .Where(node => node is not null)
+            .Cast<ResourceNode>()
+            .OrderBy(node => SectionOrder(node.ResourceSection))
+            .ThenBy(node => node.SortOrder)
+            .ToArray();
+        var treeRootCount = roots.Count;
+        roots = AddMissingResolvedModels(roots, entry.ResolvedPaths, _sourceAttributor.AttributionFor);
+        if (roots.Count > treeRootCount)
+            _log.Debug($"Supplemented {roots.Count - treeRootCount} model resource(s) omitted from Penumbra's tree DTO for object {entry.ObjectIndex}.");
+        if (roots.Count == 0)
+            return null;
+
+        return new OnScreenObject
+        {
+            ObjectIndex = entry.ObjectIndex,
+            Address = entry.Address,
+            Name = entry.Name,
+            PresentationCategory = entry.Category,
+            ResourceRoots = roots,
+        };
     }
 
     /// <summary>

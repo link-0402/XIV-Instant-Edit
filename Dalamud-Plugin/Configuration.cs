@@ -133,6 +133,12 @@ public sealed class Configuration : IPluginConfiguration
     /// </summary>
     public bool AutoFixHeels { get; set; }
 
+    /// <summary>
+    /// Compress the uncompressed mod textures your character loads, when a check finds that what their
+    /// shaders read stays the same. Originals are backed up in the cache folder.
+    /// </summary>
+    public bool AutoCompressTextures { get; set; }
+
     /// <summary>Legacy v9 context payload retained only for one-time migration or storage fallback.</summary>
     public List<PersistedExportContext> ExportContexts { get; set; } = [];
 
