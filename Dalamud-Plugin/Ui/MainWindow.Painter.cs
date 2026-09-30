@@ -170,9 +170,9 @@ public sealed partial class MainWindow
         var skin = draft.Request.Scope == PainterScope.Skin;
         ImGui.TextColored(Theme.Text, draft.Title);
         Widgets.HintWrapped(skin
-            ? "Painter gets every part of your character that shows skin, with the body skin as one texture set and the current textures as its bottom layer, " +
-              "so paint can cross the wrists, waist and ankles. Tick the face to paint across the neck too. " +
-              "Press Send to game in Painter's XIV Instant Edit panel to apply the ticked textures; each goes through a texture session with a backup."
+            ? "Painter gets your character's bare skin, whatever it wears: the torso, hands, legs and feet of your smallclothes on the skin material " +
+              "they share, with the current textures as its bottom layer, so paint can cross the wrists, waist and ankles. Tick the head to paint " +
+              "across the neck too. Press Send to game in Painter's XIV Instant Edit panel to apply the ticked textures; each goes through a texture session with a backup."
             : "Painter gets the mesh and one texture set per material, with the current textures as its bottom layer. " +
               "Press Send to game in Painter's XIV Instant Edit panel to apply the ticked textures; each goes through a texture session with a backup.");
         ImGui.Spacing();
@@ -185,14 +185,14 @@ public sealed partial class MainWindow
                     DrawPainterSet(set, draft.InProject(set));
                 if (skin)
                 {
-                    Widgets.SectionHeader("Models", "every model that shows your skin");
+                    Widgets.SectionHeader("Parts", "your smallclothes and your face");
                     using (ImRaii.Disabled())
                     {
                         var always = true;
-                        ImGui.Checkbox($"{draft.Main.Model.FileName}##painter-main", ref always);
+                        ImGui.Checkbox($"{draft.Main.Part}: {draft.Main.Model.FileName}##painter-main", ref always);
                     }
                     if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-                        ImGui.SetTooltip("Shows the most skin, so it is always part of the project.");
+                        ImGui.SetTooltip("The torso is always part of the project.");
                     DrawPainterModelSets(draft.Main);
                     foreach (var sibling in draft.Siblings)
                         DrawPainterSibling(sibling);
@@ -299,7 +299,8 @@ public sealed partial class MainWindow
     private static void DrawPainterSibling(PainterDraftModel sibling)
     {
         var selected = sibling.Selected;
-        if (ImGui.Checkbox($"{sibling.Model.FileName}##sibling-{sibling.Model.SourcePath}", ref selected))
+        var label = sibling.Part.Length > 0 ? $"{sibling.Part}: {sibling.Model.FileName}" : sibling.Model.FileName;
+        if (ImGui.Checkbox($"{label}##sibling-{sibling.Model.SourcePath}", ref selected))
             sibling.Selected = selected;
         DrawPainterModelSets(sibling);
     }

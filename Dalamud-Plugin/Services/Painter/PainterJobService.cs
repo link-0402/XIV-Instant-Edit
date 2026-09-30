@@ -28,6 +28,7 @@ internal sealed class PainterJobService : IDisposable
     private readonly Func<string, CancellationToken, Task<byte[]?>> _readGameFile;
     private readonly Action<Exception, string> _log;
     private readonly PainterLiveReader? _live;
+    private readonly PainterSkinResolver? _skin;
     private readonly ConcurrentDictionary<string, SendState> _sends = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _life = new();
 
@@ -42,9 +43,10 @@ internal sealed class PainterJobService : IDisposable
     }
 
     /// <param name="live">Reads what the character draws; without it every part of a model goes to Painter.</param>
+    /// <param name="skin">Looks up a character's smallclothes for skin projects; without it they can't be made.</param>
     internal PainterJobService(Configuration config, TextureEditService textures, PainterProjectBuilder builder,
         PainterClient client, PainterJobStore store, Func<string, CancellationToken, Task<byte[]?>> readGameFile,
-        Action<Exception, string> log, PainterLiveReader? live = null)
+        Action<Exception, string> log, PainterLiveReader? live = null, PainterSkinResolver? skin = null)
     {
         _config = config;
         _textures = textures;
@@ -54,6 +56,7 @@ internal sealed class PainterJobService : IDisposable
         _readGameFile = readGameFile;
         _log = log;
         _live = live;
+        _skin = skin;
         _textures.KeepSession = _store.LinksSession;
     }
 
@@ -77,7 +80,11 @@ internal sealed class PainterJobService : IDisposable
                 _log(error, "Could not read which parts the character draws.");
             }
         }
-        return await _builder.PrepareAsync(request with { Live = live }, token).ConfigureAwait(false);
+        request = request with { Live = live };
+        if (request is { Scope: PainterScope.Skin, Skin: null })
+            request = await (_skin ?? throw new InvalidOperationException("Your character's smallclothes can't be looked up."))
+                .ResolveAsync(request, token).ConfigureAwait(false);
+        return await _builder.PrepareAsync(request, token).ConfigureAwait(false);
     }
 
     // ---- Creating a job --------------------------------------------------------------------

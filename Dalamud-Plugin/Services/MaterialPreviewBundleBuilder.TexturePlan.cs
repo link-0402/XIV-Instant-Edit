@@ -49,8 +49,13 @@ public sealed partial class MaterialPreviewBundleBuilder
     /// actor's loaded resources. Unlike the dependency capture it never gives up on the whole
     /// model: a material or texture that can't be read carries a problem instead.
     /// </summary>
+    /// <param name="knownMaterialPath">
+    /// The game path a model material name loads from, when the caller knows it better than the
+    /// loaded resources do (for a model the actor doesn't wear); null to look it up as usual.
+    /// </param>
     public async Task<ModelTexturePlan> BuildTexturePlanAsync(byte[] modelBytes, string modelGamePath,
-        IReadOnlyCollection<MaterialResourceCandidate> candidates, CancellationToken cancellationToken = default)
+        IReadOnlyCollection<MaterialResourceCandidate> candidates, CancellationToken cancellationToken = default,
+        Func<string, string?>? knownMaterialPath = null)
     {
         var warnings = new List<string>();
         var resources = BuildResourceMap(candidates, warnings);
@@ -63,7 +68,7 @@ public sealed partial class MaterialPreviewBundleBuilder
         foreach (var modelMaterial in names)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var materialPath = ResolveMaterialPath(modelGamePath, modelMaterial, resources, warnings);
+            var materialPath = knownMaterialPath?.Invoke(modelMaterial) ?? ResolveMaterialPath(modelGamePath, modelMaterial, resources, warnings);
             if (materialPath is null)
             {
                 materials.Add(new TexturePlanMaterial(modelMaterial, "", "", "", [], "The material could not be resolved."));
