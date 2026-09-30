@@ -30,6 +30,8 @@ internal static class TextureCompressionScenarios
         CheckIndexRows();
         CheckNormalsAndColors();
         CheckBackupStore(testRoot);
+        CheckTrigger();
+        CheckRunSummary();
         CheckViews();
     }
 
@@ -467,6 +469,44 @@ internal static class TextureCompressionScenarios
         Require(broken.LoadError.Length > 0 && broken.Compressed.Count == 0 && !File.Exists(journal) &&
                 Directory.EnumerateFiles(config, TextureBackupStore.JournalName + ".unreadable-*").Any(),
             "texture backups: an unreadable list is set aside, not overwritten, and the error is reported");
+    }
+
+    // ---- Runs -----------------------------------------------------------------------------------------
+
+    private static void CheckTrigger()
+    {
+        // Penumbra reports the textures a material loads without their character, so a Glamourer
+        // outfit change only arrives as the character's model and material loads.
+        Require(CompressionTrigger.LoadsTextures("chara/equipment/e6001/material/v0001/mt_c0201e6001_top_a.mtrl") &&
+                CompressionTrigger.LoadsTextures("chara/equipment/e6001/model/c0201e6001_top.mdl") &&
+                CompressionTrigger.LoadsTextures("chara/common/texture/decal_face/_decal_5.tex") &&
+                CompressionTrigger.LoadsTextures("CHARA/ACCESSORY/A0004/MATERIAL/V0001/MT_C0201A0004_WRS_A.MTRL"),
+            "texture compression: the character's models and materials schedule a run, not only its textures");
+        Require(new[]
+            {
+                "chara/human/c0201/animation/a0001/bt_common/emote/sit.pap", "chara/action/emote/sit.tmb", "vfx/common/eff/cmat_hand.avfx",
+                "vfx/common/texture/cmat_hand.atex", "sound/foot/foot.scd", "chara/human/c0201/skeleton/base/b0001/skl_c0201b0001.sklb",
+            }.All(path => !CompressionTrigger.LoadsTextures(path)),
+            "texture compression: animations, effects, sounds and skeletons don't schedule a run");
+    }
+
+    private static void CheckRunSummary()
+    {
+        var compressed = new CompressionRun
+        {
+            Finished = DateTimeOffset.Now.AddMinutes(-1), Compressed = 2, BytesBefore = 8L << 20, BytesAfter = 2L << 20, Kept = ["a.tex: r"], Warnings = ["w"],
+        };
+        var idle = new CompressionRun { Finished = DateTimeOffset.Now, Kept = ["b.tex: r"] };
+        var shown = CompressionRun.After(compressed, idle);
+        Require(shown.Compressed == 2 && shown.Finished == compressed.Finished && shown.Warnings.SequenceEqual(["w"]) && shown.Kept.SequenceEqual(["b.tex: r"]),
+            "texture compression: a run with nothing to report keeps the last compression and its problems, and updates the kept textures");
+        Require(CompressionRun.After(compressed, new CompressionRun()).Kept.Count == 0,
+            "texture compression: kept textures the character no longer wears leave the card");
+        var failed = new CompressionRun { Failed = ["c.tex: e"] };
+        var next = new CompressionRun { Compressed = 1 };
+        Require(CompressionRun.After(null, idle) == idle && CompressionRun.After(compressed, failed) == failed &&
+                CompressionRun.After(compressed, next) == next,
+            "texture compression: the first run, and a run that compressed or ran into problems, replace what the card shows");
     }
 
     // ---- The card -------------------------------------------------------------------------------------

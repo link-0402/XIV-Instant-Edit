@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
@@ -37,6 +38,29 @@ internal sealed record CompressionRun
     /// <summary> "file: error" for textures that couldn't be compressed. </summary>
     public IReadOnlyList<string> Failed { get; init; } = [];
     public IReadOnlyList<string> Warnings { get; init; } = [];
+
+    /// <summary>
+    /// What the card shows after a run. A run that compressed nothing and ran into no problems, such
+    /// as the one after the redraw that ends a run, or one for an outfit compressed before, only
+    /// brings the list of kept textures up to date, so the last compression and its problems stay.
+    /// </summary>
+    public static CompressionRun After(CompressionRun? previous, CompressionRun run)
+        => previous is null || run.Compressed > 0 || run.Failed.Count > 0 || run.Warnings.Count > 0 ? run : previous with { Kept = run.Kept };
+}
+
+/// <summary> Which of the local player's loads that Penumbra reports can bring new textures. Dalamud-free. </summary>
+internal static class CompressionTrigger
+{
+    /// <summary>
+    /// Models, materials and textures. Penumbra reports the textures a material loads without the
+    /// character they belong to, so gear textures never arrive as such: the character's materials
+    /// (and the models that load them) stand for them. Textures that do come with the character, such
+    /// as face paint, count too. Materials count even when no mod replaces them, since a game
+    /// material can read a mod's texture.
+    /// </summary>
+    public static bool LoadsTextures(string gamePath)
+        => gamePath.EndsWith(".mtrl", StringComparison.OrdinalIgnoreCase) || gamePath.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase) ||
+           gamePath.EndsWith(".tex", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary> What restoring did: originals written back, and files it left alone. </summary>
@@ -44,17 +68,18 @@ internal sealed record CompressionRestore(int Restored, IReadOnlyList<string> Ch
 
 /// <summary>
 /// Compresses the uncompressed mod textures the local player wears, as they are loaded. While it is
-/// on, every texture Penumbra redirects for the player to a mod file schedules a run once loading
-/// settles and the player is free. A run reads the player's resource tree, has Penumbra encode each
-/// uncompressed 2D texture (BC5 for index maps, BC7 otherwise; mipmaps only when the original has
-/// them), decodes the result and keeps it only when <see cref="CompressionCheck"/> finds that what
-/// the shaders read stays the same. The original is copied into the cache folder first, then the
-/// compressed file replaces it in its mod; the mods are reloaded and the player redrawn once.
+/// on, every model and material Penumbra loads for the player schedules a run once loading settles
+/// and the player is free (see <see cref="CompressionTrigger"/>). A run reads the player's resource
+/// tree, has Penumbra encode each uncompressed 2D texture (BC5 for index maps, BC7 otherwise;
+/// mipmaps only when the original has them), decodes the result and keeps it only when
+/// <see cref="CompressionCheck"/> finds that what the shaders read stays the same. The original is
+/// copied into the cache folder first, then the compressed file replaces it in its mod; the mods are
+/// reloaded and the player redrawn once.
 /// Restoring writes the originals back over files that still hold what was compressed.
 /// </summary>
 internal sealed class TextureCompressionService : IDisposable
 {
-    /// <summary> How long a run waits after the last new texture, so an outfit change is taken in one go. </summary>
+    /// <summary> How long a run waits after the character's last model or material load, so an outfit change is taken in one go. </summary>
     private const long SettleMs = 3000;
     private const long MaxMaterialBytes = 4L * 1024 * 1024;
     private const string Recheck = "It is looked at again the next time it loads";
@@ -74,9 +99,16 @@ internal sealed class TextureCompressionService : IDisposable
     private readonly IDalamudPluginInterface _pi;
     private readonly IReadOnlyList<IPreviewModRegistry> _previews;
     private readonly CancellationTokenSource _lifetime = new();
-    private readonly Lock _failedLock = new();
+    private readonly Lock _sessionLock = new();
     // Textures Penumbra couldn't convert this session, by path and content, so every load doesn't retry them.
     private readonly HashSet<string> _failed = new(StringComparer.OrdinalIgnoreCase);
+    // Textures compressed this session, by path and original content. One that is put back as it was,
+    // as a tool that writes it again after every redraw would, is left alone instead of compressed,
+    // reloaded and redrawn over and over.
+    private readonly HashSet<string> _compressedOriginals = new(StringComparer.OrdinalIgnoreCase);
+    // Each texture's hash as a run last read it, with the file's size and write time then, so the run
+    // after every outfit change doesn't read the textures the check kept again.
+    private readonly ConcurrentDictionary<string, (FileStamp Stamp, string Sha256)> _hashes = new(StringComparer.OrdinalIgnoreCase);
     private EventSubscriber<nint, string, string>? _resolved;
     private CancellationTokenSource? _run;
     private CompressionRun? _lastRun;
@@ -175,14 +207,12 @@ internal sealed class TextureCompressionService : IDisposable
     }
 
     /// <summary>
-    /// Penumbra resolved a path for a game object, on whichever thread loads it. A texture of the
-    /// local player that a mod replaces schedules a run once loading settles. Must stay cheap.
+    /// Penumbra resolved a path for a game object, on whichever thread loads it. A model, material or
+    /// texture of the local player schedules a run once loading settles. Must stay cheap.
     /// </summary>
     private void OnResolved(nint gameObject, string gamePath, string resolvedPath)
     {
-        if (gameObject == 0 || gameObject != Volatile.Read(ref _localPlayer) ||
-            !gamePath.EndsWith(".tex", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(gamePath, resolvedPath, StringComparison.OrdinalIgnoreCase))
+        if (gameObject == 0 || gameObject != Volatile.Read(ref _localPlayer) || !CompressionTrigger.LoadsTextures(gamePath))
             return;
         Schedule(SettleMs);
     }
@@ -205,7 +235,8 @@ internal sealed class TextureCompressionService : IDisposable
         }
         if (Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
             return;
-        Volatile.Write(ref _dueAt, 0);
+        // A load reported since due was read gets a run of its own after this one.
+        Interlocked.CompareExchange(ref _dueAt, 0, due);
         var run = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         Volatile.Write(ref _run, run);
         _phase = CompressionPhase.Checking;
@@ -263,12 +294,11 @@ internal sealed class TextureCompressionService : IDisposable
         }
         finally
         {
-            if (tally.Compressed > 0 || tally.Kept.Count > 0 || tally.Failed.Count > 0 || tally.Warnings.Count > 0 || LastRun is null)
-                Volatile.Write(ref _lastRun, new CompressionRun
-                {
-                    Finished = DateTimeOffset.Now, Compressed = tally.Compressed, BytesBefore = tally.Before, BytesAfter = tally.After,
-                    Kept = tally.Kept, Failed = tally.Failed, Warnings = tally.Warnings,
-                });
+            Volatile.Write(ref _lastRun, CompressionRun.After(LastRun, new CompressionRun
+            {
+                Finished = DateTimeOffset.Now, Compressed = tally.Compressed, BytesBefore = tally.Before, BytesAfter = tally.After,
+                Kept = tally.Kept, Failed = tally.Failed, Warnings = tally.Warnings,
+            }));
             _progress = string.Empty;
             _phase = _config.AutoCompressTextures ? CompressionPhase.Watching : CompressionPhase.Off;
             var run = Interlocked.Exchange(ref _run, null);
@@ -290,7 +320,12 @@ internal sealed class TextureCompressionService : IDisposable
         foreach (var candidate in candidates)
             if (!candidate.InPreview && candidate.Source.IsModFile && !edited.Contains(candidate.File) && ReadHeader(candidate.File) is { } info &&
                 CompressionCapture.Compressible(info))
-                work.Add((candidate, info));
+            {
+                if (UnchangedVerdict(candidate.File) is { } reason)
+                    tally.Kept.Add($"{candidate.FileName}: {reason}");
+                else
+                    work.Add((candidate, info));
+            }
         if (work.Count == 0)
             return;
         // Nothing is written without a place for the originals.
@@ -366,16 +401,16 @@ internal sealed class TextureCompressionService : IDisposable
     /// </summary>
     private async Task<Outcome> CompressOneAsync(CompressionCandidate candidate, TexInfo info, string cacheRoot, CancellationToken token)
     {
+        // Stamped before reading: a file that changes while it is read is read again by the next run.
+        var stamp = FileStamp.Of(candidate.File);
         var original = await File.ReadAllBytesAsync(candidate.File, token).ConfigureAwait(false);
         if (original.LongLength > TextureFiles.MaxBytes)
             return new Outcome(null, "it is too large to convert");
         var sha = TextureBackupStore.Hash(original);
-        if (Backups.KeptFor(candidate.File, sha, CompressionCheck.Version) is { } known)
-            return new Outcome(null, known.Reason);
-        var failure = candidate.File + "\n" + sha;
-        lock (_failedLock)
-            if (_failed.Contains(failure))
-                return new Outcome(null, "Penumbra couldn't convert it earlier this session");
+        if (stamp is { } read)
+            _hashes[candidate.File] = (read, sha);
+        if (Verdict(candidate.File, sha) is { } known)
+            return new Outcome(null, known);
 
         var twoChannel = candidate.Uses.Count > 0 && candidate.Uses.All(use => use.Role == TextureRole.Index);
         var target = twoChannel ? TextureCost.Bc5 : TextureCost.Bc7;
@@ -411,8 +446,8 @@ internal sealed class TextureCompressionService : IDisposable
             }
             catch (Exception e) when (e is not OperationCanceledException)
             {
-                lock (_failedLock)
-                    _failed.Add(failure);
+                lock (_sessionLock)
+                    _failed.Add(ContentKey(candidate.File, sha));
                 throw;
             }
             if (decoded.Width != info.Width || decoded.Height != info.Height)
@@ -449,6 +484,8 @@ internal sealed class TextureCompressionService : IDisposable
                 Backups.Forget([entry]);
                 throw;
             }
+            lock (_sessionLock)
+                _compressedOriginals.Add(ContentKey(candidate.File, sha));
             _log.Information($"Compressed {candidate.Label} to {TextureCost.FormatName(target)}: {original.LongLength:N0} to {encoded.LongLength:N0} bytes.");
             return new Outcome(entry, null);
         }
@@ -458,6 +495,31 @@ internal sealed class TextureCompressionService : IDisposable
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _log.Debug(e, "Could not remove a texture compression work folder."); }
         }
     }
+
+    /// <summary>
+    /// Why a texture stays as it is: the check kept this content, Penumbra couldn't convert it this
+    /// session, or it was compressed this session and then put back as it was; null when none of these.
+    /// </summary>
+    private string? Verdict(string file, string sha)
+    {
+        if (Backups.KeptFor(file, sha, CompressionCheck.Version) is { } kept)
+            return kept.Reason;
+        var key = ContentKey(file, sha);
+        lock (_sessionLock)
+        {
+            if (_failed.Contains(key))
+                return "Penumbra couldn't convert it earlier this session";
+            if (_compressedOriginals.Contains(key))
+                return "it was compressed earlier this session, then something put the original back";
+        }
+        return null;
+    }
+
+    private static string ContentKey(string file, string sha) => file + "\n" + sha;
+
+    /// <summary> <see cref="Verdict"/> without reading the file, when its size and write time are as a run last read it; null otherwise. </summary>
+    private string? UnchangedVerdict(string file)
+        => _hashes.TryGetValue(file, out var seen) && FileStamp.Of(file) == seen.Stamp ? Verdict(file, seen.Sha256) : null;
 
     /// <summary>
     /// Has Penumbra convert a file, waiting for it to finish even when a run is cancelled, since it
@@ -549,7 +611,7 @@ internal sealed class TextureCompressionService : IDisposable
                     var current = TextureBackupStore.Hash(await File.ReadAllBytesAsync(entry.File).ConfigureAwait(false));
                     if (string.Equals(current, entry.OriginalSha256, StringComparison.OrdinalIgnoreCase))
                     {
-                        Backups.Forget([entry]);
+                        ForgetRestored(entry);
                         restored++;
                         continue;
                     }
@@ -565,7 +627,7 @@ internal sealed class TextureCompressionService : IDisposable
                         continue;
                     }
                     await _penumbra.ReplaceModFileAsync(SourceOf(entry), entry.CompressedSha256, original, "It was left as it is").ConfigureAwait(false);
-                    Backups.Forget([entry]);
+                    ForgetRestored(entry);
                     restored++;
                     mods.Add(entry.ModDirectory);
                 }
@@ -588,6 +650,14 @@ internal sealed class TextureCompressionService : IDisposable
             Interlocked.Exchange(ref _busy, 0);
         }
         return new CompressionRestore(restored, changed, failed, warnings);
+    }
+
+    /// <summary> Drops a restored texture's entry; turning compression back on compresses it again. </summary>
+    private void ForgetRestored(CompressedTexture entry)
+    {
+        Backups.Forget([entry]);
+        lock (_sessionLock)
+            _compressedOriginals.Remove(ContentKey(entry.File, entry.OriginalSha256));
     }
 
     /// <summary> Forgets every backup and deletes the copies; the compressed files stay as they are. </summary>

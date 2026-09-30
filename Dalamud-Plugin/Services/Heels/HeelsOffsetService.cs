@@ -381,25 +381,6 @@ internal sealed class HeelsOffsetService : IDisposable
                 _handled.Remove(current);
     }
 
-    /// <summary> A file's size and last write time; null for a game file or one that can't be read. </summary>
-    private readonly record struct FileStamp(long Length, DateTime Written)
-    {
-        public static FileStamp? Of(string path)
-        {
-            try
-            {
-                if (!Path.IsPathRooted(path))
-                    return null;
-                var info = new FileInfo(path);
-                return info.Exists ? new FileStamp(info.Length, info.LastWriteTimeUtc) : null;
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-            {
-                return null;
-            }
-        }
-    }
-
     /// <summary> GPose, cutscenes, zoning and combat, where the redraw after a fix would get in the way. </summary>
     private bool Waits()
         => _clientState.IsGPosing || _condition[ConditionFlag.InCombat] || _condition[ConditionFlag.BetweenAreas] ||
