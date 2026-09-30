@@ -2,7 +2,9 @@ using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
 using InstantEdit.Models;
+using InstantEdit.Services;
 using InstantEdit.Services.NeckSeam;
+using InstantEdit.Services.PreviewMods;
 using InstantEdit.Services.Painter;
 using InstantEdit.Ui;
 using static InstantEdit.TestSupport.Assertions;
@@ -33,6 +35,10 @@ internal static class BodySeamScenarios
         CheckVertexWriter();
         CheckSeams();
         CheckMisses();
+        CheckOverlaps();
+        CheckSurroundings();
+        CheckKeepUnchanged();
+        CheckBackups(testRoot);
         CheckCapture(testRoot);
         CheckViews();
     }
@@ -288,22 +294,25 @@ internal static class BodySeamScenarios
     private const int Band = Ring * 6;
 
     /// <summary> The arm: rings from the wrist up, the lowest band behind the atr_hij attribute. </summary>
-    private static byte[] Top(float gap = 0.0008f, float uOffset = 0, bool half = false, float y0 = -1)
+    private static byte[] Top(float gap = 0.0008f, float uOffset = 0, bool half = false, float y0 = -1, Func<int, int, float>? radius = null)
     {
         var bottom = y0 >= 0 ? y0 : WristY + gap;
-        var vertices = Tube([bottom, bottom + 0.04f, bottom + 0.08f], 0.1f, 0.4f, uOffset);
+        var vertices = Tube([bottom, bottom + 0.04f, bottom + 0.08f], 0.1f, 0.4f, uOffset, radius);
         return Model("/mt_c0201b0001_a.mtrl", vertices, Quads(3), [(0, Band, 1u), (Band, Band, 0u)], ["atr_hij"], [], half);
     }
 
     /// <summary>
     /// The hand: rings up to the wrist, its wrist-ring normals tilted and, optionally, the wrist ring
-    /// moved by a shape key (replacement vertices after the mesh's own).
+    /// moved by a shape key (replacement vertices after the mesh's own). With <paramref name="reach"/>,
+    /// one more ring that far up the arm and 3 mm inside it, tucked under the top's skin.
     /// </summary>
-    private static byte[] Glove(string material = "/mt_c0201b0001_a.mtrl", Func<int, int, float>? radius = null, float lift = 0, bool tilt = true)
+    private static byte[] Glove(string material = "/mt_c0201b0001_a.mtrl", Func<int, int, float>? radius = null, float lift = 0, bool tilt = true,
+        float reach = 0)
     {
-        var heights = new[] { WristY - 0.08f, WristY - 0.04f, WristY };
-        var vertices = Tube(heights, 0.6f, 0.9f, radius: radius, tilt: tilt ? (ring, _) => ring == 2 ? new Vector3(0, 0.1f, 0) : Vector3.Zero : null);
-        var indices = Quads(3);
+        var heights = reach > 0 ? new[] { WristY - 0.08f, WristY - 0.04f, WristY, WristY + reach } : new[] { WristY - 0.08f, WristY - 0.04f, WristY };
+        var vertices = Tube(heights, 0.6f, 0.9f, radius: reach > 0 ? (ring, i) => ring == 3 ? Radius - 0.003f : radius?.Invoke(ring, i) ?? Radius : radius,
+            tilt: tilt ? (ring, _) => ring == 2 ? new Vector3(0, 0.1f, 0) : Vector3.Zero : null);
+        var indices = Quads(heights.Length);
         var shapes = new List<Shape>();
         if (lift > 0)
         {
@@ -485,6 +494,180 @@ internal static class BodySeamScenarios
             "body seam: an enabled connector shape key moves the edge the way the game draws it");
     }
 
+    // ---- Overlaps, clothing and seam connectors --------------------------------------------------------
+
+    private static void CheckOverlaps()
+    {
+        // The gloves reach 1 cm up the arm and dive 3 mm under it; the top's edge lies on the gloves' skin.
+        var report = Analyze(Top(gap: 0), Glove(reach: 0.01f));
+        var wrists = report.Seam(BodySeamKind.Wrists)!;
+        Require(wrists is { Chains.Count: 1 } && wrists.Chains[0] is { Overlap: true, Closed: true, A.Length: Ring } chain && chain.Outer == wrists.A &&
+                wrists.GapMax < BodySeamAnalyzer.GapFloor && Finding(wrists, "Edge fit") is { Severity: NeckSeamSeverity.Ok } fit &&
+                fit.Detail.Contains("rests on the gloves' skin", StringComparison.Ordinal),
+            "body seam: an edge lying on the other part's skin is an overlap, not edges 1 cm apart, and no gap can show");
+        Require(Finding(wrists, "Vertex normals at the edge").Severity == NeckSeamSeverity.Problem && wrists.NormalsDiffer,
+            "body seam: at an overlap the outer edge's normals are compared with the skin under it");
+
+        // The top's edge stands 0.8 mm off the gloves' skin: a step the weld lays flat, moving only the top.
+        var raised = Analyze(Top(gap: 0, radius: (ring, _) => ring == 0 ? Radius + 0.0008f : Radius), Glove(reach: 0.01f));
+        var step = raised.Seam(BodySeamKind.Wrists)!;
+        Require(step.Chains.Single().Overlap && Finding(step, "Edge fit") is { Severity: NeckSeamSeverity.Problem, Fix: NeckSeamFixKind.Weld } && step.CanWeld &&
+                MathF.Abs(step.GapMax - 0.0008f) < 1e-4f,
+            "body seam: an overlapping edge standing off the skin under it is a step the weld fixes");
+        var fix = BodySeamFixer.Build(raised, new Dictionary<BodySeamKind, BodySeamFixOptions> { [BodySeamKind.Wrists] = new(true, true, false, false, Meet: 0.5f) });
+        var top = fix.Models.Single();
+        var after = Analyze(top.Bytes, Glove(reach: 0.01f)).Seam(BodySeamKind.Wrists)!;
+        Require(top.GamePath == TopPath && after.Chains.Single().Overlap && after.GapMax < BodySeamAnalyzer.GapFloor && after.NormalMax < BodySeamAnalyzer.NormalFloor,
+            "body seam: the weld lays the outer edge onto the skin under it with that skin's normals, and the part under it stays as it is");
+    }
+
+    private const string ConnectorPath = "chara/human/c0201/obj/body/b0002/model/c0201b0002_top.mdl";
+    private const string ClothPath = "chara/equipment/e0001/model/c0201e0001_glv.mdl";
+
+    /// <summary> A seam connector: a band of skin behind atr_cn_wrist, rings 1 cm either side of the wrist with the given radii. </summary>
+    private static byte[] Connector(float inner, float middle, string material = "/mt_c0201b0001_a.mtrl")
+    {
+        var vertices = Tube([WristY - 0.01f, WristY, WristY + 0.01f], 0.4f, 0.6f, radius: (ring, _) => ring == 1 ? middle : inner);
+        var indices = Quads(3);
+        return Model(material, vertices, indices, [(0, indices.Count, 1u)], ["atr_cn_wrist"], []);
+    }
+
+    /// <summary> A sleeve: a clothing tube 1 cm outside the skin, from 5 cm below the wrist to 5 cm above it. </summary>
+    private static byte[] Sleeve()
+    {
+        var vertices = Tube([WristY - 0.05f, WristY, WristY + 0.05f], 0.1f, 0.9f, radius: (_, _) => Radius + 0.01f);
+        var indices = Quads(3);
+        return Model("/mt_c0201e0001_glv_a.mtrl", vertices, indices, [(0, indices.Count, 0u)], [], []);
+    }
+
+    private static void CheckSurroundings()
+    {
+        Require(BodySeamAnalyzer.SlotOf(ConnectorPath) is null && BodySeamAnalyzer.SlotOf(TopPath) == "top" && SeamSurroundings.IsHumanBodyModel(ConnectorPath) &&
+                !SeamSurroundings.IsHumanBodyModel(TopPath),
+            "body seam: a human body model named like a top (the game's seam connectors, its low-poly body) is never a part");
+        var band = SkinModel.Read(Connector(Radius - 0.003f, Radius)).Meshes.Single();
+        Require(band.Triangles.Length == 0 && band.Connectors["wrist"].Length == 2 * Band,
+            "body seam: a connector's submesh isn't drawn skin; it is listed by the seam it joins");
+
+        NeckSeamInput With(params NeckSeamModelInput[] more)
+        {
+            var input = Input(Top(), Glove());
+            return input with { Bodies = [.. more, .. input.Bodies] };
+        }
+        NeckSeamModelInput ConnectorInput(byte[] bytes, uint? attributes = null, string skin = SkinPath)
+            => new(ConnectorPath, bytes, [Skin(skin)]) { Attributes = attributes };
+
+        // Listed first, so a pick by order would take it for the top.
+        var filled = BodySeamAnalyzer.Analyze(With(ConnectorInput(Connector(Radius - 0.003f, Radius)))).Seam(BodySeamKind.Wrists)!;
+        Require(filled.A.ModelPath == TopPath && Finding(filled, "Seam connector") is { Severity: NeckSeamSeverity.Info, Face: "Loaded" } connector &&
+                connector.Detail.Contains("fills the gap", StringComparison.Ordinal) && Finding(filled, "Edge fit").Severity == NeckSeamSeverity.Warning && filled.CanWeld,
+            "body seam: a connector under a 0.8 mm gap fills it with skin, so the gap is a warning instead of a problem");
+        var notDrawn = BodySeamAnalyzer.Analyze(With(ConnectorInput(Connector(Radius - 0.003f, Radius), attributes: 0))).Seam(BodySeamKind.Wrists)!;
+        Require(Finding(notDrawn, "Seam connector") is { Face: "Not drawn", Severity: NeckSeamSeverity.Info } && Finding(notDrawn, "Edge fit").Severity == NeckSeamSeverity.Problem,
+            "body seam: a connector the game doesn't draw fills nothing");
+        var otherSkin = BodySeamAnalyzer.Analyze(With(ConnectorInput(Connector(Radius - 0.003f, Radius, "/mt_c0201b0001_b.mtrl"), skin: OtherSkinPath))).Seam(BodySeamKind.Wrists)!;
+        Require(Finding(otherSkin, "Seam connector") is { Severity: NeckSeamSeverity.Warning } other && other.Detail.Contains("differently coloured", StringComparison.Ordinal),
+            "body seam: a connector with another skin material shows differently coloured skin in the gap");
+        var poking = BodySeamAnalyzer.Analyze(With(ConnectorInput(Connector(Radius + 0.002f, Radius + 0.002f)))).Seam(BodySeamKind.Wrists)!;
+        Require(Finding(poking, "Seam connector") is { Severity: NeckSeamSeverity.Problem } poke && poke.Detail.Contains("sticks out", StringComparison.Ordinal),
+            "body seam: a connector sticking 2 mm out of the skin shows as a band of skin");
+
+        var sleeved = BodySeamAnalyzer.Analyze(Input(Top(), Glove()) with { Clothing = [new NeckSeamModelInput(ClothPath, Sleeve(), [])] })
+            .Seam(BodySeamKind.Wrists)!;
+        Require(sleeved.Findings[0] is { Title: "Covered by clothing", Severity: NeckSeamSeverity.Info } && sleeved.Worst == NeckSeamSeverity.Info &&
+                sleeved.Chains[0].Covered >= BodySeamAnalyzer.HiddenShare && sleeved.CanWeld &&
+                NeckSeamViews.BodySummary(sleeved).StartsWith("Clothing covers the wrists", StringComparison.Ordinal) &&
+                NeckSeamViews.TabLabel("Wrists", sleeved.Findings) == "Wrists###skin-seam-Wrists",
+            "body seam: a seam a sleeve closes in around doesn't show, so its findings are notes, and the fixes stay available");
+        var hiddenPoke = BodySeamAnalyzer.Analyze(With(ConnectorInput(Connector(Radius + 0.002f, Radius + 0.002f))) with { Clothing = [new NeckSeamModelInput(ClothPath, Sleeve(), [])] })
+            .Seam(BodySeamKind.Wrists)!;
+        Require(Finding(hiddenPoke, "Seam connector").Severity <= NeckSeamSeverity.Info,
+            "body seam: a connector sticking out under clothing doesn't show");
+    }
+
+    /// <summary> A TEX with its mip chain: uncompressed pixels of one value, or BC7 blocks of one byte. </summary>
+    private static byte[] Tex(uint format, int size, int mips, byte fill)
+    {
+        var bc = format != 0x1450;
+        var sizes = Enumerable.Range(0, mips).Select(m => Math.Max(1, size >> m))
+            .Select(s => bc ? Math.Max(1, (s + 3) / 4) * Math.Max(1, (s + 3) / 4) * 16 : s * s * 4).ToList();
+        var bytes = new byte[80 + sizes.Sum()];
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes, 0x00800000);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4), format);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(8), (ushort)size);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(10), (ushort)size);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(12), 1);
+        bytes[14] = (byte)mips;
+        bytes[15] = 1;
+        var offset = 80;
+        for (var m = 0; m < mips; m++)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(28 + m * 4), (uint)offset);
+            offset += sizes[m];
+        }
+        bytes.AsSpan(80).Fill(fill);
+        return bytes;
+    }
+
+    private static void CheckKeepUnchanged()
+    {
+        // The re-encode changed every pixel by one step; the edit changed only the 2 x 2 corner.
+        var changed = new bool[16 * 16];
+        changed[0] = changed[1] = changed[16] = changed[17] = true;
+        var kept = TextureFiles.KeepUnchanged(Tex(0x1450, 16, 5, 100), Tex(0x1450, 16, 5, 101), changed);
+        int Pixel(int mip, int x, int y)
+        {
+            var offset = (int)BinaryPrimitives.ReadUInt32LittleEndian(kept.AsSpan(28 + mip * 4));
+            return kept[offset + (y * Math.Max(1, 16 >> mip) + x) * 4];
+        }
+        Require(Pixel(0, 0, 0) == 101 && Pixel(0, 2, 2) == 101 && Pixel(0, 3, 3) == 100 && Pixel(0, 8, 8) == 100 && Pixel(1, 0, 0) == 101 &&
+                Pixel(1, 4, 4) == 100 && Pixel(4, 0, 0) == 101,
+            "texture: outside the edit (with a pixel of margin at every mip level) the original's pixels go back into the re-encoded file");
+        const uint bc7 = (uint)Lumina.Data.Files.TexFile.TextureFormat.BC7;
+        var single = new bool[16 * 16];
+        single[0] = true;
+        var blocks = TextureFiles.KeepUnchanged(Tex(bc7, 16, 3, 0xAA), Tex(bc7, 16, 3, 0xBB), single);
+        Require(blocks[80] == 0xBB && blocks[80 + 16] == 0xAA && blocks[80 + 10 * 16] == 0xAA && blocks[80 + 256] == 0xBB && blocks[80 + 256 + 3 * 16] == 0xAA,
+            "texture: a block-compressed texture keeps the original's whole blocks where the edit didn't reach");
+        var other = Tex(bc7, 16, 3, 0xBB);
+        Require(TextureFiles.KeepUnchanged(Tex(0x1450, 16, 5, 100), other, single).SequenceEqual(other),
+            "texture: a re-encode into another format keeps nothing of the original");
+    }
+
+    private static void CheckBackups(string testRoot)
+    {
+        var folder = Path.Combine(testRoot, "SkinSeamBackups");
+        Directory.CreateDirectory(folder);
+        var store = new ModelBackupStore(folder);
+        var target = Path.Combine(folder, "strwn.tex");
+        File.WriteAllBytes(target, [1, 2, 3]);
+        var first = store.Create(target, "Makeup Mod", "normal/strwn.tex");
+        File.WriteAllBytes(target, [4]);
+        store.Create(target, "Makeup Mod", "normal/strwn.tex");
+        var listed = store.List("Makeup Mod", "normal/strwn.tex");
+        Require(listed.Count == 2 && listed[0].Created >= listed[1].Created && store.Resolve(listed[1].TargetId, listed[1].Name) == first &&
+                File.ReadAllBytes(first).SequenceEqual(new byte[] { 1, 2, 3 }) && store.List("Other Mod", "normal/strwn.tex").Count == 0,
+            "backups: a file's kept backups are listed newest first, each resolving to its copy");
+
+        PreviewSource Source(string mod, string relative) => new()
+        {
+            GamePath = "chara/" + relative, ActualPath = @"C:\Mods\" + mod + @"\" + relative, State = ResourceSourceState.LoadedMod, ModName = mod,
+            ModDirectory = mod, RelativePath = relative, Sha256 = "00",
+        };
+        var time = new DateTimeOffset(2026, 9, 29, 23, 52, 24, TimeSpan.Zero);
+        var groups = PreviewBackups.Group(
+        [
+            new PreviewBackupFile(Source("Makeup", "normal/strwn.tex"), new ManagedBackup("a", "first", time)),
+            new PreviewBackupFile(Source("Skin", "chara/bibo_mid_norm.tex"), new ManagedBackup("b", "body", time.AddSeconds(0.1))),
+            new PreviewBackupFile(Source("Face", "face.mdl"), new ManagedBackup("c", "face", time.AddSeconds(0.3))),
+            new PreviewBackupFile(Source("Makeup", "normal/strwn.tex"), new ManagedBackup("a", "again", time.AddSeconds(5))),
+            new PreviewBackupFile(Source("makeup", "Normal/strwn.tex"), new ManagedBackup("a", "later", time.AddMinutes(2))),
+        ]);
+        Require(groups.Count == 2 && groups[0].Files.Single().Backup.Name == "later" && groups[1].Files.Count == 3 &&
+                groups[1].Files.Single(f => f.Source.ModName == "Makeup").Backup.Name == "first" && groups[1].Created == time,
+            "backups: backups made together form one group, newest first, keeping each file's earliest backup in it");
+    }
+
     // ---- Capture and text ------------------------------------------------------------------------------
 
     private static void CheckCapture(string testRoot)
@@ -496,19 +679,25 @@ internal static class BodySeamScenarios
         {
             [F("top.mdl")] = Top(), [F("glv.mdl")] = Glove(), [F("skin.mtrl")] = Mtrl(),
             [F("base.tex")] = TwoTone((180, 150, 130), (150, 120, 100)), [F("norm.tex")] = NeckSeamScenarios.Texture(128, 128, 255, 255),
-            [F("mask.tex")] = NeckSeamScenarios.Texture(160, 116, 150, 255),
+            [F("mask.tex")] = NeckSeamScenarios.Texture(160, 116, 150, 255), [F("sleeve.mdl")] = Sleeve(),
         };
         ResourceNode Skin() => NeckSeamScenarios.Node(SkinPath, F("skin.mtrl"), "Skin Mod",
             [NeckSeamScenarios.Node(SkinTextures[0], F("base.tex"), "Skin Mod"), NeckSeamScenarios.Node(SkinTextures[1], F("norm.tex"), "Skin Mod"),
              NeckSeamScenarios.Node(SkinTextures[2], F("mask.tex"), "Skin Mod")]);
-        ResourceNode[] roots = [NeckSeamScenarios.Node(TopPath, F("top.mdl"), "Top Mod", [Skin()]), NeckSeamScenarios.Node(GlovePath, F("glv.mdl"), "Glove Mod", [Skin()])];
+        ResourceNode[] roots =
+        [
+            NeckSeamScenarios.Node(TopPath, F("top.mdl"), "Top Mod", [Skin()]), NeckSeamScenarios.Node(GlovePath, F("glv.mdl"), "Glove Mod", [Skin()]),
+            NeckSeamScenarios.Node(ClothPath, F("sleeve.mdl"), "Sleeve Mod"),
+        ];
         var live = new PainterLiveCharacter([new PainterLiveModel(PainterVisibility.NormalizePath(F("top.mdl")), 0, 0, 1)], null) { Race = 801 };
         var captured = NeckSeamCapture.Capture(roots, path => files.GetValueOrDefault(path), null, live);
         var top = captured.Input.Bodies.Single(b => b.GamePath == TopPath);
         Require(captured.Input.Face is null && captured.Input.CharacterRace == 801 && top.Attributes == 0 && top.Shapes == 0 &&
                 captured.Input.Bodies.Single(b => b.GamePath == GlovePath).Attributes is null && captured.Source(GlovePath)?.ModName == "Glove Mod" &&
-                captured.Source(SkinTextures[0])?.ModName == "Skin Mod" && NeckSeamCapture.HasSkinModels(roots) && !NeckSeamCapture.HasFaceModel(roots),
-            "body seam: capture works without a face, takes each model's drawn attributes and shape keys and the race from the game, and records the body files");
+                captured.Source(SkinTextures[0])?.ModName == "Skin Mod" && NeckSeamCapture.HasSkinModels(roots) && !NeckSeamCapture.HasFaceModel(roots) &&
+                captured.Input.Clothing.Single().GamePath == ClothPath && captured.Input.Bodies.All(b => b.GamePath != ClothPath),
+            "body seam: capture works without a face, takes each model's drawn attributes and shape keys and the race from the game, records the body files, " +
+            "and keeps gear without skin as clothing");
         var noFace = false;
         try { NeckSeamAnalyzer.Analyze(captured.Input); }
         catch (InvalidDataException) { noFace = true; }

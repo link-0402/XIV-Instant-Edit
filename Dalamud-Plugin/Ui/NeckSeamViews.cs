@@ -16,6 +16,8 @@ internal static class NeckSeamViews
     /// <summary> One line summing up the measured seam. </summary>
     public static string Summary(NeckSeamReport report)
     {
+        if (Covered(report.Findings))
+            return "Clothing covers the neck, so the seam doesn't show with this outfit.";
         var problems = report.Findings.Count(f => f.Severity == NeckSeamSeverity.Problem);
         var warnings = report.Findings.Count(f => f.Severity == NeckSeamSeverity.Warning);
         if (problems == 0 && warnings == 0)
@@ -29,8 +31,13 @@ internal static class NeckSeamViews
     /// <summary> One line summing up a measured body seam. </summary>
     public static string BodySummary(BodySeam seam)
     {
+        string first = seam.A.Label.ToLowerInvariant(), second = seam.B.Label.ToLowerInvariant(), where = seam.Title.ToLowerInvariant();
         if (seam.Chains.Count == 0)
-            return $"The {seam.A.Label.ToLowerInvariant()} and {seam.B.Label.ToLowerInvariant()} don't meet at the {seam.Title.ToLowerInvariant()}.";
+            return seam.Worst <= NeckSeamSeverity.Info && seam.Findings.Count > 0
+                ? $"The {first} and {second} don't meet at the {where}, but clothing covers them."
+                : $"The {first} and {second} don't meet at the {where}.";
+        if (Covered(seam.Findings))
+            return $"Clothing covers the {where}, so the seam doesn't show with this outfit.";
         var problems = seam.Findings.Count(f => f.Severity == NeckSeamSeverity.Problem);
         var warnings = seam.Findings.Count(f => f.Severity == NeckSeamSeverity.Warning);
         if (problems == 0 && warnings == 0)
@@ -40,6 +47,8 @@ internal static class NeckSeamViews
         if (warnings > 0) parts.Add(warnings == 1 ? "1 smaller difference" : $"{warnings} smaller differences");
         return string.Join(", ", parts) + (seam.AnyFix ? "." : "; none of them can be fixed here.");
     }
+
+    private static bool Covered(IReadOnlyList<NeckSeamFinding> findings) => findings.Any(f => f.Title == BodySeamAnalyzer.CoveredTitle);
 
     /// <summary> A seam tab's label: the seam and how many of its findings need a look. </summary>
     public static string TabLabel(string title, IReadOnlyList<NeckSeamFinding>? findings)

@@ -4,6 +4,7 @@ using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services.NeckSeam;
+using InstantEdit.Services.PreviewMods;
 
 namespace InstantEdit.Ui;
 
@@ -25,6 +26,20 @@ public sealed partial class MainWindow
     private bool _neckSeamConfirmApply;
     /// <summary> The fixes chosen for each body seam, replaced whole on every measurement. </summary>
     private Dictionary<BodySeamKind, BodySeamChoice> _bodySeamChoices = new();
+    /// <summary>
+    /// Which seams the preview fixes, by tab title. Only the neck starts ticked: body seam fixes change
+    /// gear models and shared skin textures, so they are opt-in. Kept across measurements, reset when
+    /// the dialog opens.
+    /// </summary>
+    private readonly Dictionary<string, bool> _skinSeamIncluded = new(StringComparer.Ordinal);
+
+    private bool SeamIncluded(string title) => _skinSeamIncluded.TryGetValue(title, out var included) ? included : title == NeckTab;
+    private const string NeckTab = "Neck";
+    /// <summary> Kept backups of the measured files, by the apply that made them; read with each measurement. </summary>
+    private IReadOnlyList<PreviewBackupGroup> _skinSeamBackups = [];
+    /// <summary> The backup group waiting for its restore to be confirmed. </summary>
+    private PreviewBackupGroup? _skinSeamRestore;
+    private bool _skinSeamRemeasure;
 
     /// <summary> One body seam's ticked fixes and where its two parts meet (0 keeps the first part, 1 the second). </summary>
     private sealed class BodySeamChoice
@@ -41,6 +56,7 @@ public sealed partial class MainWindow
         _neckSeamActor = actor;
         _neckSeamConfirmApply = false;
         _openNeckSeamDialog = true;
+        _skinSeamIncluded.Clear();
         // Mods may have changed since the last look, so every opening measures again.
         MeasureNeckSeam();
     }
@@ -71,6 +87,13 @@ public sealed partial class MainWindow
                 {
                     Weld = seam.CanWeld, Normals = seam.NormalsDiffer, Material = seam.MaterialDiffers, Textures = seam.TexturesDiffer,
                 });
+                try { _skinSeamBackups = service.Backups(analysis); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    _log.Debug(e, "Could not list the skin seam backups.");
+                    _skinSeamBackups = [];
+                }
+                _skinSeamRestore = null;
                 _neckSeamAnalysis = analysis;
             }
             catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
@@ -83,11 +106,11 @@ public sealed partial class MainWindow
         });
     }
 
-    /// <summary> The fixes ticked across all seams, one line each, for the create button's tooltip; empty when none is. </summary>
+    /// <summary> The fixes ticked across the ticked seams, one line each, for the create button's tooltip; empty when none is. </summary>
     private List<string> SelectedSkinSeamFixes(NeckSeamAnalysis analysis)
     {
         var lines = new List<string>();
-        if (analysis.Report is { } report)
+        if (analysis.Report is { } report && SeamIncluded(NeckTab))
         {
             if (_neckSeamMorph && report.NeckMorphs.Count > 0) lines.Add("Neck: add connection data to the face model");
             if (_neckSeamMaterial && report.Material.Any) lines.Add("Neck: bring the skin settings together");
@@ -95,7 +118,7 @@ public sealed partial class MainWindow
         }
         foreach (var seam in analysis.Body?.Seams ?? [])
         {
-            if (!_bodySeamChoices.TryGetValue(seam.Kind, out var choice))
+            if (!SeamIncluded(seam.Title) || !_bodySeamChoices.TryGetValue(seam.Kind, out var choice))
                 continue;
             if (choice.Weld && seam.CanWeld) lines.Add($"{seam.Title}: close the gap between the edges");
             if (choice.Normals && seam.NormalsDiffer) lines.Add($"{seam.Title}: match the vertex normals");
@@ -111,10 +134,10 @@ public sealed partial class MainWindow
             return;
         _neckSeamBusyText = "Building the fixed files";
         _neckSeamError = string.Empty;
-        var neck = analysis.Report is not null && (_neckSeamMorph || _neckSeamMaterial || _neckSeamTextures)
+        var neck = analysis.Report is not null && SeamIncluded(NeckTab) && (_neckSeamMorph || _neckSeamMaterial || _neckSeamTextures)
             ? new NeckSeamFixOptions(_neckSeamMorph, _neckSeamMaterial, _neckSeamTextures, _neckSeamBandCm / 100f, _neckSeamMeet)
             : null;
-        var body = _bodySeamChoices.Where(p => p.Value.Weld || p.Value.Normals || p.Value.Material || p.Value.Textures)
+        var body = _bodySeamChoices.Where(p => SeamIncluded(BodySeamAnalyzer.Title(p.Key)) && (p.Value.Weld || p.Value.Normals || p.Value.Material || p.Value.Textures))
             .ToDictionary(p => p.Key, p => new BodySeamFixOptions(p.Value.Weld, p.Value.Normals, p.Value.Material, p.Value.Textures, p.Value.BandCm / 100f, p.Value.Meet));
         _ = Task.Run(async () =>
         {
@@ -160,6 +183,35 @@ public sealed partial class MainWindow
         });
     }
 
+    private void RestoreSkinSeamBackup(PreviewBackupGroup group)
+    {
+        if (_neckSeam is not { } service || _neckSeamActor is not { } actor || Interlocked.CompareExchange(ref _neckSeamBusy, 1, 0) != 0)
+            return;
+        _neckSeamBusyText = "Restoring the backups";
+        _neckSeamError = string.Empty;
+        _skinSeamRestore = null;
+        _ = Task.Run(async () =>
+        {
+            var restored = false;
+            try
+            {
+                ReportNeckSeam(await service.RestoreAsync(group, actor.ObjectIndex).ConfigureAwait(false));
+                _neckSeamAnalysis = null;
+                _neckSeamFix = null;
+                _skinSeamBackups = [];
+                restored = true;
+            }
+            catch (Exception error)
+            {
+                _log.Warning(error, "Could not restore the skin seam backups.");
+                _neckSeamError = error.Message;
+            }
+            finally { Interlocked.Exchange(ref _neckSeamBusy, 0); }
+            // Measured again from the draw loop, with the restored files.
+            _skinSeamRemeasure = restored;
+        });
+    }
+
     private void ReportNeckSeam(NeckSeamOutcome outcome)
         => SetStatus(outcome.Warnings.Count == 0 ? outcome.Message : outcome.Message + " " + string.Join(" ", outcome.Warnings),
             outcome.Warnings.Count == 0 ? FeedbackSeverity.Success : FeedbackSeverity.Warning);
@@ -193,6 +245,11 @@ public sealed partial class MainWindow
 
     private void DrawNeckSeamContent()
     {
+        if (_skinSeamRemeasure && Volatile.Read(ref _neckSeamBusy) == 0)
+        {
+            _skinSeamRemeasure = false;
+            MeasureNeckSeam();
+        }
         var busy = Volatile.Read(ref _neckSeamBusy) != 0;
         var actor = _neckSeamActor;
         var analysis = _neckSeamAnalysis;
@@ -219,6 +276,8 @@ public sealed partial class MainWindow
                     DrawNeckSeamPreview(preview, busy);
                 if (analysis is not null)
                     DrawSkinSeamTabs(analysis, fixing: preview is null && analysis.PreviewSources.Count == 0);
+                if (analysis is not null && preview is null && analysis.PreviewSources.Count == 0)
+                    DrawSkinSeamBackups(busy);
             }
         }
 
@@ -240,9 +299,13 @@ public sealed partial class MainWindow
             }
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
                 ImGui.SetTooltip(selected.Count == 0
-                    ? "Tick a fix in one of the tabs first."
+                    ? "Tick a seam to fix, and a fix, in its tab first."
                     : "Puts the fixed files in a new Penumbra mod enabled for this character. Your mods stay unchanged until you apply the fix.\n\n" +
                       string.Join("\n", selected.Select(line => "• " + line)));
+            var fixing = new[] { NeckTab }.Concat(BodySeamAnalyzer.Kinds.Select(BodySeamAnalyzer.Title)).Where(SeamIncluded).ToList();
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Muted, fixing.Count == 0 ? "No seam ticked" : "Fixing: " + string.Join(", ", fixing));
         }
         ImGui.SameLine();
         var closeWidth = ImGui.CalcTextSize("Close").X + ImGui.GetStyle().FramePadding.X * 2;
@@ -299,13 +362,60 @@ public sealed partial class MainWindow
         ImGui.Spacing();
     }
 
+    /// <summary>
+    /// The kept backups of the measured files, one row per apply (or other edit) that made them, each
+    /// with a restore. Restoring a row puts its files back as they were just before it.
+    /// </summary>
+    private void DrawSkinSeamBackups(bool busy)
+    {
+        var groups = _skinSeamBackups;
+        ImGui.Spacing();
+        if (!ImGui.CollapsingHeader($"Restore backups ({groups.Count})##skin-seam-backups"))
+            return;
+        Widgets.HintWrapped("Backups of the files this check reads, made when a fix or another edit changed them, and kept for 7 days. Restoring a row puts " +
+                            "its files back as they were just before that time. The files it replaces are backed up first, so a restore can be undone the same way.");
+        if (groups.Count == 0)
+        {
+            Widgets.MutedWrapped("No backups of these files.");
+            return;
+        }
+        for (var i = 0; i < groups.Count; i++)
+        {
+            var group = groups[i];
+            using var id = ImRaii.PushId(i);
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Text, group.Created.ToLocalTime().ToString("d MMM, HH:mm:ss"));
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.TextColored(Theme.Muted, group.Files.Count == 1 ? "1 file" : $"{group.Files.Count} files");
+            ImGui.SameLine(0, Theme.Gap * 2);
+            using (ImRaii.Disabled(busy))
+            {
+                if (_skinSeamRestore == group)
+                {
+                    using (ImRaii.PushColor(ImGuiCol.Button, Theme.WithAlpha(Theme.Important, .45f)))
+                    {
+                        if (ImGui.Button("Restore these files"))
+                            RestoreSkinSeamBackup(group);
+                    }
+                    ImGui.SameLine();
+                    if (ImGui.Button("Cancel"))
+                        _skinSeamRestore = null;
+                }
+                else if (ImGui.Button("Restore"))
+                    _skinSeamRestore = group;
+            }
+            foreach (var file in group.Files)
+                Widgets.MutedWrapped("• " + file.Source.Label);
+        }
+    }
+
     /// <summary> One tab per seam; a tab's label shows how many of its findings need a look, in the colour of the worst. </summary>
     private void DrawSkinSeamTabs(NeckSeamAnalysis analysis, bool fixing)
     {
         using var tabs = ImRaii.TabBar("##skin-seams");
         if (!tabs.Success)
             return;
-        SkinSeamTab("Neck", analysis.Report?.Findings, () => DrawNeckSeamTab(analysis, fixing));
+        SkinSeamTab(NeckTab, analysis.Report?.Findings, () => DrawNeckSeamTab(analysis, fixing));
         foreach (var kind in BodySeamAnalyzer.Kinds)
         {
             var seam = analysis.Body?.Seam(kind);
@@ -350,6 +460,7 @@ public sealed partial class MainWindow
             Widgets.HintWrapped("Nothing here can be fixed automatically.");
             return;
         }
+        using var include = IncludeSeam(NeckTab, "Puts the neck's ticked fixes into the preview mod. They change the face's files, and the body's skin material when the settings meet on its side.");
         FixOption("Add neck connection data to the face model", ref _neckSeamMorph, report.NeckMorphs.Count > 0,
             $"Adds {report.NeckMorphs.Count} connection vertices from the face's neck edge, so the game joins the body's edge to the face.");
         FixOption("Bring the face's and body's skin settings together", ref _neckSeamMaterial, report.Material.Any,
@@ -401,8 +512,13 @@ public sealed partial class MainWindow
             Widgets.HintWrapped("Nothing here can be fixed automatically.");
             return;
         }
+        using var include = IncludeSeam(seam.Title,
+            $"Puts the {BodySeamAnalyzer.Of(seam.Title.ToLowerInvariant())} ticked fixes into the preview mod. Off by default: they change the " +
+            $"{BodySeamAnalyzer.Of(first)} and the {BodySeamAnalyzer.Of(second)} models and the skin textures they share, for every outfit that uses them.");
         FixOption($"Close the gap between the edges##weld-{kind}", ref choice.Weld, seam.CanWeld,
-            "Moves the two parts' edges onto each other, and the skin just behind them a little, so no crease forms.");
+            seam.Chains.Any(c => c.Overlap)
+                ? "Moves the edges onto each other, and the skin just behind them a little, so no crease forms. Where one part's edge rests on the other's skin, only that edge moves, onto the skin under it."
+                : "Moves the two parts' edges onto each other, and the skin just behind them a little, so no crease forms.");
         FixOption($"Match the vertex normals along the edges##normals-{kind}", ref choice.Normals, seam.NormalsDiffer,
             "Gives both edges the same vertex normals, so the lighting runs on smoothly across the seam.");
         FixOption($"Bring the two skin materials together##material-{kind}", ref choice.Material, seam.MaterialDiffers,
@@ -429,6 +545,29 @@ public sealed partial class MainWindow
                 $"Where the two parts meet. Left keeps the {first} as it is and changes only the {second}, right changes only the {first}, the middle moves both halfway.");
         if (choice.Weld && seam.CanWeld || choice.Normals && seam.NormalsDiffer)
             Widgets.HintWrapped("Changing a model changes it for every character and outfit that uses it.");
+    }
+
+    /// <summary>
+    /// The seam's tick ("Fix the wrists"), then its fix options indented and switched off until it is
+    /// ticked. Dispose the result after the options.
+    /// </summary>
+    private IDisposable IncludeSeam(string title, string help)
+    {
+        var included = SeamIncluded(title);
+        if (ImGui.Checkbox($"Fix the {title.ToLowerInvariant()}##include-{title}", ref included))
+            _skinSeamIncluded[title] = included;
+        ImGui.SameLine(0, Theme.Gap);
+        Widgets.HelpTip(help);
+        return new SeamOptions(ImRaii.PushIndent(), ImRaii.Disabled(!included));
+    }
+
+    private sealed class SeamOptions(IDisposable indent, IDisposable disabled) : IDisposable
+    {
+        public void Dispose()
+        {
+            disabled.Dispose();
+            indent.Dispose();
+        }
     }
 
     /// <summary> The meeting point slider between two labelled ends: left changes only the second side, right only the first. </summary>
