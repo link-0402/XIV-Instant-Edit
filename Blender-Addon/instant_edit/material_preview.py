@@ -406,6 +406,12 @@ def _has_overlapping_cards(preview: PreviewMaterial) -> bool:
     return "/obj/face/" not in preview.game_path.replace("\\", "/").casefold()
 
 
+def _is_eye_occlusion(preview: PreviewMaterial) -> bool:
+    """characterocclusion.shpk is a shading pass the game draws over the eyes:
+    its only texture, in the normal sampler, is a lid-shadow gradient."""
+    return preview.shader_package.casefold() == "characterocclusion.shpk"
+
+
 def _opacity_source(preview: PreviewMaterial) -> tuple[str, int] | None:
     """Return the texture usage and channel that hold the material's opacity."""
     shader = preview.shader_package.casefold()
@@ -751,10 +757,12 @@ def create_preview_material(
     if preview is None:
         package.warnings.append(f"No preview data for {Path(model_material).name or model_material}")
         return None
+    eye_occlusion = _is_eye_occlusion(preview)
     can_build_character_base = _can_build_character_base(preview)
     can_build_hair_preview = not can_build_character_base and _can_build_hair_preview(preview)
     if (
-        not can_build_character_base
+        not eye_occlusion
+        and not can_build_character_base
         and not can_build_hair_preview
         and not any(texture.usage in {"diffuse", "normal", "specular"} for texture in preview.textures)
     ):
@@ -781,10 +789,20 @@ def create_preview_material(
     nodes = material.node_tree.nodes
     links = material.node_tree.links
     nodes.clear()
-    principled = nodes.new(type="ShaderNodeBsdfPrincipled")
-    principled.location = (300, 0)
     output = nodes.new(type="ShaderNodeOutputMaterial")
     output.location = (620, 0)
+    if eye_occlusion:
+        # As a surface, the occlusion shell would cover the eyes with an opaque
+        # card (Painter leaves it out for that reason). Its meshes stay for
+        # export, so the preview draws them fully transparent, shadows too.
+        transparent = nodes.new(type="ShaderNodeBsdfTransparent")
+        transparent.location = (300, 0)
+        links.new(transparent.outputs["BSDF"], output.inputs["Surface"])
+        material.use_transparent_shadow = True
+        material.diffuse_color = (0.0, 0.0, 0.0, 0.0)
+        return material
+    principled = nodes.new(type="ShaderNodeBsdfPrincipled")
+    principled.location = (300, 0)
     links.new(principled.outputs["BSDF"], output.inputs["Surface"])
     base_color = _socket(principled, "Base Color")
     if base_color is not None:
