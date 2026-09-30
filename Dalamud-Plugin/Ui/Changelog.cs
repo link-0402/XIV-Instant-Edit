@@ -23,10 +23,10 @@ internal static class ChangelogCatalog
     public static IReadOnlyList<ChangelogRelease> Releases { get; } =
     [
         Release("2.1.0",
-            Highlight("Quick Actions: Character weight totals what your character costs other players in texture memory (VRAM) and triangles, counted the way Lightless, PlayerSync and other Mare-based sync plugins count them, next to their default warning and auto-pause limits."),
-            Entry("It ranks every texture and model your character renders by what it costs, counting each file once, and flags uncompressed textures, textures over 4096 pixels and textures without mipmaps.", 1),
-            Entry("Tick textures to compress them (BC7, or BC5 for index maps, the same rule as Mod Optimizer) or halve their size; uncompressed ones come ticked. The planned totals update as you choose.", 1),
-            Entry("The smaller textures go into a preview mod first. Apply them to your mods (backups are kept for a week) or discard them; changed game files go into a new mod. A file several options share changes for all of them.", 1),
+            Highlight("Quick Actions: turn on Compress textures, and the uncompressed mod textures your character wears are compressed as they load, so Lightless, PlayerSync and other sync plugins count less texture memory for you."),
+            Entry("Penumbra encodes each one (BC5 for index maps, BC7 for the rest, with mipmaps only where the original has them), and it is decoded again and compared with the original. It stays as it is if its see-through edges or opacity, the dye colors its index map picks, the way light falls on it or its colors would visibly change, which on real mods keeps fine lace, fishnet, sheer fabric and some dense index maps uncompressed.", 1),
+            Entry("The originals are backed up in the cache folder until you restore them or delete the backups. Restore originals puts them back and turns compression off. A compressed file changes for every option and collection that uses it.", 1),
+            Entry("It waits until you're out of combat, cutscenes, group pose and loading screens, then reloads the changed mods and redraws your character once.", 1),
             Highlight("Quick Actions: Fix neck seam is now Fix skin seams. Besides the neck, it checks where the top meets the gloves at the wrists and the legs at the waist, and where the legs meet the shoes at the ankles."),
             Entry("It compares only the skin the game draws, with the shape keys body mods use to join their parts, and finds gaps between the edges, vertex normals that differ, different skin materials, and textures that don't continue across the seam.", 1),
             Entry("Gaps of up to 5 mm can be closed, normals matched, skin settings brought together and textures blended across the seam, with a slider for which part changes. Parts made for different bodies, whose edges lie further apart, are named without a fix.", 1),
