@@ -120,6 +120,8 @@ static void CheckFirstTimeSetupConfiguration()
         Directory.CreateDirectory(Path.Combine(cleaned, "Backups"));
         Directory.CreateDirectory(Path.Combine(cleaned, "skeleton-library"));
         Directory.CreateDirectory(Path.Combine(cleaned, "game-exports", "chara"));
+        Directory.CreateDirectory(Path.Combine(cleaned, "texture-backups"));
+        File.WriteAllText(Path.Combine(cleaned, "texture-backups", new string('A', 64) + ".tex"), "original");
         File.WriteAllText(Path.Combine(cleaned, "Contexts", $"{Guid.NewGuid():N}.json"), "{}");
         File.WriteAllText(Path.Combine(cleaned, "TextureSessions.json"), "[]");
         File.WriteAllText(Path.Combine(cleaned, $".pending-context-revocations.json.{Guid.NewGuid():N}.tmp"), "{");

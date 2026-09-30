@@ -29,8 +29,9 @@ Penumbra mods.
 - **Quick Actions**: tasks for your whole character.
   - Fix the skin seams where its models meet: the face and body at the neck, and the top, gloves, legs and shoes at the
     wrists, waist and ankles. [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Fixing-the-Neck-Seam)
-  - Check its weight: the texture memory and triangles Lightless, PlayerSync and other sync plugins count, the files
-    that cost the most, and a preview mod that compresses or halves the heaviest textures.
+  - Compress its textures automatically: the uncompressed mod textures it wears are compressed as they load, so
+    Lightless, PlayerSync and other sync plugins count less texture memory, unless a check finds they'd look different.
+    The originals are backed up and can be restored.
   - Paint its whole skin in Substance Painter.
   - Measure the [Simple Heels](https://github.com/Caraxi/SimpleHeels) offset that keeps its heels from sinking into the
     ground.
