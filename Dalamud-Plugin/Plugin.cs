@@ -56,7 +56,8 @@ public sealed class Plugin : IDalamudPlugin
         IFramework framework,
         ISigScanner sigScanner,
         INotificationManager notifications,
-        ITargetManager targets)
+        ITargetManager targets,
+        ICondition condition)
     {
         _pi       = pi;
         _commands = commands;
@@ -203,9 +204,11 @@ public sealed class Plugin : IDalamudPlugin
             new Services.Painter.PainterLiveReader(framework, objects));
         _window.AttachNeckSeam(neckSeam);
         // Character weight: texture memory and triangles as sync plugins count them, and smaller textures in a preview mod.
-        _window.AttachCharacterWeight(new Services.CharacterWeight.CharacterWeightService(_penumbra, data, log, configDirectory, [neckSeam.Store]));
-        // Heels offsets for Simple Heels, measured on the shoes your character draws.
-        _heels = new Services.Heels.HeelsOffsetService(pi, framework, objects, data, skeletons, log);
+        var characterWeight = new Services.CharacterWeight.CharacterWeightService(_penumbra, data, log, configDirectory, [neckSeam.Store]);
+        _window.AttachCharacterWeight(characterWeight);
+        // Simple Heels offsets, measured on the model your character's feet are in and written into it; preview mods' files are left alone.
+        _heels = new Services.Heels.HeelsOffsetService(pi, framework, objects, clientState, condition, data, skeletons, _penumbra, resourceSources,
+            [neckSeam.Store, characterWeight.Store], () => _config.AutoFixHeels, log);
         _window.AttachHeelsOffset(_heels);
         // Automatic cache cleanup also removes old exports from the cache's export folder.
         _textures.AdditionalCacheCleanup = () =>

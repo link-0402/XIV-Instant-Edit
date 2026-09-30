@@ -1,7 +1,8 @@
+using System.Globalization;
+using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
-using InstantEdit.Models;
 using InstantEdit.Services.Heels;
 
 namespace InstantEdit.Ui;
@@ -9,22 +10,23 @@ namespace InstantEdit.Ui;
 public sealed partial class MainWindow
 {
     private HeelsOffsetService? _heels;
-    private HeelsOffsetResult? _heelsResult;
-    private string _heelsError = string.Empty;
-    private int _heelsBusy;
-    private IReadOnlyList<OnScreenObject>? _heelsSnapshot;
-    private OnScreenObject? _heelsCharacter;
-    // Whether the result was measured on other shoes than the list shows now, worked out once per snapshot and result.
-    private (IReadOnlyList<OnScreenObject>? Snapshot, HeelsOffsetResult? Result, bool Stale) _heelsStale;
 
-    internal void AttachHeelsOffset(HeelsOffsetService service) => _heels = service;
+    internal void AttachHeelsOffset(HeelsOffsetService service)
+    {
+        _heels = service;
+        // The automatic fix also runs with this window closed, so what it writes goes to the status line and notifications.
+        service.AutomaticallyFixed += result => _feed.Report(StatusChannel.Models, FeedbackSeverity.Success,
+            $"Heels offset: wrote {result.Plan.Attribute} into the {result.Model.Slot.Name()} model of {result.Source}.");
+        service.AutomaticFixFailed += error => _feed.Report(StatusChannel.Models, FeedbackSeverity.Warning, $"Heels offset: {error}");
+    }
 
     private void DrawHeelsOffsetCard()
     {
         ImGui.Spacing();
         QuickActionCard("##quick-heels", FontAwesomeIcon.ShoePrints, "Heels offset",
-            "Measures how far your shoes reach below the ground and gives the offset to enter in Simple Heels, " +
-            "so that heels stand on the ground instead of sinking into it.",
+            "Measures how far your shoes reach below the ground and writes the matching Simple Heels offset into their model, so that " +
+            "heels stand on the ground instead of sinking into it. When your gear hides your feet, the legs or one-piece body model that " +
+            "holds them gets the offset.",
             DrawHeelsOffsetAction);
     }
 
@@ -35,137 +37,127 @@ public sealed partial class MainWindow
             Widgets.Hint("Unavailable: the heels tools did not start.");
             return;
         }
-        var character = HeelsCharacter();
-        var busy = Volatile.Read(ref _heelsBusy) != 0;
-        using (ImRaii.Disabled(busy || character is null))
+        var busy = service.Busy;
+        using (ImRaii.Disabled(busy))
         {
-            if (ImGui.Button(_heelsResult is null ? "Measure##quick-heels" : "Measure again##quick-heels") && character is not null)
-                MeasureHeels(service, character);
+            if (ImGui.Button("Fix offset##quick-heels"))
+                service.Fix();
         }
+        ImGui.SameLine();
+        var automatic = _config.AutoFixHeels;
+        if (ImGui.Checkbox("Fix automatically##quick-heels", ref automatic))
+        {
+            _config.AutoFixHeels = automatic;
+            _saveConfig();
+        }
+        ImGui.SameLine();
+        Widgets.HelpTip("Fixes each feet model you put on once it has loaded, or the legs or body model when your gear hides your feet, " +
+                        "also while this window is closed. It writes into your mods' files, keeping a backup of each for a week, and " +
+                        "redraws your character. It waits during combat, cutscenes and GPose, and leaves the game's own files alone.");
         if (busy)
         {
             ImGui.SameLine();
             Widgets.Spinner();
         }
-        if (character is null)
-            Widgets.HintWrapped(_onScreen.IsRefreshing
-                ? "Looking for your character"
-                : "Your character isn't in the On Screen list. Refresh the list once your character is drawn.");
-        if (_heelsError.Length > 0)
-        {
-            using var wrap = ImRaii.TextWrapPos(0f);
-            ImGui.TextColored(Theme.Error, _heelsError);
-        }
-        if (_heelsResult is { } result)
-            DrawHeelsResult(service, result, character);
+        if (service.LastError is { } error)
+            HeelsText(Theme.Error, error);
+        if (service.Last is { } result)
+            DrawHeelsResult(service, result);
     }
 
-    private void DrawHeelsResult(HeelsOffsetService service, HeelsOffsetResult result, OnScreenObject? character)
+    private void DrawHeelsResult(HeelsOffsetService service, HeelsOffsetResult result)
     {
         ImGui.Spacing();
         ImGui.TextColored(Theme.Label, result.ItemName);
         ImGui.SameLine(0, Theme.Gap);
         ImGui.TextColored(Theme.Muted, result.Source);
+        if (result.Model.Slot == HeelsSlot.Legs)
+            Widgets.HintWrapped("Your legs gear hides your feet, so the legs model holds them and gets the offset.");
+        else if (result.Model.Slot == HeelsSlot.Top)
+            Widgets.HintWrapped("Your body gear hides your legs and feet, so the body model holds them and gets the offset.");
 
-        var value = HeelsModelOffset.Format(result.Offset);
-        ImGui.AlignTextToFramePadding();
+        var measurement = result.Measurement;
         ImGui.TextColored(Theme.Text, "Offset:");
         ImGui.SameLine(0, Theme.Gap);
-        ImGui.TextColored(Theme.Accent, value);
+        ImGui.TextColored(Theme.Accent, HeelsModelOffset.Format(measurement.Offset));
         ImGui.SameLine(0, Theme.Gap);
-        ImGui.TextColored(Theme.Muted, $"({result.Offset * 100:0.0} cm)");
-        ImGui.SameLine(0, Theme.Gap);
-        if (Widgets.IconButton("##quick-heels-copy", FontAwesomeIcon.Copy, "Copy the offset"))
-            ImGui.SetClipboardText(value);
+        ImGui.TextColored(Theme.Muted, measurement.Lowest <= 0
+            ? $"(reaches {HeelsFix.Centimetres(-measurement.Lowest)} below the ground)"
+            : $"(stays {HeelsFix.Centimetres(measurement.Lowest)} above the ground)");
 
-        Widgets.HintWrapped(MathF.Abs(result.Offset) < 0.001f
-            ? "They stand on the ground already and need no offset."
-            : $"In Simple Heels, open Equipment Offsets, add an entry for {result.ItemName} and paste this offset" +
-              (result.Offset < 0 ? ". They stand above the ground, so it lowers you onto it." : "."));
-        if (result.StoredOffset is { } stored)
-            Widgets.HintWrapped($"The model sets its own Simple Heels offset, {HeelsModelOffset.Format(stored)} at your height. " +
-                                "Simple Heels applies it without an entry while its Use model assigned offsets option is on.");
+        if (result.Written)
+        {
+            HeelsText(Theme.Success, $"Wrote {result.Plan.Attribute} into the model{Replacing(measurement)}. The old file is backed up for a week.");
+            using (ImRaii.Disabled(service.Busy))
+            {
+                if (ImGui.SmallButton("Undo##quick-heels-undo"))
+                    service.UndoLast();
+            }
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip("Puts the model back as it was before this fix.");
+        }
+        else if (result.Undone)
+            HeelsText(Theme.Hint, _config.AutoFixHeels
+                ? "Undone: the model is back as it was. Fix automatically leaves it alone until you press Fix offset while wearing it."
+                : "Undone: the model is back as it was.");
+        else if (result.NotWritten is { } reason)
+        {
+            HeelsText(Theme.Warning, reason);
+            if (!result.ModFile)
+            {
+                // Simple Heels doesn't scale its entries by height, so the entry gets the offset at your height.
+                var entry = HeelsModelOffset.Format(measurement.Offset * result.HeightScale);
+                Widgets.HintWrapped($"Simple Heels can still use it: add an Equipment Offsets entry for {result.ItemName} with {entry}, the offset at your height.");
+                if (Widgets.IconButton("##quick-heels-copy", FontAwesomeIcon.Copy, $"Copy {entry}"))
+                    ImGui.SetClipboardText(entry);
+            }
+        }
+        else
+            HeelsText(result.Plan.Action == HeelsFixAction.Refuse ? Theme.Warning : Theme.Success, result.Plan.Reason);
+
+        if (result.Earlier is { } earlier)
+            HeelsText(Theme.Warning, $"Simple Heels reads your {earlier.Slot.Name()} model's offset, {earlier.Offset.Attribute}, before this one's, " +
+                                     "so that one applies. Fix offset doesn't change that model.");
         if (service.Ipc.Offset is { } now)
         {
-            using var wrap = ImRaii.TextWrapPos(0f);
-            ImGui.TextColored(MathF.Abs(now - result.Offset) < 0.002f ? Theme.Success : Theme.Hint,
-                $"Simple Heels applies {HeelsModelOffset.Format(now)} to this outfit now.");
+            var expected = result.ModelOffset * result.HeightScale;
+            var matches = expected is { } value && MathF.Abs(now - value) < 0.002f;
+            HeelsText(matches ? Theme.Success : Theme.Hint, $"Simple Heels applies {HeelsModelOffset.Format(now)} to this outfit now.");
+            if (!matches && expected is not null && result.Earlier is null)
+                Widgets.MutedWrapped("If that stays different, Simple Heels applies something else first, such as an Equipment Offsets entry " +
+                                     "for this outfit or a temporary or emote offset, or its Use model assigned offsets option is off.");
         }
         else
             Widgets.HintWrapped("Simple Heels isn't running, or this version of it isn't supported.");
 
         var scaling = result.Scaling is { } scaled ? $", reshaped from c{scaled.ModelRace:D4} for {scaled.CharacterLabel}" : "";
-        var hidden = result.Measurement.HiddenParts switch
+        var hidden = measurement.HiddenParts switch
         {
             0 => "",
             1 => ", without 1 part your outfit hides",
             var count => $", without {count} parts your outfit hides",
         };
-        Widgets.MutedWrapped($"Measured in the standard pose{scaling}, at your height scale of {result.HeightScale:0.000}{hidden}. " +
-                             "Animations and Customize+ scaling aren't included.");
+        var checkedAt = result.Automatic ? $" Checked automatically at {result.Time.ToString("HH:mm", CultureInfo.InvariantCulture)}." : "";
+        Widgets.MutedWrapped($"Measured in the standard pose{scaling}{hidden}. Simple Heels scales the offset to your height; " +
+                             $"animations and Customize+ scaling aren't included.{checkedAt}");
         foreach (var warning in result.Warnings)
-        {
-            using var wrap = ImRaii.TextWrapPos(0f);
-            ImGui.TextColored(Theme.Warning, warning);
-        }
+            HeelsText(Theme.Warning, warning);
 
-        var attribute = HeelsModelOffset.AttributeFor(result.Measurement.Offset);
-        if (ImGui.SmallButton("Copy as model attribute##quick-heels-attribute"))
-            ImGui.SetClipboardText(attribute);
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip($"{attribute}\n" +
-                             "For mod files: Simple Heels applies this attribute to whoever wears the model,\n" +
-                             "scaled to their height. It leaves your height out, so it can differ from the offset above.");
-
-        if (HeelsResultStale(result, character))
-            Widgets.HintWrapped("Your feet model changed since this measurement. Measure again.");
+        if (!_config.AutoFixHeels && service.LiveModel is { } live && !live.SameModel(result.Model))
+            Widgets.HintWrapped("Your outfit changed since. Press Fix offset again.");
     }
 
-    private void MeasureHeels(HeelsOffsetService service, OnScreenObject character)
+    /// <summary> What writing replaced: ", replacing heels_offset=0.14", or where a new offset went. </summary>
+    private static string Replacing(HeelsMeasurement measurement) => measurement.OffsetAttributes switch
     {
-        if (Interlocked.CompareExchange(ref _heelsBusy, 1, 0) != 0)
-            return;
-        _heelsError = string.Empty;
-        _heelsResult = null;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                _heelsResult = await service.MeasureAsync(character, _lifetimeCts.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
-            catch (HeelsListOutdatedException error)
-            {
-                _heelsError = error.Message;
-                _onScreen.RequestRefresh();
-            }
-            catch (Exception error)
-            {
-                _log.Warning(error, "Could not measure the heels offset.");
-                _heelsError = error.Message;
-            }
-            finally { Interlocked.Exchange(ref _heelsBusy, 0); }
-        });
-    }
+        0 => ", on its first part",
+        1 => $", replacing {measurement.ModelOffset?.Attribute ?? "an offset Simple Heels couldn't read"}",
+        var count => $", replacing its {count} offset attributes",
+    };
 
-    /// <summary> Your character in the On Screen list, looked up again only when the snapshot changes. </summary>
-    private OnScreenObject? HeelsCharacter()
+    private static void HeelsText(Vector4 colour, string text)
     {
-        var items = _onScreen.Items;
-        if (!ReferenceEquals(items, _heelsSnapshot))
-        {
-            _heelsSnapshot = items;
-            _heelsCharacter = items.FirstOrDefault(item => item.PresentationCategory == ActorPresentationCategory.Player);
-        }
-        return _heelsCharacter;
-    }
-
-    /// <summary> Whether the list no longer shows the measured model on the measured character. </summary>
-    private bool HeelsResultStale(HeelsOffsetResult result, OnScreenObject? character)
-    {
-        if (!ReferenceEquals(_heelsStale.Snapshot, _heelsSnapshot) || !ReferenceEquals(_heelsStale.Result, result))
-            _heelsStale = (_heelsSnapshot, result, character is null || character.Name != result.Character ||
-                                                   HeelsMeasure.FeetNode(character.ResourceRoots, result.ModelFile) is null);
-        return _heelsStale.Stale;
+        using var wrap = ImRaii.TextWrapPos(0f);
+        ImGui.TextColored(colour, text);
     }
 }
