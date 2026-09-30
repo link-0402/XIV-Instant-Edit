@@ -387,6 +387,12 @@ Check(binaryMeta.Count == 2 && binaryMeta[0]!["Manipulation"]!["ObjectType"]!.Ge
       binaryMeta[1]!["Manipulation"]!["Gender"]!.GetValue<string>() == "Male" &&
       binaryMeta[1]!["Manipulation"]!["Slot"]!.GetValue<string>() == "Body",
     "Penumbra v1 binary metadata decodes IMC and EST records for animation packaging");
+Check(AnimationMetadata.DecodeEqdp(BinaryMetadataV1()).SequenceEqual([new AnimationMetadata.EqdpManipulation(0x5678, 4, 101, 3)]) &&
+      AnimationMetadata.DecodeEqdp(Metadata(JsonNode.Parse("""
+          [{"Type":"Eqdp","Manipulation":{"Entry":48,"Gender":"Female","Race":"Miqote","SetId":0,"Slot":"Hands"}},
+           {"Type":"Est","Manipulation":{"Race":"Midlander","Gender":"Male","SetId":1,"Slot":"Body","Entry":2}}]
+          """)!.AsArray())).SequenceEqual([new AnimationMetadata.EqdpManipulation(0, 5, 801, 48)]),
+    "EQDP manipulations decode from binary and JSON metadata, with Penumbra's slot values and gender-race codes");
 Check(AnimationMetadata.Applicable(binaryMeta, ["chara/weapon/w0010/obj/body/b0020/model/test.mdl"]).Count == 1 &&
       AnimationMetadata.Applicable(binaryMeta, ["chara/weapon/w0011/obj/body/b0020/model/test.mdl"]).Count == 0 &&
       JsonNode.DeepEquals(AnimationMetadata.Applicable(binaryMeta,
