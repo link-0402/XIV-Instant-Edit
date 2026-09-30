@@ -78,6 +78,16 @@ internal sealed class PreviewModService(PenumbraService penumbra)
         return new PreviewApplyResult(modWrites.Select(w => w.Source.ModName).Distinct().ToList(), modWrites.Count, fixMod, gameFiles.Count, warnings);
     }
 
+    /// <summary> Backups of the mod files among <paramref name="sources"/>, grouped by when they were made (one group per apply), newest first. </summary>
+    public IReadOnlyList<PreviewBackupGroup> Backups(IEnumerable<PreviewSource> sources)
+        => PreviewBackups.Group(sources.Where(s => s.IsModFile)
+            .DistinctBy(s => (s.ModDirectory.ToLowerInvariant(), s.RelativePath.Replace('\\', '/').ToLowerInvariant()))
+            .SelectMany(s => penumbra.ManagedBackupsFor(s).Select(b => new PreviewBackupFile(s, b))));
+
+    /// <summary> Puts a group's backups back over their files (backing up the current files first), then reloads the mods and redraws the character. </summary>
+    public Task<IReadOnlyList<string>> RestoreAsync(PreviewBackupGroup group, int objectIndex, string recheck)
+        => penumbra.RestorePreviewSourcesAsync(group.Files.Select(f => (f.Source, f.Backup)).ToList(), objectIndex, recheck);
+
     public async Task<PreviewDiscardResult> DiscardAsync(PreviewMod preview)
     {
         var (removed, warning) = await penumbra.DeletePreviewModAsync(preview.ModDirectory, preview.ModIdentifier, preview.ObjectIndex).ConfigureAwait(false);

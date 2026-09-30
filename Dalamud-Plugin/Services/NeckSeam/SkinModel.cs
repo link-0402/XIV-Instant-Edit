@@ -29,8 +29,15 @@ internal sealed class SkinMesh
     /// <summary>
     /// The triangles the game draws, three vertex indices each: the submeshes whose attributes are all
     /// enabled, with the enabled shape keys' replacement vertices. Every triangle when no masks are known.
+    /// Seam connector submeshes are never among them (see <see cref="Connectors"/>).
     /// </summary>
     public required int[] Triangles { get; init; }
+    /// <summary>
+    /// The drawn triangles of the game's seam connectors, by what they join ("neck", "wrist", "waist",
+    /// "ankle"): submeshes behind an atr_cn_ attribute, bands of skin that sit just inside the body
+    /// under a seam so a gap there shows skin instead of a hole.
+    /// </summary>
+    public IReadOnlyDictionary<string, int[]> Connectors { get; init; } = new Dictionary<string, int[]>();
     /// <summary> Whether positions are stored as half floats, which round to about 1 mm a metre from the origin. </summary>
     public bool HalfPositions { get; init; }
     public int VertexCount => Positions.Length;
@@ -107,6 +114,9 @@ internal sealed class SkinModel
 
     /// <summary> A submesh's index range (relative to its mesh's first index) and the attributes it needs. </summary>
     private readonly record struct Submesh(long Start, long Count, uint Attributes);
+
+    /// <summary> The attribute prefix of the game's seam connectors (atr_cn_neck, atr_cn_wrist, atr_cn_waist, atr_cn_ankle). </summary>
+    public const string ConnectorPrefix = "atr_cn_";
 
     /// <param name="attributes">The character's enabled-attribute mask for this model; null draws every submesh.</param>
     /// <param name="shapes">The enabled shape-key mask; null applies none.</param>
@@ -200,6 +210,10 @@ internal sealed class SkinModel
         var materials = ReadNames(bytes, materialTable, materialCount, stringBlock, stringSize);
         var bones = ReadNames(bytes, boneNameTable, boneCount, stringBlock, stringSize);
         var attributeNames = ReadNames(bytes, attributeTable, attributeCount, stringBlock, stringSize);
+        var connectorBits = new Dictionary<int, string>();
+        for (var a = 0; a < Math.Min(attributeNames.Count, 32); a++)
+            if (attributeNames[a].StartsWith(ConnectorPrefix, StringComparison.OrdinalIgnoreCase) && attributeNames[a].Length > ConnectorPrefix.Length)
+                connectorBits[a] = attributeNames[a][ConnectorPrefix.Length..].ToLowerInvariant();
         var shapeNames = ReadNames(bytes, shapeTable, shapeCount, stringBlock, stringSize, stride: 16);
         var tables = new ushort[boneTableCount][];
         for (var t = 0; t < boneTableCount; t++)
@@ -282,7 +296,7 @@ internal sealed class SkinModel
             }
             meshes.Add(ReadMesh(bytes, vertexOffset, indexOffset, mesh, m, vertexCount, indexCount, startIndex, declarations[m],
                 materials[materialIndex], boneTableIndex < tables.Length ? tables[boneTableIndex].Select(b => bones[b]).ToArray() : [],
-                submeshes, attributes, shapeEdits.Where(e => e.MeshStart == startIndex).Select(e => (e.At, e.Vertex))));
+                submeshes, attributes, connectorBits, shapeEdits.Where(e => e.MeshStart == startIndex).Select(e => (e.At, e.Vertex))));
         }
 
         return new SkinModel(bytes, meshHeader, lodTable, neckMorphTable, lodCount, meshTable, declarations, meshes, materials, bones, tables, morphs,
@@ -291,7 +305,7 @@ internal sealed class SkinModel
 
     private static SkinMesh ReadMesh(byte[] bytes, uint vertexOffset, uint indexOffset, int mesh, int meshIndex, int count, uint indexCount,
         uint startIndex, List<Element> elements, string material, string[] bones, Submesh[] submeshes, uint? attributes,
-        IEnumerable<(int At, int Vertex)> shapeEdits)
+        IReadOnlyDictionary<int, string> connectorBits, IEnumerable<(int At, int Vertex)> shapeEdits)
     {
         var positions = new Vector3[count];
         var normals = new Vector3[count];
@@ -376,11 +390,16 @@ internal sealed class SkinModel
         foreach (var (at, vertex) in shapeEdits)
             if (at < indexList.Length && vertex < count)
                 indexList[at] = vertex;
+        var connectorMask = 0u;
+        foreach (var bit in connectorBits.Keys)
+            connectorMask |= 1u << bit;
         int[] triangles;
-        if (attributes is not { } enabled || submeshes.Length == 0)
+        var connectors = new Dictionary<string, List<int>>();
+        if (submeshes.Length == 0 || (attributes is null && !submeshes.Any(s => (s.Attributes & connectorMask) != 0)))
             triangles = indexList[..(indexList.Length - indexList.Length % 3)];
         else
         {
+            var enabled = attributes ?? uint.MaxValue;
             var drawn = new List<int>(indexList.Length);
             foreach (var submesh in submeshes)
             {
@@ -388,8 +407,15 @@ internal sealed class SkinModel
                     continue;
                 if (submesh.Start < 0 || submesh.Start + submesh.Count > indexList.Length)
                     throw new InvalidDataException("A submesh reads past its mesh's indexList.");
+                var target = drawn;
+                if ((submesh.Attributes & connectorMask) != 0)
+                {
+                    var kind = connectorBits[System.Numerics.BitOperations.TrailingZeroCount(submesh.Attributes & connectorMask)];
+                    if (!connectors.TryGetValue(kind, out target))
+                        connectors[kind] = target = [];
+                }
                 for (var i = submesh.Start; i < submesh.Start + submesh.Count - submesh.Count % 3; i++)
-                    drawn.Add(indexList[i]);
+                    target.Add(indexList[i]);
             }
             triangles = drawn.ToArray();
         }
@@ -399,6 +425,7 @@ internal sealed class SkinModel
             MeshIndex = meshIndex, Material = material, Positions = positions, Normals = normals, Binormals = binormals, BinormalSigns = signs,
             Uv1 = uv1, Uv2 = uv2, HasUv2 = hasUv2, Colors = colors, BlendIndices = indices, BlendWeights = weights, Influences = influences,
             Bones = bones, Triangles = triangles, HalfPositions = halfPositions,
+            Connectors = connectors.ToDictionary(p => p.Key, p => p.Value.ToArray()),
         };
     }
 

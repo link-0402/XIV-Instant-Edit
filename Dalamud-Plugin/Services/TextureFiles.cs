@@ -221,6 +221,69 @@ internal static class TextureFiles
 
     public static int FullMipCount(int w, int h) => Math.Min(13, 1 + System.Numerics.BitOperations.Log2((uint)Math.Max(w, h)));
 
+    /// <summary>
+    /// Puts the original's data back wherever an edit didn't reach. For each mip level both files
+    /// hold, every 4 × 4 block (every pixel of uncompressed data) whose footprint in the full-size
+    /// image, with one pixel of that level around it for the downsampling filter, holds no changed
+    /// pixel keeps the original's bytes. A re-encode then changes only what the edit changed, instead
+    /// of adding its own compression error to the whole texture each time it is saved. Returns
+    /// <paramref name="encoded"/> unchanged unless both files have the same format and size.
+    /// </summary>
+    /// <param name="changed">Per full-size pixel, row by row, whether the edit changed it.</param>
+    public static byte[] KeepUnchanged(byte[] original, byte[] encoded, bool[] changed)
+    {
+        var (source, from) = ReadOriginal(original);
+        var to = ReadTex(encoded);
+        if (from.Format != to.Format || from.Width != to.Width || from.Height != to.Height || changed.Length != from.Width * from.Height)
+            return encoded;
+        int width = from.Width, height = from.Height;
+        // Summed-area table of changed pixels, so any footprint is counted at once.
+        var sums = new int[(width + 1) * (height + 1)];
+        for (var y = 0; y < height; y++)
+        {
+            var row = 0;
+            for (var x = 0; x < width; x++)
+            {
+                row += changed[y * width + x] ? 1 : 0;
+                sums[(y + 1) * (width + 1) + x + 1] = sums[y * (width + 1) + x + 1] + row;
+            }
+        }
+        int Count(int x0, int y0, int x1, int y1)
+        {
+            x0 = Math.Clamp(x0, 0, width);
+            x1 = Math.Clamp(x1, 0, width);
+            y0 = Math.Clamp(y0, 0, height);
+            y1 = Math.Clamp(y1, 0, height);
+            if (x1 <= x0 || y1 <= y0)
+                return 0;
+            return sums[y1 * (width + 1) + x1] - sums[y0 * (width + 1) + x1] - sums[y1 * (width + 1) + x0] + sums[y0 * (width + 1) + x0];
+        }
+
+        var uncompressed = from.Format == Uncompressed;
+        var blockBytes = uncompressed ? 4 : from.Format is (uint)TexFile.TextureFormat.BC1 or (uint)TexFile.TextureFormat.BC4 ? 8 : 16;
+        var blockPixels = uncompressed ? 1 : 4;
+        var result = (byte[])encoded.Clone();
+        for (var mip = 0; mip < Math.Min(from.Mips, to.Mips); mip++)
+        {
+            var scale = 1 << mip;
+            int levelWidth = Math.Max(1, width >> mip), levelHeight = Math.Max(1, height >> mip);
+            int blocksX = (levelWidth + blockPixels - 1) / blockPixels, blocksY = (levelHeight + blockPixels - 1) / blockPixels;
+            var sourceOffset = (int)BinaryPrimitives.ReadUInt32LittleEndian(source.AsSpan(28 + mip * 4));
+            var targetOffset = (int)BinaryPrimitives.ReadUInt32LittleEndian(result.AsSpan(28 + mip * 4));
+            for (var by = 0; by < blocksY; by++)
+                for (var bx = 0; bx < blocksX; bx++)
+                {
+                    var x0 = bx * blockPixels * scale - scale;
+                    var y0 = by * blockPixels * scale - scale;
+                    if (Count(x0, y0, x0 + (blockPixels + 2) * scale, y0 + (blockPixels + 2) * scale) != 0)
+                        continue;
+                    var at = (by * blocksX + bx) * blockBytes;
+                    source.AsSpan(sourceOffset + at, blockBytes).CopyTo(result.AsSpan(targetOffset + at, blockBytes));
+                }
+        }
+        return result;
+    }
+
     public static void ValidateOutput(byte[] bytes, uint format, int width, int height, bool mipMaps)
     {
         var header = ReadTex(bytes);
