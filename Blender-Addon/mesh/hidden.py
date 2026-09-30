@@ -102,6 +102,9 @@ def see_through(material) -> bool:
         return False
     if getattr(material, "surface_render_method", "") == "BLENDED":
         return True
+    # The eye occlusion shell only shades the eyes, whatever older imports drew.
+    if str(material.get("xiv_shader_package", "")).casefold() == "characterocclusion.shpk":
+        return True
     tree = material.node_tree
     for node in tree.nodes if tree is not None else ():
         alpha = node.inputs.get("Alpha") if node.type == "BSDF_PRINCIPLED" else None

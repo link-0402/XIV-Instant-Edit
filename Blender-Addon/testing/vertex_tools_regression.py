@@ -275,6 +275,9 @@ def check_remove_hidden_vertices() -> None:
         opaque = material("Opaque")
         two_sided = material("Two Sided", culled=False)
         sheer = material("Sheer", alpha=0.5)
+        # Older imports drew the eye occlusion shell opaque; its shader still tells.
+        eye_occlusion = material("Eye Occlusion")
+        eye_occlusion["xiv_shader_package"] = "characterocclusion.shpk"
 
         with temporary_scene_data():
             nested = mesh_object("0.0 Nested", box((0, 0, 0), 1.0), box((0, 0, 0), 0.3), surface=opaque)
@@ -307,6 +310,7 @@ def check_remove_hidden_vertices() -> None:
                 require(len(plane.data.vertices) == kept, f"{label} keeps {kept} of 25 vertices")
 
         for label, surface, transparent in (("a see-through material", sheer, False),
+                                            ("an eye occlusion shell", eye_occlusion, False),
                                             ("a mesh sorted for transparency", opaque, True)):
             with temporary_scene_data():
                 shell = mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=surface)

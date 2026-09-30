@@ -367,6 +367,26 @@ def assert_material_previews(material_preview):
                     "shaderConstants": [alpha_threshold],
                     "colorSet": sheer_colorset,
                     "textures": character_textures("diffuse_wide.rgba"),
+                }, {
+                    "modelMaterial": "/mt_c0101f0001_etc_c.mtrl",
+                    "gamePath": "chara/human/c0101/obj/face/f0001/material/mt_c0101f0001_etc_c.mtrl",
+                    "shaderPackage": "characterocclusion.shpk",
+                    "materialFlags": 0x1D,
+                    "additionalData": "02000000",
+                    "shaderKeys": [],
+                    "shaderConstants": [],
+                    "colorSet": None,
+                    "textures": [{
+                        "usage": "normal",
+                        "samplerId": 0x0C5EC1F1,
+                        "samplerFlags": 0,
+                        "gamePath": "chara/common/texture/eye/eyelids_shadow.tex",
+                        "file": "normal.rgba",
+                        "width": 1,
+                        "height": 1,
+                        "uvSet": 0,
+                        "colorSpace": "Non-Color",
+                    }],
                 }],
             }
             manifest_path = preview_directory / "materials.json"
@@ -376,7 +396,7 @@ def assert_material_previews(material_preview):
                 str(model_path),
             )
             _require(
-                len(preview_package.materials) == 7,
+                len(preview_package.materials) == 8,
                 "a bounded synthetic material-preview manifest is accepted",
             )
             warning_count = len(preview_package.warnings)
@@ -571,6 +591,24 @@ def assert_material_previews(material_preview):
                 and not lash_material.use_transparency_overlap
                 and lash_material.use_backface_culling,
                 "hair.shpk lashes on a face blend instead of dithering",
+            )
+            occlusion_material = material_preview.create_preview_material(
+                "/mt_c0101f0001_etc_c.mtrl",
+                (0.8, 0.1, 0.8, 1.0),
+                preview_package,
+                "occlusion-context",
+            )
+            occlusion_output = next(
+                node for node in occlusion_material.node_tree.nodes
+                if node.bl_idname == "ShaderNodeOutputMaterial"
+            )
+            _require(
+                linked_from(occlusion_output.inputs["Surface"]).bl_idname == "ShaderNodeBsdfTransparent"
+                and not any(node.bl_idname == "ShaderNodeTexImage" for node in occlusion_material.node_tree.nodes)
+                and occlusion_material.use_transparent_shadow
+                and occlusion_material.diffuse_color[3] == 0.0
+                and occlusion_material["xiv_shader_package"] == "characterocclusion.shpk",
+                "the eye occlusion shell draws fully transparent instead of an opaque card over the eyes",
             )
             preview_images = list(preview_package.created_images)
             _require(
