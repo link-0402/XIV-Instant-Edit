@@ -22,6 +22,8 @@ internal sealed class AnimationEditService : IDisposable
     private readonly CancellationTokenSource lifetime = new();
     private CancellationTokenSource? cancellation;
     private Task work = Task.CompletedTask;
+    // Starting work checks Busy and replaces work; the UI and a character send can both start some.
+    private readonly object launchLock = new();
     private bool disposed;
     private ImmutableArray<AnimationEditJournal> recovery;
     private LivePoseOffsetBackup? offsetBackup;
@@ -159,7 +161,15 @@ internal sealed class AnimationEditService : IDisposable
     }
     private void Launch(Func<CancellationToken, Task> action, Guid? jobId = null, AnimationClip? clip = null)
     {
-        if (Busy || disposed) return;
+        lock (launchLock)
+        {
+            if (Busy || disposed) return;
+            LaunchLocked(action, jobId, clip);
+        }
+    }
+
+    private void LaunchLocked(Func<CancellationToken, Task> action, Guid? jobId, AnimationClip? clip)
+    {
         if (clip != null) Observer.ReportOperationError(clip, null);
         cancellation?.Dispose(); cancellation = new CancellationTokenSource();
         var token = cancellation.Token; CanCancel = true; LastFailed = false;
@@ -335,10 +345,28 @@ internal sealed class AnimationEditService : IDisposable
     });
 
     /// <summary>
+    /// Samples the playing animation for a character send, holding the service busy meanwhile so the
+    /// Animations tab doesn't read and sample at the same time; refused while it is busy itself.
+    /// </summary>
+    public Task<AnimationTake> SampleForCharacterAsync(AnimationCapture capture, Action<string> status, CancellationToken token)
+    {
+        lock (launchLock)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (Busy)
+                throw new InvalidOperationException("The Animations tab is still working. Wait for it to finish, then send again.");
+            var linked = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token);
+            var sample = Task.Run(() => SampleForBlenderAsync(capture, false, status, linked.Token), linked.Token);
+            work = sample.ContinueWith(_ => linked.Dispose(), TaskScheduler.Default);
+            return sample;
+        }
+    }
+
+    /// <summary>
     /// Samples a detected clip's animation file on the skeleton it was made for, into a take for
     /// Blender, reporting progress to <paramref name="status"/>. Nothing in game changes.
     /// </summary>
-    public async Task<AnimationTake> SampleForBlenderAsync(AnimationCapture capture, bool startup, Action<string> status, CancellationToken token)
+    private async Task<AnimationTake> SampleForBlenderAsync(AnimationCapture capture, bool startup, Action<string> status, CancellationToken token)
     {
         var clip = startup ? capture.Startup ?? throw new InvalidOperationException("No linked startup animation was identified.") : capture.Clip;
         if (clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: { } source })

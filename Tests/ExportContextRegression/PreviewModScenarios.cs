@@ -100,6 +100,15 @@ internal static class PreviewModScenarios
         reloaded.Remove(preview.Id);
         Require(reloaded.Previews.Count == 0 && !reloaded.HoldsMod(PreviewFolder), "preview mods: an applied or discarded preview is forgotten");
 
+        var savedPath = Path.Combine(folder, "SharedPreviews.json");
+        File.WriteAllText(savedPath, "{ not json");
+        var broken = new PreviewModStore<PreviewMod>(folder, "SharedPreviews.json", "shared previews");
+        broken.Load();
+        broken.Add(preview);
+        Require(broken.LoadError.Length > 0 && Directory.EnumerateFiles(folder, "SharedPreviews.json.unreadable-*").Any() && broken.Previews.Count == 1,
+            "preview mods: an unreadable list is set aside, so the next save doesn't write over the previews it held");
+        broken.Remove(preview.Id);
+
         var entry = PreviewModEntry.At("/chara\\x\\--y.tex", [1]);
         Require(entry.RelativePath == "Files/chara/x/--y.tex" && entry.GamePaths.SequenceEqual(["chara/x/--y.tex"]),
             "preview mods: a file mapped from one game path sits at Files/<game path>");

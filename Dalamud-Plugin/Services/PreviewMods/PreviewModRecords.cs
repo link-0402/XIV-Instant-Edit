@@ -143,17 +143,23 @@ internal class PreviewModStore<TPreview> : IPreviewModRegistry where TPreview : 
     public bool HoldsMod(string modDirectory)
         => Previews.Any(p => string.Equals(p.ModDirectory, modDirectory, StringComparison.OrdinalIgnoreCase));
 
+    /// <summary> Reads the saved previews. An unreadable file is set aside, so the next save doesn't write over the previews it lists. </summary>
     public void Load()
     {
         lock (_lock)
         {
+            LoadError = string.Empty;
             try
             {
                 _previews = File.Exists(_path) ? JsonSerializer.Deserialize<List<TPreview>>(File.ReadAllText(_path), Json) ?? [] : [];
             }
             catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException)
             {
-                LoadError = $"Could not read the {_description}: {e.Message}";
+                var aside = $"{_path}.unreadable-{DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmss", System.Globalization.CultureInfo.InvariantCulture)}";
+                try { File.Move(_path, aside); }
+                catch (Exception moveError) when (moveError is IOException or UnauthorizedAccessException) { aside = _path; }
+                LoadError = $"Could not read the {_description} ({e.Message}); the file was kept as {Path.GetFileName(aside)}. " +
+                            "Their preview mods are still in Penumbra; apply or delete them there.";
                 _previews = [];
             }
         }

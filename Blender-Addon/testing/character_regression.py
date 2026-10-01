@@ -502,6 +502,10 @@ def check_replace(context, importer):
         "context-other", entry(send_id=SEND_C, key="Someone Else@73", name="Someone Else"), bones=["j_kao"],
         skeleton=payload(CHARACTER), name="Other", vertices=[Vector((0, 0, 1)), Vector((0.1, 0, 1)), Vector((0, 0.1, 1))],
         groups={"j_kao": [(0, 1.0), (1, 1.0), (2, 1.0)]})
+    other_armature = character.body_armature(context.scene, SEND_C)
+    require(other_armature.name != "Skeleton"
+            and f'the armature is named "{other_armature.name}"' in context.scene.xiv_ie_instant_edit_props.last_status,
+            "the status line says when the armature's name was taken, since animations sent by name go to the other object")
     # Part of the previous send is selected and active, as after clicking it to look at it; the
     # replacement removes it while the import runs.
     previous = next(obj for obj in context.view_layer.objects if obj.get(character.SEND_PROPERTY) == SEND_A)

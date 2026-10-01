@@ -49,7 +49,9 @@ internal static class SkinToneScenarios
         Require(SkinToneFixer.TonePath(EarMaterialPath, "base") == "chara/human/c1801/obj/zear/z0001/texture/c1801z0001_a_tone_base.tex" &&
                 SkinToneFixer.TonePath("chara/human/c0801/obj/face/f0002/material/mt_c0801f0002_fac_e.mtrl", "norm") ==
                 "chara/human/c0801/obj/face/f0002/texture/c0801f0002_fac_e_tone_norm.tex" &&
-                SkinToneFixer.TonePath("chara/x/mt_y.mtrl", "mask") == "chara/x/y_tone_mask.tex",
+                SkinToneFixer.TonePath("chara/x/mt_y.mtrl", "mask") == "chara/x/y_tone_mask.tex" &&
+                SkinToneFixer.TonePath("chara/equipment/e6001/material/v0002/mt_c0201e6001_top_b.mtrl", "base") ==
+                "chara/equipment/e6001/texture/c0201e6001_top_b_v0002_tone_base.tex",
             "skin tone: a matched texture goes in the texture folder beside the material's, named after the material and its role");
         Require(SkinToneAnalyzer.ShortName(EarMaterialPath) == "a" && SkinToneAnalyzer.ShortName("chara/x/mt_c0801f0002_fac_e.mtrl") == "fac_e" &&
                 SkinToneAnalyzer.PartName(EarModelPath) == "Ears" && SkinToneAnalyzer.PartName(FaceModelPath) == "Face" &&

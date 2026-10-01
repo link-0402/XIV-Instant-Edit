@@ -179,6 +179,8 @@ internal sealed class HeelsOffsetService : IDisposable
             var added = false;
             try
             {
+                // An unloading plugin writes nothing more.
+                _lifetime.Token.ThrowIfCancellationRequested();
                 lock (_lock)
                     added = _undone.Add(result.Model.ModelFile);
                 var warnings = await _penumbra.WritePreviewSourcesAsync([(undo.Source, undo.Original)], undo.ObjectIndex, "Nothing was undone")
@@ -191,6 +193,7 @@ internal sealed class HeelsOffsetService : IDisposable
                     _lastError = null;
                 }
             }
+            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
             catch (Exception error)
             {
                 _log.Warning(error, "Could not undo the heels offset fix.");
@@ -347,6 +350,8 @@ internal sealed class HeelsOffsetService : IDisposable
             ModStableId = source.ModStableId,
             Sha256 = PreviewSource.Hash(bytes),
         };
+        // The measuring took a while; an unloading plugin writes nothing more.
+        token.ThrowIfCancellationRequested();
         warnings.AddRange(await _penumbra.WritePreviewSourcesAsync([(file, patched)], live.ObjectIndex, "Fix the offset again").ConfigureAwait(false));
         return result with { Written = true, Undo = new HeelsUndo(file with { Sha256 = PreviewSource.Hash(patched) }, bytes, live.ObjectIndex) };
     }

@@ -321,12 +321,17 @@ def bind_body(context, character: CharacterImport, collection, mesh_objects, bon
     scene = context.scene
     holder = character_collection(scene, character)
     armature = body_armature(scene, character.send_id)
+    renamed = ""
     if armature is None:
         armature, report = create_armature(context, holder, character.armature_name, bone_names, mesh_objects,
                                            skeleton, created_objects=created_objects)
         _tag(armature, character, BODY)
         # As for single imports, the bones stay out of the viewport; the armature still deforms.
         armature.hide_set(True)
+        if armature.name != character.armature_name:
+            # Blender suffixes a name another object holds; animations sent by name find that object.
+            renamed = (f'the armature is named "{armature.name}" since another object is named '
+                       f'"{character.armature_name}"; animations sent to that name go to the other object')
     else:
         report = add_bones(context, armature, bone_names, mesh_objects, skeleton)
     adopt_collection(scene, character, collection)
@@ -335,7 +340,7 @@ def bind_body(context, character: CharacterImport, collection, mesh_objects, bon
         modifier = obj.modifiers.new(name="Armature", type="ARMATURE")
         modifier.object = armature
         _tag(obj, character)
-    return report.summary()
+    return "; ".join(part for part in (report.summary(), renamed) if part)
 
 
 def _offset_matrix(offset):
