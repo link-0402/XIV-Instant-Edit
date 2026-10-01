@@ -74,6 +74,8 @@ internal static class BodySeamFixer
         public required string Path { get; init; }
         public required string Kind { get; init; }
         public required byte[] Base { get; init; }
+        /// <summary> The constants the neck fix set in <see cref="Base"/>, which a body seam doesn't write over. </summary>
+        public required IReadOnlyDictionary<uint, float[]> Neck { get; init; }
         public Dictionary<uint, float[]> Constants { get; } = new();
     }
 
@@ -378,12 +380,22 @@ internal static class BodySeamFixer
             return;
         var path = PathRules.NormalizeGamePath(input.GamePath);
         if (!materials.TryGetValue(path, out var work))
+        {
+            var neck = materialBase?.GetValueOrDefault(path);
             materials[path] = work = new MaterialWork
             {
-                Path = path, Kind = "skin material", Base = materialBase?.GetValueOrDefault(path) ?? input.Bytes,
+                Path = path, Kind = "skin material", Base = neck ?? input.Bytes, Neck = neck is null ? new Dictionary<uint, float[]>() : NeckConstants(input.Bytes, neck),
             };
+        }
         foreach (var (id, values) in constants)
         {
+            if (work.Neck.TryGetValue(id, out var neckValues))
+            {
+                if (!neckValues.SequenceEqual(values))
+                    changes.Add($"The {BodySeamAnalyzer.Title(seam.Kind).ToLowerInvariant()} would set {SkinMaterial.Names.GetValueOrDefault(id, $"0x{id:X8}")} of " +
+                                $"{FileName(path)} differently from the neck fix; the neck's value was kept");
+                continue;
+            }
             if (work.Constants.TryGetValue(id, out var existing) && !existing.SequenceEqual(values))
             {
                 changes.Add($"The {BodySeamAnalyzer.Title(seam.Kind).ToLowerInvariant()} would set {SkinMaterial.Names.GetValueOrDefault(id, $"0x{id:X8}")} of " +
@@ -392,6 +404,16 @@ internal static class BodySeamFixer
             }
             work.Constants[id] = values;
         }
+    }
+
+    /// <summary> The constants the neck fix changed in a material: those whose values differ between the file and the neck's version of it. </summary>
+    private static Dictionary<uint, float[]> NeckConstants(byte[] original, byte[] neck)
+    {
+        var before = SkinMaterial.Read(original);
+        var after = SkinMaterial.Read(neck);
+        return SkinMaterial.Names.Keys.Select(id => (Id: id, Values: after.Constant(id)))
+            .Where(c => !c.Values.SequenceEqual(before.Constant(c.Id)))
+            .ToDictionary(c => c.Id, c => c.Values);
     }
 
     // ---- Textures ------------------------------------------------------------------------------------
@@ -421,13 +443,15 @@ internal static class BodySeamFixer
                 if (sampler == SkinMaterial.NormalSampler)
                     (worldA, worldB) = BodySeamAnalyzer.SmoothedNormals(samples, imageA, imageB, DeltaSmoothing);
 
+                // The normal map's alpha stays: it scales the tile strength, which the material fix
+                // matches through g_TileAlpha, so blending it too would correct it twice.
                 if (meet > 0)
                     Side(report, seam, chain, seam.A, ma, sampler, band, meet, i => sampler == SkinMaterial.NormalSampler
-                        ? (new Vector4(0, 0, delta[i].Z, delta[i].W), worldA[i], worldB[i])
+                        ? (new Vector4(0, 0, delta[i].Z, 0), worldA[i], worldB[i])
                         : (delta[i], Vector3.Zero, Vector3.Zero), textures);
                 if (meet < 1)
                     Side(report, seam, chain, seam.B, mb, sampler, band, 1 - meet, i => sampler == SkinMaterial.NormalSampler
-                        ? (new Vector4(0, 0, -delta[i].Z, -delta[i].W), worldB[i], worldA[i])
+                        ? (new Vector4(0, 0, -delta[i].Z, 0), worldB[i], worldA[i])
                         : (-delta[i], Vector3.Zero, Vector3.Zero), textures);
             }
         }
@@ -496,7 +520,7 @@ internal static class BodySeamFixer
                 var world = NeckSeamAnalyzer.ToWorld(value, edit.Frame);
                 var rotated = NeckSeamFixer.Rotate(world, edit.From, edit.To, edit.Amount);
                 var rg = NeckSeamAnalyzer.ToTexel(rotated, edit.Frame);
-                value = new Vector4(rg.X, rg.Y, value.Z + edit.Delta.Z * edit.Amount, value.W + edit.Delta.W * edit.Amount);
+                value = new Vector4(rg.X, rg.Y, value.Z + edit.Delta.Z * edit.Amount, value.W);
             }
             else
                 value += new Vector4(edit.Delta.X, edit.Delta.Y, edit.Delta.Z, 0) * edit.Amount;

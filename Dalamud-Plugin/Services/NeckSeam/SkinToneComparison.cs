@@ -63,7 +63,8 @@ internal sealed class SkinToneComparison
     /// material settings aren't matched too, it also makes up for a different g_DiffuseColor; with them
     /// matched, the target takes the base's multiplier and the textures alone differ.
     /// </summary>
-    public Vector3? Gain(bool settingsMatched)
+    /// <param name="baseSkin">The base material to match, when a fix built with it changed it already (the neck's body material).</param>
+    public Vector3? Gain(bool settingsMatched, SkinMaterial? baseSkin = null)
     {
         if (TargetSample.Colour is not { } t || BaseSample.Colour is not { } b)
             return null;
@@ -71,7 +72,7 @@ internal sealed class SkinToneComparison
         if (!settingsMatched)
         {
             var kt = Rgb(Target.Skin.Constant(SkinMaterial.DiffuseColor));
-            var kb = Rgb(Base.Skin.Constant(SkinMaterial.DiffuseColor));
+            var kb = Rgb((baseSkin ?? Base.Skin).Constant(SkinMaterial.DiffuseColor));
             gain *= new Vector3(Ratio(kb.X, kt.X), Ratio(kb.Y, kt.Y), Ratio(kb.Z, kt.Z));
         }
         return gain;

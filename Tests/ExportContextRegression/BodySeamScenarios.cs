@@ -429,6 +429,22 @@ internal static class BodySeamScenarios
                 Finding(after, "Skin colour at the seam").Severity == NeckSeamSeverity.Ok && after.Worst == NeckSeamSeverity.Ok,
             "body seam: measured again from the written files, the edges meet, share their normals and the colour runs on");
 
+        // A normal map whose blue (skin tone influence) and alpha (tile strength) both step at the seam:
+        // the blend evens out the blue and leaves the alpha, which the material fix matches.
+        var stepped = TwoTone((128, 128, 255), (128, 128, 200));
+        for (var i = 0; i < 32 * 32; i++)
+            stepped[80 + i * 4 + 3] = i < 32 * 16 ? (byte)128 : (byte)255;
+        var steppedSkin = Skin(normal: stepped);
+        var normalFix = BodySeamFixer.Build(Analyze(Top(), Glove(), steppedSkin, steppedSkin),
+            new Dictionary<BodySeamKind, BodySeamFixOptions> { [BodySeamKind.Wrists] = new(false, false, false, true) });
+        var normalOut = normalFix.Textures.Single(t => t.Sampler == SkinMaterial.NormalSampler);
+        var normalBefore = SeamTextures.Decode(normalOut.Original);
+        var texels = Enumerable.Range(0, normalBefore.Width * normalBefore.Height)
+            .Select(i => (Before: normalBefore.Texel(i % normalBefore.Width, i / normalBefore.Width), After: normalOut.Image.Texel(i % normalBefore.Width, i / normalBefore.Width)))
+            .ToList();
+        Require(texels.Any(t => MathF.Abs(t.After.Z - t.Before.Z) > 0.01f) && texels.All(t => t.After.W == t.Before.W),
+            "body seam: the normal-map blend evens out the skin tone influence and leaves the alpha, which the material fix matches");
+
         var keepTop = BodySeamFixer.Build(report, new Dictionary<BodySeamKind, BodySeamFixOptions> { [BodySeamKind.Wrists] = new(true, true, false, false, Meet: 0) });
         var onlyGlove = keepTop.Models.Single();
         var measured = Analyze(Top(), onlyGlove.Bytes).Seam(BodySeamKind.Wrists)!;
@@ -463,6 +479,13 @@ internal static class BodySeamScenarios
                 MathF.Abs(topMaterial.Constant(SkinMaterial.TileAlpha)[0] - gloveMaterial.Constant(SkinMaterial.TileAlpha)[0]) < 0.01f &&
                 gloveMaterial.Constant(SkinMaterial.NormalScale)[0] == 0.7f && topMaterial.Constant(SkinMaterial.NormalScale)[0] == 1f,
             "body seam: meeting halfway changes both materials, building on a given base, until their tile strength matches");
+        var afterNeck = BodySeamFixer.Build(new BodySeamReport { Seams = [mixed], Notes = new Dictionary<BodySeamKind, string>() },
+            new Dictionary<BodySeamKind, BodySeamFixOptions> { [BodySeamKind.Wrists] = new(false, false, true, false) },
+            new Dictionary<string, byte[]> { [OtherSkinPath] = Mtrl(tileScale: 250, tileAlpha: 0.8f) });
+        var neckGlove = SkinMaterial.Read(afterNeck.Materials.Single(m => m.GamePath == OtherSkinPath).Bytes);
+        Require(neckGlove.Constant(SkinMaterial.TileAlpha)[0] == 0.8f && neckGlove.Constant(SkinMaterial.TileScale)[0] < 250 &&
+                afterNeck.Changes.Any(change => change.Contains("differently from the neck fix", StringComparison.Ordinal)),
+            "body seam: a setting the neck fix changed in the same material keeps the neck's value, and the change list says so");
 
         // The preview plan: both models, the texture and the material that reads it.
         var analysis = new NeckSeamAnalysis(null, new NeckSeamCaptured(input, new Dictionary<string, NeckSeamSource>()), "A", 0, 0)
@@ -663,9 +686,9 @@ internal static class BodySeamScenarios
             new PreviewBackupFile(Source("Makeup", "normal/strwn.tex"), new ManagedBackup("a", "again", time.AddSeconds(5))),
             new PreviewBackupFile(Source("makeup", "Normal/strwn.tex"), new ManagedBackup("a", "later", time.AddMinutes(2))),
         ]);
-        Require(groups.Count == 2 && groups[0].Files.Single().Backup.Name == "later" && groups[1].Files.Count == 3 &&
-                groups[1].Files.Single(f => f.Source.ModName == "Makeup").Backup.Name == "first" && groups[1].Created == time,
-            "backups: backups made together form one group, newest first, keeping each file's earliest backup in it");
+        Require(groups.Count == 3 && groups[0].Files.Single().Backup.Name == "later" && groups[1].Files.Single().Backup.Name == "again" &&
+                groups[2].Files.Count == 3 && groups[2].Files.Single(f => f.Source.ModName == "Makeup").Backup.Name == "first" && groups[2].Created == time,
+            "backups: backups made together form one group, newest first; a file backed up again, as by a restore right after an apply, starts a new one");
     }
 
     // ---- Capture and text ------------------------------------------------------------------------------
