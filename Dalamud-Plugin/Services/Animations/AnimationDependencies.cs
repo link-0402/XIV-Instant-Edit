@@ -9,7 +9,7 @@ namespace InstantEdit.Services.Animations;
 internal sealed record AnimationReference(string Path, string Kind);
 internal sealed record AnimationReferences(ImmutableArray<AnimationReference> References, ImmutableArray<string> Problems);
 
-/// <summary>Bounded, format-aware readers. Unknown timeline constructs cannot silently produce an incomplete mod.</summary>
+/// <summary>Bounded, format-aware readers for the files an animation's timelines name.</summary>
 internal static class AnimationDependencies
 {
     private sealed record Layout(int Size, string Name);
@@ -147,31 +147,5 @@ internal static class AnimationDependencies
             p = checked(p + 8 + size + ((-size) & 3));
             if (p > end) throw new InvalidDataException("Invalid VFX padding.");
         }
-    }
-
-    public static async Task<AnimationDependencyManifest> BuildAsync(IEnumerable<string> roots,
-        Func<string, Task<(AnimationResource Resource, byte[] Bytes)>> read,
-        Func<string, AnimationReference, Task<IReadOnlyList<string>>> resolveReference, CancellationToken token)
-    {
-        var pending = new Queue<string>(roots.Distinct(StringComparer.OrdinalIgnoreCase));
-        var files = ImmutableDictionary.CreateBuilder<string, byte[]>(StringComparer.OrdinalIgnoreCase);
-        var resources = ImmutableArray.CreateBuilder<AnimationResource>();
-        long total = 0;
-        while (pending.TryDequeue(out var path))
-        {
-            token.ThrowIfCancellationRequested();
-            if (!SafeGamePath(path)) throw new InvalidDataException($"Invalid animation dependency path: {path}");
-            if (files.ContainsKey(path)) continue;
-            if (files.Count >= 4096) throw new InvalidDataException("The animation dependency graph exceeds 4096 resources.");
-            var source = await read(path);
-            total += source.Bytes.Length;
-            if (total > 512L * 1024 * 1024) throw new InvalidDataException("The animation dependency bundle exceeds 512 MiB.");
-            var parsed = Read(path, source.Bytes);
-            if (!parsed.Problems.IsEmpty) throw new InvalidDataException($"Cannot package {path}: {string.Join(" ", parsed.Problems)}");
-            files[path] = source.Bytes; resources.Add(source.Resource);
-            foreach (var reference in parsed.References)
-                foreach (var dependency in await resolveReference(path, reference)) pending.Enqueue(dependency);
-        }
-        return new AnimationDependencyManifest(resources.ToImmutable(), files.ToImmutable());
     }
 }

@@ -102,7 +102,7 @@ public sealed partial class MainWindow
                 Clip = current.Clip, Startup = current.Startup, Playing = current.Playing,
                 Sources = current.Sources, FamilyPaths = current.FamilyPaths,
                 LoadedResourcePaths = current.LoadedResourcePaths, ResourceAliases = current.ResourceAliases,
-                UnavailableReason = current.UnavailableReason, PackagingError = current.PackagingError,
+                UnavailableReason = current.UnavailableReason,
                 PoseUnavailableReason = current.PoseUnavailableReason,
             };
         }
@@ -795,9 +795,8 @@ public sealed partial class MainWindow
     private string? RebakeProblem(AnimationCapture capture, AnimationOperation operation, AnimationClip[] clips, ImmutableArray<string> excluded)
     {
         var problem = capture.UnavailableReason ?? clips.Select(SkeletonBlock).FirstOrDefault(reason => reason != null);
-        if (animationDestination == AnimationDestination.NewMod)
-            problem ??= capture.PackagingError;
-        else if (clips.Any(clip => !capture.Sources.Any(s => s.GamePath == clip.GamePath && AnimationResources.CanReplace(s))))
+        if (animationDestination == AnimationDestination.InPlace &&
+            clips.Any(clip => !capture.Sources.Any(s => s.GamePath == clip.GamePath && AnimationResources.CanReplace(s))))
             problem ??= "This animation has no writable Penumbra source. Choose Create new mod.";
         problem ??= AnimationBones.Problem(capture.Clip, excluded);
         if (operation == AnimationOperation.BakeOffsets)

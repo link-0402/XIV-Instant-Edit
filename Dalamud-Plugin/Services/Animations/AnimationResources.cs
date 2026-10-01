@@ -146,96 +146,36 @@ internal sealed class AnimationResources(PenumbraService penumbra, IDataManager 
     public static bool CanReplace(AnimationResource source) => source.ModDirectory != null && source.ModRoot != null &&
         source.RelativePath != null && Path.IsPathFullyQualified(source.ResolvedPath) &&
         PathRules.IsPathWithin(source.ResolvedPath, source.ModRoot) &&
-        AnimationDependencies.SafeGamePath(source.RelativePath.Replace('\\', '/')) &&
+        SafeModRelativePath(source.RelativePath) &&
         source.GamePath.EndsWith(".pap", StringComparison.OrdinalIgnoreCase);
 
-    internal static ImmutableArray<string> ManifestRoots(IEnumerable<string> sourcePaths, IEnumerable<string> packagedPaths) =>
-        sourcePaths.Concat(packagedPaths).Distinct(StringComparer.Ordinal).ToImmutableArray();
+    /// <summary>
+    /// A PAP's path inside its mod folder. Mod authors name their files freely
+    /// (e.g. "animations/sybian riding groundsit 1 v10.pap"), so this follows the
+    /// backup store's file-name rules rather than the stricter game-path ones.
+    /// </summary>
+    internal static bool SafeModRelativePath(string relativePath) =>
+        PenumbraService.IsSafeGameResourcePath(relativePath.Replace('\\', '/'), ".pap");
 
-    public async Task<AnimationDependencyManifest> ManifestAsync(AnimationCapture capture, AnimationCatalog catalog,
-        IEnumerable<string> sourcePaths, IEnumerable<string> packagedPaths, CancellationToken token)
+    /// <summary>
+    /// The clips a rebake rewrites, read for the edit and rechecked at commit. A
+    /// rebake changes motion data alone and keeps every timeline entry, so the
+    /// sounds, expressions, VFX and other files those entries name resolve in-game
+    /// exactly as before. None of them is read, packaged or required: an
+    /// expression library's PAP that Penumbra's snapshot never lists, or a sound
+    /// another mod owns, must not block the edit.
+    /// </summary>
+    public async Task<AnimationDependencyManifest> ManifestAsync(AnimationCapture capture, IEnumerable<string> clipPaths,
+        AnimationDestination destination, CancellationToken token)
     {
-        var known = capture.FamilyPaths.Concat(capture.Sources.Select(s => s.GamePath)).ToImmutableArray();
-        var loaded = capture.LoadedResourcePaths.IsDefault ? known : known.Concat(capture.LoadedResourcePaths).Distinct().ToImmutableArray();
-        // Family paths are discovery candidates, not all inputs to the current
-        // edit. Traversing every family member makes a loop-only rebake fail on
-        // an unrelated overridden startup TMB. Validate only the PAPs sampled
-        // by this operation and the files produced by it; their transitive
-        // dependencies are still followed below.
-        var roots = ManifestRoots(sourcePaths, packagedPaths);
-        var reads = new Dictionary<string, (AnimationResource Resource, byte[] Bytes)>(StringComparer.Ordinal);
-        async Task<(AnimationResource Resource, byte[] Bytes)> Read(string path)
-        {
-            token.ThrowIfCancellationRequested();
-            if (!reads.TryGetValue(path, out var source)) reads[path] = source = await ReadAsync(capture.CollectionId, path, token);
-            return source;
-        }
+        var reads = new List<(AnimationResource Resource, byte[] Bytes)>();
+        foreach (var path in clipPaths.Distinct(StringComparer.OrdinalIgnoreCase))
+            reads.Add(await ReadAsync(capture.CollectionId, path, token));
+        var manifest = new AnimationDependencyManifest(reads.Select(r => r.Resource).ToImmutableArray(),
+            reads.ToImmutableDictionary(r => r.Resource.GamePath, r => r.Bytes, StringComparer.OrdinalIgnoreCase));
+        if (destination != AnimationDestination.NewMod) return manifest;
+        // A new mod carries the collection's metadata that applies to its clips.
         var metadata = AnimationMetadata.Decode(await penumbra.AnimationMetadataAsync(capture.CollectionId));
-        var manifest = await AnimationDependencies.BuildAsync(roots,
-            Read,
-            async (parent, reference) =>
-            {
-                var path = reference.Path;
-                if (reference.Kind == "timeline" && !path.EndsWith(".tmb", StringComparison.OrdinalIgnoreCase)) path = $"chara/action/{path}.tmb";
-                if (reference.Kind == "animation" && !path.EndsWith(".pap", StringComparison.OrdinalIgnoreCase))
-                {
-                    return await ResolveMotionAsync(path, parent, capture.Clip.GamePath, loaded, catalog,
-                        async candidate => (await Read(candidate)).Bytes, token);
-                }
-                if (reference.Kind == "material" && path.StartsWith('/'))
-                {
-                    var material = path.TrimStart('/');
-                    if (material.Contains('/') && AnimationDependencies.SafeGamePath(material)) return new[] { material };
-                    var candidates = loaded.Where(p => p.EndsWith('/' + material, StringComparison.OrdinalIgnoreCase)).Distinct().ToArray();
-                    if (candidates.Length == 1) return candidates;
-                    throw new InvalidDataException($"Material '{path}' in {parent} requires an unambiguous loaded player IMC variant. Its dependencies could not be established.");
-                }
-                return new[] { path };
-            }, token);
-        return manifest with { ManipulationsJson = AnimationMetadata.Applicable(metadata, packagedPaths).ToJsonString() };
-    }
-
-    internal static async Task<IReadOnlyList<string>> ResolveMotionAsync(string motion, string parent, string selectedPap,
-        IEnumerable<string> loaded, AnimationCatalog catalog, Func<string, Task<byte[]>> read, CancellationToken token)
-    {
-        async Task<bool> Contains(string path)
-        {
-            token.ThrowIfCancellationRequested();
-            return new AnimationPap(await read(path)).Entries.Any(e => e.Name == motion);
-        }
-        // A timeline can refer to its own PAP entry without an external dependency.
-        if (parent.EndsWith(".pap", StringComparison.OrdinalIgnoreCase) && await Contains(parent)) return [];
-        var paths = loaded.Where(AnimationDependencies.SafeGamePath).Distinct(StringComparer.Ordinal).ToArray();
-        var checkedPaths = new HashSet<string>(StringComparer.Ordinal) { parent };
-        var containing = new List<string>();
-        foreach (var candidate in paths.Where(p => p.EndsWith(".pap", StringComparison.OrdinalIgnoreCase)))
-            if (checkedPaths.Add(candidate) && await Contains(candidate)) containing.Add(candidate);
-        if (containing.Count == 0)
-            foreach (var candidate in catalog.ResolveMotion(motion, selectedPap, paths, token))
-            {
-                if (!checkedPaths.Add(candidate)) continue;
-                try { if (await Contains(candidate)) containing.Add(candidate); }
-                catch (FileNotFoundException) { } // An inferred game variant may not exist.
-            }
-        // Penumbra's player snapshot can omit the animation pack that owns an
-        // external timeline. Emote startup PAPs are deterministic siblings of
-        // the selected loop, so infer that path from the TMB and validate its
-        // actual entry before accepting it.
-        if (containing.Count == 0 &&
-            AnimationCatalog.PapPathFromActionTimeline(parent, selectedPap) is { } inferred && checkedPaths.Add(inferred))
-        {
-            try { if (await Contains(inferred)) containing.Add(inferred); }
-            catch (FileNotFoundException) { }
-        }
-        if (containing.Count != 1)
-            throw new InvalidDataException(containing.Count == 0
-                ? $"Cannot identify the current player's PAP for motion '{motion}' in {parent}."
-                : $"Motion '{motion}' in {parent} is present in several player PAPs; the binding cannot be resolved uniquely.");
-        var papParts = containing[0].Split('/');
-        // Include the captured facial skeleton when this is an external facial PAP.
-        if (papParts.Length >= 7 && papParts[0] == "chara" && papParts[1] == "human" && papParts[3] == "animation" && papParts[4].StartsWith('f'))
-            containing.AddRange(paths.Where(p => p.StartsWith($"chara/human/{papParts[2]}/skeleton/face/{papParts[4]}/", StringComparison.Ordinal) &&
-                p.EndsWith(".sklb", StringComparison.Ordinal)));
-        return containing;
+        return manifest with { ManipulationsJson = AnimationMetadata.Applicable(metadata, manifest.Files.Keys).ToJsonString() };
     }
 }

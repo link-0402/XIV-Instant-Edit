@@ -268,32 +268,39 @@ catch (TargetInvocationException e) when (e.GetBaseException() is IOException)
 NativeValidationFixture.Run(Check, Reject);
 ObservationPerformanceFixture.Run(Check);
 AnimationMatchingFixture.Run(Check);
-await MotionDependencyFixture.Run(Check, Reject);
+FacePapPathFixture.Run(Check);
 await AnimationActivationFixture.Run(Check, Reject);
 
 var refs = AnimationDependencies.Read(resource.GamePath, papBytes);
 Check(refs.Problems.IsEmpty && refs.References.Select(r => r.Path).SequenceEqual(new[] { "loop", "start" }), "PAP dependency reader visits every embedded timeline");
 refs = AnimationDependencies.Read("chara/action/test.tmb", Timeline("C002", "emote/start", 24, 28));
 Check(refs.References.Single() == new AnimationReference("emote/start", "timeline"), "TMB string offsets use entry-relative addressing");
-Check(!AnimationDependencies.Read("chara/action/test.tmb", Timeline("C999")).Problems.IsEmpty, "unknown timeline records block incomplete packaging");
+Check(!AnimationDependencies.Read("chara/action/test.tmb", Timeline("C999")).Problems.IsEmpty, "unknown timeline records are reported");
 // Footsteps, voice lines, BGM and unnamed entries have the game pick a vanilla
 // resource by ID. They name no file, so they add no dependency and block nothing.
 foreach (var (code, size) in new[] { ("C042", 28), ("C053", 28), ("C230", 40), ("C031", 24), ("C021", 28) })
 {
     var runtimeSelected = AnimationDependencies.Read("chara/action/test.tmb", Timeline(code, size: size));
     Check(runtimeSelected.Problems.IsEmpty && runtimeSelected.References.IsEmpty,
-        $"{code} picks its resource at runtime, so it neither blocks packaging nor adds a dependency");
+        $"{code} picks its resource at runtime, so it adds no dependency");
 }
-var footstepGraph = await AnimationDependencies.BuildAsync(["chara/action/emote/walk.tmb"], path =>
-{
-    var bytes = Timeline("C042", size: 28);
-    return Task.FromResult((new AnimationResource(path, path, AnimationPap.Hash(bytes)), bytes));
-}, (_, r) => Task.FromResult<IReadOnlyList<string>>([r.Path]), CancellationToken.None);
-Check(footstepGraph.Files.Count == 1, "a timeline with footsteps builds a new-mod dependency manifest instead of reporting an unresolved resource");
 var invalidTimeline = Timeline("C009", "bad"); Int(invalidTimeline, 32, int.MaxValue);
 Reject(() => AnimationDependencies.Read("chara/action/test.tmb", invalidTimeline), "invalid dependency string offsets are rejected");
 Check(!AnimationDependencies.SafeGamePath("../escape.pap") && !AnimationDependencies.SafeGamePath("C:/escape.pap") &&
     !AnimationDependencies.SafeGamePath("chara//x.pap") && AnimationDependencies.SafeGamePath("chara/human/c0101/test.pap"), "dependency paths stay inside the game namespace");
+// In-place edits write the mod's own file, whose name the mod author chose freely.
+var spacedRoot = Path.Combine(Path.GetTempPath(), "[Author] Spaced Mod");
+var spacedSource = new AnimationResource("chara/human/c0801/animation/a0001/bt_common/emote/j_pose01_loop.pap",
+    Path.Combine(spacedRoot, "Animations", "Sybian Riding groundsit 1 V10.pap"), "hash", "[Author] Spaced Mod", spacedRoot,
+    "Animations/Sybian Riding groundsit 1 V10.pap");
+Check(AnimationResources.CanReplace(spacedSource) &&
+      AnimationResources.CanReplace(spacedSource with { RelativePath = @"Animations\Sybian Riding groundsit 1 V10.pap" }),
+    "a mod PAP whose file name has spaces can be replaced in place");
+Check(!AnimationResources.CanReplace(spacedSource with { RelativePath = "../escape.pap" }) &&
+      !AnimationResources.CanReplace(spacedSource with { RelativePath = "Animations/a:b.pap" }) &&
+      !AnimationResources.CanReplace(spacedSource with { RelativePath = "Animations/clip.tmb" }) &&
+      !AnimationResources.CanReplace(spacedSource with { ResolvedPath = Path.Combine(Path.GetTempPath(), "elsewhere.pap") }),
+    "in-place targets still refuse escapes, stream names, other file types and files outside the mod");
 
 static byte[] VfxChunk(string key, byte[] payload)
 {
@@ -307,15 +314,8 @@ var vfxReferences = AnimationDependencies.Read("vfx/test.avfx", vfx);
 Check(vfxReferences.Problems.IsEmpty && vfxReferences.References.Select(r => r.Path).SequenceEqual(new[] { "vfx/texture/test.tex", "sound/test.scd" }),
     "AVFX parses aligned texture strings and nested emitter sound references");
 Check(!AnimationDependencies.Read("vfx/test.avfx", VfxChunk("AVFX", VfxChunk("NEW!", new byte[4]))).Problems.IsEmpty,
-    "unknown VFX root constructs block incomplete packaging");
+    "unknown VFX root constructs are reported");
 
-var reads = 0;
-var graph = await AnimationDependencies.BuildAsync(["chara/a.tmb", "chara/a.tmb"], path =>
-{
-    reads++; var bytes = Timeline("C002", path == "chara/a.tmb" ? "chara/b.tmb" : "chara/a.tmb", 24, 28);
-    return Task.FromResult((new AnimationResource(path, path, AnimationPap.Hash(bytes)), bytes));
-}, (_, r) => Task.FromResult<IReadOnlyList<string>>([r.Path]), CancellationToken.None);
-Check(reads == 2 && graph.Files.Count == 2, "recursive dependency cycles and shared assets are deduplicated");
 var packagedRoot = "chara/human/c0801/animation/a0001/bt_common/emote/pose01_loop.pap";
 var packagedDependency = "chara/human/c0801/skeleton/face/f0002/skl_c0801f0002.sklb";
 var packagedManifest = new AnimationDependencyManifest(
@@ -331,16 +331,6 @@ Check(selectedModFiles.Count == 1 && selectedModFiles.ContainsKey(packagedRoot) 
     "new animation mods copy only baked clips, not transitively discovered dependencies");
 Reject(() => AnimationCommitService.SelectNewModFiles(packagedManifest, packagedOutputs.Add("chara/absent.pap", [4])),
     "an output outside the captured dependency manifest is rejected");
-using (var cancelled = new CancellationTokenSource())
-{
-    cancelled.Cancel();
-    try
-    {
-        await AnimationDependencies.BuildAsync(["chara/a.tex"], _ => throw new Exception("Must not read"), (_, _) => throw new Exception("Must not resolve"), cancelled.Token);
-        throw new Exception("Expected cancellation");
-    }
-    catch (OperationCanceledException) { Check(true, "cancelled dependency jobs perform no resource reads"); }
-}
 
 static string Metadata(JsonArray array, byte version = 0)
 {

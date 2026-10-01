@@ -338,13 +338,13 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
     private void ValidateTarget(AnimationEditJournal journal, AnimationFileChange file)
     {
         if (!PenumbraService.IsSafeModName(file.ModDirectory) || !AnimationDependencies.SafeGamePath(file.GamePath) ||
-            !AnimationDependencies.SafeGamePath(file.RelativePath.Replace('\\', '/')) ||
+            !AnimationResources.SafeModRelativePath(file.RelativePath) ||
             !string.Equals(Path.GetFullPath(Path.Combine(file.ModRoot, file.RelativePath)), Path.GetFullPath(file.Target), StringComparison.OrdinalIgnoreCase) ||
             !PathRules.IsPathWithin(file.Target, file.ModRoot)) throw new InvalidDataException("Invalid animation recovery target.");
         TextureFiles.EnsureLocalPath(file.Target);
         if (file.RenamedFromRelativePath is { Length: > 0 } renamedFrom)
         {
-            if (!AnimationDependencies.SafeGamePath(renamedFrom.Replace('\\', '/'))) throw new InvalidDataException("Invalid animation recovery source.");
+            if (!AnimationResources.SafeModRelativePath(renamedFrom)) throw new InvalidDataException("Invalid animation recovery source.");
             TextureFiles.EnsureLocalPath(OldTargetPath(file));
         }
         if (!PathRules.IsPathWithin(file.Staged, store.DirectoryFor(journal.Id))) throw new InvalidDataException("Invalid animation staging path.");
