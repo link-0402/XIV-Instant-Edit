@@ -226,7 +226,7 @@ internal sealed class AnimationEditService : IDisposable
         await CheckActorAsync(request.Capture, false);
         if (request.Operation == AnimationOperation.BakeOffsets) await framework.RunOnFrameworkThread(() => poses.ValidateRoundTrip(request.Capture.Pose));
         await resources.CheckAsync(request.Capture.CollectionId, request.Capture.Sources, token);
-        Status = "Capturing effective animation sources and dependencies";
+        Status = "Capturing effective animation sources";
         var clips = request.IncludeStartup ? new[] { request.Capture.Clip, request.Capture.Startup! } : [request.Capture.Clip];
         foreach (var clip in clips)
             if (clip.Resolution is { } resolution &&
@@ -238,22 +238,7 @@ internal sealed class AnimationEditService : IDisposable
                 ? $"No {AnimationBones.StandardName(missing)} skeleton was found for {unrepairable.GamePath}."
                 : "Choose the skeleton to repair onto first.");
         await resources.CheckSkeletonsAsync(request.Capture, clips, token);
-        var packagedPaths = clips.Select(clip => clip.GamePath).Distinct(StringComparer.Ordinal).ToArray();
-        AnimationDependencyManifest manifest;
-        if (request.Destination == AnimationDestination.NewMod)
-        {
-            if (request.Capture.PackagingError != null) throw new InvalidDataException(request.Capture.PackagingError);
-            manifest = await resources.ManifestAsync(request.Capture, catalog,
-                clips.Select(clip => clip.GamePath), packagedPaths, token);
-        }
-        else
-        {
-            var values = new List<(AnimationResource Resource, byte[] Bytes)>();
-            foreach (var path in request.Capture.Sources.Select(s => s.GamePath).Distinct())
-                values.Add(await resources.ReadAsync(request.Capture.CollectionId, path, token));
-            manifest = new AnimationDependencyManifest(values.Select(v => v.Resource).ToImmutableArray(),
-                values.ToImmutableDictionary(v => v.Resource.GamePath, v => v.Bytes));
-        }
+        var manifest = await resources.ManifestAsync(request.Capture, clips.Select(clip => clip.GamePath), request.Destination, token);
         var outputs = ImmutableDictionary.CreateBuilder<string, byte[]>();
         var dir = journals.DirectoryFor(request.Id); Directory.CreateDirectory(dir);
         foreach (var clip in clips.Distinct())

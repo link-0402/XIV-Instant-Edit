@@ -71,7 +71,7 @@ internal sealed record AnimationClip(string GamePath, string Name, int BindingIn
 internal sealed record AnimationCapture(string Id, ulong ActorId, long ActorAddress, Guid CollectionId,
     string CollectionName, string DisplayName, AnimationClip Clip, AnimationClip? Startup,
     ImmutableArray<string> FamilyPaths, ImmutableArray<AnimationResource> Sources, PoseSnapshot Pose,
-    DateTime CapturedUtc, bool Playing, string? UnavailableReason = null, string? PackagingError = null,
+    DateTime CapturedUtc, bool Playing, string? UnavailableReason = null,
     ImmutableArray<string> LoadedResourcePaths = default, string? PoseUnavailableReason = null,
     ImmutableDictionary<string, ImmutableArray<string>>? ResourceAliases = null)
 {

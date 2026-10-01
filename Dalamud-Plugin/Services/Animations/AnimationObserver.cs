@@ -261,20 +261,14 @@ internal sealed class AnimationObserver : IDisposable
                 var skeletonIdentity = string.Join('/', clip.SkeletonPath.Split('/').Take(3)) + "/";
                 family.UnionWith(gamePaths.Where(p => p.StartsWith(skeletonIdentity, StringComparison.Ordinal) &&
                     Path.GetExtension(p) is ".skp" or ".phyb" or ".eid"));
-                string? packagingError = null;
+                // Family members only locate the startup. A rebake rewrites motion data
+                // alone, so a member that cannot be placed never blocks an edit.
                 var startupPaths = new List<(AnimationCatalog.Timeline? Timeline, string Path)>();
                 foreach (var id in timeline.Family)
                 {
-                    var relative = catalog.Find(id);
-                    if (relative == null) { packagingError = $"Family timeline {id} is unavailable."; continue; }
-                    var familyPap = AnimationCatalog.PapPath(relative, clip.GamePath, gamePaths);
-                    if (familyPap == null) { packagingError = $"Cannot determine the player's variant for {relative.Key}."; continue; }
+                    if (catalog.Find(id) is not { } relative ||
+                        AnimationCatalog.PapPath(relative, clip.GamePath, gamePaths) is not { } familyPap) continue;
                     family.Add(familyPap);
-                    // Only existing external timelines are used. Some emotes contain their timeline exclusively inside PAP.
-                    var tmb = $"chara/action/{relative.Key}.tmb";
-                    try { _ = await resources.ReadAsync(collection.Id, tmb, token, resourceCache); family.Add(tmb); }
-                    catch (FileNotFoundException) { }
-                    catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException) { packagingError = e.Message; }
                     if (timeline.Startups.Contains(id)) startupPaths.Add((relative, familyPap));
                 }
                 // Some idle loops, including pose01_loop, have a valid sibling
@@ -325,12 +319,13 @@ internal sealed class AnimationObserver : IDisposable
                         sources.Add(startupSource.Resource);
                     }
                     }
-                    catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException) { packagingError = e.Message; }
+                    // An unreadable startup is left out; the loop stays editable on its own.
+                    catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException) { }
                 }
                 var idString = $"{runtime.ActorId}:{timeline.Id}:{clip.GamePath}:{clip.BindingIndex}:{clip.Partial}";
                 captures.Add(new AnimationCapture(idString, runtime.ActorId, runtime.Address, collection.Id, collection.Name,
                     timeline.Name, clip, startup, family.ToImmutableArray(), sources.Distinct().ToImmutableArray(), pair.Pose,
-                    pair.Pose.CapturedUtc, true, PackagingError: packagingError, LoadedResourcePaths: gamePaths.ToImmutableArray(),
+                    pair.Pose.CapturedUtc, true, LoadedResourcePaths: gamePaths.ToImmutableArray(),
                     PoseUnavailableReason: pair.PoseError, ResourceAliases: resourceAliases));
             }
             // Publish identified clips before any native source-skeleton search.

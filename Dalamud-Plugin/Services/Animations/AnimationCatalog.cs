@@ -10,9 +10,6 @@ internal sealed class AnimationCatalog
     internal sealed record Timeline(ushort Id, string Key, string Name, byte LoadType, bool Loop,
         ImmutableArray<ushort> Family, ImmutableArray<ushort> Startups);
     private readonly Dictionary<ushort, Timeline> timelines = [];
-    private readonly Dictionary<string, string> motions = new(StringComparer.Ordinal);
-    private readonly Func<string, byte[]?> readTimeline;
-    private ImmutableDictionary<string, ImmutableArray<Timeline>>? motionTimelines;
     private static readonly ImmutableHashSet<ushort> ExplicitIdleIds =
         [3, 3124, 3126, 3182, 3184, 7405, 7407, 642, 643, 653, 654, 3136, 3138, 3171,
             3132, 3134, 8002, 8004, 585, 3140, 3142, 7367, 8063, 8066, 8068];
@@ -23,7 +20,6 @@ internal sealed class AnimationCatalog
 
     public AnimationCatalog(IDataManager data)
     {
-        readTimeline = path => data.GetFile(path)?.Data;
         var sheet = data.GetExcelSheet<ActionTimeline>();
         var groups = new Dictionary<ushort, HashSet<ushort>>();
         var starts = new Dictionary<ushort, HashSet<ushort>>();
@@ -62,11 +58,6 @@ internal sealed class AnimationCatalog
             if (sheet.TryGetRow(id, out var row) && !row.Key.IsEmpty)
                 timelines[id] = new Timeline(id, row.Key.ExtractText(), names[id], row.LoadType, row.IsLoop,
                     family.Order().ToImmutableArray(), starts.TryGetValue(id, out var candidates) ? candidates.Order().ToImmutableArray() : []);
-        foreach (var motion in data.GetExcelSheet<MotionTimeline>())
-        {
-            var file = motion.Filename.ExtractText();
-            if (file.Length > 0) motions.TryAdd(motion.RowId.ToString(), file);
-        }
     }
     public Timeline? Find(ushort id) => timelines.GetValueOrDefault(id);
     private static ImmutableArray<string> PapKeys(Timeline timeline) => timeline.Key switch
@@ -105,41 +96,9 @@ internal sealed class AnimationCatalog
         return candidates.Order(StringComparer.Ordinal).ToImmutableArray();
     }
 
-    internal AnimationCatalog(IEnumerable<Timeline> entries, Func<string, byte[]?> readTimeline)
+    internal AnimationCatalog(IEnumerable<Timeline> entries)
     {
         foreach (var timeline in entries) timelines.Add(timeline.Id, timeline);
-        this.readTimeline = readTimeline;
-    }
-
-    public IReadOnlyList<string> ResolveMotion(string key, string selectedPap, IEnumerable<string> known, CancellationToken token)
-    {
-        if (motions.TryGetValue(key, out var motion)) key = motion;
-        var paths = known.Where(AnimationDependencies.SafeGamePath).Distinct(StringComparer.Ordinal).ToArray();
-        // MotionTimeline.Filename is a PAP entry name (e.g. cfxf_bad), not an
-        // ActionTimeline key (facial/pose/bad). Index the actual TMB references.
-        // This vanilla index only discovers candidates; callers must verify the
-        // effective collection's PAP entries before using any candidate.
-        if (motionTimelines == null)
-        {
-            var index = new Dictionary<string, List<Timeline>>(StringComparer.Ordinal);
-            foreach (var timeline in timelines.Values)
-            {
-                token.ThrowIfCancellationRequested();
-                if (!AnimationDependencies.SafeGamePath(timeline.Key)) continue;
-                var path = $"chara/action/{timeline.Key}.tmb";
-                if (readTimeline(path) is not { } bytes) continue;
-                foreach (var reference in AnimationDependencies.Read(path, bytes).References.Where(r => r.Kind == "animation"))
-                {
-                    if (!index.TryGetValue(reference.Path, out var entries)) index[reference.Path] = entries = [];
-                    entries.Add(timeline);
-                }
-            }
-            motionTimelines = index.ToImmutableDictionary(p => p.Key, p => p.Value.Distinct().ToImmutableArray(), StringComparer.Ordinal);
-        }
-        var matches = paths.Where(p => p.EndsWith("/" + key + ".pap", StringComparison.Ordinal)).ToHashSet(StringComparer.Ordinal);
-        foreach (var timeline in motionTimelines.GetValueOrDefault(key, []).Concat(timelines.Values.Where(t => t.Key == key)))
-            if (PapPath(timeline, selectedPap, paths) is { } path) matches.Add(path);
-        return matches.Order(StringComparer.Ordinal).ToArray();
     }
 
     public static string? PapPath(Timeline timeline, string selectedPap, IEnumerable<string> known)
@@ -166,31 +125,6 @@ internal sealed class AnimationCatalog
         if (timeline.LoadType == 1 && parts[5] == "bt_common") return null;
         if (timeline.LoadType > 2) return null;
         return $"chara/human/{parts[2]}/animation/a0001/{(timeline.LoadType == 1 ? parts[5] : "bt_common")}/{PapKeys(timeline)[0]}.pap";
-    }
-
-    /// <summary>
-    /// Infer the player PAP associated with an external emote timeline when its
-    /// PAP was not present in Penumbra's resource snapshot. This is especially
-    /// useful for a loop's sibling startup: the timeline path contains the
-    /// same relative <c>emote/</c> directory as the player animation pack.
-    /// The caller must still read the result and verify that it contains the
-    /// requested PAP entry.
-    /// </summary>
-    public static string? PapPathFromActionTimeline(string actionTimelinePath, string selectedPap)
-    {
-        const string prefix = "chara/action/";
-        const string extension = ".tmb";
-        if (!AnimationDependencies.SafeGamePath(actionTimelinePath) ||
-            !actionTimelinePath.StartsWith(prefix, StringComparison.Ordinal) ||
-            !actionTimelinePath.EndsWith(extension, StringComparison.OrdinalIgnoreCase) ||
-            !AnimationDependencies.SafeGamePath(selectedPap) ||
-            !selectedPap.EndsWith(".pap", StringComparison.OrdinalIgnoreCase)) return null;
-
-        var key = actionTimelinePath[prefix.Length..^extension.Length];
-        if (!key.StartsWith("emote/", StringComparison.Ordinal) || !AnimationDependencies.SafeGamePath(key)) return null;
-        var parts = selectedPap.Split('/');
-        if (parts.Length < 8 || parts[0] != "chara" || parts[1] != "human" || parts[3] != "animation") return null;
-        return string.Join('/', parts.Take(6)) + "/" + key + ".pap";
     }
 
     /// <summary>Player idle PAPs commonly pair <c>*_loop.pap</c> with a sibling startup.</summary>
