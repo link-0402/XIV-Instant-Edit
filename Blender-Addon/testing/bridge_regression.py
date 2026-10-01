@@ -80,7 +80,7 @@ def assert_staging_isolated(collection, created_objects, sentinels=()) -> None:
 def assert_manifest_status(server, addon_root):
     manifest_version = server._load_addon_version(addon_root / "blender_manifest.toml")
     _require(
-        manifest_version == "2.0.0",
+        manifest_version == "2.1.0",
         "the Blender add-on manifest reports the current release version",
     )
     status_payload = server._status_payload()
