@@ -35,6 +35,10 @@ public sealed partial class MainWindow
 
     private bool SeamIncluded(string title) => _skinSeamIncluded.TryGetValue(title, out var included) ? included : title == NeckTab;
     private const string NeckTab = "Neck";
+    private const string ToneTab = "Skin tone";
+    /// <summary> The tone match's picks by material path: the skin that changes and the one it should match. Kept across measurements while both are drawn. </summary>
+    private string _skinToneTargetPath = string.Empty, _skinToneBasePath = string.Empty;
+    private bool _skinToneColour, _skinToneInfluence, _skinToneShine, _skinToneSettings;
     /// <summary> Kept backups of the measured files, by the apply that made them; read with each measurement. </summary>
     private IReadOnlyList<PreviewBackupGroup> _skinSeamBackups = [];
     /// <summary> The backup group waiting for its restore to be confirmed. </summary>
@@ -57,6 +61,7 @@ public sealed partial class MainWindow
         _neckSeamConfirmApply = false;
         _openNeckSeamDialog = true;
         _skinSeamIncluded.Clear();
+        _skinToneTargetPath = _skinToneBasePath = string.Empty;
         // Mods may have changed since the last look, so every opening measures again.
         MeasureNeckSeam();
     }
@@ -87,6 +92,15 @@ public sealed partial class MainWindow
                 {
                     Weld = seam.CanWeld, Normals = seam.NormalsDiffer, Material = seam.MaterialDiffers, Textures = seam.TexturesDiffer,
                 });
+                if (analysis.Tone is { } tone)
+                {
+                    if (tone.IndexOf(_skinToneTargetPath) is null || tone.IndexOf(_skinToneBasePath) is null)
+                    {
+                        _skinToneTargetPath = tone.DefaultTarget is { } target ? tone.Parts[target].MaterialPath : string.Empty;
+                        _skinToneBasePath = tone.DefaultBase is { } @base ? tone.Parts[@base].MaterialPath : string.Empty;
+                    }
+                    ResetSkinToneChoices(tone);
+                }
                 try { _skinSeamBackups = service.Backups(analysis); }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)
                 {
@@ -125,7 +139,53 @@ public sealed partial class MainWindow
             if (choice.Material && seam.MaterialDiffers) lines.Add($"{seam.Title}: bring the skin materials together");
             if (choice.Textures && seam.TexturesDiffer) lines.Add($"{seam.Title}: blend the skin textures");
         }
+        if (SeamIncluded(ToneTab) && SkinToneOptions(analysis) is { } tone && analysis.Tone is { } toneReport &&
+            toneReport.IndexOf(tone.TargetPath) is { } target && toneReport.IndexOf(tone.BasePath) is { } @base)
+        {
+            string changed = toneReport.Parts[target].Short, matched = toneReport.Parts[@base].Short;
+            if (tone.Colour) lines.Add($"Skin tone: match the {changed} skin's colour to the {matched} skin's");
+            if (tone.Influence) lines.Add($"Skin tone: give the {changed} skin the {matched} skin's skin tone influence");
+            if (tone.Shine) lines.Add($"Skin tone: match the {changed} skin's shine to the {matched} skin's");
+            if (tone.Settings) lines.Add($"Skin tone: give the {changed} skin the {matched} skin's material settings");
+        }
         return lines;
+    }
+
+    /// <summary> The tone match's picks as indices into the measured skin materials; -1 when not picked or no longer drawn. </summary>
+    private (int Target, int Base) SkinToneSelection(SkinToneReport report)
+        => (report.IndexOf(_skinToneTargetPath) ?? -1, report.IndexOf(_skinToneBasePath) ?? -1);
+
+    /// <summary> The picked pair compared, or null when the picks don't make a pair. </summary>
+    private SkinToneComparison? PickedSkinTone(NeckSeamAnalysis analysis)
+        => analysis.Tone is { } report && SkinToneSelection(report) is var (target, @base) && target >= 0 && @base >= 0 && target != @base
+            ? report.Compare(target, @base)
+            : null;
+
+    /// <summary> Ticks every part of the match that differs for the picked pair. </summary>
+    private void ResetSkinToneChoices(SkinToneReport report)
+    {
+        var (target, @base) = SkinToneSelection(report);
+        if (target < 0 || @base < 0 || target == @base)
+        {
+            _skinToneColour = _skinToneInfluence = _skinToneShine = _skinToneSettings = false;
+            return;
+        }
+        var comparison = report.Compare(target, @base);
+        _skinToneColour = comparison.ColourDiffers;
+        _skinToneInfluence = comparison.InfluenceDiffers;
+        _skinToneShine = comparison.ShineDiffers;
+        _skinToneSettings = comparison.Settings(_skinToneInfluence).Any;
+    }
+
+    /// <summary> The ticked parts of the tone match that change something, or null when none does. </summary>
+    private SkinToneFixOptions? SkinToneOptions(NeckSeamAnalysis analysis)
+    {
+        if (PickedSkinTone(analysis) is not { } comparison)
+            return null;
+        var options = new SkinToneFixOptions(comparison.Target.MaterialPath, comparison.Base.MaterialPath,
+            _skinToneColour && comparison.ColourDiffers, _skinToneInfluence && comparison.InfluenceDiffers, _skinToneShine && comparison.ShineDiffers,
+            _skinToneSettings && comparison.Settings(_skinToneInfluence && comparison.InfluenceDiffers).Any);
+        return options.Any ? options : null;
     }
 
     private void CreateNeckSeamPreview()
@@ -139,11 +199,12 @@ public sealed partial class MainWindow
             : null;
         var body = _bodySeamChoices.Where(p => SeamIncluded(BodySeamAnalyzer.Title(p.Key)) && (p.Value.Weld || p.Value.Normals || p.Value.Material || p.Value.Textures))
             .ToDictionary(p => p.Key, p => new BodySeamFixOptions(p.Value.Weld, p.Value.Normals, p.Value.Material, p.Value.Textures, p.Value.BandCm / 100f, p.Value.Meet));
+        var tone = SeamIncluded(ToneTab) ? SkinToneOptions(analysis) : null;
         _ = Task.Run(async () =>
         {
             try
             {
-                var fix = await NeckSeamService.BuildFixAsync(analysis, neck, body, _lifetimeCts.Token).ConfigureAwait(false);
+                var fix = await NeckSeamService.BuildFixAsync(analysis, neck, body, tone, _lifetimeCts.Token).ConfigureAwait(false);
                 _neckSeamFix = fix;
                 _neckSeamBusyText = "Creating the preview mod";
                 var (_, outcome) = await service.CreatePreviewAsync(analysis, fix, _lifetimeCts.Token).ConfigureAwait(false);
@@ -302,7 +363,7 @@ public sealed partial class MainWindow
                     ? "Tick a seam to fix, and a fix, in its tab first."
                     : "Puts the fixed files in a new Penumbra mod enabled for this character. Your mods stay unchanged until you apply the fix.\n\n" +
                       string.Join("\n", selected.Select(line => "• " + line)));
-            var fixing = new[] { NeckTab }.Concat(BodySeamAnalyzer.Kinds.Select(BodySeamAnalyzer.Title)).Where(SeamIncluded).ToList();
+            var fixing = new[] { NeckTab }.Concat(BodySeamAnalyzer.Kinds.Select(BodySeamAnalyzer.Title)).Append(ToneTab).Where(SeamIncluded).ToList();
             ImGui.SameLine(0, Theme.Gap);
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Muted, fixing.Count == 0 ? "No seam ticked" : "Fixing: " + string.Join(", ", fixing));
@@ -327,6 +388,9 @@ public sealed partial class MainWindow
             if (fix.Body is { } body)
                 foreach (var line in NeckSeamViews.Expected(body))
                     Widgets.MutedWrapped("• " + line);
+            if (fix.Tone is { } tone)
+                foreach (var line in tone.Expected)
+                    Widgets.MutedWrapped("• Skin tone: " + line);
         }
         ImGui.Spacing();
         using (ImRaii.Disabled(busy))
@@ -421,6 +485,132 @@ public sealed partial class MainWindow
             var seam = analysis.Body?.Seam(kind);
             SkinSeamTab(BodySeamAnalyzer.Title(kind), seam?.Findings, () => DrawBodySeamTab(analysis, kind, seam, fixing));
         }
+        SkinSeamTab(ToneTab, PickedSkinTone(analysis)?.Findings, () => DrawSkinToneTab(analysis, fixing));
+    }
+
+    /// <summary>
+    /// The skin tone match: two pickers of the skin materials the character draws (grouped by mod), the
+    /// pair compared where they touch, and the ticks for what the match changes on the first one.
+    /// </summary>
+    private void DrawSkinToneTab(NeckSeamAnalysis analysis, bool fixing)
+    {
+        if (analysis.Tone is not { } report)
+        {
+            Widgets.HintWrapped("The skin tones weren't measured: " + analysis.ToneError);
+            return;
+        }
+        Widgets.HintWrapped("Matches one skin material to another over the whole part, for parts that use the skin shader with textures of their own: " +
+                            "a face mod's ears, a tail, extra skin on gear. Pick the skin to change and the skin it should match.");
+        if (report.Parts.Count < 2)
+        {
+            Widgets.HintWrapped("Your character draws fewer than two skin materials, so there is nothing to match.");
+            return;
+        }
+        ImGui.Spacing();
+        var (target, @base) = SkinToneSelection(report);
+        var changed = SkinToneCombo("Change", "##skin-tone-target", report, ref target,
+            "The skin that changes: its whole diffuse, normal map blue and mask, and its material settings.");
+        changed |= SkinToneCombo("To match", "##skin-tone-base", report, ref @base, "The skin to match. It stays as it is.");
+        if (changed)
+        {
+            _skinToneTargetPath = target >= 0 ? report.Parts[target].MaterialPath : string.Empty;
+            _skinToneBasePath = @base >= 0 ? report.Parts[@base].MaterialPath : string.Empty;
+            ResetSkinToneChoices(report);
+        }
+        if (target < 0 || @base < 0)
+        {
+            Widgets.MutedWrapped("Pick the skin to change and the skin to match.");
+            return;
+        }
+        if (target == @base)
+        {
+            Widgets.HintWrapped("Pick two different skin materials.");
+            return;
+        }
+
+        var comparison = report.Compare(target, @base);
+        ImGui.Spacing();
+        var (accent, _, icon) = Theme.Severity(NeckSeamViews.Feedback(comparison.Worst));
+        ImGui.TextColored(accent, icon);
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.TextColored(Theme.Text, NeckSeamViews.ToneSummary(comparison));
+        Widgets.MutedWrapped(NeckSeamViews.ToneWhere(comparison));
+        if (comparison.TargetSample.Colour is { } targetColour && comparison.BaseSample.Colour is { } baseColour)
+        {
+            ToneSwatch("##tone-target", targetColour, $"The {comparison.TargetName}'s diffuse: {SkinToneComparison.Rgb(targetColour)}");
+            ImGui.SameLine(0, Theme.Gap);
+            ToneSwatch("##tone-base", baseColour, $"The {comparison.BaseName}'s diffuse: {SkinToneComparison.Rgb(baseColour)}");
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Muted, $"{comparison.TargetName} · {comparison.BaseName} (diffuse only, before your skin colour and lighting)");
+        }
+        ImGui.Spacing();
+        DrawSeamFindings("##skin-tone-findings", comparison.Findings, comparison.Target.Column, comparison.Base.Column);
+
+        if (!fixing)
+            return;
+        ImGui.Spacing();
+        Widgets.SectionHeader("Fix");
+        if (!comparison.AnyFix)
+        {
+            Widgets.HintWrapped("Nothing here can be fixed automatically.");
+            return;
+        }
+        string t = comparison.TargetName, b = comparison.BaseName;
+        using var include = IncludeSeam(ToneTab,
+            $"Puts the ticked matches into the preview mod. Off by default: they change the {t} material for every character and outfit that uses it. " +
+            "Its changed textures become new files that only it uses, so other materials that read the same textures stay as they are.");
+        FixOption("Match the colour##tone-colour", ref _skinToneColour, comparison.ColourDiffers,
+            $"Scales every texel of the {t}'s diffuse by one factor per channel, so its colour where the parts meet becomes the {b}'s. Its own shading and detail stay.");
+        FixOption("Match the skin tone influence##tone-influence", ref _skinToneInfluence, comparison.InfluenceDiffers,
+            $"Gives the {t}'s normal map blue the {b}'s value, so your character's skin colour tints both alike, whatever skin colour you pick.");
+        FixOption("Match the shine##tone-shine", ref _skinToneShine, comparison.ShineDiffers,
+            $"Moves the {t}'s mask (specular strength, roughness, subsurface scattering) to the {b}'s values.");
+        FixOption("Match the material settings##tone-settings", ref _skinToneSettings, comparison.Settings(_skinToneInfluence).Any,
+            $"Gives the {t}'s material the {b}'s colour multiplier, pore tile (where it shows) and other skin settings.");
+        using (ImRaii.PushIndent())
+            foreach (var line in NeckSeamViews.TonePlan(comparison, _skinToneColour, _skinToneInfluence, _skinToneShine, _skinToneSettings))
+                Widgets.MutedWrapped("• " + line);
+    }
+
+    /// <summary> A labelled picker of the measured skin materials, grouped under the mods they come from. Returns whether the pick changed. </summary>
+    private static bool SkinToneCombo(string label, string id, SkinToneReport report, ref int selected, string tooltip)
+    {
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, label);
+        ImGui.SameLine(Theme.Scaled(90));
+        ImGui.SetNextItemWidth(Math.Min(Theme.Scaled(520), ImGui.GetContentRegionAvail().X));
+        var preview = selected >= 0 && selected < report.Parts.Count ? $"{report.Parts[selected].Mod} · {report.Parts[selected].Label}" : "Pick a skin material";
+        var changed = false;
+        using (var combo = ImRaii.Combo(id, preview))
+        {
+            if (combo.Success)
+                foreach (var group in report.Parts.Select((part, index) => (Part: part, Index: index)).GroupBy(p => p.Part.Mod, StringComparer.Ordinal))
+                {
+                    ImGui.TextColored(Theme.Muted, group.Key);
+                    using var indent = ImRaii.PushIndent();
+                    foreach (var (part, index) in group)
+                    {
+                        if (ImGui.Selectable($"{part.Label}##{id}-{index}", index == selected))
+                        {
+                            changed = index != selected;
+                            selected = index;
+                        }
+                        if (ImGui.IsItemHovered())
+                            ImGui.SetTooltip(NeckSeamViews.PartTooltip(part));
+                    }
+                }
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(tooltip);
+        return changed;
+    }
+
+    private static void ToneSwatch(string id, Vector3 colour, string tooltip)
+    {
+        ImGui.ColorButton(id, new Vector4(colour, 1), ImGuiColorEditFlags.NoTooltip | ImGuiColorEditFlags.NoDragDrop, new Vector2(ImGui.GetFrameHeight()));
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(tooltip);
     }
 
     private static void SkinSeamTab(string title, IReadOnlyList<NeckSeamFinding>? findings, Action draw)

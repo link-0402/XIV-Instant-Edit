@@ -543,6 +543,7 @@ public sealed partial class MainWindow
             if (Widgets.IconButton("##edit-texture", FontAwesomeIcon.PaintBrush,
                     available
                         ? "Open as a 32-bit TGA in your configured editor. Shared references to this texture will also change."
+                        : TextureEditBlock(node) is { Length: > 0 } blocked ? blocked
                         : "This texture has no verified writable mod source.",
                     available && Volatile.Read(ref _textureBusy) == 0))
                 StartTextureEdit(node, actor);

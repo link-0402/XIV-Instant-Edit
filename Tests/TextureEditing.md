@@ -66,6 +66,11 @@ agent.
 - Edit a vanilla texture. No mod should exist until the first changed save; then
   verify its TEX mapping and enabled captured collection. Subsequent saves should
   reuse that destination. A taken mod name must never be overwritten.
+- Find a material that uses a blank game texture such as
+  `chara/common/texture/white.tex`. Its brush button and Edit texture item must be
+  disabled, with the tooltip naming the file; the same for a vanilla eye texture.
+  In Substance Painter it must stay unticked with that reason, and a send must
+  never write it. A mod's own eye texture must still open.
 - Verify a modded texture outside a conventional `Files` folder works when its
   source belongs to the registered mod root. Check shared file references too.
 - Verify backups precede replacements and Restore backup restores bytes exactly

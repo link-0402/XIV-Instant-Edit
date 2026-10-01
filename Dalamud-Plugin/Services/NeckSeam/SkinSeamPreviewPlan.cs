@@ -1,30 +1,34 @@
 namespace InstantEdit.Services.NeckSeam;
 
-/// <summary> The neck's and the body seams' fixes, which go into one preview mod. </summary>
-internal sealed record SkinSeamFix(NeckSeamFix? Neck, BodySeamFix? Body)
+/// <summary> The neck's and the body seams' fixes and the skin tone match, which go into one preview mod. </summary>
+internal sealed record SkinSeamFix(NeckSeamFix? Neck, BodySeamFix? Body, SkinToneFix? Tone = null)
 {
-    public bool Empty => (Neck?.Empty ?? true) && (Body?.Empty ?? true);
-    public IReadOnlyList<string> Changes => [.. Neck?.Changes ?? [], .. Body?.Changes ?? []];
+    public bool Empty => (Neck?.Empty ?? true) && (Body?.Empty ?? true) && (Tone?.Empty ?? true);
+    public IReadOnlyList<string> Changes => [.. Neck?.Changes ?? [], .. Body?.Changes ?? [], .. Tone?.Changes ?? []];
 }
 
 /// <summary>
 /// The files a skin seam preview holds, before its textures are encoded: the changed models, the
 /// materials to write (changed ones, and unchanged ones that name a changed texture, so they can point
-/// at the preview's copy), and the changed textures with the materials that read them. When the neck
-/// and a body seam both change the body's skin material, the body seams' version already holds the
-/// neck's change, since it was built on it.
+/// at the preview's copy), the changed textures with the materials that read them, and the tone
+/// match's new textures. When the neck and a body seam both change the body's skin material, the body
+/// seams' version already holds the neck's change, since it was built on it; the tone match never
+/// shares a material with them.
 /// </summary>
 internal sealed class SkinSeamPreviewPlan
 {
     public required IReadOnlyList<SeamFileOutput> Models { get; init; }
     public required IReadOnlyList<SeamFileOutput> Materials { get; init; }
     public required IReadOnlyList<SeamTextureOutput> Textures { get; init; }
+    /// <summary> Textures that are new files for one material, at the paths its changed material already names. </summary>
+    public IReadOnlyList<SkinToneNewTexture> NewTextures { get; init; } = [];
 
     public static SkinSeamPreviewPlan Build(NeckSeamAnalysis analysis, SkinSeamFix fix)
     {
         var models = new List<SeamFileOutput>();
         var materials = new Dictionary<string, SeamFileOutput>(StringComparer.OrdinalIgnoreCase);
         var textures = new List<SeamTextureOutput>();
+        var newTextures = new List<SkinToneNewTexture>();
         if (fix.Neck is { } neck && analysis.Report is { } report)
         {
             foreach (var texture in neck.Textures)
@@ -45,12 +49,19 @@ internal sealed class SkinSeamPreviewPlan
                 materials[material.GamePath] = materials.TryGetValue(material.GamePath, out var neckVersion) ? material with { Kind = neckVersion.Kind } : material;
             textures.AddRange(body.Textures);
         }
+        if (fix.Tone is { } tone)
+        {
+            if (tone.Material is { } toneMaterial)
+                materials[toneMaterial.GamePath] = toneMaterial;
+            textures.AddRange(tone.Textures);
+            newTextures.AddRange(tone.NewTextures);
+        }
         foreach (var texture in textures)
             foreach (var owner in texture.Materials)
                 if (!materials.ContainsKey(owner) && Original(analysis, owner) is { } original)
                     materials[owner] = new SeamFileOutput(string.Equals(owner, analysis.Report?.FaceMaterialPath, StringComparison.OrdinalIgnoreCase)
                         ? "face material" : "skin material", owner, original);
-        return new SkinSeamPreviewPlan { Models = models, Materials = materials.Values.ToList(), Textures = textures };
+        return new SkinSeamPreviewPlan { Models = models, Materials = materials.Values.ToList(), Textures = textures, NewTextures = newTextures };
     }
 
     /// <summary> A material's bytes as the analysis read them. </summary>

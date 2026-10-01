@@ -21,8 +21,9 @@ internal static class PainterRules
             return "Not a per-model texture.";
         if (texture.UvSet != 0)
             return "Uses the second UV set, which the Painter mesh doesn't carry.";
-        var path = texture.GamePath.TrimStart('-');
-        if (path.StartsWith("common/", StringComparison.OrdinalIgnoreCase) || path.StartsWith("chara/common/", StringComparison.OrdinalIgnoreCase))
+        if (SharedTextures.IsBlank(texture.GamePath))
+            return SharedTextures.EditBlock(texture.GamePath, texture.IsVanilla);
+        if (SharedTextures.InSharedFolder(texture.GamePath))
             return "A shared game texture.";
         if (texture.Locator is null)
             return "Outside Penumbra's mod folder.";

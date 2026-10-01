@@ -22,7 +22,11 @@ public sealed partial class MainWindow
         => resource.GamePath.EndsWith(".tex", StringComparison.OrdinalIgnoreCase);
 
     private static bool TextureEditAvailable(ResourceView resource)
-        => resource.SourceState is ResourceSourceState.GameData or ResourceSourceState.LoadedMod;
+        => resource.SourceState is ResourceSourceState.GameData or ResourceSourceState.LoadedMod && TextureEditBlock(resource).Length == 0;
+
+    /// <summary> Why a shared game texture such as white.tex can't be edited; empty for every other texture. </summary>
+    private static string TextureEditBlock(ResourceView resource)
+        => SharedTextures.EditBlock(resource.GamePath, resource.SourceState == ResourceSourceState.GameData);
 
     /// <summary> Opens (or resumes) a texture edit session for the row's texture. </summary>
     private void StartTextureEdit(ResourceView resource, ActorView actor)

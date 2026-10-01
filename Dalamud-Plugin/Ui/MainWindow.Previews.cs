@@ -136,21 +136,21 @@ public sealed partial class MainWindow
         ImGui.TextColored(Theme.Label, presentation);
         ImGui.SameLine(0, Theme.Gap);
         ImGui.TextColored(Theme.Hint, Safe(node.GamePath, "(no game path)"));
-        Widgets.PreviewImage(entry, box);
+        Widgets.PreviewImage(entry, box, large ? PreviewLayer.WithAlpha : PreviewLayer.Colour);
         if (large)
         {
             ImGui.SameLine(0, Theme.Gap);
-            Widgets.PreviewImage(entry, box, alpha: true);
+            Widgets.PreviewImage(entry, box, PreviewLayer.Alpha);
         }
         Widgets.PreviewCaption(entry);
         if (large)
         {
             if (entry.State == PreviewState.Ready)
-                ImGui.TextColored(Theme.Hint, entry.Value?.Alpha is null ? "Colour · alpha (building)" : "Colour · alpha");
+                ImGui.TextColored(Theme.Hint, entry.Value?.Alpha is null ? "Alpha applied · alpha channel (building)" : "Alpha applied · alpha channel");
         }
         else
         {
-            ImGui.TextColored(Theme.Hint, "Hold Shift for a larger view with the alpha channel.");
+            ImGui.TextColored(Theme.Hint, "Hold Shift for a larger view with the alpha applied.");
         }
     }
 

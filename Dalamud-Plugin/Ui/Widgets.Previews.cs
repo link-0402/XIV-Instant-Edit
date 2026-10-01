@@ -55,14 +55,14 @@ internal static partial class Widgets
     /// Draws a texture preview fitted into a box: a spinner while it loads, the image over a
     /// checkerboard when ready, or a short notice when it failed. Always occupies the box.
     /// </summary>
-    public static void PreviewImage(PreviewEntry<TexturePreview> entry, Vector2 box, bool alpha = false)
+    public static void PreviewImage(PreviewEntry<TexturePreview> entry, Vector2 box, PreviewLayer layer = PreviewLayer.Colour)
     {
         var position = ImGui.GetCursorScreenPos();
         var drawList = ImGui.GetWindowDrawList();
         switch (entry.State)
         {
             case PreviewState.Ready when entry.Value is { } preview:
-                FittedImage(alpha && preview.Alpha is not null ? preview.Alpha : preview.Rgb, box);
+                FittedImage(preview.Image(layer), box);
                 break;
             case PreviewState.Failed:
                 drawList.AddRect(position, position + box, ImGui.GetColorU32(Theme.WithAlpha(Theme.Muted, .4f)), Theme.Scaled(3));

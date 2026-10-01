@@ -562,7 +562,6 @@ def _draw_empty_session(layout, context: Context, props) -> None:
         row.alert = True
         row.label(text=f"Not listening on port {port}", icon="CANCEL")
         row.popover("XIVIE_PT_connection_popover", text="", icon="DOWNARROW_HLT")
-    layout.operator("xiv_ie.simple_import", text="Import a Model File...", icon="IMPORT")
     _draw_status_row(layout, props)
 
 

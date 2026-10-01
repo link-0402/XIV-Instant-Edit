@@ -549,7 +549,8 @@ public sealed partial class MainWindow : Window, IDisposable
         }
         Widgets.HintWrapped("Models made for another race, like the c0201 gear most female races wear, go to Blender and Substance Painter " +
                             "shaped for the character's race, with its skeleton, as the game shows them on it. Browsed mods and game files use " +
-                            "the first on-screen character. For preview only: Quick Export refuses scaled models, and Simple Export warns first.");
+                            "the first on-screen character. For preview only: Quick Export refuses scaled models, and Simple Export warns first. " +
+                            "Send my character to Blender always scales them, whether this is on or off.");
 
         var applyTexturesAndMaterials = _config.ApplyTexturesAndMaterials;
         if (ImGui.Checkbox("Apply textures and materials", ref applyTexturesAndMaterials))

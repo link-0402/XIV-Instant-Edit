@@ -60,6 +60,12 @@ internal sealed record PreviewModFile
     public Dictionary<string, string> TextureRewrites { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary> What else uses the source file, shown before applying (options of its mod that map it). </summary>
     public string Note { get; init; } = string.Empty;
+    /// <summary>
+    /// A new file rather than a changed one: <see cref="Source"/> is the material that reads it at
+    /// <see cref="GamePath"/>. Applying adds it to that material's mod, mapped wherever the material
+    /// is, or puts it in the new mod with the game files when the material is game data.
+    /// </summary>
+    public bool NewFile { get; init; }
 
     [JsonIgnore]
     public IReadOnlyList<string> FixGamePaths => GamePaths.Count > 0 ? GamePaths : [GamePath];

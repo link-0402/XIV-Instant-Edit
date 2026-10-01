@@ -93,10 +93,68 @@ internal static class NeckSeamViews
 
     /// <summary> What applying the preview writes, one line per file. </summary>
     public static IReadOnlyList<string> ApplyLines(NeckSeamPreview preview)
-        => preview.Files.Select(file => file.Source.IsModFile
-                ? $"Overwrite {file.Source.ModName}: {file.Source.RelativePath} ({file.Kind})"
-                : $"Put the {file.Kind} for {file.GamePath} in a new mod (it is game data)")
+        => preview.Files.Select(file => file.NewFile
+                ? file.Source.IsModFile
+                    ? $"Add {FileName(file.GamePath)} to {file.Source.ModName} ({file.Kind}), mapped wherever {FileName(file.Source.RelativePath)} is"
+                    : $"Put the new {file.Kind} {file.GamePath} in a new mod (its material is game data)"
+                : file.Source.IsModFile
+                    ? $"Overwrite {file.Source.ModName}: {file.Source.RelativePath} ({file.Kind})"
+                    : $"Put the {file.Kind} for {file.GamePath} in a new mod (it is game data)")
             .ToList();
+
+    /// <summary> One line summing up a tone comparison. </summary>
+    public static string ToneSummary(SkinToneComparison comparison)
+    {
+        string target = comparison.TargetName, @base = comparison.BaseName;
+        var problems = comparison.Findings.Count(f => f.Severity == NeckSeamSeverity.Problem);
+        var warnings = comparison.Findings.Count(f => f.Severity == NeckSeamSeverity.Warning);
+        if (problems == 0 && warnings == 0)
+            return $"The {target} matches the {@base}.";
+        var parts = new List<string>();
+        if (problems > 0) parts.Add(problems == 1 ? "1 difference shows" : $"{problems} differences show");
+        if (warnings > 0) parts.Add(warnings == 1 ? "1 smaller difference" : $"{warnings} smaller differences");
+        return $"{string.Join(", ", parts)} between the {target} and the {@base}" + (comparison.AnyFix ? "." : "; none of them can be fixed here.");
+    }
+
+    /// <summary> Where a tone comparison read the two skins. </summary>
+    public static string ToneWhere(SkinToneComparison comparison) => comparison.Touching
+        ? $"Read where the {comparison.TargetName} touches the {comparison.BaseName}, at {comparison.Points:N0} points within " +
+          $"{SkinToneAnalyzer.Reach * 1000:0} mm of it."
+        : $"The {comparison.TargetName} doesn't touch the {comparison.BaseName}, so each is read over its whole surface.";
+
+    /// <summary> A skin material's picker tooltip: its path, the models that draw it and its skin type. </summary>
+    public static string PartTooltip(SkinTonePart part)
+        => $"{part.MaterialPath}\n{(part.Skin.IsFaceSkin ? "Face" : "Body")} skin, drawn by {string.Join(", ", part.Models.Select(FileName))}";
+
+    /// <summary> What the ticked parts of a tone match change on the target, one line each. </summary>
+    public static IReadOnlyList<string> TonePlan(SkinToneComparison comparison, bool colour, bool influence, bool shine, bool settings)
+    {
+        var lines = new List<string>();
+        string target = comparison.TargetName, @base = comparison.BaseName;
+        influence &= comparison.InfluenceDiffers;
+        if (colour && comparison.ColourDiffers && comparison.Gain(settings) is { } gain)
+            lines.Add($"Colour: the {target}'s diffuse × {gain.X:0.00} red, × {gain.Y:0.00} green, × {gain.Z:0.00} blue");
+        if (influence && comparison.TargetSample.Influence is { } from && comparison.BaseSample.Influence is { } to)
+            lines.Add($"Skin tone influence: {from:0.00} → {to:0.00}" + (to < 0.05f
+                ? $", so your skin colour no longer tints the {target}, like the {@base}"
+                : $", so your skin colour tints the {target} like the {@base}"));
+        else if (colour && comparison.InfluenceDiffers)
+            lines.Add($"While the skin tone influence differs, the colours match for one skin colour only.");
+        if (shine && comparison.ShineDiffers)
+        {
+            var offset = comparison.MaskOffset;
+            var moves = new List<string>();
+            if (offset.X != 0) moves.Add($"specular strength {offset.X:+0.00;-0.00}");
+            if (offset.Y != 0) moves.Add($"roughness {offset.Y:+0.00;-0.00}");
+            if (offset.Z != 0) moves.Add($"subsurface scattering {offset.Z:+0.00;-0.00}");
+            lines.Add("Shine: " + string.Join(", ", moves));
+        }
+        if (settings)
+            lines.AddRange(MaterialPlan(comparison.Settings(influence), 1f, target, @base).Select(line => "Settings: " + line));
+        return lines;
+    }
+
+    private static string FileName(string path) => path[(path.Replace('\\', '/').LastIndexOf('/') + 1)..];
 
     /// <summary>
     /// The meeting point slider's text: how far each side moves, for the face and body at the neck or

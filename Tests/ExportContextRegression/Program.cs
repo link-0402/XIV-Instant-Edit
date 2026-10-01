@@ -169,7 +169,9 @@ try
     NeckSeamScenarios.Run(testRoot);
     PreviewModScenarios.Run(testRoot);
     TextureCompressionScenarios.Run(testRoot);
+    HairRefitScenarios.Run(testRoot);
     BodySeamScenarios.Run(testRoot);
+    SkinToneScenarios.Run(testRoot);
     RacialScalingScenarios.Run(testRoot);
     HeelsOffsetScenarios.Run();
     CharacterSendScenarios.Run();

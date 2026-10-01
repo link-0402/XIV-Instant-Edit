@@ -144,7 +144,7 @@ internal static class NeckSeamScenarios
     // ---- Models ---------------------------------------------------------------------------------------
 
     /// <summary> An open tube of ten-vertex rings at <paramref name="heights"/>, weighted to j_kubi/j_sebo_c. </summary>
-    private static byte[] Tube(string material, float[] heights, float vStart, float vEnd)
+    internal static byte[] Tube(string material, float[] heights, float vStart, float vEnd)
     {
         const int stride = 56;
         var vertices = heights.Length * RingSize;

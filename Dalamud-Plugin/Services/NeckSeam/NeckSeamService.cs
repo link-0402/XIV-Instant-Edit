@@ -17,6 +17,9 @@ internal sealed record NeckSeamAnalysis(NeckSeamReport? Report, NeckSeamCaptured
     public string NeckError { get; init; } = string.Empty;
     public BodySeamReport? Body { get; init; }
     public string BodyError { get; init; } = string.Empty;
+    /// <summary> The drawn skin materials, for matching one's tone to another's. </summary>
+    public SkinToneReport? Tone { get; init; }
+    public string ToneError { get; init; } = string.Empty;
 }
 
 /// <summary> What applying or creating a preview did, with follow-up warnings. </summary>
@@ -95,12 +98,21 @@ internal sealed class NeckSeamService
                 _log.Warning(e, "Could not measure the body seams.");
                 bodyError = e.Message;
             }
+            token.ThrowIfCancellationRequested();
+            SkinToneReport? tone = null;
+            var toneError = string.Empty;
+            try { tone = SkinToneAnalyzer.Analyze(captured); }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                _log.Warning(e, "Could not measure the skin tones.");
+                toneError = e.Message;
+            }
             var previews = Store.Previews.Select(p => p.ModDirectory).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var previewSources = captured.Sources.Values.Where(s => previews.Contains(s.ModDirectory)).Select(s => s.ModDirectory)
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             return new NeckSeamAnalysis(report, captured, actor.Name, actor.ObjectIndex, actor.Address)
             {
-                PreviewSources = previewSources, NeckError = neckError, Body = body, BodyError = bodyError,
+                PreviewSources = previewSources, NeckError = neckError, Body = body, BodyError = bodyError, Tone = tone, ToneError = toneError,
             };
         }, token).ConfigureAwait(false);
     }
@@ -125,10 +137,12 @@ internal sealed class NeckSeamService
 
     /// <summary>
     /// Builds the selected fixes: the neck's (null options leave it out), then the body seams', whose
-    /// skin material changes build on the neck's change to the same body material.
+    /// skin material changes build on the neck's change to the same body material, then the skin tone
+    /// match, which reads the base material as those fixes left it. The tone match refuses a target
+    /// material the seam fixes also write, since one preview can hold only one version of it.
     /// </summary>
     public static Task<SkinSeamFix> BuildFixAsync(NeckSeamAnalysis analysis, NeckSeamFixOptions? neck,
-        IReadOnlyDictionary<BodySeamKind, BodySeamFixOptions> body, CancellationToken token)
+        IReadOnlyDictionary<BodySeamKind, BodySeamFixOptions> body, SkinToneFixOptions? tone, CancellationToken token)
         => Task.Run(() =>
         {
             var neckFix = analysis.Report is { } report && neck is not null ? NeckSeamFixer.Build(report, neck) : null;
@@ -137,7 +151,32 @@ internal sealed class NeckSeamService
                 ? new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase) { [neckReport.BodyMaterialPath] = bodyMaterial }
                 : null;
             var bodyFix = analysis.Body is { } bodyReport && body.Count > 0 ? BodySeamFixer.Build(bodyReport, body, materialBase) : null;
-            return new SkinSeamFix(neckFix, bodyFix);
+            token.ThrowIfCancellationRequested();
+            SkinToneFix? toneFix = null;
+            if (tone is { Any: true } && analysis.Tone is { } toneReport)
+            {
+                // What the seam fixes write: their changed materials, and the materials that read a texture they change.
+                var changed = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+                var owners = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (analysis.Report is { } faceReport)
+                {
+                    if (neckFix?.Material is { } faceMaterial)
+                        changed[faceReport.FaceMaterialPath] = faceMaterial;
+                    if (neckFix?.BodyMaterial is { } neckBody)
+                        changed[faceReport.BodyMaterialPath] = neckBody;
+                    if (neckFix is { Textures.Count: > 0 })
+                        owners.Add(faceReport.FaceMaterialPath);
+                }
+                foreach (var material in bodyFix?.Materials ?? [])
+                    changed[material.GamePath] = material.Bytes;
+                owners.UnionWith(bodyFix?.Textures.SelectMany(t => t.Materials) ?? []);
+                var target = PathRules.NormalizeGamePath(tone.TargetPath);
+                if (changed.ContainsKey(target) || owners.Contains(target))
+                    throw new InvalidOperationException($"The skin tone match and a seam fix both change {target[(target.LastIndexOf('/') + 1)..]}. " +
+                                                        "Untick one of them, make the preview, and apply or discard it before the other.");
+                toneFix = SkinToneFixer.Build(toneReport, tone, changed);
+            }
+            return new SkinSeamFix(neckFix, bodyFix, toneFix);
         }, token);
 
     /// <summary>
@@ -175,6 +214,18 @@ internal sealed class NeckSeamService
                 var bytes = await EncodeAsync(texture.Image, texture.Original, $"{i}-{NeckSeamFixer.Label(texture.Sampler)}", work, token).ConfigureAwait(false);
                 files.Add((previewRequested, bytes));
                 records.Add(Record(texture.Kind, texture.GamePath, previewRequested, bytes));
+            }
+            // New files keep their own paths: the changed material names them already, so applying adds them to its mod.
+            for (var i = 0; i < plan.NewTextures.Count; i++)
+            {
+                var texture = plan.NewTextures[i];
+                var bytes = await EncodeAsync(texture.Image, texture.Original, $"new-{i}-{NeckSeamFixer.Label(texture.Sampler)}", work, token).ConfigureAwait(false);
+                files.Add((texture.GamePath, bytes));
+                records.Add(new NeckSeamPreviewFile
+                {
+                    Kind = texture.Kind, GamePath = texture.GamePath, PreviewGamePath = texture.GamePath, PreviewRelativePath = "Files/" + texture.GamePath,
+                    PreviewSha256 = NeckSeamCapture.Hash(bytes), Source = SourceOf(texture.Material), NewFile = true,
+                });
             }
         }
         finally
@@ -313,7 +364,7 @@ internal sealed class NeckSeamService
         Files = preview.Files.Select(file => new PreviewModFile
         {
             Kind = file.Kind, GamePath = file.GamePath, PreviewRelativePath = file.PreviewRelativePath, PreviewSha256 = file.PreviewSha256,
-            Source = file.Source, TextureRewrites = file.TextureRewrites,
+            Source = file.Source, TextureRewrites = file.TextureRewrites, NewFile = file.NewFile,
         }).ToList(),
     };
 }

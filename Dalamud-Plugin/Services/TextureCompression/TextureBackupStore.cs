@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 
 namespace InstantEdit.Services.TextureCompression;
 
-/// <summary> A mod texture automatic compression replaced, and where its original is kept. </summary>
+/// <summary> A mod texture automatic optimization replaced, and where its original is kept. </summary>
 internal sealed record CompressedTexture
 {
     /// <summary> The mod file, as a full path. </summary>
@@ -25,8 +25,11 @@ internal sealed record CompressedTexture
     public required string CompressedSha256 { get; init; }
     public long CompressedLength { get; init; }
     public uint CompressedFormat { get; init; }
+    /// <summary> The original's size. </summary>
     public int Width { get; init; }
     public int Height { get; init; }
+    /// <summary> It held one color and was shrunk to <see cref="SingleColor.Size"/> square before it was compressed. </summary>
+    public bool Shrunk { get; init; }
     public DateTimeOffset Compressed { get; init; }
 
     [JsonIgnore]
@@ -43,18 +46,50 @@ internal sealed record KeptTexture
     public int CheckVersion { get; init; }
 }
 
+/// <summary> One file of a hair refit, and where its original is kept. </summary>
+internal sealed record RefitFile
+{
+    /// <summary> The mod file, as a full path. </summary>
+    public required string File { get; init; }
+    /// <summary> The file's path inside its mod folder, with forward slashes. </summary>
+    public required string RelativePath { get; init; }
+    public required string Backup { get; init; }
+    public required string OriginalSha256 { get; init; }
+    public long OriginalLength { get; init; }
+    /// <summary> What was written over the file; restoring only replaces a file that still holds it. </summary>
+    public required string NewSha256 { get; init; }
+    public long NewLength { get; init; }
+}
+
+/// <summary> Hair whose models and textures were refit together, to be put back together. </summary>
+internal sealed record RefitGroup
+{
+    public required string ModDirectory { get; init; }
+    public string ModName { get; init; } = string.Empty;
+    public Guid? ModStableId { get; init; }
+    /// <summary> The part of the texture kept, for the log and the card. </summary>
+    public string Window { get; init; } = string.Empty;
+    public List<RefitFile> Files { get; init; } = [];
+    public DateTimeOffset Refit { get; init; }
+
+    [JsonIgnore]
+    public long BytesSaved => Files.Sum(file => file.OriginalLength - file.NewLength);
+}
+
 internal sealed class TextureBackupJournal
 {
     public int Version { get; set; } = 1;
     public List<CompressedTexture> Compressed { get; set; } = [];
     public List<KeptTexture> Kept { get; set; } = [];
+    public List<RefitGroup> Refits { get; set; } = [];
 }
 
 /// <summary>
-/// The originals of the textures automatic compression replaced. Each original is copied into the
-/// cache folder's texture-backups folder under its SHA-256, so identical files share one copy; the
-/// list of replaced files and of the textures the check kept lives in the config folder, since it
-/// is what restoring needs. Backups are kept until they are restored or deleted. Dalamud-free.
+/// The originals of the textures automatic optimization replaced, and of the models and textures of
+/// refit hair. Each original is copied into the cache folder's texture-backups folder under its
+/// SHA-256, so identical files share one copy; the list of replaced files and of the textures the
+/// check kept lives in the config folder, since it is what restoring needs. Backups are kept until
+/// they are restored or deleted. Dalamud-free.
 /// </summary>
 internal sealed partial class TextureBackupStore
 {
@@ -66,6 +101,7 @@ internal sealed partial class TextureBackupStore
     private TextureBackupJournal _journal = new();
     private IReadOnlyList<CompressedTexture> _compressed = [];
     private IReadOnlyList<KeptTexture> _kept = [];
+    private IReadOnlyList<RefitGroup> _refits = [];
 
     public TextureBackupStore(string configDirectory) => _journalPath = Path.Combine(configDirectory, JournalName);
 
@@ -74,6 +110,7 @@ internal sealed partial class TextureBackupStore
 
     public IReadOnlyList<CompressedTexture> Compressed => Volatile.Read(ref _compressed);
     public IReadOnlyList<KeptTexture> Kept => Volatile.Read(ref _kept);
+    public IReadOnlyList<RefitGroup> Refits => Volatile.Read(ref _refits);
 
     public void Load()
     {
@@ -88,6 +125,8 @@ internal sealed partial class TextureBackupStore
                     _journal = JsonSerializer.Deserialize<TextureBackupJournal>(File.ReadAllText(_journalPath), JsonOptions) ?? new TextureBackupJournal();
                     _journal.Compressed.RemoveAll(entry => entry is null);
                     _journal.Kept.RemoveAll(entry => entry is null);
+                    _journal.Refits ??= [];
+                    _journal.Refits.RemoveAll(group => group?.Files is not { Count: > 0 });
                 }
                 catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException or NotSupportedException)
                 {
@@ -107,14 +146,17 @@ internal sealed partial class TextureBackupStore
     /// Copies an original into the cache folder's backup folder under its hash and returns the copy's
     /// path. A copy that is already there with the same content is reused.
     /// </summary>
-    public static string StoreBackup(string cacheRoot, byte[] original, string sha256)
+    /// <param name="extension">".tex", or ".mdl" for a refit model.</param>
+    public static string StoreBackup(string cacheRoot, byte[] original, string sha256, string extension = ".tex")
     {
         if (!Sha256Regex().IsMatch(sha256))
             throw new ArgumentException("The backup's hash is invalid.", nameof(sha256));
+        if (extension is not (".tex" or ".mdl"))
+            throw new ArgumentException("Only textures and models are backed up.", nameof(extension));
         var folder = Path.Combine(cacheRoot, FolderName);
         TextureFiles.EnsureLocalPath(folder);
         Directory.CreateDirectory(folder);
-        var path = Path.Combine(folder, sha256.ToUpperInvariant() + ".tex");
+        var path = Path.Combine(folder, sha256.ToUpperInvariant() + extension);
         if (File.Exists(path) && new FileInfo(path).Length == original.LongLength && Hash(File.ReadAllBytes(path)) == sha256.ToUpperInvariant())
             return path;
         var temporary = path + $".{Guid.NewGuid():N}.tmp";
@@ -145,7 +187,53 @@ internal sealed partial class TextureBackupStore
             _journal.Kept.RemoveAll(kept => SameFile(kept.File, entry.File));
             _journal.Compressed.Add(entry);
             Save();
-            DeleteUnreferenced(replaced);
+            DeleteUnreferenced(replaced.Select(existing => existing.Backup));
+            Publish();
+        }
+    }
+
+    /// <summary> Remembers refit hair. An earlier group that shares a file with it is replaced, and its backups deleted when nothing else uses them. </summary>
+    public void RecordRefit(RefitGroup group)
+    {
+        lock (_lock)
+        {
+            var replaced = _journal.Refits.Where(existing => existing.Files.Any(old => group.Files.Any(file => SameFile(old.File, file.File)))).ToList();
+            _journal.Refits.RemoveAll(replaced.Contains);
+            _journal.Refits.Add(group);
+            Save();
+            DeleteUnreferenced(replaced.SelectMany(existing => existing.Files).Select(file => file.Backup));
+            Publish();
+        }
+    }
+
+    /// <summary> Drops refit groups (to keep the refit files) and deletes backups nothing else uses. </summary>
+    public void ForgetRefits(IReadOnlyCollection<RefitGroup> groups)
+    {
+        if (groups.Count == 0)
+            return;
+        lock (_lock)
+        {
+            _journal.Refits.RemoveAll(existing => groups.Any(group => ReferenceEquals(group, existing)));
+            Save();
+            DeleteUnreferenced(groups.SelectMany(group => group.Files).Select(file => file.Backup));
+            Publish();
+        }
+    }
+
+    /// <summary> Replaces a refit group with the files of it still to restore; drops it when none are left. </summary>
+    public void UpdateRefit(RefitGroup group, IReadOnlyCollection<RefitFile> remaining)
+    {
+        lock (_lock)
+        {
+            var index = _journal.Refits.FindIndex(existing => ReferenceEquals(existing, group));
+            if (index < 0)
+                return;
+            if (remaining.Count == 0)
+                _journal.Refits.RemoveAt(index);
+            else
+                _journal.Refits[index] = group with { Files = remaining.ToList() };
+            Save();
+            DeleteUnreferenced(group.Files.Except(remaining).Select(file => file.Backup));
             Publish();
         }
     }
@@ -178,7 +266,7 @@ internal sealed partial class TextureBackupStore
         {
             _journal.Compressed.RemoveAll(existing => entries.Any(entry => ReferenceEquals(entry, existing) || entry == existing));
             Save();
-            DeleteUnreferenced(entries);
+            DeleteUnreferenced(entries.Select(entry => entry.Backup));
             Publish();
         }
     }
@@ -186,19 +274,22 @@ internal sealed partial class TextureBackupStore
     /// <summary> How many originals are kept and the bytes they take, each shared copy once. </summary>
     public (int Files, long Bytes) BackupTotals()
     {
-        var distinct = Compressed.GroupBy(entry => entry.Backup, StringComparer.OrdinalIgnoreCase).ToList();
+        var distinct = Compressed.Select(entry => (entry.Backup, entry.OriginalLength))
+            .Concat(Refits.SelectMany(group => group.Files).Select(file => (file.Backup, file.OriginalLength)))
+            .GroupBy(entry => entry.Backup, StringComparer.OrdinalIgnoreCase).ToList();
         return (distinct.Count, distinct.Sum(group => group.First().OriginalLength));
     }
 
-    private void DeleteUnreferenced(IEnumerable<CompressedTexture> entries)
+    private void DeleteUnreferenced(IEnumerable<string> backups)
     {
-        foreach (var backup in entries.Select(entry => entry.Backup).Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var backup in backups.Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            if (_journal.Compressed.Any(entry => string.Equals(entry.Backup, backup, StringComparison.OrdinalIgnoreCase)))
+            if (_journal.Compressed.Any(entry => string.Equals(entry.Backup, backup, StringComparison.OrdinalIgnoreCase)) ||
+                _journal.Refits.Any(group => group.Files.Any(file => string.Equals(file.Backup, backup, StringComparison.OrdinalIgnoreCase))))
                 continue;
             try
             {
-                // Only a file this store named: <sha256>.tex inside a texture-backups folder.
+                // Only a file this store named: <sha256>.tex or .mdl inside a texture-backups folder.
                 if (Sha256FileRegex().IsMatch(Path.GetFileName(backup)) &&
                     string.Equals(Path.GetFileName(Path.GetDirectoryName(backup)), FolderName, StringComparison.OrdinalIgnoreCase) &&
                     File.Exists(backup) && (File.GetAttributes(backup) & FileAttributes.ReparsePoint) == 0)
@@ -225,6 +316,7 @@ internal sealed partial class TextureBackupStore
     {
         Volatile.Write(ref _compressed, _journal.Compressed.ToArray());
         Volatile.Write(ref _kept, _journal.Kept.ToArray());
+        Volatile.Write(ref _refits, _journal.Refits.ToArray());
     }
 
     private static bool SameFile(string a, string b) => string.Equals(Full(a), Full(b), StringComparison.OrdinalIgnoreCase);
@@ -238,6 +330,6 @@ internal sealed partial class TextureBackupStore
     [GeneratedRegex("^[0-9A-Fa-f]{64}$", RegexOptions.CultureInvariant)]
     private static partial Regex Sha256Regex();
 
-    [GeneratedRegex("^[0-9A-F]{64}\\.tex$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("^[0-9A-F]{64}\\.(tex|mdl)$", RegexOptions.CultureInvariant)]
     private static partial Regex Sha256FileRegex();
 }

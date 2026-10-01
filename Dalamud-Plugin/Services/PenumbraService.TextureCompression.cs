@@ -49,6 +49,17 @@ public sealed partial class PenumbraService
         }
     }
 
+    /// <summary> The folder of a registered mod that holds its meta.json, for reading all its options; null when Penumbra doesn't know the mod. </summary>
+    internal async Task<string?> ModRootAsync(string modDirectory, Guid? stableId)
+    {
+        if (!IsSafeModName(modDirectory))
+            return null;
+        var scan = await _framework.RunOnFrameworkThread(() => ResolveModScanOnFramework(modDirectory, stableId)).ConfigureAwait(false);
+        await LeaveFrameworkThread();
+        return scan?.CandidateRoots.FirstOrDefault(root => File.Exists(Path.Combine(root, "meta.json")) &&
+                                                          (File.GetAttributes(root) & FileAttributes.ReparsePoint) == 0);
+    }
+
     /// <summary>
     /// Reloads the mods whose files changed, so the next load reads the new files, then redraws the
     /// local player once. Returns what couldn't be done.

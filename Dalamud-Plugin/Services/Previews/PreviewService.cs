@@ -5,26 +5,51 @@ using Lumina.Data;
 
 namespace InstantEdit.Services.Previews;
 
-/// <summary> A texture ready to draw: the colour image and, once requested, its alpha channel. </summary>
+/// <summary> Which image of a texture preview to draw. </summary>
+public enum PreviewLayer
+{
+    /// <summary> The colour channels, opaque. </summary>
+    Colour,
+
+    /// <summary> The colour with the alpha channel as transparency. </summary>
+    WithAlpha,
+
+    /// <summary> The alpha channel as greyscale. </summary>
+    Alpha,
+}
+
+/// <summary> A texture ready to draw: the opaque colour image and, once requested, the colour with alpha applied and the alpha channel. </summary>
 public sealed class TexturePreview : IDisposable
 {
     private int _alphaRequested;
 
-    public TexturePreview(IDalamudTextureWrap rgb, DecodedTexture info)
+    public TexturePreview(IDalamudTextureWrap colour, DecodedTexture info)
     {
-        Rgb = rgb;
+        Colour = colour;
         Info = info;
     }
 
-    public IDalamudTextureWrap Rgb { get; }
+    public IDalamudTextureWrap Colour { get; }
+    public IDalamudTextureWrap? WithAlpha { get; internal set; }
     public IDalamudTextureWrap? Alpha { get; internal set; }
     public DecodedTexture Info { get; }
+
+    /// <summary> The layer's image, or the opaque colour while the alpha images are still being built. </summary>
+    public IDalamudTextureWrap Image(PreviewLayer layer)
+        => layer switch
+        {
+            PreviewLayer.WithAlpha => WithAlpha,
+            PreviewLayer.Alpha => Alpha,
+            _ => null,
+        } ?? Colour;
 
     internal bool ClaimAlphaBuild() => Interlocked.CompareExchange(ref _alphaRequested, 1, 0) == 0;
 
     public void Dispose()
     {
-        Rgb.Dispose();
+        Colour.Dispose();
+        WithAlpha?.Dispose();
+        WithAlpha = null;
         Alpha?.Dispose();
         Alpha = null;
     }
@@ -130,25 +155,35 @@ public sealed class PreviewService : IDisposable
 
     public PreviewEntry<MaterialPreview> GetMaterial(PreviewKey key) => _materialCache.Get(key);
 
-    /// <summary> Builds the alpha-only image of a ready preview in the background, once. </summary>
+    /// <summary> Builds the alpha-applied and alpha-only images of a ready preview in the background, once. </summary>
     public void RequestAlpha(PreviewEntry<TexturePreview> entry)
     {
         if (entry.State != PreviewState.Ready || entry.Value is not { } preview || preview.Alpha is not null || !preview.ClaimAlphaBuild())
             return;
         _ = Task.Run(async () =>
         {
+            IDalamudTextureWrap? withAlpha = null;
             try
             {
-                var alpha = TextureDecoder.AlphaOnly(preview.Info.Bgra);
-                var wrap = await _textures.CreateFromRawAsync(RawImageSpecification.Bgra32(preview.Info.Width, preview.Info.Height), alpha,
+                var specification = RawImageSpecification.Bgra32(preview.Info.Width, preview.Info.Height);
+                withAlpha = await _textures.CreateFromRawAsync(specification, preview.Info.Bgra, "InstantEdit.Preview.WithAlpha").ConfigureAwait(false);
+                var alpha = await _textures.CreateFromRawAsync(specification, TextureDecoder.AlphaOnly(preview.Info.Bgra),
                     "InstantEdit.Preview.Alpha").ConfigureAwait(false);
                 if (entry.State == PreviewState.Ready && ReferenceEquals(entry.Value, preview))
-                    preview.Alpha = wrap;
+                {
+                    preview.WithAlpha = withAlpha;
+                    preview.Alpha = alpha;
+                }
                 else
-                    wrap.Dispose();
+                {
+                    withAlpha.Dispose();
+                    alpha.Dispose();
+                }
+                withAlpha = null;
             }
             catch (Exception e)
             {
+                withAlpha?.Dispose();
                 _log.Debug($"Could not build an alpha preview: {e.Message}");
             }
         });
@@ -225,7 +260,7 @@ public sealed class PreviewService : IDisposable
         token.ThrowIfCancellationRequested();
         var wrap = await _textures.CreateFromRawAsync(
             RawImageSpecification.Bgra32(decoded.Width, decoded.Height),
-            decoded.Bgra,
+            TextureDecoder.Opaque(decoded.Bgra),
             $"InstantEdit.Preview:{Path.GetFileName(key.Path)}",
             token).ConfigureAwait(false);
         return new TexturePreview(wrap, decoded);

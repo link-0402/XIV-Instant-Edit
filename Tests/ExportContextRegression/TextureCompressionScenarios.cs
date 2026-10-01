@@ -9,7 +9,8 @@ using static InstantEdit.TestSupport.Assertions;
 /// <summary>
 /// Automatic texture compression's pure parts on synthetic files: TEX headers and sizes, which of a
 /// character's textures are considered and how their materials read them, the check that keeps a
-/// texture when compression would change what its shaders read, the backup store, and the card's texts.
+/// texture when compression would change what its shaders read, finding and shrinking textures that
+/// hold one color, the backup store, and the card's texts.
 /// </summary>
 internal static class TextureCompressionScenarios
 {
@@ -29,6 +30,7 @@ internal static class TextureCompressionScenarios
         CheckOpacity();
         CheckIndexRows();
         CheckNormalsAndColors();
+        CheckSingleColor();
         CheckBackupStore(testRoot);
         CheckTrigger();
         CheckRunSummary();
@@ -36,7 +38,7 @@ internal static class TextureCompressionScenarios
     }
 
     /// <summary> A TEX file: the header, then as many bytes as its mip chain takes, filled with <paramref name="fill"/>. </summary>
-    private static byte[] Tex(uint format, int width, int height, int mips, byte fill = 0, uint attributes = Type2D, int arraySize = 0)
+    internal static byte[] Tex(uint format, int width, int height, int mips, byte fill = 0, uint attributes = Type2D, int arraySize = 0)
     {
         var data = TextureCost.Vram(format, width, height, mips) * Math.Max(1, arraySize) * ((attributes & 0x02000000) != 0 ? 6 : 1);
         var bytes = new byte[TextureCost.HeaderSize + data];
@@ -117,7 +119,7 @@ internal static class TextureCompressionScenarios
     private static string ModFile(string mod, string relative) => Mods + mod + @"\" + relative.Replace('/', '\\');
 
     /// <summary> A material with the given shader package, textures (path and flags), samplers (id and texture index), constants and flags. </summary>
-    private static byte[] Mtrl(string shader, (string Path, ushort Flags)[] textures, (uint Id, int Texture)[] samplers, (uint Id, float[] Values)[] constants,
+    internal static byte[] Mtrl(string shader, (string Path, ushort Flags)[] textures, (uint Id, int Texture)[] samplers, (uint Id, float[] Values)[] constants,
         uint flags)
     {
         var strings = new MemoryStream();
@@ -399,6 +401,94 @@ internal static class TextureCompressionScenarios
             "texture compression check: each reason reads as its own sentence part, without ellipses");
     }
 
+    // ---- Single colors --------------------------------------------------------------------------------
+
+    private static void CheckSingleColor()
+    {
+        TexInfo Info(uint format, int width, int height, uint attributes = Type2D) => TextureCost.Read(Tex(format, width, height, 1, attributes: attributes))!.Value;
+        Require(SingleColor.Shrinkable(Info(Bgra, 4096, 4096)) && SingleColor.Shrinkable(Info(Bc7, 2048, 1024)) && SingleColor.Shrinkable(Info(Bc1, 64, 64)) &&
+                SingleColor.Shrinkable(Info(Bc5, 1024, 1024)) && SingleColor.Shrinkable(Info(Bgra, 1022, 1024)),
+            "single colors: uncompressed and BC1/3/5/7 textures larger than 32 × 32 can shrink, whatever their size");
+        Require(!SingleColor.Shrinkable(Info(Bgra, 32, 32)) && !SingleColor.Shrinkable(Info(Bgra, 16, 64)) && !SingleColor.Shrinkable(Info(TextureCost.Bc4, 1024, 1024)) &&
+                !SingleColor.Shrinkable(Info(0x1131, 1024, 1024)) && !SingleColor.Shrinkable(Info(Bgra, 512, 512, 0x02000000 | Type2D)),
+            "single colors: textures no larger than the shrunk size, single-channel formats and cube maps stay as they are");
+
+        bool May(byte[] tex) => SingleColor.MayHoldOneColor(new MemoryStream(tex, false), TextureCost.Read(tex)!.Value);
+        // Every block of a BC7 texture the same: one color. One block different in the top level: not; in a smaller mipmap only: still, as only the top level is read.
+        var blocks = Tex(Bc7, 256, 256, 9, 7);
+        var patterned = (byte[])blocks.Clone();
+        patterned[80 + 16 * 300 + 5] = 8;
+        var lowerMip = (byte[])blocks.Clone();
+        lowerMip[80 + 256 * 256 + 3] = 8;
+        Require(May(blocks) && !May(patterned) && May(lowerMip),
+            "single colors: a compressed texture may hold one color when its top level repeats one block exactly");
+        // A large texture is read in chunks; a difference after the first one still counts.
+        var late = Tex(Bc7, 2048, 2048, 1, 7);
+        late[^1] = 8;
+        Require(!May(late) && May(Tex(Bc7, 2048, 2048, 1, 7)),
+            "single colors: the whole top level is compared, past the first chunk read");
+        // Bogus mip offsets: the top level is read right after the header, as Penumbra does; a file too short for it doesn't count.
+        var bogus = Tex(Bc1, 128, 128, 1, 3);
+        BinaryPrimitives.WriteUInt32LittleEndian(bogus.AsSpan(28), 12);
+        Require(May(bogus) && !May(bogus[..^8]),
+            "single colors: the top level sits right after the header when the header points elsewhere, and must be all there");
+
+        var noisy = Tex(Bgra, 64, 64, 1, 128);
+        for (var i = 80; i < noisy.Length; i += 7)
+            noisy[i] = (byte)(128 + i % 5);
+        var spotted = (byte[])noisy.Clone();
+        spotted[80 + 4 * 1000 + 2] = 140;
+        Require(May(noisy) && !May(spotted),
+            "single colors: uncompressed pixels may vary by a few levels, like a flat normal map with a level of noise, but no more");
+
+        var flat = Image(64, 64, 255, 127, 127, 255);
+        for (var i = 0; i < flat.Length; i += 4 * 3)
+            flat[i + 1] = 128;
+        Require(SingleColor.ColorOf(flat, 64, 64, false) == (255, 127, 127, 255) && SingleColor.ColorOf(Image(64, 64, 9, 8, 7, 6), 64, 64, false) == (9, 8, 7, 6),
+            "single colors: the color is each channel's rounded average");
+        var bumpy = (byte[])flat.Clone();
+        bumpy[4 * 100 + 1] = 140;
+        var index = Image(64, 64, 0, 255, 34, 255);
+        for (var i = 0; i < index.Length; i += 8)
+        {
+            index[i] = 200;
+            index[i + 3] = 0;
+        }
+        Require(SingleColor.ColorOf(bumpy, 64, 64, false) is null && SingleColor.ColorOf(index, 64, 64, false) is null &&
+                SingleColor.ColorOf(index, 64, 64, true) is (_, 255, 34, _),
+            "single colors: one pixel beyond the tolerance makes it more than one color, unless it is in blue or alpha, which BC5 drops");
+
+        var small = SingleColor.Tex((1, 2, 3, 4));
+        var header = InstantEdit.Services.TextureFiles.ReadTex(small);
+        var (pixels, width, height) = TextureCost.TopLevelBgra(small);
+        Require(header is { Format: Bgra, Width: SingleColor.Size, Height: SingleColor.Size, Mips: 1 } && width == 32 && height == 32 &&
+                SingleColor.ColorOf(pixels, width, height, false) == (1, 2, 3, 4) && small.Length == 80 + 32 * 32 * 4,
+            "single colors: the shrunk texture is a valid 32 × 32 BGRA32 TEX of the color, for Penumbra to encode");
+
+        var quad = new byte[2 * 2 * 4];
+        for (var p = 0; p < 4; p++)
+            quad[p * 4] = (byte)(p + 1);
+        var stretched = SingleColor.Stretch(quad, 2, 2, 4, 6);
+        Require(stretched.Length == 4 * 6 * 4 && stretched[0] == 1 && stretched[(0 * 4 + 3) * 4] == 2 && stretched[(5 * 4 + 0) * 4] == 3 && stretched[(5 * 4 + 3) * 4] == 4 &&
+                stretched[(2 * 4 + 1) * 4] == 1 && stretched[(3 * 4 + 2) * 4] == 4,
+            "single colors: the decoded small texture is stretched over the original's size, each pixel taking the nearest");
+
+        // The check compares the original with the shrunk color at every pixel: noise within the tolerance passes, a color that drifted doesn't.
+        var diffuse = new[] { Use(TextureRole.Base, "character.shpk") };
+        var drifted = Image(64, 64, 255, 127, 117, 255);
+        Require(CompressionCheck.Compare(flat, Image(64, 64, 255, 127, 127, 255), 64, 64, diffuse, false, SingleColor.CheckTolerances).Passed &&
+                !CompressionCheck.Compare(flat, drifted, 64, 64, diffuse, false, SingleColor.CheckTolerances).Passed &&
+                CompressionCheck.Compare(flat, drifted, 64, 64, diffuse, false).Passed,
+            "single colors: a shrunk texture may only move by the tolerance and the encoder's rounding, less than compression may");
+        var cut = new[] { Use(TextureRole.Normal, "character.shpk", 0.5f) };
+        var edge = Image(64, 64, 126, 128, 128, 255);
+        for (var i = 0; i < edge.Length; i += 8)
+            edge[i] = 129;
+        Require(SingleColor.ColorOf(edge, 64, 64, false) is (128, _, _, _) &&
+                !CompressionCheck.Compare(edge, Image(64, 64, 128, 128, 128, 255), 64, 64, cut, false, SingleColor.CheckTolerances).Passed,
+            "single colors: a near-uniform opacity channel straddling the cut-out threshold keeps the texture as it is");
+    }
+
     // ---- Backups --------------------------------------------------------------------------------------
 
     private static void CheckBackupStore(string testRoot)
@@ -518,26 +608,32 @@ internal static class TextureCompressionScenarios
             "texture compression card: sizes in units of 1024");
         Require(TextureCompressionViews.Textures(1) == "1 texture" && TextureCompressionViews.Textures(1234) == "1,234 textures",
             "texture compression card: counts read naturally");
-        CompressedTexture Entry(long before, long after) => new()
+        CompressedTexture Entry(long before, long after, bool shrunk = false) => new()
         {
             File = @"C:\x.tex", ModDirectory = "M", RelativePath = "x.tex", Backup = @"C:\b.tex", OriginalSha256 = "A", OriginalLength = before,
-            CompressedSha256 = "B", CompressedLength = after,
+            CompressedSha256 = "B", CompressedLength = after, Shrunk = shrunk,
         };
         var run = new CompressionRun { Finished = DateTimeOffset.Now, Compressed = 2, BytesBefore = 8L << 20, BytesAfter = 2L << 20, Kept = ["x.tex: r"] };
         var texts = new[]
         {
             TextureCompressionViews.Status(CompressionPhase.Off, ""), TextureCompressionViews.Status(CompressionPhase.Watching, ""),
             TextureCompressionViews.Status(CompressionPhase.Waiting, ""), TextureCompressionViews.Status(CompressionPhase.Checking, ""),
-            TextureCompressionViews.Totals([]), TextureCompressionViews.Totals([Entry(4L << 20, 1L << 20), Entry(4L << 20, 1L << 20)]),
+            TextureCompressionViews.Totals([], []), TextureCompressionViews.Totals([Entry(4L << 20, 1L << 20), Entry(4L << 20, 1L << 20)], []),
             TextureCompressionViews.Backups((2, 8L << 20)), TextureCompressionViews.LastRun(run), TextureCompressionViews.Kept(run),
             TextureCompressionViews.Restored(new CompressionRestore(3, ["M: y.tex"], ["M: z.tex: gone"], [])),
+            TextureCompressionViews.Totals([Entry(4L << 20, 1L << 20), Entry(5L << 20, 1L << 20, true)], []),
+            TextureCompressionViews.LastRun(run with { Shrunk = 1 }),
         };
-        Require(TextureCompressionViews.Status(CompressionPhase.Compressing, "Compressing 1 of 2: a.tex") == "Compressing 1 of 2: a.tex" &&
-                texts[5] == "2 textures compressed so far, 6.00 MiB smaller in total." && texts[4] == "Nothing is compressed yet." &&
-                texts[8] == "1 texture you wear stays uncompressed, because compressing would visibly change it." &&
-                texts[9].StartsWith("Restored 3 textures. 1 texture changed since", StringComparison.Ordinal) &&
-                texts[9].EndsWith("Automatic compression is off.", StringComparison.Ordinal),
-            "texture compression card: status, totals, kept textures and restoring read as sentences");
+        Require(TextureCompressionViews.Status(CompressionPhase.Compressing, "Optimizing 1 of 2: a.tex") == "Optimizing 1 of 2: a.tex" &&
+                texts[5] == "2 textures optimized so far, 6.00 MiB smaller in total." && texts[4] == "Nothing is optimized yet." &&
+                texts[8] == "1 texture you wear stays as it is, because compressing would visibly change it." &&
+                texts[9].StartsWith("Restored 3 textures. 1 file changed since", StringComparison.Ordinal) &&
+                texts[9].EndsWith("Automatic optimization is off.", StringComparison.Ordinal),
+            "texture optimization card: status, totals, kept textures and restoring read as sentences");
+        Require(texts[10] == "2 textures optimized (1 of one color, shrunk to 32 × 32) so far, 7.00 MiB smaller in total." &&
+                texts[11].StartsWith("Last run: 2 textures optimized (1 of one color, shrunk to 32 × 32), 6.00 MiB smaller, ", StringComparison.Ordinal) &&
+                !texts[7].Contains("one color", StringComparison.Ordinal),
+            "texture optimization card: textures shrunk for holding one color are counted in the totals and the last run");
         Require(texts.All(text => !text.Contains('…') && !text.Contains("...", StringComparison.Ordinal)),
             "texture compression card: no ellipses, which the game font draws as dashes");
         var temp = Path.GetTempPath();

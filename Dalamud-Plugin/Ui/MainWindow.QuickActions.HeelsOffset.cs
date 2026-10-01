@@ -20,15 +20,12 @@ public sealed partial class MainWindow
         service.AutomaticFixFailed += error => _feed.Report(StatusChannel.Models, FeedbackSeverity.Warning, $"Heels offset: {error}");
     }
 
-    private void DrawHeelsOffsetCard()
-    {
-        ImGui.Spacing();
-        QuickActionCard("##quick-heels", FontAwesomeIcon.ShoePrints, "Heels offset",
-            "Measures how far your shoes reach below the ground and writes the matching Simple Heels offset into their model, so that " +
-            "heels stand on the ground instead of sinking into it. When your gear hides your feet, the legs or one-piece body model that " +
-            "holds them gets the offset.",
-            DrawHeelsOffsetAction);
-    }
+    private QuickAction HeelsOffsetCard => new("heels-offset", FontAwesomeIcon.ShoePrints, "Heels offset",
+        "Measures how far your shoes reach below the ground and writes the matching Simple Heels offset into their model, so that " +
+        "heels stand on the ground instead of sinking into it. When your gear hides your feet, the legs or one-piece body model that " +
+        "holds them gets the offset.",
+        DrawHeelsOffsetAction,
+        () => _config.AutoFixHeels = false);
 
     private void DrawHeelsOffsetAction()
     {
