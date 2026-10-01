@@ -384,7 +384,7 @@ public sealed partial class MainWindow
                 if (animations is not { } service || request.Animation is not { } capture)
                     throw new InvalidOperationException("No animation is playing. Play an emote, idle or walk, then send again.");
                 _characterSendProgress = "Reading the animation";
-                return await service.SampleForBlenderAsync(capture, false, message => _characterSendProgress = message, token)
+                return await service.SampleForCharacterAsync(capture, message => _characterSendProgress = message, token)
                     .ConfigureAwait(false);
             default:
                 return null;

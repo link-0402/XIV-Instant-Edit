@@ -152,7 +152,8 @@ internal static class SkinToneFixer
     /// <summary>
     /// Where a tone match puts a material's texture: the texture folder beside its material folder, named
     /// after the material and the texture's role (…/f0002/material/mt_c0801f0002_fac_e.mtrl, "base" →
-    /// …/f0002/texture/c0801f0002_fac_e_tone_base.tex).
+    /// …/f0002/texture/c0801f0002_fac_e_tone_base.tex). Folders below the material folder (gear's
+    /// variant folders, v0001) go into the name, so same-named materials of two variants get their own copies.
     /// </summary>
     internal static string TonePath(string materialPath, string role)
     {
@@ -160,11 +161,14 @@ internal static class SkinToneFixer
         var slash = path.LastIndexOf('/');
         var folder = slash < 0 ? [] : path[..slash].Split('/').ToList();
         var materials = folder.FindLastIndex(segment => string.Equals(segment, "material", StringComparison.OrdinalIgnoreCase));
+        var below = materials >= 0 ? folder.Skip(materials + 1).ToList() : new List<string>();
         if (materials >= 0)
             folder = [.. folder.Take(materials), "texture"];
         var stem = Path.GetFileNameWithoutExtension(path[(slash + 1)..]);
         if (stem.StartsWith("mt_", StringComparison.OrdinalIgnoreCase))
             stem = stem[3..];
+        if (below.Count > 0)
+            stem += "_" + string.Join('_', below);
         return (folder.Count == 0 ? "" : string.Join('/', folder) + "/") + $"{stem}_tone_{role}.tex";
     }
 
