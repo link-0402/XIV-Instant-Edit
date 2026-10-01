@@ -26,6 +26,8 @@ internal sealed record NeckSeamModelInput(string GamePath, byte[] Bytes, IReadOn
 internal sealed record NeckSeamInput(NeckSeamModelInput? Face, IReadOnlyList<NeckSeamModelInput> Bodies, byte[]? RacialDeformers)
 {
     public int? CharacterRace { get; init; }
+    /// <summary> Why a loaded face model isn't in <see cref="Face"/>; null when there is none or it was read. </summary>
+    public string? FaceProblem { get; init; }
     /// <summary> Loaded gear models without skin, whose clothing can cover a seam (their materials aren't read). </summary>
     public IReadOnlyList<NeckSeamModelInput> Clothing { get; init; } = [];
 }
@@ -153,7 +155,7 @@ internal static class NeckSeamAnalyzer
     /// <param name="around">The clothing and seam connectors around the seams, when the caller read them already.</param>
     public static NeckSeamReport Analyze(NeckSeamInput input, SeamSurroundings? around = null)
     {
-        var faceInput = input.Face ?? throw new InvalidDataException("This character has no face model loaded.");
+        var faceInput = input.Face ?? throw new InvalidDataException(input.FaceProblem ?? "This character has no face model loaded.");
         var faceRace = RaceOf(faceInput.GamePath) ?? throw new InvalidDataException("The face model's race could not be read from its path.");
         var faceModel = faceInput.Read();
         var (faceMesh, faceMaterialInput, faceMaterial) = FindSkinMesh(faceInput, faceModel, m => m.IsFaceSkin)

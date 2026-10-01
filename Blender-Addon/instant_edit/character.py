@@ -92,6 +92,18 @@ def _text(value, name: str, max_length: int, *, required: bool = True) -> str:
     return value.strip()
 
 
+def _armature_name(value) -> str:
+    """An armature name Blender keeps whole: it cuts object names at 63 UTF-8 bytes."""
+    name = _text(value, "armature name", MAX_ARMATURE_NAME_LENGTH)
+    try:
+        fits = len(name.encode("utf-8")) <= MAX_ARMATURE_NAME_LENGTH
+    except UnicodeEncodeError:
+        fits = False
+    if not fits:
+        raise ValueError("character armature name is missing or invalid")
+    return name
+
+
 def _offset(value) -> list[float]:
     if (not isinstance(value, list) or len(value) != STRIDE
             or not all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in value)):
@@ -147,7 +159,7 @@ def parse_request(value) -> dict | None:
         "key": _text(value.get("key"), "key", MAX_KEY_LENGTH),
         "name": _text(value.get("name"), "name", MAX_NAME_LENGTH),
         "role": role,
-        "armatureName": _text(value.get("armatureName"), "armature name", MAX_ARMATURE_NAME_LENGTH),
+        "armatureName": _armature_name(value.get("armatureName")),
         "attach": attach,
         "enabledAttributes": attributes,
         "enabledShapes": shapes,

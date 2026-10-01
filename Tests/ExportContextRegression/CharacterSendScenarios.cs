@@ -92,6 +92,11 @@ internal static class CharacterSendScenarios
             order: int.MaxValue);
         Require(CharacterSendPlan.Models([connector, alias], includeWeapons: false) is [{ Node.GamePath: ConnectorPath }],
             "a file the character loads under two game paths goes once, since it draws the same under each");
+        var mainHand = Node(WeaponPath, @"C:\mods\Sword\sword.mdl", section: ResourceSection.Gear, order: 10);
+        var offHand = Node(WeaponPath.Replace("w0101", "w0151"), @"C:\mods\Sword\sword.mdl", section: ResourceSection.Gear, order: 11);
+        Require(CharacterSendPlan.Models([mainHand, offHand, mainHand], includeWeapons: true) is [{ Node.GamePath: WeaponPath }, { Node: var second }] &&
+                second == offHand,
+            "a weapon file both hands use goes once per hand, so each hangs its own copy");
     }
 
     private const string SmallclothesTopPath = "chara/equipment/e0000/model/c0201e0000_top.mdl";
@@ -145,6 +150,9 @@ internal static class CharacterSendScenarios
         var armed = CharacterDrawState.Plan(CharacterSendPlan.Models(roots, includeWeapons: true), roots, live);
         Require(plan.Missing.SequenceEqual(["glv.mdl"]) && armed.Missing.SequenceEqual(["glv.mdl"]),
             "a model the character draws in its own slots that the On Screen list lacks is named; attached objects aren't listed, so they don't count");
+        var outside = CharacterDrawState.Plan(CharacterSendPlan.Models(roots, includeWeapons: false), roots, live, path => path.EndsWith("glv.mdl", StringComparison.Ordinal));
+        Require(outside.Missing.Count == 0 && outside.External.SequenceEqual(["glv.mdl"]),
+            "a drawn model from outside the installed mods isn't missing from the list, which can't hold it, but can't be sent");
         Require(armed.Models[^1] is { Model.Role: CharacterModelRole.Weapon, AttributeMasks: [0xFFFFFFFEu] },
             "a weapon takes the draw state of the weapon's own model");
         var weaponAsBody = new PainterLiveCharacter([new PainterLiveModel(Drawn(FacePath), 0, 0)], null);
@@ -180,8 +188,10 @@ internal static class CharacterSendScenarios
                 CharacterSendPlan.Key(" Firstname Lastname ", 0) == "Firstname Lastname",
             "Blender tells a character's sends apart by its name and home world");
         Require(CharacterSendPlan.ArmatureName(null) == "Skeleton" && CharacterSendPlan.ArmatureName("  Rig  ") == "Rig" &&
-                CharacterSendPlan.ArmatureName(new string('x', 70)).Length == CharacterSendPlan.MaximumArmatureName,
-            "the send's armature takes the animation armature's name, cut to what Blender keeps");
+                CharacterSendPlan.ArmatureName(new string('x', 70)).Length == CharacterSendPlan.MaximumArmatureName &&
+                CharacterSendPlan.ArmatureName(new string('骨', 30)) == new string('骨', 21) &&
+                CharacterSendPlan.ArmatureName(new string('x', 62) + "😀") == new string('x', 62),
+            "the send's armature takes the animation armature's name, cut at a whole character to the bytes Blender keeps");
         Require(CharacterSendPlan.WeaponModelPath(101, 1) == WeaponPath && CharacterSendPlan.WeaponOf(WeaponPath) == ((ushort)101, (ushort)1) &&
                 CharacterSendPlan.WeaponOf(FacePath) is null,
             "a weapon's model path and its model set and body name each other");

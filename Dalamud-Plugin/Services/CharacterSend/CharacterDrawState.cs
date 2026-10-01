@@ -18,7 +18,11 @@ internal sealed record CharacterLeftOutModel(string FileName, string Reason);
 /// <param name="Missing">Files the character draws in its own slots that the On Screen list lacks, because it changed since the list was made.</param>
 /// <param name="Known">Whether the draw state was read; without it every model and part of the list goes.</param>
 internal sealed record CharacterDrawPlan(IReadOnlyList<CharacterDrawnModel> Models, IReadOnlyList<CharacterLeftOutModel> LeftOut,
-    IReadOnlyList<string> Missing, bool Known);
+    IReadOnlyList<string> Missing, bool Known)
+{
+    /// <summary> Files the character draws in its own slots from outside the installed mods, which the On Screen list leaves out and a send can't take. </summary>
+    public IReadOnlyList<string> External { get; init; } = [];
+}
 
 /// <summary>
 /// Narrows a send to what the game draws on the character right now: the models its draw object
@@ -52,8 +56,9 @@ internal static class CharacterDrawState
     /// <param name="models">The send's models from the On Screen list (<see cref="CharacterSendPlan.Models"/>).</param>
     /// <param name="roots">The whole list, to tell which drawn models it lacks.</param>
     /// <param name="live">What the character draws now; null when it couldn't be read.</param>
+    /// <param name="external">Whether a drawn file comes from outside the installed mods (a temporary mod, say), which the list leaves out.</param>
     public static CharacterDrawPlan Plan(IReadOnlyList<CharacterSendModel> models, IEnumerable<ResourceNode> roots,
-        PainterLiveCharacter? live)
+        PainterLiveCharacter? live, Func<string, bool>? external = null)
     {
         if (live is null)
             return new CharacterDrawPlan(models.Select(model => new CharacterDrawnModel(model, [], null)).ToArray(), [], [], false);
@@ -96,12 +101,10 @@ internal static class CharacterDrawState
             .SelectMany(node => new[] { PainterVisibility.NormalizePath(node.ActualPath), PainterVisibility.NormalizePath(node.GamePath) })
             .ToHashSet(StringComparer.Ordinal);
         // Only the character's own slots: besides weapons, its draw object can hold others that aren't listed.
-        var missing = live.Models
-            .Where(copy => copy.Slot >= 0 && !listed.Contains(copy.Path))
-            .Select(copy => CharacterSendPlan.FileName(copy.Path))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        return new CharacterDrawPlan(shown, leftOut, missing, true);
+        var unlisted = live.Models.Where(copy => copy.Slot >= 0 && !listed.Contains(copy.Path)).Select(copy => copy.Path)
+            .Distinct(StringComparer.Ordinal).ToLookup(path => external?.Invoke(path) == true);
+        string[] Names(IEnumerable<string> paths) => paths.Select(CharacterSendPlan.FileName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return new CharacterDrawPlan(shown, leftOut, Names(unlisted[false]), true) { External = Names(unlisted[true]) };
     }
 
     /// <summary> The game's low-poly whole body, which characters load but the game never shows. </summary>

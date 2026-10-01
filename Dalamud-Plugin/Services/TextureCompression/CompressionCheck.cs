@@ -65,8 +65,11 @@ internal sealed record CompressionTolerances
 /// </summary>
 internal static class CompressionCheck
 {
-    /// <summary> Bumped when the tolerances change, so textures an older check kept are looked at again. </summary>
-    public const int Version = 1;
+    /// <summary>
+    /// Bumped when the tolerances or what a texture is tried as change, so textures an older check kept
+    /// are looked at again. 2: an uncompressed texture the one-color check keeps is tried at its own size.
+    /// </summary>
+    public const int Version = 2;
 
     /// <summary> How a material reads opacity from the texture: the byte (BGRA order), the level that draws, and whether it blends. </summary>
     private readonly record struct Opacity(int Byte, float Level, bool Blended);
