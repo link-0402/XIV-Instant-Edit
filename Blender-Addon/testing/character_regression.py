@@ -500,6 +500,13 @@ def check_replace(context, importer):
         "context-other", entry(send_id=SEND_C, key="Someone Else@73", name="Someone Else"), bones=["j_kao"],
         skeleton=payload(CHARACTER), name="Other", vertices=[Vector((0, 0, 1)), Vector((0.1, 0, 1)), Vector((0, 0.1, 1))],
         groups={"j_kao": [(0, 1.0), (1, 1.0), (2, 1.0)]})
+    # Part of the previous send is selected and active, as after clicking it to look at it; the
+    # replacement removes it while the import runs.
+    previous = next(obj for obj in context.view_layer.objects if obj.get(character.SEND_PROPERTY) == SEND_A)
+    for obj in tuple(context.selected_objects):
+        obj.select_set(False)
+    previous.select_set(True)
+    context.view_layer.objects.active = previous
     queued, scheduled = [], []
     with patch.object(revocation, "queue_context_revocations", lambda collections: queued.extend(
             c.get("context_id") for c in collections) or len(collections)), \
@@ -510,6 +517,8 @@ def check_replace(context, importer):
     names = {obj.name for obj in bpy.data.objects}
     require(result == {"FINISHED"} and single_result == {"FINISHED"} and other_result == {"FINISHED"},
             "the imports around the replacement succeed")
+    require(context.view_layer.objects.active is None and not context.selected_objects,
+            "a replaced object that was selected doesn't fail the import; nothing removed stays selected")
     require(not any(obj.get(character.SEND_PROPERTY) == SEND_A for obj in bpy.data.objects)
             and not any(c.get("context_id") in ("context-top", "context-hair", "context-weapon") for c in bpy.data.collections),
             "a new send of the character removes the previous send's armatures, models and model collections")
@@ -611,6 +620,32 @@ def check_draw_state(addon, context, importer):
             "a model with every visible part hidden by hand exports nothing, not its hidden parts either")
     for obj in shown:
         obj.hide_set(False)
+
+    # The Mesh Groups list shows the visible parts only, but the hidden ones export with them, so a
+    # reorder keeps their IDs apart: a part can't take a hidden part's number, and moving a group
+    # renumbers the groups of hidden parts too.
+    materials = importlib.import_module(f"{addon.__name__}.materials")
+    mesh_list = importlib.import_module(f"{addon.__name__}.mesh_list")
+    ids = module("instant_edit.context").mesh_ids_from_name
+    parts = mesh_list.list_parts(shown)
+    fingertips = next(part for part in parts if by_name["4.0 Fingertips"] in part.objects)
+    placement = mesh_list.moved_part(parts, fingertips.ident, 3, 0)
+    try:
+        materials.commit_mesh_id_plan(mesh_list.placement_plan(parts, placement), shown)
+        refused = ""
+    except ValueError as error:
+        refused = str(error)
+    require("3.0 Long Nails" in refused and ids(by_name["4.0 Fingertips"])[:2] == (4, 0),
+            "a part dropped on the number of a part the game hides is refused, and nothing is renamed")
+    placement = mesh_list.moved_group(parts, 2, 0)
+    materials.commit_mesh_id_plan(mesh_list.placement_plan(parts, placement), shown, (2, 0))
+    require(ids(by_name["2.0 Robe B"])[:2] == (0, 0) and ids(by_name["0.0 Body"])[:2] == (1, 0)
+            and ids(by_name["1.0 Robe A"])[:2] == (2, 0) and ids(by_name["3.0 Long Nails"])[:2] == (3, 0),
+            "moving a group renumbers the groups of hidden parts the way it does the listed ones")
+    parts = mesh_list.list_parts(shown)
+    placement = mesh_list.moved_group(parts, 0, 2)
+    materials.commit_mesh_id_plan(mesh_list.placement_plan(parts, placement), shown, (0, 2))
+    require(all(obj.name == name for name, obj in by_name.items()), "moving the group back restores every name")
 
     for obj in objects:
         _exportable(obj)

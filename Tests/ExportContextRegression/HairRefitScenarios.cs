@@ -477,6 +477,35 @@ internal static class HairRefitScenarios
         reloaded.ForgetRefits(reloaded.Refits.ToList());
         Require(kept && reloaded.Refits.Count == 0 && !System.IO.File.Exists(textureBackup),
             "hair refit: restoring part of a group keeps the rest and its backups; forgetting it deletes them");
+
+        // Two hair materials of one model, refit one after the other: the second group's model original
+        // is what the first wrote, so the first group and its backups stay.
+        byte[] secondTexture = [7, 8, 9], movedModel = [1, 2, 4];
+        string secondSha = TextureBackupStore.Hash(secondTexture), movedSha = TextureBackupStore.Hash(movedModel);
+        modelBackup = TextureBackupStore.StoreBackup(cache, model, modelSha, ".mdl");
+        textureBackup = TextureBackupStore.StoreBackup(cache, texture, textureSha);
+        var movedBackup = TextureBackupStore.StoreBackup(cache, movedModel, movedSha, ".mdl");
+        var secondBackup = TextureBackupStore.StoreBackup(cache, secondTexture, secondSha);
+        var first = new RefitGroup
+        {
+            ModDirectory = "Hair", ModName = "Hair", Files = [File("a.mdl", modelBackup, modelSha, 3) with { NewSha256 = movedSha }, File("a.tex", textureBackup, textureSha, 3)],
+        };
+        var second = new RefitGroup { ModDirectory = "Hair", ModName = "Hair", Files = [File("a.mdl", movedBackup, movedSha, 3), File("b.tex", secondBackup, secondSha, 3)] };
+        store.Load();
+        store.RecordRefit(first);
+        store.RecordRefit(second);
+        Require(store.Refits.Count == 2 && store.Refits[0].Files.Count == 2 && System.IO.File.Exists(modelBackup) && System.IO.File.Exists(textureBackup),
+            "hair refit: a second group refitting a model the first already refit keeps the first group and its originals");
+
+        // A model that changed since the first refit: the first group's entry for it is stale and goes,
+        // the rest of that group stays.
+        var changed = new RefitGroup { ModDirectory = "Hair", ModName = "Hair", Files = [File("a.mdl", movedBackup, "C0", 3)] };
+        store.ForgetRefits([second]);
+        store.RecordRefit(changed);
+        Require(store.Refits.Count == 2 && store.Refits[0].Files.Single().RelativePath == "a.tex" && !System.IO.File.Exists(modelBackup) &&
+                System.IO.File.Exists(textureBackup),
+            "hair refit: a file changed since an earlier refit replaces that group's entry for it and keeps the group's other files");
+        store.ForgetRefits(store.Refits.ToList());
     }
 
     // ---- The card -------------------------------------------------------------------------------------

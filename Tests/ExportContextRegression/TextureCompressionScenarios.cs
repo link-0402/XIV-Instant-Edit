@@ -541,6 +541,12 @@ internal static class TextureCompressionScenarios
         Require(store.Compressed.Single().OriginalSha256 == shaSecond && !File.Exists(older.Backup) && File.Exists(newerBackup) && store.Kept.Count == 0,
             "texture backups: compressing a file again replaces its entry and its verdict, and the old original goes");
 
+        var refused = false;
+        try { store.Record(Entry(ModFile("Gear Mod", "a.tex"), "C0", older.Backup, first.Length)); }
+        catch (InvalidOperationException) { refused = true; }
+        Require(refused && store.Compressed.Single().OriginalSha256 == shaSecond && File.Exists(newerBackup),
+            "texture backups: a file still holding what was written over it isn't recorded again, so its original's copy stays");
+
         var outside = Path.Combine(root, "outside.tex");
         File.WriteAllBytes(outside, first);
         store.Record(Entry(ModFile("Gear Mod", "c.tex"), shaFirst, outside, first.Length));

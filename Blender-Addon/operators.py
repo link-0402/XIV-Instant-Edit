@@ -689,7 +689,7 @@ class XIVIE_OT_drag_mesh_order(Operator):
         plan = self._session.plan()
         if not cancelled and plan:
             try:
-                commit_mesh_id_plan(plan, self._visible_objects)
+                commit_mesh_id_plan(plan, self._visible_objects, self._session.group_move())
             except ValueError as error:
                 self.report({"ERROR"}, str(error))
                 cancelled = True

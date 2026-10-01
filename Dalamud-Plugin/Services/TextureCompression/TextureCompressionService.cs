@@ -122,8 +122,8 @@ internal sealed class TextureCompressionService : IDisposable
     // Each texture's hash as a run last read it, with the file's size and write time then, so the run
     // after every outfit change doesn't read the textures the check kept again.
     private readonly ConcurrentDictionary<string, (FileStamp Stamp, string Sha256)> _hashes = new(StringComparer.OrdinalIgnoreCase);
-    // Compressed textures a run found to hold more than one color, with the file's size and write
-    // time then, so later runs don't read them again.
+    // Compressed textures a run found to hold more than one color, or that still hold what an earlier
+    // run wrote, with the file's size and write time then, so later runs don't read them again.
     private readonly ConcurrentDictionary<string, FileStamp> _manyColors = new(StringComparer.OrdinalIgnoreCase);
     // Worn hair textures the refit looked at, with the stamps of the texture and of its mod's meta.json
     // then and why they can't be refit, so later runs don't plan the same mod again.
@@ -654,6 +654,14 @@ internal sealed class TextureCompressionService : IDisposable
             _hashes[candidate.File] = (read, sha);
         if (Verdict(candidate.File, sha) is { } known)
             return new Outcome(null, known);
+        // A file still holding what an earlier run wrote is left alone: optimizing it again would make
+        // that output its original and drop the backup of the real one.
+        if (Backups.CompressedFor(candidate.File) is { } earlier && string.Equals(earlier.CompressedSha256, sha, StringComparison.OrdinalIgnoreCase))
+        {
+            if (stamp is { } done)
+                _manyColors[candidate.File] = done;
+            return new Outcome(null, null);
+        }
 
         var twoChannel = candidate.Uses.Count > 0 && candidate.Uses.All(use => use.Role == TextureRole.Index);
         var target = twoChannel ? TextureCost.Bc5 : TextureCost.Bc7;
@@ -941,8 +949,9 @@ internal sealed class TextureCompressionService : IDisposable
                     failed.Add($"{entry.Label}: {e.Message}");
                 }
             }
-            // Refit hair after the compressed textures, which may have been cut by a refit first.
-            var groups = Backups.Refits.ToList();
+            // Refit hair after the compressed textures, which may have been cut by a refit first, and
+            // the newest group first: an older one sharing a model expects what the newer one found.
+            var groups = Enumerable.Reverse(Backups.Refits).ToList();
             for (var i = 0; i < groups.Count; i++)
             {
                 _progress = $"Restoring hairstyle {i + 1} of {groups.Count}";
