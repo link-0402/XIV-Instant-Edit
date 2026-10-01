@@ -1071,6 +1071,16 @@ def _snapshot_object_state(context: Context) -> tuple:
     )
 
 
+def _still_exists(obj) -> bool:
+    """Whether a captured object is still in the file; a character send may have removed it."""
+    if obj is None:
+        return False
+    try:
+        return obj.name in bpy.data.objects
+    except ReferenceError:
+        return False
+
+
 def _restore_object_state(context: Context, state: tuple) -> None:
     """Restore selection, active object, and mode without changing scene data."""
     selected, active, mode = state
@@ -1081,12 +1091,10 @@ def _restore_object_state(context: Context, state: tuple) -> None:
     for obj in tuple(context.selected_objects):
         obj.select_set(False)
     for obj in selected:
-        if obj.name in bpy.data.objects:
+        if _still_exists(obj):
             obj.select_set(True)
 
-    context.view_layer.objects.active = (
-        active if active is not None and active.name in bpy.data.objects else None
-    )
+    context.view_layer.objects.active = active if _still_exists(active) else None
     if mode != "OBJECT" and context.view_layer.objects.active is not None:
         bpy.ops.object.mode_set(mode=mode)
 

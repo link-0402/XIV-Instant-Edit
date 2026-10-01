@@ -164,7 +164,7 @@ internal sealed class HeelsOffsetService : IDisposable
     }
 
     /// <summary> Measures the local player's feet and fixes the model's offset. False while a fix is running. </summary>
-    public bool Fix() => Start(automatic: false);
+    public bool Fix() => Start(automatic: false, checking: null);
 
     /// <summary>
     /// Puts the model the last fix wrote back as it was, if its file still holds what the fix wrote. False
@@ -176,10 +176,11 @@ internal sealed class HeelsOffsetService : IDisposable
             return false;
         _ = Task.Run(async () =>
         {
+            var added = false;
             try
             {
                 lock (_lock)
-                    _undone.Add(result.Model.ModelFile);
+                    added = _undone.Add(result.Model.ModelFile);
                 var warnings = await _penumbra.WritePreviewSourcesAsync([(undo.Source, undo.Original)], undo.ObjectIndex, "Nothing was undone")
                     .ConfigureAwait(false);
                 var stamp = FileStamp.Of(undo.Source.ActualPath);
@@ -194,7 +195,12 @@ internal sealed class HeelsOffsetService : IDisposable
             {
                 _log.Warning(error, "Could not undo the heels offset fix.");
                 lock (_lock)
+                {
+                    // Nothing was undone, so the automatic fix still looks after the model.
+                    if (added)
+                        _undone.Remove(result.Model.ModelFile);
                     _lastError = error.Message;
+                }
             }
             finally
             {
@@ -204,7 +210,8 @@ internal sealed class HeelsOffsetService : IDisposable
         return true;
     }
 
-    private bool Start(bool automatic)
+    /// <param name="checking">The model the automatic fix marked as being checked, which it checks again once its file changes if the fix doesn't get to it.</param>
+    private bool Start(bool automatic, HeelsModelKey? checking)
     {
         if (Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
             return false;
@@ -215,7 +222,11 @@ internal sealed class HeelsOffsetService : IDisposable
                 var result = await FixAsync(automatic, _lifetime.Token).ConfigureAwait(false);
                 lock (_lock)
                 {
-                    _last = result;
+                    // The offset a fix wrote turns on another part, so the automatic fix checks the model
+                    // again right after it; that check finds nothing to do and keeps the fix, and its Undo, shown.
+                    if (!(automatic && !result.Written && result.Plan.Action == HeelsFixAction.None &&
+                          _last is { Written: true } fixedModel && fixedModel.Model.SameModel(result.Model)))
+                        _last = result;
                     _lastError = null;
                 }
                 if (automatic && result.Written)
@@ -235,6 +246,12 @@ internal sealed class HeelsOffsetService : IDisposable
             }
             finally
             {
+                // A fix that failed before it read the model, or that found another one, leaves the model
+                // it was started for to be checked again once its file changes rather than never.
+                if (checking is { } key)
+                    lock (_lock)
+                        if (_handled.TryGetValue(key, out var stamp) && stamp is null)
+                            _handled[key] = FileStamp.Of(key.ModelFile);
                 Interlocked.Exchange(ref _busy, 0);
             }
         });
@@ -376,7 +393,7 @@ internal sealed class HeelsOffsetService : IDisposable
                 return;
             _handled[current] = null;
         }
-        if (!Start(automatic: true))
+        if (!Start(automatic: true, checking: current))
             lock (_lock)
                 _handled.Remove(current);
     }

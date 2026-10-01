@@ -215,16 +215,22 @@ def moved_part(parts, ident: int, group: int, index: int) -> dict[int, tuple[int
     return placement
 
 
+def moved_group_index(current: int, group: int, index: int) -> int:
+    """Return where group `current` goes when group `group` moves to slot `index`."""
+    if current == group:
+        return index
+    if group < current <= index:
+        return current - 1
+    if index <= current < group:
+        return current + 1
+    return current
+
+
 def moved_group(parts, group: int, index: int) -> dict[int, tuple[int, int]]:
     """Return every part's (group, index) after moving a whole group to slot `index`."""
     placement = _placement(parts)
     for part in parts:
-        if part.group == group:
-            placement[part.ident] = (index, part.part)
-        elif group < part.group <= index:
-            placement[part.ident] = (part.group - 1, part.part)
-        elif index <= part.group < group:
-            placement[part.ident] = (part.group + 1, part.part)
+        placement[part.ident] = (moved_group_index(part.group, group, index), part.part)
     return placement
 
 
@@ -329,6 +335,12 @@ class DragSession:
     def plan(self) -> dict[int, tuple[int, int]]:
         """Object pointer -> planned (group, part) for every object the drop moves."""
         return placement_plan(self.parts, self.placement)
+
+    def group_move(self) -> tuple[int, int] | None:
+        """The group a group drag moves and the slot it drops it at; None for a part drag."""
+        if self.moving is not None:
+            return None
+        return self.group, self.placement[next(item.ident for item in self.parts if item.group == self.group)][0]
 
     def drag_state(self) -> tuple[str, int, int, int, str]:
         """Scope, current group/part, ceiling, and instance key of the dragged row."""

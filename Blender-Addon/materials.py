@@ -12,6 +12,7 @@ import bpy
 from .io.model.exp.validators import clean_material_path, USHORT_LIMIT
 from .instant_edit.context import (
     MASHUP_SOURCE_MATERIAL_PROPERTY,
+    ContextValidationError,
     active_mesh_id_plan,
     context_id_for_object,
     mesh_ids_from_name,
@@ -573,11 +574,18 @@ def _planned_object_name(obj) -> str:
     return _mesh_object_name(info.mesh_group, info.mesh_part, mesh_display_name(obj), info.lod)
 
 
-def commit_mesh_id_plan(plan: dict[int, tuple[int, int]], objects) -> int:
+def commit_mesh_id_plan(plan: dict[int, tuple[int, int]], objects, group_move: tuple[int, int] | None = None) -> int:
     """Rename every object a drag moved, in one collision-checked pass.
 
-    Must run outside planned_mesh_ids() so the objects' current names are read.
+    `group_move` is the group a group drag moved and the slot it dropped it at
+    (see mesh_list.DragSession.group_move). Must run outside planned_mesh_ids()
+    so the objects' current names are read.
     """
+    objects = tuple(objects)
+    hidden = _game_hidden_parts(objects)
+    if hidden:
+        plan = _plan_game_hidden_parts(plan, objects, hidden, group_move)
+        objects += hidden
     targets = []
     for obj in objects:
         planned = plan.get(obj.as_pointer())
@@ -588,6 +596,63 @@ def commit_mesh_id_plan(plan: dict[int, tuple[int, int]], objects) -> int:
             continue
         targets.append((obj, planned[0], planned[1], info.lod, mesh_display_name(obj)))
     return _rename_mesh_targets(targets, objects)
+
+
+def _game_hidden_parts(objects) -> tuple:
+    """The parts a character send imported hidden because the game didn't draw them, of the models
+    `objects` show. The list doesn't show them, but they export with their model (see
+    character.with_game_hidden_parts), so a reorder has to keep their IDs apart from the others'."""
+    from .instant_edit.character import with_game_hidden_parts
+
+    present = {obj.as_pointer() for obj in objects}
+    return tuple(
+        obj for obj in with_game_hidden_parts(bpy.context.scene, objects)
+        if obj.as_pointer() not in present
+    )
+
+
+def _plan_game_hidden_parts(plan, objects, hidden, group_move) -> dict[int, tuple[int, int]]:
+    """Extend a reorder plan to the game-hidden parts of the listed models.
+
+    Moving a mesh group renumbers the groups of hidden parts as it does the
+    listed groups, keeping their part numbers. A move that would give a listed
+    part the ID of a hidden part of the same model is refused, since the export
+    would then hold two parts with one ID; unhiding the part lists it, and it
+    moves with the rest.
+    """
+    from .mesh_list import moved_group_index
+
+    plan = dict(plan)
+    if group_move is not None:
+        for obj in hidden:
+            info = mesh_name_info(obj)
+            group = moved_group_index(info.mesh_group, *group_move)
+            if group != info.mesh_group:
+                plan[obj.as_pointer()] = (group, info.mesh_part)
+
+    def context_of(obj) -> str:
+        try:
+            return context_id_for_object(obj)
+        except ContextValidationError:
+            return ""
+
+    taken = {}
+    for obj in hidden:
+        info = mesh_name_info(obj)
+        group, part = plan.get(obj.as_pointer(), (info.mesh_group, info.mesh_part))
+        taken[(context_of(obj), group, part, info.lod)] = obj
+    for obj in objects:
+        planned = plan.get(obj.as_pointer())
+        if planned is None:
+            continue
+        info = mesh_name_info(obj)
+        other = taken.get((context_of(obj), planned[0], planned[1], info.lod))
+        if other is not None:
+            raise ValueError(
+                f"Mesh movement would give {obj.name} the number of {other.name}, a part the game "
+                "doesn't show that still exports with the model. Unhide it to move it with the others."
+            )
+    return plan
 
 
 def _rename_mesh_targets(targets, objects=None) -> int:

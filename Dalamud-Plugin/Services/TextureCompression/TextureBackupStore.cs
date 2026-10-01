@@ -177,12 +177,18 @@ internal sealed partial class TextureBackupStore
 
     public static string Hash(ReadOnlySpan<byte> bytes) => Convert.ToHexString(SHA256.HashData(bytes));
 
-    /// <summary> Remembers a replaced file. An earlier entry for the same file is replaced, and its backup deleted when nothing else uses it. </summary>
+    /// <summary>
+    /// Remembers a replaced file. An earlier entry for the same file is replaced, and its backup deleted
+    /// when nothing else uses it; an entry whose original is what that earlier entry wrote is refused,
+    /// since replacing it would delete the only copy of the real original.
+    /// </summary>
     public void Record(CompressedTexture entry)
     {
         lock (_lock)
         {
             var replaced = _journal.Compressed.Where(existing => SameFile(existing.File, entry.File)).ToList();
+            if (replaced.Any(existing => string.Equals(existing.CompressedSha256, entry.OriginalSha256, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException($"{entry.RelativePath} still holds what automatic optimization wrote; its original is kept as it was.");
             _journal.Compressed.RemoveAll(existing => SameFile(existing.File, entry.File));
             _journal.Kept.RemoveAll(kept => SameFile(kept.File, entry.File));
             _journal.Compressed.Add(entry);
@@ -192,16 +198,35 @@ internal sealed partial class TextureBackupStore
         }
     }
 
-    /// <summary> Remembers refit hair. An earlier group that shares a file with it is replaced, and its backups deleted when nothing else uses them. </summary>
+    /// <summary>
+    /// Remembers refit hair. A file an earlier group also lists stays in that group when this one's
+    /// original is what the earlier group wrote, as when two hair materials of one model are refit one
+    /// after the other: restoring the newer group first, then the older, puts back the real originals.
+    /// Otherwise the earlier group's entry for that file is replaced, the group dropped when no file is
+    /// left, and the backups deleted when nothing else uses them.
+    /// </summary>
     public void RecordRefit(RefitGroup group)
     {
         lock (_lock)
         {
-            var replaced = _journal.Refits.Where(existing => existing.Files.Any(old => group.Files.Any(file => SameFile(old.File, file.File)))).ToList();
-            _journal.Refits.RemoveAll(replaced.Contains);
+            bool Replaced(RefitFile old) => group.Files.Any(file => SameFile(old.File, file.File) &&
+                                                                    !string.Equals(old.NewSha256, file.OriginalSha256, StringComparison.OrdinalIgnoreCase));
+            var dropped = new List<RefitFile>();
+            for (var i = _journal.Refits.Count - 1; i >= 0; i--)
+            {
+                var existing = _journal.Refits[i];
+                var stale = existing.Files.Where(Replaced).ToList();
+                if (stale.Count == 0)
+                    continue;
+                dropped.AddRange(stale);
+                if (stale.Count == existing.Files.Count)
+                    _journal.Refits.RemoveAt(i);
+                else
+                    _journal.Refits[i] = existing with { Files = existing.Files.Except(stale).ToList() };
+            }
             _journal.Refits.Add(group);
             Save();
-            DeleteUnreferenced(replaced.SelectMany(existing => existing.Files).Select(file => file.Backup));
+            DeleteUnreferenced(dropped.Select(file => file.Backup));
             Publish();
         }
     }
