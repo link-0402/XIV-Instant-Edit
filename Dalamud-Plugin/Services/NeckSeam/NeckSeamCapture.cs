@@ -34,13 +34,13 @@ internal static class NeckSeamCapture
         var sources = new Dictionary<string, NeckSeamSource>(StringComparer.OrdinalIgnoreCase);
         var faceNode = models.FirstOrDefault(node => NeckSeamAnalyzer.IsFaceModel(node.GamePath));
         NeckSeamModelInput? face = null;
-        if (faceNode is not null)
-        {
-            var faceBytes = ReadNode(faceNode, read, sources)
-                ?? throw new InvalidDataException("The face model could not be read.");
+        string? faceProblem = null;
+        // A face that can't be read only leaves out the neck: the body seams and skin tones don't need it.
+        if (faceNode is not null && ReadNode(faceNode, read, sources) is { } faceBytes)
             face = WithLive(new NeckSeamModelInput(faceNode.GamePath, faceBytes, Materials(faceNode, read, sources, _ => true, recordTextures: true)),
                 faceNode, live);
-        }
+        else if (faceNode is not null)
+            faceProblem = "The face model could not be read.";
 
         var bodies = new List<NeckSeamModelInput>();
         var clothing = new List<NeckSeamModelInput>();
@@ -67,7 +67,7 @@ internal static class NeckSeamCapture
             bodies.Add(WithLive(new NeckSeamModelInput(node.GamePath, bytes, skins), node, live));
         }
         var race = live is { Race: > 0 } ? live.Race : face is null ? null : NeckSeamAnalyzer.RaceOf(face.GamePath);
-        return new NeckSeamCaptured(new NeckSeamInput(face, bodies, racialDeformers) { CharacterRace = race, Clothing = clothing }, sources);
+        return new NeckSeamCaptured(new NeckSeamInput(face, bodies, racialDeformers) { CharacterRace = race, Clothing = clothing, FaceProblem = faceProblem }, sources);
     }
 
     private static bool IsGear(string gamePath)

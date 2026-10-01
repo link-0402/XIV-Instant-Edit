@@ -4,6 +4,7 @@ using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.CharacterSend;
 
 namespace InstantEdit.Ui;
 
@@ -24,8 +25,8 @@ public sealed partial class MainWindow
 
     internal void AttachRecorder(AnimationRecorder? value) => recorder = value;
 
-    private string AnimationArmature =>
-        string.IsNullOrWhiteSpace(_config.AnimationArmatureName) ? "Skeleton" : _config.AnimationArmatureName.Trim();
+    // As a character send names its armature, so animations find the armature it built.
+    private string AnimationArmature => CharacterSendPlan.ArmatureName(_config.AnimationArmatureName);
 
     /// <summary> The Record live pose tab: records a character's live skeleton and sends it to Blender. </summary>
     private void DrawRecorder()

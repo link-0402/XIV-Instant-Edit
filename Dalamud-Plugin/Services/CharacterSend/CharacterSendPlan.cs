@@ -85,6 +85,9 @@ internal sealed record CharacterSendOutcome(string Name, CharacterPose Pose, IRe
     /// <summary> Files the character draws that the On Screen list lacks. </summary>
     public IReadOnlyList<string> Missing { get; init; } = [];
 
+    /// <summary> Files the character draws from outside the installed mods, which can't be sent. </summary>
+    public IReadOnlyList<string> External { get; init; } = [];
+
     /// <summary> Whether the character's draw state was read; without it every model and part was sent. </summary>
     public bool DrawStateKnown { get; init; } = true;
 }
@@ -107,7 +110,8 @@ internal static class CharacterSendPlan
     /// The models a send can take from a character's resource tree: every model in the character's
     /// own folders (<c>chara/human</c>, <c>chara/equipment</c>, <c>chara/accessory</c>) and, when
     /// asked for, its weapons, each file once (a file loaded under several game paths draws the same
-    /// under each), in the order On Screen lists them, with weapons last. Only models On Screen can
+    /// under each), in the order On Screen lists them, with weapons last. A weapon file counts once per
+    /// game path: a mod can give both hands one file, and each hand hangs its own copy. Only models On Screen can
     /// edit are taken: files of a loaded mod, and game data. <see cref="CharacterDrawState"/> keeps
     /// those the game draws.
     /// </summary>
@@ -119,7 +123,8 @@ internal static class CharacterSendPlan
         {
             if (!IsSendable(node) || RoleOf(node.GamePath) is not { } role || role == CharacterModelRole.Weapon && !includeWeapons)
                 continue;
-            if (seen.Add(PainterVisibility.NormalizePath(node.ActualPath)))
+            var file = PainterVisibility.NormalizePath(node.ActualPath);
+            if (seen.Add(role == CharacterModelRole.Weapon ? file + "\n" + PathRules.NormalizeGamePath(node.GamePath) : file))
                 models.Add((new CharacterSendModel(node, role), models.Count));
         }
         return models
@@ -169,11 +174,22 @@ internal static class CharacterSendPlan
     /// <summary> How Blender recognizes this character's earlier sends: its name and home world. </summary>
     public static string Key(string name, uint homeWorld) => homeWorld == 0 ? name.Trim() : $"{name.Trim()}@{homeWorld}";
 
-    /// <summary> The name the send's armature gets: the armature animations are sent to, so later animations find it. </summary>
+    /// <summary>
+    /// The name the send's armature gets: the armature animations are sent to, so later animations find
+    /// it. Cut, at a whole character, to the <see cref="MaximumArmatureName"/> UTF-8 bytes Blender keeps.
+    /// </summary>
     public static string ArmatureName(string? configured)
     {
         var name = string.IsNullOrWhiteSpace(configured) ? "Skeleton" : configured.Trim();
-        return name.Length <= MaximumArmatureName ? name : name[..MaximumArmatureName];
+        var bytes = 0;
+        var kept = new System.Text.StringBuilder();
+        foreach (var rune in name.EnumerateRunes())
+        {
+            if ((bytes += rune.Utf8SequenceLength) > MaximumArmatureName)
+                break;
+            kept.Append(rune.ToString());
+        }
+        return kept.ToString().TrimEnd();
     }
 
     public static string FileName(string gamePath)
@@ -225,6 +241,9 @@ internal static class CharacterSendPlan
         if (outcome.Missing.Count > 0)
             Warn($"Your character draws {ModelCount(outcome.Missing.Count)} the On Screen list doesn't have yet ({Listed(outcome.Missing)}). " +
                  "Refresh the list and send again.");
+        if (outcome.External.Count > 0)
+            Warn($"Your character draws {ModelCount(outcome.External.Count)} from outside your installed mods ({Listed(outcome.External)}), " +
+                 "such as another plugin's temporary mod; those can't be sent.");
         if (outcome.Failed.Count > 0)
             Warn($"{outcome.Failed.Count} could not be sent: {Listed(outcome.Failed)}.");
         if (outcome.SkeletonWarnings.Count > 0)

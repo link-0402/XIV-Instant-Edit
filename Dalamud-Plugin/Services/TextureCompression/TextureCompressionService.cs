@@ -468,12 +468,17 @@ internal sealed class TextureCompressionService : IDisposable
             var reasons = result.Refusals.ToLookup(refusal => Path.GetFullPath(Path.Combine(root, refusal.Texture)),
                 refusal => $"{Path.GetFileName(refusal.Texture)}: {refusal.Reason}", StringComparer.OrdinalIgnoreCase);
             tally.NotRefit.AddRange(reasons.SelectMany(group => group));
+            // Hair skipped for now (a file open in a texture session, a file that couldn't be read or written)
+            // is looked at again by the next run; hair that can't be refit is remembered with why.
+            var retry = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var failures = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var plan in result.Plans)
             {
                 token.ThrowIfCancellationRequested();
                 if (plan.Textures.Concat(plan.Models.Keys).Select(file => Path.GetFullPath(Path.Combine(root, file))).FirstOrDefault(edited.Contains) is { } open)
                 {
                     tally.NotRefit.Add($"{Path.GetFileName(open)}: it is open in a texture session");
+                    retry.UnionWith(plan.Textures.Select(file => Path.GetFullPath(Path.Combine(root, file))));
                     continue;
                 }
                 if (CacheRoot(tally) is not { } cacheRoot)
@@ -491,11 +496,23 @@ internal sealed class TextureCompressionService : IDisposable
                 {
                     _log.Warning(e, "Could not refit the hair of {Mod}.", source.ModName);
                     tally.Failed.Add($"{source.ModName}, hair: {e.Message}");
+                    foreach (var texture in plan.Textures.Select(file => Path.GetFullPath(Path.Combine(root, file))))
+                    {
+                        if (e is IOException or UnauthorizedAccessException)
+                            retry.Add(texture);
+                        else
+                            failures[texture] = $"{Path.GetFileName(texture)}: {e.Message}";
+                    }
                 }
             }
             foreach (var candidate in fresh)
-                if (stamps[candidate.File] is { } stamp && FileStamp.Of(candidate.File) == stamp)
-                    _refitChecked[candidate.File] = (stamp, meta, reasons[Path.GetFullPath(candidate.File)].ToArray());
+            {
+                var full = Path.GetFullPath(candidate.File);
+                if (retry.Contains(full) || stamps[candidate.File] is not { } stamp || FileStamp.Of(candidate.File) != stamp)
+                    continue;
+                string[] why = failures.TryGetValue(full, out var failure) ? [.. reasons[full], failure] : [.. reasons[full]];
+                _refitChecked[candidate.File] = (stamp, meta, why);
+            }
         }
     }
 
@@ -681,59 +698,70 @@ internal sealed class TextureCompressionService : IDisposable
             ArraySegment<byte> originalPixels = default;
             (byte B, byte G, byte R, byte A)? color = null;
             int width = info.Width, height = info.Height;
-            try
+            // The colors the game samples from the original: its own pixels when they are BGRA32, else Penumbra's decode.
+            async Task<ArraySegment<byte>> OriginalPixelsAsync()
             {
-                // The colors the game samples from the original: its own pixels when they are BGRA32, else Penumbra's decode.
-                async Task<ArraySegment<byte>> OriginalPixelsAsync()
-                {
-                    if (info.Format == TextureCost.Bgra8)
-                        return TextureCost.TopLevelBgra(source).Pixels;
-                    var plain = Path.Combine(work, "plain.tex");
-                    await ConvertAsync(input, plain, TextureType.RgbaTex, mipMaps).ConfigureAwait(false);
-                    return TextureCost.TopLevelBgra(await File.ReadAllBytesAsync(plain, token).ConfigureAwait(false)).Pixels;
-                }
-
-                if (SingleColor.MayHoldOneColor(new MemoryStream(source, false), info))
-                {
-                    originalPixels = await OriginalPixelsAsync().ConfigureAwait(false);
-                    color = SingleColor.ColorOf(originalPixels, info.Width, info.Height, twoChannel);
-                }
-                if (color is null && !CompressionCapture.Compressible(info))
-                {
-                    // A compressed texture whose blocks repeat a pattern rather than one color.
-                    if (stamp is { } seen)
-                        _manyColors[candidate.File] = seen;
-                    return new Outcome(null, null);
-                }
-                var encode = input;
-                if (color is { } one)
-                {
-                    encode = Path.Combine(work, "single-color.tex");
-                    await File.WriteAllBytesAsync(encode, SingleColor.Tex(one), token).ConfigureAwait(false);
-                    width = height = SingleColor.Size;
-                }
-                await ConvertAsync(encode, output, TextureFiles.OutputType(target), mipMaps).ConfigureAwait(false);
-                encoded = await File.ReadAllBytesAsync(output, token).ConfigureAwait(false);
-                TextureFiles.ValidateOutput(encoded, target, width, height, mipMaps);
-                await ConvertAsync(output, check, TextureType.RgbaTex, mipMaps).ConfigureAwait(false);
-                decoded = TextureCost.TopLevelBgra(await File.ReadAllBytesAsync(check, token).ConfigureAwait(false));
-                if (originalPixels.Array is null)
-                    originalPixels = await OriginalPixelsAsync().ConfigureAwait(false);
+                if (info.Format == TextureCost.Bgra8)
+                    return TextureCost.TopLevelBgra(source).Pixels;
+                var plain = Path.Combine(work, "plain.tex");
+                await ConvertAsync(input, plain, TextureType.RgbaTex, mipMaps).ConfigureAwait(false);
+                return TextureCost.TopLevelBgra(await File.ReadAllBytesAsync(plain, token).ConfigureAwait(false)).Pixels;
             }
-            catch (Exception e) when (e is not OperationCanceledException)
+
+            CompressionCheckResult result;
+            while (true)
             {
-                lock (_sessionLock)
-                    _failed.Add(ContentKey(candidate.File, sha));
-                throw;
-            }
-            if (decoded.Width != width || decoded.Height != height)
-                throw new InvalidDataException("Penumbra decoded the compressed texture at another size.");
+                try
+                {
+                    if (originalPixels.Array is null && SingleColor.MayHoldOneColor(new MemoryStream(source, false), info))
+                    {
+                        originalPixels = await OriginalPixelsAsync().ConfigureAwait(false);
+                        color = SingleColor.ColorOf(originalPixels, info.Width, info.Height, twoChannel);
+                    }
+                    if (color is null && !CompressionCapture.Compressible(info))
+                    {
+                        // A compressed texture whose blocks repeat a pattern rather than one color.
+                        if (stamp is { } seen)
+                            _manyColors[candidate.File] = seen;
+                        return new Outcome(null, null);
+                    }
+                    var encode = input;
+                    if (color is { } one)
+                    {
+                        encode = Path.Combine(work, "single-color.tex");
+                        await File.WriteAllBytesAsync(encode, SingleColor.Tex(one), token).ConfigureAwait(false);
+                        width = height = SingleColor.Size;
+                    }
+                    await ConvertAsync(encode, output, TextureFiles.OutputType(target), mipMaps).ConfigureAwait(false);
+                    encoded = await File.ReadAllBytesAsync(output, token).ConfigureAwait(false);
+                    TextureFiles.ValidateOutput(encoded, target, width, height, mipMaps);
+                    await ConvertAsync(output, check, TextureType.RgbaTex, mipMaps).ConfigureAwait(false);
+                    decoded = TextureCost.TopLevelBgra(await File.ReadAllBytesAsync(check, token).ConfigureAwait(false));
+                    if (originalPixels.Array is null)
+                        originalPixels = await OriginalPixelsAsync().ConfigureAwait(false);
+                }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                    lock (_sessionLock)
+                        _failed.Add(ContentKey(candidate.File, sha));
+                    throw;
+                }
+                if (decoded.Width != width || decoded.Height != height)
+                    throw new InvalidDataException("Penumbra decoded the compressed texture at another size.");
 
-            // A shrunk texture is compared as the game samples it, stretched over the original's pixels.
-            var result = color is null
-                ? CompressionCheck.Compare(originalPixels, decoded.Pixels, info.Width, info.Height, candidate.Uses, twoChannel)
-                : CompressionCheck.Compare(originalPixels, SingleColor.Stretch(decoded.Pixels, width, height, info.Width, info.Height), info.Width, info.Height,
-                    candidate.Uses, twoChannel, SingleColor.CheckTolerances);
+                // A shrunk texture is compared as the game samples it, stretched over the original's pixels.
+                result = color is null
+                    ? CompressionCheck.Compare(originalPixels, decoded.Pixels, info.Width, info.Height, candidate.Uses, twoChannel)
+                    : CompressionCheck.Compare(originalPixels, SingleColor.Stretch(decoded.Pixels, width, height, info.Width, info.Height), info.Width, info.Height,
+                        candidate.Uses, twoChannel, SingleColor.CheckTolerances);
+                // An uncompressed texture the stricter one-color check keeps may still compress at its own size.
+                if (result.Passed || color is null || !CompressionCapture.Compressible(info))
+                    break;
+                _log.Debug($"{candidate.Label} holds nearly one color, but shrinking it changes it ({result.Problem}); compressing it at its own size instead.");
+                color = null;
+                width = info.Width;
+                height = info.Height;
+            }
             if (!result.Passed)
             {
                 _log.Information($"Kept {candidate.Label} as it is{(color is null ? string.Empty : " (one color)")}: {result.Problem} (cut-outs {result.CutoutChange:P3}, tile {result.CutoutTileChange:P1}; " +

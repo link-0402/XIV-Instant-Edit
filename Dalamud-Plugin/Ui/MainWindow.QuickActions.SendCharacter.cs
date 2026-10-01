@@ -238,8 +238,8 @@ public sealed partial class MainWindow
             var snapshot = await resolver.CharacterSnapshotAsync(character.ObjectIndex, character.Address, request.Weapons).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("Your character changed since the On Screen list was made. Refresh it and try again.");
             // What the game draws now: the models the character's draw object holds, and their parts and shapes.
-            var plan = CharacterDrawState.Plan(models, character.ResourceRoots,
-                await ReadCharacterDrawStateAsync(character).ConfigureAwait(false));
+            var plan = CharacterDrawState.Plan(models, character.ResourceRoots, await ReadCharacterDrawStateAsync(character).ConfigureAwait(false),
+                path => Path.IsPathRooted(path) && _resourceSources.AttributionFor(path).State != ResourceSourceState.LoadedMod);
             if (plan.Models.Count == 0)
                 throw new InvalidOperationException("Your character draws none of the models in the On Screen list. Refresh it and try again.");
             var skeletonResult = await resolver.ResolveCharacterAsync(character.ObjectIndex, character.Address, token).ConfigureAwait(false);
@@ -333,7 +333,7 @@ public sealed partial class MainWindow
                 poseResult, poseError, request.Pose == CharacterPose.Current && take is not null ? RecordingWarning(take) : null,
                 weaponNotes, skeleton.Warnings)
             {
-                LeftOut = leftOut, HiddenParts = hiddenParts, Missing = plan.Missing, DrawStateKnown = plan.Known,
+                LeftOut = leftOut, HiddenParts = hiddenParts, Missing = plan.Missing, External = plan.External, DrawStateKnown = plan.Known,
             });
             ReportCharacterSend(summary.Text, summary.Warned ? FeedbackSeverity.Warning : FeedbackSeverity.Success);
             _chat.Print($"XIV Instant Edit: {sent.Count} models of {snapshot.Name} sent to Blender.");

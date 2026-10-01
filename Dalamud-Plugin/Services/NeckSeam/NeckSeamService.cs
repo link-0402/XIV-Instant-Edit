@@ -88,6 +88,12 @@ internal sealed class NeckSeamService
             var neckError = string.Empty;
             try { report = NeckSeamAnalyzer.Analyze(captured.Input, around); }
             catch (Exception e) when (e is InvalidDataException or NotSupportedException) { neckError = e.Message; }
+            // Any other failure leaves the body seams and skin tones usable, as theirs leave the neck.
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                _log.Warning(e, "Could not measure the neck seam.");
+                neckError = e.Message;
+            }
             token.ThrowIfCancellationRequested();
             BodySeamReport? body = null;
             var bodyError = string.Empty;

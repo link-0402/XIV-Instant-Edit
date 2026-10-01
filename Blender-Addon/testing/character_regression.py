@@ -250,6 +250,8 @@ def check_parsing():
     rejects(entry(key=""), "an empty key is refused")
     rejects(entry(name="x" * 129), "an overlong name is refused")
     rejects(entry(armature="x" * 64), "an armature name Blender would cut is refused")
+    rejects(entry(armature="骨" * 30), "an armature name over Blender's 63 bytes is refused, however few characters it has")
+    rejects(entry(armature="x" * 10 + "\ud83d"), "an armature name with half a character is refused")
     rejects(entry(attach={"bone": "n_buki_r", "offset": WEAPON_OFFSET}), "a body model hanging from a bone is refused")
     rejects(entry(role="weapon", attach={"bone": "", "offset": WEAPON_OFFSET}), "a weapon without a bone name is refused")
     rejects(entry(role="weapon", attach={"bone": "n_buki_r", "offset": WEAPON_OFFSET[:9]}),

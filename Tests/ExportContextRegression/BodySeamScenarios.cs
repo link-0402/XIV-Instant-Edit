@@ -726,6 +726,15 @@ internal static class BodySeamScenarios
         catch (InvalidDataException) { noFace = true; }
         Require(noFace && BodySeamAnalyzer.Analyze(captured.Input).Seam(BodySeamKind.Wrists) is null,
             "body seam: without a face the neck says why, and the top's hidden wrist band leaves no wrist seam");
+
+        // A face the capture can't read (a temporary collection's file) leaves out the neck only.
+        var unreadable = NeckSeamCapture.Capture([NeckSeamScenarios.Node("chara/human/c0801/obj/face/f0001/model/c0801f0001_fac.mdl", F("face.mdl"), "Face Mod"), .. roots],
+            path => files.GetValueOrDefault(path), null, live);
+        var faceMessage = "";
+        try { NeckSeamAnalyzer.Analyze(unreadable.Input); }
+        catch (InvalidDataException e) { faceMessage = e.Message; }
+        Require(unreadable.Input.Face is null && unreadable.Input.Bodies.Count == captured.Input.Bodies.Count && faceMessage == "The face model could not be read.",
+            "body seam: a face model that can't be read leaves the body parts measurable, and the neck says why");
     }
 
     private static void CheckViews()
