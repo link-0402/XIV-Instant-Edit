@@ -140,6 +140,9 @@ internal static class SkinToneScenarios
         Require(comparison.Gain(settingsMatched: true) is { } gain && MathF.Abs(gain.X - 170f / 150) < 1e-3f && MathF.Abs(gain.Y - 140f / 120) < 1e-3f &&
                 comparison.Gain(settingsMatched: false) is { } withMultiplier && MathF.Abs(withMultiplier.X - 170f / 150 / 1.4f) < 1e-3f,
             "skin tone: the diffuse gain takes the target's colour to the base's, and makes up for the multiplier unless the settings are matched too");
+        var neckBase = SkinMaterial.Read(NeckSeamScenarios.Material(FaceTextures, [], [(SkinMaterial.DiffuseColor, [1.2f, 1.2f, 1.2f])]));
+        Require(comparison.Gain(settingsMatched: false, neckBase) is { } afterNeck && MathF.Abs(afterNeck.X - 170f / 150 * 1.2f / 1.4f) < 1e-3f,
+            "skin tone: the gain makes up for the base's multiplier as another fix left it, not as the file had it");
         var settings = comparison.Settings(influenceMatched: true);
         var noTile = comparison.Settings(influenceMatched: false);
         Require(settings.TileAlphaOff && settings.TileIndexOff && !noTile.TileAlphaOff && !noTile.TileIndexOff && noTile.Other.ContainsKey(SkinMaterial.DiffuseColor),

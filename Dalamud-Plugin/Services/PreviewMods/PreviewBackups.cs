@@ -9,8 +9,9 @@ internal sealed record PreviewBackupGroup(DateTimeOffset Created, IReadOnlyList<
 /// <summary>
 /// Groups the kept backups of files a Quick Action reads by when they were made. An apply backs up
 /// all the files it writes within a second or two, so backups less than
-/// <see cref="Window"/> apart belong together; a file backed up twice within one group keeps its
-/// earlier backup, the state before the first write.
+/// <see cref="Window"/> apart belong together. A file backed up again starts a new group: its second
+/// backup holds what the first write left, as when a restore right after an apply backs up the
+/// applied files, and folding it into the earlier group would leave no way back to that state.
 /// </summary>
 internal static class PreviewBackups
 {
@@ -22,11 +23,9 @@ internal static class PreviewBackups
         var groups = new List<List<PreviewBackupFile>>();
         foreach (var file in files.OrderBy(f => f.Backup.Created))
         {
-            if (groups.Count == 0 || file.Backup.Created - groups[^1][0].Backup.Created > Window)
+            if (groups.Count == 0 || file.Backup.Created - groups[^1][0].Backup.Created > Window || groups[^1].Any(f => SameFile(f.Source, file.Source)))
                 groups.Add([]);
-            var group = groups[^1];
-            if (!group.Any(f => SameFile(f.Source, file.Source)))
-                group.Add(file);
+            groups[^1].Add(file);
         }
         return groups.Select(g => new PreviewBackupGroup(g[0].Backup.Created, g)).Reverse().ToList();
     }

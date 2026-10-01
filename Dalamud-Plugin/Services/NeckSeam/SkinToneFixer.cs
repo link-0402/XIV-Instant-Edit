@@ -51,7 +51,7 @@ internal static class SkinToneFixer
         var expected = new List<string>();
 
         var constants = options.Settings ? comparison.Settings(options.Influence, baseSkin).Plan(1f).Face : new Dictionary<uint, float[]>();
-        Vector3? gain = options.Colour ? comparison.Gain(options.Settings) : null;
+        Vector3? gain = options.Colour ? comparison.Gain(options.Settings, baseSkin) : null;
         if (gain is { } g && MathF.Max(MathF.Abs(g.X - 1), MathF.Max(MathF.Abs(g.Y - 1), MathF.Abs(g.Z - 1))) < 0.002f)
             gain = null;
         (float From, float To)? influence = options.Influence && comparison.InfluenceDiffers &&

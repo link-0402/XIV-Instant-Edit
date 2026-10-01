@@ -434,7 +434,7 @@ public sealed partial class MainWindow
     {
         var groups = _skinSeamBackups;
         ImGui.Spacing();
-        if (!ImGui.CollapsingHeader($"Restore backups ({groups.Count})##skin-seam-backups"))
+        if (!ImGui.CollapsingHeader($"Restore backups ({groups.Count})###skin-seam-backups"))
             return;
         Widgets.HintWrapped("Backups of the files this check reads, made when a fix or another edit changed them, and kept for 7 days. Restoring a row puts " +
                             "its files back as they were just before that time. The files it replaces are backed up first, so a restore can be undone the same way.");

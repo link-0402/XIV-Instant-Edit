@@ -908,35 +908,30 @@ internal sealed class TextureCompressionService : IDisposable
         try
         {
             _phase = CompressionPhase.Restoring;
-            var entries = Backups.Compressed.ToList();
-            for (var i = 0; i < entries.Count; i++)
+            // One compressed texture; false when its file holds neither its original nor what was written over it.
+            async Task<bool> RestoreCompressedAsync(CompressedTexture entry)
             {
-                var entry = entries[i];
-                _progress = $"Restoring {i + 1} of {entries.Count}: {Path.GetFileName(entry.RelativePath)}";
                 try
                 {
                     if (!File.Exists(entry.File))
                     {
                         failed.Add($"{entry.Label}: the file is no longer there");
-                        continue;
+                        return true;
                     }
                     var current = TextureBackupStore.Hash(await File.ReadAllBytesAsync(entry.File).ConfigureAwait(false));
                     if (string.Equals(current, entry.OriginalSha256, StringComparison.OrdinalIgnoreCase))
                     {
                         ForgetRestored(entry);
                         restored++;
-                        continue;
+                        return true;
                     }
                     if (!string.Equals(current, entry.CompressedSha256, StringComparison.OrdinalIgnoreCase))
-                    {
-                        changed.Add(entry.Label);
-                        continue;
-                    }
+                        return false;
                     var original = File.Exists(entry.Backup) ? await File.ReadAllBytesAsync(entry.Backup).ConfigureAwait(false) : null;
                     if (original is null || !string.Equals(TextureBackupStore.Hash(original), entry.OriginalSha256, StringComparison.OrdinalIgnoreCase))
                     {
                         failed.Add($"{entry.Label}: its backup is missing or damaged");
-                        continue;
+                        return true;
                     }
                     await _penumbra.ReplaceModFileAsync(SourceOf(entry), entry.CompressedSha256, original, "It was left as it is").ConfigureAwait(false);
                     ForgetRestored(entry);
@@ -948,6 +943,16 @@ internal sealed class TextureCompressionService : IDisposable
                     _log.Warning(e, "Could not restore {File}.", entry.File);
                     failed.Add($"{entry.Label}: {e.Message}");
                 }
+                return true;
+            }
+
+            var entries = Backups.Compressed.ToList();
+            var afterRefits = new List<CompressedTexture>();
+            for (var i = 0; i < entries.Count; i++)
+            {
+                _progress = $"Restoring {i + 1} of {entries.Count}: {Path.GetFileName(entries[i].RelativePath)}";
+                if (!await RestoreCompressedAsync(entries[i]).ConfigureAwait(false))
+                    afterRefits.Add(entries[i]);
             }
             // Refit hair after the compressed textures, which may have been cut by a refit first, and
             // the newest group first: an older one sharing a model expects what the newer one found.
@@ -961,6 +966,11 @@ internal sealed class TextureCompressionService : IDisposable
                     mods.Add(groups[i].ModDirectory);
                 }
             }
+            // A texture compressed before its hair was refit holds what it was compressed to again only
+            // once the refit is undone.
+            foreach (var entry in afterRefits)
+                if (!await RestoreCompressedAsync(entry).ConfigureAwait(false))
+                    changed.Add(entry.Label);
             if (mods.Count > 0)
             {
                 _progress = "Reloading the changed mods";
