@@ -222,6 +222,8 @@ public sealed class TextureEditService : IDisposable
         try
         {
             EnsureReady();
+            var blocked = SharedTextures.EditBlock(request.GamePath, string.IsNullOrEmpty(request.ModDirectory));
+            if (blocked.Length > 0) throw new IOException(blocked);
             if (launchEditor) ValidateEditor();
             var existing = _sessions.Values.FirstOrDefault(r => IsReusableFor(r.Session, request));
             if (existing is not null)
@@ -740,6 +742,7 @@ public sealed class TextureEditService : IDisposable
         state.ObservedGeneration = generation;
         var hash = TextureFiles.Hash(tga);
         if (hash == existing?.WorkingHash) return;
+        EnsureWritable(s);
         if (hash != state.FailedHash)
         {
             state.FailedHash = hash;
@@ -831,6 +834,16 @@ public sealed class TextureEditService : IDisposable
         Persist();
     }
 
+    /// <summary>
+    /// A session opened before shared game textures such as white.tex were refused never writes one;
+    /// its save conflicts instead. A vanilla session's mod replaces the game path, so it stays vanilla after its first save.
+    /// </summary>
+    private static void EnsureWritable(TextureEditSession s)
+    {
+        var blocked = SharedTextures.EditBlock(s.GamePath, s.NeedsMod || s.ResolvedGamePath.Length > 0);
+        if (blocked.Length > 0) throw new TextureConflictException(blocked);
+    }
+
     /// <summary>Saves commit identity before any refresh that may fail; false when session storage failed and the session paused.</summary>
     private bool PersistCommit(Runtime runtime)
     {
@@ -865,6 +878,7 @@ public sealed class TextureEditService : IDisposable
         runtime.ObservedGeneration = generation;
         var hash = TextureFiles.Hash(tga);
         if (hash == s.WorkingHash) return;
+        EnsureWritable(s);
         if (hash != runtime.FailedHash)
         {
             runtime.FailedHash = hash;
@@ -999,6 +1013,7 @@ public sealed class TextureEditService : IDisposable
     private async Task<ExternalTextureOutcome> ApplyExternalSaveAsync(Runtime runtime, byte[] tga)
     {
         var s = runtime.Session;
+        EnsureWritable(s);
         var (width, height) = TextureFiles.ValidateTga(tga);
         var format = TextureFiles.SaveFormat(s, _config.RecompressTextures);
         TextureFiles.ValidateEncodable(format, width, height);

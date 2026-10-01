@@ -17,9 +17,9 @@ internal sealed record NeckSeamCaptured(NeckSeamInput Input, IReadOnlyDictionary
 
 /// <summary>
 /// Collects the skin seam analysis input from an On Screen snapshot: the face model with its
-/// materials and their textures, and every other model that has a body skin material, with its
-/// skin materials and their textures. Textures a material names but the tree doesn't list come from
-/// game data. Dalamud-free; reading is delegated.
+/// materials and their textures, and every other model that has a skin material (body skin, or face
+/// skin like Viera ears), with its skin materials and their textures. Textures a material names but
+/// the tree doesn't list come from game data. Dalamud-free; reading is delegated.
 /// </summary>
 internal static class NeckSeamCapture
 {
@@ -51,9 +51,10 @@ internal static class NeckSeamCapture
         {
             if (!seen.Add(node.GamePath + "\n" + node.ActualPath))
                 continue;
-            // Body skin materials, their textures and the models are recorded too: the neck's skin settings can
-            // meet on the body's side, and the body seams' fixes write models, materials and textures.
-            var skins = Materials(node, read, sources, material => material.IsBodySkin, recordTextures: true);
+            // Skin materials, their textures and the models are recorded too: the neck's skin settings can meet on
+            // the body's side, the body seams' fixes write models, materials and textures, and a skin tone match
+            // can change any skin material (the neck and body seams read only the body skin among them).
+            var skins = Materials(node, read, sources, material => material.IsSkin, recordTextures: true);
             if (skins.Count == 0)
             {
                 // Gear without skin still draws clothing that can cover another part's seam.
@@ -197,6 +198,8 @@ internal sealed record NeckSeamPreviewFile
     public required NeckSeamSource Source { get; init; }
     /// <summary> For the material: the preview's texture paths and the stored paths they replace. </summary>
     public Dictionary<string, string> TextureRewrites { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary> A new file (a skin tone match's texture): <see cref="Source"/> is the material that reads it, whose mod applying adds it to. </summary>
+    public bool NewFile { get; init; }
 }
 
 /// <summary> A neck seam preview mod the plugin created and has not applied or discarded yet. </summary>

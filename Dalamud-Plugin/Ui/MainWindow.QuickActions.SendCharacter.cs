@@ -17,6 +17,7 @@ namespace InstantEdit.Ui;
 /// rest pose, its current pose or the animation it plays. The models its draw object holds go over
 /// with the parts and shape keys the game has on; parts it hides go over hidden. Each model is an
 /// import of its own with its own context, so Quick Export still writes each one back on its own.
+/// Models of another race always go over racially scaled for the character, so preview only.
 /// </summary>
 public sealed partial class MainWindow
 {
@@ -37,18 +38,18 @@ public sealed partial class MainWindow
 
     internal void AttachCharacterDrawState(PainterLiveReader? reader) => _characterDrawState = reader;
 
-    /// <summary> Whether the card keeps the Animations tab's listener running, to see the animation your character plays. </summary>
-    private bool CharacterSendListens => _config.CharacterSendPose == CharacterPose.Animation;
+    private const string SendCharacterKey = "send-character";
 
-    private void DrawSendCharacterCard()
-    {
-        ImGui.Spacing();
-        QuickActionCard("##quick-send-character", FontAwesomeIcon.Cubes, "Send my character to Blender",
-            "Sends your character to Blender as the game draws it now: every model it shows (body, face, hair, tail or ears, " +
-            "and all gear) as one scene, bound to one armature with your character's skeleton, with the model import options. " +
-            "Parts it hides come over hidden. Each model keeps its own context, so Quick Export still writes it back whole.",
-            DrawSendCharacterAction);
-    }
+    /// <summary> Whether the card keeps the Animations tab's listener running, to see the animation your character plays. </summary>
+    private bool CharacterSendListens => _config.CharacterSendPose == CharacterPose.Animation && QuickActionShown(SendCharacterKey);
+
+    private QuickAction SendCharacterCard => new(SendCharacterKey, FontAwesomeIcon.Cubes, "Send my character to Blender",
+        "Sends your character to Blender as the game draws it now: every model it shows (body, face, hair, tail or ears, " +
+        "and all gear) as one scene, bound to one armature with your character's skeleton, with the model import options. " +
+        "Parts it hides come over hidden. Each model keeps its own context, so Quick Export still writes it back whole. " +
+        "Models made for another race, such as the c0201 gear most female races wear, are reshaped for yours as the game " +
+        "shows them. Those are for preview only: Quick Export refuses them.",
+        DrawSendCharacterAction);
 
     private void DrawSendCharacterAction()
     {
@@ -116,9 +117,6 @@ public sealed partial class MainWindow
             ImGui.TextUnformatted(message.Text);
         }
         Widgets.HintWrapped("Sending again replaces what your last send of this character left in Blender: its armature and models.");
-        if (!_config.ApplyRacialScaling)
-            Widgets.HintWrapped("Gear made for another race keeps that race's shape. Turn on racial scaling in the model import " +
-                                "options to see it shaped for your character.");
     }
 
     private void CharacterPoseChoice(string label, CharacterPose pose)
@@ -248,10 +246,9 @@ public sealed partial class MainWindow
             var skeleton = skeletonResult.Skeleton
                 ?? throw new InvalidOperationException(skeletonResult.Problem ?? "Your character's skeleton could not be read.");
             var skeletonPayload = skeleton.ToPayload();
-            RacialScalingSource? scaling = null;
-            string? scalingProblem = null;
-            if (_config.ApplyRacialScaling)
-                (scaling, scalingProblem) = await resolver.RacialScalingAsync(character.ObjectIndex, character.Address, token).ConfigureAwait(false);
+            // Models of another race are always reshaped for the character, whatever the import option:
+            // the game draws them so, and they are bound to the character's own skeleton.
+            var (scaling, scalingProblem) = await resolver.RacialScalingAsync(character.ObjectIndex, character.Address, token).ConfigureAwait(false);
 
             // The pose is taken first: your character may move while the models go over.
             var take = await CaptureCharacterPoseAsync(request, token).ConfigureAwait(false);

@@ -457,7 +457,11 @@ internal static class PainterScenarios
     {
         Require(PainterRules.EditReason(Planned("diffuse", "chara/equipment/e0001/texture/a_d.tex")).Length == 0, "a modded gear texture can be sent back");
         Require(PainterRules.EditReason(Planned("normal", "chara/common/texture/tile_norm.tex")).Length > 0 &&
-                PainterRules.EditReason(Planned("normal", "--common/graphics/texture/x.tex")).Length > 0, "shared game textures stay in Painter");
+                PainterRules.EditReason(Planned("normal", "--common/graphics/texture/x.tex")).Length > 0 &&
+                PainterRules.EditReason(Planned("normal", "bgcommon/texture/dummy_n.tex")).Length > 0, "shared game textures stay in Painter");
+        Require(PainterRules.EditReason(Planned("mask", "chara/common/texture/white.tex")).Contains("white.tex") &&
+                PainterRules.EditReason(Planned("diffuse", "chara/common/texture/white.tex", kind: "")).Contains("white.tex"),
+            "a blank texture like white.tex is never sent back, and Painter says why");
         Require(PainterRules.EditReason(Planned("decal", "chara/x.tex")).Length > 0, "decals and other shared samplers are not offered");
         Require(PainterRules.EditReason(Planned("diffuse", "chara/x.tex", uvSet: 1)).Length > 0, "second-UV-set textures are not offered");
         Require(PainterRules.EditReason(Planned("diffuse", "chara/x.tex", kind: "")).Length > 0, "external files are not offered");

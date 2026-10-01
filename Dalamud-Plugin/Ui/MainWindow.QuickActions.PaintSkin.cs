@@ -12,15 +12,11 @@ public sealed partial class MainWindow
     private IReadOnlyList<OnScreenObject>? _paintSkinSnapshot;
     private (OnScreenObject Character, ResourceView Face)? _paintSkinCharacter;
 
-    private void DrawPaintSkinCard()
-    {
-        ImGui.Spacing();
-        QuickActionCard("##quick-paint-skin", FontAwesomeIcon.PaintRoller, "Paint my skin",
-            "Opens your character's bare skin in Substance Painter as one project: the torso, hands, legs and feet as your smallclothes draw them, " +
-            "whatever you wear, on the skin material they share, so tattoos, freckles and body paint can cross the wrists, waist and ankles. " +
-            "Tick the head in the dialog to paint across the neck too.",
-            DrawPaintSkinAction);
-    }
+    private QuickAction PaintSkinCard => new("paint-skin", FontAwesomeIcon.PaintRoller, "Paint my skin",
+        "Opens your character's bare skin in Substance Painter as one project: the torso, hands, legs and feet as your smallclothes draw them, " +
+        "whatever you wear, on the skin material they share, so tattoos, freckles and body paint can cross the wrists, waist and ankles. " +
+        "Tick the head in the dialog to paint across the neck too.",
+        DrawPaintSkinAction);
 
     private void DrawPaintSkinAction()
     {

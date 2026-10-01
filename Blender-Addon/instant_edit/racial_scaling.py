@@ -1,8 +1,8 @@
 """Meshes the plugin sent reshaped for another race, for preview only.
 
-With racial scaling on, the plugin sends a model made for one race in the shape the character's
-race wears it (c0201 gear on a c0801 character, as the game's racial deformer shows it), to check
-it against that race's face and hair. Each mesh of such an import carries the xiv_racial_scaling
+With racial scaling on, and always for Send my character, the plugin sends a model made for one
+race in the shape the character's race wears it (c0201 gear on a c0801 character, as the game's
+racial deformer shows it), to check it against that race's face and hair. Each mesh of such an import carries the xiv_racial_scaling
 custom property, "c0201 to c0801". Quick Export and mashups refuse these meshes (the plugin also
 refuses every export from a scaled import); Simple Export asks first and warns.
 """

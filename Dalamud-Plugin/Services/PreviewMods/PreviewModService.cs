@@ -1,13 +1,19 @@
 namespace InstantEdit.Services.PreviewMods;
 
 /// <summary> What applying a preview wrote, with follow-up warnings. </summary>
-internal sealed record PreviewApplyResult(IReadOnlyList<string> WrittenMods, int ModFiles, string? FixMod, int GameFiles, IReadOnlyList<string> Warnings)
+internal sealed record PreviewApplyResult(IReadOnlyList<string> WrittenMods, int ModFiles, string? FixMod, int GameFiles, IReadOnlyList<string> Warnings,
+    int NewFiles = 0)
 {
     /// <summary> "&lt;applied&gt;: wrote 2 files into A, B (backups kept for 7 days); put 1 game file in the mod X." </summary>
     public string Describe(string applied)
     {
         var parts = new List<string>();
-        if (ModFiles > 0)
+        if (ModFiles > 0 && NewFiles > 0)
+            parts.Add($"wrote {ModFiles} file{(ModFiles == 1 ? "" : "s")} and added {NewFiles} new file{(NewFiles == 1 ? "" : "s")} in " +
+                      $"{string.Join(", ", WrittenMods)} (backups kept for 7 days)");
+        else if (NewFiles > 0)
+            parts.Add($"added {NewFiles} new file{(NewFiles == 1 ? "" : "s")} to {string.Join(", ", WrittenMods)}");
+        else if (ModFiles > 0)
             parts.Add($"wrote {ModFiles} file{(ModFiles == 1 ? "" : "s")} into {string.Join(", ", WrittenMods)} (backups kept for 7 days)");
         if (FixMod is not null)
             parts.Add($"put {GameFiles} game file{(GameFiles == 1 ? "" : "s")} in the mod {FixMod}");
@@ -33,7 +39,8 @@ internal sealed class PreviewModService(PenumbraService penumbra)
     /// <summary>
     /// Writes the preview's files over their sources: mod files in place (backed up first), game data
     /// into a new mod named <paramref name="fixModName"/>. Materials get their original texture paths
-    /// back first. Then the preview mod is deleted; forgetting the preview is up to the caller.
+    /// back first. New files join the mod of the material that reads them (or the new mod, for game
+    /// data). Then the preview mod is deleted; forgetting the preview is up to the caller.
     /// </summary>
     /// <param name="recheck">What to do after a source changed, such as "Measure the seam again".</param>
     public async Task<PreviewApplyResult> ApplyAsync(PreviewMod preview, string fixModName, string fixModDescription, string fallbackName,
@@ -41,6 +48,7 @@ internal sealed class PreviewModService(PenumbraService penumbra)
     {
         var folder = await PreviewFolderAsync(preview).ConfigureAwait(false);
         var modWrites = new List<(PreviewSource Source, byte[] Bytes)>();
+        var additions = new List<(PreviewSource Material, string GamePath, byte[] Bytes)>();
         var gameFiles = new List<PreviewModEntry>();
         foreach (var file in preview.Files)
         {
@@ -52,7 +60,9 @@ internal sealed class PreviewModService(PenumbraService penumbra)
                 throw new IOException($"The preview mod's {file.Kind} was edited. Discard the preview and make a new one.");
             if (file.TextureRewrites.Count > 0)
                 bytes = PenumbraService.RewriteMaterialTexturePaths(bytes, file.TextureRewrites);
-            if (file.Source.IsModFile)
+            if (file.NewFile && file.Source.IsModFile)
+                additions.Add((file.Source, PathRules.NormalizeGamePath(file.GamePath), bytes));
+            else if (file.Source.IsModFile)
             {
                 if (!string.Equals(PreviewSource.Hash(bytes), file.Source.Sha256, StringComparison.OrdinalIgnoreCase))
                     modWrites.Add((file.Source, bytes));
@@ -62,8 +72,8 @@ internal sealed class PreviewModService(PenumbraService penumbra)
         }
 
         var warnings = new List<string>();
-        if (modWrites.Count > 0)
-            warnings.AddRange(await penumbra.WritePreviewSourcesAsync(modWrites, preview.ObjectIndex, recheck).ConfigureAwait(false));
+        if (modWrites.Count > 0 || additions.Count > 0)
+            warnings.AddRange(await penumbra.WritePreviewSourcesAsync(modWrites, preview.ObjectIndex, recheck, additions).ConfigureAwait(false));
         string? fixMod = null;
         if (gameFiles.Count > 0)
         {
@@ -75,7 +85,8 @@ internal sealed class PreviewModService(PenumbraService penumbra)
         var (_, delete) = await penumbra.DeletePreviewModAsync(preview.ModDirectory, preview.ModIdentifier, preview.ObjectIndex).ConfigureAwait(false);
         if (delete is not null)
             warnings.Add(delete);
-        return new PreviewApplyResult(modWrites.Select(w => w.Source.ModName).Distinct().ToList(), modWrites.Count, fixMod, gameFiles.Count, warnings);
+        return new PreviewApplyResult(modWrites.Select(w => w.Source.ModName).Concat(additions.Select(a => a.Material.ModName)).Distinct().ToList(),
+            modWrites.Count, fixMod, gameFiles.Count, warnings, additions.Count);
     }
 
     /// <summary> Backups of the mod files among <paramref name="sources"/>, grouped by when they were made (one group per apply), newest first. </summary>

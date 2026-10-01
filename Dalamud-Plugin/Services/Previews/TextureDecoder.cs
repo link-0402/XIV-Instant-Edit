@@ -122,6 +122,15 @@ public static class TextureDecoder
         return (result, outWidth, outHeight);
     }
 
+    /// <summary> A copy with the alpha channel ignored, so the colour shows everywhere. </summary>
+    public static byte[] Opaque(byte[] bgra)
+    {
+        var result = (byte[])bgra.Clone();
+        for (var i = 3; i < result.Length; i += 4)
+            result[i] = 255;
+        return result;
+    }
+
     /// <summary> The alpha channel as an opaque greyscale image. </summary>
     public static byte[] AlphaOnly(byte[] bgra)
     {

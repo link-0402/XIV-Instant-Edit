@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using InstantEdit;
 using InstantEdit.Models;
 using InstantEdit.Services;
@@ -82,6 +83,7 @@ internal static class TextureEditScenarios
             await WatcherAsync(Path.Combine(root, "watcher"));
             await CacheCleanupAsync(Path.Combine(root, "cache-cleanup"));
             await DiscardAllAsync(Path.Combine(root, "discard-all"));
+            await SharedTexturesAsync(Path.Combine(root, "shared"));
             AtomicReplacement(Path.Combine(root, "atomic"));
             await PainterBatchAsync(Path.Combine(root, "painter"));
             PainterJobMod(Path.Combine(root, "painter-mod"));
@@ -549,6 +551,91 @@ internal static class TextureEditScenarios
               !TextureEditService.IsReusableFor(gameFilesSession, gameFilesRequest with { ObjectIndex = 0, ActorAddress = 1234 }) &&
               !TextureEditService.IsReusableFor(gameFilesSession with { CollectionId = null }, gameFilesRequest),
             "a vanilla texture opened from Game Files reuses its actor-less session, not an On Screen one");
+    }
+
+    /// <summary>
+    /// Materials point at blank game textures such as white.tex without shipping them. None opens
+    /// for editing, and a session opened before that rule never writes one.
+    /// </summary>
+    private static async Task SharedTexturesAsync(string root)
+    {
+        Check(SharedTextures.IsBlank("chara/common/texture/white.tex") && SharedTextures.IsBlank("--chara/common/texture/White.tex") &&
+              SharedTextures.IsBlank("common/graphics/texture/dummy.tex") && SharedTextures.IsBlank("bgcommon/texture/dummy_n.tex") &&
+              !SharedTextures.IsBlank("chara/human/c0801/obj/face/f0002/common/texture/white.tex"),
+            "the game's blank textures are recognized by game path, also with a leading --");
+        Check(SharedTextures.EditBlock("chara/common/texture/white.tex", vanilla: false).Length > 0 &&
+              SharedTextures.EditBlock("chara/common/texture/eye/eye01_base.tex", vanilla: true).Length > 0 &&
+              SharedTextures.EditBlock("chara/common/texture/eye/eye01_base.tex", vanilla: false).Length == 0 &&
+              SharedTextures.EditBlock("chara/equipment/e0001/texture/v01_c0101e0001_top_base.tex", vanilla: true).Length == 0,
+            "blank textures are never editable, other shared game textures only when a mod ships its own file");
+
+        using (var f = new Fixture(Path.Combine(root, "open"), (uint)TexFile.TextureFormat.BC1))
+        {
+            var white = f.Request with { GamePath = "chara/common/texture/white.tex", RelativePath = "Files/chara/common/texture/white.tex" };
+            await RejectAsync(() => f.Service.StartAsync(white, false), "a mod's copy of white.tex doesn't open for editing");
+            await RejectAsync(() => f.Service.StartAsync(white with { ModDirectory = "", NewModName = "White" }, false),
+                "the game's white.tex doesn't open into a new mod");
+            await RejectAsync(() => f.Service.StartAsync(f.Request with { GamePath = "chara/common/texture/eye/eye01_base.tex", ModDirectory = "", NewModName = "Eye" }, false),
+                "a shared game texture doesn't open into a new mod");
+            Check(f.Service.Sessions.Count == 0 && f.Backend.Commits == 0, "a refused texture leaves no session behind");
+            await f.Service.StartAsync(f.Request with { GamePath = "chara/common/texture/eye/eye01_base.tex", RelativePath = "Files/chara/common/texture/eye/eye01_base.tex" }, false);
+            Check(f.Service.Sessions.Count == 1, "an eye mod's own texture under chara/common still opens");
+        }
+
+        using var old = new Fixture(Path.Combine(root, "old"), (uint)TexFile.TextureFormat.BC1);
+        var painted = await old.Service.StartAsync(old.Request, false);
+        TextureEditRequest Other(string name) => old.Request with
+        {
+            GamePath = $"chara/{name}.tex", ActualPath = Path.Combine(old.Backend.ModRoot, "Files", "chara", name + ".tex"), RelativePath = $"Files/chara/{name}.tex",
+        };
+        var saved = await old.Service.StartAsync(Other("second"), false);
+        var variant = await old.Service.StartAsync(Other("third"), false);
+        old.Service.Dispose();
+        await old.Service.Completion;
+        // As if these sessions were opened on blank textures by an earlier version.
+        var catalogPath = Path.Combine(old.ConfigDir, "TextureSessions.json");
+        var catalog = JsonNode.Parse(File.ReadAllText(catalogPath))!.AsArray();
+        var blanks = new Dictionary<Guid, string>
+        {
+            [painted] = "chara/common/texture/white.tex", [saved] = "chara/common/texture/null_normal.tex", [variant] = "bgcommon/texture/dummy_d.tex",
+        };
+        var targets = new Dictionary<Guid, (string File, byte[] Bytes)>();
+        foreach (var entry in catalog)
+        {
+            var id = entry!["Id"]!.GetValue<Guid>();
+            var before = JsonSerializer.Deserialize<TextureEditSession>(entry.ToJsonString())!;
+            entry["GamePath"] = blanks[id];
+            var after = JsonSerializer.Deserialize<TextureEditSession>(entry.ToJsonString())!;
+            // The working TGA is named after the game path; a leftover one would count as a variant.
+            File.Move(before.WorkingFile, after.WorkingFile);
+            targets[id] = (after.TargetFile, File.ReadAllBytes(after.TargetFile));
+        }
+        File.WriteAllText(catalogPath, catalog.ToJsonString());
+        using var service = new TextureEditService(old.Backend, old.Config, old.ConfigDir, old.Backups, (_, _) => { }, false);
+        Check(service.StartupError.Length == 0 && service.Sessions.Count == 3, "sessions on blank textures still load, so their files can be discarded");
+
+        var results = await service.ApplyExternalAsync([new ExternalTextureSave(painted, Tga(8, 8, 71))], CancellationToken.None);
+        Check(results.Single().Outcome == ExternalTextureOutcome.Failed && service.Sessions.Single(s => s.Id == painted) is { Conflict: true } p && p.Status.Contains("white.tex"),
+            "a Painter send never writes white.tex; its session conflicts");
+
+        await service.SetPausedAsync(saved, false);
+        await service.SetPausedAsync(variant, false);
+        var savedSession = service.Sessions.Single(s => s.Id == saved);
+        File.WriteAllBytes(savedSession.WorkingFile, Tga(8, 8, 72));
+        File.WriteAllBytes(Path.Combine(service.Sessions.Single(s => s.Id == variant).Directory, "Red.tga"), Tga(8, 8, 73));
+        await service.ProcessPendingAsync(true);
+        Check(service.Sessions.Single(s => s.Id == saved) is { Conflict: true } n && n.Status.Contains("null_normal.tex") &&
+              service.Sessions.Single(s => s.Id == variant) is { Conflict: true, Variants.Count: 0 } d && d.Status.Contains("dummy_d.tex"),
+            "an editor save or a variant of a blank texture conflicts");
+        Check(old.Backend.Commits == 0 && old.Backend.VariantCommits == 0 && targets.Values.All(t => File.ReadAllBytes(t.File).SequenceEqual(t.Bytes)),
+            "no blank texture's file is written");
+    }
+
+    private static async Task RejectAsync(Func<Task> action, string message)
+    {
+        try { await action(); }
+        catch (IOException) { Check(true, message); return; }
+        Check(false, message);
     }
 
     /// <summary> A Painter project's vanilla textures share one mod, found again by its identifier. </summary>

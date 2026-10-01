@@ -73,12 +73,13 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
-    /// With racial scaling on, how a model is reshaped by a character's racial scaling
-    /// <paramref name="source"/>, or <paramref name="problem"/> when the character has none.
+    /// How a model is reshaped by a character's racial scaling <paramref name="source"/>, or
+    /// <paramref name="problem"/> when the character has none. The caller decides whether to scale:
+    /// single sends follow the import option, a character send always scales.
     /// </summary>
-    private (RacialScaling? Scaling, string? Warning) RacialScalingFor(RacialScalingSource? source, string? problem, string modelPath)
+    private static (RacialScaling? Scaling, string? Warning) RacialScalingFor(RacialScalingSource? source, string? problem, string modelPath)
     {
-        if (!_config.ApplyRacialScaling || ModelSkeletonPaths.Parse(modelPath) is not { Human: true })
+        if (ModelSkeletonPaths.Parse(modelPath) is not { Human: true })
             return (null, null);
         if (source is null)
             return (null, problem);
@@ -239,7 +240,8 @@ public sealed partial class MainWindow
         {
             var bytes = character?.Bytes ?? await ReadModelBytesAsync(model, cancellationToken).ConfigureAwait(false);
             // Blender gets the model as the character wears it, for preview: the import context
-            // records the scaling, and the plugin refuses every export from it.
+            // records the scaling, and the plugin refuses every export from it. A character send
+            // resolved the scaling once for all its models.
             var (scaling, scalingWarning) = character is null
                 ? await ResolveRacialScalingAsync(actor, model.GamePath, cancellationToken).ConfigureAwait(false)
                 : RacialScalingFor(character.Scaling, character.ScalingProblem, model.GamePath);

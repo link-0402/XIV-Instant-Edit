@@ -19,8 +19,9 @@ internal sealed record NeckSeamModelInput(string GamePath, byte[] Bytes, IReadOn
 }
 
 /// <summary>
-/// Everything the analysis reads: the face (null when none is loaded), the models that carry body
-/// skin, human.pbd, and the character's race (code like 801) when the game was read.
+/// Everything the analysis reads: the face (null when none is loaded), the models that carry skin
+/// (body skin, or face skin such as Viera ears), human.pbd, and the character's race (code like 801)
+/// when the game was read.
 /// </summary>
 internal sealed record NeckSeamInput(NeckSeamModelInput? Face, IReadOnlyList<NeckSeamModelInput> Bodies, byte[]? RacialDeformers)
 {

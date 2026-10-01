@@ -78,7 +78,7 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>
     /// Send models made for another race (most female gear is c0201) to Blender and Substance Painter
     /// reshaped for the character's race, as the game's racial deformer shows them. For preview only:
-    /// the plugin refuses exports of scaled imports.
+    /// the plugin refuses exports of scaled imports. Send my character to Blender scales without it.
     /// </summary>
     public bool ApplyRacialScaling { get; set; }
 
@@ -134,10 +134,20 @@ public sealed class Configuration : IPluginConfiguration
     public bool AutoFixHeels { get; set; }
 
     /// <summary>
-    /// Compress the uncompressed mod textures your character loads, when a check finds that what their
-    /// shaders read stays the same. Originals are backed up in the cache folder.
+    /// Quick Actions' Optimize textures: compress the uncompressed mod textures your character loads and
+    /// shrink the ones that hold a single color, when a check finds that what their shaders read stays
+    /// the same. Originals are backed up in the cache folder. The name predates the card's other tasks.
     /// </summary>
     public bool AutoCompressTextures { get; set; }
+
+    /// <summary>
+    /// Optimize textures also refits hair whose UVs use only part of its textures: the mod's models
+    /// are moved onto the part used and the textures cut down to it. Off by default: it changes models.
+    /// </summary>
+    public bool RefitHairUvs { get; set; }
+
+    /// <summary> Quick Actions cards the user removed from the tab. Cards not listed show, so new ones appear on their own. </summary>
+    public List<string> HiddenQuickActions { get; set; } = [];
 
     /// <summary>Legacy v9 context payload retained only for one-time migration or storage fallback.</summary>
     public List<PersistedExportContext> ExportContexts { get; set; } = [];

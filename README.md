@@ -29,10 +29,13 @@ Penumbra mods.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Game-Files)
 - **Quick Actions**: tasks for your whole character.
   - Fix the skin seams where its models meet: the face and body at the neck, and the top, gloves, legs and shoes at the
-    wrists, waist and ankles. [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Fixing-the-Neck-Seam)
-  - Compress its textures automatically: the uncompressed mod textures it wears are compressed as they load, so
-    Lightless, PlayerSync and other sync plugins count less texture memory, unless a check finds they'd look different.
-    The originals are backed up and can be restored.
+    wrists, waist and ankles. Match one skin part's tone to another, such as a face mod's ears to the face.
+    [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Fixing-the-Neck-Seam)
+  - Optimize its textures automatically: the uncompressed mod textures it wears are compressed as they load, and ones
+    that hold a single color shrink to 32 × 32 pixels, so Lightless, PlayerSync and other sync plugins count less
+    texture memory, unless a check finds they'd look different. Hair whose UVs use only part of its textures, like
+    Sims 4 ports, can be refit onto that part with its textures cut down to it. The originals are backed up and can be
+    restored.
   - Paint its whole skin in Substance Painter.
   - Fix its [Simple Heels](https://github.com/Caraxi/SimpleHeels) offset: measure how far its shoes reach below the
     ground and write the offset into their model, so heels stand on the ground instead of sinking into it. It can fix

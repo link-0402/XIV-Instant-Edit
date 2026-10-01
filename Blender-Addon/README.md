@@ -106,7 +106,9 @@ Everything is in the **IE - Instant Edit** tab of the 3D Viewport's sidebar (pre
   under gear, come in hidden (`xiv_ie_game_hidden`) and still export with the rest of their
   model, so Quick Export keeps the model whole; delete a part to leave it out. The shape keys the
   game has on are turned on; exports write the model without them, since the game turns them on
-  itself.
+  itself. Models made for another race, like the c0201 gear most female races wear, come in
+  reshaped for the character's race (`xiv_racial_scaling`), so they are for preview only and
+  Quick Export refuses them.
 - Optional material previews, built from the materials and textures the game uses for the model,
   with colorsets, masks, normal maps and transparency. They are only for viewing: Quick Export
   doesn't write them, and changing them doesn't change the game.
