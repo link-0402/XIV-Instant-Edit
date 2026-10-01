@@ -46,7 +46,7 @@ internal static class SkinToneScenarios
 
     private static void CheckPaths()
     {
-        Require(SkinToneFixer.TonePath(EarMaterialPath, "base") == "chara/human/c1801/obj/zear/z0001/texture/c1801z0001_a_tone_base.tex" &&
+        Require(SkinToneFixer.TonePath(EarMaterialPath, "base") == "chara/human/c1801/obj/zear/z0001/texture/c1801z0001_a_v0001_tone_base.tex" &&
                 SkinToneFixer.TonePath("chara/human/c0801/obj/face/f0002/material/mt_c0801f0002_fac_e.mtrl", "norm") ==
                 "chara/human/c0801/obj/face/f0002/texture/c0801f0002_fac_e_tone_norm.tex" &&
                 SkinToneFixer.TonePath("chara/x/mt_y.mtrl", "mask") == "chara/x/y_tone_mask.tex" &&
@@ -319,8 +319,8 @@ internal static class SkinToneScenarios
             ],
         };
         var lines = NeckSeamViews.ApplyLines(preview);
-        Require(lines[0] == "Add c1801z0001_a_tone_base.tex to Ears Mod (skin diffuse texture), mapped wherever mt_c1801z0001_a.mtrl is" &&
-                lines[1].StartsWith("Put the new skin diffuse texture chara/human/c1801/obj/zear/z0001/texture/c1801z0001_a_tone_base.tex in a new mod", StringComparison.Ordinal),
+        Require(lines[0] == "Add c1801z0001_a_v0001_tone_base.tex to Ears Mod (skin diffuse texture), mapped wherever mt_c1801z0001_a.mtrl is" &&
+                lines[1].StartsWith("Put the new skin diffuse texture chara/human/c1801/obj/zear/z0001/texture/c1801z0001_a_v0001_tone_base.tex in a new mod", StringComparison.Ordinal),
             "skin tone: applying lists each new texture with the mod it joins");
         Require(new PreviewApplyResult(["Ears Mod"], 1, null, 0, [], NewFiles: 3).Describe("Skin seam fix applied") ==
                 "Skin seam fix applied: wrote 1 file and added 3 new files in Ears Mod (backups kept for 7 days)." &&
