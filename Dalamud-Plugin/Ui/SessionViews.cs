@@ -8,6 +8,7 @@ internal enum SessionState
 {
     Watching,
     NeedsMod,
+    Waiting,
     Paused,
     Conflict,
 }
@@ -18,6 +19,7 @@ internal static class SessionViews
     public static SessionState StateOf(TextureEditSession session)
         => session.Conflict ? SessionState.Conflict
             : session.Paused ? SessionState.Paused
+            : session.Waiting ? SessionState.Waiting
             : session.NeedsMod ? SessionState.NeedsMod
             : SessionState.Watching;
 

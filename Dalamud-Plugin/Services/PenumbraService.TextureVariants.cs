@@ -39,8 +39,7 @@ public sealed partial class PenumbraService
             throw new IOException($"\"{variant.Name}\" cannot be used as a Penumbra option name.");
         if (string.Equals(variant.Name, OriginalTextureOptionName, StringComparison.OrdinalIgnoreCase))
             throw new IOException($"\"{OriginalTextureOptionName}\" is reserved for the edited texture. Save the variant under another name.");
-        if (TextureMappingFingerprint(session.ModRoot) != session.MappingFingerprint)
-            throw new TextureConflictException("The mod's options or mappings changed. Reopen the texture from the browser.");
+        EnsureTextureMapping(session);
 
         var owned = variant.LastCommittedHash.Length > 0 && variant.RelativePath.Length > 0;
         var relative = owned ? variant.RelativePath : ChooseTextureVariantPath(session, variant.Name);
@@ -63,7 +62,7 @@ public sealed partial class PenumbraService
         {
             var (groupId, originalId, optionId) = WriteTextureVariantGroup(session, variant, relative);
             return new TextureVariantCommit(TextureFiles.Hash(tex), backup, relative, groupId, originalId, optionId,
-                TextureMappingFingerprint(session.ModRoot));
+                TextureMappingFingerprint(session.ModRoot, session.RelativePath));
         }
         catch
         {

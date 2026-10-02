@@ -81,6 +81,9 @@ internal static class TextureEditScenarios
             await VariantsAsync(Path.Combine(root, "variants"));
             await VanillaVariantAsync(Path.Combine(root, "vanilla-variant"));
             await WatcherAsync(Path.Combine(root, "watcher"));
+            await RestartAsync(Path.Combine(root, "restart"));
+            await MetadataRewritesAsync(Path.Combine(root, "metadata"));
+            await WaitingAsync(Path.Combine(root, "waiting"));
             await CacheCleanupAsync(Path.Combine(root, "cache-cleanup"));
             await DiscardAllAsync(Path.Combine(root, "discard-all"));
             await SharedTexturesAsync(Path.Combine(root, "shared"));
@@ -216,7 +219,7 @@ internal static class TextureEditScenarios
         fixture.Service.Dispose();
         await fixture.Service.Completion;
         using var restored = new TextureEditService(fixture.Backend, fixture.Config, fixture.ConfigDir, fixture.Backups, (_, _) => { }, false);
-        Check(restored.Sessions.Single().Paused && restored.Sessions.Single().WorkingFile == s.WorkingFile, "session is restored paused after restart");
+        Check(restored.Sessions.Single().Paused && restored.Sessions.Single().WorkingFile == s.WorkingFile, "a session paused by its restore stays paused after a restart");
         Check(await restored.StartAsync(fixture.Request, false) == id && !restored.Sessions.Single().Paused,
             "reopening a texture after restart resumes its session");
         await restored.DiscardAsync(id);
@@ -292,9 +295,9 @@ internal static class TextureEditScenarios
         File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 42));
         await f.Service.ProcessPendingAsync(true);
         Check(f.Backend.Commits == 2, "subsequent vanilla saves reuse the same mod");
-        var v4Fingerprint = PenumbraService.TextureMappingFingerprint(saved.ModRoot);
+        var v4Fingerprint = PenumbraService.TextureMappingFingerprint(saved.ModRoot, saved.RelativePath);
         File.WriteAllText(Path.Combine(saved.ModRoot, "default_mod.json"), "{\"ignored\":true}");
-        Check(PenumbraService.TextureMappingFingerprint(saved.ModRoot) == v4Fingerprint,
+        Check(PenumbraService.TextureMappingFingerprint(saved.ModRoot, saved.RelativePath) == v4Fingerprint,
             "texture mapping fingerprints ignore stray legacy JSON files");
         Check(await f.Service.StartAsync(f.Request, false) == id, "vanilla reopening reuses the session");
     }
@@ -399,6 +402,166 @@ internal static class TextureEditScenarios
         Check(f.Backend.Commits == 1, "directory watcher catches rename-based editor saves");
         f.Service.Dispose();
         await f.Service.Completion;
+    }
+
+    /// <summary>
+    /// Sessions carry on across plugin reloads and game restarts: a watching session keeps watching, a
+    /// paused one stays paused, and one left alone for a day is paused so cache cleanup can remove it.
+    /// </summary>
+    private static async Task RestartAsync(string root)
+    {
+        using var f = new Fixture(root, (uint)TexFile.TextureFormat.BC7);
+        TextureEditRequest Other(string name) => f.Request with
+        {
+            GamePath = $"chara/{name}.tex", ActualPath = Path.Combine(f.Backend.ModRoot, "Files", "chara", name + ".tex"), RelativePath = $"Files/chara/{name}.tex",
+        };
+        var watching = await f.Service.StartAsync(f.Request, false);
+        var paused = await f.Service.StartAsync(Other("paused"), false);
+        var idle = await f.Service.StartAsync(Other("idle"), false);
+        await f.Service.SetPausedAsync(paused, true);
+        SetStale(f.Service.Sessions.Single(s => s.Id == idle).Directory);
+        // Saving any session rewrites every session.json; that doesn't make the idle one active.
+        await f.Service.SetPausedAsync(watching, false);
+        f.Service.Dispose();
+        await f.Service.Completion;
+
+        using var restarted = new TextureEditService(f.Backend, f.Config, f.ConfigDir, f.Backups, (_, _) => { }, false);
+        TextureEditSession Find(Guid id) => restarted.Sessions.Single(s => s.Id == id);
+        Check(Find(watching) is { Paused: false, Status: "Watching for saves" } && Find(paused) is { Paused: true, Status: "Paused" } &&
+              Find(idle) is { Paused: true } i && i.Status.StartsWith("Paused after a day", StringComparison.Ordinal),
+            "after a restart a watching session keeps watching, a paused one stays paused, and one idle for a day is paused");
+        File.WriteAllBytes(Find(watching).WorkingFile, Tga(8, 8, 55));
+        await restarted.ProcessPendingAsync(true);
+        Check(f.Backend.Commits == 1 && File.ReadAllBytes(f.Backend.Target)[80] == 55, "a save after a restart goes through without resuming the session");
+    }
+
+    /// <summary>
+    /// Penumbra, Blender exports and other sessions rewrite meta.json all the time. A session only stops
+    /// when the game paths mapped to its own file change, and reconnecting takes it back.
+    /// </summary>
+    private static async Task MetadataRewritesAsync(string root)
+    {
+        using var f = new Fixture(root, (uint)TexFile.TextureFormat.BC7, withMeta: true);
+        var id = await f.Service.StartAsync(f.Request, false);
+        var s = f.Service.Sessions.Single();
+        var metaPath = Path.Combine(f.Backend.ModRoot, "meta.json");
+        void EditMeta(Action<JsonObject> edit)
+        {
+            var meta = JsonNode.Parse(File.ReadAllText(metaPath))!.AsObject();
+            edit(meta);
+            File.WriteAllText(metaPath, meta.ToJsonString());
+        }
+
+        // As Penumbra saves it, after a Blender export added an attribute group.
+        EditMeta(meta =>
+        {
+            meta["LastWrite"] = DateTime.UtcNow.AddMinutes(5).ToString("O");
+            meta["Description"] = "Edited in Penumbra";
+            meta["DefaultData"]!["Files"]!["chara/test.tex"] = "files\\chara\\test.tex";
+            meta["Groups"]!.AsArray().Add(new JsonObject
+            {
+                ["Type"] = "Imc", ["Id"] = Guid.NewGuid().ToString("D"), ["Name"] = "XIV Instant Edit test Parts (IMC)",
+                ["Options"] = new JsonArray { new JsonObject { ["Id"] = Guid.NewGuid().ToString("D"), ["Name"] = "A" } },
+            });
+        });
+        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 60));
+        await f.Service.ProcessPendingAsync(true);
+        Check(f.Backend.Commits == 1 && !f.Service.Sessions.Single().Conflict,
+            "rewrites of meta.json that keep the texture's mapping, with paths as Penumbra writes them, don't stop a save");
+
+        var secondTarget = Path.Combine(f.Backend.ModRoot, "Files", "chara", "second.tex");
+        PenumbraService.AddGameTextureToMod(f.Backend.ModRoot, "chara/second.tex", f.Backend.Original);
+        var second = await f.Service.StartAsync(f.Request with { GamePath = "chara/second.tex", ActualPath = secondTarget, RelativePath = "Files/chara/second.tex" }, false);
+        File.WriteAllBytes(Path.Combine(f.Service.Sessions.Single(x => x.Id == second).Directory, "Red.tga"), Tga(8, 8, 61));
+        await f.Service.ProcessPendingAsync(true);
+        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 62));
+        await f.Service.ProcessPendingAsync(true);
+        Check(f.Backend.VariantCommits == 1 && f.Backend.Commits == 2 && f.Service.Sessions.All(x => !x.Conflict),
+            "another session's variant group in the same mod doesn't stop this session");
+
+        var encodes = f.Backend.Encodes;
+        EditMeta(meta => meta["DefaultData"]!["Files"]!["chara/test.tex"] = "Files/chara/elsewhere.tex");
+        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 63));
+        await f.Service.ProcessPendingAsync(true);
+        var conflicted = f.Service.Sessions.Single(x => x.Id == id);
+        Check(f.Backend.Commits == 2 && f.Backend.Encodes == encodes && conflicted is { Conflict: true, Paused: true } &&
+              conflicted.Status.Contains("no longer uses", StringComparison.Ordinal),
+            "once the mod maps the texture to another file, a save stops with a conflict before encoding");
+        await RejectAsync(() => f.Service.ReconnectAsync(id), "reconnecting is refused while the mod doesn't use the file");
+        EditMeta(meta => meta["DefaultData"]!["Files"]!["chara/test.tex"] = "Files/chara/test.tex");
+        await f.Service.ReconnectAsync(id);
+        Check(f.Service.Sessions.Single(x => x.Id == id) is { Conflict: false, Paused: false }, "reconnecting takes the session back");
+        await f.Service.ProcessPendingAsync(true);
+        Check(f.Backend.Commits == 3 && File.ReadAllBytes(f.Backend.Target)[80] == 63, "the save the conflict stopped goes through after reconnecting");
+
+        var external = Tex((uint)TexFile.TextureFormat.BC7, 8, 8, 4, 99);
+        File.WriteAllBytes(f.Backend.Target, external);
+        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 64));
+        await f.Service.ProcessPendingAsync(true);
+        Check(f.Service.Sessions.Single(x => x.Id == id).Conflict && File.ReadAllBytes(f.Backend.Target).SequenceEqual(external),
+            "a texture file another program changed stops the save with a conflict");
+        await f.Service.ReconnectAsync(id);
+        await f.Service.ProcessPendingAsync(true);
+        var reconnected = f.Service.Sessions.Single(x => x.Id == id);
+        Check(!reconnected.Conflict && File.ReadAllBytes(f.Backend.Target)[80] == 64 && File.ReadAllBytes(reconnected.LastBackup).SequenceEqual(external),
+            "after reconnecting, the save goes over the other program's file and backs it up first");
+
+        // Earlier versions kept a hash of all of meta.json.
+        f.Service.Dispose();
+        await f.Service.Completion;
+        var catalogPath = Path.Combine(f.ConfigDir, "TextureSessions.json");
+        var catalog = JsonNode.Parse(File.ReadAllText(catalogPath))!.AsArray();
+        foreach (var entry in catalog)
+            entry!["MappingFingerprint"] = TextureFiles.Hash(File.ReadAllBytes(metaPath));
+        File.WriteAllText(catalogPath, catalog.ToJsonString());
+        EditMeta(meta => meta["LastWrite"] = DateTime.UtcNow.AddMinutes(10).ToString("O"));
+        using var restarted = new TextureEditService(f.Backend, f.Config, f.ConfigDir, f.Backups, (_, _) => { }, false);
+        File.WriteAllBytes(restarted.Sessions.Single(x => x.Id == id).WorkingFile, Tga(8, 8, 65));
+        await restarted.ProcessPendingAsync(true);
+        var legacy = restarted.Sessions.Single(x => x.Id == id);
+        Check(!legacy.Conflict && File.ReadAllBytes(f.Backend.Target)[80] == 65 && legacy.MappingFingerprint.StartsWith("paths:", StringComparison.Ordinal),
+            "a session from an earlier version still saves after meta.json changed, and takes the new fingerprint");
+    }
+
+    /// <summary>
+    /// A save that can't go through right now, while Penumbra loads or the character shows another file,
+    /// waits without encoding and goes through later. It never turns into a conflict.
+    /// </summary>
+    private static async Task WaitingAsync(string root)
+    {
+        using var f = new Fixture(root, (uint)TexFile.TextureFormat.BC7);
+        var id = await f.Service.StartAsync(f.Request, false);
+        var s = f.Service.Sessions.Single();
+        f.Backend.Wait = "Penumbra isn't available right now.";
+        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 66));
+        await f.Service.ProcessPendingAsync(true);
+        Check(f.Backend.Commits == 0 && f.Backend.Encodes == 0 && f.Service.Sessions.Single() is { Waiting: true, Conflict: false, Paused: false } w &&
+              w.Status == "Save waiting: Penumbra isn't available right now.",
+            "a save that has to wait encodes nothing and says why, without a conflict");
+        f.Backend.Wait = null;
+        await f.Service.ProcessPendingAsync(true);
+        Check(f.Backend.Commits == 1 && f.Service.Sessions.Single() is { Waiting: false, Conflict: false }, "the waiting save goes through once it can");
+
+        // Painter sends aren't tried again: the send says why, and the session carries on.
+        f.Backend.Wait = "Your character shows another file for this texture right now.";
+        var results = await f.Service.ApplyExternalAsync([new ExternalTextureSave(id, Tga(8, 8, 67))], CancellationToken.None);
+        Check(results.Single() is { Outcome: ExternalTextureOutcome.Failed } r && r.Message == f.Backend.Wait &&
+              f.Service.Sessions.Single() is { Waiting: false, Conflict: false, Paused: false } p && p.Status.StartsWith("Painter texture not applied:", StringComparison.Ordinal),
+            "a Painter texture that can't be applied now fails that send without stopping the session");
+        f.Backend.Wait = null;
+        results = await f.Service.ApplyExternalAsync([new ExternalTextureSave(id, Tga(8, 8, 67))], CancellationToken.None);
+        Check(results.Single().Outcome == ExternalTextureOutcome.Applied && f.Backend.Commits == 2, "sending it again applies it");
+
+        File.WriteAllBytes(f.Backend.Target, Tex((uint)TexFile.TextureFormat.BC7, 8, 8, 4, 98));
+        await f.Service.ApplyExternalAsync([new ExternalTextureSave(id, Tga(8, 8, 68))], CancellationToken.None);
+        var status = f.Service.Sessions.Single().Status;
+        results = await f.Service.ApplyExternalAsync([new ExternalTextureSave(id, Tga(8, 8, 68))], CancellationToken.None);
+        Check(f.Service.Sessions.Single() is { Conflict: true } c && c.Status == status && results.Single().Message == status,
+            "sending to a conflicted session again reports the conflict as it was");
+        await f.Service.ReconnectAsync(id);
+        results = await f.Service.ApplyExternalAsync([new ExternalTextureSave(id, Tga(8, 8, 68))], CancellationToken.None);
+        Check(results.Single().Outcome == ExternalTextureOutcome.Applied && File.ReadAllBytes(f.Backend.Target)[80] == 68,
+            "after reconnecting, Painter's texture is applied");
     }
 
     private static async Task CacheCleanupAsync(string root)
@@ -647,7 +810,9 @@ internal static class TextureEditScenarios
         var first = Tex((uint)TexFile.TextureFormat.BC7, 8, 8, 4, 5);
         PenumbraService.StageGameTextureMod(modRoot, "Painter Top", "chara/equipment/e0001/texture/a_base.tex", first, job);
         Check(PenumbraService.ReadModStableIdentifierForRegression(modRoot) == job, "the project's mod carries the job id as its identifier");
-        var before = PenumbraService.TextureMappingFingerprint(modRoot);
+        const string baseFile = "Files/chara/equipment/e0001/texture/a_base.tex", normFile = "Files/chara/equipment/e0001/texture/a_norm.tex";
+        var before = PenumbraService.TextureMappingFingerprint(modRoot, baseFile);
+        var unmapped = PenumbraService.TextureMappingFingerprint(modRoot, normFile);
         PenumbraService.AddGameTextureToMod(modRoot, "chara/equipment/e0001/texture/a_norm.tex", Tex((uint)TexFile.TextureFormat.BC7, 8, 8, 4, 6));
         var meta = JsonDocument.Parse(File.ReadAllText(Path.Combine(modRoot, "meta.json"))).RootElement;
         var files = meta.GetProperty("DefaultData").GetProperty("Files");
@@ -655,7 +820,9 @@ internal static class TextureEditScenarios
               files.GetProperty("chara/equipment/e0001/texture/a_norm.tex").GetString() == "Files/chara/equipment/e0001/texture/a_norm.tex",
             "a later vanilla texture joins the mod's default option");
         Check(File.Exists(Path.Combine(modRoot, "Files", "chara", "equipment", "e0001", "texture", "a_norm.tex")) &&
-              PenumbraService.TextureMappingFingerprint(modRoot) != before, "the file is written and the mapping fingerprint changes");
+              PenumbraService.TextureMappingFingerprint(modRoot, normFile) != unmapped &&
+              PenumbraService.TextureMappingFingerprint(modRoot, baseFile) == before,
+            "the file is written; the new file's mapping fingerprint changes and the first texture's stays");
         Check(PenumbraService.ReadModStableIdentifierForRegression(modRoot) == job, "adding a file keeps the identifier");
     }
 
@@ -763,11 +930,14 @@ internal static class TextureEditScenarios
         public readonly byte[] Original;
         private readonly ModelBackupStore _backups;
         private readonly bool _vanilla;
-        public int Commits, VariantCommits;
+        public int Commits, VariantCommits, Encodes;
         public Guid? LastShown;
         public TextureType LastFormat;
         public bool FailConversion, RefreshWarning;
         public Action? OnEncode;
+        /// <summary>Set to make saves wait, as when Penumbra is unavailable or the character shows another file.</summary>
+        public string? Wait;
+        private string Meta => Path.Combine(ModRoot, "meta.json");
         /// <summary>The TEX files converted to TGA, as the converter received them.</summary>
         public readonly List<byte[]> TargaInputs = [];
         public FakeBackend(string root, uint format, ModelBackupStore backups, bool vanilla, bool withMeta = false, byte[]? original = null)
@@ -803,8 +973,27 @@ internal static class TextureEditScenarios
                 GamePath = request.GamePath, ModDirectory = "Mod", ModRoot = ModRoot, RelativePath = relative, JobId = request.JobId,
                 NewModName = request.NewModName, NeedsMod = _vanilla, CollectionId = Guid.NewGuid(),
                 Format = h.Format, Width = 8, Height = 8, MipMaps = true, LastCommittedHash = _vanilla ? "" : TextureFiles.Hash(Original),
-                MappingFingerprint = File.Exists(Path.Combine(ModRoot, "meta.json")) ? PenumbraService.TextureMappingFingerprint(ModRoot) : "",
+                MappingFingerprint = File.Exists(Meta) ? PenumbraService.TextureMappingFingerprint(ModRoot, relative) : "",
             }));
+        }
+        // As PenumbraService checks before encoding, minus Penumbra and the live actor.
+        public Task CheckAsync(TextureEditSession s, CancellationToken token)
+        {
+            if (Wait is { } wait) throw new TextureWaitException(wait);
+            if (!s.NeedsMod && File.Exists(Meta)) PenumbraService.EnsureTextureMappingForRegression(s);
+            return Task.CompletedTask;
+        }
+        public Task<TextureRebase> RebaseAsync(TextureEditSession s, CancellationToken token)
+        {
+            if (Wait is { } wait) throw new TextureWaitException(wait);
+            if (File.Exists(Meta) && PenumbraService.TextureGamePaths(ModRoot, s.RelativePath).Count == 0)
+                throw new IOException("The mod no longer uses this texture's file.");
+            var bytes = File.ReadAllBytes(s.TargetFile);
+            var h = TextureFiles.ReadOriginal(bytes).Header;
+            var variants = s.Variants.Where(v => v.RelativePath.Length > 0 && File.Exists(s.VariantTargetFile(v)))
+                .ToDictionary(v => v.Name, v => TextureFiles.Hash(File.ReadAllBytes(s.VariantTargetFile(v))), StringComparer.OrdinalIgnoreCase);
+            return Task.FromResult(new TextureRebase(TextureFiles.Hash(bytes),
+                File.Exists(Meta) ? PenumbraService.TextureMappingFingerprint(ModRoot, s.RelativePath) : "", h.Format, h.Width, h.Height, variants));
         }
         public Task ConvertAsync(string input, string output, TextureType format, bool mipMaps)
         {
@@ -825,7 +1014,7 @@ internal static class TextureEditScenarios
                 };
                 var (width, height) = TextureFiles.ValidateTga(tga);
                 File.WriteAllBytes(output, Tex((uint)code, width, height, mipMaps ? TextureFiles.FullMipCount(width, height) : 1, tga[18]));
-                if (mipMaps) { LastFormat = format; OnEncode?.Invoke(); }
+                if (mipMaps) { LastFormat = format; Encodes++; OnEncode?.Invoke(); }
             }
             return Task.CompletedTask;
         }
@@ -840,10 +1029,11 @@ internal static class TextureEditScenarios
                 Directory.CreateDirectory(ModRoot);
                 PenumbraService.StageGameTextureMod(ModRoot, "Mod", s.GamePath, tex);
                 s.NeedsMod = false;
-                s.MappingFingerprint = PenumbraService.TextureMappingFingerprint(ModRoot);
+                s.MappingFingerprint = PenumbraService.TextureMappingFingerprint(ModRoot, s.RelativePath);
             }
             else
             {
+                if (File.Exists(Meta)) PenumbraService.EnsureTextureMappingForRegression(s);
                 if (TextureFiles.Hash(File.ReadAllBytes(s.TargetFile)) != s.LastCommittedHash) throw new TextureConflictException("Destination changed");
                 backup = TextureFiles.Replace(s.TargetFile, ModRoot, s.RelativePath, "Mod", tex, s.LastCommittedHash, _backups, current, token);
             }

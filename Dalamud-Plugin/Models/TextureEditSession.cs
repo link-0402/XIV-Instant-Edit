@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Penumbra.Api.Enums;
 
 namespace InstantEdit.Models;
@@ -20,6 +21,10 @@ public sealed record TextureEditSession
     public string ModDirectory { get; set; } = "";
     public string ModRoot { get; set; } = "";
     public string RelativePath { get; set; } = "";
+    /// <summary>
+    /// The game paths the mod maps to the destination file, hashed. A save stops with a conflict
+    /// when they change; the rest of the mod's metadata may change freely.
+    /// </summary>
     public string MappingFingerprint { get; set; } = "";
     public string NewModName { get; init; } = "";
     /// <summary>
@@ -48,6 +53,9 @@ public sealed record TextureEditSession
     public string WorkingHash { get; set; } = "";
     public bool Paused { get; set; }
     public bool Conflict { get; set; }
+    /// <summary>The last save could not go through yet and is tried again; Status says why.</summary>
+    [JsonIgnore]
+    public bool Waiting { get; set; }
     public string Status { get; set; } = "Watching for saves";
     public string LastBackup { get; set; } = "";
     public DateTimeOffset? LastSaved { get; set; }
@@ -82,8 +90,11 @@ public sealed record TextureVariant
 }
 
 internal sealed record TextureSource(byte[] Bytes, TextureEditSession Session);
-/// <param name="MappingFingerprint">The mod's new metadata fingerprint when the commit changed its mappings; otherwise empty.</param>
-internal sealed record TextureCommit(string Hash, string Backup, string Message, string MappingFingerprint = "");
+internal sealed record TextureCommit(string Hash, string Backup, string Message);
+/// <summary>The destination as it is now, which a conflicted session takes as its last save when it reconnects.</summary>
+/// <param name="VariantHashes">The hash of each variant's file by variant name; a variant whose file is gone is left out.</param>
+internal sealed record TextureRebase(string Hash, string MappingFingerprint, uint Format, int Width, int Height,
+    IReadOnlyDictionary<string, string> VariantHashes);
 /// <param name="ShowOption">The variant-group option to select in the session's collection, if any.</param>
 internal sealed record TextureRefresh(TextureEditSession Session, Guid? ShowOption);
 
@@ -99,6 +110,13 @@ internal sealed record TextureVariantCommit(string Hash, string Backup, string R
 internal interface ITextureEditBackend
 {
     Task<TextureSource> CaptureAsync(TextureEditRequest request, CancellationToken token);
+    /// <summary>
+    /// Checks, before an image is encoded, that a save can go through now. Throws a
+    /// <c>TextureConflictException</c> when it never will, and a <c>TextureWaitException</c> when it can later.
+    /// </summary>
+    Task CheckAsync(TextureEditSession session, CancellationToken token);
+    /// <summary>Validates a conflicted session's destination again and reads it as it is now.</summary>
+    Task<TextureRebase> RebaseAsync(TextureEditSession session, CancellationToken token);
     Task ConvertAsync(string input, string output, TextureType format, bool mipMaps);
     Task<TextureCommit> CommitAsync(TextureEditSession session, byte[] tex, Func<bool> stillCurrent, CancellationToken token);
     /// <summary>Writes a variant TEX into the session's existing mod and maps it in the session's variant group.</summary>

@@ -54,15 +54,28 @@ agent.
 - Save rapidly while a BC7 conversion is running. Also exercise the editor's
   temp-file/rename save behavior. Only the latest stable image may commit.
 - Pause while encoding; verify the pending conversion cannot replace the TEX.
-  Resume and verify the pending working image is processed. Restart the plugin
-  with sessions open; confirm they restore paused with their original paths.
-  Choose **Edit texture** on one of them (and **Open in editor** on another):
-  each must resume without pressing Resume, and a save made while paused must
-  then be applied.
-- Edit the destination externally, change its option mapping, disable/remove/move
-  its mod, or change the actor's active texture mapping. The session must pause
-  on a conflict rather than overwrite a different source. Reopening from the
-  browser must retain the old conflicted session's working files.
+  Resume and verify the pending working image is processed. Reload the plugin
+  (or restart the game) with sessions open: watching sessions must keep watching
+  with their original paths, and a save made right after must apply without
+  pressing Resume. A session you paused stays paused, and one whose files haven't
+  changed for a day comes back paused. Choose **Edit texture** on a paused one
+  (and **Open in editor** on another): each must resume, and a save made while
+  paused must then be applied.
+- Rewrite the mod's metadata without touching the texture: rename an option in
+  Penumbra, export its model from Blender with attribute groups or EST changes,
+  and save a variant from another session in the same mod. Saves must keep
+  applying, also from Substance Painter.
+- Edit the destination externally, or map its game path to another file. The
+  session must stop on a conflict rather than overwrite a different source, and
+  Painter's send must report it. **Reconnect** on the session card must take the
+  session back (Painter's project included): after an external edit, the next
+  save goes over it with a backup first; while the mod doesn't use the file,
+  Reconnect is refused. Removing or moving the mod still conflicts. Reopening
+  from the browser must retain the old conflicted session's working files.
+- Switch the actor's option to another file for the texture, then save: the
+  session must show **Waiting** without encoding, and the save must apply after
+  switching back. Save while the character is being redrawn or between areas,
+  and while Penumbra reloads: none of these may conflict.
 - Edit a vanilla texture. No mod should exist until the first changed save; then
   verify its TEX mapping and enabled captured collection. Subsequent saves should
   reuse that destination. A taken mod name must never be overwritten.

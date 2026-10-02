@@ -5,6 +5,8 @@ import urllib.request
 from urllib.error import HTTPError, URLError
 
 MAX_RESPONSE_BYTES = 1024 * 1024
+# How long a send waits for Instant Edit to answer at all before giving up on it.
+UNREACHABLE_SECONDS = 60.0
 
 
 class PluginUnavailable(ConnectionError):
@@ -73,6 +75,24 @@ def call(ports: list, endpoint: str, payload=None, timeout: float = 5.0):
     raise PluginUnavailable(
         "Instant Edit is not reachable. Start the game with the plugin loaded."
         + (f" ({last_error})" if last_error else ""))
+
+
+def poll_failure(error: Exception, unreachable_since, now: float):
+    """What a failed send-status poll means: (message, unreachable_since).
+
+    A message ends the send with it; None keeps polling. Instant Edit refusing the poll ends it at once,
+    as when it restarted and no longer knows the send. Not answering at all ends it once that has
+    lasted UNREACHABLE_SECONDS, since the game may only be busy.
+    """
+    if isinstance(error, PluginRefused):
+        if error.code == "unknown_send":
+            return ("Instant Edit lost track of this send, probably because it restarted while applying it. "
+                    "Check the textures in game, then send again."), None
+        return str(error), None
+    since = now if unreachable_since is None else unreachable_since
+    if now - since >= UNREACHABLE_SECONDS:
+        return f"Lost contact with Instant Edit: {error}", since
+    return None, since
 
 
 def is_available(ports: list) -> bool:

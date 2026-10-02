@@ -199,9 +199,11 @@ internal static class UiViewModelScenarios
         var paused = watching with { Paused = true, ModDirectory = "ModB" };
         var pending = new TextureEditSession { GamePath = "chara/b.tex", NeedsMod = true, NewModName = "New Tex" };
         var conflict = watching with { Conflict = true, Paused = true, NeedsMod = true };
+        var waiting = pending with { Waiting = true };
         Require(SessionViews.StateOf(watching) == SessionState.Watching && SessionViews.StateOf(paused) == SessionState.Paused
-                && SessionViews.StateOf(pending) == SessionState.NeedsMod && SessionViews.StateOf(conflict) == SessionState.Conflict,
-            "session state precedence is conflict, paused, needs mod, watching");
+                && SessionViews.StateOf(pending) == SessionState.NeedsMod && SessionViews.StateOf(conflict) == SessionState.Conflict
+                && SessionViews.StateOf(waiting) == SessionState.Waiting && SessionViews.StateOf(waiting with { Paused = true }) == SessionState.Paused,
+            "session state precedence is conflict, paused, waiting, needs mod, watching");
         Require(SessionViews.Caption(watching) == "1024 × 512 · BGRA32 · Mipmaps", "captions list size, format and mipmaps");
         Require(SessionViews.Caption(watching with { SavedFormat = bc7, MipMaps = false }) == "1024 × 512 · BC7 (originally BGRA32) · No mipmaps",
             "captions mention the original format when it changed");

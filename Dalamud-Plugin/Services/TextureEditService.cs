@@ -37,6 +37,14 @@ public sealed class TextureEditService : IDisposable
             if (!Variants.TryGetValue(name, out var state)) Variants[name] = state = new VariantState();
             return state;
         }
+        /// <summary>Forgets a failed save of the working image, so nothing waits for its next attempt.</summary>
+        public void Succeeded()
+        {
+            FailedHash = "";
+            Failures = 0;
+            RetryAt = 0;
+            Session.Waiting = false;
+        }
         public void Dispose() { Enabled = false; Interlocked.Increment(ref Generation); Watcher?.Dispose(); }
     }
 
@@ -98,6 +106,7 @@ public sealed class TextureEditService : IDisposable
         _cacheCleanupInterval = cacheCleanupInterval ?? CacheCleanupInterval;
         if (_cacheCleanupInterval <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(cacheCleanupInterval));
         _catalog = Path.Combine(configDirectory, "TextureSessions.json");
+        var idleSince = DateTime.UtcNow - StaleSessionAge;
         try
         {
             if (File.Exists(_catalog))
@@ -128,8 +137,21 @@ public sealed class TextureEditService : IDisposable
                     // Sessions from before optional recompression always saved in their captured format.
                     if (s.SavedFormat == 0) s.SavedFormat = s.Format;
                     if (!TextureFiles.IsSessionFormat(s.SavedFormat, s)) throw new IOException("Invalid texture session format.");
-                    s.Paused = true;
-                    s.Status = s.Conflict ? s.Status : "Paused after restart. Open the texture again or Resume to apply saved changes.";
+                    // Sessions carry on as they were across plugin reloads and game restarts. One left
+                    // alone for a day is paused, so automatic cache cleanup can remove it.
+                    if (s.PixelHash.Length == 0)
+                    {
+                        s.Paused = true;
+                        s.Status = "This session didn't finish opening. Discard it and open the texture again.";
+                    }
+                    else if (!s.Paused && !s.Conflict)
+                    {
+                        var latest = LastActivity(s);
+                        s.Paused = latest is null || latest < idleSince;
+                        s.Status = latest is null ? "The working folder can't be read. Discard the session and open the texture again."
+                            : s.Paused ? "Paused after a day without saves. Open the texture or Resume to continue."
+                            : "Watching for saves";
+                    }
                     if (!_sessions.TryAdd(s.Id, new Runtime(s))) throw new IOException("Duplicate texture session identity.");
                 }
             }
@@ -141,6 +163,8 @@ public sealed class TextureEditService : IDisposable
             _sessions.Clear();
         }
         Publish();
+        foreach (var runtime in _sessions.Values.Where(runtime => runtime.Enabled))
+            ArmWatcher(runtime);
         _worker = watch ? Task.Run(WatchLoopAsync) : Task.CompletedTask;
     }
 
@@ -388,8 +412,7 @@ public sealed class TextureEditService : IDisposable
         if (!paused && s.PixelHash.Length == 0) throw new IOException("This session did not finish opening. Discard it and reopen the texture.");
         TextureFiles.EnsureLocalPath(s.Directory);
         s.Paused = paused;
-        runtime.RetryAt = 0;
-        runtime.Failures = 0;
+        runtime.Succeeded();
         s.Status = paused ? "Paused" : "Watching for saves";
         runtime.Enabled = !paused;
         if (!paused) ArmWatcher(runtime);
@@ -411,6 +434,42 @@ public sealed class TextureEditService : IDisposable
             var s = Get(id).Session;
             if (!s.NeedsMod) s.Status = await RefreshOneAsync(s, null).ConfigureAwait(false);
             Persist();
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// Takes a conflicted session back: the destination as it is now becomes the session's last save,
+    /// and watching resumes with the working TGA as it is, so its next save goes over that file.
+    /// </summary>
+    public async Task ReconnectAsync(Guid id)
+    {
+        var runtime = Get(id);
+        await _gate.WaitAsync(_life.Token).ConfigureAwait(false);
+        try
+        {
+            EnsureReady();
+            var s = runtime.Session;
+            if (!s.Conflict) return;
+            if (s.PixelHash.Length == 0) throw new IOException("This session didn't finish opening. Discard it and open the texture again.");
+            var blocked = SharedTextures.EditBlock(s.GamePath, s.NeedsMod || s.ResolvedGamePath.Length > 0);
+            if (blocked.Length > 0) throw new IOException(blocked);
+            var rebase = await _backend.RebaseAsync(s, _life.Token).ConfigureAwait(false);
+            s.LastCommittedHash = rebase.Hash;
+            s.MappingFingerprint = rebase.MappingFingerprint;
+            s.Width = rebase.Width;
+            s.Height = rebase.Height;
+            // Another program may have stored it in a format saves don't write; the next save writes it again anyway.
+            if (TextureFiles.IsSessionFormat(rebase.Format, s)) s.SavedFormat = rebase.Format;
+            foreach (var variant in s.Variants)
+                if (rebase.VariantHashes.TryGetValue(variant.Name, out var hash))
+                    variant.LastCommittedHash = hash;
+            runtime.Variants.Clear();
+            s.Conflict = false;
+            ApplyPaused(runtime, false);
+            // A save that the conflict stopped goes through now.
+            runtime.Changed();
+            runtime.VariantChanged();
         }
         finally { _gate.Release(); }
     }
@@ -556,14 +615,7 @@ public sealed class TextureEditService : IDisposable
                     .Any(path => !generated.Contains(Path.GetFullPath(path))))
                 return false;
 
-            var latest = Directory.GetLastWriteTimeUtc(session.Directory);
-            foreach (var path in Directory.EnumerateFiles(session.Directory, "*", SearchOption.AllDirectories))
-            {
-                TextureFiles.EnsureLocalPath(path);
-                var modified = File.GetLastWriteTimeUtc(path);
-                latest = latest > modified ? latest : modified;
-            }
-            if (latest >= cutoff) return false;
+            if (LastActivity(session) is not { } latest || latest >= cutoff) return false;
             foreach (var variant in session.Variants)
             {
                 var file = session.VariantWorkingFile(variant);
@@ -572,6 +624,31 @@ public sealed class TextureEditService : IDisposable
             return TextureFiles.Hash(TextureFiles.Read(session.WorkingFile)) == session.WorkingHash;
         }
         catch { return false; }
+    }
+
+    /// <summary>
+    /// When the session's files last changed: its images, variants, conversions and anything an editor
+    /// keeps there. Its session.json doesn't count, since saving any session rewrites all of them.
+    /// Null when the folder is gone or can't be read.
+    /// </summary>
+    private static DateTime? LastActivity(TextureEditSession session)
+    {
+        try
+        {
+            if (!Directory.Exists(session.Directory))
+                return null;
+            DateTime? latest = null;
+            foreach (var path in Directory.EnumerateFiles(session.Directory, "*", SearchOption.AllDirectories))
+            {
+                TextureFiles.EnsureLocalPath(path);
+                if (Path.GetFileName(path).StartsWith("session.json", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var modified = File.GetLastWriteTimeUtc(path);
+                latest = latest > modified ? latest : modified;
+            }
+            return latest ?? Directory.GetLastWriteTimeUtc(session.Directory);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return null; }
     }
 
     private static bool DeleteOwnedWorkingDirectory(TextureEditSession session)
@@ -613,7 +690,11 @@ public sealed class TextureEditService : IDisposable
             watcher.EnableRaisingEvents = true;
             runtime.Watcher = watcher;
         }
-        catch (IOException error) { _log(error, "Texture notifications unavailable; periodic reconciliation remains active."); }
+        // A missing working folder is an ArgumentException.
+        catch (Exception error) when (error is IOException or ArgumentException or UnauthorizedAccessException)
+        {
+            _log(error, "Texture notifications unavailable; periodic reconciliation remains active.");
+        }
     }
 
     private async Task WatchLoopAsync()
@@ -659,32 +740,51 @@ public sealed class TextureEditService : IDisposable
         finally { _gate.Release(); }
     }
 
-    /// <summary>Records a failed save and backs off; a conflict pauses the whole session. Callers hold the queue gate.</summary>
-    private void ReportSaveFailure(Runtime runtime, Exception error, string? variantName = null)
+    /// <summary>
+    /// Records a failed save. A conflict pauses the whole session. A failed save of a watched TGA is tried
+    /// again after a growing delay, and one that only has to wait, for Penumbra or for the character to
+    /// show the file again, says so. A Painter send isn't tried again; Painter sends anew. Callers hold the queue gate.
+    /// </summary>
+    private void ReportSaveFailure(Runtime runtime, Exception error, string? variantName = null, bool fromPainter = false)
     {
         var s = runtime.Session;
-        var message = (variantName is null ? "Save not applied: " : $"Variant \"{variantName}\" not applied: ") + error.Message;
+        var waiting = error is TextureWaitException && !fromPainter;
+        var subject = variantName is not null ? $"Variant \"{variantName}\"" : fromPainter ? "Painter texture" : "Save";
+        var message = $"{subject} {(waiting ? "waiting" : "not applied")}: {error.Message}";
         var changed = s.Status != message;
         s.Status = message;
-        if (variantName is null)
-        {
-            runtime.Failures = Math.Min(runtime.Failures + 1, 5);
-            runtime.RetryAt = Environment.TickCount64 + Math.Min(30000, 1000 * (1 << runtime.Failures));
-        }
-        else
+        if (variantName is not null)
         {
             var state = runtime.StateFor(variantName);
             state.Failures = Math.Min(state.Failures + 1, 5);
             state.RetryAt = Environment.TickCount64 + Math.Min(30000, 1000 * (1 << state.Failures));
-            if (FindVariant(s, variantName) is { } variant) variant.Status = "Save not applied: " + error.Message;
+            if (FindVariant(s, variantName) is { } variant) variant.Status = (waiting ? "Waiting: " : "Save not applied: ") + error.Message;
         }
+        else if (!fromPainter)
+        {
+            runtime.Failures = Math.Min(runtime.Failures + 1, 5);
+            runtime.RetryAt = Environment.TickCount64 + Math.Min(30000, 1000 * (1 << runtime.Failures));
+        }
+        // Only the working image's own outcome ends a wait for it.
+        if (variantName is null && !fromPainter)
+            s.Waiting = waiting;
+        else if (waiting)
+            s.Waiting = true;
         if (error is TextureConflictException)
         {
+            changed |= !s.Conflict;
             s.Conflict = true;
             s.Paused = true;
+            s.Waiting = false;
             runtime.Enabled = false;
         }
-        if (changed) _log(error, "Texture save failed; the previous destination remains available.");
+        // A save that keeps waiting only needs the session list to show it.
+        if (!changed)
+        {
+            Publish();
+            return;
+        }
+        _log(error, waiting ? "A texture save is waiting and will be tried again." : "Texture save failed; the previous destination remains available.");
         try { Persist(); }
         catch (Exception storageError)
         {
@@ -697,6 +797,16 @@ public sealed class TextureEditService : IDisposable
 
     private static TextureVariant? FindVariant(TextureEditSession session, string name)
         => session.Variants.FirstOrDefault(v => string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Forgets a variant's failed save; the session stops waiting unless its working image still is.</summary>
+    private static void VariantSucceeded(Runtime runtime, VariantState state)
+    {
+        state.FailedHash = "";
+        state.Failures = 0;
+        state.RetryAt = 0;
+        if (runtime.Failures == 0)
+            runtime.Session.Waiting = false;
+    }
 
     private async Task ApplyVariantSavesAsync(Runtime runtime, bool force)
     {
@@ -732,16 +842,22 @@ public sealed class TextureEditService : IDisposable
         var info = new FileInfo(file);
         if (!info.Exists) return;
         if (force) state.RetryAt = 0;
+        // An unchanged file is read again every 30 seconds, and after a failed save once it may be tried again.
         if (!force && generation == state.ObservedGeneration && info.Length == state.ObservedLength &&
-            info.LastWriteTimeUtc.Ticks == state.ObservedWrite && Environment.TickCount64 - state.LastHashCheck < 30000 &&
-            state.Failures == 0) return;
+            info.LastWriteTimeUtc.Ticks == state.ObservedWrite && (state.Failures == 0
+                ? Environment.TickCount64 - state.LastHashCheck < 30000
+                : Environment.TickCount64 < state.RetryAt)) return;
         var tga = TextureFiles.Read(file);
         state.LastHashCheck = Environment.TickCount64;
         state.ObservedLength = info.Length;
         state.ObservedWrite = info.LastWriteTimeUtc.Ticks;
         state.ObservedGeneration = generation;
         var hash = TextureFiles.Hash(tga);
-        if (hash == existing?.WorkingHash) return;
+        if (hash == existing?.WorkingHash)
+        {
+            VariantSucceeded(runtime, state);
+            return;
+        }
         EnsureWritable(s);
         if (hash != state.FailedHash)
         {
@@ -780,10 +896,13 @@ public sealed class TextureEditService : IDisposable
         {
             if (!Current()) return;
             existing.WorkingHash = hash;
+            VariantSucceeded(runtime, state);
             s.Status = $"Watching; variant \"{name}\" pixels are unchanged";
             Persist();
             return;
         }
+        // Nothing is encoded for a save that can't go through now.
+        await _backend.CheckAsync(s, _life.Token).ConfigureAwait(false);
         await _backend.ConvertAsync(snapshot, output, TextureFiles.OutputType(format), s.MipMaps).ConfigureAwait(false);
         _life.Token.ThrowIfCancellationRequested();
         if (!Current()) return;
@@ -802,6 +921,7 @@ public sealed class TextureEditService : IDisposable
         variant.SavedFormat = format;
         variant.LastSaved = DateTimeOffset.UtcNow;
         variant.Status = "Saved";
+        VariantSucceeded(runtime, state);
         s.VariantGroupId = result.GroupId;
         s.OriginalOptionId = result.OriginalOptionId;
         s.MappingFingerprint = result.MappingFingerprint;
@@ -868,16 +988,28 @@ public sealed class TextureEditService : IDisposable
         var s = runtime.Session;
         var generation = Interlocked.Read(ref runtime.Generation);
         var info = new FileInfo(s.WorkingFile);
+        // An unchanged file is read again every 30 seconds, and after a failed save once it may be tried again.
         if (!force && info.Exists && generation == runtime.ObservedGeneration &&
-            info.Length == runtime.ObservedLength && info.LastWriteTimeUtc.Ticks == runtime.ObservedWrite &&
-            Environment.TickCount64 - runtime.LastHashCheck < 30000 && runtime.Failures == 0) return;
+            info.Length == runtime.ObservedLength && info.LastWriteTimeUtc.Ticks == runtime.ObservedWrite && (runtime.Failures == 0
+                ? Environment.TickCount64 - runtime.LastHashCheck < 30000
+                : Environment.TickCount64 < runtime.RetryAt)) return;
         var tga = TextureFiles.Read(s.WorkingFile);
         runtime.LastHashCheck = Environment.TickCount64;
         runtime.ObservedLength = info.Length;
         runtime.ObservedWrite = info.LastWriteTimeUtc.Ticks;
         runtime.ObservedGeneration = generation;
         var hash = TextureFiles.Hash(tga);
-        if (hash == s.WorkingHash) return;
+        if (hash == s.WorkingHash)
+        {
+            // Back to what the game has: nothing is left to save.
+            if (runtime.Failures > 0)
+            {
+                runtime.Succeeded();
+                s.Status = "Watching for saves";
+                Publish();
+            }
+            return;
+        }
         EnsureWritable(s);
         if (hash != runtime.FailedHash)
         {
@@ -911,10 +1043,13 @@ public sealed class TextureEditService : IDisposable
         {
             if (!Current()) return;
             s.WorkingHash = hash;
+            runtime.Succeeded();
             s.Status = "Watching; saved pixels are unchanged";
             Persist();
             return;
         }
+        // Nothing is encoded for a save that can't go through now.
+        await _backend.CheckAsync(s, _life.Token).ConfigureAwait(false);
         await _backend.ConvertAsync(snapshot, output, TextureFiles.OutputType(format), s.MipMaps).ConfigureAwait(false);
         _life.Token.ThrowIfCancellationRequested();
         if (!Current()) return;
@@ -930,7 +1065,7 @@ public sealed class TextureEditService : IDisposable
         s.Height = height;
         s.LastSaved = DateTimeOffset.UtcNow;
         s.Status = result.Message;
-        PropagateFingerprint(s, result.MappingFingerprint);
+        runtime.Succeeded();
         RaiseFileChanged(s.TargetFile);
         if (!PersistCommit(runtime)) return;
         _life.Token.ThrowIfCancellationRequested();
@@ -941,20 +1076,6 @@ public sealed class TextureEditService : IDisposable
 
     private Task<string> RefreshOneAsync(TextureEditSession session, Guid? showOption)
         => _backend.RefreshAsync([new TextureRefresh(session, showOption)], _life.Token);
-
-    /// <summary>
-    /// Adding a file to a Painter project's shared mod rewrites its metadata; the project's other
-    /// sessions in that mod take the new fingerprint instead of reporting a mapping conflict.
-    /// </summary>
-    private void PropagateFingerprint(TextureEditSession source, string fingerprint)
-    {
-        if (fingerprint.Length == 0 || source.JobId is null)
-            return;
-        foreach (var other in _sessions.Values.Select(r => r.Session))
-            if (!ReferenceEquals(other, source) && other.JobId == source.JobId && !other.NeedsMod &&
-                string.Equals(other.ModRoot, source.ModRoot, StringComparison.OrdinalIgnoreCase))
-                other.MappingFingerprint = fingerprint;
-    }
 
     /// <summary>
     /// Applies textures exported by Substance Painter as one batch: each goes through its session's
@@ -977,10 +1098,14 @@ public sealed class TextureEditService : IDisposable
                     continue;
                 }
                 var s = runtime.Session;
+                // Its status already says why, and the session card can reconnect it.
+                if (s.Conflict)
+                {
+                    results.Add(new ExternalTextureResult(save.SessionId, ExternalTextureOutcome.Failed, s.Status));
+                    continue;
+                }
                 try
                 {
-                    if (s.Conflict)
-                        throw new TextureConflictException(s.Status);
                     ResumeIfPaused(runtime);
                     var outcome = save.Tga is null
                         ? await RestoreOriginalAsync(runtime).ConfigureAwait(false)
@@ -992,7 +1117,7 @@ public sealed class TextureEditService : IDisposable
                 catch (Exception error) when (error is not OperationCanceledException || !_life.IsCancellationRequested)
                 {
                     if (error is not OperationCanceledException)
-                        ReportSaveFailure(runtime, error);
+                        ReportSaveFailure(runtime, error, fromPainter: true);
                     results.Add(new ExternalTextureResult(save.SessionId, ExternalTextureOutcome.Failed,
                         error is OperationCanceledException ? "The save was interrupted." : error.Message));
                 }
@@ -1037,6 +1162,8 @@ public sealed class TextureEditService : IDisposable
             Persist();
             return ExternalTextureOutcome.Unchanged;
         }
+        // Nothing is encoded for a texture that can't be applied now.
+        await _backend.CheckAsync(s, _life.Token).ConfigureAwait(false);
         s.Status = "Converting Painter texture";
         Publish();
         await _backend.ConvertAsync(snapshot, output, TextureFiles.OutputType(format), s.MipMaps).ConfigureAwait(false);
@@ -1053,7 +1180,6 @@ public sealed class TextureEditService : IDisposable
         s.Height = height;
         s.LastSaved = DateTimeOffset.UtcNow;
         s.Status = "Saved from Substance Painter";
-        PropagateFingerprint(s, result.MappingFingerprint);
         RaiseFileChanged(s.TargetFile);
         MirrorWorkingFile(runtime, tga, hash);
         if (!PersistCommit(runtime)) throw new IOException(s.Status);
@@ -1082,7 +1208,6 @@ public sealed class TextureEditService : IDisposable
         s.Height = header.Height;
         s.LastSaved = DateTimeOffset.UtcNow;
         s.Status = "Original restored from Substance Painter";
-        PropagateFingerprint(s, result.MappingFingerprint);
         RaiseFileChanged(s.TargetFile);
         // The working image follows, so a later editor save starts from what the game shows.
         var snapshot = Path.Combine(s.Directory, "snapshot.tga");
@@ -1110,9 +1235,7 @@ public sealed class TextureEditService : IDisposable
             TextureFiles.EnsureLocalPath(s.WorkingFile);
             File.WriteAllBytes(s.WorkingFile, tga);
             s.WorkingHash = hash;
-            runtime.FailedHash = "";
-            runtime.Failures = 0;
-            runtime.RetryAt = 0;
+            runtime.Succeeded();
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {

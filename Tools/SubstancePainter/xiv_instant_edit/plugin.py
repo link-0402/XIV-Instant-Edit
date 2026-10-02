@@ -359,9 +359,11 @@ class Plugin:
             if self.send is not send:
                 return  # The project closed meanwhile.
             if error is not None:
-                if time.monotonic() > send["deadline"]:
-                    self._finish_send(f"Lost contact with Instant Edit: {error}", [], failed=True)
+                message, send["unreachable_since"] = client.poll_failure(error, send.get("unreachable_since"), time.monotonic())
+                if message is not None:
+                    self._finish_send(message, [], failed=True)
                 return
+            send["unreachable_since"] = None
             body = result[2]
             if body.get("state") == "pending":
                 if time.monotonic() > send["deadline"]:
