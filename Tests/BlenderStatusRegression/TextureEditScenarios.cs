@@ -81,9 +81,11 @@ internal static class TextureEditScenarios
             await VariantsAsync(Path.Combine(root, "variants"));
             await VanillaVariantAsync(Path.Combine(root, "vanilla-variant"));
             await WatcherAsync(Path.Combine(root, "watcher"));
+            await UnchangedFilesAsync(Path.Combine(root, "unchanged"));
             await RestartAsync(Path.Combine(root, "restart"));
             await MetadataRewritesAsync(Path.Combine(root, "metadata"));
             await WaitingAsync(Path.Combine(root, "waiting"));
+            await WaitingRetriesAsync(Path.Combine(root, "waiting-retries"));
             await CacheCleanupAsync(Path.Combine(root, "cache-cleanup"));
             await DiscardAllAsync(Path.Combine(root, "discard-all"));
             await SharedTexturesAsync(Path.Combine(root, "shared"));
@@ -405,6 +407,59 @@ internal static class TextureEditScenarios
     }
 
     /// <summary>
+    /// A scan reads a working or variant TGA only when its size or write time changed, so idle sessions
+    /// cost nothing. Saves the watcher missed still change them, and a resumed session reads again.
+    /// </summary>
+    private static async Task UnchangedFilesAsync(string root)
+    {
+        using var f = new Fixture(root, (uint)TexFile.TextureFormat.BC7, withMeta: true);
+        await f.Service.StartAsync(f.Request, false);
+        var s = f.Service.Sessions.Single();
+        var red = Path.Combine(s.Directory, "Red.tga");
+        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 56));
+        File.WriteAllBytes(red, Tga(8, 8, 75));
+        await f.Service.ProcessPendingAsync(true);
+        // Keeps the size and write time, so only reading the file notices the change.
+        void Rewrite(string path, byte value)
+        {
+            var written = File.GetLastWriteTimeUtc(path);
+            File.WriteAllBytes(path, Tga(8, 8, value));
+            File.SetLastWriteTimeUtc(path, written);
+        }
+        Rewrite(s.WorkingFile, 57);
+        Rewrite(red, 76);
+        // Each session is scanned at most every 2 seconds.
+        await Task.Delay(2100);
+        await f.Service.ProcessPendingAsync();
+        Check(f.Backend.Commits == 1 && f.Backend.VariantCommits == 1,
+            "a scan doesn't read a working or variant TGA whose size and write time haven't changed");
+        await f.Service.ProcessPendingAsync(true);
+        Check(f.Backend.Commits == 2 && f.Backend.VariantCommits == 2 && File.ReadAllBytes(f.Backend.Target)[80] == 57,
+            "a forced scan reads them anyway");
+
+        // This fixture has no watcher, as if it missed these saves.
+        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 58));
+        File.WriteAllBytes(red, Tga(8, 8, 77));
+        await Task.Delay(2100);
+        await f.Service.ProcessPendingAsync();
+        Check(f.Backend.Commits == 3 && f.Backend.VariantCommits == 3 && File.ReadAllBytes(f.Backend.Target)[80] == 58,
+            "saves the watcher missed go through, since they change the write time");
+
+        // With the catalog locked, the failed save can't be stored either, which pauses the session.
+        f.Backend.FailConversion = true;
+        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 59));
+        using (new FileStream(Path.Combine(f.ConfigDir, "TextureSessions.json"), FileMode.Open, FileAccess.Read, FileShare.None))
+            await f.Service.ProcessPendingAsync(true);
+        f.Backend.FailConversion = false;
+        Check(f.Service.Sessions.Single().Paused, "a save that fails while session storage fails too pauses the session");
+        await f.Service.StartAsync(f.Request, false);
+        await Task.Delay(2100);
+        await f.Service.ProcessPendingAsync();
+        Check(f.Backend.Commits == 4 && File.ReadAllBytes(f.Backend.Target)[80] == 59 && !f.Service.Sessions.Single().Paused,
+            "a resumed session reads its working TGA again, so a save that failed before the pause goes through");
+    }
+
+    /// <summary>
     /// Sessions carry on across plugin reloads and game restarts: a watching session keeps watching, a
     /// paused one stays paused, and one left alone for a day is paused so cache cleanup can remove it.
     /// </summary>
@@ -562,6 +617,34 @@ internal static class TextureEditScenarios
         results = await f.Service.ApplyExternalAsync([new ExternalTextureSave(id, Tga(8, 8, 68))], CancellationToken.None);
         Check(results.Single().Outcome == ExternalTextureOutcome.Applied && File.ReadAllBytes(f.Backend.Target)[80] == 68,
             "after reconnecting, Painter's texture is applied");
+    }
+
+    /// <summary>
+    /// A waiting save is checked again on each retry, but its TGA is only read and converted again once
+    /// the save can go through. The same goes for a variant.
+    /// </summary>
+    private static async Task WaitingRetriesAsync(string root)
+    {
+        using var f = new Fixture(root, (uint)TexFile.TextureFormat.BC7, withMeta: true);
+        await f.Service.StartAsync(f.Request, false);
+        var s = f.Service.Sessions.Single();
+        var red = Path.Combine(s.Directory, "Red.tga");
+        f.Backend.Wait = "Penumbra isn't available right now.";
+        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 66));
+        File.WriteAllBytes(red, Tga(8, 8, 79));
+        await f.Service.ProcessPendingAsync(true);
+        var conversions = f.Backend.Conversions;
+        var checks = f.Backend.Checks;
+        // Reading either file would fail while it's locked.
+        using (new FileStream(s.WorkingFile, FileMode.Open, FileAccess.Read, FileShare.None))
+        using (new FileStream(red, FileMode.Open, FileAccess.Read, FileShare.None))
+            await f.Service.ProcessPendingAsync(true);
+        Check(f.Backend.Checks == checks + 2 && f.Backend.Conversions == conversions && f.Service.Sessions.Single().Waiting,
+            "retrying a waiting save checks again without reading or converting the working or variant TGA");
+        f.Backend.Wait = null;
+        await f.Service.ProcessPendingAsync(true);
+        Check(f.Backend.Commits == 1 && f.Backend.VariantCommits == 1 && !f.Service.Sessions.Single().Waiting,
+            "once the check passes, both waiting saves go through");
     }
 
     private static async Task CacheCleanupAsync(string root)
@@ -930,7 +1013,7 @@ internal static class TextureEditScenarios
         public readonly byte[] Original;
         private readonly ModelBackupStore _backups;
         private readonly bool _vanilla;
-        public int Commits, VariantCommits, Encodes;
+        public int Commits, VariantCommits, Encodes, Conversions, Checks;
         public Guid? LastShown;
         public TextureType LastFormat;
         public bool FailConversion, RefreshWarning;
@@ -979,6 +1062,7 @@ internal static class TextureEditScenarios
         // As PenumbraService checks before encoding, minus Penumbra and the live actor.
         public Task CheckAsync(TextureEditSession s, CancellationToken token)
         {
+            Checks++;
             if (Wait is { } wait) throw new TextureWaitException(wait);
             if (!s.NeedsMod && File.Exists(Meta)) PenumbraService.EnsureTextureMappingForRegression(s);
             return Task.CompletedTask;
@@ -997,6 +1081,7 @@ internal static class TextureEditScenarios
         }
         public Task ConvertAsync(string input, string output, TextureType format, bool mipMaps)
         {
+            Conversions++;
             if (FailConversion) throw new IOException("Simulated converter failure");
             if (format == TextureType.Targa)
             {

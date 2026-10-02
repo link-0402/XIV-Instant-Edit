@@ -19,13 +19,14 @@ public sealed class TextureEditService : IDisposable
         public long ChangedAt;
         public long Generation;
         public long LastScan;
-        public long LastHashCheck;
         public long ObservedGeneration = -1;
         public long ObservedLength = -1;
         public long ObservedWrite;
         public string FailedHash = "";
         public int Failures;
         public long RetryAt;
+        /// <summary>The working image's last failed save only had to wait.</summary>
+        public bool Waiting;
         public volatile bool Enabled = !session.Paused;
         public long VariantGeneration;
         /// <summary>Save tracking per variant TGA name; only touched while holding the queue gate.</summary>
@@ -43,6 +44,7 @@ public sealed class TextureEditService : IDisposable
             FailedHash = "";
             Failures = 0;
             RetryAt = 0;
+            Waiting = false;
             Session.Waiting = false;
         }
         public void Dispose() { Enabled = false; Interlocked.Increment(ref Generation); Watcher?.Dispose(); }
@@ -53,10 +55,10 @@ public sealed class TextureEditService : IDisposable
         public long ObservedGeneration = -1;
         public long ObservedLength = -1;
         public long ObservedWrite;
-        public long LastHashCheck;
         public string FailedHash = "";
         public int Failures;
         public long RetryAt;
+        public bool Waiting;
     }
 
     /// <summary>TGAs in the working folder that the service writes itself, so they are never variants.</summary>
@@ -415,7 +417,12 @@ public sealed class TextureEditService : IDisposable
         runtime.Succeeded();
         s.Status = paused ? "Paused" : "Watching for saves";
         runtime.Enabled = !paused;
-        if (!paused) ArmWatcher(runtime);
+        if (!paused)
+        {
+            ArmWatcher(runtime);
+            // The working image is read again, so a save that failed before the pause is tried again.
+            runtime.Changed();
+        }
         Persist();
     }
 
@@ -758,12 +765,14 @@ public sealed class TextureEditService : IDisposable
             var state = runtime.StateFor(variantName);
             state.Failures = Math.Min(state.Failures + 1, 5);
             state.RetryAt = Environment.TickCount64 + Math.Min(30000, 1000 * (1 << state.Failures));
+            state.Waiting = waiting;
             if (FindVariant(s, variantName) is { } variant) variant.Status = (waiting ? "Waiting: " : "Save not applied: ") + error.Message;
         }
         else if (!fromPainter)
         {
             runtime.Failures = Math.Min(runtime.Failures + 1, 5);
             runtime.RetryAt = Environment.TickCount64 + Math.Min(30000, 1000 * (1 << runtime.Failures));
+            runtime.Waiting = waiting;
         }
         // Only the working image's own outcome ends a wait for it.
         if (variantName is null && !fromPainter)
@@ -804,6 +813,7 @@ public sealed class TextureEditService : IDisposable
         state.FailedHash = "";
         state.Failures = 0;
         state.RetryAt = 0;
+        state.Waiting = false;
         if (runtime.Failures == 0)
             runtime.Session.Waiting = false;
     }
@@ -842,13 +852,14 @@ public sealed class TextureEditService : IDisposable
         var info = new FileInfo(file);
         if (!info.Exists) return;
         if (force) state.RetryAt = 0;
-        // An unchanged file is read again every 30 seconds, and after a failed save once it may be tried again.
-        if (!force && generation == state.ObservedGeneration && info.Length == state.ObservedLength &&
-            info.LastWriteTimeUtc.Ticks == state.ObservedWrite && (state.Failures == 0
-                ? Environment.TickCount64 - state.LastHashCheck < 30000
-                : Environment.TickCount64 < state.RetryAt)) return;
+        var unchanged = generation == state.ObservedGeneration && info.Length == state.ObservedLength &&
+            info.LastWriteTimeUtc.Ticks == state.ObservedWrite;
+        // A file with the same size and write time isn't read again: a save the watcher missed still
+        // changes them. After a failed save it's read again once it may be tried again.
+        if (!force && unchanged && (state.Failures == 0 || Environment.TickCount64 < state.RetryAt)) return;
+        // A waiting save is checked first: its file is only read and converted again once it can go through.
+        if (unchanged && state.Waiting) await _backend.CheckAsync(s, _life.Token).ConfigureAwait(false);
         var tga = TextureFiles.Read(file);
-        state.LastHashCheck = Environment.TickCount64;
         state.ObservedLength = info.Length;
         state.ObservedWrite = info.LastWriteTimeUtc.Ticks;
         state.ObservedGeneration = generation;
@@ -988,13 +999,14 @@ public sealed class TextureEditService : IDisposable
         var s = runtime.Session;
         var generation = Interlocked.Read(ref runtime.Generation);
         var info = new FileInfo(s.WorkingFile);
-        // An unchanged file is read again every 30 seconds, and after a failed save once it may be tried again.
-        if (!force && info.Exists && generation == runtime.ObservedGeneration &&
-            info.Length == runtime.ObservedLength && info.LastWriteTimeUtc.Ticks == runtime.ObservedWrite && (runtime.Failures == 0
-                ? Environment.TickCount64 - runtime.LastHashCheck < 30000
-                : Environment.TickCount64 < runtime.RetryAt)) return;
+        var unchanged = info.Exists && generation == runtime.ObservedGeneration &&
+            info.Length == runtime.ObservedLength && info.LastWriteTimeUtc.Ticks == runtime.ObservedWrite;
+        // A file with the same size and write time isn't read again: a save the watcher missed still
+        // changes them. After a failed save it's read again once it may be tried again.
+        if (!force && unchanged && (runtime.Failures == 0 || Environment.TickCount64 < runtime.RetryAt)) return;
+        // A waiting save is checked first: its file is only read and converted again once it can go through.
+        if (unchanged && runtime.Waiting) await _backend.CheckAsync(s, _life.Token).ConfigureAwait(false);
         var tga = TextureFiles.Read(s.WorkingFile);
-        runtime.LastHashCheck = Environment.TickCount64;
         runtime.ObservedLength = info.Length;
         runtime.ObservedWrite = info.LastWriteTimeUtc.Ticks;
         runtime.ObservedGeneration = generation;
