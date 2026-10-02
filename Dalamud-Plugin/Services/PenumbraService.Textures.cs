@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using Penumbra.Api.Enums;
@@ -7,6 +8,9 @@ namespace InstantEdit.Services;
 
 public sealed partial class PenumbraService : ITextureEditBackend
 {
+    /// <summary>Starts a mapping fingerprint of the game paths mapped to one file; older ones hashed all of meta.json.</summary>
+    private const string MappingFingerprintVersion = "paths:";
+
     async Task ITextureEditBackend.ConvertAsync(string input, string output, TextureType format, bool mipMaps)
     {
         TextureFiles.EnsureLocalPath(input);
@@ -68,7 +72,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
             CollectionId = collection?.Id, CollectionName = collection?.Name ?? "",
             Format = header.Format, Width = header.Width, Height = header.Height, MipMaps = header.Mips > 1,
             LastCommittedHash = vanilla ? "" : TextureFiles.Hash(bytes),
-            MappingFingerprint = vanilla ? "" : TextureMappingFingerprint(modRoot),
+            MappingFingerprint = vanilla ? "" : TextureMappingFingerprint(modRoot, relative),
         };
         await ValidateLiveTextureMappingAsync(session, vanilla ? resolvedGamePath : request.ActualPath, true).ConfigureAwait(false);
         return new TextureSource(bytes, session);
@@ -89,13 +93,18 @@ public sealed partial class PenumbraService : ITextureEditBackend
         if (!PathRules.IsPathWithin(file, root) || !string.Equals(Path.GetFullPath(Path.Combine(root, relative)), Path.GetFullPath(file), StringComparison.OrdinalIgnoreCase))
             throw new TextureConflictException("The texture no longer belongs to its captured mod directory.");
         token.ThrowIfCancellationRequested();
-        var registered = await _framework.RunOnFrameworkThread(() => ResolveModScanOnFramework(mod)).ConfigureAwait(false);
+        var (available, registered) = await _framework.RunOnFrameworkThread(() => (Available, ResolveModScanOnFramework(mod))).ConfigureAwait(false);
+        // Penumbra lists no mods while it is unavailable, and not every mod while it loads them again.
+        if (!available)
+            throw new TextureWaitException("Penumbra isn't available right now.");
+        if (registered is null && Directory.Exists(root) && File.Exists(file))
+            throw new TextureWaitException("Penumbra doesn't list the texture's mod right now.");
         if (registered is null || !registered.CandidateRoots.Any(candidate =>
                 string.Equals(Path.GetFullPath(candidate), Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase) ||
                 (Path.GetFileName(candidate).Equals("Files", StringComparison.OrdinalIgnoreCase) &&
                  string.Equals(Path.GetDirectoryName(Path.GetFullPath(candidate)), Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase))) ||
             !File.Exists(file))
-            throw new TextureConflictException("The texture's mod moved, was removed, or is no longer available. Reopen it from the browser.");
+            throw new TextureConflictException("The texture's mod moved, was removed, or is no longer available. Reopen the texture from On Screen or the Mod Browser.");
     }
 
     private bool MatchesTextureActor(TextureEditSession session)
@@ -112,6 +121,12 @@ public sealed partial class PenumbraService : ITextureEditBackend
     private static string[] SessionTextureFiles(TextureEditSession session)
         => [session.TargetFile, .. session.Variants.Where(v => v.RelativePath.Length > 0).Select(session.VariantTargetFile)];
 
+    /// <summary>
+    /// Checks that the actor draws the session's texture from one of the expected files. When a session
+    /// opens it must. Later, a texture that isn't drawn right now passes, since the actor is gone, being
+    /// redrawn or between areas, or wears other gear; one drawn from another file waits, since a redraw
+    /// or an option switched back can end that.
+    /// </summary>
     private async Task ValidateLiveTextureMappingAsync(TextureEditSession session, IReadOnlyCollection<string> expected, bool requireActor)
     {
         if (!session.ObjectIndex.HasValue) return;
@@ -122,20 +137,88 @@ public sealed partial class PenumbraService : ITextureEditBackend
                 if (requireActor) throw new TextureConflictException("The selected actor changed. Refresh and reopen the texture.");
                 return;
             }
-            var paths = GetResourcePaths((ushort)session.ObjectIndex.Value);
-            if (paths is null || !paths.Any(p => expected.Contains(p.Key, StringComparer.OrdinalIgnoreCase) &&
-                    p.Value.Contains(session.GamePath, StringComparer.OrdinalIgnoreCase)))
+            // Penumbra has no paths for an actor without a draw object.
+            var shown = GetResourcePaths((ushort)session.ObjectIndex.Value)?
+                .Where(p => p.Value.Contains(session.GamePath, StringComparer.OrdinalIgnoreCase))
+                .Select(p => p.Key)
+                .ToList() ?? [];
+            if (shown.Any(file => expected.Any(candidate => SameTextureFile(file, candidate))))
+                return;
+            if (requireActor)
                 throw new TextureConflictException("The actor's texture mapping changed. Refresh and reopen the texture.");
+            if (shown.Count > 0)
+                throw new TextureWaitException("Your character shows another file for this texture right now.");
         }).ConfigureAwait(false);
     }
 
-    internal static string TextureMappingFingerprint(string root)
+    /// <summary>A resolved path from Penumbra against a session file: game paths by text, files on disk by location.</summary>
+    private static bool SameTextureFile(string resolved, string file)
+        => string.Equals(resolved, file, StringComparison.OrdinalIgnoreCase) || PathRules.SamePhysicalPath(resolved, file);
+
+    /// <summary>The game paths a mod maps to one of its files, lower case, from its default data and every option.</summary>
+    internal static SortedSet<string> TextureGamePaths(string root, string relativePath)
     {
-        // Hash the complete v4 document so option renames, reordering, and mapping edits invalidate the session.
-        _ = LoadV4ModMetadata(root);
-        var path = Path.Combine(root, "meta.json");
-        return TextureFiles.Hash(TextureFiles.Read(path));
+        var meta = LoadV4ModMetadata(root);
+        var file = ModRelativeKey(relativePath);
+        var gamePaths = new SortedSet<string>(StringComparer.Ordinal);
+        void Add(JsonNode? container)
+        {
+            if (container is not JsonObject value || value["Files"] is not JsonObject files)
+                return;
+            foreach (var (gamePath, mapped) in files)
+                if (JsonString(mapped) is { } path && string.Equals(ModRelativeKey(path), file, StringComparison.OrdinalIgnoreCase))
+                    gamePaths.Add(PathRules.NormalizeGamePath(gamePath).ToLowerInvariant());
+        }
+        Add(meta["DefaultData"]);
+        foreach (var group in (meta["Groups"] as JsonArray ?? []).OfType<JsonObject>())
+            foreach (var key in new[] { "Options", "Containers" })
+                foreach (var container in (group[key] as JsonArray ?? []).OfType<JsonObject>())
+                    Add(container);
+        return gamePaths;
     }
+
+    /// <summary>
+    /// Fingerprints what a save relies on in the mod's metadata: the game paths mapped to the session's file.
+    /// Penumbra, Blender exports and other tools rewrite meta.json for option names, other files, attribute
+    /// groups, EST entries and its LastWrite stamp, none of which changes what the file is used for.
+    /// </summary>
+    internal static string TextureMappingFingerprint(string root, string relativePath)
+        => MappingFingerprint(TextureGamePaths(root, relativePath));
+
+    private static string MappingFingerprint(IEnumerable<string> gamePaths)
+        => MappingFingerprintVersion + TextureFiles.Hash(Encoding.UTF8.GetBytes(string.Join('\n', gamePaths)));
+
+    /// <summary>Penumbra writes a mod's relative paths with backslashes and in lower case; sessions keep them as found on disk.</summary>
+    private static string ModRelativeKey(string path)
+    {
+        var normalized = path.Replace('\\', '/').Trim();
+        while (normalized.StartsWith("./", StringComparison.Ordinal))
+            normalized = normalized[2..];
+        return normalized.TrimStart('/');
+    }
+
+    /// <summary>
+    /// Throws a conflict when the mod maps the session's file to other game paths than when the session
+    /// opened. A session from an earlier version kept a hash of all of meta.json; it takes the current
+    /// mapping on its next save, as long as the mod still uses the file.
+    /// </summary>
+    private static void EnsureTextureMapping(TextureEditSession session)
+    {
+        var gamePaths = TextureGamePaths(session.ModRoot, session.RelativePath);
+        var fingerprint = MappingFingerprint(gamePaths);
+        if (fingerprint == session.MappingFingerprint)
+            return;
+        if (gamePaths.Count > 0 && !session.MappingFingerprint.StartsWith(MappingFingerprintVersion, StringComparison.Ordinal))
+        {
+            session.MappingFingerprint = fingerprint;
+            return;
+        }
+        throw new TextureConflictException(gamePaths.Count == 0
+            ? "The mod no longer uses this texture's file. Reopen the texture from On Screen or the Mod Browser."
+            : "The mod now uses this texture's file differently. Reconnect its session in the Sessions tab to keep editing it.");
+    }
+
+    internal static void EnsureTextureMappingForRegression(TextureEditSession session) => EnsureTextureMapping(session);
 
     async Task<TextureCommit> ITextureEditBackend.CommitAsync(TextureEditSession session, byte[] tex, Func<bool> stillCurrent, CancellationToken token)
     {
@@ -155,8 +238,8 @@ public sealed partial class PenumbraService : ITextureEditBackend
                 if (!stillCurrent()) throw new OperationCanceledException("A newer save is pending.");
                 AddGameTextureToMod(session.ModRoot, session.GamePath, tex);
                 session.NeedsMod = false;
-                session.MappingFingerprint = TextureMappingFingerprint(session.ModRoot);
-                return new TextureCommit(TextureFiles.Hash(tex), "", "Texture saved", session.MappingFingerprint);
+                session.MappingFingerprint = TextureMappingFingerprint(session.ModRoot, session.RelativePath);
+                return new TextureCommit(TextureFiles.Hash(tex), "", "Texture saved");
             }
             if (session.NeedsMod)
             {
@@ -172,7 +255,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
                     StageGameTextureMod(staging, session.ModDirectory, session.GamePath, tex, session.JobId);
                     token.ThrowIfCancellationRequested();
                     if (!stillCurrent()) throw new OperationCanceledException("A newer save is pending.");
-                    var mappingFingerprint = TextureMappingFingerprint(staging);
+                    var mappingFingerprint = TextureMappingFingerprint(staging, session.RelativePath);
                     Directory.Move(staging, session.ModRoot);
                     session.NeedsMod = false;
                     session.MappingFingerprint = mappingFingerprint;
@@ -186,19 +269,53 @@ public sealed partial class PenumbraService : ITextureEditBackend
             else
             {
                 await ValidateTextureDestinationAsync(session.ModDirectory, session.ModRoot, session.RelativePath, session.TargetFile, token).ConfigureAwait(false);
-                if (TextureMappingFingerprint(session.ModRoot) != session.MappingFingerprint)
-                    throw new TextureConflictException("The mod's options or mappings changed. Reopen the texture from the browser.");
+                EnsureTextureMapping(session);
                 await ValidateLiveTextureMappingAsync(session, SessionTextureFiles(session), false).ConfigureAwait(false);
                 if (_backups is null) throw new IOException("Texture backup storage is unavailable.");
                 backup = TextureFiles.Replace(session.TargetFile, session.ModRoot, session.RelativePath,
                     session.ModDirectory, tex, session.LastCommittedHash, _backups, () =>
                     {
-                        if (TextureMappingFingerprint(session.ModRoot) != session.MappingFingerprint)
-                            throw new TextureConflictException("The mod's mappings changed while saving. Reopen the texture.");
+                        EnsureTextureMapping(session);
                         return stillCurrent();
                     }, token);
             }
             return new TextureCommit(TextureFiles.Hash(tex), backup, "Texture saved");
+        }
+        finally { _exportGate.Release(); }
+    }
+
+    async Task ITextureEditBackend.CheckAsync(TextureEditSession session, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        // The first save of a vanilla texture checks its new mod's name while creating it.
+        if (session.NeedsMod)
+        {
+            await ValidateLiveTextureMappingAsync(session, session.ResolvedGamePath, false).ConfigureAwait(false);
+            return;
+        }
+        await ValidateTextureDestinationAsync(session.ModDirectory, session.ModRoot, session.RelativePath, session.TargetFile, token).ConfigureAwait(false);
+        EnsureTextureMapping(session);
+        await ValidateLiveTextureMappingAsync(session, SessionTextureFiles(session), false).ConfigureAwait(false);
+    }
+
+    async Task<TextureRebase> ITextureEditBackend.RebaseAsync(TextureEditSession session, CancellationToken token)
+    {
+        if (session.NeedsMod)
+            throw new IOException("This texture's mod hasn't been created. Discard the session and open the texture again.");
+        await _exportGate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            await ValidateTextureDestinationAsync(session.ModDirectory, session.ModRoot, session.RelativePath, session.TargetFile, token).ConfigureAwait(false);
+            var gamePaths = TextureGamePaths(session.ModRoot, session.RelativePath);
+            if (gamePaths.Count == 0)
+                throw new IOException("The mod no longer uses this texture's file. Open the texture again from On Screen or the Mod Browser.");
+            await ValidateLiveTextureMappingAsync(session, SessionTextureFiles(session), false).ConfigureAwait(false);
+            var bytes = TextureFiles.Read(session.TargetFile);
+            var header = TextureFiles.ReadOriginal(bytes).Header;
+            var variants = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var variant in session.Variants.Where(v => v.RelativePath.Length > 0 && File.Exists(session.VariantTargetFile(v))))
+                variants[variant.Name] = TextureFiles.Hash(TextureFiles.Read(session.VariantTargetFile(variant)));
+            return new TextureRebase(TextureFiles.Hash(bytes), MappingFingerprint(gamePaths), header.Format, header.Width, header.Height, variants);
         }
         finally { _exportGate.Release(); }
     }
@@ -328,3 +445,6 @@ public sealed partial class PenumbraService : ITextureEditBackend
 }
 
 internal sealed class TextureConflictException(string message) : IOException(message);
+
+/// <summary>A save that can't go through right now, such as while Penumbra loads; the session tries it again.</summary>
+internal sealed class TextureWaitException(string message) : IOException(message);

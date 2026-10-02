@@ -380,6 +380,7 @@ public sealed partial class MainWindow
             return;
         Widgets.SectionHeader("Substance Painter projects", jobs.Count == 1 ? "1 project" : $"{jobs.Count} projects");
         var busy = Volatile.Read(ref _painterBusy) != 0;
+        var sessions = _textures.Sessions.ToDictionary(session => session.Id);
         foreach (var job in jobs)
         {
             using var id = ImRaii.PushId(job.Id.ToString("N"));
@@ -398,6 +399,11 @@ public sealed partial class MainWindow
                 Widgets.HintWrapped(job.Message + (job.LastSent is { } sent ? $" · last send {sent.ToLocalTime():g}" : ""));
             if (job.ProjectPath.Length > 0)
                 Widgets.HintWrapped("Project: " + job.ProjectPath);
+            if (PainterBlockedTextures(job, sessions) is { Length: > 0 } blocked)
+            {
+                using var wrap = ImRaii.TextWrapPos(0f);
+                ImGui.TextColored(Theme.Paused, blocked);
+            }
             using (ImRaii.Disabled(busy))
             {
                 if (ImGui.Button("Open in Painter"))
@@ -414,6 +420,23 @@ public sealed partial class MainWindow
         }
         ImGui.Separator();
         ImGui.Spacing();
+    }
+
+    /// <summary> Why some of a project's textures can't be sent: their session is in conflict, or was discarded. </summary>
+    private static string PainterBlockedTextures(PainterJob job, IReadOnlyDictionary<Guid, TextureEditSession> sessions)
+    {
+        var conflicts = job.Targets.Count(target => sessions.TryGetValue(target.SessionId, out var session) && session.Conflict);
+        var missing = job.Targets.Count(target => !sessions.ContainsKey(target.SessionId));
+        var lines = new List<string>();
+        if (conflicts > 0)
+            lines.Add(conflicts == 1
+                ? "1 texture can't be sent until its session below is reconnected."
+                : $"{conflicts} textures can't be sent until their sessions below are reconnected.");
+        if (missing > 0)
+            lines.Add(missing == 1
+                ? "1 texture's session was discarded, so Painter can't send it anymore."
+                : $"{missing} textures' sessions were discarded, so Painter can't send them anymore.");
+        return string.Join(" ", lines);
     }
 
     private void ReopenPainterJob(PainterJob job)

@@ -57,7 +57,7 @@ public sealed partial class MainWindow
         => state switch
         {
             SessionState.Conflict => Theme.Conflict,
-            SessionState.Paused => Theme.Paused,
+            SessionState.Paused or SessionState.Waiting => Theme.Paused,
             SessionState.NeedsMod => Theme.Info,
             _ => Theme.Watching,
         };
@@ -67,6 +67,7 @@ public sealed partial class MainWindow
         {
             SessionState.Conflict => "Conflict",
             SessionState.Paused => "Paused",
+            SessionState.Waiting => "Waiting",
             SessionState.NeedsMod => "Needs mod",
             _ => "Watching",
         };
@@ -184,7 +185,15 @@ public sealed partial class MainWindow
                     s.Paused ? "Resume watching for saves" : "Pause: saves are ignored until resumed", canPause))
                 TextureAction(() => _textures.SetPausedAsync(s.Id, !s.Paused));
             ImGui.SameLine();
-            if (Widgets.IconButton("##retry", FontAwesomeIcon.Redo, "Retry the last save: resume, reload the mod and redraw", canPause))
+            // A conflict stops the session for good, unless it takes the mod's file as it is now.
+            if (s.Conflict)
+            {
+                if (Widgets.IconButton("##reconnect", FontAwesomeIcon.Link,
+                        "Reconnect: keep this session and use the mod's file as it is now. Your next save goes over it.",
+                        !s.NeedsMod && !string.IsNullOrEmpty(s.PixelHash)))
+                    TextureAction(() => _textures.ReconnectAsync(s.Id));
+            }
+            else if (Widgets.IconButton("##retry", FontAwesomeIcon.Redo, "Retry the last save: resume, reload the mod and redraw", canPause))
                 TextureAction(() => _textures.RetryAsync(s.Id));
             ImGui.SameLine();
             if (Widgets.IconButton("##restore", FontAwesomeIcon.History,
@@ -240,6 +249,11 @@ public sealed partial class MainWindow
         {
             Widgets.SectionHeader("Discard working files?");
             Widgets.HintWrapped("This deletes the session's working directory, including its TGA and any editing documents saved there. The committed mod and managed backups are retained.");
+            if (_discardTexture is { } linked && _painter?.Jobs.FirstOrDefault(job => job.Targets.Any(target => target.SessionId == linked)) is { } project)
+            {
+                using var wrap = ImRaii.TextWrapPos(0f);
+                ImGui.TextColored(Theme.Paused, $"The Substance Painter project {project.DisplayName} sends this texture through this session. Afterwards it can't send it anymore.");
+            }
             ImGui.Spacing();
             if (ImGui.Button("Delete working files"))
             {

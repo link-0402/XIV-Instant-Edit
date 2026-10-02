@@ -233,6 +233,20 @@ class ClientTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_failed_send_polls_end_on_refusals_and_after_a_minute_without_answer(self):
+        lost = client.PluginRefused(404, "Instant Edit has no record of this send.", "unknown_send")
+        message, since = client.poll_failure(lost, None, 100.0)
+        self.assertIn("restarted", message)
+        self.assertIsNone(since)
+        message, _ = client.poll_failure(client.PluginRefused(404, "Unknown project.", "unknown_project"), 50.0, 100.0)
+        self.assertEqual(message, "Unknown project.")
+        down = client.PluginUnavailable("Instant Edit is not reachable.")
+        self.assertEqual(client.poll_failure(down, None, 100.0), (None, 100.0))
+        self.assertEqual(client.poll_failure(down, 100.0, 100.0 + client.UNREACHABLE_SECONDS - 1), (None, 100.0))
+        message, since = client.poll_failure(down, 100.0, 100.0 + client.UNREACHABLE_SECONDS)
+        self.assertTrue(message.startswith("Lost contact with Instant Edit"))
+        self.assertEqual(since, 100.0)
+
 
 def install_painter_stub():
     """A minimal stand-in for Painter's API, enough to import painter_job."""

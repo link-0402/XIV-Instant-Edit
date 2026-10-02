@@ -412,7 +412,7 @@ internal static class TextureFiles
             throw new TextureConflictException("The replacement target is outside the captured texture mod.");
         _ = ReadTex(bytes);
         if (Hash(Read(target)) != expectedHash)
-            throw new TextureConflictException("The destination was edited externally. Your TGA is retained; reopen the texture from its new source.");
+            throw new TextureConflictException("Something else changed the texture's file. Your TGA is kept; reconnect its session in the Sessions tab to save over the change, or reopen the texture.");
         var temp = target + $".{Guid.NewGuid():N}.tmp";
         try
         {
@@ -421,12 +421,12 @@ internal static class TextureFiles
             if (!current()) throw new OperationCanceledException("A newer save is pending.");
             var backup = backups.Create(target, mod, relative);
             if (Hash(Read(backup)) != expectedHash)
-                throw new TextureConflictException("The destination changed while preparing the save.");
+                throw new TextureConflictException("Something else changed the texture's file during the save. Reconnect its session in the Sessions tab to save over the change.");
             token.ThrowIfCancellationRequested();
             if (!current()) throw new OperationCanceledException("A newer save is pending.");
             EnsureLocalPath(target);
             if (Hash(Read(target)) != expectedHash)
-                throw new TextureConflictException("The destination changed while preparing the save.");
+                throw new TextureConflictException("Something else changed the texture's file during the save. Reconnect its session in the Sessions tab to save over the change.");
             File.Replace(temp, target, null);
             return backup;
         }
