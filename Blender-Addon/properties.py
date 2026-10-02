@@ -109,9 +109,8 @@ class XIVIEExportSettings(PropertyGroup):
     calculate_heels_offset: BoolProperty(
         name="Calculate Heels Offset",
         description=(
-            "Measure how far the model reaches below the floor and export it as a "
-            "heels_offset attribute on the first mesh part, replacing any manual "
-            "heels_offset attribute. Nothing is added when no geometry is below the floor"
+            "Automatically calculates the optimal height offset for this model "
+            "(usually shoes) and writes it as an attribute to the model"
         ),
         default=False,
     )  # type: ignore

@@ -30,7 +30,7 @@ internal static class TextureCompressionViews
     {
         CompressionPhase.Off => "Off.",
         CompressionPhase.Watching => "On: textures your character loads are checked a few seconds later.",
-        CompressionPhase.Waiting => "New textures loaded. Waiting until your character is out of combat, cutscenes, group pose and loading screens.",
+        CompressionPhase.Waiting => "Waiting until your character is out of combat, cutscenes, group pose and loading screens.",
         CompressionPhase.Checking => "Checking your character's textures",
         _ => progress.Length > 0 ? progress : "Working",
     };
@@ -62,9 +62,13 @@ internal static class TextureCompressionViews
     private static string OneColor(int shrunk)
         => shrunk == 0 ? string.Empty : string.Create(CultureInfo.InvariantCulture, $" ({shrunk:N0} of one color, shrunk to {SingleColor.Size} × {SingleColor.Size})");
 
-    /// <summary> The originals the backup folder holds, each shared copy once. </summary>
-    public static string Backups((int Files, long Bytes) totals)
-        => totals.Files == 0 ? string.Empty : $"Their originals take {Bytes(totals.Bytes)} in the cache folder's texture-backups folder.";
+    /// <summary> The originals the backup folder holds, each shared copy once, and how long they stay. </summary>
+    public static string Backups((int Files, long Bytes) totals, bool automaticCleanup)
+        => totals.Files == 0
+            ? string.Empty
+            : automaticCleanup
+                ? string.Create(CultureInfo.InvariantCulture, $"Backups: {Bytes(totals.Bytes)}, kept for {TextureBackupStore.Retention.TotalDays:0} days.")
+                : $"Backups: {Bytes(totals.Bytes)}, kept until restored (automatic cache cleanup is off).";
 
     /// <summary> The last run's result, when it optimized something. </summary>
     public static string LastRun(CompressionRun run)
@@ -91,6 +95,15 @@ internal static class TextureCompressionViews
             var count => $"{Textures(count)} you wear stay as they are, because compressing would visibly change them.",
         };
 
+    /// <summary> How many of the textures the character wears stay as they are because their originals were restored. </summary>
+    public static string LeftRestored(CompressionRun run)
+        => run.Restored.Count switch
+        {
+            0 => string.Empty,
+            1 => "1 restored file is skipped. Hover for which.",
+            var count => string.Create(CultureInfo.InvariantCulture, $"{count:N0} restored files are skipped. Hover for which."),
+        };
+
     public static string Restored(CompressionRestore result)
     {
         var restored = new List<string>();
@@ -98,7 +111,10 @@ internal static class TextureCompressionViews
             restored.Add(Textures(result.Restored));
         if (result.Hairstyles > 0)
             restored.Add(Hairstyles(result.Hairstyles));
-        var parts = new List<string> { restored.Count == 0 ? "Nothing needed restoring." : $"Restored {string.Join(" and ", restored)}." };
+        var parts = new List<string>
+        {
+            restored.Count == 0 ? "Nothing to restore on your character." : $"Restored {string.Join(" and ", restored)}.",
+        };
         if (result.Changed.Count == 1)
             parts.Add("1 file changed since it was optimized, so it was left as it is and keeps its backup.");
         else if (result.Changed.Count > 1)
@@ -108,7 +124,6 @@ internal static class TextureCompressionViews
             parts.Add("1 file couldn't be restored.");
         else if (result.Failed.Count > 1)
             parts.Add(string.Create(CultureInfo.InvariantCulture, $"{result.Failed.Count:N0} files couldn't be restored."));
-        parts.Add("Automatic optimization is off.");
         return string.Join(" ", parts);
     }
 

@@ -82,6 +82,8 @@ internal sealed class TextureBackupJournal
     public List<CompressedTexture> Compressed { get; set; } = [];
     public List<KeptTexture> Kept { get; set; } = [];
     public List<RefitGroup> Refits { get; set; } = [];
+    /// <summary> Files whose originals were restored, as full paths; optimization leaves them alone until Optimize now. </summary>
+    public List<string> Restored { get; set; } = [];
 }
 
 /// <summary>
@@ -89,12 +91,15 @@ internal sealed class TextureBackupJournal
 /// refit hair. Each original is copied into the cache folder's texture-backups folder under its
 /// SHA-256, so identical files share one copy; the list of replaced files and of the textures the
 /// check kept lives in the config folder, since it is what restoring needs. Backups are kept until
-/// they are restored or deleted. Dalamud-free.
+/// they are restored, or until the automatic cache cleanup finds them older than
+/// <see cref="Retention"/>. Dalamud-free.
 /// </summary>
 internal sealed partial class TextureBackupStore
 {
     public const string FolderName = "texture-backups";
     public const string JournalName = "CompressedTextures.json";
+    /// <summary> How long the automatic cache cleanup keeps an original. </summary>
+    public static readonly TimeSpan Retention = TimeSpan.FromDays(7);
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly Lock _lock = new();
     private readonly string _journalPath;
@@ -102,6 +107,7 @@ internal sealed partial class TextureBackupStore
     private IReadOnlyList<CompressedTexture> _compressed = [];
     private IReadOnlyList<KeptTexture> _kept = [];
     private IReadOnlyList<RefitGroup> _refits = [];
+    private IReadOnlySet<string> _restored = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
     public TextureBackupStore(string configDirectory) => _journalPath = Path.Combine(configDirectory, JournalName);
 
@@ -127,6 +133,8 @@ internal sealed partial class TextureBackupStore
                     _journal.Kept.RemoveAll(entry => entry is null);
                     _journal.Refits ??= [];
                     _journal.Refits.RemoveAll(group => group?.Files is not { Count: > 0 });
+                    _journal.Restored ??= [];
+                    _journal.Restored.RemoveAll(string.IsNullOrWhiteSpace);
                 }
                 catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException or NotSupportedException)
                 {
@@ -158,7 +166,12 @@ internal sealed partial class TextureBackupStore
         Directory.CreateDirectory(folder);
         var path = Path.Combine(folder, sha256.ToUpperInvariant() + extension);
         if (File.Exists(path) && new FileInfo(path).Length == original.LongLength && Hash(File.ReadAllBytes(path)) == sha256.ToUpperInvariant())
+        {
+            // Dated now, so the cleanup's sweep for copies no entry names doesn't take it before it is recorded.
+            try { File.SetLastWriteTimeUtc(path, DateTime.UtcNow); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
             return path;
+        }
         var temporary = path + $".{Guid.NewGuid():N}.tmp";
         try
         {
@@ -305,6 +318,125 @@ internal sealed partial class TextureBackupStore
         return (distinct.Count, distinct.Sum(group => group.First().OriginalLength));
     }
 
+    /// <summary> Whether the file's original was restored, so optimization leaves it alone. </summary>
+    public bool IsRestored(string file) => Volatile.Read(ref _restored).Contains(Full(file));
+
+    /// <summary> Remembers files whose originals were restored. </summary>
+    public void MarkRestored(IEnumerable<string> files)
+    {
+        lock (_lock)
+        {
+            var known = _journal.Restored.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var added = files.Select(Full).Where(known.Add).ToList();
+            if (added.Count == 0)
+                return;
+            _journal.Restored.AddRange(added);
+            Save();
+            Publish();
+        }
+    }
+
+    /// <summary> Lets optimization change these files again; returns how many were marked restored. </summary>
+    public int ClearRestored(IEnumerable<string> files)
+    {
+        lock (_lock)
+        {
+            var cleared = files.Select(Full).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var removed = _journal.Restored.RemoveAll(cleared.Contains);
+            if (removed == 0)
+                return 0;
+            Save();
+            Publish();
+            return removed;
+        }
+    }
+
+    /// <summary>
+    /// The compressed textures and refit groups to restore for these files (what a character has
+    /// loaded). A refit group goes back whole when any of its files is among them, together with every
+    /// group sharing a file with it and the compressed entries of all their files, since a texture cut
+    /// by a refit may have been compressed after. Groups keep the store's order, oldest first.
+    /// </summary>
+    public static (IReadOnlyList<CompressedTexture> Compressed, IReadOnlyList<RefitGroup> Refits) Covering(
+        IReadOnlyList<CompressedTexture> compressed, IReadOnlyList<RefitGroup> refits, IEnumerable<string> files)
+    {
+        var wanted = files.Select(Full).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var groups = new HashSet<RefitGroup>(ReferenceEqualityComparer.Instance);
+        for (var grew = true; grew;)
+        {
+            grew = false;
+            foreach (var group in refits)
+            {
+                if (groups.Contains(group) || !group.Files.Any(file => wanted.Contains(Full(file.File))))
+                    continue;
+                groups.Add(group);
+                wanted.UnionWith(group.Files.Select(file => Full(file.File)));
+                grew = true;
+            }
+        }
+        return (compressed.Where(entry => wanted.Contains(Full(entry.File))).ToList(), refits.Where(groups.Contains).ToList());
+    }
+
+    /// <summary>
+    /// The automatic cache cleanup: forgets textures optimized and hair refit before <paramref name="cutoff"/>
+    /// and deletes their originals, then deletes copies in <paramref name="cacheRoot"/>'s backup folder that
+    /// no entry names and that are older than the cutoff too, such as ones a failed delete left. That sweep is
+    /// skipped when the list couldn't be read, since the set-aside list may still name them. Returns the
+    /// originals forgotten and the stray copies deleted.
+    /// </summary>
+    public (int Forgotten, int Strays) Expire(string? cacheRoot, DateTimeOffset cutoff)
+    {
+        lock (_lock)
+        {
+            var entries = _journal.Compressed.Where(entry => entry.Compressed < cutoff).ToList();
+            var groups = _journal.Refits.Where(group => group.Refit < cutoff).ToList();
+            if (entries.Count > 0 || groups.Count > 0)
+            {
+                _journal.Compressed.RemoveAll(entries.Contains);
+                _journal.Refits.RemoveAll(groups.Contains);
+                Save();
+                DeleteUnreferenced(entries.Select(entry => entry.Backup).Concat(groups.SelectMany(group => group.Files).Select(file => file.Backup)));
+                Publish();
+            }
+            var strays = LoadError.Length == 0 && cacheRoot is not null ? DeleteStrays(Path.Combine(cacheRoot, FolderName), cutoff) : 0;
+            return (entries.Count + groups.Sum(group => group.Files.Count), strays);
+        }
+    }
+
+    private int DeleteStrays(string folder, DateTimeOffset cutoff)
+    {
+        var deleted = 0;
+        try
+        {
+            if (!Directory.Exists(folder) || (File.GetAttributes(folder) & FileAttributes.ReparsePoint) != 0)
+                return 0;
+            var named = _journal.Compressed.Select(entry => entry.Backup).Concat(_journal.Refits.SelectMany(group => group.Files).Select(file => file.Backup))
+                .Select(Full).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in Directory.EnumerateFiles(folder))
+            {
+                try
+                {
+                    var name = Path.GetFileName(path);
+                    if ((Sha256FileRegex().IsMatch(name) || TemporaryFileRegex().IsMatch(name)) && !named.Contains(Full(path)) &&
+                        (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0 && File.GetLastWriteTimeUtc(path) < cutoff.UtcDateTime)
+                    {
+                        File.Delete(path);
+                        deleted++;
+                    }
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    // Left for the next cleanup.
+                }
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            // The folder can't be read now; the next cleanup tries again.
+        }
+        return deleted;
+    }
+
     private void DeleteUnreferenced(IEnumerable<string> backups)
     {
         foreach (var backup in backups.Distinct(StringComparer.OrdinalIgnoreCase))
@@ -342,6 +474,7 @@ internal sealed partial class TextureBackupStore
         Volatile.Write(ref _compressed, _journal.Compressed.ToArray());
         Volatile.Write(ref _kept, _journal.Kept.ToArray());
         Volatile.Write(ref _refits, _journal.Refits.ToArray());
+        Volatile.Write(ref _restored, _journal.Restored.Select(Full).ToHashSet(StringComparer.OrdinalIgnoreCase));
     }
 
     private static bool SameFile(string a, string b) => string.Equals(Full(a), Full(b), StringComparison.OrdinalIgnoreCase);
@@ -357,4 +490,8 @@ internal sealed partial class TextureBackupStore
 
     [GeneratedRegex("^[0-9A-F]{64}\\.(tex|mdl)$", RegexOptions.CultureInvariant)]
     private static partial Regex Sha256FileRegex();
+
+    /// <summary> What <see cref="StoreBackup"/> writes before moving a copy into place. </summary>
+    [GeneratedRegex("^[0-9A-F]{64}\\.(tex|mdl)\\.[0-9a-f]{32}\\.tmp$", RegexOptions.CultureInvariant)]
+    private static partial Regex TemporaryFileRegex();
 }

@@ -10,21 +10,21 @@ public sealed partial class MainWindow
 {
     private TextureCompressionService? _compression;
     private bool _compressionConfirmRestore;
-    private bool _compressionConfirmDelete;
     private string _compressionMessage = string.Empty;
     private IReadOnlyList<string> _compressionDetails = [];
-    // The totals lines, worked out again only when the list of compressed textures changes.
-    private (IReadOnlyList<CompressedTexture>? Entries, IReadOnlyList<RefitGroup>? Refits, string Totals, string Backups) _compressionTotals;
+    // The totals lines, worked out again only when the list of compressed textures or the cleanup setting changes.
+    private (IReadOnlyList<CompressedTexture>? Entries, IReadOnlyList<RefitGroup>? Refits, bool Cleanup, string Totals, string Backups) _compressionTotals;
     private (string? Directory, bool InTemp) _compressionCacheInTemp;
 
     internal void AttachTextureCompression(TextureCompressionService service) => _compression = service;
 
     private QuickAction TextureCompressionCard => new("texture-compression", FontAwesomeIcon.CompressArrowsAlt, "Optimize textures",
-        "Sync plugins such as Lightless and PlayerSync count the size of your mods' texture files, and warn about or pause heavy characters. " +
-        "While this is on, the textures your character wears are made smaller when they load: uncompressed ones are compressed, and ones that " +
-        $"hold a single color everywhere shrink to {SingleColor.Size} × {SingleColor.Size} pixels. Each one is decoded again and compared first, " +
-        "and stays as it is if its see-through edges, dye colors or shading would change. It can also refit hair whose UVs use only part of its " +
-        "textures. The originals are backed up in the cache folder.",
+        "Automatically optimize your character's textures when they load. Every compression is checked for visual quality impact " +
+        "and dismissed if it negatively affects the appearance. " +
+        $"Single-color textures shrink to {SingleColor.Size} × {SingleColor.Size} pixels. Optionally checks hair and automatically crops " +
+        "its textures and UVs if it only uses a small portion of them, as is often the case for Sims 4 hair. " +
+        "Both of those have no impact on visuals and merely save storage space and the VRAM that sync plugins count. " +
+        "Originals are backed up for a week.",
         DrawTextureCompressionAction,
         () =>
         {
@@ -77,15 +77,16 @@ public sealed partial class MainWindow
 
         var entries = service.Backups.Compressed;
         var refits = service.Backups.Refits;
-        if (!ReferenceEquals(entries, _compressionTotals.Entries) || !ReferenceEquals(refits, _compressionTotals.Refits))
-            _compressionTotals = (entries, refits, TextureCompressionViews.Totals(entries, refits), TextureCompressionViews.Backups(service.Backups.BackupTotals()));
+        var cleanup = _config.AutomaticCacheCleanup;
+        if (!ReferenceEquals(entries, _compressionTotals.Entries) || !ReferenceEquals(refits, _compressionTotals.Refits) || cleanup != _compressionTotals.Cleanup)
+            _compressionTotals = (entries, refits, cleanup, TextureCompressionViews.Totals(entries, refits),
+                TextureCompressionViews.Backups(service.Backups.BackupTotals(), cleanup));
         Widgets.MutedWrapped(_compressionTotals.Totals);
         if (service.LastRun is { } run)
             DrawCompressionRun(run);
 
         ImGui.Spacing();
-        if (entries.Count > 0 || refits.Count > 0)
-            DrawCompressionBackups(service, entries.Count + refits.Sum(group => group.Files.Count), busy);
+        DrawCompressionButtons(service, entries.Count > 0 || refits.Count > 0, busy);
         if (_compressionMessage.Length > 0)
         {
             Widgets.HintWrapped(_compressionMessage);
@@ -114,6 +115,12 @@ public sealed partial class MainWindow
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(string.Join("\n", run.NotRefit));
         }
+        if (TextureCompressionViews.LeftRestored(run) is { Length: > 0 } restored)
+        {
+            Widgets.MutedWrapped(restored);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(string.Join("\n", run.Restored));
+        }
         foreach (var problem in run.Failed.Concat(run.Warnings))
         {
             using var wrap = ImRaii.TextWrapPos(0f);
@@ -121,16 +128,15 @@ public sealed partial class MainWindow
         }
     }
 
-    private void DrawCompressionBackups(TextureCompressionService service, int count, bool busy)
+    private void DrawCompressionButtons(TextureCompressionService service, bool backups, bool busy)
     {
-        if (_compressionTotals.Backups.Length > 0)
+        if (backups && _compressionTotals.Backups.Length > 0)
             Widgets.MutedWrapped(_compressionTotals.Backups);
         using (ImRaii.Disabled(busy))
         {
-            if (_compressionConfirmRestore)
+            if (_compressionConfirmRestore && backups)
             {
-                Widgets.HintWrapped($"Put back the originals of {(count == 1 ? "1 file" : $"{count:N0} files")}? This turns automatic optimization off, " +
-                                    "so they aren't optimized again. Files that changed since they were optimized are left as they are.");
+                Widgets.HintWrapped("Restore your character's original textures? They're skipped until you use Optimize now.");
                 using (ImRaii.PushColor(ImGuiCol.Button, Theme.WithAlpha(Theme.Important, .45f)))
                 {
                     if (ImGui.Button("Restore##quick-compression-restore"))
@@ -141,35 +147,24 @@ public sealed partial class MainWindow
                     _compressionConfirmRestore = false;
                 return;
             }
-            if (_compressionConfirmDelete)
+            if (ImGui.Button("Optimize now##quick-compression"))
             {
-                Widgets.HintWrapped("Delete the backups? The optimized textures stay, and their originals can't be restored afterwards.");
-                using (ImRaii.PushColor(ImGuiCol.Button, Theme.WithAlpha(Theme.Error, .45f)))
-                {
-                    if (ImGui.Button("Delete##quick-compression-delete"))
-                    {
-                        var deleted = service.DeleteBackups();
-                        _compressionConfirmDelete = false;
-                        _compressionMessage = $"Deleted the backups of {(deleted == 1 ? "1 file" : $"{deleted:N0} files")}.";
-                        _compressionDetails = [];
-                    }
-                }
-                ImGui.SameLine();
-                if (ImGui.Button("Cancel##quick-compression-delete"))
-                    _compressionConfirmDelete = false;
-                return;
+                _compressionMessage = string.Empty;
+                _compressionDetails = [];
+                service.OptimizeNow();
             }
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip("Optimize your character's textures now, including restored ones.");
+            if (!backups)
+                return;
+            ImGui.SameLine();
             if (ImGui.Button("Restore originals##quick-compression"))
             {
                 _compressionConfirmRestore = true;
                 _compressionMessage = string.Empty;
             }
-            ImGui.SameLine();
-            if (ImGui.Button("Delete backups##quick-compression"))
-            {
-                _compressionConfirmDelete = true;
-                _compressionMessage = string.Empty;
-            }
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip("Restore your character's original textures.");
         }
     }
 

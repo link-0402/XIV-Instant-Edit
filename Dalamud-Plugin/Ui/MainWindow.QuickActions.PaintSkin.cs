@@ -13,9 +13,8 @@ public sealed partial class MainWindow
     private (OnScreenObject Character, ResourceView Face)? _paintSkinCharacter;
 
     private QuickAction PaintSkinCard => new("paint-skin", FontAwesomeIcon.PaintRoller, "Paint my skin",
-        "Opens your character's bare skin in Substance Painter as one project: the torso, hands, legs and feet as your smallclothes draw them, " +
-        "whatever you wear, on the skin material they share, so tattoos, freckles and body paint can cross the wrists, waist and ankles. " +
-        "Tick the head in the dialog to paint across the neck too.",
+        "Opens your character's bare skin in Substance Painter as one project: the torso, hands, legs and feet based on your mods affecting Smallclothes / Nothing." +
+        "The can can be optionally included if you need to paint across the neck seam for tattoos covering the neck.",
         DrawPaintSkinAction);
 
     private void DrawPaintSkinAction()
