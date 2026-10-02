@@ -32,6 +32,8 @@ internal static class TextureCompressionScenarios
         CheckNormalsAndColors();
         CheckSingleColor();
         CheckBackupStore(testRoot);
+        CheckRestoreSelection();
+        CheckBackupExpiry(testRoot);
         CheckTrigger();
         CheckRunSummary();
         CheckViews();
@@ -244,6 +246,10 @@ internal static class TextureCompressionScenarios
             "texture compression: when a material can't be read, Penumbra's sampler name still gives the role");
         Require(File("sho_base.tex").InPreview && !File("norm.tex").InPreview,
             "texture compression: files of other Quick Actions' preview mods are marked so they are left alone");
+        var loaded = CompressionCapture.ModFiles(roots);
+        Require(loaded.Count == 12 && loaded.Contains(ModFile(gear, "top.mdl")) && loaded.Contains(ModFile(gear, "TOP.MTRL")) && loaded.Contains(normal) &&
+                !loaded.Contains("chara/common/texture/skin_d.tex"),
+            "texture optimization: what the character has loaded from mods is every model, material and texture of the tree, game files left out");
     }
 
     // ---- The check ------------------------------------------------------------------------------------
@@ -558,6 +564,15 @@ internal static class TextureCompressionScenarios
         Require(File.Exists(outside) && !File.Exists(newerBackup) && reloaded.Compressed.Count == 0,
             "texture backups: only copies inside the texture-backups folder are ever deleted");
 
+        reloaded.MarkRestored([ModFile("Gear Mod", "a.tex"), ModFile("Gear Mod", "hair.mdl")]);
+        var marked = new TextureBackupStore(config);
+        marked.Load();
+        Require(marked.IsRestored(ModFile("Gear Mod", "A.TEX")) && marked.IsRestored(ModFile("Gear Mod", "hair.mdl")) && !marked.IsRestored(ModFile("Gear Mod", "b.tex")),
+            "texture backups: files whose originals were restored are remembered across a reload");
+        Require(marked.ClearRestored([ModFile("Gear Mod", "a.tex"), ModFile("Gear Mod", "b.tex")]) == 1 && !marked.IsRestored(ModFile("Gear Mod", "a.tex")) &&
+                marked.IsRestored(ModFile("Gear Mod", "hair.mdl")),
+            "texture backups: Optimize now lets only the character's restored files be optimized again");
+
         var journal = Path.Combine(config, TextureBackupStore.JournalName);
         File.WriteAllText(journal, "{ not json");
         var broken = new TextureBackupStore(config);
@@ -565,6 +580,85 @@ internal static class TextureCompressionScenarios
         Require(broken.LoadError.Length > 0 && broken.Compressed.Count == 0 && !File.Exists(journal) &&
                 Directory.EnumerateFiles(config, TextureBackupStore.JournalName + ".unreadable-*").Any(),
             "texture backups: an unreadable list is set aside, not overwritten, and the error is reported");
+    }
+
+    private static CompressedTexture Compressed(string file, string backup, DateTimeOffset when, string sha = "A0") => new()
+    {
+        File = file, ModDirectory = "Gear Mod", ModName = "Gear Mod", RelativePath = Path.GetFileName(file), Backup = backup, OriginalSha256 = sha,
+        OriginalLength = 4, CompressedSha256 = "C0", CompressedLength = 1, Compressed = when,
+    };
+
+    private static RefitGroup Refit(DateTimeOffset when, params (string File, string Backup)[] files) => new()
+    {
+        ModDirectory = "Hair Mod", ModName = "Hair Mod", Refit = when,
+        Files = files.Select(file => new RefitFile
+        {
+            File = file.File, RelativePath = Path.GetFileName(file.File), Backup = file.Backup, OriginalSha256 = "A1", OriginalLength = 4, NewSha256 = "B1", NewLength = 2,
+        }).ToList(),
+    };
+
+    private static void CheckRestoreSelection()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var worn = Compressed(ModFile("Gear Mod", "top_norm.tex"), "b1", now);
+        var other = Compressed(ModFile("Gear Mod", "dwn_norm.tex"), "b2", now);
+        var cut = Compressed(ModFile("Hair Mod", "hair_opt2_norm.tex"), "b3", now);
+        var hair = Refit(now, (ModFile("Hair Mod", "hair.mdl"), "m"), (ModFile("Hair Mod", "hair_norm.tex"), "t"));
+        // A second material of the same model, refit after the first: restoring one must restore both.
+        var sharing = Refit(now, (ModFile("Hair Mod", "hair.mdl"), "m2"), (ModFile("Hair Mod", "hair_opt2_norm.tex"), "t2"));
+        var unrelated = Refit(now, (ModFile("Other Hair", "hair.mdl"), "m3"));
+        var (entries, groups) = TextureBackupStore.Covering([worn, other, cut], [hair, sharing, unrelated],
+            [ModFile("Gear Mod", "TOP_NORM.TEX"), ModFile("Hair Mod", "hair_norm.tex"), ModFile("Gear Mod", "never_optimized.tex")]);
+        Require(entries.Count == 2 && entries.Contains(worn) && entries.Contains(cut) && !entries.Contains(other),
+            "texture restore: only the optimized textures the character has loaded go back, with those of the hair restored with them");
+        Require(groups.Count == 2 && ReferenceEquals(groups[0], hair) && ReferenceEquals(groups[1], sharing),
+            "texture restore: refit hair goes back whole, with every refit sharing a file with it, oldest first");
+        var (none, noGroups) = TextureBackupStore.Covering([worn], [hair], [ModFile("Gear Mod", "sho.tex")]);
+        Require(none.Count == 0 && noGroups.Count == 0, "texture restore: nothing goes back for files the character hasn't loaded");
+    }
+
+    private static void CheckBackupExpiry(string testRoot)
+    {
+        var root = Path.Combine(testRoot, "TextureBackupExpiry");
+        var config = Path.Combine(root, "config");
+        var cache = Path.Combine(root, "cache");
+        var folder = Path.Combine(cache, TextureBackupStore.FolderName);
+        Directory.CreateDirectory(config);
+        Directory.CreateDirectory(folder);
+        string Copy(char fill, DateTime written)
+        {
+            var path = Path.Combine(folder, new string(fill, 64) + ".tex");
+            File.WriteAllBytes(path, [1, 2, 3, 4]);
+            File.SetLastWriteTimeUtc(path, written);
+            return path;
+        }
+        var now = DateTimeOffset.UtcNow;
+        var old = now - TextureBackupStore.Retention - TimeSpan.FromHours(1);
+        var recent = now - TimeSpan.FromDays(1);
+        string oldCopy = Copy('A', old.UtcDateTime), recentCopy = Copy('B', recent.UtcDateTime), oldHair = Copy('C', old.UtcDateTime),
+            oldStray = Copy('D', old.UtcDateTime), recentStray = Copy('E', recent.UtcDateTime);
+        var foreign = Path.Combine(folder, "notes.txt");
+        File.WriteAllText(foreign, "x");
+        File.SetLastWriteTimeUtc(foreign, old.UtcDateTime);
+        // A copy an old and a recent entry share stays for the recent one.
+        var shared = Copy('F', old.UtcDateTime);
+
+        var store = new TextureBackupStore(config);
+        store.Load();
+        store.Record(Compressed(ModFile("Gear Mod", "old.tex"), oldCopy, old));
+        store.Record(Compressed(ModFile("Gear Mod", "recent.tex"), recentCopy, recent));
+        store.Record(Compressed(ModFile("Gear Mod", "old_shared.tex"), shared, old));
+        store.Record(Compressed(ModFile("Gear Mod", "recent_shared.tex"), shared, recent));
+        store.RecordRefit(Refit(old, (ModFile("Hair Mod", "hair.mdl"), oldHair)));
+        var (forgotten, strays) = store.Expire(cache, now - TextureBackupStore.Retention);
+        Require(forgotten == 3 && strays == 1 && store.Refits.Count == 0 &&
+                store.Compressed.Select(entry => Path.GetFileName(entry.File)).Order(StringComparer.Ordinal).SequenceEqual(["recent.tex", "recent_shared.tex"]),
+            "texture backups: the automatic cleanup forgets what was optimized more than a week ago");
+        Require(!File.Exists(oldCopy) && !File.Exists(oldHair) && !File.Exists(oldStray) && File.Exists(recentCopy) && File.Exists(shared) &&
+                File.Exists(recentStray) && File.Exists(foreign),
+            "texture backups: the cleanup deletes old originals and old copies no entry names, and nothing else");
+        Require(store.Expire(cache, now - TextureBackupStore.Retention) == (0, 0),
+            "texture backups: a second cleanup finds nothing left to do");
     }
 
     // ---- Runs -----------------------------------------------------------------------------------------
@@ -625,17 +719,23 @@ internal static class TextureCompressionScenarios
             TextureCompressionViews.Status(CompressionPhase.Off, ""), TextureCompressionViews.Status(CompressionPhase.Watching, ""),
             TextureCompressionViews.Status(CompressionPhase.Waiting, ""), TextureCompressionViews.Status(CompressionPhase.Checking, ""),
             TextureCompressionViews.Totals([], []), TextureCompressionViews.Totals([Entry(4L << 20, 1L << 20), Entry(4L << 20, 1L << 20)], []),
-            TextureCompressionViews.Backups((2, 8L << 20)), TextureCompressionViews.LastRun(run), TextureCompressionViews.Kept(run),
+            TextureCompressionViews.Backups((2, 8L << 20), true), TextureCompressionViews.LastRun(run), TextureCompressionViews.Kept(run),
             TextureCompressionViews.Restored(new CompressionRestore(3, ["M: y.tex"], ["M: z.tex: gone"], [])),
             TextureCompressionViews.Totals([Entry(4L << 20, 1L << 20), Entry(5L << 20, 1L << 20, true)], []),
             TextureCompressionViews.LastRun(run with { Shrunk = 1 }),
+            TextureCompressionViews.Backups((2, 8L << 20), false), TextureCompressionViews.LeftRestored(run with { Restored = ["a.tex", "b.tex"] }),
+            TextureCompressionViews.Restored(new CompressionRestore(0, [], [], [])),
         };
         Require(TextureCompressionViews.Status(CompressionPhase.Compressing, "Optimizing 1 of 2: a.tex") == "Optimizing 1 of 2: a.tex" &&
                 texts[5] == "2 textures optimized so far, 6.00 MiB smaller in total." && texts[4] == "Nothing is optimized yet." &&
                 texts[8] == "1 texture you wear stays as it is, because compressing would visibly change it." &&
                 texts[9].StartsWith("Restored 3 textures. 1 file changed since", StringComparison.Ordinal) &&
-                texts[9].EndsWith("Automatic optimization is off.", StringComparison.Ordinal),
+                texts[14] == "Nothing to restore on your character.",
             "texture optimization card: status, totals, kept textures and restoring read as sentences");
+        Require(texts[6] == "Backups: 8.00 MiB, kept for 7 days." && texts[12].Contains("automatic cache cleanup is off", StringComparison.Ordinal) &&
+                texts[13] == "2 restored files are skipped. Hover for which." &&
+                TextureCompressionViews.LeftRestored(run) == string.Empty,
+            "texture optimization card: how long originals stay, and the worn files left as restored");
         Require(texts[10] == "2 textures optimized (1 of one color, shrunk to 32 × 32) so far, 7.00 MiB smaller in total." &&
                 texts[11].StartsWith("Last run: 2 textures optimized (1 of one color, shrunk to 32 × 32), 6.00 MiB smaller, ", StringComparison.Ordinal) &&
                 !texts[7].Contains("one color", StringComparison.Ordinal),

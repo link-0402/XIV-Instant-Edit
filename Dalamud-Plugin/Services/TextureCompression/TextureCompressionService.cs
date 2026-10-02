@@ -45,17 +45,19 @@ internal sealed record CompressionRun
     public int Refit { get; init; }
     /// <summary> "file: reason" for each worn hair texture that uses only part of its space but can't be refit safely. </summary>
     public IReadOnlyList<string> NotRefit { get; init; } = [];
+    /// <summary> File names of worn textures and hair whose originals were restored, which only Optimize now changes again. </summary>
+    public IReadOnlyList<string> Restored { get; init; } = [];
 
     /// <summary>
     /// What the card shows after a run. A run that changed nothing and ran into no problems, such as
     /// the one after the redraw that ends a run, or one for an outfit optimized before, only brings
-    /// the lists of kept textures and hair left as it is up to date, so the last changes and their
+    /// the lists of kept, restored and not refit files up to date, so the last changes and their
     /// problems stay.
     /// </summary>
     public static CompressionRun After(CompressionRun? previous, CompressionRun run)
         => previous is null || run.Compressed > 0 || run.Refit > 0 || run.Failed.Count > 0 || run.Warnings.Count > 0
             ? run
-            : previous with { Kept = run.Kept, NotRefit = run.NotRefit };
+            : previous with { Kept = run.Kept, NotRefit = run.NotRefit, Restored = run.Restored };
 }
 
 /// <summary> Which of the local player's loads that Penumbra reports can bring new textures. Dalamud-free. </summary>
@@ -88,7 +90,9 @@ internal sealed record CompressionRestore(int Restored, IReadOnlyList<string> Ch
 /// stays the same. The original is copied into the cache folder first, then the new file replaces it
 /// in its mod; the mods are reloaded and the player redrawn once. When hair refitting is on too, hair
 /// whose UVs use only part of its textures is refit first (<see cref="HairRefitPlanner"/>).
-/// Restoring writes the originals back over files that still hold what replaced them.
+/// Optimize now runs the same on demand, also while automatic optimization is off. Restoring writes
+/// the originals of what the player has loaded back over files that still hold what replaced them,
+/// and marks those files so that only Optimize now changes them again.
 /// </summary>
 internal sealed class TextureCompressionService : IDisposable
 {
@@ -136,6 +140,9 @@ internal sealed class TextureCompressionService : IDisposable
     private CompressionRun? _lastRun;
     private nint _localPlayer;
     private long _dueAt;
+    // Optimize now was pressed: the due run goes ahead while automatic optimization is off, and
+    // optimizes the player's restored files again.
+    private int _manual;
     private int _busy;
     private volatile CompressionPhase _phase;
     private volatile string _progress = string.Empty;
@@ -197,10 +204,25 @@ internal sealed class TextureCompressionService : IDisposable
             return;
         }
         Unsubscribe();
+        Volatile.Write(ref _manual, 0);
         Volatile.Write(ref _dueAt, 0);
         CancelRun();
         if (!Busy)
             _phase = CompressionPhase.Off;
+    }
+
+    /// <summary>
+    /// Optimizes what the character has loaded now, as soon as it is free, whether automatic
+    /// optimization is on or not. Files whose originals were restored are optimized again, and
+    /// textures Penumbra couldn't convert earlier are tried again.
+    /// </summary>
+    public void OptimizeNow()
+    {
+        lock (_sessionLock)
+            _failed.Clear();
+        _refitChecked.Clear();
+        Volatile.Write(ref _manual, 1);
+        Schedule(0);
     }
 
     /// <summary> Turns hair refitting on or off. Turning it on while optimization is on looks at the hair the character wears now. </summary>
@@ -260,11 +282,11 @@ internal sealed class TextureCompressionService : IDisposable
         var player = _objects.LocalPlayer;
         Volatile.Write(ref _localPlayer, player?.Address ?? 0);
         var due = Volatile.Read(ref _dueAt);
-        if (due == 0 || !_config.AutoCompressTextures || Environment.TickCount64 < due || Busy)
+        if (due == 0 || !_config.AutoCompressTextures && Volatile.Read(ref _manual) == 0 || Environment.TickCount64 < due || Busy)
             return;
         if (player is null || !_clientState.IsLoggedIn || Occupied() || !_penumbra.Available)
         {
-            if (_phase == CompressionPhase.Watching)
+            if (_phase is CompressionPhase.Watching or CompressionPhase.Off)
                 _phase = CompressionPhase.Waiting;
             return;
         }
@@ -272,10 +294,11 @@ internal sealed class TextureCompressionService : IDisposable
             return;
         // A load reported since due was read gets a run of its own after this one.
         Interlocked.CompareExchange(ref _dueAt, 0, due);
+        var manual = Interlocked.Exchange(ref _manual, 0) != 0;
         var run = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         Volatile.Write(ref _run, run);
         _phase = CompressionPhase.Checking;
-        _ = Task.Run(() => CompressAsync(run.Token));
+        _ = Task.Run(() => CompressAsync(manual, run.Token));
     }
 
     /// <summary> Group pose, cutscenes, combat and zone changes: the redraw at the end would reset a pose, flicker in a fight or hit a loading character. </summary>
@@ -303,6 +326,8 @@ internal sealed class TextureCompressionService : IDisposable
         public readonly List<string> Failed = [];
         public readonly List<string> Warnings = [];
         public readonly List<string> NotRefit = [];
+        /// <summary> Worn files left alone because their originals were restored, as full paths. </summary>
+        public readonly HashSet<string> Restored = new(StringComparer.OrdinalIgnoreCase);
         public readonly HashSet<string> Mods = new(StringComparer.OrdinalIgnoreCase);
         public int Compressed, Shrunk, Refit;
         public long Before, After;
@@ -310,14 +335,14 @@ internal sealed class TextureCompressionService : IDisposable
         public bool CacheChecked;
     }
 
-    private async Task CompressAsync(CancellationToken token)
+    private async Task CompressAsync(bool manual, CancellationToken token)
     {
         var tally = new RunTally();
         try
         {
             try
             {
-                await CompressCharacterAsync(tally, token).ConfigureAwait(false);
+                await CompressCharacterAsync(tally, manual, token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -336,6 +361,7 @@ internal sealed class TextureCompressionService : IDisposable
             {
                 Finished = DateTimeOffset.Now, Compressed = tally.Compressed, Shrunk = tally.Shrunk, BytesBefore = tally.Before, BytesAfter = tally.After,
                 Kept = tally.Kept, Failed = tally.Failed, Warnings = tally.Warnings, Refit = tally.Refit, NotRefit = tally.NotRefit,
+                Restored = tally.Restored.Select(Path.GetFileName).OfType<string>().Order(StringComparer.OrdinalIgnoreCase).ToList(),
             }));
             _progress = string.Empty;
             _phase = _config.AutoCompressTextures ? CompressionPhase.Watching : CompressionPhase.Off;
@@ -347,25 +373,34 @@ internal sealed class TextureCompressionService : IDisposable
 
     /// <summary>
     /// Reads the character's textures and optimizes the ones the check lets through: uncompressed
-    /// ones, and compressed ones that may hold one color.
+    /// ones, and compressed ones that may hold one color. Files whose originals were restored are
+    /// left alone, unless <paramref name="manual"/> (Optimize now) lets them be optimized again.
     /// </summary>
-    private async Task CompressCharacterAsync(RunTally tally, CancellationToken token)
+    private async Task CompressCharacterAsync(RunTally tally, bool manual, CancellationToken token)
     {
         var actor = _onScreen.CaptureLocalPlayer(token);
         if (actor is null)
             return;
+        if (manual && Backups.ClearRestored(CompressionCapture.ModFiles(actor.ResourceRoots)) is var cleared and > 0)
+            _log.Information($"Optimize now: {cleared:N0} restored files of your character may be optimized again.");
         var candidates = CompressionCapture.Collect(actor.ResourceRoots, ReadMaterial,
             directory => directory.Length > 0 && _previews.Any(store => store.HoldsMod(directory)));
         var edited = _textures.Sessions.SelectMany(EditedFiles).ToHashSet(StringComparer.OrdinalIgnoreCase);
         // Refit hair first: its cut textures are then compressed like any other.
         if (_config.RefitHairUvs)
-            await RefitHairAsync(candidates, edited, tally, token).ConfigureAwait(false);
+            await RefitHairAsync(candidates, edited, tally, manual, token).ConfigureAwait(false);
         var work = new List<(CompressionCandidate Candidate, TexInfo Info)>();
         foreach (var candidate in candidates)
         {
             token.ThrowIfCancellationRequested();
-            if (candidate.InPreview || !candidate.Source.IsModFile || edited.Contains(candidate.File) || ReadHeader(candidate.File) is not { } info ||
-                !CompressionCapture.Compressible(info) && !MayHoldOneColor(candidate.File, info))
+            if (candidate.InPreview || !candidate.Source.IsModFile || edited.Contains(candidate.File))
+                continue;
+            if (Backups.IsRestored(candidate.File))
+            {
+                tally.Restored.Add(candidate.File);
+                continue;
+            }
+            if (ReadHeader(candidate.File) is not { } info || !CompressionCapture.Compressible(info) && !MayHoldOneColor(candidate.File, info))
                 continue;
             if (UnchangedVerdict(candidate.File) is { } reason)
                 tally.Kept.Add($"{candidate.FileName}: {reason}");
@@ -425,13 +460,17 @@ internal sealed class TextureCompressionService : IDisposable
     /// Refits the hair the character wears whose UVs use only part of its textures. Each mod with
     /// such hair is planned as a whole (<see cref="HairRefitPlanner"/>): every model and texture of a
     /// group changes together, in all the mod's options. Hair left as it is is remembered until its
-    /// texture or the mod's options change.
+    /// texture or the mod's options change. Hair with a restored file is left alone, unless
+    /// <paramref name="manual"/> (Optimize now) refits it again.
     /// </summary>
-    private async Task RefitHairAsync(IReadOnlyList<CompressionCandidate> candidates, HashSet<string> edited, RunTally tally, CancellationToken token)
+    private async Task RefitHairAsync(IReadOnlyList<CompressionCandidate> candidates, HashSet<string> edited, RunTally tally, bool manual,
+        CancellationToken token)
     {
-        var worn = candidates.Where(candidate => !candidate.InPreview && candidate.Source.IsModFile &&
+        var hair = candidates.Where(candidate => !candidate.InPreview && candidate.Source.IsModFile &&
                                                  candidate.Uses.Any(use => string.Equals(use.ShaderPackage, HairRefitPlanner.HairShader,
-                                                     StringComparison.OrdinalIgnoreCase)));
+                                                     StringComparison.OrdinalIgnoreCase))).ToList();
+        tally.Restored.UnionWith(hair.Where(candidate => Backups.IsRestored(candidate.File)).Select(candidate => candidate.File));
+        var worn = hair.Where(candidate => !Backups.IsRestored(candidate.File));
         foreach (var mod in worn.GroupBy(candidate => candidate.Source.ModDirectory, StringComparer.OrdinalIgnoreCase))
         {
             token.ThrowIfCancellationRequested();
@@ -475,18 +514,24 @@ internal sealed class TextureCompressionService : IDisposable
             foreach (var plan in result.Plans)
             {
                 token.ThrowIfCancellationRequested();
-                if (plan.Textures.Concat(plan.Models.Keys).Select(file => Path.GetFullPath(Path.Combine(root, file))).FirstOrDefault(edited.Contains) is { } open)
+                var planFiles = plan.Textures.Concat(plan.Models.Keys).Select(file => Path.GetFullPath(Path.Combine(root, file))).ToList();
+                if (planFiles.FirstOrDefault(edited.Contains) is { } open)
                 {
                     tally.NotRefit.Add($"{Path.GetFileName(open)}: it is open in a texture session");
                     retry.UnionWith(plan.Textures.Select(file => Path.GetFullPath(Path.Combine(root, file))));
                     continue;
                 }
+                // Hair restored with files the character doesn't wear now, such as another option's
+                // textures, stays as it is; Optimize now refits it again.
+                if (!manual && planFiles.Any(Backups.IsRestored))
+                    continue;
                 if (CacheRoot(tally) is not { } cacheRoot)
                     return;
                 try
                 {
                     if (await ApplyRefitAsync(root, source, plan, cacheRoot, token).ConfigureAwait(false) is not { } group)
                         continue;
+                    Backups.ClearRestored(planFiles);
                     tally.Refit++;
                     tally.Before += group.Files.Sum(file => file.OriginalLength);
                     tally.After += group.Files.Sum(file => file.NewLength);
@@ -918,13 +963,15 @@ internal sealed class TextureCompressionService : IDisposable
     }
 
     /// <summary>
-    /// Turns automatic compression off, waits for a run to stop, then writes each original back over
-    /// its file when the file still holds what was compressed. Files that changed since are left
-    /// alone and keep their backups.
+    /// Puts back the originals of what the character has loaded: each optimized texture, and each refit
+    /// hairstyle as a whole (<see cref="TextureBackupStore.Covering"/>), whose file still holds what was
+    /// written over it. A run in progress is stopped first. Every file it covers is marked restored, so
+    /// automatic optimization leaves it alone until Optimize now. Files that changed since are left
+    /// alone and keep their backups. Off the framework thread only.
     /// </summary>
     public async Task<CompressionRestore> RestoreAsync()
     {
-        SetEnabled(false);
+        CancelRun();
         while (Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
             await Task.Delay(100, _lifetime.Token).ConfigureAwait(false);
         var restored = 0;
@@ -974,7 +1021,9 @@ internal sealed class TextureCompressionService : IDisposable
                 return true;
             }
 
-            var entries = Backups.Compressed.ToList();
+            _progress = "Reading what your character has loaded";
+            var actor = _onScreen.CaptureLocalPlayer(_lifetime.Token) ?? throw new InvalidOperationException("Your character isn't loaded.");
+            var (entries, selected) = TextureBackupStore.Covering(Backups.Compressed, Backups.Refits, CompressionCapture.ModFiles(actor.ResourceRoots));
             var afterRefits = new List<CompressedTexture>();
             for (var i = 0; i < entries.Count; i++)
             {
@@ -984,7 +1033,7 @@ internal sealed class TextureCompressionService : IDisposable
             }
             // Refit hair after the compressed textures, which may have been cut by a refit first, and
             // the newest group first: an older one sharing a model expects what the newer one found.
-            var groups = Enumerable.Reverse(Backups.Refits).ToList();
+            var groups = Enumerable.Reverse(selected).ToList();
             for (var i = 0; i < groups.Count; i++)
             {
                 _progress = $"Restoring hairstyle {i + 1} of {groups.Count}";
@@ -999,6 +1048,7 @@ internal sealed class TextureCompressionService : IDisposable
             foreach (var entry in afterRefits)
                 if (!await RestoreCompressedAsync(entry).ConfigureAwait(false))
                     changed.Add(entry.Label);
+            Backups.MarkRestored(entries.Select(entry => entry.File).Concat(selected.SelectMany(group => group.Files).Select(file => file.File)));
             if (mods.Count > 0)
             {
                 _progress = "Reloading the changed mods";
@@ -1066,7 +1116,7 @@ internal sealed class TextureCompressionService : IDisposable
         return wrote;
     }
 
-    /// <summary> Drops a restored texture's entry; turning compression back on compresses it again. </summary>
+    /// <summary> Drops a restored texture's entry; Optimize now compresses it again. </summary>
     private void ForgetRestored(CompressedTexture entry)
     {
         Backups.Forget([entry]);
@@ -1074,14 +1124,39 @@ internal sealed class TextureCompressionService : IDisposable
             _compressedOriginals.Remove(ContentKey(entry.File, entry.OriginalSha256));
     }
 
-    /// <summary> Forgets every backup and deletes the copies; the changed files stay as they are. Returns the files whose originals are gone. </summary>
-    public int DeleteBackups()
+    /// <summary>
+    /// Part of the automatic cache cleanup: forgets originals backed up more than
+    /// <see cref="TextureBackupStore.Retention"/> ago and deletes their copies. Skipped while a run or
+    /// a restore is busy; the next cleanup catches up.
+    /// </summary>
+    public void ExpireBackups()
     {
-        var entries = Backups.Compressed.ToList();
-        var groups = Backups.Refits.ToList();
-        Backups.Forget(entries);
-        Backups.ForgetRefits(groups);
-        return entries.Count + groups.Sum(group => group.Files.Count);
+        if (Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
+            return;
+        try
+        {
+            string? cacheRoot;
+            try
+            {
+                cacheRoot = TextureFiles.CacheRootFor(_config.TextureCacheDirectory);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                cacheRoot = null;
+            }
+            var (forgotten, strays) = Backups.Expire(cacheRoot, DateTimeOffset.UtcNow - TextureBackupStore.Retention);
+            if (forgotten > 0 || strays > 0)
+                _log.Information($"Cache cleanup removed the originals of {forgotten:N0} optimized files and {strays:N0} stray copies, older than " +
+                                 $"{TextureBackupStore.Retention.TotalDays:0} days.");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            _log.Warning(e, "Could not clean up old texture backups.");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _busy, 0);
+        }
     }
 
     private static PreviewSource SourceOf(RefitGroup group, RefitFile file, string sha256) => new()

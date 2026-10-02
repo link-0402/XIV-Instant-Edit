@@ -44,9 +44,8 @@ public sealed partial class MainWindow
     private bool CharacterSendListens => _config.CharacterSendPose == CharacterPose.Animation && QuickActionShown(SendCharacterKey);
 
     private QuickAction SendCharacterCard => new(SendCharacterKey, FontAwesomeIcon.Cubes, "Send my character to Blender",
-        "Sends your character to Blender as the game draws it now: every model it shows (body, face, hair, tail or ears, " +
-        "and all gear) as one scene, bound to one armature with your character's skeleton, with the model import options. " +
-        "Parts it hides come over hidden. Each model keeps its own context, so Quick Export still writes it back whole. " +
+        "Sends your character to Blender as the game shows it now. " +
+        "Each model keeps its own context, so Quick Export still writes it back whole. " +
         "Models made for another race, such as the c0201 gear most female races wear, are reshaped for yours as the game " +
         "shows them. Those are for preview only: Quick Export refuses them.",
         DrawSendCharacterAction);

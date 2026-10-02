@@ -104,6 +104,21 @@ internal static class CompressionCapture
         }).OrderBy(candidate => candidate.Label, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
+    /// <summary> Every mod file in the tree, as full paths: the models, materials and textures a character has loaded from mods. </summary>
+    public static IReadOnlySet<string> ModFiles(IReadOnlyList<ResourceNode> roots)
+    {
+        var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pending = new Stack<ResourceNode>(roots);
+        while (pending.TryPop(out var node))
+        {
+            if (node.SourceState == ResourceSourceState.LoadedMod && FullPath(node.ActualPath) is { } file)
+                files.Add(file);
+            foreach (var child in node.Children)
+                pending.Push(child);
+        }
+        return files;
+    }
+
     private sealed class Group(ResourceNode first, string file)
     {
         public ResourceNode First { get; } = first;

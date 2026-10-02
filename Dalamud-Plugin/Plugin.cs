@@ -217,9 +217,11 @@ public sealed class Plugin : IDalamudPlugin
         _heels = new Services.Heels.HeelsOffsetService(pi, framework, objects, clientState, condition, data, skeletons, _penumbra, resourceSources,
             [neckSeam.Store], () => _config.AutoFixHeels, log);
         _window.AttachHeelsOffset(_heels);
-        // Automatic cache cleanup also removes old exports from the cache's export folder.
+        // Automatic cache cleanup also removes old exports from the cache's export folder, and the
+        // originals of textures optimized more than a week ago.
         _textures.AdditionalCacheCleanup = () =>
         {
+            _compression.ExpireBackups();
             var (files, bytes) = _gameExport.CleanCache(TextureFiles.CacheRootFor(_config.TextureCacheDirectory));
             if (files > 0)
                 _log.Information($"Cache cleanup removed {files:N0} old Game Files export files ({bytes / (double)(1L << 20):0.0} MB).");
