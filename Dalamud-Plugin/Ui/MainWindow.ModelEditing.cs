@@ -279,7 +279,10 @@ public sealed partial class MainWindow
                 importOptions.ApplyTexturesAndMaterials,
                 importOptions.ExcludeBodyAndGeneralMaterials,
                 cancellationToken,
-                actor.Entity is null ? source.OptionMemberships : null).ConfigureAwait(false);
+                actor.Entity is null ? source.OptionMemberships : null,
+                // A character's vanilla models show the skin, pube and piercing materials and
+                // textures the character wears, which mods often replace.
+                source.SourceState == ResourceSourceState.GameData ? character?.PreviewResources : null).ConfigureAwait(false);
             var preview = materialBundle.Preview;
             var resourceManifest = materialBundle.ResourceManifest;
             var dependencyWarnings = materialBundle.DependencyWarnings.ToList();
