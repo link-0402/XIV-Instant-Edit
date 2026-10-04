@@ -368,6 +368,16 @@ def assert_material_previews(material_preview):
                     "colorSet": sheer_colorset,
                     "textures": character_textures("diffuse_wide.rgba"),
                 }, {
+                    "modelMaterial": "/mt_solid.mtrl",
+                    "gamePath": "chara/equipment/e0001/material/v0001/mt_solid.mtrl",
+                    "shaderPackage": "character.shpk",
+                    "materialFlags": 0x10,
+                    "additionalData": "",
+                    "shaderKeys": [],
+                    "shaderConstants": [],
+                    "colorSet": sheer_colorset,
+                    "textures": character_textures("diffuse_wide.rgba"),
+                }, {
                     "modelMaterial": "/mt_c0101f0001_etc_c.mtrl",
                     "gamePath": "chara/human/c0101/obj/face/f0001/material/mt_c0101f0001_etc_c.mtrl",
                     "shaderPackage": "characterocclusion.shpk",
@@ -396,7 +406,7 @@ def assert_material_previews(material_preview):
                 str(model_path),
             )
             _require(
-                len(preview_package.materials) == 8,
+                len(preview_package.materials) == 9,
                 "a bounded synthetic material-preview manifest is accepted",
             )
             warning_count = len(preview_package.warnings)
@@ -569,6 +579,17 @@ def assert_material_previews(material_preview):
                 and cutout_alpha.operation == "GREATER_THAN"
                 and abs(cutout_alpha.inputs[1].default_value - 0.5) < 1e-4,
                 "opaque gear cuts opacity at the alpha threshold instead of dithering it",
+            )
+            solid_material = material_preview.create_preview_material(
+                "/mt_solid.mtrl",
+                (0.8, 0.1, 0.8, 1.0),
+                preview_package,
+                "solid-context",
+            )
+            _require(
+                solid_material.surface_render_method == "DITHERED"
+                and not principled_of(solid_material).inputs["Alpha"].is_linked,
+                "translucent gear without an alpha threshold draws solid, as the game draws it",
             )
             _require(
                 linked_from(cutout_principled.inputs["Base Color"]).image.get("instant_edit_preview_usage")

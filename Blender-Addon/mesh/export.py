@@ -125,6 +125,20 @@ def check_triangulation(objects=None) -> list[str]:
 
     return not_triangulated
 
+def check_uv_layers(objects=None) -> list[str]:
+    """Problems with the UV maps meshes would export, one sentence per mesh (see get_xiv_uv_layers)."""
+    from ..io.model.com.exceptions import XIVMeshError
+    from ..io.model.exp.accessors import get_xiv_uv_layers
+
+    visible = list(objects) if objects is not None else visible_meshobj()
+    problems = []
+    for obj in visible:
+        try:
+            get_xiv_uv_layers(obj)
+        except XIVMeshError as error:
+            problems.append(str(error))
+    return problems
+
 def check_weights(objects=None) -> list[str]:
     """Names of meshes without a vertex group for any bone of their armature.
 

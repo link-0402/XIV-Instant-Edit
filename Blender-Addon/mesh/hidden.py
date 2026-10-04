@@ -9,8 +9,14 @@ other's directions. The rules follow how the game draws a model:
 - A face whose material culls backfaces is seen only from its front, and a ray
   passes through it from behind. Faces without a material count as visible
   from both sides but never hide anything from behind.
-- A see-through face (alpha from a texture or below 1, blended, or a mesh
-  marked for transparency sorting) hides nothing.
+- A face hides what lies behind it where its material is at least 90%
+  opaque. When an image's alpha drives the material's Alpha, directly or
+  through math nodes like the material preview's alpha test, a ray that hits
+  the face reads that image where it hits, so a top's opaque parts hide the
+  skin and its sheer parts don't. Gear the game draws solid because its
+  material has no alpha threshold hides everywhere, whatever an older import
+  drew. A mesh marked for transparency sorting, a Transparent BSDF or an alpha
+  the test cannot follow hides nothing.
 - Surfaces closer to a sample than a small tolerance do not hide it, so a mesh
   lying on a copy of itself (a mannequin, a Backfaces duplicate) survives.
 - The test uses each mesh's own vertices in the rest pose, without modifiers.
@@ -28,13 +34,17 @@ move the covering mesh against what it covers.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+import math
 
 import bmesh
 import numpy as np
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
+from mathutils.geometry import barycentric_transform
 
 from ..instant_edit.context import mesh_ids_from_name
+from ..instant_edit.material_preview import drawn_solid
 
 
 DIRECTIONS = 256
@@ -53,6 +63,27 @@ _STEP = 1e-6
 _TOLERANCE = 1e-4
 # What a face hides: nothing, what lies behind its front, or both sides.
 _BLOCKS_NOTHING, _BLOCKS_FRONT, _BLOCKS_BOTH = 0, 1, 2
+# Behind a 90% opaque texel the skin shows at a tenth of its strength at most.
+_MIN_OPACITY = 0.9
+
+
+def _divide(a, b):
+    """Blender's Math node divide: zero where the divisor is zero."""
+    a, b = np.broadcast_arrays(np.asarray(a, dtype=np.float32), np.asarray(b, dtype=np.float32))
+    return np.divide(a, b, out=np.zeros(a.shape, dtype=np.float32), where=b != 0)
+
+
+# The Math nodes an opacity image may pass through on its way to Alpha.
+_MATH = {
+    "GREATER_THAN": lambda a, b: np.greater(a, b).astype(np.float32),
+    "LESS_THAN": lambda a, b: np.less(a, b).astype(np.float32),
+    "MULTIPLY": np.multiply,
+    "DIVIDE": _divide,
+    "ADD": np.add,
+    "SUBTRACT": np.subtract,
+    "MINIMUM": np.minimum,
+    "MAXIMUM": np.maximum,
+}
 
 
 def _sphere_directions(count: int) -> np.ndarray:
@@ -96,21 +127,130 @@ def shape_key_states(obj) -> dict[str, np.ndarray]:
     return states
 
 
-def see_through(material) -> bool:
-    """Whether a material lets what lies behind it show."""
+@dataclass
+class _Opacity:
+    """Where a material's opacity image hides what lies behind it."""
+
+    # One byte per texel, rows from the bottom like Blender's pixels: 1 hides.
+    hides_at: bytes
+    width: int
+    height: int
+    extension: str
+    # The UV map the image node reads; empty for the mesh's active render map.
+    uv_map: str
+
+    def hides(self, u: float, v: float) -> bool:
+        if not (math.isfinite(u) and math.isfinite(v)):
+            return False
+        if self.extension == "REPEAT":
+            u, v = u % 1.0, v % 1.0
+        elif self.extension == "CLIP" and not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
+            return False
+        x = min(max(int(u * self.width), 0), self.width - 1)
+        y = min(max(int(v * self.height), 0), self.height - 1)
+        return bool(self.hides_at[y * self.width + x])
+
+
+def _opacity_source(alpha):
+    """The image node whose alpha feeds the ``alpha`` socket and the Math steps
+    on the way (nearest Alpha first), or None for anything else."""
+    steps = []
+    socket = alpha
+    for _depth in range(32):
+        if not socket.is_linked:
+            return None
+        link = socket.links[0]
+        node = link.from_node
+        if node.type == "REROUTE":
+            socket = node.inputs[0]
+        elif node.type == "TEX_IMAGE":
+            return (node, steps) if link.from_socket.name == "Alpha" else None
+        elif node.type == "MATH" and node.operation in _MATH:
+            operands = (node.inputs[0], node.inputs[1])
+            linked = [index for index, operand in enumerate(operands) if operand.is_linked]
+            if len(linked) != 1:
+                return None
+            index = linked[0]
+            steps.append((node.operation, index, float(operands[1 - index].default_value), node.use_clamp))
+            socket = operands[index]
+        else:
+            return None
+    return None
+
+
+def _read_opacity(node, steps) -> _Opacity | None:
+    image = node.image
+    vector = node.inputs["Vector"]
+    uv_map = ""
+    if vector.is_linked:
+        source = vector.links[0].from_node
+        if source.type != "UVMAP":
+            return None
+        uv_map = source.uv_map
+    width, height = image.size if image is not None else (0, 0)
+    if not width or not height:
+        return None
+    channels = image.channels
+    if channels == 4:
+        pixels = np.empty(width * height * 4, dtype=np.float32)
+        image.pixels.foreach_get(pixels)
+        values = pixels[3::4].copy()
+        del pixels
+    else:
+        values = np.ones(width * height, dtype=np.float32)
+    for operation, index, constant, clamp in reversed(steps):
+        values = _MATH[operation](*((values, constant) if index == 0 else (constant, values)))
+        if clamp:
+            values = np.clip(values, 0.0, 1.0)
+    opaque = (np.asarray(values) >= _MIN_OPACITY).reshape(height, width)
+    # Filtering blends a texel with its neighbours, so one next to a
+    # see-through texel does not count.
+    hides_at = opaque.copy()
+    for axis in (0, 1):
+        for shift in (-1, 1):
+            hides_at &= np.roll(opaque, shift, axis=axis)
+    return _Opacity(hides_at.tobytes(), width, height, node.extension, uv_map)
+
+
+def material_cover(material) -> bool | _Opacity:
+    """Where a material hides what lies behind it: everywhere (True), nowhere
+    (False), or where an opacity image says."""
     if material is None:
-        return False
-    if getattr(material, "surface_render_method", "") == "BLENDED":
         return True
+    shader_package = str(material.get("xiv_shader_package", ""))
     # The eye occlusion shell only shades the eyes, whatever older imports drew.
-    if str(material.get("xiv_shader_package", "")).casefold() == "characterocclusion.shpk":
-        return True
-    tree = material.node_tree
-    for node in tree.nodes if tree is not None else ():
-        alpha = node.inputs.get("Alpha") if node.type == "BSDF_PRINCIPLED" else None
-        if alpha is not None and (alpha.is_linked or alpha.default_value < 1.0):
+    if shader_package.casefold() == "characterocclusion.shpk":
+        return False
+    # Older imports drew gear without an alpha threshold see-through.
+    try:
+        constants = json.loads(str(material.get("xiv_shader_constants", "[]")))
+        if shader_package and isinstance(constants, list) and drawn_solid(
+                shader_package, [constant for constant in constants if isinstance(constant, dict)]):
             return True
-    return False
+    except (TypeError, ValueError):
+        pass
+    tree = material.node_tree
+    nodes = list(tree.nodes) if tree is not None else []
+    if any(node.type == "BSDF_TRANSPARENT" for node in nodes):
+        return False
+    principled = [node for node in nodes if node.type == "BSDF_PRINCIPLED"]
+    if not principled:
+        return getattr(material, "surface_render_method", "") != "BLENDED"
+    cover = True
+    for node in principled:
+        alpha = node.inputs.get("Alpha")
+        if alpha is None:
+            continue
+        if not alpha.is_linked:
+            if alpha.default_value < _MIN_OPACITY:
+                return False
+            continue
+        source = _opacity_source(alpha)
+        opacity = _read_opacity(*source) if source is not None else None
+        if opacity is None or cover is not True:
+            return False
+        cover = opacity
+    return cover
 
 
 def mesh_lod(obj) -> int | None:
@@ -139,9 +279,14 @@ class _Mesh:
     # Per triangle: seen from the front only, and what it hides (_BLOCKS_*).
     culled: np.ndarray
     blocks: np.ndarray
+    # Per triangle: the index into ``opacities`` of the image that says where
+    # it hides, or -1 where all of it does. Each entry has its triangles' UVs.
+    opacity_index: np.ndarray
+    opacities: list[tuple[_Opacity, np.ndarray]]
 
     @classmethod
-    def read(cls, obj) -> "_Mesh":
+    def read(cls, obj, covers: dict) -> "_Mesh":
+        """``covers`` caches material_cover per material across meshes."""
         mesh = obj.data
         mesh.calc_loop_triangles()
         count = len(mesh.vertices)
@@ -150,6 +295,9 @@ class _Mesh:
         triangles = np.empty(len(mesh.loop_triangles) * 3, dtype=np.int64)
         mesh.loop_triangles.foreach_get("vertices", triangles)
         triangles = triangles.reshape(-1, 3)
+        triangle_loops = np.empty(len(mesh.loop_triangles) * 3, dtype=np.int64)
+        mesh.loop_triangles.foreach_get("loops", triangle_loops)
+        triangle_loops = triangle_loops.reshape(-1, 3)
         polygons = np.empty(len(mesh.loop_triangles), dtype=np.int64)
         mesh.loop_triangles.foreach_get("polygon_index", polygons)
         polygon_vertices = np.empty(len(mesh.loops), dtype=np.int64)
@@ -165,22 +313,48 @@ class _Mesh:
             # Blender draws a mirrored object with its faces turned back
             # around; do the same so the world-space normals point outwards.
             triangles = triangles[:, (0, 2, 1)]
+            triangle_loops = triangle_loops[:, (0, 2, 1)]
         # A material index past the last slot draws with no material.
         slots = [slot.material for slot in obj.material_slots] + [None]
         transparent = bool(obj.get("xiv_transparency", False))
+        slot_covers = []
+        uv_corners: dict[str, np.ndarray | None] = {}
+        opacities = []
+        slot_opacity = []
+        for material in slots:
+            key = material.as_pointer() if material is not None else None
+            if key not in covers:
+                covers[key] = material_cover(material)
+            cover = covers[key]
+            index = -1
+            if isinstance(cover, _Opacity):
+                layer = mesh.uv_layers.get(cover.uv_map) if cover.uv_map else next(
+                    (layer for layer in mesh.uv_layers if layer.active_render), None)
+                if layer is not None and layer.name not in uv_corners:
+                    uv = np.empty(len(mesh.loops) * 2, dtype=np.float64)
+                    layer.data.foreach_get("uv", uv)
+                    uv_corners[layer.name] = uv.reshape(-1, 2)[triangle_loops]
+                if layer is None:
+                    cover = False
+                else:
+                    index = len(opacities)
+                    opacities.append((cover, uv_corners[layer.name]))
+            slot_covers.append(cover)
+            slot_opacity.append(index)
         slot_culled = np.array([material is not None and material.use_backface_culling for material in slots])
         slot_blocks = np.array([
-            _BLOCKS_NOTHING if transparent or see_through(material)
+            _BLOCKS_NOTHING if transparent or cover is False
             else _BLOCKS_FRONT if material is None or material.use_backface_culling
             else _BLOCKS_BOTH
-            for material in slots
+            for material, cover in zip(slots, slot_covers)
         ], dtype=np.int8)
         material_index = np.zeros(len(mesh.polygons), dtype=np.int64)
         mesh.polygons.foreach_get("material_index", material_index)
         material_index = np.minimum(material_index[polygons], len(slots) - 1)
         return cls(obj, matrix, basis.reshape(-1, 3), shape_key_states(obj), triangles, polygons,
                    polygon_vertices, polygon_starts, polygon_sizes, edges.reshape(-1, 2),
-                   slot_culled[material_index], slot_blocks[material_index])
+                   slot_culled[material_index], slot_blocks[material_index],
+                   np.array(slot_opacity, dtype=np.int64)[material_index], opacities)
 
     def world(self, local: np.ndarray) -> np.ndarray:
         return local @ self.matrix[:3, :3].T + self.matrix[:3, 3]
@@ -279,6 +453,17 @@ class _Scene:
             if meshes else np.zeros((0, 3), dtype=np.int64)
         self.tree = BVHTree.FromPolygons(co.tolist(), triangles.tolist(), all_triangles=True)
         self.blocks = np.concatenate([mesh.blocks for mesh in meshes]).tolist() if meshes else []
+        # Per triangle: None where all of it hides, else its opacity image,
+        # corners and UVs for reading the image where a ray hits.
+        self.textures: list = [None] * len(triangles)
+        start = 0
+        for mesh, world in zip(meshes, positions):
+            for index, (opacity, uvs) in enumerate(mesh.opacities):
+                for triangle in np.flatnonzero(mesh.opacity_index == index).tolist():
+                    corners = [Vector(point) for point in world[mesh.triangles[triangle]].tolist()]
+                    uv = [Vector((u, v, 0.0)) for u, v in uvs[triangle].tolist()]
+                    self.textures[start + triangle] = (opacity, *corners, *uv)
+            start += len(mesh.triangles)
         self.step = max(extent * _STEP, 1e-7)
         self.tolerance = max(extent * _TOLERANCE, self.step * 2)
 
@@ -299,6 +484,7 @@ class _Search:
         scene = self.scene
         ray_cast = scene.tree.ray_cast
         blocks = scene.blocks
+        textures = scene.textures
         tolerance = scene.tolerance
         origin = point + step
         travelled = scene.step
@@ -311,7 +497,12 @@ class _Search:
             # surface whose normal points along the ray.
             kind = blocks[index]
             if travelled > tolerance and kind and (kind == _BLOCKS_BOTH or normal.dot(direction) > 0.0):
-                return False
+                texture = textures[index]
+                if texture is None:
+                    return False
+                uv = barycentric_transform(location, *texture[1:])
+                if texture[0].hides(uv.x, uv.y):
+                    return False
             origin = location + step
             travelled += scene.step
         return True
@@ -418,10 +609,11 @@ def hidden_vertices(targets, occluders=None, *, margin: int = 2, directions: int
         shared = {obj.data.as_pointer() for obj in targets}
         targets += [obj for obj in occluders if obj.data.as_pointer() in shared and obj not in targets]
     read = {}
+    covers = {}
 
     def mesh_of(obj) -> _Mesh:
         if obj not in read:
-            read[obj] = _Mesh.read(obj)
+            read[obj] = _Mesh.read(obj, covers)
         return read[obj]
 
     scenes = []

@@ -187,6 +187,12 @@ class SceneHandler:
 
             if not dupe.parent or dupe.parent.type != "ARMATURE":
                 dupe.parent = stats["armature"]
+            elif dupe.parent is not stats["armature"]:
+                # Parented to another rig than the one deforming it: groups are checked against
+                # the parent's bones, so move the copy to the deforming armature, in place.
+                world = dupe.matrix_world.copy()
+                dupe.parent = stats["armature"]
+                dupe.matrix_world = world
 
             if stats["shape"]:
                 shape_keys.append((dupe, obj, stats["shape"]))

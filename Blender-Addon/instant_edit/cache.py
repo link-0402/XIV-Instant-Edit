@@ -37,7 +37,7 @@ BACKUP_FILE_RE = re.compile(
 # sync with OwnedRootDirectories/OwnedRootFiles in Dalamud-Plugin/Services/TextureFiles.cs.
 OWNED_ROOT_DIRECTORIES = frozenset(name.casefold() for name in (
     "imports", "exports", "backups", "texture-edits", "AnimationEdits", "skeleton-library", "Contexts", "painter", "game-exports",
-    "texture-backups",
+    "texture-backups", "animation-preview",
 ))
 OWNED_ROOT_FILES = frozenset(name.casefold() for name in (
     "TextureSessions.json", "TextureSessions.json.tmp", "pending-context-revocations.json",

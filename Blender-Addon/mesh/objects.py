@@ -54,12 +54,12 @@ def get_object_from_mesh(mesh_name:str) -> Object | Literal[False]:
 def armature_for_object(obj: Object) -> Object | None:
     """Return the armature that drives a mesh, if any.
 
-    An armature parent wins; otherwise the first Armature modifier that points
-    at an armature object is used, so meshes rigged only by modifier resolve too.
+    The first Armature modifier that points at an armature object wins: it is
+    what deforms the mesh, even when the mesh is parented to another rig (a
+    retargeted outfit kept under its source rig). Otherwise an armature parent
+    is used.
     """
-    if obj.parent and obj.parent.type == "ARMATURE":
-        return obj.parent
-    return next(
+    modifier_armature = next(
         (
             modifier.object
             for modifier in obj.modifiers
@@ -69,6 +69,11 @@ def armature_for_object(obj: Object) -> Object | None:
         ),
         None,
     )
+    if modifier_armature is not None:
+        return modifier_armature
+    if obj.parent and obj.parent.type == "ARMATURE":
+        return obj.parent
+    return None
 
 def safe_object_delete(obj: Object) -> None:
     """Safely delete an object with proper reference cleanup."""
