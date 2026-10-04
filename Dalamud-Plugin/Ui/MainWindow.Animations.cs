@@ -323,6 +323,7 @@ public sealed partial class MainWindow
         DrawAnimationTool("LivePose", "bake your LivePose adjustments into it", DrawLivePose);
         DrawAnimationTool("Animated bones", "choose the bones it moves", DrawAnimatedBones);
         DrawAnimationTool("Skeleton repair", "retarget it onto a standard skeleton", DrawSkeletonRepair);
+        DrawAnimationTool("Timeline", "edit its timeline", DrawAnimationTimeline);
         DrawRecentEditsTab();
         if (ImGui.BeginTabItem("Record live pose", ImGuiTabItemFlags.Trailing))
         {

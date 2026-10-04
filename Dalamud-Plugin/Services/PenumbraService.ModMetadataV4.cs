@@ -324,6 +324,67 @@ public sealed partial class PenumbraService
         return stillReferenced;
     }
 
+    /// <summary>
+    /// Map <paramref name="gamePath"/> to <paramref name="relativePath"/> in every DefaultData,
+    /// group, option and container that maps <paramref name="ownerGamePath"/>, so a file an
+    /// animation edit added (an imported sound) plays wherever that animation does. Refuses
+    /// when the mod already maps <paramref name="gamePath"/> anywhere.
+    /// </summary>
+    internal static void AddAnimationResourceMapping(string modRoot, string ownerGamePath, string gamePath, string relativePath)
+    {
+        var meta = LoadV4ModMetadata(modRoot);
+        var containers = AnimationMappingContainers(meta).ToArray();
+        if (containers.Any(files => files.Any(pair => SameGamePath(pair.Key, gamePath))))
+            throw new InvalidDataException($"The mod already maps {gamePath}.");
+        var added = false;
+        foreach (var files in containers.Where(files => files.Any(pair => SameGamePath(pair.Key, ownerGamePath))))
+        {
+            files[gamePath] = relativePath;
+            added = true;
+        }
+        if (!added) throw new InvalidDataException($"The mod no longer maps {ownerGamePath}.");
+        TouchV4ModMetadata(meta);
+        WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
+    }
+
+    /// <summary>
+    /// Undo <see cref="AddAnimationResourceMapping"/>: drop every mapping of <paramref name="gamePath"/>
+    /// to <paramref name="relativePath"/>. Nothing to drop is fine, since a failed commit rolls back
+    /// before it mapped anything.
+    /// </summary>
+    internal static void RemoveAnimationResourceMapping(string modRoot, string gamePath, string relativePath)
+    {
+        var meta = LoadV4ModMetadata(modRoot);
+        var normalized = relativePath.Replace('\\', '/').Trim();
+        var removed = false;
+        foreach (var files in AnimationMappingContainers(meta))
+            foreach (var pair in files.ToArray())
+                if (SameGamePath(pair.Key, gamePath) && JsonString(pair.Value) is { } value &&
+                    string.Equals(value.Replace('\\', '/').Trim(), normalized, StringComparison.OrdinalIgnoreCase))
+                {
+                    files.Remove(pair.Key);
+                    removed = true;
+                }
+        if (!removed) return;
+        TouchV4ModMetadata(meta);
+        WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
+    }
+
+    /// <summary>The Files objects of a mod's DefaultData, groups, options and containers.</summary>
+    private static IEnumerable<JsonObject> AnimationMappingContainers(JsonObject meta)
+    {
+        if (meta["DefaultData"] is JsonObject { } defaults && defaults["Files"] is JsonObject defaultFiles) yield return defaultFiles;
+        if (meta["Groups"] is not JsonArray groups) yield break;
+        foreach (var group in groups.OfType<JsonObject>())
+        {
+            if (group["Files"] is JsonObject groupFiles) yield return groupFiles;
+            foreach (var key in new[] { "Options", "Containers" })
+                if (group[key] is JsonArray entries)
+                    foreach (var entry in entries.OfType<JsonObject>())
+                        if (entry["Files"] is JsonObject files) yield return files;
+        }
+    }
+
     private static void WriteJsonAtomic(string path, JsonObject value)
     {
         var tempPath = path + ".tmp." + Guid.NewGuid().ToString("N");

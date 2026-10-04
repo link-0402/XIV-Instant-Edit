@@ -24,6 +24,13 @@ AnimationExportFixture.Presentation(Check);
 AnimationExportFixture.Rows(Check);
 AnimationExportFixture.RecordingScaleCases(Check);
 ModelSkeletonFixture.Run(Check, Reject);
+AnimationPreviewFixture.Run(Check, Reject);
+TimelineCatalogFixture.Run(Check, Reject);
+AnimationTimelineCommitFixture.Run(Check, Reject);
+TmbFileFixture.Run(Check, Reject);
+TimelineEditorFixture.Run(Check, Reject);
+AudioFixture.Run(Check, Reject);
+TimelineWindowViewsFixture.Run(Check, Reject);
 // Writes the fixture take as the plugin sends it, for reading back in Blender.
 if (args is ["--write-sample-take", var takePath])
     File.WriteAllBytes(takePath, AnimationTakeFormat.Write(AnimationExportFixture.SampleTake(), "Skeleton", false, "1.2.4"));
@@ -474,6 +481,25 @@ try
     Check(!Enum.IsDefined(legacyLoaded.Request.Operation) &&
           legacyLoaded.Files.Single() is { RelativePath: "files/pose-1/chara/x.pap", AfterHash: "after", RenamedFromRelativePath: null },
         "journals written by removed animation operations still load for undo");
+    Check(legacyLoaded.Files.Single().AddedFor == null && legacyLoaded.Request.Timeline == null,
+        "older journals load with no added files and no timeline edit");
+    // A timeline edit journals its clip and new length, and the files it adds.
+    var timelineId = Guid.NewGuid();
+    store.Save(new AnimationEditJournal
+    {
+        Id = timelineId, State = "Completed", PoseClearOutcome = "NotApplicable",
+        Request = request with
+        {
+            Id = timelineId, Operation = AnimationOperation.EditTimeline, SelectedBones = ImmutableHashSet<PoseBoneId>.Empty,
+            Components = PoseComponents.None, Timeline = new AnimationTimelineEdit(true, 1, 2.5f),
+        },
+        Files = [new AnimationFileChange("sound/instant_edit/a_00000000.scd", "target", "mod", "root",
+            "instant_edit/sound/instant_edit/a_00000000.scd", "", "after", "", "staged", AddedFor: "chara/x.pap")],
+    });
+    var timelineLoaded = new AnimationJournalStore(temp).Load().Single(j => j.Id == timelineId);
+    Check(timelineLoaded.Request is { Operation: AnimationOperation.EditTimeline, Timeline: { Startup: true, EntryIndex: 1, DurationSeconds: 2.5f } } &&
+          timelineLoaded.Files.Single().AddedFor == "chara/x.pap",
+        "timeline edit journals keep the edited clip, its new length and the added files across a restart");
     // Records moved out of an older version's cache (issue #8) must still pass the undo's
     // staging check, which wants their staged outputs in the record's new folder.
     var legacyRoot = Path.Combine(temp, "legacy-cache");

@@ -97,7 +97,9 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         private readonly string[] originalMotionPrints;
         private readonly string motionPath;
         private readonly int frames;
-        private readonly float duration;
+        // The output's length, and the source's: they differ only when a timeline edit
+        // changes the clip's length, which samples the source at the scaled time.
+        private readonly float duration, sourceDuration;
         private int frame, validationFrame;
         private bool replaced;
         public float Progress => (float)frame / frames;
@@ -163,7 +165,27 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 poseBinding->TransformTrackToBoneIndices = arena.Copy<short>(Enumerable.Range(0, skeleton->Bones.Length).Select(i => (short)i).ToArray());
                 poseBinding->FloatTrackToFloatSlotIndices = default; poseBinding->PartitionIndices = default;
                 targetSampler = new AnimationNative.Sampler(skeleton, poseBinding);
-                duration = originalAnimation->Duration;
+                sourceDuration = originalAnimation->Duration;
+                duration = request.Operation == AnimationOperation.EditTimeline && request.Timeline?.DurationSeconds is { } length
+                    ? length : sourceDuration;
+                if (duration != sourceDuration)
+                {
+                    if (!AnimationPoseRules.ValidDuration(duration)) throw new InvalidDataException("The new length is outside 1 frame to 10 minutes.");
+                    if (sourceDuration <= 0) throw new InvalidDataException("This animation has no length to change.");
+                    // Root motion and annotations are timed in seconds and have no writer here,
+                    // so they would keep the old length while the motion changes.
+                    if (originalAnimation->ExtractedMotion.ptr != null)
+                        throw new InvalidDataException("This animation moves your character, so its length can't be changed yet.");
+                    for (var i = 0; i < originalAnimation->AnnotationTracks.Length; i++)
+                        if (originalAnimation->AnnotationTracks[i].Annotations.Length > 0)
+                            throw new InvalidDataException("This animation has Havok annotations, so its length can't be changed yet.");
+                    // Validation compares against this copy of the source's metadata, so it
+                    // must carry the new length too.
+                    var metadataAnimation = arena.Alloc<AnimationNative.Interleaved>();
+                    native.Initialize(metadataAnimation, originalAnimation);
+                    metadataAnimation->Animation.Duration = duration;
+                    outputMetadata->Animation = new hkRefPtr<hkaAnimation> { ptr = &metadataAnimation->Animation };
+                }
                 var sourceFrames = AnimationNative.SourceFrameCount(originalAnimation);
                 frames = AnimationPoseRules.SampleCount(duration, sourceFrames);
                 if ((long)frames * (skeleton->Bones.Length * sizeof(hkQsTransformf) + (skeleton->FloatSlots.Length + sourceSkeleton->FloatSlots.Length) * 4) > AnimationPap.MaxFileSize)
@@ -179,6 +201,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             catch { Dispose(); throw; }
         }
         private float Time(int index) => index == frames - 1 ? duration : duration * index / (frames - 1);
+        private float SourceTime(int index) => index == frames - 1 ? sourceDuration : sourceDuration * index / (frames - 1);
         public void Save(string path) => doc!.Save(path);
         public void ValidateUnchanged(byte[] bytes)
         {
@@ -195,7 +218,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             do
             {
                 token.ThrowIfCancellationRequested();
-                sampler!.Sample(Time(frame)); rawSampler!.Sample(Time(frame));
+                sampler!.Sample(SourceTime(frame)); rawSampler!.Sample(SourceTime(frame));
                 var sourceValues = new ReadOnlySpan<hkQsTransformf>(sampler.Transforms, sampler.BoneCount).ToArray();
                 var mappedValues = retarget == null ? sourceValues : retarget.Map(sourceValues.Select(AnimationSkeleton.Transform).ToArray())
                     .Select(AnimationSkeleton.Transform).ToArray();
@@ -253,6 +276,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             if (tracks.Count == 0) tracks.Add((short)Enumerable.Range(0, skeleton->Bones.Length).First(i => !excluded.Contains(i)));
             var animation = arena.Alloc<AnimationNative.Interleaved>();
             native.Initialize(animation, originalAnimation);
+            animation->Animation.Duration = duration;
             animation->Animation.NumberOfTransformTracks = tracks.Count;
             animation->Transforms = arena.Array<hkQsTransformf>(checked(frames * tracks.Count));
             animation->Floats = arena.Array<float>(checked(frames * originalAnimation->NumberOfFloatTracks));

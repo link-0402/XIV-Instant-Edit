@@ -67,6 +67,9 @@ internal static class AnimationPoseRules
             throw new InvalidDataException("LivePose contains unsupported IK parameters.");
     }
 
+    /// <summary>A length a timeline edit may give a clip: from one 30 fps frame to ten minutes.</summary>
+    public static bool ValidDuration(float seconds) => float.IsFinite(seconds) && seconds >= 1 / 30f - 1e-6f && seconds <= 600;
+
     public static int SampleCount(float duration, int sourceFrames)
     {
         if (!float.IsFinite(duration) || duration < 0 || duration > 3600)

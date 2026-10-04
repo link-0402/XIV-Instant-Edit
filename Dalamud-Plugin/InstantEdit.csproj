@@ -43,6 +43,8 @@
   <ItemGroup>
     <PackageReference Include="DalamudPackager" Version="15.0.0" GeneratePathProperty="true" />
     <PackageReference Include="Penumbra.Api" Version="5.15.1" />
+    <!-- Managed Ogg Vorbis decoder (MIT) for sound import; CopyLocalLockFileAssemblies ships NVorbis.dll in the plugin. -->
+    <PackageReference Include="NVorbis" Version="0.10.5" />
   </ItemGroup>
 
   <ItemGroup>

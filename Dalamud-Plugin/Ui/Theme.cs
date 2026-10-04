@@ -73,6 +73,24 @@ internal static class Theme
     public static readonly Vector4 ErrorBg = new(.24f, .055f, .055f, 1);
     public static readonly Vector4 InfoBg = new(.06f, .12f, .2f, 1);
 
+    // Timeline lanes reuse the kind palette: the motion keeps the animation colour.
+    public static readonly Vector4 TrackMotion = AnimationKind;
+    public static readonly Vector4 TrackExpression = MaterialKind;
+    public static readonly Vector4 TrackLipSync = IndexTexture;
+    public static readonly Vector4 TrackSound = ModelKind;
+    public static readonly Vector4 TrackEffect = NormalTexture;
+    public static readonly Vector4 TrackProp = MaskTexture;
+    public static readonly Vector4 TrackOther = OtherTexture;
+
+    /// <summary> The timeline's current frame: its line and the marker on the ruler. </summary>
+    public static readonly Vector4 Playhead = Accent;
+
+    /// <summary> The line a timeline drag sticks to. </summary>
+    public static readonly Vector4 SnapGuide = Info;
+
+    /// <summary> Shade over the part of a timeline past its end, where nothing plays. </summary>
+    public static readonly Vector4 PastEnd = new(0, 0, 0, .38f);
+
     public static float Scale => ImGuiHelpers.GlobalScale;
     public static float Scaled(float value) => value * ImGuiHelpers.GlobalScale;
     public static Vector2 Scaled(float x, float y) => ImGuiHelpers.ScaledVector2(x, y);

@@ -30,6 +30,10 @@ public sealed class Plugin : IDalamudPlugin
     private readonly PreviewService          _previews;
     private readonly AnimationEditService?   _animations;
     private readonly AnimationRecorder       _recorder;
+    private readonly Services.Animations.Timeline.TimelineCatalog _timelineCatalog;
+    private readonly Services.Animations.Preview.AnimationPreviewService _animationPreview;
+    private readonly Services.Animations.Preview.AnimationPlayback _animationPlayback;
+    private readonly TimelineWindow          _timelineWindow;
     private readonly ExportServer            _exportServer;
     private readonly Services.Painter.PainterJobService _painterJobs;
     private readonly GameFileBrowserService  _gameFiles;
@@ -155,6 +159,13 @@ public sealed class Plugin : IDalamudPlugin
             log.Warning(error, "Could not initialize animation editing; other features remain available.");
         }
         _recorder = new AnimationRecorder(framework, objects, clientState, targets, new CustomizePlusPause(pi, framework, log));
+        // The timeline editor: what can be placed, the GPose preview through a temporary mod, and playback on the GPose actor.
+        _timelineCatalog = new Services.Animations.Timeline.TimelineCatalog(data, log, bytes => Services.Audio.ScdFile.TrySeconds(bytes));
+        _animationPreview = new Services.Animations.Preview.AnimationPreviewService(_penumbra, framework, log, configDirectory,
+            () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory), clientState);
+        _animationPlayback =new Services.Animations.Preview.AnimationPlayback(framework, objects, clientState, targets, log);
+        _timelineWindow = new TimelineWindow(_animations, animationError, _timelineCatalog, _animationPreview, _animationPlayback,
+            data, framework, log, pi.UiBuilder);
         _exportServer = new ExportServer(_config, _penumbra, _contexts, log);
         var painterStore = new Services.Painter.PainterJobStore(configDirectory);
         painterStore.Load();
@@ -194,6 +205,7 @@ public sealed class Plugin : IDalamudPlugin
             () => _settingsWindow!.Open());
         _window.AttachAnimations(_animations, animationError);
         _window.AttachRecorder(_recorder);
+        _window.AttachTimeline(_timelineWindow.Open);
         _window.AttachPainter(_painterJobs);
         // Game skeletons for Blender's armatures: sent with imports, and asked for by the add-on.
         var skeletons = new ModelSkeletonResolver(_penumbra, data, framework, objects, log);
@@ -256,11 +268,13 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.AddWindow(_changelogWindow);
         _windowSystem.AddWindow(_setupWindow);
         _windowSystem.AddWindow(_settingsWindow);
+        _windowSystem.AddWindow(_timelineWindow);
 
         _pi.UiBuilder.Draw += _windowSystem.Draw;
         _pi.UiBuilder.Draw += _setupWindow.DrawFileDialog;
         _pi.UiBuilder.Draw += _toolSetup.DrawFileDialog;
         _pi.UiBuilder.Draw += _window.DrawFileDialog;
+        _pi.UiBuilder.Draw += _timelineWindow.DrawFileDialog;
         _pi.UiBuilder.OpenMainUi += OpenMainUi;
         _pi.UiBuilder.OpenConfigUi += _settingsWindow.Open;
 
@@ -372,15 +386,23 @@ public sealed class Plugin : IDalamudPlugin
         _pi.UiBuilder.Draw -= _setupWindow.DrawFileDialog;
         _pi.UiBuilder.Draw -= _toolSetup.DrawFileDialog;
         _pi.UiBuilder.Draw -= _window.DrawFileDialog;
+        _pi.UiBuilder.Draw -= _timelineWindow.DrawFileDialog;
         _pi.UiBuilder.OpenMainUi -= OpenMainUi;
         _pi.UiBuilder.OpenConfigUi -= _settingsWindow.Open;
         _windowSystem.RemoveWindow(_window);
         _windowSystem.RemoveWindow(_changelogWindow);
         _windowSystem.RemoveWindow(_setupWindow);
         _windowSystem.RemoveWindow(_settingsWindow);
+        _windowSystem.RemoveWindow(_timelineWindow);
         _glamourer.AppearanceChanged -= _window.OnGlamourerAppearanceChanged;
         _glamourer.Dispose();
         _recorder.Dispose();
+        // The window first, then playback (puts the GPose actor back), the preview (removes its
+        // temporary mod) and the catalog; all of them before Penumbra goes away.
+        _timelineWindow.Dispose();
+        _animationPlayback.Dispose();
+        _animationPreview.Dispose();
+        _timelineCatalog.Dispose();
         _textures.AdditionalCacheCleanup = null;
         _gameExport.Dispose();
         _window.Dispose();

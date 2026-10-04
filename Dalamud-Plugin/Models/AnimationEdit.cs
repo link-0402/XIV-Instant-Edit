@@ -9,7 +9,7 @@ internal enum AnimationDestination { NewMod, InPlace }
 // Journals store operations by number. 2-5 belonged to operations that were removed
 // (startup transitions, slot swaps, facial expressions, retiming) and stay unused so
 // those older journals still load and undo.
-internal enum AnimationOperation { BakeOffsets = 0, RepairSkeleton = 1, ExcludeBones = 6 }
+internal enum AnimationOperation { BakeOffsets = 0, RepairSkeleton = 1, ExcludeBones = 6, EditTimeline = 7 }
 internal enum SkeletonResolutionState { Searching, Matched, Ambiguous, Incompatible }
 internal enum SkeletonSourceKind { Collection, Game, Mod }
 // The shared body skeleton layouts, each extending the one before it: the game's own,
@@ -89,10 +89,19 @@ internal sealed record AnimationBakeRequest(Guid Id, AnimationCapture Capture, A
     ImmutableArray<string> ExcludedBones = default,
     // The standard skeleton a repair retargets onto. Repairs journaled before this
     // retargeted onto the live skeleton and load with none.
-    SkeletonStandard? RepairTarget = null)
+    SkeletonStandard? RepairTarget = null,
+    // What a timeline edit changes; null for every other operation.
+    AnimationTimelineEdit? Timeline = null)
 {
     public ImmutableArray<string> ExcludedBones { get; init; } = ExcludedBones.IsDefault ? [] : ExcludedBones;
 }
+/// <summary>
+/// A timeline edit of one clip: the loop, or its startup when <paramref name="Startup"/> is set.
+/// The rewritten timeline itself travels in the staged file. <paramref name="DurationSeconds"/>
+/// is the clip's new length when it changed, which resamples its motion; null keeps the motion
+/// byte for byte.
+/// </summary>
+internal sealed record AnimationTimelineEdit(bool Startup, int EntryIndex, float? DurationSeconds);
 /// <summary>
 /// One member of an animation family the player can switch between, such as the
 /// standing idles or the ground-sitting set. Most are numbered files like
@@ -123,6 +132,9 @@ internal sealed class AnimationEditJournal
     public bool OffsetsCleared { get; set; }
     public string PoseClearOutcome { get; set; } = "NotStarted";
     public Dictionary<string, string> ModFileHashes { get; set; } = [];
+    // Game paths this edit's timeline uses that an earlier edit added and this one found
+    // already in place: undoing that earlier edit would take them away, so it waits for this one.
+    public List<string> ReusedFiles { get; set; } = [];
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
 }
 internal sealed record AnimationFileChange(string GamePath, string Target, string ModDirectory, string ModRoot,
@@ -130,4 +142,8 @@ internal sealed record AnimationFileChange(string GamePath, string Target, strin
     // Set only when an in-place rebake landed at a fresh path instead of
     // overwriting the original file. Null for journals written before this
     // existed, which is correctly read as "this file was not renamed".
-    string? RenamedFromRelativePath = null);
+    string? RenamedFromRelativePath = null,
+    // Set for a file the edit added, such as an imported sound: the game path of the
+    // edited animation, whose mappings in place gain one for this file too. Undo
+    // removes the file and that mapping. Null for every edited file.
+    string? AddedFor = null);
