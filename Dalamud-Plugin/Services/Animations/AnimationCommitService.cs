@@ -8,8 +8,15 @@ namespace InstantEdit.Services.Animations;
 internal sealed class AnimationCommitService(PenumbraService penumbra, AnimationResources resources,
     ModelBackupStore backups, AnimationJournalStore store, ModelBackupStore? legacyBackups = null)
 {
+    /// <summary>
+    /// Stages the edited files, and the files the edit adds (<paramref name="added"/>, such as
+    /// imported sounds, keyed by game path) next to the edited animation they belong to. In
+    /// place, an added file lands in that animation's mod and every option mapping the
+    /// animation maps it too.
+    /// </summary>
     public async Task<AnimationEditJournal> PrepareAsync(AnimationBakeRequest request, AnimationDependencyManifest manifest,
-        ImmutableDictionary<string, byte[]> outputs, CancellationToken token)
+        ImmutableDictionary<string, byte[]> outputs, CancellationToken token,
+        (string For, IReadOnlyDictionary<string, byte[]> Files)? added = null)
     {
         var journal = new AnimationEditJournal { Id = request.Id, Request = RecoveryRequest(request),
             PoseBefore = request.Operation == AnimationOperation.BakeOffsets ? request.Capture.Pose : null };
@@ -41,7 +48,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
         // path each time instead of overwriting the original file.
         var renamesOutput = request.Destination == AnimationDestination.InPlace &&
             request.Operation is AnimationOperation.BakeOffsets or AnimationOperation.RepairSkeleton
-                or AnimationOperation.ExcludeBones;
+                or AnimationOperation.ExcludeBones or AnimationOperation.EditTimeline;
         foreach (var (gamePath, bytes) in files)
         {
             token.ThrowIfCancellationRequested();
@@ -78,11 +85,47 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
             if (AnimationPap.Hash(await File.ReadAllBytesAsync(staged, token)) != after) throw new IOException("Staged output validation failed.");
             journal.Files.Add(new AnimationFileChange(gamePath, target, mod, root, relative, before, after, "", staged, renamedFrom));
         }
+        if (added is { } extra)
+        {
+            if (!files.ContainsKey(extra.For)) throw new InvalidDataException("Added files must belong to an edited animation.");
+            foreach (var (gamePath, bytes) in extra.Files)
+            {
+                token.ThrowIfCancellationRequested();
+                if (!AddedGamePath(gamePath) || files.ContainsKey(gamePath))
+                    throw new InvalidDataException($"{gamePath} can't be added to the mod.");
+                string mod, root, relative;
+                if (request.Destination == AnimationDestination.NewMod)
+                {
+                    mod = journal.ModDirectory; root = journal.ModRoot; relative = "files/" + gamePath;
+                }
+                else
+                {
+                    var source = manifest.Resources.Single(r => r.GamePath == extra.For);
+                    mod = source.ModDirectory!; root = source.ModRoot!; relative = AddedFolder + gamePath;
+                }
+                var target = Path.GetFullPath(Path.Combine(root, relative));
+                TextureFiles.EnsureLocalPath(target);
+                if (!PathRules.IsPathWithin(target, root)) throw new IOException("The output escapes its mod directory.");
+                if (File.Exists(target)) throw new IOException($"{target} already exists.");
+                var staged = Path.Combine(dir, journal.Files.Count + ".staged");
+                await File.WriteAllBytesAsync(staged, bytes, token);
+                var after = AnimationPap.Hash(bytes);
+                if (AnimationPap.Hash(await File.ReadAllBytesAsync(staged, token)) != after) throw new IOException("Staged output validation failed.");
+                journal.Files.Add(new AnimationFileChange(gamePath, target, mod, root, relative, "", after, "", staged, AddedFor: extra.For));
+            }
+        }
         if (journal.Files.Select(f => f.Target).Distinct(StringComparer.OrdinalIgnoreCase).Count() != journal.Files.Count)
             throw new IOException("Several edited game paths share one source file. Use Create new mod to separate them.");
         store.Save(journal);
         return journal;
     }
+
+    /// <summary>Where an in-place edit puts the files it adds, inside the edited animation's mod.</summary>
+    internal const string AddedFolder = "instant_edit/";
+
+    /// <summary>The kinds of file an edit may add: sounds, effects and what effects use.</summary>
+    internal static bool AddedGamePath(string gamePath) => AnimationDependencies.SafeGamePath(gamePath) &&
+        Path.GetExtension(gamePath).ToLowerInvariant() is ".scd" or ".avfx" or ".atex" or ".tmb";
 
     internal static AnimationBakeRequest RecoveryRequest(AnimationBakeRequest request)
     {
@@ -117,7 +160,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
             {
                 var metadata = AnimationMetadata.Applicable(
                     AnimationMetadata.Decode(await penumbra.AnimationMetadataAsync(journal.Request.Capture.CollectionId)),
-                    journal.Files.Select(file => file.GamePath)).ToJsonString();
+                    journal.Files.Where(file => file.AddedFor == null).Select(file => file.GamePath)).ToJsonString();
                 if (metadata != manifest.ManipulationsJson) throw new IOException("Applicable collection metadata changed during baking. Refresh and retry.");
             }
             foreach (var file in journal.Files) ValidateTarget(journal, file);
@@ -170,10 +213,17 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                         if (!stillReferenced)
                             try { File.Delete(preEditTarget); } catch (IOException) { }
                     }
+                    // An added file plays wherever its animation plays: every option that maps
+                    // the animation maps it too. A new mod's metadata maps it below.
+                    if (file.AddedFor is { } owner && journal.Request.Destination == AnimationDestination.InPlace)
+                        PenumbraService.AddAnimationResourceMapping(file.ModRoot, owner, file.GamePath, file.RelativePath);
                 }
                 if (journal.Request.Destination == AnimationDestination.NewMod)
                 {
-                    var metadata = CreateNewModMetadata(journal.ModDirectory, journal.Files, manifest.ManipulationsJson);
+                    var metadata = CreateNewModMetadata(journal.ModDirectory, journal.Files, manifest.ManipulationsJson,
+                        journal.Request.Operation == AnimationOperation.EditTimeline
+                            ? "Animation timeline edited by XIV Instant Edit."
+                            : "Animation offsets baked by XIV Instant Edit.");
                     AnimationJournalStore.WriteAtomic(
                         Path.Combine(journal.ModRoot, "meta.json"),
                         JsonSerializer.SerializeToUtf8Bytes(metadata));
@@ -265,6 +315,12 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
             // Preflight every backup and target before restoring any file. Restart can resume a partly completed undo.
             foreach (var file in journal.Files)
             {
+                if (file.AddedFor is not null)
+                {
+                    // Gone already means undone; otherwise only remove what this edit wrote.
+                    if (File.Exists(file.Target)) RequireHash(file.Target, file.AfterHash);
+                    continue;
+                }
                 if (file.RenamedFromRelativePath is { Length: > 0 })
                 {
                     // The rename's own output file no longer existing is what "already
@@ -295,6 +351,12 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
             journal.State = "Undoing"; store.Save(journal);
             foreach (var file in journal.Files)
             {
+                if (file.AddedFor is not null)
+                {
+                    PenumbraService.RemoveAnimationResourceMapping(file.ModRoot, file.GamePath, file.RelativePath);
+                    if (File.Exists(file.Target)) File.Delete(file.Target);
+                    continue;
+                }
                 if (file.RenamedFromRelativePath is { Length: > 0 })
                 {
                     if (!File.Exists(file.Target)) continue;
@@ -337,8 +399,12 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
     }
     private void ValidateTarget(AnimationEditJournal journal, AnimationFileChange file)
     {
+        var safeRelative = file.AddedFor is null
+            ? AnimationResources.SafeModRelativePath(file.RelativePath)
+            : AddedGamePath(file.GamePath) && AnimationDependencies.SafeGamePath(file.AddedFor) &&
+              PenumbraService.IsSafeGameResourcePath(file.RelativePath.Replace('\\', '/'), Path.GetExtension(file.GamePath));
         if (!PenumbraService.IsSafeModName(file.ModDirectory) || !AnimationDependencies.SafeGamePath(file.GamePath) ||
-            !AnimationResources.SafeModRelativePath(file.RelativePath) ||
+            !safeRelative ||
             !string.Equals(Path.GetFullPath(Path.Combine(file.ModRoot, file.RelativePath)), Path.GetFullPath(file.Target), StringComparison.OrdinalIgnoreCase) ||
             !PathRules.IsPathWithin(file.Target, file.ModRoot)) throw new InvalidDataException("Invalid animation recovery target.");
         TextureFiles.EnsureLocalPath(file.Target);

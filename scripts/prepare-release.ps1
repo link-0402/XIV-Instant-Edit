@@ -41,7 +41,8 @@ function Assert-DalamudPackage {
         'InstantEdit.json',
         'InstantEdit.deps.json',
         'InstantEdit.pdb',
-        'Penumbra.Api.dll'
+        'Penumbra.Api.dll',
+        'NVorbis.dll'
     )
     $archive = [System.IO.Compression.ZipFile]::OpenRead($PackagePath)
     try {

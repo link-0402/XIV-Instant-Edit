@@ -85,6 +85,76 @@ internal sealed class AnimationPap
         return result;
     }
 
+    /// <summary>The index of the entry named <paramref name="name"/> with Havok binding <paramref name="binding"/>.</summary>
+    public int EntryIndex(string name, int binding)
+    {
+        var matches = Entries.Select((entry, index) => (entry, index)).Where(e => e.entry.Name == name && e.entry.Binding == binding).ToArray();
+        return matches.Length switch
+        {
+            1 => matches[0].index,
+            0 => throw new InvalidDataException($"The PAP has no animation '{name}' with binding {binding}."),
+            _ => throw new InvalidDataException($"The PAP has {matches.Length} animations '{name}' with binding {binding}."),
+        };
+    }
+
+    /// <summary>The embedded timeline (a whole TMLB) of entry <paramref name="index"/>.</summary>
+    public byte[] TimelineBytes(int index)
+    {
+        if (index < 0 || index >= Entries.Length) throw new InvalidDataException($"PAP entry {index} does not exist.");
+        var (start, length) = TimelineSpans()[index];
+        return bytes[start..(start + length)];
+    }
+
+    /// <summary>
+    /// Replaces entry <paramref name="index"/>'s timeline. The footer is rebuilt in entry order with
+    /// timelines padded to 4 relative to <see cref="TimelineOffset"/> (how the game and VFXEditor walk
+    /// it, including the odd offsets of modded PAPs), the last unpadded. Header, Havok and everything
+    /// before the replaced timeline stay byte for byte, as do any bytes after the last timeline.
+    /// </summary>
+    public byte[] WithTimeline(int index, byte[] tmb)
+    {
+        var spans = TimelineSpans();
+        if (index < 0 || index >= spans.Length) throw new InvalidDataException($"PAP entry {index} does not exist.");
+        if (tmb.Length < 12 || !tmb.AsSpan(0, 4).SequenceEqual("TMLB"u8) || ReadInt(tmb, 4) != tmb.Length)
+            throw new InvalidDataException("The replacement timeline is not a whole TMLB.");
+        var (lastStart, lastLength) = spans[^1];
+        var footer = new MemoryStream();
+        footer.Write(bytes, 0, spans[index].Start);
+        for (var i = index; i < spans.Length; i++)
+        {
+            if (i > index) footer.Write(new byte[(TimelineOffset - (int)footer.Length) & 3]);
+            if (i == index) footer.Write(tmb);
+            else footer.Write(bytes, spans[i].Start, spans[i].Length);
+        }
+        footer.Write(bytes, lastStart + lastLength, bytes.Length - lastStart - lastLength);
+        if (footer.Length > MaxFileSize) throw new InvalidDataException("The rebuilt PAP exceeds the size limit.");
+        var result = footer.ToArray();
+        var rebuilt = new AnimationPap(result);
+        var walked = rebuilt.TimelineSpans();
+        for (var i = 0; i < spans.Length; i++)
+            if (!result.AsSpan(walked[i].Start, walked[i].Length).SequenceEqual(i == index ? tmb : bytes.AsSpan(spans[i].Start, spans[i].Length)))
+                throw new InvalidDataException("The rebuilt PAP does not hold the expected timelines.");
+        return result;
+    }
+
+    /// <summary>Where each entry's TMLB lives: back to back from the footer, padded to 4 relative to it, the last unpadded.</summary>
+    private (int Start, int Length)[] TimelineSpans()
+    {
+        var spans = new (int Start, int Length)[Entries.Length];
+        var offset = TimelineOffset;
+        for (var i = 0; i < spans.Length; i++)
+        {
+            if (i > 0) offset += (TimelineOffset - offset) & 3;
+            if (offset > bytes.Length - 12 || !bytes.AsSpan(offset, 4).SequenceEqual("TMLB"u8))
+                throw new InvalidDataException($"The PAP's timeline {i} is missing.");
+            var length = ReadInt(bytes, offset + 4);
+            if (length < 12 || length > bytes.Length - offset) throw new InvalidDataException($"The PAP's timeline {i} has an invalid size.");
+            spans[i] = (offset, length);
+            offset += length;
+        }
+        return spans;
+    }
+
     public static int ReadInt(byte[] data, int offset)
     {
         if (offset < 0 || offset > data.Length - 4) throw new InvalidDataException("Resource offset is out of bounds.");

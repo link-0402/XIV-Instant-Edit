@@ -42,3 +42,48 @@ is not included. LiveAnimationEdit's static animation-value patcher is not used.
 The existing FFXIVClientStructs and Lumina host assemblies provide client
 structures and material/model readers. They remain Dalamud-provided dependencies.
 Blender add-on notices remain in [Blender-Addon/THIRD_PARTY_NOTICES.md](Blender-Addon/THIRD_PARTY_NOTICES.md).
+
+# Timeline editing
+
+The timeline editor's TMB reader and writer follow VFXEditor's `Formats/TmbFormat`
+at the revision named above: entry layouts and sizes, the order of items, extra
+data, id lists and strings, and canonical id numbering. Instant Edit also remaps
+the F-curve ids that movement entries hold. The GPose preview's playback calls
+follow the patterns of [Brio](https://github.com/Etheirys/Brio) and
+[Ktisis](https://github.com/ktisis-tools/Ktisis) (both GPL-3.0) through
+FFXIVClientStructs members; no code from either is included.
+
+# Sound import
+
+The SCD sound file layout (header, entry tables, sound, track and audio entries,
+and the Vorbis XOR table) follows VFXEditor's `Formats/ScdFormat` at the revision
+named above. The MS-ADPCM encoder, WAV reader and resampler are Instant Edit's
+own; no external encoder is shipped or run.
+
+Ogg Vorbis decoding uses [NVorbis](https://github.com/NVorbis/NVorbis) 0.10.5 by
+Andrew Ward, shipped unmodified as `NVorbis.dll` beside the plugin under the MIT
+License:
+
+```text
+MIT License
+
+Copyright (c) 2020 Andrew Ward
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

@@ -22,7 +22,8 @@ Penumbra mods.
   the wrists, waist, ankles and neck.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Painting-in-Substance-Painter)
 - **Animations**: bake LivePose adjustments into animations, repair their skeletons, give bones back to physics, and
-  send animations or a recorded live pose to Blender.
+  send animations or a recorded live pose to Blender. Edit an animation's timeline: its length, sounds, expressions,
+  lip sync, effects and props, with a preview in GPose.
   [Editing](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-Animations) ·
   [In Blender](https://github.com/link-0402/XIV-Instant-Edit/wiki/Animations-in-Blender)
 - **Game Files**: browse the game's own models, edit them, or batch-export their files and skeletons.

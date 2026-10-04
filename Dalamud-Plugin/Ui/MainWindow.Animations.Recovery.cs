@@ -45,6 +45,7 @@ public sealed partial class MainWindow
                 ? $"skeleton repair onto {AnimationBones.StandardName(target)}"
                 : "skeleton repair",
             AnimationOperation.ExcludeBones => "bone exclusion",
+            AnimationOperation.EditTimeline => "timeline edit",
             _ => "LivePose bake",
         };
 

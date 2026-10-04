@@ -5,7 +5,7 @@ using InstantEdit.Models;
 
 namespace InstantEdit.Services.Animations;
 
-internal sealed class AnimationEditService : IDisposable
+internal sealed partial class AnimationEditService : IDisposable
 {
     private readonly IFramework framework;
     private readonly IObjectTable objects;
@@ -282,7 +282,7 @@ internal sealed class AnimationEditService : IDisposable
                         ModDirectory = file.ModDirectory, ModRoot = file.ModRoot, RelativePath = file.RelativePath,
                     }
                     : s).ToImmutableArray();
-            Observer.UpdateSources(request.Capture.Id, updatedSources);
+            await framework.RunOnFrameworkThread(() => Observer.UpdateSources(request.Capture.Id, updatedSources));
         }
         if (request.Operation != AnimationOperation.BakeOffsets)
         {
@@ -387,6 +387,11 @@ internal sealed class AnimationEditService : IDisposable
     });
     public void Undo(AnimationEditJournal journal) => Launch(async _ =>
     {
+        // A later timeline edit that relies on a file this one added must be undone first.
+        var added = journal.Files.Where(f => f.AddedFor != null).Select(f => f.GamePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (added.Count > 0 && recovery.Any(other => other.Id != journal.Id && other.State is not ("Undone" or "FilesUndone") &&
+                other.ReusedFiles.Any(added.Contains)))
+            throw new IOException("A later timeline edit uses a file this edit added. Undo that edit first.");
         await CheckActorAsync(journal.Request.Capture, false);
         CanCancel = false;
         await commits.UndoFilesAsync(journal);

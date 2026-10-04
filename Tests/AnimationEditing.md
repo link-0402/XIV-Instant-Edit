@@ -382,3 +382,61 @@ visibly change motion. All 385 animation regressions pass.
   disabled button's tooltip must say it was already made for that skeleton. Repair
   a clip with its startup included; both parts must bind the same standard.
 - [ ] Undo and confirm the unticked bones are animated again.
+
+## Timeline editor live acceptance (pending)
+
+The Timeline tab opens the selected clip in the Timeline window. The TMB reader and
+writer round-trip every vanilla chara timeline (173,717) byte for byte and 53,018 of
+53,032 mod timelines (the 14 refused are malformed). SCD output was re-parsed and
+decoded offline. None of this was checked in game yet.
+
+Saving:
+- [ ] Move a sound in an emote and save to a new mod, then in place. Only that
+  timeline changes; the motion bytes are identical; Undo last save restores it.
+- [ ] Add a sound (template: play once, 3D), an effect (caster to target), a resident
+  expression (Angry) and a library expression (Smile, sets the face pack) to a PAP
+  timeline that had no face pack. Each plays at its frame; the face holds for its
+  length.
+- [ ] Add lip sync (cfxl_lip_nor1). It plays at its own pace.
+- [ ] Add a harvested prop (Toast: model 1962, WeaponTimeline 388 on c0101, 389 on
+  c0801) and a still prop (Read). The prop appears without a T-pose flash, animates,
+  and disappears when it ends.
+- [ ] Import a 44.1 kHz and a 48 kHz wav, a stereo wav, an ogg and an scd. Each plays
+  once at full length and pitch; volume 50% is quieter. Import an .avfx whose
+  textures sit in a sibling folder; the textures are packaged at their game paths.
+- [ ] Save an edit with imports in place into a mod whose animation sits in a group
+  option. Every option that maps the animation also maps the import; Undo removes
+  the import and its mappings.
+- [ ] Delete the only entry of a conditional track; edit a PAP with several entries
+  and one with an odd footer offset. Every entry still plays.
+
+Length:
+- [ ] Make a loop emote 1.5x longer with Scale events on. The motion, faces, sounds
+  and footsteps stretch together; validation passes (the old retime always failed it).
+- [ ] Make a one-shot emote longer. Check whether the shared chara/action/<key>.tmb
+  cuts it off at the old length. If it does, the editor needs an option to edit that
+  file too.
+- [ ] A clip with root motion or Havok annotations refuses a length change with a
+  clear reason.
+
+Preview (GPose):
+- [ ] Preview adds a temporary Penumbra mod (Penumbra's Temporary view shows it at
+  maximum priority) and the GPose actor plays the edited clip, even when another mod
+  replaces the same PAP. A new revision plays without a redraw; check idles and
+  movement, which may need a redraw.
+- [ ] Pause freezes body and face; scrubbing moves the pose without drift; Resume and
+  speed work; sounds and effects fire only while playing. Check alongside Brio and
+  Ktisis, which hook the same speed function.
+- [ ] Stop, closing the window, leaving GPose and unloading the plugin each end the
+  preview: the temporary mod is gone, the actor is not left locked, and the
+  animation-preview cache folder is cleaned. After a forced crash the next load
+  removes them.
+- [ ] With a shared collection the window warns that others see the preview too.
+  Lightless/PlayerSync do not upload preview files.
+
+Window:
+- [ ] Edges, bodies, stacked markers and the length handle are easy to grab at normal
+  and zoomed-out levels. Ctrl+wheel zooms at the cursor without scrolling the window.
+- [ ] With the window focused, Delete, arrows and Ctrl+Z/Y/C/V/D/A don't reach the game.
+- [ ] Every field edit in the properties panel undoes in one step. The window stays
+  visible in GPose and the On Screen/Animations tabs keep working.

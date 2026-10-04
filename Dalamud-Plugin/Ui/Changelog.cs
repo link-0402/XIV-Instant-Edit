@@ -18,10 +18,19 @@ internal sealed record ChangelogRelease(
 
 internal static class ChangelogCatalog
 {
-    public const string CurrentVersion = "2.1.0";
+    public const string CurrentVersion = "2.2.0";
 
     public static IReadOnlyList<ChangelogRelease> Releases { get; } =
     [
+        Release("2.2.0",
+            Highlight("Animations: the new Timeline tab opens an animation in its own Timeline window, laid out like a video editor."),
+            Entry("Change the animation's length. Its sounds and effects can move with it.", 1),
+            Entry("Add sounds, facial expressions, lip sync, effects and props, and drag them where you want them.", 1),
+            Entry("Import your own sounds (wav, ogg or scd) and effects (avfx). They are saved into the mod with the animation.", 1),
+            Entry("Save as a new mod or replace the original. Undo works like the other animation edits.", 1),
+            Entry("In GPose, preview the result on your character, then pause and scrub through it. The preview doesn't change your mods.", 1),
+            Entry("Blender add-on: Remove Hidden Vertices now removes skin under gear with sheer or cut-out parts, keeping only the skin those parts show."),
+            Entry("Blender add-on: gear the game draws solid no longer looks see-through in the preview.")),
         Release("2.1.0",
             Highlight("Quick Actions: 'Optimize textures' makes the mod textures your character wears smaller, so sync plugins like Lightless and PlayerSync count less texture memory for you."),
             Entry("Textures are only automatically compressed and then evaluated on whether this negatively affects the visual quality. If that is the case, the compression is not applied.", 1),

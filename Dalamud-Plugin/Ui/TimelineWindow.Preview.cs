@@ -1,0 +1,320 @@
+﻿using System.Collections.Immutable;
+using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
+using Dalamud.Interface.Components;
+using Dalamud.Interface.Utility.Raii;
+using InstantEdit.Services.Animations;
+using InstantEdit.Services.Animations.Timeline;
+using InstantEdit.Ui.Timeline;
+
+namespace InstantEdit.Ui;
+
+/// <summary>
+/// The preview bar: builds the edited clip, shows it through a Penumbra temporary mod on the GPose
+/// actor's collection and plays it there, with pause, speed, replay and stop. Paused, the playhead
+/// scrubs the pose; playing, it follows the clip. Outside GPose it may follow the clip your
+/// character plays. Every playback call runs here, on the framework thread.
+/// </summary>
+public sealed partial class TimelineWindow
+{
+    private float speedPercent = 100;
+    private bool follow = true;
+    private volatile string? previewFingerprint;
+    private volatile int previewGeneration;
+    private ushort previewTimeline;
+    // The GPose actor whose collection got the preview; playing on another would show the unedited clip.
+    private ushort? previewActor;
+    private TimelineDocument? previewDocument;
+    private bool previewJob;
+    private string? previewError;
+    private Task? previewStop;
+    private int lastSeekFrame = -1;
+
+    private void DrawPreviewBar(TimelineEditor current, AnimationTimelineSource loaded)
+    {
+        var service = animations!;
+        var available = PlaybackAvailable(out var reason);
+        var shown = previewFingerprint != null;
+        var active = playback.Active;
+        var paused = active && playback.Paused;
+        var blocked = !available ? reason
+            : ReadOnly ? "Wait for the save to finish."
+            : previewJob ? "The preview is being built."
+            : service.Busy ? "Another edit is running. Wait for it to end."
+            : preview.Busy ? "The preview is busy."
+            : null;
+        using (ImRaii.Disabled(blocked != null))
+        {
+            if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Eye, "Preview", null, null, null, null))
+                StartPreview(current, loaded);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(blocked ?? "Build the edited clip and play it on your GPose character. Nothing is saved.");
+
+        ImGui.SameLine(0, Theme.Scaled(8));
+        if (Widgets.IconButton("##timeline-play", active && !paused ? FontAwesomeIcon.Pause : FontAwesomeIcon.Play,
+                !shown ? "Press Preview first." : active ? paused ? "Resume" : "Pause" : "Play the preview", shown && available))
+            TogglePlay();
+        ImGui.SameLine(0, Theme.Scaled(2));
+        if (Widgets.IconButton("##timeline-replay", FontAwesomeIcon.Redo, shown ? "Play again from the start" : "Press Preview first.", shown && available))
+            Replay(current);
+        ImGui.SameLine(0, Theme.Scaled(2));
+        if (Widgets.IconButton("##timeline-stop", FontAwesomeIcon.Stop, "Stop the preview and put your character back",
+                shown || active || preview.Active || previewJob))
+            StopPreview();
+
+        ImGui.SameLine(0, Theme.Scaled(12));
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Speed");
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.SetNextItemWidth(Theme.Scaled(110));
+        if (ImGui.SliderFloat("##timeline-speed", ref speedPercent, 10, 200, "%.0f%%"))
+        {
+            speedPercent = Math.Clamp(speedPercent, 10, 200);
+            if (playback.Active)
+                PlaybackCall(() => playback.SetSpeed(speedPercent / 100f));
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Playback speed of the preview.");
+        ImGui.SameLine(0, Theme.Scaled(12));
+        ImGui.Checkbox("Follow", ref follow);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Outside the preview, move the playhead with this clip while your character plays it.");
+
+        // A status only follows on this line when there is one, so nothing else lands beside the bar.
+        if (previewJob)
+        {
+            ImGui.SameLine(0, Theme.Scaled(12));
+            Widgets.Spinner();
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Muted, service.Status);
+        }
+        else if (FirstText(previewError, preview.Error, playback.Error) is { } error)
+        {
+            ImGui.SameLine(0, Theme.Scaled(12));
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Warning, error);
+        }
+        else if (FirstText(active ? playback.Status : null, preview.Active ? preview.Status : null, available ? null : reason) is { } status)
+        {
+            ImGui.SameLine(0, Theme.Scaled(12));
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Muted, status);
+        }
+
+        if (!shown && !preview.Active)
+            return;
+        if (preview.CollectionShared)
+            ImGui.TextColored(Theme.Warning, "⚠ Others using this collection see the preview too.");
+        ImGui.TextColored(Theme.Hint, previewDocument != null && !ReferenceEquals(previewDocument, current.Document)
+            ? "Changed since the preview. Press Preview again."
+            : "Sounds and effects play only while the preview plays.");
+    }
+
+    private static string? FirstText(params string?[] texts)
+    {
+        foreach (var text in texts)
+            if (!string.IsNullOrEmpty(text))
+                return text;
+        return null;
+    }
+
+    private bool PlaybackAvailable(out string reason)
+    {
+        try { return playback.Available(out reason); }
+        catch (InvalidOperationException e)
+        {
+            reason = e.Message;
+            return false;
+        }
+    }
+
+    /// <summary> A playback call that reports failure in the bar rather than throwing into the draw. </summary>
+    private void PlaybackCall(Func<bool> call)
+    {
+        try
+        {
+            if (call())
+                previewError = null;
+        }
+        catch (InvalidOperationException e)
+        {
+            previewError = e.Message;
+        }
+    }
+
+    /// <summary>
+    /// Builds the edited clip in the service, writes it with the imports it uses into a temporary
+    /// mod on the GPose actor's collection, then plays the clip's timeline on that actor.
+    /// </summary>
+    private void StartPreview(TimelineEditor current, AnimationTimelineSource loaded)
+    {
+        ushort? actor;
+        try { actor = playback.ActorIndex(); }
+        catch (InvalidOperationException e)
+        {
+            previewError = e.Message;
+            return;
+        }
+        if (actor is not { } index)
+        {
+            previewError = "Enter GPose to play the preview.";
+            return;
+        }
+        var document = current.Document;
+        var target = Fresh(loaded);
+        var clip = target.Clip;
+        ImmutableDictionary<string, byte[]> added;
+        try { added = TimelineWindowViews.AddedFiles(document, imports.Values); }
+        catch (InvalidDataException e)
+        {
+            previewError = e.Message;
+            return;
+        }
+        var speed = speedPercent / 100f;
+        var generation = ++previewGeneration;
+        previewActor = index;
+        previewError = null;
+        previewJob = true;
+        previewDocument = document;
+        lastSeekFrame = -1;
+        animations!.PreviewTimeline(target, document, async (built, token) =>
+        {
+            var files = new Dictionary<string, byte[]>(added, StringComparer.OrdinalIgnoreCase) { [clip.GamePath] = built.Pap };
+            await preview.ShowAsync(index, files, token);
+            if (generation != previewGeneration)
+            {
+                // Stopped or replaced while it was being built: take it down again.
+                await preview.StopAsync();
+                return "Preview ended.";
+            }
+            var played = await framework.RunOnFrameworkThread(() =>
+            {
+                if (generation != previewGeneration)
+                    return false;
+                previewFingerprint = built.BindingFingerprint;
+                previewTimeline = clip.Timeline;
+                if (!playback.Play(clip.Timeline, built.BindingFingerprint, index))
+                    return false;
+                if (Math.Abs(speed - 1) > .001f)
+                    playback.SetSpeed(speed);
+                return true;
+            });
+            return played ? "Preview playing." : "Preview on. " + playback.Error;
+        });
+    }
+
+    private void TogglePlay()
+    {
+        if (!playback.Active)
+        {
+            if (previewFingerprint is { } fingerprint)
+                PlaybackCall(() => playback.Play(previewTimeline, fingerprint, previewActor));
+        }
+        else if (playback.Paused)
+            PlaybackCall(playback.Resume);
+        else
+            PlaybackCall(playback.Pause);
+    }
+
+    private void Replay(TimelineEditor current)
+    {
+        if (previewFingerprint is not { } fingerprint)
+            return;
+        PlaybackCall(() => playback.Play(previewTimeline, fingerprint, previewActor));
+        current.Playhead = 0;
+        lastSeekFrame = 0;
+    }
+
+    /// <summary>
+    /// Ends the preview: the character is put back now, the temporary mod is removed on a task.
+    /// Runs when the window closes, the clip changes, before a save and from Stop.
+    /// </summary>
+    private void StopPreview()
+    {
+        previewGeneration++;
+        try
+        {
+            if (playback.Active)
+                playback.Stop();
+        }
+        catch (InvalidOperationException e)
+        {
+            previewError = e.Message;
+        }
+        previewFingerprint = null;
+        previewDocument = null;
+        lastSeekFrame = -1;
+        if (!preview.Active && !preview.Busy)
+            return;
+        var stop = preview.StopAsync();
+        // The window may close before this ends; a failure still reaches the log.
+        _ = stop.ContinueWith(task => log.Warning(task.Exception!, "Could not end the animation preview."),
+            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+        previewStop = stop;
+    }
+
+    private void PollPreview()
+    {
+        if (previewJob && animations is { Busy: false } service)
+        {
+            previewJob = false;
+            if (service.LastFailed)
+                previewError = service.Status;
+        }
+        if (previewStop is { IsCompleted: true } stop)
+        {
+            previewStop = null;
+            if (stop.IsFaulted)
+                previewError = "The preview could not be removed. " + ErrorText(stop.Exception);
+        }
+        // The service ends the preview on its own when GPose ends or Penumbra restarts.
+        if (previewFingerprint != null && !previewJob && !preview.Active && !preview.Busy)
+        {
+            previewFingerprint = null;
+            previewDocument = null;
+            lastSeekFrame = -1;
+        }
+    }
+
+    /// <summary>
+    /// Keeps the playhead and the GPose pose together: paused (or while scrubbing) the pose follows
+    /// the playhead; playing, the playhead follows the clip. Without a preview, Follow reads the
+    /// clip your character plays, read only.
+    /// </summary>
+    private void SyncPlayback(TimelineEditor current, AnimationTimelineSource loaded)
+    {
+        try
+        {
+            if (playback.Active && previewFingerprint is { } fingerprint)
+            {
+                if (playback.Paused || current.Gesture == TimelineGesture.Scrub)
+                {
+                    if (current.Playhead != lastSeekFrame)
+                    {
+                        playback.Seek(current.Playhead / (float)TimelineDocument.Fps, fingerprint);
+                        lastSeekFrame = current.Playhead;
+                    }
+                }
+                else if (playback.CurrentTime(fingerprint) is { } seconds)
+                {
+                    current.Playhead = TimelineWindowViews.Frames(seconds);
+                    lastSeekFrame = current.Playhead;
+                    current.Reveal(current.Playhead);
+                }
+                return;
+            }
+            if (follow && !playback.Active && current.Gesture == TimelineGesture.None && loaded.Clip.BindingFingerprint.Length > 0 &&
+                playback.CurrentTime(loaded.Clip.BindingFingerprint) is { } live)
+            {
+                current.Playhead = TimelineWindowViews.Frames(live);
+                lastSeekFrame = current.Playhead;
+            }
+        }
+        catch (InvalidOperationException e)
+        {
+            previewError = e.Message;
+        }
+    }
+}
