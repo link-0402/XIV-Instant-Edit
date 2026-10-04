@@ -65,13 +65,11 @@ def _loop_uvs(layer, loop_count: int) -> np.ndarray:
 def _add_uv2(obj, uv1):
     """Add the second export UV map, named so the exporter reads it as UV2."""
     uv_layers = obj.data.uv_layers
-    if _NUMBERED_UV.fullmatch(uv1.name.lower()):
-        name = "uv1"
-    else:
-        # Unnumbered maps export in Blender's order; keep this one unnumbered too.
-        name = f"{uv1.name} UV2"[:63]
+    if not _NUMBERED_UV.fullmatch(uv1.name.lower()):
+        # A lone unnumbered map exports as uv0, but two would be ambiguous: number both.
+        uv1.name = "uv0"
     active = uv_layers.active_index
-    layer = uv_layers.new(name=name, do_init=False)
+    layer = uv_layers.new(name="uv1", do_init=False)
     if layer is None:
         raise ValueError(f"{obj.name} already has the most UV maps Blender allows.")
     uv_layers.active_index = active

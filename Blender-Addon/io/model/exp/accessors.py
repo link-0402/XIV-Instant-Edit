@@ -14,34 +14,54 @@ from ..com.exceptions import XIVMeshError
 from ....xivpy.model import XIV_COL, XIV_UV
 
 
+def _ambiguous_uv_layers(obj: Object, layers) -> XIVMeshError:
+    names = ", ".join(layer.name for layer in layers)
+    return XIVMeshError(
+        f'{obj.name}: Ambiguous UV maps ({names}). '
+        'Delete the extra UV maps, or name the ones to export uv0, uv1 and uv2.'
+    )
+
+
+def _is_empty_uv_layer(layer) -> bool:
+    """Whether every corner of a UV map sits on one point, as in an unused or cleared map."""
+    values = np.empty(len(layer.uv) * 2, single)
+    layer.uv.foreach_get("vector", values)
+    return not len(values) or bool(np.ptp(values.reshape(-1, 2), axis=0).max() == 0)
+
+
 def get_xiv_uv_layers(obj: Object, expected_count: int | None = None) -> list:
-    """Return export UV layers in a deterministic channel order."""
-    candidates = [
-        layer for layer in obj.data.uv_layers
-        if layer.name.lower().startswith(XIV_UV)
-    ]
-    if not candidates:
-        raise XIVMeshError(f'{obj.name}: No export UV layer was found.')
+    """Return export UV layers in a deterministic channel order.
+
+    Maps named uv0-uv2 export as those channels; other maps next to them are ignored.
+    Without them, a mesh's only UV map with content exports as uv0 whatever its name,
+    and more than one such map is refused as ambiguous. Empty maps without a uv0-uv2
+    name never count.
+    """
+    all_layers = list(obj.data.uv_layers)
+    if not all_layers:
+        raise XIVMeshError(f'{obj.name}: No UV map was found.')
+    if len(all_layers) > 1:
+        numbered_name = re.compile(r"uv[0-2]")
+        all_layers = [
+            layer for layer in all_layers
+            if numbered_name.fullmatch(layer.name.lower()) or not _is_empty_uv_layer(layer)
+        ] or all_layers[:1]
 
     numbered: dict[int, object] = {}
     unnumbered = []
-    for layer in candidates:
+    for layer in all_layers:
         match = re.fullmatch(r"uv([0-2])", layer.name.lower())
         if match:
             channel = int(match.group(1))
             if channel in numbered:
                 raise XIVMeshError(f'{obj.name}: Duplicate UV channel uv{channel}.')
             numbered[channel] = layer
-        else:
+        elif layer.name.lower().startswith(XIV_UV):
             unnumbered.append(layer)
 
     if numbered:
         if unnumbered:
-            names = ", ".join(layer.name for layer in candidates)
-            raise XIVMeshError(
-                f'{obj.name}: Ambiguous UV layer names ({names}). '
-                'Use uv0, uv1, and uv2 exclusively.'
-            )
+            raise _ambiguous_uv_layers(obj, (*numbered.values(), *unnumbered))
         highest = max(numbered)
         missing = [f"uv{idx}" for idx in range(highest + 1) if idx not in numbered]
         if missing:
@@ -49,9 +69,10 @@ def get_xiv_uv_layers(obj: Object, expected_count: int | None = None) -> list:
                 f'{obj.name}: Missing UV channel(s): {", ".join(missing)}.'
             )
         layers = [numbered[idx] for idx in range(highest + 1)]
+    elif len(all_layers) == 1:
+        layers = all_layers
     else:
-        # Legacy names such as UVMap have no channel number; preserve Blender order.
-        layers = candidates
+        raise _ambiguous_uv_layers(obj, all_layers)
 
     if len(layers) > 3:
         raise XIVMeshError(f'{obj.name}: More than three export UV layers were found.')

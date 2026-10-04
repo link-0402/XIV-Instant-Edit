@@ -23,7 +23,7 @@ from .materials import (
     convert_suffix_mesh_names,
 )
 from .mesh_list import DragSession, ListMetrics, list_parts, moved_part, placement_plan, scene_parts
-from .mesh.export import (check_triangulation, check_weights, dropped_shape_keys_warning, export_result,
+from .mesh.export import (check_triangulation, check_uv_layers, check_weights, dropped_shape_keys_warning, export_result,
                           get_export_stats)
 from .mesh.hidden import hidden_vertices, remove_vertices
 from .mesh.objects import visible_meshobj
@@ -277,6 +277,10 @@ class XIVIE_OT_simple_export(Operator):
         if unweighted:
             self.report({"ERROR"}, "No bone weights: " + ", ".join(unweighted))
             return {"CANCELLED"}
+        uv_problems = check_uv_layers(objects) if settings.model_format == "MDL" else []
+        if uv_problems:
+            self.report({"ERROR"}, " ".join(uv_problems))
+            return {"CANCELLED"}
         from .instant_edit.racial_scaling import simple_export_warning
 
         scaled = simple_export_warning(objects)
@@ -391,7 +395,11 @@ class XIVIE_OT_simple_import(Operator):
                             colors_type="LINEAR",
                         )
                     else:
-                        result = bpy.ops.import_scene.gltf(filepath=str(file_path))
+                        # Bone shapes add an Icosphere in a glTF_not_exported collection.
+                        result = bpy.ops.import_scene.gltf(
+                            filepath=str(file_path),
+                            disable_bone_shape=True,
+                        )
                     if "FINISHED" not in result:
                         return set(result)
                 imported_objects = tracker.created
@@ -888,8 +896,8 @@ class XIVIE_OT_remove_hidden_vertices(Operator):
         target = "this part" if properties.part_only else "the selected meshes"
         return (
             f"Delete the vertices of {target} that no camera angle can see, with the faces that use them.\n"
-            "Tests the rest pose and each shp_ shape key the way the game draws them: see-through materials "
-            "hide nothing, and neither does the back of a face whose material culls backfaces"
+            "Tests the rest pose and each shp_ shape key the way the game draws them: see-through parts of a "
+            "material hide nothing, and neither does the back of a face whose material culls backfaces"
         )
 
     @classmethod

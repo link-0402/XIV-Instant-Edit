@@ -370,6 +370,21 @@ _CHARACTER_SHADERS = frozenset({
     "characterstockings.shpk",
     "charactertransparency.shpk",
 })
+# Gear shaders draw opacity as min(1, opacity / g_AlphaThreshold), so without a
+# threshold (the default 0) they draw solid whatever the texture holds. Glass,
+# tattoo and transparency materials draw see-through without one.
+_SOLID_WITHOUT_THRESHOLD = frozenset({"character.shpk", "characterlegacy.shpk", "characterscroll.shpk"})
+
+
+def drawn_solid(shader_package: str, shader_constants) -> bool:
+    """Whether the game draws a material solid whatever its opacity texture holds."""
+    if shader_package.casefold() not in _SOLID_WITHOUT_THRESHOLD:
+        return False
+    for constant in shader_constants:
+        if constant.get("id") == _ALPHA_THRESHOLD_CONSTANT_ID:
+            values = constant.get("values") or ()
+            return not values or values[0] <= 0.0
+    return True
 
 
 def _shader_constant_values(preview: PreviewMaterial, constant_id: int) -> list | None:
@@ -729,9 +744,10 @@ def _link_opacity(tree: _PreviewNodes, principled, alpha, preview: PreviewMateri
     Opaque materials discard texels below g_AlphaThreshold (default 0).
     Translucent ones blend with opacity divided by the threshold, as TexTools
     and MeddleTools both render it; unknown flags keep that smooth alpha.
+    Gear without a threshold draws solid either way.
     """
     alpha_input = _socket(principled, "Alpha")
-    if alpha_input is None or alpha is None:
+    if alpha_input is None or alpha is None or drawn_solid(preview.shader_package, preview.shader_constants):
         return False
     threshold = _alpha_threshold(preview)
     if _is_translucent(preview) is False:

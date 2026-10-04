@@ -21,7 +21,7 @@ from ..materials     import (
     is_body_material,
 )
 from ..mesh.export   import (export_result, get_export_stats, check_triangulation, check_weights,
-                             check_dropped_shape_keys, draw_dropped_shape_keys, flush_edit_mode)
+                             check_uv_layers, check_dropped_shape_keys, draw_dropped_shape_keys, flush_edit_mode)
 from ..mesh.objects  import visible_meshobj
 from ..properties    import get_settings
 from ..xivpy.model   import XIVModel
@@ -729,6 +729,7 @@ def export_target_issues(
                 "ERROR",
                 _named_readiness_issue("No bone weights", unweighted),
             ))
+        issues.extend(("ERROR", problem) for problem in check_uv_layers(export_objects))
         scaled = racial_scaling.marks(export_objects)
         if scaled:
             issues.append((
@@ -2640,6 +2641,9 @@ def raise_unless_exportable(export_objects) -> None:
         raise ValueError(
             "No bone weights: " + ", ".join(unweighted)
             + ". Weight them to the armature's bones before exporting.")
+    uv_problems = check_uv_layers(export_objects)
+    if uv_problems:
+        raise ValueError(" ".join(uv_problems))
 
 
 # ---- Mashup export execution ----

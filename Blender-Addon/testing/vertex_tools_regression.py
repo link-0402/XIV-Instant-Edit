@@ -1,6 +1,7 @@
 """Vertex Data tools, hidden vertex removal, export requirements, Pose tools, shortcuts and the listener retry."""
 
 import importlib
+import json
 import re
 import socket
 import sys
@@ -188,8 +189,8 @@ def check_vertex_data_tools() -> None:
         byte_colour = colour_layer(legacy, "vc0", (0.25, 0.5, 0.75, 0.5), data_type="BYTE_COLOR")
         select_only(legacy)
         require(bpy.ops.xiv_ie.vertex_data(action="COPY_UV1_TO_UV2") == {"FINISHED"}
-                and [layer.name for layer in legacy.data.uv_layers] == ["UVMap", "UVMap UV2"],
-                "Copy UV1 to UV2 names the new map so an unnumbered UV1 keeps its place")
+                and [layer.name for layer in legacy.data.uv_layers] == ["uv0", "uv1"],
+                "Copy UV1 to UV2 numbers an unnumbered UV1 so the two maps are not ambiguous")
         _model, streams, _path = export([legacy], folder, "legacy")
         tex = streams[0][1]
         require(tex["uv0"].shape[1] == 4 and np.allclose(tex["uv0"][:, 2:4], tex["uv0"][:, 0:2]),
@@ -219,6 +220,42 @@ def material(name: str, *, culled: bool = True, alpha: float = 1.0):
     principled = next(node for node in result.node_tree.nodes if node.type == "BSDF_PRINCIPLED")
     principled.inputs["Alpha"].default_value = alpha
     return result
+
+
+def opacity_material(name: str, alphas, *, operation: str = "", value: float = 0.5):
+    """A blended material whose image alpha, in bands across U, drives Alpha,
+    through a clamped Math node when ``operation`` names one."""
+    result = material(name)
+    result.surface_render_method = "BLENDED"
+    width = 8 * len(alphas)
+    pixels = np.ones((4, width, 4), dtype=np.float32)
+    for band, alpha in enumerate(alphas):
+        pixels[:, band * 8:(band + 1) * 8, 3] = alpha
+    image = bpy.data.images.new(name, width, 4, alpha=True)
+    image.pixels.foreach_set(pixels.ravel())
+    tree = result.node_tree
+    texture = tree.nodes.new("ShaderNodeTexImage")
+    texture.image = image
+    opacity = texture.outputs["Alpha"]
+    if operation:
+        node = tree.nodes.new("ShaderNodeMath")
+        node.operation = operation
+        node.use_clamp = True
+        node.inputs[1].default_value = value
+        tree.links.new(opacity, node.inputs[0])
+        opacity = node.outputs["Value"]
+    principled = next(node for node in tree.nodes if node.type == "BSDF_PRINCIPLED")
+    tree.links.new(opacity, principled.inputs["Alpha"])
+    return result
+
+
+def band_uvs(obj, band_of_polygon, bands: int) -> None:
+    """Map each polygon of ``obj`` onto the middle of one band of an opacity_material."""
+    layer = obj.data.uv_layers.new(name="uv0")
+    for polygon in obj.data.polygons:
+        u = (band_of_polygon(polygon) + 0.5) / bands
+        for loop in polygon.loop_indices:
+            layer.uv[loop].vector = (u, 0.5)
 
 
 def box(centre, half, *, open_top: bool = False):
@@ -318,6 +355,38 @@ def check_remove_hidden_vertices() -> None:
                 inner = mesh_object("0.1 Inner", box((0, 0, 0), 0.3), surface=opaque)
                 remove_hidden(inner)
                 require(len(inner.data.vertices) == 8, f"{label} hides nothing")
+
+        sheer_band, middle_band, opaque_band = 0, 1, 2
+        for label, operation, value, band_of, kept in (
+            ("the opaque part of an opacity texture hides what lies behind it", "", 0.5, lambda _p: opaque_band, 0),
+            ("the sheer part of an opacity texture hides nothing", "", 0.5, lambda _p: sheer_band, 8),
+            ("one sheer side of a cover shows what lies behind it", "", 0.5,
+             lambda polygon: sheer_band if polygon.normal.x < -0.5 else opaque_band, 8),
+            ("a cut-out hides where its texture passes the alpha test", "GREATER_THAN", 0.5, lambda _p: middle_band, 0),
+            ("a blend hides only where it is nearly solid", "DIVIDE", 0.7, lambda _p: middle_band, 8),
+        ):
+            with temporary_scene_data():
+                cover = opacity_material("Cover", (0.25, 0.6, 1.0), operation=operation, value=value)
+                band_uvs(mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=cover), band_of, 3)
+                inner = mesh_object("0.1 Inner", box((0, 0, 0), 0.3), surface=opaque)
+                remove_hidden(inner)
+                require(len(inner.data.vertices) == kept, label)
+
+        threshold = [{"id": 0x29AC0223, "values": [0.5]}]
+        for label, package, constants, kept in (
+            ("gear without an alpha threshold hides what it covers, whatever an older import drew",
+             "character.shpk", [], 0),
+            ("gear with an alpha threshold shows what lies behind its sheer parts", "character.shpk", threshold, 8),
+            ("a tattoo without an alpha threshold stays see-through", "charactertattoo.shpk", [], 8),
+        ):
+            with temporary_scene_data():
+                cover = opacity_material("Older Import", (0.25,))
+                cover["xiv_shader_package"] = package
+                cover["xiv_shader_constants"] = json.dumps(constants)
+                band_uvs(mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=cover), lambda _p: 0, 1)
+                inner = mesh_object("0.1 Inner", box((0, 0, 0), 0.3), surface=opaque)
+                remove_hidden(inner)
+                require(len(inner.data.vertices) == kept, label)
 
         for label, flip in (("a mannequin on the same spot", False), ("a Backfaces copy", True)):
             with temporary_scene_data():
@@ -469,6 +538,35 @@ def check_export_requirements() -> None:
         model, _streams, _path = export([mixed, follower], folder, "accepted")
         require(model.bones == ["j_kosi", "j_sebo_a"],
                 "every non-bone group is dropped and a bone-parented mesh follows its bone")
+
+        lone = part("0.5 Lone UV", armature, uv_names=("VTXW0000",))
+        lone_uvs = layer_values(lone.data.uv_layers[0], "vector")
+        many = part("0.6 Many UVs", armature, uv_names=("VTXW0000", "EXTRAUV0"))
+        extra = part("0.7 Extra UV", armature, uv_names=("uv0", "UVMap"))
+        lightmap = part("0.8 Lightmap", armature, uv_names=("uv0", "Lightmap"))
+        padded = part("0.9 Empty Extras", armature, uv_names=("EXTRAUV0", "VTXW0000", "EXTRAUV1"))
+        for name in ("EXTRAUV0", "EXTRAUV1"):
+            padded.data.uv_layers[name].uv.foreach_set("vector", np.zeros(len(padded.data.loops) * 2, np.float32))
+        require([layer.name for layer in module("io.model.exp.accessors").get_xiv_uv_layers(padded)] == ["VTXW0000"],
+                "empty extra UV maps are skipped and the one with content exports as uv0")
+        padded.hide_set(True)
+        problems = export_module.check_uv_layers([lone, many, extra, lightmap])
+        require(len(problems) == 2 and "0.6 Many UVs: Ambiguous UV maps (VTXW0000, EXTRAUV0)" in problems[0]
+                and "0.7 Extra UV: Ambiguous UV maps" in problems[1],
+                "several UV maps without uv0 naming are ambiguous; a lone map or uv0 with extras is not")
+        _model, streams, _path = export([lone], folder, "lone_uv")
+        require(np.allclose(streams[0][1]["uv0"][:, 0:2], np.column_stack((lone_uvs[:, 0], 1 - lone_uvs[:, 1]))[
+                    :len(streams[0][1]["uv0"])], atol=1e-3)
+                and [layer.name for layer in lone.data.uv_layers] == ["VTXW0000"],
+                "a mesh's only UV map exports as uv0 whatever its name, without renaming it")
+        try:
+            export([many], folder, "many_uv")
+        except exceptions.XIVMeshError as error:
+            require("Delete the extra UV maps" in str(error), "export refuses ambiguous UV maps")
+        else:
+            raise AssertionError("ambiguous UV maps exported")
+        for obj in (lone, many, extra, lightmap):
+            obj.hide_set(True)
 
         quad = part("0.0 Quad", armature, faces=((0, 1, 3, 2),))
         require(export_module.check_triangulation([quad, mixed]) == ["0.0 Quad"], "quads are found")
