@@ -80,7 +80,8 @@ public sealed partial class MaterialPreviewBundleBuilder
         bool buildPreview,
         bool excludeBodyAndGeneralMaterials,
         CancellationToken cancellationToken = default,
-        IReadOnlyCollection<string>? preferredOptionMemberships = null)
+        IReadOnlyCollection<string>? preferredOptionMemberships = null,
+        IReadOnlyCollection<MaterialResourceCandidate>? previewCandidates = null)
     {
         var dependencyWarnings = new List<string>();
         var scopedCandidates = ScopeResourceCandidates(
@@ -89,10 +90,13 @@ public sealed partial class MaterialPreviewBundleBuilder
         var dependencies = await BuildDependencyManifestAsync(
             modelBytes, modelGamePath, scopedCandidates, resourceCache,
             dependencyWarnings, cancellationToken).ConfigureAwait(false);
+        // The preview may read other resources than the dependencies, such as a vanilla model's
+        // materials as a character wears them; the cache is keyed by game path, so it isn't shared then.
         var preview = buildPreview
             ? await BuildAsync(
-                modelBytes, modelGamePath, scopedCandidates, bundleDirectory,
-                excludeBodyAndGeneralMaterials, resourceCache, cancellationToken).ConfigureAwait(false)
+                modelBytes, modelGamePath, previewCandidates ?? scopedCandidates, bundleDirectory,
+                excludeBodyAndGeneralMaterials, previewCandidates is null ? resourceCache : null,
+                cancellationToken).ConfigureAwait(false)
             : null;
         return new MaterialImportBundleResult(dependencies, preview, dependencyWarnings);
     }

@@ -218,8 +218,9 @@ public sealed partial class MainWindow
         {
             var port = _config.BlenderPort;
             // The character's armature is always built from its skeleton: the existing-armature option doesn't apply.
-            var importOptions = BlenderImportOptions.GeneratedWithPreview(
-                _config.ApplyTexturesAndMaterials, _config.ExcludeBodyAndGeneralMaterials);
+            // Nor does excluding body and general materials: the character is shown with the skin, pubes and
+            // piercings it wears.
+            var importOptions = BlenderImportOptions.GeneratedWithPreview(_config.ApplyTexturesAndMaterials);
             var models = CharacterSendPlan.Models(character.ResourceRoots, request.Weapons);
             if (models.Count == 0)
                 throw new InvalidOperationException("Your character shows no model that can be sent. Refresh the On Screen list and try again.");
