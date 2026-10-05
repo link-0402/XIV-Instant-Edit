@@ -201,11 +201,10 @@ internal static class VariantExportScenarios
             // These reproduce MDL-table-position masks from an older add-on.
             // The plugin must canonicalize them from the suffix instead.
             ["atr_tv_a"] = 16,
-            ["atr_gv_a"] = 64,
             ["atr_tv_c"] = 32,
             ["atr_tv_b"] = 8,
         };
-        var tags = new[] { "atr_tv_a", "atr_gv_a", "atr_tv_c", "atr_tv_b", "atrx_cape" };
+        var tags = new[] { "atr_tv_a", "atr_tv_c", "atr_tv_b", "atrx_cape" };
         var sourceImc = new JsonArray(new JsonObject
         {
             ["Type"] = "Imc",
@@ -451,6 +450,83 @@ internal static class VariantExportScenarios
                     .SequenceEqual([("A", 1), ("I", 256), ("J", 512)]) &&
                 tenSuffixGroup["DefaultSettings"]!.GetValue<int>() == 7,
             "attribute groups: _i and _j use IMC attribute bits 8 and 9");
+
+        CheckAccessoryImcGroups(root);
+    }
+
+    /// <summary>
+    /// A necklace like the converted Kunoichi cloak: a0060 has four variants with materials 1 to 4, and
+    /// the swap mod points variants 2 to 4 at material 1 in its default data.
+    /// </summary>
+    private static void CheckAccessoryImcGroups(string root)
+    {
+        const string necklace = "chara/accessory/a0060/model/c0201a0060_nek.mdl";
+        string[] tags = ["atr_nv_a", "atr_nv_b", "atr_nv_c", "atr_nv_d"];
+        var masks = new Dictionary<string, int> { ["atr_nv_a"] = 1, ["atr_nv_b"] = 2, ["atr_nv_c"] = 4, ["atr_nv_d"] = 8 };
+        var game = new[] { 1, 1, 2, 3, 4 }.Select(material => Entry(material)).ToArray();
+
+        static JsonObject Entry(int material, int vfx = 0) => new()
+        {
+            ["MaterialId"] = material, ["DecalId"] = 0, ["VfxId"] = vfx, ["MaterialAnimationId"] = 0, ["AttributeMask"] = 1023, ["SoundId"] = 0,
+        };
+        static JsonArray Imc(params (int Variant, JsonObject Entry)[] entries) => new(entries.Select(item => (JsonNode)new JsonObject
+        {
+            ["Type"] = "Imc",
+            ["Manipulation"] = new JsonObject
+            {
+                ["ObjectType"] = "Accessory", ["PrimaryId"] = 60, ["Variant"] = item.Variant, ["EquipSlot"] = "Neck", ["Entry"] = item.Entry,
+            },
+        }).ToArray());
+        string Folder(string name)
+        {
+            var folder = Path.Combine(root, name);
+            Directory.CreateDirectory(folder);
+            File.WriteAllText(Path.Combine(folder, "meta.json"), Metadata().ToJsonString());
+            return folder;
+        }
+        JsonObject ImcGroup(string folder)
+            => JsonNode.Parse(File.ReadAllText(Path.Combine(folder, "meta.json")))!["Groups"]!.AsArray()
+                .OfType<JsonObject>().Single(group => group["Type"]?.GetValue<string>() == "Imc");
+
+        var swap = Folder("NecklaceSwap");
+        Require(PenumbraService.WriteAttributeGroupsForRegression(swap, necklace, tags, masks,
+                    Imc((2, Entry(1)), (3, Entry(1)), (4, Entry(1))), game) is null,
+            "accessory attribute groups: a necklace's part toggles are generated");
+        var swapGroup = ImcGroup(swap);
+        Require(swapGroup["Identifier"]!["ObjectType"]!.GetValue<string>() == "Accessory" &&
+                swapGroup["Identifier"]!["EquipSlot"]!.GetValue<string>() == "Neck" &&
+                swapGroup["Identifier"]!["PrimaryId"]!.GetValue<int>() == 60 &&
+                swapGroup["AllVariants"]!.GetValue<bool>() && !swapGroup["OnlyAttributes"]!.GetValue<bool>() &&
+                swapGroup["DefaultEntry"]!["MaterialId"]!.GetValue<int>() == 1 &&
+                swapGroup["DefaultEntry"]!["AttributeMask"]!.GetValue<int>() == 0 &&
+                swapGroup["Options"]!.AsArray().Select(option => option!["AttributeMask"]!.GetValue<int>()).SequenceEqual([1, 2, 4, 8]),
+            "accessory attribute groups: a swap that gives every variant material 1 keeps it, instead of the game's materials 2 to 4");
+
+        var plain = Folder("NecklacePlain");
+        Require(PenumbraService.WriteAttributeGroupsForRegression(plain, necklace, tags, masks, Imc((1, Entry(1))), game) is null &&
+                ImcGroup(plain)["OnlyAttributes"]!.GetValue<bool>() &&
+                ImcGroup(plain)["DefaultEntry"]!["MaterialId"]!.GetValue<int>() == 1,
+            "accessory attribute groups: a mod without IMC changes of its own keeps every variant's game entry");
+
+        var mixed = Folder("NecklaceMixed");
+        var mixedBefore = File.ReadAllText(Path.Combine(mixed, "meta.json"));
+        Require(PenumbraService.WriteAttributeGroupsForRegression(mixed, necklace, tags, masks, Imc((1, Entry(1, vfx: 7))), game)?
+                    .StartsWith("attribute_group_imc_mixed:", StringComparison.Ordinal) == true &&
+                File.ReadAllText(Path.Combine(mixed, "meta.json")) == mixedBefore,
+            "accessory attribute groups: one group can't keep IMC changes that differ between variants, so none is written");
+
+        // The converted cloak still carried the body's atr_tv_ tags, which a necklace's IMC entry never hides.
+        var converted = Folder("ConvertedCloak");
+        var convertedBefore = File.ReadAllText(Path.Combine(converted, "meta.json"));
+        var refused = PenumbraService.WriteAttributeGroupsForRegression(converted, necklace, ["atr_tv_a", "atr_tv_b", "atr_nv_c"],
+            new Dictionary<string, int> { ["atr_tv_a"] = 1, ["atr_tv_b"] = 2, ["atr_nv_c"] = 4 }, null, game);
+        Require(refused == "attribute_group_invalid: A necklace model only toggles atr_nv_ tags, so atr_tv_a, atr_tv_b would never hide. " +
+                           "Rename them to atr_nv_a, atr_nv_b." &&
+                File.ReadAllText(Path.Combine(converted, "meta.json")) == convertedBefore,
+            "accessory attribute groups: another slot's part tags are refused with the names to use");
+        Require(PenumbraService.WriteAttributeGroupsForRegression(converted, "chara/accessory/a0064/model/c0101a0064_ear.mdl", ["atr_gv_a"],
+                    new Dictionary<string, int> { ["atr_gv_a"] = 1 })?.Contains("An earring model only toggles atr_ev_ tags", StringComparison.Ordinal) == true,
+            "accessory attribute groups: the refusal names the model's own family");
     }
 
     private static IEnumerable<JsonObject> AtrManipulations(JsonNode meta)

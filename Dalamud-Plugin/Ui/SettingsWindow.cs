@@ -274,7 +274,7 @@ public sealed class SettingsWindow : Window
         Widgets.SectionHeader("Notifications");
         var showNotifications = _config.ShowNotifications;
         if (Toggle("Show notifications", ref showNotifications,
-                "Warnings, errors and model handoff results also appear as Dalamud notifications, even while the window is closed."))
+                "Warnings, errors, model handoff results and texture optimizations also appear as Dalamud notifications, even while the window is closed."))
         {
             _config.ShowNotifications = showNotifications;
             Save();

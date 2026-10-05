@@ -486,6 +486,8 @@ internal sealed class ToolSetupViews
         ImGui.Spacing();
         Widgets.HintWrapped("The save scripts add two actions: 'SaveFlattenedTGA' and 'SaveFlattenedTGAVariant', which save the current texture back as a flattened 32-bit TGA in one " +
                             "step while keeping layers in your editing copy. Saving as a variant automatically sets up a Penumbra mapping for this texture under the new name.");
+        Widgets.HintWrapped("Give both a keyboard shortcut in your editor to save with one key press: Edit > Keyboard Shortcuts in Photoshop and GIMP, " +
+                            "Settings > Configure Krita > Keyboard Shortcuts in Krita.");
     }
 
     private void DrawSaveScripts(TextureEditor editor, SaveScriptState state)

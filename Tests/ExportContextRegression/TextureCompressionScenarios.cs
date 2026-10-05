@@ -742,6 +742,12 @@ internal static class TextureCompressionScenarios
             "texture optimization card: textures shrunk for holding one color are counted in the totals and the last run");
         Require(texts.All(text => !text.Contains('…') && !text.Contains("...", StringComparison.Ordinal)),
             "texture compression card: no ellipses, which the game font draws as dashes");
+        Require(TextureCompressionViews.Toast(run with { Compressed = 4, Shrunk = 1, Refit = 1 }) ==
+                    "Textures optimized: 3 textures were compressed, 1 was resized, hair UV optimized and cropped." &&
+                TextureCompressionViews.Toast(run with { Compressed = 1 }) == "Textures optimized: 1 texture was compressed." &&
+                TextureCompressionViews.Toast(run with { Compressed = 2, Shrunk = 2 }) == "Textures optimized: 2 textures were resized." &&
+                TextureCompressionViews.Toast(run with { Compressed = 0, Refit = 2 }) == "Textures optimized: hair UV optimized and cropped.",
+            "texture optimization toast: lists only what the run did");
         var temp = Path.GetTempPath();
         Require(TextureCompressionViews.InTempFolder(Path.Combine(temp, "XIV Instant Edit"), temp) &&
                 !TextureCompressionViews.InTempFolder(Path.GetPathRoot(temp) + "Games" + Path.DirectorySeparatorChar + "Cache", temp),

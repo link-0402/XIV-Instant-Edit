@@ -131,9 +131,10 @@ def layout_rows(parts, metrics: ListMetrics | None = None, maximum_group: int | 
             continue
         rows.append(ListRow("header", group, top))
         top += unit + metrics.header_gap
-        previous = None
+        # Missing leading parts count as a gap too, so a part can be dragged to 0.
+        previous = -1
         for part in members:
-            if previous is not None and part.part > previous + 1:
+            if part.part > previous + 1:
                 # One placeholder row stands for the whole gap.
                 rows.append(ListRow("gap", group, top, part_index=previous + 1))
                 top += unit
@@ -186,16 +187,22 @@ def placement_plan(parts, placement) -> dict[int, tuple[int, int]]:
 def moved_part(parts, ident: int, group: int, index: int) -> dict[int, tuple[int, int]]:
     """Return every part's (group, index) after dropping one part at `index` of `group`.
 
-    Inside its own group a unique part rotates: the parts between its old and
-    new index shift one step toward the index it left. A duplicate, or a part
-    entering another group, is inserted instead: the parts from `index` upward
-    shift by one until a free index absorbs the shift, so no other part takes
-    over a duplicate ID. The parts of the group a part leaves keep their IDs.
+    A part dropped on a free index, such as an empty slot, just takes it.
+    Dropped on another part inside its own group, a unique part rotates: the
+    parts between its old and new index shift one step toward the index it
+    left. A duplicate, or a part entering another group, is inserted instead:
+    the parts from `index` upward shift by one until a free index absorbs the
+    shift, so no other part takes over a duplicate ID. The parts of the group
+    a part leaves keep their IDs.
     """
     moving = next(part for part in parts if part.ident == ident)
     placement = _placement(parts)
     others = [part for part in parts if part.ident != ident and part.group == group]
-    rotates = group == moving.group and all(part.part != moving.part for part in others)
+    rotates = (
+        group == moving.group
+        and any(part.part == index for part in others)
+        and all(part.part != moving.part for part in others)
+    )
     if rotates:
         for part in others:
             if moving.part < part.part <= index:
@@ -240,13 +247,14 @@ def part_targets(parts, ident: int, maximum_group: int) -> list[tuple[int, int]]
     targets = []
     for group in range(maximum_group + 1):
         indices = [part.part for part in parts if part.group == group and part.ident != ident]
+        # Every group's parts can start at 0, the list's leading empty slot.
         if group == moving.group:
             # A duplicate may also take the free index after the group's end.
             bounds = indices + [moving.part]
             last = max(bounds) + (1 if moving.part in indices else 0)
-            targets.extend((group, index) for index in range(min(bounds), last + 1))
+            targets.extend((group, index) for index in range(last + 1))
         elif indices:
-            targets.extend((group, index) for index in range(min(indices), max(indices) + 2))
+            targets.extend((group, index) for index in range(max(indices) + 2))
         else:
             targets.append((group, 0))
     return targets

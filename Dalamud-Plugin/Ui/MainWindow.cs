@@ -107,6 +107,8 @@ public sealed partial class MainWindow : Window, IDisposable
     {
         _penumbra.ResourcesChanged -= OnResourcesChanged;
         _feed.Reported -= Notify;
+        if (_compression is not null)
+            _compression.Optimized -= NotifyOptimized;
         DetachPainter();
         DetachGameFiles();
         _lifetimeCts.Cancel();
@@ -482,19 +484,24 @@ public sealed partial class MainWindow : Window, IDisposable
             return;
         if (entry.Severity == FeedbackSeverity.Success && entry.Channel != StatusChannel.Models)
             return;
+        ShowNotification(entry.Text, entry.Severity switch
+        {
+            FeedbackSeverity.Warning => NotificationType.Warning,
+            FeedbackSeverity.Error => NotificationType.Error,
+            FeedbackSeverity.Info => NotificationType.Info,
+            _ => NotificationType.Success,
+        });
+    }
+
+    private void ShowNotification(string content, NotificationType type)
+    {
         try
         {
             _notifications.AddNotification(new Notification
             {
                 Title = "XIV Instant Edit",
-                Content = entry.Text,
-                Type = entry.Severity switch
-                {
-                    FeedbackSeverity.Warning => NotificationType.Warning,
-                    FeedbackSeverity.Error => NotificationType.Error,
-                    FeedbackSeverity.Info => NotificationType.Info,
-                    _ => NotificationType.Success,
-                },
+                Content = content,
+                Type = type,
             });
         }
         catch (Exception e)
@@ -538,7 +545,7 @@ public sealed partial class MainWindow : Window, IDisposable
         }
         else
         {
-            Widgets.HintWrapped("Each import creates its own InstantEditArmature. This armature is only safe for import and export and is not suited for posing, animation or scaling.");
+            Widgets.HintWrapped("Each import creates its own InstantEditArmature.");
         }
 
         var racialScaling = _config.ApplyRacialScaling;

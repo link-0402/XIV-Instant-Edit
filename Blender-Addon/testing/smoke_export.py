@@ -564,9 +564,24 @@ def assert_mesh_part_gap_handling(addon):
         ]:
             raise AssertionError("A large part gap rendered more than its smallest placeholder")
         if slot_shape((gap_two, gap_five), 30) != [
-            (2, False), (3, True), (5, False)
+            (0, True), (2, False), (3, True), (5, False)
         ]:
-            raise AssertionError("Part gaps incorrectly added leading or trailing placeholders")
+            raise AssertionError("Missing leading parts did not render one placeholder, or a trailing one was added")
+
+        # A group whose lowest part is x.1 can be reordered to start at x.0.
+        lead_one = create("35.1 Lead One")
+        lead_two = create("35.2 Lead Two")
+        parts = mesh_list.list_parts((lead_one, lead_two))
+        moving = next(part for part in parts if lead_two in part.objects)
+        if (35, 0) not in mesh_list.part_targets(parts, moving.ident, 36):
+            raise AssertionError("The leading empty slot is not a drop target")
+        _drop_part(addon, (lead_one, lead_two), lead_two, 35, 0)
+        if not lead_two.name.startswith("35.0 ") or not lead_one.name.startswith("35.1 "):
+            raise AssertionError("Dragging a part into the leading empty slot changed the wrong part")
+        other = create("36.3 Other Group")
+        _drop_part(addon, (lead_one, lead_two, other), other, 35, 0)
+        if not other.name.startswith("35.0 ") or not lead_two.name.startswith("35.1 ") or not lead_one.name.startswith("35.2 "):
+            raise AssertionError("A part entering a group at its first slot did not shift the group's parts")
 
         moved_zero = create("31.0 Drag Zero")
         moved_two = create("31.2 Drag Two")
@@ -875,6 +890,17 @@ def assert_mesh_list_geometry(addon):
             raise AssertionError(f"Group drag to {offset} px went to group {drag.drag_state()[1]}, expected {expected}")
     if drag.placement[3] != (1, 0) or drag.placement[0] != (0, 0):
         raise AssertionError("A group drag did not shift only the groups it passed")
+
+    # A group starting at x.1 shows its empty x.0 slot above the part, and the
+    # part's row moves up into it.
+    parts = [part(0, 0, 1, "A", "a")]
+    rows = [(row.kind, row.top, row.part_index) for row in mesh_list.layout_rows(parts, metrics)][:3]
+    if rows != [("header", 0, -1), ("gap", 37, 0), ("part", 57, -1)]:
+        raise AssertionError(f"Unexpected rows for a group starting at x.1: {rows}")
+    drag = mesh_list.DragSession(parts, metrics, "PART", 0, 1, "a")
+    drag.update(-20)
+    if drag.placement[0] != (0, 0):
+        raise AssertionError(f"Dragging x.1 up into the empty x.0 slot placed {drag.placement}")
     print("[PASS] Mesh Groups rows follow the measured layout and drags follow the pointer")
 
 
