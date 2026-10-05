@@ -29,6 +29,9 @@ internal static class TmbEntrySchema
     public const string MotionReason = "The animation itself";
     public const string MovableReason = "Can be moved or deleted";
 
+    /// <summary>C010's time control bit: on, the motion plays its frame range over the duration; off, the game ignores both.</summary>
+    public const string TimeControlField = "TimeControl";
+
     /// <summary>Kinds that move the player, lock actions, change targeting or drive cameras: never changed.</summary>
     private static readonly ImmutableHashSet<string> Gameplay =
         ["C013", "C083", "C084", "C117", "C124", "C125", "C139", "C168", "C176", "C177", "C178", "C192"];
@@ -168,7 +171,7 @@ internal static class TmbEntrySchema
             // -1 keeps a looping effect going, 0 turns the entry off, 1 plays it once; more waits that
             // many frames after one loop before playing it again (see TimelineEffectCheck).
             ["C173"] = [Number(TimelineEffectCheck.LoopField, "Loop/wait", 12, TmbStorage.Int32, -1, short.MaxValue)],
-            ["C010"] = [new(new TimelineField("TimeControl", "Time control", TimelineFieldKind.Bool, 0, 1), 20, TmbStorage.Bit0)],
+            ["C010"] = [new(new TimelineField(TimeControlField, "Time control", TimelineFieldKind.Bool, 0, 1), 20, TmbStorage.Bit0)],
             ["C198"] =
             [
                 Number("Model", "Model", 32, TmbStorage.Int16, 0, short.MaxValue),

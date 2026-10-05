@@ -126,6 +126,10 @@ internal static class TimelineWindowViews
         ? "until the end"
         : $"{TimelineText.Seconds(frames)} · {Whole(frames)} {(frames == 1 ? "frame" : "frames")}";
 
+    /// <summary>How long a face without time control shows (see <see cref="TimelineDocument.Holds"/>).</summary>
+    public static string HoldText(TimelineDocument doc, TimelineEvent ev) =>
+        doc.HeldEnd(ev) < doc.Length ? "Holds until the next expression" : "Holds to the end";
+
     /// <summary>"2.5s · 75 frames", with the old length when it changed.</summary>
     public static string LengthText(TimelineDocument doc)
     {

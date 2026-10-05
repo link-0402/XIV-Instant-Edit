@@ -13,7 +13,8 @@ internal readonly record struct TimelineLaneRows(TimelineLane Lane, int FirstRow
 /// <summary>
 /// Which row every event of a document is drawn in. Built once per document, not per frame, and
 /// independent of the zoom: an event occupies [Start, Start + max(Duration, visible length, 1)), and
-/// events whose spans overlap inside a lane are packed greedily into sub-rows. No ImGui or Dalamud dependencies.
+/// events whose spans overlap inside a lane are packed greedily into sub-rows. A holding face counts
+/// as lasting until it stops showing (<see cref="Shown"/>). No ImGui or Dalamud dependencies.
 /// </summary>
 internal sealed class TimelineLayout
 {
@@ -24,19 +25,21 @@ internal sealed class TimelineLayout
     private readonly Dictionary<string, int> indexByKey;
     private readonly int[] rows;
     private readonly int[] ends;
+    private readonly TimelineEvent[] shown;
 
     public TimelineDocument Document { get; }
     public ImmutableArray<TimelineLaneRows> Lanes { get; }
     public int RowCount { get; }
 
     private TimelineLayout(TimelineDocument document, ImmutableArray<TimelineLaneRows> lanes, int rowCount,
-        int[] rows, int[] ends, Dictionary<string, int> indexByKey)
+        int[] rows, int[] ends, TimelineEvent[] shown, Dictionary<string, int> indexByKey)
     {
         Document = document;
         Lanes = lanes;
         RowCount = rowCount;
         this.rows = rows;
         this.ends = ends;
+        this.shown = shown;
         this.indexByKey = indexByKey;
     }
 
@@ -49,11 +52,16 @@ internal sealed class TimelineLayout
         var events = doc.Events.IsDefault ? [] : doc.Events;
         var rows = new int[events.Length];
         var ends = new int[events.Length];
+        var shown = new TimelineEvent[events.Length];
         var indexByKey = new Dictionary<string, int>(events.Length, StringComparer.Ordinal);
         var present = new bool[(int)TimelineLane.Other + 1];
         for (var index = 0; index < events.Length; index++)
         {
             var ev = events[index];
+            // The game ignores a holding face's length: it shows until the next face or the end.
+            if (TimelineDocument.Holds(ev))
+                ev = ev with { Duration = doc.HeldEnd(ev) - ev.Start };
+            shown[index] = ev;
             // Saturating: mods use int32 durations such as 9999999 for "until the end".
             ends[index] = (int)Math.Min(int.MaxValue, (long)ev.Start + Math.Max(Math.Max(ev.Duration, visibleLength?.Invoke(ev) ?? 0), 1));
             indexByKey.TryAdd(ev.Key, index);
@@ -86,7 +94,7 @@ internal sealed class TimelineLayout
             lanes.Add(new TimelineLaneRows(lane, next, count));
             next += count;
         }
-        return new TimelineLayout(doc, lanes.ToImmutable(), next, rows, ends, indexByKey);
+        return new TimelineLayout(doc, lanes.ToImmutable(), next, rows, ends, shown, indexByKey);
     }
 
     /// <summary>The index of the event with <paramref name="key"/> in the document's events, or -1.</summary>
@@ -97,6 +105,13 @@ internal sealed class TimelineLayout
 
     /// <summary>The frame where the event at <paramref name="index"/> stops taking space in its row.</summary>
     public int EndOf(int index) => ends[index];
+
+    /// <summary>
+    /// The event at <paramref name="index"/> as it is drawn and grabbed: a holding face
+    /// (<see cref="TimelineDocument.Holds"/>) lasts until <see cref="TimelineDocument.HeldEnd"/>
+    /// instead of the length it stores. Every other event is the document's own.
+    /// </summary>
+    public TimelineEvent Shown(int index) => shown[index];
 
     public TimelineLaneRows? Lane(TimelineLane lane)
     {

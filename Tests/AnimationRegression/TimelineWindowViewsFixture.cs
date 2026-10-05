@@ -265,6 +265,13 @@ internal static class TimelineWindowViewsFixture
             check(TimelineWindowViews.LengthText(Doc(60, 60)) == "2s · 60 frames", "An unchanged length shows no old one");
             check(duration == "1s · 30 frames" && TimelineWindowViews.DurationText(1) == "0.03s · 1 frame", "Durations read seconds and frames");
             check(TimelineWindowViews.DurationText(9999999) == "until the end", "Mod durations past the TMB range read until the end");
+            var free = ImmutableDictionary<string, double>.Empty.Add(TmbEntrySchema.TimeControlField, 0);
+            TimelineEvent Face(int start) => new("t" + start, "C010", TimelineLane.Expression, start, 10, true, "cfxf_smile",
+                TimelineAccess.Editable, null, false, free);
+            var faces = Doc(100, 100, Face(0), Face(60));
+            var holds = new[] { TimelineWindowViews.HoldText(faces, faces.Events[0]), TimelineWindowViews.HoldText(faces, faces.Events[1]) };
+            texts.AddRange(holds);
+            check(holds.SequenceEqual(["Holds until the next expression", "Holds to the end"]), "A face without time control says how long it holds");
         }
         finally
         {

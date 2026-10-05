@@ -97,6 +97,31 @@ internal sealed record TimelineDocument(
     /// <summary>Lengths one frame apart are the same clip counted differently.</summary>
     public static bool SameLength(int a, int b) => b > 0 && Math.Abs((long)a - b) <= 1;
 
+    /// <summary>
+    /// Whether <paramref name="ev"/> is a face (C010 "cfxf_") without time control. The game then
+    /// ignores its length and frame range: the face plays at its own pace (a pose is a constant clip,
+    /// so it shows at once) and stays until another face takes over or the clip ends, see <see cref="HeldEnd"/>.
+    /// </summary>
+    public static bool Holds(TimelineEvent ev) =>
+        ev.Magic == "C010" && IsFace(ev) && ev.Values is { } values &&
+        values.TryGetValue(TmbEntrySchema.TimeControlField, out var timed) && timed == 0;
+
+    /// <summary>
+    /// Where a holding face (<see cref="Holds"/>) stops showing: the start of the next face, else the
+    /// end of the clip, and never before the frame after its own start.
+    /// </summary>
+    public int HeldEnd(TimelineEvent ev)
+    {
+        var end = Length;
+        if (!Events.IsDefault)
+            foreach (var other in Events)
+                if (other.Start > ev.Start && other.Start < end && IsFace(other))
+                    end = other.Start;
+        return Math.Max(end, ev.Start + 1);
+    }
+
+    private static bool IsFace(TimelineEvent ev) => ev.Lane == TimelineLane.Expression && ev.Path.StartsWith("cfxf_", StringComparison.Ordinal);
+
     /// <summary>A motion's length in seconds as whole frames; null when unknown or out of the timeline's range.</summary>
     public static int? MotionFrames(float seconds) =>
         float.IsFinite(seconds) && Math.Round(seconds * (double)Fps, MidpointRounding.AwayFromZero) is var frames and >= 1 and <= MaxFrames

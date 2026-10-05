@@ -168,7 +168,16 @@ public sealed partial class TimelineWindow
         if (ev.Duration <= 0 && !ev.Resizable)
             return;
         Fact("Length");
-        if (editable && ev.Resizable && ev.Duration <= TimelineDocument.MaxFrames)
+        if (TimelineDocument.Holds(ev))
+        {
+            // The game ignores the stored length; show how long the face really shows.
+            ImGui.TextUnformatted(TimelineWindowViews.DurationText(current.Document.HeldEnd(ev) - ev.Start));
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.TextColored(Theme.Muted, "held");
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(TimelineWindowViews.HoldText(current.Document, ev) + ". Turn on Time control to set a length.");
+        }
+        else if (editable && TimelineEdits.CanResize(ev) && ev.Duration <= TimelineDocument.MaxFrames)
         {
             var duration = ev.Duration;
             ImGui.SetNextItemWidth(Theme.Scaled(90));

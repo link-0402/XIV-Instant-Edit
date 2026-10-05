@@ -42,8 +42,9 @@ internal static class TimelineConvert
     /// values or (on their own) length; Movable ones move; Locked ones keep their place unless the
     /// timeline's length changed, when the editor scales every start and length.
     /// Automatic follow-ups: a C009 that lasted the whole clip keeps lasting it; a C010 without
-    /// time control whose end frame was its duration keeps ending at its duration; a curve (TMFC)
-    /// stretches with the entry that uses it. The header's length (TMDH) changes only with the
+    /// time control whose end frame was its duration keeps ending at its duration; a holding face
+    /// given time control gets the range 0 to 1 when its own was empty; a curve (TMFC) stretches
+    /// with the entry that uses it. The header's length (TMDH) changes only with the
     /// length (see <see cref="TimelineDocument.SavedHeaderLength"/>), so a mod's own otherwise stays.
     /// Returns <paramref name="originalTmb"/> itself when nothing changed, and refuses an output that
     /// does not read back as the edit.
@@ -102,8 +103,16 @@ internal static class TimelineConvert
             else if (!scaled && old.Access == TimelineAccess.Movable) target = target with { Duration = old.Duration };
             Update(file, id, old, target, scaled);
             expected.Add((target with { Conditional = old.Conditional }, id));
-            if (target.Duration == old.Duration) continue;
             var entry = file.Find(id)!;
+            // A holding face ignores its frame range. Given time control it plays it, so an empty range
+            // (VFXEditor's default 0 to 0) becomes the 0 to 1 every vanilla timed face uses.
+            if (TimelineDocument.Holds(old) && target.Values.GetValueOrDefault(TmbEntrySchema.TimeControlField) != 0 &&
+                !(entry.Single(28) > entry.Single(24)))
+            {
+                file.SetSingle(id, 24, 0);
+                file.SetSingle(id, 28, 1);
+            }
+            if (target.Duration == old.Duration) continue;
             if (old.Magic == "C010" && (entry.Int32(20) & 1) == 0 && entry.Single(28) == old.Duration)
                 file.SetSingle(id, 28, target.Duration);
             if (TmbFile.CurveUsers.Contains(old.Magic) && old.Duration > 0 &&

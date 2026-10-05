@@ -10,7 +10,8 @@ internal static class TimelineSnap
 {
     /// <summary>
     /// The frames the magnet pulls to: 0, the length, the playhead and the starts and ends of every
-    /// event not in <paramref name="exclude"/> (the dragged ones). Sorted and distinct.
+    /// event not in <paramref name="exclude"/> (the dragged ones), but not the stored end of a face
+    /// that holds, which the game ignores. Sorted and distinct.
     /// </summary>
     public static int[] Targets(TimelineDocument doc, int? playhead, IReadOnlySet<string>? exclude = null,
         bool length = true, bool sourceLength = false, bool events = true)
@@ -28,7 +29,7 @@ internal static class TimelineSnap
                 if (exclude?.Contains(ev.Key) == true)
                     continue;
                 targets.Add(ev.Start);
-                if (ev.Duration > 0)
+                if (ev.Duration > 0 && !TimelineDocument.Holds(ev))
                     targets.Add(TimelineEdits.End(ev));
             }
         targets.Sort();

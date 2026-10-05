@@ -397,7 +397,7 @@ public sealed partial class TimelineWindow
         var pad = Theme.Scaled(2);
         for (var index = 0; index < events.Length && index < labels.Length; index++)
         {
-            var ev = events[index];
+            var ev = layout.Shown(index);
             var top = min.Y + geometry.RowTop(layout.RowOf(index));
             if (top + geometry.Row < rowsTop || top > max.Y)
                 continue;
@@ -490,7 +490,9 @@ public sealed partial class TimelineWindow
             ImGui.SameLine(0, Theme.Gap);
             ImGui.TextColored(Theme.Muted, TimelineWindowViews.KindName(ev.Magic));
             ImGui.TextUnformatted("Starts at " + TimelineWindowViews.FrameText(ev.Start));
-            if (ev.Duration > 0)
+            if (TimelineDocument.Holds(ev))
+                ImGui.TextUnformatted(TimelineWindowViews.HoldText(current.Document, ev));
+            else if (ev.Duration > 0)
                 ImGui.TextUnformatted("Lasts " + TimelineWindowViews.DurationText(ev.Duration));
             if (ev.Path.Length > 0)
                 ImGui.TextColored(Theme.Hint, ev.Path);
