@@ -283,13 +283,24 @@ class XIVIE_OT_simple_export(Operator):
         if uv_problems:
             self.report({"ERROR"}, " ".join(uv_problems))
             return {"CANCELLED"}
+        from .instant_edit import sizes
         from .instant_edit.racial_scaling import simple_export_warning
 
         scaled = simple_export_warning(objects)
         dropped = dropped_shape_keys_warning(objects)
 
+        written = []
         try:
-            export_result(directory / name, settings.model_format, export_objects=objects)
+            if sizes.wanted():
+                # A file per size picked in Magic Fit, the size added to its name.
+                def export(sized, _index):
+                    file_name = f"{name} {sizes.file_part(sized.name)}"
+                    export_result(directory / file_name, settings.model_format, export_objects=objects)
+                    written.append(file_name + suffix)
+
+                sizes.export_each(objects, export)
+            else:
+                export_result(directory / name, settings.model_format, export_objects=objects)
             get_export_stats(context)
         except Exception as error:
             self.report({"ERROR"}, f"Export failed: {error}")
@@ -298,7 +309,7 @@ class XIVIE_OT_simple_export(Operator):
         from .instant_edit.ops import refresh_variant_targets_after_operation
 
         refresh_error = refresh_variant_targets_after_operation(context)
-        message = f"Exported {name}{suffix}"
+        message = f"Exported {', '.join(written)}" if written else f"Exported {name}{suffix}"
         if scaled or dropped:
             message += ". " + " ".join(warning for warning in (scaled, dropped) if warning)
         if refresh_error is not None:

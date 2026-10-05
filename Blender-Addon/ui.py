@@ -21,6 +21,7 @@ from .instant_edit.ops import (MASHUP_TARGET, SAVE_NEW_MOD_TARGET,
                                normalise_variant_name, save_new_mod_target_state)
 from .instant_edit.props import DEFAULT_STATUS, IN_PLACE_TARGET, get_instant_edit_props
 from .instant_edit.server import server_status
+from .instant_edit.sizes import NO_SIZES, export_names, magic_fit_api, picked_names
 from .materials import (
     attribute_display_name,
     material_mismatch_parts,
@@ -343,7 +344,7 @@ def _target_groups(props) -> list:
     return groups
 
 
-def _target_summary(props) -> tuple[str, str]:
+def _target_summary(props, sized: bool = False) -> tuple[str, str]:
     """Text and icon for the export target dropdown."""
     selection = props.variant_target
     if selection == IN_PLACE_TARGET:
@@ -357,6 +358,9 @@ def _target_summary(props) -> tuple[str, str]:
     target = _selected_target(props)
     if target is None:
         return "Choose a Target", "QUESTION"
+    if sized:
+        # Sizes go into the group, an option of a group standing for it.
+        return f"{target.group_name} › Sizes", "ADD"
     if target.kind == "GROUP":
         return f"{target.group_name} › New Option", "ADD"
     return f"{target.group_name} › {target.option_name}", "FILE"
@@ -384,13 +388,14 @@ class XIVIE_MT_export_targets(Menu):
             ).selection_id = selection_id
 
         target(layout, IN_PLACE_TARGET, "In Place")
+        sized = export_names(props) is not None
         if props.variant_targets_context_id == ref.context_id:
             for group, options in _target_groups(props):
                 layout.separator()
                 layout.label(text=group.group_name, icon="OUTLINER_COLLECTION")
                 for option in options:
                     target(layout, option.selection_id, option.option_name)
-                target(layout, group.selection_id, "New Option...")
+                target(layout, group.selection_id, "Sizes" if sized else "New Option...")
         else:
             layout.separator()
             layout.operator("xiv_ie.refresh_variant_targets", text="Load Mod Options", icon="FILE_REFRESH")
@@ -529,6 +534,14 @@ class XIVIE_PT_export_scope_popover(Panel):
         toggles = layout.column(align=True)
         toggles.use_property_split = False
         toggles.prop(props, "create_attribute_groups", text="Create Penumbra Attribute Group")
+        if magic_fit_api() is not None:
+            toggles.prop(props, "export_sizes", text="Export Magic Fit Sizes")
+            if props.export_sizes:
+                names = picked_names(context.scene)
+                hint = toggles.row()
+                hint.active = False
+                width = _display_wrap_width(context, self.bl_ui_units_x) - 4
+                hint.label(text=_size_list(names, width) if names else NO_SIZES, icon="BLANK1")
 
 
 # ---- Instant Edit (session) panel ---------------------------------------------------
@@ -587,10 +600,11 @@ def _draw_context_rows(layout, context: Context, props, entries, ref) -> None:
             row.label(text="", icon="BLANK1")
 
 
-def _draw_target(layout, props, ref) -> bool:
-    """Draw the target dropdown and its name fields; return whether an option name is needed."""
+def _draw_target(layout, props, ref, sized: bool = False) -> bool:
+    """Draw the target dropdown and its name fields; return whether an option name is needed.
+    Exports at Magic Fit's sizes (``sized``) name their options after the sizes."""
     row = layout.row(align=True)
-    text, icon = _target_summary(props)
+    text, icon = _target_summary(props, sized)
     row.menu("XIVIE_MT_export_targets", text=text, icon=icon)
     row.operator("xiv_ie.refresh_variant_targets", text="", icon="FILE_REFRESH")
     if props.variant_targets_context_id != ref.context_id:
@@ -600,19 +614,29 @@ def _draw_target(layout, props, ref) -> bool:
 
     target = _selected_target(props)
     needs_group = props.variant_target == "NEW_GROUP"
-    needs_option = needs_group or (target is not None and target.kind == "GROUP")
-    if needs_option:
+    needs_option = not sized and (needs_group or (target is not None and target.kind == "GROUP"))
+    if needs_group or needs_option:
         fields = layout.column(align=True)
         fields.use_property_split = True
         fields.use_property_decorate = False
         if needs_group:
             fields.prop(props, "variant_group_name", text="Group")
-        fields.prop(props, "variant_name", text="Option", placeholder="Option name")
+        if needs_option:
+            fields.prop(props, "variant_name", text="Option", placeholder="Option name")
     return needs_option
 
 
-def _draw_destination(layout, props, ref, needs_option: bool) -> None:
+def _draw_destination(layout, props, ref, needs_option: bool, size_names: list[str] | None = None) -> None:
     if props.variant_target in {MASHUP_TARGET, SAVE_NEW_MOD_TARGET}:
+        return
+    if size_names is not None:
+        target = _selected_target(props)
+        group = props.variant_group_name if props.variant_target == "NEW_GROUP" else (
+            target.group_name if target is not None else "")
+        if size_names and group.strip() and props.variant_target != IN_PLACE_TARGET:
+            row = layout.row()
+            row.active = False
+            row.label(text=f"→ {len(size_names)} options in {group.strip()}", icon="BLANK1")
         return
     if needs_option:
         try:
@@ -661,7 +685,7 @@ def _draw_readiness(layout, context: Context, props, ref) -> None:
         message for _severity, message in issues)
 
 
-def _draw_export_button(layout, props, ref) -> None:
+def _draw_export_button(layout, props, ref, size_names: list[str] | None = None) -> None:
     text, icon = "Quick Export", "EXPORT"
     if ref.destination_state == "new_mod_required":
         text, icon = "Create Penumbra Mod...", "NEWFOLDER"
@@ -669,16 +693,32 @@ def _draw_export_button(layout, props, ref) -> None:
         text, icon = "Create Mashup...", "EXPERIMENTAL"
     elif props.variant_target == SAVE_NEW_MOD_TARGET:
         text, icon = "Save as New Mod...", "NEWFOLDER"
+    elif size_names:
+        text = f"Export {len(size_names)} Sizes"
     row = layout.row(align=True)
     row.scale_y = 1.4
     row.operator("xiv_ie.instant_export", text=text, icon=icon)
     row.popover("XIVIE_PT_export_scope_popover", text="", icon="PREFERENCES")
 
 
-def _draw_scope_summary(layout, props, ref) -> None:
+def _size_list(names: list[str], width: int) -> str:
+    """The sizes' names, as many as fit in ``width`` characters (one at least), then how many more."""
+    shown = []
+    for index, name in enumerate(names):
+        rest = len(names) - index - 1
+        if shown and len(", ".join([*shown, name]) + (f", +{rest} more" if rest else "")) > width:
+            break
+        shown.append(name)
+    more = len(names) - len(shown)
+    return ", ".join(shown) + (f", +{more} more" if more else "")
+
+
+def _draw_scope_summary(layout, props, ref, size_names: list[str] | None = None, width: int = 42) -> None:
     """Point out non-default Quick Export options that live in the popover, and the model's parts
     a character send hid because the game didn't draw them, which export all the same."""
     notes = []
+    if size_names:
+        notes.append((f"Sizes: {_size_list(size_names, width - 10)}", "CON_SIZELIKE"))
     if props.export_scope == "VISIBLE_NO_MANNEQUIN":
         excluded = props.export_excluded_mesh
         notes.append((f"Except {excluded.name}" if excluded is not None else "No mesh excluded yet", "FILTER"))
@@ -765,14 +805,15 @@ class XIVIE_PT_session(Panel):
             row.label(text=entries[0].label, icon="FILE_3D")
             row.popover("XIVIE_PT_context_details_popover", text="", icon="THREE_DOTS")
 
+        size_names = export_names(props)
         if ref.destination_state == "new_mod_required":
             _draw_wrapped_label(layout, context, "Quick Export creates a new Penumbra mod for this model.", "INFO")
         else:
-            needs_option = _draw_target(layout, props, ref)
-            _draw_destination(layout, props, ref, needs_option)
+            needs_option = _draw_target(layout, props, ref, size_names is not None)
+            _draw_destination(layout, props, ref, needs_option, size_names)
         _draw_readiness(layout, context, props, ref)
-        _draw_export_button(layout, props, ref)
-        _draw_scope_summary(layout, props, ref)
+        _draw_export_button(layout, props, ref, size_names)
+        _draw_scope_summary(layout, props, ref, size_names, _display_wrap_width(context))
         _draw_status_row(layout, props)
 
 
@@ -1118,7 +1159,16 @@ class XIVIE_PT_file_io(Panel):
         column.prop(props, "export_scope", text="Parts")
         if props.export_scope == "VISIBLE_NO_MANNEQUIN":
             column.prop(props, "export_excluded_mesh", text="Except")
-        layout.operator("xiv_ie.simple_export", text="Export Model File", icon="EXPORT")
+        if magic_fit_api() is not None:
+            column.prop(props, "export_sizes", text="Magic Fit Sizes")
+        size_names = export_names(props)
+        text = f"Export {len(size_names)} Sizes" if size_names else "Export Model File"
+        layout.operator("xiv_ie.simple_export", text=text, icon="EXPORT")
+        if size_names is not None:
+            hint = layout.row()
+            hint.active = False
+            hint.label(text=_size_list(size_names, _display_wrap_width(context) - 4) if size_names else NO_SIZES,
+                       icon="CON_SIZELIKE")
 
 
 class XIVIE_PT_options(Panel):

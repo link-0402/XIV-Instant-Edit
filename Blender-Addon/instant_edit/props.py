@@ -143,6 +143,15 @@ class XIVIEInstantEditProps(PropertyGroup):
         default=False,
     )  # type: ignore
 
+    export_sizes: BoolProperty(
+        name="Magic Fit Sizes",
+        description=(
+            "Export the model at each size picked in Magic Fit's Resize panel. "
+            "Quick Export makes each size an option of the target group"
+        ),
+        default=False,
+    )  # type: ignore
+
     export_excluded_mesh: PointerProperty(
         type=Object,
         name="Excluded Mesh",

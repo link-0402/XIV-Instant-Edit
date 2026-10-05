@@ -39,7 +39,7 @@ from .material_preview import (cleanup_preview_bundle, discard_preview_data,
 from .cache import create_job, finish_job
 from .diagnostics import record_failure, record_protocol_failure, record_remote_failure
 from .skeleton import create_armature, load_skeleton
-from . import character as character_send, racial_scaling
+from . import character as character_send, racial_scaling, sizes
 
 
 # ---- Dalamud plugin HTTP transport ----
@@ -631,6 +631,18 @@ def hair_skeleton_target_issue(game_path: str, entry: dict) -> str:
     return ""
 
 
+def sizes_export_issue(props, ref) -> str:
+    """Why Quick Export can't go out at Magic Fit's sizes to the selected target, or "" when it can."""
+    if ref.destination_state == "new_mod_required":
+        return "Turn off Magic Fit Sizes and export once to create the mod."
+    selection = getattr(props, "variant_target", "NEW_GROUP")
+    if selection == IN_PLACE_TARGET:
+        return "Sizes go into an option group. Pick New Group or a group."
+    if selection in {MASHUP_TARGET, SAVE_NEW_MOD_TARGET}:
+        return "Sizes can't go into a mashup or a new mod."
+    return ""
+
+
 def export_target_issues(
     context: Context,
     ref=None,
@@ -752,6 +764,13 @@ def export_target_issues(
             if target_issue:
                 issues.append(("WARNING", target_issue))
 
+    sized = sizes.wanted(props)
+    if sized:
+        issue = sizes_export_issue(props, ref)
+        if issue:
+            issues.append(("ERROR", issue))
+        if not sizes.picked_names(context.scene):
+            issues.append(("ERROR", sizes.NO_SIZES))
     selection = getattr(props, "variant_target", "NEW_GROUP")
     if selection == MASHUP_TARGET:
         show_target, enabled, message = mashup_target_state(context, ref)
@@ -770,17 +789,18 @@ def export_target_issues(
             normalise_variant_group_name(getattr(props, "variant_group_name", ""))
         except ValueError as error:
             issues.append(("ERROR", str(error)))
-        try:
-            validate_variant_name(ref.source_game_path, getattr(props, "variant_name", ""))
-        except ValueError as error:
-            issues.append(("ERROR", str(error)))
+        if not sized:
+            try:
+                validate_variant_name(ref.source_game_path, getattr(props, "variant_name", ""))
+            except ValueError as error:
+                issues.append(("ERROR", str(error)))
     elif selection != IN_PLACE_TARGET:
         target = selected_variant_target(props)
         if getattr(props, "variant_targets_context_id", "") != ref.context_id:
             issues.append(("ERROR", "Refresh targets for this Context before exporting."))
         elif target is None:
             issues.append(("ERROR", "The selected mod option is no longer available; refresh targets."))
-        elif target.kind == "GROUP":
+        elif target.kind == "GROUP" and not sized:
             try:
                 validate_variant_name(ref.source_game_path, getattr(props, "variant_name", ""))
             except ValueError as error:
@@ -1833,13 +1853,18 @@ class QuickExport(Operator):
             return False
 
     def invoke(self, context: Context, event):
+        props = get_instant_edit_props()
         try:
-            if export_destination_context(context).destination_state == "new_mod_required":
+            ref = export_destination_context(context)
+            issue = sizes_export_issue(props, ref) if sizes.wanted(props) else ""
+            if issue:
+                self.report({"ERROR"}, issue)
+                return {"CANCELLED"}
+            if ref.destination_state == "new_mod_required":
                 return bpy.ops.xiv_ie.vanilla_mod_name("INVOKE_DEFAULT", name="")
         except ContextValidationError as error:
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
-        props = get_instant_edit_props()
         if props.variant_target == MASHUP_TARGET:
             return bpy.ops.xiv_ie.mashup_destination("INVOKE_DEFAULT")
         if props.variant_target == SAVE_NEW_MOD_TARGET:
@@ -2649,6 +2674,8 @@ def perform_mashup_export(
         any(char in INVALID_VARIANT_CHARS for char in name)
     ):
         raise ValueError("Mod name contains characters that cannot be used in a folder name.")
+    if sizes.wanted():
+        raise ValueError("Sizes can't go into a mashup or a new mod.")
 
     ref = export_destination_context(context)
     minimum_contexts = 1 if allow_single_context else 2
@@ -2862,6 +2889,8 @@ def perform_instant_export(
     """Export one validated context through its authenticated plugin route."""
     ref = export_destination_context(context, destination)
     props = get_instant_edit_props()
+    if sizes.wanted(props):
+        return perform_sizes_export(context, ref)
     pending = ref.destination_state == "new_mod_required"
     if pending:
         name = (new_mod_name or "").strip()
@@ -2922,12 +2951,7 @@ def perform_instant_export(
         if not mdl_path.is_file():
             raise ValueError("Export produced no .mdl file.")
 
-        digest = hashlib.sha256()
-        byte_size = 0
-        with mdl_path.open("rb") as exported:
-            for chunk in iter(lambda: exported.read(1024 * 1024), b""):
-                byte_size += len(chunk)
-                digest.update(chunk)
+        byte_size, digest = _file_digest(mdl_path)
 
         # These are the only fields sent in the body. Port is routing only.
         payload = build_export_payload(
@@ -2935,7 +2959,7 @@ def perform_instant_export(
             export_id,
             mdl_path,
             byte_size,
-            digest.hexdigest(),
+            digest,
             props,
             variant_name,
             variant_group_name,
@@ -2970,7 +2994,7 @@ def perform_instant_export(
                 export_id,
                 mdl_path,
                 byte_size,
-                digest.hexdigest(),
+                digest,
                 props,
                 variant_name,
                 variant_group_name,
@@ -3027,6 +3051,160 @@ def perform_instant_export(
             # target tree recoverable through its manual refresh button.
             props.last_status += f"; Penumbra targets could not refresh: {refresh_error}"
         return mdl_path
+    finally:
+        try:
+            finish_job(temp_dir)
+        except OSError as error:
+            print(f"XIV Instant Edit: could not remove export cache job: {error}")
+
+
+def _file_digest(path: Path) -> tuple[int, str]:
+    """The size and SHA-256 of an exported file, which the plugin checks."""
+    digest = hashlib.sha256()
+    byte_size = 0
+    with path.open("rb") as exported:
+        for chunk in iter(lambda: exported.read(1024 * 1024), b""):
+            byte_size += len(chunk)
+            digest.update(chunk)
+    return byte_size, digest.hexdigest()
+
+
+# ---- Export at Magic Fit's sizes ----
+
+
+def _sizes_target(props, ref) -> tuple[str, str | None]:
+    """The option group a Quick Export at Magic Fit's sizes goes into: (its name, its target ID, None
+    for a new group). A selected option stands for its group."""
+    issue = sizes_export_issue(props, ref)
+    if issue:
+        raise ValueError(issue)
+    if props.variant_target == "NEW_GROUP":
+        return normalise_variant_group_name(props.variant_group_name), None
+    target = selected_variant_target(props)
+    if target is None or props.variant_targets_context_id != ref.context_id:
+        raise ValueError("Refresh Penumbra targets after changing Context.")
+    if target.kind == "GROUP":
+        return target.group_name, target.selection_id
+    parts = target.selection_id.split(":")
+    if target.kind != "OPTION" or len(parts) != 3 or parts[0] != "option":
+        raise ValueError("The selected Penumbra target is invalid; refresh targets.")
+    return target.group_name, f"group:{parts[1]}"
+
+
+def build_sizes_payload(ref, export_id: str, files: list[dict], default_size: str, props, group_name: str,
+                        group_id: str | None, *, attribute_tags: tuple[str, ...] = (),
+                        attribute_masks: dict[str, int] | None = None,
+                        est_entries: list[dict] | None = None) -> dict:
+    """Build the plugin's request for a Quick Export at Magic Fit's sizes: each size's model (``files``:
+    name, filePath, size, sha256) for an option of one group, as build_export_payload does for one model."""
+    payload = {
+        "schema": "instant-edit.export-sizes",
+        "version": 1,
+        "pluginInstanceId": ref.plugin_instance_id,
+        "contextId": ref.context_id,
+        "exportId": export_id,
+        "capability": ref.capability,
+        "variantTarget": "group" if group_id else "new_group",
+        "defaultSize": default_size,
+        "sizes": [dict(file) for file in files],
+        "backupExisting": bool(getattr(get_settings(), "backup_models_on_export", False)),
+    }
+    if group_id:
+        payload["variantTargetId"] = group_id
+    else:
+        payload["variantGroupName"] = group_name
+    if getattr(props, "create_attribute_groups", False):
+        payload["createAttributeGroups"] = True
+        payload["attributeTags"] = list(attribute_tags)
+        payload["attributeMasks"] = dict(attribute_masks or {})
+    if est_entries is not None:
+        payload["estEntries"] = [dict(entry) for entry in est_entries]
+    return payload
+
+
+def perform_sizes_export(context: Context, ref) -> Path:
+    """Quick Export at each size picked in Magic Fit's Resize panel (see sizes), every size an option
+    of one Penumbra group. The plugin gets all of them in one request."""
+    props = get_instant_edit_props()
+    group_name, group_id = _sizes_target(props, ref)
+    export_objects = export_objects_for_scope(ref, getattr(props, "export_scope", "VISIBLE"))
+    if not export_objects:
+        raise ValueError("No visible mesh objects to export.")
+    export_groups = group_mesh_objects(export_objects)
+    recognized = {obj for group in export_groups for obj in group.objects}
+    unrecognized = [obj.name for obj in export_objects if obj not in recognized]
+    if unrecognized:
+        raise ValueError(
+            "Visible mesh names must use 'group.part Name' or 'Name group.part': "
+            + ", ".join(unrecognized)
+        )
+    raise_unless_exportable(export_objects)
+    attribute_tags, attribute_masks = (
+        attribute_group_data(export_objects, use_lods=get_settings().use_lods)
+        if getattr(props, "create_attribute_groups", False)
+        else ((), {})
+    )
+    est_entries, est_issue = hair_skeleton_tags(export_objects)
+
+    export_id = uuid.uuid4().hex
+    temp_dir = create_job("exports", export_id)
+    try:
+        files = []
+
+        def export(sized, index):
+            mdl_path = temp_dir / f"size_{index}.mdl"
+            saved_materials = _use_mashup_source_materials(export_objects, ref.context_id)
+            try:
+                with _exporting_as_mdl():
+                    export_result(mdl_path.with_suffix(""), "MDL", export_objects=export_objects)
+            finally:
+                _restore_object_materials(saved_materials)
+            if not mdl_path.is_file():
+                raise ValueError(f"Export produced no .mdl file for {sized.name}.")
+            byte_size, digest = _file_digest(mdl_path)
+            files.append({"name": sized.name, "filePath": str(mdl_path), "size": byte_size, "sha256": digest})
+
+        results = sizes.export_each(export_objects, export)
+        default_size = sizes.default_name(results)
+
+        def payload(current_ref):
+            return build_sizes_payload(
+                current_ref, export_id, files, default_size, props, group_name, group_id,
+                attribute_tags=attribute_tags, attribute_masks=attribute_masks, est_entries=est_entries)
+
+        try:
+            result = _send_plugin_export_to(ref, payload(ref), "/export/sizes")
+        except PluginResponseError as error:
+            if error.status != 410 and not (
+                error.status == 401 and error.code == "plugin_instance_mismatch"
+            ):
+                raise
+            # As in perform_instant_export: reattach once and send again with the
+            # plugin-issued capability and instance id.
+            from .recovery import reattach_collection
+
+            if not reattach_collection(ref.collection, context.scene):
+                raise ValueError(
+                    f"plugin returned HTTP {error.status} ({error.code}); context recovery failed"
+                ) from error
+            ref = validate_context(ref.context_id, context.scene)
+            result = _send_plugin_export_to(ref, payload(ref), "/export/sizes")
+
+        props.last_export_id = export_id
+        group = result.get("destinationName") or group_name
+        status = f"Exported {len(results)} sizes to {group}: {', '.join(sized.name for sized in results)}"
+        warnings = ([est_issue] if est_issue else []) + list(result.get("warnings", []))
+        props.last_status = (
+            f"{status} with warnings: {plugin_warning_summary(warnings)}" if warnings else status
+        )
+        resize_notes = sizes.notes(results)
+        if resize_notes:
+            props.last_status += ". " + " ".join(resize_notes)
+        refresh_error = refresh_variant_targets_after_operation(
+            context, select_group_name=group, select_option_name=default_size)
+        if refresh_error is not None:
+            props.last_status += f"; Penumbra targets could not refresh: {refresh_error}"
+        return Path(result.get("targetFilePath") or ref.target_file_path)
     finally:
         try:
             finish_job(temp_dir)
