@@ -265,7 +265,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
             var view = editor.View;
             var playhead = editor.Playhead;
             editor.Reset(doc);
-            editor.View = view.Clamp(doc.Length);
+            editor.View = view.Clamp(TimelineEdits.Extent(doc));
             editor.Playhead = playhead;
         }
         else

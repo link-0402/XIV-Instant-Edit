@@ -10,6 +10,9 @@ internal sealed class AnimationCatalog
     internal sealed record Timeline(ushort Id, string Key, string Name, byte LoadType, bool Loop,
         ImmutableArray<ushort> Family, ImmutableArray<ushort> Startups);
     private readonly Dictionary<ushort, Timeline> timelines = [];
+    private readonly Lazy<PapLoadTable?> papTable;
+    /// <summary>The game's PAP load table, or null when it can't be read: then every race loads its own paths.</summary>
+    public PapLoadTable? PapTable => papTable.Value;
     private static readonly ImmutableHashSet<ushort> ExplicitIdleIds =
         [3, 3124, 3126, 3182, 3184, 7405, 7407, 642, 643, 653, 654, 3136, 3138, 3171,
             3132, 3134, 8002, 8004, 585, 3140, 3142, 7367, 8063, 8066, 8068];
@@ -20,6 +23,11 @@ internal sealed class AnimationCatalog
 
     public AnimationCatalog(IDataManager data)
     {
+        papTable = new(() =>
+        {
+            try { return data.GetFile(PapLoadTable.GamePath)?.Data is { } bytes ? new PapLoadTable(bytes) : null; }
+            catch (InvalidDataException) { return null; }
+        });
         var sheet = data.GetExcelSheet<ActionTimeline>();
         var groups = new Dictionary<ushort, HashSet<ushort>>();
         var starts = new Dictionary<ushort, HashSet<ushort>>();
@@ -73,7 +81,7 @@ internal sealed class AnimationCatalog
         timeline.LoadType == 0 && timeline.Key.StartsWith("facial/pose/", StringComparison.Ordinal) &&
         pap.EndsWith("/nonresident/" + timeline.Key[12..] + ".pap", StringComparison.Ordinal);
 
-    public static ImmutableArray<string> CandidatePapPaths(Timeline timeline, IEnumerable<string> known)
+    public static ImmutableArray<string> CandidatePapPaths(Timeline timeline, IEnumerable<string> known, PapLoadTable? table = null)
     {
         var paths = known.Where(AnimationDependencies.SafeGamePath).Distinct(StringComparer.Ordinal).ToArray();
         var candidates = new HashSet<string>(StringComparer.Ordinal);
@@ -87,21 +95,33 @@ internal sealed class AnimationCatalog
             var parts = path.Split('/');
             if (parts.Length != 7 || parts[0] != "chara" || parts[1] != "human" || parts[3] != "skeleton" ||
                 !path.EndsWith(".sklb", StringComparison.Ordinal)) continue;
+            // A race without its own copy plays the one the game's load table names.
             if (timeline.LoadType == 2 && parts[4] == "base")
                 foreach (var key in PapKeys(timeline))
-                    candidates.Add($"chara/human/{parts[2]}/animation/a0001/bt_common/{key}.pap");
+                    candidates.Add(Loaded($"chara/human/{parts[2]}/animation/a0001/bt_common/{key}.pap", table));
             else if (timeline.LoadType == 0 && parts[4] == "face" && timeline.Key.StartsWith("facial/pose/", StringComparison.Ordinal))
                 candidates.Add($"chara/human/{parts[2]}/animation/{parts[5]}/nonresident/{timeline.Key[12..]}.pap");
         }
         return candidates.Order(StringComparer.Ordinal).ToImmutableArray();
     }
 
-    internal AnimationCatalog(IEnumerable<Timeline> entries)
+    internal AnimationCatalog(IEnumerable<Timeline> entries, PapLoadTable? table = null)
     {
+        papTable = new(() => table);
         foreach (var timeline in entries) timelines.Add(timeline.Id, timeline);
     }
 
-    public static string? PapPath(Timeline timeline, string selectedPap, IEnumerable<string> known)
+    private static string Loaded(string path, PapLoadTable? table) => table?.Resolve(path) ?? path;
+
+    /// <summary>The race of the one base skeleton among loaded paths, the race that requests body PAPs.</summary>
+    private static string? BaseRace(IEnumerable<string> paths)
+    {
+        var races = paths.Select(p => p.Split('/')).Where(p => p.Length == 7 && p[0] == "chara" && p[1] == "human" &&
+            p[3] == "skeleton" && p[4] == "base" && p[6].EndsWith(".sklb", StringComparison.Ordinal)).Select(p => p[2]).Distinct().ToArray();
+        return races.Length == 1 ? races[0] : null;
+    }
+
+    public static string? PapPath(Timeline timeline, string selectedPap, IEnumerable<string> known, PapLoadTable? table = null)
     {
         if (!AnimationDependencies.SafeGamePath(timeline.Key)) return null;
         var paths = known.Where(AnimationDependencies.SafeGamePath).Distinct(StringComparer.Ordinal).ToArray();
@@ -119,19 +139,29 @@ internal sealed class AnimationCatalog
         if (AnimationDependencies.SafeGamePath(selectedPap) &&
             PapKeys(timeline).Any(key => selectedPap.EndsWith("/" + key + ".pap", StringComparison.Ordinal)))
             return selectedPap;
-        var existing = paths.Where(p => p.StartsWith($"chara/human/{parts[2]}/animation/", StringComparison.Ordinal) &&
+        // The selected clip may be another race's copy. The player's race requests the
+        // family member, and the load table can send it to a third race.
+        var race = BaseRace(paths) ?? parts[2];
+        var requested = timeline.LoadType > 2 || timeline.LoadType == 1 && parts[5] == "bt_common" ? null :
+            Loaded($"chara/human/{race}/animation/a0001/{(timeline.LoadType == 1 ? parts[5] : "bt_common")}/{PapKeys(timeline)[0]}.pap", table);
+        var existing = paths.Where(p => (p == requested || p.StartsWith($"chara/human/{race}/animation/", StringComparison.Ordinal)) &&
             PapKeys(timeline).Any(key => p.EndsWith("/" + key + ".pap", StringComparison.Ordinal))).ToArray();
         if (existing.Length > 0) return existing.Length == 1 ? existing[0] : null;
-        if (timeline.LoadType == 1 && parts[5] == "bt_common") return null;
-        if (timeline.LoadType > 2) return null;
-        return $"chara/human/{parts[2]}/animation/a0001/{(timeline.LoadType == 1 ? parts[5] : "bt_common")}/{PapKeys(timeline)[0]}.pap";
+        return requested;
     }
 
-    /// <summary>Player idle PAPs commonly pair <c>*_loop.pap</c> with a sibling startup.</summary>
-    public static string? SiblingStartupPath(string loopPath)
+    /// <summary>
+    /// Player idle PAPs commonly pair <c>*_loop.pap</c> with a sibling startup. The player's race
+    /// requests it, so a loop borrowed from another race can still start from the player's own copy.
+    /// </summary>
+    public static string? SiblingStartupPath(string loopPath, IEnumerable<string>? known = null, PapLoadTable? table = null)
     {
         const string loop = "_loop.pap";
         if (!AnimationDependencies.SafeGamePath(loopPath) || !loopPath.EndsWith(loop, StringComparison.OrdinalIgnoreCase)) return null;
-        return loopPath[..^loop.Length] + "_start.pap";
+        var parts = (loopPath[..^loop.Length] + "_start.pap").Split('/');
+        if (parts.Length > 4 && parts[0] == "chara" && parts[1] == "human" && parts[3] == "animation" &&
+            known != null && BaseRace(known.Where(AnimationDependencies.SafeGamePath)) is { } race)
+            parts[2] = race;
+        return Loaded(string.Join('/', parts), table);
     }
 }

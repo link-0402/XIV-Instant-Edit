@@ -43,6 +43,9 @@ internal sealed class RacialDeformer
 
     public int BoneCount => _matrices.Count;
 
+    /// <summary> Each bone that moves, with its matrix. </summary>
+    public IReadOnlyDictionary<string, Affine> Matrices => _matrices;
+
     public Affine For(string bone) => _matrices.TryGetValue(bone, out var matrix) ? matrix : Affine.Identity;
 
     /// <summary> The deformer for a model of race <paramref name="modelRace"/> worn by <paramref name="skeletonRace"/> (codes like 801). </summary>

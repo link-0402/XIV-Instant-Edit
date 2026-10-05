@@ -127,6 +127,7 @@ public sealed partial class TimelineWindow
             saveError = e.Message;
             return;
         }
+        var beside = TimelineWindowViews.AddedBeside(document, imports.Values);
         var service = animations!;
         saveError = null;
         saveMessage = null;
@@ -142,7 +143,7 @@ public sealed partial class TimelineWindow
             return await framework.RunOnFrameworkThread(() =>
             {
                 playback.Stop();
-                return service.EditTimeline(target, document, place, name, added);
+                return service.EditTimeline(target, document, place, name, added, beside);
             });
         });
     }

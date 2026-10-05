@@ -193,7 +193,9 @@ internal sealed class AnimationObserver : IDisposable
             foreach (var timeline in active)
                 try { await TimelineMotions(timeline); }
                 catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException) { motionReferences[timeline.Id] = ImmutableHashSet<string>.Empty; }
-            var inferredPaths = active.SelectMany(t => AnimationCatalog.CandidatePapPaths(t, gamePaths)).ToHashSet(StringComparer.Ordinal);
+            // Read once, off the framework thread: the table is 1.6 MB.
+            var papTable = await Task.Run(() => catalog.PapTable, token);
+            var inferredPaths = active.SelectMany(t => AnimationCatalog.CandidatePapPaths(t, gamePaths, papTable)).ToHashSet(StringComparer.Ordinal);
             var candidatePaths = gamePaths.Where(p => p.EndsWith(".pap", StringComparison.OrdinalIgnoreCase))
                 .Concat(inferredPaths).Distinct(StringComparer.Ordinal).ToArray();
             var candidates = new List<AnimationPapCandidate>();
@@ -267,14 +269,14 @@ internal sealed class AnimationObserver : IDisposable
                 foreach (var id in timeline.Family)
                 {
                     if (catalog.Find(id) is not { } relative ||
-                        AnimationCatalog.PapPath(relative, clip.GamePath, gamePaths) is not { } familyPap) continue;
+                        AnimationCatalog.PapPath(relative, clip.GamePath, gamePaths, papTable) is not { } familyPap) continue;
                     family.Add(familyPap);
                     if (timeline.Startups.Contains(id)) startupPaths.Add((relative, familyPap));
                 }
                 // Some idle loops, including pose01_loop, have a valid sibling
                 // startup but no Emote-sheet relationship. Discover it through the
                 // captured game path, then still validate its effective PAP below.
-                if (startupPaths.Count == 0 && AnimationCatalog.SiblingStartupPath(clip.GamePath) is { } sibling)
+                if (startupPaths.Count == 0 && AnimationCatalog.SiblingStartupPath(clip.GamePath, gamePaths, papTable) is { } sibling)
                 {
                     family.Add(sibling);
                     startupPaths.Add((null, sibling));

@@ -2,7 +2,10 @@ using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
+using InstantEdit.Services.Painter;
+using Penumbra.Api.Enums;
 using Penumbra.Api.Helpers;
+using NativeCharacter = FFXIVClientStructs.FFXIV.Client.Game.Character.Character;
 
 namespace InstantEdit.Services;
 
@@ -159,21 +162,21 @@ public sealed class OnScreenService : IDisposable
             return null;
         var paths = _penumbra.GetResourcePaths(index);
         return new JoinedTree(localPlayer.ObjectIndex, localPlayer.Address, localPlayer.Name.TextValue ?? "Unknown",
-            ActorPresentationCategory.Player, tree, paths.Length > 0 ? paths[0] : null);
+            ActorPresentationCategory.Player, tree, paths.Length > 0 ? paths[0] : null, HiddenGearOf(localPlayer));
     }
 
     /// <summary> An immutable, pruned and attributed copy of one joined tree; null when nothing in it is kept. </summary>
     private OnScreenObject? ToOnScreenObject(JoinedTree entry)
     {
         IReadOnlyList<ResourceNode> roots = (entry.Tree.Nodes ?? [])
-            .Select(CopyPrunedNode)
+            .Select(node => CopyPrunedNode(node, entry.HiddenGear))
             .Where(node => node is not null)
             .Cast<ResourceNode>()
             .OrderBy(node => SectionOrder(node.ResourceSection))
             .ThenBy(node => node.SortOrder)
             .ToArray();
         var treeRootCount = roots.Count;
-        roots = AddMissingResolvedModels(roots, entry.ResolvedPaths, _sourceAttributor.AttributionFor);
+        roots = AddMissingResolvedModels(roots, entry.ResolvedPaths, _sourceAttributor.AttributionFor, entry.HiddenGear.Files);
         if (roots.Count > treeRootCount)
             _log.Debug($"Supplemented {roots.Count - treeRootCount} model resource(s) omitted from Penumbra's tree DTO for object {entry.ObjectIndex}.");
         if (roots.Count == 0)
@@ -225,7 +228,8 @@ public sealed class OnScreenService : IDisposable
                 if (!TryClassifyCandidate(candidate, localPlayer, out var category))
                     continue;
 
-                joined.Add(new JoinedTree(index, candidate.Address, candidate.Name.TextValue ?? "Unknown", category, tree, paths));
+                joined.Add(new JoinedTree(index, candidate.Address, candidate.Name.TextValue ?? "Unknown", category, tree, paths,
+                    HiddenGearOf(candidate)));
             }
             catch (Exception e)
             {
@@ -275,6 +279,12 @@ public sealed class OnScreenService : IDisposable
                 treeEntries.Add(new TreeEntry(missing[i], recoveredTree, i < recoveredPaths.Length ? recoveredPaths[i] : null));
         }
     }
+
+    /// <summary> The gear models other gear hides on a character; none when it isn't drawn as a person. Call on the framework thread. </summary>
+    private static unsafe HiddenGearModels HiddenGearOf(IGameObject candidate)
+        => candidate is ICharacter && candidate.Address != nint.Zero
+            ? ModelVisibility.HiddenGear(((NativeCharacter*)candidate.Address)->GetCharacterBase())
+            : HiddenGearModels.None;
 
     private static bool IsSupportedOwnedObject(IGameObject candidate)
         => candidate.ObjectKind is ObjectKind.Companion or ObjectKind.Mount or ObjectKind.FollowMount ||
@@ -329,7 +339,8 @@ public sealed class OnScreenService : IDisposable
         string Name,
         ActorPresentationCategory Category,
         ResourceTreeDto Tree,
-        Dictionary<string, HashSet<string>>? ResolvedPaths);
+        Dictionary<string, HashSet<string>>? ResolvedPaths,
+        HiddenGearModels HiddenGear);
 
     /// <summary>
     /// Penumbra's tree DTO serializes its hierarchy and exposes a game path only when
@@ -337,10 +348,12 @@ public sealed class OnScreenService : IDisposable
     /// set and retains every mapping, so use it to restore only missing, positively
     /// attributed model edit targets.
     /// </summary>
+    /// <param name="hiddenFiles">Normalized files of models other gear hides (<see cref="HiddenGearModels.Files"/>), which are marked hidden.</param>
     internal static IReadOnlyList<ResourceNode> AddMissingResolvedModels(
         IReadOnlyList<ResourceNode> roots,
         Dictionary<string, HashSet<string>>? resolvedPaths,
-        Func<string?, ResourceSource> attributeSource)
+        Func<string?, ResourceSource> attributeSource,
+        IReadOnlySet<string>? hiddenFiles = null)
     {
         if (resolvedPaths is null || resolvedPaths.Count == 0)
             return roots;
@@ -366,6 +379,7 @@ public sealed class OnScreenService : IDisposable
                                 PenumbraService.IsSafeGamePath(normalizedActualPath);
             if (!safeModModel && !safeGameModel)
                 continue;
+            var hidden = hiddenFiles?.Contains(PainterVisibility.NormalizePath(actualPath)) == true;
 
             foreach (var rawGamePath in gamePaths)
             {
@@ -394,6 +408,7 @@ public sealed class OnScreenService : IDisposable
                     SlotLabel = presentation.SlotLabel,
                     ResourceSection = presentation.Section,
                     SortOrder = presentation.SortOrder,
+                    Hidden = hidden,
                 });
             }
         }
@@ -420,6 +435,7 @@ public sealed class OnScreenService : IDisposable
         return separator < 0 ? path : path[(separator + 1)..];
     }
 
+    /// <summary> What On Screen lists: no models other gear hides, and without <paramref name="includeVanilla"/> no game files, keeping modded descendants. </summary>
     internal static IReadOnlyList<ResourceNode> ProjectVisibleResourceNodes(
         IEnumerable<ResourceNode> roots,
         bool includeVanilla)
@@ -429,6 +445,8 @@ public sealed class OnScreenService : IDisposable
         ResourceNode node,
         bool includeVanilla)
     {
+        if (node.Hidden)
+            return [];
         if (includeVanilla)
             return [node];
 
@@ -446,10 +464,10 @@ public sealed class OnScreenService : IDisposable
             ? PathRules.NormalizeGamePath(actualPath)
             : actualPath;
 
-    private ResourceNode? CopyPrunedNode(ResourceNodeDto node)
+    private ResourceNode? CopyPrunedNode(ResourceNodeDto node, HiddenGearModels hiddenGear)
     {
         var children = (node.Children ?? [])
-            .Select(CopyPrunedNode)
+            .Select(child => CopyPrunedNode(child, hiddenGear))
             .Where(child => child is not null)
             .Cast<ResourceNode>()
             .OrderBy(child => SectionOrder(child.ResourceSection))
@@ -482,6 +500,8 @@ public sealed class OnScreenService : IDisposable
             SlotLabel = presentation.SlotLabel,
             ResourceSection = presentation.Section,
             SortOrder = presentation.SortOrder,
+            // A model node's object is the slot's render model.
+            Hidden = node.Type == ResourceType.Mdl && hiddenGear.Models.Contains(node.ObjectAddress),
         };
     }
 

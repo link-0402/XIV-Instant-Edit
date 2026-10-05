@@ -54,7 +54,7 @@ internal static class TimelineTemplates
                     throw new InvalidDataException($"Model {prop.Model} body {prop.Body} is not a valid prop.");
                 var group = "prop-" + Guid.NewGuid().ToString("N")[..12];
                 var events = ImmutableArray.CreateBuilder<TimelineEvent>();
-                events.Add(Event("C173", request.Start, 0, SyncEffect, [], group));
+                events.Add(Event("C173", request.Start, 0, SyncEffect, new() { [TimelineEffectCheck.LoopField] = 1 }, group));
                 events.Add(Event("C198", request.Start, Length(60), "",
                     new() { ["Model"] = prop.Model, ["Body"] = prop.Body, ["Variant"] = prop.Variant }, group));
                 if (prop.WeaponTimeline is { } timeline)

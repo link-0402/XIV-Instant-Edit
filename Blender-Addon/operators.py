@@ -22,10 +22,12 @@ from .materials import (
     set_mesh_part_attribute,
     convert_suffix_mesh_names,
 )
-from .mesh_list import DragSession, ListMetrics, list_parts, moved_part, placement_plan, scene_parts
+from .mesh_list import (DragSession, ListMetrics, list_parts, moved_part, placement_plan, scene_parts,
+                        untangled_placement)
 from .mesh.export import (check_triangulation, check_uv_layers, check_weights, dropped_shape_keys_warning, export_result,
                           get_export_stats)
 from .mesh.hidden import hidden_vertices, remove_vertices
+from .mesh.racial_scaling import apply_deformer
 from .mesh.objects import visible_meshobj
 from .mesh.armatures import available_armatures, combine_armatures
 from .mesh.vertex_data import (
@@ -705,6 +707,51 @@ class XIVIE_OT_drag_mesh_order(Operator):
         return {"CANCELLED"} if cancelled or not plan else {"FINISHED"}
 
 
+class XIVIE_OT_untangle_mesh_groups(Operator):
+    bl_idname = "xiv_ie.untangle_mesh_groups"
+    bl_label = "Untangle Mesh Groups"
+    bl_description = (
+        "Move parts with a different material to a new mesh group, "
+        "and give every part its own number without gaps"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: Context):
+        if context.mode != "OBJECT":
+            cls.poll_message_set("Switch to Object Mode to untangle mesh groups")
+            return False
+        return True
+
+    def execute(self, context: Context):
+        visible = tuple(visible_meshobj())
+        parts = list_parts(visible)
+        placement = untangled_placement(parts)
+        plan = placement_plan(parts, placement)
+        if not plan:
+            self.report({"INFO"}, "Nothing to untangle.")
+            return {"CANCELLED"}
+        try:
+            commit_mesh_id_plan(plan, visible)
+        except ValueError as error:
+            self.report({"ERROR"}, f"Mesh groups were not untangled: {error}")
+            return {"CANCELLED"}
+        moved = [part for part in parts if placement[part.ident][0] != part.group]
+        renumbered = sum(placement[part.ident] != (part.group, part.part) for part in parts) - len(moved)
+        if moved:
+            groups = len({placement[part.ident][0] for part in moved})
+            message = (
+                f"Moved {len(moved)} part{'s' if len(moved) != 1 else ''} to "
+                f"{groups} new mesh group{'s' if groups != 1 else ''}"
+                f"{f' and renumbered {renumbered}' if renumbered else ''}."
+            )
+        else:
+            message = f"Renumbered {renumbered} part{'s' if renumbered != 1 else ''}."
+        self.report({"INFO"}, message)
+        _redraw(context)
+        return {"FINISHED"}
+
+
 class XIVIE_OT_select_mesh_part(Operator):
     bl_idname = "xiv_ie.select_mesh_part"
     bl_label = "Select Mesh Part"
@@ -732,7 +779,7 @@ class XIVIE_OT_select_mesh_part(Operator):
                 lines.append("Its material differs from the rest of the mesh group.")
             instances = mesh_part_instances(group.objects, properties.mesh_group, properties.mesh_part)
             if len(instances) > 1:
-                lines.append("Another visible part uses the same number; drag one of them to a free slot.")
+                lines.append("Another visible part uses the same number; Untangle Mesh Groups gives each its own.")
         return "\n".join(lines)
 
     def invoke(self, context: Context, event):
@@ -943,6 +990,164 @@ class XIVIE_OT_remove_hidden_vertices(Operator):
             return {"FINISHED"}
         where = changed[0].name if len(changed) == 1 else f"{len(changed)} meshes"
         self.report({"INFO"}, f"Removed {total:,} hidden vertices from {where}")
+        _redraw(context)
+        return {"FINISHED"}
+
+
+def _model_race_items():
+    from .instant_edit.racial_scaling import PLAYER_RACES, race_label
+
+    return tuple((str(code), race_label(code), f"The selected meshes are made for {label}")
+                 for code, label in PLAYER_RACES)
+
+
+def _target_race_items():
+    from .instant_edit.racial_scaling import PLAYER_RACES, race_label
+
+    return (("0", "My Character", "Your character's race, as the game shows it now"),) + tuple(
+        (str(code), race_label(code), f"Reshape for {label}") for code, label in PLAYER_RACES)
+
+
+# Blender needs dynamic enum strings kept alive, so the items are built once.
+_MODEL_RACE_ITEMS = _model_race_items()
+_TARGET_RACE_ITEMS = _target_race_items()
+
+
+class XIVIE_OT_apply_racial_scaling(Operator):
+    bl_idname = "xiv_ie.apply_racial_scaling"
+    bl_label = "Apply Racial Scaling"
+    bl_description = (
+        "Reshape the selected meshes for another race, the way the game's racial deformer does "
+        "(c0201 gear on a Miqo'te, for example). Unlike a scaled import, the result can be exported. "
+        "Applying again replaces the earlier scaling; the model's own race takes it off.\n"
+        "Needs the XIV Instant Edit plugin running: it reads the deformer your character's collection loads"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    model_race: EnumProperty(
+        name="From",
+        description="The race the selected meshes are made for",
+        items=_MODEL_RACE_ITEMS,
+        default="201",
+    )  # type: ignore
+    race: EnumProperty(
+        name="To",
+        description="The race to reshape the meshes for",
+        items=_TARGET_RACE_ITEMS,
+        default="0",
+    )  # type: ignore
+    detected: BoolProperty(default=False, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
+
+    @classmethod
+    def poll(cls, context: Context):
+        if context.mode != "OBJECT":
+            cls.poll_message_set("Switch to Object Mode to apply racial scaling")
+            return False
+        if not _selected_meshes(context):
+            cls.poll_message_set("Select the meshes to reshape")
+            return False
+        return True
+
+    def invoke(self, context: Context, event):
+        from .instant_edit.racial_scaling import detect_model_race
+
+        found = {detect_model_race(obj) for obj in _selected_meshes(context)} - {None}
+        self.detected = len(found) == 1
+        if self.detected:
+            self.model_race = str(found.pop())
+        return context.window_manager.invoke_props_dialog(
+            self, width=400, title="Apply Racial Scaling", confirm_text="Apply")
+
+    def draw(self, context: Context):
+        from .instant_edit.racial_scaling import applied, race_label
+
+        marks = {applied(obj) for obj in _selected_meshes(context)}
+        layout = self.layout
+        column = layout.column()
+        column.use_property_split = True
+        column.use_property_decorate = False
+        row = column.row()
+        # A reshaped mesh keeps the race it was made for.
+        row.enabled = None in marks
+        row.prop(self, "model_race")
+        column.prop(self, "race")
+        current = sorted({mark[1] for mark in marks if mark})
+        if current:
+            names = " and ".join(race_label(race) for race in current)
+            layout.label(text=f"Now shaped for {names}. This replaces it.", icon="INFO")
+            layout.label(text="Pick the model's own race to undo it.", icon="BLANK1")
+        elif not self.detected:
+            layout.label(text="Couldn't tell the model's race. Check From.", icon="ERROR")
+        notes = layout.column(align=True)
+        notes.active = False
+        notes.label(text="Shape keys and normals move too. The armature stays.")
+        notes.label(text="Uses your character's collection, so skeleton mods count.")
+
+    def execute(self, context: Context):
+        from .instant_edit.racial_scaling import PROPERTY, applied, race_label, request_deformer, set_applied
+
+        # (mesh, model race, race it is shaped for now or None), once per mesh data.
+        plans, meshes, previews = [], set(), []
+        for obj in _selected_meshes(context):
+            if obj.get(PROPERTY):
+                previews.append(obj.name)
+            elif obj.data not in meshes:
+                meshes.add(obj.data)
+                plans.append((obj, *(applied(obj) or (int(self.model_race), None))))
+        if not plans:
+            self.report({"ERROR"}, "The selected meshes were sent racially scaled for preview. "
+                                   "Re-import them with racial scaling off to reshape them.")
+            return {"CANCELLED"}
+        deformers = {}
+
+        def deformer(model_race: int, race: int):
+            if (model_race, race) not in deformers:
+                deformers[model_race, race] = request_deformer(model_race, race)
+            return deformers[model_race, race]
+
+        try:
+            steps = [(obj, model_race, current, *deformer(model_race, int(self.race)),
+                      deformer(model_race, current)[1] if current else None)
+                     for obj, model_race, current in plans]
+        except ValueError as error:
+            self.report({"ERROR"}, f"Racial scaling failed: {error}")
+            return {"CANCELLED"}
+        changed, unchanged, unmoved, reached = [], [], [], set()
+        for obj, model_race, current, race, matrices, previous in steps:
+            reached.add(race)
+            if race == (current or model_race):
+                unchanged.append(obj.name)
+            elif apply_deformer(obj, matrices, previous):
+                set_applied(obj, model_race, race)
+                obj.update_tag()
+                changed.append(obj)
+            else:
+                unmoved.append(obj.name)
+        if not changed:
+            if unmoved:
+                self.report({"WARNING"}, "Nothing moved: the selected meshes have no weights on bones the race changes.")
+            else:
+                self.report({"INFO"}, f"The meshes are already shaped for {' and '.join(race_label(race) for race in sorted(reached))}.")
+            return {"CANCELLED"}
+        where = changed[0].name if len(changed) == 1 else f"{len(changed)} meshes"
+        if all(applied(obj) is None for obj in changed):
+            message = f"Took the racial scaling off {where}"
+        else:
+            message = f"Reshaped {where} for {' and '.join(race_label(race) for race in sorted(reached))}"
+
+        def listed(names):
+            return f"{', '.join(names[:3])}{', ...' if len(names) > 3 else ''}"
+
+        problems = []
+        if previews:
+            problems.append(f"sent scaled for preview: {listed(previews)}")
+        if unchanged:
+            problems.append(f"already shaped for it: {listed(unchanged)}")
+        if unmoved:
+            problems.append(f"no weights to move: {listed(unmoved)}")
+        if problems:
+            message += f" ({'; '.join(problems)})"
+        self.report({"WARNING"} if problems else {"INFO"}, message)
         _redraw(context)
         return {"FINISHED"}
 

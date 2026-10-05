@@ -48,6 +48,12 @@ public sealed record ResourceNode
     public required string SlotLabel { get; init; }
     public required ResourceSection ResourceSection { get; init; }
     public required int SortOrder { get; init; }
+
+    /// <summary>
+    /// A gear model that the character's other gear hides, such as legs under a robe. The game keeps it
+    /// loaded, so sync plugins still count its files, but doesn't draw it. On Screen doesn't list it.
+    /// </summary>
+    public bool Hidden { get; init; }
 }
 
 /// <summary> A model selected for import into Blender. </summary>

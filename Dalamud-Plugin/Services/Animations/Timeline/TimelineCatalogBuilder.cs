@@ -161,14 +161,18 @@ internal sealed class TimelineCatalogBuilder(Func<string, bool> exists, Func<str
         var harvest = new Harvest();
         var visited = new HashSet<string>(StringComparer.Ordinal);
         var ancestors = AnimationSkeletonIndex.Ancestors(key.RaceCode);
+        var papTable = PapTable();
         foreach (var emote in sheets.Emotes)
             foreach (var timeline in emote.Timelines)
             {
                 token.ThrowIfCancellationRequested();
                 if (timeline.LoadType == 0 || !AnimationDependencies.SafeGamePath(timeline.Key) || !visited.Add(timeline.Key)) continue;
                 var label = emote.Name.Length > 0 ? emote.Name : timeline.Key[(timeline.Key.LastIndexOf('/') + 1)..];
-                // A race without its own copy of an emote plays its skeleton parent's.
-                if (timeline.LoadType == 2)
+                // A race without its own copy of an emote plays the one the game's load table
+                // names; without the table, the nearest skeleton ancestor's is the best guess.
+                if (timeline.LoadType == 2 && papTable != null)
+                    HarvestFile(papTable.Resolve($"chara/human/{key.RaceCode}/animation/a0001/bt_common/{timeline.Key}.pap"), label, harvest);
+                else if (timeline.LoadType == 2)
                     foreach (var model in ancestors)
                         if (HarvestFile($"chara/human/{model}/animation/a0001/bt_common/{timeline.Key}.pap", label, harvest)) break;
                 HarvestFile($"chara/action/{timeline.Key}.tmb", label, harvest);
@@ -330,6 +334,13 @@ internal sealed class TimelineCatalogBuilder(Func<string, bool> exists, Func<str
     {
         try { return read(path); }
         catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException) { unreadable++; return null; }
+    }
+
+    private PapLoadTable? PapTable()
+    {
+        if (Read(PapLoadTable.GamePath) is not { } bytes) return null;
+        try { return new PapLoadTable(bytes); }
+        catch (InvalidDataException) { unreadable++; return null; }
     }
 
     private ImmutableArray<AnimationPap.Entry>? FaceEntries(string path)

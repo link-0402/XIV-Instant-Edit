@@ -103,9 +103,11 @@ public sealed partial class TimelineWindow
                 RequestPicker(kind, current.Playhead, null);
     }
 
-    /// <summary> One line each for an import running or done, and for an edit the editor refused. </summary>
+    /// <summary> One line each for an import running or done, an edit the editor refused and a header length the motion disagrees with. </summary>
     private void DrawMessages(TimelineEditor current)
     {
+        if (headerNote != null)
+            Note(null, Theme.Muted, headerNote);
         if (importTask != null && importing is { } work)
         {
             Widgets.Spinner();
@@ -125,6 +127,34 @@ public sealed partial class TimelineWindow
         }
         if (current.LastError is { } error)
             Note(null, Theme.Warning, error);
+        DrawEffectProblems(current);
+    }
+
+    /// <summary> Effects that stop although the animation goes on, and the button that keeps them going. </summary>
+    private void DrawEffectProblems(TimelineEditor current)
+    {
+        if (effectWarning is not { } warning || effectProblems.IsEmpty)
+            return;
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Warning, "⚠ " + warning);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(string.Join("\n", effectProblems.Select(p => p.Text)));
+        ImGui.SameLine(0, Theme.Gap);
+        using (ImRaii.Disabled(ReadOnly))
+        {
+            if (ImGui.SmallButton(effectEvents == 1 ? "Keep it looping" : "Keep them looping"))
+            {
+                // The copies are packaged like imports; the edit's own undo puts the original effects back.
+                foreach (var copy in effectCopies)
+                    imports[copy.GamePath] = copy;
+                current.Commit(TimelineEffectCheck.Fix(current.Document, effectProblems));
+            }
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(effectCopies.IsEmpty
+                ? "Sets Loop/wait to -1, which loops an effect until the animation ends. Save to keep the change."
+                : "Sets Loop/wait to -1 and uses copies of the effects that keep going: no kill of their own, sounds that loop. " +
+                  "Save to keep the change.");
     }
 
     /// <summary> A short coloured message with an optional dismiss button; true when dismissed. </summary>

@@ -276,6 +276,7 @@ NativeValidationFixture.Run(Check, Reject);
 ObservationPerformanceFixture.Run(Check);
 AnimationMatchingFixture.Run(Check);
 FacePapPathFixture.Run(Check);
+PapLoadTableFixture.Run(Check, Reject);
 await AnimationActivationFixture.Run(Check, Reject);
 
 var refs = AnimationDependencies.Read(resource.GamePath, papBytes);

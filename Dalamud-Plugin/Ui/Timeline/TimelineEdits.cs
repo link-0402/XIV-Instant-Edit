@@ -99,10 +99,11 @@ internal static class TimelineEdits
 
     /// <summary>
     /// Changes the length to <paramref name="frames"/>, clamped to the editor's limits. Motion clips
-    /// that lasted the whole old length last the new one. With <paramref name="scaleEvents"/> every
-    /// start and every non-zero duration scales with the length (rounded half away from zero), and a
-    /// start that played before still plays; without it nothing else moves. Durations past
-    /// <see cref="TimelineDocument.MaxFrames"/> mean "until the end" in mods and never scale.
+    /// that lasted the whole old length (give or take a frame) last the new one. With
+    /// <paramref name="scaleEvents"/> every start and every non-zero duration scales with the length
+    /// (rounded half away from zero), and a start that played before still plays; without it nothing
+    /// else moves. Durations past <see cref="TimelineDocument.MaxFrames"/> mean "until the end" in
+    /// mods and never scale.
     /// With <paramref name="loaded"/> (the document as it was loaded), the motions that follow are
     /// the ones that lasted the loaded length, and going back to that length puts what the user
     /// can't move (Locked starts and lengths, Movable lengths) back exactly where it was.
@@ -132,8 +133,8 @@ internal static class TimelineEdits
                     duration = Math.Clamp(TimelineSnap.Round(ev.Duration * ratio), 1, TimelineDocument.MaxFrames);
             }
             if (ev.Lane == TimelineLane.Motion && (original == null
-                    ? old > 0 && ev.Duration == old
-                    : original.TryGetValue(ev.Key, out var motion) && motion.Duration == loaded!.Length))
+                    ? doc.LastsWhole(ev.Duration)
+                    : original.TryGetValue(ev.Key, out var motion) && loaded!.LastsWhole(motion.Duration)))
                 duration = length;
             if (restore && original!.TryGetValue(ev.Key, out var before))
             {
@@ -148,8 +149,17 @@ internal static class TimelineEdits
         return doc with { Length = length, Events = events.ToImmutable() };
     }
 
-    /// <summary>Events that start at or after the end of the timeline, so they would never play.</summary>
+    /// <summary>Events that start at or after the end of the clip's motion. Vanilla has none.</summary>
     public static ImmutableArray<TimelineEvent> PastEnd(TimelineDocument doc) => [.. Events(doc).Where(ev => ev.Start >= doc.Length)];
+
+    /// <summary>The frames the view scrolls over: the length, or up to the last start when events start past it.</summary>
+    public static int Extent(TimelineDocument doc)
+    {
+        var extent = doc.Length;
+        foreach (var ev in Events(doc))
+            extent = Math.Max(extent, Math.Min(TimelineDocument.MaxFrames, ev.Start) + 1);
+        return extent;
+    }
 
     /// <summary>
     /// Appends <paramref name="events"/> with new "n" keys. Events sharing a group keep sharing one,

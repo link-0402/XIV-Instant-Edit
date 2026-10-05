@@ -2,6 +2,7 @@
 using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
+using InstantEdit.Services.Audio;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui.Timeline;
@@ -20,10 +21,197 @@ internal static class TmbFileFixture
         Structure(check, reject, original);
         Document(check, reject, original);
         Length(check, original);
+        HeaderLength(check, reject);
         Templates(check, reject, original);
         Refusals(reject, original);
         Pap(check, reject, original);
         ReviewFixes(check, original);
+        EffectLoops(check);
+        EffectCopies(check, reject);
+    }
+
+    /// <summary>
+    /// Async VFX (C173) loop/wait: the editor reads and writes it, and the check finds looping
+    /// effects that stop after one loop (1 at frame 0, or a wait) and keeps them looping, as the
+    /// Red Carpet dance's 909 needed. Effects that don't loop, aren't read, or already loop pass.
+    /// </summary>
+    private static void EffectLoops(Action<bool, string> check)
+    {
+        static Tmb Async(Tmb tmb, short id, int time, int loop, string path) =>
+            tmb.Item("C173", 0x44, id, time).I32(12, loop).Text(20, path).Bind(24, 1, 0, -1).I32(28, 3).I32(32, 2);
+        var timeline = new Tmb().Head(455, null, 2).Actor(2, 3).Track(3, 4, 5, 6, 7, 8);
+        timeline = Async(timeline, 4, 0, 909, "vfx/mod/sparkle.avfx");
+        timeline = Async(timeline, 5, 0, 909, "vfx/mod/music.avfx");
+        timeline = Async(timeline, 6, 0, 1, "vfx/mod/cloud.avfx");
+        timeline = Async(timeline, 7, 20, 1, "vfx/mod/cloud.avfx");
+        timeline = Async(timeline, 8, 0, -1, "vfx/mod/props.avfx");
+        var bytes = timeline.Build();
+        var doc = TimelineConvert.Read(TmbFile.Parse(bytes));
+        check(TmbEntrySchema.Get("C173").Fields.Single() is { Name: TimelineEffectCheck.LoopField, Min: -1 } &&
+              doc.Events.Select(e => e.Values[TimelineEffectCheck.LoopField]).SequenceEqual([909.0, 909, 1, 1, -1]),
+            "an Async VFX entry's loop/wait is an editable field");
+
+        var loops = new Dictionary<string, TimelineEffectInfo>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["vfx/mod/Sparkle.avfx"] = new([(0, 455)]), ["vfx/mod/music.avfx"] = new([]), ["vfx/mod/cloud.avfx"] = new([(0, 130), (10, 40)]),
+            ["vfx/mod/props.avfx"] = new([(0, 455)]),
+        };
+        var problems = TimelineEffectCheck.Find(doc, loops);
+        check(problems.Select(p => (p.Key, p.Issue, p.Value, p.Frames)).SequenceEqual(
+                  [("t4", TimelineEffectIssue.Pauses, 909, 455), ("t6", TimelineEffectIssue.LoopsOnce, 1, 130)]) &&
+              problems[0].Text == "sparkle plays its loop once, then pauses for 30.3 s." && problems[1].Text == "cloud plays its loop once, then stops.",
+            "looping effects with a wait, or with 1 at frame 0, stop after their first loop; others pass");
+        check(TimelineEffectCheck.Find(doc, new Dictionary<string, TimelineEffectInfo>()).IsEmpty,
+            "an effect that couldn't be read is never judged");
+        check(InstantEdit.Ui.TimelineWindowViews.EffectLoopWarning(problems) == "2 effects stop after their first loop: sparkle, cloud." &&
+              InstantEdit.Ui.TimelineWindowViews.EffectLoopWarning([problems[1]]) == problems[1].Text &&
+              InstantEdit.Ui.TimelineWindowViews.EffectLoopWarning([]) == null,
+            "the Timeline window names the effects that stop");
+
+        var looping = TimelineEffectCheck.Fix(doc, problems);
+        var saved = TimelineConvert.Apply(bytes, looping);
+        var changed = Enumerable.Range(0, bytes.Length).Count(i => saved.Length != bytes.Length || saved[i] != bytes[i]);
+        check(TmbFile.Parse(saved).Entries.Select(e => e.Int32(12)).SequenceEqual([-1, 909, -1, 1, -1]) && changed == 8 &&
+              TimelineEffectCheck.Find(TimelineConvert.Read(TmbFile.Parse(saved)), loops).IsEmpty &&
+              ReferenceEquals(TimelineEffectCheck.Fix(looping, []), looping),
+            "keeping them looping writes -1 into those entries' loop/wait and changes no other byte");
+
+        var prop = TimelineTemplates.Create(new TimelineAddRequest(TimelineAddKind.Prop, 0, "", Prop: new TimelinePropModel(1962, 1, 1, null)));
+        var withProp = TimelineEdits.Add(doc, prop, null, out var error);
+        check(error == null && prop[0] is { Magic: "C173" } sync && sync.Values[TimelineEffectCheck.LoopField] == 1 &&
+              TmbFile.Parse(TimelineConvert.Apply(bytes, withProp)).Entries.Count(e => e.Magic == "C173" && e.Int32(12) == 1) == 3,
+            "a new prop's sync effect still plays once, as vanilla's do");
+
+        static byte[] TimelineChunk(int start, int end) => Chunk("TmLn", [.. Chunk("LpSt", Ints(start)), .. Chunk("LpEd", Ints(end)), .. Chunk("BnNo", Ints(-1))]);
+        var avfx = Chunk("AVFX", [.. Chunk("Ver", Ints(1)), .. TimelineChunk(0, 0), .. TimelineChunk(0, 455), .. TimelineChunk(-1, 20),
+            .. Chunk("Emit", Chunk("LpSt", Ints(0)))]);
+        check(AnimationDependencies.ReadVfxLoops(avfx).SequenceEqual([(0, 455)]) &&
+              AnimationDependencies.ReadVfxLoops(Chunk("AVFX", Chunk("Ver", Ints(1)))).IsEmpty,
+            "an effect loops when one of its timelines has a loop range");
+    }
+
+    /// <summary>
+    /// Effects that stop even at loop/wait -1, as the Red Carpet dance's did: its effects schedule
+    /// their own KILL at frame 908 and its music is marked to loop but has no loop points. The check
+    /// finds both, and keeping them going swaps in a copy with the kill turned off and the sound
+    /// looping, mapped beside the originals. Effects that clean up after themselves are left alone.
+    /// </summary>
+    private static void EffectCopies(Action<bool, string> check, Action<Action, string> reject)
+    {
+        const string music = "sound/mod/music.scd";
+        static byte[] Field(string name, int value) => Chunk(name, Ints(value));
+        static byte[] Entry(byte enabled, int start, int timeline) => [.. Chunk("bEna", [enabled]), .. Field("StTm", start), .. Field("TlNo", timeline)];
+        static byte[] Item(int start, int end, int emitter, int clip) => [.. Chunk("bEna", [1]), .. Field("StTm", start), .. Field("EdTm", end),
+            .. Field("BdNo", -1), .. Field("EfNo", -1), .. Field("EmNo", emitter), .. Field("Plfm", 0), .. Field("ClNo", clip)];
+        // Like VFXEditor writes them: every Item chunk repeats the items before it, every Trgr chunk all items and the triggers so far.
+        static byte[] Timeline(int loopEnd, bool kill, params byte[][] items) =>
+        [
+            .. Field("LpSt", 0), .. Field("LpEd", loopEnd), .. Field("BnNo", -1), .. Field("TICn", items.Length), .. Field("CpCn", kill ? 1 : 0),
+            .. items.Select((_, i) => Chunk("Item", [.. items.Take(i + 1).SelectMany(x => x)])).SelectMany(x => x),
+            .. (kill ? Chunk("Clip", [.. Ints(0x4B494C4C), .. new byte[160]]) : []),
+        ];
+        static byte[] Effect(byte killEnabled, int loopEnd, string? sound = null)
+        {
+            byte[][] items = [Entry(killEnabled, 908, 1), Entry(1, 0, 2)];
+            byte[][] triggers = [Entry(1, 0, 1), .. Enumerable.Repeat(Entry(1, 0, -1), 11)];
+            var scheduler = Chunk("Schd", [
+                .. Field("ItCn", items.Length), .. Field("TrCn", triggers.Length),
+                .. items.Select((_, i) => Chunk("Item", [.. items.Take(i + 1).SelectMany(x => x)])).SelectMany(x => x),
+                .. triggers.Select((_, i) => Chunk("Trgr", [.. items.SelectMany(x => x), .. triggers.Take(i + 1).SelectMany(x => x)])).SelectMany(x => x)]);
+            return Chunk("AVFX", [
+                .. Chunk("Ver", Ints(1)), .. scheduler,
+                .. Chunk("TmLn", Timeline(0, false, Item(0, -1, 0, -1))),
+                .. Chunk("TmLn", Timeline(0, true, Item(0, 1, -1, 0))),
+                .. Chunk("TmLn", Timeline(loopEnd, false, Item(213, 347, 1, -1), Item(357, 455, 2, -1))),
+                .. Chunk("Emit", [.. Chunk("SdNm", [.. Encoding.ASCII.GetBytes(sound ?? ""), 0]), .. Field("SdNo", 1)])]);
+        }
+
+        var carpet = Effect(0xFF, 455, music);
+        var killed = TimelineEffectFiles.WithoutScheduledKills(carpet);
+        var flipped = Enumerable.Range(0, carpet.Length).Where(i => carpet[i] != killed[i]).ToList();
+        check(TimelineEffectFiles.EndsAt(carpet) == 908 && TimelineEffectFiles.EndsAt(killed) == null &&
+              flipped.Count == 14 && flipped.All(i => carpet[i] == 0xFF && killed[i] == 0) &&
+              AnimationDependencies.ReadVfxLoops(killed).SequenceEqual([(0, 455)]),
+            "an effect that keeps going but schedules its own kill ends there; turning off every copy of that item keeps it going");
+        check(TimelineEffectFiles.EndsAt(Effect(0, 455)) == null && TimelineEffectFiles.EndsAt(Effect(1, 0)) == null,
+            "a kill that is off, or one that cleans up after an effect that ends anyway, doesn't count");
+
+        const string renamedSound = "sound/instant_edit/music_loop_0a1b2c3d.scd";
+        var renamed = TimelineEffectFiles.WithSound(carpet, "Sound/Mod/Music.scd", renamedSound);
+        static int Padded(string text) => (text.Length + 1 + 3) & ~3;
+        check(AnimationDependencies.ReadVfxPaths(renamed).Sounds.SequenceEqual([renamedSound]) &&
+              renamed.Length == carpet.Length + Padded(renamedSound) - Padded(music) &&
+              TimelineEffectFiles.EndsAt(renamed) == 908 && AnimationDependencies.ReadVfxLoops(renamed).SequenceEqual([(0, 455)]),
+            "renaming an emitter's sound rewrites only that name and the sizes around it");
+        reject(() => TimelineEffectFiles.WithSound(carpet, "sound/other.scd", renamedSound), "renaming a sound the effect doesn't play is refused");
+
+        var scd = AudioFixture.Template();
+        var length = ScdFile.Read(scd).Audio[0].Seconds;
+        var looped = TimelineEffectFiles.WithLoopPoints(scd, 0);
+        var audio = ScdFile.Read(looped).Audio[0];
+        var unmarked = (byte[])scd.Clone();
+        unmarked[ScdFile.Read(scd).Sounds[0].Offset + 4] &= 0xFE;
+        check(TimelineEffectFiles.UnloopedSeconds(scd, 0) == length && TimelineEffectFiles.UnloopedSeconds(scd, length + 1) == null &&
+              TimelineEffectFiles.UnloopedSeconds(unmarked, 0) == null && TimelineEffectFiles.UnloopedSeconds(looped, 0) == null &&
+              audio is { LoopStart: 0 } && audio.LoopEnd == (int)Math.Round(length * audio.SampleRate) &&
+              Enumerable.Range(0, scd.Length).Count(i => scd[i] != looped[i]) <= 4,
+            "a sound marked to loop without loop points plays once; loop points over all of it (MS-ADPCM in samples) make it loop");
+
+        var copy = TimelineEffectFiles.LoopingCopy("vfx/mod/carpet.avfx", carpet, true, [(music, scd)], 0);
+        var soundCopy = copy.Files.Keys.Single(k => k.EndsWith(".scd"));
+        check(copy.GamePath.StartsWith("vfx/instant_edit/carpet_loop_") && soundCopy.StartsWith("sound/instant_edit/music_loop_") && copy.Files.Count == 2 &&
+              copy.Beside is { } beside && beside[copy.GamePath] == "vfx/mod/carpet.avfx" && beside[soundCopy] == music &&
+              TimelineEffectFiles.EndsAt(copy.Files[copy.GamePath]) == null &&
+              AnimationDependencies.ReadVfxPaths(copy.Files[copy.GamePath]).Sounds.SequenceEqual([soundCopy]) &&
+              TimelineEffectFiles.UnloopedSeconds(copy.Files[soundCopy], 0) == null,
+            "the looping copy turns off the kill, plays a looping copy of the sound, and names what each copy replaces");
+
+        static Tmb Async(Tmb tmb, short id, int time, int loop, string path) =>
+            tmb.Item("C173", 0x44, id, time).I32(12, loop).Text(20, path).Bind(24, 1, 0, -1).I32(28, 3).I32(32, 2);
+        var timeline = new Tmb().Head(455, null, 2).Actor(2, 3).Track(3, 4, 5, 6, 7);
+        timeline = Async(timeline, 4, 0, 909, "vfx/mod/carpet.avfx");
+        timeline = Async(timeline, 5, 0, -1, "vfx/mod/nocopy.avfx");
+        timeline = Async(timeline, 6, 20, 1, "vfx/mod/carpet.avfx");
+        timeline = Async(timeline, 7, 0, 1, "vfx/mod/cloud.avfx");
+        var bytes = timeline.Build();
+        var doc = TimelineConvert.Read(TmbFile.Parse(bytes));
+        var effects = new Dictionary<string, TimelineEffectInfo>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["vfx/mod/carpet.avfx"] = new([(0, 455)], 908, 30.334, copy),
+            ["vfx/mod/nocopy.avfx"] = new([(0, 455)], 908),
+            ["vfx/mod/cloud.avfx"] = new([(0, 130)]),
+        };
+        var problems = TimelineEffectCheck.Find(doc, effects);
+        check(problems.Select(p => (p.Key, p.Issue, p.Frames)).SequenceEqual([("t4", TimelineEffectIssue.Pauses, 455),
+                  ("t4", TimelineEffectIssue.EndsItself, 908), ("t4", TimelineEffectIssue.SoundStops, 910), ("t7", TimelineEffectIssue.LoopsOnce, 130)]) &&
+              problems[1].Text == "carpet ends itself after 30.3 s." && problems[2].Text == "carpet's sound stops after 30.3 s.",
+            "an effect that ends itself or whose sound stops is found when a copy that keeps it going exists");
+        check(InstantEdit.Ui.TimelineWindowViews.EffectLoopWarning(problems) == "2 effects stop: carpet, cloud." &&
+              InstantEdit.Ui.TimelineWindowViews.EffectLoopWarning([.. problems.Take(2)]) ==
+                  "carpet plays its loop once, then pauses for 30.3 s. carpet ends itself after 30.3 s.",
+            "the warning names each effect once and says how one effect stops");
+
+        var fixedDoc = TimelineEffectCheck.Fix(doc, problems);
+        var saved = TmbFile.Parse(TimelineConvert.Apply(bytes, fixedDoc)).Entries;
+        check(saved.Select(e => (e.Text, e.Int32(12))).SequenceEqual([(copy.GamePath, -1), ("vfx/mod/nocopy.avfx", -1), ("vfx/mod/carpet.avfx", 1),
+                  ("vfx/mod/cloud.avfx", -1)]) &&
+              TimelineEffectCheck.Copies(problems).Single() == copy && TimelineEffectCheck.Find(fixedDoc, effects).IsEmpty,
+            "keeping them going plays the copy at -1 instead; entries that restart themselves keep the original");
+        var added = InstantEdit.Ui.TimelineWindowViews.AddedFiles(fixedDoc, [copy]);
+        var addedBeside = InstantEdit.Ui.TimelineWindowViews.AddedBeside(fixedDoc, [copy]);
+        check(added.Count == 2 && addedBeside.Count == 2 && addedBeside[soundCopy] == music &&
+              InstantEdit.Ui.TimelineWindowViews.AddedBeside(doc, [copy]).IsEmpty,
+            "a save packages the copies and maps each beside its original, only while the timeline uses them");
+    }
+
+    /// <summary>An AVFX chunk: the name stored reversed, the payload's size, the payload, padding to 4.</summary>
+    private static byte[] Chunk(string name, byte[] payload)
+    {
+        var chunk = new byte[8 + payload.Length + ((-payload.Length) & 3)];
+        Encoding.ASCII.GetBytes(new string(name.Reverse().ToArray())).CopyTo(chunk, 0);
+        BinaryPrimitives.WriteInt32LittleEndian(chunk.AsSpan(4), payload.Length);
+        payload.CopyTo(chunk, 8);
+        return chunk;
     }
 
     /// <summary>
@@ -247,7 +435,9 @@ internal static class TmbFileFixture
         check(TimelineConvert.Apply(original, With("t13", x => x with { Start = 31 })) == original,
             "a gameplay entry stays put while the length stays");
         reject(() => TimelineConvert.Apply(original, doc with { Length = 1 }), "a length below the minimum is refused");
-        reject(() => TimelineConvert.Apply(original, doc with { SourceLength = 90 }), "a document of another timeline is refused");
+        reject(() => TimelineConvert.Apply(original, doc with { HeaderLength = 90 }), "a document of another timeline is refused");
+        reject(() => TimelineConvert.Apply(original, doc with { SourceLength = 99 }),
+            "a document loaded with a motion length its timeline would not take is refused");
         reject(() => TimelineConvert.Apply(original, doc with { FacePack = "a b" }), "an unsafe face pack is refused");
 
         // A Movable entry (animation blending) moves and goes away, and only takes a new length from a scaled timeline.
@@ -300,6 +490,79 @@ internal static class TmbFileFixture
         check(shorter.Length == 80 && shorter.Find(9)!.Int32(12) == 80 && shorter.Find(11)!.Single(28) == 40 &&
               shorter.CurveTimes(15).SequenceEqual([0f, 8f]),
             "a length change without scaling moves nothing but the motion's length");
+    }
+
+    /// <summary>
+    /// A mod's header length (TMDH) that isn't its motion's, like Red Carpet's Popoto Step dance: a
+    /// 455-frame motion under a header copied from a 30-frame walk, laid out for two loops. The
+    /// document takes the motion's length, saving keeps the header unless the length changes (then
+    /// it scales with the motion), and a length change retimes the real motion.
+    /// </summary>
+    private static void HeaderLength(Action<bool, string> check, Action<Action, string> reject)
+    {
+        check(TimelineDocument.MotionFrames(455 / 30f) == 455 && TimelineDocument.MotionFrames(1 / 60f) == 1 &&
+              TimelineDocument.MotionFrames(0) == null && TimelineDocument.MotionFrames(.01f) == null &&
+              TimelineDocument.MotionFrames(-1) == null && TimelineDocument.MotionFrames(float.NaN) == null &&
+              TimelineDocument.MotionFrames(1200) == null,
+            "a motion's length in seconds becomes whole frames, or nothing when unknown or out of range");
+
+        var dance = new Tmb().Head(30, null, 2).Actor(2, 3, 4, 5, 6).Track(3, 7).Track(4, 8, 9).Track(5, 10, 11).Track(6, 12)
+            .Motion(7, 455).Sound(8, 0).Sound(9, 200).Face(10, 0, 55, 0, 55, "cfxf_bossy").Face(11, 455, 55, 0, 55, "cfxf_bossy")
+            .Sound(12, 907).Build();
+        var header = TimelineConvert.Read(TmbFile.Parse(dance));
+        var doc = TimelineConvert.Read(TmbFile.Parse(dance), TimelineDocument.MotionFrames(455 / 30f));
+        check(header is { Length: 30, SourceLength: 30, HeaderLength: 30 } &&
+              doc is { Length: 455, SourceLength: 455, HeaderLength: 30, LengthChanged: false } &&
+              doc.Events.Select(e => (e.Key, e.Start, e.Duration)).SequenceEqual(header.Events.Select(e => (e.Key, e.Start, e.Duration))),
+            "a timeline takes its motion's length over a header that says otherwise, and the header's without one");
+        check(TimelineConvert.Read(TmbFile.Parse(dance), 31) is { Length: 30, HeaderLength: 30 } &&
+              TimelineConvert.Read(TmbFile.Parse(dance), 29).Length == 30 && TimelineConvert.Read(TmbFile.Parse(dance), 0).Length == 30,
+            "a motion one frame off the header is the header's length counted differently, as in a few vanilla timelines");
+        check(TimelineEdits.PastEnd(doc).Select(e => e.Key).SequenceEqual(["t11", "t12"]) && TimelineEdits.PastEnd(header).Length == 3,
+            "only events past the motion's end count as past the end");
+
+        check(ReferenceEquals(TimelineConvert.Apply(dance, doc), dance), "an unchanged document gives back the original bytes");
+        var moved = TmbFile.Parse(TimelineConvert.Apply(dance, doc with
+        {
+            Events = [.. doc.Events.Select(e => e.Key == "t9" ? e with { Start = 210 } : e)],
+        }));
+        check(moved.Length == 30 && moved.Find(7)!.Int32(12) == 455 && moved.Find(9)!.Time == 210,
+            "an edit that keeps the length keeps the mod's header length");
+
+        var doubled = TimelineEdits.SetLength(doc, 910, false, doc);
+        var saved = TmbFile.Parse(TimelineConvert.Apply(dance, doubled));
+        check(doubled.Events[0].Duration == 910 && saved.Find(7)!.Int32(12) == 910 && saved.Find(12)!.Time == 907 &&
+              AnimationEditService.RetimeSeconds(doubled) is { } seconds && Math.Abs(seconds - 910 / 30f) < 1e-4 &&
+              AnimationEditService.RetimeSeconds(doc) == null,
+            "doubling the length makes the 15 s motion 30 s, not 2 s from the header's 1 s");
+        check(saved.Length == 60 && doubled.SavedHeaderLength == 60,
+            "a mod's own header length scales with the motion");
+        check(TmbFile.Parse(TimelineConvert.Apply(dance, doc with { Length = 600 })) is { Length: 40 } longer && longer.Find(7)!.Int32(12) == 600,
+            "the clip's motion entry follows a length change on its own");
+        // A 2 s pose loop whose header and events run past the motion, as some mods lay them out.
+        var pose = new Tmb().Head(369, null, 2).Actor(2, 3, 4).Track(3, 5).Track(4, 6).Motion(5, 60).Sound(6, 351).Build();
+        var poseDoc = TimelineConvert.Read(TmbFile.Parse(pose), 60);
+        check(poseDoc is { Length: 60, HeaderLength: 369 } &&
+              TmbFile.Parse(TimelineConvert.Apply(pose, TimelineEdits.SetLength(poseDoc, 120, true, poseDoc))) is { Length: 738 } posed &&
+              posed.Find(6)!.Time == 702 && posed.Find(5)!.Int32(12) == 120,
+            "a header longer than its motion stays as much longer, so the events laid out up to it still fit");
+        var empty = new Tmb().Head(0, null, 2).Actor(2, 3).Track(3, 4).Motion(4, 60).Build();
+        check(TimelineEdits.SetLength(TimelineConvert.Read(TmbFile.Parse(dance), 31), 50, false).SavedHeaderLength == 50 &&
+              TimelineEdits.SetLength(TimelineConvert.Read(TmbFile.Parse(pose)), 400, false).SavedHeaderLength == 400 &&
+              TimelineConvert.Read(TmbFile.Parse(empty), 60) is { Length: 60, HeaderLength: 0 } emptyDoc &&
+              TmbFile.Parse(TimelineConvert.Apply(empty, emptyDoc with { Length = 90 })).Length == 90,
+            "a header that matched the motion, said 0 or is the only length known becomes the new length");
+        var back = TimelineEdits.SetLength(doubled, 455, false, doc);
+        check(!back.LengthChanged && ReferenceEquals(TimelineConvert.Apply(dance, back), dance),
+            "going back to the motion's length leaves the file as it was, header included");
+
+        var counted = new Tmb().Head(30, null, 2).Actor(2, 3).Track(3, 4).Motion(4, 456).Build();
+        var countedDoc = TimelineConvert.Read(TmbFile.Parse(counted), 455);
+        check(countedDoc.Length == 455 && TimelineEdits.SetLength(countedDoc, 910, false, countedDoc).Events[0].Duration == 910 &&
+              TmbFile.Parse(TimelineConvert.Apply(counted, countedDoc with { Length = 910 })) is { Length: 60 } stretched &&
+              stretched.Find(4)!.Int32(12) == 910,
+            "a motion entry one frame longer than its motion still lasts the whole clip");
+        reject(() => TimelineConvert.Apply(dance, doc with { HeaderLength = 455 }), "a document whose header length isn't the file's is refused");
     }
 
     private static void Templates(Action<bool, string> check, Action<Action, string> reject, byte[] original)

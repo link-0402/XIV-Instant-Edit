@@ -410,6 +410,23 @@ Saving:
 - [ ] Delete the only entry of a conditional track; edit a PAP with several entries
   and one with an odd footer offset. Every entry still plays.
 
+Effects that stop:
+Red Carpet's Popoto Step dance (a swap of its mode A walk onto dance12_loop) starts
+four effects with Async VFX entries at loop/wait 909. With -1 the carpet, cloud and
+sparkle kept looping but ended at frame 908 (30.3 s, two dance loops): each effect
+schedules its own KILL there. The music (redcarpetbgm -> redcarpet.scd, Vorbis, 910
+frames) is marked to loop but has no loop points, so it played once. Offline, the fix
+writes copies that differ only in the kill item's enable byte (13-14 bytes) and in
+the SCD's loop end (1,827,659, the value mode B's redcarpet2.scd already uses).
+- [ ] Open the dance: the window says "4 effects stop: ...". Keep them looping,
+  preview in GPose, then save in place. Dance for over a minute: the effects never
+  stop and the music plays in full and starts over without a gap. The mod gets
+  instant_edit/ copies mapped in the Music, Props, Sparkles and Floor Cloud Thingy
+  options. Turning a toggle off removes that effect from the dance too. The mode A
+  walk is unchanged. Undo removes the copies and their mappings.
+- [ ] Check whether -1 on the bgm effect (it doesn't loop, it was 909) changes
+  anything, and whether the copies' effects double up when the dance loops.
+
 Length:
 - [ ] Make a loop emote 1.5x longer with Scale events on. The motion, faces, sounds
   and footsteps stretch together; validation passes (the old retime always failed it).
@@ -418,6 +435,11 @@ Length:
   file too.
 - [ ] A clip with root motion or Havok annotations refuses a length change with a
   clear reason.
+- [ ] Open Red Carpet's Popoto Step dance (header 30 frames, motion 455). The length
+  reads 15.17s, a note says the header says 1s, and 39 events are past the end.
+  Make it 1.5x longer: the dance lasts about 22.8 s and isn't squeezed. Saved, the
+  header scales to 45 and the motion entry to 683. Also watch whether the second
+  loop's faces (frames 455 to 907) play: if they do, the past-end warning overstates.
 
 Preview (GPose):
 - [ ] Preview adds a temporary Penumbra mod (Penumbra's Temporary view shows it at

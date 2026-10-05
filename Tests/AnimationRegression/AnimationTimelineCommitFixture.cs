@@ -40,6 +40,11 @@ internal static class AnimationTimelineCommitFixture
                 ["Options"] = new JsonArray(
                     new JsonObject { ["Id"] = Guid.NewGuid().ToString("D"), ["Name"] = "Loud", ["Files"] = new JsonObject { [pap] = "files/loud.pap" } },
                     new JsonObject { ["Id"] = Guid.NewGuid().ToString("D"), ["Name"] = "Other", ["Files"] = new JsonObject { [other] = "files/clap.pap" } }),
+            }, new JsonObject
+            {
+                ["Type"] = "Multi", ["Id"] = Guid.NewGuid().ToString("D"), ["Name"] = "Toggles",
+                ["Options"] = new JsonArray(
+                    new JsonObject { ["Id"] = Guid.NewGuid().ToString("D"), ["Name"] = "Music", ["Files"] = new JsonObject { ["vfx/mod/bgm.avfx"] = "toggles/bgm.avfx" } }),
             });
             File.WriteAllText(metaPath, meta.ToJsonString());
 
@@ -63,6 +68,21 @@ internal static class AnimationTimelineCommitFixture
             var before = File.ReadAllText(metaPath);
             PenumbraService.RemoveAnimationResourceMapping(root, sound, relative);
             check(File.ReadAllText(metaPath) == before, "removing a mapping that is already gone changes nothing");
+
+            // A looping copy of an effect follows its original's toggle, not the animation's options.
+            const string copy = "vfx/instant_edit/bgm_loop_0a1b2c3d.avfx";
+            const string copyRelative = "instant_edit/vfx/instant_edit/bgm_loop_0a1b2c3d.avfx";
+            check(PenumbraService.ModMapsGamePath(root, "VFX/Mod/BGM.avfx") && !PenumbraService.ModMapsGamePath(root, copy) &&
+                  !PenumbraService.ModMapsGamePath(Path.Combine(root, "missing"), "vfx/mod/bgm.avfx"),
+                "a mod maps a game path when any of its options does");
+            PenumbraService.AddAnimationResourceMapping(root, "vfx/mod/bgm.avfx", copy, copyRelative);
+            var beside = JsonNode.Parse(File.ReadAllText(metaPath))!.AsObject();
+            check(beside["Groups"]![1]!["Options"]![0]!["Files"]![copy]!.GetValue<string>() == copyRelative &&
+                  beside["DefaultData"]!["Files"]![copy] is null && beside["Groups"]![0]!["Options"]![0]!["Files"]![copy] is null,
+                "a copy is mapped only in the options that map its original");
+            PenumbraService.RemoveAnimationResourceMapping(root, copy, copyRelative);
+            check(JsonNode.Parse(File.ReadAllText(metaPath))!["Groups"]![1]!["Options"]![0]!["Files"]!.AsObject().Count == 1,
+                "undo removes the copy's mapping and keeps the original's");
         }
         finally
         {

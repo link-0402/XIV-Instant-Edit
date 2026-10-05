@@ -116,6 +116,18 @@ internal static class RacialScalingScenarios
         Reject(() => source.For("chara/equipment/e6001/model/c1101e6001_top.mdl"),
             "racial scaling: a race the character's race doesn't descend from can't be scaled for it");
 
+        // Blender's Apply Racial Scaling reads rows X, Y, Z with the translation last, in game space.
+        using (var answer = JsonDocument.Parse(ExportServer.RacialDeformerJson(101, 801, chained)))
+        {
+            var root = answer.RootElement;
+            var bones = root.GetProperty("bones").EnumerateArray().ToArray();
+            var kubi = bones[0].GetProperty("matrix").EnumerateArray().Select(value => value.GetSingle()).ToArray();
+            Require(root.GetProperty("race").GetInt32() == 801 && root.GetProperty("raceLabel").GetString() == "Female Miqo'te" &&
+                    bones.Select(bone => bone.GetProperty("name").GetString()).SequenceEqual(["j_kubi", "j_sebo_c"]) &&
+                    kubi.SequenceEqual([2f, 0, 0, 0, 0, 2, 0, 1, 0, 0, 2, 0]),
+                "racial scaling: the add-on's deformer answer lists each bone's chained matrix row by row");
+        }
+
         var blended = RacialDeformer.Blend([Matrix(2, Vector3.Zero), Matrix(1, Vector3.UnitY)], [0, 1], [0.25f, 0.75f]);
         Require(blended.Point(Vector3.One) == new Vector3(1.25f, 2, 1.25f) &&
                 RacialDeformer.Blend([Matrix(2, Vector3.Zero)], [0], [0f]) == RacialDeformer.Affine.Identity,

@@ -50,7 +50,7 @@ internal sealed record TimelineEvent(
 /// One timeline being edited. Immutable: every edit makes a new document, so undo keeps
 /// whole snapshots and a no-op edit returns the same instance.
 /// </summary>
-/// <param name="Length">The timeline's length in frames (TMB TMDH length). The clip's motion lasts this long.</param>
+/// <param name="Length">The clip's length in frames: its motion lasts this long. Changing it resamples the motion.</param>
 /// <param name="SourceLength">The length when the timeline was loaded.</param>
 /// <param name="FacePack">The expression library the timeline loads (TMB TMPP), such as "emot/laugh"; null for none.</param>
 /// <param name="Events">The entries in TMB item order; added entries go at the end.</param>
@@ -69,6 +69,39 @@ internal sealed record TimelineDocument(
     /// <summary>The longest length the editor allows, in frames (10 minutes).</summary>
     public const int MaxLength = 18000;
     public bool LengthChanged => Length != SourceLength;
+
+    /// <summary>
+    /// The length the file's header (TMB TMDH) gave when loaded. Vanilla's matches the motion's, but
+    /// mods often keep one copied from another timeline: a 15 s dance whose header says 30 frames
+    /// plays fine in game. See <see cref="SavedHeaderLength"/>.
+    /// </summary>
+    public int HeaderLength { get; init; } = SourceLength;
+
+    /// <summary>
+    /// The header length a save writes. It stays as loaded unless the length changes. Then a header
+    /// that matched the motion (every vanilla one), or said nothing (0), becomes the new length, and
+    /// a mod's own scales with the motion: one laid out longer than its motion, with events up to
+    /// its end, stays that much longer, in case the game times the events by it.
+    /// </summary>
+    public int SavedHeaderLength =>
+        !LengthChanged ? HeaderLength
+        : HeaderLength == SourceLength || HeaderLength <= 0 || SourceLength <= 0 ? Length
+        : (int)Math.Clamp(Math.Round(HeaderLength * (double)Length / SourceLength, MidpointRounding.AwayFromZero), 1, MaxFrames);
+
+    /// <summary>
+    /// Whether a motion entry lasting <paramref name="frames"/> lasts the whole clip. Files often count
+    /// the clip one frame longer than its motion (a few vanilla ones too, many mods).
+    /// </summary>
+    public bool LastsWhole(int frames) => SameLength(frames, Length);
+
+    /// <summary>Lengths one frame apart are the same clip counted differently.</summary>
+    public static bool SameLength(int a, int b) => b > 0 && Math.Abs((long)a - b) <= 1;
+
+    /// <summary>A motion's length in seconds as whole frames; null when unknown or out of the timeline's range.</summary>
+    public static int? MotionFrames(float seconds) =>
+        float.IsFinite(seconds) && Math.Round(seconds * (double)Fps, MidpointRounding.AwayFromZero) is var frames and >= 1 and <= MaxFrames
+            ? (int)frames
+            : null;
 }
 
 /// <summary>What an Add creates. Each kind makes one or more events (a prop makes several).</summary>

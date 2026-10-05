@@ -295,7 +295,18 @@ internal static class TimelineEditorFixture
             "the length stays inside the editor's limits and an unchanged length is a no-op");
         check(TimelineEdits.PastEnd(timeline).Select(ev => ev.Key).SequenceEqual(["past"]) &&
               TimelineEdits.PastEnd(TimelineEdits.SetLength(timeline, 60, false)).Select(ev => ev.Key).SequenceEqual(["vfx", "face", "past"]),
-            "events that start at or past the end are reported as never playing");
+            "events that start at or past the end are reported");
+        check(TimelineEdits.Extent(timeline) == 121 && TimelineEdits.Extent(Doc(100, Ev("a", TimelineLane.Sound, 50))) == 100 &&
+              TimelineEdits.Extent(Doc(100)) == 100,
+            "the view reaches the last event that starts past the end");
+        var counted = Doc(455,
+            Ev("long", TimelineLane.Motion, 0, 456, true, TimelineAccess.Locked, magic: "C009"),
+            Ev("short", TimelineLane.Motion, 0, 453, true, TimelineAccess.Locked, magic: "C010"));
+        var doubled = TimelineEdits.SetLength(counted, 910, false, counted);
+        check(doubled.Events[0].Duration == 910 && doubled.Events[1].Duration == 453 &&
+              TimelineEdits.SetLength(counted, 910, false).Events[0].Duration == 910 &&
+              TimelineEdits.SetLength(doubled, 455, false, counted).Events[0].Duration == 456,
+            "a motion one frame longer than the clip still follows its length, and comes back as it was");
 
         var props = new TimelineDocument(100, 100, null, [Ev("n5", TimelineLane.Sound, 1)], 5);
         var added = TimelineEdits.Add(props, [Ev("", TimelineLane.Prop, 10, group: "prop"), Ev("", TimelineLane.Prop, 10, magic: "C031", group: "prop"),
@@ -659,6 +670,10 @@ internal static class TimelineEditorFixture
         check(scrolled.Document.Length == 700 && scrolled.View.First == 900, "the view holds still during a drag, so a length drag never runs away");
         scrolled.Release();
         check(scrolled.View.First == 700 * TimelineView.Headroom - 110, "the view settles inside the new length after the drag");
+        var late = Editor(Doc(100, Ev("late", TimelineLane.Sound, 300)));
+        late.Pan(-100000);
+        check(late.View.First == 301 * TimelineView.Headroom - 110 && late.View.Last >= 300,
+            "the view scrolls far enough to show events that start past the end");
 
         editor.Zoom(200, 8);
         check(editor.View.PixelsPerFrame == 32 && editor.Key(TimelineKey.Fit) && Math.Abs(editor.View.PixelsPerFrame - 4) < 1e-5 && editor.View.First == 0,

@@ -63,6 +63,9 @@ Everything is in the **IE - Instant Edit** tab of the 3D Viewport's sidebar (pre
 - To reorder, click a part's or group's grip, move the pointer, and click again to drop it. The
   list shows the new order under the pointer; parts whose material doesn't match their group turn
   red.
+- **Untangle Mesh Groups** at the top moves parts with another material than their group to a new
+  group and gives parts that share a number their own, keeping each collection's parts together.
+  It also closes gaps in the part numbers.
 - Right-click a part's name for **Generate Duplicate with Backfaces**, or for **Remove Hidden
   Vertices** on that part alone.
 - New meshes join a group by name: `group.part Name`, for example `2.1 Collar`, as in Yet Another
@@ -88,8 +91,12 @@ Everything is in the **IE - Instant Edit** tab of the 3D Viewport's sidebar (pre
   clear vertex colors or their alpha, clear hair flow, on the selected meshes), **Remove Hidden
   Vertices** (deletes what no camera angle can see on the selected meshes, such as skin under a
   top; its redo panel chooses whether other visible meshes can hide them and how many rings of
-  hidden vertices stay at the edges), **Combine Armatures**, the mesh naming helpers, **Clear All
-  Contexts**, and the cache and diagnostics folders.
+  hidden vertices stay at the edges), **Apply Racial Scaling** (reshapes the selected meshes for
+  another race, like c0201 gear for a Miqo'te, as the game's racial deformer does: shape keys and
+  normals too, with the deformer your character's collection loads, so the plugin must be running;
+  unlike a scaled import, the result exports normally; applying another race replaces the
+  scaling, and the model's own race takes it off), **Combine Armatures**, **Move Mesh IDs to Front**, **Clear
+  All Contexts**, and the cache and diagnostics folders.
 
 ### Also
 

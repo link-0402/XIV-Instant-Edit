@@ -582,7 +582,7 @@ def commit_mesh_id_plan(plan: dict[int, tuple[int, int]], objects, group_move: t
     so the objects' current names are read.
     """
     objects = tuple(objects)
-    hidden = _game_hidden_parts(objects)
+    hidden = game_hidden_parts(objects)
     if hidden:
         plan = _plan_game_hidden_parts(plan, objects, hidden, group_move)
         objects += hidden
@@ -598,7 +598,7 @@ def commit_mesh_id_plan(plan: dict[int, tuple[int, int]], objects, group_move: t
     return _rename_mesh_targets(targets, objects)
 
 
-def _game_hidden_parts(objects) -> tuple:
+def game_hidden_parts(objects) -> tuple:
     """The parts a character send imported hidden because the game didn't draw them, of the models
     `objects` show. The list doesn't show them, but they export with their model (see
     character.with_game_hidden_parts), so a reorder has to keep their IDs apart from the others'."""
@@ -717,69 +717,6 @@ def _rename_mesh_targets(targets, objects=None) -> int:
     return len(desired)
 
 
-def compact_mesh_part_indices(collections) -> int:
-    """Fill part-index gaps in each supplied context collection atomically.
-
-    Direct mesh objects are compacted independently per collection and mesh
-    group.  Existing part-instance ordering is retained, while every LOD in
-    an instance receives the same new part index.
-    """
-    targets = []
-    moved_instances = 0
-    claimed_objects = {}
-
-    for collection in collections:
-        collection_objects = tuple(
-            sorted(
-                (obj for obj in collection.objects if obj.type == "MESH"),
-                key=lambda obj: obj.name.casefold(),
-            )
-        )
-        if not collection_objects:
-            continue
-
-        for obj in collection_objects:
-            pointer = obj.as_pointer()
-            previous_collection = claimed_objects.get(pointer)
-            if previous_collection is not None and previous_collection != collection:
-                raise ValueError(
-                    f"{obj.name}: object is linked to multiple visible Instant Edit collections."
-                )
-            claimed_objects[pointer] = collection
-            try:
-                mesh_ids_from_name(obj)
-            except Exception as error:
-                raise ValueError(f"{obj.name}: invalid mesh name") from error
-
-        grouped = defaultdict(list)
-        for obj in collection_objects:
-            group, _part, _lod = mesh_ids_from_name(obj)
-            grouped[group].append(obj)
-
-        for mesh_index, group_objects in sorted(grouped.items()):
-            instances = mesh_part_instances(group_objects, mesh_index)
-            for target_part, instance in enumerate(instances):
-                if target_part == instance.part_index:
-                    continue
-                moved_instances += 1
-                for obj in instance.objects:
-                    _group, _part, lod = mesh_ids_from_name(obj)
-                    targets.append(
-                        (
-                            obj,
-                            mesh_index,
-                            target_part,
-                            lod,
-                            mesh_display_name(obj),
-                        )
-                    )
-
-    if not targets:
-        return 0
-    _rename_mesh_targets(targets)
-    return moved_instances
-
-
 def _property(obj, name: str, default=None):
     if name in obj:
         return obj[name]
@@ -848,6 +785,22 @@ def _material_identity_key(material: str) -> tuple[str, str]:
     if filename.endswith("_bibo.mtrl"):
         return ("bibo", "_bibo.mtrl")
     return ("path", material)
+
+
+def first_material_identity(objects) -> tuple[str, str] | None:
+    """Return the material identity of the first of `objects` that exports one.
+
+    Objects are taken in the exporter's order, lowest LOD then part then name,
+    so for a mesh group this is the material its export uses.
+    """
+    for obj in sorted(
+        objects,
+        key=lambda obj: (mesh_ids_from_name(obj)[2], mesh_ids_from_name(obj)[1], obj.name.casefold()),
+    ):
+        path = export_material_path(obj)
+        if path:
+            return _material_identity_key(path)
+    return None
 
 
 def material_mismatch_parts(objects) -> set[int]:

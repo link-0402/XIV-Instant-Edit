@@ -10,10 +10,15 @@ namespace InstantEdit.Services.Animations;
 /// timeline can't be edited, and <see cref="ReadOnlyReason"/> says why.
 /// </summary>
 internal sealed record AnimationTimelineSource(AnimationCapture Capture, bool Startup, AnimationClip Clip,
-    AnimationResource Resource, byte[] Pap, int EntryIndex, byte[] Tmb, TimelineDocument? Document, string? ReadOnlyReason)
+    AnimationResource Resource, byte[] Pap, int EntryIndex, byte[] Tmb, TimelineDocument? Document, string? ReadOnlyReason,
+    ImmutableDictionary<string, TimelineEffectInfo>? Effects = null)
 {
     /// <summary>The motion's length in seconds, as the game plays it.</summary>
     public float Seconds => Clip.Duration;
+
+    /// <summary>Effects that stop although the animation goes on, in <paramref name="document"/>; see <see cref="TimelineEffectCheck"/>.</summary>
+    public ImmutableArray<TimelineEffectCheck.Problem> EffectProblems(TimelineDocument document) =>
+        Effects is { Count: > 0 } effects ? TimelineEffectCheck.Find(document, effects) : [];
 }
 
 /// <summary>An edited clip, built and checked: the new animation file and its motion's fingerprint.</summary>
@@ -32,14 +37,67 @@ internal sealed partial class AnimationEditService
         var pap = new AnimationPap(bytes);
         var entry = pap.EntryIndex(clip.Name, clip.BindingIndex);
         var tmb = pap.TimelineBytes(entry);
+        TimelineDocument document;
         try
         {
-            return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, TimelineConvert.Read(TmbFile.Parse(tmb)), null);
+            // The motion's own length: mods often keep a timeline header copied from another clip.
+            document = TimelineConvert.Read(TmbFile.Parse(tmb), TimelineDocument.MotionFrames(clip.Duration));
         }
         catch (InvalidDataException error)
         {
             return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, null, error.Message);
         }
+        return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, document, null,
+            await EffectsAsync(capture.CollectionId, document, token));
+    }
+
+    /// <summary>
+    /// What decides how long the effects the timeline's Async VFX entries start keep going, as the
+    /// collection resolves them: their loops, a kill their own schedule sets, sounds that should
+    /// loop but can't, and the copy that keeps them going. An effect that can't be read is left
+    /// out, so it is never judged.
+    /// </summary>
+    private async Task<ImmutableDictionary<string, TimelineEffectInfo>> EffectsAsync(Guid collection,
+        TimelineDocument document, CancellationToken token)
+    {
+        var effects = ImmutableDictionary.CreateBuilder<string, TimelineEffectInfo>(StringComparer.OrdinalIgnoreCase);
+        // A sound counts as background music when it lasts at least one play of the motion.
+        var motionSeconds = document.Length / (double)TimelineDocument.Fps;
+        foreach (var path in document.Events.Where(e => e.Magic == "C173").Select(e => e.Path).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!path.EndsWith(".avfx", StringComparison.OrdinalIgnoreCase) || !AnimationDependencies.SafeGamePath(path))
+                continue;
+            // The check is a hint: an effect it can't read must never keep the timeline from opening.
+            try
+            {
+                var avfx = (await resources.ReadAsync(collection, path, token)).Bytes;
+                var loops = AnimationDependencies.ReadVfxLoops(avfx);
+                var endsAt = TimelineEffectFiles.EndsAt(avfx);
+                double? soundSeconds = null;
+                var sounds = new List<(string Path, byte[] Scd)>();
+                foreach (var sound in AnimationDependencies.ReadVfxPaths(avfx).Sounds)
+                {
+                    if (!sound.EndsWith(".scd", StringComparison.OrdinalIgnoreCase) || !AnimationDependencies.SafeGamePath(sound))
+                        continue;
+                    try
+                    {
+                        var scd = (await resources.ReadAsync(collection, sound, token)).Bytes;
+                        if (TimelineEffectFiles.UnloopedSeconds(scd, motionSeconds) is not { } seconds)
+                            continue;
+                        soundSeconds = Math.Max(soundSeconds ?? 0, seconds);
+                        sounds.Add((sound, scd));
+                    }
+                    catch (Exception e) when (e is not OperationCanceledException) { log.Debug(e, $"Could not read {sound}, which {path} plays."); }
+                }
+                TimelineImport? looping = null;
+                if (endsAt != null || sounds.Count > 0)
+                    try { looping = TimelineEffectFiles.LoopingCopy(path, avfx, endsAt != null, sounds, motionSeconds); }
+                    catch (InvalidDataException e) { log.Debug(e, $"Could not make a copy of {path} that keeps going."); }
+                effects[path] = new TimelineEffectInfo(loops, endsAt, soundSeconds, looping);
+            }
+            catch (Exception e) when (e is not OperationCanceledException) { log.Debug(e, $"Could not read the effect {path}."); }
+        }
+        return effects.ToImmutable();
     }
 
     /// <summary>
@@ -67,11 +125,13 @@ internal sealed partial class AnimationEditService
     /// <summary>
     /// Saves a timeline edit like a rebake: into a new mod or in place, journaled for Undo.
     /// <paramref name="added"/> holds the files the timeline needs that no mod has yet, such as
-    /// imported sounds, by game path; they are packaged next to the animation.
+    /// imported sounds, by game path; they are packaged next to the animation. A file
+    /// <paramref name="beside"/> names as a copy of another (see <see cref="TimelineImport.Beside"/>)
+    /// is mapped wherever that file is instead, when the animation's mod is what provides it.
     /// </summary>
     /// <returns>The job's id, which <see cref="LastResult"/> carries once it ends; null when another job is running.</returns>
     public Guid? EditTimeline(AnimationTimelineSource source, TimelineDocument document, AnimationDestination destination,
-        string modName, IReadOnlyDictionary<string, byte[]> added)
+        string modName, IReadOnlyDictionary<string, byte[]> added, IReadOnlyDictionary<string, string>? beside = null)
     {
         if (Busy) return null;
         var request = TimelineRequest(source, document, destination, modName.Trim());
@@ -89,10 +149,10 @@ internal sealed partial class AnimationEditService
                 throw new IOException("The animation file changed while saving. Open the timeline again.");
             var built = await BuildTimelineAsync(request, source, manifest.Files[source.Clip.GamePath], document,
                 journals.DirectoryFor(request.Id), token);
-            var (files, reused) = await AddedFilesAsync(capture, destination, source.Resource, added, token);
+            var (files, reused, owners) = await AddedFilesAsync(capture, destination, source.Resource, added, beside, token);
             var outputs = ImmutableDictionary<string, byte[]>.Empty.Add(source.Clip.GamePath, built.Pap);
             var journal = await commits.PrepareAsync(request, manifest, outputs, token,
-                files.Count > 0 ? (source.Clip.GamePath, files) : null);
+                files.Count > 0 ? (source.Clip.GamePath, files, owners) : null);
             if (reused.Count > 0)
             {
                 journal.ReusedFiles = reused;
@@ -132,8 +192,14 @@ internal sealed partial class AnimationEditService
         AnimationDestination destination, string modName)
         => new(Guid.NewGuid(), source.Capture, destination, modName, false, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None,
             AnimationOperation.EditTimeline,
-            Timeline: new AnimationTimelineEdit(source.Startup, source.EntryIndex,
-                document.LengthChanged ? document.Length / (float)TimelineDocument.Fps : null));
+            Timeline: new AnimationTimelineEdit(source.Startup, source.EntryIndex, RetimeSeconds(document)));
+
+    /// <summary>
+    /// How long the motion becomes, in seconds; null when the length stays. The document's length is
+    /// the motion's own (see <see cref="TimelineConvert.Read"/>), not a mod's copied header length.
+    /// </summary>
+    internal static float? RetimeSeconds(TimelineDocument document) =>
+        document.LengthChanged ? document.Length / (float)TimelineDocument.Fps : null;
 
     /// <summary>
     /// Writes the edited timeline into the clip's file. A changed length first resamples the
@@ -192,12 +258,16 @@ internal sealed partial class AnimationEditService
     /// The added files to package. In place, a file the collection already resolves to the same
     /// bytes (an import saved before) is left as it is rather than packaged twice; when a mod
     /// provides it, it is listed as reused so undoing the edit that added it waits for this one.
+    /// <c>Owners</c> holds the copies mapped beside their original: those whose original the
+    /// edited animation's mod maps itself. Every other file is mapped with the animation.
     /// </summary>
-    private async Task<(IReadOnlyDictionary<string, byte[]> Files, List<string> Reused)> AddedFilesAsync(AnimationCapture capture,
-        AnimationDestination destination, AnimationResource edited, IReadOnlyDictionary<string, byte[]> added, CancellationToken token)
+    private async Task<(IReadOnlyDictionary<string, byte[]> Files, List<string> Reused, IReadOnlyDictionary<string, string> Owners)>
+        AddedFilesAsync(AnimationCapture capture, AnimationDestination destination, AnimationResource edited,
+            IReadOnlyDictionary<string, byte[]> added, IReadOnlyDictionary<string, string>? beside, CancellationToken token)
     {
         var result = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         var reused = new List<string>();
+        var owners = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (gamePath, bytes) in added)
         {
             if (!AnimationCommitService.AddedGamePath(gamePath)) throw new InvalidDataException($"{gamePath} can't be added to the mod.");
@@ -217,9 +287,23 @@ internal sealed partial class AnimationEditService
                             : $"Another mod already provides {gamePath}. Choose Create new mod.");
                 }
                 catch (FileNotFoundException) { }
+                // A copy follows its original's options (a toggle that turns the original off turns it off too).
+                if (beside?.GetValueOrDefault(gamePath) is { } original && AnimationDependencies.SafeGamePath(original) &&
+                    edited.ModRoot is { } root && PenumbraService.ModMapsGamePath(root, original))
+                {
+                    try
+                    {
+                        var (provider, _) = await resources.ReadAsync(capture.CollectionId, original, token);
+                        if (provider.ModDirectory == edited.ModDirectory && provider.ModRoot is { } providerRoot &&
+                            PathRules.SamePhysicalPath(providerRoot, root))
+                            owners[gamePath] = original;
+                    }
+                    // Unreadable, the copy is simply mapped with the animation.
+                    catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException) { }
+                }
             }
             result[gamePath] = bytes;
         }
-        return (result, reused);
+        return (result, reused, owners);
     }
 }

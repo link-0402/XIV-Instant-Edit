@@ -121,6 +121,36 @@ internal sealed class ModelSkeletonResolver(PenumbraService penumbra, IDataManag
     }
 
     /// <summary>
+    /// The deformer that reshapes a model of <paramref name="modelRace"/> for <paramref name="race"/>
+    /// (the local player's race when null), from the <c>human.pbd</c> the local player's collection
+    /// loads, so skeleton mods' deformers apply. The game's file without a local player. A problem
+    /// instead when the race is unknown or the file can't reshape the model's race for it.
+    /// </summary>
+    public async Task<(RacialDeformer? Deformer, ushort Race, string? Problem)> RacialDeformerForPlayerAsync(ushort modelRace, ushort? race,
+        CancellationToken token)
+    {
+        var objectIndex = await framework.RunOnFrameworkThread(() => objects.LocalPlayer is { } player ? player.ObjectIndex : -1);
+        if (race is null)
+        {
+            race = objectIndex >= 0 ? await framework.RunOnFrameworkThread(() => CharacterRace(objectIndex, 0)) : null;
+            if (race is null)
+                return (null, 0, "your character isn't on screen as a human race");
+        }
+        try
+        {
+            var collection = objectIndex >= 0 ? await penumbra.GetCollectionTargetAsync(objectIndex) : null;
+            var pbd = await ReadAsync(collection?.Id, RacialDeformer.GamePath, token);
+            return (RacialDeformer.Create(pbd, race.Value, modelRace), race.Value, null);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
+        {
+            log.Warning(e, "Could not read the racial deformer file.");
+            return (null, race.Value, e.Message);
+        }
+    }
+
+    /// <summary>
     /// The character at <paramref name="objectIndex"/> as a character send needs it: its name, home
     /// world and, with <paramref name="weapons"/>, where its weapons hang on its skeleton. Null when
     /// the object changed or isn't a character.
