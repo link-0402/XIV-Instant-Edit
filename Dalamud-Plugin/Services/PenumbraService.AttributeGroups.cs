@@ -63,42 +63,79 @@ public sealed partial class PenumbraService
         JsonArray? sourceManipulations)
         => WriteAttributeGroupsCore(
             modFolder, resolvedGamePath, tags, masks,
-            identity => ResolveAttributeGroupImcEntry(resolvedGamePath, identity, sourceManipulations));
+            identity => PlanImcGroupEntry(identity, sourceManipulations, GameImcEntries(resolvedGamePath, identity)));
+
+    /// <summary> The entry a generated IMC group starts from; with <see cref="OnlyAttributes"/> Penumbra takes everything but the mask from the game's file. </summary>
+    private sealed record ImcGroupEntry(JsonObject? Entry, bool OnlyAttributes, string? Error = null);
 
     private static string? WriteAttributeGroupsCore(
         string modFolder,
         string resolvedGamePath,
         IReadOnlyList<string> tags,
         IReadOnlyDictionary<string, int>? masks,
-        Func<AttributeModelIdentity, JsonObject?> resolveImcEntry)
+        Func<AttributeModelIdentity, ImcGroupEntry> resolveImcEntry)
     {
         var inputError = NormalizeAttributeGroupInput(
             resolvedGamePath, tags, masks, out var identity, out var suffixMasks, out _);
         if (inputError is not null)
             return inputError;
-        JsonObject? defaultImcEntry = null;
+        ImcGroupEntry? imcEntry = null;
         if (identity is not null && suffixMasks.Count > 0)
         {
-            defaultImcEntry = resolveImcEntry(identity);
-            if (defaultImcEntry is null)
+            imcEntry = resolveImcEntry(identity);
+            if (imcEntry.Error is not null)
+                return imcEntry.Error;
+            if (imcEntry.Entry is null)
                 return "attribute_group_imc_unavailable: Could not resolve the current IMC entry for this model. Re-import it with game data available, then retry the export.";
         }
 
         var error = PrepareAttributeGroups(
-            modFolder, resolvedGamePath, tags, masks, defaultImcEntry, out var prepared);
+            modFolder, resolvedGamePath, tags, masks, imcEntry, out var prepared);
         if (error is not null)
             return error;
         return prepared is null ? null : CommitAttributeGroups(prepared);
     }
 
-    private JsonObject? ResolveAttributeGroupImcEntry(
-        string resolvedGamePath,
+    /// <summary>
+    /// Plans a generated IMC group. Penumbra writes it to every variant of the game's file, before the
+    /// mod's own IMC entries, so those would be lost. A mod without IMC changes of its own keeps the
+    /// game's entries (OnlyAttributes). A mod that changes them, such as a swap pointing every variant
+    /// at its one material, gets its entries written into the group when they're all the same; when
+    /// they differ, no single group can keep them and none is made. <paramref name="gameEntries"/> holds
+    /// the game's entries by variant, 0 to the file's count; without it, only the mod's variant 1 is known.
+    /// </summary>
+    private static ImcGroupEntry PlanImcGroupEntry(
         AttributeModelIdentity identity,
-        JsonArray? sourceManipulations)
+        JsonArray? sourceManipulations,
+        IReadOnlyList<JsonObject>? gameEntries)
     {
-        var captured = CapturedImcEntry(identity, sourceManipulations);
-        if (captured is not null)
-            return captured;
+        var own = SourceImcEntries(identity, sourceManipulations);
+        if (gameEntries is not { Count: > 1 })
+            return Usable(new ImcGroupEntry(own.GetValueOrDefault(1) ?? gameEntries?.FirstOrDefault(), true));
+
+        var count = gameEntries.Count - 1;
+        if (own.All(pair => pair.Key < 1 || pair.Key > count || SameImcEntry(pair.Value, gameEntries[pair.Key])))
+            return Usable(new ImcGroupEntry(gameEntries[1], true));
+        var effective = Enumerable.Range(1, count)
+            .Select(variant => own.GetValueOrDefault(variant) ?? gameEntries[variant])
+            .ToList();
+        if (effective.All(entry => SameImcEntry(entry, effective[0])))
+            return Usable(new ImcGroupEntry(effective[0], false));
+        return new ImcGroupEntry(null, false,
+            "attribute_group_imc_mixed: This mod changes the materials or effects of some of this model's variants, and a part toggle group would undo that. " +
+            "Set up the part toggles in Penumbra instead.");
+
+        static ImcGroupEntry Usable(ImcGroupEntry plan)
+            => plan.Entry is not null && JsonIntFlexible(plan.Entry["MaterialId"]) is >= 1 and <= byte.MaxValue ? plan : plan with { Entry = null };
+    }
+
+    private static bool SameImcEntry(JsonObject first, JsonObject second)
+        => new[] { "MaterialId", "DecalId", "VfxId", "MaterialAnimationId", "SoundId" }
+            .All(key => JsonIntFlexible(first[key]) == JsonIntFlexible(second[key]));
+
+    /// <summary> The game's IMC entries of the model's part, by variant from 0 to the file's count; null when there's no file. </summary>
+    private IReadOnlyList<JsonObject>? GameImcEntries(string resolvedGamePath, AttributeModelIdentity identity)
+    {
         if (_data is null)
             return null;
 
@@ -130,33 +167,35 @@ public sealed partial class PenumbraService
                 if ((imc.PartMask & (1 << bit)) != 0)
                     ++partIndex;
 
-            var entry = imc.Count > 0
-                ? imc.GetVariant(partIndex, 0)
-                : imc.GetDefaultVariant(partIndex);
-            if (entry.MaterialId == 0)
-                return null;
-            var soundId = entry.SoundId > 0x3F ? entry.SoundId >> 10 : entry.SoundId;
-            return ImcEntry(
-                entry.MaterialId,
-                entry.DecalId,
-                entry.VfxId,
-                entry.MaterialAnimationId,
-                0,
-                soundId);
+            var entries = new List<JsonObject> { Entry(imc.GetDefaultVariant(partIndex)) };
+            for (var variant = 0; variant < imc.Count; ++variant)
+                entries.Add(Entry(imc.GetVariant(partIndex, variant)));
+            return entries;
         }
         catch (Exception error)
         {
             _log.Debug(error, "Could not resolve the game IMC entry for {GamePath}.", resolvedGamePath);
             return null;
         }
+
+        static JsonObject Entry(ImcFile.ImageChangeData entry)
+            => ImcEntry(
+                entry.MaterialId,
+                entry.DecalId,
+                entry.VfxId,
+                entry.MaterialAnimationId,
+                0,
+                entry.SoundId > 0x3F ? entry.SoundId >> 10 : entry.SoundId);
     }
 
-    private static JsonObject? CapturedImcEntry(
+    /// <summary> The mod's own IMC entries for the model's part, by variant; the first one captured for a variant wins, as in Penumbra. </summary>
+    private static Dictionary<int, JsonObject> SourceImcEntries(
         AttributeModelIdentity identity,
         JsonArray? sourceManipulations)
     {
+        var result = new Dictionary<int, JsonObject>();
         if (sourceManipulations is null)
-            return null;
+            return result;
         foreach (var item in sourceManipulations.OfType<JsonObject>())
         {
             if (!string.Equals(JsonString(item["Type"]), "Imc", StringComparison.OrdinalIgnoreCase) ||
@@ -165,7 +204,7 @@ public sealed partial class PenumbraService
                 !string.Equals(JsonString(manipulation["ObjectType"]), identity.ObjectType,
                     StringComparison.OrdinalIgnoreCase) ||
                 JsonIntFlexible(manipulation["PrimaryId"]) != identity.Id ||
-                JsonIntFlexible(manipulation["Variant"]) != 1)
+                result.ContainsKey(JsonIntFlexible(manipulation["Variant"])))
                 continue;
             if (identity.ObjectType is "Equipment" or "Accessory")
             {
@@ -182,7 +221,7 @@ public sealed partial class PenumbraService
             var materialId = JsonIntFlexible(entry["MaterialId"]);
             if (materialId is < 1 or > byte.MaxValue)
                 continue;
-            return ImcEntry(
+            result[JsonIntFlexible(manipulation["Variant"])] = ImcEntry(
                 materialId,
                 JsonByteOrZero(entry["DecalId"]),
                 JsonByteOrZero(entry["VfxId"]),
@@ -190,7 +229,7 @@ public sealed partial class PenumbraService
                 0,
                 Math.Clamp(JsonIntFlexible(entry["SoundId"]), 0, 0x3F));
         }
-        return null;
+        return result;
     }
 
     private static int JsonByteOrZero(JsonNode? node)
@@ -204,7 +243,7 @@ public sealed partial class PenumbraService
         string resolvedGamePath,
         IReadOnlyList<string> tags,
         IReadOnlyDictionary<string, int>? masks,
-        JsonObject? defaultImcEntry,
+        ImcGroupEntry? imcEntry,
         out AttributeGroupWrite? prepared)
     {
         prepared = null;
@@ -232,13 +271,13 @@ public sealed partial class PenumbraService
 
         if (suffixMasks.Count > 0)
         {
-            if (defaultImcEntry is null)
+            if (imcEntry?.Entry is not { } defaultImcEntry)
                 return "attribute_group_imc_unavailable: No current IMC entry was supplied for the generated group.";
             UpsertAttributeGroup(
                 groups,
                 AttributeGroupMarker("imc", markerPath),
                 GeneratedAttributeGroupName(identity, markerPath, "IMC"),
-                existing => BuildImcAttributeGroup(existing, identity, suffixMasks, defaultImcEntry));
+                existing => BuildImcAttributeGroup(existing, identity, suffixMasks, defaultImcEntry, imcEntry.OnlyAttributes));
         }
         else
         {
@@ -280,10 +319,11 @@ public sealed partial class PenumbraService
         string resolvedGamePath,
         IReadOnlyList<string> tags,
         IReadOnlyDictionary<string, int>? masks,
-        JsonArray? sourceManipulations = null)
+        JsonArray? sourceManipulations = null,
+        IReadOnlyList<JsonObject>? gameImcEntries = null)
         => WriteAttributeGroupsCore(
             modFolder, resolvedGamePath, tags, masks,
-            identity => CapturedImcEntry(identity, sourceManipulations));
+            identity => PlanImcGroupEntry(identity, sourceManipulations, gameImcEntries));
 
     private static string? NormalizeAttributeGroupInput(
         string resolvedGamePath,
@@ -307,6 +347,8 @@ public sealed partial class PenumbraService
         if (tags.Count > 512)
             return "attribute_group_invalid: Too many model attributes were supplied.";
 
+        var (family, slotName) = VariantFamily(identity.AtrSlot);
+        var otherFamily = new List<string>();
         foreach (var tag in tags.Distinct(StringComparer.Ordinal))
         {
             if (string.IsNullOrWhiteSpace(tag) || tag.Length > 128 ||
@@ -319,6 +361,13 @@ public sealed partial class PenumbraService
                 // cannot load an IMC group for them.
                 if (identity.ObjectType == "Character")
                     continue;
+                // A model's IMC entry only toggles its own slot's tags, such as
+                // atr_nv_ on a necklace; another slot's tags would never hide.
+                if (!tag.StartsWith($"atr_{family}_", StringComparison.Ordinal))
+                {
+                    otherFamily.Add(tag);
+                    continue;
+                }
                 // IMC columns are semantic suffix bits, not positions in the
                 // model's attribute table. Canonicalize this here as well as
                 // in Blender so older payloads cannot shift A/B/C to D/E/F.
@@ -345,9 +394,32 @@ public sealed partial class PenumbraService
             return $"attribute_group_invalid: Custom attribute {tag} must use the atrx_ prefix; it was not emitted as a Penumbra toggle.";
         }
 
+        if (otherFamily.Count > 0)
+        {
+            otherFamily.Sort(StringComparer.Ordinal);
+            return $"attribute_group_invalid: {(slotName[0] == 'e' ? "An" : "A")} {slotName} model only toggles atr_{family}_ tags, so {string.Join(", ", otherFamily)} " +
+                   $"would never hide. Rename {(otherFamily.Count == 1 ? "it" : "them")} to " +
+                   $"{string.Join(", ", otherFamily.Select(tag => $"atr_{family}_{tag[^1]}"))}.";
+        }
+
         customTags = customTags.Distinct(StringComparer.Ordinal).OrderBy(value => value, StringComparer.Ordinal).ToList();
         return null;
     }
+
+    /// <summary> The variant tag family a gear or accessory slot's IMC entry toggles, and the slot's name for messages. </summary>
+    private static (string Family, string SlotName) VariantFamily(string atrSlot) => atrSlot switch
+    {
+        "Head" => ("mv", "head"),
+        "Body" => ("tv", "body"),
+        "Hands" => ("gv", "glove"),
+        "Legs" => ("dv", "leg"),
+        "Feet" => ("sv", "shoe"),
+        "Ears" => ("ev", "earring"),
+        "Neck" => ("nv", "necklace"),
+        "Wrists" => ("wv", "bracelet"),
+        "RFinger" or "LFinger" => ("rv", "ring"),
+        _ => ("", atrSlot),
+    };
 
     private static bool TryGetStandardAttributeSuffix(string tag, out string suffix)
     {
@@ -531,13 +603,15 @@ public sealed partial class PenumbraService
         JsonObject? existing,
         AttributeModelIdentity identity,
         IReadOnlyDictionary<string, int> suffixMasks,
-        JsonObject defaultImcEntry)
+        JsonObject defaultImcEntry,
+        bool onlyAttributes)
     {
         var result = existing?.DeepClone() as JsonObject ?? new JsonObject();
         result["Type"] = "Imc";
         result["AllVariants"] = true;
-        // Only the attribute mask changes; every variant keeps its own materials, decals and VFX.
-        result["OnlyAttributes"] = true;
+        // With OnlyAttributes, only the attribute mask changes and every variant keeps the game's materials,
+        // decals and VFX. Without it, every variant gets the default entry: the one the mod gives them all.
+        result["OnlyAttributes"] = onlyAttributes;
         result["Identifier"] = new JsonObject
         {
             ["PrimaryId"] = identity.Id,

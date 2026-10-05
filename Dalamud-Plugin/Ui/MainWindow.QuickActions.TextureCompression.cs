@@ -1,5 +1,6 @@
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
+using Dalamud.Interface.ImGuiNotification;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Services;
 using InstantEdit.Services.TextureCompression;
@@ -16,7 +17,18 @@ public sealed partial class MainWindow
     private (IReadOnlyList<CompressedTexture>? Entries, IReadOnlyList<RefitGroup>? Refits, bool Cleanup, string Totals, string Backups) _compressionTotals;
     private (string? Directory, bool InTemp) _compressionCacheInTemp;
 
-    internal void AttachTextureCompression(TextureCompressionService service) => _compression = service;
+    internal void AttachTextureCompression(TextureCompressionService service)
+    {
+        _compression = service;
+        service.Optimized += NotifyOptimized;
+    }
+
+    /// <summary> Runs mostly happen while the window is closed, so each one that changed something shows a toast. </summary>
+    private void NotifyOptimized(CompressionRun run)
+    {
+        if (_config.ShowNotifications)
+            ShowNotification(TextureCompressionViews.Toast(run), NotificationType.Success);
+    }
 
     private QuickAction TextureCompressionCard => new("texture-compression", FontAwesomeIcon.CompressArrowsAlt, "Optimize textures",
         "Automatically optimize your character's textures when they load. Every compression is checked for visual quality impact " +

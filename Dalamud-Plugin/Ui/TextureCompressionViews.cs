@@ -76,6 +76,26 @@ internal static class TextureCompressionViews
             ? string.Empty
             : $"Last run: {What(run.Compressed, run.Shrunk, run.Refit)}, {Bytes(run.BytesBefore - run.BytesAfter)} smaller, {run.Finished.ToLocalTime():t}.";
 
+    /// <summary>
+    /// The toast after a run that changed something: "Textures optimized: 3 textures were compressed, 1 was
+    /// resized, hair UV optimized and cropped.", leaving out what is none. Shrunk textures count as resized only.
+    /// </summary>
+    public static string Toast(CompressionRun run)
+    {
+        var parts = new List<string>();
+        var compressed = run.Compressed - run.Shrunk;
+        if (compressed > 0)
+            parts.Add(compressed == 1 ? "1 texture was compressed" : string.Create(CultureInfo.InvariantCulture, $"{compressed:N0} textures were compressed"));
+        if (run.Shrunk > 0)
+        {
+            var noun = parts.Count == 0 ? run.Shrunk == 1 ? " texture" : " textures" : "";
+            parts.Add(string.Create(CultureInfo.InvariantCulture, $"{run.Shrunk:N0}{noun} {(run.Shrunk == 1 ? "was" : "were")} resized"));
+        }
+        if (run.Refit > 0)
+            parts.Add("hair UV optimized and cropped");
+        return $"Textures optimized: {string.Join(", ", parts)}.";
+    }
+
     /// <summary> How many worn hair textures use only part of their space but can't be refit safely. </summary>
     public static string NotRefit(CompressionRun run)
         => run.NotRefit.Count switch

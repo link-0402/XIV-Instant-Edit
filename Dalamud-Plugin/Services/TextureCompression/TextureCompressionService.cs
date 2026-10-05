@@ -186,6 +186,8 @@ internal sealed class TextureCompressionService : IDisposable
     public string Progress => _progress;
     public CompressionRun? LastRun => Volatile.Read(ref _lastRun);
     public bool Busy => Volatile.Read(ref _busy) != 0;
+    /// <summary> Raised on the run's thread after a run that compressed textures or refit hair, automatic or Optimize now. </summary>
+    public event Action<CompressionRun>? Optimized;
 
     /// <summary> Turns automatic compression on or off. Turning it on looks at what the character wears now. </summary>
     public void SetEnabled(bool enabled)
@@ -338,6 +340,7 @@ internal sealed class TextureCompressionService : IDisposable
     private async Task CompressAsync(bool manual, CancellationToken token)
     {
         var tally = new RunTally();
+        CompressionRun finished;
         try
         {
             try
@@ -357,17 +360,29 @@ internal sealed class TextureCompressionService : IDisposable
         }
         finally
         {
-            Volatile.Write(ref _lastRun, CompressionRun.After(LastRun, new CompressionRun
+            finished = new CompressionRun
             {
                 Finished = DateTimeOffset.Now, Compressed = tally.Compressed, Shrunk = tally.Shrunk, BytesBefore = tally.Before, BytesAfter = tally.After,
                 Kept = tally.Kept, Failed = tally.Failed, Warnings = tally.Warnings, Refit = tally.Refit, NotRefit = tally.NotRefit,
                 Restored = tally.Restored.Select(Path.GetFileName).OfType<string>().Order(StringComparer.OrdinalIgnoreCase).ToList(),
-            }));
+            };
+            Volatile.Write(ref _lastRun, CompressionRun.After(LastRun, finished));
             _progress = string.Empty;
             _phase = _config.AutoCompressTextures ? CompressionPhase.Watching : CompressionPhase.Off;
             var run = Interlocked.Exchange(ref _run, null);
             run?.Dispose();
             Interlocked.Exchange(ref _busy, 0);
+        }
+        if (finished.Compressed > 0 || finished.Refit > 0)
+        {
+            try
+            {
+                Optimized?.Invoke(finished);
+            }
+            catch (Exception e)
+            {
+                _log.Debug(e, "A texture optimization listener failed.");
+            }
         }
     }
 
