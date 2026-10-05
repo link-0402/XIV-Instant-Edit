@@ -133,6 +133,15 @@ internal static class TimelineWindowViews
         return doc.LengthChanged ? $"{text} · was {TimelineText.Seconds(doc.SourceLength)}" : text;
     }
 
+    /// <summary>
+    /// A note when the file's header gives another length than the motion's (mods only), or null.
+    /// It hides while the length is changed, when the motion's loaded length no longer holds.
+    /// </summary>
+    public static string? HeaderNote(TimelineDocument doc) =>
+        doc.LengthChanged || doc.HeaderLength == doc.SourceLength
+            ? null
+            : $"The file's header says {TimelineText.Seconds(doc.HeaderLength)}, but the motion lasts {TimelineText.Seconds(doc.SourceLength)}.";
+
     /// <summary>A field's value as read-only text.</summary>
     public static string FieldText(TimelineField field, double value)
     {
@@ -175,15 +184,30 @@ internal static class TimelineWindowViews
         return null;
     }
 
-    /// <summary>A warning about events that start at or after the end, or null when every event plays.</summary>
+    /// <summary>
+    /// A warning about events that start at or after the motion's end, or null when none do. Vanilla
+    /// never has any; whether the game still plays them is untested, so the warning doesn't promise.
+    /// </summary>
     public static string? PastEndWarning(TimelineDocument doc)
     {
         var count = TimelineEdits.PastEnd(doc).Length;
         return count switch
         {
             0 => null,
-            1 => "1 event starts after the end and won't play.",
-            _ => $"{Whole(count)} events start after the end and won't play.",
+            1 => "1 event starts after the end and may not play.",
+            _ => $"{Whole(count)} events start after the end and may not play.",
+        };
+    }
+
+    /// <summary>The warning about effects that stop although the animation goes on, or null when none do.</summary>
+    public static string? EffectLoopWarning(ImmutableArray<TimelineEffectCheck.Problem> problems)
+    {
+        var names = problems.Select(p => p.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        return names.Count switch
+        {
+            0 => null,
+            1 => string.Join(" ", problems.Select(p => p.Text)),
+            _ => $"{Whole(names.Count)} effects stop{(problems.All(p => p.FirstLoop) ? " after their first loop" : "")}: {string.Join(", ", names)}.",
         };
     }
 
@@ -224,21 +248,40 @@ internal static class TimelineWindowViews
     /// </summary>
     public static ImmutableDictionary<string, byte[]> AddedFiles(TimelineDocument doc, IEnumerable<TimelineImport> imports)
     {
+        var files = ImmutableDictionary.CreateBuilder<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+        foreach (var import in Used(doc, imports))
+            foreach (var (gamePath, bytes) in import.Files)
+            {
+                if (files.TryGetValue(gamePath, out var other) && !other.AsSpan().SequenceEqual(bytes))
+                    throw new InvalidDataException($"Two imports need different files at {gamePath}. Remove one of them.");
+                files[gamePath] = bytes;
+            }
+        return files.ToImmutable();
+    }
+
+    /// <summary>
+    /// For the files <see cref="AddedFiles"/> packages that are edited copies, the game path of the
+    /// file each copies (<see cref="TimelineImport.Beside"/>), so a save maps them where it is.
+    /// </summary>
+    public static ImmutableDictionary<string, string> AddedBeside(TimelineDocument doc, IEnumerable<TimelineImport> imports)
+    {
+        var beside = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var import in Used(doc, imports))
+            foreach (var (gamePath, original) in import.Beside ?? ImmutableDictionary<string, string>.Empty)
+                if (import.Files.ContainsKey(gamePath))
+                    beside[gamePath] = original;
+        return beside.ToImmutable();
+    }
+
+    /// <summary>The imports whose game path an event of <paramref name="doc"/> uses.</summary>
+    private static IEnumerable<TimelineImport> Used(TimelineDocument doc, IEnumerable<TimelineImport> imports)
+    {
         var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (!doc.Events.IsDefault)
             foreach (var ev in doc.Events)
                 if (ev.Path.Length > 0)
                     used.Add(ev.Path);
-        var files = ImmutableDictionary.CreateBuilder<string, byte[]>(StringComparer.OrdinalIgnoreCase);
-        foreach (var import in imports)
-            if (used.Contains(import.GamePath))
-                foreach (var (gamePath, bytes) in import.Files)
-                {
-                    if (files.TryGetValue(gamePath, out var other) && !other.AsSpan().SequenceEqual(bytes))
-                        throw new InvalidDataException($"Two imports need different files at {gamePath}. Remove one of them.");
-                    files[gamePath] = bytes;
-                }
-        return files.ToImmutable();
+        return imports.Where(import => used.Contains(import.GamePath));
     }
 
     /// <summary>

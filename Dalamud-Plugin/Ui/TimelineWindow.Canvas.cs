@@ -1,4 +1,5 @@
-﻿using System.Numerics;
+﻿using System.Collections.Immutable;
+using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
@@ -35,7 +36,13 @@ public sealed partial class TimelineWindow
     private TimelineDocument? labelDocument;
     private string[] labels = [];
     private string lengthText = string.Empty;
+    private string? headerNote;
     private string? pastEndWarning;
+    private ImmutableArray<TimelineEffectCheck.Problem> effectProblems = [];
+    private string? effectWarning;
+    // The copies keeping them going swaps in, and how many events it changes.
+    private ImmutableArray<TimelineImport> effectCopies = [];
+    private int effectEvents;
     private TimelineLayout? groupLayout;
     private readonly List<GroupSpan> groupSpans = [];
     private readonly Dictionary<long, string> tickLabels = [];
@@ -188,7 +195,7 @@ public sealed partial class TimelineWindow
             current.ClearSelection();
     }
 
-    /// <summary> Labels, the past-end warning, the length text and prop groups, rebuilt only when the document or layout changes. </summary>
+    /// <summary> Labels, the past-end warning, the length texts and prop groups, rebuilt only when the document or layout changes. </summary>
     private void RefreshDocumentTexts(TimelineDocument doc)
     {
         if (ReferenceEquals(labelDocument, doc))
@@ -198,7 +205,12 @@ public sealed partial class TimelineWindow
         for (var index = 0; index < events.Length; index++)
             labels[index] = TimelineWindowViews.EventLabel(events[index]);
         lengthText = TimelineWindowViews.LengthText(doc);
+        headerNote = TimelineWindowViews.HeaderNote(doc);
         pastEndWarning = TimelineWindowViews.PastEndWarning(doc);
+        effectProblems = source?.EffectProblems(doc) ?? [];
+        effectWarning = TimelineWindowViews.EffectLoopWarning(effectProblems);
+        effectCopies = TimelineEffectCheck.Copies(effectProblems);
+        effectEvents = effectProblems.Select(p => p.Key).Distinct(StringComparer.Ordinal).Count();
         labelDocument = doc;
     }
 

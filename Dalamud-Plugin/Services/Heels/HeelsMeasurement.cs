@@ -173,8 +173,8 @@ internal enum HeelsSlot
 internal static class HeelsSlots
 {
     /// <summary>
-    /// Where a character's feet are: the feet model, else the legs when their gear hides the feet, else a
-    /// one-piece body when its gear hides the legs too. The game draws no model in a slot gear hides.
+    /// Where a character's feet are: the feet model, else the legs when gear hides the feet, else a one-piece
+    /// body when it hides the legs too. The game keeps a hidden slot's model loaded but doesn't draw it.
     /// </summary>
     public static readonly IReadOnlyList<HeelsSlot> FeetOrder = [HeelsSlot.Feet, HeelsSlot.Legs, HeelsSlot.Top];
 
@@ -183,6 +183,17 @@ internal static class HeelsSlots
     {
         HeelsSlot.Feet => [HeelsSlot.Top, HeelsSlot.Legs],
         HeelsSlot.Legs => [HeelsSlot.Top],
+        _ => [],
+    };
+
+    /// <summary>
+    /// The slots whose model offsets Simple Heels reads after this one's, in its order. It reads hidden models
+    /// too, so a hidden model's offset applies while the drawn one sets none.
+    /// </summary>
+    public static IEnumerable<HeelsSlot> ReadAfter(this HeelsSlot slot) => slot switch
+    {
+        HeelsSlot.Top => [HeelsSlot.Legs, HeelsSlot.Feet],
+        HeelsSlot.Legs => [HeelsSlot.Feet],
         _ => [],
     };
 
@@ -230,7 +241,11 @@ internal static class HeelsFix
     /// <summary> The deepest a model may reach: the deepest heels among 1,185 shoe models of a large mod library reach 21 cm. </summary>
     public const float MaxBelowGround = 0.3f;
 
-    public static HeelsFixPlan Plan(HeelsMeasurement measurement, HeelsSlot slot)
+    /// <param name="hiddenOffset">
+    /// The offset a hidden model Simple Heels reads after this one sets (see <see cref="HeelsSlots.ReadAfter"/>), which
+    /// applies while this model sets none. A model on the ground then gets a zero offset.
+    /// </param>
+    public static HeelsFixPlan Plan(HeelsMeasurement measurement, HeelsSlot slot, float? hiddenOffset = null)
     {
         if (measurement.Lowest > MaxAboveGround)
             return new HeelsFixPlan(HeelsFixAction.Refuse, string.Empty,
@@ -240,7 +255,7 @@ internal static class HeelsFix
                 $"The {slot.Name()} model reaches {Centimetres(-measurement.Lowest)} below the ground, deeper than any heel. Check it for stray vertices.");
         if (measurement.OffsetAttributes == 1 && measurement.ModelOffset is { } stored && MathF.Abs(stored.Value - measurement.Offset) < Tolerance)
             return new HeelsFixPlan(HeelsFixAction.None, string.Empty, $"The model's offset, {stored.Attribute}, is right already.");
-        if (measurement.OffsetAttributes == 0 && MathF.Abs(measurement.Offset) < Tolerance)
+        if (measurement.OffsetAttributes == 0 && MathF.Abs(measurement.Offset) < Tolerance && MathF.Abs(hiddenOffset ?? 0) < Tolerance)
             return new HeelsFixPlan(HeelsFixAction.None, string.Empty, $"The {slot.Name()} model stands on the ground already and needs no offset.");
         return new HeelsFixPlan(HeelsFixAction.Write, HeelsModelOffset.AttributeFor(measurement.Offset), string.Empty);
     }

@@ -11,12 +11,13 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
     /// <summary>
     /// Stages the edited files, and the files the edit adds (<paramref name="added"/>, such as
     /// imported sounds, keyed by game path) next to the edited animation they belong to. In
-    /// place, an added file lands in that animation's mod and every option mapping the
-    /// animation maps it too.
+    /// place, an added file lands in that animation's mod and every option mapping its owner
+    /// maps it too: the file <c>Owners</c> names for it (an edited copy's original), else the
+    /// animation.
     /// </summary>
     public async Task<AnimationEditJournal> PrepareAsync(AnimationBakeRequest request, AnimationDependencyManifest manifest,
         ImmutableDictionary<string, byte[]> outputs, CancellationToken token,
-        (string For, IReadOnlyDictionary<string, byte[]> Files)? added = null)
+        (string For, IReadOnlyDictionary<string, byte[]> Files, IReadOnlyDictionary<string, string>? Owners)? added = null)
     {
         var journal = new AnimationEditJournal { Id = request.Id, Request = RecoveryRequest(request),
             PoseBefore = request.Operation == AnimationOperation.BakeOffsets ? request.Capture.Pose : null };
@@ -111,7 +112,10 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                 await File.WriteAllBytesAsync(staged, bytes, token);
                 var after = AnimationPap.Hash(bytes);
                 if (AnimationPap.Hash(await File.ReadAllBytesAsync(staged, token)) != after) throw new IOException("Staged output validation failed.");
-                journal.Files.Add(new AnimationFileChange(gamePath, target, mod, root, relative, "", after, "", staged, AddedFor: extra.For));
+                var owner = extra.Owners?.GetValueOrDefault(gamePath) ?? extra.For;
+                if (!AnimationDependencies.SafeGamePath(owner) || (files.ContainsKey(owner) && owner != extra.For) || extra.Files.ContainsKey(owner))
+                    throw new InvalidDataException($"{gamePath} can't be mapped beside {owner}.");
+                journal.Files.Add(new AnimationFileChange(gamePath, target, mod, root, relative, "", after, "", staged, AddedFor: owner));
             }
         }
         if (journal.Files.Select(f => f.Target).Distinct(StringComparer.OrdinalIgnoreCase).Count() != journal.Files.Count)
@@ -213,8 +217,8 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                         if (!stillReferenced)
                             try { File.Delete(preEditTarget); } catch (IOException) { }
                     }
-                    // An added file plays wherever its animation plays: every option that maps
-                    // the animation maps it too. A new mod's metadata maps it below.
+                    // An added file plays wherever its owner is: every option that maps the
+                    // animation, or the original of a copy, maps it too. A new mod's metadata maps it below.
                     if (file.AddedFor is { } owner && journal.Request.Destination == AnimationDestination.InPlace)
                         PenumbraService.AddAnimationResourceMapping(file.ModRoot, owner, file.GamePath, file.RelativePath);
                 }

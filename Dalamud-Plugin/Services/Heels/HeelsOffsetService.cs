@@ -16,17 +16,19 @@ using RenderModel = FFXIVClientStructs.FFXIV.Client.Graphics.Render.Model;
 namespace InstantEdit.Services.Heels;
 
 /// <summary> The model a character's feet are in, as the game draws it: its slot and file, and the parts and shapes turned on. </summary>
-internal readonly record struct HeelsModelKey(HeelsSlot Slot, string ModelFile, uint Attributes, uint Shapes)
+/// <param name="HiddenOffset">The offset a hidden model Simple Heels reads after this one sets, which applies while this one sets none.</param>
+internal readonly record struct HeelsModelKey(HeelsSlot Slot, string ModelFile, uint Attributes, uint Shapes, float? HiddenOffset = null)
 {
     /// <summary>
-    /// Whether this is the same model as <paramref name="other"/> with the same shapes. The parts turned on
-    /// don't count: a written offset attribute is turned on too, which changes them.
+    /// Whether this is the same model as <paramref name="other"/> with the same shapes, under the same hidden
+    /// offset. The parts turned on don't count: a written offset attribute is turned on too, which changes them.
     /// </summary>
-    public bool SameModel(HeelsModelKey other) => Slot == other.Slot && ModelFile == other.ModelFile && Shapes == other.Shapes;
+    public bool SameModel(HeelsModelKey other) => Slot == other.Slot && ModelFile == other.ModelFile && Shapes == other.Shapes &&
+                                                  HiddenOffset == other.HiddenOffset;
 }
 
-/// <summary> An offset attribute of another model Simple Heels reads before the measured one's, so it wins. </summary>
-internal sealed record HeelsEarlierOffset(HeelsSlot Slot, HeelsModelOffset Offset);
+/// <summary> An offset attribute of another of the character's models, in a slot Simple Heels also reads. </summary>
+internal sealed record HeelsSlotOffset(HeelsSlot Slot, HeelsModelOffset Offset);
 
 /// <param name="Source">The written file, with the hash of what the fix wrote, so Undo only writes over the fix.</param>
 /// <param name="Original">The model's bytes before the fix.</param>
@@ -37,9 +39,11 @@ internal sealed record HeelsUndo(PreviewSource Source, byte[] Original, ushort O
 /// <param name="ModFile">Whether the model is a file of an installed mod, which a fix can write.</param>
 /// <param name="HeightScale">The character's height, which Simple Heels multiplies model offsets by.</param>
 /// <param name="Scaling">The racial scaling the model was measured with, when it is another race's.</param>
+/// <param name="Earlier">An offset of a model Simple Heels reads before the measured one's, so it wins.</param>
+/// <param name="Hidden">An offset of a hidden model Simple Heels reads after the measured one's, which applies while that sets none.</param>
 internal sealed record HeelsOffsetResult(HeelsModelKey Model, string ItemName, string Source, bool ModFile,
-    HeelsMeasurement Measurement, HeelsFixPlan Plan, float HeightScale, RacialScaling? Scaling, HeelsEarlierOffset? Earlier,
-    IReadOnlyList<string> Warnings)
+    HeelsMeasurement Measurement, HeelsFixPlan Plan, float HeightScale, RacialScaling? Scaling, HeelsSlotOffset? Earlier,
+    HeelsSlotOffset? Hidden, IReadOnlyList<string> Warnings)
 {
     /// <summary> Whether the automatic fix made this result rather than Fix offset. </summary>
     public bool Automatic { get; init; }
@@ -262,7 +266,7 @@ internal sealed class HeelsOffsetService : IDisposable
     }
 
     private sealed record DrawnModel(ushort ObjectIndex, nint Address, HeelsModelKey Key, ushort ModelId, float HeightScale,
-        HeelsEarlierOffset? Earlier);
+        HeelsSlotOffset? Earlier, HeelsSlotOffset? Hidden);
 
     private async Task<HeelsOffsetResult> FixAsync(bool automatic, CancellationToken token)
     {
@@ -312,9 +316,10 @@ internal sealed class HeelsOffsetService : IDisposable
         var bytes = await Task.Run(() => Read(actualPath, modFile), token).ConfigureAwait(false)
                     ?? throw new IOException($"Could not read {Path.GetFileName(actualPath)}.");
         var measurement = HeelsMeasure.Measure(bytes, scaling?.Deformer, live.Key.Attributes, live.Key.Shapes);
-        var plan = HeelsFix.Plan(measurement, slot);
+        var plan = HeelsFix.Plan(measurement, slot, live.Hidden?.Offset.Value);
         var result = new HeelsOffsetResult(live.Key, SimpleHeels.ItemName(slot, live.ModelId, Items(slot, live.ModelId)),
-            modFile ? source.ModName ?? "a mod" : "game data", modFile, measurement, plan, live.HeightScale, scaling, live.Earlier, warnings)
+            modFile ? source.ModName ?? "a mod" : "game data", modFile, measurement, plan, live.HeightScale, scaling, live.Earlier, live.Hidden,
+            warnings)
         {
             Automatic = automatic,
         };
@@ -410,8 +415,8 @@ internal sealed class HeelsOffsetService : IDisposable
            _condition[ConditionFlag.WatchingCutscene] || _condition[ConditionFlag.WatchingCutscene78];
 
     /// <summary>
-    /// The local player's model that holds its feet, the parts and shapes it turns on, its height, and an
-    /// offset a model Simple Heels reads first sets. Call on the framework thread. Null, with why, when none is drawn.
+    /// The local player's drawn model that holds its feet, the parts and shapes it turns on, its height, and the
+    /// offsets of models Simple Heels reads before and after it. Call on the framework thread. Null, with why, when none is drawn.
     /// </summary>
     private unsafe DrawnModel? ReadLive(out string problem)
     {
@@ -430,31 +435,35 @@ internal sealed class HeelsOffsetService : IDisposable
         var human = (Human*)drawObject;
         foreach (var slot in HeelsSlots.FeetOrder)
         {
+            // Gear that hides a slot leaves its model loaded, but the game doesn't draw it.
             var model = SlotModel(drawObject, slot);
-            if (model == null)
+            if (model == null || !ModelVisibility.IsDrawn(model))
                 continue;
+            var hidden = FirstOffset(drawObject, slot.ReadAfter());
             var key = new HeelsModelKey(slot, PainterVisibility.NormalizePath(model->ModelResourceHandle->FileName.ToString()),
-                model->EnabledAttributeIndexMask, model->EnabledShapeKeyIndexMask);
+                model->EnabledAttributeIndexMask, model->EnabledShapeKeyIndexMask, hidden?.Offset.Value);
             var modelId = slot switch
             {
                 HeelsSlot.Top => human->Top.Id,
                 HeelsSlot.Legs => human->Legs.Id,
                 _ => human->Feet.Id,
             };
-            HeelsEarlierOffset? earlier = null;
-            foreach (var before in slot.ReadBefore())
-            {
-                if (SlotModel(drawObject, before) is var other && other != null && OffsetOf(other) is { } offset)
-                {
-                    earlier = new HeelsEarlierOffset(before, offset);
-                    break;
-                }
-            }
             var scale = drawObject->DrawObject.Object.Scale.Y;
             return new DrawnModel(player.ObjectIndex, player.Address, key, modelId,
-                float.IsFinite(scale) && scale > 0 ? scale : 1, earlier);
+                float.IsFinite(scale) && scale > 0 ? scale : 1, FirstOffset(drawObject, slot.ReadBefore()), hidden);
         }
         problem = "Your character draws no feet, legs or body model right now.";
+        return null;
+    }
+
+    /// <summary> The first offset the loaded models of these slots set, drawn or hidden, as Simple Heels reads them. </summary>
+    private static unsafe HeelsSlotOffset? FirstOffset(CharacterBase* drawObject, IEnumerable<HeelsSlot> slots)
+    {
+        foreach (var slot in slots)
+        {
+            if (SlotModel(drawObject, slot) is var model && model != null && OffsetOf(model) is { } offset)
+                return new HeelsSlotOffset(slot, offset);
+        }
         return null;
     }
 

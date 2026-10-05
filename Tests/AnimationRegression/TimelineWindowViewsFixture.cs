@@ -131,11 +131,25 @@ internal static class TimelineWindowViewsFixture
             Ev("c", "C063", TimelineLane.Sound, 9, "sound/c.scd"));
         var warning = TimelineWindowViews.PastEndWarning(past);
         texts.Add(warning ?? "");
-        check(warning == "2 events start after the end and won't play.", "Events past the end are counted in the warning");
+        check(warning == "2 events start after the end and may not play.", "Events past the end are counted in the warning");
         check(TimelineWindowViews.PastEndWarning(Doc(10, 10, Ev("a", "C063", TimelineLane.Sound, 10, "sound/a.scd"))) ==
-              "1 event starts after the end and won't play.", "One event past the end reads in the singular");
+              "1 event starts after the end and may not play.", "One event past the end reads in the singular");
         check(TimelineWindowViews.PastEndWarning(Doc(10, 10, Ev("a", "C063", TimelineLane.Sound, 9, "sound/a.scd"))) == null,
-            "No warning while every event plays");
+            "No warning while every event starts before the end");
+
+        // Red Carpet's Popoto Step dance: a 15.17 s motion under a header copied from a 1 s walk,
+        // with a second loop's events laid out after the first.
+        var dance = Doc(455, 455, Ev("motion", "C009", TimelineLane.Motion, 0, "cbem_dance12_2lp", 455, access: TimelineAccess.Locked),
+            Ev("step", "C042", TimelineLane.Other, 200, access: TimelineAccess.Movable),
+            Ev("again", "C042", TimelineLane.Other, 466, access: TimelineAccess.Movable)) with { HeaderLength = 30 };
+        var note = TimelineWindowViews.HeaderNote(dance);
+        texts.Add(note ?? "");
+        check(note == "The file's header says 1s, but the motion lasts 15.17s." &&
+              TimelineWindowViews.LengthText(dance) == "15.17s · 455 frames" &&
+              TimelineWindowViews.PastEndWarning(dance) == "1 event starts after the end and may not play.",
+            "A header length the motion disagrees with gets a short note, and the length and warning follow the motion");
+        check(TimelineWindowViews.HeaderNote(dance with { Length = 600 }) == null && TimelineWindowViews.HeaderNote(Doc(30, 30)) == null,
+            "No header note when the header agrees, or while the length is changed");
     }
 
     private static void CatalogKeys(Action<bool, string> check)

@@ -201,6 +201,18 @@ internal static class TimelineCatalogFixture
         check(faceless.Expressions.IsEmpty && faceless.LipShapes.IsEmpty && faceless.Notes.Contains("No face animations for f0003, so no expressions.") &&
               faceless.ModFiles.Count == 0 && faceless.Sounds.All(s => s.Origin == TimelineCatalogOrigin.Emote),
             "a face folder without animations offers no expressions and says so");
+
+        // With the game's load table, its pick wins over the skeleton chart: c0801 toasts with c0101's copy.
+        files[PapLoadTable.GamePath] = PapLoadTableFixture.Table(["bt_common"], [(0, "emote_sp/sp19")],
+            [new(801, 1, 0, [0])], [new(101, 1, 0), new(801, 1, 0), new(801, 1, 0), new(801, 1, 0)]);
+        files["chara/human/c0101/animation/a0001/bt_common/emote_sp/sp19.pap"] = Pap(("cbem_sp19", 7, Tmb(
+            new Entry("C031", 24, (b, at) => { Short(b, at + 20, 388); Short(b, at + 22, 2); }),
+            new Entry("C043", 32, (b, at) => { Short(b, at + 24, 1963); Short(b, at + 26, 1); Int(b, at + 28, 1); }))));
+        var tabled = builder.Build(sheets, new TimelineCatalogKey(801, "f0002"));
+        check(tabled.Props.Any(p => p is { Label: "Toast", Origin: TimelineCatalogOrigin.Emote } && p.Prop == new TimelinePropModel(1963, 1, 1, 388)) &&
+              !tabled.Props.Any(p => p.Origin == TimelineCatalogOrigin.Emote && p.Prop?.Model == 1962) &&
+              tabled.Props.Any(p => p is { Label: "Navigate", Origin: TimelineCatalogOrigin.Emote }),
+            "emote recipes come from the copy the game's load table picks, and emotes it doesn't list from the race's own");
         try
         {
             using var cancelled = new CancellationTokenSource();

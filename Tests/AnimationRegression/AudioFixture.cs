@@ -306,7 +306,7 @@ internal static class AudioFixture
     /// extra block, the canonical track (KeyOn, Interval, KeyOff, End), one attribute entry and a
     /// two-block MS-ADPCM audio entry last. The bytes are invented; only the structure is vanilla's.
     /// </summary>
-    private static byte[] Template(bool marker = false, bool twoAudio = false, bool looping = false)
+    internal static byte[] Template(bool marker = false, bool twoAudio = false, bool looping = false)
     {
         var markerSize = marker ? 32 : 0;
         var data = MsAdpcm.Encode(MsAdpcm.ToPcm16(Sine(44100, 1000, 0.5f, 1, 256)), 1);

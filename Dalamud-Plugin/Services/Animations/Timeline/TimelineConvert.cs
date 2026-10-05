@@ -9,12 +9,21 @@ namespace InstantEdit.Services.Animations.Timeline;
 /// </summary>
 internal static class TimelineConvert
 {
-    /// <summary>One event per C-entry in item order, keyed "t" + its id. TMFC curves are not events.</summary>
-    public static TimelineDocument Read(TmbFile file)
+    /// <summary>
+    /// One event per C-entry in item order, keyed "t" + its id. TMFC curves are not events.
+    /// <paramref name="motionFrames"/> is how long the clip's motion plays (its Havok duration),
+    /// when known. It becomes the length when the header (TMDH) says otherwise by more than a
+    /// frame, which only mods do; without it the header's length is used.
+    /// </summary>
+    public static TimelineDocument Read(TmbFile file, int? motionFrames = null)
     {
         var conditional = file.Tracks.Where(t => t.Conditional).SelectMany(t => t.Entries).ToHashSet();
-        return new TimelineDocument(file.Length, file.Length, file.FacePack,
-            [.. file.Entries.Where(e => e.Magic != "TMFC").Select(e => Event(e, conditional.Contains(e.Id)))], 1);
+        var length = motionFrames is { } motion && motion > 0 && !TimelineDocument.SameLength(motion, file.Length) ? motion : file.Length;
+        return new TimelineDocument(length, length, file.FacePack,
+            [.. file.Entries.Where(e => e.Magic != "TMFC").Select(e => Event(e, conditional.Contains(e.Id)))], 1)
+        {
+            HeaderLength = file.Length,
+        };
     }
 
     private static TimelineEvent Event(TmbFile.Entry entry, bool conditional)
@@ -32,16 +41,19 @@ internal static class TimelineConvert
     /// "n" events are added from <see cref="TimelineTemplates"/>. Only Editable events change path,
     /// values or (on their own) length; Movable ones move; Locked ones keep their place unless the
     /// timeline's length changed, when the editor scales every start and length.
-    /// Automatic follow-ups: a C009 that lasted the whole timeline keeps lasting it; a C010 without
+    /// Automatic follow-ups: a C009 that lasted the whole clip keeps lasting it; a C010 without
     /// time control whose end frame was its duration keeps ending at its duration; a curve (TMFC)
-    /// stretches with the entry that uses it. Returns <paramref name="originalTmb"/> itself when
-    /// nothing changed, and refuses an output that does not read back as the edit.
+    /// stretches with the entry that uses it. The header's length (TMDH) changes only with the
+    /// length (see <see cref="TimelineDocument.SavedHeaderLength"/>), so a mod's own otherwise stays.
+    /// Returns <paramref name="originalTmb"/> itself when nothing changed, and refuses an output that
+    /// does not read back as the edit.
     /// </summary>
     public static byte[] Apply(byte[] originalTmb, TimelineDocument edited)
     {
         var file = TmbFile.Parse(originalTmb);
-        var source = Read(file);
-        if (edited.SourceLength != source.Length) throw new InvalidDataException("The edit was made on a different timeline.");
+        var source = Read(file, edited.SourceLength);
+        if (edited.HeaderLength != file.Length || edited.SourceLength != source.Length)
+            throw new InvalidDataException("The edit was made on a different timeline.");
         if (edited.Length != source.Length && edited.Length is < TimelineDocument.MinLength or > TimelineDocument.MaxLength)
             throw new InvalidDataException($"A length of {edited.Length} frames is out of range.");
         var before = source.Events.ToDictionary(e => e.Key);
@@ -82,8 +94,8 @@ internal static class TimelineConvert
             var id = Id(e.Key);
             var old = before[e.Key];
             var target = e;
-            // The clip's own motion lasts the whole timeline, whatever length it now has.
-            if (old.Magic == "C009" && old.Lane == TimelineLane.Motion && scaled && old.Duration == source.Length)
+            // The clip's own motion lasts the whole clip, whatever length it now has.
+            if (old.Magic == "C009" && old.Lane == TimelineLane.Motion && scaled && source.LastsWhole(old.Duration))
                 target = e with { Duration = edited.Length };
             // Back at the loaded length, what only length scaling moves is where it was loaded.
             if (!scaled && old.Access == TimelineAccess.Locked) target = target with { Start = old.Start, Duration = old.Duration };
@@ -107,7 +119,7 @@ internal static class TimelineConvert
         foreach (var (curve, factor) in curves) file.ScaleCurve(curve, factor);
         foreach (var e in removed) file.RemoveEntry(Id(e.Key));
         if (edited.FacePack != source.FacePack) file.FacePack = edited.FacePack;
-        if (edited.Length != source.Length) file.SetLength(edited.Length);
+        if (edited.Length != source.Length) file.SetLength(edited.SavedHeaderLength);
         if (!file.Edited) return originalTmb;
 
         var output = file.ToArray(out var ids);
@@ -168,13 +180,18 @@ internal static class TimelineConvert
         return id;
     }
 
-    /// <summary>Reads the output back: every event must come out as the document has it, by its new id.</summary>
+    /// <summary>
+    /// Reads the output back: every event must come out as the document has it, by its new id, and
+    /// the header's length as <see cref="TimelineDocument.SavedHeaderLength"/>.
+    /// </summary>
     private static void Verify(byte[] output, TimelineDocument edited, List<(TimelineEvent Event, short Id)> expected,
         IReadOnlyDictionary<short, short> ids)
     {
-        var actual = Read(TmbFile.Parse(output));
+        var file = TmbFile.Parse(output);
+        var actual = Read(file);
         var events = actual.Events.ToDictionary(e => e.Key);
-        if (actual.Length != edited.Length || actual.FacePack != edited.FacePack || events.Count != expected.Count ||
+        if (file.Length != edited.SavedHeaderLength || actual.FacePack != edited.FacePack ||
+            events.Count != expected.Count ||
             expected.Any(x => !events.TryGetValue("t" + ids[x.Id], out var e) || !Same(e, x.Event)))
             throw new InvalidDataException("The rebuilt timeline does not match the edit.");
     }

@@ -283,6 +283,11 @@ internal static class HeelsOffsetScenarios
         Require(HeelsFix.Plan(Measured(0f, ["heels_offset=0.05"]), HeelsSlot.Feet) is { Action: HeelsFixAction.Write, Attribute: "heels_offset=0.00" } &&
                 HeelsFix.Plan(Measured(0.0183f, []), HeelsSlot.Feet) is { Action: HeelsFixAction.Write, Attribute: "heels_offset=-0.0183" },
             "heels: a wrong offset on flat shoes becomes zero, and floating bare feet are lowered onto the ground");
+        Require(HeelsFix.Plan(Measured(0f, []), HeelsSlot.Legs, 0.1f) is { Action: HeelsFixAction.Write, Attribute: "heels_offset=0.00" } &&
+                HeelsFix.Plan(Measured(0f, []), HeelsSlot.Top, 0.0005f).Action == HeelsFixAction.None &&
+                HeelsFix.Plan(Measured(-0.1192f, ["heels_offset=0.1192"]), HeelsSlot.Legs, 0.05f).Action == HeelsFixAction.None &&
+                HeelsFix.Plan(Measured(-0.05f, []), HeelsSlot.Legs, 0.1f) is { Action: HeelsFixAction.Write, Attribute: "heels_offset=0.05" },
+            "heels: a model on the ground over hidden heels gets a zero offset, so Simple Heels doesn't take the hidden one");
         Require(HeelsFix.Plan(Measured(0.143f, []), HeelsSlot.Legs) is { Action: HeelsFixAction.Refuse, Reason: var high } &&
                 high.Contains("legs model") && high.Contains("14.3 cm above") &&
                 HeelsFix.Plan(Measured(-0.35f, []), HeelsSlot.Top) is { Action: HeelsFixAction.Refuse, Reason: var deep } && deep.Contains("35.0 cm below"),
@@ -408,9 +413,14 @@ internal static class HeelsOffsetScenarios
             "heels: the feet are looked for in the feet model, then the legs, then the body");
         Require(HeelsSlot.Feet.ReadBefore().SequenceEqual([HeelsSlot.Top, HeelsSlot.Legs]) && HeelsSlot.Top.ReadBefore().SequenceEqual(Array.Empty<HeelsSlot>()),
             "heels: Simple Heels reads the body's and legs' offsets before the feet's");
+        Require(HeelsSlot.Top.ReadAfter().SequenceEqual([HeelsSlot.Legs, HeelsSlot.Feet]) && HeelsSlot.Legs.ReadAfter().SequenceEqual([HeelsSlot.Feet]) &&
+                HeelsSlot.Feet.ReadAfter().SequenceEqual(Array.Empty<HeelsSlot>()),
+            "heels: Simple Heels reads the legs' and feet's offsets after the body's");
         var key = new HeelsModelKey(HeelsSlot.Feet, "a.mdl", 0b0111, 0b1);
         Require(key.SameModel(key with { Attributes = 0b1111 }) && !key.SameModel(key with { Shapes = 0 }) && !key.SameModel(key with { Slot = HeelsSlot.Legs }),
             "heels: a written offset's attribute doesn't make the model count as changed, while other shapes or slots do");
+        Require(!key.SameModel(key with { HiddenOffset = 0.1f }) && key with { HiddenOffset = 0.1f } != key,
+            "heels: another offset on a hidden model counts as another outfit, so the automatic fix checks it again");
     }
 
     private static void CheckSimpleHeels()

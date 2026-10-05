@@ -524,11 +524,8 @@ def assert_mesh_studio(addon, obj, second, added_group):
 
 
 def assert_mesh_part_gap_handling(addon):
-    materials = importlib.import_module(f"{addon.__name__}.materials")
-    context_module = importlib.import_module(f"{addon.__name__}.instant_edit.context")
-
     with temporary_scene_data():
-        def create(name, collection=None, hidden=False):
+        def create(name):
             mesh = bpy.data.meshes.new(f"{name} Data")
             mesh.from_pydata(
                 [(0, 0, 0), (1, 0, 0), (0, 1, 0)],
@@ -537,9 +534,7 @@ def assert_mesh_part_gap_handling(addon):
             )
             mesh.update()
             obj = bpy.data.objects.new(name, mesh)
-            (collection or bpy.context.scene.collection).objects.link(obj)
-            if hidden:
-                obj.hide_set(True)
+            bpy.context.scene.collection.objects.link(obj)
             return obj
 
         mesh_list = importlib.import_module(f"{addon.__name__}.mesh_list")
@@ -610,91 +605,229 @@ def assert_mesh_part_gap_handling(addon):
         _drop_part(addon, (duplicate_zero, duplicate_a, duplicate_b), duplicate_a, 34, 1)
         if not duplicate_a.name.startswith("34.1 ") or not duplicate_b.name.startswith("34.2 "):
             raise AssertionError("Moving one duplicate instance changed its sibling")
+        print("[PASS] Mesh Studio placeholders and drags into part gaps")
 
-        visible_collection = context_module.create_collection(
-            bpy.context.scene, {"context_id": "gap-visible-context"}
-        )
-        visible_first = create("40.0 Visible First", visible_collection)
-        visible_second = create("40.2 Visible Second", visible_collection)
-        visible_second_lod1 = create("40.2 Visible Second LOD1", visible_collection)
-        visible_hidden = create(
-            "40.5 Hidden Third", visible_collection, hidden=True
-        )
 
-        hidden_collection = context_module.create_collection(
-            bpy.context.scene, {"context_id": "gap-hidden-context"}
-        )
-        hidden_first = create("41.0 Hidden Collection First", hidden_collection)
-        hidden_second = create("41.2 Hidden Collection Second", hidden_collection)
-        hidden_collection.hide_viewport = True
+class _RecordingLayout:
+    """Stands in for a Blender UILayout, logging (operator, enabled) for every button drawn."""
 
-        excluded_collection = context_module.create_collection(
-            bpy.context.scene, {"context_id": "gap-excluded-context"}
-        )
-        excluded_first = create("42.0 Excluded First", excluded_collection)
-        excluded_second = create("42.2 Excluded Second", excluded_collection)
-        excluded_layer = bpy.context.view_layer.layer_collection.children.get(
-            excluded_collection.name
-        )
-        if excluded_layer is None:
-            raise AssertionError("Excluded test collection was not added to the active view layer")
-        excluded_layer.exclude = True
+    def __init__(self, log=None):
+        self.log = [] if log is None else log
+        self.enabled = True
 
-        if bpy.ops.xiv_ie.compact_context_parts() != {"FINISHED"}:
-            raise AssertionError("Fill Mesh Part Gaps did not finish")
-        if (
-            not visible_first.name.startswith("40.0 ")
-            or not visible_second.name.startswith("40.1 ")
-            or not visible_second_lod1.name.startswith("40.1 ")
-            or not visible_hidden.name.startswith("40.2 ")
-        ):
-            raise AssertionError("Compaction did not preserve visible mesh order and LODs")
-        if not hidden_second.name.startswith("41.2 "):
-            raise AssertionError("Meshes in a hidden collection were compacted")
-        if not excluded_second.name.startswith("42.2 "):
-            raise AssertionError("Meshes in an excluded collection were compacted")
-        compacted_names = tuple(sorted(obj.name for obj in visible_collection.objects))
-        if bpy.ops.xiv_ie.compact_context_parts() != {"FINISHED"}:
-            raise AssertionError("Compacting an already compact collection did not finish")
-        if tuple(sorted(obj.name for obj in visible_collection.objects)) != compacted_names:
-            raise AssertionError("Compacting an already compact collection changed names")
+    def __getattr__(self, name):
+        def call(*args, **_options):
+            if name == "operator":
+                self.log.append((args[0], self.enabled))
+            return _RecordingLayout(self.log)
+        return call
 
-        invalid_collection = context_module.create_collection(
-            bpy.context.scene, {"context_id": "gap-invalid-context"}
-        )
-        invalid_move = create("43.0 Invalid Test", invalid_collection)
-        invalid_gap = create("43.2 Invalid Gap", invalid_collection)
-        invalid_name = create("Not A Mesh Part", invalid_collection)
-        original_invalid_names = (invalid_move.name, invalid_gap.name, invalid_name.name)
+
+def assert_untangle_mesh_groups(addon):
+    """Untangle Mesh Groups pulls apart parts that share a number or a group with another material."""
+    mesh_list = importlib.import_module(f"{addon.__name__}.mesh_list")
+    context_module = importlib.import_module(f"{addon.__name__}.instant_edit.context")
+    character = importlib.import_module(f"{addon.__name__}.instant_edit.character")
+    ui = importlib.import_module(f"{addon.__name__}.ui")
+
+    # Parts stay in list order; a part without a material stays, others move to a
+    # new group per (group, material) after every listed and hidden group.
+    part = mesh_list.ListPart
+    parts = [
+        part(0, 0, 0, "Top", "top"), part(1, 0, 0, "Neck", "neck"), part(2, 0, 1, "Top", "top"),
+        part(3, 0, 3, "Waist", "waist"), part(4, 1, 0, "Body", "body"),
+        part(5, 1, 0, "Piercing", "piercing"), part(6, 1, 2, "Nail", "nail"),
+    ]
+    placement = mesh_list.untangled(
+        parts,
+        {0: "top", 1: "skin", 2: "top", 3: None, 4: "skin", 5: "metal", 6: "skin"},
+        {0: "top", 1: "skin"},
+        {(1, 1)},
+    )
+    expected = {0: (0, 0), 1: (2, 0), 2: (0, 1), 3: (0, 2), 4: (1, 0), 5: (3, 0), 6: (1, 2)}
+    if placement != expected:
+        raise AssertionError(f"Untangled placement {placement}, expected {expected}")
+    if mesh_list.untangled([], {}, {}) != {}:
+        raise AssertionError("Untangling an empty list placed parts")
+
+    # Where parts share numbers, each collection's parts stay together in their
+    # order, the collection with the lowest number first (Outliner order on a tie).
+    # Group 1 shares no numbers, so its collections stay interleaved.
+    chest, legs = 1, 3
+    parts = [
+        part(0, 0, 0, "Neck", "neck"), part(1, 0, 0, "Waist", "waist"), part(2, 0, 1, "Knees", "knees"),
+        part(3, 0, 1, "Torso", "torso"), part(4, 0, 2, "Elbows", "elbows"), part(5, 0, 2, "Shins", "shins"),
+        part(6, 0, 3, "Wrists", "wrists"),
+        part(7, 1, 0, "A", "a"), part(8, 1, 2, "B", "b"), part(9, 1, 3, "C", "c"),
+        part(10, 2, 2, "X1", "x1"), part(11, 2, 3, "X2", "x2"),
+        part(12, 2, 0, "Y0", "y0"), part(13, 2, 1, "Y1", "y1"), part(14, 2, 2, "Y2", "y2"),
+    ]
+    collections = {
+        0: chest, 1: legs, 2: legs, 3: chest, 4: chest, 5: legs, 6: chest,
+        7: legs, 8: chest, 9: legs, 10: chest, 11: chest, 12: legs, 13: legs, 14: legs,
+    }
+    placement = mesh_list.untangled(parts, {}, {}, collections=collections)
+    expected = {
+        0: (0, 0), 3: (0, 1), 4: (0, 2), 6: (0, 3), 1: (0, 4), 2: (0, 5), 5: (0, 6),
+        7: (1, 0), 8: (1, 1), 9: (1, 2),
+        12: (2, 0), 13: (2, 1), 14: (2, 2), 10: (2, 3), 11: (2, 4),
+    }
+    if placement != expected:
+        raise AssertionError(f"Collection-ordered placement {placement}, expected {expected}")
+
+    if hasattr(bpy.types, "XIV_IE_OT_compact_context_parts"):
+        raise AssertionError("Fill Mesh Part Gaps is still registered")
+    tools = _RecordingLayout()
+    ui.XIVIE_PT_tools.draw(SimpleNamespace(layout=tools), bpy.context)
+    if any(idname == "xiv_ie.compact_context_parts" for idname, _enabled in tools.log):
+        raise AssertionError("The Tools panel still offers Fill Mesh Part Gaps")
+
+    with temporary_scene_data():
+        # The list shows every visible mesh; keep the earlier scenarios' meshes out of it.
+        earlier = [obj for obj in bpy.context.visible_objects if obj.type == "MESH"]
+        for obj in earlier:
+            obj.hide_set(True)
         try:
-            invalid_result = bpy.ops.xiv_ie.compact_context_parts()
-        except RuntimeError as error:
-            if "Mesh part gaps were not filled" not in str(error):
-                raise
-            invalid_result = {"CANCELLED"}
-        if invalid_result != {"CANCELLED"}:
-            raise AssertionError("Invalid mesh names did not cancel compaction")
-        if (invalid_move.name, invalid_gap.name, invalid_name.name) != original_invalid_names:
-            raise AssertionError("Invalid-name cancellation applied a partial compaction")
+            def create(name, material=None, import_id=None, collection=None, vertices=True):
+                mesh = bpy.data.meshes.new(f"{name} Data")
+                if vertices:
+                    mesh.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+                obj = bpy.data.objects.new(name, mesh)
+                (collection or bpy.context.scene.collection).objects.link(obj)
+                if material:
+                    obj["xiv_material"] = material
+                if import_id:
+                    obj["instant_edit_import_instance_id"] = import_id
+                return obj
 
-        collision_collection = bpy.data.collections.new("Gap Collision Collection")
-        bpy.context.scene.collection.children.link(collision_collection)
-        collision_zero = create("44.0 Collision Zero", collision_collection)
-        collision_gap = create("44.2 Collision Target", collision_collection)
-        collision_object = create("44.1 Collision Target")
-        original_collision_names = (collision_zero.name, collision_gap.name)
-        try:
-            materials.compact_mesh_part_indices((collision_collection,))
-        except ValueError:
-            pass
-        else:
-            raise AssertionError("Rename collision did not cancel compaction")
-        if (collision_zero.name, collision_gap.name) != original_collision_names:
-            raise AssertionError("Rename-collision cancellation applied a partial compaction")
+            top = "/mt_c0201e0593_top_a.mtrl"
+            skin = "/mt_c0201b0001_b.mtrl"
+            piercing = "/mt_c0201b0001_piercings.mtrl"
+            robe = "/mt_c0201e0100_top_a.mtrl"
+            # The reported layout: a body's parts imported on top of a gear model's IDs.
+            # A group keeps the material of its first part, lowest number then name,
+            # as the exporter and the red rows have it.
+            objects = [
+                create("0.0 c0201e0593_top", top, "gear"), create("0.0 Neck", skin, "neck"),
+                create("0.0 Waist", skin, "waist"), create("0.1 c0201e0593_top", top, "gear"),
+                create("0.1 Knees", skin, "knees"), create("0.3 c0201e0593_top", top, "gear"),
+                create("0.3 c0201e0593_top LOD1", top, "gear"), create("0.5 Strap", None, "strap"),
+                create("1.0 Body", skin, "body"), create("1.0 Piercing B", piercing, "piercing-b"),
+                create("1.1 Piercing R", piercing, "piercing-r"),
+                # Bibo bodies of different races share one material.
+                create("2.0 Bibo Body", "/mt_c0101b0001_bibo.mtrl", "bibo-body"),
+                create("2.0 Pubes", "/mt_c0201b0001_bibopube.mtrl", "pubes"),
+                create("2.1 Bibo Hands", "/mt_c1401b0001_bibo.mtrl", "bibo-hands"),
+            ]
+            # A sent character's model: its hidden parts keep their numbers, and the
+            # hidden 3.0 decides group 3's material although Amulet sorts first.
+            send = context_module.create_collection(bpy.context.scene, {"context_id": "untangle-send"})
+            game_hidden = [create("3.0 Robe Lining", robe, "robe", send), create("4.0 Robe Tail", robe, "robe", send)]
+            for obj in game_hidden:
+                obj[character.GAME_HIDDEN_PROPERTY] = True
+                obj.hide_set(True)
+            objects += [
+                create("3.1 Amulet", piercing, "amulet", send), create("3.1 Robe Body", robe, "robe", send),
+                create("3.2 Robe Belt", robe, "robe-belt", send), create("3.2 Robe Sash", robe, "robe-sash", send),
+            ]
+            by_hand = create("0.2 Hidden By Hand", top, "by-hand")
+            by_hand.hide_set(True)
+            unrelated = create("Not A Mesh Part", top)
 
-        # Keep these references live until the assertions above have run.
-        _ = (hidden_first, excluded_first, collision_object)
-        print("[PASS] Mesh Studio placeholders and atomic part-gap compaction")
+            def draws_enabled():
+                layout = _RecordingLayout()
+                ui._draw_mesh_groups(layout, bpy.context)
+                if not layout.log or layout.log[0][0] != "xiv_ie.untangle_mesh_groups":
+                    raise AssertionError(f"Untangle Mesh Groups is not the first button: {layout.log[:3]}")
+                return layout.log[0][1]
+
+            if not draws_enabled():
+                raise AssertionError("Untangle Mesh Groups was disabled with overlapping parts")
+            if bpy.ops.xiv_ie.untangle_mesh_groups() != {"FINISHED"}:
+                raise AssertionError("Untangle Mesh Groups did not finish")
+            names = [obj.name for obj in objects]
+            expected_names = [
+                "0.0 c0201e0593_top", "5.0 Neck", "5.1 Waist", "0.1 c0201e0593_top", "5.2 Knees",
+                "0.2 c0201e0593_top", "0.2 c0201e0593_top LOD1", "0.3 Strap", "1.0 Body", "6.0 Piercing B", "6.1 Piercing R",
+                "2.0 Bibo Body", "7.0 Pubes", "2.1 Bibo Hands",
+                "8.0 Amulet", "3.1 Robe Body", "3.2 Robe Belt", "3.3 Robe Sash",
+            ]
+            if names != expected_names:
+                raise AssertionError(f"Untangled names {names}, expected {expected_names}")
+            untouched = [obj.name for obj in (*game_hidden, by_hand, unrelated)]
+            if untouched != ["3.0 Robe Lining", "4.0 Robe Tail", "0.2 Hidden By Hand", "Not A Mesh Part"]:
+                raise AssertionError(f"Untangling renamed meshes the list doesn't show: {untouched}")
+
+            if draws_enabled():
+                raise AssertionError("Untangle Mesh Groups stayed enabled with nothing to untangle")
+            if bpy.ops.xiv_ie.untangle_mesh_groups() != {"CANCELLED"}:
+                raise AssertionError("Untangling untangled groups changed something")
+            if [obj.name for obj in objects] != expected_names:
+                raise AssertionError("Untangling untangled groups renamed parts")
+            for obj in objects:
+                obj.hide_set(True)
+
+            # The reported Outliner: a top and legs, each numbered from 0 in one group,
+            # with their piercings and pubes in child collections.
+            def collection(name, parent=None):
+                created = bpy.data.collections.new(name)
+                (parent or bpy.context.scene.collection).children.link(created)
+                return created
+
+            bibo = "/mt_c0201b0001_bibo.mtrl"
+            chest = collection("Untangle Chest")
+            nipple = collection("Untangle Nipple Piercings", chest)
+            legs = collection("Untangle Legs")
+            pubes = collection("Untangle Pubes", legs)
+            layout = [
+                create("0.0 Neck", bibo, "neck", chest), create("0.1 Torso", bibo, "torso", chest),
+                create("0.2 Elbows", bibo, "elbows", chest), create("0.3 Wrists", bibo, "wrists", chest),
+                create("1.0 Piercing B", piercing, "piercing-b", chest),
+                create("1.1 Piercing R", piercing, "piercing-r", nipple),
+                create("1.2 Piercing L", piercing, "piercing-l", nipple),
+                create("1.3 Chains L", piercing, "chains-l", nipple),
+                create("0.0 Waist", bibo, "waist", legs), create("0.1 Knees", bibo, "knees", legs),
+                create("0.2 Shins", bibo, "shins", legs),
+                create("1.0 Pubes", "/mt_c0201b0001_bibopube.mtrl", "pubes", pubes),
+            ]
+            switched_off = [
+                create("1.3 Chains S", piercing, "chains-s", nipple),
+                create("2.0 BPF", "/mt_c0201b0001_bibopube.mtrl", "bpf", pubes),
+                create("2.1 BPF", "/mt_c0201b0001_bibopube.mtrl", "bpf", pubes),
+            ]
+            for obj in switched_off:
+                obj.hide_set(True)
+            if bpy.ops.xiv_ie.untangle_mesh_groups() != {"FINISHED"}:
+                raise AssertionError("Untangle Mesh Groups did not finish on the reported layout")
+            names = [obj.name for obj in layout]
+            expected_names = [
+                "0.0 Neck", "0.1 Torso", "0.2 Elbows", "0.3 Wrists",
+                "1.0 Piercing B", "1.1 Piercing R", "1.2 Piercing L", "1.3 Chains L",
+                "0.4 Waist", "0.5 Knees", "0.6 Shins", "2.0 Pubes",
+            ]
+            if names != expected_names:
+                raise AssertionError(f"Untangled reported layout {names}, expected {expected_names}")
+            if [obj.name for obj in switched_off] != ["1.3 Chains S", "2.0 BPF", "2.1 BPF"]:
+                raise AssertionError("Untangling renamed parts hidden by hand")
+            for obj in layout:
+                obj.hide_set(True)
+
+            # A rename onto an unlisted visible mesh (here an empty one) cancels the whole untangle.
+            anchor = create("10.0 Anchor", top)
+            mover = create("10.2 Mover", top)
+            create("10.1 Mover", vertices=False)
+            try:
+                result = bpy.ops.xiv_ie.untangle_mesh_groups()
+            except RuntimeError as error:
+                if "Mesh groups were not untangled" not in str(error):
+                    raise
+                result = {"CANCELLED"}
+            if result != {"CANCELLED"} or (anchor.name, mover.name) != ("10.0 Anchor", "10.2 Mover"):
+                raise AssertionError("A rename collision did not cancel the whole untangle")
+        finally:
+            for obj in earlier:
+                obj.hide_set(False)
+    print("[PASS] Untangle Mesh Groups pulls apart overlapping parts and closes part gaps")
 
 
 def assert_mesh_material_quick_selectors(addon):
@@ -2433,6 +2566,7 @@ def run() -> None:
 
         assert_mesh_studio(addon, obj, second, added_group)
         assert_mesh_part_gap_handling(addon)
+        assert_untangle_mesh_groups(addon)
         assert_mesh_drag_plan(addon)
         assert_mesh_list_geometry(addon)
         assert_backface_duplicate(addon)

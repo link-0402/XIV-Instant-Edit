@@ -8,8 +8,12 @@ namespace InstantEdit.Services.Animations.Timeline;
 /// A sound or effect file brought in from disk: the game path the timeline names, and every file
 /// to package under its game path (the file itself and, for an effect, what it needs that the
 /// game lacks). <paramref name="Seconds"/> is a sound's length, 0 when unknown or for effects.
+/// <paramref name="Beside"/> names, for a file that is an edited copy, the game path of the file it
+/// copies: saved in place, the copy is mapped wherever that file is (such as a mod's toggle
+/// option), so it comes and goes with it.
 /// </summary>
-internal sealed record TimelineImport(string GamePath, ImmutableDictionary<string, byte[]> Files, float Seconds);
+internal sealed record TimelineImport(string GamePath, ImmutableDictionary<string, byte[]> Files, float Seconds,
+    ImmutableDictionary<string, string>? Beside = null);
 
 /// <summary>
 /// Turns files picked on disk into packaged timeline resources. Each gets a new game path under

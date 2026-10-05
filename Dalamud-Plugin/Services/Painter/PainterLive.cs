@@ -10,7 +10,8 @@ namespace InstantEdit.Services.Painter;
 /// <summary> A model the character has loaded, and which of its attributes and shape keys are enabled. </summary>
 /// <param name="Path">The loaded file as <see cref="PainterVisibility.NormalizePath"/> writes it.</param>
 /// <param name="Slot">The character's model slot (1 body, 2 hands, 3 legs, 4 feet); -1 for weapons.</param>
-public sealed record PainterLiveModel(string Path, uint EnabledAttributes, uint EnabledShapes = 0, int Slot = -1);
+/// <param name="Drawn">False for a gear model other gear hides, such as legs under a robe, which stays loaded.</param>
+public sealed record PainterLiveModel(string Path, uint EnabledAttributes, uint EnabledShapes = 0, int Slot = -1, bool Drawn = true);
 
 /// <summary> What an on-screen character draws right now: its loaded models and its own colors. </summary>
 public sealed record PainterLiveCharacter(IReadOnlyList<PainterLiveModel> Models, PainterCharacterColors? Colors)
@@ -108,7 +109,7 @@ internal sealed class PainterLiveReader(IFramework framework, IObjectTable objec
             var path = model->ModelResourceHandle->FileName.ToString();
             if (path.Length > 0)
                 models.Add(new PainterLiveModel(PainterVisibility.NormalizePath(path), model->EnabledAttributeIndexMask, model->EnabledShapeKeyIndexMask,
-                    own ? slot : -1));
+                    own ? slot : -1, !own || !ModelVisibility.IsHiddenGear(character, slot)));
         }
     }
 

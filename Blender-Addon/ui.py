@@ -29,7 +29,7 @@ from .materials import (
     mesh_part_attributes,
 )
 from .keymaps import draw_shortcut
-from .mesh_list import layout_rows, lod_zero_objects, scene_parts
+from .mesh_list import layout_rows, lod_zero_objects, placement_plan, scene_parts, untangled_placement
 from .operators import active_mesh_drag_plan, active_mesh_drag_state
 from .pose import pose_actions, pose_armature, shown_action
 from .properties import get_settings
@@ -910,8 +910,12 @@ def draw_mesh_part_context_menu(self, context: Context) -> None:
 
 def _draw_mesh_groups(layout, context: Context) -> None:
     """Draw the compact Mesh Studio overview adapted from Yet Another Addon."""
-    box = layout.box()
     parts = scene_parts()
+    if parts:
+        untangle = layout.row()
+        untangle.enabled = bool(placement_plan(parts, untangled_placement(parts)))
+        untangle.operator("xiv_ie.untangle_mesh_groups", icon="SORTSIZE")
+    box = layout.box()
     if not parts:
         box.label(text="No visible FFXIV mesh groups.", icon="INFO")
         return
@@ -1286,10 +1290,9 @@ class XIVIE_PT_tools(Panel):
         layout = self.layout
         layout.popover("XIVIE_PT_vertex_data_popover", text="Vertex Data", icon="GROUP_VCOL")
         layout.operator("xiv_ie.remove_hidden_vertices", text="Remove Hidden Vertices", icon="HIDE_ON")
+        layout.operator("xiv_ie.apply_racial_scaling", text="Apply Racial Scaling...", icon="COMMUNITY")
         layout.operator("xiv_ie.combine_armatures", text="Combine Armatures...", icon="ARMATURE_DATA")
-        column = layout.column(align=True)
-        column.operator("xiv_ie.convert_mesh_names", text="Move Mesh IDs to Front", icon="SORTALPHA")
-        column.operator("xiv_ie.compact_context_parts", text="Fill Mesh Part Gaps", icon="SORTSIZE")
+        layout.operator("xiv_ie.convert_mesh_names", text="Move Mesh IDs to Front", icon="SORTALPHA")
         layout.operator("xiv_ie.clear_contexts", text="Clear All Contexts...", icon="TRASH")
         row = layout.row(align=True)
         row.operator("xiv_ie.open_cache_folder", text="Cache", icon="FILE_FOLDER")

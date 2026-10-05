@@ -152,7 +152,7 @@ internal static class AnimationDependencies
         }
         return length;
     }
-    private static string ReadString(byte[] bytes, int start, int end)
+    internal static string ReadString(byte[] bytes, int start, int end)
     {
         var span = bytes.AsSpan(start, Math.Min(512, end - start)); var zero = span.IndexOf((byte)0);
         if (zero < 0) throw new InvalidDataException("Unterminated animation dependency path.");
@@ -169,6 +169,32 @@ internal static class AnimationDependencies
         ReadVfx(bytes, (path, sound) => { if (path.Length > 0) (sound ? sounds : textures).Add(path); }, problems);
         return new AnimationVfxPaths([.. textures.Distinct(StringComparer.OrdinalIgnoreCase)],
             [.. sounds.Distinct(StringComparer.OrdinalIgnoreCase)], [.. problems.Distinct()]);
+    }
+
+    /// <summary>
+    /// The frame ranges an AVFX's timelines (TmLn) loop over, from their loop start and end
+    /// (LpSt, LpEd); empty when the effect plays through once.
+    /// </summary>
+    internal static ImmutableArray<(int Start, int End)> ReadVfxLoops(byte[] bytes)
+    {
+        if (bytes.Length > AnimationPap.MaxFileSize) throw new InvalidDataException("Dependency exceeds the file size limit.");
+        if (bytes.Length < 8 || FourCc(bytes, 0) != "AVFX") throw new InvalidDataException("Invalid AVFX header.");
+        var length = AnimationPap.ReadInt(bytes, 4);
+        if (length < 0 || length != bytes.Length - 8) throw new InvalidDataException("Invalid AVFX length.");
+        var loops = ImmutableArray.CreateBuilder<(int, int)>();
+        foreach (var (name, start, size) in Chunks(bytes, 8, 8 + length))
+        {
+            if (name != "TmLn") continue;
+            int loopStart = 0, loopEnd = 0;
+            foreach (var (field, position, count) in Chunks(bytes, start, start + size))
+            {
+                if (count < 4) continue;
+                if (field == "LpSt") loopStart = AnimationPap.ReadInt(bytes, position);
+                else if (field == "LpEd") loopEnd = AnimationPap.ReadInt(bytes, position);
+            }
+            if (loopEnd > loopStart && loopStart >= 0) loops.Add((loopStart, loopEnd));
+        }
+        return loops.ToImmutable();
     }
 
     /// <summary>Walks an AVFX, reporting each texture path (sound false) and emitter sound path (sound true) in file order.</summary>
@@ -200,7 +226,8 @@ internal static class AnimationDependencies
     // Names are stored reversed; the game pads three-letter names with a NUL after the reversed
     // letters ("xeT\0" for Tex), so the NUL comes first once reversed.
     private static string FourCc(byte[] bytes, int offset) => new string(Encoding.ASCII.GetString(bytes, offset, 4).Reverse().ToArray()).Trim('\0');
-    private static IEnumerable<(string Name, int Start, int Size)> Chunks(byte[] bytes, int start, int end)
+    /// <summary>The AVFX chunks from <paramref name="start"/> to <paramref name="end"/>: name, payload start and payload size.</summary>
+    internal static IEnumerable<(string Name, int Start, int Size)> Chunks(byte[] bytes, int start, int end)
     {
         for (var p = start; p < end;)
         {

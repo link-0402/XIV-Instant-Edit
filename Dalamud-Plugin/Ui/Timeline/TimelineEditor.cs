@@ -165,7 +165,7 @@ internal sealed class TimelineEditor
         {
             case TimelinePart.LengthHandle:
             {
-                var lasted = Events(loaded).Where(ev => ev.Lane == TimelineLane.Motion && ev.Duration == loaded.Length)
+                var lasted = Events(loaded).Where(ev => ev.Lane == TimelineLane.Motion && loaded.LastsWhole(ev.Duration))
                     .Select(ev => ev.Key).ToHashSet(StringComparer.Ordinal);
                 var followers = Events(doc).Where(ev => ScaleEvents || lasted.Contains(ev.Key))
                     .Select(ev => ev.Key).ToHashSet(StringComparer.Ordinal);
@@ -550,16 +550,16 @@ internal sealed class TimelineEditor
 
     /// <summary>Zooms around <paramref name="x"/> (track pixels) within the zoom limits.</summary>
     public void Zoom(float x, float factor) =>
-        View = View.ZoomAt(x, factor, MinPixelsPerFrame, MaxPixelsPerFrame).Clamp(Document.Length);
+        View = View.ZoomAt(x, factor, MinPixelsPerFrame, MaxPixelsPerFrame).Clamp(TimelineEdits.Extent(Document));
 
-    public void Pan(float dx) => View = View.Pan(dx).Clamp(Document.Length);
+    public void Pan(float dx) => View = View.Pan(dx).Clamp(TimelineEdits.Extent(Document));
 
     /// <summary>Shows the whole timeline, within the zoom limits.</summary>
     public void Fit()
     {
         var fit = TimelineView.Fit(Document.Length, View.Width);
         View = (fit with { PixelsPerFrame = Math.Clamp(fit.PixelsPerFrame, MinPixelsPerFrame, Math.Max(MinPixelsPerFrame, MaxPixelsPerFrame)) })
-            .Clamp(Document.Length);
+            .Clamp(TimelineEdits.Extent(Document));
         fitted = View.Width > 0;
     }
 
@@ -587,7 +587,7 @@ internal sealed class TimelineEditor
             return;
         var margin = view.Width * .1f / view.Scale;
         View = (frame < view.First ? view with { First = frame - margin } : view with { First = frame + margin - view.Width / view.Scale })
-            .Clamp(Document.Length);
+            .Clamp(TimelineEdits.Extent(Document));
     }
 
     /// <summary>
@@ -641,7 +641,7 @@ internal sealed class TimelineEditor
     private void ClampView()
     {
         if (View.Width > 0)
-            View = View.Clamp(Document.Length);
+            View = View.Clamp(TimelineEdits.Extent(Document));
     }
 
     private void BeginEdit(TimelineGesture kind, ImmutableArray<string> keys, int[] edgeAnchors, int[] snapTargets)

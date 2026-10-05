@@ -159,6 +159,19 @@ internal static class CharacterSendScenarios
         Require(CharacterDrawState.Plan([new CharacterSendModel(face, CharacterModelRole.Body)], [face], weaponAsBody).Models.Count == 0,
             "a body model matches only the character's own slots, not a weapon's");
 
+        // A robe hides the legs, and through its own legs flags the feet: both stay loaded but aren't drawn.
+        var robed = new PainterLiveCharacter(
+        [
+            new PainterLiveModel(Drawn(@"C:\mods\Robe\top.mdl"), 0xFFFFFFFF, 0, 1),
+            new PainterLiveModel(Drawn(@"C:\mods\Body\dwn.mdl"), 0xFFFFFFFF, 0, 3, Drawn: false),
+            new PainterLiveModel(Drawn(@"C:\mods\New\sho.mdl"), 0xFFFFFFFF, 0, 4, Drawn: false),
+        ], null);
+        ResourceNode[] robeRoots = [top, legs];
+        var robePlan = CharacterDrawState.Plan(CharacterSendPlan.Models(robeRoots, includeWeapons: false), robeRoots, robed);
+        Require(robePlan.Models is [{ Model.Node.GamePath: TopPath }] &&
+                robePlan.LeftOut is [{ FileName: "c0201e0000_dwn.mdl", Reason: CharacterDrawState.HiddenByGearReason }] && robePlan.Missing.Count == 0,
+            "gear other gear hides isn't sent, and a hidden model the list lacks isn't missing from it");
+
         var unknown = CharacterDrawState.Plan(CharacterSendPlan.Models(roots, includeWeapons: false), roots, null);
         Require(!unknown.Known && unknown.Models.Count == 7 && unknown.Models.All(model => model.AttributeMasks.Count == 0 && model.Shapes is null) &&
                 unknown.LeftOut.Count == 0 && unknown.Missing.Count == 0,

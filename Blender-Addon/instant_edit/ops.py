@@ -17,7 +17,7 @@ from bpy.types import Operator, Context
 
 from ..io.model      import ModelImport
 from ..materials     import (
-    attribute_group_data, compact_mesh_part_indices, group_mesh_objects, hair_skeleton_tags,
+    attribute_group_data, group_mesh_objects, hair_skeleton_tags,
     is_body_material,
 )
 from ..mesh.export   import (export_result, get_export_stats, check_triangulation, check_weights,
@@ -28,7 +28,7 @@ from ..xivpy.model   import XIVModel
 from .props          import IN_PLACE_TARGET, NO_EXPORT_CONTEXT, get_instant_edit_props
 from .context        import (SCHEMA, VERSION, SUPPORTED_VERSIONS, ContextValidationError,
                              _value, apply_authoritative_context, clear_context_metadata,
-                             collection_visible_in_view_layer, context_collections,
+                             context_collections,
                              context_id_for_object, create_collection, mesh_ids_from_name,
                              mesh_name_info, MASHUP_SOURCE_MATERIAL_PROPERTY,
                              tag_object,
@@ -2084,41 +2084,6 @@ class ClearInstantEditContexts(Operator):
         return {"FINISHED"}
 
 
-class CompactInstantEditParts(Operator):
-    bl_idname = "xiv_ie.compact_context_parts"
-    bl_label = "Fill Mesh Part Gaps"
-    bl_description = (
-        "Fill part-index gaps in visible XIV Instant Edit collections while "
-        "preserving the current mesh order"
-    )
-    bl_options = {"REGISTER", "UNDO"}
-
-    @classmethod
-    def poll(cls, context: Context):
-        return context.mode == "OBJECT"
-
-    def execute(self, context: Context):
-        collections = [
-            collection
-            for collection in context_collections(context.scene)
-            if collection_visible_in_view_layer(collection, context.view_layer)
-        ]
-        try:
-            moved = compact_mesh_part_indices(collections)
-        except ValueError as error:
-            self.report({"ERROR"}, f"Mesh part gaps were not filled: {error}")
-            return {"CANCELLED"}
-
-        if moved:
-            self.report(
-                {"INFO"},
-                f"Filled mesh part gaps on {moved} part instance{'s' if moved != 1 else ''}.",
-            )
-        else:
-            self.report({"INFO"}, "No mesh part gaps found.")
-        return {"FINISHED"}
-
-
 class CopyInstantEditStatus(Operator):
     bl_idname = "xiv_ie.copy_status"
     bl_label = "Copy Full Import Status"
@@ -3080,7 +3045,6 @@ CLASSES = [
     SaveNewModName,
     VanillaModName,
     ClearInstantEditContexts,
-    CompactInstantEditParts,
     CopyInstantEditStatus,
     CopyExportTargetStatus,
 ]

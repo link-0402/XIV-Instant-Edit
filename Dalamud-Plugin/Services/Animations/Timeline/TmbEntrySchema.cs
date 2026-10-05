@@ -165,6 +165,9 @@ internal static class TmbEntrySchema
                 Choice("Visibility", "Visibility", 64, TmbStorage.Int32,
                     [("Default", 0), ("Default with triggers", 1), ("Always", 2), ("Always with triggers", 3)]),
             ],
+            // -1 keeps a looping effect going, 0 turns the entry off, 1 plays it once; more waits that
+            // many frames after one loop before playing it again (see TimelineEffectCheck).
+            ["C173"] = [Number(TimelineEffectCheck.LoopField, "Loop/wait", 12, TmbStorage.Int32, -1, short.MaxValue)],
             ["C010"] = [new(new TimelineField("TimeControl", "Time control", TimelineFieldKind.Bool, 0, 1), 20, TmbStorage.Bit0)],
             ["C198"] =
             [

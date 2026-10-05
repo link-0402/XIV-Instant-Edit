@@ -483,6 +483,24 @@ try
             !projectedMixed.SelectMany(node => node.Children.Prepend(node))
                 .Any(node => node.SourceState == ResourceSourceState.GameData),
         "the disabled visibility projection removes vanilla rows while retaining modded descendants");
+
+    // ---- Gear other gear hides (legs under a robe) stays loaded but isn't listed ----
+    const string robeLegsModel = @"G:\Penumbra\Robe\chara\equipment\e6001\model\c0201e6001_dwn.mdl";
+    const string robeLegsPath = "chara/equipment/e6001/model/c0201e6001_dwn.mdl";
+    var robeLegsPaths = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+    {
+        [robeLegsModel] = new(StringComparer.OrdinalIgnoreCase) { robeLegsPath },
+    };
+    var robeSource = new ResourceSource(ResourceSourceState.LoadedMod, "Loaded from: Robe", "Robe", "Robe", @"G:\Penumbra\Robe", robeLegsPath);
+    var hiddenLegs = OnScreenService.AddMissingResolvedModels([], robeLegsPaths, _ => robeSource,
+        new HashSet<string>(StringComparer.Ordinal) { InstantEdit.Services.Painter.PainterVisibility.NormalizePath(robeLegsModel) });
+    Require(hiddenLegs is [{ Hidden: true, SlotLabel: "Legs" }] &&
+            OnScreenService.AddMissingResolvedModels([], robeLegsPaths, _ => robeSource) is [{ Hidden: false }],
+        "a supplemented model is marked hidden when other gear hides its file");
+    Require(OnScreenService.ProjectVisibleResourceNodes(hiddenLegs, true).Count == 0 &&
+            OnScreenService.ProjectVisibleResourceNodes([mixedBranch with { Children = [.. mixedBranch.Children, .. hiddenLegs] }], false)
+                is [{ Children: [{ SourceState: ResourceSourceState.LoadedMod, Hidden: false }] }],
+        "On Screen doesn't list models other gear hides, with or without game files");
     Require(OnScreenService.NormalizeActualPath(
             @"chara\human\c0101\obj\hair\h0001\model\c0101h0001_hir.mdl",
             ResourceSourceState.GameData) == vanillaActualModel &&

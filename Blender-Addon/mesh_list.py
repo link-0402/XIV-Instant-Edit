@@ -5,7 +5,7 @@ in one aligned column, another line and the material row. Every row is one
 widget unit tall and the space between them follows Blender's style metrics.
 A drag lays out every arrangement it could produce with the same rules the
 panel draws with, and shows the arrangement whose dragged row lies under the
-pointer.
+pointer. Untangle Mesh Groups rearranges the whole list at once.
 """
 
 from __future__ import annotations
@@ -15,8 +15,16 @@ from dataclasses import dataclass, replace
 from math import floor
 from struct import pack, unpack
 
+import bpy
+
 from .instant_edit.context import mesh_ids_from_name
-from .materials import group_mesh_objects, mesh_display_name, mesh_part_instances
+from .materials import (
+    first_material_identity,
+    game_hidden_parts,
+    group_mesh_objects,
+    mesh_display_name,
+    mesh_part_instances,
+)
 from .mesh.objects import visible_meshobj
 
 
@@ -239,6 +247,117 @@ def moved_group(parts, group: int, index: int) -> dict[int, tuple[int, int]]:
     for part in parts:
         placement[part.ident] = (moved_group_index(part.group, group, index), part.part)
     return placement
+
+
+def _untangled_order(members, collections) -> list[ListPart]:
+    """Order one group's parts for renumbering.
+
+    Parts keep their list order unless some share a number. Then each
+    collection's parts stay together in their order, and the collection with
+    the lowest number goes first; the Outliner order breaks ties.
+    """
+    members = sorted(members, key=ListPart.order)
+    if len({part.part for part in members}) == len(members):
+        return members
+    lowest = {}
+    for part in members:
+        lowest.setdefault(collections.get(part.ident, 0), part.part)
+
+    def order(part):
+        collection = collections.get(part.ident, 0)
+        return (lowest[collection], collection, part.order())
+
+    return sorted(members, key=order)
+
+
+def untangled(parts, materials, kept, taken=frozenset(), collections=None) -> dict[int, tuple[int, int]]:
+    """Return every part's (group, index) once overlapping parts are pulled apart.
+
+    A part stays in its group when its material (`materials` by ident) is the
+    one `kept` for the group, or when it has none. The other parts move to a
+    new group per material, after the last group. Each group then numbers its
+    parts from 0 (see _untangled_order, which reads a part's collection as its
+    Outliner position in `collections`), so parts sharing a number get their
+    own and the gaps close. The (group, index) slots in `taken` belong to
+    parts the list doesn't show that export with the model, and are skipped.
+    """
+    collections = collections or {}
+    placement = _placement(parts)
+    by_group = defaultdict(list)
+    for part in parts:
+        by_group[part.group].append(part)
+    if not by_group:
+        return placement
+    taken = set(taken)
+    new_group = max([*by_group, *(group for group, _index in taken)]) + 1
+    for group in sorted(by_group):
+        staying = []
+        leaving = {}
+        for part in sorted(by_group[group], key=ListPart.order):
+            material = materials.get(part.ident)
+            if material is None or material == kept.get(group):
+                staying.append(part)
+            else:
+                leaving.setdefault(material, []).append(part)
+        index = 0
+        for part in _untangled_order(staying, collections):
+            while (group, index) in taken:
+                index += 1
+            placement[part.ident] = (group, index)
+            index += 1
+        for moving in leaving.values():
+            for index, part in enumerate(_untangled_order(moving, collections)):
+                placement[part.ident] = (new_group, index)
+            new_group += 1
+    return placement
+
+
+def _collection_positions(scene) -> dict[int, int]:
+    """Collection pointer -> its place in the Outliner, each collection before its children."""
+    positions = {}
+
+    def visit(collection):
+        if collection.as_pointer() in positions:
+            return
+        positions[collection.as_pointer()] = len(positions)
+        for child in collection.children:
+            visit(child)
+
+    visit(scene.collection)
+    return positions
+
+
+def untangled_placement(parts) -> dict[int, tuple[int, int]]:
+    """Return the arrangement Untangle Mesh Groups gives the list's `parts`.
+
+    Each group keeps the material its export uses now. Parts a character send
+    imported hidden export with their model's listed parts, so they count for
+    their group's material and keep their numbers.
+    """
+    hidden = game_hidden_parts([obj for part in parts for obj in part.objects])
+    group_objects = defaultdict(list)
+    for part in parts:
+        group_objects[part.group].extend(part.objects)
+    for obj in hidden:
+        group_objects[mesh_ids_from_name(obj)[0]].append(obj)
+    positions = _collection_positions(bpy.context.scene)
+    return untangled(
+        parts,
+        {part.ident: first_material_identity(part.objects) for part in parts},
+        {group: first_material_identity(objects) for group, objects in group_objects.items()},
+        {mesh_ids_from_name(obj)[:2] for obj in hidden},
+        {
+            part.ident: min(
+                (
+                    positions.get(collection.as_pointer(), len(positions))
+                    for obj in part.objects
+                    for collection in obj.users_collection
+                ),
+                default=len(positions),
+            )
+            for part in parts
+        },
+    )
 
 
 def part_targets(parts, ident: int, maximum_group: int) -> list[tuple[int, int]]:

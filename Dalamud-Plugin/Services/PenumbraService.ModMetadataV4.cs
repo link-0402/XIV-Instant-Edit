@@ -324,11 +324,18 @@ public sealed partial class PenumbraService
         return stillReferenced;
     }
 
+    /// <summary>Whether a DefaultData, group, option or container of the mod maps <paramref name="gamePath"/> to a file.</summary>
+    internal static bool ModMapsGamePath(string modRoot, string gamePath)
+    {
+        try { return AnimationMappingContainers(LoadV4ModMetadata(modRoot)).Any(files => files.Any(pair => SameGamePath(pair.Key, gamePath))); }
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or System.Text.Json.JsonException) { return false; }
+    }
+
     /// <summary>
     /// Map <paramref name="gamePath"/> to <paramref name="relativePath"/> in every DefaultData,
     /// group, option and container that maps <paramref name="ownerGamePath"/>, so a file an
-    /// animation edit added (an imported sound) plays wherever that animation does. Refuses
-    /// when the mod already maps <paramref name="gamePath"/> anywhere.
+    /// animation edit added (an imported sound) plays wherever that animation does, or a copy
+    /// wherever its original is. Refuses when the mod already maps <paramref name="gamePath"/> anywhere.
     /// </summary>
     internal static void AddAnimationResourceMapping(string modRoot, string ownerGamePath, string gamePath, string relativePath)
     {

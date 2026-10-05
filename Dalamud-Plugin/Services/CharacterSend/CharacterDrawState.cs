@@ -27,15 +27,17 @@ internal sealed record CharacterDrawPlan(IReadOnlyList<CharacterDrawnModel> Mode
 /// <summary>
 /// Narrows a send to what the game draws on the character right now: the models its draw object
 /// holds, each with the attributes and shape keys the game has on. Of what the draw object holds,
-/// the game never shows its low-poly whole body (<c>chara/human/c####/obj/body/b0003</c>), and
-/// gear in a body slot carries its own body, so smallclothes of that slot loaded next to it aren't
-/// shown either. Dalamud-free, so it can be tested without the game.
+/// the game never shows its low-poly whole body (<c>chara/human/c####/obj/body/b0003</c>), nor gear
+/// that other gear hides (legs under a robe), and gear in a body slot carries its own body, so
+/// smallclothes of that slot loaded next to it aren't shown either. Dalamud-free, so it can be tested
+/// without the game.
 /// </summary>
 internal static class CharacterDrawState
 {
     public const string LowPolyReason = "the low-poly body the game never shows";
     public const string SmallclothesReason = "smallclothes under the gear in its slot";
     public const string NotDrawnReason = "not drawn any more";
+    public const string HiddenByGearReason = "hidden by your other gear";
     public const string NoPartReason = "every part is turned off";
 
     private static readonly Regex LowPolyBody = new(@"^chara/human/c\d{4}/obj/body/b0003/", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -72,10 +74,16 @@ internal static class CharacterDrawState
                 leftOut.Add(new CharacterLeftOutModel(model.FileName, LowPolyReason));
                 continue;
             }
-            var copies = Copies(live, model.Node, model.Role).ToList();
-            if (copies.Count == 0)
+            var loaded = Copies(live, model.Node, model.Role).ToList();
+            if (loaded.Count == 0)
             {
                 leftOut.Add(new CharacterLeftOutModel(model.FileName, NotDrawnReason));
+                continue;
+            }
+            var copies = loaded.Where(copy => copy.Drawn).ToList();
+            if (copies.Count == 0)
+            {
+                leftOut.Add(new CharacterLeftOutModel(model.FileName, HiddenByGearReason));
                 continue;
             }
             drawn.Add(new CharacterDrawnModel(model, copies.Select(copy => copy.EnabledAttributes).Distinct().ToArray(),
@@ -101,7 +109,7 @@ internal static class CharacterDrawState
             .SelectMany(node => new[] { PainterVisibility.NormalizePath(node.ActualPath), PainterVisibility.NormalizePath(node.GamePath) })
             .ToHashSet(StringComparer.Ordinal);
         // Only the character's own slots: besides weapons, its draw object can hold others that aren't listed.
-        var unlisted = live.Models.Where(copy => copy.Slot >= 0 && !listed.Contains(copy.Path)).Select(copy => copy.Path)
+        var unlisted = live.Models.Where(copy => copy.Slot >= 0 && copy.Drawn && !listed.Contains(copy.Path)).Select(copy => copy.Path)
             .Distinct(StringComparer.Ordinal).ToLookup(path => external?.Invoke(path) == true);
         string[] Names(IEnumerable<string> paths) => paths.Select(CharacterSendPlan.FileName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         return new CharacterDrawPlan(shown, leftOut, Names(unlisted[false]), true) { External = Names(unlisted[true]) };

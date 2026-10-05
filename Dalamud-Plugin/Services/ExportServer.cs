@@ -579,6 +579,9 @@ public sealed partial class ExportServer : IDisposable
         if (method == "POST" && path.TrimEnd('/') == "/skeleton")
             return await HandleSkeletonAsync(request).ConfigureAwait(false);
 
+        if (method == "POST" && path.TrimEnd('/') == "/racial-deformer")
+            return await HandleRacialDeformerAsync(request).ConfigureAwait(false);
+
         return Error(404, "endpoint_not_found", "the requested bridge endpoint was not found");
     }
 
@@ -599,6 +602,7 @@ public sealed partial class ExportServer : IDisposable
                 "instant-edit.structured-errors.v1",
                 "instant-edit.import-status.v1",
                 SkeletonCapability,
+                RacialDeformerCapability,
             },
         }));
 
@@ -1788,6 +1792,7 @@ public sealed partial class ExportServer : IDisposable
             "/mashup/export" => "mashup_export",
             "/export" => "export",
             "/skeleton" => "skeleton",
+            "/racial-deformer" => "racial_deformer",
             _ => "http_request",
         };
 

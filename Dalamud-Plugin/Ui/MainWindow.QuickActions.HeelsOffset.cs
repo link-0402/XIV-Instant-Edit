@@ -115,9 +115,11 @@ public sealed partial class MainWindow
         if (result.Earlier is { } earlier)
             HeelsText(Theme.Warning, $"Simple Heels reads your {earlier.Slot.Name()} model's offset, {earlier.Offset.Attribute}, before this one's, " +
                                      "so that one applies. Fix offset doesn't change that model.");
+        else if (result.Hidden is { } hiddenOffset && measurement.ModelOffset is null)
+            Widgets.HintWrapped($"Your hidden {hiddenOffset.Slot.Name()} model sets {hiddenOffset.Offset.Attribute}. Simple Heels uses it while this model sets none.");
         if (service.Ipc.Offset is { } now)
         {
-            var expected = result.ModelOffset * result.HeightScale;
+            var expected = (result.ModelOffset ?? result.Hidden?.Offset.Value) * result.HeightScale;
             var matches = expected is { } value && MathF.Abs(now - value) < 0.002f;
             HeelsText(matches ? Theme.Success : Theme.Hint, $"Simple Heels applies {HeelsModelOffset.Format(now)} to this outfit now.");
             if (!matches && expected is not null && result.Earlier is null)
