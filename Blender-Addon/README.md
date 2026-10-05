@@ -126,6 +126,14 @@ Everything is in the **IE - Instant Edit** tab of the 3D Viewport's sidebar (pre
   "Sets hair EST entry". It warns when the parts disagree, the tag is another race's, or the model
   isn't hair. Exporting the hair without a tag takes back only the entries Quick Export set, and
   restoring a Quick Export backup restores its EST entries too. Simple Export never changes EST.
+- Sizes from Magic Fit: with Magic Fit installed, **Export Magic Fit Sizes** in the Quick Export
+  options exports the model at every size picked in the **Sizes** of Magic Fit's **Resize** panel.
+  Magic Fit resizes the clothing to each size first, as shape keys it keeps for the next time.
+  Quick Export makes each size an option of one group, **New Group** or the group picked as the
+  target, named after the size (`Medium Rue`), with the size the body shows on. Exporting again
+  replaces those options' models. Each model goes next to the imported one, named after it and the
+  size; **Simple Export** writes a file per size. The clothing's `shp_` keys keep the offsets they
+  have at the size it was made for.
 - SimpleHeels offsets: give a mesh part the attribute `heels_offset=0.15` with its **+** button,
   or turn on **Options > Export > Calculate Heels Offset**.
 - Keyboard shortcuts for Quick Export and the rest pose toggle. They start without a key: set one

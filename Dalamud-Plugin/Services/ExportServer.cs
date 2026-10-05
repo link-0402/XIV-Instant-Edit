@@ -573,6 +573,9 @@ public sealed partial class ExportServer : IDisposable
         if (method == "POST" && path.TrimEnd('/') == "/export")
             return await HandleExportAsync(request).ConfigureAwait(false);
 
+        if (method == "POST" && path.TrimEnd('/') == "/export/sizes")
+            return await HandleSizesExportAsync(request).ConfigureAwait(false);
+
         if (method == "POST" && path.StartsWith("/painter/", StringComparison.Ordinal) && _painter is { } painter)
             return painter.Handle(path.TrimEnd('/'), request.Body);
 
@@ -603,6 +606,7 @@ public sealed partial class ExportServer : IDisposable
                 "instant-edit.import-status.v1",
                 SkeletonCapability,
                 RacialDeformerCapability,
+                SizesExportCapability,
             },
         }));
 
@@ -1791,6 +1795,7 @@ public sealed partial class ExportServer : IDisposable
             "/mashup/plan" => "mashup_plan",
             "/mashup/export" => "mashup_export",
             "/export" => "export",
+            "/export/sizes" => "export_sizes",
             "/skeleton" => "skeleton",
             "/racial-deformer" => "racial_deformer",
             _ => "http_request",
@@ -1819,7 +1824,7 @@ public sealed partial class ExportServer : IDisposable
             return "reservation";
         if (code is "export_not_found")
             return "receipt_lookup";
-        if (code is "destination_not_ready" or "vanilla_mod_exists" or "mashup_plan_mismatch")
+        if (code is "destination_not_ready" or "vanilla_mod_exists" or "mashup_plan_mismatch" or "sizes_need_mod")
             return "destination_validation";
         if (code is "racial_scaling_preview")
             return "racial_scaling";
@@ -1845,6 +1850,8 @@ public sealed partial class ExportServer : IDisposable
             return "Select or create a valid Penumbra destination, then retry.";
         if (code is "mashup_plan_mismatch")
             return "Refresh the mashup plan and retry the export.";
+        if (code is "sizes_need_mod")
+            return "Export once with Magic Fit Sizes off to create the mod, then export the sizes.";
         if (code is "racial_scaling_preview")
             return "Re-import the model with racial scaling off to edit and export it.";
         if (code == "internal_error")
@@ -1882,7 +1889,7 @@ public sealed partial class ExportServer : IDisposable
             "duplicate_export_id" => 409,
             "mashup_plan_mismatch" => 409,
             "racial_scaling_preview" => 409,
-            "vanilla_mod_exists" or "destination_not_ready" => 409,
+            "vanilla_mod_exists" or "destination_not_ready" or "sizes_need_mod" => 409,
             "export_not_found" => 404,
             "server_stopped" or "internal_error" => 500,
             _ => 400,

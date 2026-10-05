@@ -20,8 +20,9 @@ dotnet build Dalamud-Plugin/InstantEdit.csproj -c Release -p:SkipDistributionPac
 PowerShell users should check `$LASTEXITCODE` after each command.
 
 `run_blender_suites.py` runs `bridge_regression`, `smoke_export`,
-`correctness_regression`, `animation_regression`, `skeleton_regression` and
-`vertex_tools_regression`, or the suite names and script paths you pass, as
+`correctness_regression`, `animation_regression`, `skeleton_regression`,
+`character_regression`, `vertex_tools_regression`, `racial_scaling_regression`
+and `sizes_regression`, or the suite names and script paths you pass, as
 `blender --background --factory-startup --python-exit-code 1 --python <script>`.
 Pass `--blender <path>` to test a Blender that is not on PATH. Each script gets
 a new temporary Blender user profile. The fixtures call
@@ -77,8 +78,15 @@ updates the distribution archives or extension repository index.
   the triangulation and bone-weight export checks, the Pose section's armature,
   actions and rest pose toggle, the shortcuts, the listener taking over a freed
   port, and that every sidebar icon exists.
+- `sizes_regression.py`: exports at Magic Fit's sizes. Against a stand-in for
+  Magic Fit's API: finding it by add-on name, the `/export/sizes` request, each
+  exported model's shape, the targets that can't take sizes, Edit Mode, and Simple
+  Export's file per size. Then against Magic Fit itself, when `MAGIC_FIT_ROOT` (or
+  a `Magic Fit` folder beside the repository) holds its repository; otherwise that
+  part is skipped.
 - `ExportContextRegression`: named session-store and variant-export scenarios,
-  plus authorization, backups, resource bundling, migration, mod metadata, and
+  the option group of an export at Magic Fit's sizes and its request
+  (`SizesExportScenarios.cs`), plus authorization, backups, resource bundling, migration, mod metadata, and
   collection activation (`CollectionActivationScenarios.cs`: enabling a new mod
   must not depend on the redraw step), and the window view models
   (`UiViewModelScenarios.cs`: kind filters, search, expansion keys, status feed,

@@ -65,6 +65,9 @@ jobs:
       - name: Run racial scaling regressions
         run: python3 Blender-Addon/testing/run_blender_suites.py racial_scaling_regression
 
+      - name: Run Magic Fit size regressions
+        run: python3 Blender-Addon/testing/run_blender_suites.py sizes_regression
+
       - name: Run cache regressions
         run: python3 Blender-Addon/testing/cache_regression.py
 
