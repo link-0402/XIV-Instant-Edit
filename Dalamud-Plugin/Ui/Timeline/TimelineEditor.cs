@@ -211,7 +211,8 @@ internal sealed class TimelineEditor
                 }
                 var keys = moving.Select(item => item.Key).ToImmutableArray();
                 BeginEdit(TimelineGesture.Move, keys,
-                    [.. moving.SelectMany(item => item.Duration > 0 ? new[] { item.Start, TimelineEdits.End(item) } : [item.Start])],
+                    [.. moving.SelectMany(item => item.Duration > 0 && !TimelineDocument.Holds(item)
+                        ? new[] { item.Start, TimelineEdits.End(item) } : [item.Start])],
                     TimelineSnap.Targets(doc, playhead, keys.ToHashSet(StringComparer.Ordinal)));
                 break;
             case TimelinePart.Lane or TimelinePart.None:

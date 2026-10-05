@@ -410,6 +410,21 @@ Saving:
 - [ ] Delete the only entry of a conditional track; edit a PAP with several entries
   and one with an odd footer offset. Every entry still plays.
 
+Expressions without time control:
+Without time control the game ignores a C010's length and frame range. A face pose is
+a constant two-key clip, so the face shows at once and holds. Seen in game on
+2026-10-05: Leena Grind on Breathcontrol's Smile (stored 10 frames, range 0 to 0)
+shows for the whole 100-frame loop. The editor now draws such a face until the next
+face or the end and marks it "held". 4,912 library faces are like this, 3,434 of them
+with the empty 0 to 0 range VFXEditor writes.
+- [ ] Open that mod: the Smile spans the whole loop, reads "held" and has no resize
+  edges. Tick Time control: it keeps its span and becomes resizable. Shorten it to 30
+  frames and save in place (the range becomes 0 to 1). In game the smile now ends
+  after 1 s and comes back with each loop.
+- [ ] Give a held face a timed face later in the clip. The editor ends the held face
+  where the timed one starts and shows nothing after it ends. Check what the game
+  shows after the timed face ends: the held face, or the neutral face.
+
 Effects that stop:
 Red Carpet's Popoto Step dance (a swap of its mode A walk onto dance12_loop) starts
 four effects with Async VFX entries at loop/wait 909. With -1 the carpet, cloud and

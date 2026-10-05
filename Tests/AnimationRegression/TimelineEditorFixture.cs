@@ -44,6 +44,65 @@ internal static class TimelineEditorFixture
         Gestures(check);
         Keys(check);
         Panel(check);
+        Holding(check);
+    }
+
+    /// <summary>
+    /// A face (cfxf_) without time control: the game ignores its length and frame range, and the
+    /// pose shows until the next face starts or the clip ends (seen in game on a mod whose smile
+    /// stored 10 frames and showed for the whole 100-frame loop).
+    /// </summary>
+    private static void Holding(Action<bool, string> check)
+    {
+        var timed = NoValues.Add(TmbEntrySchema.TimeControlField, 1);
+        var free = NoValues.Add(TmbEntrySchema.TimeControlField, 0);
+        TimelineEvent Face(string key, int start, int duration, ImmutableDictionary<string, double> values, string path = "cfxf_smile") =>
+            Ev(key, TimelineLane.Expression, start, duration, true, magic: "C010", path: path) with { Values = values };
+        var doc = Doc(100,
+            Ev("m", TimelineLane.Motion, 0, 100, true, TimelineAccess.Locked, magic: "C009", path: "cbem_sp01"),
+            Face("held", 0, 10, free),
+            Face("blink", 30, 8, free, "cfxb_blink1"),
+            Face("timed", 60, 20, timed, "cfxf_angry"),
+            Face("last", 85, 5, free, "cfxf_bow"),
+            Ev("lip", TimelineLane.LipSync, 0, 40, true, magic: "C010", path: "cfxl_lip_nor1") with { Values = free });
+        check(TimelineDocument.Holds(doc.Events[1]) && TimelineDocument.Holds(doc.Events[4]) && !TimelineDocument.Holds(doc.Events[2]) &&
+              !TimelineDocument.Holds(doc.Events[3]) && !TimelineDocument.Holds(doc.Events[5]) && !TimelineDocument.Holds(Face("x", 0, 10, NoValues)) &&
+              !TimelineDocument.Holds(Face("x", 0, 10, free) with { Magic = "C009" }),
+            "only a C010 face without time control holds; blinks, lip sync, timed faces and unknown values keep their length");
+
+        var layout = TimelineLayout.Build(doc);
+        int End(string key) => layout.EndOf(layout.IndexOf(key));
+        check(doc.HeldEnd(doc.Events[1]) == 60 && End("held") == 60 && layout.Shown(layout.IndexOf("held")) is { Duration: 60, Key: "held" } &&
+              End("last") == 100 && End("blink") == 38 && End("timed") == 80 && End("lip") == 40 &&
+              ReferenceEquals(layout.Shown(layout.IndexOf("timed")), doc.Events[3]) && layout.RowOf(layout.IndexOf("timed")) == layout.RowOf(layout.IndexOf("held")),
+            "a holding face lasts until the next face starts or the clip ends, whatever length it stores; other events are drawn as they are");
+        var shorter = doc with { Length = 50 };
+        check(shorter.HeldEnd(doc.Events[1]) == 50 && shorter.HeldEnd(doc.Events[4]) == 86 && doc.HeldEnd(Face("late", 120, 10, free)) == 121,
+            "a holding face follows the clip's length, and one past the end still takes a frame");
+
+        var view = TimelineView.Fit(100, 440);
+        check(Geometry.HitTest(doc, layout, view, At(60, 1, -1)) is { Part: TimelinePart.Body, Key: "held" } &&
+              Geometry.HitTest(doc, layout, view, At(0, 1, 1)) is { Part: TimelinePart.Body, Key: "held" } &&
+              Geometry.HitTest(doc, layout, view, At(30, 1)) is { Part: TimelinePart.Body, Key: "held" } &&
+              !TimelineEdits.CanResize(doc.Events[1]) && TimelineEdits.CanResize(doc.Events[3]) &&
+              ReferenceEquals(TimelineEdits.Resize(doc, "held", false, 5), doc),
+            "a holding face is grabbed over the frames it shows and has no edges to resize");
+        check(TimelineSnap.Targets(doc, null).SequenceEqual([0, 30, 38, 40, 60, 80, 85, 100]),
+            "the length a holding face stores is no snap target");
+        var editor = Editor(doc);
+        editor.Press(Hit(editor, At(60, 1, -1)));
+        check(editor.Gesture == TimelineGesture.Move && editor.Primary == "held", "pressing where a holding face ends moves it");
+        editor.Release();
+
+        var on = TimelineEdits.Replace(doc, doc.Events[1] with { Values = timed });
+        check(on.Events[1] is { Duration: 60 } && !TimelineDocument.Holds(on.Events[1]) && TimelineEdits.CanResize(on.Events[1]) &&
+              TimelineEdits.Replace(doc, doc.Events[1] with { Values = timed, Duration = 25 }).Events[1].Duration == 25 &&
+              TimelineEdits.Replace(doc, doc.Events[4] with { Values = timed }).Events[4].Duration == 15 &&
+              TimelineEdits.Replace(doc, doc.Events[1] with { Start = 5 }).Events[1] is { Start: 5, Duration: 10 },
+            "turning time control on keeps how long a face showed, unless a new length comes with it");
+        var off = TimelineEdits.Replace(doc, doc.Events[3] with { Values = free });
+        check(off.Events[3].Duration == 20 && TimelineDocument.Holds(off.Events[3]) && TimelineLayout.Build(off).EndOf(3) == 85,
+            "turning it off keeps the stored length, which the face then ignores");
     }
 
     private static void Panel(Action<bool, string> check)

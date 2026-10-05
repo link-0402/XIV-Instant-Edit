@@ -399,6 +399,17 @@ internal static class TmbFileFixture
               output.Find(12)!.Int32(68) == 5 && !output.Entries.Any(x => x.Text == "cfxf_laugh"),
             "edited paths and values are written, other bits and unknown fields are kept, unused strings dropped");
 
+        // A holding face with VFXEditor's empty range (0 to 0), given time control, gets the 0 to 1 of vanilla timed faces.
+        var held = new Tmb().Head(100, null, 2).Actor(2, 3, 4).Track(3, 5).Track(4, 6).Motion(5, 100).Face(6, 0, 10, 0, 0, "cfxf_smile").Build();
+        var heldDoc = TimelineConvert.Read(TmbFile.Parse(held));
+        var timedFace = TmbFile.Parse(TimelineConvert.Apply(held, heldDoc with
+        {
+            Events = [.. heldDoc.Events.Select(x => x.Key == "t6" ? x with { Duration = 100, Values = x.Values.SetItem(TmbEntrySchema.TimeControlField, 1) } : x)],
+        })).Find(6)!;
+        check(TimelineDocument.Holds(heldDoc.Events[1]) && timedFace.Int32(12) == 100 && timedFace.Int32(20) == 1 &&
+              timedFace.Single(24) == 0 && timedFace.Single(28) == 1 && timedFace.Text == "cfxf_smile",
+            "a holding face given time control keeps a range it can play");
+
         // Removing the effect drops its track; the sound's track stays for its condition. Ids close up
         // and the push follows its curve to its new id.
         var removed = TimelineConvert.Apply(original, doc with { Events = doc.Events.RemoveAll(x => x.Key is "t10" or "t12") });

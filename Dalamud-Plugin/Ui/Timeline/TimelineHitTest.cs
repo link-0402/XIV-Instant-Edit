@@ -97,7 +97,7 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
         {
             if (layout.RowOf(index) != row)
                 continue;
-            var ev = events[index];
+            var ev = layout.Shown(index);
             var part = PartAt(ev, layout.EndOf(index), view, x);
             if (part == TimelinePart.None)
                 continue;
@@ -119,7 +119,7 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
     private TimelinePart PartAt(TimelineEvent ev, int end, TimelineView view, float x)
     {
         var (left, right) = EventSpan(ev, end, view);
-        if (ev.Access == TimelineAccess.Editable && ev.Resizable && ev.Duration > 0)
+        if (TimelineEdits.CanResize(ev) && ev.Duration > 0)
         {
             var edge = RightEdgeX(ev, view);
             // Inside the clip each edge takes at most a third, so a narrow clip can still be moved.

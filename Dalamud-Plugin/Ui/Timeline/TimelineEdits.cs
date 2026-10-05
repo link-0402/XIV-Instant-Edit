@@ -13,7 +13,8 @@ internal static class TimelineEdits
 {
     public static bool CanMove(TimelineEvent ev) => ev.Access is TimelineAccess.Editable or TimelineAccess.Movable;
 
-    public static bool CanResize(TimelineEvent ev) => ev.Access == TimelineAccess.Editable && ev.Resizable;
+    /// <summary>Whether the event's length can change: never for a face that holds, whose length the game ignores.</summary>
+    public static bool CanResize(TimelineEvent ev) => ev.Access == TimelineAccess.Editable && ev.Resizable && !TimelineDocument.Holds(ev);
 
     public static bool CanEdit(TimelineEvent ev) => ev.Access == TimelineAccess.Editable;
 
@@ -256,7 +257,8 @@ internal static class TimelineEdits
     /// only its start; a Locked one nothing. What the loader derives from the entry's kind and track
     /// (Resizable, LockReason, Conditional) is kept too, since saving checks it against the written
     /// file, and only a resizable event takes a new duration (at least one frame; an unchanged one is
-    /// kept exactly). Starts stay inside the TMB's range.
+    /// kept exactly). Starts stay inside the TMB's range. A holding face that gets time control and
+    /// no new duration lasts as long as it held, so it keeps playing the same.
     /// </summary>
     public static TimelineDocument Replace(TimelineDocument doc, TimelineEvent ev)
     {
@@ -277,6 +279,9 @@ internal static class TimelineEdits
             TimelineAccess.Movable => old with { Start = start },
             _ => old,
         };
+        if (TimelineDocument.Holds(old) && old.Resizable && updated.Duration == old.Duration &&
+            updated.Values.GetValueOrDefault(TmbEntrySchema.TimeControlField) != 0)
+            updated = updated with { Duration = doc.HeldEnd(old) - old.Start };
         return Same(old, updated) ? doc : doc with { Events = doc.Events.SetItem(index, updated) };
     }
 
