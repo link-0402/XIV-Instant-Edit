@@ -29,6 +29,7 @@ public sealed partial class MainWindow
         PaintSkinCard,
         HeelsOffsetCard,
         SendCharacterCard,
+        PhysicsCard,
     ];
 
     private QuickAction NeckSeamCard => new("skin-seams", FontAwesomeIcon.UserCheck, "Fix skin seams",

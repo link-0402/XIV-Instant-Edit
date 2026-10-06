@@ -177,6 +177,7 @@ try
     RacialScalingScenarios.Run(testRoot);
     HeelsOffsetScenarios.Run();
     CharacterSendScenarios.Run();
+    PhysicsScenarios.Run(testRoot);
 
     // ---- Backup safety, export-context authorization, and revocation ----
     var originalRoot = Path.Combine(testRoot, "OriginalMod");
