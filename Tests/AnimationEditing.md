@@ -547,3 +547,93 @@ face once at its own length.
 - [ ] A loop that runs out returns the face to neutral. Check with a loop started late
   (move the face to about 31,000 frames, about 1 minute of loop) rather than waiting
   18 minutes.
+
+## Motion editor live acceptance (pending)
+
+Bone layers (offset, amplitude, pose blend) live in the Timeline window's document and
+are baked by the existing save path: `AnimationBakeService.Session.ApplyMotion` runs
+`MotionEvaluator` over every sampled pose before the build. Live shows them on the GPose
+actor with no hooks: `MotionLiveDisplay` swaps an uncompressed copy of the clip (the
+samples a bake compresses) into the actor's Havok controls, and puts the clip's own
+binding and track weights back afterwards. The evaluator, layer edits, angles, rows, hit
+zones, gestures, documents and journals are covered offline (MotionLayerFixture,
+MotionEditsFixture).
+
+Spike, checked in game 2026-10-06 with a fixed test layer (the neck bent 30 degrees about
+its own Z axis over the middle third, which tilts the head forward): Live showed it, with
+pause, scrubbing, replay and speed; toggling the layer under Live, Stop, leaving GPose and
+unloading the plugin with Live on all worked; Preview played the built file. Saving worked
+but stacked: the reload after a save dropped the layer, so adding it again baked a second
+tilt onto the saved result. The window now keeps the layers and the motion before its
+first save (below).
+
+Bone layers (reported good in game 2026-10-06):
+- [x] Add > Offset layer: a bar covers the whole clip in the Bones rows and the panel shows
+  it. Choose the neck in the panel and drag Turn with Live on: the head follows the drag
+  and a key diamond appears at the playhead.
+- [x] Move the playhead and turn the neck the other way: a second key. Scrubbing goes
+  smoothly between them with Smooth, evenly with Linear and holds with Hold.
+- [x] Drag a bar's ends, the fade handles on its top edge, the whole bar and a key. Each
+  follows the pointer and snaps to edges and keys (Alt drags freely); Ctrl+Z undoes each
+  drag in one step. Alt+arrows nudge the selected key or layer.
+- [x] Double-click the empty Bones row: a one-second offset section appears there.
+  Right-click a layer: turn it off (Live drops it), duplicate, apply earlier or later,
+  delete; right-click a key: delete it.
+- [x] Add > Amplitude layer on an emote with clear arm motion: at 200% the arms swing
+  twice as far, at 0% they hold their average pose. Limit it to one bone: only that bone
+  changes.
+- [x] Add > Pose layer, choose a bone, press Key, then turn it: the bone holds that
+  rotation over the layer, and Blend 50% goes half way. Tick Move to set its position too.
+- [x] Save into a new mod: the layers stay in the editor, not dirty. Change a value and
+  save in place: the result replaces the earlier one, the tilt doesn't double. Undo last
+  save: the layers stay as unsaved changes.
+- [x] Turn every layer off and save in place: the clip's original motion comes back.
+- [x] Key a bone outside IVCS + YAS that the clip doesn't animate: the save footer warns
+  that sync plugins can refuse the file.
+- [x] Change the length with a layer present: Live asks for Preview instead; saving bakes
+  the layers in for good and they leave the editor.
+
+Listener in GPose, reported good in game 2026-10-06 (it follows the GPose target when that is a GPose actor, else the posed
+copy of your character; outside GPose your own character):
+- [x] In GPose, play an emote on the GPose actor (Brio, or the GPose animation controls).
+  It shows under Playing now without leaving GPose, and the list's status reads
+  "Listening in GPose". Target another GPose actor: its animations are listed instead.
+- [x] With Live on, the clip stays listed as playing while you edit.
+- [x] A clip captured in GPose: its LivePose tab says the adjustments are read from your own
+  character outside GPose. Save its timeline in GPose: it works. Leave GPose and save
+  again: the message says the GPose character is gone.
+- [x] Leave GPose: the list follows your own character again, and what played in GPose
+  stays under Played recently.
+
+Bones window (Phase 4; the map's data, selection rules, edits for several bones and Mirror
+are covered offline in PoseEditorFixture):
+- [ ] The Timeline toolbar's figure button opens the Bones window, also in GPose; it closes
+  with the Timeline window. Brio's body, armor and hand pictures show, with toes for IVCS
+  skeletons and a tail for races with one. Dots sit on their joints and bones missing from
+  the clip's skeleton have none.
+- [ ] Hover a dot: its name and state show. Click selects it, Ctrl+click adds or removes,
+  Shift+click selects it with everything below it, a click on empty space clears. The lines
+  below the primary bone light up. Swap sides moves the left side's dots to the right.
+- [ ] Select > Left fingers, Spine and the other groups select those bones; with a layer
+  selected, "Bones this layer changes" selects its bones. All bones lists the skeleton as a
+  tree, coloured like the dots, and a search narrows it.
+- [ ] Select an offset layer and the neck: the rotation ball's rings follow the camera as you
+  orbit it. Drag a ring with Live on: the head turns about that axis, a key appears at the
+  playhead, and Ctrl+Z undoes the whole drag. The wheel over a ring turns it in steps, Shift
+  finer, and a right click locks the ring. Character axes turn it about up, forward and to
+  the side whatever its own axes are.
+- [ ] Select a side skirt bone and a leg: Bone axes greys out and the ball's rings are the
+  character's. A drag turns both the same way about their own joints; so does a Turn field.
+  Key, Delete key, Reset and Clear act on every selected bone.
+- [ ] Shift+click the upper arm and drag a ring: the arm turns as one piece, the forearm and
+  hand follow without turning further. Make the hand the primary bone (Ctrl+click it twice):
+  only the hand turns.
+- [ ] Key the left upper arm raised, then Mirror: the right arm raises the mirrored way,
+  also when the body is turned in the clip, and the right arm's earlier keys in that layer
+  are replaced.
+- [ ] A pose layer: the ball turns the selected bones from the clip's own pose; Reset keys
+  that pose back. An amplitude layer: Limit to selected adds the selected bones to its list.
+- [ ] Previous and next key step the playhead between the layer's keys; the arrows step it a
+  frame (Shift ten) while the Bones window has focus, without moving the character.
+- [ ] Bone names in the Animated Bones list and the bone picker read Left Knee for
+  j_asi_b_l, Left Foot for j_asi_d_l and Body for n_hara.

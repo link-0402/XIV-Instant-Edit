@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using InstantEdit.Services.Animations.Motion;
 
 namespace InstantEdit.Services.Animations.Timeline;
 
@@ -71,6 +72,20 @@ internal sealed record TimelineDocument(
     /// <summary>The longest length the editor allows, in frames (10 minutes).</summary>
     public const int MaxLength = 18000;
     public bool LengthChanged => Length != SourceLength;
+
+    /// <summary>
+    /// The bone layers that change the clip's motion, applied in this order (see
+    /// <see cref="MotionEvaluator"/>). Saving bakes them into the motion; empty when the motion is not edited.
+    /// </summary>
+    public ImmutableArray<MotionLayer> Motion { get => motion; init => motion = value.IsDefault ? [] : value; }
+
+    private readonly ImmutableArray<MotionLayer> motion = [];
+
+    /// <summary>The number the next added layer's "m" key uses.</summary>
+    public int NextMotionKey { get; init; } = 1;
+
+    /// <summary>Whether saving changes the motion through its bone layers.</summary>
+    public bool MotionChanged => MotionEvaluator.Changes(Motion);
 
     /// <summary>
     /// An expression's own timeline (chara/action/facial/pose/smile.tmb), not a clip's: it has no

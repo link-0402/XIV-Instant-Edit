@@ -3,6 +3,7 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
+using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui.Timeline;
 
@@ -24,6 +25,9 @@ public sealed partial class TimelineWindow
     ];
     private static readonly string[] LaneGlyphs = [.. LaneIcons.Select(icon => icon.ToIconString())];
     private static readonly string LockGlyph = FontAwesomeIcon.Lock.ToIconString();
+    // Offset, amplitude and pose layers.
+    private static readonly FontAwesomeIcon[] LayerIcons = [FontAwesomeIcon.Bone, FontAwesomeIcon.WaveSquare, FontAwesomeIcon.StreetView];
+    private static readonly string[] LayerGlyphs = [.. LayerIcons.Select(icon => icon.ToIconString())];
     private static readonly string[] AddHereLabels =
         ["Add expression here", "Add lip sync here", "Add sound here", "Add effect here", "Add prop here"];
 
@@ -38,6 +42,7 @@ public sealed partial class TimelineWindow
     private string lengthText = string.Empty;
     private string? headerNote;
     private string? pastEndWarning;
+    private string? layerBonesWarning;
     private ImmutableArray<TimelineEffectCheck.Problem> effectProblems = [];
     private string? effectWarning;
     // The copies keeping them going swaps in, and how many events it changes.
@@ -50,6 +55,10 @@ public sealed partial class TimelineWindow
     private static FontAwesomeIcon LaneIcon(TimelineLane lane) => LaneIcons[Math.Min((int)lane, LaneIcons.Length - 1)];
 
     private static string LaneGlyph(TimelineLane lane) => LaneGlyphs[Math.Min((int)lane, LaneGlyphs.Length - 1)];
+
+    private static FontAwesomeIcon LayerIcon(MotionLayerKind kind) => LayerIcons[Math.Min((int)kind, LayerIcons.Length - 1)];
+
+    private static string LayerGlyph(MotionLayerKind kind) => LayerGlyphs[Math.Min((int)kind, LayerGlyphs.Length - 1)];
 
     private static uint U32(Vector4 colour) => ImGui.GetColorU32(colour);
 
@@ -163,9 +172,11 @@ public sealed partial class TimelineWindow
             rightPressed = false;
         }
 
-        var resizing = current.Gesture is TimelineGesture.ResizeLeft or TimelineGesture.ResizeRight or TimelineGesture.Length;
+        var resizing = current.Gesture is TimelineGesture.ResizeLeft or TimelineGesture.ResizeRight or TimelineGesture.Length or
+            TimelineGesture.LayerLeft or TimelineGesture.LayerRight or TimelineGesture.LayerFadeIn or TimelineGesture.LayerFadeOut or TimelineGesture.LayerKey;
         if (!readOnly && (resizing || hovered && current.Gesture == TimelineGesture.None &&
-                hit.Part is TimelinePart.LeftEdge or TimelinePart.RightEdge or TimelinePart.LengthHandle))
+                hit.Part is TimelinePart.LeftEdge or TimelinePart.RightEdge or TimelinePart.LengthHandle or TimelinePart.LayerLeft or
+                    TimelinePart.LayerRight or TimelinePart.LayerFadeIn or TimelinePart.LayerFadeOut or TimelinePart.LayerKey))
             ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeEw);
     }
 
@@ -182,6 +193,12 @@ public sealed partial class TimelineWindow
             RequestPicker(kind, hit.Part == TimelinePart.Legend ? current.Playhead : current.SnappedFrame(hit.Frame, io.KeyAlt), null);
             return;
         }
+        // A double click on the empty bone row adds an offset section there.
+        if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) && !readOnly && hit.Part == TimelinePart.MotionLane && hit.Layer == null)
+        {
+            AddLayerAt(current, MotionLayerKind.Offset, current.SnappedFrame(hit.Frame, io.KeyAlt));
+            return;
+        }
         if (!readOnly)
         {
             current.Press(hit, io.KeyCtrl, io.KeyShift, io.KeyAlt);
@@ -191,8 +208,24 @@ public sealed partial class TimelineWindow
             current.Press(hit, alt: io.KeyAlt);
         else if (hit.OnEvent)
             current.Select(hit.Key!, io.KeyCtrl, io.KeyShift);
+        else if (hit.OnLayer)
+            current.SelectLayer(hit.Layer!, hit.Part == TimelinePart.LayerKey ? hit.KeyFrame : null);
         else if (!io.KeyCtrl && !io.KeyShift)
             current.ClearSelection();
+    }
+
+    /// <summary>
+    /// Adds a bone layer section starting at <paramref name="frame"/>: a second long, or to the end of the
+    /// clip, moved back when the clip ends sooner.
+    /// </summary>
+    private static void AddLayerAt(TimelineEditor current, MotionLayerKind kind, int frame)
+    {
+        var length = Math.Max(TimelineDocument.MinLength, current.Document.Length);
+        var start = Math.Clamp(frame, 0, length - 1);
+        var end = Math.Min(length, start + MotionEdits.SectionLength);
+        if (end - start < MotionEdits.SectionLength)
+            start = Math.Max(0, end - MotionEdits.SectionLength);
+        current.AddLayer(kind, start, end);
     }
 
     /// <summary> Labels, the past-end warning, the length texts and prop groups, rebuilt only when the document or layout changes. </summary>
@@ -207,6 +240,7 @@ public sealed partial class TimelineWindow
         lengthText = TimelineWindowViews.LengthText(doc);
         headerNote = TimelineWindowViews.HeaderNote(doc);
         pastEndWarning = TimelineWindowViews.PastEndWarning(doc);
+        layerBonesWarning = source == null ? null : TimelineWindowViews.LayerBonesWarning(doc, Fresh(source).Clip);
         effectProblems = source?.EffectProblems(doc) ?? [];
         effectWarning = TimelineWindowViews.EffectLoopWarning(effectProblems);
         effectCopies = TimelineEffectCheck.Copies(effectProblems);
@@ -284,6 +318,7 @@ public sealed partial class TimelineWindow
             drawList.AddText(new Vector2(min.X + Theme.Scaled(30), textY), U32(Theme.Label), TimelineWindowViews.LaneName(lane.Lane));
             drawList.PopClipRect();
         }
+        DrawLayerLegend(drawList, current, doc, layout, geometry, min, max, trackLeft, rowsTop);
         drawList.PopClipRect();
 
         // The track: grid, the shade past the end, prop groups, events, then the lines on top.
@@ -299,6 +334,7 @@ public sealed partial class TimelineWindow
             drawList.AddRectFilled(new Vector2(Math.Max(endX, trackLeft), rowsTop), max, U32(Theme.PastEnd));
         DrawGroups(drawList, geometry, view, min, max, trackLeft);
         DrawEvents(drawList, current, doc, layout, geometry, view, min, max, trackLeft, rowsTop, hovered && hit.OnEvent ? hit.Key : null);
+        DrawLayers(drawList, current, doc, layout, geometry, view, min, max, trackLeft, rowsTop, hovered ? hit : TimelineHit.None());
         if (doc.LengthChanged)
         {
             var ghost = Crisp(trackLeft + view.X(doc.SourceLength));
@@ -476,10 +512,130 @@ public sealed partial class TimelineWindow
             drawList.AddCircleFilled(new Vector2(badgeX, y0 + Theme.Scaled(3)), Theme.Scaled(2.5f), U32(Theme.Info));
     }
 
+    /// <summary>
+    /// The bone layer rows below the event lanes: each layer's kind and name over a band in its colour,
+    /// or "Bones" over the empty row a first layer goes into; a line sets them apart from the events.
+    /// </summary>
+    private static void DrawLayerLegend(ImDrawListPtr drawList, TimelineEditor current, TimelineDocument doc, TimelineLayout layout,
+        TimelineGeometry geometry, Vector2 min, Vector2 max, float trackLeft, float rowsTop)
+    {
+        if (layout.MotionRows == 0)
+            return;
+        var fontSize = ImGui.GetFontSize();
+        for (var row = layout.MotionFirstRow; row < layout.MotionFirstRow + layout.MotionRows; row++)
+        {
+            var top = min.Y + geometry.RowTop(row);
+            var bottom = top + geometry.Row;
+            if (bottom < rowsTop || top > max.Y)
+                continue;
+            var index = layout.LayerIndexAt(row);
+            var layer = index >= 0 ? doc.Motion[index] : null;
+            var colour = layer == null ? Theme.Muted : TimelineWindowViews.LayerColour(layer.Kind);
+            drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(max.X, bottom),
+                U32((row - layout.MotionFirstRow) % 2 == 0 ? Theme.RowAlt : Theme.PanelBg));
+            drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(min.X + Theme.Scaled(3), bottom), U32(colour));
+            var textY = top + (geometry.Row - fontSize) / 2;
+            drawList.PushClipRect(new Vector2(min.X, top), new Vector2(trackLeft - Theme.Scaled(3), bottom), true);
+            drawList.AddText(UiBuilder.IconFont, fontSize, new Vector2(min.X + Theme.Scaled(9), textY), U32(Theme.WithAlpha(colour, layer?.Enabled == false ? .5f : 1)),
+                LayerGlyph(layer?.Kind ?? MotionLayerKind.Offset));
+            var name = layer == null ? Theme.Hint : !layer.Enabled ? Theme.Muted : current.SelectedLayer == layer.Key ? Theme.Accent : Theme.Label;
+            drawList.AddText(new Vector2(min.X + Theme.Scaled(30), textY), U32(name), layer?.Name ?? TimelineWindowViews.BonesLaneName);
+            drawList.PopClipRect();
+        }
+        var y = Crisp(min.Y + geometry.RowTop(layout.MotionFirstRow));
+        if (y > rowsTop && y < max.Y)
+            drawList.AddLine(new Vector2(min.X, y), new Vector2(max.X, y), U32(Theme.WithAlpha(Theme.TreeLine, .8f)), Math.Max(1, MathF.Floor(Theme.Scale)));
+    }
+
+    /// <summary>
+    /// Each bone layer: a faint bar over its frames with its weight drawn on it, rising over the fade in
+    /// and falling over the fade out; its keys as diamonds; and, when it is selected or under the
+    /// pointer, handles where the fades end. A layer turned off is dimmed.
+    /// </summary>
+    private static void DrawLayers(ImDrawListPtr drawList, TimelineEditor current, TimelineDocument doc, TimelineLayout layout,
+        TimelineGeometry geometry, TimelineView view, Vector2 min, Vector2 max, float trackLeft, float rowsTop, TimelineHit hit)
+    {
+        var pad = Theme.Scaled(2);
+        var rounding = Theme.Scaled(3);
+        var line = Math.Max(1, MathF.Floor(Theme.Scale));
+        var fontSize = ImGui.GetFontSize();
+        for (var index = 0; index < doc.Motion.Length; index++)
+        {
+            var layer = doc.Motion[index];
+            var top = min.Y + geometry.RowTop(layout.LayerRow(index));
+            if (top + geometry.Row < rowsTop || top > max.Y || layer.End < view.First || layer.Start > view.Last)
+                continue;
+            var y0 = top + pad;
+            var y1 = top + geometry.Row - pad;
+            var x0 = trackLeft + view.X(layer.Start);
+            var x1 = Math.Max(trackLeft + view.X(layer.End), x0 + 1);
+            var fadeInX = Math.Clamp(trackLeft + view.X(layer.Start + layer.FadeIn), x0, x1);
+            var fadeOutX = Math.Clamp(trackLeft + view.X(layer.End - layer.FadeOut), fadeInX, x1);
+            var colour = TimelineWindowViews.LayerColour(layer.Kind);
+            var selected = current.SelectedLayer == layer.Key;
+            var hot = hit.OnLayer && hit.Layer == layer.Key;
+            var alpha = layer.Enabled ? 1f : .4f;
+            drawList.AddRectFilled(new Vector2(x0, y0), new Vector2(x1, y1), U32(Theme.WithAlpha(colour, .14f * alpha)), rounding);
+            drawList.AddQuadFilled(new Vector2(x0, y1), new Vector2(fadeInX, y0), new Vector2(fadeOutX, y0), new Vector2(x1, y1),
+                U32(Theme.WithAlpha(colour, (hot ? .62f : .46f) * alpha)));
+            drawList.AddRect(new Vector2(x0, y0), new Vector2(x1, y1), U32(Theme.WithAlpha(colour, .9f * alpha)), rounding, ImDrawFlags.None, line);
+            if (selected)
+                drawList.AddRect(new Vector2(x0 - 1, y0 - 1), new Vector2(x1 + 1, y1 + 1), U32(Theme.Accent), rounding, ImDrawFlags.None, Theme.Scaled(2));
+            var labelLeft = Math.Max(x0, trackLeft) + Theme.Scaled(4);
+            var labelRight = x1 - Theme.Scaled(4);
+            if (labelRight - labelLeft > Theme.Scaled(18))
+            {
+                drawList.PushClipRect(new Vector2(labelLeft, y0), new Vector2(labelRight, y1), true);
+                drawList.AddText(new Vector2(labelLeft, top + (geometry.Row - fontSize) / 2), U32(layer.Enabled ? Theme.Text : Theme.Muted),
+                    TimelineWindowViews.LayerLabel(layer));
+                drawList.PopClipRect();
+            }
+            var middle = (y0 + y1) / 2;
+            var half = Math.Min((y1 - y0) / 2, Theme.Scaled(5));
+            foreach (var key in layer.Keys)
+            {
+                var x = trackLeft + view.X(key.Frame);
+                if (x < trackLeft - half || x > max.X + half)
+                    continue;
+                if (selected && current.SelectedKey == key.Frame)
+                {
+                    var ring = half + Theme.Scaled(2);
+                    drawList.AddQuadFilled(new Vector2(x, middle - ring), new Vector2(x + ring, middle), new Vector2(x, middle + ring),
+                        new Vector2(x - ring, middle), U32(Theme.Accent));
+                }
+                // A key outside the layer still shapes the curve but never applies on its own.
+                var inside = key.Frame >= layer.Start && key.Frame <= layer.End;
+                var hotKey = hot && hit.Part == TimelinePart.LayerKey && hit.KeyFrame == key.Frame;
+                drawList.AddQuadFilled(new Vector2(x, middle - half), new Vector2(x + half, middle), new Vector2(x, middle + half),
+                    new Vector2(x - half, middle), U32(Theme.WithAlpha(Theme.Text, (inside ? hotKey ? 1 : .88f : .4f) * alpha)));
+            }
+            if (selected || hot)
+            {
+                var radius = Theme.Scaled(3);
+                drawList.AddCircleFilled(new Vector2(fadeInX, y0), radius,
+                    U32(hot && hit.Part == TimelinePart.LayerFadeIn ? Theme.Accent : Theme.WithAlpha(Theme.Text, .8f)));
+                drawList.AddCircleFilled(new Vector2(fadeOutX, y0), radius,
+                    U32(hot && hit.Part == TimelinePart.LayerFadeOut ? Theme.Accent : Theme.WithAlpha(Theme.Text, .8f)));
+            }
+        }
+    }
+
     private void DrawTooltip(TimelineEditor current, TimelineHit hit, bool hovering, bool readOnly)
     {
         if (!hovering || current.Gesture != TimelineGesture.None)
             return;
+        if (hit.OnLayer && MotionEdits.Find(current.Document, hit.Layer) is { } layer)
+        {
+            if (!Widgets.HoverDelay($"layer:{layer.Key}:{hit.Part}:{hit.KeyFrame}"))
+                return;
+            DrawLayerTooltip(layer, hit, readOnly);
+            return;
+        }
+        if (hit.Part == TimelinePart.MotionLane && hit.Layer == null && !readOnly && Widgets.HoverDelay("timeline-bones-lane"))
+        {
+            ImGui.SetTooltip("Double-click to add a bone layer here.");
+            return;
+        }
         if (hit.OnEvent && TimelineEdits.Find(current.Document, hit.Key) is { } ev)
         {
             // Event keys are unique in the document, so they serve as the hover id.
@@ -508,12 +664,62 @@ public sealed partial class TimelineWindow
             ImGui.SetTooltip(readOnly || current.FixedLength ? "The end of the clip." : "Drag to change the length.");
     }
 
+    /// <summary> A bone layer's or key's tooltip: what it is, where it lies and what dragging the part under the pointer does. </summary>
+    private static void DrawLayerTooltip(MotionLayer layer, TimelineHit hit, bool readOnly)
+    {
+        using var tooltip = ImRaii.Tooltip();
+        ImGui.TextColored(Theme.Label, layer.Name);
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.TextColored(Theme.Muted, MotionEdits.KindName(layer.Kind) + (layer.Enabled ? "" : " · off"));
+        if (hit.Part == TimelinePart.LayerKey && MotionEdits.KeyIndex(layer, hit.KeyFrame) is var at and >= 0)
+        {
+            var bones = layer.Keys[at].Bones.Count;
+            ImGui.TextUnformatted($"Key at {TimelineWindowViews.FrameText(hit.KeyFrame)} · {(bones == 1 ? "1 bone" : $"{bones} bones")}");
+            if (!readOnly)
+                ImGui.TextColored(Theme.Hint, "Drag to move the key.");
+            return;
+        }
+        ImGui.TextUnformatted($"From {TimelineWindowViews.FrameText(layer.Start)} to {TimelineWindowViews.FrameText(layer.End)}");
+        if (layer.FadeIn > 0 || layer.FadeOut > 0)
+            ImGui.TextUnformatted($"Fades in {TimelineText.Seconds(layer.FadeIn)}, out {TimelineText.Seconds(layer.FadeOut)}");
+        ImGui.TextUnformatted(TimelineWindowViews.LayerContent(layer));
+        if (readOnly)
+            return;
+        ImGui.TextColored(Theme.Hint, hit.Part switch
+        {
+            TimelinePart.LayerLeft => "Drag to change where it starts.",
+            TimelinePart.LayerRight => "Drag to change where it ends.",
+            TimelinePart.LayerFadeIn => "Drag to change how long it fades in.",
+            TimelinePart.LayerFadeOut => "Drag to change how long it fades out.",
+            _ => "Drag to move it with its keys.",
+        });
+    }
+
     /// <summary> The right-click menu: actions on the event under the pointer, or adds and the length at that frame. </summary>
     private void DrawCanvasMenu(TimelineEditor current, bool readOnly)
     {
         using var popup = ImRaii.Popup(CanvasMenu);
         if (!popup.Success)
             return;
+        if (menuHit.OnLayer && MotionEdits.Find(current.Document, menuHit.Layer) is { } layer)
+        {
+            DrawLayerMenu(current, layer, readOnly);
+            return;
+        }
+        if (menuHit.Part == TimelinePart.MotionLane || menuHit.Part == TimelinePart.Legend && current.Layout.IsMotionRow(menuHit.Row))
+        {
+            foreach (var kind in TimelineWindowViews.LayerKinds)
+            {
+                if (ImGui.MenuItem($"Add {MotionEdits.KindName(kind).ToLowerInvariant()} layer here", "", false, !readOnly))
+                    AddLayerAt(current, kind, menuFrame);
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip(TimelineWindowViews.LayerKindHint(kind));
+            }
+            ImGui.Separator();
+            if (ImGui.MenuItem("Fit", "F"))
+                current.Fit();
+            return;
+        }
         if (menuHit.OnEvent && TimelineEdits.Find(current.Document, menuHit.Key) is { } ev)
         {
             ImGui.TextColored(Theme.Label, TimelineWindowViews.EventLabel(ev));
@@ -542,6 +748,29 @@ public sealed partial class TimelineWindow
             current.SetLength(menuFrame);
         if (ImGui.MenuItem("Fit", "F"))
             current.Fit();
+    }
+
+    /// <summary> A bone layer's menu: its key under the pointer, turning it on or off, copying, ordering and deleting it. </summary>
+    private static void DrawLayerMenu(TimelineEditor current, MotionLayer layer, bool readOnly)
+    {
+        ImGui.TextColored(Theme.Label, layer.Name);
+        ImGui.Separator();
+        var doc = current.Document;
+        var index = MotionEdits.IndexOf(doc, layer.Key);
+        if (current.SelectedKey is { } frame && ImGui.MenuItem("Delete key", "Del", false, !readOnly))
+            current.Commit(MotionEdits.DeleteKey(doc, layer.Key, frame));
+        if (ImGui.MenuItem(layer.Enabled ? "Turn off" : "Turn on", "", false, !readOnly))
+            current.Commit(MotionEdits.SetEnabled(doc, layer.Key, !layer.Enabled));
+        if (ImGui.MenuItem("Duplicate", "Ctrl+D", false, !readOnly))
+            current.DuplicateLayer();
+        if (ImGui.MenuItem("Apply earlier", "", false, !readOnly && index > 0))
+            current.Commit(MotionEdits.Reorder(doc, layer.Key, -1));
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Move it up: layers apply from the top down.");
+        if (ImGui.MenuItem("Apply later", "", false, !readOnly && index < doc.Motion.Length - 1))
+            current.Commit(MotionEdits.Reorder(doc, layer.Key, 1));
+        if (ImGui.MenuItem("Delete layer", "", false, !readOnly))
+            current.Commit(MotionEdits.Remove(doc, layer.Key));
     }
 
     /// <summary> Whether the selection holds an event that can be duplicated, and one that can be moved or deleted. </summary>

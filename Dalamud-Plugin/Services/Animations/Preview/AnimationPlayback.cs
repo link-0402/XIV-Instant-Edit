@@ -1,4 +1,5 @@
-﻿using Dalamud.Game.ClientState.Objects.Types;
+﻿using System.Numerics;
+using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.Havok.Animation.Playback.Control.Default;
@@ -104,6 +105,20 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     {
         RequireFrameworkThread();
         return GPoseActor() is { } actor ? actor.ObjectIndex : null;
+    }
+
+    /// <summary>
+    /// How the character bones are edited on is turned in the world: the GPose actor, else your own
+    /// character. The Bones window's rotation ball shows its rings that way; null when neither is drawn.
+    /// </summary>
+    public Quaternion? ActorRotation()
+    {
+        RequireFrameworkThread();
+        var actor = (IGameObject?)GPoseActor() ?? _objects.LocalPlayer;
+        if (actor is not { Address: not 0 })
+            return null;
+        var drawObject = ((FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject*)actor.Address)->DrawObject;
+        return drawObject != null ? Quaternion.Normalize(drawObject->Object.Rotation) : Quaternion.CreateFromAxisAngle(Vector3.UnitY, actor.Rotation);
     }
 
     /// <summary>
@@ -346,9 +361,10 @@ internal sealed unsafe class AnimationPlayback : IDisposable
                     if (control == null || control->Binding.ptr == null || control->Binding.ptr->Animation.ptr == null)
                         continue;
                     resource ??= partial->SkeletonResourceHandle->FileName.Utf8();
-                    string print;
-                    try { print = _bindings.BindingFingerprint(control->Binding.ptr, animated->Skeleton, resource); }
-                    catch (InvalidDataException) { continue; }
+                    // A live motion copy counts as the clip it stands for, so pause, seek and time reads still find it.
+                    if (!LiveBindings.TryGet((nint)control->Binding.ptr, out _, out var print))
+                        try { print = _bindings.BindingFingerprint(control->Binding.ptr, animated->Skeleton, resource); }
+                        catch (InvalidDataException) { continue; }
                     if (string.Equals(print, fingerprint, StringComparison.Ordinal) && !_matches.Contains((nint)control))
                         _matches.Add((nint)control);
                 }

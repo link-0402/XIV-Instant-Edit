@@ -33,6 +33,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly Services.Animations.Timeline.TimelineCatalog _timelineCatalog;
     private readonly Services.Animations.Preview.AnimationPreviewService _animationPreview;
     private readonly Services.Animations.Preview.AnimationPlayback _animationPlayback;
+    private readonly Services.Animations.Preview.MotionLiveDisplay? _motionDisplay;
     private readonly TimelineWindow          _timelineWindow;
     private readonly ExportServer            _exportServer;
     private readonly Services.Painter.PainterJobService _painterJobs;
@@ -117,6 +118,10 @@ public sealed class Plugin : IDalamudPlugin
             _log.Error(error, "Could not initialize per-session context storage; retaining contexts in plugin settings.");
         }
         pi.UiBuilder.DisableUserUiHide = _config.KeepVisibleWhenUiHidden;
+        // Dalamud hides plugin windows in GPose by default. The animation tools work there (the
+        // timeline preview, live bone layers, recording the posed character), so the windows must
+        // open and stay open in GPose; a window that isn't open shows nothing either way.
+        pi.UiBuilder.DisableGposeUiHide = true;
         _backups   = new ModelBackupStore(storageRoot);
         _penumbra  = new PenumbraService(pi, framework, log, objects, data, _backups,
             new EstEntryStore(configDirectory));
@@ -152,7 +157,7 @@ public sealed class Plugin : IDalamudPlugin
         _textures = new TextureEditService(_penumbra, _config, storageRoot, _backups,
             (error, message) => log.Warning(error, message));
         string? animationError = null;
-        try { _animations = new AnimationEditService(pi, framework, objects, data, sigScanner, _penumbra, _backups, _config, log); }
+        try { _animations = new AnimationEditService(pi, framework, objects, clientState, targets, data, sigScanner, _penumbra, _backups, _config, log); }
         catch (Exception error)
         {
             animationError = "Animation integration is unavailable: " + error.Message;
@@ -167,8 +172,11 @@ public sealed class Plugin : IDalamudPlugin
         _animationPreview = new Services.Animations.Preview.AnimationPreviewService(_penumbra, framework, log, configDirectory,
             () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory), clientState);
         _animationPlayback =new Services.Animations.Preview.AnimationPlayback(framework, objects, clientState, targets, log);
+        // Bone layers shown live on the GPose actor: an edited copy of the clip swapped into its controls.
+        _motionDisplay = _animations == null ? null
+            : new Services.Animations.Preview.MotionLiveDisplay(framework, objects, clientState, _animations.Native, log);
         _timelineWindow = new TimelineWindow(_animations, animationError, _timelineCatalog, _animationPreview, _animationPlayback,
-            data, framework, log, pi.UiBuilder);
+            _motionDisplay, data, framework, textureProvider, log);
         _exportServer = new ExportServer(_config, _penumbra, _contexts, log);
         var painterStore = new Services.Painter.PainterJobStore(configDirectory);
         painterStore.Load();
@@ -272,6 +280,7 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.AddWindow(_setupWindow);
         _windowSystem.AddWindow(_settingsWindow);
         _windowSystem.AddWindow(_timelineWindow);
+        _windowSystem.AddWindow(_timelineWindow.Bones);
 
         _pi.UiBuilder.Draw += _windowSystem.Draw;
         _pi.UiBuilder.Draw += _setupWindow.DrawFileDialog;
@@ -397,12 +406,15 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.RemoveWindow(_setupWindow);
         _windowSystem.RemoveWindow(_settingsWindow);
         _windowSystem.RemoveWindow(_timelineWindow);
+        _windowSystem.RemoveWindow(_timelineWindow.Bones);
         _glamourer.AppearanceChanged -= _window.OnGlamourerAppearanceChanged;
         _glamourer.Dispose();
         _recorder.Dispose();
-        // The window first, then playback (puts the GPose actor back), the preview (removes its
-        // temporary mod) and the catalog; all of them before Penumbra goes away.
+        // The window first, then the live display (puts the clip's own motion back), playback (puts the
+        // GPose actor back), the preview (removes its temporary mod) and the catalog; all of them before
+        // Penumbra goes away.
         _timelineWindow.Dispose();
+        _motionDisplay?.Dispose();
         _animationPlayback.Dispose();
         _animationPreview.Dispose();
         _timelineCatalog.Dispose();

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text;
+using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.Havok.Animation.Animation;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
@@ -95,33 +96,96 @@ internal sealed unsafe class RuntimeCaptureCache
     }
 }
 
+/// <summary>
+/// Bindings the live motion display swapped into controls, each standing for the clip binding it
+/// replaced. Readers of live controls treat such a copy as that clip: the listener keeps seeing the
+/// clip play, and nothing hashes the copy, which changes with every edit.
+/// </summary>
+internal static class LiveBindings
+{
+    private static readonly object Sync = new();
+    private static readonly Dictionary<nint, (nint Original, string Fingerprint)> Copies = [];
+
+    public static void Set(nint copy, nint original, string fingerprint)
+    {
+        lock (Sync) Copies[copy] = (original, fingerprint);
+    }
+
+    public static void Remove(nint copy)
+    {
+        lock (Sync) Copies.Remove(copy);
+    }
+
+    public static bool TryGet(nint binding, out nint original, out string fingerprint)
+    {
+        lock (Sync)
+        {
+            if (Copies.TryGetValue(binding, out var found))
+            {
+                (original, fingerprint) = found;
+                return true;
+            }
+        }
+        original = 0;
+        fingerprint = string.Empty;
+        return false;
+    }
+}
+
 /// <summary>Only this boundary reads player pointers. No native address escapes in a binding or skeleton record.</summary>
 internal static unsafe class AnimationRuntime
 {
     private const ulong StampOffset = 14695981039346656037UL;
+    // GPose characters (the posed copies and actors posing tools add) start here; the player's copy is 201.
+    private const int FirstGPoseIndex = 200;
+    private const int GPosePlayerIndex = 201;
 
     private static ulong StampMix(ulong hash, ulong value)
         => (hash ^ value) * 1099511628211UL;
 
-    public static (ulong ActorId, long Address, ushort Index)? Identity(IObjectTable objects)
+    /// <summary>
+    /// The character whose animations the Animations tab follows: in GPose the GPose target when it
+    /// is a GPose character, else the posed copy of the player; otherwise, and while GPose has no
+    /// actor yet, the local player.
+    /// </summary>
+    public static IGameObject? Subject(IObjectTable objects, bool gposing, IGameObject? gposeTarget)
     {
-        if (objects.LocalPlayer is not { } player) return null;
-        return (((Character*)player.Address)->ContentId, player.Address, player.ObjectIndex);
+        if (gposing)
+        {
+            if (gposeTarget is ICharacter { Address: not 0, ObjectIndex: >= FirstGPoseIndex } target) return target;
+            if (objects[GPosePlayerIndex] is ICharacter { Address: not 0 } posed) return posed;
+        }
+        return objects.LocalPlayer;
     }
-    public static RuntimeChangeStamp? CaptureChangeStamp(IObjectTable objects)
+
+    /// <summary>A character's identity across captures: its content id, or for an actor without one (some GPose actors) its object id.</summary>
+    private static ulong ActorId(Character* actor, IGameObject subject) => actor->ContentId != 0 ? actor->ContentId : subject.GameObjectId;
+
+    public static (ulong ActorId, long Address, ushort Index)? Identity(IObjectTable objects) => Identity(objects.LocalPlayer);
+
+    public static (ulong ActorId, long Address, ushort Index)? Identity(IGameObject? subject)
     {
-        if (objects.LocalPlayer is not { } player) return null;
+        if (subject is not ICharacter { Address: not 0 }) return null;
+        return (ActorId((Character*)subject.Address, subject), subject.Address, subject.ObjectIndex);
+    }
+
+    public static RuntimeChangeStamp? CaptureChangeStamp(IObjectTable objects) => CaptureChangeStamp(objects.LocalPlayer);
+
+    public static RuntimeChangeStamp? CaptureChangeStamp(IGameObject? subject)
+    {
+        if (subject is not ICharacter { Address: not 0 } player) return null;
         var actor = (Character*)player.Address;
+        var actorId = ActorId(actor, player);
         var character = actor->GetCharacterBase();
         var timelineIds = actor->Timeline.TimelineSequencer.TimelineIds;
         var timelineFingerprint = StampMix(StampOffset, (ulong)timelineIds.Length);
         for (var i = 0; i < timelineIds.Length; i++) timelineFingerprint = StampMix(timelineFingerprint, timelineIds[i]);
         if (character == null || character->Skeleton == null || actor->InCombat || actor->IsMounted())
-            return new(actor->ContentId, player.Address, player.ObjectIndex, timelineIds.Length, timelineFingerprint, 0, 0, 0, 0);
+            return new(actorId, player.Address, player.ObjectIndex, timelineIds.Length, timelineFingerprint, 0, 0, 0, 0);
 
         var skeleton = character->Skeleton;
         if (skeleton->PartialSkeletonCount is 0 or > 16 || skeleton->PartialSkeletons == null)
-            return new(actor->ContentId, player.Address, player.ObjectIndex, timelineIds.Length, timelineFingerprint, 0, 0, 0, 0);
+            return new(actorId, player.Address, player.ObjectIndex, timelineIds.Length, timelineFingerprint, 0, 0, 0, 0);
         var skeletonFingerprint = StampMix(StampOffset, (ulong)skeleton->PartialSkeletonCount);
         var controlFingerprint = StampOffset;
         var activeControls = 0;
@@ -145,23 +209,33 @@ internal static unsafe class AnimationRuntime
                     controlFingerprint = StampMix(controlFingerprint, (ulong)partial);
                     controlFingerprint = StampMix(controlFingerprint, (ulong)buffer);
                     controlFingerprint = StampMix(controlFingerprint, (ulong)i);
-                    controlFingerprint = StampMix(controlFingerprint, unchecked((ulong)(nint)binding));
-                    controlFingerprint = StampMix(controlFingerprint, unchecked((ulong)(nint)binding->Animation.ptr));
+                    // A live copy counts as the clip it stands for, so swapping in a new copy is no change.
+                    if (LiveBindings.TryGet((nint)binding, out var original, out _))
+                        controlFingerprint = StampMix(controlFingerprint, unchecked((ulong)original));
+                    else
+                    {
+                        controlFingerprint = StampMix(controlFingerprint, unchecked((ulong)(nint)binding));
+                        controlFingerprint = StampMix(controlFingerprint, unchecked((ulong)(nint)binding->Animation.ptr));
+                    }
                     controlFingerprint = StampMix(controlFingerprint, unchecked((ulong)(nint)animated->Skeleton));
                     controlFingerprint = StampMix(controlFingerprint, unchecked((uint)BitConverter.SingleToInt32Bits(control->Weight)));
                 }
             }
         }
-        return new(actor->ContentId, player.Address, player.ObjectIndex, timelineIds.Length, timelineFingerprint,
+        return new(actorId, player.Address, player.ObjectIndex, timelineIds.Length, timelineFingerprint,
             skeleton->PartialSkeletonCount, skeletonFingerprint, activeControls, controlFingerprint);
     }
 
     public static RuntimeAnimationSnapshot? Capture(IObjectTable objects)
-        => Capture(objects, null);
+        => Capture(objects.LocalPlayer, null);
 
     public static RuntimeAnimationSnapshot? Capture(IObjectTable objects, RuntimeCaptureCache? cache)
+        => Capture(objects.LocalPlayer, cache);
+
+    /// <summary>What <paramref name="subject"/> plays now: its timelines and every weighted binding, or null when it can't be read.</summary>
+    public static RuntimeAnimationSnapshot? Capture(IGameObject? subject, RuntimeCaptureCache? cache)
     {
-        if (objects.LocalPlayer is not { } player) return null;
+        if (subject is not ICharacter { Address: not 0 } player) return null;
         var actor = (Character*)player.Address;
         var character = actor->GetCharacterBase();
         if (character == null || character->Skeleton == null || actor->InCombat || actor->IsMounted()) return null;
@@ -201,8 +275,9 @@ internal static unsafe class AnimationRuntime
                     RuntimeBinding? captured;
                     try
                     {
-                        var fingerprint = cache?.BindingFingerprint(control->Binding.ptr, animated->Skeleton, resource) ??
-                            AnimationNative.Fingerprint(control->Binding.ptr);
+                        var fingerprint = LiveBindings.TryGet((nint)control->Binding.ptr, out _, out var stands) ? stands
+                            : cache?.BindingFingerprint(control->Binding.ptr, animated->Skeleton, resource) ??
+                              AnimationNative.Fingerprint(control->Binding.ptr);
                         captured = new(partial, fingerprint, resource, description.Fingerprint, description);
                     }
                     catch (InvalidDataException) { captured = null; }
@@ -211,7 +286,7 @@ internal static unsafe class AnimationRuntime
                 }
             }
         }
-        return new RuntimeAnimationSnapshot(actor->ContentId, player.Address, player.ObjectIndex,
+        return new RuntimeAnimationSnapshot(ActorId(actor, player), player.Address, player.ObjectIndex,
             actor->Timeline.TimelineSequencer.TimelineIds.ToArray().ToImmutableArray(),
             bindings.DistinctBy(b => (b.Partial, b.Fingerprint, b.SkeletonResource, b.SkeletonFingerprint)).ToImmutableArray());
     }

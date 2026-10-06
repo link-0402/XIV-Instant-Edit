@@ -11,10 +11,11 @@ internal static class TimelineSnap
     /// <summary>
     /// The frames the magnet pulls to: 0, the length, the playhead and the starts and ends of every
     /// event not in <paramref name="exclude"/> (the dragged ones), but not the stored end of a
-    /// motion at its own speed, which the game ignores. Sorted and distinct.
+    /// motion at its own speed, which the game ignores. With <paramref name="motion"/> also every bone
+    /// layer's start, end and keys but <paramref name="exceptLayer"/>'s. Sorted and distinct.
     /// </summary>
     public static int[] Targets(TimelineDocument doc, int? playhead, IReadOnlySet<string>? exclude = null,
-        bool length = true, bool sourceLength = false, bool events = true)
+        bool length = true, bool sourceLength = false, bool events = true, bool motion = false, string? exceptLayer = null)
     {
         var targets = new List<int> { 0 };
         if (length)
@@ -32,6 +33,8 @@ internal static class TimelineSnap
                 if (ev.Duration > 0 && !TimelineDocument.OwnPace(ev))
                     targets.Add(TimelineEdits.End(ev));
             }
+        if (motion)
+            targets.AddRange(MotionEdits.SnapFrames(doc, exceptLayer));
         targets.Sort();
         var distinct = new List<int>(targets.Count);
         foreach (var target in targets)

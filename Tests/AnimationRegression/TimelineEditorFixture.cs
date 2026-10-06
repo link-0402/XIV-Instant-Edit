@@ -242,8 +242,9 @@ internal static class TimelineEditorFixture
         var layout = TimelineLayout.Build(doc);
         check(layout.Lanes.Select(lane => lane.Lane).SequenceEqual([TimelineLane.Motion, TimelineLane.Expression, TimelineLane.LipSync,
                   TimelineLane.Sound, TimelineLane.Effect, TimelineLane.Prop]) &&
-              layout.Lanes.Select(lane => lane.Rows).SequenceEqual([1, 2, 1, 2, 1, 1]) && layout.RowCount == 8,
-            "the motion and every addable lane always show; Other only with events; overlaps add rows");
+              layout.Lanes.Select(lane => lane.Rows).SequenceEqual([1, 2, 1, 2, 1, 1]) && layout.RowCount == 9 &&
+              layout.MotionFirstRow == 8 && layout.MotionRows == 1 && layout.IsMotionRow(8) && layout.LayerIndexAt(8) == -1,
+            "the motion and every addable lane always show, then one bone layer row; Other only with events; overlaps add rows");
         check(layout.RowOf(layout.IndexOf("e1")) == 1 && layout.RowOf(layout.IndexOf("e2")) == 2 && layout.RowOf(layout.IndexOf("e3")) == 1 &&
               layout.RowOf(layout.IndexOf("s1")) == 4 && layout.RowOf(layout.IndexOf("s2")) == 5 && layout.RowOf(layout.IndexOf("s3")) == 4,
             "events pack greedily into the first free row, a clip ending where another starts sharing it");
@@ -256,10 +257,10 @@ internal static class TimelineEditorFixture
               layout.EndOf(layout.IndexOf("s1")) == 6,
             "an event's visible length takes room in its row; a bare marker takes one frame");
         check(layout.RowAt(23, 20, 24) == -1 && layout.RowAt(24, 20, 24) == 0 && layout.RowAt(24 + 20 * 3 + 1, 20, 24) == 3 &&
-              layout.RowAt(24 + 20 * 8, 20, 24) == -1 && TimelineLayout.RowTop(2, 20, 24) == 64 && layout.Height(20, 24) == 184 &&
+              layout.RowAt(24 + 20 * 8, 20, 24) == 8 && layout.RowAt(24 + 20 * 9, 20, 24) == -1 && TimelineLayout.RowTop(2, 20, 24) == 64 && layout.Height(20, 24) == 204 &&
               layout.RowAt(30, 20, 24, scrollY: 40) == 2 && layout.LaneSpan(TimelineLane.Sound, 20, 24) == (104, 144),
             "rows map to y and back below the ruler, with vertical scrolling");
-        check(layout.IndexOf("missing") == -1 && TimelineLayout.Build(new TimelineDocument(10, 10, null, default, 0)).RowCount == 6,
+        check(layout.IndexOf("missing") == -1 && TimelineLayout.Build(new TimelineDocument(10, 10, null, default, 0)).RowCount == 7,
             "an empty document still lays out its fixed lanes");
     }
 
@@ -284,7 +285,7 @@ internal static class TimelineEditorFixture
             "the length handle sits on the ruler and the motion lane, not on other lanes");
         check(Hit(new(150, 10)) is { Part: TimelinePart.Ruler, Frame: 12.5f, Lane: null } && Hit(At(20, 1) with { X = 50 }) is
               { Part: TimelinePart.Legend, Lane: TimelineLane.Expression } && Hit(new(50, 10)).Part == TimelinePart.None &&
-              Hit(At(10, 7)).Part == TimelinePart.None && Hit(At(200, 1)).Part == TimelinePart.None,
+              Hit(At(10, 7)).Part == TimelinePart.MotionLane && Hit(At(10, 8)).Part == TimelinePart.None && Hit(At(200, 1)).Part == TimelinePart.None,
             "the ruler, the legend and the space outside the rows are told apart");
 
         var crowded = Doc(100, Ev("a", TimelineLane.Sound, 50), Ev("b", TimelineLane.Sound, 51));

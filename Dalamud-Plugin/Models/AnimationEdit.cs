@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Numerics;
+using InstantEdit.Services.Animations.Motion;
 
 namespace InstantEdit.Models;
 
@@ -71,13 +72,15 @@ internal sealed record AnimationClip(string GamePath, string Name, int BindingIn
 // ExpressionTimeline is set for an expression (an emote such as /smile playing a face on the
 // face skeleton): its own timeline file, chara/action/facial/pose/<name>.tmb, as the collection
 // resolved it. The face motion is Clip; the timeline is a file of its own, not part of the PAP.
+// ActorIndex is the object the animation was captured from: 0 for your own character, 200 or
+// more for a GPose actor. Captures journaled before it was kept load as your own character's.
 internal sealed record AnimationCapture(string Id, ulong ActorId, long ActorAddress, Guid CollectionId,
     string CollectionName, string DisplayName, AnimationClip Clip, AnimationClip? Startup,
     ImmutableArray<string> FamilyPaths, ImmutableArray<AnimationResource> Sources, PoseSnapshot Pose,
     DateTime CapturedUtc, bool Playing, string? UnavailableReason = null,
     ImmutableArray<string> LoadedResourcePaths = default, string? PoseUnavailableReason = null,
     ImmutableDictionary<string, ImmutableArray<string>>? ResourceAliases = null,
-    AnimationResource? ExpressionTimeline = null)
+    AnimationResource? ExpressionTimeline = null, ushort ActorIndex = 0)
 {
     public ImmutableArray<string> LoadedResourcePaths { get; init; } = LoadedResourcePaths.IsDefault ? [] : LoadedResourcePaths;
     public ImmutableDictionary<string, ImmutableArray<string>> ResourceAliases { get; init; } =
@@ -104,9 +107,14 @@ internal sealed record AnimationBakeRequest(Guid Id, AnimationCapture Capture, A
 /// The rewritten timeline itself travels in the staged file. <paramref name="EntryIndex"/> is the
 /// clip's timeline inside its PAP, or -1 for an expression's timeline, a TMB file of its own.
 /// <paramref name="DurationSeconds"/> is the clip's new length when it changed, which resamples
-/// its motion; null keeps the motion byte for byte.
+/// its motion. <paramref name="Motion"/> are the bone layers baked into the motion. With neither,
+/// the motion stays byte for byte. Journals written before bone layers load with none.
 /// </summary>
-internal sealed record AnimationTimelineEdit(bool Startup, int EntryIndex, float? DurationSeconds);
+internal sealed record AnimationTimelineEdit(bool Startup, int EntryIndex, float? DurationSeconds,
+    ImmutableArray<MotionLayer> Motion = default)
+{
+    public ImmutableArray<MotionLayer> Motion { get; init; } = Motion.IsDefault ? [] : Motion;
+}
 /// <summary>
 /// One member of an animation family the player can switch between, such as the
 /// standing idles or the ground-sitting set. Most are numbered files like

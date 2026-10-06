@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using InstantEdit.Models;
+using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 
 namespace InstantEdit.Services.Animations;
@@ -34,6 +35,25 @@ internal sealed record AnimationTimelineSource(AnimationCapture Capture, bool St
     /// <summary>Effects that stop although the animation goes on, in <paramref name="document"/>; see <see cref="TimelineEffectCheck"/>.</summary>
     public ImmutableArray<TimelineEffectCheck.Problem> EffectProblems(TimelineDocument document) =>
         Effects is { Count: > 0 } effects ? TimelineEffectCheck.Find(document, effects) : [];
+
+    /// <summary>The fingerprint of the clip's binding in <see cref="Pap"/>, the file as loaded; empty when unknown.</summary>
+    public string FileFingerprint { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The motion bone layers apply to when it isn't the file's own: after the Timeline window saved
+    /// layers into the file, the file as it was before, so the next save bakes the layers onto it again
+    /// instead of onto the saved result. Null when the file's own motion is the base.
+    /// </summary>
+    public byte[]? BaseMotion { get; init; }
+
+    /// <summary>The fingerprint of the clip's binding in <see cref="BaseMotion"/>.</summary>
+    public string? BaseFingerprint { get; init; }
+
+    /// <summary>The PAP whose motion the layers apply to: <see cref="BaseMotion"/>, else the file's own.</summary>
+    public byte[] MotionSource => BaseMotion ?? Pap;
+
+    /// <summary>The clip as found in <see cref="MotionSource"/>, with that binding's fingerprint.</summary>
+    public AnimationClip MotionClip => BaseMotion == null ? Clip : Clip with { BindingFingerprint = BaseFingerprint ?? string.Empty };
 }
 
 /// <summary>
@@ -67,8 +87,10 @@ internal sealed partial class AnimationEditService
         {
             return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, null, error.Message);
         }
+        // What the loaded file's clip is called by fingerprint: after a save the game may play either it or the clip as captured.
+        var fingerprint = await framework.RunOnFrameworkThread(() => AnimationRuntime.InspectPap(bytes).GetValueOrDefault(clip.BindingIndex, string.Empty));
         return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, document, null,
-            await EffectsAsync(capture.CollectionId, document, token));
+            await EffectsAsync(capture.CollectionId, document, token)) { FileFingerprint = fingerprint };
     }
 
     /// <summary>
@@ -143,6 +165,30 @@ internal sealed partial class AnimationEditService
         return effects.ToImmutable();
     }
 
+    /// <summary>The native animation runtime, which the live motion display builds its uncompressed copies with.</summary>
+    internal AnimationNative Native => native;
+
+    /// <summary>
+    /// Decodes the motion of the clip <paramref name="source"/> holds on the skeleton it was made for:
+    /// the unedited motion bone layers apply to, for the live GPose display and the bone panels.
+    /// Nothing in game changes.
+    /// </summary>
+    public async Task<MotionClip> DecodeMotionAsync(AnimationTimelineSource source, Action<string> status, CancellationToken token)
+    {
+        if (source.Standalone) throw new InvalidOperationException("An expression's face can't take bone layers yet.");
+        var clip = source.Clip;
+        if (clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: { } selected })
+            throw new InvalidOperationException(clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for first.");
+        var skeleton = (await resources.ReadSkeletonAsync(source.Capture.CollectionId, selected.Source, token)).Bytes;
+        var work = Path.Combine(Path.GetTempPath(), "XIV Instant Edit motion", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(work);
+        try { return await baker.DecodeAsync(source.MotionSource, skeleton, source.MotionClip, source.Capture, work, status, token, () => { }); }
+        finally
+        {
+            try { Directory.Delete(work, true); } catch (IOException) { }
+        }
+    }
+
     /// <summary>
     /// Builds the edited clip and hands it to <paramref name="show"/>, whose message becomes the
     /// status: the GPose preview. A changed length bakes the motion first. Nothing is saved.
@@ -210,7 +256,7 @@ internal sealed partial class AnimationEditService
             await commits.CommitAsync(journal, manifest, async () =>
             {
                 await CheckActorAsync(capture, false);
-                if (document.LengthChanged) await resources.CheckSkeletonsAsync(capture, [source.Clip], token);
+                if (ChangesMotion(document)) await resources.CheckSkeletonsAsync(capture, [source.Clip], token);
                 await framework.RunOnFrameworkThread(() => CheckIdentityOnFramework(capture, false));
             }, message =>
             {
@@ -230,7 +276,7 @@ internal sealed partial class AnimationEditService
                 await framework.RunOnFrameworkThread(() => Observer.UpdateSources(capture.Id, updated));
             }
             journal.State = "Completed"; journal.PoseClearOutcome = "NotApplicable";
-            journal.Message = "Timeline saved.";
+            journal.Message = document.MotionChanged ? "Animation saved." : "Timeline saved.";
             journals.Save(journal); Status = journal.Message;
         }, request.Id, source.Clip);
         return request.Id;
@@ -240,7 +286,8 @@ internal sealed partial class AnimationEditService
         AnimationDestination destination, string modName)
         => new(Guid.NewGuid(), source.Capture, destination, modName, false, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None,
             AnimationOperation.EditTimeline,
-            Timeline: new AnimationTimelineEdit(source.Startup, source.EntryIndex, RetimeSeconds(document)));
+            Timeline: new AnimationTimelineEdit(source.Startup, source.EntryIndex, RetimeSeconds(document),
+                document.MotionChanged ? document.Motion : []));
 
     /// <summary>
     /// How long the motion becomes, in seconds; null when the length stays. The document's length is
@@ -249,10 +296,13 @@ internal sealed partial class AnimationEditService
     internal static float? RetimeSeconds(TimelineDocument document) =>
         document.LengthChanged ? document.Length / (float)TimelineDocument.Fps : null;
 
+    /// <summary>Whether saving <paramref name="document"/> bakes the motion: a new length, or bone layers that change it.</summary>
+    internal static bool ChangesMotion(TimelineDocument document) => document.LengthChanged || document.MotionChanged;
+
     /// <summary>
-    /// Writes the edited timeline into the clip's file. A changed length first resamples the
-    /// motion, which needs the skeleton the clip was made for. Everything else in the file must
-    /// come out exactly as it went in.
+    /// Writes the edited timeline into the clip's file. A changed length resamples the motion and
+    /// bone layers change it, both in a bake that needs the skeleton the clip was made for.
+    /// Everything else in the file must come out exactly as it went in.
     /// </summary>
     private async Task<AnimationTimelineBuild> BuildTimelineAsync(AnimationBakeRequest request, AnimationTimelineSource source,
         byte[] pap, TimelineDocument document, IReadOnlyDictionary<string, int>? motionFrames, string workDirectory, CancellationToken token)
@@ -264,25 +314,31 @@ internal sealed partial class AnimationEditService
         {
             // An expression's timeline is the whole file; the face it plays stays as it is.
             if (document.LengthChanged) throw new InvalidOperationException("An expression's timeline keeps its length.");
+            if (document.MotionChanged) throw new InvalidOperationException("An expression's face can't take bone layers yet.");
             if (!pap.AsSpan().SequenceEqual(source.Tmb)) throw new IOException("The timeline file changed while saving. Open the timeline again.");
             _ = TmbFile.Parse(timeline);
             return new AnimationTimelineBuild(source.Resource.GamePath, timeline, clip.BindingFingerprint);
         }
-        var motion = pap;
-        if (document.LengthChanged)
+        // With a base (the file before the window saved layers into it) the motion comes from the base:
+        // a bake applies the layers to it again, and with nothing to bake its own motion comes back.
+        var motion = source.BaseMotion ?? pap;
+        var baked = ChangesMotion(document);
+        if (baked)
         {
             native.EnsureAvailable();
             if (clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: { } selected })
-                throw new InvalidOperationException(clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for before changing its length.");
+                throw new InvalidOperationException(clip.Resolution?.Reason ?? (document.LengthChanged
+                    ? "Choose the skeleton this animation was made for before changing its length."
+                    : "Choose the skeleton this animation was made for before changing its motion."));
             await resources.CheckSkeletonsAsync(request.Capture, [clip], token);
             var skeleton = (await resources.ReadSkeletonAsync(request.Capture.CollectionId, selected.Source, token)).Bytes;
             Directory.CreateDirectory(workDirectory);
-            motion = await baker.BakeAsync(pap, skeleton, clip, request, workDirectory, message => Status = message, token,
-                () => CheckIdentityOnFramework(request.Capture, true));
+            motion = await baker.BakeAsync(source.BaseMotion ?? pap, skeleton, source.BaseMotion == null ? clip : source.MotionClip, request,
+                workDirectory, message => Status = message, token, () => CheckIdentityOnFramework(request.Capture, true));
         }
         var result = new AnimationPap(motion).WithTimeline(source.EntryIndex, timeline);
-        CheckTimelineOutput(pap, result, source.EntryIndex, timeline, !document.LengthChanged);
-        var fingerprint = document.LengthChanged
+        CheckTimelineOutput(pap, result, source.EntryIndex, timeline, !baked && source.BaseMotion == null);
+        var fingerprint = baked || source.BaseMotion != null
             ? await framework.RunOnFrameworkThread(() => AnimationRuntime.InspectPap(result).GetValueOrDefault(clip.BindingIndex, ""))
             : clip.BindingFingerprint;
         return new AnimationTimelineBuild(source.Resource.GamePath, result, fingerprint);

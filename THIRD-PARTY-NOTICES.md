@@ -53,6 +53,19 @@ follow the patterns of [Brio](https://github.com/Etheirys/Brio) and
 [Ktisis](https://github.com/ktisis-tools/Ktisis) (both GPL-3.0) through
 FFXIVClientStructs members; no code from either is included.
 
+# Motion editor
+
+The Bones window adapts [Brio](https://github.com/Etheirys/Brio) by Etheirys and
+contributors (GPL-3.0), revision `73e30cb11be94bb3ca72d062c8305a990f58756b`. Its posing
+artwork (`Brio/Resources/Embedded/Images/PoseBody.png`, `PoseArmor.png`, `PoseHand.png`,
+`PoseToes.png` and `PoseTail.png`) ships unmodified in `Dalamud-Plugin/Resources/Pose`.
+The bone positions on those pictures come from `Resources/Embedded/Data/GraphicalBonePosePositions.json`,
+the mirrored layout from `UI/Windows/Specialized/PosingGraphicalWindow.cs`, the rotation
+ball from `UI/Controls/Stateless/ImBrio.Gizmo.cs`, the bone groups from
+`Resources/Embedded/Data/BoneCategories.json`, and the body part names from
+`Resources/Embedded/Language/en.json`. LivePose, which shows the same artwork, is a fork
+of Brio.
+
 # Sound import
 
 The SCD sound file layout (header, entry tables, sound, track and audio entries,

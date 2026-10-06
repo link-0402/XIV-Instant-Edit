@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Numerics;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui.Timeline;
 
@@ -29,6 +30,78 @@ internal static class TimelineWindowViews
     /// <summary>What an Add can create, in menu order.</summary>
     public static readonly ImmutableArray<TimelineAddKind> AddKinds =
         [TimelineAddKind.Expression, TimelineAddKind.LipSync, TimelineAddKind.Sound, TimelineAddKind.Effect, TimelineAddKind.Prop];
+
+    /// <summary>What the Add menu's bone layer items create, in menu order.</summary>
+    public static readonly ImmutableArray<MotionLayerKind> LayerKinds = [MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose];
+
+    /// <summary>The bone layer rows' legend when there is no layer yet.</summary>
+    public const string BonesLaneName = "Bones";
+
+    public static Vector4 LayerColour(MotionLayerKind kind) => kind switch
+    {
+        MotionLayerKind.Offset => Theme.Info,
+        MotionLayerKind.Amplitude => Theme.Watching,
+        _ => Theme.Important,
+    };
+
+    /// <summary>What a layer kind does, for the Add menu and tooltips.</summary>
+    public static string LayerKindHint(MotionLayerKind kind) => kind switch
+    {
+        MotionLayerKind.Offset => "Turn, move or scale bones over a section, by keys you set.",
+        MotionLayerKind.Amplitude => "Make bones move more or less around their average pose.",
+        _ => "Blend bones toward poses you key.",
+    };
+
+    /// <summary>The amount as the panel and bar show it: "150%".</summary>
+    public static string AmountText(MotionLayer layer) =>
+        Math.Round(layer.Amount * 100, MidpointRounding.AwayFromZero).ToString(CultureInfo.InvariantCulture) + "%";
+
+    /// <summary>A layer's bar label: its name, its amount when it isn't full strength, "off" when turned off.</summary>
+    public static string LayerLabel(MotionLayer layer) =>
+        !layer.Enabled ? layer.Name + " · off"
+        : Math.Abs(layer.Amount - 1) > 1e-4f || layer.Kind == MotionLayerKind.Amplitude ? $"{layer.Name} · {AmountText(layer)}"
+        : layer.Name;
+
+    /// <summary>
+    /// A warning when the active bone layers move bones outside the IVCS + YAS layout that the clip
+    /// doesn't animate already: saving gives them tracks at indices other players' skeletons may lack,
+    /// and sync plugins refuse such files. Null when none do, or before the game's skeleton is known.
+    /// </summary>
+    public static string? LayerBonesWarning(TimelineDocument doc, AnimationClip clip)
+    {
+        if (!doc.MotionChanged || AnimationBones.Standard(clip, SkeletonStandard.Vanilla) is not { } game)
+            return null;
+        var vanilla = game.Skeleton.Bones.Select(bone => bone.Name).ToHashSet(StringComparer.Ordinal);
+        var animated = AnimationBones.Animated(clip).ToHashSet(StringComparer.Ordinal);
+        var moved = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var layer in doc.Motion.Where(MotionEvaluator.Active))
+        {
+            // An amplitude only scales motion that is there, so it never adds a track.
+            if (layer.Kind == MotionLayerKind.Amplitude)
+                continue;
+            foreach (var key in layer.Keys)
+                foreach (var bone in key.Bones.Keys)
+                    if (layer.Bones.IsEmpty || layer.Bones.Contains(bone))
+                        moved.Add(bone);
+        }
+        var outside = moved.Where(bone => !animated.Contains(bone) && !AnimationBones.InStandard(bone, SkeletonStandard.IvcsYas, vanilla)).ToArray();
+        if (outside.Length == 0)
+            return null;
+        var names = string.Join(", ", outside.Take(3).Select(AnimationPresentation.BoneName)) + (outside.Length > 3 ? $" and {outside.Length - 3} more" : "");
+        return $"Bone layers move {names}, which other players' skeletons may not have. Sync plugins can refuse the saved file.";
+    }
+
+    /// <summary>How many keys and bones a layer has, for its tooltip; an amplitude has no keys, only the bones it is limited to.</summary>
+    public static string LayerContent(MotionLayer layer)
+    {
+        var bones = layer.Kind == MotionLayerKind.Amplitude
+            ? layer.Bones.Length
+            : layer.Keys.SelectMany(key => key.Bones.Keys).Distinct(StringComparer.Ordinal).Count();
+        if (layer.Kind == MotionLayerKind.Amplitude)
+            return bones == 0 ? "Every bone" : bones == 1 ? "1 bone" : $"{Whole(bones)} bones";
+        var keys = layer.Keys.Length;
+        return (keys == 1 ? "1 key" : $"{Whole(keys)} keys") + " · " + (bones == 1 ? "1 bone" : $"{Whole(bones)} bones");
+    }
 
     public static string LaneName(TimelineLane lane) => lane switch
     {
@@ -199,14 +272,17 @@ internal static class TimelineWindowViews
     /// only warn (see <see cref="PastEndWarning"/>).
     /// </summary>
     public static string? SaveProblem(bool editable, string? readOnlyReason, bool inPlace, bool canReplace, bool lengthChanged,
-        SkeletonResolution? resolution)
+        SkeletonResolution? resolution, bool motionChanged = false)
     {
         if (!editable)
             return readOnlyReason ?? "This timeline can't be edited.";
         if (inPlace && !canReplace)
             return NoWritableSource;
-        if (lengthChanged && resolution is not { State: SkeletonResolutionState.Matched, Selected: not null })
-            return resolution?.Reason ?? "Choose the skeleton this animation was made for before changing its length.";
+        // A new length and bone layers both bake the motion, on the skeleton the clip was made for.
+        if ((lengthChanged || motionChanged) && resolution is not { State: SkeletonResolutionState.Matched, Selected: not null })
+            return resolution?.Reason ?? (lengthChanged
+                ? "Choose the skeleton this animation was made for before changing its length."
+                : "Choose the skeleton this animation was made for before changing its motion.");
         return null;
     }
 

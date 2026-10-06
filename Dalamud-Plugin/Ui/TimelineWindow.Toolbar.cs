@@ -2,6 +2,7 @@
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
+using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui.Timeline;
 
@@ -35,7 +36,7 @@ public sealed partial class TimelineWindow
             current.Redo();
 
         ImGui.SameLine(0, Theme.Scaled(12));
-        if (Widgets.IconButton("##timeline-add", FontAwesomeIcon.Plus, "Add an expression, lip sync, sound, effect or prop at the playhead", !readOnly))
+        if (Widgets.IconButton("##timeline-add", FontAwesomeIcon.Plus, "Add an expression, lip sync, sound, effect or prop at the playhead, or a bone layer", !readOnly))
             ImGui.OpenPopup(AddMenu);
         DrawAddMenu(current);
         ImGui.SameLine(0, Theme.Scaled(2));
@@ -49,6 +50,15 @@ public sealed partial class TimelineWindow
         ImGui.SameLine(0, Theme.Scaled(2));
         if (Widgets.IconButton("##timeline-fit", FontAwesomeIcon.Expand, "Show the whole timeline (F)"))
             current.Fit();
+        // An expression's face takes no bone layers, so it has no bones to pose.
+        if (!current.Document.Expression)
+        {
+            ImGui.SameLine(0, Theme.Scaled(2));
+            if (Toggle("##timeline-bones", FontAwesomeIcon.Child, bonesWindow.IsOpen, bonesWindow.IsOpen
+                    ? "Close the Bones window."
+                    : "Open the Bones window: pick bones on a body map and pose them in the selected bone layer."))
+                ToggleBones();
+        }
 
         ImGui.SameLine(0, Theme.Scaled(12));
         ImGui.AlignTextToFramePadding();
@@ -103,6 +113,17 @@ public sealed partial class TimelineWindow
         foreach (var kind in TimelineWindowViews.AddKinds)
             if (ImGui.MenuItem(TimelineWindowViews.AddKindName(kind)))
                 RequestPicker(kind, current.Playhead, null);
+        // An expression's face takes no bone layers.
+        if (current.Document.Expression)
+            return;
+        ImGui.Separator();
+        foreach (var kind in TimelineWindowViews.LayerKinds)
+        {
+            if (ImGui.MenuItem($"{MotionEdits.KindName(kind)} layer"))
+                current.AddLayer(kind, 0, Math.Max(TimelineDocument.MinLength, current.Document.Length));
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(TimelineWindowViews.LayerKindHint(kind) + " Covers the whole clip; drag its ends to narrow it.");
+        }
     }
 
     /// <summary> One line each for an import running or done, an edit the editor refused and a header length the motion disagrees with. </summary>

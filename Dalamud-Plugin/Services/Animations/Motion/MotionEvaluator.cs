@@ -1,0 +1,545 @@
+using System.Collections.Immutable;
+using System.Numerics;
+using InstantEdit.Models;
+using InstantEdit.Services.Animations.Timeline;
+
+namespace InstantEdit.Services.Animations.Motion;
+
+/// <summary>
+/// Applies bone layers to a decoded clip. Pure, so the save's bake, the live GPose display and the
+/// bone panels all get the same motion: what is shown is what is saved. Transforms compose the
+/// Havok way (the game's syncLocalSpace): a child's model rotation is its parent's times its own,
+/// and its model position is its parent's plus its own turned by the parent, never scaled by it.
+/// </summary>
+internal static class MotionEvaluator
+{
+    /// <summary>The largest offset strength or amplitude factor.</summary>
+    public const float MaxAmount = 4;
+    public const int MaxLayers = 64;
+    public const int MaxKeys = 4096;
+    public const int MaxKeyBones = 4096;
+    /// <summary>The range of an offset key's scale factor, and of a pose key's scale.</summary>
+    public const float MinScale = 0.001f, MaxScale = 100;
+    // Sample frames come from float seconds; a layer reaching the clip's end must still cover its last sample.
+    private const float FrameTolerance = 1e-3f;
+
+    /// <summary>Whether <paramref name="layer"/> changes anything when applied.</summary>
+    public static bool Active(MotionLayer layer) => layer.Enabled && layer.Kind switch
+    {
+        MotionLayerKind.Amplitude => Math.Abs(layer.Amount - 1) > 1e-6f &&
+                                     (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0,
+        _ => layer.Amount > 0 && layer.Components != PoseComponents.None && layer.Keys.Any(key => !key.Bones.IsEmpty),
+    };
+
+    /// <summary>Whether any of <paramref name="layers"/> changes the motion.</summary>
+    public static bool Changes(ImmutableArray<MotionLayer> layers) => !layers.IsDefaultOrEmpty && layers.Any(Active);
+
+    /// <summary>
+    /// How much of <paramref name="layer"/> applies at <paramref name="frame"/>, before its amount:
+    /// 0 outside its range, rising over its fade in and falling over its fade out on a smoothstep.
+    /// </summary>
+    public static float Fade(MotionLayer layer, float frame)
+    {
+        if (!float.IsFinite(frame) || frame < layer.Start - FrameTolerance || frame > layer.End + FrameTolerance)
+            return 0;
+        frame = Math.Clamp(frame, layer.Start, layer.End);
+        var weight = 1f;
+        if (layer.FadeIn > 0 && frame < layer.Start + layer.FadeIn)
+            weight = AnimationPoseRules.SmoothStep((frame - layer.Start) / layer.FadeIn);
+        if (layer.FadeOut > 0 && frame > layer.End - layer.FadeOut)
+            weight = Math.Min(weight, AnimationPoseRules.SmoothStep((layer.End - frame) / layer.FadeOut));
+        return Math.Clamp(weight, 0, 1);
+    }
+
+    /// <summary>Checks one layer; throws <see cref="InvalidDataException"/> naming what is wrong.</summary>
+    public static void Validate(MotionLayer layer)
+    {
+        if (layer == null || string.IsNullOrEmpty(layer.Key) || !Enum.IsDefined(layer.Kind) || !Enum.IsDefined(layer.Interpolation))
+            throw new InvalidDataException("A bone layer can't be read.");
+        var name = string.IsNullOrWhiteSpace(layer.Name) ? "A bone layer" : $"The bone layer {layer.Name}";
+        if (layer.Start < 0 || layer.End <= layer.Start || layer.End > TimelineDocument.MaxFrames)
+            throw new InvalidDataException($"{name} has no frames on the timeline.");
+        if (layer.FadeIn < 0 || layer.FadeOut < 0 || (long)layer.FadeIn + layer.FadeOut > layer.End - layer.Start)
+            throw new InvalidDataException($"{name} fades for longer than it lasts.");
+        var most = layer.Kind == MotionLayerKind.Pose ? 1 : MaxAmount;
+        if (!float.IsFinite(layer.Amount) || layer.Amount < 0 || layer.Amount > most)
+            throw new InvalidDataException($"{name} has an amount out of range.");
+        if ((layer.Components & ~PoseComponents.All) != 0)
+            throw new InvalidDataException($"{name} changes an unknown part of its bones.");
+        if (layer.Bones.Any(string.IsNullOrEmpty) || layer.Bones.Distinct(StringComparer.Ordinal).Count() != layer.Bones.Length)
+            throw new InvalidDataException($"{name} lists a bone twice or a bone without a name.");
+        if (layer.Keys.Length > MaxKeys)
+            throw new InvalidDataException($"{name} has too many keys.");
+        var previous = -1;
+        foreach (var key in layer.Keys)
+        {
+            if (key?.Bones == null || key.Frame <= previous || key.Frame > TimelineDocument.MaxFrames)
+                throw new InvalidDataException($"{name} has keys out of order.");
+            previous = key.Frame;
+            if (key.Bones.Count > MaxKeyBones)
+                throw new InvalidDataException($"{name} has a key with too many bones.");
+            foreach (var (bone, value) in key.Bones)
+            {
+                if (string.IsNullOrEmpty(bone) || value == null || !Finite(value.Position) || !Finite(value.Scale) ||
+                    !float.IsFinite(value.Rotation.LengthSquared()) || value.Rotation.LengthSquared() is < .25f or > 4)
+                    throw new InvalidDataException($"{name} has a key with a value that is not a transform.");
+                if (value.Scale.X is < MinScale or > MaxScale || value.Scale.Y is < MinScale or > MaxScale || value.Scale.Z is < MinScale or > MaxScale)
+                    throw new InvalidDataException($"{name} has a key whose scale is out of range.");
+            }
+            if (key.Moved.Any(bone => !key.Bones.ContainsKey(bone)))
+                throw new InvalidDataException($"{name} moves a bone its key has no value for.");
+        }
+    }
+
+    /// <summary>Checks a document's layers: each one, how many there are, and that their keys are unique.</summary>
+    public static void Validate(IReadOnlyList<MotionLayer> layers)
+    {
+        if (layers.Count > MaxLayers)
+            throw new InvalidDataException($"An animation can have at most {MaxLayers} bone layers.");
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var layer in layers)
+        {
+            Validate(layer);
+            if (!keys.Add(layer.Key))
+                throw new InvalidDataException("Two bone layers share a key.");
+        }
+    }
+
+    /// <summary>
+    /// Applies the active layers to <paramref name="clip"/> in place, in order, each to the motion the
+    /// ones before it made, then keeps every bone's rotation on its previous sample's hemisphere.
+    /// Throws for a layer naming a bone the clip's skeleton does not have.
+    /// </summary>
+    public static void Apply(MotionClip clip, IReadOnlyList<MotionLayer> layers, CancellationToken token = default)
+    {
+        Validate(layers);
+        var index = Index(clip.Skeleton);
+        foreach (var layer in layers)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!Active(layer))
+                continue;
+            var mask = Mask(layer, index);
+            switch (layer.Kind)
+            {
+                case MotionLayerKind.Offset:
+                    ApplyOffset(clip, layer, Tracks(layer, index, mask, false), token);
+                    break;
+                case MotionLayerKind.Amplitude:
+                    ApplyAmplitude(clip, layer, (IReadOnlyCollection<int>?)mask ?? Enumerable.Range(0, clip.Bones).ToArray(), token);
+                    break;
+                case MotionLayerKind.Pose:
+                    ApplyPose(clip, layer, Tracks(layer, index, mask, false), Tracks(layer, index, mask, true), token);
+                    break;
+            }
+        }
+        Continuity(clip);
+    }
+
+    /// <summary>Throws when a layer names a bone <paramref name="skeleton"/> does not have.</summary>
+    public static void CheckBones(IReadOnlyList<MotionLayer> layers, SkeletonDescription skeleton)
+    {
+        var index = Index(skeleton);
+        foreach (var layer in layers)
+        {
+            foreach (var name in layer.Bones)
+                if (!index.ContainsKey(name))
+                    throw Missing(name);
+            foreach (var key in layer.Keys)
+                foreach (var name in key.Bones.Keys)
+                    if (!index.ContainsKey(name))
+                        throw Missing(name);
+        }
+    }
+
+    /// <summary>Bone indices by name.</summary>
+    public static Dictionary<string, int> Index(SkeletonDescription skeleton)
+    {
+        var index = new Dictionary<string, int>(skeleton.Bones.Length, StringComparer.Ordinal);
+        for (var i = 0; i < skeleton.Bones.Length; i++)
+            index[skeleton.Bones[i].Name] = i;
+        return index;
+    }
+
+    /// <summary>
+    /// A bone's keyed value at <paramref name="frame"/>: between two keys it goes the layer's way, before
+    /// the first and after the last it holds. Null when no key has the bone.
+    /// </summary>
+    public static MotionTransform? KeyValue(MotionLayer layer, string bone, float frame)
+    {
+        var frames = new List<int>();
+        var values = new List<MotionTransform>();
+        foreach (var key in layer.Keys)
+            if (key.Bones.TryGetValue(bone, out var value))
+            {
+                frames.Add(key.Frame);
+                values.Add(Normalized(MotionTransform.From(value)));
+            }
+        return frames.Count == 0 ? null : Sample(frames.ToArray(), values.ToArray(), frame, layer.Interpolation);
+    }
+
+    /// <summary>The value at <paramref name="frame"/> on a bone's keys (frames ascending, at least one).</summary>
+    internal static MotionTransform Sample(int[] frames, MotionTransform[] values, float frame, MotionInterpolation mode)
+    {
+        if (frames.Length == 1 || frame <= frames[0])
+            return values[0];
+        if (frame >= frames[^1])
+            return values[^1];
+        // frames[low] <= frame < frames[high]
+        int low = 0, high = frames.Length - 1;
+        while (high - low > 1)
+        {
+            var middle = (low + high) >>> 1;
+            if (frames[middle] <= frame) low = middle;
+            else high = middle;
+        }
+        var t = (frame - frames[low]) / (frames[high] - frames[low]);
+        t = mode switch
+        {
+            MotionInterpolation.Step => 0,
+            MotionInterpolation.Smooth => AnimationPoseRules.SmoothStep(t),
+            _ => t,
+        };
+        return Lerp(values[low], values[high], t);
+    }
+
+    /// <summary>Uniform interpolation: positions and scales on a line, rotations the short way round.</summary>
+    public static MotionTransform Lerp(MotionTransform from, MotionTransform to, float t) =>
+        new(Vector3.Lerp(from.Position, to.Position, t), Slerp(from.Rotation, to.Rotation, t), Vector3.Lerp(from.Scale, to.Scale, t));
+
+    public static Quaternion Slerp(Quaternion from, Quaternion to, float t)
+    {
+        from = Quaternion.Normalize(from);
+        return Quaternion.Normalize(Quaternion.Slerp(from, Align(Quaternion.Normalize(to), from), t));
+    }
+
+    /// <summary><paramref name="q"/>, or its negation when that is closer to <paramref name="reference"/>: the same orientation.</summary>
+    public static Quaternion Align(Quaternion q, Quaternion reference) => Quaternion.Dot(q, reference) < 0 ? -q : q;
+
+    /// <summary>The rotation turned <paramref name="k"/> times as far, the short way: 0 is none, 1 itself, 2 twice as far.</summary>
+    public static Quaternion Pow(Quaternion q, float k)
+    {
+        q = Quaternion.Normalize(q);
+        if (q.W < 0)
+            q = -q;
+        var sin = MathF.Sqrt(q.X * q.X + q.Y * q.Y + q.Z * q.Z);
+        if (sin < 1e-6f)
+            return Quaternion.Normalize(new Quaternion(q.X * k, q.Y * k, q.Z * k, 1));
+        var angle = MathF.Atan2(sin, q.W) * k;
+        var scale = MathF.Sin(angle) / sin;
+        return new Quaternion(q.X * scale, q.Y * scale, q.Z * scale, MathF.Cos(angle));
+    }
+
+    /// <summary>Every bone's model-space transform from its local one.</summary>
+    public static MotionTransform[] ModelSpace(SkeletonDescription skeleton, ReadOnlySpan<MotionTransform> local)
+    {
+        if (local.Length != skeleton.Bones.Length)
+            throw new InvalidDataException("The pose does not match the skeleton.");
+        var model = new MotionTransform[local.Length];
+        for (var b = 0; b < local.Length; b++)
+        {
+            var parent = skeleton.Bones[b].Parent;
+            model[b] = parent < 0 ? local[b] : Compose(model[parent], local[b]);
+        }
+        return model;
+    }
+
+    /// <summary>Every bone's local transform from its model-space one: the inverse of <see cref="ModelSpace"/>.</summary>
+    public static MotionTransform[] LocalSpace(SkeletonDescription skeleton, ReadOnlySpan<MotionTransform> model)
+    {
+        if (model.Length != skeleton.Bones.Length)
+            throw new InvalidDataException("The pose does not match the skeleton.");
+        var local = new MotionTransform[model.Length];
+        for (var b = 0; b < model.Length; b++)
+        {
+            var parent = skeleton.Bones[b].Parent;
+            local[b] = parent < 0 ? model[b] : Relative(model[parent], model[b]);
+        }
+        return local;
+    }
+
+    /// <summary>A child's model transform from its parent's and its own local one.</summary>
+    public static MotionTransform Compose(MotionTransform parent, MotionTransform local) =>
+        new(parent.Position + Vector3.Transform(local.Position, parent.Rotation),
+            Quaternion.Normalize(parent.Rotation * local.Rotation), parent.Scale * local.Scale);
+
+    /// <summary>A child's local transform from its parent's and its own model one.</summary>
+    public static MotionTransform Relative(MotionTransform parent, MotionTransform model)
+    {
+        var inverse = Quaternion.Inverse(Quaternion.Normalize(parent.Rotation));
+        return new(Vector3.Transform(model.Position - parent.Position, inverse),
+            Quaternion.Normalize(inverse * model.Rotation), Divide(model.Scale, parent.Scale));
+    }
+
+    /// <summary>Flips rotations onto the hemisphere of the bone's previous sample, so compression never goes the long way.</summary>
+    public static void Continuity(MotionClip clip)
+    {
+        for (var b = 0; b < clip.Bones; b++)
+        {
+            var previous = clip.Get(0, b).Rotation;
+            for (var i = 1; i < clip.Samples; i++)
+            {
+                var value = clip.Get(i, b);
+                if (Quaternion.Dot(previous, value.Rotation) < 0)
+                {
+                    value = value with { Rotation = -value.Rotation };
+                    clip.Set(i, b, value);
+                }
+                previous = value.Rotation;
+            }
+        }
+    }
+
+    private static void ApplyOffset(MotionClip clip, MotionLayer layer, Dictionary<int, Track> tracks, CancellationToken token)
+    {
+        if (tracks.Count == 0)
+            return;
+        var rotate = layer.Components.HasFlag(PoseComponents.Rotation);
+        var move = layer.Components.HasFlag(PoseComponents.Position);
+        var scale = layer.Components.HasFlag(PoseComponents.Scale);
+        // Model rotations are only needed up to the last edited bone: parents come before children.
+        var last = tracks.Keys.Max();
+        var model = new Quaternion[last + 1];
+        var bones = clip.Skeleton.Bones;
+        for (var i = 0; i < clip.Samples; i++)
+        {
+            if ((i & 63) == 0)
+                token.ThrowIfCancellationRequested();
+            var frame = clip.Frame(i);
+            var strength = Fade(layer, frame) * layer.Amount;
+            if (strength <= 0)
+                continue;
+            for (var b = 0; b <= last; b++)
+            {
+                var local = clip.Get(i, b);
+                var parent = bones[b].Parent;
+                var parentModel = parent >= 0 ? model[parent] : Quaternion.Identity;
+                if (tracks.TryGetValue(b, out var track))
+                {
+                    local = OffsetBone(local, parentModel, Sample(track.Frames, track.Values, frame, layer.Interpolation), strength, rotate, move, scale);
+                    clip.Set(i, b, local);
+                }
+                model[b] = parent >= 0 ? Quaternion.Normalize(parentModel * local.Rotation) : Quaternion.Normalize(local.Rotation);
+            }
+        }
+    }
+
+    /// <summary>
+    /// An offset's change to one bone at <paramref name="strength"/>: its turn after the bone's own, its
+    /// move in character space under a parent turned <paramref name="parentModel"/>, its scale factor.
+    /// </summary>
+    private static MotionTransform OffsetBone(MotionTransform local, Quaternion parentModel, MotionTransform delta, float strength,
+        bool rotate, bool move, bool scale)
+    {
+        if (rotate)
+            local = local with { Rotation = Quaternion.Normalize(local.Rotation * Pow(delta.Rotation, strength)) };
+        // The move is in character space; in the parent's space it turns with the parent.
+        if (move && delta.Position != Vector3.Zero)
+            local = local with { Position = local.Position + Vector3.Transform(delta.Position * strength, Quaternion.Inverse(parentModel)) };
+        if (scale && delta.Scale != Vector3.One)
+            local = local with { Scale = local.Scale * Vector3.Max(new Vector3(MinScale), Vector3.Lerp(Vector3.One, delta.Scale, strength)) };
+        return local;
+    }
+
+    /// <summary>A pose key's pull on one bone at <paramref name="weight"/>: its rotation and scale blended toward the key's.</summary>
+    private static MotionTransform PoseBone(MotionTransform value, MotionTransform target, float weight, bool rotate, bool scale)
+    {
+        if (rotate)
+            value = value with { Rotation = Slerp(value.Rotation, target.Rotation, weight) };
+        if (scale)
+            value = value with { Scale = Vector3.Lerp(value.Scale, target.Scale, weight) };
+        return value;
+    }
+
+    /// <summary>
+    /// One pose with the offset and pose layers applied at <paramref name="frame"/>, in order, the way
+    /// <see cref="Apply"/> applies them to a sample there. Amplitudes are left out: they scale motion
+    /// around its average over their section, which one pose does not have. The Bones window turns
+    /// bones in the space the layers leave the bones above them in. Throws for a layer naming a bone
+    /// the skeleton does not have.
+    /// </summary>
+    public static MotionTransform[] ApplyAt(SkeletonDescription skeleton, ReadOnlySpan<MotionTransform> local, IReadOnlyList<MotionLayer> layers, float frame)
+    {
+        if (local.Length != skeleton.Bones.Length)
+            throw new InvalidDataException("The pose does not match the skeleton.");
+        var pose = local.ToArray();
+        var index = Index(skeleton);
+        var model = new Quaternion[pose.Length];
+        foreach (var layer in layers)
+        {
+            if (!Active(layer) || layer.Kind == MotionLayerKind.Amplitude)
+                continue;
+            var rotate = layer.Components.HasFlag(PoseComponents.Rotation);
+            var move = layer.Components.HasFlag(PoseComponents.Position);
+            var scale = layer.Components.HasFlag(PoseComponents.Scale);
+            var mask = Mask(layer, index);
+            if (layer.Kind == MotionLayerKind.Offset)
+            {
+                var strength = Fade(layer, frame) * layer.Amount;
+                var tracks = Tracks(layer, index, mask, false);
+                if (strength <= 0 || tracks.Count == 0)
+                    continue;
+                var last = tracks.Keys.Max();
+                for (var b = 0; b <= last; b++)
+                {
+                    var parent = skeleton.Bones[b].Parent;
+                    var parentModel = parent >= 0 ? model[parent] : Quaternion.Identity;
+                    if (tracks.TryGetValue(b, out var track))
+                        pose[b] = OffsetBone(pose[b], parentModel, Sample(track.Frames, track.Values, frame, layer.Interpolation), strength, rotate, move, scale);
+                    model[b] = parent >= 0 ? Quaternion.Normalize(parentModel * pose[b].Rotation) : Quaternion.Normalize(pose[b].Rotation);
+                }
+                continue;
+            }
+            var weight = Math.Min(1, Fade(layer, frame) * layer.Amount);
+            if (weight <= 0)
+                continue;
+            if (rotate || scale)
+                foreach (var (b, track) in Tracks(layer, index, mask, false))
+                    pose[b] = PoseBone(pose[b], Sample(track.Frames, track.Values, frame, layer.Interpolation), weight, rotate, scale);
+            if (move)
+                foreach (var (b, track) in Tracks(layer, index, mask, true))
+                    pose[b] = pose[b] with { Position = Vector3.Lerp(pose[b].Position, Sample(track.Frames, track.Values, frame, layer.Interpolation).Position, weight) };
+        }
+        return pose;
+    }
+
+    private static void ApplyAmplitude(MotionClip clip, MotionLayer layer, IReadOnlyCollection<int> bones, CancellationToken token)
+    {
+        var rotate = layer.Components.HasFlag(PoseComponents.Rotation);
+        var move = layer.Components.HasFlag(PoseComponents.Position);
+        int first = -1, last = -1;
+        for (var i = 0; i < clip.Samples; i++)
+            if (Inside(layer, clip.Frame(i)))
+            {
+                if (first < 0) first = i;
+                last = i;
+            }
+        if (first < 0)
+            return;
+        var count = last - first + 1;
+        foreach (var b in bones)
+        {
+            token.ThrowIfCancellationRequested();
+            // The average pose over the layer: rotations on one hemisphere, summed and normalized.
+            var reference = Quaternion.Normalize(clip.Get(first, b).Rotation);
+            var sum = Vector4.Zero;
+            var center = Vector3.Zero;
+            for (var i = first; i <= last; i++)
+            {
+                var value = clip.Get(i, b);
+                var q = Align(Quaternion.Normalize(value.Rotation), reference);
+                sum += new Vector4(q.X, q.Y, q.Z, q.W);
+                center += value.Position;
+            }
+            center /= count;
+            var pivot = sum.LengthSquared() < 1e-12f ? reference : Quaternion.Normalize(new Quaternion(sum.X, sum.Y, sum.Z, sum.W));
+            var inverse = Quaternion.Inverse(pivot);
+            // A bone that holds still has nothing to scale; leaving it alone keeps the bake from
+            // giving every still bone of the skeleton a track for rounding noise. A turn is measured
+            // by its quaternion's vector part (half the angle's sine), which floats keep precise.
+            var turns = false;
+            var moves = false;
+            for (var i = first; i <= last && !(turns && moves); i++)
+            {
+                var value = clip.Get(i, b);
+                var turn = inverse * Align(Quaternion.Normalize(value.Rotation), pivot);
+                turns |= rotate && new Vector3(turn.X, turn.Y, turn.Z).LengthSquared() > 1e-10f;
+                moves |= move && Vector3.DistanceSquared(value.Position, center) > 1e-12f;
+            }
+            if (!turns && !moves)
+                continue;
+            for (var i = first; i <= last; i++)
+            {
+                var factor = 1 + (layer.Amount - 1) * Fade(layer, clip.Frame(i));
+                if (Math.Abs(factor - 1) < 1e-6f)
+                    continue;
+                var value = clip.Get(i, b);
+                if (turns)
+                    value = value with { Rotation = Quaternion.Normalize(pivot * Pow(inverse * Align(Quaternion.Normalize(value.Rotation), pivot), factor)) };
+                if (moves)
+                    value = value with { Position = center + (value.Position - center) * factor };
+                clip.Set(i, b, value);
+            }
+        }
+    }
+
+    private static void ApplyPose(MotionClip clip, MotionLayer layer, Dictionary<int, Track> tracks, Dictionary<int, Track> positions,
+        CancellationToken token)
+    {
+        var rotate = layer.Components.HasFlag(PoseComponents.Rotation);
+        var move = layer.Components.HasFlag(PoseComponents.Position);
+        var scale = layer.Components.HasFlag(PoseComponents.Scale);
+        for (var i = 0; i < clip.Samples; i++)
+        {
+            if ((i & 63) == 0)
+                token.ThrowIfCancellationRequested();
+            var frame = clip.Frame(i);
+            var weight = Math.Min(1, Fade(layer, frame) * layer.Amount);
+            if (weight <= 0)
+                continue;
+            if (rotate || scale)
+                foreach (var (b, track) in tracks)
+                    clip.Set(i, b, PoseBone(clip.Get(i, b), Sample(track.Frames, track.Values, frame, layer.Interpolation), weight, rotate, scale));
+            if (move)
+                foreach (var (b, track) in positions)
+                {
+                    var target = Sample(track.Frames, track.Values, frame, layer.Interpolation);
+                    var value = clip.Get(i, b);
+                    clip.Set(i, b, value with { Position = Vector3.Lerp(value.Position, target.Position, weight) });
+                }
+        }
+    }
+
+    private static bool Inside(MotionLayer layer, float frame) => frame >= layer.Start - FrameTolerance && frame <= layer.End + FrameTolerance;
+
+    /// <summary>The bones a layer is limited to, by index; null when it is not limited.</summary>
+    private static HashSet<int>? Mask(MotionLayer layer, Dictionary<string, int> index)
+    {
+        if (layer.Bones.IsEmpty)
+            return null;
+        var mask = new HashSet<int>();
+        foreach (var name in layer.Bones)
+            mask.Add(index.TryGetValue(name, out var bone) ? bone : throw Missing(name));
+        return mask;
+    }
+
+    /// <summary>
+    /// Each keyed bone's keys, by bone index: every key that names the bone, or with
+    /// <paramref name="positions"/> only those that move it.
+    /// </summary>
+    private static Dictionary<int, Track> Tracks(MotionLayer layer, Dictionary<string, int> index, HashSet<int>? mask, bool positions)
+    {
+        var frames = new Dictionary<int, List<int>>();
+        var values = new Dictionary<int, List<MotionTransform>>();
+        foreach (var key in layer.Keys)
+            foreach (var (name, value) in key.Bones)
+            {
+                if (!index.TryGetValue(name, out var bone))
+                    throw Missing(name);
+                if (mask != null && !mask.Contains(bone) || positions && !key.Moved.Contains(name, StringComparer.Ordinal))
+                    continue;
+                if (!frames.TryGetValue(bone, out var list))
+                {
+                    frames[bone] = list = [];
+                    values[bone] = [];
+                }
+                list.Add(key.Frame);
+                values[bone].Add(Normalized(MotionTransform.From(value)));
+            }
+        return frames.ToDictionary(pair => pair.Key, pair => new Track(pair.Value.ToArray(), values[pair.Key].ToArray()));
+    }
+
+    private static MotionTransform Normalized(MotionTransform value) => value with { Rotation = Quaternion.Normalize(value.Rotation) };
+
+    private static InvalidDataException Missing(string bone) =>
+        new($"This animation's skeleton has no bone {AnimationPresentation.BoneName(bone)}.");
+
+    private static bool Finite(Vector3 value) => float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
+
+    private static Vector3 Divide(Vector3 value, Vector3 by) => new(
+        Math.Abs(by.X) < 1e-12f ? value.X : value.X / by.X,
+        Math.Abs(by.Y) < 1e-12f ? value.Y : value.Y / by.Y,
+        Math.Abs(by.Z) < 1e-12f ? value.Z : value.Z / by.Z);
+
+    internal sealed record Track(int[] Frames, MotionTransform[] Values);
+}
