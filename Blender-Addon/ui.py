@@ -15,11 +15,13 @@ from .instant_edit.context import (
     planned_mesh_ids,
     validate_context,
 )
-from .instant_edit.ops import (MASHUP_TARGET, SAVE_NEW_MOD_TARGET,
+from .instant_edit.ops import (MASHUP_TARGET, RACE_TARGET, SAVE_NEW_MOD_TARGET,
                                export_destination_context, mashup_target_state,
                                cached_export_readiness, cached_hair_skeleton,
-                               normalise_variant_name, save_new_mod_target_state)
+                               normalise_variant_name, race_target_label, race_target_state,
+                               save_new_mod_target_state)
 from .instant_edit.props import DEFAULT_STATUS, IN_PLACE_TARGET, get_instant_edit_props
+from .instant_edit.racial_scaling import race_model_path
 from .instant_edit.server import server_status
 from .instant_edit.sizes import NO_SIZES, export_names, magic_fit_api, picked_names
 from .materials import (
@@ -99,8 +101,9 @@ def _import_file_display(ref) -> str:
     ) or "Unavailable"
 
 
-def _export_destination_display(ref, props=None) -> str:
-    """Return the effective mod-relative Quick Export target and model file."""
+def _export_destination_display(ref, props=None, context: Context | None = None) -> str:
+    """Return the effective mod-relative Quick Export target and model file. The race model's file
+    needs the ``context`` to find the race the meshes are shaped for."""
     relative = str(getattr(ref, "target_relative_path", "") or "").strip()
     if relative:
         destination = relative.replace("\\", "/")
@@ -120,6 +123,11 @@ def _export_destination_display(ref, props=None) -> str:
         IN_PLACE_TARGET, MASHUP_TARGET, SAVE_NEW_MOD_TARGET,
     }:
         return destination
+    if getattr(props, "variant_target", "") == RACE_TARGET:
+        race = race_target_state(context, ref)[1] if context is not None else None
+        name = PurePosixPath(race_model_path(ref.source_game_path, race)).name if race else ""
+        directory, separator, _ = destination.rpartition("/")
+        return (f"{directory}/{name}" if separator else name) if name else destination
 
     selected_target = _selected_target(props)
     if (
@@ -344,8 +352,8 @@ def _target_groups(props) -> list:
     return groups
 
 
-def _target_summary(props, sized: bool = False) -> tuple[str, str]:
-    """Text and icon for the export target dropdown."""
+def _target_summary(props, sized: bool = False, race: int | None = None) -> tuple[str, str]:
+    """Text and icon for the export target dropdown; ``race`` names the race model's race."""
     selection = props.variant_target
     if selection == IN_PLACE_TARGET:
         return "In Place", "FILE_TICK"
@@ -355,6 +363,8 @@ def _target_summary(props, sized: bool = False) -> tuple[str, str]:
         return "Create Mashup", "EXPERIMENTAL"
     if selection == SAVE_NEW_MOD_TARGET:
         return "Save as New Mod", "NEWFOLDER"
+    if selection == RACE_TARGET:
+        return race_target_label(race), "USER"
     target = _selected_target(props)
     if target is None:
         return "Choose a Target", "QUESTION"
@@ -401,6 +411,14 @@ class XIVIE_MT_export_targets(Menu):
             layout.operator("xiv_ie.refresh_variant_targets", text="Load Mod Options", icon="FILE_REFRESH")
         layout.separator()
         target(layout, "NEW_GROUP", "New Group...")
+
+        show_race, race, race_message = race_target_state(context, ref)
+        if show_race:
+            row = layout.row()
+            row.enabled = not race_message
+            target(row, RACE_TARGET, race_target_label(race))
+            if race_message:
+                layout.label(text=race_message, icon="ERROR")
 
         show_mashup, mashup_enabled, mashup_message = mashup_target_state(context, ref)
         if show_mashup:
@@ -495,7 +513,7 @@ class XIVIE_PT_context_details_popover(Panel):
             )
         destination = (
             "Not created yet" if ref.destination_state == "new_mod_required"
-            else _export_destination_display(ref, get_instant_edit_props())
+            else _export_destination_display(ref, get_instant_edit_props(), context)
         )
         width = max(24, _display_wrap_width(context, self.bl_ui_units_x) - 6)
         for title, value, icon in (
@@ -600,11 +618,12 @@ def _draw_context_rows(layout, context: Context, props, entries, ref) -> None:
             row.label(text="", icon="BLANK1")
 
 
-def _draw_target(layout, props, ref, sized: bool = False) -> bool:
+def _draw_target(layout, context: Context, props, ref, sized: bool = False) -> bool:
     """Draw the target dropdown and its name fields; return whether an option name is needed.
     Exports at Magic Fit's sizes (``sized``) name their options after the sizes."""
     row = layout.row(align=True)
-    text, icon = _target_summary(props, sized)
+    race = race_target_state(context, ref)[1] if props.variant_target == RACE_TARGET else None
+    text, icon = _target_summary(props, sized, race)
     row.menu("XIVIE_MT_export_targets", text=text, icon=icon)
     row.operator("xiv_ie.refresh_variant_targets", text="", icon="FILE_REFRESH")
     if props.variant_targets_context_id != ref.context_id:
@@ -626,7 +645,8 @@ def _draw_target(layout, props, ref, sized: bool = False) -> bool:
     return needs_option
 
 
-def _draw_destination(layout, props, ref, needs_option: bool, size_names: list[str] | None = None) -> None:
+def _draw_destination(layout, context: Context, props, ref, needs_option: bool,
+                      size_names: list[str] | None = None) -> None:
     if props.variant_target in {MASHUP_TARGET, SAVE_NEW_MOD_TARGET}:
         return
     if size_names is not None:
@@ -645,7 +665,7 @@ def _draw_destination(layout, props, ref, needs_option: bool, size_names: list[s
             return
     row = layout.row()
     row.active = False
-    row.label(text=f"→ {PurePosixPath(_export_destination_display(ref, props)).name}", icon="BLANK1")
+    row.label(text=f"→ {PurePosixPath(_export_destination_display(ref, props, context)).name}", icon="BLANK1")
 
 
 def _draw_readiness(layout, context: Context, props, ref) -> None:
@@ -669,17 +689,26 @@ def _draw_readiness(layout, context: Context, props, ref) -> None:
         column.label(text=f"+{len(issues) - _MAX_SHOWN_ISSUES} more", icon="BLANK1")
 
     actions = box.row(align=True)
-    offers_mashup = False
-    if material_coverage_warning and props.variant_target != MASHUP_TARGET:
+    offers_fix = False
+    show_race, race, race_problem = False, None, ""
+    if ref.destination_state != "new_mod_required" and props.variant_target != RACE_TARGET:
+        show_race, race, race_problem = race_target_state(context, ref)
+    if show_race and race is not None and not race_problem:
+        # Meshes shaped for another race only go into that race's model.
+        offers_fix = True
+        actions.operator(
+            "xiv_ie.select_variant_target", text=f"Use {race_target_label(race)}", icon="USER",
+        ).selection_id = RACE_TARGET
+    elif material_coverage_warning and props.variant_target != MASHUP_TARGET:
         show_mashup, mashup_enabled, _message = mashup_target_state(context, ref)
         if show_mashup:
-            offers_mashup = True
+            offers_fix = True
             fix = actions.row(align=True)
             fix.enabled = mashup_enabled
             fix.operator(
                 "xiv_ie.select_variant_target", text="Use Create Mashup", icon="EXPERIMENTAL",
             ).selection_id = MASHUP_TARGET
-    if not offers_mashup:
+    if not offers_fix:
         actions.alignment = "RIGHT"
     actions.operator("xiv_ie.copy_target_status", text="", icon="COPYDOWN").status_message = "\n".join(
         message for _severity, message in issues)
@@ -807,10 +836,14 @@ class XIVIE_PT_session(Panel):
 
         size_names = export_names(props)
         if ref.destination_state == "new_mod_required":
-            _draw_wrapped_label(layout, context, "Quick Export creates a new Penumbra mod for this model.", "INFO")
+            _shown, race, race_problem = race_target_state(context, ref)
+            _draw_wrapped_label(
+                layout, context,
+                f"Quick Export creates a new Penumbra mod with the c{race:04d} model." if race and not race_problem
+                else "Quick Export creates a new Penumbra mod for this model.", "INFO")
         else:
-            needs_option = _draw_target(layout, props, ref, size_names is not None)
-            _draw_destination(layout, props, ref, needs_option, size_names)
+            needs_option = _draw_target(layout, context, props, ref, size_names is not None)
+            _draw_destination(layout, context, props, ref, needs_option, size_names)
         _draw_readiness(layout, context, props, ref)
         _draw_export_button(layout, props, ref, size_names)
         _draw_scope_summary(layout, props, ref, size_names, _display_wrap_width(context))

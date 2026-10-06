@@ -418,6 +418,30 @@ internal sealed class TmbFile
         return id;
     }
 
+    /// <summary>
+    /// Adds a copy of entry <paramref name="sourceId"/> to the track that plays it, after that
+    /// track's last entry: a run of faces on one track, as mods lay them out (19 faces on one
+    /// track in NFLB's Cow Taming). Entries that use a curve, or are on no track, are refused.
+    /// Returns the copy's id, temporary like every model id until the file is written.
+    /// </summary>
+    public short CloneOnTrack(short sourceId)
+    {
+        var source = entries.FirstOrDefault(e => e.Id == sourceId && e.Magic != "TMFC")
+                     ?? throw new InvalidDataException("The entry to copy is no longer in the timeline.");
+        if (CurveUsers.Contains(source.Magic)) throw new InvalidDataException($"A {source.Magic} entry uses a curve and cannot be copied.");
+        var track = tracks.FirstOrDefault(t => t.List.Ids.Contains(sourceId))
+                    ?? throw new InvalidDataException("The entry to copy is on no track.");
+        var copy = new Item(source.Magic, source.Bytes.ToArray());
+        foreach (var field in source.Fields)
+            copy.Fields.Add(new Field(field.Layout) { Present = field.Present, Text = field.Text, Data = field.Data.ToArray() });
+        BinaryPrimitives.WriteInt16LittleEndian(copy.Bytes.AsSpan(8), FreeId());
+        var mates = track.List.Ids.ToHashSet();
+        entries.Insert(entries.FindLastIndex(e => mates.Contains(e.Id)) + 1, copy);
+        track.List.Ids.Add(copy.Id);
+        Edited = true;
+        return copy.Id;
+    }
+
     private short AddEntry(string magic, ReadOnlySpan<byte> fixedBytes, Item? player)
     {
         var size = TmbEntrySchema.Find(magic)?.Size ?? throw new InvalidDataException($"Cannot add an entry of kind {magic}.");

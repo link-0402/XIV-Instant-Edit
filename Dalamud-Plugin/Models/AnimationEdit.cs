@@ -68,12 +68,16 @@ internal sealed record AnimationClip(string GamePath, string Name, int BindingIn
     ushort Timeline, string SkeletonPath, string SkeletonFingerprint = "", SkeletonDescription? TargetSkeleton = null,
     SkeletonResolution? Resolution = null, string BindingFingerprint = "", string SourceContext = "", string? LastOperationError = null,
     AnimationSourceIdentity? SourceIdentity = null, float Duration = 0, bool IsLoop = false);
+// ExpressionTimeline is set for an expression (an emote such as /smile playing a face on the
+// face skeleton): its own timeline file, chara/action/facial/pose/<name>.tmb, as the collection
+// resolved it. The face motion is Clip; the timeline is a file of its own, not part of the PAP.
 internal sealed record AnimationCapture(string Id, ulong ActorId, long ActorAddress, Guid CollectionId,
     string CollectionName, string DisplayName, AnimationClip Clip, AnimationClip? Startup,
     ImmutableArray<string> FamilyPaths, ImmutableArray<AnimationResource> Sources, PoseSnapshot Pose,
     DateTime CapturedUtc, bool Playing, string? UnavailableReason = null,
     ImmutableArray<string> LoadedResourcePaths = default, string? PoseUnavailableReason = null,
-    ImmutableDictionary<string, ImmutableArray<string>>? ResourceAliases = null)
+    ImmutableDictionary<string, ImmutableArray<string>>? ResourceAliases = null,
+    AnimationResource? ExpressionTimeline = null)
 {
     public ImmutableArray<string> LoadedResourcePaths { get; init; } = LoadedResourcePaths.IsDefault ? [] : LoadedResourcePaths;
     public ImmutableDictionary<string, ImmutableArray<string>> ResourceAliases { get; init; } =
@@ -97,9 +101,10 @@ internal sealed record AnimationBakeRequest(Guid Id, AnimationCapture Capture, A
 }
 /// <summary>
 /// A timeline edit of one clip: the loop, or its startup when <paramref name="Startup"/> is set.
-/// The rewritten timeline itself travels in the staged file. <paramref name="DurationSeconds"/>
-/// is the clip's new length when it changed, which resamples its motion; null keeps the motion
-/// byte for byte.
+/// The rewritten timeline itself travels in the staged file. <paramref name="EntryIndex"/> is the
+/// clip's timeline inside its PAP, or -1 for an expression's timeline, a TMB file of its own.
+/// <paramref name="DurationSeconds"/> is the clip's new length when it changed, which resamples
+/// its motion; null keeps the motion byte for byte.
 /// </summary>
 internal sealed record AnimationTimelineEdit(bool Startup, int EntryIndex, float? DurationSeconds);
 /// <summary>

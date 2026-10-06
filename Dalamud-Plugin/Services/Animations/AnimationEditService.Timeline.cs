@@ -6,8 +6,10 @@ namespace InstantEdit.Services.Animations;
 
 /// <summary>
 /// One clip's timeline as the Timeline window loaded it: the animation file, which of its
-/// entries the clip is, and that entry's timeline. <see cref="Document"/> is null when the
-/// timeline can't be edited, and <see cref="ReadOnlyReason"/> says why.
+/// entries the clip is, and that entry's timeline. An expression's timeline is a TMB file of its
+/// own instead (<see cref="Standalone"/>): <see cref="Resource"/> is that file, <see cref="Pap"/>
+/// is empty and <see cref="EntryIndex"/> is -1. <see cref="Document"/> is null when the timeline
+/// can't be edited, and <see cref="ReadOnlyReason"/> says why.
 /// </summary>
 internal sealed record AnimationTimelineSource(AnimationCapture Capture, bool Startup, AnimationClip Clip,
     AnimationResource Resource, byte[] Pap, int EntryIndex, byte[] Tmb, TimelineDocument? Document, string? ReadOnlyReason,
@@ -16,13 +18,29 @@ internal sealed record AnimationTimelineSource(AnimationCapture Capture, bool St
     /// <summary>The motion's length in seconds, as the game plays it.</summary>
     public float Seconds => Clip.Duration;
 
+    /// <summary>The timeline is an expression's own TMB file, not part of the clip's PAP. Its length can't change.</summary>
+    public bool Standalone => EntryIndex < 0;
+
+    /// <summary>
+    /// The length in frames of the face an expression plays, by motion name, as the collection
+    /// resolves it: a mod's animated face is far longer than the vanilla pose the editor's lists
+    /// know. Empty for every other clip.
+    /// </summary>
+    public ImmutableDictionary<string, int> OwnFrames =>
+        Standalone && Clip.Name.Length > 0 && TimelineDocument.MotionFrames(Clip.Duration) is { } frames
+            ? ImmutableDictionary<string, int>.Empty.Add(Clip.Name, frames)
+            : ImmutableDictionary<string, int>.Empty;
+
     /// <summary>Effects that stop although the animation goes on, in <paramref name="document"/>; see <see cref="TimelineEffectCheck"/>.</summary>
     public ImmutableArray<TimelineEffectCheck.Problem> EffectProblems(TimelineDocument document) =>
         Effects is { Count: > 0 } effects ? TimelineEffectCheck.Find(document, effects) : [];
 }
 
-/// <summary>An edited clip, built and checked: the new animation file and its motion's fingerprint.</summary>
-internal sealed record AnimationTimelineBuild(byte[] Pap, string BindingFingerprint);
+/// <summary>
+/// An edited clip, built and checked: the file it replaces (the animation, or an expression's
+/// timeline), its new bytes and the motion's fingerprint.
+/// </summary>
+internal sealed record AnimationTimelineBuild(string GamePath, byte[] Bytes, string BindingFingerprint);
 
 internal sealed partial class AnimationEditService
 {
@@ -33,6 +51,8 @@ internal sealed partial class AnimationEditService
     public async Task<AnimationTimelineSource> LoadTimelineAsync(AnimationCapture capture, bool startup, CancellationToken token)
     {
         var clip = startup ? capture.Startup ?? throw new InvalidOperationException("No linked startup animation was identified.") : capture.Clip;
+        if (!startup && capture.ExpressionTimeline is { } expression)
+            return await LoadExpressionTimelineAsync(capture, clip, expression.GamePath, token);
         var (resource, bytes) = await resources.ReadAsync(capture.CollectionId, clip.GamePath, token);
         var pap = new AnimationPap(bytes);
         var entry = pap.EntryIndex(clip.Name, clip.BindingIndex);
@@ -48,6 +68,29 @@ internal sealed partial class AnimationEditService
             return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, null, error.Message);
         }
         return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, document, null,
+            await EffectsAsync(capture.CollectionId, document, token));
+    }
+
+    /// <summary>
+    /// Reads an expression's timeline (chara/action/facial/pose/smile.tmb), a TMB file of its own.
+    /// It has no motion to measure, so its length is its header's, or for an endless header (-1, as
+    /// permanent-expression mods write) the vanilla expression length.
+    /// </summary>
+    private async Task<AnimationTimelineSource> LoadExpressionTimelineAsync(AnimationCapture capture, AnimationClip clip, string gamePath,
+        CancellationToken token)
+    {
+        var (resource, bytes) = await resources.ReadAsync(capture.CollectionId, gamePath, token);
+        TimelineDocument document;
+        try
+        {
+            var file = TmbFile.Parse(bytes);
+            document = TimelineConvert.Read(file, TimelineDocument.ExpressionFrames(file.Length)) with { Expression = true };
+        }
+        catch (InvalidDataException error)
+        {
+            return new AnimationTimelineSource(capture, false, clip, resource, [], -1, bytes, null, error.Message);
+        }
+        return new AnimationTimelineSource(capture, false, clip, resource, [], -1, bytes, document, null,
             await EffectsAsync(capture.CollectionId, document, token));
     }
 
@@ -103,16 +146,17 @@ internal sealed partial class AnimationEditService
     /// <summary>
     /// Builds the edited clip and hands it to <paramref name="show"/>, whose message becomes the
     /// status: the GPose preview. A changed length bakes the motion first. Nothing is saved.
+    /// <paramref name="motionFrames"/> are facial motions' own lengths (see <see cref="TimelineConvert.Apply"/>).
     /// </summary>
     public void PreviewTimeline(AnimationTimelineSource source, TimelineDocument document,
-        Func<AnimationTimelineBuild, CancellationToken, Task<string>> show) => Launch(async token =>
+        Func<AnimationTimelineBuild, CancellationToken, Task<string>> show, IReadOnlyDictionary<string, int>? motionFrames = null) => Launch(async token =>
     {
         var request = TimelineRequest(source, document, AnimationDestination.NewMod, "");
         // A preview is never journaled, so a length change bakes in a folder of its own.
         var work = Path.Combine(Path.GetTempPath(), "XIV Instant Edit timeline preview", request.Id.ToString("N"));
         try
         {
-            var built = await BuildTimelineAsync(request, source, source.Pap, document, work, token);
+            var built = await BuildTimelineAsync(request, source, source.Standalone ? source.Tmb : source.Pap, document, motionFrames, work, token);
             Status = "Showing the preview";
             Status = await show(built, token);
         }
@@ -128,10 +172,12 @@ internal sealed partial class AnimationEditService
     /// imported sounds, by game path; they are packaged next to the animation. A file
     /// <paramref name="beside"/> names as a copy of another (see <see cref="TimelineImport.Beside"/>)
     /// is mapped wherever that file is instead, when the animation's mod is what provides it.
+    /// <paramref name="motionFrames"/> are facial motions' own lengths (see <see cref="TimelineConvert.Apply"/>).
     /// </summary>
     /// <returns>The job's id, which <see cref="LastResult"/> carries once it ends; null when another job is running.</returns>
     public Guid? EditTimeline(AnimationTimelineSource source, TimelineDocument document, AnimationDestination destination,
-        string modName, IReadOnlyDictionary<string, byte[]> added, IReadOnlyDictionary<string, string>? beside = null)
+        string modName, IReadOnlyDictionary<string, byte[]> added, IReadOnlyDictionary<string, string>? beside = null,
+        IReadOnlyDictionary<string, int>? motionFrames = null)
     {
         if (Busy) return null;
         var request = TimelineRequest(source, document, destination, modName.Trim());
@@ -144,15 +190,17 @@ internal sealed partial class AnimationEditService
             await CheckActorAsync(capture, false);
             // The file must still be the one the editor loaded, or the edit would drop newer work.
             await resources.CheckAsync(capture.CollectionId, [source.Resource], token);
-            var manifest = await resources.ManifestAsync(capture, [source.Clip.GamePath], destination, token);
+            // The file the timeline lives in: the clip's PAP, or an expression's own TMB.
+            var edited = source.Resource.GamePath;
+            var manifest = await resources.ManifestAsync(capture, [edited], destination, token);
             if (manifest.Resources.Single().Hash != source.Resource.Hash)
                 throw new IOException("The animation file changed while saving. Open the timeline again.");
-            var built = await BuildTimelineAsync(request, source, manifest.Files[source.Clip.GamePath], document,
+            var built = await BuildTimelineAsync(request, source, manifest.Files[edited], document, motionFrames,
                 journals.DirectoryFor(request.Id), token);
             var (files, reused, owners) = await AddedFilesAsync(capture, destination, source.Resource, added, beside, token);
-            var outputs = ImmutableDictionary<string, byte[]>.Empty.Add(source.Clip.GamePath, built.Pap);
+            var outputs = ImmutableDictionary<string, byte[]>.Empty.Add(built.GamePath, built.Bytes);
             var journal = await commits.PrepareAsync(request, manifest, outputs, token,
-                files.Count > 0 ? (source.Clip.GamePath, files, owners) : null);
+                files.Count > 0 ? (edited, files, owners) : null);
             if (reused.Count > 0)
             {
                 journal.ReusedFiles = reused;
@@ -171,7 +219,7 @@ internal sealed partial class AnimationEditService
             }, token);
             if (destination == AnimationDestination.InPlace)
             {
-                var updated = capture.Sources.Select(s =>
+                var updated = capture.Sources.Concat(capture.ExpressionTimeline is { } expression ? [expression] : []).Select(s =>
                     journal.Files.FirstOrDefault(f => f.AddedFor == null && f.GamePath == s.GamePath) is { } file
                         ? s with
                         {
@@ -207,11 +255,19 @@ internal sealed partial class AnimationEditService
     /// come out exactly as it went in.
     /// </summary>
     private async Task<AnimationTimelineBuild> BuildTimelineAsync(AnimationBakeRequest request, AnimationTimelineSource source,
-        byte[] pap, TimelineDocument document, string workDirectory, CancellationToken token)
+        byte[] pap, TimelineDocument document, IReadOnlyDictionary<string, int>? motionFrames, string workDirectory, CancellationToken token)
     {
         if (source.Document == null) throw new InvalidOperationException(source.ReadOnlyReason ?? "This timeline can't be edited.");
         var clip = source.Clip;
-        var timeline = TimelineConvert.Apply(source.Tmb, document);
+        var timeline = TimelineConvert.Apply(source.Tmb, document, motionFrames);
+        if (source.Standalone)
+        {
+            // An expression's timeline is the whole file; the face it plays stays as it is.
+            if (document.LengthChanged) throw new InvalidOperationException("An expression's timeline keeps its length.");
+            if (!pap.AsSpan().SequenceEqual(source.Tmb)) throw new IOException("The timeline file changed while saving. Open the timeline again.");
+            _ = TmbFile.Parse(timeline);
+            return new AnimationTimelineBuild(source.Resource.GamePath, timeline, clip.BindingFingerprint);
+        }
         var motion = pap;
         if (document.LengthChanged)
         {
@@ -229,7 +285,7 @@ internal sealed partial class AnimationEditService
         var fingerprint = document.LengthChanged
             ? await framework.RunOnFrameworkThread(() => AnimationRuntime.InspectPap(result).GetValueOrDefault(clip.BindingIndex, ""))
             : clip.BindingFingerprint;
-        return new AnimationTimelineBuild(result, fingerprint);
+        return new AnimationTimelineBuild(source.Resource.GamePath, result, fingerprint);
     }
 
     /// <summary>

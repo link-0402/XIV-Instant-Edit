@@ -8,7 +8,18 @@ namespace InstantEdit.Services.Animations;
 internal sealed class AnimationCatalog
 {
     internal sealed record Timeline(ushort Id, string Key, string Name, byte LoadType, bool Loop,
-        ImmutableArray<ushort> Family, ImmutableArray<ushort> Startups);
+        ImmutableArray<ushort> Family, ImmutableArray<ushort> Startups)
+    {
+        /// <summary>
+        /// An expression emote's timeline (/smile plays facial/pose/smile): it plays a face on the face
+        /// skeleton, from the library its TMB names or the face's resident set.
+        /// </summary>
+        public bool IsExpression => IsExpressionKey(LoadType, Key);
+    }
+
+    private const string FacialPrefix = "facial/pose/";
+
+    internal static bool IsExpressionKey(byte loadType, string key) => loadType == 0 && key.StartsWith(FacialPrefix, StringComparison.Ordinal);
     private readonly Dictionary<ushort, Timeline> timelines = [];
     private readonly Lazy<PapLoadTable?> papTable;
     /// <summary>The game's PAP load table, or null when it can't be read: then every race loads its own paths.</summary>
@@ -78,10 +89,17 @@ internal sealed class AnimationCatalog
     public static bool Matches(Timeline timeline, string pap, string clip) =>
         PapKeys(timeline).Any(key => pap.EndsWith("/" + key + ".pap", StringComparison.Ordinal)) ||
         clip == timeline.Key || clip == timeline.Key.Split('/').Last() ||
-        timeline.LoadType == 0 && timeline.Key.StartsWith("facial/pose/", StringComparison.Ordinal) &&
-        pap.EndsWith("/nonresident/" + timeline.Key[12..] + ".pap", StringComparison.Ordinal);
+        timeline.IsExpression && pap.EndsWith("/nonresident/" + timeline.Key[FacialPrefix.Length..] + ".pap", StringComparison.Ordinal);
 
-    public static ImmutableArray<string> CandidatePapPaths(Timeline timeline, IEnumerable<string> known, PapLoadTable? table = null)
+    /// <summary>
+    /// The PAPs that may hold what <paramref name="timeline"/> plays, for the player whose loaded
+    /// paths are <paramref name="known"/>. An expression's face comes from the library its TMB names
+    /// (<paramref name="facePacks"/>, such as "smile"), or from the face's resident set when it
+    /// names none: Straight Face, Shut Eyes, Endure, Ouch and Concentrate play cfxf_ motions
+    /// every face always has loaded.
+    /// </summary>
+    public static ImmutableArray<string> CandidatePapPaths(Timeline timeline, IEnumerable<string> known, PapLoadTable? table = null,
+        IEnumerable<string>? facePacks = null)
     {
         var paths = known.Where(AnimationDependencies.SafeGamePath).Distinct(StringComparer.Ordinal).ToArray();
         var candidates = new HashSet<string>(StringComparer.Ordinal);
@@ -99,10 +117,25 @@ internal sealed class AnimationCatalog
             if (timeline.LoadType == 2 && parts[4] == "base")
                 foreach (var key in PapKeys(timeline))
                     candidates.Add(Loaded($"chara/human/{parts[2]}/animation/a0001/bt_common/{key}.pap", table));
-            else if (timeline.LoadType == 0 && parts[4] == "face" && timeline.Key.StartsWith("facial/pose/", StringComparison.Ordinal))
-                candidates.Add($"chara/human/{parts[2]}/animation/{parts[5]}/nonresident/{timeline.Key[12..]}.pap");
+            else if (timeline.IsExpression && parts[4] == "face")
+            {
+                // The face's animation folder is its skeleton's: faces sharing a skeleton share it too.
+                var face = $"chara/human/{parts[2]}/animation/{parts[5]}";
+                candidates.Add($"{face}/nonresident/{timeline.Key[FacialPrefix.Length..]}.pap");
+                candidates.Add($"{face}/resident/face.pap");
+                foreach (var pack in facePacks ?? [])
+                    if (FacePackPath(face, pack) is { } library)
+                        candidates.Add(library);
+            }
         }
         return candidates.Order(StringComparer.Ordinal).ToImmutableArray();
+    }
+
+    /// <summary>A face library's PAP in a face's animation folder, or null for a name that is no safe path.</summary>
+    private static string? FacePackPath(string faceFolder, string pack)
+    {
+        var path = $"{faceFolder}/nonresident/{pack}.pap";
+        return pack.Length > 0 && AnimationDependencies.SafeGamePath(path) ? path : null;
     }
 
     internal AnimationCatalog(IEnumerable<Timeline> entries, PapLoadTable? table = null)
@@ -127,14 +160,14 @@ internal sealed class AnimationCatalog
         var paths = known.Where(AnimationDependencies.SafeGamePath).Distinct(StringComparer.Ordinal).ToArray();
         var parts = selectedPap.Split('/');
         if (parts.Length < 8 || parts[0] != "chara" || parts[1] != "human" || parts[3] != "animation") return null;
-        if (timeline.LoadType == 0 && timeline.Key.StartsWith("facial/pose/", StringComparison.Ordinal))
+        if (timeline.IsExpression)
         {
             var face = paths.Select(p => p.Split('/')).Where(p => p.Length == 7 && p[0] == "chara" && p[1] == "human" &&
                 p[2] == parts[2] && p[3] == "skeleton" && p[4] == "face" && p[6].EndsWith(".sklb", StringComparison.Ordinal))
                 .Select(p => p[5]).Distinct().ToArray();
             if (face.Length == 0) face = paths.Select(p => p.Split('/')).Where(p => p.Length > 6 && p[0] == "chara" && p[1] == "human" &&
                 p[2] == parts[2] && p[3] == "animation" && p[4].StartsWith('f')).Select(p => p[4]).Distinct().ToArray();
-            return face.Length == 1 ? $"chara/human/{parts[2]}/animation/{face[0]}/nonresident/{timeline.Key[12..]}.pap" : null;
+            return face.Length == 1 ? $"chara/human/{parts[2]}/animation/{face[0]}/nonresident/{timeline.Key[FacialPrefix.Length..]}.pap" : null;
         }
         if (AnimationDependencies.SafeGamePath(selectedPap) &&
             PapKeys(timeline).Any(key => selectedPap.EndsWith("/" + key + ".pap", StringComparison.Ordinal)))

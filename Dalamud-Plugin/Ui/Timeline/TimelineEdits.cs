@@ -13,8 +13,12 @@ internal static class TimelineEdits
 {
     public static bool CanMove(TimelineEvent ev) => ev.Access is TimelineAccess.Editable or TimelineAccess.Movable;
 
-    /// <summary>Whether the event's length can change: never for a face that holds, whose length the game ignores.</summary>
-    public static bool CanResize(TimelineEvent ev) => ev.Access == TimelineAccess.Editable && ev.Resizable && !TimelineDocument.Holds(ev);
+    /// <summary>
+    /// Whether the event's length can change: never for a motion at its own speed, whose length the
+    /// game ignores, nor for a kept face, which has none.
+    /// </summary>
+    public static bool CanResize(TimelineEvent ev) => ev.Access == TimelineAccess.Editable && ev.Resizable &&
+        !TimelineDocument.OwnPace(ev) && !TimelineDocument.Kept(ev);
 
     public static bool CanEdit(TimelineEvent ev) => ev.Access == TimelineAccess.Editable;
 
@@ -104,7 +108,7 @@ internal static class TimelineEdits
     /// <paramref name="scaleEvents"/> every start and every non-zero duration scales with the length
     /// (rounded half away from zero), and a start that played before still plays; without it nothing
     /// else moves. Durations past <see cref="TimelineDocument.MaxFrames"/> mean "until the end" in
-    /// mods and never scale.
+    /// mods and never scale, nor do those of motions at their own speed, which the game ignores.
     /// With <paramref name="loaded"/> (the document as it was loaded), the motions that follow are
     /// the ones that lasted the loaded length, and going back to that length puts what the user
     /// can't move (Locked starts and lengths, Movable lengths) back exactly where it was.
@@ -130,7 +134,7 @@ internal static class TimelineEdits
                 if (ev.Start < old)
                     start = Math.Min(start, length - 1);
                 start = Math.Clamp(start, 0, TimelineDocument.MaxFrames);
-                if (duration is > 0 and <= TimelineDocument.MaxFrames)
+                if (duration is > 0 and <= TimelineDocument.MaxFrames && !TimelineDocument.OwnPace(ev))
                     duration = Math.Clamp(TimelineSnap.Round(ev.Duration * ratio), 1, TimelineDocument.MaxFrames);
             }
             if (ev.Lane == TimelineLane.Motion && (original == null
@@ -180,7 +184,7 @@ internal static class TimelineEdits
         var added = events.ToList();
         if (added.Count == 0)
             return doc;
-        if (added.Any(ev => ev.Start < 0 || ev.Start > TimelineDocument.MaxFrames || ev.Duration < 0))
+        if (added.Any(ev => ev.Start < 0 || ev.Start > TimelineDocument.MaxFrames || ev.Duration < 0 && !TimelineDocument.Kept(ev)))
         {
             error = "The event is outside the timeline.";
             return doc;
@@ -217,8 +221,10 @@ internal static class TimelineEdits
                     group = "g" + key[1..] + "-" + suffix.ToString(CultureInfo.InvariantCulture);
                 newGroups[ev.Group] = group;
             }
-            // A copy of a loaded entry remembers it, so saving copies all of its bytes.
-            builder.Add(ev with { Key = key, Group = group, Conditional = false, CloneOf = ev.Key.StartsWith('t') ? ev.Key : ev.CloneOf });
+            // A copy of a loaded entry remembers it, so saving copies all of its bytes. Faces loop
+            // only on an expression's timeline.
+            builder.Add(ev with { Key = key, Group = group, Conditional = false, CloneOf = ev.Key.StartsWith('t') ? ev.Key : ev.CloneOf,
+                Loop = ev.Loop && doc.Expression });
             names.Add(key);
         }
         created = names.MoveToImmutable();
@@ -257,10 +263,11 @@ internal static class TimelineEdits
     /// only its start; a Locked one nothing. What the loader derives from the entry's kind and track
     /// (Resizable, LockReason, Conditional) is kept too, since saving checks it against the written
     /// file, and only a resizable event takes a new duration (at least one frame; an unchanged one is
-    /// kept exactly). Starts stay inside the TMB's range. A holding face that gets time control and
-    /// no new duration lasts as long as it held, so it keeps playing the same.
+    /// kept exactly). Starts stay inside the TMB's range. A motion at its own speed that gets time
+    /// control and no new duration lasts what it played (<see cref="TimelineDocument.PlayedFrames"/>
+    /// with <paramref name="motionFrames"/>), so it keeps playing the same.
     /// </summary>
-    public static TimelineDocument Replace(TimelineDocument doc, TimelineEvent ev)
+    public static TimelineDocument Replace(TimelineDocument doc, TimelineEvent ev, IReadOnlyDictionary<string, int>? motionFrames = null)
     {
         var index = IndexOf(doc, ev.Key);
         if (index < 0)
@@ -279,11 +286,43 @@ internal static class TimelineEdits
             TimelineAccess.Movable => old with { Start = start },
             _ => old,
         };
-        if (TimelineDocument.Holds(old) && old.Resizable && updated.Duration == old.Duration &&
+        if (TimelineDocument.OwnPace(old) && old.Resizable && updated.Duration == old.Duration &&
             updated.Values.GetValueOrDefault(TmbEntrySchema.TimeControlField) != 0)
-            updated = updated with { Duration = doc.HeldEnd(old) - old.Start };
+            updated = updated with { Duration = Math.Max(1, doc.PlayedFrames(old, motionFrames)) };
         return Same(old, updated) ? doc : doc with { Events = doc.Events.SetItem(index, updated) };
     }
+
+    /// <summary>
+    /// Keeps the face <paramref name="key"/> on, or stops keeping it. Kept, it gets time control and
+    /// the endless length (<see cref="TimelineDocument.KeptDuration"/>), so the game shows it after the
+    /// timeline ends until another face replaces it; a moving face (<paramref name="motionFrames"/>
+    /// knows its length) on an expression's timeline loops (<see cref="TimelineDocument.Loops"/>).
+    /// Keeping a kept moving face that doesn't loop yet makes it loop. No longer kept, a moving face
+    /// lasts its own length, a pose holds until the next face or the end of the timeline.
+    /// </summary>
+    public static TimelineDocument Keep(TimelineDocument doc, string key, bool keep, IReadOnlyDictionary<string, int>? motionFrames = null)
+    {
+        var index = IndexOf(doc, key);
+        if (index < 0 || !TimelineDocument.CanKeep(doc.Events[index]))
+            return doc;
+        var ev = doc.Events[index];
+        var loop = keep && CanLoop(doc, ev, motionFrames);
+        if (keep == TimelineDocument.Kept(ev) && loop == ev.Loop)
+            return doc;
+        var values = (ev.Values ?? ImmutableDictionary<string, double>.Empty).SetItem(TmbEntrySchema.TimeControlField, 1);
+        var duration = keep ? TimelineDocument.KeptDuration
+            : TimelineDocument.Moves(ev, motionFrames) is { } own ? own
+            : Math.Clamp(doc.HeldEnd(ev) - ev.Start, 1, TimelineDocument.MaxFrames);
+        return doc with { Events = doc.Events.SetItem(index, ev with { Duration = duration, Values = values, Loop = loop }) };
+    }
+
+    /// <summary>
+    /// Whether keeping <paramref name="ev"/> makes it loop: a moving face on an expression's timeline
+    /// that starts early enough for a second play to fit.
+    /// </summary>
+    public static bool CanLoop(TimelineDocument doc, TimelineEvent ev, IReadOnlyDictionary<string, int>? motionFrames) =>
+        doc.Expression && TimelineDocument.CanKeep(ev) && TimelineDocument.Moves(ev, motionFrames) is { } own &&
+        (long)ev.Start + own <= TimelineDocument.MaxFrames;
 
     /// <summary>Field-by-field equality, comparing values by content rather than by dictionary instance.</summary>
     public static bool Same(TimelineEvent a, TimelineEvent b)
@@ -292,7 +331,7 @@ internal static class TimelineEdits
             return true;
         if (a.Key != b.Key || a.Magic != b.Magic || a.Lane != b.Lane || a.Start != b.Start || a.Duration != b.Duration ||
             a.Resizable != b.Resizable || a.Path != b.Path || a.Access != b.Access || a.LockReason != b.LockReason ||
-            a.Conditional != b.Conditional || a.Group != b.Group || a.CloneOf != b.CloneOf)
+            a.Conditional != b.Conditional || a.Group != b.Group || a.CloneOf != b.CloneOf || a.Loop != b.Loop)
             return false;
         if (ReferenceEquals(a.Values, b.Values))
             return true;

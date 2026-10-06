@@ -101,7 +101,11 @@ internal static class AnimationPresentation
     }
 
     public static string AnimationState(AnimationCapture capture, bool startup) => startup ? "Startup" :
+        IsExpression(capture) ? "Expression" :
         AnimationCatalog.IsExplicitIdle(capture.Clip.Timeline) || AnimationCatalog.IsExplicitWalk(capture.Clip.Timeline) ? "Loop" : "Emote";
+
+    /// <summary>An expression emote (/smile): a face on the face skeleton, timed by a TMB file of its own.</summary>
+    public static bool IsExpression(AnimationCapture capture) => capture.ExpressionTimeline != null;
 
     /// <summary>The Blender action name of a clip: its display name, followed by its name inside the PAP.</summary>
     public static string ExportName(AnimationCapture capture, bool startup = false)

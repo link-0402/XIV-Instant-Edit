@@ -10,8 +10,8 @@ using static InstantEdit.TestSupport.Assertions;
 
 /// <summary>
 /// Racial scaling on synthetic data: the deformer chain through human.pbd's race tree, reshaping a
-/// two-LOD model and its bounding boxes, and the import context that marks a scaled import as a
-/// preview whose exports are refused.
+/// two-LOD model and its bounding boxes, and the import context that marks a scaled import, whose
+/// exports only go into a model of the race it was scaled for.
 /// </summary>
 internal static class RacialScalingScenarios
 {
@@ -462,16 +462,32 @@ internal static class RacialScalingScenarios
         var game = registry.CreateGameContext(TopPath, TopPath, 0, 42428, racialScaling: record);
         Require(game.RacialScaling == record, "racial scaling: a vanilla import records its scaling too");
 
-        // Scaled imports are previews: nothing exported from one, or combined with one, is written.
+        // A scaled import is shaped for the character's race, so it only goes into that race's model.
         var hair = context with { GamePath = "chara/human/c0801/obj/hair/h0101/model/c0801h0101_hir.mdl", RacialScaling = null };
-        Require(ExportServer.RacialScalingRefusal([context]) is { Success: false, Code: "racial_scaling_preview" } refusal &&
+        Require(ExportServer.GamePathRace(context) == 201 && ExportServer.GamePathRace(hair) == 801 &&
+                ExportServer.GamePathRace(context with { GamePath = "chara/weapon/w0101/obj/body/b0001/model/w0101b0001.mdl" }) is null,
+            "racial scaling: the target race is the race in the written model's file name");
+        Require(ExportServer.RacialScalingRefusal([context], ExportServer.GamePathRace(context)) is
+                    { Success: false, Code: "racial_scaling_mismatch" } refusal &&
                 refusal.Message.Contains("c0201 to Female Miqo'te", StringComparison.Ordinal) &&
-                ExportServer.RacialScalingRefusal([game]) is { Code: "racial_scaling_preview" },
-            "racial scaling: every export from a scaled import is refused, naming the scaling");
-        Require(ExportServer.RacialScalingRefusal([hair, context]) is { Code: "racial_scaling_preview" } &&
-                ExportServer.RacialScalingRefusal([context, hair]) is { Code: "racial_scaling_preview" },
-            "racial scaling: a mashup is refused whether a scaled import is its destination or a contributor");
-        Require(ExportServer.RacialScalingRefusal([hair]) is null && ExportServer.RacialScalingRefusal([hair, hair]) is null,
+                refusal.Message.Contains("a c0201 model", StringComparison.Ordinal) &&
+                refusal.Message.Contains("Save as c0801 Model", StringComparison.Ordinal) &&
+                ExportServer.RacialScalingRefusal([game], 201) is { Code: "racial_scaling_mismatch" } &&
+                ExportServer.RacialScalingRefusal([context], null) is { Code: "racial_scaling_mismatch" },
+            "racial scaling: a scaled import can't go back into its own race's model, and the refusal names the target to use");
+        Require(ExportServer.RacialScalingRefusal([context], 801) is null && ExportServer.RacialScalingRefusal([game], 801) is null,
+            "racial scaling: a scaled import goes into a model of the race it was scaled for");
+        Require(ExportServer.RacialScalingRefusal([context, hair], ExportServer.GamePathRace(context)) is { Code: "racial_scaling_mismatch" } &&
+                ExportServer.RacialScalingRefusal([hair, context], ExportServer.GamePathRace(hair)) is null,
+            "racial scaling: a mashup with a scaled import is refused unless it goes into a model of the scaled race");
+        Require(ExportServer.RacialScalingRefusal([hair], 801) is null && ExportServer.RacialScalingRefusal([hair, hair], null) is null,
             "racial scaling: unscaled imports export as before");
+        Require(ExportServer.RaceExportRefusal(context, 801) is null && ExportServer.RaceExportRefusal(game, 801) is null &&
+                ExportServer.RaceExportRefusal(context with { RacialScaling = null }, 1401) is null,
+            "race export: a scaled or unscaled gear import can be written as another race's model");
+        Require(ExportServer.RaceExportRefusal(context, 1401) is { Code: "racial_scaling_mismatch" } &&
+                ExportServer.RaceExportRefusal(context with { RacialScaling = null }, 201) is { Code: "race_model_unavailable" } &&
+                ExportServer.RaceExportRefusal(hair, 1401) is { Code: "race_model_unavailable" },
+            "race export: refused for another race than the scaled one, the model's own race, and models that aren't gear");
     }
 }

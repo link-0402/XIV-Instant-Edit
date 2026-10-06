@@ -576,6 +576,9 @@ public sealed partial class ExportServer : IDisposable
         if (method == "POST" && path.TrimEnd('/') == "/export/sizes")
             return await HandleSizesExportAsync(request).ConfigureAwait(false);
 
+        if (method == "POST" && path.TrimEnd('/') == "/export/race")
+            return await HandleRaceExportAsync(request).ConfigureAwait(false);
+
         if (method == "POST" && path.StartsWith("/painter/", StringComparison.Ordinal) && _painter is { } painter)
             return painter.Handle(path.TrimEnd('/'), request.Body);
 
@@ -607,6 +610,7 @@ public sealed partial class ExportServer : IDisposable
                 SkeletonCapability,
                 RacialDeformerCapability,
                 SizesExportCapability,
+                RaceExportCapability,
             },
         }));
 
@@ -882,7 +886,7 @@ public sealed partial class ExportServer : IDisposable
                 return Error(409, "destination_not_ready", "a contributor Context is not ready for mashup export");
             contributors.Add(new MashupContributor(contributorContext, contributor.Materials!));
         }
-        if (RacialScalingRefusal(contributors.Select(item => item.Context).Prepend(activeContext)) is { } planScaling)
+        if (RacialScalingRefusal(contributors.Select(item => item.Context).Prepend(activeContext), GamePathRace(activeContext)) is { } planScaling)
             return Error(StatusForCode(planScaling.Code), planScaling.Code, planScaling.Message);
 
         var plan = PenumbraService.BuildMashupPlan(
@@ -937,7 +941,7 @@ public sealed partial class ExportServer : IDisposable
                 return Error(409, "destination_not_ready", "a contributor Context is not ready for mashup export");
             contributors.Add(new MashupContributor(contributorContext, contributor.Materials!));
         }
-        if (RacialScalingRefusal(contributors.Select(item => item.Context).Prepend(activeContext)) is { } exportScaling)
+        if (RacialScalingRefusal(contributors.Select(item => item.Context).Prepend(activeContext), GamePathRace(activeContext)) is { } exportScaling)
             return Error(StatusForCode(exportScaling.Code), exportScaling.Code, exportScaling.Message);
 
         var plan = PenumbraService.BuildMashupPlan(
@@ -1119,7 +1123,7 @@ public sealed partial class ExportServer : IDisposable
                         stageResult.Error.Value.Code,
                         stageResult.Error.Value.Message);
                 }
-                else if (RacialScalingRefusal([reservation.Context]) is { } scalingRefusal)
+                else if (RacialScalingRefusal([reservation.Context], GamePathRace(reservation.Context)) is { } scalingRefusal)
                 {
                     receipt = scalingRefusal;
                 }
@@ -1636,17 +1640,25 @@ public sealed partial class ExportServer : IDisposable
     }
 
     /// <summary>
-    /// Racially scaled imports are for preview only: an export from one, or a mashup with one, is
-    /// refused before anything is written. Null when none of the imports was scaled.
+    /// A racially scaled import is shaped for the character's race, so it can only be written as a model
+    /// of that race: an export, or a mashup with one, into a model of <paramref name="targetRace"/> (the
+    /// race in the written game path, null for a path without one) is refused before anything is written
+    /// when an import was scaled for another race. Null when that's fine.
     /// </summary>
-    internal static ExportReceipt? RacialScalingRefusal(IEnumerable<InstantEditImportContext> contexts)
+    internal static ExportReceipt? RacialScalingRefusal(IEnumerable<InstantEditImportContext> contexts, ushort? targetRace)
     {
-        if (contexts.Select(context => context.RacialScaling).FirstOrDefault(scaling => scaling is not null) is not { } record)
+        if (contexts.Select(context => context.RacialScaling)
+                .FirstOrDefault(scaling => scaling is not null && scaling.CharacterRace != targetRace) is not { } record)
             return null;
-        return new ExportReceipt(false, "racial_scaling_preview",
-            $"This model was sent to Blender racially scaled (c{record.ModelRace:D4} to {GameRaces.Label(record.CharacterRace)}) " +
-            "for preview only, so it can't be exported. Re-import it with racial scaling off to edit and export it.");
+        var target = targetRace is { } race ? $"a c{race:D4} model" : "this model";
+        return new ExportReceipt(false, "racial_scaling_mismatch",
+            $"This model was sent to Blender racially scaled (c{record.ModelRace:D4} to {GameRaces.Label(record.CharacterRace)}), " +
+            $"so it can't go into {target}. Pick Save as c{record.CharacterRace:D4} Model as the target.");
     }
+
+    /// <summary>The race of a context's model game path (201 for c0201e6000_top.mdl), or null.</summary>
+    internal static ushort? GamePathRace(InstantEditImportContext context)
+        => ModelSkeletonPaths.Parse(context.GamePath) is { Human: true } key ? key.GenderRace : null;
 
     internal static void CleanupStagedExport(StagedExport? staged)
     {
@@ -1796,6 +1808,7 @@ public sealed partial class ExportServer : IDisposable
             "/mashup/export" => "mashup_export",
             "/export" => "export",
             "/export/sizes" => "export_sizes",
+            "/export/race" => "export_race",
             "/skeleton" => "skeleton",
             "/racial-deformer" => "racial_deformer",
             _ => "http_request",
@@ -1826,7 +1839,7 @@ public sealed partial class ExportServer : IDisposable
             return "receipt_lookup";
         if (code is "destination_not_ready" or "vanilla_mod_exists" or "mashup_plan_mismatch" or "sizes_need_mod")
             return "destination_validation";
-        if (code is "racial_scaling_preview")
+        if (code is "racial_scaling_mismatch" or "race_model_unavailable")
             return "racial_scaling";
         return code == "internal_error" ? "processing" : "external_service";
     }
@@ -1852,8 +1865,8 @@ public sealed partial class ExportServer : IDisposable
             return "Refresh the mashup plan and retry the export.";
         if (code is "sizes_need_mod")
             return "Export once with Magic Fit Sizes off to create the mod, then export the sizes.";
-        if (code is "racial_scaling_preview")
-            return "Re-import the model with racial scaling off to edit and export it.";
+        if (code is "racial_scaling_mismatch")
+            return "Export it as a model of the race it was scaled for, or re-import it with racial scaling off.";
         if (code == "internal_error")
             return "Retry the operation and review the Dalamud plugin log if it fails again.";
         return "Review the reported Penumbra or request details, correct them, and retry.";
@@ -1888,7 +1901,7 @@ public sealed partial class ExportServer : IDisposable
             "invalid_capability" or "plugin_instance_mismatch" => 401,
             "duplicate_export_id" => 409,
             "mashup_plan_mismatch" => 409,
-            "racial_scaling_preview" => 409,
+            "racial_scaling_mismatch" => 409,
             "vanilla_mod_exists" or "destination_not_ready" or "sizes_need_mod" => 409,
             "export_not_found" => 404,
             "server_stopped" or "internal_error" => 500,

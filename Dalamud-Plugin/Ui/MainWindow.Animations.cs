@@ -102,6 +102,7 @@ public sealed partial class MainWindow
                 Clip = current.Clip, Startup = current.Startup, Playing = current.Playing,
                 Sources = current.Sources, FamilyPaths = current.FamilyPaths,
                 LoadedResourcePaths = current.LoadedResourcePaths, ResourceAliases = current.ResourceAliases,
+                ExpressionTimeline = current.ExpressionTimeline,
                 UnavailableReason = current.UnavailableReason,
                 PoseUnavailableReason = current.PoseUnavailableReason,
             };
@@ -236,7 +237,7 @@ public sealed partial class MainWindow
         if (row.Startup)
             DrawStartupGuide();
         ImGui.SetCursorPosX(start + (row.Startup ? TreeStep : 0));
-        Widgets.Icon(FontAwesomeIcon.Running, Theme.AnimationKind);
+        Widgets.Icon(AnimationIcon(row.Capture), Theme.AnimationKind);
         ImGui.SameLine(0, Theme.Gap);
         var problem = SkeletonBlock(row.Clip);
         var searching = row.Clip.Resolution?.State == SkeletonResolutionState.Searching;
@@ -305,6 +306,10 @@ public sealed partial class MainWindow
 
     private static float BadgeWidth(string text) => ImGui.CalcTextSize(text).X + Theme.Scaled(12);
 
+    /// <summary> A face for an expression, a figure for every other animation. </summary>
+    private static FontAwesomeIcon AnimationIcon(AnimationCapture capture) =>
+        AnimationPresentation.IsExpression(capture) ? FontAwesomeIcon.Smile : FontAwesomeIcon.Running;
+
     private static float IconWidth(FontAwesomeIcon icon)
     {
         using var font = ImRaii.PushFont(UiBuilder.IconFont);
@@ -322,7 +327,9 @@ public sealed partial class MainWindow
         DrawAnimationTool("Source", "see its file and the skeleton it was made for", DrawAnimationSource);
         DrawAnimationTool("LivePose", "bake your LivePose adjustments into it", DrawLivePose);
         DrawAnimationTool("Animated bones", "choose the bones it moves", DrawAnimatedBones);
-        DrawAnimationTool("Skeleton repair", "retarget it onto a standard skeleton", DrawSkeletonRepair);
+        // The standard skeletons are body layouts; an expression plays on the face skeleton.
+        if (animationSelection is not { } selected || !AnimationPresentation.IsExpression(selected))
+            DrawAnimationTool("Skeleton repair", "retarget it onto a standard skeleton", DrawSkeletonRepair);
         DrawAnimationTool("Timeline", "edit its timeline", DrawAnimationTimeline);
         DrawRecentEditsTab();
         if (ImGui.BeginTabItem("Record live pose", ImGuiTabItemFlags.Trailing))
@@ -338,7 +345,7 @@ public sealed partial class MainWindow
         var clip = animationStartupSelected && capture.Startup is { } startup ? startup : capture.Clip;
         var file = capture.Sources.FirstOrDefault(s => s.GamePath == clip.GamePath);
         var playing = capture.Playing && !animationStartupSelected ? " · playing" : "";
-        Widgets.Icon(FontAwesomeIcon.Running, Theme.AnimationKind);
+        Widgets.Icon(AnimationIcon(capture), Theme.AnimationKind);
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Label, AnimationPresentation.AnimationName(capture, animationStartupSelected));
@@ -423,15 +430,19 @@ public sealed partial class MainWindow
                 Widgets.PathText(Safe(file?.RelativePath, clip.GamePath), Safe(file?.ResolvedPath, clip.GamePath));
                 Fact("Game path");
                 Widgets.PathText(clip.GamePath, clip.GamePath);
+                if (capture.ExpressionTimeline is { } timeline)
+                {
+                    // An expression's timing lives in a file of its own, which a mod may replace on its own.
+                    Fact("Timeline");
+                    Widgets.PathText(Safe(timeline.RelativePath, timeline.GamePath), Safe(timeline.ResolvedPath, timeline.GamePath));
+                    Fact("Timeline from");
+                    ImGui.TextUnformatted(timeline.ModName ?? timeline.ModDirectory ?? "Game Data");
+                }
                 Fact("Plays on");
                 ImGui.TextUnformatted(AnimationPresentation.ModelName(clip));
-                Fact(startup ? "Leads into" : "Startup");
-                if (startup)
-                    ImGui.TextUnformatted(AnimationPresentation.AnimationName(capture));
-                else if (capture.Startup is null)
-                    ImGui.TextColored(Theme.Hint, "No linked startup was identified");
-                else
-                    ImGui.TextUnformatted(AnimationPresentation.AnimationName(capture, true));
+                // Expressions have no startup.
+                if (!AnimationPresentation.IsExpression(capture))
+                    DrawStartupFact(capture, startup);
                 Fact("Live skeleton");
                 DrawLiveSkeleton(capture.Clip);
                 Fact("Made for");
@@ -458,6 +469,18 @@ public sealed partial class MainWindow
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Hint, "Skeleton library in Settings");
+    }
+
+    /// <summary> The startup an animation begins with, or for a startup the animation it leads into. </summary>
+    private static void DrawStartupFact(AnimationCapture capture, bool startup)
+    {
+        Fact(startup ? "Leads into" : "Startup");
+        if (startup)
+            ImGui.TextUnformatted(AnimationPresentation.AnimationName(capture));
+        else if (capture.Startup is null)
+            ImGui.TextColored(Theme.Hint, "No linked startup was identified");
+        else
+            ImGui.TextUnformatted(AnimationPresentation.AnimationName(capture, true));
     }
 
     private static void DrawLiveSkeleton(AnimationClip clip)

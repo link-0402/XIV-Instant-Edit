@@ -199,7 +199,7 @@ internal static partial class AnimationMetadata
         _ => throw new InvalidDataException("Invalid IMC object type in Penumbra metadata."),
     };
 
-    private static string EquipSlotName(byte value) => value switch
+    internal static string EquipSlotName(byte value) => value switch
     {
         1 => "MainHand",
         2 => "OffHand",

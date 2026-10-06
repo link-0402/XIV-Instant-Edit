@@ -64,16 +64,16 @@ internal static class TimelineEditorFixture
             Face("blink", 30, 8, free, "cfxb_blink1"),
             Face("timed", 60, 20, timed, "cfxf_angry"),
             Face("last", 85, 5, free, "cfxf_bow"),
-            Ev("lip", TimelineLane.LipSync, 0, 40, true, magic: "C010", path: "cfxl_lip_nor1") with { Values = free });
+            Ev("lip", TimelineLane.LipSync, 0, 25, true, magic: "C010", path: "cfxl_lip_nor1") with { Values = free });
         check(TimelineDocument.Holds(doc.Events[1]) && TimelineDocument.Holds(doc.Events[4]) && !TimelineDocument.Holds(doc.Events[2]) &&
               !TimelineDocument.Holds(doc.Events[3]) && !TimelineDocument.Holds(doc.Events[5]) && !TimelineDocument.Holds(Face("x", 0, 10, NoValues)) &&
               !TimelineDocument.Holds(Face("x", 0, 10, free) with { Magic = "C009" }),
-            "only a C010 face without time control holds; blinks, lip sync, timed faces and unknown values keep their length");
+            "only a C010 face without time control holds; blinks, lip sync, timed faces and unknown values do not");
 
         var layout = TimelineLayout.Build(doc);
         int End(string key) => layout.EndOf(layout.IndexOf(key));
         check(doc.HeldEnd(doc.Events[1]) == 60 && End("held") == 60 && layout.Shown(layout.IndexOf("held")) is { Duration: 60, Key: "held" } &&
-              End("last") == 100 && End("blink") == 38 && End("timed") == 80 && End("lip") == 40 &&
+              End("last") == 100 && End("blink") == 38 && End("timed") == 80 && End("lip") == 25 &&
               ReferenceEquals(layout.Shown(layout.IndexOf("timed")), doc.Events[3]) && layout.RowOf(layout.IndexOf("timed")) == layout.RowOf(layout.IndexOf("held")),
             "a holding face lasts until the next face starts or the clip ends, whatever length it stores; other events are drawn as they are");
         var shorter = doc with { Length = 50 };
@@ -87,8 +87,8 @@ internal static class TimelineEditorFixture
               !TimelineEdits.CanResize(doc.Events[1]) && TimelineEdits.CanResize(doc.Events[3]) &&
               ReferenceEquals(TimelineEdits.Resize(doc, "held", false, 5), doc),
             "a holding face is grabbed over the frames it shows and has no edges to resize");
-        check(TimelineSnap.Targets(doc, null).SequenceEqual([0, 30, 38, 40, 60, 80, 85, 100]),
-            "the length a holding face stores is no snap target");
+        check(TimelineSnap.Targets(doc, null).SequenceEqual([0, 30, 60, 80, 85, 100]),
+            "the lengths motions at their own speed store are no snap targets");
         var editor = Editor(doc);
         editor.Press(Hit(editor, At(60, 1, -1)));
         check(editor.Gesture == TimelineGesture.Move && editor.Primary == "held", "pressing where a holding face ends moves it");
@@ -103,6 +103,32 @@ internal static class TimelineEditorFixture
         var off = TimelineEdits.Replace(doc, doc.Events[3] with { Values = free });
         check(off.Events[3].Duration == 20 && TimelineDocument.Holds(off.Events[3]) && TimelineLayout.Build(off).EndOf(3) == 85,
             "turning it off keeps the stored length, which the face then ignores");
+
+        // Lip sync and blinks without time control play their own length (lip shapes: 40 or 10 frames in every
+        // vanilla face), which only the face's animation files know.
+        var lengths = new Dictionary<string, int> { ["cfxl_lip_nor1"] = 40, ["cfxb_blink1"] = 8 };
+        check(TimelineDocument.OwnPace(doc.Events[5]) && TimelineDocument.OwnPace(doc.Events[2]) && TimelineDocument.OwnPace(doc.Events[1]) &&
+              !TimelineDocument.OwnPace(doc.Events[3]) && !TimelineDocument.OwnPace(doc.Events[0]) &&
+              !TimelineEdits.CanResize(doc.Events[5]) && !TimelineEdits.CanResize(doc.Events[2]),
+            "faces, blinks and lip sync without time control play at their own speed and can't be resized");
+        var known = TimelineLayout.Build(doc, null, lengths);
+        check(doc.PlayedFrames(doc.Events[5], lengths) == 40 && doc.PlayedFrames(doc.Events[5]) == 25 && doc.PlayedFrames(doc.Events[3], lengths) == 20 &&
+              known.Shown(known.IndexOf("lip")).Duration == 40 && known.EndOf(known.IndexOf("lip")) == 40 && known.EndOf(known.IndexOf("held")) == 60 &&
+              TimelineLayout.Build(doc, null, new Dictionary<string, int> { ["cfxl_lip_nor1"] = 0 }).EndOf(5) == 25,
+            "a lip motion at its own speed lasts its own length once known, else the length it stores");
+        check(TimelineEdits.Replace(doc, doc.Events[5] with { Values = timed }, lengths).Events[5].Duration == 40 &&
+              TimelineEdits.Replace(doc, doc.Events[5] with { Values = timed }).Events[5].Duration == 25,
+            "turning time control on gives lip sync the length it played");
+        var longer = TimelineEdits.SetLength(doc, 200, scaleEvents: true);
+        check(longer.Events[5].Duration == 25 && longer.Events[1].Duration == 10 && longer.Events[3].Duration == 40,
+            "a longer clip leaves the lengths the game ignores alone");
+        var lips = Editor(doc);
+        lips.MotionFrames = lengths;
+        var before = lips.Layout;
+        lips.MotionFrames = lengths;
+        check(ReferenceEquals(before, lips.Layout) && lips.Layout.EndOf(5) == 40 &&
+              lips.Replace(Event(lips, "lip") with { Values = timed }) && Event(lips, "lip").Duration == 40 && TimelineEdits.CanResize(Event(lips, "lip")),
+            "the editor lays lip sync out at its own length and keeps it when time control turns on");
     }
 
     private static void Panel(Action<bool, string> check)

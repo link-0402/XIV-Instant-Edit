@@ -440,7 +440,7 @@ internal sealed class HeelsOffsetService : IDisposable
             if (model == null || !ModelVisibility.IsDrawn(model))
                 continue;
             var hidden = FirstOffset(drawObject, slot.ReadAfter());
-            var key = new HeelsModelKey(slot, PainterVisibility.NormalizePath(model->ModelResourceHandle->FileName.ToString()),
+            var key = new HeelsModelKey(slot, PainterVisibility.NormalizePath(model->ModelResourceHandle->FileName.Utf8()),
                 model->EnabledAttributeIndexMask, model->EnabledShapeKeyIndexMask, hidden?.Offset.Value);
             var modelId = slot switch
             {

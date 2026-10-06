@@ -250,7 +250,10 @@ public sealed partial class PenumbraService
         }
     }
 
-    /// <summary>Create the first persistent Penumbra destination for a game-data import.</summary>
+    /// <summary>
+    /// Create the first persistent Penumbra destination for a game-data import. With <paramref name="race"/>
+    /// the model is that race's own copy (see RaceModelGamePath), with the EQDP entry that makes the race load it.
+    /// </summary>
     public async Task<NewModelModResult> CreateGameModelModAsync(
         InstantEditImportContext context,
         string exportedFile,
@@ -258,7 +261,8 @@ public sealed partial class PenumbraService
         bool createAttributeGroups = false,
         IReadOnlyList<string>? attributeTags = null,
         IReadOnlyDictionary<string, int>? attributeMasks = null,
-        IReadOnlyList<EstEntryRequest>? estEntries = null)
+        IReadOnlyList<EstEntryRequest>? estEntries = null,
+        int? race = null)
     {
         if (context.SourceKind != InstantEditImportContext.GameSource ||
             context.DestinationState != InstantEditImportContext.NewModRequiredDestination)
@@ -268,6 +272,14 @@ public sealed partial class PenumbraService
         var validationError = ValidateExportRequest(modName, context.GamePath, exportedFile);
         if (validationError is not null)
             return new NewModelModResult(new ExportResult(false, "invalid_export_file", validationError));
+        var modelGamePath = context.GamePath;
+        if (race is { } raceCode)
+        {
+            if (RaceModelGamePath(context.GamePath, raceCode) is not { } racePath)
+                return new NewModelModResult(new ExportResult(false, "race_model_unavailable",
+                    "Only gear and accessory models can be saved for another race."));
+            modelGamePath = racePath;
+        }
 
         await _exportGate.WaitAsync().ConfigureAwait(false);
         try
@@ -291,7 +303,7 @@ public sealed partial class PenumbraService
                 Directory.Exists(finalFolder) || File.Exists(finalFolder))
                 return new NewModelModResult(new ExportResult(false, "vanilla_mod_exists", "A Penumbra mod or folder with this name already exists."));
 
-            var relativeModel = "Files/" + NormalizeGamePath(context.GamePath);
+            var relativeModel = "Files/" + NormalizeGamePath(modelGamePath);
             var staging = Path.Combine(root, $".instant-edit-vanilla-{Guid.NewGuid():N}.tmp");
             var committed = false;
             try
@@ -300,8 +312,10 @@ public sealed partial class PenumbraService
                 StageGameModelMod(
                     staging,
                     modName,
-                    context.GamePath,
+                    modelGamePath,
                     await File.ReadAllBytesAsync(exportedFile).ConfigureAwait(false));
+                if (race is not null)
+                    AddRaceModelEqdp(staging, modelGamePath, race.Value);
                 if (createAttributeGroups && attributeTags is { Count: > 0 })
                 {
                     var attributeError = WriteAttributeGroups(

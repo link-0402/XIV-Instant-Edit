@@ -168,7 +168,17 @@ public sealed partial class TimelineWindow
         if (ev.Duration <= 0 && !ev.Resizable)
             return;
         Fact("Length");
-        if (TimelineDocument.Holds(ev))
+        if (TimelineDocument.Kept(ev))
+        {
+            var loops = TimelineDocument.Loops(ev);
+            ImGui.TextUnformatted(loops ? $"Loops for about {TimelineWindowViews.LoopMinutes(ev)} min"
+                : TimelineDocument.Moves(ev, current.MotionFrames) != null ? "Holds still" : "Until replaced");
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.TextColored(Theme.Muted, "kept");
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip((loops ? TimelineWindowViews.LoopText(ev) : TimelineWindowViews.KeptText) + ".");
+        }
+        else if (TimelineDocument.Holds(ev))
         {
             // The game ignores the stored length; show how long the face really shows.
             ImGui.TextUnformatted(TimelineWindowViews.DurationText(current.Document.HeldEnd(ev) - ev.Start));
@@ -176,6 +186,14 @@ public sealed partial class TimelineWindow
             ImGui.TextColored(Theme.Muted, "held");
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(TimelineWindowViews.HoldText(current.Document, ev) + ". Turn on Time control to set a length.");
+        }
+        else if (TimelineDocument.OwnPace(ev))
+        {
+            ImGui.TextUnformatted(TimelineWindowViews.DurationText(current.Document.PlayedFrames(ev, current.MotionFrames)));
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.TextColored(Theme.Muted, "own speed");
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Plays at its own speed. Turn on Time control to set a length.");
         }
         else if (editable && TimelineEdits.CanResize(ev) && ev.Duration <= TimelineDocument.MaxFrames)
         {
@@ -188,6 +206,25 @@ public sealed partial class TimelineWindow
         }
         else
             ImGui.TextUnformatted(TimelineWindowViews.DurationText(ev.Duration));
+        if (TimelineDocument.CanKeep(ev))
+            DrawKeep(current, ev, editable);
+    }
+
+    /// <summary> The Keep switch of a face: on, the game keeps showing it after the timeline ends. </summary>
+    private static void DrawKeep(TimelineEditor current, TimelineEvent ev, bool editable)
+    {
+        Fact("Keep");
+        // A kept moving face that could loop but holds still (as a Static Infinite option writes)
+        // shows unticked, so ticking it makes it loop.
+        var loops = TimelineEdits.CanLoop(current.Document, ev, current.MotionFrames);
+        var kept = TimelineDocument.Kept(ev) && (ev.Loop || !loops);
+        using (ImRaii.Disabled(!editable))
+        {
+            if (ImGui.Checkbox("##keep", ref kept))
+                current.Keep(ev.Key, kept);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(TimelineWindowViews.KeepTip(ev, TimelineDocument.Moves(ev, current.MotionFrames) != null, loops));
     }
 
     /// <summary> The event's file or motion, or a prop's model, with Choose for one that can take another. </summary>

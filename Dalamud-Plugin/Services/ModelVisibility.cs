@@ -51,7 +51,7 @@ internal static unsafe class ModelVisibility
             var model = drawObject->Models[slot];
             if (model == null || model->ModelResourceHandle == null)
                 continue;
-            var file = PainterVisibility.NormalizePath(model->ModelResourceHandle->FileName.ToString());
+            var file = PainterVisibility.NormalizePath(model->ModelResourceHandle->FileName.Utf8());
             if (IsHiddenGear(drawObject, slot))
             {
                 models.Add((nint)model);

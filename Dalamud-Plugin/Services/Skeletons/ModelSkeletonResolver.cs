@@ -208,7 +208,7 @@ internal sealed class ModelSkeletonResolver(PenumbraService penumbra, IDataManag
             if (havok == null && partial->SkeletonResourceHandle != null)
                 havok = partial->SkeletonResourceHandle->HavokSkeleton;
             var path = partial->SkeletonResourceHandle != null
-                ? GamePathOf(partial->SkeletonResourceHandle->FileName.ToString())
+                ? GamePathOf(partial->SkeletonResourceHandle->FileName.Utf8())
                 : $"partial skeleton {p}";
             if (havok == null)
             {

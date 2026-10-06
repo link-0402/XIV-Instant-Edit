@@ -32,17 +32,23 @@ internal sealed class TimelineCatalog : IDisposable
     private volatile string status = "";
 
     /// <param name="soundSeconds">Reads an SCD's length in seconds, null when it can't tell; may also be set later.</param>
-    public TimelineCatalog(IDataManager data, IPluginLog log, Func<byte[], float?>? soundSeconds = null)
+    /// <param name="clipSeconds">Reads a PAP's clip lengths in seconds by binding index (through the game's Havok); may also be set later.</param>
+    public TimelineCatalog(IDataManager data, IPluginLog log, Func<byte[], float?>? soundSeconds = null,
+        Func<byte[], CancellationToken, IReadOnlyDictionary<int, float>?>? clipSeconds = null)
     {
         this.data = data;
         this.log = log;
         // Not cached on failure, so a later build tries the sheets again.
         sheets = new(ReadSheets, LazyThreadSafetyMode.PublicationOnly);
         SoundSeconds = soundSeconds;
+        ClipSeconds = clipSeconds;
     }
 
     /// <summary>The SCD length reader the audio code provides; sound lengths stay unknown without it.</summary>
     public Func<byte[], float?>? SoundSeconds { get; set; }
+
+    /// <summary>The PAP clip length reader; lip shape and blink lengths stay unknown without it.</summary>
+    public Func<byte[], CancellationToken, IReadOnlyDictionary<int, float>?>? ClipSeconds { get; set; }
 
     public TimelineCatalogState State => state;
 
@@ -164,13 +170,23 @@ internal sealed class TimelineCatalog : IDisposable
         var token = CancellationTokenSource.CreateLinkedTokenSource(life.Token);
         build = token;
         Publish(TimelineCatalogData.Empty, TimelineCatalogState.Loading, "Finding what can be placed");
+        var clips = ClipSeconds;
         _ = Task.Run(() =>
         {
             TimelineCatalogData? result = null;
             string error = "";
             try
             {
-                result = new TimelineCatalogBuilder(Exists, Read).Build(sheets.Value, target, token.Token);
+                Func<byte[], IReadOnlyDictionary<int, float>?>? lengths = clips == null ? null : bytes =>
+                {
+                    try { return clips(bytes, token.Token); }
+                    catch (Exception e) when (e is not OperationCanceledException and not OutOfMemoryException)
+                    {
+                        log.Debug(e, "Could not read the face animation lengths.");
+                        return null;
+                    }
+                };
+                result = new TimelineCatalogBuilder(Exists, Read, lengths).Build(sheets.Value, target, token.Token);
             }
             catch (OperationCanceledException) { }
             catch (Exception e)

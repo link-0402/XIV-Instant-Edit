@@ -42,6 +42,12 @@ Everything is in the **IE - Instant Edit** tab of the 3D Viewport's sidebar (pre
 - The export target: **In Place** (the imported file), another option of the mod, a new option or
   group, **Save as New Mod**, or **Create Mashup** when models from two or more mods are visible.
   A mashup is a new mod or group with the combined model and the materials and textures it needs.
+- Meshes reshaped for another race (a racially scaled import or **Apply Racial Scaling**) only go
+  into a model of that race. For gear and accessories the target list then offers **Save as c0801
+  Model** (the race they're shaped for): the plugin writes the model next to the imported file as
+  `c0801e6000_top.mdl`, maps it beside the original in every option that uses the imported model,
+  and turns on the race's EQDP model flag so the race loads it. A game model's first export
+  creates its mod with that file.
 - The panel lists anything that blocks or weakens the export, such as untriangulated meshes,
   vertices without bone weights or missing materials.
 - **Quick Export** writes the model, sets up Penumbra, and redraws your character and its
@@ -94,7 +100,7 @@ Everything is in the **IE - Instant Edit** tab of the 3D Viewport's sidebar (pre
   hidden vertices stay at the edges), **Apply Racial Scaling** (reshapes the selected meshes for
   another race, like c0201 gear for a Miqo'te, as the game's racial deformer does: shape keys and
   normals too, with the deformer your character's collection loads, so the plugin must be running;
-  unlike a scaled import, the result exports normally; applying another race replaces the
+  the result exports as that race's model, like a scaled import; applying another race replaces the
   scaling, and the model's own race takes it off), **Combine Armatures**, **Move Mesh IDs to Front**, **Clear
   All Contexts**, and the cache and diagnostics folders.
 
@@ -114,8 +120,8 @@ Everything is in the **IE - Instant Edit** tab of the 3D Viewport's sidebar (pre
   model, so Quick Export keeps the model whole; delete a part to leave it out. The shape keys the
   game has on are turned on; exports write the model without them, since the game turns them on
   itself. Models made for another race, like the c0201 gear most female races wear, come in
-  reshaped for the character's race (`xiv_racial_scaling`), so they are for preview only and
-  Quick Export refuses them.
+  reshaped for the character's race (`xiv_racial_scaling`), so Quick Export writes them only as
+  that race's own model (**Save as c0801 Model**), not back into the file they came from.
 - Optional material previews, built from the materials and textures the game uses for the model,
   with colorsets, masks, normal maps and transparency. They are only for viewing: Quick Export
   doesn't write them, and changing them doesn't change the game.

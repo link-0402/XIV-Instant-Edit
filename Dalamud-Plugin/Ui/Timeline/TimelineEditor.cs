@@ -33,6 +33,7 @@ internal sealed class TimelineEditor
     private readonly HashSet<string> selected = new(StringComparer.Ordinal);
     private TimelineLayout? layout;
     private Func<TimelineEvent, int>? visibleLength;
+    private IReadOnlyDictionary<string, int>? motionFrames;
     private ImmutableArray<TimelineEvent> clipboard = [];
     private string? clipboardPack;
     // The document as it was loaded: length changes follow and restore from it, and a copy keeps
@@ -74,6 +75,12 @@ internal sealed class TimelineEditor
     /// <summary>Whether changing the length moves and stretches the events with it.</summary>
     public bool ScaleEvents { get; set; }
 
+    /// <summary>
+    /// The length can't change: an expression's timeline has no motion of its own to resample. The
+    /// length handle then only scrubs, and <see cref="SetLength"/> does nothing.
+    /// </summary>
+    public bool FixedLength => Document.Expression;
+
     public float MinPixelsPerFrame { get; set; } = DefaultMinPixelsPerFrame;
     public float MaxPixelsPerFrame { get; set; } = DefaultMaxPixelsPerFrame;
 
@@ -106,9 +113,26 @@ internal sealed class TimelineEditor
         }
     }
 
+    /// <summary>
+    /// Facial motions' own lengths in frames by motion name, from the player's face files (see
+    /// <see cref="TimelineDocument.PlayedFrames"/>); null while unknown. Set a new instance when they change.
+    /// </summary>
+    public IReadOnlyDictionary<string, int>? MotionFrames
+    {
+        get => motionFrames;
+        set
+        {
+            if (ReferenceEquals(value, motionFrames))
+                return;
+            motionFrames = value;
+            layout = null;
+        }
+    }
+
     /// <summary>The layout of the current document, rebuilt only when the document instance changes.</summary>
     public TimelineLayout Layout =>
-        layout is { } current && ReferenceEquals(current.Document, Document) ? current : layout = TimelineLayout.Build(Document, visibleLength);
+        layout is { } current && ReferenceEquals(current.Document, Document) ? current
+            : layout = TimelineLayout.Build(Document, visibleLength, motionFrames);
 
     public IReadOnlySet<string> Selected => selected;
 
@@ -163,6 +187,11 @@ internal sealed class TimelineEditor
         var doc = Document;
         switch (hit.Part)
         {
+            case TimelinePart.LengthHandle when FixedLength:
+                gesture = TimelineGesture.Scrub;
+                targets = TimelineSnap.Targets(doc, null);
+                Scrub(hit.Frame, alt);
+                break;
             case TimelinePart.LengthHandle:
             {
                 var lasted = Events(loaded).Where(ev => ev.Lane == TimelineLane.Motion && loaded.LastsWhole(ev.Duration))
@@ -211,7 +240,7 @@ internal sealed class TimelineEditor
                 }
                 var keys = moving.Select(item => item.Key).ToImmutableArray();
                 BeginEdit(TimelineGesture.Move, keys,
-                    [.. moving.SelectMany(item => item.Duration > 0 && !TimelineDocument.Holds(item)
+                    [.. moving.SelectMany(item => item.Duration > 0 && !TimelineDocument.OwnPace(item)
                         ? new[] { item.Start, TimelineEdits.End(item) } : [item.Start])],
                     TimelineSnap.Targets(doc, playhead, keys.ToHashSet(StringComparer.Ordinal)));
                 break;
@@ -382,7 +411,10 @@ internal sealed class TimelineEditor
     }
 
     /// <summary>Sets the length as one undo step, scaling the events when <see cref="ScaleEvents"/> is on.</summary>
-    public bool SetLength(int frames) => Commit(TimelineEdits.SetLength(Document, frames, ScaleEvents, loaded));
+    public bool SetLength(int frames) => !FixedLength && Commit(TimelineEdits.SetLength(Document, frames, ScaleEvents, loaded));
+
+    /// <summary>Keeps the face <paramref name="key"/> on, or stops keeping it (see <see cref="TimelineEdits.Keep"/>).</summary>
+    public bool Keep(string key, bool keep) => Commit(TimelineEdits.Keep(Document, key, keep, motionFrames));
 
     public bool DeleteSelection() => Commit(TimelineEdits.Delete(Document, selected));
 
@@ -477,7 +509,7 @@ internal sealed class TimelineEditor
     {
         if (gesture != TimelineGesture.None)
             return false;
-        var next = TimelineEdits.Replace(Document, ev);
+        var next = TimelineEdits.Replace(Document, ev, motionFrames);
         if (ReferenceEquals(next, Document))
             return false;
         if (History.InGesture)

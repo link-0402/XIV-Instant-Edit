@@ -309,6 +309,14 @@ Check(!AnimationResources.CanReplace(spacedSource with { RelativePath = "../esca
       !AnimationResources.CanReplace(spacedSource with { RelativePath = "Animations/clip.tmb" }) &&
       !AnimationResources.CanReplace(spacedSource with { ResolvedPath = Path.Combine(Path.GetTempPath(), "elsewhere.pap") }),
     "in-place targets still refuse escapes, stream names, other file types and files outside the mod");
+// An expression's timeline is a TMB of its own, replaced in place like a PAP.
+var expressionSource = new AnimationResource("chara/action/facial/pose/comeon.tmb",
+    Path.Combine(spacedRoot, "static infinite", "chara", "action", "facial", "pose", "comeon.tmb"), "hash", "[Author] Spaced Mod", spacedRoot,
+    @"static infinite\chara\action\facial\pose\comeon.tmb");
+Check(AnimationResources.CanReplace(expressionSource) &&
+      !AnimationResources.CanReplace(expressionSource with { RelativePath = @"static infinite\comeon.pap" }) &&
+      !AnimationResources.CanReplace(expressionSource with { GamePath = "chara/action/facial/pose/comeon.avfx", RelativePath = "comeon.avfx" }),
+    "an expression's TMB can be replaced in place, but only by a file of its own type");
 
 static byte[] VfxChunk(string key, byte[] payload)
 {

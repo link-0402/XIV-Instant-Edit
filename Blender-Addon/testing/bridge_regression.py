@@ -1102,17 +1102,53 @@ def run_staging_isolation_regression(addon) -> None:
             tagged = [bpy.data.objects.new(name, None) for name in ("Tagged A", "Tagged B", "Plain")]
             tagged[0][scaling_module.PROPERTY] = "c0201 to c0801"
             tagged[1][scaling_module.PROPERTY] = "c0101 to c0801"
-            refusal = scaling_module.quick_export_refusal(tagged)
+            top = "chara/equipment/e6000/model/c0201e6000_top.mdl"
+            refusal = scaling_module.mismatch_refusal(tagged, top)
             warning = scaling_module.simple_export_warning(tagged)
             single = scaling_module.simple_export_warning(tagged[:1])
             _require(
                 scaling_module.marks(tagged) == {"c0201 to c0801": ["Tagged A"], "c0101 to c0801": ["Tagged B"]} and
-                scaling_module.quick_export_refusal(tagged[2:]) == "" and scaling_module.simple_export_warning(tagged[2:]) == "" and
-                "Tagged A, Tagged B were sent racially scaled (c0101 to c0801 and c0201 to c0801) for preview only" in refusal and
-                "Plain" not in refusal and "racial scaling off" in refusal and
+                scaling_module.shaped_races(tagged) == {801: ["Tagged A", "Tagged B"]} and
+                scaling_module.mismatch_refusal(tagged[2:], top) == "" and scaling_module.simple_export_warning(tagged[2:]) == "" and
+                refusal == "Tagged A, Tagged B are shaped for Female Miqo'te (c0801), so they can't go into a c0201 model. "
+                           "Pick Save as c0801 Model as the target." and
                 warning.startswith("Tagged A, Tagged B are racially scaled") and
                 single.startswith("Tagged A is racially scaled (c0201 to c0801) for preview."),
-                "Quick Export's refusal and Simple Export's warning name the scaled meshes and their scalings",
+                "Quick Export's refusal and Simple Export's warning name the scaled meshes and their race",
+            )
+            hair = "chara/human/c0201/obj/hair/h0101/model/c0201h0101_hir.mdl"
+            _require(
+                scaling_module.mismatch_refusal(tagged, "chara/equipment/e6000/model/c0801e6000_top.mdl") == "" and
+                scaling_module.mismatch_refusal(tagged[:2], top).startswith("These meshes are shaped for Female Miqo'te (c0801), so they") and
+                scaling_module.mismatch_refusal(tagged[:1], top).startswith("This mesh is shaped for Female Miqo'te (c0801), so it") and
+                "Re-import it with racial scaling off" in scaling_module.mismatch_refusal(tagged[:1], hair) and
+                scaling_module.path_race(top) == 201 and scaling_module.path_race(hair) == 201 and
+                scaling_module.path_race("chara/weapon/w0101/obj/body/b0001/model/w0101b0001.mdl") is None,
+                "meshes scaled for a race go into that race's models only, and the refusal offers the race model where there is one",
+            )
+            _require(
+                scaling_module.race_model_path(top, 801) == "chara/equipment/e6000/model/c0801e6000_top.mdl" and
+                scaling_module.race_model_path("chara/accessory/a0001/model/c0201a0001_rir.mdl", 1401) ==
+                "chara/accessory/a0001/model/c1401a0001_rir.mdl" and
+                scaling_module.race_model_path(top, 201) == "" and scaling_module.race_model_path(hair, 801) == "" and
+                scaling_module.race_model_path(top, 804) == "",
+                "a race's own gear or accessory model sits at the same path with its race code",
+            )
+            _require(
+                scaling_module.race_model(tagged[:2], top) == (801, "") and
+                scaling_module.race_model(tagged, top) == (801, "Plain is not shaped for c0801. Apply racial scaling to it too, or hide it.") and
+                scaling_module.race_model(tagged[2:], top) == (None, "Nothing here is racially scaled.") and
+                scaling_module.race_model(tagged[:2], hair)[1] == "Only gear and accessory models can be saved for another race." and
+                scaling_module.race_model(tagged[:2], "chara/equipment/e6000/model/c0801e6000_top.mdl")[1].endswith("Export it in place."),
+                "Save as Race Model takes meshes all shaped for one race, for gear and accessories only",
+            )
+            tagged[1][scaling_module.PROPERTY] = "c0101 to c1401"
+            _require(
+                scaling_module.race_model(tagged[:2], top)[0] is None and
+                scaling_module.race_model(tagged[:2], top)[1].startswith("The meshes are shaped for different races") and
+                "Female Miqo'te (c0801) and Female Au Ra (c1401)" in scaling_module.mismatch_refusal(tagged, top) and
+                "Re-import it with racial scaling off" in scaling_module.mismatch_refusal(tagged, top),
+                "meshes shaped for different races go into no race model",
             )
             for obj in tagged:
                 bpy.data.objects.remove(obj, do_unlink=True)

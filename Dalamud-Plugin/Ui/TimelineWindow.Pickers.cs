@@ -312,7 +312,7 @@ public sealed partial class TimelineWindow
                         ImGui.TextColored(Theme.Muted, item.Detail);
                     }
                     if (clicked && !picked)
-                        picked = Place(current, pickerKind, pickerFrame, pickerTarget, item.Path, item.Pack, item.Prop);
+                        picked = Place(current, pickerKind, pickerFrame, pickerTarget, item.Path, item.Pack, item.Prop, item.Frames ?? 0);
                 }
             clipper.End();
         }
@@ -326,8 +326,10 @@ public sealed partial class TimelineWindow
     /// <summary>
     /// Adds an event of <paramref name="kind"/> at <paramref name="frame"/>, or gives the event
     /// <paramref name="target"/> a new path or prop model. Sets <see cref="pickerError"/> when refused.
+    /// Lip sync plays at its own speed, so it gets the motion's own <paramref name="frames"/> when known.
     /// </summary>
-    private bool Place(TimelineEditor current, TimelineAddKind kind, int frame, string? target, string path, string? pack, TimelinePropModel? prop)
+    private bool Place(TimelineEditor current, TimelineAddKind kind, int frame, string? target, string path, string? pack,
+        TimelinePropModel? prop, int frames = 0)
     {
         pickerError = null;
         if (ReadOnly)
@@ -340,7 +342,7 @@ public sealed partial class TimelineWindow
         if (kind == TimelineAddKind.Prop && prop != null)
             prop = prop with { WeaponTimeline = WeaponChoice(prop) };
         ImmutableArray<TimelineEvent> events;
-        try { events = TimelineTemplates.Create(new TimelineAddRequest(kind, frame, path, 0, pack, prop)); }
+        try { events = TimelineTemplates.Create(new TimelineAddRequest(kind, frame, path, kind == TimelineAddKind.LipSync ? frames : 0, pack, prop)); }
         catch (InvalidDataException e)
         {
             pickerError = e.Message;

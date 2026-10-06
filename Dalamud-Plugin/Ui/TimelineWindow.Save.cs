@@ -117,6 +117,7 @@ public sealed partial class TimelineWindow
     private void StartSave(TimelineEditor current, AnimationTimelineSource loaded)
     {
         var document = current.Document;
+        var motionFrames = current.MotionFrames;
         var target = Fresh(loaded);
         var place = destination;
         var name = modName.Trim();
@@ -143,7 +144,7 @@ public sealed partial class TimelineWindow
             return await framework.RunOnFrameworkThread(() =>
             {
                 playback.Stop();
-                return service.EditTimeline(target, document, place, name, added, beside);
+                return service.EditTimeline(target, document, place, name, added, beside, motionFrames);
             });
         });
     }
