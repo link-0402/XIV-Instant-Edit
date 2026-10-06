@@ -27,6 +27,7 @@ internal static class PhysicsScenarios
         CheckModFiles(testRoot);
         CheckVanillaFiles();
         PhysicsFitScenarios.Run();
+        PhysicsBumpScenarios.Run();
     }
 
     private static void CheckNames()

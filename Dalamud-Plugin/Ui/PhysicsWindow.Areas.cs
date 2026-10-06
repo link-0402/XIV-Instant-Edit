@@ -464,7 +464,6 @@ internal sealed partial class PhysicsWindow
     private void DrawCollision(PhysicsDocument current, int index, List<(int Simulator, int Chain)> targets)
     {
         var file = current.File;
-        var simulator = file.Simulators[index];
         var (s0, c0) = targets[0];
         var tip = file.Simulators[s0].Chains[c0].Nodes[^1];
         var size = tip.Radius * 100;
@@ -479,35 +478,51 @@ internal sealed partial class PhysicsWindow
         }
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Label, "Bumps into");
-        Tip("Shapes this area stays out of, such as arms and legs. Each shape costs a little performance.");
+        Tip("Shapes these chains stay out of, such as arms and legs. Each shape costs a little performance.");
         ImGui.SameLine(LabelWidth);
         using var group = ImRaii.Group();
         foreach (var name in names)
         {
             using var id = ImRaii.PushId(name);
-            var reference = simulator.Collisions.FirstOrDefault(r => r.Name.Text == name);
-            var on = reference != null;
-            if (ImGui.Checkbox(name, ref on))
+            var state = PhysicsCollisions.State(file, targets, name);
+            // Both bits set is ticked, one of them shows the dash of a partly ticked box; a click ticks or unticks all.
+            var bits = state switch
+            {
+                PhysicsBumps.All => 3u,
+                PhysicsBumps.Some => 1u,
+                _ => 0u,
+            };
+            if (ImGui.CheckboxFlags(name, ref bits, 3u))
+            {
+                var on = bits == 3u;
                 Change(current, () =>
                 {
-                    if (on)
-                        simulator.Collisions.Add(new PhybCollisionRef { Name = PhybName.From(name), Type = PhybCollisionType.Outside });
-                    else
-                        simulator.Collisions.RemoveAll(r => r.Name.Text == name);
-                    CollideWithAll(simulator);
+                    if (!on)
+                        PhysicsCollisions.Remove(file, targets, name);
+                    else if (!PhysicsCollisions.Add(file, targets, name))
+                        Say(FeedbackSeverity.Warning, $"A chain can bump into {PhysicsCollisions.MaxShapes} shapes at most.");
                 });
-            if (reference != null)
-            {
-                ImGui.SameLine();
-                ImGui.SetNextItemWidth(Theme.Scaled(110));
-                using var combo = ImRaii.Combo("##type", TypeLabel(reference.Type));
-                if (combo.Success)
-                    foreach (var type in Enum.GetValues<PhybCollisionType>())
-                        if (ImGui.Selectable(TypeLabel(type), reference.Type == type) && reference.Type != type)
-                            Change(current, () => reference.Type = type);
             }
+            if (state == PhysicsBumps.Some)
+                Tip($"Only some of these points bump into it: {string.Join(", ", Bumping(file, targets, name))}. Tick to make all of them.");
+            var references = targets.Select(target => target.Simulator).Distinct()
+                .SelectMany(s => file.Simulators[s].Collisions.Where(reference => reference.Name.Text == name)).ToList();
+            if (state == PhysicsBumps.None || references.Count == 0)
+                continue;
+            ImGui.SameLine();
+            ImGui.SetNextItemWidth(Theme.Scaled(110));
+            using var combo = ImRaii.Combo("##type", TypeLabel(references[0].Type));
+            if (combo.Success)
+                foreach (var type in Enum.GetValues<PhybCollisionType>())
+                    if (ImGui.Selectable(TypeLabel(type), references[0].Type == type) && references.Any(reference => reference.Type != type))
+                        Change(current, () => references.ForEach(reference => reference.Type = type));
         }
     }
+
+    /// <summary> The chains that bump into a shape, all of their points or some. </summary>
+    private static IEnumerable<string> Bumping(PhybFile file, List<(int Simulator, int Chain)> targets, string name)
+        => targets.Where(target => PhysicsCollisions.State(file, [target], name) != PhysicsBumps.None)
+            .Select(target => PhysicsValidation.ChainLabel(file.Simulators[target.Simulator].Chains[target.Chain], target.Chain));
 
     private static string TypeLabel(PhybCollisionType type) => type switch
     {
@@ -515,18 +530,6 @@ internal sealed partial class PhysicsWindow
         PhybCollisionType.Inside => "Stay inside",
         _ => "Stick to surface",
     };
-
-    /// <summary> After the area's shapes change: every moving point bumps into all of them. </summary>
-    private static void CollideWithAll(PhybSimulator simulator)
-    {
-        var count = simulator.Collisions.Count;
-        var mask = count >= 32 ? uint.MaxValue : (1u << count) - 1;
-        foreach (var chain in simulator.Chains)
-            for (var n = 1; n < chain.Nodes.Count; n++)
-                chain.Nodes[n].CollisionFlags = mask;
-        if (count > 0)
-            simulator.Flags |= PhybSimulatorFlags.CollisionsHandled;
-    }
 
     // ---- Advanced ----
 

@@ -186,27 +186,32 @@ internal static class PhysicsValidation
         simulator.Springs.RemoveAll(s => !Point(s.Chain1, s.Node1) || !Point(s.Chain2, s.Node2));
         simulator.PostAlignments.RemoveAll(a => !Point(a.Chain, a.Node) || !shapes.Contains(a.CollisionName.Text));
         simulator.CollisionConnectors.RemoveAll(r => !shapes.Contains(r.Name.Text));
+        // A node's collision bits count the simulator's shapes, then its chain's own: each kept shape keeps its bit, renumbered.
+        var keptSimulator = simulator.Collisions.Where(r => shapes.Contains(r.Name.Text)).ToList();
         foreach (var chain in simulator.Chains)
-            chain.Collisions.RemoveAll(r => !shapes.Contains(r.Name.Text));
-        // A node's collision bits count the simulator's shapes in order: each kept shape keeps its bit.
-        var kept = simulator.Collisions.Select((reference, index) => (Reference: reference, Index: index))
-            .Where(item => shapes.Contains(item.Reference.Name.Text)).ToList();
-        if (kept.Count == simulator.Collisions.Count)
-            return;
-        foreach (var node in simulator.Chains.SelectMany(chain => chain.Nodes))
         {
-            uint flags = 0, continuous = 0;
-            for (var bit = 0; bit < kept.Count && bit < 32; bit++)
-            {
-                if (kept[bit].Index < 32 && (node.CollisionFlags & (1u << kept[bit].Index)) != 0)
-                    flags |= 1u << bit;
-                if (kept[bit].Index < 32 && (node.ContinuousCollisionFlags & (1u << kept[bit].Index)) != 0)
-                    continuous |= 1u << bit;
-            }
-            node.CollisionFlags = flags;
-            node.ContinuousCollisionFlags = continuous;
+            var before = PhysicsCollisions.BitShapes(simulator, chain);
+            var keptChain = chain.Collisions.Where(r => shapes.Contains(r.Name.Text)).ToList();
+            var after = keptSimulator.Concat(keptChain).ToList();
+            if (after.Count != simulator.Collisions.Count + chain.Collisions.Count)
+                foreach (var node in chain.Nodes)
+                {
+                    node.CollisionFlags = Renumbered(node.CollisionFlags, before, after);
+                    node.ContinuousCollisionFlags = Renumbered(node.ContinuousCollisionFlags, before, after);
+                }
+            chain.Collisions = keptChain;
         }
-        simulator.Collisions = kept.Select(item => item.Reference).ToList();
+        simulator.Collisions = keptSimulator;
+    }
+
+    /// <summary> Bits over the shapes <paramref name="before"/> named, moved to where the same shapes are <paramref name="after"/>. </summary>
+    private static uint Renumbered(uint flags, IReadOnlyList<PhybCollisionRef> before, List<PhybCollisionRef> after)
+    {
+        var result = 0u;
+        for (var bit = 0; bit < before.Count && bit < PhysicsCollisions.MaxShapes; bit++)
+            if ((flags & (1u << bit)) != 0 && after.IndexOf(before[bit]) is var moved and >= 0 and < PhysicsCollisions.MaxShapes)
+                result |= 1u << moved;
+        return result;
     }
 
     /// <summary> "Chain j_mune_l", or "Chain 3" when it has no bone. </summary>
