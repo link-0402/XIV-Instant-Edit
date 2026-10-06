@@ -53,11 +53,12 @@ internal sealed class PhysicsBody
 
     private readonly Dictionary<string, int> boneIndex;
 
-    private PhysicsBody(string[] bones, Vector3[] points, int[] pointBones, float[] pointWeights, float[] areas,
+    private PhysicsBody(string[] bones, Vector3[] points, Vector3[] normals, int[] pointBones, float[] pointWeights, float[] areas,
         IReadOnlyDictionary<string, PhysicsFrame> pose, IReadOnlyList<string> models, int missingBones)
     {
         Bones = bones;
         Points = points;
+        Normals = normals;
         PointBones = pointBones;
         PointWeights = pointWeights;
         Areas = areas;
@@ -74,6 +75,9 @@ internal sealed class PhysicsBody
 
     /// <summary> The drawn skin's points in model space. </summary>
     public Vector3[] Points { get; }
+
+    /// <summary> Which way the skin faces at each point, outward, as posed; zero where no drawn triangle says. </summary>
+    public Vector3[] Normals { get; }
 
     /// <summary> Point p's bones from p × <see cref="Influences"/> on, heaviest first: indices into <see cref="Bones"/>, or -1. </summary>
     public int[] PointBones { get; }
@@ -97,11 +101,12 @@ internal sealed class PhysicsBody
 
     /// <summary> A body from points already posed, such as a measurement kept from before or a test's. </summary>
     internal static PhysicsBody Of(IReadOnlyList<string> bones, Vector3[] points, int[] pointBones, float[] pointWeights, float[] areas,
-        IReadOnlyDictionary<string, PhysicsFrame> pose)
+        IReadOnlyDictionary<string, PhysicsFrame> pose, Vector3[]? normals = null)
     {
-        if (pointBones.Length != points.Length * Influences || pointWeights.Length != pointBones.Length || areas.Length != points.Length)
+        if (pointBones.Length != points.Length * Influences || pointWeights.Length != pointBones.Length || areas.Length != points.Length ||
+            normals is { } given && given.Length != points.Length)
             throw new ArgumentException("Each point needs its bones, weights and area.");
-        return new PhysicsBody(bones.ToArray(), points, pointBones, pointWeights, areas, pose, [], 0);
+        return new PhysicsBody(bones.ToArray(), points, normals ?? new Vector3[points.Length], pointBones, pointWeights, areas, pose, [], 0);
     }
 
     /// <summary> The bone that moves point <paramref name="point"/> most. </summary>
@@ -131,6 +136,7 @@ internal sealed class PhysicsBody
         var bones = new List<string>();
         var boneIds = new Dictionary<string, int>(StringComparer.Ordinal);
         var points = new List<Vector3>();
+        var normals = new List<Vector3>();
         var pointBones = new List<int>();
         var pointWeights = new List<float>();
         var areas = new List<float>();
@@ -189,6 +195,7 @@ internal sealed class PhysicsBody
                     }
                     pointOf[vertex] = points.Count;
                     points.Add(posed);
+                    normals.Add(Vector3.Zero);
                     areas.Add(0);
                     for (var i = 0; i < Influences; i++)
                     {
@@ -202,19 +209,36 @@ internal sealed class PhysicsBody
                     int a = pointOf[triangles[t]], b = pointOf[triangles[t + 1]], c = pointOf[triangles[t + 2]];
                     if (a < 0 || b < 0 || c < 0)
                         continue;
-                    var third = Vector3.Cross(points[b] - points[a], points[c] - points[a]).Length() / 6;
+                    var face = Vector3.Cross(points[b] - points[a], points[c] - points[a]);
+                    var third = face.Length() / 6;
                     if (!float.IsFinite(third))
                         continue;
                     areas[a] += third;
                     areas[b] += third;
                     areas[c] += third;
+                    // Faces point out the way the model's own normals do, whichever way its triangles wind.
+                    face *= Outward(part, triangles[t], triangles[t + 1], triangles[t + 2]);
+                    normals[a] += face;
+                    normals[b] += face;
+                    normals[c] += face;
                 }
             }
         }
         if (points.Count == 0)
             throw new InvalidDataException("None of your body's skin is drawn, so there is nothing to measure.");
-        return new PhysicsBody(bones.ToArray(), points.ToArray(), pointBones.ToArray(), pointWeights.ToArray(), areas.ToArray(), pose, names,
-            missing.Count);
+        for (var i = 0; i < normals.Count; i++)
+            normals[i] = normals[i].LengthSquared() > 1e-20f ? Vector3.Normalize(normals[i]) : Vector3.Zero;
+        return new PhysicsBody(bones.ToArray(), points.ToArray(), normals.ToArray(), pointBones.ToArray(), pointWeights.ToArray(), areas.ToArray(),
+            pose, names, missing.Count);
+    }
+
+    /// <summary> 1 when a triangle of the unposed model winds the way its vertex normals face, -1 when the other way. </summary>
+    private static float Outward(ModelMeshPart part, int a, int b, int c)
+    {
+        if (part.Normals.Length <= Math.Max(a, Math.Max(b, c)) || part.Positions.Length <= Math.Max(a, Math.Max(b, c)))
+            return 1;
+        var face = Vector3.Cross(part.Positions[b] - part.Positions[a], part.Positions[c] - part.Positions[a]);
+        return Vector3.Dot(face, part.Normals[a] + part.Normals[b] + part.Normals[c]) < 0 ? -1 : 1;
     }
 
     /// <summary>

@@ -212,6 +212,7 @@ internal sealed partial class PhysicsWindow
         var targets = Targets(file, index);
         if (targets.Count == 0)
             return;
+        SetSliderArea(current, targets);
 
         ImGui.Spacing();
         Widgets.SectionHeader("Movement");
@@ -343,19 +344,11 @@ internal sealed partial class PhysicsWindow
         var file = current.File;
         var (s0, c0) = targets[0];
         var first = file.Simulators[s0].Chains[c0];
-        var tip = first.Nodes[^1];
+        DrawLevels(current, targets);
 
-        var spring = MainSpring(file.Simulators[s0], c0);
-        if (spring != null)
-        {
-            var firmness = spring.Stiffness;
-            if (Slider(current, "Firmness", "How hard it springs back to rest. Lower is bouncier.", ref firmness, 0, 0.2f, "%.4f", ImGuiSliderFlags.Logarithmic))
-                Apply(current, targets, (simulator, chain, index) =>
-                {
-                    if (MainSpring(simulator, index) is { } own)
-                        own.Stiffness = firmness;
-                });
-        }
+        if (PhysicsKnobs.MainSpring(file.Simulators[s0], c0) is not null)
+            KnobSlider(current, targets, PhysicsKnob.Firmness, "Firmness", "How hard it springs back to rest. Lower is bouncier.", 0, 0.2f, "%.4f",
+                ImGuiSliderFlags.Logarithmic);
         else
         {
             ImGui.AlignTextToFramePadding();
@@ -369,7 +362,7 @@ internal sealed partial class PhysicsWindow
                     Change(current, () =>
                     {
                         foreach (var (s, c) in targets)
-                            if (MainSpring(file.Simulators[s], c) == null &&
+                            if (PhysicsKnobs.MainSpring(file.Simulators[s], c) == null &&
                                 PhysicsTemplates.RestSpring(file.Simulators[s].Chains[c], (short)c, found.Character.Skeleton, 0.04f) is { } added)
                                 file.Simulators[s].Attracts.Add(added);
                     });
@@ -377,43 +370,68 @@ internal sealed partial class PhysicsWindow
             }
         }
 
-        var damping = first.Dampening;
-        if (Slider(current, "Damping", "How fast the motion calms down.", ref damping, 0, 1, "%.3f"))
-            Apply(current, targets, (_, chain, _) => chain.Dampening = damping);
-
-        var swing = PhysicsTemplates.Degrees(first.Nodes[0].ConeMaxAngle);
-        if (Slider(current, "Swing", "How far it can swing away from rest.", ref swing, 0, 180, "%.0f°"))
-            Apply(current, targets, (_, chain, _) => SetSwing(chain, PhysicsTemplates.Radians(swing)));
-
-        var weight = tip.GravityScale;
-        if (Slider(current, "Weight", "How much gravity pulls it.", ref weight, 0, 2, "%.2f"))
-            Apply(current, targets, (_, chain, _) => SetMoving(chain, node => node.GravityScale, (node, value) => node.GravityScale = value, weight));
-
-        var follow = tip.AttractByAnimation;
-        if (Slider(current, "Follow animation", "How closely it sticks to the animation. Higher is stiffer.", ref follow, 0, 1, "%.3f",
-                ImGuiSliderFlags.Logarithmic))
-            Apply(current, targets, (_, chain, _) => SetMoving(chain, node => node.AttractByAnimation, (node, value) => node.AttractByAnimation = value, follow));
-
-        var length = first.LastBoneOffset.Length() * 100;
-        if (Slider(current, "Length", "How far the tip sits from the bone. Longer swings slower and wider.", ref length, 0.5f, 50, "%.1f cm"))
-            Apply(current, targets, (_, chain, _) =>
-            {
-                var offset = chain.LastBoneOffset;
-                chain.LastBoneOffset = offset.LengthSquared() > 1e-12f ? Vector3.Normalize(offset) * (length / 100) : new Vector3(length / 100, 0, 0);
-            });
-
-        var speed = first.MaxSpeed;
-        if (Slider(current, "Max speed", "The fastest it may move.", ref speed, 0, 10, "%.2f"))
-            Apply(current, targets, (_, chain, _) => chain.MaxSpeed = speed);
-
-        var wind = tip.WindScale;
-        if (Slider(current, "Wind", "How much wind moves it.", ref wind, 0, 0.2f, "%.4f", ImGuiSliderFlags.Logarithmic))
-            Apply(current, targets, (_, chain, _) => SetMoving(chain, node => node.WindScale, (node, value) => node.WindScale = value, wind));
+        KnobSlider(current, targets, PhysicsKnob.Damping, "Damping", "How fast the motion calms down.", 0, 1, "%.3f");
+        KnobSlider(current, targets, PhysicsKnob.Swing, "Swing", "How far it can swing away from rest.", 0, 180, "%.0f°");
+        KnobSlider(current, targets, PhysicsKnob.Weight, "Weight", "How much gravity pulls it.", 0, 2, "%.2f");
+        KnobSlider(current, targets, PhysicsKnob.Follow, "Follow animation", "How closely it sticks to the animation. Higher is stiffer.", 0, 1, "%.3f",
+            ImGuiSliderFlags.Logarithmic);
+        KnobSlider(current, targets, PhysicsKnob.Length, "Length", "How far the tip sits from the bone. Longer swings slower and wider.", 0.5f, 50,
+            "%.1f cm");
+        KnobSlider(current, targets, PhysicsKnob.MaxSpeed, "Max speed", "The fastest it may move.", 0, 10, "%.2f");
+        KnobSlider(current, targets, PhysicsKnob.Wind, "Wind", "How much wind moves it.", 0, 0.2f, "%.4f", ImGuiSliderFlags.Logarithmic);
     }
 
-    /// <summary> A labelled slider; the drag is one undo step and previews when let go. Returns whether the value changed. </summary>
+    /// <summary>
+    /// Firm to very soft for areas popular presets agree on, each level a preset's settings. The level
+    /// the chains match is filled. Chest levels take the firmness that suits the breast size the last
+    /// fit measured.
+    /// </summary>
+    private void DrawLevels(PhysicsDocument current, List<(int Simulator, int Chain)> targets)
+    {
+        if (sliderArea is not { } area || PhysicsLevels.For(area) is not { Count: > 0 } levels)
+            return;
+        var (s0, c0) = targets[0];
+        var matched = PhysicsLevels.Match(current.File.Simulators[s0], c0, area);
+        var sized = PhysicsLevels.SizeFitted(area);
+        var scale = sized && measuredChest is { } chest ? PhysicsSize.ChestScale(chest.Ratio) : 1;
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Label, "Intensity");
+        Tip("Settings taken from popular presets, from the firmest to the softest.");
+        ImGui.SameLine(LabelWidth);
+        foreach (var level in levels)
+        {
+            var on = ReferenceEquals(level, matched);
+            bool clicked;
+            using (ImRaii.PushColor(ImGuiCol.Button, Theme.Selection, on).Push(ImGuiCol.ButtonHovered, Theme.WithAlpha(Theme.Selection, .85f), on))
+                clicked = ImGui.Button($"{level.Name}##level-{level.Name}");
+            var sizeNote = !sized ? string.Empty
+                : measuredChest is { } measured ? $" Firmness for {measured.Label} breasts."
+                : " Fit to my body to suit its firmness to your size.";
+            Tip(level.Detail + sizeNote);
+            if (clicked)
+                Change(current, () => PhysicsLevels.Apply(current.File, targets, level, area, target?.Character.Skeleton, scale));
+            ImGui.SameLine();
+        }
+        ImGui.NewLine();
+    }
+
+    /// <summary> A slider for a knob of the edited chains: shows the first's value and sets them all. </summary>
+    private void KnobSlider(PhysicsDocument current, List<(int Simulator, int Chain)> targets, PhysicsKnob knob, string label, string tip,
+        float min, float max, string format, ImGuiSliderFlags flags = ImGuiSliderFlags.None)
+    {
+        var (s0, c0) = targets[0];
+        var value = PhysicsKnobs.Read(current.File.Simulators[s0], c0, knob) ?? 0;
+        if (Slider(current, label, tip, ref value, min, max, format, flags, knob))
+            Apply(current, targets, (simulator, _, index) => PhysicsKnobs.Write(simulator, index, knob, value));
+    }
+
+    /// <summary>
+    /// A labelled slider; the drag is one undo step and previews when let go. With a knob, a strip under
+    /// it shows where most presets set it for this area, and a mark the game's own value. Returns
+    /// whether the value changed.
+    /// </summary>
     private bool Slider(PhysicsDocument current, string label, string tip, ref float value, float min, float max, string format,
-        ImGuiSliderFlags flags = ImGuiSliderFlags.None)
+        ImGuiSliderFlags flags = ImGuiSliderFlags.None, PhysicsKnob? knob = null)
     {
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Label, label);
@@ -425,6 +443,8 @@ internal sealed partial class PhysicsWindow
             current.Checkpoint();
         if (ImGui.IsItemDeactivatedAfterEdit())
             Edited(current);
+        if (knob is { } shown)
+            DrawBand(shown, min, max, format, (flags & ImGuiSliderFlags.Logarithmic) != 0);
         return changed;
     }
 
@@ -436,39 +456,12 @@ internal sealed partial class PhysicsWindow
         current.Changed();
     }
 
-    /// <summary> The spring that holds a chain's tip: its strongest one on a moving point. </summary>
-    private static PhybAttract? MainSpring(PhybSimulator simulator, int chain)
-        => simulator.Attracts.Where(attract => attract.Chain == chain && attract.Node >= 1).MaxBy(attract => MathF.Abs(attract.Stiffness));
-
-    /// <summary> Sets the bone's swing limit; the points between bone and tip keep their share of it. </summary>
-    private static void SetSwing(PhybChain chain, float radians)
-    {
-        var old = chain.Nodes[0].ConeMaxAngle;
-        chain.Nodes[0].ConeMaxAngle = radians;
-        for (var n = 1; n < chain.Nodes.Count - 1; n++)
-            chain.Nodes[n].ConeMaxAngle = old > 1e-6f ? Math.Clamp(chain.Nodes[n].ConeMaxAngle * radians / old, 0, MathF.PI) : radians;
-    }
-
-    /// <summary> Sets a value on the tip; the points between bone and tip keep their share of it. </summary>
-    private static void SetMoving(PhybChain chain, Func<PhybNode, float> get, Action<PhybNode, float> set, float value)
-    {
-        var tip = chain.Nodes[^1];
-        var old = get(tip);
-        for (var n = 1; n < chain.Nodes.Count - 1; n++)
-            set(chain.Nodes[n], MathF.Abs(old) > 1e-9f ? get(chain.Nodes[n]) * value / old : value);
-        set(tip, value);
-    }
-
     // ---- Collision ----
 
     private void DrawCollision(PhysicsDocument current, int index, List<(int Simulator, int Chain)> targets)
     {
         var file = current.File;
-        var (s0, c0) = targets[0];
-        var tip = file.Simulators[s0].Chains[c0].Nodes[^1];
-        var size = tip.Radius * 100;
-        if (Slider(current, "Size", "The tip's size when it bumps into the shapes below.", ref size, 0, 20, "%.1f cm"))
-            Apply(current, targets, (_, chain, _) => SetMoving(chain, node => node.Radius, (node, value) => node.Radius = value, size / 100));
+        KnobSlider(current, targets, PhysicsKnob.Size, "Size", "The tip's size when it bumps into the shapes below.", 0, 20, "%.1f cm");
 
         var names = file.Collision.Names.Select(name => name.Text).Distinct().ToList();
         if (names.Count == 0)
@@ -666,15 +659,9 @@ internal sealed partial class PhysicsWindow
         var (s0, c0) = targets[0];
         var first = file.Simulators[s0].Chains[c0];
 
-        var friction = first.Friction;
-        if (Slider(current, "Friction", "How much it slows down while sliding along a shape.", ref friction, 0, 1, "%.3f"))
-            Apply(current, targets, (_, chain, _) => chain.Friction = friction);
-        var collisionDamping = first.CollisionDampening;
-        if (Slider(current, "Bump damping", "How much a bump calms it down.", ref collisionDamping, 0, 1, "%.3f"))
-            Apply(current, targets, (_, chain, _) => chain.CollisionDampening = collisionDamping);
-        var repulsion = first.RepulsionStrength;
-        if (Slider(current, "Push back", "How hard shapes push it out. Higher is snappier.", ref repulsion, 0, 2, "%.3f"))
-            Apply(current, targets, (_, chain, _) => chain.RepulsionStrength = repulsion);
+        KnobSlider(current, targets, PhysicsKnob.Friction, "Friction", "How much it slows down while sliding along a shape.", 0, 1, "%.3f");
+        KnobSlider(current, targets, PhysicsKnob.BumpDamping, "Bump damping", "How much a bump calms it down.", 0, 1, "%.3f");
+        KnobSlider(current, targets, PhysicsKnob.PushBack, "Push back", "How hard shapes push it out. Higher is snappier.", 0, 2, "%.3f");
 
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Label, "Point shape");

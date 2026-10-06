@@ -7,25 +7,42 @@ namespace InstantEdit.Ui;
 internal sealed partial class PhysicsWindow
 {
     private const string FitPopup = "##physics-fit";
-    private Task<(PhysicsFitResult Fit, IReadOnlyList<string> Warnings)>? fitting;
+
+    /// <summary> The fit scales breasts by the game's own racial ranges, read from its data, which a mod changing them doesn't reach. </summary>
+    private const string BustScalingNote = "The fit uses the game's own racial bust scaling, so remove any mod that changes it.";
+
+    private Task<(PhysicsFitResult Fit, IReadOnlyList<string> Warnings, string Note)>? fitting;
     private PhysicsFitResult? fit;
     private IReadOnlyList<string> fitWarnings = [];
+    private string fitNote = string.Empty;
     private readonly HashSet<int> fitChosen = [];
     private PhysicsDocument? fitDocument;
     private int fitRevision;
 
-    /// <summary> "Fit collision to my body": measures the body and sizes a copy of the file as it is now. </summary>
+    /// <summary> The breast size the last fit measured, which chest levels suit their firmness to. </summary>
+    private PhysicsSizeMeasure? measuredChest;
+
+    /// <summary> "Fit to my body": measures the body and fits a copy of the file as it is now. </summary>
     private void DrawFitButton(PhysicsDocument current, bool small)
     {
         using (ImRaii.Disabled(Busy || target == null))
         {
-            var clicked = small ? ImGui.SmallButton("Fit to my body##fit") : ImGui.Selectable("Fit collision to my body##fit");
+            var clicked = small ? ImGui.SmallButton("Fit to my body##fit") : ImGui.Selectable("Fit to my body##fit");
             if (clicked)
                 StartFit(current);
         }
-        Tip("Measures your body as the game draws it now, Customize+ included, and sizes the collision to it. " +
-            "Take your gear off first. You see every size before it changes.");
+        Tip("Measures your body standing still, with your body mod, Customize+ and bust size. Sizes the collision, suits the chest's " +
+            "firmness to your size and keeps swings from sinking into your body. Take your gear off first. You see every change first.\n\n" +
+            BustScalingNote);
     }
+
+    /// <summary> A fitted value in its own units. </summary>
+    private static string FitValue(PhysicsFitItem item, float value) => item.Target switch
+    {
+        PhysicsFitTarget.Swing => $"{value:0}°",
+        PhysicsFitTarget.Firmness => $"{value:0.000#}",
+        _ => $"{value * 100:0.0} cm",
+    };
 
     private void StartFit(PhysicsDocument current)
     {
@@ -38,7 +55,7 @@ internal sealed partial class PhysicsWindow
         fitting = Task.Run(async () =>
         {
             var measured = await service.MeasureBodyAsync(life.Token).ConfigureAwait(false);
-            return (PhysicsFit.Measure(file, measured.Body, measured.Skeleton), measured.Warnings);
+            return (PhysicsFit.Measure(file, measured.Body, measured.Skeleton, measured.Chest), measured.Warnings, measured.Note);
         });
     }
 
@@ -52,7 +69,8 @@ internal sealed partial class PhysicsWindow
             Say(FeedbackSeverity.Error, Unwrap(done.Exception));
             return;
         }
-        (fit, fitWarnings) = done.Result;
+        (fit, fitWarnings, fitNote) = done.Result;
+        measuredChest = fit.Chest ?? measuredChest;
         fitChosen.Clear();
         for (var i = 0; i < fit.Items.Count; i++)
             if (fit.Items[i].Changes)
@@ -60,8 +78,8 @@ internal sealed partial class PhysicsWindow
         if (fitChosen.Count == 0 && fit.Notes.Count == 0 && fitWarnings.Count == 0)
         {
             Say(FeedbackSeverity.Success, fit.Items.Count == 0
-                ? "Nothing in this file bumps into your body, so there is nothing to fit."
-                : "Your collision already fits your body.");
+                ? "Nothing in this file fits to a body, so there is nothing to change."
+                : "Your physics already fits your body.");
             fit = null;
             return;
         }
@@ -80,8 +98,14 @@ internal sealed partial class PhysicsWindow
             ImGui.CloseCurrentPopup();
             return;
         }
-        ImGui.TextColored(Theme.Label, "Fit collision to your body");
-        Widgets.MutedWrapped("Measured on your body as the game draws it now: your body mod, Customize+ and the bust slider.");
+        ImGui.TextColored(Theme.Label, "Fit to your body");
+        Widgets.MutedWrapped($"{fitNote} Your animation, jiggle and posing don't count.");
+        if (result.Chest is { } chest)
+        {
+            Widgets.MutedWrapped($"Your breasts measure {chest.Label}: {chest.Ratio:0.00} times the game's own body " +
+                                 $"({chest.BaseRatio:0.00} before Customize+ and the bust slider).");
+            Widgets.MutedWrapped(BustScalingNote);
+        }
         foreach (var warning in fitWarnings)
         {
             using var color = ImRaii.PushColor(ImGuiCol.Text, Theme.Warning);
@@ -95,7 +119,7 @@ internal sealed partial class PhysicsWindow
             using var table = ImRaii.Table("##physics-fit-table", 3, ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.RowBg);
             if (table.Success)
             {
-                ImGui.TableSetupColumn("Size", ImGuiTableColumnFlags.WidthStretch);
+                ImGui.TableSetupColumn("Setting", ImGuiTableColumnFlags.WidthStretch);
                 ImGui.TableSetupColumn("Now");
                 ImGui.TableSetupColumn("Fits");
                 ImGui.TableHeadersRow();
@@ -115,15 +139,15 @@ internal sealed partial class PhysicsWindow
                     }
                     Tip(item.Detail);
                     ImGui.TableNextColumn();
-                    ImGui.TextColored(Theme.Muted, $"{item.Current * 100:0.0} cm");
+                    ImGui.TextColored(Theme.Muted, FitValue(item, item.Current));
                     ImGui.TableNextColumn();
-                    ImGui.TextColored(item.Fitted > item.Current ? Theme.Accent : Theme.Info, $"{item.Fitted * 100:0.0} cm");
+                    ImGui.TextColored(item.Fitted > item.Current ? Theme.Accent : Theme.Info, FitValue(item, item.Fitted));
                 }
             }
         }
         var same = result.Items.Count - changing.Count;
         if (same > 0)
-            Widgets.Hint($"{same} size{(same == 1 ? " already fits" : "s already fit")}.");
+            Widgets.Hint($"{same} setting{(same == 1 ? " already fits" : "s already fit")}.");
         if (result.Notes.Count > 0)
         {
             using var node = ImRaii.TreeNode($"Not measured ({result.Notes.Count})##fit-notes");
@@ -135,7 +159,7 @@ internal sealed partial class PhysicsWindow
         ImGui.Spacing();
         using (ImRaii.Disabled(fitChosen.Count == 0))
         {
-            if (ImGui.Button($"Apply {fitChosen.Count} size{(fitChosen.Count == 1 ? "" : "s")}##physics-fit-apply"))
+            if (ImGui.Button($"Apply {fitChosen.Count} change{(fitChosen.Count == 1 ? "" : "s")}##physics-fit-apply"))
             {
                 ApplyFit(current, result);
                 ImGui.CloseCurrentPopup();
@@ -160,6 +184,6 @@ internal sealed partial class PhysicsWindow
         }
         var chosen = fitChosen.Order().Select(i => result.Items[i]).ToList();
         Change(current, () => PhysicsFit.Apply(current.File, chosen));
-        Say(FeedbackSeverity.Success, $"Fitted {chosen.Count} size{(chosen.Count == 1 ? "" : "s")} to your body. Preview to see them.");
+        Say(FeedbackSeverity.Success, $"Fitted {chosen.Count} setting{(chosen.Count == 1 ? "" : "s")} to your body. Preview to see them.");
     }
 }

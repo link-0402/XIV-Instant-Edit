@@ -9,7 +9,9 @@ namespace InstantEdit.Services.Physics;
 
 /// <summary>
 /// The local player as the physics builder needs it: name, race, body skeleton with rest poses, every
-/// bone name of its other skeletons, and the body skeleton and physics files the game loaded.
+/// bone name of its other skeletons, and the body skeleton and physics files the game loaded. The
+/// object index is your own character's, for its collection and redraws (in GPose Penumbra redraws
+/// your posed copy in its place); everything else is read from the character drawn for you.
 /// </summary>
 internal sealed record PhysicsCharacter(
     int ObjectIndex,
@@ -22,29 +24,42 @@ internal sealed record PhysicsCharacter(
 /// <summary> A body model the character draws: its model slot, its loaded file, and the parts and shapes it turns on. </summary>
 internal sealed record PhysicsDrawnModel(int Slot, string File, uint Attributes, uint Shapes);
 
+/// <summary> What the character's appearance says about its body's scale: clan (1 to 16), sex, body type and bust size (0 to 100). </summary>
+internal readonly record struct PhysicsCustomize(int Clan, bool Female, int BodyType, int BustSize);
+
 /// <summary>
 /// The local player's body as the game drew it last frame: the models of its body, hands, legs and
 /// feet slots, and every body bone's place in model space after physics, pose plugins, Customize+ and
-/// the bust slider, which all change the pose before the next frame starts.
+/// the bust slider, which all change the pose before the next frame starts. The object index and
+/// address are the drawn character's: in GPose, your posed copy.
 /// </summary>
 internal sealed record PhysicsBodyCapture(int ObjectIndex, nint Address, PhysicsCharacter Character, IReadOnlyList<PhysicsDrawnModel> Models,
-    IReadOnlyDictionary<string, PhysicsFrame> Pose);
+    IReadOnlyDictionary<string, PhysicsFrame> Pose, PhysicsCustomize Customize);
 
 /// <summary> Reads the local player's skeleton and loaded physics; must run on the framework thread. </summary>
 internal static unsafe class PhysicsLiveReader
 {
     private const int MaximumPartials = 16;
 
+    /// <summary> GPose copies the player into this slot, and other posed characters follow it. </summary>
+    public const int FirstPosed = 201;
+
+    /// <summary> How many GPose slots Penumbra looks through for a posed copy. </summary>
+    private const int PosedSlots = 42;
+
     /// <summary> The model slots that draw the body: body, hands, legs and feet. </summary>
     private static readonly int[] BodySlots = [1, 2, 3, 4];
 
     /// <summary> The local player's drawn body and live pose, or why they can't be read. </summary>
-    public static (PhysicsBodyCapture? Capture, string? Problem) ReadBody(IObjectTable objects)
+    public static (PhysicsBodyCapture? Capture, string? Problem) ReadBody(IObjectTable objects, bool posing)
     {
-        var (character, problem) = ReadLocalPlayer(objects);
-        if (character is null || objects.LocalPlayer is not ICharacter player)
+        var (character, problem) = ReadLocalPlayer(objects, posing);
+        if (character is null || objects.LocalPlayer is not ICharacter local)
             return (null, problem ?? "Your character isn't loaded.");
+        var player = Shown(objects, local, posing);
         var drawObject = ((Character*)player.Address)->GetCharacterBase();
+        if (drawObject == null)
+            return (null, "Your character isn't drawn.");
         var skeleton = drawObject->Skeleton;
         var pose = skeleton->PartialSkeletons[0].GetHavokPose(0);
         if (pose == null || pose->Skeleton == null)
@@ -80,14 +95,46 @@ internal static unsafe class PhysicsLiveReader
                     models.Add(new PhysicsDrawnModel(slot, Painter.PainterVisibility.NormalizePath(file), drawn->EnabledAttributeIndexMask,
                         drawn->EnabledShapeKeyIndexMask));
             }
-        return (new PhysicsBodyCapture(player.ObjectIndex, player.Address, character, models, frames), null);
+        ref var customize = ref ((Character*)player.Address)->DrawData.CustomizeData;
+        var look = new PhysicsCustomize(customize.Tribe, customize.Sex == 1, customize.BodyType, customize.BustSize);
+        return (new PhysicsBodyCapture(player.ObjectIndex, player.Address, character, models, frames, look), null);
     }
 
-    /// <summary> The local player, or why it can't be read. </summary>
-    public static (PhysicsCharacter? Character, string? Problem) ReadLocalPlayer(IObjectTable objects)
+    /// <summary>
+    /// The character drawn for you: in GPose the posed copy of your character, the first GPose actor
+    /// with your name as Penumbra finds it to redraw in your place, else your character.
+    /// </summary>
+    public static ICharacter Shown(IObjectTable objects, ICharacter player, bool posing)
     {
-        if (objects.LocalPlayer is not ICharacter player || player.Address == 0)
+        if (!posing)
+            return player;
+        var index = PosedSlot(slot => objects[FirstPosed + slot] is { } actor ? actor.Name.TextValue : null, player.Name.TextValue);
+        return index is { } found && objects[found] is ICharacter { Address: not 0 } posed ? posed : player;
+    }
+
+    /// <summary>
+    /// The object index of the first GPose actor called <paramref name="name"/>, or null. The list ends
+    /// at the first empty slot, as Penumbra reads it.
+    /// </summary>
+    internal static int? PosedSlot(Func<int, string?> nameAt, string name)
+    {
+        for (var slot = 0; slot < PosedSlots; slot++)
+        {
+            var actor = nameAt(slot);
+            if (actor is null)
+                return null;
+            if (string.Equals(actor, name, StringComparison.Ordinal))
+                return FirstPosed + slot;
+        }
+        return null;
+    }
+
+    /// <summary> The local player, read from the character drawn for it, or why it can't be read. </summary>
+    public static (PhysicsCharacter? Character, string? Problem) ReadLocalPlayer(IObjectTable objects, bool posing)
+    {
+        if (objects.LocalPlayer is not ICharacter local || local.Address == 0)
             return (null, "Your character isn't loaded.");
+        var player = Shown(objects, local, posing);
         var drawObject = ((Character*)player.Address)->GetCharacterBase();
         if (drawObject == null || drawObject->GetModelType() != CharacterBase.ModelType.Human)
             return (null, "Your character has no human body right now.");
@@ -138,7 +185,7 @@ internal static unsafe class PhysicsLiveReader
             if (handle != null)
                 physics = handle->FileName.Utf8();
         }
-        return (new PhysicsCharacter(player.ObjectIndex, player.Name.TextValue, race, PhysicsSkeleton.From(body.Description!, others),
+        return (new PhysicsCharacter(local.ObjectIndex, local.Name.TextValue, race, PhysicsSkeleton.From(body.Description!, others),
             body.File, physics), null);
     }
 

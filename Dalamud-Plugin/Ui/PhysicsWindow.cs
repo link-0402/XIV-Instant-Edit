@@ -5,6 +5,7 @@ using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
+using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Physics;
 
 namespace InstantEdit.Ui;
@@ -12,7 +13,8 @@ namespace InstantEdit.Ui;
 /// <summary>
 /// The physics builder: body physics for your character's skeleton, started from the game's file,
 /// the one your mods load or any file, tuned per body area with plain sliders, previewed on your
-/// character and saved into a mod of its own that can be opened and changed again.
+/// character and saved into a mod of its own that can be opened and changed again. In GPose it works
+/// on your posed character, which can walk or run in place while you watch.
 /// </summary>
 internal sealed partial class PhysicsWindow : Window, IDisposable
 {
@@ -21,6 +23,7 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
     private const int ShapesView = -2;
 
     private readonly PhysicsBuilderService service;
+    private readonly AnimationPlayback playback;
     private readonly Configuration config;
     private readonly Action saveConfig;
     private readonly IPluginLog log;
@@ -47,10 +50,11 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
     private IReadOnlyList<PhysicsIssue> issues = [];
     private string lastFolder = string.Empty;
 
-    internal PhysicsWindow(PhysicsBuilderService service, Configuration config, Action saveConfig, IPluginLog log)
+    internal PhysicsWindow(PhysicsBuilderService service, AnimationPlayback playback, Configuration config, Action saveConfig, IPluginLog log)
         : base("Body Physics##InstantEditPhysics")
     {
         this.service = service;
+        this.playback = playback;
         this.config = config;
         this.saveConfig = saveConfig;
         this.log = log;
@@ -71,6 +75,7 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
 
     public override void OnClose()
     {
+        StopMoving();
         // The preview is a look at unsaved settings; closing the builder puts your saved physics back.
         if (service.Preview.Active)
             _ = service.StopPreviewAsync(target).ContinueWith(task => log.Warning(task.Exception!, "Could not stop the physics preview."),
@@ -129,6 +134,7 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
     {
         HandlePicked();
         PollFit();
+        KeepMoving();
         if (finding is { IsCompleted: true } found)
         {
             finding = null;
@@ -165,6 +171,8 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
             working = null;
             var done = workDone;
             workDone = null;
+            // Previews, saves and turning the mod off all redraw your character.
+            motionCheckDue = Environment.TickCount64 + MotionCheckDelayMs;
             if (work.IsCompletedSuccessfully)
                 Say(work.Result is null ? FeedbackSeverity.Success : FeedbackSeverity.Warning, done?.Invoke(work.Result) ?? work.Result ?? "Done.");
             else
@@ -351,7 +359,10 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
             Widgets.Badge("Unsaved", Theme.Warning);
         }
         ImGui.SameLine();
-        ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetWindowContentRegionMax().X - ImGui.GetFrameHeight() * 2 - ImGui.GetStyle().ItemSpacing.X));
+        var history = ImGui.GetFrameHeight() * 2 + ImGui.GetStyle().ItemSpacing.X;
+        ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetWindowContentRegionMax().X - history - Theme.Gap * 3 - MotionsWidth));
+        DrawMotions();
+        ImGui.SameLine(0, Theme.Gap * 3);
         if (Widgets.IconButton("##physics-undo", FontAwesomeIcon.Undo, "Undo (Ctrl+Z)", current.CanUndo))
             Undo(current);
         ImGui.SameLine();
@@ -519,7 +530,10 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
 
     private static void Tip(string text)
     {
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(text);
+        if (!ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            return;
+        using var tooltip = ImRaii.Tooltip();
+        using var wrap = ImRaii.TextWrapPos(Theme.Scaled(480));
+        ImGui.TextUnformatted(text);
     }
 }

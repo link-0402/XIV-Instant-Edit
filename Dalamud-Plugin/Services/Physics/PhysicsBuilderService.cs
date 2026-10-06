@@ -1,3 +1,5 @@
+using Dalamud.Game.ClientState.Objects.Types;
+using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using InstantEdit.Services.Skeletons;
 
@@ -10,14 +12,21 @@ internal sealed record PhysicsLoadedFile(string GamePath, string ResolvedPath, s
 internal sealed record PhysicsTarget(PhysicsCharacter Character, Guid CollectionId, string CollectionName, PhysicsLoadedFile Physics,
     PhysicsLoadedFile Skeleton);
 
-/// <summary> Your body as the game drew it, to fit collision to, and what to know about the measuring. </summary>
-internal sealed record PhysicsBodyMeasure(PhysicsBody Body, PhysicsSkeleton Skeleton, IReadOnlyList<string> Warnings);
+/// <summary>
+/// Your body as the game draws it, standing in the measuring pose, to fit physics to; its breast size
+/// when it has breasts; what to know about the measuring; and a line saying what shaped it.
+/// </summary>
+internal sealed record PhysicsBodyMeasure(PhysicsBody Body, PhysicsSkeleton Skeleton, IReadOnlyList<string> Warnings, PhysicsSizeMeasure? Chest = null,
+    string Note = "");
 
 /// <summary>
 /// The physics builder's game side: finds your character, its skeleton and the body physics its
 /// collection loads; reads a starting file (the game's, the loaded one, your physics mod's or one
 /// you pick); previews a document through a temporary mod; and saves it into your physics mod, a
 /// mod of its own enabled above every other in your collection, so it can be changed again any time.
+/// In GPose it reads and measures your posed copy, the character you see; previews and saves still
+/// redraw your own character, which Penumbra turns into a redraw of the posed copy (and of your
+/// character once GPose ends).
 /// </summary>
 internal sealed class PhysicsBuilderService : IDisposable
 {
@@ -31,20 +40,24 @@ internal sealed class PhysicsBuilderService : IDisposable
     private readonly IDataManager data;
     private readonly IFramework framework;
     private readonly IObjectTable objects;
+    private readonly IClientState clientState;
     private readonly ModelSkeletonResolver skeletons;
+    private readonly PhysicsCustomizePlus customizePlus;
     private readonly IPluginLog log;
     private readonly Configuration config;
     private readonly Action saveConfig;
 
-    public PhysicsBuilderService(PenumbraService penumbra, IDataManager data, IFramework framework, IObjectTable objects,
-        ModelSkeletonResolver skeletons, IPluginLog log, Configuration config, Action saveConfig, string configDirectory,
-        Func<string> cacheRoot)
+    public PhysicsBuilderService(IDalamudPluginInterface pi, PenumbraService penumbra, IDataManager data, IFramework framework, IObjectTable objects,
+        IClientState clientState, ModelSkeletonResolver skeletons, IPluginLog log, Configuration config, Action saveConfig,
+        string configDirectory, Func<string> cacheRoot)
     {
         this.penumbra = penumbra;
         this.data = data;
         this.framework = framework;
         this.objects = objects;
+        this.clientState = clientState;
         this.skeletons = skeletons;
+        customizePlus = new PhysicsCustomizePlus(pi, log);
         this.log = log;
         this.config = config;
         this.saveConfig = saveConfig;
@@ -58,10 +71,23 @@ internal sealed class PhysicsBuilderService : IDisposable
 
     public string ModDirectory => config.PhysicsModDirectory;
 
+    /// <summary> You're in GPose, where only posed characters can be made to walk or run. </summary>
+    public bool Posing => clientState.IsGPosing;
+
+    /// <summary> The posed copy of your character in GPose, or null outside GPose and when there's none. Framework thread only. </summary>
+    public ushort? PosedActor()
+    {
+        if (!clientState.IsGPosing || objects.LocalPlayer is not ICharacter player || player.Address == 0)
+            return null;
+        var shown = PhysicsLiveReader.Shown(objects, player, posing: true);
+        return shown.ObjectIndex >= PhysicsLiveReader.FirstPosed ? shown.ObjectIndex : null;
+    }
+
     /// <summary> Reads your character, its skeleton and what its collection loads for its body. </summary>
     public async Task<PhysicsTarget> FindAsync()
     {
-        var (character, problem) = await framework.RunOnFrameworkThread(() => PhysicsLiveReader.ReadLocalPlayer(objects)).ConfigureAwait(false);
+        var (character, problem) = await framework.RunOnFrameworkThread(() => PhysicsLiveReader.ReadLocalPlayer(objects, clientState.IsGPosing))
+            .ConfigureAwait(false);
         if (character is null)
             throw new IOException(problem ?? "Your character can't be read.");
         var collection = await penumbra.GetCollectionTargetAsync(character.ObjectIndex).ConfigureAwait(false)
@@ -195,25 +221,32 @@ internal sealed class PhysicsBuilderService : IDisposable
     }
 
     /// <summary>
-    /// Measures your body as the game draws it now: the models of your body, hands, legs and feet, read
-    /// from the files your collection loads, reshaped for your race, and posed by your live skeleton, so
-    /// your body mod, Customize+ and the bust slider are all in. Gear covering a slot is measured as it is,
-    /// with a warning, since the fit is for bare skin.
+    /// Measures your body as the game draws it: the models of your body, hands, legs and feet, read
+    /// from the files your collection loads and reshaped for your race, standing in the skeleton's rest
+    /// pose with your Customize+ profile and bust size (<see cref="PhysicsPose"/>). Your animation,
+    /// physics and posing tools don't count, so measuring again gives the same body. Gear covering a
+    /// slot is measured as it is, with a warning, since the fit is for bare skin.
     /// </summary>
     public async Task<PhysicsBodyMeasure> MeasureBodyAsync(CancellationToken token)
     {
-        var (capture, resolved) = await framework.RunOnFrameworkThread(() =>
+        var (capture, resolved, plus, plusInstalled, plusProblem) = await framework.RunOnFrameworkThread(() =>
         {
-            var (body, problem) = PhysicsLiveReader.ReadBody(objects);
+            var (body, problem) = PhysicsLiveReader.ReadBody(objects, clientState.IsGPosing);
             if (body is null)
                 throw new IOException(problem ?? "Your character can't be read.");
-            // Penumbra's resource tree reads the character, so it has to run here.
-            return (body, penumbra.GetResourcePaths((ushort)body.ObjectIndex));
+            // Penumbra's resource tree and Customize+ read the character, so they have to run here.
+            var paths = penumbra.GetResourcePaths((ushort)body.ObjectIndex);
+            var profile = customizePlus.Read((ushort)body.Character.ObjectIndex, out var installed, out var why);
+            return (body, paths, profile, installed, why);
         }).ConfigureAwait(false);
         if (capture.Models.Count == 0)
             throw new IOException("Your character draws no body right now.");
 
         var warnings = new List<string>();
+        if (plusProblem is not null)
+            warnings.Add($"Measured without Customize+: {plusProblem}.");
+        else if (plus is null && plusInstalled)
+            warnings.Add("Customize+ shares no profile of yours (temporary ones, like a sync plugin's, can't be read), so your body is measured without it.");
         var (scaling, problem) = await skeletons.RacialScalingAsync(capture.ObjectIndex, capture.Address, token).ConfigureAwait(false);
         if (scaling is null && problem is not null)
             warnings.Add($"Measured without racial scaling: {problem}.");
@@ -244,10 +277,74 @@ internal sealed class PhysicsBuilderService : IDisposable
 
         var skeleton = capture.Character.Skeleton;
         var rest = PhysicsBody.RestPose(skeleton);
-        var measured = await Task.Run(() => PhysicsBody.Measure(models, rest, capture.Pose), token).ConfigureAwait(false);
+        var look = capture.Customize;
+        // The game's own bust ranges: a mod that changes racial bust scaling isn't read, so the window asks to remove those.
+        var bust = await Task.Run(() => data.GetFile(PhysicsPose.CharaMakeFile)?.Data is { } cmp
+            ? PhysicsPose.Bust(cmp, look.Clan, look.Female, look.BodyType, look.BustSize)
+            : System.Numerics.Vector3.One, token).ConfigureAwait(false);
+        var pose = PhysicsPose.Reference(skeleton, plus, bust);
+        var measured = await Task.Run(() => PhysicsBody.Measure(models, rest, pose), token).ConfigureAwait(false);
         if (measured.MissingBones > 0)
             warnings.Add($"Your skeleton lacks {measured.MissingBones} bones your body models use; their skin was measured unposed.");
-        return new PhysicsBodyMeasure(measured, skeleton, warnings);
+        PhysicsSizeMeasure? chest = null;
+        if (PhysicsSize.HasBreasts(capture.Character.Race))
+            chest = await Task.Run(() => ChestSize(models, scaling, skeleton, rest, pose), token).ConfigureAwait(false);
+        var shaped = plus is null ? "your body mod" : "your body mod and Customize+ profile";
+        var note = look.Female ? $"Measured standing still with {shaped}, bust size {look.BustSize}." : $"Measured standing still with {shaped}.";
+        return new PhysicsBodyMeasure(measured, skeleton, warnings, chest, note);
+    }
+
+    /// <summary> The game's own body, which breast sizes are measured against. </summary>
+    private const string GameChest = "chara/equipment/e0000/model/c0201e0000_top.mdl";
+
+    /// <summary>
+    /// Breast size: your body's base shape (at rest, without Customize+) against the game's own body,
+    /// reshaped for your race the same way, grown by the breast bones' scale in the measuring pose
+    /// (Customize+ and the bust size).
+    /// </summary>
+    private PhysicsSizeMeasure? ChestSize(IReadOnlyList<PhysicsBodyModel> models, RacialScalingSource? scaling, PhysicsSkeleton skeleton,
+        Dictionary<string, PhysicsFrame> rest, IReadOnlyDictionary<string, PhysicsFrame> pose)
+    {
+        try
+        {
+            if (data.GetFile(GameChest)?.Data is not { } game)
+                return null;
+            RacialDeformer? deformer = null;
+            try { deformer = scaling?.For(GameChest)?.Deformer; }
+            catch (InvalidDataException) { }
+            var own = PhysicsBody.Measure(models, rest, rest);
+            var reference = PhysicsBody.Measure([new PhysicsBodyModel("game body", game, deformer, null, 0)], rest, rest);
+            return PhysicsSize.Measure(own, reference, skeleton, pose);
+        }
+        catch (InvalidDataException e)
+        {
+            log.Debug(e, "Could not measure the breast size.");
+            return null;
+        }
+    }
+
+    private readonly Dictionary<ushort, Task<PhybFile?>> vanilla = [];
+
+    /// <summary> The game's own body physics for a race, read once; null when it has none or it can't be read. </summary>
+    public Task<PhybFile?> VanillaAsync(ushort race)
+    {
+        lock (vanilla)
+        {
+            if (!vanilla.TryGetValue(race, out var task))
+                vanilla[race] = task = Task.Run(() =>
+                {
+                    try
+                    {
+                        return data.GetFile(PhysicsPaths.BodyPhysics(race))?.Data is { } bytes ? PhybFile.Parse(bytes) : null;
+                    }
+                    catch (InvalidDataException e)
+                    {
+                        log.Debug(e, "Could not read the game's body physics for c{Race:D4}.", race);
+                        return null;
+                    }
+                });
+            return task;
+        }
     }
 
     private byte[]? ReadModel(string actual, string gamePath)

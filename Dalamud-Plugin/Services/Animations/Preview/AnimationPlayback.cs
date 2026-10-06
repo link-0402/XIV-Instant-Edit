@@ -141,12 +141,13 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     /// </summary>
     /// <param name="expectedIndex">The actor the preview was shown on; another one means the GPose target changed.</param>
     /// <param name="face">An expression's timeline: it plays on the face slot and leaves the body, its mode and its base as they are.</param>
-    public bool Play(ushort timelineId, string? bindingFingerprint = null, ushort? expectedIndex = null, bool face = false)
+    /// <param name="actorIndex">A GPose character to play on instead of the GPose target, such as the posed copy of your character.</param>
+    public bool Play(ushort timelineId, string? bindingFingerprint = null, ushort? expectedIndex = null, bool face = false, ushort? actorIndex = null)
     {
         RequireFrameworkThread();
         if (timelineId == 0)
             return Fail("Pick a timeline to play.");
-        var actor = GPoseActor();
+        var actor = actorIndex is { } index ? GPoseCharacter(index) : GPoseActor();
         if (Problem(actor) is { } problem)
             return Fail(problem);
         if (expectedIndex is { } expected && actor!.ObjectIndex != expected)
@@ -252,6 +253,16 @@ internal sealed unsafe class AnimationPlayback : IDisposable
         else if (_objects.LocalPlayer is { Address: not 0 } player)
             chara = (Character*)player.Address;
         return chara == null ? null : ReadTime(chara, bindingFingerprint);
+    }
+
+    /// <summary> The timeline the playback's character runs in its base slot now; null without a playback. </summary>
+    public ushort? BaseTimeline()
+    {
+        RequireFrameworkThread();
+        if (_session is not { } session || !_clientState.IsGPosing)
+            return null;
+        var chara = SessionActor(session);
+        return chara == null ? null : chara->Timeline.TimelineSequencer.TimelineIds[0];
     }
 
     /// <summary> Puts the actor's mode, base override and slot speeds back and plays its base again. </summary>
@@ -450,6 +461,10 @@ internal sealed unsafe class AnimationPlayback : IDisposable
             return target;
         return _objects[GPosePlayerIndex] is ICharacter { Address: not 0 } posed ? posed : null;
     }
+
+    /// <summary> The GPose character at <paramref name="index"/>; never a character of the world, for the same reason. </summary>
+    private ICharacter? GPoseCharacter(ushort index)
+        => _clientState.IsGPosing && index >= FirstGPoseIndex && _objects[index] is ICharacter { Address: not 0 } actor ? actor : null;
 
     private Character* SessionActor(Session session)
     {
