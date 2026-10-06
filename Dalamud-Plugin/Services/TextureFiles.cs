@@ -21,7 +21,7 @@ internal static class TextureFiles
     private static readonly HashSet<string> OwnedRootDirectories = new(StringComparer.OrdinalIgnoreCase)
     {
         "imports", "exports", "backups", "texture-edits", "AnimationEdits", "skeleton-library", "Contexts", "painter", "game-exports",
-        "texture-backups", "animation-preview",
+        "texture-backups", "animation-preview", "physics-preview",
     };
     private static readonly HashSet<string> OwnedRootFiles = new(StringComparer.OrdinalIgnoreCase)
     {

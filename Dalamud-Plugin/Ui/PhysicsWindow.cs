@@ -1,0 +1,523 @@
+using System.Numerics;
+using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
+using Dalamud.Interface.ImGuiFileDialog;
+using Dalamud.Interface.Utility.Raii;
+using Dalamud.Interface.Windowing;
+using Dalamud.Plugin.Services;
+using InstantEdit.Services.Physics;
+
+namespace InstantEdit.Ui;
+
+/// <summary>
+/// The physics builder: body physics for your character's skeleton, started from the game's file,
+/// the one your mods load or any file, tuned per body area with plain sliders, previewed on your
+/// character and saved into a mod of its own that can be opened and changed again.
+/// </summary>
+internal sealed partial class PhysicsWindow : Window, IDisposable
+{
+    private const string DiscardPopup = "##physics-discard";
+    private const int AutoPreviewDelayMs = 400;
+    private const int ShapesView = -2;
+
+    private readonly PhysicsBuilderService service;
+    private readonly Configuration config;
+    private readonly Action saveConfig;
+    private readonly IPluginLog log;
+    private readonly FileDialogManager fileDialog = new();
+    private readonly CancellationTokenSource life = new();
+
+    private PhysicsTarget? target;
+    private Task<PhysicsTarget>? finding;
+    private string? findProblem;
+    private PhysicsDocument? document;
+    private Task<PhysicsDocument>? loading;
+    private Task<PhybFile>? importing;
+    private string importName = string.Empty;
+    private PhybFile? importFile;
+    private Task<string?>? working;
+    private Func<string?, string>? workDone;
+    private string message = string.Empty;
+    private FeedbackSeverity messageSeverity = FeedbackSeverity.Info;
+    private (PhysicsSourceKind Kind, string? File)? pendingStart;
+    private int selected = -1;
+    private long autoPreviewDue;
+    private int issuesRevision = -1;
+    private PhysicsDocument? issuesDocument;
+    private IReadOnlyList<PhysicsIssue> issues = [];
+    private string lastFolder = string.Empty;
+
+    internal PhysicsWindow(PhysicsBuilderService service, Configuration config, Action saveConfig, IPluginLog log)
+        : base("Body Physics##InstantEditPhysics")
+    {
+        this.service = service;
+        this.config = config;
+        this.saveConfig = saveConfig;
+        this.log = log;
+        Size = new Vector2(960, 640);
+        SizeCondition = ImGuiCond.FirstUseEver;
+        SizeConstraints = new WindowSizeConstraints { MinimumSize = new Vector2(720, 420), MaximumSize = new Vector2(float.MaxValue, float.MaxValue) };
+        AllowPinning = true;
+        AllowBackgroundBlur = true;
+    }
+
+    public void Open()
+    {
+        IsOpen = true;
+        Find();
+    }
+
+    public void DrawFileDialog() => fileDialog.Draw();
+
+    public override void OnClose()
+    {
+        // The preview is a look at unsaved settings; closing the builder puts your saved physics back.
+        if (service.Preview.Active)
+            _ = service.StopPreviewAsync(target).ContinueWith(task => log.Warning(task.Exception!, "Could not stop the physics preview."),
+                TaskContinuationOptions.OnlyOnFaulted);
+    }
+
+    public void Dispose()
+    {
+        life.Cancel();
+        life.Dispose();
+    }
+
+    private bool Busy => finding != null || loading != null || importing != null || working != null || service.Preview.Busy;
+
+    private void Find()
+    {
+        if (finding != null)
+            return;
+        findProblem = null;
+        finding = Task.Run(service.FindAsync);
+    }
+
+    public override void Draw()
+    {
+        Poll();
+        DrawHeader();
+        ImGui.Separator();
+        DrawStart();
+        if (document is not { } current)
+        {
+            Widgets.EmptyState(FontAwesomeIcon.Feather, loading != null ? "Loading" : "Pick a starting point",
+                "The game's file has your race's own skirt, hair, earring and tail physics. Start there to build body physics from scratch, " +
+                "or from what your mods load now to change it.");
+            DrawDiscardPopup();
+            return;
+        }
+        if (current.Race != target?.Character.Race && target != null)
+            Widgets.Banner("##physics-race", FeedbackSeverity.Warning,
+                $"This physics is for c{current.Race:D4}, and your character is c{target.Character.Race:D4} now. Start again to edit it for your race.");
+        DrawEditingRow(current);
+        var bottom = ImGui.GetFrameHeightWithSpacing() * 2 + ImGui.GetStyle().ItemSpacing.Y;
+        var height = Math.Max(1, ImGui.GetContentRegionAvail().Y - bottom);
+        DrawAreas(current, height);
+        ImGui.Separator();
+        DrawActions(current);
+        DrawDiscardPopup();
+        DrawImportPopup(current);
+        HandleShortcuts(current);
+        PumpAutoPreview(current);
+    }
+
+    // ---- Tasks ----
+
+    private void Poll()
+    {
+        HandlePicked();
+        if (finding is { IsCompleted: true } found)
+        {
+            finding = null;
+            if (found.IsCompletedSuccessfully)
+                target = found.Result;
+            else
+                findProblem = Unwrap(found.Exception);
+        }
+        if (loading is { IsCompleted: true } loaded)
+        {
+            loading = null;
+            if (loaded.IsCompletedSuccessfully)
+            {
+                document = loaded.Result;
+                selected = document.File.Simulators.Count > 0 ? 0 : -1;
+                Say(FeedbackSeverity.Info, $"Started from {document.Source.Label}.");
+            }
+            else
+                Say(FeedbackSeverity.Error, Unwrap(loaded.Exception));
+        }
+        if (importing is { IsCompleted: true } imported)
+        {
+            importing = null;
+            if (imported.IsCompletedSuccessfully)
+            {
+                importFile = imported.Result;
+                ImGui.OpenPopup(ImportPopup);
+            }
+            else
+                Say(FeedbackSeverity.Error, Unwrap(imported.Exception));
+        }
+        if (working is { IsCompleted: true } work)
+        {
+            working = null;
+            var done = workDone;
+            workDone = null;
+            if (work.IsCompletedSuccessfully)
+                Say(work.Result is null ? FeedbackSeverity.Success : FeedbackSeverity.Warning, done?.Invoke(work.Result) ?? work.Result ?? "Done.");
+            else
+                Say(FeedbackSeverity.Error, Unwrap(work.Exception));
+            Find();
+        }
+    }
+
+    private void Run(Func<Task<string?>> action, Func<string?, string> done)
+    {
+        if (working != null)
+            return;
+        workDone = done;
+        working = Task.Run(action);
+    }
+
+    private void Say(FeedbackSeverity severity, string text)
+    {
+        messageSeverity = severity;
+        message = text;
+    }
+
+    private static string Unwrap(AggregateException? error)
+    {
+        var inner = error?.InnerExceptions.Count == 1 ? error.InnerExceptions[0] : error;
+        return inner switch
+        {
+            OperationCanceledException => "Cancelled.",
+            null => "Something went wrong.",
+            _ => inner.Message,
+        };
+    }
+
+    // ---- Header and starting points ----
+
+    private void DrawHeader()
+    {
+        if (target is { } found)
+        {
+            var character = found.Character;
+            Widgets.Icon(FontAwesomeIcon.User, Theme.Accent);
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.TextColored(Theme.Text, character.Name);
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.TextColored(Theme.Muted, $"{Services.GameFiles.GameRaces.Label(character.Race)} (c{character.Race:D4})");
+            ImGui.SameLine(0, Theme.Gap * 2);
+            ImGui.TextColored(Theme.Label, $"{character.Skeleton.Family} skeleton");
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.TextColored(Theme.Muted, $"{character.Skeleton.Count} bones, from {found.Skeleton.Label}");
+        }
+        else
+        {
+            Widgets.Icon(FontAwesomeIcon.User, Theme.Inactive);
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.TextColored(Theme.Hint, finding != null ? "Looking for your character" : findProblem ?? "Your character isn't found yet.");
+        }
+        var button = ImGui.GetFrameHeight();
+        ImGui.SameLine();
+        ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetWindowContentRegionMax().X - button));
+        if (Widgets.IconButton("##physics-refresh", FontAwesomeIcon.Sync, "Read your character and its mods again", finding == null))
+            Find();
+        if (target is { } loaded)
+        {
+            ImGui.TextColored(Theme.Muted, "Body physics loaded now:");
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.TextColored(loaded.Physics.Mine ? Theme.Success : loaded.Physics.Preview ? Theme.Info : Theme.Label, loaded.Physics.Label);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip($"{loaded.Physics.ResolvedPath}\nCollection: {loaded.CollectionName}");
+        }
+    }
+
+    private void DrawStart()
+    {
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Label, "Start from");
+        ImGui.SameLine(0, Theme.Gap * 2);
+        using (ImRaii.Disabled(target == null || Busy))
+        {
+            if (ImGui.Button("The game's file"))
+                Start(PhysicsSourceKind.Vanilla, null);
+            Tip("Your race's own physics: skirt, hair, earrings, tail and chest. Add body areas to it.");
+            ImGui.SameLine();
+            if (ImGui.Button("Loaded now"))
+                Start(PhysicsSourceKind.Loaded, null);
+            Tip(target is { } found ? $"What your mods load now: {found.Physics.Label}." : "What your mods load now.");
+            ImGui.SameLine();
+            using (ImRaii.Disabled(!service.HasMod))
+            {
+                if (ImGui.Button("My physics mod"))
+                    Start(PhysicsSourceKind.Mine, null);
+            }
+            Tip(service.HasMod ? $"What you saved into {service.ModDirectory}." : "You haven't saved a physics mod yet.");
+            ImGui.SameLine();
+            if (ImGui.Button("A file"))
+                OpenFileDialog(import: false);
+            Tip("Any .phyb file, such as a preset from a physics mod.");
+        }
+        if (loading != null)
+        {
+            ImGui.SameLine();
+            Widgets.Spinner();
+        }
+    }
+
+    private void Start(PhysicsSourceKind kind, string? file)
+    {
+        if (document is { Dirty: true })
+        {
+            pendingStart = (kind, file);
+            ImGui.OpenPopup(DiscardPopup);
+            return;
+        }
+        Load(kind, file);
+    }
+
+    private void Load(PhysicsSourceKind kind, string? file)
+    {
+        if (target is not { } found || loading != null)
+            return;
+        loading = Task.Run(() => service.LoadAsync(found, kind, file));
+    }
+
+    private void OpenFileDialog(bool import)
+    {
+        var start = lastFolder.Length > 0 && Directory.Exists(lastFolder) ? lastFolder : null;
+        // The dialog calls back while it draws, outside this window; the pick is handled in Poll.
+        fileDialog.OpenFileDialog(import ? "Import an area from a physics file" : "Open a physics file", "Physics files{.phyb}", (success, files) =>
+        {
+            if (success && files.Count > 0)
+                picked = (files[0], import);
+        }, 1, start, false);
+    }
+
+    private (string File, bool Import)? picked;
+
+    private void HandlePicked()
+    {
+        if (picked is not { } pick)
+            return;
+        picked = null;
+        lastFolder = Path.GetDirectoryName(pick.File) ?? lastFolder;
+        if (pick.Import)
+        {
+            importName = Path.GetFileName(pick.File);
+            importing = Task.Run(() => PhysicsBuilderService.ReadFileAsync(pick.File));
+        }
+        else
+            Start(PhysicsSourceKind.File, pick.File);
+    }
+
+    private void DrawDiscardPopup()
+    {
+        using var popup = ImRaii.Popup(DiscardPopup);
+        if (!popup.Success)
+            return;
+        ImGui.TextColored(Theme.Text, "Discard your unsaved changes?");
+        if (ImGui.Button("Discard##physics-discard-yes") && pendingStart is { } start)
+        {
+            pendingStart = null;
+            Load(start.Kind, start.File);
+            ImGui.CloseCurrentPopup();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("Keep editing##physics-discard-no"))
+        {
+            pendingStart = null;
+            ImGui.CloseCurrentPopup();
+        }
+    }
+
+    // ---- Editing row, actions ----
+
+    private void DrawEditingRow(PhysicsDocument current)
+    {
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Editing");
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.TextColored(Theme.Text, current.Source.Label);
+        if (ImGui.IsItemHovered() && current.Source.Path.Length > 0)
+            ImGui.SetTooltip(current.Source.Path);
+        if (current.Dirty)
+        {
+            ImGui.SameLine(0, Theme.Gap);
+            Widgets.Badge("Unsaved", Theme.Warning);
+        }
+        ImGui.SameLine();
+        ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetWindowContentRegionMax().X - ImGui.GetFrameHeight() * 2 - ImGui.GetStyle().ItemSpacing.X));
+        if (Widgets.IconButton("##physics-undo", FontAwesomeIcon.Undo, "Undo (Ctrl+Z)", current.CanUndo))
+            Undo(current);
+        ImGui.SameLine();
+        if (Widgets.IconButton("##physics-redo", FontAwesomeIcon.Redo, "Redo (Ctrl+Y)", current.CanRedo))
+            Redo(current);
+    }
+
+    private void Undo(PhysicsDocument current)
+    {
+        if (current.Undo())
+            Edited(current);
+    }
+
+    private void Redo(PhysicsDocument current)
+    {
+        if (current.Redo())
+            Edited(current);
+    }
+
+    private void HandleShortcuts(PhysicsDocument current)
+    {
+        if (!ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows) || ImGui.GetIO().WantTextInput || !ImGui.GetIO().KeyCtrl)
+            return;
+        if (ImGui.IsKeyPressed(ImGuiKey.Z))
+            Undo(current);
+        else if (ImGui.IsKeyPressed(ImGuiKey.Y))
+            Redo(current);
+    }
+
+    /// <summary> After a finished change: keep the selection valid and queue the automatic preview. </summary>
+    private void Edited(PhysicsDocument current)
+    {
+        if (selected >= current.File.Simulators.Count)
+            selected = current.File.Simulators.Count - 1;
+        if (config.PhysicsAutoPreview && target != null)
+            autoPreviewDue = Environment.TickCount64 + AutoPreviewDelayMs;
+    }
+
+    private void PumpAutoPreview(PhysicsDocument current)
+    {
+        if (autoPreviewDue == 0 || Environment.TickCount64 < autoPreviewDue || working != null || ImGui.IsAnyItemActive())
+            return;
+        autoPreviewDue = 0;
+        if (Issues(current).Any(issue => issue.Level == PhysicsIssueLevel.Error))
+        {
+            Say(FeedbackSeverity.Warning, "Not previewed: fix the problems marked in red first.");
+            return;
+        }
+        StartPreview(current);
+    }
+
+    /// <summary> The file to write, made here on the thread that edits the document; null after saying why it can't be. </summary>
+    private byte[]? Prepare(PhysicsDocument current, PhysicsTarget found)
+    {
+        try
+        {
+            return PhysicsBuilderService.Prepare(current, found);
+        }
+        catch (Exception e) when (e is InvalidDataException or InvalidOperationException)
+        {
+            Say(FeedbackSeverity.Error, e.Message);
+            return null;
+        }
+    }
+
+    private void StartPreview(PhysicsDocument current)
+    {
+        if (target is not { } found || Prepare(current, found) is not { } bytes)
+            return;
+        Run(() => service.PreviewAsync(found, bytes, life.Token),
+            warning => warning ?? (service.Preview.Shared
+                ? $"Previewing on your character. Others using {service.Preview.CollectionName} see it too."
+                : "Previewing on your character. Your mods aren't changed until you save."));
+    }
+
+    private void DrawActions(PhysicsDocument current)
+    {
+        var errors = Issues(current).Count(issue => issue.Level == PhysicsIssueLevel.Error);
+        using (ImRaii.Disabled(target == null || Busy || errors > 0))
+        {
+            if (Widgets.TabButton(FontAwesomeIcon.Eye, "Preview", false))
+                StartPreview(current);
+        }
+        Tip(errors > 0 ? "Fix the problems marked in red first." : "Shows these settings on your character. Your mods aren't changed until you save.");
+        ImGui.SameLine();
+        var auto = config.PhysicsAutoPreview;
+        if (ImGui.Checkbox("Auto##physics-auto", ref auto))
+        {
+            config.PhysicsAutoPreview = auto;
+            saveConfig();
+        }
+        Tip("Preview after every change, once you let go of the control.");
+        ImGui.SameLine();
+        using (ImRaii.Disabled(!service.Preview.Active || Busy))
+        {
+            if (ImGui.Button("Stop preview"))
+                Run(async () =>
+                {
+                    await service.StopPreviewAsync(target).ConfigureAwait(false);
+                    return null;
+                }, _ => "Preview off. Your character shows your saved physics again.");
+        }
+        ImGui.SameLine(0, Theme.Gap * 3);
+        using (ImRaii.Disabled(target == null || Busy || errors > 0))
+        {
+            if (Widgets.TabButton(FontAwesomeIcon.Save, service.HasMod ? "Save to my mod" : "Save as a new mod", current.Dirty))
+                Save(current);
+        }
+        Tip(service.HasMod
+            ? $"Saves into {service.ModDirectory} and turns it on above your other mods. You can come back and change it any time."
+            : $"Makes a mod called {PhysicsBuilderService.ModName}, above your other mods in your collection. You can come back and change it any time.");
+        if (service.HasMod)
+        {
+            ImGui.SameLine();
+            using (ImRaii.Disabled(target == null || Busy))
+            {
+                if (ImGui.Button("Turn my mod off"))
+                    Run(() => service.SetModEnabledAsync(target!, false), warning => warning ?? $"{service.ModDirectory} is off. Your other physics mods apply again.");
+            }
+            Tip("Turns your physics mod off in your collection. Saving turns it on again.");
+        }
+        if (working != null || service.Preview.Busy)
+        {
+            ImGui.SameLine();
+            Widgets.Spinner();
+        }
+
+        if (message.Length > 0)
+        {
+            var (accent, _, icon) = Theme.Severity(messageSeverity);
+            ImGui.TextColored(accent, icon);
+            ImGui.SameLine(0, Theme.Gap);
+            using var wrap = ImRaii.TextWrapPos(0f);
+            ImGui.TextColored(Theme.Text, message);
+        }
+    }
+
+    private void Save(PhysicsDocument current)
+    {
+        if (target is not { } found || Prepare(current, found) is not { } bytes)
+            return;
+        Run(async () =>
+        {
+            var warnings = await service.SaveAsync(found, bytes, life.Token).ConfigureAwait(false);
+            return warnings.Count == 0 ? null : string.Join(" ", warnings);
+        }, warning =>
+        {
+            current.MarkSaved(new PhysicsSource(PhysicsSourceKind.Mine, "Your physics mod", service.ModDirectory), bytes);
+            return warning ?? $"Saved into {service.ModDirectory}. Your character uses it now.";
+        });
+    }
+
+    // ---- Shared helpers ----
+
+    private IReadOnlyList<PhysicsIssue> Issues(PhysicsDocument current)
+    {
+        if (!ReferenceEquals(issuesDocument, current) || issuesRevision != current.Revision)
+        {
+            issues = PhysicsValidation.Check(current.File, target?.Character.Skeleton);
+            issuesDocument = current;
+            issuesRevision = current.Revision;
+        }
+        return issues;
+    }
+
+    private static void Tip(string text)
+    {
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(text);
+    }
+}

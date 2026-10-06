@@ -40,6 +40,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly GameFileBrowserService  _gameFiles;
     private readonly GameFileExportService   _gameExport;
     private readonly Services.Heels.HeelsOffsetService _heels;
+    private readonly Services.Physics.PhysicsBuilderService _physics;
+    private readonly PhysicsWindow           _physicsWindow;
     private readonly Services.TextureCompression.TextureCompressionService _compression;
     private readonly WindowSystem            _windowSystem;
     private readonly MainWindow              _window;
@@ -240,6 +242,11 @@ public sealed class Plugin : IDalamudPlugin
         _heels = new Services.Heels.HeelsOffsetService(pi, framework, objects, clientState, condition, data, skeletons, _penumbra, resourceSources,
             [neckSeam.Store], () => _config.AutoFixHeels, log);
         _window.AttachHeelsOffset(_heels);
+        // The physics builder: body physics for your skeleton, previewed through a temporary mod and saved into a mod of its own.
+        _physics = new Services.Physics.PhysicsBuilderService(_penumbra, data, framework, objects, log, _config, SaveConfiguration, configDirectory,
+            () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory));
+        _physicsWindow = new PhysicsWindow(_physics, _config, SaveConfiguration, log);
+        _window.AttachPhysics(_physicsWindow.Open);
         // Automatic cache cleanup also removes old exports from the cache's export folder, and the
         // originals of textures optimized more than a week ago.
         _textures.AdditionalCacheCleanup = () =>
@@ -282,18 +289,20 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.AddWindow(_timelineWindow);
         _windowSystem.AddWindow(_timelineWindow.Bones);
         _windowSystem.AddWindow(_timelineWindow.Overlay);
+        _windowSystem.AddWindow(_physicsWindow);
 
         _pi.UiBuilder.Draw += _windowSystem.Draw;
         _pi.UiBuilder.Draw += _setupWindow.DrawFileDialog;
         _pi.UiBuilder.Draw += _toolSetup.DrawFileDialog;
         _pi.UiBuilder.Draw += _window.DrawFileDialog;
         _pi.UiBuilder.Draw += _timelineWindow.DrawFileDialog;
+        _pi.UiBuilder.Draw += _physicsWindow.DrawFileDialog;
         _pi.UiBuilder.OpenMainUi += OpenMainUi;
         _pi.UiBuilder.OpenConfigUi += _settingsWindow.Open;
 
         _commands.AddHandler("/ie", new CommandInfo(OnCommand)
         {
-            HelpMessage = "Opens the XIV Instant Edit window. Use /ie refresh to refresh the on-screen list.",
+            HelpMessage = "Opens the XIV Instant Edit window. Use /ie refresh to refresh the on-screen list, /ie physics for the physics builder.",
         });
         _commands.AddHandler("/iesettings", new CommandInfo((_, _) => _settingsWindow.Open())
         {
@@ -320,6 +329,11 @@ public sealed class Plugin : IDalamudPlugin
         if (args.Trim().Equals("refresh", StringComparison.OrdinalIgnoreCase))
         {
             _onScreen.RequestRefresh();
+            return;
+        }
+        if (args.Trim().Equals("physics", StringComparison.OrdinalIgnoreCase))
+        {
+            _physicsWindow.Open();
             return;
         }
 
@@ -400,6 +414,7 @@ public sealed class Plugin : IDalamudPlugin
         _pi.UiBuilder.Draw -= _toolSetup.DrawFileDialog;
         _pi.UiBuilder.Draw -= _window.DrawFileDialog;
         _pi.UiBuilder.Draw -= _timelineWindow.DrawFileDialog;
+        _pi.UiBuilder.Draw -= _physicsWindow.DrawFileDialog;
         _pi.UiBuilder.OpenMainUi -= OpenMainUi;
         _pi.UiBuilder.OpenConfigUi -= _settingsWindow.Open;
         _windowSystem.RemoveWindow(_window);
@@ -409,6 +424,7 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.RemoveWindow(_timelineWindow);
         _windowSystem.RemoveWindow(_timelineWindow.Bones);
         _windowSystem.RemoveWindow(_timelineWindow.Overlay);
+        _windowSystem.RemoveWindow(_physicsWindow);
         _glamourer.AppearanceChanged -= _window.OnGlamourerAppearanceChanged;
         _glamourer.Dispose();
         _recorder.Dispose();
@@ -425,6 +441,9 @@ public sealed class Plugin : IDalamudPlugin
         _window.Dispose();
         _compression.Dispose();
         _heels.Dispose();
+        // Removes the physics preview's temporary mod, so it goes before Penumbra.
+        _physicsWindow.Dispose();
+        _physics.Dispose();
         _gameFiles.Dispose();
         _textures.FileChanged -= _previews.Invalidate;
         _previews.Dispose();

@@ -149,6 +149,15 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary> Quick Actions cards the user removed from the tab. Cards not listed show, so new ones appear on their own. </summary>
     public List<string> HiddenQuickActions { get; set; } = [];
 
+    /// <summary> The physics builder's mod folder in Penumbra, empty until the first save. </summary>
+    public string PhysicsModDirectory { get; set; } = "";
+
+    /// <summary> The physics builder's mod's Penumbra identifier, so a mod later put in its folder isn't written over. </summary>
+    public Guid PhysicsModIdentifier { get; set; }
+
+    /// <summary> The physics builder previews every change on your character once you let go of a control. </summary>
+    public bool PhysicsAutoPreview { get; set; }
+
     /// <summary>Legacy v9 context payload retained only for one-time migration or storage fallback.</summary>
     public List<PersistedExportContext> ExportContexts { get; set; } = [];
 
