@@ -12,7 +12,7 @@ using InstantEdit.Ui.Timeline;
 /// document round trip with its automatic follow-ups, entry templates and the PAP footer rewrite.
 /// Expected timelines are assembled here in VFXEditor's layout, never with TmbFile's own writer.
 /// </summary>
-internal static class TmbFileFixture
+internal static partial class TmbFileFixture
 {
     public static void Run(Action<bool, string> check, Action<Action, string> reject)
     {
@@ -28,6 +28,7 @@ internal static class TmbFileFixture
         ReviewFixes(check, original);
         EffectLoops(check);
         EffectCopies(check, reject);
+        EffectLooks(check, reject);
         Expressions(check, reject);
     }
 

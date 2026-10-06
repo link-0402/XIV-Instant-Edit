@@ -510,6 +510,9 @@ public sealed partial class TimelineWindow
         }
         if (ev.Conditional)
             drawList.AddCircleFilled(new Vector2(badgeX, y0 + Theme.Scaled(3)), Theme.Scaled(2.5f), U32(Theme.Info));
+        if (ev.Look != null)
+            drawList.AddCircleFilled(new Vector2(badgeX - (ev.Conditional ? Theme.Scaled(7) : 0), y0 + Theme.Scaled(3)), Theme.Scaled(2.5f),
+                U32(Theme.Accent));
     }
 
     /// <summary>
@@ -658,6 +661,8 @@ public sealed partial class TimelineWindow
                 ImGui.TextColored(Theme.Warning, (ev.Access == TimelineAccess.Locked ? "Locked: " : "Move only: ") + reason);
             if (ev.Conditional)
                 ImGui.TextColored(Theme.Info, "Plays only under a condition.");
+            if (ev.Look != null)
+                ImGui.TextColored(Theme.Accent, "Look changed.");
             return;
         }
         if (hit.Part == TimelinePart.LengthHandle && Widgets.HoverDelay("timeline-length-handle"))

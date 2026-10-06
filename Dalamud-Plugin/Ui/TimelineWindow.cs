@@ -185,6 +185,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         catalogKey = null;
         motionBase = null;
         motionCarry = null;
+        ForgetEffects();
     }
 
     public void Dispose()
@@ -292,8 +293,10 @@ public sealed partial class TimelineWindow : Window, IDisposable
                    (loaded.Resource.ModName ?? loaded.Resource.ModDirectory ?? "Game Data");
         labelDocument = null;
         pendingLengths.Clear();
+        lookEditing = false;
         if (!sameClip)
         {
+            ForgetEffects();
             modName = TimelineWindowViews.DefaultModName(AnimationPresentation.DefaultModName(loaded.Capture));
             destination = AnimationDestination.NewMod;
             saveError = null;

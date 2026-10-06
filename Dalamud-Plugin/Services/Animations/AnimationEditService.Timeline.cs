@@ -194,6 +194,17 @@ internal sealed partial class AnimationEditService
         return effects.ToImmutable();
     }
 
+    /// <summary>
+    /// Reads the effect <paramref name="gamePath"/> as the collection resolves it, for the Timeline's
+    /// effect editor (see <see cref="TimelineEffectLooks"/>). Nothing in game changes.
+    /// </summary>
+    public async Task<byte[]> ReadEffectAsync(Guid collection, string gamePath, CancellationToken token)
+    {
+        if (!gamePath.EndsWith(".avfx", StringComparison.OrdinalIgnoreCase) || !AnimationDependencies.SafeGamePath(gamePath))
+            throw new InvalidDataException("This is not an effect the game can load.");
+        return (await resources.ReadAsync(collection, gamePath, token)).Bytes;
+    }
+
     /// <summary>The native animation runtime, which the live motion display builds its uncompressed copies with.</summary>
     internal AnimationNative Native => native;
 

@@ -107,6 +107,9 @@ internal static class TimelineConvert
     /// </summary>
     public static byte[] Apply(byte[] originalTmb, TimelineDocument edited, IReadOnlyDictionary<string, int>? motionFrames = null)
     {
+        // A look lives in a copy of its effect; one still on an event would be lost.
+        if (!edited.Events.IsDefault && edited.Events.Any(e => e.Look is { IsEmpty: false }))
+            throw new InvalidDataException("An effect's look was not written into a copy of the effect.");
         var file = TmbFile.Parse(originalTmb);
         var chains = LoopChains(file);
         // How every face played as loaded: a loop is rebuilt from its first play.

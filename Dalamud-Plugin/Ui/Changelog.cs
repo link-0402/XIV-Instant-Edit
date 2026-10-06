@@ -30,6 +30,7 @@ internal static class ChangelogCatalog
             Entry("Save as a new mod or replace the original. Undo works like the other animation edits.", 1),
             Entry("In GPose, preview the result on your character, then pause and scrub through it. The preview doesn't change your mods.", 1),
             Entry("It warns when an effect or its music stops while the animation goes on, and keeps it going with one click.", 1),
+            Entry("Change how an effect looks: tint, size, position, its colours one by one or all at once, glow, opacity and light range. The changes go into a copy, so the original stays as it is.", 1),
             Highlight("Timeline: bone layers change how the animation moves, live on your character in GPose."),
             Entry("Offset layers turn, move or scale bones over part of the animation, easing in and out.", 1),
             Entry("Amplitude layers make bones move more or less.", 1),
