@@ -113,6 +113,9 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     /// <summary>How many of the actor's controls show the edited motion.</summary>
     public int Showing => session?.Swapped.Count ?? 0;
 
+    /// <summary>Whether the controls show <paramref name="layers"/> now, with nothing left to apply.</summary>
+    public bool Shows(ImmutableArray<MotionLayer> layers) => session is { } current && evaluation == null && current.Shown == layers;
+
     public string Error { get; private set; } = string.Empty;
 
     /// <summary>

@@ -122,6 +122,19 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     }
 
     /// <summary>
+    /// Reads the body skeleton of the GPose character at <paramref name="index"/> as the game shows it this
+    /// frame into <paramref name="pose"/>, for the bones the Bones window draws on it. False outside GPose,
+    /// for characters of the world and when the character is not drawn.
+    /// </summary>
+    public bool ReadPose(ushort index, ActorPose pose)
+    {
+        RequireFrameworkThread();
+        if (!_clientState.IsGPosing || index < FirstGPoseIndex || _objects[index] is not ICharacter { Address: not 0 } actor)
+            return false;
+        return pose.Read(actor.Address);
+    }
+
+    /// <summary>
     /// Plays <paramref name="timelineId"/> on the GPose actor: saves its mode, base override and slot
     /// speeds (once per actor), sets AnimLock, makes the timeline the base override and starts it.
     /// <paramref name="bindingFingerprint"/> names the clip's binding for pause, seek and time reads.

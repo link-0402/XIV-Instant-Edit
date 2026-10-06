@@ -637,3 +637,24 @@ are covered offline in PoseEditorFixture):
   frame (Shift ten) while the Bones window has focus, without moving the character.
 - [ ] Bone names in the Animated Bones list and the bone picker read Left Knee for
   j_asi_b_l, Left Foot for j_asi_d_l and Body for n_hara.
+
+Bones on the character (Phase 5, reported good in game 2026-10-06; the gizmo's math and moves
+for several bones are covered offline in PoseEditorFixture):
+- [x] In GPose with the Bones window open, dots sit on the GPose character's joints, joined to
+  the bone above, coloured like the map's, also for a tall or small character and after
+  turning or moving the character. They stay behind the Bones window and every other window.
+  The crosshairs button in the Bones window hides and shows them; outside GPose there are none.
+- [x] Hover a dot: its name and state show, and the click selects it without turning the
+  camera. Ctrl and Shift work as on the map. Dragging the camera across dots selects nothing.
+- [x] Live off: the Turn/Move choice says to turn on Live, and no gizmo shows. Live on and
+  playing: it says to pause. The new play button beside Live pauses and resumes.
+- [x] Live on, paused, an offset layer and the neck selected: the gizmo's rings sit on the
+  neck. Drag a ring: the head turns that way and stays there when you let go, without the
+  gizmo jumping back; a key appears at the playhead and Ctrl+Z undoes the whole drag.
+- [x] Bone axes: the rings follow the neck's own axes. Character axes, or several bones
+  selected: they are the character's, and every selected bone turns the same way about its
+  own joint (a bone below another selected one follows it).
+- [x] Gizmo Move: the arrows move the hand and it follows the mouse along each arrow; in a
+  pose layer the key then sets the position (Set position ticks itself), starting from where
+  the clip has the bone.
+- [x] With Brio's overlay open as well, dragging one gizmo never moves the other.

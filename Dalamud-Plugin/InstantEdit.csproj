@@ -60,6 +60,10 @@
       <HintPath>$(DalamudDevPath)\Dalamud.Bindings.ImPlot.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="Dalamud.Bindings.ImGuizmo">
+      <HintPath>$(DalamudDevPath)\Dalamud.Bindings.ImGuizmo.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="FFXIVClientStructs">
       <HintPath>$(DalamudDevPath)\FFXIVClientStructs.dll</HintPath>
       <Private>false</Private>

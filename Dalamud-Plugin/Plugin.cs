@@ -281,6 +281,7 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.AddWindow(_settingsWindow);
         _windowSystem.AddWindow(_timelineWindow);
         _windowSystem.AddWindow(_timelineWindow.Bones);
+        _windowSystem.AddWindow(_timelineWindow.Overlay);
 
         _pi.UiBuilder.Draw += _windowSystem.Draw;
         _pi.UiBuilder.Draw += _setupWindow.DrawFileDialog;
@@ -407,6 +408,7 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.RemoveWindow(_settingsWindow);
         _windowSystem.RemoveWindow(_timelineWindow);
         _windowSystem.RemoveWindow(_timelineWindow.Bones);
+        _windowSystem.RemoveWindow(_timelineWindow.Overlay);
         _glamourer.AppearanceChanged -= _window.OnGlamourerAppearanceChanged;
         _glamourer.Dispose();
         _recorder.Dispose();
