@@ -49,6 +49,9 @@ internal sealed record AnimationTimelineSource(AnimationCapture Capture, bool St
     /// <summary>The fingerprint of the clip's binding in <see cref="BaseMotion"/>.</summary>
     public string? BaseFingerprint { get; init; }
 
+    /// <summary>The hash of <see cref="BaseMotion"/>.</summary>
+    public string? BaseHash { get; init; }
+
     /// <summary>The PAP whose motion the layers apply to: <see cref="BaseMotion"/>, else the file's own.</summary>
     public byte[] MotionSource => BaseMotion ?? Pap;
 
@@ -91,6 +94,32 @@ internal sealed partial class AnimationEditService
         var fingerprint = await framework.RunOnFrameworkThread(() => AnimationRuntime.InspectPap(bytes).GetValueOrDefault(clip.BindingIndex, string.Empty));
         return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, document, null,
             await EffectsAsync(capture.CollectionId, document, token)) { FileFingerprint = fingerprint };
+    }
+
+    /// <summary>
+    /// Reads the clip <paramref name="journal"/>'s edit saved, with that edit's bone layers back on the
+    /// motion from before it (Edit again): saving them again replaces the edit's motion instead of stacking
+    /// new layers onto it. Refused when the file changed since. Nothing in game changes.
+    /// </summary>
+    public async Task<AnimationTimelineSource> LoadTimelineAgainAsync(AnimationEditJournal journal, AnimationCapture capture,
+        CancellationToken token)
+    {
+        if (EditAgainProblem(journal) is { } problem) throw new InvalidOperationException(problem);
+        var edit = journal.Request.Timeline!;
+        var loaded = await LoadTimelineAsync(capture, edit.Startup, token);
+        if (loaded.Document == null)
+            return loaded;
+        if (EditAgainFileProblem(journal, loaded) is { } changed) throw new IOException(changed);
+        byte[] motion;
+        try { motion = await File.ReadAllBytesAsync(Path.Combine(journals.DirectoryFor(journal.Id), MotionBaseName), token); }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+        {
+            throw new IOException("The motion from before this edit is gone.");
+        }
+        if (AnimationPap.Hash(motion) != edit.MotionBaseHash) throw new IOException("The motion from before this edit is damaged.");
+        var fingerprint = await framework.RunOnFrameworkThread(() =>
+            AnimationRuntime.InspectPap(motion).GetValueOrDefault(loaded.Clip.BindingIndex, string.Empty));
+        return WithSavedLayers(loaded, edit, motion, fingerprint);
     }
 
     /// <summary>
@@ -245,8 +274,14 @@ internal sealed partial class AnimationEditService
                 journals.DirectoryFor(request.Id), token);
             var (files, reused, owners) = await AddedFilesAsync(capture, destination, source.Resource, added, beside, token);
             var outputs = ImmutableDictionary<string, byte[]>.Empty.Add(built.GamePath, built.Bytes);
-            var journal = await commits.PrepareAsync(request, manifest, outputs, token,
+            // The motion the layers were baked onto goes with the journal, so the edit can be opened again.
+            var motionBase = MotionBase(source, document, manifest.Files[edited]);
+            var journaled = motionBase == null ? request
+                : request with { Timeline = request.Timeline! with { MotionBaseHash = AnimationPap.Hash(motionBase) } };
+            var journal = await commits.PrepareAsync(journaled, manifest, outputs, token,
                 files.Count > 0 ? (edited, files, owners) : null);
+            if (motionBase != null)
+                KeepMotionBase(journal.Id, motionBase);
             if (reused.Count > 0)
             {
                 journal.ReusedFiles = reused;
@@ -298,6 +333,79 @@ internal sealed partial class AnimationEditService
 
     /// <summary>Whether saving <paramref name="document"/> bakes the motion: a new length, or bone layers that change it.</summary>
     internal static bool ChangesMotion(TimelineDocument document) => document.LengthChanged || document.MotionChanged;
+
+    /// <summary>The file beside a journal that holds the motion its edit's bone layers were baked onto.</summary>
+    internal const string MotionBaseName = "motion-base.pap";
+
+    /// <summary>
+    /// The file whose motion saving <paramref name="document"/> bakes its layers onto: the base the window
+    /// keeps, else <paramref name="file"/>, the clip's file as it is. Null when the save bakes no layers, or
+    /// a new length too, which bakes them in for good.
+    /// </summary>
+    internal static byte[]? MotionBase(AnimationTimelineSource source, TimelineDocument document, byte[] file) =>
+        source.Standalone || !document.MotionChanged || document.LengthChanged ? null : source.BaseMotion ?? file;
+
+    /// <summary>Keeps the motion beside the journal. Without it the edit still saves; it just can't be opened again.</summary>
+    private void KeepMotionBase(Guid id, byte[] motion)
+    {
+        try { AnimationJournalStore.WriteAtomic(Path.Combine(journals.DirectoryFor(id), MotionBaseName), motion); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            log.Warning(e, "Could not keep the motion from before a timeline edit, so it can't be edited again.");
+        }
+    }
+
+    /// <summary>
+    /// Why <paramref name="journal"/>'s edit can't be opened again with its bone layers; null when it can:
+    /// a finished timeline edit that baked layers, kept the clip's length and kept the motion from before it.
+    /// </summary>
+    internal static string? EditAgainProblem(AnimationEditJournal journal) => journal switch
+    {
+        { Request: not { Operation: AnimationOperation.EditTimeline, Timeline.Motion.IsEmpty: false } } =>
+            "Only edits with bone layers can be edited again.",
+        { State: "Undone" or "FilesUndone" } => "This edit was undone.",
+        { State: not "Completed" } => "This edit did not finish.",
+        { Request.Timeline.DurationSeconds: not null } => "This edit changed the length, which baked its layers in for good.",
+        { Request.Timeline.MotionBaseHash: null } => "This edit kept no copy of the motion from before it.",
+        _ => null,
+    };
+
+    /// <summary>
+    /// The capture to open <paramref name="journal"/>'s clip again with: the newest the listener saw of the
+    /// same clip in the same collection, the same character's first; else the one the edit was made from.
+    /// </summary>
+    internal static AnimationCapture EditAgainCapture(AnimationEditJournal journal, IEnumerable<AnimationCapture> history)
+    {
+        var saved = journal.Request.Capture;
+        var startup = journal.Request.Timeline?.Startup == true;
+        if ((startup ? saved.Startup : saved.Clip) is not { } clip)
+            return saved;
+        var same = history.Where(capture => capture.CollectionId == saved.CollectionId && (startup || capture.ExpressionTimeline == null) &&
+            (startup ? capture.Startup : capture.Clip) is { } other && other.GamePath == clip.GamePath && other.Name == clip.Name &&
+            other.BindingIndex == clip.BindingIndex).ToArray();
+        return same.FirstOrDefault(capture => capture.ActorId == saved.ActorId) ?? same.FirstOrDefault() ?? saved;
+    }
+
+    /// <summary>
+    /// Why <paramref name="loaded"/>, the clip as it is now, can't take <paramref name="journal"/>'s layers
+    /// back: its file must still be the one that edit saved. Null when it can.
+    /// </summary>
+    internal static string? EditAgainFileProblem(AnimationEditJournal journal, AnimationTimelineSource loaded) =>
+        journal.Request.Timeline is not { } edit || loaded.Standalone || loaded.EntryIndex != edit.EntryIndex ||
+        !journal.Files.Any(f => f.AddedFor == null && f.GamePath == loaded.Resource.GamePath && f.AfterHash == loaded.Resource.Hash)
+            ? "The animation was changed after this edit."
+            : null;
+
+    /// <summary><paramref name="loaded"/> with <paramref name="edit"/>'s layers back, on the motion from before it.</summary>
+    internal static AnimationTimelineSource WithSavedLayers(AnimationTimelineSource loaded, AnimationTimelineEdit edit, byte[] motion,
+        string fingerprint) =>
+        loaded.Document is not { } document ? loaded : loaded with
+        {
+            Document = document with { Motion = edit.Motion },
+            BaseMotion = motion,
+            BaseFingerprint = fingerprint,
+            BaseHash = edit.MotionBaseHash,
+        };
 
     /// <summary>
     /// Writes the edited timeline into the clip's file. A changed length resamples the motion and

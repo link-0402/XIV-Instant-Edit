@@ -97,7 +97,7 @@ public sealed partial class MainWindow
         ImGui.TableSetupColumn("When", ImGuiTableColumnFlags.WidthFixed, Theme.Scaled(110));
         ImGui.TableSetupColumn("Edit", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableSetupColumn("State", ImGuiTableColumnFlags.WidthFixed, Theme.Scaled(96));
-        ImGui.TableSetupColumn("##actions", ImGuiTableColumnFlags.WidthFixed, Theme.Scaled(58));
+        ImGui.TableSetupColumn("##actions", ImGuiTableColumnFlags.WidthFixed, Theme.Scaled(88));
         ImGui.TableHeadersRow();
 
         var shown = 0;
@@ -122,6 +122,10 @@ public sealed partial class MainWindow
                 ImGui.SetTooltip(journal.Message);
 
             ImGui.TableSetColumnIndex(3);
+            var againProblem = editAgain is null ? "The timeline editor is unavailable." : AnimationEditService.EditAgainProblem(journal);
+            if (Widgets.IconButton("##edit-again", FontAwesomeIcon.Edit, againProblem ?? "Edit again: bring back its bone layers in the Timeline window", againProblem is null))
+                editAgain?.Invoke(journal);
+            ImGui.SameLine(0, Theme.Scaled(2));
             var canUndo = journal.State != "Undone";
             using (ImRaii.Disabled(animations.Busy || !canUndo))
             {

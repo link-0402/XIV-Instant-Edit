@@ -662,18 +662,35 @@ for several bones are covered offline in PoseEditorFixture):
 Key a pose (Phase 6; .pose parsing, model-to-local conversion, moved bones, proportions and
 keying are covered offline in PoseFileFixture; all 8,897 poses in E:\FFXIVmods\Poses parse, 60%
 of them were made on bodies of other proportions than IVCS c0801):
-- [ ] Select a pose layer: Key a pose shows under the keys in the properties panel and under
+- [x] Select a pose layer: Key a pose shows under the keys in the properties panel and under
   the bone panel in the Bones window. Offset and amplitude layers don't have it.
-- [ ] Pose file: pick an Anamnesis, a Ktisis and a Brio .pose. The name and tool show; Key at
+- [x] Pose file: pick an Anamnesis, a Ktisis and a Brio .pose. The name and tool show; Key at
   the playhead keys the whole body (no hair, skirt or weapon bones unless ticked) as one undo
   step, and with Live on the character takes the pose there and blends back out of it.
-- [ ] A lying or sitting pose made on your own race: Move bones is ticked, the body lands where
+- [x] A lying or sitting pose made on your own race: Move bones is ticked, the body lands where
   the pose has it. A pose made on another race: Move bones is off with the proportions note,
   and the character keeps its own proportions.
-- [ ] Selected bones: select an arm, key a pose: only the arm takes the pose.
-- [ ] Character pose: in GPose, pose the character with Brio or Ktisis, then key it: the clip
+- [x] Selected bones: select an arm, key a pose: only the arm takes the pose.
+- [x] Character pose: in GPose, pose the character with Brio or Ktisis, then key it: the clip
   takes that pose at the playhead. Outside GPose it reads your own character.
-- [ ] Frame of an animation: pick another emote, drag Frame, key: the bones take that frame's
+- [x] Frame of an animation: pick another emote, drag Frame, key: the bones take that frame's
   pose. Picking this clip itself (this one) needs no reading.
-- [ ] Open a startup: Loop's first frame, at the end keys the loop's first pose at the
+- [x] Open a startup: Loop's first frame, at the end keys the loop's first pose at the
   startup's last frame; with a fade-in the startup now runs into the loop without a jump.
+
+Edit again (Phase 7; which edits qualify, the motion a save keeps, the capture, the file check and
+older journals are covered offline in EditAgainFixture):
+- [ ] Save a clip with a bone layer in place. In Recent edits its row has an Edit again button
+  (pen); it is greyed out with a reason for bakes, undone edits and edits that changed the length.
+- [ ] Close the Timeline window and press Edit again: the clip opens with its layers, "The saved
+  layers are back." shows and Replace in-place is chosen. With Live on the layers show once, not
+  twice.
+- [ ] Change the layer and save: the motion changes only by the new amount (nothing stacks).
+  Undo last save goes back to the first save, and the layers stay editable.
+- [ ] Open the clip from the Animations tab instead: "Saved with bone layers." and Edit again
+  show above the lanes, and Edit again brings the layers back.
+- [ ] After reloading the plugin, Edit again still works.
+- [ ] Save the clip again without its layers (a sound only), then press Edit again on the older
+  edit: it refuses, because the animation was changed after that edit.
+- [ ] An edit saved into a new mod: Edit again opens that mod's file, and saving in place
+  writes into that mod.

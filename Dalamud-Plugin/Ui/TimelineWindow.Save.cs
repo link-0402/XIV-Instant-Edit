@@ -239,7 +239,7 @@ public sealed partial class TimelineWindow
             return;
         if (motionBase?.Clip != clip)
             motionBase = loaded.BaseMotion is { } kept
-                ? (clip, kept, loaded.BaseFingerprint ?? string.Empty, AnimationPap.Hash(kept))
+                ? (clip, kept, loaded.BaseFingerprint ?? string.Empty, loaded.BaseHash ?? AnimationPap.Hash(kept))
                 : (clip, loaded.Pap, loaded.FileFingerprint, loaded.Resource.Hash);
         motionCarry = (clip, document.Motion, document.NextMotionKey, false);
     }
@@ -251,8 +251,8 @@ public sealed partial class TimelineWindow
             return loaded;
         // Back to the base, as after undoing the first save, the file's own motion is the base again.
         return kept.Hash == loaded.Resource.Hash
-            ? loaded with { BaseMotion = null, BaseFingerprint = null }
-            : loaded with { BaseMotion = kept.Bytes, BaseFingerprint = kept.Fingerprint };
+            ? loaded with { BaseMotion = null, BaseFingerprint = null, BaseHash = null }
+            : loaded with { BaseMotion = kept.Bytes, BaseFingerprint = kept.Fingerprint, BaseHash = kept.Hash };
     }
 
     /// <summary> The read document with the layers carried over a save or an undo, once; null when none are carried. </summary>
@@ -263,6 +263,38 @@ public sealed partial class TimelineWindow
         motionCarry = null;
         return carry.Layers.IsEmpty ? null
             : (doc with { Motion = carry.Layers, NextMotionKey = Math.Max(doc.NextMotionKey, carry.NextKey) }, carry.Unsaved);
+    }
+
+    /// <summary>
+    /// The saved edit whose bone layers the open clip's file holds baked in, while this window doesn't edit
+    /// them: the newest finished edit with layers that saved exactly this file. Null when there is none.
+    /// </summary>
+    private AnimationEditJournal? SavedLayers(AnimationTimelineSource current)
+    {
+        if (animations is not { } service || current.BaseMotion != null || current.Document == null || current.Standalone)
+            return null;
+        foreach (var journal in service.Recovery)
+            if (journal.Request.Capture.CollectionId == current.Capture.CollectionId && journal.Request.Timeline?.Startup == current.Startup &&
+                AnimationEditService.EditAgainProblem(journal) == null && AnimationEditService.EditAgainFileProblem(journal, current) == null)
+                return journal;
+        return null;
+    }
+
+    /// <summary> Offers to bring back the layers the open clip was saved with, which new layers would otherwise go on top of. </summary>
+    private void DrawSavedLayers()
+    {
+        if (source is not { } current || SavedLayers(current) is not { } saved)
+            return;
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Saved with bone layers.");
+        ImGui.SameLine(0, Theme.Gap);
+        using (ImRaii.Disabled(ReadOnly))
+        {
+            if (ImGui.SmallButton("Edit again"))
+                EditAgain(saved, current.Capture);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Bring back the bone layers it was saved with, to change them.\nOtherwise they stay baked in, and new layers go on top.");
     }
 
     /// <summary> Reverts this window's last save through its journal, then reads the timeline again. </summary>

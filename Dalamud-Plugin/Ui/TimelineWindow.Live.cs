@@ -153,9 +153,9 @@ public sealed partial class TimelineWindow
         }
     }
 
-    /// <summary>Identifies a decode: the clip, its file version and the skeleton it is read on.</summary>
+    /// <summary>Identifies a decode: the clip, its file version, the skeleton it is read on and the motion layers apply to.</summary>
     private static string DecodeKey(AnimationTimelineSource loaded) =>
-        $"{ClipKey(loaded)}|{loaded.Resource.Hash}|{loaded.Clip.BindingFingerprint}|{loaded.Clip.Resolution?.Selected?.Skeleton.Fingerprint}";
+        $"{ClipKey(loaded)}|{loaded.Resource.Hash}|{loaded.Clip.BindingFingerprint}|{loaded.Clip.Resolution?.Selected?.Skeleton.Fingerprint}|{loaded.BaseHash}";
 
     /// <summary>Starts decoding the clip's motion unless this version of it is decoded or being decoded.</summary>
     private void EnsureDecode(AnimationTimelineSource loaded)
