@@ -13,11 +13,17 @@ namespace InstantEdit.Ui;
 public sealed partial class MainWindow
 {
     private Action<AnimationCapture, bool>? openTimeline;
+    // Opens a saved edit's clip with its bone layers back (Recent edits' Edit again).
+    private Action<AnimationEditJournal>? editAgain;
     private Task<ImmutableArray<TimelineEffectCheck.Problem>>? effectCheck;
     private CancellationTokenSource? effectCheckCancel;
     private string? effectCheckKey;
 
-    internal void AttachTimeline(Action<AnimationCapture, bool>? open) => openTimeline = open;
+    internal void AttachTimeline(Action<AnimationCapture, bool>? open, Action<AnimationEditJournal>? again = null)
+    {
+        openTimeline = open;
+        editAgain = again;
+    }
 
     /// <summary>
     /// Checks the selected clip's effects on a task, once per clip and file version, so the tab can

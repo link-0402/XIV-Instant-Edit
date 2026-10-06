@@ -151,6 +151,7 @@ public sealed partial class TimelineWindow
         if (current.LastError is { } error)
             Note(null, Theme.Warning, error);
         DrawEffectProblems(current);
+        DrawSavedLayers();
     }
 
     /// <summary> Effects that stop although the animation goes on, and the button that keeps them going. </summary>

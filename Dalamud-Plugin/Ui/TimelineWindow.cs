@@ -43,13 +43,19 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private CancellationTokenSource? loadCancel;
     private (AnimationCapture Capture, bool Startup)? loading;
     private bool loadKeepsView;
+    // The saved edit a load brings back with its bone layers (Edit again), until it ends.
+    private AnimationEditJournal? loadingAgain;
     private string? loadError;
+    // The failed load was an Edit again.
+    private bool loadErrorAgain;
     private string title = string.Empty;
     private string subtitle = string.Empty;
     private bool canReplace;
 
     private PendingAction pending;
     private (AnimationCapture Capture, bool Startup)? pendingOpen;
+    // The saved edit the pending open brings back (Edit again).
+    private AnimationEditJournal? pendingAgain;
     private bool closeConfirmed;
     private float footerHeight;
     private float propertiesWidth;
@@ -116,9 +122,38 @@ public sealed partial class TimelineWindow : Window, IDisposable
         {
             pending = PendingAction.Switch;
             pendingOpen = (capture, startup);
+            pendingAgain = null;
             return;
         }
         Load(capture, startup, false);
+    }
+
+    /// <summary>
+    /// Opens the clip <paramref name="journal"/>'s edit saved, with that edit's bone layers back on the
+    /// motion from before it (Edit again), so saving changes them instead of stacking new ones on top.
+    /// With unsaved changes it asks first, like <see cref="Open"/>.
+    /// </summary>
+    internal void EditAgain(AnimationEditJournal journal) => EditAgain(journal, null);
+
+    /// <summary>
+    /// <see cref="EditAgain(AnimationEditJournal)"/> with <paramref name="capture"/>, the clip's capture to use;
+    /// null for the best one the listener heard (see <see cref="AnimationEditService.EditAgainCapture"/>).
+    /// </summary>
+    private void EditAgain(AnimationEditJournal journal, AnimationCapture? capture)
+    {
+        IsOpen = true;
+        BringToFront();
+        if (animations is not { } service || journal.Request.Timeline is not { } edit)
+            return;
+        capture ??= AnimationEditService.EditAgainCapture(journal, service.Observer.History);
+        if (HasUnsavedChanges)
+        {
+            pending = PendingAction.Switch;
+            pendingOpen = (capture, edit.Startup);
+            pendingAgain = journal;
+            return;
+        }
+        Load(capture, edit.Startup, false, journal);
     }
 
     public override void OnClose()
@@ -134,6 +169,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         closeConfirmed = false;
         pending = PendingAction.None;
         pendingOpen = null;
+        pendingAgain = null;
         // The Bones window poses this window's clip; it goes with it, and so do its bones on the character.
         bonesWindow.IsOpen = false;
         EndGizmo(true);
@@ -143,6 +179,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         loadCancel?.Cancel();
         loadTask = null;
         loading = null;
+        loadingAgain = null;
         loadError = null;
         source = null;
         catalogKey = null;
@@ -179,9 +216,10 @@ public sealed partial class TimelineWindow : Window, IDisposable
 
     /// <summary>
     /// Reads the clip's timeline on a task. <paramref name="keepView"/> reloads the clip already
-    /// shown after a save or undo, keeping its view and playhead.
+    /// shown after a save or undo, keeping its view and playhead. With <paramref name="again"/> the
+    /// clip comes with that saved edit's bone layers back (Edit again).
     /// </summary>
-    private void Load(AnimationCapture capture, bool startup, bool keepView)
+    private void Load(AnimationCapture capture, bool startup, bool keepView, AnimationEditJournal? again = null)
     {
         if (animations is not { } service)
             return;
@@ -191,10 +229,12 @@ public sealed partial class TimelineWindow : Window, IDisposable
         loadCancel = new CancellationTokenSource();
         var token = loadCancel.Token;
         loading = (capture, startup);
+        loadingAgain = again;
         loadKeepsView = keepView;
         loadError = null;
         pending = PendingAction.None;
         pendingOpen = null;
+        pendingAgain = null;
         if (!keepView)
         {
             source = null;
@@ -210,7 +250,9 @@ public sealed partial class TimelineWindow : Window, IDisposable
         {
             await ending;
             await preview.StopAsync();
-            return await service.LoadTimelineAsync(capture, startup, token);
+            return again == null
+                ? await service.LoadTimelineAsync(capture, startup, token)
+                : await service.LoadTimelineAgainAsync(again, capture, token);
         }, token);
     }
 
@@ -220,19 +262,25 @@ public sealed partial class TimelineWindow : Window, IDisposable
             return;
         loadTask = null;
         loading = null;
+        var again = loadingAgain;
+        loadingAgain = null;
         if (task.IsCanceled)
             return;
         if (task.IsFaulted)
         {
             loadError = ErrorText(task.Exception);
+            loadErrorAgain = again != null;
             return;
         }
-        Apply(task.Result, loadKeepsView);
+        Apply(task.Result, loadKeepsView, again);
     }
 
-    private void Apply(AnimationTimelineSource loaded, bool keepView)
+    private void Apply(AnimationTimelineSource loaded, bool keepView, AnimationEditJournal? again = null)
     {
         var sameClip = source != null && ClipKey(source) == ClipKey(loaded);
+        // Edit again: the saved layers apply to the motion from before their edit while this clip stays open.
+        if (again != null && loaded.BaseMotion is { } kept && loaded.BaseHash is { } keptHash)
+            motionBase = (ClipKey(loaded), kept, loaded.BaseFingerprint ?? string.Empty, keptHash);
         // A clip read again after this window saved bone layers into it keeps editing them on the motion
         // from before: the carried layers come back, and the base stays the motion they apply to.
         loaded = WithMotionBase(loaded);
@@ -252,6 +300,12 @@ public sealed partial class TimelineWindow : Window, IDisposable
             saveMessage = null;
             lastSaveId = null;
             scrollY = 0;
+        }
+        if (again != null && loaded.BaseMotion != null)
+        {
+            // Saving again writes over the edit's file; the new save's journal keeps it for Undo.
+            destination = canReplace ? AnimationDestination.InPlace : AnimationDestination.NewMod;
+            saveMessage = "The saved layers are back.";
         }
         if (loaded.Document is not { } doc)
             return;
@@ -391,7 +445,8 @@ public sealed partial class TimelineWindow : Window, IDisposable
         }
         if (loadError != null)
         {
-            Widgets.Banner("##timeline-load-error", FeedbackSeverity.Error, "The timeline could not be read: " + loadError);
+            Widgets.Banner("##timeline-load-error", FeedbackSeverity.Error,
+                (loadErrorAgain ? "The edit could not be opened again. " : "The timeline could not be read: ") + loadError);
             return;
         }
         Widgets.EmptyState(FontAwesomeIcon.Film, "No timeline open",
@@ -437,6 +492,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         {
             pending = PendingAction.None;
             pendingOpen = null;
+            pendingAgain = null;
         }
         ImGui.Spacing();
     }
@@ -450,7 +506,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
             IsOpen = false;
             return;
         }
-        Load(next.Capture, next.Startup, false);
+        Load(next.Capture, next.Startup, false, pendingAgain);
     }
 
     /// <summary> The lanes on the left and the selected event's properties on the right, split like the Mod Browser. </summary>
