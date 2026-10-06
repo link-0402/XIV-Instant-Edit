@@ -26,6 +26,7 @@ internal static class PhysicsScenarios
         CheckDocument();
         CheckModFiles(testRoot);
         CheckVanillaFiles();
+        PhysicsFitScenarios.Run();
     }
 
     private static void CheckNames()
@@ -426,6 +427,7 @@ internal static class PhysicsScenarios
                 c0801.Simulators.Select(s => PhysicsAreas.Classify(s).Label).Contains("Skirt"),
             "physics: the game's Miqo'te file has the chest in group 7 and the skirt");
         _ = skeleton;
+        PhysicsFitScenarios.CheckGameBody(game);
     }
 
     private static string? GameSqpack()

@@ -35,6 +35,7 @@ internal static class ChangelogCatalog
             Entry("Tune each area with plain sliders, both sides at once, and preview it on your character before you save.", 1),
             Entry("It saves into a mod of its own, above your other mods, that you can open and change again any time.", 1),
             Entry("It points out settings that don't do what they seem, like body physics that hats turn off, and fixes them in one click.", 1),
+            Entry("'Fit collision to my body' measures your body as the game draws it, Customize+ included, and sizes the arms, legs and tips that bump into each other to match. You check every size before it changes.", 1),
             Entry("Animations: expressions like /smile now show up too. Bake LivePose face adjustments into them, untick bones, send them to Blender or open their timeline."),
             Entry("Timeline: tick Keep on a face to keep it on after the expression ends, until another one replaces it, like the Permanent Facial Expressions mod does. A moving face, like Panting Face's, keeps looping for about 18 minutes, then returns to neutral.", 1),
             Entry("Animations: the listener now finds emotes your race plays from another race's files, like a Miqo'te dancing with a Midlander male's Popotostep mod."),

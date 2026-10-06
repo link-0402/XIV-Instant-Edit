@@ -243,7 +243,7 @@ public sealed class Plugin : IDalamudPlugin
             [neckSeam.Store], () => _config.AutoFixHeels, log);
         _window.AttachHeelsOffset(_heels);
         // The physics builder: body physics for your skeleton, previewed through a temporary mod and saved into a mod of its own.
-        _physics = new Services.Physics.PhysicsBuilderService(_penumbra, data, framework, objects, log, _config, SaveConfiguration, configDirectory,
+        _physics = new Services.Physics.PhysicsBuilderService(_penumbra, data, framework, objects, skeletons, log, _config, SaveConfiguration, configDirectory,
             () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory));
         _physicsWindow = new PhysicsWindow(_physics, _config, SaveConfiguration, log);
         _window.AttachPhysics(_physicsWindow.Open);
