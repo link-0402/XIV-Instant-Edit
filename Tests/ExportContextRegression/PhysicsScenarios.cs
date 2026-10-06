@@ -25,9 +25,11 @@ internal static class PhysicsScenarios
         CheckValidation();
         CheckDocument();
         CheckModFiles(testRoot);
+        CheckPosed();
         CheckVanillaFiles();
         PhysicsFitScenarios.Run();
         PhysicsBumpScenarios.Run();
+        PhysicsTuneScenarios.Run();
     }
 
     private static void CheckNames()
@@ -398,6 +400,25 @@ internal static class PhysicsScenarios
         Require(third.EndsWith(".3.phyb", StringComparison.Ordinal) && files.Count == 2, "physics mod: game paths match whatever their case");
     }
 
+    /// <summary> In GPose the builder reads your posed copy: the first GPose actor with your name, as Penumbra finds it to redraw. </summary>
+    private static void CheckPosed()
+    {
+        string?[] slots = ["Brio One", "Lucina Zero", "Lucina Zero", null, "After Gap"];
+        int? Find(string name) => PhysicsLiveReader.PosedSlot(slot => slot < slots.Length ? slots[slot] : null, name);
+        Require(Find("Lucina Zero") == PhysicsLiveReader.FirstPosed + 1 && Find("Brio One") == PhysicsLiveReader.FirstPosed,
+            "physics: in GPose your posed copy is the first GPose actor with your name");
+        Require(Find("After Gap") is null && Find("Someone Else") is null && PhysicsLiveReader.PosedSlot(_ => null, "Lucina Zero") is null,
+            "physics: the search ends at the first empty GPose slot, as Penumbra's does");
+    }
+
+    /// <summary> The walk and run the builder plays in GPose are the game's own loops. </summary>
+    private static void CheckMotions(Lumina.GameData game)
+    {
+        var sheet = game.Excel.GetSheet<Lumina.Excel.RawRow>(name: "ActionTimeline");
+        Require(PhysicsMotions.Keys.All(motion => sheet.GetRow(motion.Timeline).ReadStringColumn(0).ExtractText() == motion.Key),
+            "physics: the walk and run played in GPose are the game's normal/walk and normal/run");
+    }
+
     /// <summary> Every vanilla body physics file, read from the installed game when there is one. </summary>
     private static void CheckVanillaFiles()
     {
@@ -429,6 +450,8 @@ internal static class PhysicsScenarios
             "physics: the game's Miqo'te file has the chest in group 7 and the skirt");
         _ = skeleton;
         PhysicsFitScenarios.CheckGameBody(game);
+        PhysicsTuneScenarios.CheckGame(game);
+        CheckMotions(game);
     }
 
     private static string? GameSqpack()

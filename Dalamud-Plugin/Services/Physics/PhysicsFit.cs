@@ -2,27 +2,38 @@ using System.Numerics;
 
 namespace InstantEdit.Services.Physics;
 
-/// <summary> What a fit sizes: a collision shape, or the moving points of one chain. </summary>
+/// <summary>
+/// What a fit sets: a collision shape's size, the size of one chain's moving points, a chain's
+/// firmness (its main spring) or its swing limit.
+/// </summary>
 internal enum PhysicsFitTarget
 {
     Capsule,
     Sphere,
     Chain,
+    Firmness,
+    Swing,
 }
 
 /// <summary>
-/// A size measured on the body: <see cref="Name"/> is the shape's name, or for a chain the simulator and
-/// chain in <see cref="Simulator"/> and <see cref="Chain"/>. Sizes are radii in model units (metres).
+/// A setting measured on the body: <see cref="Name"/> is the shape's name, or for a chain its bone,
+/// with the simulator and chain in <see cref="Simulator"/> and <see cref="Chain"/>. Sizes are radii in
+/// model units (metres), swings degrees, firmness the spring's strength.
 /// </summary>
 internal sealed record PhysicsFitItem(PhysicsFitTarget Target, string Name, int Simulator, int Chain, string Label, string Detail, float Current,
     float Fitted)
 {
-    /// <summary> The fit differs from the file by at least half a millimetre. </summary>
-    public bool Changes => MathF.Abs(Fitted - Current) >= 0.0005f;
+    /// <summary> The fit differs from the file: half a millimetre, half a degree, or a twentieth of the firmness. </summary>
+    public bool Changes => Target switch
+    {
+        PhysicsFitTarget.Swing => MathF.Abs(Fitted - Current) >= 0.5f,
+        PhysicsFitTarget.Firmness => MathF.Abs(Fitted - Current) >= Math.Max(0.0002f, MathF.Abs(Current) * 0.05f),
+        _ => MathF.Abs(Fitted - Current) >= 0.0005f,
+    };
 }
 
-/// <summary> The sizes a fit measured, and what it couldn't measure, in plain words. </summary>
-internal sealed record PhysicsFitResult(IReadOnlyList<PhysicsFitItem> Items, IReadOnlyList<string> Notes);
+/// <summary> The settings a fit measured, the breast size it measured them for, and what it couldn't measure, in plain words. </summary>
+internal sealed record PhysicsFitResult(IReadOnlyList<PhysicsFitItem> Items, IReadOnlyList<string> Notes, PhysicsSizeMeasure? Chest = null);
 
 /// <summary>
 /// Sizes a physics file's collision to a measured body. Only collision that body areas or the skirt use
@@ -39,6 +50,9 @@ internal sealed record PhysicsFitResult(IReadOnlyList<PhysicsFitItem> Items, IRe
 /// </list>
 /// Skin counts by area, so a dense nipple mesh doesn't outweigh the breast around it. A helper bone
 /// without skin of its own, like the elbow's, is measured on the limb it sits on.
+/// Beyond collision, a chest set to an intensity level gets the firmness size-based presets give its
+/// breast size (<see cref="PhysicsSize"/>), and body areas whose swing would let their skin sink into
+/// the torso get a lower limit (<see cref="PhysicsClearance"/>); limits are only ever lowered.
 /// </summary>
 internal static class PhysicsFit
 {
@@ -51,7 +65,7 @@ internal static class PhysicsFit
     private const float Smallest = 0.005f;
     private const float Largest = 0.5f;
 
-    public static PhysicsFitResult Measure(PhybFile file, PhysicsBody body, PhysicsSkeleton skeleton)
+    public static PhysicsFitResult Measure(PhybFile file, PhysicsBody body, PhysicsSkeleton skeleton, PhysicsSizeMeasure? chest = null)
     {
         var items = new List<PhysicsFitItem>();
         var notes = new List<string>();
@@ -128,7 +142,72 @@ internal static class PhysicsFit
                         chain.Nodes[^1].Radius, Clamp(measured.Value)));
             }
         }
-        return new PhysicsFitResult(items, notes);
+        Firmness(file, chest, items, notes);
+        Swings(file, body, skeleton, items, notes);
+        return new PhysicsFitResult(items, notes, chest);
+    }
+
+    /// <summary> Chest chains set to a level get its firmness for the measured breast size. </summary>
+    private static void Firmness(PhybFile file, PhysicsSizeMeasure? chest, List<PhysicsFitItem> items, List<string> notes)
+    {
+        if (chest is null)
+            return;
+        var scale = PhysicsSize.ChestScale(chest.Ratio);
+        var unmatched = false;
+        for (var s = 0; s < file.Simulators.Count; s++)
+        {
+            var simulator = file.Simulators[s];
+            if (simulator.Excluded)
+                continue;
+            for (var c = 0; c < simulator.Chains.Count; c++)
+            {
+                var chain = simulator.Chains[c];
+                if (chain.Nodes.Count < 2 || PhysicsAreas.KindOf(chain.Nodes[0].Bone.Text) is not { } kind || !PhysicsLevels.SizeFitted(kind.Key))
+                    continue;
+                if (PhysicsLevels.Match(simulator, c, kind.Key) is not { Firmness: { } firmness } level ||
+                    PhysicsKnobs.MainSpring(simulator, c) is not { } spring)
+                {
+                    unmatched = true;
+                    continue;
+                }
+                var root = chain.Nodes[0].Bone.Text;
+                items.Add(new PhysicsFitItem(PhysicsFitTarget.Firmness, root, s, c, $"{kind.Label}{Side(root)}: firmness",
+                    $"{level.Name}, for {chest.Label} breasts. Size-based presets make bigger breasts softer.", spring.Stiffness,
+                    MathF.Round(firmness * scale, 4)));
+            }
+        }
+        if (unmatched)
+            notes.Add("Chest firmness: pick an intensity for the chest, then fit again to suit it to your size.");
+    }
+
+    /// <summary> Body areas whose swing lets their skin sink into the torso get the swing that stays clear. </summary>
+    private static void Swings(PhybFile file, PhysicsBody body, PhysicsSkeleton skeleton, List<PhysicsFitItem> items, List<string> notes)
+    {
+        PhysicsClearance.Torso? torso = null;
+        for (var s = 0; s < file.Simulators.Count; s++)
+        {
+            var simulator = file.Simulators[s];
+            if (simulator.Excluded)
+                continue;
+            for (var c = 0; c < simulator.Chains.Count; c++)
+            {
+                var chain = simulator.Chains[c];
+                if (chain.Nodes.Count < 2 || PhysicsAreas.KindOf(chain.Nodes[0].Bone.Text) is not { Body: true } kind ||
+                    kind.Part is not (PhysicsPart.Chest or PhysicsPart.Pecs or PhysicsPart.Butt or PhysicsPart.Belly or PhysicsPart.Thighs))
+                    continue;
+                torso ??= PhysicsClearance.TorsoOf(body, skeleton);
+                if (PhysicsClearance.Degrees(body, skeleton, torso, simulator, c) is not { } clear)
+                    continue;
+                var current = Math.Min(180, PhysicsKnobs.Read(simulator, c, PhysicsKnob.Swing) ?? 180);
+                if (current <= clear + 0.5f)
+                    continue;
+                var root = chain.Nodes[0].Bone.Text;
+                items.Add(new PhysicsFitItem(PhysicsFitTarget.Swing, root, s, c, $"{kind.Label}{Side(root)}: swing",
+                    "How far it can swing before your skin there would sink into your body.", current, clear));
+            }
+        }
+        if (torso is { Count: 0 })
+            notes.Add("Swing: none of your skin is carried by your hips and spine, so swings weren't measured.");
     }
 
     /// <summary> Sets the sizes of <paramref name="items"/> in the file; chains keep their middle points' share of the tip's size. </summary>
@@ -146,17 +225,22 @@ internal static class PhysicsFit
                     foreach (var sphere in file.Collision.Spheres.Where(shape => shape.Name.Text == item.Name))
                         sphere.Thickness = item.Fitted;
                     break;
-                case PhysicsFitTarget.Chain:
+                case PhysicsFitTarget.Chain or PhysicsFitTarget.Firmness or PhysicsFitTarget.Swing:
                     if (item.Simulator < 0 || item.Simulator >= file.Simulators.Count ||
                         item.Chain < 0 || item.Chain >= file.Simulators[item.Simulator].Chains.Count)
                         break;
-                    var chain = file.Simulators[item.Simulator].Chains[item.Chain];
+                    var simulator = file.Simulators[item.Simulator];
+                    var chain = simulator.Chains[item.Chain];
                     if (chain.Nodes.Count < 2 || chain.Nodes[0].Bone.Text != item.Name)
                         break;
-                    var old = chain.Nodes[^1].Radius;
-                    for (var n = 1; n < chain.Nodes.Count - 1; n++)
-                        chain.Nodes[n].Radius = MathF.Abs(old) > 1e-9f ? chain.Nodes[n].Radius * item.Fitted / old : item.Fitted;
-                    chain.Nodes[^1].Radius = item.Fitted;
+                    var knob = item.Target switch
+                    {
+                        PhysicsFitTarget.Firmness => PhysicsKnob.Firmness,
+                        PhysicsFitTarget.Swing => PhysicsKnob.Swing,
+                        _ => PhysicsKnob.Size,
+                    };
+                    // Sizes are metres here and centimetres on the slider.
+                    PhysicsKnobs.Write(simulator, item.Chain, knob, knob == PhysicsKnob.Size ? item.Fitted * 100 : item.Fitted);
                     break;
             }
         }
