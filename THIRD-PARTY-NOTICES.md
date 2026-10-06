@@ -68,6 +68,10 @@ projection from `Game/Camera/CameraExtensions.cs`, the bone groups from
 `Resources/Embedded/Language/en.json`. LivePose, which shows the same artwork, is a fork
 of Brio.
 
+The gizmo itself is ImGuizmo through Dalamud's `Dalamud.Bindings.ImGuizmo`, a
+Dalamud-provided dependency. Pose files are read as Anamnesis, Ktisis and Brio write
+them; no code from those tools is included.
+
 # Sound import
 
 The SCD sound file layout (header, entry tables, sound, track and audio entries,

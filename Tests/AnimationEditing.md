@@ -694,3 +694,7 @@ older journals are covered offline in EditAgainFixture):
   edit: it refuses, because the animation was changed after that edit.
 - [ ] An edit saved into a new mod: Edit again opens that mod's file, and saving in place
   writes into that mod.
+
+Docs (Phase 8):
+- [ ] The changelog's 2.2.0 lists the bone layer entries under Timeline, and the Animations
+  tab's Timeline tab says the motion can change too.

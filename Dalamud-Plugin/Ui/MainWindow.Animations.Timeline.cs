@@ -60,7 +60,7 @@ public sealed partial class MainWindow
         var expression = !startup ? capture.ExpressionTimeline : null;
         Widgets.HintWrapped(expression != null
             ? "Place sounds, effects and faces on the expression, keep its face on and preview it in GPose."
-            : "Place sounds, expressions, effects and props on the animation, change its length and preview it in GPose.");
+            : "Place sounds, expressions, effects and props on the animation, change its length and motion, and preview it in GPose.");
         ImGui.Spacing();
         using (var facts = ImRaii.Table("##timeline-facts", 2, ImGuiTableFlags.SizingFixedFit))
         {
