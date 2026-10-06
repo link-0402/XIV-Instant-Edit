@@ -33,7 +33,9 @@ public sealed partial class TimelineWindow
         "Changes go to the bone layer selected in the timeline, at the playhead.\n" +
         "Several selected bones turn and move the same way, about the character's axes.\n" +
         "A bone below another selected bone follows it.\n" +
-        "Drag a ring of the ball, or turn the wheel over it, to turn. Hold Shift to turn finer.";
+        "Drag a ring of the ball, or turn the wheel over it, to turn. Hold Shift to turn finer.\n" +
+        "In GPose the bones show on the character too. Click a dot there to select it.\n" +
+        "With Live on and paused, drag the gizmo on the character to turn or move the bones.";
 
     private readonly BonesWindow bonesWindow;
     private readonly ITextureProvider textures;
@@ -118,10 +120,17 @@ public sealed partial class TimelineWindow
         HandleBonesKeys(current);
     }
 
-    /// <summary> Live, the layer's previous and next key, the layer and the playhead. </summary>
+    /// <summary> Live and pause, the layer's previous and next key, the layer and the playhead. </summary>
     private void DrawBonesHeader(TimelineEditor current, AnimationTimelineSource loaded, MotionLayer? layer)
     {
         DrawLiveToggle(current, loaded, "##bones-live");
+        ImGui.SameLine(0, Theme.Scaled(2));
+        var shown = previewFingerprint != null;
+        var playing = playback.Active && !playback.Paused;
+        if (Widgets.IconButton("##bones-play", playing ? FontAwesomeIcon.Pause : FontAwesomeIcon.Play,
+                !shown ? "Turn on Live first." : playing ? "Pause" : playback.Active ? "Resume" : "Play",
+                shown && PlaybackAvailable(out _)))
+            TogglePlay();
         ImGui.SameLine(0, Theme.Scaled(8));
         var frame = current.Playhead;
         int? previous = null, next = null;
@@ -193,6 +202,11 @@ public sealed partial class TimelineWindow
                 swapSides = !swapSides;
             ImGui.SameLine(0, Theme.Scaled(2));
         }
+        if (Toggle("##bones-overlay", FontAwesomeIcon.Crosshairs, showOnCharacter, showOnCharacter
+                ? "In GPose the bones show on the character, to select them there and pose them with the gizmo. Click to hide them."
+                : "Show the bones on the character in GPose, to select them there and pose them with the gizmo."))
+            showOnCharacter = !showOnCharacter;
+        ImGui.SameLine(0, Theme.Scaled(2));
         if (Widgets.IconButton("##bones-clear", FontAwesomeIcon.Times, "Clear the selection", selection.Count > 0))
             selection.Clear();
         ImGui.SameLine(0, Theme.Gap);
@@ -577,12 +591,42 @@ public sealed partial class TimelineWindow
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(several
                 ? "Several bones turn about the character's axes: their own axes point different ways."
-                : "The rings turn the bone about its own axes.");
+                : "The ball and the gizmo use the bone's own axes.");
         ImGui.SameLine();
         if (ImGui.RadioButton("Character axes", character))
             characterAxes = true;
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("The rings turn the bones about the character's axes: up, forward and to the side.");
+            ImGui.SetTooltip("The ball and the gizmo use the character's axes: up, forward and to the side.");
+        if (OverlayWanted)
+            DrawGizmoChoice(layer, frame);
+    }
+
+    /// <summary> Whether the gizmo on the character turns or moves, and what it waits for. </summary>
+    private void DrawGizmoChoice(MotionLayer layer, int frame)
+    {
+        var turns = layer.Components.HasFlag(PoseComponents.Rotation);
+        var moves = layer.Components.HasFlag(PoseComponents.Position);
+        var move = moves && (gizmoMove || !turns);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Gizmo");
+        ImGui.SameLine(0, Theme.Gap);
+        using (ImRaii.Disabled(!turns))
+        {
+            if (ImGui.RadioButton("Turn##gizmo-turn", !move))
+                gizmoMove = false;
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(turns ? "The gizmo on the character turns the bones." : "This layer doesn't turn bones.");
+        ImGui.SameLine();
+        using (ImRaii.Disabled(!moves))
+        {
+            if (ImGui.RadioButton("Move##gizmo-move", move))
+                gizmoMove = true;
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(moves ? "The gizmo on the character moves the bones." : "This layer doesn't move bones.");
+        if (GizmoOperation(layer, frame, out var reason) == null && reason != null)
+            Widgets.HintWrapped(reason);
     }
 
     /// <summary>

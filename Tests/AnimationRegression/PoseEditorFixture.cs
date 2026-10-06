@@ -24,6 +24,8 @@ internal static class PoseEditorFixture
         Values(check);
         Edits(check);
         Turns(check);
+        Moves(check);
+        Gizmo(check);
         Following(check);
         Frames(check);
         Mirrors(check);
@@ -243,6 +245,77 @@ internal static class PoseEditorFixture
         check(both.All(target => At(character, 4, target.Bone) is { } turned &&
                   Degrees(Space(target.Bone) * turned.Rotation, turn * Space(target.Bone) * target.Value.Rotation) < 1e-3f),
             "about the character's axes every bone ends up turned the same way in character space");
+    }
+
+    private static void Moves(Action<bool, string> check)
+    {
+        var move = new Vector3(.03f, -.02f, .01f);
+        PoseTarget hand = new(Hand, M(new Vector3(.1f, 0, 0), Q(Vector3.UnitZ, 5)), false), twin = new(Twin, M(new Vector3(0, .2f, 0), Q(Vector3.UnitY, 30)), false);
+        var offset = PoseEdits.Move(Doc(MotionLayerKind.Offset), "m1", 6, [hand, twin], move, Space, true);
+        check(At(offset, 6, Hand) is { } a && Near(a.Position, hand.Value.Position + move) && a.Rotation == hand.Value.Rotation &&
+              At(offset, 6, Twin) is { } b && Near(b.Position, twin.Value.Position + move) && offset.Motion[0].Keys.Single().Moved.IsEmpty,
+            "an offset's move goes the same way in character space for every bone and keeps the turn");
+
+        // A pose moves in its parent's space; the key then sets the position, from the clip's own when it didn't before.
+        var own = new Vector3(.5f, .5f, .5f);
+        var pose = PoseEdits.Move(Doc(MotionLayerKind.Pose), "m1", 6, [hand with { Moved = true }, twin], move, Space, false,
+            bone => bone == Twin ? own : null);
+        check(At(pose, 6, Hand) is { } c && Near(Vector3.Transform(c.Position - hand.Value.Position, Space(Hand)), move) &&
+              At(pose, 6, Twin) is { } d && Near(Vector3.Transform(d.Position - own, Space(Twin)), move) &&
+              pose.Motion[0].Keys.Single().Moved.Order().SequenceEqual([Hand, Twin]),
+            "a pose's move goes the same way in character space, starts from the clip's own position and keys it");
+    }
+
+    /// <summary>The gizmo on the character: placing it, projecting it and reading a drag back in character space.</summary>
+    private static void Gizmo(Action<bool, string> check)
+    {
+        var place = new Vector3(10, 0, 5);
+        var facing = Q(Vector3.UnitY, 90);
+        var world = PoseGizmo.World(place, facing, new Vector3(2));
+        var point = new Vector3(1, .5f, -.25f);
+        check(Near(Vector3.Transform(point, world), place + Vector3.Transform(point * 2, facing)),
+            "the character's model space is scaled, turned, then moved into the world");
+        var bone = PoseGizmo.Bone(new Vector3(0, 1, 0), Q(Vector3.UnitX, 30));
+        check(Near(bone.Translation, Vector3.UnitY) && Degrees(PoseGizmo.Rotation(bone), Q(Vector3.UnitX, 30)) < 1e-3f &&
+              Degrees(PoseGizmo.Rotation(Matrix4x4.CreateScale(3) * bone), Q(Vector3.UnitX, 30)) < 1e-3f,
+            "a bone's gizmo sits on the bone, turned like it, and a scale doesn't change its rotation");
+
+        // A camera five units in front of the middle, looking at it.
+        var view = Matrix4x4.CreateLookAt(new Vector3(0, 0, 5), Vector3.Zero, Vector3.UnitY);
+        var lens = Matrix4x4.CreatePerspectiveFieldOfView(1, 16 / 9f, .1f, 100);
+        var game = lens;
+        game.M33 = 0;
+        game.M43 = .1f;
+        var projection = PoseGizmo.Projection(game, .1f, 100);
+        float Depth(float distance)
+        {
+            var clip = Vector4.Transform(new Vector4(0, 0, 5 - distance, 1), view * projection);
+            return clip.Z / clip.W;
+        }
+        check(Math.Abs(Depth(.1f) + 1) < 1e-3f && Math.Abs(Depth(100) - 1) < 1e-3f && projection.M11 == lens.M11 && projection.M22 == lens.M22 &&
+              projection.M34 == lens.M34,
+            "ImGuizmo's projection gets an ordinary depth range from the near to the far plane and keeps the lens");
+        var screen = new Vector2(1920, 1080);
+        var origin = new Vector2(100, 50);
+        check(PoseGizmo.Project(Vector3.Zero, view * projection, origin, screen, out var middle) && Near(new Vector3(middle, 0), new Vector3(origin + screen / 2, 0), 1e-2f) &&
+              PoseGizmo.Project(Vector3.UnitX, view * projection, origin, screen, out var right) && right.X > middle.X && Math.Abs(right.Y - middle.Y) < 1e-2f &&
+              PoseGizmo.Project(Vector3.UnitY, view * projection, origin, screen, out var up) && up.Y < middle.Y &&
+              !PoseGizmo.Project(new Vector3(0, 0, 9), view * projection, origin, screen, out _),
+            "a point lands on the screen where the camera sees it, right to the right and up higher, and nothing behind the camera does");
+
+        // A turn about the character's axes (ImGuizmo's world mode) and about the bone's own (local mode).
+        var from = Q(Vector3.UnitZ, 40) * Q(Vector3.UnitX, -15);
+        var turn = Q(Vector3.UnitY, 25);
+        var start = PoseGizmo.Bone(new Vector3(.2f, 1, 0), from);
+        var (worldTurn, still) = PoseGizmo.Delta(start, PoseGizmo.Bone(new Vector3(.2f, 1, 0), turn * from));
+        check(Degrees(worldTurn, turn) < 1e-3f && Near(still, Vector3.Zero), "a gizmo turn about the character's axes is that turn in character space");
+        var (localTurn, _) = PoseGizmo.Delta(start, PoseGizmo.Bone(new Vector3(.2f, 1, 0), from * turn));
+        check(Degrees(localTurn, PoseEdits.Around(from, turn)) < 1e-3f,
+            "a gizmo turn about the bone's own axes reads back as the ball's turn about them");
+        var (none, moved) = PoseGizmo.Delta(start, PoseGizmo.Bone(new Vector3(.2f, 1.5f, -.1f), from));
+        check(Degrees(none, Quaternion.Identity) < 1e-3f && Near(moved, new Vector3(0, .5f, -.1f)), "a gizmo move reads back as the move in character space");
+        var (back, _) = PoseGizmo.Delta(PoseGizmo.Bone(Vector3.Zero, Q(Vector3.UnitY, 170)), PoseGizmo.Bone(Vector3.Zero, Q(Vector3.UnitY, -170)));
+        check(back.W >= 0 && Degrees(back, Q(Vector3.UnitY, 20)) < 1e-3f, "a turn reads back the short way, with one sign");
     }
 
     /// <summary>A chain root, a, b, c with a side bone x on the root: the bones an edit changes when several are selected.</summary>

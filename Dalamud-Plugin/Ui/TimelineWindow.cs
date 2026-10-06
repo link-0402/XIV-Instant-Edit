@@ -75,6 +75,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         this.textures = textures;
         this.log = log;
         bonesWindow = new BonesWindow(this);
+        overlayWindow = new BonesOverlay(this);
 
         Size = new Vector2(1000, 560);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -132,8 +133,9 @@ public sealed partial class TimelineWindow : Window, IDisposable
         closeConfirmed = false;
         pending = PendingAction.None;
         pendingOpen = null;
-        // The Bones window poses this window's clip; it goes with it.
+        // The Bones window poses this window's clip; it goes with it, and so do its bones on the character.
         bonesWindow.IsOpen = false;
+        EndGizmo(true);
         StopPreview();
         ForgetDecode();
         loadCancel?.Cancel();
@@ -353,6 +355,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
 
         SyncPlayback(editor, source);
         UpdateLive(editor, source);
+        CheckGizmo();
         DrawToolbar(editor);
         DrawPreviewBar(editor, source);
         DrawMessages(editor);

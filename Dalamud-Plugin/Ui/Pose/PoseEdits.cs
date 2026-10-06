@@ -125,6 +125,30 @@ internal static class PoseEdits
         return doc;
     }
 
+    /// <summary>
+    /// Moves every target by <paramref name="move"/>, a move in character space, each from where it is. An
+    /// offset moves in character space already. A pose moves in its parent's space (<paramref name="space"/>),
+    /// and its key then sets the position, starting from the clip's own (<paramref name="own"/>) where it
+    /// left the position to the clip before.
+    /// </summary>
+    public static TimelineDocument Move(TimelineDocument doc, string layer, int frame, IReadOnlyList<PoseTarget> targets, Vector3 move,
+        Func<string, Quaternion> space, bool offset, Func<string, Vector3?>? own = null)
+    {
+        foreach (var target in targets)
+        {
+            var value = target.Value;
+            if (offset)
+                value = value with { Position = value.Position + move };
+            else
+            {
+                var from = target.Moved ? value.Position : own?.Invoke(target.Bone) ?? value.Position;
+                value = value with { Position = from + Vector3.Transform(move, Quaternion.Inverse(Quaternion.Normalize(space(target.Bone)))) };
+            }
+            doc = MotionEdits.SetKey(doc, layer, frame, target.Bone, value.ToBone(), offset ? null : true);
+        }
+        return doc;
+    }
+
     /// <summary>Keys every target at <paramref name="frame"/> with the value it has there now.</summary>
     public static TimelineDocument Key(TimelineDocument doc, string layer, int frame, IReadOnlyList<PoseTarget> targets, bool pose)
     {
