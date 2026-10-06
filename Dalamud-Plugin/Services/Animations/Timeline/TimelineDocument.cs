@@ -33,6 +33,7 @@ internal enum TimelineAccess : byte
 /// <param name="Group">Shared by the entries one Add created together, such as a prop's parts; null when alone.</param>
 /// <param name="CloneOf">For a copy of a loaded entry, that entry's "t" key: saving copies every byte of it, not only the fields shown.</param>
 /// <param name="Loop">A kept moving face that loops (see <see cref="TimelineDocument.Loops"/>): saved as copies of itself back to back.</param>
+/// <param name="Look">An effect's changed look (tint, size, colours): saving writes it into a copy of the effect (<see cref="TimelineEffectLooks.Bake"/>); null when unchanged.</param>
 internal sealed record TimelineEvent(
     string Key,
     string Magic,
@@ -47,7 +48,8 @@ internal sealed record TimelineEvent(
     ImmutableDictionary<string, double> Values,
     string? Group = null,
     string? CloneOf = null,
-    bool Loop = false);
+    bool Loop = false,
+    TimelineEffectEdit? Look = null);
 
 /// <summary>
 /// One timeline being edited. Immutable: every edit makes a new document, so undo keeps

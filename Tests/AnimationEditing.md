@@ -452,6 +452,29 @@ the SCD's loop end (1,827,659, the value mode B's redcarpet2.scd already uses).
 - [ ] Check whether -1 on the bgm effect (it doesn't loop, it was 909) changes
   anything, and whether the copies' effects double up when the dance loops.
 
+Effect looks (2026-10-07):
+Selecting an effect (C012 or C173) shows a Look section. Tint, size, offset and turn
+write the AVFX root "revised" fields (RvR/G/B, RvS*, RvP*, RvR*); the swatches, Hue and
+Saturation recolour every colour key (particle, model, line, dissolve, non-white
+emitter, light, simple animation colours in use); Glow and Opacity scale each
+particle's main Bri/A curve and the lights' Bri; Light range scales point lights'
+DstS. Offline, all 16,339 library and vanilla effects read, an empty look changes no
+byte, and a full look changes only those numbers.
+- [ ] Tint an effect red and preview in GPose: the whole effect turns red, lights and
+  model particles too. Above 1 it gets brighter.
+- [ ] Size 2 doubles it, Offset Y 1 lifts it, Turn Y 90 turns it a quarter (if it
+  turns about 57x as far, the field is radians and the label must change).
+- [ ] Click a swatch, pick another colour: only that part changes. Hue 180 turns
+  every colour to its opposite; Saturation 0 makes it grey.
+- [ ] Glow 200% brightens, Opacity 50% fades the particles. Light range 200% on an
+  effect with a point light (a fire or glow) lights a wider area.
+- [ ] Save in place: the mod gets vfx/instant_edit/<name>_<hash>.avfx mapped in the
+  option the effect is in, and the timeline names it. Reopen the timeline: the Look
+  shows the saved tint and colours, and a further change makes a copy without a
+  second hash in its name. Undo removes the copy.
+- [ ] Each drag of a look control undoes in one step; a lane event with a changed look
+  shows an amber dot and "Look changed." in its tooltip.
+
 Length:
 - [ ] Make a loop emote 1.5x longer with Scale events on. The motion, faces, sounds
   and footsteps stretch together; validation passes (the old retime always failed it).

@@ -119,7 +119,7 @@ public sealed partial class TimelineWindow
             return "Another edit is running. Wait for it to end.";
         if (destination == AnimationDestination.NewMod && !PenumbraService.IsSafeNewModName(modName.Trim()))
             return "Choose a valid mod name.";
-        return null;
+        return LookMissing(current.Document);
     }
 
     /// <summary>
@@ -133,14 +133,21 @@ public sealed partial class TimelineWindow
         var target = Fresh(loaded);
         var place = destination;
         var name = modName.Trim();
+        // Effect looks are saved as copies of their effects, packaged like imports.
+        TimelineDocument saved;
         ImmutableDictionary<string, byte[]> added;
-        try { added = TimelineWindowViews.AddedFiles(document, imports.Values); }
+        ImmutableDictionary<string, string> beside;
+        try
+        {
+            (saved, var used) = WithLooks(document);
+            added = TimelineWindowViews.AddedFiles(saved, used);
+            beside = TimelineWindowViews.AddedBeside(saved, used);
+        }
         catch (InvalidDataException e)
         {
             saveError = e.Message;
             return;
         }
-        var beside = TimelineWindowViews.AddedBeside(document, imports.Values);
         var service = animations!;
         saveError = null;
         saveMessage = null;
@@ -157,7 +164,7 @@ public sealed partial class TimelineWindow
             return await framework.RunOnFrameworkThread(() =>
             {
                 playback.Stop();
-                return service.EditTimeline(target, document, place, name, added, beside, motionFrames);
+                return service.EditTimeline(target, saved, place, name, added, beside, motionFrames);
             });
         });
     }

@@ -205,8 +205,16 @@ public sealed partial class TimelineWindow
         var document = current.Document;
         var target = Fresh(loaded);
         var clip = target.Clip;
+        TimelineDocument shown;
         ImmutableDictionary<string, byte[]> added;
-        try { added = TimelineWindowViews.AddedFiles(document, imports.Values); }
+        try
+        {
+            if (LookMissing(document) is { } missing)
+                throw new InvalidDataException(missing);
+            // Effect looks play from copies of their effects, as a save writes them.
+            (shown, var used) = WithLooks(document);
+            added = TimelineWindowViews.AddedFiles(shown, used);
+        }
         catch (InvalidDataException e)
         {
             previewError = e.Message;
@@ -219,7 +227,7 @@ public sealed partial class TimelineWindow
         previewJob = true;
         previewDocument = document;
         lastSeekFrame = -1;
-        animations!.PreviewTimeline(target, document, async (built, token) =>
+        animations!.PreviewTimeline(target, shown, async (built, token) =>
         {
             var files = new Dictionary<string, byte[]>(added, StringComparer.OrdinalIgnoreCase) { [built.GamePath] = built.Bytes };
             await preview.ShowAsync(index, files, token);

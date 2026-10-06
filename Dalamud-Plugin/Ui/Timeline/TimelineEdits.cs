@@ -265,7 +265,8 @@ internal static class TimelineEdits
     /// file, and only a resizable event takes a new duration (at least one frame; an unchanged one is
     /// kept exactly). Starts stay inside the TMB's range. A motion at its own speed that gets time
     /// control and no new duration lasts what it played (<see cref="TimelineDocument.PlayedFrames"/>
-    /// with <paramref name="motionFrames"/>), so it keeps playing the same.
+    /// with <paramref name="motionFrames"/>), so it keeps playing the same. Only an effect keeps a
+    /// look, and only while it keeps its file: a look is made for one effect's colours.
     /// </summary>
     public static TimelineDocument Replace(TimelineDocument doc, TimelineEvent ev, IReadOnlyDictionary<string, int>? motionFrames = null)
     {
@@ -282,6 +283,7 @@ internal static class TimelineEdits
                 Resizable = old.Resizable, LockReason = old.LockReason, Conditional = old.Conditional, CloneOf = old.CloneOf,
                 Duration = !old.Resizable || ev.Duration == old.Duration ? old.Duration : Math.Max(1, ev.Duration),
                 Values = ev.Values ?? old.Values,
+                Look = old.Lane == TimelineLane.Effect && ev.Path == old.Path && ev.Look is { IsEmpty: false } look ? look : null,
             },
             TimelineAccess.Movable => old with { Start = start },
             _ => old,
@@ -331,7 +333,7 @@ internal static class TimelineEdits
             return true;
         if (a.Key != b.Key || a.Magic != b.Magic || a.Lane != b.Lane || a.Start != b.Start || a.Duration != b.Duration ||
             a.Resizable != b.Resizable || a.Path != b.Path || a.Access != b.Access || a.LockReason != b.LockReason ||
-            a.Conditional != b.Conditional || a.Group != b.Group || a.CloneOf != b.CloneOf || a.Loop != b.Loop)
+            a.Conditional != b.Conditional || a.Group != b.Group || a.CloneOf != b.CloneOf || a.Loop != b.Loop || !Equals(a.Look, b.Look))
             return false;
         if (ReferenceEquals(a.Values, b.Values))
             return true;
