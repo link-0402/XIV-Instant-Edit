@@ -20,6 +20,7 @@ internal sealed partial class PhysicsWindow
         var collision = current.File.Collision;
         Widgets.SectionHeader("Collision shapes", "areas bump into the ones they tick");
         Widgets.MutedWrapped("Sizes and places are in centimetres, in the space of the bone each end sits on.");
+        DrawFitButton(current, small: true);
         ImGui.Spacing();
         for (var i = 0; i < collision.Capsules.Count; i++)
         {

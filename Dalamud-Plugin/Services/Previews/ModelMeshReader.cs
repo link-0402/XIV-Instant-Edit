@@ -9,11 +9,24 @@ public sealed record ModelMesh(IReadOnlyList<ModelMeshPart> Meshes, IReadOnlyLis
 {
     /// <summary> The model's shapes in its shape order, when read with them; empty otherwise. </summary>
     public IReadOnlyList<ModelShape> Shapes { get; init; } = [];
+
+    /// <summary> The model's bone names, which <see cref="ModelSkin.Bones"/> index, when read with skin weights; empty otherwise. </summary>
+    public IReadOnlyList<string> Bones { get; init; } = [];
 }
 
 /// <summary> One mesh: its vertices and the triangles of each submesh, indexed into those vertices. </summary>
 public sealed record ModelMeshPart(int MeshIndex, int MaterialIndex, Vector3[] Positions, Vector3[] Normals, Vector2[] Uvs,
-    IReadOnlyList<ModelSubmesh> Submeshes);
+    IReadOnlyList<ModelSubmesh> Submeshes)
+{
+    /// <summary> Each vertex's bones and weights, when read with skin weights and the mesh has them. </summary>
+    public ModelSkin? Skin { get; init; }
+}
+
+/// <summary>
+/// The bones that move a mesh's vertices: vertex v has <see cref="Influences"/> slots from v × Influences
+/// on, each a model bone (an index into <see cref="ModelMesh.Bones"/>, or -1) with its weight from 0 to 1.
+/// </summary>
+public sealed record ModelSkin(int Influences, int[] Bones, float[] Weights);
 
 public sealed record ModelSubmesh(int SubmeshIndex, int[] Indices, uint AttributeMask)
 {
@@ -54,20 +67,25 @@ public static class ModelMeshReader
     private const int ShapeMeshSize = 12;
 
     private const byte UsagePosition = 0;
+    private const byte UsageWeights = 1;
+    private const byte UsageIndices = 2;
     private const byte UsageNormal = 3;
     private const byte UsageUv = 4;
 
     private const byte TypeSingle2 = 1;
     private const byte TypeSingle3 = 2;
     private const byte TypeSingle4 = 3;
+    private const byte TypeUByte4 = 5;
     private const byte TypeNByte4 = 8;
     private const byte TypeHalf2 = 13;
     private const byte TypeHalf4 = 14;
+    private const byte TypeUShort4 = 17;
 
     private readonly record struct Element(byte Stream, byte Offset, byte Type);
 
     /// <param name="shapes">Also read the shapes and their LOD-0 index replacements.</param>
-    public static ModelMesh Read(byte[] bytes, bool shapes = false)
+    /// <param name="skin">Also read each vertex's bones and weights, and the model's bone names.</param>
+    public static ModelMesh Read(byte[] bytes, bool shapes = false, bool skin = false)
     {
         Require(bytes.Length >= FileHeaderSize + StringHeaderSize, "file header");
         var version = BinaryPrimitives.ReadUInt32LittleEndian(bytes);
@@ -93,6 +111,8 @@ public static class ModelMeshReader
         var positions = new Element?[declarationCount];
         var normals = new Element?[declarationCount];
         var uvs = new Element?[declarationCount];
+        var weights = new Element?[declarationCount];
+        var indices = new Element?[declarationCount];
         for (var d = 0; d < declarationCount; d++)
         {
             var declaration = FileHeaderSize + d * VertexDeclarationSize;
@@ -109,6 +129,9 @@ public static class ModelMeshReader
                 if (usage == UsagePosition) positions[d] = element;
                 else if (usage == UsageNormal) normals[d] = element;
                 else if (usage == UsageUv && usageIndex == 0) uvs[d] = element;
+                // The first weights and indices are the ones the game skins with.
+                else if (usage == UsageWeights) weights[d] ??= element;
+                else if (usage == UsageIndices) indices[d] ??= element;
             }
         }
 
@@ -137,6 +160,9 @@ public static class ModelMeshReader
 
         var attributes = ReadNames(bytes, attributeTable, attributeCount, stringBlock, (int)stringSize);
         var materials = ReadNames(bytes, materialTable, materialCount, stringBlock, (int)stringSize);
+        var (bones, boneTables) = skin
+            ? ReadBones(bytes, meshHeader, materialTable + materialCount * 4, stringBlock, (int)stringSize)
+            : ([], []);
 
         var lod0MeshIndex = U16(bytes, lodTable);
         var lod0MeshCount = U16(bytes, lodTable + 2);
@@ -206,7 +232,12 @@ public static class ModelMeshReader
                 submeshes.Add(new ModelSubmesh(index, triangleIndices, mask) { MeshIndexStart = (int)(start - startIndex) });
             }
             if (submeshes.Count > 0)
-                parts.Add(new ModelMeshPart(m, materialIndex, meshPositions, meshNormals, meshUvs, submeshes));
+                parts.Add(new ModelMeshPart(m, materialIndex, meshPositions, meshNormals, meshUvs, submeshes)
+                {
+                    Skin = skin && weights[m] is { } weightElement && indices[m] is { } indexElement
+                        ? ReadSkin(bytes, vertexOffset, mesh, weightElement, indexElement, vertexCount, BoneTable(boneTables, U16(bytes, mesh + 14)))
+                        : null,
+                });
         }
 
         if (parts.Count == 0)
@@ -214,8 +245,72 @@ public static class ModelMeshReader
         return new ModelMesh(parts, materials, attributes)
         {
             Shapes = shapes ? ReadShapes(bytes, meshHeader, materialTable + materialCount * 4, stringBlock, (int)stringSize, meshStarts) : [],
+            Bones = bones,
         };
     }
+
+    /// <summary>
+    /// The bone names, which follow the material names, and the bone tables after them: a mesh's blend
+    /// indices count in its table, whose entries count in the bone names. Each table is a header of its
+    /// start (in 4-byte steps from the header) and length, as the racial scaling reads them.
+    /// </summary>
+    private static (IReadOnlyList<string> Names, int[][] Tables) ReadBones(byte[] bytes, int meshHeader, int boneNameTable, int stringBlock,
+        int stringSize)
+    {
+        int boneCount = U16(bytes, meshHeader + 12);
+        int boneTableCount = U16(bytes, meshHeader + 14);
+        Require(boneNameTable + boneCount * 4 <= bytes.Length, "bone names");
+        var names = ReadNames(bytes, boneNameTable, boneCount, stringBlock, stringSize);
+        var tablesAt = boneNameTable + boneCount * 4;
+        var tables = new int[boneTableCount][];
+        for (var t = 0; t < boneTableCount; t++)
+        {
+            var header = tablesAt + t * 4;
+            int offset = U16(bytes, header), count = U16(bytes, header + 2);
+            var start = header + offset * 4;
+            Require(start + count * 2 <= bytes.Length, "bone table");
+            tables[t] = new int[count];
+            for (var i = 0; i < count; i++)
+                if ((tables[t][i] = U16(bytes, start + i * 2)) >= boneCount)
+                    throw new InvalidDataException("A bone table names a bone outside the bone list.");
+        }
+        return (names, tables);
+    }
+
+    private static int[] BoneTable(int[][] tables, int index) => index < tables.Length ? tables[index] : [];
+
+    /// <summary>
+    /// Each vertex's bones, through the mesh's bone table, and weights: a byte each, four of them, or
+    /// eight in a UShort4 element, as the game's vertex shader reads them. A blend index outside the
+    /// table, or a slot without weight, gets bone -1.
+    /// </summary>
+    private static ModelSkin ReadSkin(byte[] bytes, uint vertexOffset, int mesh, Element weights, Element indices, int vertexCount, int[] table)
+    {
+        var influences = Math.Min(SkinWidth(weights.Type), SkinWidth(indices.Type));
+        var bones = new int[vertexCount * influences];
+        var amounts = new float[vertexCount * influences];
+        DecodeStream(bytes, vertexOffset, mesh, weights, vertexCount, (v, at, _) =>
+        {
+            for (var i = 0; i < influences; i++)
+                amounts[v * influences + i] = bytes[at + i] / 255f;
+        });
+        DecodeStream(bytes, vertexOffset, mesh, indices, vertexCount, (v, at, _) =>
+        {
+            for (var i = 0; i < influences; i++)
+            {
+                var slot = bytes[at + i];
+                bones[v * influences + i] = slot < table.Length && amounts[v * influences + i] > 0 ? table[slot] : -1;
+            }
+        });
+        return new ModelSkin(influences, bones, amounts);
+    }
+
+    private static int SkinWidth(byte type) => type switch
+    {
+        TypeUByte4 or TypeNByte4 => 4,
+        TypeUShort4 => 8,
+        _ => throw new NotSupportedException($"Unsupported skin weight layout (type {type})."),
+    };
 
     /// <summary>
     /// The shape table and each shape's LOD-0 meshes, which follow the bone names and bone tables.
@@ -286,9 +381,11 @@ public static class ModelMeshReader
             TypeSingle2 => 8,
             TypeSingle3 => 12,
             TypeSingle4 => 16,
+            TypeUByte4 => 4,
             TypeNByte4 => 4,
             TypeHalf2 => 4,
             TypeHalf4 => 8,
+            TypeUShort4 => 8,
             _ => throw new NotSupportedException($"Unsupported vertex element type {element.Type}."),
         };
         if (element.Stream > 2)

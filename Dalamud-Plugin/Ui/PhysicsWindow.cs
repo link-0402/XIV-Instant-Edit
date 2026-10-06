@@ -83,7 +83,7 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
         life.Dispose();
     }
 
-    private bool Busy => finding != null || loading != null || importing != null || working != null || service.Preview.Busy;
+    private bool Busy => finding != null || loading != null || importing != null || working != null || fitting != null || service.Preview.Busy;
 
     private void Find()
     {
@@ -118,6 +118,7 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
         DrawActions(current);
         DrawDiscardPopup();
         DrawImportPopup(current);
+        DrawFitPopup(current);
         HandleShortcuts(current);
         PumpAutoPreview(current);
     }
@@ -127,6 +128,7 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
     private void Poll()
     {
         HandlePicked();
+        PollFit();
         if (finding is { IsCompleted: true } found)
         {
             finding = null;

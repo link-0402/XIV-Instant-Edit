@@ -1,4 +1,5 @@
 using Dalamud.Plugin.Services;
+using InstantEdit.Services.Skeletons;
 
 namespace InstantEdit.Services.Physics;
 
@@ -8,6 +9,9 @@ internal sealed record PhysicsLoadedFile(string GamePath, string ResolvedPath, s
 /// <summary> The character the builder works for, and the files its collection loads for it. </summary>
 internal sealed record PhysicsTarget(PhysicsCharacter Character, Guid CollectionId, string CollectionName, PhysicsLoadedFile Physics,
     PhysicsLoadedFile Skeleton);
+
+/// <summary> Your body as the game drew it, to fit collision to, and what to know about the measuring. </summary>
+internal sealed record PhysicsBodyMeasure(PhysicsBody Body, PhysicsSkeleton Skeleton, IReadOnlyList<string> Warnings);
 
 /// <summary>
 /// The physics builder's game side: finds your character, its skeleton and the body physics its
@@ -21,21 +25,26 @@ internal sealed class PhysicsBuilderService : IDisposable
     private const string ModDescription =
         "Body physics made with XIV Instant Edit's physics builder (Quick Actions > Body physics). Open the builder to change it.";
 
+    private const long MaxModelBytes = 256L * 1024 * 1024;
+
     private readonly PenumbraService penumbra;
     private readonly IDataManager data;
     private readonly IFramework framework;
     private readonly IObjectTable objects;
+    private readonly ModelSkeletonResolver skeletons;
     private readonly IPluginLog log;
     private readonly Configuration config;
     private readonly Action saveConfig;
 
-    public PhysicsBuilderService(PenumbraService penumbra, IDataManager data, IFramework framework, IObjectTable objects, IPluginLog log,
-        Configuration config, Action saveConfig, string configDirectory, Func<string> cacheRoot)
+    public PhysicsBuilderService(PenumbraService penumbra, IDataManager data, IFramework framework, IObjectTable objects,
+        ModelSkeletonResolver skeletons, IPluginLog log, Configuration config, Action saveConfig, string configDirectory,
+        Func<string> cacheRoot)
     {
         this.penumbra = penumbra;
         this.data = data;
         this.framework = framework;
         this.objects = objects;
+        this.skeletons = skeletons;
         this.log = log;
         this.config = config;
         this.saveConfig = saveConfig;
@@ -183,6 +192,80 @@ internal sealed class PhysicsBuilderService : IDisposable
             warnings.Add(redraw);
         log.Information($"Saved body physics for c{race:D4} into {saved.Directory} ({saved.RelativePath}).");
         return warnings;
+    }
+
+    /// <summary>
+    /// Measures your body as the game draws it now: the models of your body, hands, legs and feet, read
+    /// from the files your collection loads, reshaped for your race, and posed by your live skeleton, so
+    /// your body mod, Customize+ and the bust slider are all in. Gear covering a slot is measured as it is,
+    /// with a warning, since the fit is for bare skin.
+    /// </summary>
+    public async Task<PhysicsBodyMeasure> MeasureBodyAsync(CancellationToken token)
+    {
+        var (capture, resolved) = await framework.RunOnFrameworkThread(() =>
+        {
+            var (body, problem) = PhysicsLiveReader.ReadBody(objects);
+            if (body is null)
+                throw new IOException(problem ?? "Your character can't be read.");
+            // Penumbra's resource tree reads the character, so it has to run here.
+            return (body, penumbra.GetResourcePaths((ushort)body.ObjectIndex));
+        }).ConfigureAwait(false);
+        if (capture.Models.Count == 0)
+            throw new IOException("Your character draws no body right now.");
+
+        var warnings = new List<string>();
+        var (scaling, problem) = await skeletons.RacialScalingAsync(capture.ObjectIndex, capture.Address, token).ConfigureAwait(false);
+        if (scaling is null && problem is not null)
+            warnings.Add($"Measured without racial scaling: {problem}.");
+        var models = new List<PhysicsBodyModel>();
+        foreach (var drawn in capture.Models)
+        {
+            var slot = PhysicsPaths.SlotName(drawn.Slot);
+            if (PhysicsPaths.ResolveDrawn(resolved, drawn.File, drawn.Slot) is not var (actual, gamePath))
+            {
+                warnings.Add($"Penumbra doesn't list your {slot} model, so it wasn't measured. Redraw your character and try again.");
+                continue;
+            }
+            if (!PhysicsPaths.IsBareBody(gamePath))
+                warnings.Add($"You're wearing {slot} gear, so the fit measured the gear, not your skin.");
+            var bytes = await Task.Run(() => ReadModel(actual, gamePath), token).ConfigureAwait(false);
+            if (bytes is null)
+            {
+                warnings.Add($"Your {slot} model couldn't be read, so it wasn't measured.");
+                continue;
+            }
+            RacialDeformer? deformer = null;
+            try { deformer = scaling?.For(gamePath.Length > 0 ? gamePath : Path.GetFileName(actual))?.Deformer; }
+            catch (InvalidDataException e) { warnings.Add($"Your {slot} model was measured without racial scaling: {e.Message}"); }
+            models.Add(new PhysicsBodyModel(slot, bytes, deformer, drawn.Attributes, drawn.Shapes));
+        }
+        if (models.Count == 0)
+            throw new IOException("None of your body's models could be read.");
+
+        var skeleton = capture.Character.Skeleton;
+        var rest = PhysicsBody.RestPose(skeleton);
+        var measured = await Task.Run(() => PhysicsBody.Measure(models, rest, capture.Pose), token).ConfigureAwait(false);
+        if (measured.MissingBones > 0)
+            warnings.Add($"Your skeleton lacks {measured.MissingBones} bones your body models use; their skin was measured unposed.");
+        return new PhysicsBodyMeasure(measured, skeleton, warnings);
+    }
+
+    private byte[]? ReadModel(string actual, string gamePath)
+    {
+        try
+        {
+            if (Path.IsPathFullyQualified(actual))
+            {
+                var info = new FileInfo(actual);
+                return info.Exists && info.Length is > 0 and <= MaxModelBytes ? File.ReadAllBytes(info.FullName) : null;
+            }
+            return data.GetFile(gamePath.Length > 0 ? gamePath : actual)?.Data;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or InvalidDataException)
+        {
+            log.Debug(e, "Could not read {Path} to measure the body.", actual);
+            return null;
+        }
     }
 
     /// <summary> Turns your physics mod on or off in your collection and redraws your character. </summary>

@@ -116,6 +116,7 @@ internal sealed partial class PhysicsWindow
         if (ImGui.Selectable($"Collision shapes ({shapes})##shapes", selected == ShapesView))
             selected = ShapesView;
         Tip("The capsules and spheres areas can bump into, such as arms and legs.");
+        DrawFitButton(current, small: false);
     }
 
     private void DrawImportPopup(PhysicsDocument current)
