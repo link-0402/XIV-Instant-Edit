@@ -196,16 +196,10 @@ internal static class PhysicsFit
         return users;
     }
 
-    /// <summary> The shapes a moving point stays out of: its simulator's, by the point's bits, and its chain's own. </summary>
+    /// <summary> The shapes a moving point stays out of, by its bits over its simulator's and its chain's own shapes. </summary>
     private static IEnumerable<string> Shapes(PhybSimulator simulator, PhybChain chain, PhybNode node)
-    {
-        for (var bit = 0; bit < simulator.Collisions.Count && bit < 32; bit++)
-            if ((node.CollisionFlags & (1u << bit)) != 0 && simulator.Collisions[bit].Type != PhybCollisionType.Inside)
-                yield return simulator.Collisions[bit].Name.Text;
-        foreach (var reference in chain.Collisions)
-            if (reference.Type != PhybCollisionType.Inside)
-                yield return reference.Name.Text;
-    }
+        => PhysicsCollisions.Shapes(simulator, chain, node).Where(reference => reference.Type != PhybCollisionType.Inside)
+            .Select(reference => reference.Name.Text);
 
     private static bool CollidesOutside(PhybSimulator simulator, PhybChain chain)
         => chain.Nodes.Skip(1).Any(node => Shapes(simulator, chain, node).Any());
