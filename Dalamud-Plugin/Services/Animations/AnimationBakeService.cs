@@ -8,6 +8,7 @@ using FFXIVClientStructs.Havok.Common.Base.Container.Array;
 using FFXIVClientStructs.Havok.Common.Base.Math.QsTransform;
 using FFXIVClientStructs.Havok.Common.Base.Types;
 using InstantEdit.Models;
+using InstantEdit.Services.Animations.Motion;
 
 namespace InstantEdit.Services.Animations;
 
@@ -53,6 +54,12 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 status($"Baking {clip.Name}: {session.Progress:P0}");
             }
             token.ThrowIfCancellationRequested();
+            if (session.EditsMotion)
+            {
+                // Managed work over every sample: off the framework thread, so the game keeps its frame rate.
+                status($"Applying bone layers to {clip.Name}");
+                await Task.Run(() => session.ApplyMotion(token), token);
+            }
             await framework.RunOnFrameworkThread(() => { Check(token); validateRuntime(); session.Build(); session.Save(path); });
             var baked = await File.ReadAllBytesAsync(path, token);
             await framework.RunOnFrameworkThread(() => { Check(token); session.BeginValidation(baked); });
@@ -69,6 +76,46 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         {
             if (session != null && !disposed) await framework.RunOnFrameworkThread(() => { session.Dispose(); active.Remove(session); });
             if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    /// <summary>
+    /// Samples the clip's motion on its source skeleton into owned memory, on the grid a bake of it
+    /// samples, with its float tracks: the unedited motion the bone panels and the live GPose display
+    /// apply layers to. Nothing is written.
+    /// </summary>
+    public async Task<MotionClip> DecodeAsync(byte[] source, byte[] skeleton, AnimationClip clip, AnimationCapture capture,
+        string workDirectory, Action<string> status, CancellationToken token, Action validateRuntime)
+    {
+        native.EnsureAvailable();
+        Session? session = null;
+        var motionPath = Path.Combine(workDirectory, Guid.NewGuid().ToString("N") + ".motion");
+        // A timeline edit with nothing to change: the source's own length on the source's own skeleton.
+        var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "", false,
+            ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.EditTimeline);
+        try
+        {
+            session = await framework.RunOnFrameworkThread(() =>
+            {
+                Check(token);
+                validateRuntime();
+                var created = new Session(native, source, skeleton, clip, request, motionPath);
+                active.Add(created); return created;
+            });
+            var completed = false;
+            while (!completed)
+            {
+                token.ThrowIfCancellationRequested();
+                completed = await framework.RunOnTick(() => { Check(token); validateRuntime(); return session.SampleBatch(token); }, delayTicks: 1);
+                status($"Reading {clip.Name}: {session.Progress:P0}");
+            }
+            token.ThrowIfCancellationRequested();
+            return await Task.Run(session.Decode, token);
+        }
+        finally
+        {
+            if (session != null && !disposed) await framework.RunOnFrameworkThread(() => { session.Dispose(); active.Remove(session); });
+            if (File.Exists(motionPath)) File.Delete(motionPath);
         }
     }
 
@@ -96,6 +143,12 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         private readonly string[] originalPrints;
         private readonly string[] originalMotionPrints;
         private readonly string motionPath;
+        // The edit's bone layers (a timeline edit only), and the source skeleton float slot each
+        // float track drives, kept managed so a decode can be read off the framework thread.
+        private readonly ImmutableArray<MotionLayer> motion = [];
+        private readonly short[] floatSlots = [];
+        private readonly short[] sourceTracks = [];
+        private readonly sbyte blendHint;
         private readonly int frames;
         // The output's length, and the source's: they differ only when a timeline edit
         // changes the clip's length, which samples the source at the scaled time.
@@ -190,10 +243,22 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 frames = AnimationPoseRules.SampleCount(duration, sourceFrames);
                 if ((long)frames * (skeleton->Bones.Length * sizeof(hkQsTransformf) + (skeleton->FloatSlots.Length + sourceSkeleton->FloatSlots.Length) * 4) > AnimationPap.MaxFileSize)
                     throw new InvalidDataException("This animation exceeds the bake memory limit.");
+                floatSlots = new ReadOnlySpan<short>(originalBinding->FloatTrackToFloatSlotIndices.Data,
+                    originalBinding->FloatTrackToFloatSlotIndices.Length).ToArray();
+                motion = request.Operation == AnimationOperation.EditTimeline && request.Timeline is { } edit ? edit.Motion : [];
+                if (MotionEvaluator.Changes(motion))
+                {
+                    // Refuse before sampling: a layer naming a bone this skeleton lacks would fail only at the end.
+                    MotionEvaluator.Validate(motion);
+                    MotionEvaluator.CheckBones(motion, targetDescription);
+                    if ((long)frames * targetDescription.Bones.Length * MotionClip.Stride * sizeof(float) > MotionClip.MaxBytes)
+                        throw new InvalidDataException("This animation is too long to edit its motion.");
+                }
                 originalPrints = Enumerable.Range(0, doc.Container->Bindings.Length).Select(i => AnimationNative.Fingerprint(doc.Container->Bindings[i].ptr)).ToArray();
                 originalMotionPrints = Enumerable.Range(0, doc.Container->Bindings.Length).Select(i => AnimationNative.ExtractedMotionFingerprint(doc.Container->Bindings[i].ptr, motionPath)).ToArray();
-                var sourceTracks = new ReadOnlySpan<short>(originalBinding->TransformTrackToBoneIndices.Data,
+                sourceTracks = new ReadOnlySpan<short>(originalBinding->TransformTrackToBoneIndices.Data,
                     originalBinding->TransformTrackToBoneIndices.Length).ToArray();
+                blendHint = originalBinding->BlendHint.Storage;
                 foreach (var bone in retarget?.MapTracks(sourceTracks) ?? sourceTracks) affected.Add(bone);
                 var applicable = request.Capture.Pose.Bones.Where(b => b.Id.Partial == clip.Partial && request.SelectedBones.Contains(b.Id)).ToArray();
                 if (request.Operation == AnimationOperation.BakeOffsets && applicable.Length == 0) throw new InvalidDataException("No selected offsets belong to this animation's partial skeleton.");
@@ -257,6 +322,73 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             } while (frame < frames && watch.ElapsedMilliseconds < 3);
             return frame == frames;
         }
+        /// <summary>Whether the edit's bone layers change the motion, so <see cref="ApplyMotion"/> must run before the build.</summary>
+        public bool EditsMotion => MotionEvaluator.Changes(motion);
+
+        /// <summary>
+        /// Applies the edit's bone layers to every sampled pose, between sampling and the build: the
+        /// layers see the motion at the output's times, and every bone they change gets a track. Touches
+        /// managed state only, so it may run off the framework thread.
+        /// </summary>
+        public void ApplyMotion(CancellationToken token)
+        {
+            if (!EditsMotion) return;
+            if (expected.Count != frames) throw new InvalidOperationException("The animation must be sampled before its bone layers apply.");
+            var clip = new MotionClip(targetDescription, duration, frames);
+            for (var f = 0; f < frames; f++)
+                for (var b = 0; b < expected[f].Length; b++)
+                    clip.Set(f, b, FromHavok(expected[f][b]));
+            MotionEvaluator.Apply(clip, motion, token);
+            for (var f = 0; f < frames; f++)
+            {
+                token.ThrowIfCancellationRequested();
+                for (var b = 0; b < expected[f].Length; b++)
+                {
+                    var value = ToHavok(clip.Get(f, b));
+                    AnimationNative.CheckTransform(value);
+                    if (AnimationNative.Near(value, expected[f][b], 0.000001f)) continue;
+                    affected.Add(b);
+                    expected[f][b] = value;
+                }
+            }
+            // As sampling does: each rotation on its previous sample's hemisphere, so compression takes the short way.
+            for (var f = 1; f < frames; f++)
+                for (var b = 0; b < expected[f].Length; b++)
+                    if (Quaternion.Dot(AnimationNative.Rotation(expected[f - 1][b]), AnimationNative.Rotation(expected[f][b])) < 0)
+                        fixed (hkQsTransformf* p = &expected[f][b]) AnimationNative.SetRotation(p, -AnimationNative.Rotation(*p));
+        }
+
+        /// <summary>The sampled motion as owned data, with each sample's float track values. Touches managed state only.</summary>
+        public MotionClip Decode()
+        {
+            if (expected.Count != frames) throw new InvalidOperationException("The animation must be sampled before it can be read.");
+            var floats = new float[(long)frames * floatSlots.Length];
+            for (var f = 0; f < frames; f++)
+                for (var t = 0; t < floatSlots.Length; t++)
+                    floats[f * floatSlots.Length + t] = rawFloats[f][floatSlots[t]];
+            // A decode never retargets, so the source's tracks are the decoded skeleton's bones.
+            var clip = new MotionClip(targetDescription, duration, frames, floats, floatSlots.Length)
+            {
+                SourceTracks = retarget == null ? [.. sourceTracks] : [.. retarget.MapTracks(sourceTracks)],
+                BlendHint = blendHint,
+            };
+            for (var f = 0; f < frames; f++)
+                for (var b = 0; b < expected[f].Length; b++)
+                    clip.Set(f, b, FromHavok(expected[f][b]));
+            return clip;
+        }
+
+        private static MotionTransform FromHavok(hkQsTransformf t) => new(AnimationNative.Translation(t), AnimationNative.Rotation(t), AnimationNative.Scale(t));
+
+        private static hkQsTransformf ToHavok(MotionTransform t)
+        {
+            hkQsTransformf value = default;
+            value.Translation.X = t.Position.X; value.Translation.Y = t.Position.Y; value.Translation.Z = t.Position.Z;
+            value.Rotation.X = t.Rotation.X; value.Rotation.Y = t.Rotation.Y; value.Rotation.Z = t.Rotation.Z; value.Rotation.W = t.Rotation.W;
+            value.Scale.X = t.Scale.X; value.Scale.Y = t.Scale.Y; value.Scale.Z = t.Scale.Z;
+            return value;
+        }
+
         public void Build()
         {
             // Preserve original track ordering; append only bones actually changed by the pose/IK.

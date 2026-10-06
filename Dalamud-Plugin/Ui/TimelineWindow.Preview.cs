@@ -53,6 +53,9 @@ public sealed partial class TimelineWindow
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(blocked ?? "Build the edited clip and play it on your GPose character. Nothing is saved.");
 
+        ImGui.SameLine(0, Theme.Scaled(2));
+        DrawLiveToggle(current, loaded, "##timeline-live");
+
         ImGui.SameLine(0, Theme.Scaled(8));
         if (Widgets.IconButton("##timeline-play", active && !paused ? FontAwesomeIcon.Pause : FontAwesomeIcon.Play,
                 !shown ? "Press Preview first." : active ? paused ? "Resume" : "Pause" : "Play the preview", shown && available))
@@ -92,7 +95,15 @@ public sealed partial class TimelineWindow
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Muted, service.Status);
         }
-        else if (FirstText(previewError, preview.Error, playback.Error) is { } error)
+        else if (liveWanted && (decodeTask != null || motionDisplay?.Building == true))
+        {
+            ImGui.SameLine(0, Theme.Scaled(12));
+            Widgets.Spinner();
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Muted, decodeTask != null ? decodeStatus : "Applying the bone layers");
+        }
+        else if (FirstText(liveError, liveWanted ? motionDisplay?.Error : null, previewError, preview.Error, playback.Error) is { } error)
         {
             ImGui.SameLine(0, Theme.Scaled(12));
             ImGui.AlignTextToFramePadding();
@@ -105,6 +116,11 @@ public sealed partial class TimelineWindow
             ImGui.TextColored(Theme.Muted, status);
         }
 
+        if (liveWanted)
+        {
+            ImGui.TextColored(Theme.Hint, "Live shows bone layers only. Preview shows sounds, effects and a new length too.");
+            return;
+        }
         if (!shown && !preview.Active)
             return;
         if (preview.CollectionShared)
@@ -112,6 +128,26 @@ public sealed partial class TimelineWindow
         ImGui.TextColored(Theme.Hint, previewDocument != null && !ReferenceEquals(previewDocument, current.Document)
             ? "Changed since the preview. Press Preview again."
             : "Sounds and effects play only while the preview plays.");
+    }
+
+    /// <summary> The Live toggle, in the preview bar and in the Bones window. </summary>
+    private void DrawLiveToggle(TimelineEditor current, AnimationTimelineSource loaded, string id)
+    {
+        var liveBlocked = liveWanted ? null : LiveBlocked(current, Fresh(loaded), PlaybackAvailable(out var reason), reason);
+        using (ImRaii.PushColor(ImGuiCol.Button, Theme.Selection, liveWanted)
+                   .Push(ImGuiCol.ButtonHovered, Theme.WithAlpha(Theme.Selection, .85f), liveWanted))
+        {
+            if (Widgets.IconButton(id, FontAwesomeIcon.Bolt, liveWanted
+                    ? "Live is on: your bone layers show on the GPose character as you edit. Click to turn it off."
+                    : liveBlocked ?? "Show your bone layers on the GPose character as you edit them. Nothing is saved.",
+                    liveWanted || liveBlocked == null))
+            {
+                if (liveWanted)
+                    StopPreview();
+                else
+                    StartLive(loaded);
+            }
+        }
     }
 
     private static string? FirstText(params string?[] texts)
@@ -152,6 +188,8 @@ public sealed partial class TimelineWindow
     /// </summary>
     private void StartPreview(TimelineEditor current, AnimationTimelineSource loaded)
     {
+        // The preview plays the built file through a temporary mod; Live's swapped motion must go first.
+        StopLive();
         ushort? actor;
         try { actor = playback.ActorIndex(); }
         catch (InvalidOperationException e)
@@ -236,6 +274,7 @@ public sealed partial class TimelineWindow
     /// </summary>
     private void StopPreview()
     {
+        StopLive();
         previewGeneration++;
         try
         {
@@ -272,8 +311,9 @@ public sealed partial class TimelineWindow
             if (stop.IsFaulted)
                 previewError = "The preview could not be removed. " + ErrorText(stop.Exception);
         }
-        // The service ends the preview on its own when GPose ends or Penumbra restarts.
-        if (previewFingerprint != null && !previewJob && !preview.Active && !preview.Busy)
+        // The service ends the preview on its own when GPose ends or Penumbra restarts. Live plays the
+        // clip's own file and needs no temporary mod.
+        if (previewFingerprint != null && !previewJob && !preview.Active && !preview.Busy && !liveWanted)
         {
             previewFingerprint = null;
             previewDocument = null;

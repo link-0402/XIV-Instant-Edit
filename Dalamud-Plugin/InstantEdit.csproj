@@ -84,6 +84,8 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Services\Animations\TmbLayouts.json" />
+    <!-- The Bones window's body artwork, from Brio (GPL-3.0); see THIRD-PARTY-NOTICES.md. -->
+    <EmbeddedResource Include="Resources\Pose\*.png" LogicalName="InstantEdit.Pose.%(Filename)%(Extension)" />
     <!-- The Substance Painter plugin, installed from Settings so it always matches this build. -->
     <EmbeddedResource Include="..\Tools\SubstancePainter\xiv_instant_edit\*.py" LogicalName="InstantEdit.PainterPlugin.%(Filename)%(Extension)" />
     <!-- Run by setup in a windowless Blender to add the GitHub extension repository and install the add-on. -->

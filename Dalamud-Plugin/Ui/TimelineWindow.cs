@@ -29,10 +29,11 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private readonly TimelineCatalog catalog;
     private readonly AnimationPreviewService preview;
     private readonly AnimationPlayback playback;
+    // Shows bone layers live on the GPose actor; null when animation editing is unavailable.
+    private readonly MotionLiveDisplay? motionDisplay;
     private readonly IDataManager data;
     private readonly IFramework framework;
     private readonly IPluginLog log;
-    private readonly IUiBuilder uiBuilder;
     private readonly FileDialogManager fileDialog = new();
 
     private AnimationTimelineSource? source;
@@ -50,8 +51,6 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private PendingAction pending;
     private (AnimationCapture Capture, bool Startup)? pendingOpen;
     private bool closeConfirmed;
-    private bool gposeHideSet;
-    private bool previousGposeHide;
     private float footerHeight;
     private float propertiesWidth;
     private bool disposed;
@@ -61,8 +60,8 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private IReadOnlyDictionary<string, int>? framesMerged;
 
     internal TimelineWindow(AnimationEditService? animations, string? animationError, TimelineCatalog catalog,
-        AnimationPreviewService preview, AnimationPlayback playback, IDataManager data, IFramework framework, IPluginLog log,
-        IUiBuilder uiBuilder)
+        AnimationPreviewService preview, AnimationPlayback playback, MotionLiveDisplay? motionDisplay, IDataManager data,
+        IFramework framework, ITextureProvider textures, IPluginLog log)
         : base("Timeline###XIVInstantEditTimeline")
     {
         this.animations = animations;
@@ -70,10 +69,12 @@ public sealed partial class TimelineWindow : Window, IDisposable
         this.catalog = catalog;
         this.preview = preview;
         this.playback = playback;
+        this.motionDisplay = motionDisplay;
         this.data = data;
         this.framework = framework;
+        this.textures = textures;
         this.log = log;
-        this.uiBuilder = uiBuilder;
+        bonesWindow = new BonesWindow(this);
 
         Size = new Vector2(1000, 560);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -118,8 +119,6 @@ public sealed partial class TimelineWindow : Window, IDisposable
         Load(capture, startup, false);
     }
 
-    public override void OnOpen() => ApplyGposeHide();
-
     public override void OnClose()
     {
         // Closing with unsaved changes asks first; the window stays open until Discard.
@@ -133,14 +132,18 @@ public sealed partial class TimelineWindow : Window, IDisposable
         closeConfirmed = false;
         pending = PendingAction.None;
         pendingOpen = null;
+        // The Bones window poses this window's clip; it goes with it.
+        bonesWindow.IsOpen = false;
         StopPreview();
+        ForgetDecode();
         loadCancel?.Cancel();
         loadTask = null;
         loading = null;
         loadError = null;
         source = null;
         catalogKey = null;
-        RestoreGposeHide();
+        motionBase = null;
+        motionCarry = null;
     }
 
     public void Dispose()
@@ -151,25 +154,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         loadCancel?.Cancel();
         loadCancel?.Dispose();
         loadCancel = null;
-        RestoreGposeHide();
-    }
-
-    // Plugin windows hide in GPose by default; the preview needs this one there.
-    private void ApplyGposeHide()
-    {
-        if (gposeHideSet)
-            return;
-        previousGposeHide = uiBuilder.DisableGposeUiHide;
-        uiBuilder.DisableGposeUiHide = true;
-        gposeHideSet = true;
-    }
-
-    private void RestoreGposeHide()
-    {
-        if (!gposeHideSet)
-            return;
-        uiBuilder.DisableGposeUiHide = previousGposeHide;
-        gposeHideSet = false;
+        ForgetDecode();
     }
 
     private bool Showing(AnimationCapture capture, bool startup)
@@ -210,6 +195,9 @@ public sealed partial class TimelineWindow : Window, IDisposable
             source = null;
             catalogKey = null;
             title = AnimationPresentation.AnimationName(capture, startup);
+            // Another clip, or this one opened afresh: its own file is the motion to edit.
+            motionBase = null;
+            motionCarry = null;
         }
         // The preview's temporary mod must be gone first, or the read would get the previewed file.
         var ending = previewStop ?? Task.CompletedTask;
@@ -240,6 +228,9 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private void Apply(AnimationTimelineSource loaded, bool keepView)
     {
         var sameClip = source != null && ClipKey(source) == ClipKey(loaded);
+        // A clip read again after this window saved bone layers into it keeps editing them on the motion
+        // from before: the carried layers come back, and the base stays the motion they apply to.
+        loaded = WithMotionBase(loaded);
         source = loaded;
         canReplace = AnimationResources.CanReplace(loaded.Resource);
         catalogKey = TimelineWindowViews.CatalogKey(loaded.Capture.LoadedResourcePaths, loaded.Clip.GamePath, loaded.Resource.ModRoot);
@@ -259,6 +250,9 @@ public sealed partial class TimelineWindow : Window, IDisposable
         }
         if (loaded.Document is not { } doc)
             return;
+        var carried = TakeCarriedLayers(loaded);
+        if (carried is { Unsaved: false } saved)
+            doc = saved.Document;
         if (editor == null)
         {
             editor = new TimelineEditor(doc);
@@ -276,6 +270,9 @@ public sealed partial class TimelineWindow : Window, IDisposable
         {
             editor.Reset(doc);
         }
+        // After an undo the layers stay as unsaved edits: one undo step away from the file.
+        if (carried is { Unsaved: true } unsaved)
+            editor.Commit(unsaved.Document);
     }
 
     /// <summary>
@@ -355,6 +352,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         editor.MotionFrames = MotionFrames(source);
 
         SyncPlayback(editor, source);
+        UpdateLive(editor, source);
         DrawToolbar(editor);
         DrawPreviewBar(editor, source);
         DrawMessages(editor);

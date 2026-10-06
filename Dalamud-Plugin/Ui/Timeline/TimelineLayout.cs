@@ -29,19 +29,42 @@ internal sealed class TimelineLayout
 
     public TimelineDocument Document { get; }
     public ImmutableArray<TimelineLaneRows> Lanes { get; }
+
+    /// <summary>Every row: the event lanes' and, below them, the bone layers'.</summary>
     public int RowCount { get; }
 
+    /// <summary>The first bone layer row, right below the event lanes.</summary>
+    public int MotionFirstRow { get; }
+
+    /// <summary>
+    /// The bone layer rows: one per layer, in the order they apply, or one empty row to add the first
+    /// to. None on an expression's own timeline, whose face takes no bone layers.
+    /// </summary>
+    public int MotionRows { get; }
+
     private TimelineLayout(TimelineDocument document, ImmutableArray<TimelineLaneRows> lanes, int rowCount,
-        int[] rows, int[] ends, TimelineEvent[] shown, Dictionary<string, int> indexByKey)
+        int[] rows, int[] ends, TimelineEvent[] shown, Dictionary<string, int> indexByKey, int motionFirstRow, int motionRows)
     {
         Document = document;
         Lanes = lanes;
         RowCount = rowCount;
+        MotionFirstRow = motionFirstRow;
+        MotionRows = motionRows;
         this.rows = rows;
         this.ends = ends;
         this.shown = shown;
         this.indexByKey = indexByKey;
     }
+
+    /// <summary>Whether <paramref name="row"/> is a bone layer row.</summary>
+    public bool IsMotionRow(int row) => row >= MotionFirstRow && row < MotionFirstRow + MotionRows;
+
+    /// <summary>The index in the document's layers of the layer drawn in <paramref name="row"/>, or -1 (an empty or event row).</summary>
+    public int LayerIndexAt(int row) =>
+        IsMotionRow(row) && row - MotionFirstRow < Document.Motion.Length ? row - MotionFirstRow : -1;
+
+    /// <summary>The row the layer at <paramref name="index"/> is drawn in.</summary>
+    public int LayerRow(int index) => MotionFirstRow + index;
 
     /// <summary>
     /// Lays out <paramref name="doc"/>. <paramref name="visibleLength"/> gives the frames an event
@@ -98,7 +121,9 @@ internal sealed class TimelineLayout
             lanes.Add(new TimelineLaneRows(lane, next, count));
             next += count;
         }
-        return new TimelineLayout(doc, lanes.ToImmutable(), next, rows, ends, shown, indexByKey);
+        var motionFirst = next;
+        var motionRows = doc.Expression ? 0 : Math.Max(1, doc.Motion.Length);
+        return new TimelineLayout(doc, lanes.ToImmutable(), next + motionRows, rows, ends, shown, indexByKey, motionFirst, motionRows);
     }
 
     /// <summary>The index of the event with <paramref name="key"/> in the document's events, or -1.</summary>

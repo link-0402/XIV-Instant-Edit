@@ -19,6 +19,8 @@ internal sealed class AnimationObserver : IDisposable
 
     private readonly IFramework framework;
     private readonly IObjectTable objects;
+    private readonly IClientState clientState;
+    private readonly ITargetManager targets;
     private readonly PenumbraService penumbra;
     private readonly AnimationNative native;
     private readonly AnimationResources resources;
@@ -53,10 +55,10 @@ internal sealed class AnimationObserver : IDisposable
     public string Status { get; private set; } = "Waiting for the local player";
     public event Action? CharacterChanged;
 
-    public AnimationObserver(IFramework framework, IObjectTable objects, PenumbraService penumbra,
+    public AnimationObserver(IFramework framework, IObjectTable objects, IClientState clientState, ITargetManager targets, PenumbraService penumbra,
         AnimationNative native, AnimationResources resources, LivePoseAdapter poses, AnimationCatalog catalog, AnimationSkeletonIndex skeletons, IPluginLog log)
     {
-        this.framework = framework; this.objects = objects; this.penumbra = penumbra;
+        this.framework = framework; this.objects = objects; this.clientState = clientState; this.targets = targets; this.penumbra = penumbra;
         this.native = native; this.resources = resources; this.poses = poses; this.catalog = catalog;
         this.skeletons = skeletons;
         this.log = log;
@@ -92,13 +94,25 @@ internal sealed class AnimationObserver : IDisposable
         MarkNotPlaying();
         Status = "Open Instant Edit to observe player animations.";
     }
+    /// <summary>
+    /// The character to follow: in GPose the GPose actor (the GPose target, else the posed copy of
+    /// the player), which is what plays animations there; otherwise the local player.
+    /// </summary>
+    private Dalamud.Game.ClientState.Objects.Types.IGameObject? Subject() =>
+        AnimationRuntime.Subject(objects, clientState.IsGPosing, targets.GPoseTarget);
+
+    // Whether the character followed is a GPose actor, for the status line.
+    private volatile bool followingGPose;
+    private string Listening => followingGPose ? "Listening in GPose" : "Listening";
+
     private void Update(IFramework _)
     {
         var listeningToken = listening;
         if (!listeningEnabled || listeningToken is null || listeningToken.IsCancellationRequested) return;
         RuntimeChangeStamp? stamp;
-        try { stamp = AnimationRuntime.CaptureChangeStamp(objects); }
+        try { stamp = AnimationRuntime.CaptureChangeStamp(Subject()); }
         catch (Exception e) { log.Debug(e, "Could not capture the animation change stamp."); return; }
+        followingGPose = stamp?.ObjectIndex >= 200;
         var current = stamp?.ActorId ?? 0;
         if (current != actor)
         {
@@ -133,11 +147,17 @@ internal sealed class AnimationObserver : IDisposable
             var pair = await framework.RunOnFrameworkThread(() =>
             {
                 token.ThrowIfCancellationRequested();
-                var runtime = AnimationRuntime.Capture(objects, runtimeCache);
+                var subject = Subject();
+                var runtime = AnimationRuntime.Capture(subject, runtimeCache);
+                // Another character than the one this observation began with: the next update starts over.
+                if (runtime != null && runtime.ActorId != actor) runtime = null;
                 string? error = null;
                 PoseSnapshot pose;
                 try
                 {
+                    // LivePose keeps its offsets on your own character; GPose actors have none of them.
+                    if (subject == null || subject.ObjectIndex != objects.LocalPlayer?.ObjectIndex)
+                        throw new InvalidOperationException("LivePose adjustments are read from your own character outside GPose.");
                     pose = poses.Capture();
                     if (runtime != null && !pose.Global && (runtime.Timelines[0] != pose.MainTimeline || runtime.Timelines[1] != pose.UpperTimeline || runtime.Timelines[2] != pose.FaceTimeline))
                         throw new InvalidOperationException("Waiting for LivePose to capture the current timeline transition.");
@@ -347,7 +367,8 @@ internal sealed class AnimationObserver : IDisposable
                     timeline.Name, clip, startup, family.ToImmutableArray(), sources.Distinct().ToImmutableArray(), pair.Pose,
                     pair.Pose.CapturedUtc, true, LoadedResourcePaths: gamePaths.ToImmutableArray(),
                     PoseUnavailableReason: pair.PoseError, ResourceAliases: resourceAliases,
-                    ExpressionTimeline: timeline.IsExpression ? timelineReferences.GetValueOrDefault(timeline.Id)?.Root : null));
+                    ExpressionTimeline: timeline.IsExpression ? timelineReferences.GetValueOrDefault(timeline.Id)?.Root : null,
+                    ActorIndex: runtime.ObjectIndex));
             }
             // Publish identified clips before any native source-skeleton search.
             await PublishAsync(captures, expectedGeneration, token);
@@ -356,7 +377,7 @@ internal sealed class AnimationObserver : IDisposable
             await framework.RunOnFrameworkThread(() =>
             {
                 if (expectedGeneration != generation) return;
-                Status = captures.Count > 0 ? $"Listening · {captures.Count} playing · {history.Length} recent" :
+                Status = captures.Count > 0 ? $"{Listening} · {captures.Count} playing · {history.Length} recent" :
                     $"No editable animation matched. Active: {string.Join(", ", active.Select(t => $"{t.Id} ({t.Key})"))}. " +
                     $"Playing bindings: {runtime.Bindings.Length}; PAPs checked: {candidates.Count}; " +
                     $"timeline matches: {matchedBindings}; ambiguous: {ambiguousBindings}." +
@@ -423,7 +444,7 @@ internal sealed class AnimationObserver : IDisposable
         };
         var current = captures.DistinctBy(c => c.Id).Select(c => c with { Clip = Cached(c.Clip), Startup = c.Startup == null ? null : Cached(c.Startup) }).ToArray();
         history = MergeHistory(current, history);
-        Status = $"Listening · {current.Length} playing · {history.Length} recent";
+        Status = $"{Listening} · {current.Length} playing · {history.Length} recent";
     });
     internal static ImmutableArray<AnimationCapture> MergeHistory(IEnumerable<AnimationCapture> captures, ImmutableArray<AnimationCapture> previous)
     {

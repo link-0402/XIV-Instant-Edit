@@ -1,4 +1,5 @@
 ﻿using System.Numerics;
+using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 
 namespace InstantEdit.Ui.Timeline;
@@ -17,16 +18,32 @@ internal enum TimelinePart : byte
     RightEdge,
     /// <summary>The end of the timeline, on the ruler and the motion lane.</summary>
     LengthHandle,
+    /// <summary>Empty space in a bone layer row, or the empty row below the event lanes.</summary>
+    MotionLane,
+    LayerBody,
+    LayerLeft,
+    LayerRight,
+    /// <summary>The handle where a layer's fade in ends, on its top edge.</summary>
+    LayerFadeIn,
+    /// <summary>The handle where a layer's fade out begins, on its top edge.</summary>
+    LayerFadeOut,
+    /// <summary>A layer's key, a diamond on its bar.</summary>
+    LayerKey,
 }
 
 /// <param name="Frame">The fractional frame under the pointer; the editor rounds it.</param>
 /// <param name="Lane">The lane of the row under the pointer, null on the ruler or outside the rows.</param>
 /// <param name="Key">The event under the pointer for Body, LeftEdge and RightEdge.</param>
 /// <param name="Row">The row under the pointer, -1 outside the rows.</param>
-internal readonly record struct TimelineHit(TimelinePart Part, float Frame, TimelineLane? Lane = null, string? Key = null, int Row = -1)
+/// <param name="Layer">The bone layer of the row under the pointer, also on the legend.</param>
+/// <param name="KeyFrame">The frame of the layer's key under the pointer for LayerKey, else -1.</param>
+internal readonly record struct TimelineHit(TimelinePart Part, float Frame, TimelineLane? Lane = null, string? Key = null, int Row = -1,
+    string? Layer = null, int KeyFrame = -1)
 {
     public static TimelineHit None(float frame = 0) => new(TimelinePart.None, frame);
     public bool OnEvent => Key != null && Part is TimelinePart.Body or TimelinePart.LeftEdge or TimelinePart.RightEdge;
+    public bool OnLayer => Layer != null && Part is TimelinePart.LayerBody or TimelinePart.LayerLeft or TimelinePart.LayerRight or
+        TimelinePart.LayerFadeIn or TimelinePart.LayerFadeOut or TimelinePart.LayerKey;
 }
 
 /// <summary>
@@ -80,8 +97,11 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
             return TimelineHit.None(float.IsFinite(frame) ? frame : 0);
         var row = layout.RowAt(y, Row, Ruler, ScrollY);
         TimelineLane? lane = row >= 0 ? layout.LaneAt(row)?.Lane : null;
+        var layerIndex = row >= 0 ? layout.LayerIndexAt(row) : -1;
         if (x < 0)
-            return row >= 0 ? new TimelineHit(TimelinePart.Legend, frame, lane, null, row) : TimelineHit.None(frame);
+            return row >= 0
+                ? new TimelineHit(TimelinePart.Legend, frame, lane, null, row, layerIndex >= 0 ? doc.Motion[layerIndex].Key : null)
+                : TimelineHit.None(frame);
 
         if (MathF.Abs(x - view.X(doc.Length)) <= Edge && (y < Ruler || lane == TimelineLane.Motion))
             return new TimelineHit(TimelinePart.LengthHandle, frame, lane, null, row);
@@ -89,6 +109,10 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
             return new TimelineHit(TimelinePart.Ruler, frame);
         if (row < 0)
             return TimelineHit.None(frame);
+        if (layout.IsMotionRow(row))
+            return layerIndex < 0
+                ? new TimelineHit(TimelinePart.MotionLane, frame, null, null, row)
+                : HitLayer(doc.Motion[layerIndex], view, x, y - RowTop(row), frame, row);
 
         var events = doc.Events.IsDefault ? [] : doc.Events;
         TimelineHit? nearest = null;
@@ -113,6 +137,50 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
             }
         }
         return nearest ?? new TimelineHit(TimelinePart.Lane, frame, lane, null, row);
+    }
+
+    /// <summary>
+    /// What of a bone layer is at <paramref name="x"/>, <paramref name="y"/> (y from the row's top):
+    /// a key first, then a fade handle in the top third, then an edge, then the bar. Outside the bar
+    /// and its grab zones, the empty row.
+    /// </summary>
+    private TimelineHit HitLayer(MotionLayer layer, TimelineView view, float x, float y, float frame, int row)
+    {
+        var left = view.X(layer.Start);
+        var right = Math.Max(view.X(layer.End), left + 1);
+        var middle = Row / 2;
+        if (MathF.Abs(y - middle) <= Marker / 2 + 1)
+        {
+            TimelineHit? nearest = null;
+            var best = float.MaxValue;
+            foreach (var key in layer.Keys)
+            {
+                var distance = MathF.Abs(x - view.X(key.Frame));
+                if (distance <= Marker / 2 + 1 && distance < best)
+                {
+                    best = distance;
+                    nearest = new TimelineHit(TimelinePart.LayerKey, frame, null, null, row, layer.Key, key.Frame);
+                }
+            }
+            if (nearest is { } key0)
+                return key0;
+        }
+        if (y < Row / 3 && right - left > Edge * 2)
+        {
+            if (MathF.Abs(x - view.X(layer.Start + layer.FadeIn)) <= Edge)
+                return new TimelineHit(TimelinePart.LayerFadeIn, frame, null, null, row, layer.Key);
+            if (MathF.Abs(x - view.X(layer.End - layer.FadeOut)) <= Edge)
+                return new TimelineHit(TimelinePart.LayerFadeOut, frame, null, null, row, layer.Key);
+        }
+        // Inside the bar each edge takes at most a third, so a narrow layer can still be moved.
+        var inner = Math.Min(Edge, (right - left) / 3);
+        if (x >= left - Edge && x <= left + inner)
+            return new TimelineHit(TimelinePart.LayerLeft, frame, null, null, row, layer.Key);
+        if (x >= right - inner && x <= right + Edge)
+            return new TimelineHit(TimelinePart.LayerRight, frame, null, null, row, layer.Key);
+        return x >= left && x <= right
+            ? new TimelineHit(TimelinePart.LayerBody, frame, null, null, row, layer.Key)
+            : new TimelineHit(TimelinePart.MotionLane, frame, null, null, row, layer.Key);
     }
 
     /// <summary>Which part of one event's grab zones <paramref name="x"/> is in, or None.</summary>

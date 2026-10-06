@@ -41,8 +41,9 @@ internal sealed partial class AnimationEditService : IDisposable
     public void StartObservation() => Observer.Start();
     public void StopObservation() => Observer.Stop();
 
-    public AnimationEditService(IDalamudPluginInterface pi, IFramework framework, IObjectTable objects,
-        IDataManager data, ISigScanner scanner, PenumbraService penumbra, ModelBackupStore backups, Configuration configuration, IPluginLog log)
+    public AnimationEditService(IDalamudPluginInterface pi, IFramework framework, IObjectTable objects, IClientState clientState,
+        ITargetManager targets, IDataManager data, ISigScanner scanner, PenumbraService penumbra, ModelBackupStore backups,
+        Configuration configuration, IPluginLog log)
     {
         this.framework = framework; this.objects = objects; this.penumbra = penumbra; this.log = log;
         native = new AnimationNative(scanner);
@@ -61,7 +62,7 @@ internal sealed partial class AnimationEditService : IDisposable
         commits = new AnimationCommitService(penumbra, resources, new ModelBackupStore(recoveryRoot), journals, backups);
         baker = new AnimationBakeService(native, framework);
         skeletons = new AnimationSkeletonIndex(penumbra, resources, framework, log, () => TextureFiles.EnsureCacheRoot(configuration.TextureCacheDirectory));
-        Observer = new AnimationObserver(framework, objects, penumbra, native, resources, poses, catalog, skeletons, log);
+        Observer = new AnimationObserver(framework, objects, clientState, targets, penumbra, native, resources, poses, catalog, skeletons, log);
         Files = new AnimationFiles(framework, objects, penumbra, resources, skeletons);
         Observer.CharacterChanged += Cancel;
     }
@@ -412,12 +413,18 @@ internal sealed partial class AnimationEditService : IDisposable
         if (!restored) throw new IOException("Live offsets changed after this edit. They were retained; automatic restoration was skipped.");
         journal.OffsetsCleared = false; journal.PoseClearOutcome = "Restored"; journal.Message = "Captured live offsets restored."; journals.Save(journal);
     }
+    /// <summary>
+    /// The character the capture came from (your own, or a GPose actor) must still be there with the
+    /// same collection, and with <paramref name="skeleton"/> the same object and partial skeleton.
+    /// </summary>
     private async Task CheckActorAsync(AnimationCapture capture, bool skeleton = true)
     {
         if (disposed) throw new OperationCanceledException();
-        var player = await framework.RunOnFrameworkThread(() => AnimationRuntime.Capture(objects));
+        var player = await framework.RunOnFrameworkThread(() => AnimationRuntime.Capture(objects[capture.ActorIndex], null));
         if (player == null || player.ActorId != capture.ActorId || skeleton && player.Address != capture.ActorAddress)
-            throw new InvalidOperationException("The captured player is unavailable or changed. Refresh the animation capture.");
+            throw new InvalidOperationException(capture.ActorIndex >= 200
+                ? "The GPose character this animation was captured from is gone or changed. Refresh the animation capture."
+                : "The captured player is unavailable or changed. Refresh the animation capture.");
         var collection = await penumbra.GetCollectionTargetAsync(player.ObjectIndex);
         if (collection?.Id != capture.CollectionId) throw new InvalidOperationException("The player's collection changed. Refresh the animation capture.");
         if (skeleton && !player.Bindings.Any(b => b.Partial == capture.Clip.Partial && b.SkeletonFingerprint == capture.Clip.SkeletonFingerprint))
@@ -426,7 +433,7 @@ internal sealed partial class AnimationEditService : IDisposable
     private void CheckIdentityOnFramework(AnimationCapture capture, bool address)
     {
         if (disposed) throw new OperationCanceledException();
-        var identity = AnimationRuntime.Identity(objects);
+        var identity = AnimationRuntime.Identity(objects[capture.ActorIndex]);
         if (identity == null || identity.Value.ActorId != capture.ActorId || address && identity.Value.Address != capture.ActorAddress)
             throw new InvalidOperationException("The captured player changed. Live offsets were retained.");
         penumbra.CheckAnimationCollectionOnFramework(identity.Value.Index, capture.CollectionId);

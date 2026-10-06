@@ -130,6 +130,17 @@ internal sealed class AnimationRetarget
         return new(pose.Position - reference.Position,
             Quaternion.Normalize(hint == 2 ? inverse * pose.Rotation : pose.Rotation * inverse), pose.Scale / reference.Scale);
     }
+    /// <summary><see cref="Encode(BoneTransform, BoneTransform, sbyte)"/> on values, for loops over every sample of a clip.</summary>
+    internal static Motion.MotionTransform Encode(Motion.MotionTransform pose, Motion.MotionTransform reference, sbyte hint)
+    {
+        if (hint == 0) return pose;
+        if (hint is not (1 or 2)) throw new InvalidDataException("Unsupported animation blend hint.");
+        if (Math.Abs(reference.Scale.X * reference.Scale.Y * reference.Scale.Z) < 1e-12f)
+            throw new InvalidDataException("Cannot encode additive animation against a singular reference pose.");
+        var inverse = Quaternion.Inverse(reference.Rotation);
+        return new(pose.Position - reference.Position,
+            Quaternion.Normalize(hint == 2 ? inverse * pose.Rotation : pose.Rotation * inverse), pose.Scale / reference.Scale);
+    }
     internal static float MapFloat(float value, float sourceReference, float targetReference, sbyte hint) =>
         hint == 0 ? value : value - sourceReference + targetReference;
     private static BoneTransform Collapse(SkeletonDescription skeleton, IReadOnlyList<BoneTransform> values, int bone, int ancestor)

@@ -4,6 +4,8 @@ using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.Animations.Motion;
+using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui.Timeline;
 
 namespace InstantEdit.Ui;
@@ -25,6 +27,11 @@ public sealed partial class TimelineWindow
     private string? jobClip;
     private string? saveError;
     private string? saveMessage;
+    // The clip's motion before this window first saved bone layers into it, kept while the clip stays
+    // open: later saves bake the layers onto it again instead of onto the saved result.
+    private (string Clip, byte[] Bytes, string Fingerprint, string Hash)? motionBase;
+    // Layers to put back once the clip is read again: after a save as saved, after an undo as unsaved edits.
+    private (string Clip, ImmutableArray<MotionLayer> Layers, int NextKey, bool Unsaved)? motionCarry;
 
     private void DrawSaveFooter(TimelineEditor current, AnimationTimelineSource loaded)
     {
@@ -44,13 +51,18 @@ public sealed partial class TimelineWindow
         var doc = current.Document;
         RefreshDocumentTexts(doc);
         var problem = TimelineWindowViews.SaveProblem(loaded.Document != null, loaded.ReadOnlyReason,
-            destination == AnimationDestination.InPlace, canReplace, doc.LengthChanged, loaded.Clip.Resolution);
+            destination == AnimationDestination.InPlace, canReplace, doc.LengthChanged, Fresh(loaded).Clip.Resolution, doc.MotionChanged);
         if (problem != null)
             Widgets.Banner("##timeline-save-problem", FeedbackSeverity.Warning, problem);
         else if (saveError != null)
             Widgets.Banner("##timeline-save-error", FeedbackSeverity.Error, saveError);
         else if (pastEndWarning != null)
             ImGui.TextColored(Theme.Warning, "⚠ " + pastEndWarning);
+        else if (layerBonesWarning != null)
+        {
+            using var wrap = ImRaii.TextWrapPos(0f);
+            ImGui.TextColored(Theme.Warning, "⚠ " + layerBonesWarning);
+        }
 
         var missing = SaveMissing(current, problem);
         using (ImRaii.Disabled(missing != null))
@@ -133,6 +145,7 @@ public sealed partial class TimelineWindow
         saveError = null;
         saveMessage = null;
         jobClip = ClipKey(loaded);
+        KeepMotionForSave(target, document);
         StopPreview();
         var ending = previewStop ?? Task.CompletedTask;
         previewStop = null;
@@ -157,17 +170,24 @@ public sealed partial class TimelineWindow
         {
             saveTask = null;
             if (task.IsFaulted || task.IsCanceled)
+            {
                 saveError = "The preview could not be ended, so nothing was saved. " + ErrorText(task.Exception);
+                motionCarry = null;
+            }
             else if (task.Result is { } id)
                 pendingSaveId = id;
             else
+            {
                 saveError = "Another edit is running. Save again when it ends.";
+                motionCarry = null;
+            }
         }
         // A save that never started, or whose result a later job replaced while the window was closed.
         if (pendingSaveId is { } stale && !service.Busy && service.LastResult?.Id != stale)
         {
             pendingSaveId = null;
             saveError = "The save's result is unknown. Check Recent edits in the Animations tab.";
+            motionCarry = null;
         }
         var sameClip = source != null && ClipKey(source) == jobClip;
         if (pendingSaveId is { } job && service.LastResult is { } result && result.Id == job)
@@ -185,6 +205,7 @@ public sealed partial class TimelineWindow
             else
             {
                 saveError = result.Message;
+                motionCarry = null;
             }
         }
         if (undoPending && !service.Busy)
@@ -198,6 +219,50 @@ public sealed partial class TimelineWindow
                 saveMessage = "The last save was undone.";
             Load(source!.Capture, source.Startup, true);
         }
+    }
+
+    /// <summary>
+    /// Before a save: keeps the motion the layers apply to, and the layers themselves, so the clip read
+    /// back after the save goes on editing them rather than stacking them on the saved result. A new
+    /// length bakes them in for good.
+    /// </summary>
+    private void KeepMotionForSave(AnimationTimelineSource loaded, TimelineDocument document)
+    {
+        var clip = ClipKey(loaded);
+        if (document.LengthChanged)
+        {
+            motionBase = null;
+            motionCarry = null;
+            return;
+        }
+        if (document.Motion.IsEmpty && loaded.BaseMotion == null)
+            return;
+        if (motionBase?.Clip != clip)
+            motionBase = loaded.BaseMotion is { } kept
+                ? (clip, kept, loaded.BaseFingerprint ?? string.Empty, AnimationPap.Hash(kept))
+                : (clip, loaded.Pap, loaded.FileFingerprint, loaded.Resource.Hash);
+        motionCarry = (clip, document.Motion, document.NextMotionKey, false);
+    }
+
+    /// <summary> The clip as read, with the base its layers apply to while this window has saved layers into it. </summary>
+    private AnimationTimelineSource WithMotionBase(AnimationTimelineSource loaded)
+    {
+        if (motionBase is not { } kept || kept.Clip != ClipKey(loaded) || loaded.Document == null)
+            return loaded;
+        // Back to the base, as after undoing the first save, the file's own motion is the base again.
+        return kept.Hash == loaded.Resource.Hash
+            ? loaded with { BaseMotion = null, BaseFingerprint = null }
+            : loaded with { BaseMotion = kept.Bytes, BaseFingerprint = kept.Fingerprint };
+    }
+
+    /// <summary> The read document with the layers carried over a save or an undo, once; null when none are carried. </summary>
+    private (TimelineDocument Document, bool Unsaved)? TakeCarriedLayers(AnimationTimelineSource loaded)
+    {
+        if (motionCarry is not { } carry || carry.Clip != ClipKey(loaded) || loaded.Document is not { } doc)
+            return null;
+        motionCarry = null;
+        return carry.Layers.IsEmpty ? null
+            : (doc with { Motion = carry.Layers, NextMotionKey = Math.Max(doc.NextMotionKey, carry.NextKey) }, carry.Unsaved);
     }
 
     /// <summary> Reverts this window's last save through its journal, then reads the timeline again. </summary>
@@ -221,6 +286,9 @@ public sealed partial class TimelineWindow
             if (ImGui.Button("Undo last save") && journal != null)
             {
                 jobClip = source is { } shown ? ClipKey(shown) : null;
+                // The layers stay, as unsaved edits on the motion they apply to.
+                if (source != null && !current.Document.Motion.IsEmpty)
+                    motionCarry = (ClipKey(source), current.Document.Motion, current.Document.NextMotionKey, true);
                 StopPreview();
                 service.Undo(journal);
                 undoPending = true;

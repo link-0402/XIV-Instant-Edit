@@ -8,15 +8,35 @@ internal static class AnimationPresentation
 {
     internal sealed record ListItem(AnimationCapture Capture, bool Startup, bool SeparatorBefore);
 
+    // The body's bones by their game names, after Brio's names for them (see THIRD-PARTY-NOTICES.md).
     private static readonly ImmutableDictionary<string, string> BoneLabels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
-        ["n_root"] = "Root", ["j_kosi"] = "Hips", ["j_sebo_a"] = "Lower Spine", ["j_sebo_b"] = "Upper Spine",
-        ["j_mune"] = "Chest", ["j_kubi"] = "Neck", ["j_kao"] = "Head", ["j_ude_l"] = "Left Upper Arm",
-        ["j_ude_r"] = "Right Upper Arm", ["j_hiji_l"] = "Left Elbow", ["j_hiji_r"] = "Right Elbow",
-        ["j_te_l"] = "Left Hand", ["j_te_r"] = "Right Hand", ["j_asi_l"] = "Left Upper Leg",
-        ["j_asi_r"] = "Right Upper Leg", ["j_hiza_l"] = "Left Knee", ["j_hiza_r"] = "Right Knee",
-        ["j_asi_b_l"] = "Left Foot", ["j_asi_b_r"] = "Right Foot", ["j_toe_l"] = "Left Toes",
-        ["j_toe_r"] = "Right Toes",
+        ["n_root"] = "Root", ["n_hara"] = "Body", ["n_throw"] = "Throw", ["j_kosi"] = "Hips",
+        ["j_sebo_a"] = "Lower Spine", ["j_sebo_b"] = "Middle Spine", ["j_sebo_c"] = "Upper Spine",
+        ["j_kubi"] = "Neck", ["j_kao"] = "Head", ["j_kami_a"] = "Hair A", ["j_kami_b"] = "Hair B",
+        ["n_sippo_a"] = "Tail A", ["n_sippo_b"] = "Tail B", ["n_sippo_c"] = "Tail C", ["n_sippo_d"] = "Tail D", ["n_sippo_e"] = "Tail E",
+    }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
+
+    // Bones with a left and a right twin, by their name before the _l or _r.
+    private static readonly ImmutableDictionary<string, string> SidedLabels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["j_sako"] = "Clavicle", ["n_hkata"] = "Shoulder", ["j_ude_a"] = "Upper Arm", ["j_ude_b"] = "Forearm",
+        ["n_hhiji"] = "Elbow", ["n_hte"] = "Wrist", ["j_te"] = "Hand", ["j_mune"] = "Breast",
+        ["j_asi_a"] = "Thigh", ["j_asi_b"] = "Knee", ["j_asi_c"] = "Calf", ["j_asi_d"] = "Foot", ["j_asi_e"] = "Toes",
+        ["j_oya_a"] = "Thumb A", ["j_oya_b"] = "Thumb B",
+        ["j_hito_a"] = "Index A", ["j_hito_b"] = "Index B", ["iv_hito_c"] = "Index C",
+        ["j_naka_a"] = "Middle A", ["j_naka_b"] = "Middle B", ["iv_naka_c"] = "Middle C",
+        ["j_kusu_a"] = "Ring A", ["j_kusu_b"] = "Ring B", ["iv_kusu_c"] = "Ring C",
+        ["j_ko_a"] = "Pinky A", ["j_ko_b"] = "Pinky B", ["iv_ko_c"] = "Pinky C",
+        ["iv_asi_oya_a"] = "Big Toe A", ["iv_asi_oya_b"] = "Big Toe B", ["iv_asi_hito_a"] = "Second Toe A", ["iv_asi_hito_b"] = "Second Toe B",
+        ["iv_asi_naka_a"] = "Middle Toe A", ["iv_asi_naka_b"] = "Middle Toe B", ["iv_asi_kusu_a"] = "Fourth Toe A", ["iv_asi_kusu_b"] = "Fourth Toe B",
+        ["iv_asi_ko_a"] = "Little Toe A", ["iv_asi_ko_b"] = "Little Toe B", ["iv_shiri"] = "Buttock", ["iv_nitoukin"] = "Bicep",
+        ["j_kami_f"] = "Front Hair", ["j_mimi"] = "Ear", ["n_ear_a"] = "Earring A", ["n_ear_b"] = "Earring B",
+        ["n_buki"] = "Weapon", ["n_buki_tate"] = "Shield", ["j_buki_sebo"] = "Scabbard", ["j_buki_kosi"] = "Sheath", ["j_buki2_kosi"] = "Holster",
+        ["n_kataarmor"] = "Pauldron", ["n_hizasoubi"] = "Knee Guard", ["n_hijisoubi"] = "Elbow Guard",
+        ["j_sk_f_a"] = "Skirt Front A", ["j_sk_f_b"] = "Skirt Front B", ["j_sk_f_c"] = "Skirt Front C",
+        ["j_sk_b_a"] = "Skirt Back A", ["j_sk_b_b"] = "Skirt Back B", ["j_sk_b_c"] = "Skirt Back C",
+        ["j_sk_s_a"] = "Skirt Side A", ["j_sk_s_b"] = "Skirt Side B", ["j_sk_s_c"] = "Skirt Side C",
     }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
 
     private static readonly ImmutableDictionary<string, string> ModelLabels = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -140,6 +160,8 @@ internal static class AnimationPresentation
     public static string BoneName(string raw)
     {
         if (BoneLabels.TryGetValue(raw, out var label)) return $"{label} ({raw})";
+        if (raw.Length > 2 && raw[^2] == '_' && char.ToLowerInvariant(raw[^1]) is 'l' or 'r' && SidedLabels.TryGetValue(raw[..^2], out var sided))
+            return $"{(char.ToLowerInvariant(raw[^1]) == 'l' ? "Left" : "Right")} {sided} ({raw})";
         var words = raw.Split('_', StringSplitOptions.RemoveEmptyEntries).Where(w => w is not "j" and not "n")
             .Select(w => w.Equals("l", StringComparison.OrdinalIgnoreCase) ? "Left" : w.Equals("r", StringComparison.OrdinalIgnoreCase) ? "Right" :
                 char.ToUpperInvariant(w[0]) + w[1..]);

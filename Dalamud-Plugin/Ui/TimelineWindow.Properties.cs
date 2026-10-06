@@ -17,11 +17,17 @@ public sealed partial class TimelineWindow
     private void DrawProperties(TimelineEditor current)
     {
         var readOnly = ReadOnly;
+        if (current.SelectedLayerValue is { } layer && source != null)
+        {
+            DrawLayerProperties(current, layer, source);
+            return;
+        }
         var primary = current.PrimaryEvent;
         var count = current.Selected.Count;
         if (primary == null || count == 0)
         {
-            Widgets.EmptyState(FontAwesomeIcon.MousePointer, "Select an event", "Click an event to edit it. Double-click a lane to add one.");
+            Widgets.EmptyState(FontAwesomeIcon.MousePointer, "Select an event",
+                "Click an event or a bone layer to edit it. Double-click a lane to add one.");
             return;
         }
         if (count > 1 && !OneGroup(current, primary))

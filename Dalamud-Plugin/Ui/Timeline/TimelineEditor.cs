@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Numerics;
+using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 
 namespace InstantEdit.Ui.Timeline;
@@ -18,6 +19,14 @@ internal enum TimelineGesture : byte
     ResizeRight,
     Length,
     Scrub,
+    /// <summary>Moves a bone layer with its keys.</summary>
+    LayerMove,
+    LayerLeft,
+    LayerRight,
+    LayerFadeIn,
+    LayerFadeOut,
+    /// <summary>Moves one key of a bone layer.</summary>
+    LayerKey,
 }
 
 /// <summary>
@@ -54,6 +63,9 @@ internal sealed class TimelineEditor
     private ImmutableArray<string> gestureKeys = [];
     private int[] anchors = [];
     private int[] targets = [];
+    // The bone layer a layer gesture drags, and for a key drag the key's frame when it began.
+    private string? gestureLayer;
+    private int gestureKeyFrame;
 
     public TimelineEditor(TimelineDocument document, int capacity = TimelineHistory.DefaultCapacity)
     {
@@ -138,6 +150,17 @@ internal sealed class TimelineEditor
 
     /// <summary>The event the properties panel shows and shift-ranges start from.</summary>
     public string? Primary { get; private set; }
+
+    /// <summary>
+    /// The selected bone layer, which the properties panel shows. Selecting a layer clears the event
+    /// selection and the other way round.
+    /// </summary>
+    public string? SelectedLayer { get; private set; }
+
+    /// <summary>The frame of the selected layer's selected key, or null.</summary>
+    public int? SelectedKey { get; private set; }
+
+    public MotionLayer? SelectedLayerValue => MotionEdits.Find(Document, SelectedLayer);
 
     public TimelineEvent? PrimaryEvent => TimelineEdits.Find(Document, Primary);
 
@@ -244,9 +267,58 @@ internal sealed class TimelineEditor
                         ? new[] { item.Start, TimelineEdits.End(item) } : [item.Start])],
                     TimelineSnap.Targets(doc, playhead, keys.ToHashSet(StringComparer.Ordinal)));
                 break;
-            case TimelinePart.Lane or TimelinePart.None:
+            case TimelinePart.Lane or TimelinePart.None or TimelinePart.MotionLane:
                 if (!ctrl && !shift)
                     ClearSelection();
+                break;
+            case TimelinePart.Legend when hit.Layer != null && MotionEdits.Find(doc, hit.Layer) != null:
+                SelectLayer(hit.Layer);
+                gesture = TimelineGesture.Select;
+                break;
+            case TimelinePart.LayerBody or TimelinePart.LayerLeft or TimelinePart.LayerRight or TimelinePart.LayerFadeIn or
+                TimelinePart.LayerFadeOut or TimelinePart.LayerKey when hit.Layer is { } key && MotionEdits.Find(doc, key) is { } layer:
+                PressLayer(hit, key, layer, doc);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// A press on a bone layer: it becomes the selection and the drag that follows moves it, an end, a
+    /// fade or a key. A press on a key also moves the playhead there, so the panel shows that key.
+    /// </summary>
+    private void PressLayer(TimelineHit hit, string key, MotionLayer layer, TimelineDocument doc)
+    {
+        var onKey = hit.Part == TimelinePart.LayerKey && MotionEdits.KeyIndex(layer, hit.KeyFrame) >= 0;
+        SelectLayer(key, onKey ? hit.KeyFrame : null);
+        if (onKey)
+            Playhead = hit.KeyFrame;
+        var snap = TimelineSnap.Targets(doc, playhead, motion: true, exceptLayer: key);
+        gestureLayer = key;
+        switch (hit.Part)
+        {
+            case TimelinePart.LayerBody:
+                BeginEdit(TimelineGesture.LayerMove, [], [layer.Start, layer.End], snap);
+                break;
+            case TimelinePart.LayerLeft:
+                BeginEdit(TimelineGesture.LayerLeft, [], [layer.Start], snap);
+                break;
+            case TimelinePart.LayerRight:
+                BeginEdit(TimelineGesture.LayerRight, [], [layer.End], snap);
+                break;
+            case TimelinePart.LayerFadeIn:
+                BeginEdit(TimelineGesture.LayerFadeIn, [], [layer.Start + layer.FadeIn], snap);
+                break;
+            case TimelinePart.LayerFadeOut:
+                BeginEdit(TimelineGesture.LayerFadeOut, [], [layer.End - layer.FadeOut], snap);
+                break;
+            case TimelinePart.LayerKey when onKey:
+                gestureKeyFrame = hit.KeyFrame;
+                // The layer's other keys are where this one may land next to.
+                BeginEdit(TimelineGesture.LayerKey, [], [hit.KeyFrame],
+                    [.. snap.Concat(layer.Keys.Select(item => item.Frame).Where(frame => frame != hit.KeyFrame)).Distinct().Order()]);
+                break;
+            default:
+                gesture = TimelineGesture.Select;
                 break;
         }
     }
@@ -288,6 +360,10 @@ internal sealed class TimelineEditor
                 next = TimelineEdits.SetLength(start, start.Length + delta, ScaleEvents, loaded);
                 landed = next.Length;
                 break;
+            case TimelineGesture.LayerMove or TimelineGesture.LayerLeft or TimelineGesture.LayerRight or
+                TimelineGesture.LayerFadeIn or TimelineGesture.LayerFadeOut or TimelineGesture.LayerKey when gestureLayer is { } layerKey:
+                (next, landed) = DragLayer(start, layerKey, delta);
+                break;
             default:
                 return;
         }
@@ -295,10 +371,45 @@ internal sealed class TimelineEditor
         History.Preview(next);
     }
 
+    /// <summary>The document a layer drag of <paramref name="delta"/> frames makes, and the frame the dragged edge, fade or key lands on.</summary>
+    private (TimelineDocument Next, int Landed) DragLayer(TimelineDocument start, string layerKey, int delta)
+    {
+        switch (gesture)
+        {
+            case TimelineGesture.LayerMove:
+            {
+                var next = MotionEdits.Move(start, layerKey, delta);
+                return (next, MotionEdits.Find(next, layerKey) is { } moved && MotionEdits.Find(start, layerKey) is { } before &&
+                    moved.Start - before.Start == delta ? moved.Start : -1);
+            }
+            case TimelineGesture.LayerLeft or TimelineGesture.LayerRight:
+            {
+                var left = gesture == TimelineGesture.LayerLeft;
+                var next = MotionEdits.Resize(start, layerKey, left, delta);
+                return (next, MotionEdits.Find(next, layerKey) is { } resized ? left ? resized.Start : resized.End : -1);
+            }
+            case TimelineGesture.LayerFadeIn or TimelineGesture.LayerFadeOut:
+            {
+                var fadeIn = gesture == TimelineGesture.LayerFadeIn;
+                var next = MotionEdits.Fade(start, layerKey, fadeIn, delta);
+                return (next, MotionEdits.Find(next, layerKey) is { } faded ? fadeIn ? faded.Start + faded.FadeIn : faded.End - faded.FadeOut : -1);
+            }
+            default:
+            {
+                var next = MotionEdits.MoveKey(start, layerKey, gestureKeyFrame, delta, out var landed);
+                SelectedKey = landed;
+                return (next, landed);
+            }
+        }
+    }
+
+    /// <summary>Whether <paramref name="kind"/> edits the document, so it is one undo step.</summary>
+    private static bool Edits(TimelineGesture kind) => kind is not (TimelineGesture.None or TimelineGesture.Select or TimelineGesture.Scrub);
+
     /// <summary>The mouse was released: a drag becomes one undo step; a click without a drag only selects.</summary>
     public void Release()
     {
-        if (gesture is TimelineGesture.Move or TimelineGesture.ResizeLeft or TimelineGesture.ResizeRight or TimelineGesture.Length)
+        if (Edits(gesture))
             History.End();
         if (!dragged && collapseOnClick && pressKey != null && TimelineEdits.Find(Document, pressKey) != null)
             SelectOnly(pressKey);
@@ -309,8 +420,10 @@ internal sealed class TimelineEditor
     /// <summary>Escape during a drag: back to the document and playhead from before the press.</summary>
     public void Cancel()
     {
-        if (gesture is TimelineGesture.Move or TimelineGesture.ResizeLeft or TimelineGesture.ResizeRight or TimelineGesture.Length)
+        if (Edits(gesture))
             History.Cancel();
+        if (gesture == TimelineGesture.LayerKey)
+            SelectedKey = gestureKeyFrame;
         if (gesture != TimelineGesture.None)
             Playhead = playheadAtPress;
         EndGesture();
@@ -337,8 +450,8 @@ internal sealed class TimelineEditor
         {
             case TimelineKey.Undo: return Undo();
             case TimelineKey.Redo: return Redo();
-            case TimelineKey.Delete: return DeleteSelection();
-            case TimelineKey.Duplicate: return DuplicateSelection();
+            case TimelineKey.Delete: return SelectedLayer != null ? DeleteLayerSelection() : DeleteSelection();
+            case TimelineKey.Duplicate: return SelectedLayer != null ? DuplicateLayer() : DuplicateSelection();
             case TimelineKey.Copy: return Copy();
             case TimelineKey.Paste: return Paste();
             case TimelineKey.SelectAll:
@@ -346,6 +459,8 @@ internal sealed class TimelineEditor
                 return selected.Count > 0;
             case TimelineKey.Left or TimelineKey.Right:
                 var step = (shift ? 10 : 1) * (key == TimelineKey.Left ? -1 : 1);
+                if (alt && SelectedLayer is { } nudged)
+                    return NudgeLayer(nudged, step);
                 if (alt)
                     return Nudge(step);
                 var before = playhead;
@@ -358,7 +473,7 @@ internal sealed class TimelineEditor
                 Playhead = Document.Length;
                 return true;
             case TimelineKey.Escape:
-                var had = selected.Count > 0;
+                var had = selected.Count > 0 || SelectedLayer != null;
                 ClearSelection();
                 return had;
             case TimelineKey.Fit:
@@ -533,6 +648,8 @@ internal sealed class TimelineEditor
             else
                 SelectOnly(hit.Key!);
         }
+        else if (gesture == TimelineGesture.None && hit.OnLayer)
+            SelectLayer(hit.Layer!, hit.Part == TimelinePart.LayerKey ? hit.KeyFrame : null);
         return SnappedFrame(hit.Frame, alt);
     }
 
@@ -545,6 +662,76 @@ internal sealed class TimelineEditor
 
     /// <summary>Moves the selection by <paramref name="delta"/> frames as one undo step.</summary>
     public bool Nudge(int delta) => Commit(TimelineEdits.Move(Document, selected, delta));
+
+    /// <summary>Alt+arrows on a selected layer: moves its selected key, else the whole layer, as one undo step.</summary>
+    private bool NudgeLayer(string key, int step)
+    {
+        if (SelectedKey is not { } frame)
+            return Commit(MotionEdits.Move(Document, key, step));
+        if (!Commit(MotionEdits.MoveKey(Document, key, frame, step, out var landed)))
+            return false;
+        SelectedKey = landed;
+        return true;
+    }
+
+    // Bone layers.
+
+    /// <summary>
+    /// Makes <paramref name="next"/> current, as a field edit's live change while one is running, else
+    /// as one undo step; false when nothing changed or a drag is running. For the layer panels.
+    /// </summary>
+    public bool Change(TimelineDocument next)
+    {
+        if (gesture != TimelineGesture.None || ReferenceEquals(next, Document))
+            return false;
+        if (History.InGesture)
+            History.Preview(next);
+        else
+            History.Commit(next);
+        return true;
+    }
+
+    /// <summary>Adds a bone layer of <paramref name="kind"/> from <paramref name="start"/> to <paramref name="end"/> and selects it.</summary>
+    public bool AddLayer(MotionLayerKind kind, int start, int end)
+    {
+        LastError = null;
+        var next = MotionEdits.Add(Document, kind, start, end, out var key, out var error);
+        LastError = error;
+        if (!Commit(next))
+            return false;
+        SelectLayer(key);
+        return true;
+    }
+
+    /// <summary>Selects a bone layer, and with <paramref name="keyFrame"/> its key there; the event selection clears.</summary>
+    public void SelectLayer(string key, int? keyFrame = null)
+    {
+        if (MotionEdits.Find(Document, key) is not { } layer)
+            return;
+        selected.Clear();
+        Primary = null;
+        SelectedLayer = key;
+        SelectedKey = keyFrame is { } frame && MotionEdits.KeyIndex(layer, frame) >= 0 ? frame : null;
+    }
+
+    /// <summary>Deletes the selected key, or with none the selected layer.</summary>
+    public bool DeleteLayerSelection()
+    {
+        if (SelectedLayer is not { } key)
+            return false;
+        return SelectedKey is { } frame
+            ? Commit(MotionEdits.DeleteKey(Document, key, frame))
+            : Commit(MotionEdits.Remove(Document, key));
+    }
+
+    /// <summary>Copies the selected layer right after itself and selects the copy.</summary>
+    public bool DuplicateLayer()
+    {
+        if (SelectedLayer is not { } key || !Commit(MotionEdits.Duplicate(Document, key, out var created)))
+            return false;
+        SelectLayer(created);
+        return true;
+    }
 
     /// <summary>Moves the selection so the primary event starts at <paramref name="frame"/>.</summary>
     public bool MoveSelectionTo(int frame) =>
@@ -567,16 +754,25 @@ internal sealed class TimelineEditor
 
     public void SelectAll()
     {
+        ClearLayerSelection();
         foreach (var ev in Events(Document))
             selected.Add(ev.Key);
         if (Primary == null || !selected.Contains(Primary))
             Primary = Events(Document).OrderBy(ev => ev.Start).Select(ev => ev.Key).FirstOrDefault();
     }
 
+    /// <summary>Clears the selection of events and of bone layers.</summary>
     public void ClearSelection()
     {
         selected.Clear();
         Primary = null;
+        ClearLayerSelection();
+    }
+
+    private void ClearLayerSelection()
+    {
+        SelectedLayer = null;
+        SelectedKey = null;
     }
 
     // View and playback.
@@ -698,6 +894,7 @@ internal sealed class TimelineEditor
         gestureKeys = [];
         anchors = [];
         targets = [];
+        gestureLayer = null;
     }
 
     private void Scrub(float frame, bool alt)
@@ -709,6 +906,7 @@ internal sealed class TimelineEditor
 
     private void SelectOnly(string key)
     {
+        ClearLayerSelection();
         selected.Clear();
         selected.UnionWith(GroupOf(Document, key));
         Primary = key;
@@ -716,6 +914,7 @@ internal sealed class TimelineEditor
 
     private void Toggle(string key)
     {
+        ClearLayerSelection();
         var group = GroupOf(Document, key);
         if (selected.Contains(key))
         {
@@ -731,6 +930,7 @@ internal sealed class TimelineEditor
     /// <summary>Every event whose start lies between the primary's and this one's, across all lanes.</summary>
     private void SelectRange(string key)
     {
+        ClearLayerSelection();
         var doc = Document;
         if (TimelineEdits.Find(doc, Primary) is not { } anchor || TimelineEdits.Find(doc, key) is not { } clicked)
         {
@@ -747,6 +947,7 @@ internal sealed class TimelineEditor
 
     private void SelectKeys(IEnumerable<string> keys)
     {
+        ClearLayerSelection();
         selected.Clear();
         selected.UnionWith(keys);
         Primary = selected.Count == 0 ? null : keys.First();
@@ -767,6 +968,13 @@ internal sealed class TimelineEditor
     private void OnDocumentChanged()
     {
         var doc = Document;
+        if (SelectedLayer != null)
+        {
+            if (MotionEdits.Find(doc, SelectedLayer) is not { } layer)
+                ClearLayerSelection();
+            else if (SelectedKey is { } frame && MotionEdits.KeyIndex(layer, frame) < 0 && gesture != TimelineGesture.LayerKey)
+                SelectedKey = null;
+        }
         if (selected.Count > 0)
         {
             var keys = Events(doc).Select(ev => ev.Key).ToHashSet(StringComparer.Ordinal);

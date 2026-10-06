@@ -31,6 +31,9 @@ TmbFileFixture.Run(Check, Reject);
 TimelineEditorFixture.Run(Check, Reject);
 AudioFixture.Run(Check, Reject);
 TimelineWindowViewsFixture.Run(Check, Reject);
+MotionLayerFixture.Run(Check, Reject);
+MotionEditsFixture.Run(Check, Reject);
+PoseEditorFixture.Run(Check, Reject);
 // Writes the fixture take as the plugin sends it, for reading back in Blender.
 if (args is ["--write-sample-take", var takePath])
     File.WriteAllBytes(takePath, AnimationTakeFormat.Write(AnimationExportFixture.SampleTake(), "Skeleton", false, "1.2.4"));
