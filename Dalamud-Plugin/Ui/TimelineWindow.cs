@@ -60,11 +60,12 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private IReadOnlyDictionary<string, int>? framesMerged;
 
     internal TimelineWindow(AnimationEditService? animations, string? animationError, TimelineCatalog catalog,
-        AnimationPreviewService preview, AnimationPlayback playback, MotionLiveDisplay? motionDisplay, IDataManager data,
+        AnimationPreviewService preview, AnimationPlayback playback, MotionLiveDisplay? motionDisplay, AnimationRecorder recorder, IDataManager data,
         IFramework framework, ITextureProvider textures, IPluginLog log)
         : base("Timeline###XIVInstantEditTimeline")
     {
         this.animations = animations;
+        this.recorder = recorder;
         this.animationError = animationError;
         this.catalog = catalog;
         this.preview = preview;
@@ -138,6 +139,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         EndGizmo(true);
         StopPreview();
         ForgetDecode();
+        DropPose();
         loadCancel?.Cancel();
         loadTask = null;
         loading = null;
@@ -157,6 +159,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         loadCancel?.Dispose();
         loadCancel = null;
         ForgetDecode();
+        DropPose();
     }
 
     private bool Showing(AnimationCapture capture, bool startup)

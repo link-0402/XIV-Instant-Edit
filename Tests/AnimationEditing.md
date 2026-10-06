@@ -658,3 +658,22 @@ for several bones are covered offline in PoseEditorFixture):
   pose layer the key then sets the position (Set position ticks itself), starting from where
   the clip has the bone.
 - [x] With Brio's overlay open as well, dragging one gizmo never moves the other.
+
+Key a pose (Phase 6; .pose parsing, model-to-local conversion, moved bones, proportions and
+keying are covered offline in PoseFileFixture; all 8,897 poses in E:\FFXIVmods\Poses parse, 60%
+of them were made on bodies of other proportions than IVCS c0801):
+- [ ] Select a pose layer: Key a pose shows under the keys in the properties panel and under
+  the bone panel in the Bones window. Offset and amplitude layers don't have it.
+- [ ] Pose file: pick an Anamnesis, a Ktisis and a Brio .pose. The name and tool show; Key at
+  the playhead keys the whole body (no hair, skirt or weapon bones unless ticked) as one undo
+  step, and with Live on the character takes the pose there and blends back out of it.
+- [ ] A lying or sitting pose made on your own race: Move bones is ticked, the body lands where
+  the pose has it. A pose made on another race: Move bones is off with the proportions note,
+  and the character keeps its own proportions.
+- [ ] Selected bones: select an arm, key a pose: only the arm takes the pose.
+- [ ] Character pose: in GPose, pose the character with Brio or Ktisis, then key it: the clip
+  takes that pose at the playhead. Outside GPose it reads your own character.
+- [ ] Frame of an animation: pick another emote, drag Frame, key: the bones take that frame's
+  pose. Picking this clip itself (this one) needs no reading.
+- [ ] Open a startup: Loop's first frame, at the end keys the loop's first pose at the
+  startup's last frame; with a fade-in the startup now runs into the loop without a jump.

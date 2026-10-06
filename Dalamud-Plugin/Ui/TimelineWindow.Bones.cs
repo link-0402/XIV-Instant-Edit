@@ -546,6 +546,13 @@ public sealed partial class TimelineWindow
             DrawLayerLimit(current, layer, skeleton, readOnly, false);
         else
             DrawBoneEditor(current, layer, skeleton, loaded, readOnly, true);
+        if (layer.Kind == MotionLayerKind.Pose)
+        {
+            ImGui.Spacing();
+            ImGui.Separator();
+            ImGui.Spacing();
+            DrawPoseSources(current, layer, skeleton, loaded, readOnly);
+        }
     }
 
     /// <summary>

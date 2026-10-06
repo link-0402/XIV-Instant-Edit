@@ -93,6 +93,11 @@ public sealed partial class TimelineWindow
             DrawBoneEditor(current, layer, skeleton, loaded, readOnly, false);
             ImGui.Spacing();
             DrawLayerKeys(current, layer);
+            if (layer.Kind == MotionLayerKind.Pose)
+            {
+                ImGui.Spacing();
+                DrawPoseSources(current, layer, skeleton, loaded, readOnly);
+            }
         }
 
         ImGui.Spacing();

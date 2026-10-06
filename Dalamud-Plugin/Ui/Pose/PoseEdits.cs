@@ -149,6 +149,45 @@ internal static class PoseEdits
         return doc;
     }
 
+    /// <summary>
+    /// Keys <paramref name="pose"/> at <paramref name="frame"/> in a pose layer for each of <paramref name="bones"/> it
+    /// has: the bone's rotation, and with <paramref name="positions"/> its position where the pose moves it. The
+    /// scale and the other positions stay the clip's own (<paramref name="own"/>), so a pose never reshapes the body.
+    /// </summary>
+    public static TimelineDocument KeyPose(TimelineDocument doc, string layer, int frame, PoseImport pose, IEnumerable<string> bones, bool positions,
+        Func<string, MotionTransform?> own)
+    {
+        foreach (var bone in bones)
+        {
+            if (!pose.Local.TryGetValue(bone, out var value))
+                continue;
+            var clip = own(bone);
+            var moved = positions && pose.Moved.Contains(bone);
+            var key = new MotionTransform(moved || clip is not { } kept ? value.Position : kept.Position, value.Rotation, clip?.Scale ?? Vector3.One);
+            doc = MotionEdits.SetKey(doc, layer, frame, bone, key.ToBone(), moved);
+        }
+        return doc;
+    }
+
+    /// <summary>Bones a whole-body pose never keys: the skeleton's root nodes, and the face, which a body clip doesn't move.</summary>
+    public static bool Unposed(string bone) =>
+        bone is "n_root" or "n_throw" or "n_hara_noanim_trans" || bone.StartsWith("j_f_", StringComparison.Ordinal);
+
+    /// <summary>
+    /// The bones a pose keys, of the ones it has (<paramref name="available"/>): the <paramref name="selected"/> ones, or
+    /// with none given the whole body but its root nodes, the face and the groups in <paramref name="leftOut"/>.
+    /// </summary>
+    public static List<string> PoseBones(IEnumerable<string> available, IReadOnlyCollection<string>? selected, IEnumerable<PoseGroup> leftOut)
+    {
+        if (selected != null)
+        {
+            var chosen = selected.ToHashSet(StringComparer.Ordinal);
+            return [.. available.Where(chosen.Contains)];
+        }
+        var groups = leftOut.ToArray();
+        return [.. available.Where(bone => !Unposed(bone) && !groups.Any(group => group.Contains(bone)))];
+    }
+
     /// <summary>Keys every target at <paramref name="frame"/> with the value it has there now.</summary>
     public static TimelineDocument Key(TimelineDocument doc, string layer, int frame, IReadOnlyList<PoseTarget> targets, bool pose)
     {
