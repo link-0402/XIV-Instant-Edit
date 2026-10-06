@@ -23,8 +23,10 @@ Penumbra mods.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Painting-in-Substance-Painter)
 - **Animations**: bake LivePose adjustments into animations, repair their skeletons, give bones back to physics, and
   send animations or a recorded live pose to Blender. Edit an animation's timeline: its length, sounds, expressions,
-  lip sync, effects and props, with a preview in GPose.
+  lip sync, effects and props, with a preview in GPose. Change how it moves with bone layers, shown live on your
+  character in GPose, and key whole poses from .pose files, your posed character or other animations.
   [Editing](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-Animations) ·
+  [Timeline](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-the-Timeline) ·
   [In Blender](https://github.com/link-0402/XIV-Instant-Edit/wiki/Animations-in-Blender)
 - **Game Files**: browse the game's own models, edit them, or batch-export their files and skeletons.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Game-Files)
@@ -81,6 +83,8 @@ supported editor versions and manual setup, and the add-on's [README](Blender-Ad
   [XIVPy](https://github.com/Arrenval/XIVPy) by Arrenval; see [its credits](Blender-Addon/README.md#credits-and-license).
 - The animation tools adapt code from [VFXEditor](https://github.com/0ceal0t/Dalamud-VFXEditor) by 0ceal0t and follow
   [LivePose](https://github.com/Caraxi/LivePose) by Caraxi; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+- The motion editor's Bones window and its bones on the character adapt [Brio](https://github.com/Etheirys/Brio) by
+  Etheirys and contributors, including its posing artwork.
 
 ## Contributing
 
