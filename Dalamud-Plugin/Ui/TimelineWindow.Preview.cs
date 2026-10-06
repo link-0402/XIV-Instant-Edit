@@ -22,6 +22,8 @@ public sealed partial class TimelineWindow
     private volatile string? previewFingerprint;
     private volatile int previewGeneration;
     private ushort previewTimeline;
+    // The previewed timeline is an expression's: it plays on the face only.
+    private bool previewFace;
     // The GPose actor whose collection got the preview; playing on another would show the unedited clip.
     private ushort? previewActor;
     private TimelineDocument? previewDocument;
@@ -181,7 +183,7 @@ public sealed partial class TimelineWindow
         lastSeekFrame = -1;
         animations!.PreviewTimeline(target, document, async (built, token) =>
         {
-            var files = new Dictionary<string, byte[]>(added, StringComparer.OrdinalIgnoreCase) { [clip.GamePath] = built.Pap };
+            var files = new Dictionary<string, byte[]>(added, StringComparer.OrdinalIgnoreCase) { [built.GamePath] = built.Bytes };
             await preview.ShowAsync(index, files, token);
             if (generation != previewGeneration)
             {
@@ -195,14 +197,15 @@ public sealed partial class TimelineWindow
                     return false;
                 previewFingerprint = built.BindingFingerprint;
                 previewTimeline = clip.Timeline;
-                if (!playback.Play(clip.Timeline, built.BindingFingerprint, index))
+                previewFace = target.Standalone;
+                if (!playback.Play(clip.Timeline, built.BindingFingerprint, index, previewFace))
                     return false;
                 if (Math.Abs(speed - 1) > .001f)
                     playback.SetSpeed(speed);
                 return true;
             });
             return played ? "Preview playing." : "Preview on. " + playback.Error;
-        });
+        }, current.MotionFrames);
     }
 
     private void TogglePlay()
@@ -210,7 +213,7 @@ public sealed partial class TimelineWindow
         if (!playback.Active)
         {
             if (previewFingerprint is { } fingerprint)
-                PlaybackCall(() => playback.Play(previewTimeline, fingerprint, previewActor));
+                PlaybackCall(() => playback.Play(previewTimeline, fingerprint, previewActor, previewFace));
         }
         else if (playback.Paused)
             PlaybackCall(playback.Resume);
@@ -222,7 +225,7 @@ public sealed partial class TimelineWindow
     {
         if (previewFingerprint is not { } fingerprint)
             return;
-        PlaybackCall(() => playback.Play(previewTimeline, fingerprint, previewActor));
+        PlaybackCall(() => playback.Play(previewTimeline, fingerprint, previewActor, previewFace));
         current.Playhead = 0;
         lastSeekFrame = 0;
     }

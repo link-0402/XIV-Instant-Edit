@@ -28,7 +28,196 @@ internal static class TmbFileFixture
         ReviewFixes(check, original);
         EffectLoops(check);
         EffectCopies(check, reject);
+        Expressions(check, reject);
     }
+
+    /// <summary>
+    /// An expression's own timeline (chara/action/facial/pose/smile.tmb: length 150, one face with
+    /// time control 0 to 1 over 150 frames and the 0x08000000 bit vanilla sets) and Keep, which
+    /// writes what "Permanent Facial Expressions" does: the face's length -1, nothing else.
+    /// </summary>
+    private static void Expressions(Action<bool, string> check, Action<Action, string> reject)
+    {
+        check(TimelineDocument.ExpressionFrames(150) == 150 && TimelineDocument.ExpressionFrames(-1) == 150 &&
+              TimelineDocument.ExpressionFrames(0) == 150 && TimelineDocument.ExpressionFrames(600) == 600,
+            "an expression's timeline is edited at its header's length, or the game's 150 frames for an endless header");
+
+        var smile = new Tmb().Head(150, "smile", 2).Actor(2, 3).Track(3, 4).Face(4, 0, 150, 0x08000001, 1, "cfxf_smile").Build();
+        var doc = TimelineConvert.Read(TmbFile.Parse(smile), TimelineDocument.ExpressionFrames(150));
+        var face = doc.Events.Single();
+        check(doc is { Length: 150, HeaderLength: 150 } && TimelineDocument.CanKeep(face) && !TimelineDocument.Kept(face) &&
+              TimelineEdits.CanResize(face),
+            "a vanilla expression's face can be kept and is not kept yet");
+
+        var kept = TimelineEdits.Keep(doc, face.Key, true);
+        var keptFace = kept.Events.Single();
+        check(keptFace.Duration == TimelineDocument.KeptDuration && TimelineDocument.Kept(keptFace) && !TimelineEdits.CanResize(keptFace) &&
+              kept.PlayedFrames(keptFace) == 150 && TimelineLayout.Build(kept).EndOf(0) == 150 &&
+              ReferenceEquals(TimelineEdits.Keep(kept, face.Key, true), kept),
+            "a kept face has the endless length, is drawn to the end and can't be resized");
+        var saved = TimelineConvert.Apply(smile, kept);
+        var changed = Enumerable.Range(0, smile.Length).Where(i => saved[i] != smile[i]).ToArray();
+        var savedFace = TmbFile.Parse(saved).Entries.Single();
+        check(saved.Length == smile.Length && changed.Length == 4 && savedFace.Int32(12) == -1 && savedFace.Int32(20) == 0x08000001 &&
+              savedFace.Single(24) == 0 && savedFace.Single(28) == 1 && TmbFile.Parse(saved).Length == 150,
+            "keeping a face changes only its length to -1, as Permanent Facial Expressions does");
+        var reread = TimelineConvert.Read(TmbFile.Parse(saved), 150);
+        check(TimelineDocument.Kept(reread.Events.Single()) &&
+              TimelineEdits.Keep(reread, reread.Events.Single().Key, false) is var unkept &&
+              unkept.Events.Single().Duration == 150 && TimelineConvert.Apply(saved, unkept).SequenceEqual(smile),
+            "a kept face reads back kept, and letting it go holds it to the end again: the vanilla file");
+
+        // Permanent Facial Expressions' own file: the header -1 too.
+        var permanent = new Tmb().Head(-1, "smile", 2).Actor(2, 3).Track(3, 4).Face(4, 0, -1, 0x08000001, 1, "cfxf_smile").Build();
+        var permanentDoc = TimelineConvert.Read(TmbFile.Parse(permanent), TimelineDocument.ExpressionFrames(-1));
+        check(permanentDoc is { Length: 150, HeaderLength: -1, LengthChanged: false } && TimelineDocument.Kept(permanentDoc.Events.Single()) &&
+              ReferenceEquals(TimelineConvert.Apply(permanent, permanentDoc), permanent),
+            "an endless header reads at 150 frames and an unchanged save gives the file back");
+        var moved = TmbFile.Parse(TimelineConvert.Apply(permanent, permanentDoc with
+        {
+            Events = [permanentDoc.Events.Single() with { Start = 10 }],
+        }));
+        check(moved.Length == -1 && moved.Entries.Single() is { Time: 10 } movedFace && movedFace.Int32(12) == -1,
+            "the endless header stays as it was through an edit");
+
+        // VFXEditor's empty range plays nothing at all; a kept pose gets the vanilla 0 to 1.
+        var empty = new Tmb().Head(150, null, 2).Actor(2, 3).Track(3, 4).Face(4, 0, 150, 1, 0, "cfxf_bow").Build();
+        var emptyDoc = TimelineConvert.Read(TmbFile.Parse(empty), 150);
+        var emptySaved = TmbFile.Parse(TimelineConvert.Apply(empty, TimelineEdits.Keep(emptyDoc, emptyDoc.Events[0].Key, true))).Entries.Single();
+        check(emptySaved.Int32(12) == -1 && emptySaved.Single(24) == 0 && emptySaved.Single(28) == 1,
+            "a kept face with an empty range gets the pose range 0 to 1");
+
+        // A face without time control holds anyway; kept, it gets time control and the endless length.
+        var held = new Tmb().Head(100, null, 2).Actor(2, 3).Track(3, 4).Face(4, 5, 10, 0, 0, "cfxf_smile").Build();
+        var heldDoc = TimelineConvert.Read(TmbFile.Parse(held), 100);
+        var heldKept = TimelineEdits.Keep(heldDoc, heldDoc.Events[0].Key, true);
+        var heldSaved = TmbFile.Parse(TimelineConvert.Apply(held, heldKept)).Entries.Single();
+        check(heldKept.Events[0].Values[TmbEntrySchema.TimeControlField] == 1 && (heldSaved.Int32(20) & 1) == 1 &&
+              heldSaved.Int32(12) == -1 && heldSaved.Single(28) == 1,
+            "a held face kept gets time control, the endless length and the pose range");
+
+        // A moving face (a mod's 600-frame loop) let go plays once, at its own length.
+        var frames = new Dictionary<string, int> { ["cfxf_comeon"] = 600, ["cfxf_smile"] = 1 };
+        var moving = new Tmb().Head(150, "comeon", 2).Actor(2, 3).Track(3, 4).Face(4, 0, -1, 0x08000001, 600, "cfxf_comeon").Build();
+        var movingDoc = TimelineConvert.Read(TmbFile.Parse(moving), 150);
+        check(TimelineDocument.Moves(movingDoc.Events[0], frames) == 600 && TimelineDocument.Moves(face, frames) == null &&
+              TimelineDocument.Moves(movingDoc.Events[0], null) == null &&
+              TimelineEdits.Keep(movingDoc, movingDoc.Events[0].Key, false, frames).Events[0].Duration == 600,
+            "a moving face let go lasts its own length; a pose holds to the end");
+
+        // Lip sync, blinks and the clip's own motion are never kept.
+        var mixed = new Tmb().Head(100, null, 2).Actor(2, 3, 4, 5).Track(3, 6).Track(4, 7).Track(5, 8)
+            .Motion(6, 100).Face(7, 0, 40, 1, 40, "cfxl_lip_nor1").Face(8, 0, 8, 1, 8, "cfxb_blink1").Build();
+        var mixedDoc = TimelineConvert.Read(TmbFile.Parse(mixed), 100);
+        check(mixedDoc.Events.All(e => !TimelineDocument.CanKeep(e) && ReferenceEquals(TimelineEdits.Keep(mixedDoc, e.Key, true), mixedDoc)),
+            "only faces can be kept");
+        reject(() => TimelineConvert.Apply(mixed, mixedDoc with { Events = [.. mixedDoc.Events.Select(e => e.Key == "t8" ? e with { Duration = -1 } : e)] }),
+            "an endless length is refused on anything but a kept face");
+
+        // A kept face can be added and duplicated.
+        var added = TimelineTemplates.Create(new(TimelineAddKind.Expression, 30, "cfxf_bow")).Single() with { Duration = TimelineDocument.KeptDuration };
+        var withAdded = TimelineEdits.Add(doc, [added], null, out var addError);
+        var addedFile = TmbFile.Parse(TimelineConvert.Apply(smile, withAdded));
+        check(addError == null && addedFile.Entries.Count(e => e.Magic == "C010") == 2 &&
+              addedFile.Entries.Single(e => e.Text == "cfxf_bow") is { Time: 30 } addedFace && addedFace.Int32(12) == -1 && addedFace.Single(28) == 1,
+            "a kept face can be added");
+        var duplicated = TimelineEdits.Duplicate(kept, [keptFace.Key], 20, out var copies);
+        check(copies.Length == 1 && TmbFile.Parse(TimelineConvert.Apply(smile, duplicated)).Entries.Count(e => e.Int32(12) == -1) == 2,
+            "a kept face can be duplicated");
+        Loops(check, reject);
+    }
+
+    /// <summary>
+    /// A kept moving face on an expression's timeline loops: Panting Face [Taunt]'s 600-frame face
+    /// (comeon.tmb: 0 to 600 over 600, header 150) written back to back on its track to the last
+    /// frame a timeline reaches, then the face returns to neutral. Seen in game 2026-10-05: copies
+    /// past the header play; one entry can't loop (a range past the face's length drops it at once).
+    /// </summary>
+    private static void Loops(Action<bool, string> check, Action<Action, string> reject)
+    {
+        var frames = new Dictionary<string, int> { ["cfxf_comeon"] = 600 };
+        static byte[] Taunt(int duration, float end) =>
+            new Tmb().Head(150, "comeon", 2).Actor(2, 3).Track(3, 4).Face(4, 0, duration, 0x08000001, end, "cfxf_comeon").Build();
+        static TimelineDocument Open(byte[] tmb) => TimelineConvert.Read(TmbFile.Parse(tmb), 150) with { Expression = true };
+        static C010[] Faces(byte[] tmb) => [.. TmbFile.Parse(tmb).Entries.Where(e => e.Magic == "C010")
+            .Select(e => new C010(e.Time, e.Int32(12), e.Int32(20), e.Single(24), e.Single(28))).OrderBy(f => f.Time)];
+
+        var taunt = Taunt(600, 600);
+        var doc = Open(taunt);
+        var face = doc.Events.Single();
+        var looped = TimelineEdits.Keep(doc, face.Key, true, frames);
+        check(TimelineEdits.CanLoop(doc, face, frames) && TimelineDocument.Loops(looped.Events.Single()) &&
+              !TimelineEdits.CanLoop(doc with { Expression = false }, face, frames) && !TimelineEdits.CanLoop(doc, face, null),
+            "a moving face on an expression's timeline loops when kept; elsewhere, or with its length unknown, it doesn't");
+        var saved = TimelineConvert.Apply(taunt, looped, frames);
+        var file = TmbFile.Parse(saved);
+        var faces = Faces(saved);
+        check(faces.Length == 55 && faces.Select(f => (int)f.Time).SequenceEqual(Enumerable.Range(0, 55).Select(i => i * 600)) &&
+              faces.All(f => f.Duration == 600) &&
+              faces.All(f => f is { Flags: 0x08000001, From: 0, To: 600 }) &&
+              file.Tracks.Length == 1 && file.Tracks[0].Entries.Length == 55 && file.Length == 150,
+            "a looping face is written as 55 plays back to back on its own track, none kept, the header left alone");
+        var reread = Open(saved);
+        check(reread.Events.Length == 1 && TimelineDocument.Loops(reread.Events[0]) && reread.Events[0].Duration == -1 &&
+              ReferenceEquals(TimelineConvert.Apply(saved, reread, frames), saved) &&
+              TimelineLayout.Build(reread, null, frames).EndOf(0) == 150,
+            "a saved loop reads back as one looping face, drawn to the end, and saves back unchanged");
+
+        var moved = Faces(TimelineConvert.Apply(saved, reread with { Events = [reread.Events[0] with { Start = 30 }] }, frames));
+        check(moved.Length == 55 && moved[0].Time == 30 && moved[^1].Time == 30 + 54 * 600 && moved[^1].Duration == 600,
+            "a moved loop is written again from its new start");
+        var unkept = Faces(TimelineConvert.Apply(saved, TimelineEdits.Keep(reread, reread.Events[0].Key, false, frames), frames));
+        check(unkept is [{ Time: 0, Duration: 600, From: 0, To: 600 }],
+            "a loop let go plays the face once");
+        check(Faces(TimelineConvert.Apply(saved, reread with { Events = [] }, frames)).Length == 0,
+            "deleting a loop removes all of its copies");
+        var untimed = reread.Events[0] with { Values = reread.Events[0].Values.SetItem(TmbEntrySchema.TimeControlField, 0) };
+        check(Faces(TimelineConvert.Apply(saved, reread with { Events = [untimed] }, frames)) is [{ Time: 0, Flags: 0x08000000 }],
+            "a loop without time control is one face at its own speed");
+
+        // The mod's other speeds: Static Infinite holds still until ticked again; Half Speed loops at half speed.
+        var still = Open(Taunt(-1, 600));
+        var stillFace = still.Events.Single();
+        check(TimelineDocument.Kept(stillFace) && !TimelineDocument.Loops(stillFace) &&
+              Faces(TimelineConvert.Apply(Taunt(-1, 600), TimelineEdits.Keep(still, stillFace.Key, true, frames), frames)) is { Length: 55 } fromStill &&
+              fromStill[0] is { Duration: 600, From: 0, To: 600 },
+            "a kept moving face that holds still loops once kept again, a play being the face once");
+        var half = Open(Taunt(1200, 600));
+        check(Faces(TimelineConvert.Apply(Taunt(1200, 600), TimelineEdits.Keep(half, half.Events[0].Key, true, frames), frames)) is { Length: 28 } slow &&
+              slow[1] is { Time: 1200, Duration: 1200, To: 600 } && slow[^1].Duration == 1200,
+            "a face slowed down by its own length loops at that speed");
+        var vanillaRange = Open(Taunt(150, 1));
+        check(Faces(TimelineConvert.Apply(Taunt(150, 1), TimelineEdits.Keep(vanillaRange, vanillaRange.Events[0].Key, true, frames), frames))
+                  is { Length: 55 } whole && whole[0] is { Duration: 600, From: 0, To: 600 },
+            "a moving face with a pose's range loops the whole face once per play");
+
+        // Faces a mod put back to back itself, stopping before the end, stay as they are.
+        var authored = new Tmb().Head(1200, null, 2).Actor(2, 3).Track(3, 4, 5)
+            .Face(4, 0, 600, 1, 600, "cfxf_comeon").Face(5, 600, 600, 1, 600, "cfxf_comeon").Build();
+        check(Open(authored).Events.Length == 2 && !Open(authored).Events.Any(TimelineDocument.Loops),
+            "faces back to back that stop before the end are not read as a loop");
+        // The first loops (test pack 3) kept their last copy: they still read as one looping face.
+        var oldLoop = TmbFile.Parse(saved);
+        oldLoop.SetInt32(oldLoop.Entries.Where(e => e.Magic == "C010").MaxBy(e => e.Time)!.Id, 12, -1);
+        var oldBytes = oldLoop.ToArray();
+        var oldDoc = Open(oldBytes);
+        check(oldDoc.Events.Length == 1 && TimelineDocument.Loops(oldDoc.Events[0]) &&
+              ReferenceEquals(TimelineConvert.Apply(oldBytes, oldDoc, frames), oldBytes) &&
+              Faces(TimelineConvert.Apply(oldBytes, oldDoc with { Events = [oldDoc.Events[0] with { Start = 10 }] }, frames)) is { Length: 55 } redone &&
+              redone[^1].Duration == 600,
+            "a loop saved with a kept last copy reads as one, and is written again ending in neutral");
+        // I'm A Mystery's dance04_loop: smile, a cheer over it, then the smile kept.
+        var mystery = new Tmb().Head(219, "cheer", 2).Actor(2, 3).Track(3, 4, 5, 6)
+            .Face(4, 0, 100, 1, 1, "cfxf_smile").Face(5, 85, 30, 1, 1, "cfxf_cheer").Face(6, 100, -1, 1, 1, "cfxf_smile").Build();
+        check(TimelineConvert.LoopChains(TmbFile.Parse(mystery)).Count == 0 && Open(mystery).Events.Length == 3,
+            "a mod's face kept after a play of itself is no loop: a loop runs to the last frame a timeline reaches");
+        reject(() => TimelineConvert.Apply(taunt, looped), "a loop whose face has no known length is refused");
+        var late = doc with { Events = [face with { Start = 32500 }] };
+        check(!TimelineEdits.CanLoop(late, late.Events[0], frames) && !TimelineDocument.Loops(TimelineEdits.Keep(late, face.Key, true, frames).Events[0]),
+            "a face too late for a second play is kept without a loop");
+    }
+
+    private readonly record struct C010(short Time, int Duration, int Flags, float From, float To);
 
     /// <summary>
     /// Async VFX (C173) loop/wait: the editor reads and writes it, and the check finds looping
@@ -409,6 +598,22 @@ internal static class TmbFileFixture
         check(TimelineDocument.Holds(heldDoc.Events[1]) && timedFace.Int32(12) == 100 && timedFace.Int32(20) == 1 &&
               timedFace.Single(24) == 0 && timedFace.Single(28) == 1 && timedFace.Text == "cfxf_smile",
             "a holding face given time control keeps a range it can play");
+
+        // Lip sync given time control plays its range over its length, so the range must be the whole motion.
+        TmbFile.Entry Timed(byte[] bytes, IReadOnlyDictionary<string, int>? lengths)
+        {
+            var lipDoc = TimelineConvert.Read(TmbFile.Parse(bytes));
+            return TmbFile.Parse(TimelineConvert.Apply(bytes, lipDoc with
+            {
+                Events = [.. lipDoc.Events.Select(x => x.Key == "t6" ? x with { Values = x.Values.SetItem(TmbEntrySchema.TimeControlField, 1) } : x)],
+            }, lengths)).Find(6)!;
+        }
+        byte[] Lip(float end) => new Tmb().Head(100, null, 2).Actor(2, 3, 4).Track(3, 5).Track(4, 6).Motion(5, 100)
+            .Face(6, 0, 25, 0, end, "cfxl_lip_nor1").Build();
+        var lengths = new Dictionary<string, int> { ["cfxl_lip_nor1"] = 40 };
+        check(Timed(Lip(1), lengths) is { } known && known.Single(24) == 0 && known.Single(28) == 40 && known.Int32(12) == 25 &&
+              Timed(Lip(1), null).Single(28) == 1 && Timed(Lip(0), null).Single(28) == 25,
+            "lip sync given time control gets the range 0 to its own length; unknown, an empty range becomes 0 to its stored length");
 
         // Removing the effect drops its track; the sound's track stays for its condition. Ids close up
         // and the push follows its curve to its new id.

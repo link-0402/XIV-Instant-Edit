@@ -492,8 +492,10 @@ public sealed partial class TimelineWindow
             ImGui.TextUnformatted("Starts at " + TimelineWindowViews.FrameText(ev.Start));
             if (TimelineDocument.Holds(ev))
                 ImGui.TextUnformatted(TimelineWindowViews.HoldText(current.Document, ev));
-            else if (ev.Duration > 0)
-                ImGui.TextUnformatted("Lasts " + TimelineWindowViews.DurationText(ev.Duration));
+            else if (TimelineDocument.Kept(ev))
+                ImGui.TextUnformatted(TimelineDocument.Loops(ev) ? TimelineWindowViews.LoopText(ev) : TimelineWindowViews.KeptText);
+            else if (current.Document.PlayedFrames(ev, current.MotionFrames) is var played and > 0)
+                ImGui.TextUnformatted("Lasts " + TimelineWindowViews.DurationText(played));
             if (ev.Path.Length > 0)
                 ImGui.TextColored(Theme.Hint, ev.Path);
             if (ev.LockReason is { Length: > 0 } reason)
@@ -503,7 +505,7 @@ public sealed partial class TimelineWindow
             return;
         }
         if (hit.Part == TimelinePart.LengthHandle && Widgets.HoverDelay("timeline-length-handle"))
-            ImGui.SetTooltip(readOnly ? "The end of the clip." : "Drag to change the length.");
+            ImGui.SetTooltip(readOnly || current.FixedLength ? "The end of the clip." : "Drag to change the length.");
     }
 
     /// <summary> The right-click menu: actions on the event under the pointer, or adds and the length at that frame. </summary>
@@ -536,7 +538,7 @@ public sealed partial class TimelineWindow
             current.Playhead = menuFrame;
             current.Paste();
         }
-        if (ImGui.MenuItem("Set length here", "", false, !readOnly && menuFrame >= TimelineDocument.MinLength))
+        if (ImGui.MenuItem("Set length here", "", false, !readOnly && !current.FixedLength && menuFrame >= TimelineDocument.MinLength))
             current.SetLength(menuFrame);
         if (ImGui.MenuItem("Fit", "F"))
             current.Fit();

@@ -60,6 +60,8 @@ EXPORT_STATUS_POLL_ATTEMPTS = 30
 INVALID_VARIANT_CHARS = frozenset('<>:"/\\|?*')
 MASHUP_TARGET = "CREATE_MASHUP"
 SAVE_NEW_MOD_TARGET = "SAVE_NEW_MOD"
+# Meshes shaped for another race go into that race's own copy of the model (Save as c0801 Model).
+RACE_TARGET = "RACE_MODEL"
 MATERIAL_COVERAGE_SCHEMA = "instant-edit.material-coverage"
 MATERIAL_COVERAGE_WARNING = (
     "Warning: the output mod is missing material or texture files from one or more non-active source mods. "
@@ -539,6 +541,42 @@ def save_new_mod_target_state(context: Context, ref=None) -> tuple[bool, bool, s
         return True, False, str(error)
 
 
+def race_target_state(context: Context, ref=None) -> tuple[bool, int | None, str]:
+    """Whether Save as Race Model is offered (some exported mesh is shaped for another race than the
+    model's), the race it writes for (None when the meshes aren't shaped for one race), and why it
+    can't, "" when it can."""
+    try:
+        ref = ref or export_destination_context(context, persist=False)
+        objects = export_objects_for_scope(ref, getattr(get_instant_edit_props(), "export_scope", "VISIBLE"))
+    except ContextValidationError as error:
+        return False, None, str(error)
+    found = racial_scaling.shaped_races(objects)
+    if not found or set(found) == {racial_scaling.path_race(ref.source_game_path)}:
+        return False, None, ""
+    race, problem = racial_scaling.race_model(objects, ref.source_game_path)
+    return True, race, problem
+
+
+def race_target_label(race: int | None) -> str:
+    """The Save as Race Model target's name: "Save as c0801 Model"."""
+    return f"Save as c{race:04d} Model" if race else "Save as Race Model"
+
+
+def wants_race_model(props, ref, objects) -> bool:
+    """Whether Quick Export writes the meshes as their race's own model: the target is picked, or a game
+    model's first export goes out racially scaled (its own race's model would refuse them)."""
+    if ref.destination_state == "new_mod_required":
+        return bool(racial_scaling.shaped_races(objects))
+    return getattr(props, "variant_target", "") == RACE_TARGET
+
+
+def racial_scaling_issue(props, ref, objects) -> str:
+    """Why Quick Export refuses the meshes' racial scaling for its target, or "" when it doesn't."""
+    if wants_race_model(props, ref, objects):
+        return racial_scaling.race_model(objects, ref.source_game_path)[1]
+    return racial_scaling.mismatch_refusal(objects, ref.source_game_path)
+
+
 # ---- Variant target selection and validation ----
 
 
@@ -636,7 +674,7 @@ def sizes_export_issue(props, ref) -> str:
     if ref.destination_state == "new_mod_required":
         return "Turn off Magic Fit Sizes and export once to create the mod."
     selection = getattr(props, "variant_target", "NEW_GROUP")
-    if selection == IN_PLACE_TARGET:
+    if selection in {IN_PLACE_TARGET, RACE_TARGET}:
         return "Sizes go into an option group. Pick New Group or a group."
     if selection in {MASHUP_TARGET, SAVE_NEW_MOD_TARGET}:
         return "Sizes can't go into a mashup or a new mod."
@@ -742,14 +780,9 @@ def export_target_issues(
                 _named_readiness_issue("No bone weights", unweighted),
             ))
         issues.extend(("ERROR", problem) for problem in check_uv_layers(export_objects))
-        scaled = racial_scaling.marks(export_objects)
-        if scaled:
-            issues.append((
-                "ERROR",
-                _named_readiness_issue(
-                    f"Racially scaled ({' and '.join(sorted(scaled))}) for preview only; re-import unscaled to export",
-                    [name for names in scaled.values() for name in names]),
-            ))
+        scaling_issue = racial_scaling_issue(props, ref, export_objects)
+        if scaling_issue:
+            issues.append(("ERROR", scaling_issue))
         dropped_shape_keys = check_dropped_shape_keys(export_objects)
         if dropped_shape_keys:
             issues.append((
@@ -794,7 +827,7 @@ def export_target_issues(
                 validate_variant_name(ref.source_game_path, getattr(props, "variant_name", ""))
             except ValueError as error:
                 issues.append(("ERROR", str(error)))
-    elif selection != IN_PLACE_TARGET:
+    elif selection not in {IN_PLACE_TARGET, RACE_TARGET}:
         target = selected_variant_target(props)
         if getattr(props, "variant_targets_context_id", "") != ref.context_id:
             issues.append(("ERROR", "Refresh targets for this Context before exporting."))
@@ -1036,7 +1069,7 @@ def refresh_variant_targets(
     elif previous_targets_context_id != ref.context_id and not groups:
         props.variant_target = IN_PLACE_TARGET
     elif props.variant_target not in {
-        "NEW_GROUP", IN_PLACE_TARGET, MASHUP_TARGET, SAVE_NEW_MOD_TARGET,
+        "NEW_GROUP", IN_PLACE_TARGET, MASHUP_TARGET, SAVE_NEW_MOD_TARGET, RACE_TARGET,
     } and not any(
             item.selection_id == props.variant_target for item in props.variant_targets
     ):
@@ -1754,6 +1787,13 @@ class SelectVariantTarget(Operator):
             return "Combines the visible exported meshes and their material and texture dependencies."
         if selection_id == SAVE_NEW_MOD_TARGET:
             return "Saves the visible model as a new mod, bundling participating-mod resources and retaining external dependencies."
+        if selection_id == RACE_TARGET:
+            _shown, race, problem = race_target_state(context)
+            if problem or race is None:
+                return problem or cls.bl_description
+            return (
+                f"Saves the model as a c{race:04d} file next to the imported one and maps it in the same options, "
+                f"so {racial_scaling.race_label(race)} characters wear it.")
         try:
             target = next(
                 (
@@ -2616,10 +2656,15 @@ def detected_attribute_group_tags(context: Context) -> tuple[str, ...]:
     return tags
 
 
-def raise_unless_exportable(export_objects) -> None:
+def raise_unless_exportable(export_objects, game_path: str, *, race_model: bool = False) -> int | None:
     """Refuse meshes the game cannot use: faces must be triangles and meshes need bone weights.
-    Racially scaled meshes are refused too: they are sent for preview only."""
-    refusal = racial_scaling.quick_export_refusal(export_objects)
+    Meshes shaped for another race than the model at ``game_path`` is for are refused too, unless they
+    go out as their race's own model (``race_model``); then that race is returned."""
+    race = None
+    if race_model:
+        race, refusal = racial_scaling.race_model(export_objects, game_path)
+    else:
+        refusal = racial_scaling.mismatch_refusal(export_objects, game_path)
     if refusal:
         raise ValueError(refusal)
     flush_edit_mode(export_objects)
@@ -2634,6 +2679,7 @@ def raise_unless_exportable(export_objects) -> None:
     uv_problems = check_uv_layers(export_objects)
     if uv_problems:
         raise ValueError(" ".join(uv_problems))
+    return race
 
 
 # ---- Mashup export execution ----
@@ -2688,7 +2734,7 @@ def perform_mashup_export(
         raise ValueError(
             "Visible mesh names must use 'group.part Name' or 'Name group.part': "
             + ", ".join(unrecognized))
-    raise_unless_exportable(export_objects)
+    raise_unless_exportable(export_objects, ref.source_game_path)
     attribute_tags, attribute_masks = (
         attribute_group_data(export_objects, use_lods=get_settings().use_lods)
         if getattr(get_instant_edit_props(), "create_attribute_groups", False)
@@ -2903,6 +2949,8 @@ def perform_instant_export(
         raise ValueError("This context already has a Penumbra destination.")
     if not pending and props.variant_target == MASHUP_TARGET:
         raise ValueError("Use Quick Export to choose the mashup destination and name.")
+    if wants_race_model(props, ref, export_objects_for_scope(ref, getattr(props, "export_scope", "VISIBLE"))):
+        return perform_race_export(context, ref, new_mod_name)
     in_place = not pending and props.variant_target == IN_PLACE_TARGET
     variant_target = None if pending or in_place else selected_variant_target(props)
     if variant_target is not None and props.variant_targets_context_id != ref.context_id:
@@ -2930,7 +2978,7 @@ def perform_instant_export(
             "Visible mesh names must use 'group.part Name' or 'Name group.part': "
             + ", ".join(unrecognized)
         )
-    raise_unless_exportable(export_objects)
+    raise_unless_exportable(export_objects, ref.source_game_path)
     attribute_tags, attribute_masks = (
         attribute_group_data(export_objects, use_lods=get_settings().use_lods)
         if getattr(props, "create_attribute_groups", False)
@@ -2954,43 +3002,9 @@ def perform_instant_export(
         byte_size, digest = _file_digest(mdl_path)
 
         # These are the only fields sent in the body. Port is routing only.
-        payload = build_export_payload(
-            ref,
-            export_id,
-            mdl_path,
-            byte_size,
-            digest,
-            props,
-            variant_name,
-            variant_group_name,
-            variant_target,
-            backup_existing=False if pending else None,
-            setup_in_penumbra=not pending and not in_place,
-            new_mod_name=new_mod_name,
-            attribute_tags=attribute_tags,
-            attribute_masks=attribute_masks,
-            est_entries=est_entries,
-        )
-        try:
-            result = _send_plugin_export_to(ref, payload, "/export")
-        except PluginResponseError as error:
-            if error.status != 410 and not (
-                error.status == 401 and error.code == "plugin_instance_mismatch"
-            ):
-                raise
-
-            # A saved scene may outlive the runtime context or the plugin instance.
-            # Reattach once and rebuild the envelope with the plugin-issued
-            # capability and instance id.
-            from .recovery import reattach_collection
-
-            if not reattach_collection(ref.collection, context.scene):
-                raise ValueError(
-                    f"plugin returned HTTP {error.status} ({error.code}); context recovery failed"
-                ) from error
-            ref = validate_context(ref.context_id, context.scene)
-            payload = build_export_payload(
-                ref,
+        def payload(current_ref):
+            return build_export_payload(
+                current_ref,
                 export_id,
                 mdl_path,
                 byte_size,
@@ -3006,19 +3020,10 @@ def perform_instant_export(
                 attribute_masks=attribute_masks,
                 est_entries=est_entries,
             )
-            result = _send_plugin_export_to(ref, payload, "/export")
 
+        result, ref = _send_with_reattach(context, ref, payload, "/export")
         props.last_export_id = export_id
-        promoted = result.get("context")
-        if promoted is not None:
-            if not isinstance(promoted, dict):
-                raise ValueError("plugin returned an invalid promoted context")
-            apply_authoritative_context(ref.collection, promoted)
-            ref = validate_context(ref.context_id, context.scene)
-            props.context_version = int(promoted.get("version", VERSION))
-            props.plugin_instance_id = ref.plugin_instance_id
-            props.capability = ref.capability
-            props.managed_destination = ref.managed_destination
+        ref = _apply_promoted_context(context, ref, result)
         target_file_path = Path(result.get("targetFilePath") or ref.target_file_path)
         if variant_name is not None and not result.get("targetFilePath"):
             target_file_path = target_file_path.with_name(f"{variant_name}.mdl")
@@ -3049,6 +3054,149 @@ def perform_instant_export(
         if refresh_error is not None:
             # The model and Penumbra setup have already completed. Leave the
             # target tree recoverable through its manual refresh button.
+            props.last_status += f"; Penumbra targets could not refresh: {refresh_error}"
+        return mdl_path
+    finally:
+        try:
+            finish_job(temp_dir)
+        except OSError as error:
+            print(f"XIV Instant Edit: could not remove export cache job: {error}")
+
+
+def _send_with_reattach(context: Context, ref, payload_for, endpoint: str):
+    """Send an export to the plugin; when a saved scene outlived the runtime context or the plugin
+    instance, reattach once and send again with the plugin-issued capability and instance id.
+    Returns (the plugin's answer, the Context it went out with)."""
+    try:
+        return _send_plugin_export_to(ref, payload_for(ref), endpoint), ref
+    except PluginResponseError as error:
+        if error.status != 410 and not (
+            error.status == 401 and error.code == "plugin_instance_mismatch"
+        ):
+            raise
+        from .recovery import reattach_collection
+
+        if not reattach_collection(ref.collection, context.scene):
+            raise ValueError(
+                f"plugin returned HTTP {error.status} ({error.code}); context recovery failed"
+            ) from error
+        ref = validate_context(ref.context_id, context.scene)
+        return _send_plugin_export_to(ref, payload_for(ref), endpoint), ref
+
+
+def _apply_promoted_context(context: Context, ref, result: dict):
+    """Take on the Context the plugin promoted to the mod a game model's first export created; returns
+    the Context to carry on with."""
+    promoted = result.get("context")
+    if promoted is None:
+        return ref
+    if not isinstance(promoted, dict):
+        raise ValueError("plugin returned an invalid promoted context")
+    apply_authoritative_context(ref.collection, promoted)
+    ref = validate_context(ref.context_id, context.scene)
+    props = get_instant_edit_props()
+    props.context_version = int(promoted.get("version", VERSION))
+    props.plugin_instance_id = ref.plugin_instance_id
+    props.capability = ref.capability
+    props.managed_destination = ref.managed_destination
+    return ref
+
+
+def build_race_payload(ref, export_id: str, mdl_path: Path, byte_size: int, sha256: str, props, race: int, *,
+                       new_mod_name: str | None = None,
+                       attribute_tags: tuple[str, ...] = (),
+                       attribute_masks: dict[str, int] | None = None,
+                       est_entries: list[dict] | None = None) -> dict:
+    """Build the plugin's request to write the meshes as ``race``'s own copy of the model (see
+    perform_race_export); ``new_mod_name`` names the mod a game model's first export creates."""
+    payload = {
+        "schema": "instant-edit.export-race",
+        "version": 1,
+        "pluginInstanceId": ref.plugin_instance_id,
+        "contextId": ref.context_id,
+        "exportId": export_id,
+        "capability": ref.capability,
+        "race": f"c{race:04d}",
+        "filePath": str(mdl_path),
+        "size": byte_size,
+        "sha256": sha256,
+        "backupExisting": new_mod_name is None and bool(getattr(get_settings(), "backup_models_on_export", False)),
+    }
+    if new_mod_name is not None:
+        payload["newModName"] = new_mod_name
+    if getattr(props, "create_attribute_groups", False):
+        payload["createAttributeGroups"] = True
+        payload["attributeTags"] = list(attribute_tags)
+        payload["attributeMasks"] = dict(attribute_masks or {})
+    if est_entries is not None:
+        payload["estEntries"] = [dict(entry) for entry in est_entries]
+    return payload
+
+
+def perform_race_export(context: Context, ref, new_mod_name: str | None = None) -> Path:
+    """Quick Export meshes shaped for another race as that race's own copy of the model: the plugin
+    writes it next to the imported file (c0801e6000_top.mdl), maps it beside the original and sets the
+    EQDP entry that makes the race load it. A game model's first export creates its mod with it."""
+    props = get_instant_edit_props()
+    export_objects = export_objects_for_scope(ref, getattr(props, "export_scope", "VISIBLE"))
+    if not export_objects:
+        raise ValueError("No visible mesh objects to export.")
+    export_groups = group_mesh_objects(export_objects)
+    recognized = {obj for group in export_groups for obj in group.objects}
+    unrecognized = [obj.name for obj in export_objects if obj not in recognized]
+    if unrecognized:
+        raise ValueError(
+            "Visible mesh names must use 'group.part Name' or 'Name group.part': "
+            + ", ".join(unrecognized)
+        )
+    race = raise_unless_exportable(export_objects, ref.source_game_path, race_model=True)
+    attribute_tags, attribute_masks = (
+        attribute_group_data(export_objects, use_lods=get_settings().use_lods)
+        if getattr(props, "create_attribute_groups", False)
+        else ((), {})
+    )
+    est_entries, est_issue = hair_skeleton_tags(export_objects)
+    pending = ref.destination_state == "new_mod_required"
+
+    export_id = uuid.uuid4().hex
+    temp_dir = create_job("exports", export_id)
+    mdl_path = temp_dir / f"model_{export_id}.mdl"
+    try:
+        saved_materials = _use_mashup_source_materials(export_objects, ref.context_id)
+        try:
+            with _exporting_as_mdl():
+                export_result(mdl_path.with_suffix(""), "MDL", export_objects=export_objects)
+        finally:
+            _restore_object_materials(saved_materials)
+        if not mdl_path.is_file():
+            raise ValueError("Export produced no .mdl file.")
+        byte_size, digest = _file_digest(mdl_path)
+
+        def payload(current_ref):
+            return build_race_payload(
+                current_ref, export_id, mdl_path, byte_size, digest, props, race,
+                new_mod_name=new_mod_name if pending else None, attribute_tags=attribute_tags,
+                attribute_masks=attribute_masks, est_entries=est_entries)
+
+        result, ref = _send_with_reattach(context, ref, payload, "/export/race")
+        props.last_export_id = export_id
+        ref = _apply_promoted_context(context, ref, result)
+        target_file_path = result.get("targetFilePath") or racial_scaling.race_model_path(ref.source_game_path, race)
+        group_status = "; ".join(
+            f"{group.mesh_index}.({','.join(str(part) for part in group.parts)})"
+            for group in export_groups
+        )
+        status = f"Exported {group_status} to {target_file_path} as the c{race:04d} model" + (
+            " and created its Penumbra mod" if pending else "")
+        warnings = ([est_issue] if est_issue else []) + list(result.get("warnings", []))
+        props.last_status = (
+            f"{status} with warnings: {plugin_warning_summary(warnings)}" if warnings else status
+        )
+        if pending:
+            # A newly created Penumbra destination must not preserve the old Context's target-cache identity.
+            props.variant_targets_context_id = ""
+        refresh_error = refresh_variant_targets_after_operation(context)
+        if refresh_error is not None:
             props.last_status += f"; Penumbra targets could not refresh: {refresh_error}"
         return mdl_path
     finally:
@@ -3138,7 +3286,7 @@ def perform_sizes_export(context: Context, ref) -> Path:
             "Visible mesh names must use 'group.part Name' or 'Name group.part': "
             + ", ".join(unrecognized)
         )
-    raise_unless_exportable(export_objects)
+    raise_unless_exportable(export_objects, ref.source_game_path)
     attribute_tags, attribute_masks = (
         attribute_group_data(export_objects, use_lods=get_settings().use_lods)
         if getattr(props, "create_attribute_groups", False)
@@ -3172,24 +3320,7 @@ def perform_sizes_export(context: Context, ref) -> Path:
                 current_ref, export_id, files, default_size, props, group_name, group_id,
                 attribute_tags=attribute_tags, attribute_masks=attribute_masks, est_entries=est_entries)
 
-        try:
-            result = _send_plugin_export_to(ref, payload(ref), "/export/sizes")
-        except PluginResponseError as error:
-            if error.status != 410 and not (
-                error.status == 401 and error.code == "plugin_instance_mismatch"
-            ):
-                raise
-            # As in perform_instant_export: reattach once and send again with the
-            # plugin-issued capability and instance id.
-            from .recovery import reattach_collection
-
-            if not reattach_collection(ref.collection, context.scene):
-                raise ValueError(
-                    f"plugin returned HTTP {error.status} ({error.code}); context recovery failed"
-                ) from error
-            ref = validate_context(ref.context_id, context.scene)
-            result = _send_plugin_export_to(ref, payload(ref), "/export/sizes")
-
+        result, ref = _send_with_reattach(context, ref, payload, "/export/sizes")
         props.last_export_id = export_id
         group = result.get("destinationName") or group_name
         status = f"Exported {len(results)} sizes to {group}: {', '.join(sized.name for sized in results)}"

@@ -158,6 +158,7 @@ try
 {
     VariantExportScenarios.Run(testRoot);
     SizesExportScenarios.Run(testRoot);
+    RaceExportScenarios.Run(testRoot);
     EstEntryScenarios.Run(testRoot);
     CheckSessionStore(testRoot);
     SelectorStabilityScenarios.Run(testRoot);

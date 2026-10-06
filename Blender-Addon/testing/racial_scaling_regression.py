@@ -214,8 +214,13 @@ def check_reshape() -> None:
         require(body.data.get(racial.APPLIED_PROPERTY) == "c0201 to c0801" and racial.APPLIED_PROPERTY not in body,
                 "the mesh data records what was applied, not the object")
         require(not body.get(racial.PROPERTY), "reshaped meshes don't get the preview-only property")
-        require(racial.quick_export_refusal([body]) == "" and racial.simple_export_warning([body]) == "",
-                "neither Quick Export nor Simple Export holds back a reshaped mesh")
+        require(racial.simple_export_warning([body]) == "" and racial.shaped_race(body) == 801,
+                "Simple Export doesn't warn about a reshaped mesh, which is shaped for the race it was reshaped for")
+        top = "chara/equipment/e6000/model/c0201e6000_top.mdl"
+        require("can't go into a c0201 model" in racial.mismatch_refusal([body], top) and
+                racial.mismatch_refusal([body], "chara/equipment/e6000/model/c0801e6000_top.mdl") == "" and
+                racial.race_model([body], top) == (801, ""),
+                "Quick Export writes a reshaped mesh as the race's own model only, not back into the c0201 model")
 
         def error_from(points):
             return max((Vector(vertex.co) - point).length for vertex, point in zip(body.data.vertices, points))

@@ -55,6 +55,10 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private float footerHeight;
     private float propertiesWidth;
     private bool disposed;
+    // The catalog's face lengths with an expression's own face, kept while neither changes.
+    private IReadOnlyDictionary<string, int>? framesKnown;
+    private AnimationTimelineSource? framesSource;
+    private IReadOnlyDictionary<string, int>? framesMerged;
 
     internal TimelineWindow(AnimationEditService? animations, string? animationError, TimelineCatalog catalog,
         AnimationPreviewService preview, AnimationPlayback playback, IDataManager data, IFramework framework, IPluginLog log,
@@ -275,6 +279,25 @@ public sealed partial class TimelineWindow : Window, IDisposable
     }
 
     /// <summary>
+    /// Facial motions' own lengths: the catalog's, read from the game's face files, with the face an
+    /// expression plays as the collection resolves it, which a mod may have made a moving one.
+    /// The same instance until either changes, so the layout is rebuilt only then.
+    /// </summary>
+    private IReadOnlyDictionary<string, int> MotionFrames(AnimationTimelineSource current)
+    {
+        var known = catalog.Data.MotionFrames;
+        if (!current.Standalone)
+            return known;
+        if (!ReferenceEquals(known, framesKnown) || !ReferenceEquals(current, framesSource) || framesMerged == null)
+        {
+            framesKnown = known;
+            framesSource = current;
+            framesMerged = known.SetItems(current.OwnFrames);
+        }
+        return framesMerged;
+    }
+
+    /// <summary>
     /// The source with the clip's latest skeleton match: choosing a skeleton in the Source tab after
     /// opening the timeline must still allow a length change.
     /// </summary>
@@ -329,6 +352,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
             Widgets.Banner("##timeline-reload-error", FeedbackSeverity.Error, "Reading the timeline again failed: " + loadError);
         if (catalogKey != null)
             catalog.Request(catalogKey);
+        editor.MotionFrames = MotionFrames(source);
 
         SyncPlayback(editor, source);
         DrawToolbar(editor);
@@ -373,7 +397,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
     /// <summary> The clip's name and state, the mod it comes from and its length. </summary>
     private void DrawHeader(AnimationTimelineSource current)
     {
-        Widgets.Icon(FontAwesomeIcon.Running, Theme.AnimationKind);
+        Widgets.Icon(current.Standalone ? FontAwesomeIcon.Smile : FontAwesomeIcon.Running, Theme.AnimationKind);
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Label, title);
@@ -389,7 +413,8 @@ public sealed partial class TimelineWindow : Window, IDisposable
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(editor.Document.LengthChanged ? Theme.Warning : Theme.Muted, lengthText);
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(editor.Document.LengthChanged ? "The new length. Saving resamples the motion to it." : "The clip's length.");
+            ImGui.SetTooltip(editor.Document.LengthChanged ? "The new length. Saving resamples the motion to it."
+                : current.Standalone ? "The expression's timeline length." : "The clip's length.");
     }
 
     /// <summary> The inline question before unsaved changes are lost: Discard or Keep editing, never a modal. </summary>

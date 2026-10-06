@@ -160,7 +160,10 @@ public sealed class Plugin : IDalamudPlugin
         }
         _recorder = new AnimationRecorder(framework, objects, clientState, targets, new CustomizePlusPause(pi, framework, log));
         // The timeline editor: what can be placed, the GPose preview through a temporary mod, and playback on the GPose actor.
-        _timelineCatalog = new Services.Animations.Timeline.TimelineCatalog(data, log, bytes => Services.Audio.ScdFile.TrySeconds(bytes));
+        // Lip shape lengths come from the game's Havok, read on the framework thread like the observer's clip lengths.
+        _timelineCatalog = new Services.Animations.Timeline.TimelineCatalog(data, log, bytes => Services.Audio.ScdFile.TrySeconds(bytes),
+            _animations == null ? null : (bytes, token) => framework.RunOnTick(
+                () => Services.Animations.AnimationRuntime.InspectPapDurations(bytes), cancellationToken: token).GetAwaiter().GetResult());
         _animationPreview = new Services.Animations.Preview.AnimationPreviewService(_penumbra, framework, log, configDirectory,
             () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory), clientState);
         _animationPlayback =new Services.Animations.Preview.AnimationPlayback(framework, objects, clientState, targets, log);

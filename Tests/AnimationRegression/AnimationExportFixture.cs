@@ -247,5 +247,17 @@ internal static class AnimationExportFixture
             "a Blender action is named after the animation and its clip inside the PAP");
         check(AnimationPresentation.ExportName(Capture("CBEM_YES loop")) == "CBEM_YES loop",
             "the clip name is not repeated when the display name already has it");
+
+        // An expression: a face on the face skeleton, timed by a TMB of its own.
+        var timeline = new AnimationResource("chara/action/facial/pose/comeon.tmb", "x", "before", "Panting Face");
+        var expression = Capture("Taunt") with { ExpressionTimeline = timeline };
+        check(AnimationPresentation.IsExpression(expression) && AnimationPresentation.AnimationState(expression, false) == "Expression" &&
+              !AnimationPresentation.IsExpression(Capture("Yes")) && AnimationPresentation.AnimationState(Capture("Yes"), false) == "Emote",
+            "an expression is labelled as one");
+        var saved = AnimationObserver.ApplyUpdatedSources([expression], expression.Id, [timeline with { Hash = "after" }]).Single();
+        var other = AnimationObserver.ApplyUpdatedSources([expression], "other", [timeline with { Hash = "after" }]).Single();
+        check(saved.ExpressionTimeline?.Hash == "after" && other.ExpressionTimeline?.Hash == "before" &&
+              AnimationObserver.ApplyUpdatedSources([Capture("Yes")], "clip", [timeline]).Single().ExpressionTimeline == null,
+            "a save in place moves an expression's timeline file along, and only that expression's");
     }
 }

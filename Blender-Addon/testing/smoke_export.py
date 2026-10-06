@@ -1535,6 +1535,7 @@ def run() -> None:
         mashup_plan_payloads = []
         mashup_export_payloads = []
         export_payloads = []
+        race_payloads = []
         material_coverage_payloads = []
         material_coverage_warning = True
         material_coverage_delay = 0.2
@@ -1646,6 +1647,12 @@ def run() -> None:
                 return FakeResponse(json.dumps(response).encode("utf-8"))
             if request.full_url.endswith("/export"):
                 export_payloads.append(json.loads(request.data.decode("utf-8")))
+            if request.full_url.endswith("/export/race"):
+                race_payloads.append(json.loads(request.data.decode("utf-8")))
+                return FakeResponse(json.dumps({
+                    "ok": True, "code": "race_model_exported", "message": "exported",
+                    "targetFilePath": "C:/Penumbra/SmokeMod/Files/c0801e0001_top.mdl",
+                }).encode("utf-8"))
             return FakeResponse()
 
         plugin_http.urllib.request.urlopen = fake_urlopen
@@ -2318,27 +2325,51 @@ def run() -> None:
                 f"expected={tuple(tuple(row) for row in original_pose)}"
             )
         bpy.context.scene.xiv_ie_settings.reset_scaling_on_export = True
-        # Racially scaled meshes are previews: Quick Export refuses them before writing anything.
+        # Racially scaled meshes are shaped for their race: Quick Export refuses to write them into the
+        # c0101 model they came from and offers that race's own model instead.
         scaling_property = importlib.import_module(f"{addon.__name__}.instant_edit.racial_scaling").PROPERTY
-        obj[scaling_property] = "c0201 to c0801"
+        obj[scaling_property] = "c0101 to c0801"
         payloads_before = len(export_payloads)
         try:
             scaled_issues = instant_ops.export_target_issues(bpy.context, ref, material_coverage_warning=False)
-            if not any(severity == "ERROR" and "Racially scaled (c0201 to c0801) for preview only" in message and obj.name in message
-                       for severity, message in scaled_issues):
+            if not any(severity == "ERROR" and "can't go into a c0101 model" in message and obj.name in message and
+                       "Save as c0801 Model" in message for severity, message in scaled_issues):
                 raise AssertionError(f"Export readiness did not report the racially scaled mesh: {scaled_issues}")
             try:
                 instant_ops.perform_instant_export(bpy.context)
             except ValueError as error:
-                if "racially scaled (c0201 to c0801) for preview only" not in str(error):
+                if "can't go into a c0101 model" not in str(error):
                     raise AssertionError(f"Quick Export refused a racially scaled mesh for another reason: {error}")
             else:
-                raise AssertionError("Quick Export wrote a racially scaled mesh")
+                raise AssertionError("Quick Export wrote a racially scaled mesh into another race's model")
             if len(export_payloads) != payloads_before:
                 raise AssertionError("Quick Export sent a racially scaled mesh to the plugin")
+            print("[PASS] Quick Export refuses racially scaled meshes for another race's model and readiness reports them")
+
+            instant_props.variant_target = instant_ops.RACE_TARGET
+            shown, race, problem = instant_ops.race_target_state(bpy.context, ref)
+            if not shown or race != 801 or "not shaped for c0801" not in problem or second.name not in problem:
+                raise AssertionError(f"Save as c0801 Model took unscaled meshes: {(shown, race, problem)}")
+            for tagged in (second, added_group):
+                tagged[scaling_property] = "c0101 to c0801"
+            shown, race, problem = instant_ops.race_target_state(bpy.context, ref)
+            race_issues = instant_ops.export_target_issues(bpy.context, ref, material_coverage_warning=False)
+            if (shown, race, problem) != (True, 801, "") or any("c0801" in message for _severity, message in race_issues):
+                raise AssertionError(f"Save as c0801 Model was not offered: {(shown, race, problem)} {race_issues}")
+            instant_ops.perform_instant_export(bpy.context)
+            race_payload = race_payloads[-1] if race_payloads else {}
+            if (race_payload.get("schema") != "instant-edit.export-race" or race_payload.get("version") != 1 or
+                    race_payload.get("race") != "c0801" or race_payload.get("contextId") != ref.context_id or
+                    "newModName" in race_payload or "variantTarget" in race_payload or
+                    len(export_payloads) != payloads_before):
+                raise AssertionError(f"Save as c0801 Model did not send a race export: {race_payload}")
+            if "as the c0801 model" not in instant_props.last_status or "c0801e0001_top.mdl" not in instant_props.last_status:
+                raise AssertionError(f"Save as c0801 Model reported: {instant_props.last_status}")
         finally:
-            del obj[scaling_property]
-        print("[PASS] Quick Export refuses racially scaled meshes and readiness reports them")
+            instant_props.variant_target = "NEW_GROUP"
+            for tagged in (obj, second, added_group):
+                tagged.pop(scaling_property, None)
+        print("[PASS] Save as c0801 Model sends the scaled meshes as the race's own model")
         # Magic Fit's Hair Weights tags: every part agrees on one hair skeleton.
         for tagged in (obj, second, added_group):
             tagged["xiv_est_hair"] = 160

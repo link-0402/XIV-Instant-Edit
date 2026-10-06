@@ -146,16 +146,17 @@ internal sealed class AnimationResources(PenumbraService penumbra, IDataManager 
     public static bool CanReplace(AnimationResource source) => source.ModDirectory != null && source.ModRoot != null &&
         source.RelativePath != null && Path.IsPathFullyQualified(source.ResolvedPath) &&
         PathRules.IsPathWithin(source.ResolvedPath, source.ModRoot) &&
-        SafeModRelativePath(source.RelativePath) &&
-        source.GamePath.EndsWith(".pap", StringComparison.OrdinalIgnoreCase);
+        SafeModRelativePath(source.RelativePath, source.GamePath);
 
     /// <summary>
-    /// A PAP's path inside its mod folder. Mod authors name their files freely
-    /// (e.g. "animations/sybian riding groundsit 1 v10.pap"), so this follows the
-    /// backup store's file-name rules rather than the stricter game-path ones.
+    /// A PAP's path inside its mod folder, or an expression's TMB's, with the extension of the
+    /// game path it maps. Mod authors name their files freely (e.g. "animations/sybian riding
+    /// groundsit 1 v10.pap"), so this follows the backup store's file-name rules rather than the
+    /// stricter game-path ones.
     /// </summary>
-    internal static bool SafeModRelativePath(string relativePath) =>
-        PenumbraService.IsSafeGameResourcePath(relativePath.Replace('\\', '/'), ".pap");
+    internal static bool SafeModRelativePath(string relativePath, string gamePath) =>
+        Path.GetExtension(gamePath).ToLowerInvariant() is ".pap" or ".tmb" &&
+        PenumbraService.IsSafeGameResourcePath(relativePath.Replace('\\', '/'), Path.GetExtension(gamePath));
 
     /// <summary>
     /// The clips a rebake rewrites, read for the edit and rechecked at commit. A

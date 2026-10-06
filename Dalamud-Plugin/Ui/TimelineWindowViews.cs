@@ -130,6 +130,26 @@ internal static class TimelineWindowViews
     public static string HoldText(TimelineDocument doc, TimelineEvent ev) =>
         doc.HeldEnd(ev) < doc.Length ? "Holds until the next expression" : "Holds to the end";
 
+    /// <summary>How long a kept face shows (see <see cref="TimelineDocument.Kept"/>).</summary>
+    public const string KeptText = "Stays after the timeline, until another expression replaces it";
+
+    /// <summary>How long a looping face loops (see <see cref="TimelineDocument.Loops"/>), then what it does.</summary>
+    public static string LoopText(TimelineEvent ev) =>
+        $"Loops for about {LoopMinutes(ev)} minutes, then returns to neutral";
+
+    /// <summary>The minutes a face starting at <paramref name="ev"/>'s start loops: up to the last frame a timeline reaches.</summary>
+    public static int LoopMinutes(TimelineEvent ev) =>
+        (int)Math.Max(1, Math.Round((TimelineDocument.MaxFrames - ev.Start) / (double)TimelineDocument.Fps / 60));
+
+    /// <summary>
+    /// The Keep switch's tooltip. A moving face (a mod's animated one) loops on an expression's
+    /// timeline; anywhere else it holds still once kept.
+    /// </summary>
+    public static string KeepTip(TimelineEvent ev, bool moves, bool loops) =>
+        loops ? $"Keep this face on after the expression ends. It loops for about {LoopMinutes(ev)} minutes, then returns to neutral. Another expression replaces it sooner."
+        : moves ? "Keep this face on after the timeline ends, until another expression replaces it. It holds still once kept."
+        : "Keep this face on after the timeline ends, until another expression replaces it.";
+
     /// <summary>"2.5s · 75 frames", with the old length when it changed.</summary>
     public static string LengthText(TimelineDocument doc)
     {
@@ -144,7 +164,9 @@ internal static class TimelineWindowViews
     public static string? HeaderNote(TimelineDocument doc) =>
         doc.LengthChanged || doc.HeaderLength == doc.SourceLength
             ? null
-            : $"The file's header says {TimelineText.Seconds(doc.HeaderLength)}, but the motion lasts {TimelineText.Seconds(doc.SourceLength)}.";
+            : doc.HeaderLength < 0
+                ? "The file's header gives an endless length (-1). It stays that way."
+                : $"The file's header says {TimelineText.Seconds(doc.HeaderLength)}, but the motion lasts {TimelineText.Seconds(doc.SourceLength)}.";
 
     /// <summary>A field's value as read-only text.</summary>
     public static string FieldText(TimelineField field, double value)

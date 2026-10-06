@@ -425,6 +425,16 @@ with the empty 0 to 0 range VFXEditor writes.
   where the timed one starts and shows nothing after it ends. Check what the game
   shows after the timed face ends: the held face, or the neutral face.
 
+Lip sync and blinks without time control play their own length. The window reads the
+lengths from the player's resident face.pap through the game's Havok (in all 161 vanilla
+resident faces lip …1 = 40 frames and …2 = 10). 23 of the library's 61 such lips
+store another length.
+- [ ] Add Lip Nor 2 and Lip Nor 1: they read 0.33s and 1.33s with "own speed" and
+  have no resize edges. (40 frames for Nor 2 means the Havok read failed.) In game
+  each plays once, then the mouth rests.
+- [ ] Tick Time control on Lip Nor 1, stretch it to 80 frames and save. In game the
+  lip plays at half speed (the save writes the range 0 to 40).
+
 Effects that stop:
 Red Carpet's Popoto Step dance (a swap of its mode A walk onto dance12_loop) starts
 four effects with Async VFX entries at loop/wait 909. With -1 the carpet, cloud and
@@ -477,3 +487,63 @@ Window:
 - [ ] With the window focused, Delete, arrows and Ctrl+Z/Y/C/V/D/A don't reach the game.
 - [ ] Every field edit in the properties panel undoes in one step. The window stays
   visible in GPose and the On Screen/Animations tabs keep working.
+
+## Expressions (pending)
+
+Expression emotes (/smile, /taunt...) play a face on the face skeleton, timed by a TMB of
+their own, chara/action/facial/pose/<name>.tmb. The listener now looks for the face in the
+library that TMB names (its TMPP) and in the face's resident face.pap. Before, it only
+looked in nonresident/<name>.pap, which misses Straight Face, Shut Eyes, Endure, Ouch and
+Concentrate. Offline: Keep on a vanilla expression writes exactly what Permanent Facial
+Expressions ships for Alert and Straight Face; its other 27 files also set the header to
+-1. 312 vanilla and mod expression timelines read and save back byte for byte.
+
+In-game facts (2026-10-05, Panting Face [Taunt], a 600-frame moving face):
+- Time control on with a frame range past the face's own length (0..1,000,000,000 over
+  as many frames, or 0..2^32 over -1) drops the face at once.
+- Time control off plays the face once at its own length, even with an endless (-1)
+  timeline header. Time control on, 0..600 over 600 with a 600-frame header, also plays
+  once: the expression's timeline does not repeat.
+- -1 with the clip's own range (the mod's Static Infinite) holds the face still.
+- The same face three times back to back (frames 0, 600, 1200, each 0..600 over 600)
+  plays for the full minute, with the header at 1800, -1 or left at 150. Entries past
+  the expression's header play.
+- The editor's own Keep output for Panting Face (54 plays, then the kept copy) keeps
+  playing, and a short run (4 plays, then the kept copy) holds the face still after the
+  last play (test pack 3, 2026-10-05). The user wants the face back to neutral at the
+  end instead, so the last copy now plays normally.
+
+So Keep on a moving face (its own length over 2 frames, from the clip the listener
+matched) writes it as copies back to back on its own track, up to frame 32,767 (the
+last a 16-bit entry time reaches, about 18 minutes); after the last play the face
+returns to neutral. Loops saved with a kept last copy (test pack 3) still read as loops
+and are rewritten without it when edited. NFLB's Cow Taming keeps 19 faces on one track; no library
+timeline has more than 26 tracks on one actor, so copies never get tracks of their own.
+Reading collapses such a run back into one looping face. A play keeps a mod's own speed
+when its range covers the whole face (Half Speed loops at half speed), else it is the
+face once at its own length.
+
+- [ ] Do /smile, /taunt and /bow (Shut Eyes, resident). Each is listed with a face icon
+  and "Expression" while it plays, and stays under Played recently once its face
+  skeleton is matched. The Source tab shows the face's PAP and the timeline file with
+  its mod. There is no Skeleton repair tab.
+- [ ] Adjust face bones in LivePose during an expression, then Rebake with LivePose. The
+  expression plays with the adjustment and LivePose's face pose for it is cleared.
+- [ ] Untick a face bone under Animated bones and rebake: that bone stops moving.
+- [ ] Send an expression to Blender with the pen.
+- [ ] Open an expression's timeline. The header shows a face, the length can't change
+  and Save writes only the TMB. Preview in GPose plays the expression on the face
+  only: the body keeps its pose. Stop returns the face to neutral.
+- [ ] Tick Keep on /smile's face and save in place. In game the smile stays after the
+  expression ends, until another expression replaces it. Undo last save restores it.
+- [ ] Open Permanent Facial Expressions' smile: the face reads kept, a note says the
+  header is endless, and an unchanged save is refused (nothing changed).
+- [ ] Open Panting Face's /taunt. The face reads 20s long. Tick Keep: it reads "Loops
+  for about 18 min" and is drawn to the end. Save in place, /taunt and watch for over
+  a minute: the face keeps panting with no visible pop between plays, and /smile
+  replaces it. Reopen the timeline: one looping face, not 55.
+- [ ] With Panting Face's Static Infinite option, the face reads "Holds still" and Keep
+  is unticked; ticking it makes it loop. With Half Speed it loops at half speed.
+- [ ] A loop that runs out returns the face to neutral. Check with a loop started late
+  (move the face to about 31,000 frames, about 1 minute of loop) rather than waiting
+  18 minutes.

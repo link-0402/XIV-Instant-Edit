@@ -57,7 +57,7 @@ public sealed partial class TimelineWindow
         ImGui.SetNextItemWidth(Theme.Scaled(72));
         // While typing, the field shows what was typed; Enter or leaving it applies the length once.
         var seconds = lengthActive ? lengthEdit : current.Document.Length / (float)TimelineDocument.Fps;
-        using (ImRaii.Disabled(readOnly))
+        using (ImRaii.Disabled(readOnly || current.FixedLength))
         {
             if (ImGui.InputFloat("##timeline-length", ref seconds, 0, 0, "%.2f"))
                 lengthEdit = seconds;
@@ -68,7 +68,9 @@ public sealed partial class TimelineWindow
                 current.SetLength(TimelineWindowViews.Frames(lengthEdit));
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("The clip's length in seconds. Press Enter to apply it.");
+            ImGui.SetTooltip(current.FixedLength
+                ? "An expression's timeline keeps its length."
+                : "The clip's length in seconds. Press Enter to apply it.");
         ImGui.SameLine(0, Theme.Scaled(3));
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Muted, "s");

@@ -183,7 +183,7 @@ internal static unsafe class AnimationRuntime
                     AnimationNative.ValidateArray(animated->AnimationControls, 256, "animation controls");
                     if (!descriptions.TryGetValue((nint)animated->Skeleton, out description!))
                     {
-                        var resource = p->SkeletonResourceHandle->FileName.ToString();
+                        var resource = p->SkeletonResourceHandle->FileName.Utf8();
                         if (cache?.TryGetSkeleton(animated->Skeleton, resource, out description) != true)
                         {
                             description = AnimationSkeleton.Describe(animated->Skeleton);
@@ -197,7 +197,7 @@ internal static unsafe class AnimationRuntime
                 {
                     var control = animated->AnimationControls[i].Value;
                     if (control == null || control->Weight <= 0 || control->Binding.ptr == null) continue;
-                    var resource = p->SkeletonResourceHandle->FileName.ToString();
+                    var resource = p->SkeletonResourceHandle->FileName.Utf8();
                     RuntimeBinding? captured;
                     try
                     {

@@ -13,8 +13,8 @@ internal readonly record struct TimelineLaneRows(TimelineLane Lane, int FirstRow
 /// <summary>
 /// Which row every event of a document is drawn in. Built once per document, not per frame, and
 /// independent of the zoom: an event occupies [Start, Start + max(Duration, visible length, 1)), and
-/// events whose spans overlap inside a lane are packed greedily into sub-rows. A holding face counts
-/// as lasting until it stops showing (<see cref="Shown"/>). No ImGui or Dalamud dependencies.
+/// events whose spans overlap inside a lane are packed greedily into sub-rows. A motion the game plays
+/// at its own speed counts as lasting what it plays (<see cref="Shown"/>). No ImGui or Dalamud dependencies.
 /// </summary>
 internal sealed class TimelineLayout
 {
@@ -46,8 +46,11 @@ internal sealed class TimelineLayout
     /// <summary>
     /// Lays out <paramref name="doc"/>. <paramref name="visibleLength"/> gives the frames an event
     /// visibly takes beyond its duration (a sound's play length, a label); null counts only durations.
+    /// <paramref name="motionFrames"/> gives facial motions' own lengths by name (see
+    /// <see cref="TimelineDocument.PlayedFrames"/>); without it they count what they store.
     /// </summary>
-    public static TimelineLayout Build(TimelineDocument doc, Func<TimelineEvent, int>? visibleLength = null)
+    public static TimelineLayout Build(TimelineDocument doc, Func<TimelineEvent, int>? visibleLength = null,
+        IReadOnlyDictionary<string, int>? motionFrames = null)
     {
         var events = doc.Events.IsDefault ? [] : doc.Events;
         var rows = new int[events.Length];
@@ -58,9 +61,10 @@ internal sealed class TimelineLayout
         for (var index = 0; index < events.Length; index++)
         {
             var ev = events[index];
-            // The game ignores a holding face's length: it shows until the next face or the end.
-            if (TimelineDocument.Holds(ev))
-                ev = ev with { Duration = doc.HeldEnd(ev) - ev.Start };
+            // The game ignores the length a motion at its own speed stores: a face shows until the
+            // next face or the end, a lip motion for its own length.
+            if (doc.PlayedFrames(ev, motionFrames) is var played && played != ev.Duration)
+                ev = ev with { Duration = played };
             shown[index] = ev;
             // Saturating: mods use int32 durations such as 9999999 for "until the end".
             ends[index] = (int)Math.Min(int.MaxValue, (long)ev.Start + Math.Max(Math.Max(ev.Duration, visibleLength?.Invoke(ev) ?? 0), 1));
@@ -107,9 +111,9 @@ internal sealed class TimelineLayout
     public int EndOf(int index) => ends[index];
 
     /// <summary>
-    /// The event at <paramref name="index"/> as it is drawn and grabbed: a holding face
-    /// (<see cref="TimelineDocument.Holds"/>) lasts until <see cref="TimelineDocument.HeldEnd"/>
-    /// instead of the length it stores. Every other event is the document's own.
+    /// The event at <paramref name="index"/> as it is drawn and grabbed: a motion at its own speed
+    /// lasts what the game plays (<see cref="TimelineDocument.PlayedFrames"/>) instead of the length
+    /// it stores. Every other event is the document's own.
     /// </summary>
     public TimelineEvent Shown(int index) => shown[index];
 

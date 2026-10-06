@@ -8,6 +8,15 @@ namespace InstantEdit.Services.Animations;
 
 internal sealed class AnimationObserver : IDisposable
 {
+    /// <summary>
+    /// What an active timeline's TMBs name: the motions it plays, the face libraries it loads and,
+    /// read first, its own file (an expression's timeline, for the Timeline tool).
+    /// </summary>
+    private sealed record TimelineReferences(ImmutableHashSet<string> Motions, ImmutableArray<string> FacePacks, AnimationResource? Root)
+    {
+        public static readonly TimelineReferences None = new(ImmutableHashSet<string>.Empty, [], null);
+    }
+
     private readonly IFramework framework;
     private readonly IObjectTable objects;
     private readonly PenumbraService penumbra;
@@ -25,7 +34,7 @@ internal sealed class AnimationObserver : IDisposable
     private readonly RuntimeCaptureCache runtimeCache = new();
     private readonly AnimationResourceCache resourceCache = new();
     private readonly ConcurrentDictionary<string, AnimationPap> parsedPaps = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, ImmutableHashSet<string>> motionCache = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, TimelineReferences> motionCache = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ImmutableDictionary<int, float>> durations = new(StringComparer.Ordinal);
     private CancellationTokenSource? listening;
     private CancellationTokenSource? observation;
@@ -165,13 +174,16 @@ internal sealed class AnimationObserver : IDisposable
                 resourceMapKey = mapKey;
             }
             var gamePaths = paths.Values.SelectMany(p => p).Distinct(StringComparer.Ordinal).ToArray();
-            var motionReferences = new Dictionary<ushort, ImmutableHashSet<string>>();
-            async Task<ImmutableHashSet<string>> TimelineMotions(AnimationCatalog.Timeline timeline)
+            var timelineReferences = new Dictionary<ushort, TimelineReferences>();
+            async Task<TimelineReferences> ReadTimeline(AnimationCatalog.Timeline timeline)
             {
-                if (motionReferences.TryGetValue(timeline.Id, out var found)) return found;
+                if (timelineReferences.TryGetValue(timeline.Id, out var found)) return found;
                 var motionKey = $"{collection.Id:N}:{mapKey}:{timeline.Id}";
-                if (motionCache.TryGetValue(motionKey, out found)) return motionReferences[timeline.Id] = found;
+                // An expression's timeline is one small TMB a mod option may swap, so it is always read again.
+                if (!timeline.IsExpression && motionCache.TryGetValue(motionKey, out found)) return timelineReferences[timeline.Id] = found;
                 var names = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
+                var packs = new List<string>();
+                AnimationResource? root = null;
                 var pendingPaths = new Queue<string>(); pendingPaths.Enqueue($"chara/action/{timeline.Key}.tmb");
                 var visited = new HashSet<string>(StringComparer.Ordinal);
                 while (pendingPaths.TryDequeue(out var path))
@@ -181,21 +193,27 @@ internal sealed class AnimationObserver : IDisposable
                     (AnimationResource Resource, byte[] Bytes) source;
                     try { source = await resources.ReadAsync(collection.Id, path, token, resourceCache); }
                     catch (FileNotFoundException) when (visited.Count == 1) { break; }
+                    root ??= source.Resource;
                     foreach (var reference in AnimationDependencies.Read(path, source.Bytes).References)
                         if (reference.Kind == "animation") names.Add(reference.Path);
+                        else if (reference.Kind == "facepack") { if (!packs.Contains(reference.Path)) packs.Add(reference.Path); }
                         else if (reference.Kind == "timeline") pendingPaths.Enqueue(reference.Path.EndsWith(".tmb", StringComparison.Ordinal) ? reference.Path : $"chara/action/{reference.Path}.tmb");
                 }
-                found = names.ToImmutable();
+                found = new TimelineReferences(names.ToImmutable(), [.. packs], root);
+                if (timeline.IsExpression) return timelineReferences[timeline.Id] = found;
                 if (motionCache.Count >= 128) motionCache.TryRemove(motionCache.Keys.First(), out _);
                 motionCache[motionKey] = found;
-                return motionReferences[timeline.Id] = found;
+                return timelineReferences[timeline.Id] = found;
             }
+            async Task<ImmutableHashSet<string>> TimelineMotions(AnimationCatalog.Timeline timeline) => (await ReadTimeline(timeline)).Motions;
             foreach (var timeline in active)
-                try { await TimelineMotions(timeline); }
-                catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException) { motionReferences[timeline.Id] = ImmutableHashSet<string>.Empty; }
+                try { await ReadTimeline(timeline); }
+                catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException) { timelineReferences[timeline.Id] = TimelineReferences.None; }
+            var motionReferences = timelineReferences.ToDictionary(pair => pair.Key, pair => pair.Value.Motions);
             // Read once, off the framework thread: the table is 1.6 MB.
             var papTable = await Task.Run(() => catalog.PapTable, token);
-            var inferredPaths = active.SelectMany(t => AnimationCatalog.CandidatePapPaths(t, gamePaths, papTable)).ToHashSet(StringComparer.Ordinal);
+            var inferredPaths = active.SelectMany(t => AnimationCatalog.CandidatePapPaths(t, gamePaths, papTable,
+                timelineReferences.GetValueOrDefault(t.Id)?.FacePacks)).ToHashSet(StringComparer.Ordinal);
             var candidatePaths = gamePaths.Where(p => p.EndsWith(".pap", StringComparison.OrdinalIgnoreCase))
                 .Concat(inferredPaths).Distinct(StringComparer.Ordinal).ToArray();
             var candidates = new List<AnimationPapCandidate>();
@@ -328,7 +346,8 @@ internal sealed class AnimationObserver : IDisposable
                 captures.Add(new AnimationCapture(idString, runtime.ActorId, runtime.Address, collection.Id, collection.Name,
                     timeline.Name, clip, startup, family.ToImmutableArray(), sources.Distinct().ToImmutableArray(), pair.Pose,
                     pair.Pose.CapturedUtc, true, LoadedResourcePaths: gamePaths.ToImmutableArray(),
-                    PoseUnavailableReason: pair.PoseError, ResourceAliases: resourceAliases));
+                    PoseUnavailableReason: pair.PoseError, ResourceAliases: resourceAliases,
+                    ExpressionTimeline: timeline.IsExpression ? timelineReferences.GetValueOrDefault(timeline.Id)?.Root : null));
             }
             // Publish identified clips before any native source-skeleton search.
             await PublishAsync(captures, expectedGeneration, token);
@@ -467,13 +486,20 @@ internal sealed class AnimationObserver : IDisposable
     // edited clip then stops matching any live binding and is never revisited
     // by the passive scan above, so its captured Sources would stay stale
     // forever and every retry would fail CheckAsync against its own last edit.
-    public void UpdateSources(string captureId, ImmutableArray<AnimationResource> updatedResources) =>
+    public void UpdateSources(string captureId, ImmutableArray<AnimationResource> updatedResources)
+    {
         history = ApplyUpdatedSources(history, captureId, updatedResources);
+        // Timelines are kept with the file they were read from, which a save in place just replaced.
+        motionCache.Clear();
+    }
     internal static ImmutableArray<AnimationCapture> ApplyUpdatedSources(ImmutableArray<AnimationCapture> history,
         string captureId, ImmutableArray<AnimationResource> updatedResources) =>
         history.Select(c => c.Id != captureId ? c : c with
         {
             Sources = c.Sources.Select(s => updatedResources.FirstOrDefault(u => u.GamePath == s.GamePath) ?? s).ToImmutableArray(),
+            ExpressionTimeline = c.ExpressionTimeline is { } timeline
+                ? updatedResources.FirstOrDefault(u => u.GamePath == timeline.GamePath) ?? timeline
+                : null,
         }).ToImmutableArray();
     public void ReportOperationError(AnimationClip clip, string? error)
     {

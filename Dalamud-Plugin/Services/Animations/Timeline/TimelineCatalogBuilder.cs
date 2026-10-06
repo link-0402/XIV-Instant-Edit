@@ -29,8 +29,9 @@ internal enum TimelineCatalogOrigin : byte
 /// <param name="Detail">Short secondary text: the emote, item list or mod it came from.</param>
 /// <param name="Pack">The expression library (TMPP) the motion needs; null when the face always has it loaded.</param>
 /// <param name="Prop">The model a prop spawns, with the WeaponTimeline row a vanilla emote animates it with.</param>
+/// <param name="Frames">For a facial motion, how many frames it plays at its own speed; null when unknown.</param>
 internal sealed record TimelineCatalogItem(string Label, string Path, TimelineCatalogOrigin Origin, string Detail,
-    string? Pack = null, TimelinePropModel? Prop = null)
+    string? Pack = null, TimelinePropModel? Prop = null, int? Frames = null)
 {
     /// <summary>The add request that places this item at <paramref name="start"/>.</summary>
     public TimelineAddRequest Request(TimelineAddKind kind, int start, int duration = 0) => new(kind, start, Path, duration, Pack, Prop);
@@ -119,15 +120,24 @@ internal sealed record TimelineCatalogData(
 {
     public static readonly TimelineCatalogData Empty = new([], [], [], [], [], [],
         ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase), []);
+
+    /// <summary>The own length in frames of every expression and lip shape that has one known, by motion name.</summary>
+    public ImmutableDictionary<string, int> MotionFrames { get; } = Expressions.IsDefault || LipShapes.IsDefault
+        ? ImmutableDictionary<string, int>.Empty
+        : Expressions.Concat(LipShapes).Where(item => item.Frames is > 0)
+            .GroupBy(item => item.Path, StringComparer.Ordinal).ToImmutableDictionary(group => group.Key, group => group.First().Frames!.Value, StringComparer.Ordinal);
 }
 
 /// <summary>
 /// Builds a <see cref="TimelineCatalogData"/> from game files and sheet rows. Vanilla paths can't
 /// be listed (the game's index holds only hashes), so every list comes from paths the sheets and
 /// vanilla timelines name, checked with <c>exists</c> and read with <c>read</c>. Pure: no game or
-/// Dalamud types; the source mod's metadata is read from disk, never written.
+/// Dalamud types; the source mod's metadata is read from disk, never written. <c>clipSeconds</c>
+/// gives a PAP's clip lengths in seconds by binding index (the game's Havok reads them), null when
+/// it can't; without it facial motions have no known length.
 /// </summary>
-internal sealed class TimelineCatalogBuilder(Func<string, bool> exists, Func<string, byte[]?> read)
+internal sealed class TimelineCatalogBuilder(Func<string, bool> exists, Func<string, byte[]?> read,
+    Func<byte[], IReadOnlyDictionary<int, float>?>? clipSeconds = null)
 {
     // PAP clip types of face animations (r14): faces, blinks and lip shapes.
     private const short FaceType = 17, BlinkType = 18, LipType = 19;
@@ -148,13 +158,20 @@ internal sealed class TimelineCatalogBuilder(Func<string, bool> exists, Func<str
         var expressions = new List<TimelineCatalogItem>();
         var lips = new List<TimelineCatalogItem>();
         var resident = new HashSet<string>(StringComparer.Ordinal);
-        if (FaceEntries($"{faceRoot}/resident/face.pap") is { } residentEntries)
+        var residentBytes = Read($"{faceRoot}/resident/face.pap");
+        if (FaceEntries(residentBytes) is { } residentEntries)
+        {
+            // Lip shapes and blinks play at their own speed, so their lengths matter. Only this file
+            // has any (every vanilla face in 2026), so only its lengths are read.
+            var frames = ClipFrames(residentBytes!);
             foreach (var entry in residentEntries)
             {
-                if (entry.Type == LipType) lips.Add(new(Readable(entry.Name), entry.Name, TimelineCatalogOrigin.Resident, "Always loaded"));
+                int? length = frames.TryGetValue(entry.Binding, out var count) ? count : null;
+                if (entry.Type == LipType) lips.Add(new(Readable(entry.Name), entry.Name, TimelineCatalogOrigin.Resident, "Always loaded", Frames: length));
                 else if (entry.Type is FaceType or BlinkType && resident.Add(entry.Name))
-                    expressions.Add(new(FaceLabel(entry.Name, facialNames), entry.Name, TimelineCatalogOrigin.Resident, "Always loaded"));
+                    expressions.Add(new(FaceLabel(entry.Name, facialNames), entry.Name, TimelineCatalogOrigin.Resident, "Always loaded", Frames: length));
             }
+        }
         else notes.Add($"No face animations for {key.Face}, so no expressions.");
 
         // The vanilla emotes: their sounds, effects, props and expression libraries.
@@ -343,11 +360,24 @@ internal sealed class TimelineCatalogBuilder(Func<string, bool> exists, Func<str
         catch (InvalidDataException) { unreadable++; return null; }
     }
 
-    private ImmutableArray<AnimationPap.Entry>? FaceEntries(string path)
+    private ImmutableArray<AnimationPap.Entry>? FaceEntries(string path) => FaceEntries(Read(path));
+
+    private ImmutableArray<AnimationPap.Entry>? FaceEntries(byte[]? bytes)
     {
-        if (Read(path) is not { } bytes) return null;
+        if (bytes == null) return null;
         try { return new AnimationPap(bytes).Entries; }
         catch (InvalidDataException) { unreadable++; return null; }
+    }
+
+    /// <summary>A PAP's clip lengths in whole frames by binding index; empty when they can't be read.</summary>
+    private Dictionary<int, int> ClipFrames(byte[] bytes)
+    {
+        var frames = new Dictionary<int, int>();
+        if (clipSeconds?.Invoke(bytes) is { } seconds)
+            foreach (var (binding, value) in seconds)
+                if (TimelineDocument.MotionFrames(value) is { } count)
+                    frames[binding] = count;
+        return frames;
     }
 
     private (byte[] Bytes, ImmutableArray<AnimationTimelineEntry> Entries)? Entries(string path)

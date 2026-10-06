@@ -23,6 +23,8 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     private const int FirstGPoseIndex = 200;
     // ActionTimeline row normal/idle, played after a stop when nothing overrode the base before (Brio does the same).
     private const ushort IdleTimeline = 3;
+    // ActionTimeline row facial/pose/base (Straight Face), played after an expression preview: a kept face stays otherwise.
+    private const ushort NeutralFaceTimeline = 604;
     private const int MaximumPartials = 16;
     private const int MaximumControls = 256;
     // ActionTimelineSequencer slots: base, upper body and facial.
@@ -55,6 +57,10 @@ internal sealed unsafe class AnimationPlayback : IDisposable
         public required ushort BaseOverride { get; init; }
         public required float[] Speeds { get; init; }
         public ushort Timeline { get; set; }
+        /// <summary> A body timeline took over the base slot (AnimLock and BaseOverride), which a stop puts back. </summary>
+        public bool BodyPlayed { get; set; }
+        /// <summary> An expression played on the face, which a stop returns to neutral. </summary>
+        public bool FacePlayed { get; set; }
         public string? Fingerprint { get; set; }
         public bool Paused { get; set; }
         public float Speed { get; set; } = 1;
@@ -106,7 +112,8 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     /// <paramref name="bindingFingerprint"/> names the clip's binding for pause, seek and time reads.
     /// </summary>
     /// <param name="expectedIndex">The actor the preview was shown on; another one means the GPose target changed.</param>
-    public bool Play(ushort timelineId, string? bindingFingerprint = null, ushort? expectedIndex = null)
+    /// <param name="face">An expression's timeline: it plays on the face slot and leaves the body, its mode and its base as they are.</param>
+    public bool Play(ushort timelineId, string? bindingFingerprint = null, ushort? expectedIndex = null, bool face = false)
     {
         RequireFrameworkThread();
         if (timelineId == 0)
@@ -125,8 +132,14 @@ internal sealed unsafe class AnimationPlayback : IDisposable
         session.Fingerprint = bindingFingerprint;
         session.Paused = false;
         session.Hold = null;
-        chara->SetMode(CharacterModes.AnimLock, 0);
-        chara->Timeline.BaseOverride = timelineId;
+        if (face)
+            session.FacePlayed = true;
+        else
+        {
+            session.BodyPlayed = true;
+            chara->SetMode(CharacterModes.AnimLock, 0);
+            chara->Timeline.BaseOverride = timelineId;
+        }
         chara->Timeline.TimelineSequencer.PlayTimeline(timelineId);
         if (session.SpeedSet)
             Apply(chara, session);
@@ -332,7 +345,7 @@ internal sealed unsafe class AnimationPlayback : IDisposable
                     var control = animated->AnimationControls[i].Value;
                     if (control == null || control->Binding.ptr == null || control->Binding.ptr->Animation.ptr == null)
                         continue;
-                    resource ??= partial->SkeletonResourceHandle->FileName.ToString();
+                    resource ??= partial->SkeletonResourceHandle->FileName.Utf8();
                     string print;
                     try { print = _bindings.BindingFingerprint(control->Binding.ptr, animated->Skeleton, resource); }
                     catch (InvalidDataException) { continue; }
@@ -379,10 +392,15 @@ internal sealed unsafe class AnimationPlayback : IDisposable
             if (session.SpeedSet)
                 for (var i = 0; i < SpeedSlots.Length; i++)
                     chara->Timeline.TimelineSequencer.SetSlotSpeed(SpeedSlots[i], session.Speeds[i]);
-            chara->Timeline.BaseOverride = session.BaseOverride;
-            chara->Mode = session.Mode;
-            chara->ModeParam = session.ModeParam;
-            chara->Timeline.TimelineSequencer.PlayTimeline(session.BaseOverride != 0 ? session.BaseOverride : IdleTimeline);
+            if (session.BodyPlayed)
+            {
+                chara->Timeline.BaseOverride = session.BaseOverride;
+                chara->Mode = session.Mode;
+                chara->ModeParam = session.ModeParam;
+                chara->Timeline.TimelineSequencer.PlayTimeline(session.BaseOverride != 0 ? session.BaseOverride : IdleTimeline);
+            }
+            if (session.FacePlayed)
+                chara->Timeline.TimelineSequencer.PlayTimeline(NeutralFaceTimeline);
         }
         catch (Exception e)
         {

@@ -404,7 +404,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
     private void ValidateTarget(AnimationEditJournal journal, AnimationFileChange file)
     {
         var safeRelative = file.AddedFor is null
-            ? AnimationResources.SafeModRelativePath(file.RelativePath)
+            ? AnimationResources.SafeModRelativePath(file.RelativePath, file.GamePath)
             : AddedGamePath(file.GamePath) && AnimationDependencies.SafeGamePath(file.AddedFor) &&
               PenumbraService.IsSafeGameResourcePath(file.RelativePath.Replace('\\', '/'), Path.GetExtension(file.GamePath));
         if (!PenumbraService.IsSafeModName(file.ModDirectory) || !AnimationDependencies.SafeGamePath(file.GamePath) ||
@@ -414,7 +414,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
         TextureFiles.EnsureLocalPath(file.Target);
         if (file.RenamedFromRelativePath is { Length: > 0 } renamedFrom)
         {
-            if (!AnimationResources.SafeModRelativePath(renamedFrom)) throw new InvalidDataException("Invalid animation recovery source.");
+            if (!AnimationResources.SafeModRelativePath(renamedFrom, file.GamePath)) throw new InvalidDataException("Invalid animation recovery source.");
             TextureFiles.EnsureLocalPath(OldTargetPath(file));
         }
         if (!PathRules.IsPathWithin(file.Staged, store.DirectoryFor(journal.Id))) throw new InvalidDataException("Invalid animation staging path.");

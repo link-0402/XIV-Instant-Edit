@@ -133,7 +133,7 @@ public sealed partial class ExportServer
             var target = reservation.Context;
             if (stageError is not null)
                 receipt = new ExportReceipt(false, stageError.Value.Code, stageError.Value.Message);
-            else if (RacialScalingRefusal([target]) is { } scalingRefusal)
+            else if (RacialScalingRefusal([target], GamePathRace(target)) is { } scalingRefusal)
                 receipt = scalingRefusal;
             else if (target.DestinationState == InstantEditImportContext.NewModRequiredDestination)
                 receipt = new ExportReceipt(false, "sizes_need_mod",

@@ -167,6 +167,23 @@ internal static class TimelineCatalogFixture
         check(Expression("cfxf_laugh", "emot/laugh")!.Request(TimelineAddKind.Expression, 12, 30) ==
               new TimelineAddRequest(TimelineAddKind.Expression, 12, "cfxf_laugh", 30, "emot/laugh"),
             "a catalog item becomes the add request that places it");
+        check(data.Expressions.Concat(data.LipShapes).All(item => item.Frames == null) && data.MotionFrames.IsEmpty &&
+              TimelineCatalogData.Empty.MotionFrames.IsEmpty,
+            "without the game's Havok no facial motion has a known length");
+
+        // The resident face file's clip lengths by binding (the fixture's clips bind in order); the game reads them.
+        var reads = new List<int>();
+        var timed = new TimelineCatalogBuilder(files.ContainsKey, files.GetValueOrDefault, bytes =>
+        {
+            reads.Add(bytes.Length);
+            return new Dictionary<int, float> { [0] = 1 / 30f, [1] = 8 / 30f, [4] = 40 / 30f, [3] = float.NaN };
+        }).Build(sheets, new TimelineCatalogKey(801, "f0002", mod));
+        check(timed.LipShapes.Single(l => l.Path == "cfxl_lip_nor1").Frames == 40 && timed.Expressions.Single(e => e.Path == "cfxb_blink1").Frames == 8 &&
+              timed.Expressions.Single(e => e.Path == "cfxf_angry" && e.Pack == null).Frames == 1 &&
+              timed.Expressions.Single(e => e.Path == "cfxf_bow").Frames == null && timed.Expressions.Single(e => e.Path == "cfxf_salute").Frames == null &&
+              timed.LipShapes.Single(l => l.Path == "cfxl_lip_laugh").Frames == null && reads.Count == 1 &&
+              timed.MotionFrames.Count == 3 && timed.MotionFrames["cfxl_lip_nor1"] == 40 && timed.MotionFrames["cfxb_blink1"] == 8,
+            "the always-loaded face file's lip shapes, blinks and faces get their own lengths; libraries are not read");
 
         var sound = data.Sounds.Where(s => s.Path.Equals("sound/test/se_laugh.scd", StringComparison.OrdinalIgnoreCase)).ToArray();
         check(data.Sounds[0].Origin == TimelineCatalogOrigin.Mod && sound is [{ Origin: TimelineCatalogOrigin.Mod, Path: "sound/test/SE_LAUGH.scd" }] &&

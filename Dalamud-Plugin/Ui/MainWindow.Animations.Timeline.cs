@@ -28,7 +28,7 @@ public sealed partial class MainWindow
     {
         if (animations is not { } service)
             return [];
-        var key = $"{capture.Id}|{startup}|{clip.GamePath}|{file?.Hash}";
+        var key = $"{capture.Id}|{startup}|{clip.GamePath}|{file?.Hash}|{capture.ExpressionTimeline?.Hash}";
         if (key != effectCheckKey)
         {
             effectCheckCancel?.Cancel();
@@ -51,17 +51,22 @@ public sealed partial class MainWindow
         var clip = startup ? capture.Startup! : capture.Clip;
         var file = capture.Sources.FirstOrDefault(s => s.GamePath == clip.GamePath);
         var problems = EffectProblems(capture, startup, clip, file);
-        Widgets.HintWrapped("Place sounds, expressions, effects and props on the animation, change its length and preview it in GPose.");
+        var expression = !startup ? capture.ExpressionTimeline : null;
+        Widgets.HintWrapped(expression != null
+            ? "Place sounds, effects and faces on the expression, keep its face on and preview it in GPose."
+            : "Place sounds, expressions, effects and props on the animation, change its length and preview it in GPose.");
         ImGui.Spacing();
         using (var facts = ImRaii.Table("##timeline-facts", 2, ImGuiTableFlags.SizingFixedFit))
         {
             if (facts.Success)
             {
                 SetupFacts();
-                Fact("Length");
+                Fact(expression != null ? "Face length" : "Length");
                 ImGui.TextUnformatted(clip.Duration > 0 ? clip.Duration.ToString("0.##", CultureInfo.InvariantCulture) + "s" : "Unknown");
+                // An expression's timeline is a file of its own, often from another mod than its face.
+                var timelineFile = expression ?? file;
                 Fact("Mod");
-                ImGui.TextUnformatted(file?.ModName ?? file?.ModDirectory ?? "Game Data");
+                ImGui.TextUnformatted(timelineFile?.ModName ?? timelineFile?.ModDirectory ?? "Game Data");
             }
         }
         if (problems is { IsEmpty: false } found && TimelineWindowViews.EffectLoopWarning(found) is { } warning)

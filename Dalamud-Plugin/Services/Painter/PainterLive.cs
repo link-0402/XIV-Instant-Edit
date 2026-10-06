@@ -106,7 +106,7 @@ internal sealed class PainterLiveReader(IFramework framework, IObjectTable objec
             var model = character->Models[slot];
             if (model == null || model->ModelResourceHandle == null)
                 continue;
-            var path = model->ModelResourceHandle->FileName.ToString();
+            var path = model->ModelResourceHandle->FileName.Utf8();
             if (path.Length > 0)
                 models.Add(new PainterLiveModel(PainterVisibility.NormalizePath(path), model->EnabledAttributeIndexMask, model->EnabledShapeKeyIndexMask,
                     own ? slot : -1, !own || !ModelVisibility.IsHiddenGear(character, slot)));

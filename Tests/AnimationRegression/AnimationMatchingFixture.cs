@@ -41,10 +41,24 @@ internal static class AnimationMatchingFixture
               AnimationCatalog.Matches(walking, movementBPath, "cbnm_01f_lp0"),
             "normal walk timelines resolve the shared movement PAPs for discovery, matching, and packaging");
         var face = idle with { Id = 50, Key = "facial/pose/smile", LoadType = 0 };
-        check(AnimationCatalog.CandidatePapPaths(face,
-                tree.Concat(["chara/human/c0801/skeleton/face/f0003/skl_c0801f0003.sklb"]))
-                .SequenceEqual(["chara/human/c0801/animation/f0003/nonresident/smile.pap"]),
-            "facial animation discovery uses the loaded face skeleton variant");
+        string[] faceTree = [.. tree, "chara/human/c0801/skeleton/face/f0003/skl_c0801f0003.sklb"];
+        check(face.IsExpression && !idle.IsExpression && !(face with { LoadType = 2 }).IsExpression &&
+              AnimationCatalog.CandidatePapPaths(face, faceTree).SequenceEqual([
+                  "chara/human/c0801/animation/f0003/nonresident/smile.pap", "chara/human/c0801/animation/f0003/resident/face.pap"]),
+            "facial animation discovery uses the loaded face skeleton variant, and the face's resident set");
+        // Shut Eyes names no library: cfxf_bow is one of the motions every face has loaded.
+        var shutEyes = face with { Key = "facial/pose/bow" };
+        check(AnimationCatalog.CandidatePapPaths(shutEyes, faceTree).Contains("chara/human/c0801/animation/f0003/resident/face.pap"),
+            "an expression without a face library is found in the face's resident set");
+        // A mod's expression may load another library than the one named like the emote.
+        check(AnimationCatalog.CandidatePapPaths(face, faceTree, null, ["pandacatte", "../escape", ""])
+                .SequenceEqual([
+                    "chara/human/c0801/animation/f0003/nonresident/pandacatte.pap",
+                    "chara/human/c0801/animation/f0003/nonresident/smile.pap",
+                    "chara/human/c0801/animation/f0003/resident/face.pap"]),
+            "an expression's own face library is a candidate; unsafe library names are not");
+        check(AnimationCatalog.CandidatePapPaths(idle, faceTree, null, ["pandacatte"]).SequenceEqual([idlePath]),
+            "face libraries only widen an expression's search, never a body animation's");
 
         static AnimationPap Pap(string clip)
         {
