@@ -93,9 +93,10 @@ public sealed record SourceOptionLocator
 }
 
 /// <summary>
-/// The racial scaling a model was sent to Blender with, for preview only: its vertices were moved
-/// from the model's race (<see cref="ModelRace"/>, 201 for c0201) onto the character's
-/// (<see cref="CharacterRace"/>), and the plugin refuses every export from the import.
+/// The racial scaling a model was sent to Blender with: its vertices were moved from the model's race
+/// (<see cref="ModelRace"/>, 201 for c0201) onto the character's (<see cref="CharacterRace"/>). The
+/// plugin refuses to export the import into a model of another race; Save as c0801 Model writes it as
+/// the character's race's own model instead.
 /// </summary>
 public sealed record RacialScalingRecord
 {

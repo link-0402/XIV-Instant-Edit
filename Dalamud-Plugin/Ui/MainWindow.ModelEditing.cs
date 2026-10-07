@@ -386,7 +386,7 @@ public sealed partial class MainWindow
                 notes.Add($"Skeleton: {skeletonWarning}");
             if (scalingWarning is not null)
                 notes.Add($"Not racially scaled: {scalingWarning.TrimEnd('.')}.");
-            var scaled = scaling is null ? string.Empty : $", scaled from {scaling.Description} for preview (it can't be exported)";
+            var scaled = scaling is null ? string.Empty : $", scaled from {scaling.Description} (export it with Save as c{scaling.CharacterRace:D4} Model)";
             var status = $"Sent {model.FileName} to Blender{scaled}.{string.Concat(notes.Select(note => " " + note))}";
             return new ModelSendResult(model.FileName, status, notes.Count > 0, notes, scaling is not null);
         }
