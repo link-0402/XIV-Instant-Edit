@@ -25,6 +25,8 @@ public sealed partial class TimelineWindow
     private (string Id, Vector3 Degrees)? turnEdit;
     // The layer the selection last started on: a newly chosen layer with nothing selected starts on its first bone.
     private string? selectionLayer;
+    // The ease curve handle being dragged: 0 or 1, -1 for none.
+    private int easeHandle = -1;
 
     private void DrawLayerProperties(TimelineEditor current, MotionLayer layer, AnimationTimelineSource loaded)
     {
@@ -93,6 +95,11 @@ public sealed partial class TimelineWindow
             DrawBoneEditor(current, layer, skeleton, loaded, readOnly, false);
             ImGui.Spacing();
             DrawLayerKeys(current, layer);
+            if (current.SelectedKey is { } keyFrame && MotionEdits.KeyIndex(layer, keyFrame) is var keyAt and >= 0)
+            {
+                ImGui.Spacing();
+                DrawKeyEase(current, layer, layer.Keys[keyAt], readOnly);
+            }
             if (layer.Kind == MotionLayerKind.Pose)
             {
                 ImGui.Spacing();
@@ -166,20 +173,139 @@ public sealed partial class TimelineWindow
     {
         Fact("Between keys");
         ImGui.SetNextItemWidth(Theme.Scaled(120));
-        using var combo = ImRaii.Combo("##layer-interpolation", InterpolationName(layer.Interpolation));
-        if (!combo.Success)
-            return;
-        foreach (var mode in Enum.GetValues<MotionInterpolation>())
-            if (ImGui.Selectable(InterpolationName(mode), mode == layer.Interpolation) && mode != layer.Interpolation)
-                current.Commit(MotionEdits.Replace(current.Document, layer with { Interpolation = mode }));
+        using (var combo = ImRaii.Combo("##layer-interpolation", TimelineWindowViews.EaseName(layer.Interpolation)))
+        {
+            if (combo.Success)
+                foreach (var mode in TimelineWindowViews.LayerEases)
+                {
+                    if (ImGui.Selectable(TimelineWindowViews.EaseName(mode), mode == layer.Interpolation) && mode != layer.Interpolation)
+                        current.Commit(MotionEdits.Replace(current.Document, layer with { Interpolation = mode }));
+                    if (ImGui.IsItemHovered())
+                        ImGui.SetTooltip(TimelineWindowViews.EaseHint(mode));
+                }
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("How bones go from one key to the next. A key can have its own way.");
     }
 
-    private static string InterpolationName(MotionInterpolation mode) => mode switch
+    /// <summary>
+    /// The selected key's way to the next key: the layer's, a preset, or its own curve, drawn below with
+    /// two handles to drag. Dragging a handle makes the curve the key's own.
+    /// </summary>
+    private void DrawKeyEase(TimelineEditor current, MotionLayer layer, MotionKey key, bool readOnly)
     {
-        MotionInterpolation.Linear => "Linear",
-        MotionInterpolation.Smooth => "Smooth",
-        _ => "Hold",
-    };
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, current.SelectedBone is { } bone
+            ? $"{AnimationPresentation.BoneName(bone)}'s key at {TimelineWindowViews.FrameText(key.Frame)}"
+            : $"Key at {TimelineWindowViews.FrameText(key.Frame)}");
+        using (ImRaii.Disabled(readOnly))
+        {
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextUnformatted("To the next key");
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(120), ImGui.GetContentRegionAvail().X));
+            var preview = key.Ease is { } own ? TimelineWindowViews.EaseName(own) : $"The layer's ({TimelineWindowViews.EaseName(layer.Interpolation)})";
+            using (var combo = ImRaii.Combo("##key-ease", preview))
+            {
+                if (combo.Success)
+                {
+                    if (ImGui.Selectable($"The layer's ({TimelineWindowViews.EaseName(layer.Interpolation)})", key.Ease == null) && key.Ease != null)
+                        current.Commit(MotionEdits.SetEase(current.Document, layer.Key, key.Frame, null));
+                    foreach (var mode in TimelineWindowViews.LayerEases.Add(MotionInterpolation.Custom))
+                    {
+                        if (ImGui.Selectable(TimelineWindowViews.EaseName(mode), key.Ease == mode) && key.Ease != mode)
+                            current.Commit(MotionEdits.SetEase(current.Document, layer.Key, key.Frame, mode,
+                                mode == MotionInterpolation.Custom ? MotionEvaluator.CurveOf(layer, key) ?? MotionCurve.Linear : null));
+                        if (ImGui.IsItemHovered())
+                            ImGui.SetTooltip(TimelineWindowViews.EaseHint(mode));
+                    }
+                }
+            }
+            DrawEaseCurve(current, layer, key, readOnly);
+        }
+        if (key.Bones.Count > 1 && current.SelectedBone != null)
+            Widgets.HintWrapped($"Shared by the {key.Bones.Count} bones in this key. Drag this bone's key to a frame of its own to ease it alone.");
+        // The ease shapes the way to each bone's next key; with none after it, it changes nothing.
+        var last = !layer.Keys.Any(later => later.Frame > key.Frame && later.Bones.Keys.Any(key.Bones.ContainsKey));
+        if (last)
+            Widgets.HintWrapped("No key follows for these bones, so this has no effect yet.");
+    }
+
+    /// <summary>
+    /// The key's curve from its value (bottom left) to the next key's (top right). Space above and below
+    /// shows overshoot. A hold draws its jump and has no handles.
+    /// </summary>
+    private void DrawEaseCurve(TimelineEditor current, MotionLayer layer, MotionKey key, bool readOnly)
+    {
+        var curve = MotionEvaluator.CurveOf(layer, key);
+        var width = Math.Max(Theme.Scaled(120), ImGui.GetContentRegionAvail().X);
+        var height = Theme.Scaled(110);
+        var origin = ImGui.GetCursorScreenPos();
+        ImGui.InvisibleButton("##ease-curve", new Vector2(width, height));
+        var drawList = ImGui.GetWindowDrawList();
+        // Y from -0.25 to 1.25 fills the box, so the curve's 0 to 1 sits in its middle two thirds.
+        const float low = -.25f, high = 1.25f;
+        var margin = Theme.Scaled(10);
+        var plotMin = origin + new Vector2(margin, Theme.Scaled(4));
+        var plotMax = origin + new Vector2(width - margin, height - Theme.Scaled(4));
+        var plot = plotMax - plotMin;
+        Vector2 Screen(float x, float y) => new(plotMin.X + x * plot.X, plotMax.Y - (y - low) / (high - low) * plot.Y);
+        Vector2 Curve(Vector2 screen) => new(Math.Clamp((screen.X - plotMin.X) / plot.X, 0, 1),
+            Math.Clamp(low + (plotMax.Y - screen.Y) / plot.Y * (high - low), low, high));
+
+        drawList.AddRectFilled(origin, origin + new Vector2(width, height), U32(Theme.RowAlt), Theme.Scaled(3));
+        var guide = U32(Theme.WithAlpha(Theme.TreeLine, .6f));
+        drawList.AddLine(Screen(0, 0), Screen(1, 0), guide);
+        drawList.AddLine(Screen(0, 1), Screen(1, 1), guide);
+        drawList.AddLine(Screen(0, low), Screen(0, high), guide);
+        drawList.AddLine(Screen(1, low), Screen(1, high), guide);
+        var stroke = U32(Theme.Accent);
+        var thickness = Theme.Scaled(2);
+        if (curve == null)
+        {
+            drawList.AddLine(Screen(0, 0), Screen(1, 0), stroke, thickness);
+            drawList.AddLine(Screen(1, 0), Screen(1, 1), stroke, thickness);
+            return;
+        }
+        var previous = Screen(0, 0);
+        for (var step = 1; step <= 48; step++)
+        {
+            var t = step / 48f;
+            var next = Screen(t, curve.Ease(t));
+            drawList.AddLine(previous, next, stroke, thickness);
+            previous = next;
+        }
+        var handles = new[] { Screen(curve.X1, curve.Y1), Screen(curve.X2, curve.Y2) };
+        var handleLine = U32(Theme.WithAlpha(Theme.Text, .5f));
+        drawList.AddLine(Screen(0, 0), handles[0], handleLine);
+        drawList.AddLine(Screen(1, 1), handles[1], handleLine);
+        var mouse = ImGui.GetIO().MousePos;
+        var reach = Theme.Scaled(9);
+        if (ImGui.IsItemActivated() && !readOnly)
+        {
+            easeHandle = Vector2.Distance(mouse, handles[0]) <= reach ? 0 : Vector2.Distance(mouse, handles[1]) <= reach ? 1 : -1;
+            if (easeHandle >= 0)
+                current.BeginFieldEdit();
+        }
+        if (easeHandle >= 0 && ImGui.IsItemActive())
+        {
+            var point = Curve(mouse);
+            var moved = easeHandle == 0 ? curve with { X1 = point.X, Y1 = point.Y } : curve with { X2 = point.X, Y2 = point.Y };
+            current.Change(MotionEdits.SetEase(current.Document, layer.Key, key.Frame, MotionInterpolation.Custom, moved));
+        }
+        if (ImGui.IsItemDeactivated() && easeHandle >= 0)
+        {
+            easeHandle = -1;
+            current.EndFieldEdit();
+        }
+        for (var index = 0; index < 2; index++)
+        {
+            var hot = easeHandle == index || easeHandle < 0 && ImGui.IsItemHovered() && Vector2.Distance(mouse, handles[index]) <= reach;
+            drawList.AddCircleFilled(handles[index], Theme.Scaled(hot ? 6 : 5), U32(hot ? Theme.Accent : Theme.Text));
+        }
+        if (ImGui.IsItemHovered() && easeHandle < 0 && !readOnly)
+            ImGui.SetTooltip("Drag a handle to shape how the bones get to the next key.");
+    }
 
     /// <summary>
     /// The selected bones' values at the playhead, for an offset or a pose layer: the primary bone's turn,

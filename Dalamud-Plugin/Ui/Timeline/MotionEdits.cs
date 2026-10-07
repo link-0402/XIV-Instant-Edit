@@ -178,6 +178,98 @@ internal static class MotionEdits
         return doc with { Motion = doc.Motion.SetItem(index, moved) };
     }
 
+    /// <summary>
+    /// Moves one bone's value out of the layer's key at <paramref name="frame"/> by <paramref name="delta"/>
+    /// frames, never onto or past that bone's neighbouring keys. It joins the key it lands on, taking that
+    /// key's ease, or starts a key there with its old key's ease. Its old key goes when it is left empty.
+    /// <paramref name="landed"/> is where it ends up (its frame when nothing moved).
+    /// </summary>
+    public static TimelineDocument MoveBoneKey(TimelineDocument doc, string key, string bone, int frame, int delta, out int landed)
+    {
+        landed = frame;
+        var index = IndexOf(doc, key);
+        if (index < 0)
+            return doc;
+        var layer = doc.Motion[index];
+        var at = KeyIndex(layer, frame);
+        if (at < 0 || delta == 0 || !layer.Keys[at].Bones.TryGetValue(bone, out var value))
+            return doc;
+        int low = 0, high = TimelineDocument.MaxFrames;
+        for (var before = at - 1; before >= 0; before--)
+            if (layer.Keys[before].Bones.ContainsKey(bone))
+            {
+                low = layer.Keys[before].Frame + 1;
+                break;
+            }
+        for (var after = at + 1; after < layer.Keys.Length; after++)
+            if (layer.Keys[after].Bones.ContainsKey(bone))
+            {
+                high = layer.Keys[after].Frame - 1;
+                break;
+            }
+        landed = Math.Clamp(frame + delta, low, Math.Max(low, high));
+        if (landed == frame)
+            return doc;
+        var source = layer.Keys[at];
+        var moved = source.Moved.Contains(bone);
+        var left = source with { Bones = source.Bones.Remove(bone), Moved = source.Moved.Remove(bone) };
+        var keys = left.Bones.IsEmpty ? layer.Keys.RemoveAt(at) : layer.Keys.SetItem(at, left);
+        var target = -1;
+        for (var item = 0; item < keys.Length; item++)
+            if (keys[item].Frame == landed)
+                target = item;
+        if (target >= 0)
+        {
+            var joined = keys[target];
+            keys = keys.SetItem(target, joined with
+            {
+                Bones = joined.Bones.SetItem(bone, value),
+                Moved = moved && !joined.Moved.Contains(bone) ? joined.Moved.Add(bone) : joined.Moved,
+            });
+        }
+        else
+        {
+            var started = new MotionKey(landed, ImmutableDictionary<string, BoneTransform>.Empty.WithComparers(StringComparer.Ordinal).Add(bone, value),
+                moved ? [bone] : [], source.Ease, source.Curve);
+            var insert = 0;
+            while (insert < keys.Length && keys[insert].Frame < landed)
+                insert++;
+            keys = keys.Insert(insert, started);
+        }
+        return doc with { Motion = doc.Motion.SetItem(index, layer with { Keys = keys }) };
+    }
+
+    /// <summary>
+    /// Sets how the bones go from the layer's key at <paramref name="frame"/> to their next keys: null
+    /// for the layer's way, <see cref="MotionInterpolation.Custom"/> with <paramref name="curve"/>.
+    /// </summary>
+    public static TimelineDocument SetEase(TimelineDocument doc, string key, int frame, MotionInterpolation? ease, MotionCurve? curve = null)
+    {
+        var index = IndexOf(doc, key);
+        if (index < 0 || KeyIndex(doc.Motion[index], frame) is not (var at and >= 0))
+            return doc;
+        if (ease is { } mode && !Enum.IsDefined(mode))
+            return doc;
+        curve = ease == MotionInterpolation.Custom ? (curve ?? MotionCurve.Linear).Clamped() : null;
+        var layer = doc.Motion[index];
+        var old = layer.Keys[at];
+        if (old.Ease == ease && Equals(old.Curve, curve))
+            return doc;
+        return doc with { Motion = doc.Motion.SetItem(index, layer with { Keys = layer.Keys.SetItem(at, old with { Ease = ease, Curve = curve }) }) };
+    }
+
+    /// <summary>
+    /// The bones the layer's keys name, once each: in <paramref name="order"/> (the skeleton's, parents
+    /// first) when known, bones it lacks last, then by name.
+    /// </summary>
+    public static ImmutableArray<string> KeyBones(MotionLayer layer, IReadOnlyDictionary<string, int>? order = null)
+    {
+        var bones = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in layer.Keys)
+            bones.UnionWith(item.Bones.Keys);
+        return [.. bones.OrderBy(bone => order != null && order.TryGetValue(bone, out var at) ? at : int.MaxValue).ThenBy(bone => bone, StringComparer.Ordinal)];
+    }
+
     public static TimelineDocument DeleteKey(TimelineDocument doc, string key, int frame)
     {
         var index = IndexOf(doc, key);
@@ -347,6 +439,7 @@ internal static class MotionEdits
         a.FadeOut == b.FadeOut && a.Amount.Equals(b.Amount) && a.Components == b.Components && a.Interpolation == b.Interpolation &&
         a.Enabled == b.Enabled && a.Bones.SequenceEqual(b.Bones, StringComparer.Ordinal) && a.Keys.Length == b.Keys.Length &&
         a.Keys.Zip(b.Keys).All(pair => pair.First.Frame == pair.Second.Frame && pair.First.Moved.SequenceEqual(pair.Second.Moved, StringComparer.Ordinal) &&
+            pair.First.Ease == pair.Second.Ease && Equals(pair.First.Curve, pair.Second.Curve) &&
             pair.First.Bones.Count == pair.Second.Bones.Count &&
             pair.First.Bones.All(bone => pair.Second.Bones.TryGetValue(bone.Key, out var other) && other == bone.Value));
 }

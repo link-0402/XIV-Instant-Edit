@@ -331,6 +331,8 @@ public sealed partial class TimelineWindow : Window, IDisposable
         else
         {
             editor.Reset(doc);
+            if (!sameClip)
+                editor.FoldAll();
         }
         // After an undo the layers stay as unsaved edits: one undo step away from the file.
         if (carried is { Unsaved: true } unsaved)
@@ -412,6 +414,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         if (catalogKey != null)
             catalog.Request(catalogKey);
         editor.MotionFrames = MotionFrames(source);
+        editor.BoneOrder = source.Clip.Resolution?.Selected?.Skeleton is { } skeleton ? BoneTree(skeleton).Index : null;
 
         SyncPlayback(editor, source);
         UpdateLive(editor, source);

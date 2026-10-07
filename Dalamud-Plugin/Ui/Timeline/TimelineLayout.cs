@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 
 namespace InstantEdit.Ui.Timeline;
@@ -9,6 +10,12 @@ internal readonly record struct TimelineLaneRows(TimelineLane Lane, int FirstRow
     public int EndRow => FirstRow + Rows;
     public bool Contains(int row) => row >= FirstRow && row < EndRow;
 }
+
+/// <summary>
+/// One bone layer row: the layer at <paramref name="Layer"/> in the document's layers (-1 for the empty
+/// row a first layer goes into), or with <paramref name="Bone"/> one bone's keys of it, under its row.
+/// </summary>
+internal readonly record struct TimelineMotionRow(int Layer, string? Bone = null);
 
 /// <summary>
 /// Which row every event of a document is drawn in. Built once per document, not per frame, and
@@ -26,6 +33,8 @@ internal sealed class TimelineLayout
     private readonly int[] rows;
     private readonly int[] ends;
     private readonly TimelineEvent[] shown;
+    private readonly ImmutableArray<TimelineMotionRow> motionRows;
+    private readonly int[] layerRows;
 
     public TimelineDocument Document { get; }
     public ImmutableArray<TimelineLaneRows> Lanes { get; }
@@ -37,43 +46,63 @@ internal sealed class TimelineLayout
     public int MotionFirstRow { get; }
 
     /// <summary>
-    /// The bone layer rows: one per layer, in the order they apply, or one empty row to add the first
-    /// to. None on an expression's own timeline, whose face takes no bone layers.
+    /// The bone layer rows: one per layer, in the order they apply, each unfolded layer followed by one
+    /// row per bone its keys name; or one empty row to add the first to. None on an expression's own
+    /// timeline, whose face takes no bone layers.
     /// </summary>
-    public int MotionRows { get; }
+    public int MotionRows => motionRows.Length;
 
     private TimelineLayout(TimelineDocument document, ImmutableArray<TimelineLaneRows> lanes, int rowCount,
-        int[] rows, int[] ends, TimelineEvent[] shown, Dictionary<string, int> indexByKey, int motionFirstRow, int motionRows)
+        int[] rows, int[] ends, TimelineEvent[] shown, Dictionary<string, int> indexByKey, int motionFirstRow,
+        ImmutableArray<TimelineMotionRow> motionRows, int[] layerRows)
     {
         Document = document;
         Lanes = lanes;
         RowCount = rowCount;
         MotionFirstRow = motionFirstRow;
-        MotionRows = motionRows;
         this.rows = rows;
         this.ends = ends;
         this.shown = shown;
         this.indexByKey = indexByKey;
+        this.motionRows = motionRows;
+        this.layerRows = layerRows;
     }
 
-    /// <summary>Whether <paramref name="row"/> is a bone layer row.</summary>
+    /// <summary>Whether <paramref name="row"/> is a bone layer row, a layer's own or one of its bones'.</summary>
     public bool IsMotionRow(int row) => row >= MotionFirstRow && row < MotionFirstRow + MotionRows;
 
-    /// <summary>The index in the document's layers of the layer drawn in <paramref name="row"/>, or -1 (an empty or event row).</summary>
-    public int LayerIndexAt(int row) =>
-        IsMotionRow(row) && row - MotionFirstRow < Document.Motion.Length ? row - MotionFirstRow : -1;
+    /// <summary>What the bone layer row <paramref name="row"/> shows, or null for any other row.</summary>
+    public TimelineMotionRow? MotionRowAt(int row) => IsMotionRow(row) ? motionRows[row - MotionFirstRow] : null;
+
+    /// <summary>The index in the document's layers of the layer whose own row is <paramref name="row"/>, or -1 (a bone, empty or event row).</summary>
+    public int LayerIndexAt(int row) => MotionRowAt(row) is { Bone: null, Layer: var layer } ? layer : -1;
+
+    /// <summary>The layer and bone of the bone row <paramref name="row"/>, or null for any other row.</summary>
+    public (int Layer, string Bone)? BoneAt(int row) => MotionRowAt(row) is { Bone: { } bone, Layer: var layer } ? (layer, bone) : null;
+
+    /// <summary>How many layers have rows: every layer, or none on an expression's own timeline.</summary>
+    public int LayerCount => layerRows.Length;
 
     /// <summary>The row the layer at <paramref name="index"/> is drawn in.</summary>
-    public int LayerRow(int index) => MotionFirstRow + index;
+    public int LayerRow(int index) => layerRows[index];
+
+    /// <summary>How many bone rows the layer at <paramref name="index"/> shows under it: none while it is folded.</summary>
+    public int BoneRows(int index) => (index + 1 < layerRows.Length ? layerRows[index + 1] : MotionFirstRow + MotionRows) - layerRows[index] - 1;
+
+    /// <summary>Whether the layer can unfold into bone rows: an offset or pose with keys. Amplitudes have none.</summary>
+    public static bool Unfolds(MotionLayer layer) => layer.Kind != MotionLayerKind.Amplitude && layer.Keys.Any(key => !key.Bones.IsEmpty);
 
     /// <summary>
     /// Lays out <paramref name="doc"/>. <paramref name="visibleLength"/> gives the frames an event
     /// visibly takes beyond its duration (a sound's play length, a label); null counts only durations.
     /// <paramref name="motionFrames"/> gives facial motions' own lengths by name (see
-    /// <see cref="TimelineDocument.PlayedFrames"/>); without it they count what they store.
+    /// <see cref="TimelineDocument.PlayedFrames"/>); without it they count what they store. The layers
+    /// keyed in <paramref name="unfolded"/> get a row per bone, in <paramref name="boneOrder"/> (see
+    /// <see cref="MotionEdits.KeyBones"/>).
     /// </summary>
     public static TimelineLayout Build(TimelineDocument doc, Func<TimelineEvent, int>? visibleLength = null,
-        IReadOnlyDictionary<string, int>? motionFrames = null)
+        IReadOnlyDictionary<string, int>? motionFrames = null, IReadOnlySet<string>? unfolded = null,
+        IReadOnlyDictionary<string, int>? boneOrder = null)
     {
         var events = doc.Events.IsDefault ? [] : doc.Events;
         var rows = new int[events.Length];
@@ -122,8 +151,21 @@ internal sealed class TimelineLayout
             next += count;
         }
         var motionFirst = next;
-        var motionRows = doc.Expression ? 0 : Math.Max(1, doc.Motion.Length);
-        return new TimelineLayout(doc, lanes.ToImmutable(), next + motionRows, rows, ends, shown, indexByKey, motionFirst, motionRows);
+        var motion = ImmutableArray.CreateBuilder<TimelineMotionRow>();
+        var layerRows = new int[doc.Expression ? 0 : doc.Motion.Length];
+        for (var index = 0; index < layerRows.Length; index++)
+        {
+            var layer = doc.Motion[index];
+            layerRows[index] = motionFirst + motion.Count;
+            motion.Add(new TimelineMotionRow(index));
+            if (unfolded != null && unfolded.Contains(layer.Key) && Unfolds(layer))
+                foreach (var bone in MotionEdits.KeyBones(layer, boneOrder))
+                    motion.Add(new TimelineMotionRow(index, bone));
+        }
+        if (!doc.Expression && motion.Count == 0)
+            motion.Add(new TimelineMotionRow(-1));
+        return new TimelineLayout(doc, lanes.ToImmutable(), next + motion.Count, rows, ends, shown, indexByKey, motionFirst,
+            motion.ToImmutable(), layerRows);
     }
 
     /// <summary>The index of the event with <paramref name="key"/> in the document's events, or -1.</summary>
