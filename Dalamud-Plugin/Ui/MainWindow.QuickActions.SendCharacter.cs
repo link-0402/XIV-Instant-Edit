@@ -17,7 +17,8 @@ namespace InstantEdit.Ui;
 /// rest pose, its current pose or the animation it plays. The models its draw object holds go over
 /// with the parts and shape keys the game has on; parts it hides go over hidden. Each model is an
 /// import of its own with its own context, so Quick Export still writes each one back on its own.
-/// Models of another race always go over racially scaled for the character, so preview only.
+/// Models of another race always go over racially scaled for the character, so Quick Export saves those
+/// only as the character's race's own model (Save as c0801 Model), never back into the other race's file.
 /// </summary>
 public sealed partial class MainWindow
 {
@@ -47,7 +48,7 @@ public sealed partial class MainWindow
         "Sends your character to Blender as the game shows it now. " +
         "Each model keeps its own context, so Quick Export still writes it back whole. " +
         "Models made for another race, such as the c0201 gear most female races wear, are reshaped for yours as the game " +
-        "shows them. Those are for preview only: Quick Export refuses them.",
+        "shows them. Quick Export can save those only as your race's own model, not back into the other race's file.",
         DrawSendCharacterAction);
 
     private void DrawSendCharacterAction()

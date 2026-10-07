@@ -227,8 +227,8 @@ internal static class CharacterSendPlan
         var scaled = outcome.Sent.Count(model => model.Scaled);
         if (scaled > 0)
             parts.Add(scaled == 1
-                ? "1 model was reshaped for the character's race for preview, so it can't be exported."
-                : $"{scaled} models were reshaped for the character's race for preview, so they can't be exported.");
+                ? "1 model was reshaped for the character's race. Quick Export can save it only as that race's own model."
+                : $"{scaled} models were reshaped for the character's race. Quick Export can save them only as that race's own model.");
         if (outcome.HiddenParts > 0)
             parts.Add(outcome.HiddenParts == 1
                 ? "1 part your character doesn't show now came over hidden; Quick Export still writes it."

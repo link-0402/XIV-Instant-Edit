@@ -33,8 +33,8 @@ public sealed partial class MainWindow
     ];
 
     private QuickAction NeckSeamCard => new("skin-seams", FontAwesomeIcon.UserCheck, "Fix skin seams",
-        "Automatically fix skin seams between model parts, such as on the neck, wrists, ankles and belly. The neck fix is safe, but use the other options carefully." +
-        "Builds a preview mod from the fixed files. Open the check window again to put the contents of the preview mod into the original mods." +
+        "Automatically fix skin seams between model parts, such as on the neck, wrists, ankles and belly. The neck fix is safe, but use the other options carefully. " +
+        "Builds a preview mod from the fixed files. Open the check window again to put the contents of the preview mod into the original mods. " +
         "It can also match one skin part's tone to another, such as a face mod's ears to the face.",
         DrawNeckSeamAction);
 
