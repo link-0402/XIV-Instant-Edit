@@ -20,6 +20,7 @@ internal static class MotionLayerFixture
         Fades(check);
         Offsets(check);
         Keys(check);
+        Eases(check, reject);
         Amplitudes(check);
         Poses(check);
         Order(check);
@@ -161,6 +162,53 @@ internal static class MotionLayerFixture
             "stepped keys hold until the next key");
         var applied = Applied(linear);
         check(Degrees(applied.Get(15, Index(Hand)).Rotation, Q(Vector3.UnitY, 45)) < .01f, "applied keys turn the bone by their value at each sample");
+    }
+
+    private static void Eases(Action<bool, string> check, Action<Action, string> reject)
+    {
+        check(Math.Abs(MotionCurve.Smooth.Ease(.3f) - AnimationPoseRules.SmoothStep(.3f)) < 1e-5f && Math.Abs(MotionCurve.Linear.Ease(.3f) - .3f) < 1e-5f &&
+              MotionCurve.EaseIn.Ease(.2f) < .2f && MotionCurve.EaseOut.Ease(.2f) > .2f,
+            "the presets: smooth is the smoothstep layers always used, linear the time itself, slow start lags it and slow end leads it");
+        static bool Rising(MotionCurve curve) => Enumerable.Range(0, 101).Select(i => curve.Ease(i / 100f)).Zip(Enumerable.Range(1, 100).Select(i => curve.Ease(i / 100f)))
+            .All(pair => pair.Second >= pair.First - 1e-5f);
+        var css = new MotionCurve(.42f, 0, .58f, 1);
+        check(Math.Abs(css.Ease(.5f) - .5f) < 1e-3f && css.Ease(.25f) < .25f && css.Ease(0) == 0 && css.Ease(1) == 1 && Rising(css),
+            "a curve with handles off the thirds solves for its time and keeps its ends");
+        var stall = new MotionCurve(1, 0, 0, 1);
+        check(Rising(stall) && Math.Abs(stall.Ease(.5f) - .5f) < 1e-3f, "handles that make the time stall still solve");
+        var overshoot = new MotionCurve(1 / 3f, 0, 2 / 3f, 1.6f);
+        check(Enumerable.Range(1, 99).Any(i => overshoot.Ease(i / 100f) > 1) && overshoot.Ease(1) == 1, "a handle above the box overshoots and settles on the next key");
+
+        var keys = new[]
+        {
+            Key(0, (Hand, T(Vector3.Zero, Quaternion.Identity))) with { Ease = MotionInterpolation.Step },
+            Key(10, (Hand, T(Vector3.Zero, Q(Vector3.UnitY, 90)))),
+            Key(20, (Hand, T(Vector3.Zero, Quaternion.Identity))),
+        };
+        var layer = Layer(MotionLayerKind.Offset, keys: keys);
+        check(Degrees(MotionEvaluator.KeyValue(layer, Hand, 9)!.Value.Rotation, Quaternion.Identity) < .01f &&
+              Degrees(MotionEvaluator.KeyValue(layer, Hand, 10)!.Value.Rotation, Q(Vector3.UnitY, 90)) < .01f &&
+              Math.Abs(Degrees(MotionEvaluator.KeyValue(layer, Hand, 15)!.Value.Rotation, Quaternion.Identity) - 45) < .01f,
+            "a key's own ease shapes only the way from it to the next key; a key without one goes the layer's way");
+        var custom = layer with { Keys = layer.Keys.SetItem(1, layer.Keys[1] with { Ease = MotionInterpolation.Custom, Curve = MotionCurve.EaseOut }) };
+        var expected = 90 * (1 - MotionCurve.EaseOut.Ease(.5f));
+        check(Math.Abs(Degrees(MotionEvaluator.KeyValue(custom, Hand, 15)!.Value.Rotation, Quaternion.Identity) - expected) < .01f,
+            "a key's own curve shapes its way to the next key");
+        var applied = Applied(custom);
+        check(Degrees(applied.Get(5, Index(Hand)).Rotation, Quaternion.Identity) < .01f &&
+              Math.Abs(Degrees(applied.Get(15, Index(Hand)).Rotation, Quaternion.Identity) - expected) < .01f,
+            "the bake follows each key's ease, as the panels show it");
+        check(MotionEvaluator.KeyEase(layer, layer.Keys[0]) == MotionInterpolation.Step && MotionEvaluator.KeyEase(layer, layer.Keys[1]) == MotionInterpolation.Linear,
+            "a key goes its own way, else the layer's");
+
+        reject(() => MotionEvaluator.Validate(layer with { Interpolation = MotionInterpolation.Custom }), "a layer can't use a key's own curve");
+        reject(() => MotionEvaluator.Validate(layer with { Keys = layer.Keys.SetItem(1, layer.Keys[1] with { Ease = MotionInterpolation.Custom }) }),
+            "a key's own curve without its handles is refused");
+        reject(() => MotionEvaluator.Validate(layer with { Keys = layer.Keys.SetItem(1, layer.Keys[1] with { Ease = MotionInterpolation.Custom, Curve = new MotionCurve(1.5f, 0, 0, 1) }) }),
+            "handles that run back in time are refused");
+        reject(() => MotionEvaluator.Validate(layer with { Keys = layer.Keys.SetItem(1, layer.Keys[1] with { Ease = (MotionInterpolation)99 }) }),
+            "an unknown ease is refused");
+        MotionEvaluator.Validate(custom);
     }
 
     private static void Amplitudes(Action<bool, string> check)
@@ -318,7 +366,7 @@ internal static class MotionLayerFixture
                 new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""), DateTime.UtcNow, true, ActorIndex: 201);
             var layer = new MotionLayer("m3", MotionLayerKind.Pose, "Wave", 5, 25, 3, 4, .75f, PoseComponents.Rotation | PoseComponents.Position,
                 MotionInterpolation.Smooth, [Hand], [Key(5, (Hand, new BoneTransform(new Vector3(1, 2, 3), Q(Vector3.UnitX, 20), new Vector3(1, 1.1f, 1))))
-                    with { Moved = [Hand] }]);
+                    with { Moved = [Hand], Ease = MotionInterpolation.Custom, Curve = new MotionCurve(.2f, -.1f, .8f, 1.2f) }]);
             var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "Motion", false,
                 ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.EditTimeline,
                 Timeline: new AnimationTimelineEdit(false, 0, null, [layer]));
@@ -331,9 +379,18 @@ internal static class MotionLayerFixture
             check(loaded with { Bones = [], Keys = [] } == layer with { Bones = [], Keys = [] } && loaded.Bones.SequenceEqual([Hand]) &&
                   key.Frame == 5 && key.Moved.SequenceEqual([Hand]) && key.Bones[Hand] == layer.Keys[0].Bones[Hand],
                 "a timeline edit's journal keeps its bone layers, keys and values across a restart");
+            check(key.Ease == MotionInterpolation.Custom && key.Curve == layer.Keys[0].Curve, "a journal keeps a key's own ease and curve");
+
+            // Journals written before keys had their own ease have no Ease or Curve.
+            var path = Path.Combine(temp, "AnimationEdits", request.Id.ToString("N"), "journal.json");
+            var easeless = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+            var savedKey = easeless["Request"]!["Timeline"]!["Motion"]![0]!["Keys"]![0]!.AsObject();
+            check(savedKey.Remove("Ease") && savedKey.Remove("Curve"), "a journal stores a key's ease as Ease and Curve");
+            File.WriteAllText(path, easeless.ToJsonString());
+            check(new AnimationJournalStore(temp).Load().Single().Request.Timeline!.Motion.Single().Keys.Single() is { Ease: null, Curve: null, Frame: 5 },
+                "an older journal's keys go the layer's way");
 
             // Journals written before bone layers have no Motion field.
-            var path = Path.Combine(temp, "AnimationEdits", request.Id.ToString("N"), "journal.json");
             var json = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
             json["Request"]!["Timeline"]!.AsObject().Remove("Motion");
             json["Request"]!["Capture"]!.AsObject().Remove("ActorIndex");

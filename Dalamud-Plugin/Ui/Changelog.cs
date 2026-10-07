@@ -38,6 +38,8 @@ internal static class ChangelogCatalog
             Entry("Pick bones on a body map, like Brio's, or on your character in GPose, and turn them with a ball or a gizmo. Mirror gives the other side the same edits.", 1),
             Entry("Key a whole pose from a .pose file (Anamnesis, Ktisis or Brio), your posed character or a frame of another animation.", 1),
             Entry("Saved layers stay editable: Edit again brings them back.", 1),
+            Entry("Each key can set how bones get to the next key: smooth, slow start, slow end, hold, or a curve you shape.", 1),
+            Entry("Unfold a layer to see a row per bone, and drag one bone's key on its own.", 1),
             Highlight("Quick Actions: 'Body physics' builds body physics for the skeleton your character uses, without VFXEditor."),
             Entry("Start from the game's file, the physics your mods load or any preset, and add areas your skeleton has bones for, like IVCS and YAS butts and thighs.", 1),
             Entry("Tune each area with plain sliders, both sides at once, and preview it on your character before you save.", 1),

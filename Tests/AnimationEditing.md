@@ -721,3 +721,20 @@ older journals are covered offline in EditAgainFixture):
 Docs (Phase 8):
 - [ ] The changelog's 2.2.0 lists the bone layer entries under Timeline, and the Animations
   tab's Timeline tab says the motion can change too.
+
+Key eases and bone rows (2026-10-07; curves, per-key sampling, bone key moves, rows, hits and
+gestures are covered offline in MotionLayerFixture and MotionEditsFixture):
+- [ ] Select an offset layer's key: under the keys the panel shows "To the next key" with the
+  layer's way and a curve. Pick Hold: the key turns into a square and with Live on the bone
+  stays put until the next key, then jumps. Slow start and Slow end visibly lag or lead.
+- [ ] Drag a handle of the curve: the key turns into a circle, the ease becomes Custom and Live
+  follows while dragging; the drag is one undo step. A handle pulled above the box makes the
+  bone overshoot the next key's value and settle back.
+- [ ] Right-click a key: To the next key lists the layer's way and the presets.
+- [ ] The arrow at the right of a layer's name unfolds a row per keyed bone, parents first
+  (an amplitude has no arrow). Folding is no undo step and stays after a save.
+- [ ] Click a bone row: the bone is picked in the panel and the Bones window. Drag one of its
+  keys: only that bone's value moves; dropped on another key's frame it joins that key.
+  Delete and Alt+arrows act on that bone alone. The layer's own row still moves whole keys.
+- [ ] Save and Edit again: the eases come back with the layers, and the saved motion matches
+  what Live showed.

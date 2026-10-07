@@ -29,30 +29,41 @@ internal enum TimelinePart : byte
     LayerFadeOut,
     /// <summary>A layer's key, a diamond on its bar.</summary>
     LayerKey,
+    /// <summary>The arrow at the right of a layer's name that folds its bone rows in and out.</summary>
+    LayerUnfold,
+    /// <summary>Empty space in one bone's row under its layer.</summary>
+    BoneLane,
+    /// <summary>One bone's value in a layer's key, on that bone's row.</summary>
+    BoneKey,
 }
 
 /// <param name="Frame">The fractional frame under the pointer; the editor rounds it.</param>
 /// <param name="Lane">The lane of the row under the pointer, null on the ruler or outside the rows.</param>
 /// <param name="Key">The event under the pointer for Body, LeftEdge and RightEdge.</param>
 /// <param name="Row">The row under the pointer, -1 outside the rows.</param>
-/// <param name="Layer">The bone layer of the row under the pointer, also on the legend.</param>
-/// <param name="KeyFrame">The frame of the layer's key under the pointer for LayerKey, else -1.</param>
+/// <param name="Layer">The bone layer of the row under the pointer, also on the legend and on its bone rows.</param>
+/// <param name="KeyFrame">The frame of the layer's key under the pointer for LayerKey and BoneKey, else -1.</param>
+/// <param name="Bone">The bone of a bone row under the pointer, also on the legend.</param>
 internal readonly record struct TimelineHit(TimelinePart Part, float Frame, TimelineLane? Lane = null, string? Key = null, int Row = -1,
-    string? Layer = null, int KeyFrame = -1)
+    string? Layer = null, int KeyFrame = -1, string? Bone = null)
 {
     public static TimelineHit None(float frame = 0) => new(TimelinePart.None, frame);
     public bool OnEvent => Key != null && Part is TimelinePart.Body or TimelinePart.LeftEdge or TimelinePart.RightEdge;
     public bool OnLayer => Layer != null && Part is TimelinePart.LayerBody or TimelinePart.LayerLeft or TimelinePart.LayerRight or
-        TimelinePart.LayerFadeIn or TimelinePart.LayerFadeOut or TimelinePart.LayerKey;
+        TimelinePart.LayerFadeIn or TimelinePart.LayerFadeOut or TimelinePart.LayerKey or TimelinePart.BoneKey;
+    /// <summary>On a key, a whole one on its layer's bar or one bone's on its row.</summary>
+    public bool OnKey => Layer != null && KeyFrame >= 0 && Part is TimelinePart.LayerKey or TimelinePart.BoneKey;
 }
 
 /// <summary>
 /// Pixel sizes of the drawn timeline, all already scaled: legend width, ruler height, row height,
 /// the edge grab tolerance and the narrowest an event may be to still be grabbed. Rows scroll up by
 /// <paramref name="ScrollY"/> under a fixed ruler. Points are relative to the canvas' top left corner,
-/// legend included. No ImGui or Dalamud dependencies.
+/// legend included. <paramref name="Unfold"/> is the width of the arrow at the legend's right edge
+/// that folds a layer's bone rows; 0 leaves it out. No ImGui or Dalamud dependencies.
 /// </summary>
-internal readonly record struct TimelineGeometry(float Legend, float Ruler, float Row, float Edge, float Marker, float ScrollY = 0)
+internal readonly record struct TimelineGeometry(float Legend, float Ruler, float Row, float Edge, float Marker, float ScrollY = 0,
+    float Unfold = 0)
 {
     /// <summary>
     /// Where an event is drawn and grabbed, in track pixels. A marker (no duration) is centred on its
@@ -99,9 +110,15 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
         TimelineLane? lane = row >= 0 ? layout.LaneAt(row)?.Lane : null;
         var layerIndex = row >= 0 ? layout.LayerIndexAt(row) : -1;
         if (x < 0)
-            return row >= 0
-                ? new TimelineHit(TimelinePart.Legend, frame, lane, null, row, layerIndex >= 0 ? doc.Motion[layerIndex].Key : null)
-                : TimelineHit.None(frame);
+        {
+            if (row < 0)
+                return TimelineHit.None(frame);
+            var motionRow = layout.MotionRowAt(row);
+            var owner = motionRow is { Layer: >= 0 and var at } ? doc.Motion[at].Key : null;
+            if (Unfold > 0 && layerIndex >= 0 && x >= -Unfold && TimelineLayout.Unfolds(doc.Motion[layerIndex]))
+                return new TimelineHit(TimelinePart.LayerUnfold, frame, lane, null, row, owner);
+            return new TimelineHit(TimelinePart.Legend, frame, lane, null, row, owner, Bone: motionRow?.Bone);
+        }
 
         if (MathF.Abs(x - view.X(doc.Length)) <= Edge && (y < Ruler || lane == TimelineLane.Motion))
             return new TimelineHit(TimelinePart.LengthHandle, frame, lane, null, row);
@@ -109,6 +126,8 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
             return new TimelineHit(TimelinePart.Ruler, frame);
         if (row < 0)
             return TimelineHit.None(frame);
+        if (layout.BoneAt(row) is { } boneRow)
+            return HitBone(doc.Motion[boneRow.Layer], boneRow.Bone, view, x, frame, row);
         if (layout.IsMotionRow(row))
             return layerIndex < 0
                 ? new TimelineHit(TimelinePart.MotionLane, frame, null, null, row)
@@ -181,6 +200,27 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
         return x >= left && x <= right
             ? new TimelineHit(TimelinePart.LayerBody, frame, null, null, row, layer.Key)
             : new TimelineHit(TimelinePart.MotionLane, frame, null, null, row, layer.Key);
+    }
+
+    /// <summary>One bone's row: the nearest of its keys within a marker's reach, else the empty row.</summary>
+    private TimelineHit HitBone(MotionLayer layer, string bone, TimelineView view, float x, float frame, int row)
+    {
+        var best = float.MaxValue;
+        var found = -1;
+        foreach (var key in layer.Keys)
+        {
+            if (!key.Bones.ContainsKey(bone))
+                continue;
+            var distance = MathF.Abs(x - view.X(key.Frame));
+            if (distance <= Marker / 2 + 1 && distance < best)
+            {
+                best = distance;
+                found = key.Frame;
+            }
+        }
+        return found >= 0
+            ? new TimelineHit(TimelinePart.BoneKey, frame, null, null, row, layer.Key, found, bone)
+            : new TimelineHit(TimelinePart.BoneLane, frame, null, null, row, layer.Key, Bone: bone);
     }
 
     /// <summary>Which part of one event's grab zones <paramref name="x"/> is in, or None.</summary>

@@ -54,7 +54,8 @@ internal static class MotionEvaluator
     /// <summary>Checks one layer; throws <see cref="InvalidDataException"/> naming what is wrong.</summary>
     public static void Validate(MotionLayer layer)
     {
-        if (layer == null || string.IsNullOrEmpty(layer.Key) || !Enum.IsDefined(layer.Kind) || !Enum.IsDefined(layer.Interpolation))
+        if (layer == null || string.IsNullOrEmpty(layer.Key) || !Enum.IsDefined(layer.Kind) || !Enum.IsDefined(layer.Interpolation) ||
+            layer.Interpolation == MotionInterpolation.Custom)
             throw new InvalidDataException("A bone layer can't be read.");
         var name = string.IsNullOrWhiteSpace(layer.Name) ? "A bone layer" : $"The bone layer {layer.Name}";
         if (layer.Start < 0 || layer.End <= layer.Start || layer.End > TimelineDocument.MaxFrames)
@@ -88,6 +89,9 @@ internal static class MotionEvaluator
             }
             if (key.Moved.Any(bone => !key.Bones.ContainsKey(bone)))
                 throw new InvalidDataException($"{name} moves a bone its key has no value for.");
+            if (key.Ease is { } ease && !Enum.IsDefined(ease) || key.Curve is { Valid: false } ||
+                key.Ease == MotionInterpolation.Custom && key.Curve == null)
+                throw new InvalidDataException($"{name} has a key with an ease that can't be read.");
         }
     }
 
@@ -162,24 +166,46 @@ internal static class MotionEvaluator
     }
 
     /// <summary>
-    /// A bone's keyed value at <paramref name="frame"/>: between two keys it goes the layer's way, before
-    /// the first and after the last it holds. Null when no key has the bone.
+    /// A bone's keyed value at <paramref name="frame"/>: between two keys it goes the earlier key's way
+    /// (<see cref="KeyEase"/>), before the first and after the last it holds. Null when no key has the bone.
     /// </summary>
     public static MotionTransform? KeyValue(MotionLayer layer, string bone, float frame)
     {
         var frames = new List<int>();
         var values = new List<MotionTransform>();
+        var curves = new List<MotionCurve?>();
         foreach (var key in layer.Keys)
             if (key.Bones.TryGetValue(bone, out var value))
             {
                 frames.Add(key.Frame);
                 values.Add(Normalized(MotionTransform.From(value)));
+                curves.Add(CurveOf(layer, key));
             }
-        return frames.Count == 0 ? null : Sample(frames.ToArray(), values.ToArray(), frame, layer.Interpolation);
+        return frames.Count == 0 ? null : Sample(frames.ToArray(), values.ToArray(), curves.ToArray(), frame);
     }
 
-    /// <summary>The value at <paramref name="frame"/> on a bone's keys (frames ascending, at least one).</summary>
-    internal static MotionTransform Sample(int[] frames, MotionTransform[] values, float frame, MotionInterpolation mode)
+    /// <summary>How the bones go from <paramref name="key"/> to their next keys: its own way, else the layer's.</summary>
+    public static MotionInterpolation KeyEase(MotionLayer layer, MotionKey key) => key.Ease ?? layer.Interpolation;
+
+    /// <summary>The curve from <paramref name="key"/> to the next one; null holds the value until then.</summary>
+    public static MotionCurve? CurveOf(MotionLayer layer, MotionKey key) => CurveOf(KeyEase(layer, key), key.Curve);
+
+    /// <summary>The curve of <paramref name="mode"/>, with <paramref name="custom"/> for a key's own; null for a hold.</summary>
+    public static MotionCurve? CurveOf(MotionInterpolation mode, MotionCurve? custom) => mode switch
+    {
+        MotionInterpolation.Step => null,
+        MotionInterpolation.Smooth => MotionCurve.Smooth,
+        MotionInterpolation.EaseIn => MotionCurve.EaseIn,
+        MotionInterpolation.EaseOut => MotionCurve.EaseOut,
+        MotionInterpolation.Custom when custom is { Valid: true } => custom,
+        _ => MotionCurve.Linear,
+    };
+
+    /// <summary>
+    /// The value at <paramref name="frame"/> on a bone's keys (frames ascending, at least one), each
+    /// stretch between two keys following the earlier key's curve (null holds it).
+    /// </summary>
+    internal static MotionTransform Sample(int[] frames, MotionTransform[] values, MotionCurve?[] curves, float frame)
     {
         if (frames.Length == 1 || frame <= frames[0])
             return values[0];
@@ -194,12 +220,7 @@ internal static class MotionEvaluator
             else high = middle;
         }
         var t = (frame - frames[low]) / (frames[high] - frames[low]);
-        t = mode switch
-        {
-            MotionInterpolation.Step => 0,
-            MotionInterpolation.Smooth => AnimationPoseRules.SmoothStep(t),
-            _ => t,
-        };
+        t = curves[low] is { } curve ? curve.Ease(t) : 0;
         return Lerp(values[low], values[high], t);
     }
 
@@ -316,7 +337,7 @@ internal static class MotionEvaluator
                 var parentModel = parent >= 0 ? model[parent] : Quaternion.Identity;
                 if (tracks.TryGetValue(b, out var track))
                 {
-                    local = OffsetBone(local, parentModel, Sample(track.Frames, track.Values, frame, layer.Interpolation), strength, rotate, move, scale);
+                    local = OffsetBone(local, parentModel, Sample(track.Frames, track.Values, track.Curves, frame), strength, rotate, move, scale);
                     clip.Set(i, b, local);
                 }
                 model[b] = parent >= 0 ? Quaternion.Normalize(parentModel * local.Rotation) : Quaternion.Normalize(local.Rotation);
@@ -385,7 +406,7 @@ internal static class MotionEvaluator
                     var parent = skeleton.Bones[b].Parent;
                     var parentModel = parent >= 0 ? model[parent] : Quaternion.Identity;
                     if (tracks.TryGetValue(b, out var track))
-                        pose[b] = OffsetBone(pose[b], parentModel, Sample(track.Frames, track.Values, frame, layer.Interpolation), strength, rotate, move, scale);
+                        pose[b] = OffsetBone(pose[b], parentModel, Sample(track.Frames, track.Values, track.Curves, frame), strength, rotate, move, scale);
                     model[b] = parent >= 0 ? Quaternion.Normalize(parentModel * pose[b].Rotation) : Quaternion.Normalize(pose[b].Rotation);
                 }
                 continue;
@@ -395,10 +416,10 @@ internal static class MotionEvaluator
                 continue;
             if (rotate || scale)
                 foreach (var (b, track) in Tracks(layer, index, mask, false))
-                    pose[b] = PoseBone(pose[b], Sample(track.Frames, track.Values, frame, layer.Interpolation), weight, rotate, scale);
+                    pose[b] = PoseBone(pose[b], Sample(track.Frames, track.Values, track.Curves, frame), weight, rotate, scale);
             if (move)
                 foreach (var (b, track) in Tracks(layer, index, mask, true))
-                    pose[b] = pose[b] with { Position = Vector3.Lerp(pose[b].Position, Sample(track.Frames, track.Values, frame, layer.Interpolation).Position, weight) };
+                    pose[b] = pose[b] with { Position = Vector3.Lerp(pose[b].Position, Sample(track.Frames, track.Values, track.Curves, frame).Position, weight) };
         }
         return pose;
     }
@@ -479,11 +500,11 @@ internal static class MotionEvaluator
                 continue;
             if (rotate || scale)
                 foreach (var (b, track) in tracks)
-                    clip.Set(i, b, PoseBone(clip.Get(i, b), Sample(track.Frames, track.Values, frame, layer.Interpolation), weight, rotate, scale));
+                    clip.Set(i, b, PoseBone(clip.Get(i, b), Sample(track.Frames, track.Values, track.Curves, frame), weight, rotate, scale));
             if (move)
                 foreach (var (b, track) in positions)
                 {
-                    var target = Sample(track.Frames, track.Values, frame, layer.Interpolation);
+                    var target = Sample(track.Frames, track.Values, track.Curves, frame);
                     var value = clip.Get(i, b);
                     clip.Set(i, b, value with { Position = Vector3.Lerp(value.Position, target.Position, weight) });
                 }
@@ -511,7 +532,10 @@ internal static class MotionEvaluator
     {
         var frames = new Dictionary<int, List<int>>();
         var values = new Dictionary<int, List<MotionTransform>>();
+        var curves = new Dictionary<int, List<MotionCurve?>>();
         foreach (var key in layer.Keys)
+        {
+            var curve = CurveOf(layer, key);
             foreach (var (name, value) in key.Bones)
             {
                 if (!index.TryGetValue(name, out var bone))
@@ -522,11 +546,14 @@ internal static class MotionEvaluator
                 {
                     frames[bone] = list = [];
                     values[bone] = [];
+                    curves[bone] = [];
                 }
                 list.Add(key.Frame);
                 values[bone].Add(Normalized(MotionTransform.From(value)));
+                curves[bone].Add(curve);
             }
-        return frames.ToDictionary(pair => pair.Key, pair => new Track(pair.Value.ToArray(), values[pair.Key].ToArray()));
+        }
+        return frames.ToDictionary(pair => pair.Key, pair => new Track(pair.Value.ToArray(), values[pair.Key].ToArray(), curves[pair.Key].ToArray()));
     }
 
     private static MotionTransform Normalized(MotionTransform value) => value with { Rotation = Quaternion.Normalize(value.Rotation) };
@@ -541,5 +568,5 @@ internal static class MotionEvaluator
         Math.Abs(by.Y) < 1e-12f ? value.Y : value.Y / by.Y,
         Math.Abs(by.Z) < 1e-12f ? value.Z : value.Z / by.Z);
 
-    internal sealed record Track(int[] Frames, MotionTransform[] Values);
+    internal sealed record Track(int[] Frames, MotionTransform[] Values, MotionCurve?[] Curves);
 }

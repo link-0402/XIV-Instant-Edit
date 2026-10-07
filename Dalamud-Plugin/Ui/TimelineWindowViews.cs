@@ -103,6 +103,41 @@ internal static class TimelineWindowViews
         return (keys == 1 ? "1 key" : $"{Whole(keys)} keys") + " · " + (bones == 1 ? "1 bone" : $"{Whole(bones)} bones");
     }
 
+    /// <summary>The ways a layer can take its keys to the next one, in menu order. A key can also have its own curve.</summary>
+    public static readonly ImmutableArray<MotionInterpolation> LayerEases =
+        [MotionInterpolation.Linear, MotionInterpolation.Smooth, MotionInterpolation.EaseIn, MotionInterpolation.EaseOut, MotionInterpolation.Step];
+
+    public static string EaseName(MotionInterpolation mode) => mode switch
+    {
+        MotionInterpolation.Linear => "Linear",
+        MotionInterpolation.Smooth => "Smooth",
+        MotionInterpolation.EaseIn => "Slow start",
+        MotionInterpolation.EaseOut => "Slow end",
+        MotionInterpolation.Step => "Hold",
+        _ => "Custom",
+    };
+
+    public static string EaseHint(MotionInterpolation mode) => mode switch
+    {
+        MotionInterpolation.Linear => "Same speed all the way.",
+        MotionInterpolation.Smooth => "Starts slow and ends slow.",
+        MotionInterpolation.EaseIn => "Starts slow, ends at full speed.",
+        MotionInterpolation.EaseOut => "Starts at full speed, ends slow.",
+        MotionInterpolation.Step => "Stays put, then jumps at the next key.",
+        _ => "Your own curve. Drag its two handles.",
+    };
+
+    /// <summary>How a key goes to the next one, for its tooltip: its own way, or the layer's.</summary>
+    public static string KeyEaseText(MotionLayer layer, MotionKey key) =>
+        key.Ease is { } own ? "To the next key: " + EaseName(own) : $"To the next key: {EaseName(layer.Interpolation)} (the layer's)";
+
+    /// <summary>A bone's row tooltip: how many of the layer's keys hold it.</summary>
+    public static string BoneKeysText(MotionLayer layer, string bone)
+    {
+        var keys = layer.Keys.Count(key => key.Bones.ContainsKey(bone));
+        return keys == 1 ? "1 key in this layer" : $"{Whole(keys)} keys in this layer";
+    }
+
     public static string LaneName(TimelineLane lane) => lane switch
     {
         TimelineLane.Motion => "Motion",

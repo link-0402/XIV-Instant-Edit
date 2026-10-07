@@ -3,6 +3,7 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
+using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui.Timeline;
@@ -28,6 +29,9 @@ public sealed partial class TimelineWindow
     // Offset, amplitude and pose layers.
     private static readonly FontAwesomeIcon[] LayerIcons = [FontAwesomeIcon.Bone, FontAwesomeIcon.WaveSquare, FontAwesomeIcon.StreetView];
     private static readonly string[] LayerGlyphs = [.. LayerIcons.Select(icon => icon.ToIconString())];
+    // A layer's bone rows, folded and unfolded.
+    private static readonly string FoldedGlyph = FontAwesomeIcon.CaretRight.ToIconString();
+    private static readonly string UnfoldedGlyph = FontAwesomeIcon.CaretDown.ToIconString();
     private static readonly string[] AddHereLabels =
         ["Add expression here", "Add lip sync here", "Add sound here", "Add effect here", "Add prop here"];
 
@@ -85,7 +89,7 @@ public sealed partial class TimelineWindow
         current.SnapTolerance = Theme.Scaled(8);
         current.SetWidth(Math.Max(1, area.X - legend));
         ClampScroll(current, row, ruler, area.Y);
-        var geometry = new TimelineGeometry(legend, ruler, row, Theme.Scaled(5), Theme.Scaled(9), scrollY);
+        var geometry = new TimelineGeometry(legend, ruler, row, Theme.Scaled(5), Theme.Scaled(9), scrollY, Theme.Scaled(18));
 
         ImGui.InvisibleButton("##canvas", area,
             ImGuiButtonFlags.MouseButtonLeft | ImGuiButtonFlags.MouseButtonRight | ImGuiButtonFlags.MouseButtonMiddle);
@@ -173,10 +177,11 @@ public sealed partial class TimelineWindow
         }
 
         var resizing = current.Gesture is TimelineGesture.ResizeLeft or TimelineGesture.ResizeRight or TimelineGesture.Length or
-            TimelineGesture.LayerLeft or TimelineGesture.LayerRight or TimelineGesture.LayerFadeIn or TimelineGesture.LayerFadeOut or TimelineGesture.LayerKey;
+            TimelineGesture.LayerLeft or TimelineGesture.LayerRight or TimelineGesture.LayerFadeIn or TimelineGesture.LayerFadeOut or TimelineGesture.LayerKey or
+            TimelineGesture.BoneKey;
         if (!readOnly && (resizing || hovered && current.Gesture == TimelineGesture.None &&
                 hit.Part is TimelinePart.LeftEdge or TimelinePart.RightEdge or TimelinePart.LengthHandle or TimelinePart.LayerLeft or
-                    TimelinePart.LayerRight or TimelinePart.LayerFadeIn or TimelinePart.LayerFadeOut or TimelinePart.LayerKey))
+                    TimelinePart.LayerRight or TimelinePart.LayerFadeIn or TimelinePart.LayerFadeOut or TimelinePart.LayerKey or TimelinePart.BoneKey))
             ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeEw);
     }
 
@@ -199,6 +204,9 @@ public sealed partial class TimelineWindow
             AddLayerAt(current, MotionLayerKind.Offset, current.SnappedFrame(hit.Frame, io.KeyAlt));
             return;
         }
+        // A bone's row picks that bone for the panel and the Bones window; Ctrl adds it.
+        if (hit.Bone is { } bone && hit.Layer != null && hit.Part is TimelinePart.BoneKey or TimelinePart.BoneLane or TimelinePart.Legend)
+            selection.Click(bone, io.KeyCtrl && hit.Part != TimelinePart.BoneKey);
         if (!readOnly)
         {
             current.Press(hit, io.KeyCtrl, io.KeyShift, io.KeyAlt);
@@ -206,10 +214,14 @@ public sealed partial class TimelineWindow
         }
         if (hit.Part == TimelinePart.Ruler)
             current.Press(hit, alt: io.KeyAlt);
+        else if (hit.Part == TimelinePart.LayerUnfold && hit.Layer is { } folding)
+            current.SetUnfolded(folding, !current.IsUnfolded(folding));
         else if (hit.OnEvent)
             current.Select(hit.Key!, io.KeyCtrl, io.KeyShift);
         else if (hit.OnLayer)
-            current.SelectLayer(hit.Layer!, hit.Part == TimelinePart.LayerKey ? hit.KeyFrame : null);
+            current.SelectLayer(hit.Layer!, hit.OnKey ? hit.KeyFrame : null, hit.Part == TimelinePart.BoneKey ? hit.Bone : null);
+        else if (hit.Part is TimelinePart.BoneLane or TimelinePart.Legend && hit.Layer != null)
+            current.SelectLayer(hit.Layer);
         else if (!io.KeyCtrl && !io.KeyShift)
             current.ClearSelection();
     }
@@ -318,7 +330,7 @@ public sealed partial class TimelineWindow
             drawList.AddText(new Vector2(min.X + Theme.Scaled(30), textY), U32(Theme.Label), TimelineWindowViews.LaneName(lane.Lane));
             drawList.PopClipRect();
         }
-        DrawLayerLegend(drawList, current, doc, layout, geometry, min, max, trackLeft, rowsTop);
+        DrawLayerLegend(drawList, current, doc, layout, geometry, min, max, trackLeft, rowsTop, hovered ? hit : TimelineHit.None());
         drawList.PopClipRect();
 
         // The track: grid, the shade past the end, prop groups, events, then the lines on top.
@@ -517,33 +529,59 @@ public sealed partial class TimelineWindow
 
     /// <summary>
     /// The bone layer rows below the event lanes: each layer's kind and name over a band in its colour,
-    /// or "Bones" over the empty row a first layer goes into; a line sets them apart from the events.
+    /// with an arrow at the right that unfolds a row per bone; each bone row its bone's name, indented;
+    /// or "Bones" over the empty row a first layer goes into. A line sets them apart from the events.
     /// </summary>
-    private static void DrawLayerLegend(ImDrawListPtr drawList, TimelineEditor current, TimelineDocument doc, TimelineLayout layout,
-        TimelineGeometry geometry, Vector2 min, Vector2 max, float trackLeft, float rowsTop)
+    private void DrawLayerLegend(ImDrawListPtr drawList, TimelineEditor current, TimelineDocument doc, TimelineLayout layout,
+        TimelineGeometry geometry, Vector2 min, Vector2 max, float trackLeft, float rowsTop, TimelineHit hit)
     {
         if (layout.MotionRows == 0)
             return;
         var fontSize = ImGui.GetFontSize();
+        var layerBand = 0;
         for (var row = layout.MotionFirstRow; row < layout.MotionFirstRow + layout.MotionRows; row++)
         {
             var top = min.Y + geometry.RowTop(row);
             var bottom = top + geometry.Row;
+            var entry = layout.MotionRowAt(row)!.Value;
+            if (entry.Bone == null)
+                layerBand++;
             if (bottom < rowsTop || top > max.Y)
                 continue;
-            var index = layout.LayerIndexAt(row);
-            var layer = index >= 0 ? doc.Motion[index] : null;
+            var layer = entry.Layer >= 0 ? doc.Motion[entry.Layer] : null;
             var colour = layer == null ? Theme.Muted : TimelineWindowViews.LayerColour(layer.Kind);
-            drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(max.X, bottom),
-                U32((row - layout.MotionFirstRow) % 2 == 0 ? Theme.RowAlt : Theme.PanelBg));
-            drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(min.X + Theme.Scaled(3), bottom), U32(colour));
+            var band = U32(layerBand % 2 == 1 ? Theme.RowAlt : Theme.PanelBg);
             var textY = top + (geometry.Row - fontSize) / 2;
-            drawList.PushClipRect(new Vector2(min.X, top), new Vector2(trackLeft - Theme.Scaled(3), bottom), true);
+            if (entry.Bone is { } bone && layer != null)
+            {
+                drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(max.X, bottom), band);
+                drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(max.X, bottom), U32(Theme.WithAlpha(colour, .05f)));
+                drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(min.X + Theme.Scaled(3), bottom), U32(Theme.WithAlpha(colour, .45f)));
+                var picked = current.SelectedLayer == layer.Key && selection.Contains(bone);
+                var hot = hit.Part == TimelinePart.Legend && hit.Row == row;
+                drawList.PushClipRect(new Vector2(min.X, top), new Vector2(trackLeft - Theme.Scaled(3), bottom), true);
+                drawList.AddText(new Vector2(min.X + Theme.Scaled(22), textY),
+                    U32(picked ? Theme.Accent : hot ? Theme.Text : !layer.Enabled ? Theme.Muted : Theme.Label), AnimationPresentation.BoneName(bone));
+                drawList.PopClipRect();
+                continue;
+            }
+            drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(max.X, bottom), band);
+            drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(min.X + Theme.Scaled(3), bottom), U32(colour));
+            var unfolds = layer != null && TimelineLayout.Unfolds(layer);
+            var nameRight = trackLeft - Theme.Scaled(3) - (unfolds ? geometry.Unfold : 0);
+            drawList.PushClipRect(new Vector2(min.X, top), new Vector2(nameRight, bottom), true);
             drawList.AddText(UiBuilder.IconFont, fontSize, new Vector2(min.X + Theme.Scaled(9), textY), U32(Theme.WithAlpha(colour, layer?.Enabled == false ? .5f : 1)),
                 LayerGlyph(layer?.Kind ?? MotionLayerKind.Offset));
             var name = layer == null ? Theme.Hint : !layer.Enabled ? Theme.Muted : current.SelectedLayer == layer.Key ? Theme.Accent : Theme.Label;
             drawList.AddText(new Vector2(min.X + Theme.Scaled(30), textY), U32(name), layer?.Name ?? TimelineWindowViews.BonesLaneName);
             drawList.PopClipRect();
+            if (unfolds)
+            {
+                var hot = hit.Part == TimelinePart.LayerUnfold && hit.Row == row;
+                var glyph = current.IsUnfolded(layer!.Key) ? UnfoldedGlyph : FoldedGlyph;
+                drawList.AddText(UiBuilder.IconFont, fontSize, new Vector2(trackLeft - geometry.Unfold + Theme.Scaled(3), textY),
+                    U32(hot ? Theme.Accent : Theme.Muted), glyph);
+            }
         }
         var y = Crisp(min.Y + geometry.RowTop(layout.MotionFirstRow));
         if (y > rowsTop && y < max.Y)
@@ -562,7 +600,7 @@ public sealed partial class TimelineWindow
         var rounding = Theme.Scaled(3);
         var line = Math.Max(1, MathF.Floor(Theme.Scale));
         var fontSize = ImGui.GetFontSize();
-        for (var index = 0; index < doc.Motion.Length; index++)
+        for (var index = 0; index < layout.LayerCount; index++)
         {
             var layer = doc.Motion[index];
             var top = min.Y + geometry.RowTop(layout.LayerRow(index));
@@ -600,17 +638,14 @@ public sealed partial class TimelineWindow
                 var x = trackLeft + view.X(key.Frame);
                 if (x < trackLeft - half || x > max.X + half)
                     continue;
+                var shape = KeyShapeOf(layer, key);
                 if (selected && current.SelectedKey == key.Frame)
-                {
-                    var ring = half + Theme.Scaled(2);
-                    drawList.AddQuadFilled(new Vector2(x, middle - ring), new Vector2(x + ring, middle), new Vector2(x, middle + ring),
-                        new Vector2(x - ring, middle), U32(Theme.Accent));
-                }
+                    DrawKeyMark(drawList, shape, x, middle, half + Theme.Scaled(2),
+                        U32(current.SelectedBone == null ? Theme.Accent : Theme.WithAlpha(Theme.Accent, .45f)));
                 // A key outside the layer still shapes the curve but never applies on its own.
                 var inside = key.Frame >= layer.Start && key.Frame <= layer.End;
                 var hotKey = hot && hit.Part == TimelinePart.LayerKey && hit.KeyFrame == key.Frame;
-                drawList.AddQuadFilled(new Vector2(x, middle - half), new Vector2(x + half, middle), new Vector2(x, middle + half),
-                    new Vector2(x - half, middle), U32(Theme.WithAlpha(Theme.Text, (inside ? hotKey ? 1 : .88f : .4f) * alpha)));
+                DrawKeyMark(drawList, shape, x, middle, half, U32(Theme.WithAlpha(Theme.Text, (inside ? hotKey ? 1 : .88f : .4f) * alpha)));
             }
             if (selected || hot)
             {
@@ -621,6 +656,72 @@ public sealed partial class TimelineWindow
                     U32(hot && hit.Part == TimelinePart.LayerFadeOut ? Theme.Accent : Theme.WithAlpha(Theme.Text, .8f)));
             }
         }
+        DrawBoneRows(drawList, current, doc, layout, geometry, view, min, max, trackLeft, rowsTop, hit);
+    }
+
+    private enum KeyShape : byte { Diamond, Circle, Square }
+
+    /// <summary>A hold is a square, a key with its own ease a circle, a key going the layer's way a diamond.</summary>
+    private static KeyShape KeyShapeOf(MotionLayer layer, MotionKey key) =>
+        MotionEvaluator.KeyEase(layer, key) == MotionInterpolation.Step ? KeyShape.Square : key.Ease != null ? KeyShape.Circle : KeyShape.Diamond;
+
+    private static void DrawKeyMark(ImDrawListPtr drawList, KeyShape shape, float x, float y, float half, uint colour)
+    {
+        switch (shape)
+        {
+            case KeyShape.Square:
+                var side = half * .8f;
+                drawList.AddRectFilled(new Vector2(x - side, y - side), new Vector2(x + side, y + side), colour);
+                break;
+            case KeyShape.Circle:
+                drawList.AddCircleFilled(new Vector2(x, y), half * .9f, colour);
+                break;
+            default:
+                drawList.AddQuadFilled(new Vector2(x, y - half), new Vector2(x + half, y), new Vector2(x, y + half), new Vector2(x - half, y), colour);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// An unfolded layer's bone rows: a thin line over the layer's frames and the bone's own keys, smaller
+    /// than the layer's. The selected one gets a ring, and so does each bone's part of a selected whole key.
+    /// </summary>
+    private static void DrawBoneRows(ImDrawListPtr drawList, TimelineEditor current, TimelineDocument doc, TimelineLayout layout,
+        TimelineGeometry geometry, TimelineView view, Vector2 min, Vector2 max, float trackLeft, float rowsTop, TimelineHit hit)
+    {
+        var line = Math.Max(1, MathF.Floor(Theme.Scale));
+        for (var row = layout.MotionFirstRow; row < layout.MotionFirstRow + layout.MotionRows; row++)
+        {
+            if (layout.BoneAt(row) is not { } entry)
+                continue;
+            var top = min.Y + geometry.RowTop(row);
+            if (top + geometry.Row < rowsTop || top > max.Y)
+                continue;
+            var layer = doc.Motion[entry.Layer];
+            var colour = TimelineWindowViews.LayerColour(layer.Kind);
+            var alpha = layer.Enabled ? 1f : .4f;
+            var middle = top + geometry.Row / 2;
+            var x0 = trackLeft + view.X(layer.Start);
+            var x1 = Math.Max(trackLeft + view.X(layer.End), x0 + 1);
+            drawList.AddLine(new Vector2(x0, middle), new Vector2(x1, middle), U32(Theme.WithAlpha(colour, .45f * alpha)), line);
+            var half = Math.Min(geometry.Row / 2 - Theme.Scaled(2), Theme.Scaled(4));
+            var selectedLayer = current.SelectedLayer == layer.Key;
+            foreach (var key in layer.Keys)
+            {
+                if (!key.Bones.ContainsKey(entry.Bone))
+                    continue;
+                var x = trackLeft + view.X(key.Frame);
+                if (x < trackLeft - half || x > max.X + half)
+                    continue;
+                var shape = KeyShapeOf(layer, key);
+                if (selectedLayer && current.SelectedKey == key.Frame && (current.SelectedBone == null || current.SelectedBone == entry.Bone))
+                    DrawKeyMark(drawList, shape, x, middle, half + Theme.Scaled(2),
+                        U32(current.SelectedBone == entry.Bone ? Theme.Accent : Theme.WithAlpha(Theme.Accent, .45f)));
+                var inside = key.Frame >= layer.Start && key.Frame <= layer.End;
+                var hotKey = hit.Part == TimelinePart.BoneKey && hit.Row == row && hit.KeyFrame == key.Frame;
+                DrawKeyMark(drawList, shape, x, middle, half, U32(Theme.WithAlpha(hotKey ? Theme.Text : colour, (inside ? hotKey ? 1 : .95f : .4f) * alpha)));
+            }
+        }
     }
 
     private void DrawTooltip(TimelineEditor current, TimelineHit hit, bool hovering, bool readOnly)
@@ -629,9 +730,24 @@ public sealed partial class TimelineWindow
             return;
         if (hit.OnLayer && MotionEdits.Find(current.Document, hit.Layer) is { } layer)
         {
-            if (!Widgets.HoverDelay($"layer:{layer.Key}:{hit.Part}:{hit.KeyFrame}"))
+            if (!Widgets.HoverDelay($"layer:{layer.Key}:{hit.Part}:{hit.KeyFrame}:{hit.Bone}"))
                 return;
             DrawLayerTooltip(layer, hit, readOnly);
+            return;
+        }
+        if (hit.Part == TimelinePart.LayerUnfold && hit.Layer is { } folding && Widgets.HoverDelay("layer-unfold:" + folding))
+        {
+            ImGui.SetTooltip(current.IsUnfolded(folding) ? "Hide the bone rows." : "Show a row per bone, to move one bone's keys on their own.");
+            return;
+        }
+        if (hit.Part is TimelinePart.BoneLane or TimelinePart.Legend && hit.Bone is { } boneRow &&
+            MotionEdits.Find(current.Document, hit.Layer) is { } owner && Widgets.HoverDelay($"bone-row:{owner.Key}:{boneRow}"))
+        {
+            using var tooltip = ImRaii.Tooltip();
+            ImGui.TextColored(Theme.Label, AnimationPresentation.BoneName(boneRow));
+            ImGui.TextUnformatted(TimelineWindowViews.BoneKeysText(owner, boneRow));
+            if (!readOnly)
+                ImGui.TextColored(Theme.Hint, "Click to pick this bone. Ctrl+click adds it.");
             return;
         }
         if (hit.Part == TimelinePart.MotionLane && hit.Layer == null && !readOnly && Widgets.HoverDelay("timeline-bones-lane"))
@@ -676,10 +792,19 @@ public sealed partial class TimelineWindow
         ImGui.TextColored(Theme.Label, layer.Name);
         ImGui.SameLine(0, Theme.Gap);
         ImGui.TextColored(Theme.Muted, MotionEdits.KindName(layer.Kind) + (layer.Enabled ? "" : " · off"));
+        if (hit.Part == TimelinePart.BoneKey && hit.Bone is { } bone && MotionEdits.KeyIndex(layer, hit.KeyFrame) is var own and >= 0)
+        {
+            ImGui.TextUnformatted($"{AnimationPresentation.BoneName(bone)} at {TimelineWindowViews.FrameText(hit.KeyFrame)}");
+            ImGui.TextUnformatted(TimelineWindowViews.KeyEaseText(layer, layer.Keys[own]));
+            if (!readOnly)
+                ImGui.TextColored(Theme.Hint, "Drag to move this bone's key alone. It joins a key it lands on.");
+            return;
+        }
         if (hit.Part == TimelinePart.LayerKey && MotionEdits.KeyIndex(layer, hit.KeyFrame) is var at and >= 0)
         {
             var bones = layer.Keys[at].Bones.Count;
             ImGui.TextUnformatted($"Key at {TimelineWindowViews.FrameText(hit.KeyFrame)} · {(bones == 1 ? "1 bone" : $"{bones} bones")}");
+            ImGui.TextUnformatted(TimelineWindowViews.KeyEaseText(layer, layer.Keys[at]));
             if (!readOnly)
                 ImGui.TextColored(Theme.Hint, "Drag to move the key.");
             return;
@@ -709,6 +834,19 @@ public sealed partial class TimelineWindow
         if (menuHit.OnLayer && MotionEdits.Find(current.Document, menuHit.Layer) is { } layer)
         {
             DrawLayerMenu(current, layer, readOnly);
+            return;
+        }
+        if (menuHit.Part is TimelinePart.BoneLane or TimelinePart.Legend && menuHit.Bone is { } bone &&
+            MotionEdits.Find(current.Document, menuHit.Layer) is { } owner)
+        {
+            ImGui.TextColored(Theme.Label, AnimationPresentation.BoneName(bone));
+            ImGui.Separator();
+            if (ImGui.MenuItem("Take out of this layer", "", false, !readOnly))
+                current.Commit(MotionEdits.ClearBone(current.Document, owner.Key, bone));
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Delete this bone's keys in this layer.");
+            if (ImGui.MenuItem("Hide bone rows"))
+                current.SetUnfolded(owner.Key, false);
             return;
         }
         if (menuHit.Part == TimelinePart.MotionLane || menuHit.Part == TimelinePart.Legend && current.Layout.IsMotionRow(menuHit.Row))
@@ -762,8 +900,15 @@ public sealed partial class TimelineWindow
         ImGui.Separator();
         var doc = current.Document;
         var index = MotionEdits.IndexOf(doc, layer.Key);
-        if (current.SelectedKey is { } frame && ImGui.MenuItem("Delete key", "Del", false, !readOnly))
-            current.Commit(MotionEdits.DeleteKey(doc, layer.Key, frame));
+        if (current.SelectedKey is { } frame && MotionEdits.KeyIndex(layer, frame) is var at and >= 0)
+        {
+            if (ImGui.MenuItem(current.SelectedBone is { } bone ? $"Delete {AnimationPresentation.BoneName(bone)}'s key" : "Delete key", "Del", false, !readOnly))
+                current.DeleteLayerSelection();
+            DrawEaseMenu(current, layer, layer.Keys[at], readOnly);
+            ImGui.Separator();
+        }
+        if (TimelineLayout.Unfolds(layer) && ImGui.MenuItem(current.IsUnfolded(layer.Key) ? "Hide bone rows" : "Show bone rows"))
+            current.SetUnfolded(layer.Key, !current.IsUnfolded(layer.Key));
         if (ImGui.MenuItem(layer.Enabled ? "Turn off" : "Turn on", "", false, !readOnly))
             current.Commit(MotionEdits.SetEnabled(doc, layer.Key, !layer.Enabled));
         if (ImGui.MenuItem("Duplicate", "Ctrl+D", false, !readOnly))
@@ -776,6 +921,23 @@ public sealed partial class TimelineWindow
             current.Commit(MotionEdits.Reorder(doc, layer.Key, 1));
         if (ImGui.MenuItem("Delete layer", "", false, !readOnly))
             current.Commit(MotionEdits.Remove(doc, layer.Key));
+    }
+
+    /// <summary> The key's ease to the next key: the layer's way or one of the presets. Its own curve is made in the panel. </summary>
+    private static void DrawEaseMenu(TimelineEditor current, MotionLayer layer, MotionKey key, bool readOnly)
+    {
+        using var menu = ImRaii.Menu("To the next key", !readOnly);
+        if (!menu.Success)
+            return;
+        if (ImGui.MenuItem($"The layer's ({TimelineWindowViews.EaseName(layer.Interpolation)})", "", key.Ease == null))
+            current.Commit(MotionEdits.SetEase(current.Document, layer.Key, key.Frame, null));
+        foreach (var mode in TimelineWindowViews.LayerEases)
+        {
+            if (ImGui.MenuItem(TimelineWindowViews.EaseName(mode), "", key.Ease == mode))
+                current.Commit(MotionEdits.SetEase(current.Document, layer.Key, key.Frame, mode));
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(TimelineWindowViews.EaseHint(mode));
+        }
     }
 
     /// <summary> Whether the selection holds an event that can be duplicated, and one that can be moved or deleted. </summary>

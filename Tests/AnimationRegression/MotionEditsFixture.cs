@@ -20,6 +20,7 @@ internal static class MotionEditsFixture
         Angles(check);
         Rows(check);
         Gestures(check);
+        BoneRows(check);
         Views(check);
     }
 
@@ -30,6 +31,10 @@ internal static class MotionEditsFixture
               TimelineWindowViews.LayerLabel(doc.Motion[0] with { Enabled = false }) == "Offset 1 · off" &&
               TimelineWindowViews.LayerLabel(doc.Motion[0] with { Amount = .5f }) == "Offset 1 · 50%",
             "a layer's bar names it, with its amount when that isn't full strength and off when it is turned off");
+        check(TimelineWindowViews.KeyEaseText(doc.Motion[0], doc.Motion[0].Keys[0]) == "To the next key: Smooth (the layer's)" &&
+              TimelineWindowViews.KeyEaseText(doc.Motion[0], doc.Motion[0].Keys[0] with { Ease = MotionInterpolation.EaseIn }) == "To the next key: Slow start" &&
+              TimelineWindowViews.BoneKeysText(doc.Motion[0], Hand) == "2 keys in this layer" && !TimelineWindowViews.LayerEases.Contains(MotionInterpolation.Custom),
+            "a key's tooltip says how it goes to the next key; a layer offers every way but a key's own curve");
         check(TimelineWindowViews.LayerContent(doc.Motion[0]) == "2 keys · 1 bone" && TimelineWindowViews.LayerContent(doc.Motion[1]) == "Every bone" &&
               TimelineWindowViews.LayerContent(doc.Motion[1] with { Bones = [Hand] }) == "1 bone",
             "a layer's tooltip counts its keys and bones");
@@ -233,6 +238,89 @@ internal static class MotionEditsFixture
         var none = new TimelineEditor(Empty());
         none.SetWidth(440);
         check(none.HitTest(Geometry, At(10, 6)) is { Part: TimelinePart.MotionLane, Layer: null }, "with no layers one empty bone row takes the first");
+    }
+
+    private static void BoneRows(Action<bool, string> check)
+    {
+        const string Arm = "j_ude_a_l";
+        // m1: keys at 30 (hand and arm), 40 (arm) and 50 (hand).
+        var doc = Layered(Empty());
+        doc = MotionEdits.SetKey(doc, "m1", 30, Arm, Turn(5));
+        doc = MotionEdits.SetKey(doc, "m1", 40, Arm, Turn(15));
+        var order = new Dictionary<string, int>(StringComparer.Ordinal) { [Arm] = 1, [Hand] = 2 };
+        check(MotionEdits.KeyBones(doc.Motion[0]).SequenceEqual([Hand, Arm]) && MotionEdits.KeyBones(doc.Motion[0], order).SequenceEqual([Arm, Hand]),
+            "a layer's bone rows list its keyed bones in the skeleton's order, by name while that is unknown");
+
+        static int[] Frames(TimelineDocument doc) => [.. doc.Motion[0].Keys.Select(key => key.Frame)];
+        static string[] BonesAt(TimelineDocument doc, int frame) => [.. doc.Motion[0].Keys.Single(key => key.Frame == frame).Bones.Keys.Order(StringComparer.Ordinal)];
+        var moved = MotionEdits.MoveBoneKey(doc, "m1", Hand, 30, 5, out var landed);
+        check(landed == 35 && Frames(moved).SequenceEqual([30, 35, 40, 50]) && BonesAt(moved, 30).SequenceEqual([Arm]) && BonesAt(moved, 35).SequenceEqual([Hand]),
+            "moving one bone's key leaves the rest of the key where it was");
+        var joined = MotionEdits.MoveBoneKey(doc, "m1", Hand, 30, 10, out landed);
+        check(landed == 40 && Frames(joined).SequenceEqual([30, 40, 50]) && BonesAt(joined, 40).SequenceEqual([Hand, Arm]),
+            "a bone's key joins the key it lands on");
+        MotionEdits.MoveBoneKey(doc, "m1", Hand, 30, 40, out landed);
+        check(landed == 49, "a bone's key never passes that bone's next key");
+        var held = MotionEdits.SetEase(doc, "m1", 50, MotionInterpolation.Step);
+        var alone = MotionEdits.MoveBoneKey(held, "m1", Hand, 50, -5, out landed);
+        check(landed == 45 && Frames(alone).SequenceEqual([30, 40, 45]) && alone.Motion[0].Keys[2].Ease == MotionInterpolation.Step,
+            "a key left empty goes, and a bone moved to a frame of its own keeps its key's ease");
+
+        var eased = MotionEdits.SetEase(doc, "m1", 30, MotionInterpolation.Custom, new MotionCurve(2, 0, .5f, 3));
+        check(eased.Motion[0].Keys[0] is { Ease: MotionInterpolation.Custom, Curve: { X1: 1, Y2: MotionCurve.MaxY } },
+            "a key's own curve keeps its handles in range");
+        check(ReferenceEquals(MotionEdits.SetEase(eased, "m1", 30, MotionInterpolation.Custom, eased.Motion[0].Keys[0].Curve), eased) &&
+              MotionEdits.SetEase(eased, "m1", 30, null).Motion[0].Keys[0] is { Ease: null, Curve: null } &&
+              !MotionEdits.Same(eased.Motion[0], doc.Motion[0]),
+            "setting the same ease changes nothing, the layer's way drops the curve, and an ease counts as a change");
+
+        var editor = new TimelineEditor(doc);
+        editor.SetWidth(440);
+        var geometry = Geometry with { Unfold = 16 };
+        var legendY = (int row) => 24 + row * 20 + 10f;
+        check(!editor.IsUnfolded("m1") && editor.Layout.RowCount == 8, "layers start folded");
+        check(editor.HitTest(geometry, new Vector2(92, legendY(6))) is { Part: TimelinePart.LayerUnfold, Layer: "m1" } &&
+              editor.HitTest(geometry, new Vector2(92, legendY(7))) is { Part: TimelinePart.Legend, Layer: "m2" } &&
+              editor.HitTest(Geometry, new Vector2(92, legendY(6))) is { Part: TimelinePart.Legend },
+            "a layer with keys has an arrow at the right of its name; an amplitude has none");
+        editor.Press(editor.HitTest(geometry, new Vector2(92, legendY(6))));
+        editor.Release();
+        var layout = editor.Layout;
+        check(editor.IsUnfolded("m1") && layout.RowCount == 10 && layout.BoneAt(7) == (0, Hand) && layout.BoneAt(8) == (0, Arm) &&
+              layout.LayerIndexAt(9) == 1 && layout.LayerRow(1) == 9 && layout.BoneRows(0) == 2 && layout.BoneRows(1) == 0 && layout.LayerIndexAt(7) == -1,
+            "unfolding adds a row per bone under the layer and moves the next layer down");
+        check(editor.History.UndoCount == 0, "folding is no edit");
+        editor.BoneOrder = order;
+        check(editor.Layout.BoneAt(7) == (0, Arm) && editor.Layout.BoneAt(8) == (0, Hand), "the bone rows follow the skeleton's order once it is known");
+        check(editor.HitTest(geometry, At(40, 7)) is { Part: TimelinePart.BoneKey, Layer: "m1", Bone: Arm, KeyFrame: 40 } &&
+              editor.HitTest(geometry, At(45, 7)) is { Part: TimelinePart.BoneLane, Layer: "m1", Bone: Arm } &&
+              editor.HitTest(geometry, At(40, 8)) is { Part: TimelinePart.BoneLane, Bone: Hand } &&
+              editor.HitTest(geometry, new Vector2(50, legendY(8))) is { Part: TimelinePart.Legend, Layer: "m1", Bone: Hand },
+            "a bone's row grabs only that bone's keys, and its name names the bone");
+
+        editor.Press(editor.HitTest(geometry, At(30, 8)));
+        check(editor is { SelectedLayer: "m1", SelectedKey: 30, SelectedBone: Hand, Gesture: TimelineGesture.BoneKey, Playhead: 30 },
+            "pressing a bone's key selects that bone's part of the key and moves the playhead there");
+        editor.Drag(36, alt: true);
+        editor.Release();
+        check(Frames(editor.Document).SequenceEqual([30, 36, 40, 50]) && BonesAt(editor.Document, 36).SequenceEqual([Hand]) &&
+              editor.SelectedKey == 36 && editor.SelectedBone == Hand && editor.History.UndoCount == 1,
+            "dragging it moves that bone's value alone, as one undo step");
+        editor.Key(TimelineKey.Right, alt: true);
+        check(editor.SelectedKey == 37 && BonesAt(editor.Document, 37).SequenceEqual([Hand]), "Alt+arrows nudge the bone's key alone");
+        editor.Key(TimelineKey.Delete);
+        check(Frames(editor.Document).SequenceEqual([30, 40, 50]) && BonesAt(editor.Document, 30).SequenceEqual([Arm]) && editor.SelectedKey == null,
+            "Delete takes out only the bone's value");
+        editor.Press(editor.HitTest(geometry, At(30, 6)));
+        editor.Release();
+        check(editor is { SelectedKey: 30, SelectedBone: null }, "pressing the layer's key selects the whole key");
+        editor.Undo();
+        editor.Undo();
+        editor.Undo();
+        check(Frames(editor.Document).SequenceEqual([30, 40, 50]) && BonesAt(editor.Document, 30).SequenceEqual([Hand, Arm]), "undo puts the bone's key back");
+        editor.SelectLayer("m1");
+        editor.Key(TimelineKey.Delete);
+        check(!editor.IsUnfolded("m1") && editor.Layout.LayerIndexAt(6) == 0 && editor.Layout.RowCount == 7, "a deleted layer's bone rows go with it");
     }
 
     private static void Gestures(Action<bool, string> check)

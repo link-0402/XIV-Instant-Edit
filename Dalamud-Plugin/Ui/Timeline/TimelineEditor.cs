@@ -27,6 +27,8 @@ internal enum TimelineGesture : byte
     LayerFadeOut,
     /// <summary>Moves one key of a bone layer.</summary>
     LayerKey,
+    /// <summary>Moves one bone's value out of a key of a bone layer, on that bone's row.</summary>
+    BoneKey,
 }
 
 /// <summary>
@@ -63,9 +65,15 @@ internal sealed class TimelineEditor
     private ImmutableArray<string> gestureKeys = [];
     private int[] anchors = [];
     private int[] targets = [];
-    // The bone layer a layer gesture drags, and for a key drag the key's frame when it began.
+    // The bone layer a layer gesture drags, and for a key drag the key's frame when it began and the bone a bone key drag moves.
     private string? gestureLayer;
     private int gestureKeyFrame;
+    private string? gestureBone;
+    // Layers showing a row per bone, and the skeleton's bone order for those rows; either changing rebuilds the layout.
+    private readonly HashSet<string> unfolded = new(StringComparer.Ordinal);
+    private IReadOnlyDictionary<string, int>? boneOrder;
+    private int layoutStamp;
+    private int builtStamp = -1;
 
     public TimelineEditor(TimelineDocument document, int capacity = TimelineHistory.DefaultCapacity)
     {
@@ -141,10 +149,52 @@ internal sealed class TimelineEditor
         }
     }
 
-    /// <summary>The layout of the current document, rebuilt only when the document instance changes.</summary>
-    public TimelineLayout Layout =>
-        layout is { } current && ReferenceEquals(current.Document, Document) ? current
-            : layout = TimelineLayout.Build(Document, visibleLength, motionFrames);
+    /// <summary>
+    /// The skeleton's bone indices by name, so bone rows list parents first; null while unknown, when
+    /// they go by name. Set a new instance when the skeleton changes.
+    /// </summary>
+    public IReadOnlyDictionary<string, int>? BoneOrder
+    {
+        get => boneOrder;
+        set
+        {
+            if (ReferenceEquals(value, boneOrder))
+                return;
+            boneOrder = value;
+            layoutStamp++;
+        }
+    }
+
+    /// <summary>The layout of the current document, rebuilt only when the document instance, the folding or the bone order changes.</summary>
+    public TimelineLayout Layout
+    {
+        get
+        {
+            if (layout is { } current && ReferenceEquals(current.Document, Document) && builtStamp == layoutStamp)
+                return current;
+            builtStamp = layoutStamp;
+            return layout = TimelineLayout.Build(Document, visibleLength, motionFrames, unfolded, boneOrder);
+        }
+    }
+
+    /// <summary>Whether the layer with <paramref name="key"/> shows a row per bone under it.</summary>
+    public bool IsUnfolded(string key) => unfolded.Contains(key);
+
+    /// <summary>Folds every layer's bone rows, for another clip whose layers only share the keys.</summary>
+    public void FoldAll()
+    {
+        if (unfolded.Count == 0)
+            return;
+        unfolded.Clear();
+        layoutStamp++;
+    }
+
+    /// <summary>Shows or hides a layer's bone rows. A view setting: never an undo step.</summary>
+    public void SetUnfolded(string key, bool show)
+    {
+        if (show ? unfolded.Add(key) : unfolded.Remove(key))
+            layoutStamp++;
+    }
 
     public IReadOnlySet<string> Selected => selected;
 
@@ -159,6 +209,12 @@ internal sealed class TimelineEditor
 
     /// <summary>The frame of the selected layer's selected key, or null.</summary>
     public int? SelectedKey { get; private set; }
+
+    /// <summary>
+    /// The bone whose value in the selected key was chosen on its own row, or null when the whole key
+    /// was: deleting and nudging then act on that bone alone.
+    /// </summary>
+    public string? SelectedBone { get; private set; }
 
     public MotionLayer? SelectedLayerValue => MotionEdits.Find(Document, SelectedLayer);
 
@@ -271,12 +327,15 @@ internal sealed class TimelineEditor
                 if (!ctrl && !shift)
                     ClearSelection();
                 break;
-            case TimelinePart.Legend when hit.Layer != null && MotionEdits.Find(doc, hit.Layer) != null:
+            case TimelinePart.Legend or TimelinePart.BoneLane when hit.Layer != null && MotionEdits.Find(doc, hit.Layer) != null:
                 SelectLayer(hit.Layer);
                 gesture = TimelineGesture.Select;
                 break;
+            case TimelinePart.LayerUnfold when hit.Layer is { } folding && MotionEdits.Find(doc, folding) != null:
+                SetUnfolded(folding, !IsUnfolded(folding));
+                break;
             case TimelinePart.LayerBody or TimelinePart.LayerLeft or TimelinePart.LayerRight or TimelinePart.LayerFadeIn or
-                TimelinePart.LayerFadeOut or TimelinePart.LayerKey when hit.Layer is { } key && MotionEdits.Find(doc, key) is { } layer:
+                TimelinePart.LayerFadeOut or TimelinePart.LayerKey or TimelinePart.BoneKey when hit.Layer is { } key && MotionEdits.Find(doc, key) is { } layer:
                 PressLayer(hit, key, layer, doc);
                 break;
         }
@@ -284,12 +343,14 @@ internal sealed class TimelineEditor
 
     /// <summary>
     /// A press on a bone layer: it becomes the selection and the drag that follows moves it, an end, a
-    /// fade or a key. A press on a key also moves the playhead there, so the panel shows that key.
+    /// fade, a key or one bone's value in a key. A press on a key also moves the playhead there, so the
+    /// panel shows that key.
     /// </summary>
     private void PressLayer(TimelineHit hit, string key, MotionLayer layer, TimelineDocument doc)
     {
-        var onKey = hit.Part == TimelinePart.LayerKey && MotionEdits.KeyIndex(layer, hit.KeyFrame) >= 0;
-        SelectLayer(key, onKey ? hit.KeyFrame : null);
+        var at = hit.OnKey ? MotionEdits.KeyIndex(layer, hit.KeyFrame) : -1;
+        var onKey = at >= 0 && (hit.Part == TimelinePart.LayerKey || hit.Bone is { } named && layer.Keys[at].Bones.ContainsKey(named));
+        SelectLayer(key, onKey ? hit.KeyFrame : null, onKey && hit.Part == TimelinePart.BoneKey ? hit.Bone : null);
         if (onKey)
             Playhead = hit.KeyFrame;
         var snap = TimelineSnap.Targets(doc, playhead, motion: true, exceptLayer: key);
@@ -311,10 +372,11 @@ internal sealed class TimelineEditor
             case TimelinePart.LayerFadeOut:
                 BeginEdit(TimelineGesture.LayerFadeOut, [], [layer.End - layer.FadeOut], snap);
                 break;
-            case TimelinePart.LayerKey when onKey:
+            case TimelinePart.LayerKey or TimelinePart.BoneKey when onKey:
                 gestureKeyFrame = hit.KeyFrame;
-                // The layer's other keys are where this one may land next to.
-                BeginEdit(TimelineGesture.LayerKey, [], [hit.KeyFrame],
+                gestureBone = hit.Part == TimelinePart.BoneKey ? hit.Bone : null;
+                // The layer's other keys are where this one may land next to; a bone's value joins one it lands on.
+                BeginEdit(gestureBone == null ? TimelineGesture.LayerKey : TimelineGesture.BoneKey, [], [hit.KeyFrame],
                     [.. snap.Concat(layer.Keys.Select(item => item.Frame).Where(frame => frame != hit.KeyFrame)).Distinct().Order()]);
                 break;
             default:
@@ -361,7 +423,8 @@ internal sealed class TimelineEditor
                 landed = next.Length;
                 break;
             case TimelineGesture.LayerMove or TimelineGesture.LayerLeft or TimelineGesture.LayerRight or
-                TimelineGesture.LayerFadeIn or TimelineGesture.LayerFadeOut or TimelineGesture.LayerKey when gestureLayer is { } layerKey:
+                TimelineGesture.LayerFadeIn or TimelineGesture.LayerFadeOut or TimelineGesture.LayerKey or TimelineGesture.BoneKey
+                when gestureLayer is { } layerKey:
                 (next, landed) = DragLayer(start, layerKey, delta);
                 break;
             default:
@@ -394,6 +457,12 @@ internal sealed class TimelineEditor
                 var next = MotionEdits.Fade(start, layerKey, fadeIn, delta);
                 return (next, MotionEdits.Find(next, layerKey) is { } faded ? fadeIn ? faded.Start + faded.FadeIn : faded.End - faded.FadeOut : -1);
             }
+            case TimelineGesture.BoneKey when gestureBone is { } bone:
+            {
+                var next = MotionEdits.MoveBoneKey(start, layerKey, bone, gestureKeyFrame, delta, out var landed);
+                SelectedKey = landed;
+                return (next, landed);
+            }
             default:
             {
                 var next = MotionEdits.MoveKey(start, layerKey, gestureKeyFrame, delta, out var landed);
@@ -422,7 +491,7 @@ internal sealed class TimelineEditor
     {
         if (Edits(gesture))
             History.Cancel();
-        if (gesture == TimelineGesture.LayerKey)
+        if (gesture is TimelineGesture.LayerKey or TimelineGesture.BoneKey)
             SelectedKey = gestureKeyFrame;
         if (gesture != TimelineGesture.None)
             Playhead = playheadAtPress;
@@ -649,7 +718,9 @@ internal sealed class TimelineEditor
                 SelectOnly(hit.Key!);
         }
         else if (gesture == TimelineGesture.None && hit.OnLayer)
-            SelectLayer(hit.Layer!, hit.Part == TimelinePart.LayerKey ? hit.KeyFrame : null);
+            SelectLayer(hit.Layer!, hit.OnKey ? hit.KeyFrame : null, hit.Part == TimelinePart.BoneKey ? hit.Bone : null);
+        else if (gesture == TimelineGesture.None && hit.Part is TimelinePart.BoneLane or TimelinePart.Legend && hit.Layer != null)
+            SelectLayer(hit.Layer);
         return SnappedFrame(hit.Frame, alt);
     }
 
@@ -663,12 +734,19 @@ internal sealed class TimelineEditor
     /// <summary>Moves the selection by <paramref name="delta"/> frames as one undo step.</summary>
     public bool Nudge(int delta) => Commit(TimelineEdits.Move(Document, selected, delta));
 
-    /// <summary>Alt+arrows on a selected layer: moves its selected key, else the whole layer, as one undo step.</summary>
+    /// <summary>
+    /// Alt+arrows on a selected layer: moves its selected key (or the selected bone's value in it), else
+    /// the whole layer, as one undo step.
+    /// </summary>
     private bool NudgeLayer(string key, int step)
     {
         if (SelectedKey is not { } frame)
             return Commit(MotionEdits.Move(Document, key, step));
-        if (!Commit(MotionEdits.MoveKey(Document, key, frame, step, out var landed)))
+        int landed;
+        var next = SelectedBone is { } bone
+            ? MotionEdits.MoveBoneKey(Document, key, bone, frame, step, out landed)
+            : MotionEdits.MoveKey(Document, key, frame, step, out landed);
+        if (!Commit(next))
             return false;
         SelectedKey = landed;
         return true;
@@ -703,25 +781,32 @@ internal sealed class TimelineEditor
         return true;
     }
 
-    /// <summary>Selects a bone layer, and with <paramref name="keyFrame"/> its key there; the event selection clears.</summary>
-    public void SelectLayer(string key, int? keyFrame = null)
+    /// <summary>
+    /// Selects a bone layer, with <paramref name="keyFrame"/> its key there, and with <paramref name="bone"/>
+    /// that bone's value in the key alone; the event selection clears.
+    /// </summary>
+    public void SelectLayer(string key, int? keyFrame = null, string? bone = null)
     {
         if (MotionEdits.Find(Document, key) is not { } layer)
             return;
         selected.Clear();
         Primary = null;
         SelectedLayer = key;
-        SelectedKey = keyFrame is { } frame && MotionEdits.KeyIndex(layer, frame) >= 0 ? frame : null;
+        var at = keyFrame is { } frame ? MotionEdits.KeyIndex(layer, frame) : -1;
+        SelectedKey = at >= 0 ? keyFrame : null;
+        SelectedBone = at >= 0 && bone != null && layer.Keys[at].Bones.ContainsKey(bone) ? bone : null;
     }
 
-    /// <summary>Deletes the selected key, or with none the selected layer.</summary>
+    /// <summary>Deletes the selected bone's value in its key, else the selected key, or with none the selected layer.</summary>
     public bool DeleteLayerSelection()
     {
         if (SelectedLayer is not { } key)
             return false;
-        return SelectedKey is { } frame
-            ? Commit(MotionEdits.DeleteKey(Document, key, frame))
-            : Commit(MotionEdits.Remove(Document, key));
+        if (SelectedKey is not { } frame)
+            return Commit(MotionEdits.Remove(Document, key));
+        return SelectedBone is { } bone
+            ? Commit(MotionEdits.SetKey(Document, key, frame, bone, null))
+            : Commit(MotionEdits.DeleteKey(Document, key, frame));
     }
 
     /// <summary>Copies the selected layer right after itself and selects the copy.</summary>
@@ -773,6 +858,7 @@ internal sealed class TimelineEditor
     {
         SelectedLayer = null;
         SelectedKey = null;
+        SelectedBone = null;
     }
 
     // View and playback.
@@ -895,6 +981,7 @@ internal sealed class TimelineEditor
         anchors = [];
         targets = [];
         gestureLayer = null;
+        gestureBone = null;
     }
 
     private void Scrub(float frame, bool alt)
@@ -972,9 +1059,15 @@ internal sealed class TimelineEditor
         {
             if (MotionEdits.Find(doc, SelectedLayer) is not { } layer)
                 ClearLayerSelection();
-            else if (SelectedKey is { } frame && MotionEdits.KeyIndex(layer, frame) < 0 && gesture != TimelineGesture.LayerKey)
+            else if (SelectedKey is { } frame && gesture is not (TimelineGesture.LayerKey or TimelineGesture.BoneKey) &&
+                     (MotionEdits.KeyIndex(layer, frame) is not (var at and >= 0) || SelectedBone is { } bone && !layer.Keys[at].Bones.ContainsKey(bone)))
+            {
                 SelectedKey = null;
+                SelectedBone = null;
+            }
         }
+        if (unfolded.RemoveWhere(key => MotionEdits.Find(doc, key) == null) > 0)
+            layoutStamp++;
         if (selected.Count > 0)
         {
             var keys = Events(doc).Select(ev => ev.Key).ToHashSet(StringComparer.Ordinal);
