@@ -103,10 +103,12 @@ internal static class PhysicsAreas
         new("thighs-yas", PhysicsPart.Thighs, "Thighs", "YAS", ["ya_daitai_phys_l", "ya_daitai_phys_r"], true, ChestGroup,
             new PhysicsTemplate(new Vector3(0, 0.072f, 0), Damping: 0.05f, SwingDegrees: 25f, TipGravity: 0.1f, FollowAnimation: 0.1f,
                 Firmness: 0.05f)),
-        new("groin-ivcs", PhysicsPart.Groin, "Groin", "IVCS",
-            ["iv_kougan_l", "iv_kougan_r", "iv_kintama_phys_l", "iv_kintama_phys_r", "iv_kuritto"], true, ChestGroup, BonePrefix: null),
-        new("groin-ivcs-shaft", PhysicsPart.Groin, "Groin", "IVCS", [], true, ChestGroup, BonePrefix: "iv_ochinko_"),
-        new("groin-ivcs-soft", PhysicsPart.Groin, "Groin", "IVCS", [], true, ChestGroup, BonePrefix: "iv_funyachin_phy_"),
+        // IVCS names the groin's bones in Japanese; its "_phys" bones are jiggle bones, like the belly's and thighs'.
+        new("penis-ivcs", PhysicsPart.Groin, "Penis", "IVCS", [], true, ChestGroup, BonePrefix: "iv_ochinko_"),
+        new("penis-soft-ivcs", PhysicsPart.Groin, "Penis, flaccid", "IVCS", [], true, ChestGroup, BonePrefix: "iv_funyachin_phy_"),
+        new("testicles-ivcs", PhysicsPart.Groin, "Testicles", "IVCS", ["iv_kougan_l", "iv_kougan_r"], true, ChestGroup),
+        new("testicles-jiggle-ivcs", PhysicsPart.Groin, "Testicles, jiggle", "IVCS", ["iv_kintama_phys_l", "iv_kintama_phys_r"], true, ChestGroup),
+        new("clitoris-ivcs", PhysicsPart.Groin, "Clitoris", "IVCS", ["iv_kuritto"], true, ChestGroup),
         new("ears", PhysicsPart.Ears, "Ears", "Vanilla", ["j_mimi_l", "j_mimi_r"], false, EarsGroup,
             new PhysicsTemplate(new Vector3(0.1f, 0, 0), Damping: 0.05f, SwingDegrees: 15f, TipGravity: 0.1f, FollowAnimation: 0.1f,
                 Firmness: 0.05f)),
@@ -147,6 +149,24 @@ internal static class PhysicsAreas
             : bones.All(bone => bone.EndsWith("_r", StringComparison.Ordinal)) ? ", right"
             : string.Empty;
         return new PhysicsAreaInfo(Label(known) + side, parts.Count == 1 ? parts[0] : null, known, bones, true);
+    }
+
+    /// <summary> Each simulator's label, numbered where a file has several of one: "Chest", "Chest (2)". </summary>
+    public static IReadOnlyList<string> Labels(PhybFile file)
+    {
+        var labels = file.Simulators.Select(simulator => Classify(simulator).Label).ToList();
+        var shared = labels.GroupBy(label => label, StringComparer.Ordinal).Where(group => group.Count() > 1)
+            .Select(group => group.Key).ToHashSet(StringComparer.Ordinal);
+        var seen = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < labels.Count; i++)
+        {
+            if (!shared.Contains(labels[i]))
+                continue;
+            var count = seen[labels[i]] = seen.GetValueOrDefault(labels[i]) + 1;
+            if (count > 1)
+                labels[i] = $"{labels[i]} ({count})";
+        }
+        return labels;
     }
 
     /// <summary> "Butt (IVCS)", "Butt (IVCS, YAS)" or "Butt (IVCS), Thighs (YAS)". </summary>

@@ -86,12 +86,11 @@ internal static class AnimationPresentation
     {
         var clip = startup ? capture.Startup : capture.Clip;
         if (clip != null && TryIdleName(clip, startup, out var idleName)) return idleName;
+        if (clip != null && AnimationCatalog.MovementName(clip.Timeline) is { } movement) return "Movement - " + movement;
         if (!string.Equals(capture.DisplayName, "Idle", StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(capture.DisplayName, "Walk", StringComparison.OrdinalIgnoreCase) &&
             !string.IsNullOrWhiteSpace(capture.DisplayName))
             return startup ? capture.DisplayName + " - Startup" : capture.DisplayName;
         if (clip == null) return capture.DisplayName;
-        if (AnimationCatalog.IsExplicitWalk(clip.Timeline)) return "Movement - Running";
         if (AnimationCatalog.IsExplicitIdle(clip.Timeline)) return "Standing Idle - " + (startup ? "Startup" : "Loop");
         return string.IsNullOrWhiteSpace(capture.DisplayName) ? "Animation" : capture.DisplayName;
     }
@@ -122,7 +121,8 @@ internal static class AnimationPresentation
 
     public static string AnimationState(AnimationCapture capture, bool startup) => startup ? "Startup" :
         IsExpression(capture) ? "Expression" :
-        AnimationCatalog.IsExplicitIdle(capture.Clip.Timeline) || AnimationCatalog.IsExplicitWalk(capture.Clip.Timeline) ? "Loop" : "Emote";
+        AnimationCatalog.IsMovement(capture.Clip.Timeline) ? "Movement" :
+        AnimationCatalog.IsExplicitIdle(capture.Clip.Timeline) ? "Loop" : "Emote";
 
     /// <summary>An expression emote (/smile): a face on the face skeleton, timed by a TMB file of its own.</summary>
     public static bool IsExpression(AnimationCapture capture) => capture.ExpressionTimeline != null;
@@ -149,6 +149,15 @@ internal static class AnimationPresentation
     {
         var model = candidate.Source.CanonicalModel ?? AnimationSkeletonIndex.ModelFromPath(candidate.Source.Resource.GamePath);
         return ModelLabel(model, "Unknown source model");
+    }
+
+    /// <summary>A source skeleton's race, the mod or game it comes from and its bone count.</summary>
+    internal static string SkeletonLabel(SkeletonCandidate candidate)
+    {
+        var provider = candidate.Source.Resource.ModName ?? candidate.Source.Resource.ModDirectory ??
+                       (candidate.Source.Kind == SkeletonSourceKind.Game ? "Vanilla game" : "Current collection");
+        var bones = candidate.Source.LeadingBones > 0 ? $"its first {candidate.Skeleton.Bones.Length} bones" : $"{candidate.Skeleton.Bones.Length} bones";
+        return $"{SourceModelName(candidate)} · {provider} · {bones}";
     }
 
     private static string ModelLabel(string? model, string fallback)

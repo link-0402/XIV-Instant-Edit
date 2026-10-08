@@ -15,8 +15,17 @@ internal static class AnimationMatching
          from entry in candidate.Pap.Entries
          where candidate.Prints.GetValueOrDefault(entry.Binding) == fingerprint
          from timeline in active
-         where AnimationCatalog.Matches(timeline, candidate.Resource.GamePath, entry.Name) ||
-             motions.TryGetValue(timeline.Id, out var references) &&
-             (references.Contains(entry.Name) || references.Contains(candidate.Resource.GamePath))
+         where Plays(timeline, candidate, entry, motions.GetValueOrDefault(timeline.Id))
          select new AnimationMatch(candidate.Resource, entry, timeline)).Distinct().ToImmutableArray();
+
+    private static bool Plays(AnimationCatalog.Timeline timeline, AnimationPapCandidate candidate, AnimationPap.Entry entry,
+        ImmutableHashSet<string>? references)
+    {
+        if (references != null && (references.Contains(entry.Name) || references.Contains(candidate.Resource.GamePath))) return true;
+        if (!AnimationCatalog.Matches(timeline, candidate.Resource.GamePath, entry.Name)) return false;
+        // move_a and move_b hold every walk, run, sprint and jump clip. A movement row plays only the
+        // clip its TMB names; the whole file counts only when the TMB names none of its clips.
+        return !AnimationCatalog.IsMovement(timeline) || references == null ||
+            !candidate.Pap.Entries.Any(other => references.Contains(other.Name));
+    }
 }

@@ -2,18 +2,20 @@
 import bpy
 import numpy as np
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib         import Path
 from bpy.types       import Context, UILayout
 from mathutils       import Matrix
 
 from .heels          import apply_calculated_heels_offset
 from .objects        import visible_meshobj, armature_for_object
+from .shapes         import get_shape_mix
 from ..io.model      import ModelExport, SceneHandler, exportable_shape_keys
 from ..io.logging    import YetAnotherLogger
 from ..properties    import get_settings
 from ..backups       import create_backup
 from ..instant_edit.character import is_hung_weapon
+from ..instant_edit.context import SIZE_COPY_NAME
 
 
 
@@ -237,6 +239,250 @@ def export_result(file_path: Path, file_format: str, logger: YetAnotherLogger=No
         bpy.context.evaluated_depsgraph_get().update()
         export = FileExport(file_path, file_format, logger=logger, batch=batch, export_objects=export_objects)
         export.export_template()
+
+class ShapeExports:
+    """Export the same meshes several times while their shape keys change, like a model at each of
+    Magic Fit's sizes, with ``write`` inside the ``with`` block.
+
+    For an MDL, the export copies are made and prepared once (split along UV seams and sharp edges,
+    the slow part of an export), and each write only moves their vertices, shape keys and custom
+    normals to the shape the meshes show then. That writes what a fresh export of the shape would,
+    but for custom normals: set again on the split copy, they come out up to about 0.0005 off
+    (0.03 degrees), and a tangent byte may round the other way. Other formats, meshes with
+    transparency (their faces are reordered) and meshes whose copies can't be followed back to
+    their vertices are exported afresh each time.
+
+    The meshes keep their names, visibility and shape key values while the block runs, so they can
+    change between writes (Magic Fit adds a key per size).
+    """
+
+    _SOURCE_VERTEX = "xiv_ie_source_vertex"
+    _SOURCE_CORNER = "xiv_ie_source_corner"
+    _COPY_NAME     = SIZE_COPY_NAME
+
+    def __init__(self, export_objects, file_format: str):
+        self.export_objects = list(export_objects)
+        self.file_format    = file_format
+        self.copies         = None
+        self._handler       = None
+        self._contexts      = None
+
+    def __enter__(self) -> "ShapeExports":
+        if self.file_format != 'MDL':
+            return self
+        flush_edit_mode(self.export_objects)
+        self._contexts = ExitStack()
+        try:
+            settings = get_settings()
+            self._contexts.enter_context(_showing(self.export_objects))
+            self._contexts.enter_context(
+                _clean_export_state(self.export_objects, settings.reset_scaling_on_export))
+            bpy.context.evaluated_depsgraph_get().update()
+            self._make_copies()
+        except BaseException:
+            self._close()
+            raise
+        return self
+
+    def __exit__(self, *_exc) -> bool:
+        self._close()
+        return False
+
+    def write(self, file_path: Path) -> None:
+        """Export the meshes as they show now to ``file_path`` (without its extension)."""
+        global _export_stats
+
+        if self.copies is None:
+            export_result(file_path, self.file_format, export_objects=self.export_objects)
+            return
+        self._move_copies()
+        copies = [source["copy"] for source in self.copies]
+        settings = get_settings()
+        with self._named_copies():
+            heels_offset = apply_calculated_heels_offset(copies) if settings.calculate_heels_offset else None
+            if settings.backup_models_on_export:
+                create_backup(file_path.parent, file_path.name + ".mdl")
+            _export_stats = ModelExport.export_scene(
+                copies, str(file_path) + ".mdl", settings.use_lods, [], **settings.get_model_flags())
+        if heels_offset is not None:
+            attribute, obj_name = heels_offset
+            _export_stats.setdefault(obj_name, []).append(f"Calculated {attribute}.")
+
+    def _make_copies(self) -> None:
+        view_layer = bpy.context.view_layer
+        active = view_layer.objects.active
+        try:
+            self._copy_meshes()
+        finally:
+            # Preparing a copy makes it active; the meshes stay in front of the user meanwhile.
+            if active is not None and active.name in view_layer.objects:
+                view_layer.objects.active = active
+
+    def _copy_meshes(self) -> None:
+        handler = SceneHandler(source_objects=self.export_objects)
+        self._handler = handler
+        handler.prepare_scene()
+        handler.process_scene()
+        sources = []
+        for (original, stats), copy in zip(handler.meshes.items(), handler.export_objs):
+            sources.append({
+                "original": original,
+                "copy": copy,
+                "name": stats["old_name"],
+                # Kept and game shape keys are off in an export; Magic Fit's sizes turn others on.
+                "off_keys": [name for name, _value in stats["shape_values"]],
+                "kept_keys": [key.name for key in stats["shape"]],
+                "transparency": stats["transparency"],
+            })
+        if any(source["transparency"] for source in sources) or any(
+                source["kept_keys"] and len(source["copy"].data.vertices) != len(source["original"].data.vertices)
+                for source in sources):
+            # Exported afresh each time: drop the copies.
+            handler.restore_meshes()
+            self._handler = None
+            return
+
+        from ..io.model.exp.scene import prepare_export_mesh, PREPARED_PROPERTY
+
+        # While the meshes are still hidden: preparing a copy enters Edit Mode, which takes in
+        # every selected mesh.
+        for source in sources:
+            copy = source["copy"]
+            mesh = copy.data
+            source["vertex_count"] = len(mesh.vertices)
+            source["corner_count"] = len(mesh.loops)
+            # The world matrix prepare_export_mesh applies, before it makes it the identity.
+            source["matrix"] = copy.matrix_world.copy()
+            for name, domain, count in ((self._SOURCE_VERTEX, 'POINT', len(mesh.vertices)),
+                                        (self._SOURCE_CORNER, 'CORNER', len(mesh.loops))):
+                attribute = mesh.attributes.new(name, 'INT', domain)
+                attribute.data.foreach_set("value", np.arange(count, dtype=np.int32))
+            prepare_export_mesh(copy)
+            copy[PREPARED_PROPERTY] = True
+            for key, name, count in (("vertices", self._SOURCE_VERTEX, len(copy.data.vertices)),
+                                     ("corners", self._SOURCE_CORNER, len(copy.data.loops))):
+                values = np.empty(count, dtype=np.int32)
+                copy.data.attributes[name].data.foreach_get("value", values)
+                source[key] = values
+        for source in sources:
+            source["copy"].hide_set(True)
+        self._release_sources()
+        self.copies = sources
+
+    def _release_sources(self) -> None:
+        """Give the meshes back their names, visibility and key values, which SceneHandler changed
+        while making the copies; the copies take other names until they're written."""
+        handler = self._handler
+        for copy in handler.export_objs:
+            copy.name = self._COPY_NAME
+        for obj, stats in handler.meshes.items():
+            obj.name = stats["old_name"]
+            obj.hide_set(stats["hidden"])
+            if stats.get("selected") and not obj.hide_get():
+                obj.select_set(True)
+            keys = obj.data.shape_keys
+            if keys is not None:
+                for key_name, value in stats["shape_values"]:
+                    block = keys.key_blocks.get(key_name)
+                    if block is not None:
+                        block.value = value
+
+    @contextmanager
+    def _named_copies(self):
+        """The copies under the meshes' names while they're written, as the writer reads parts from names."""
+        sources = self.copies
+        for source in sources:
+            source["original"].name = "temp_export"
+        for source in sources:
+            source["copy"].name = source["name"]
+        try:
+            yield
+        finally:
+            for source in sources:
+                source["copy"].name = self._COPY_NAME
+            for source in sources:
+                source["original"].name = source["name"]
+
+    def _move_copies(self) -> None:
+        """Give the copies the shape the meshes show now, with their kept and game shape keys off,
+        as SceneHandler copies them."""
+        turned_off = []
+        for source in self.copies:
+            keys = source["original"].data.shape_keys
+            if keys is None:
+                continue
+            for name in source["off_keys"]:
+                block = keys.key_blocks.get(name)
+                if block is not None and block.value != 0:
+                    turned_off.append((block, block.value))
+                    block.value = 0
+        try:
+            depsgraph = bpy.context.evaluated_depsgraph_get()
+            for source in self.copies:
+                self._move_copy(source, depsgraph)
+        finally:
+            for block, value in reversed(turned_off):
+                block.value = value
+
+    def _move_copy(self, source: dict, depsgraph) -> None:
+        original = source["original"]
+        evaluated = original.evaluated_get(depsgraph)
+        # Only the positions and normals are read.
+        mesh = bpy.data.meshes.new_from_object(evaluated, depsgraph=depsgraph)
+        try:
+            if len(mesh.vertices) != source["vertex_count"] or len(mesh.loops) != source["corner_count"]:
+                raise ValueError(f"{source['name']}: its vertex count changed between exports.")
+            co = np.empty(len(mesh.vertices) * 3, dtype=np.float32)
+            mesh.vertices.foreach_get("co", co)
+            normals = None
+            if mesh.has_custom_normals:
+                normals = np.empty(len(mesh.loops) * 3, dtype=np.float32)
+                mesh.corner_normals.foreach_get("vector", normals)
+        finally:
+            bpy.data.meshes.remove(mesh)
+
+        copy = source["copy"]
+        data = copy.data
+        moved = co.reshape(-1, 3)[source["vertices"]].ravel()
+        data.vertices.foreach_set("co", moved)
+        keys = data.shape_keys
+        if keys is not None:
+            keys.key_blocks[0].data.foreach_set("co", moved)
+            for block in keys.key_blocks[1:]:
+                # As SceneHandler keeps a shape key: the mesh's mix with this key fully on.
+                mix = get_shape_mix(original, block.name).reshape(-1, 3)[source["vertices"]]
+                block.data.foreach_set("co", mix.astype(np.float32).ravel())
+        if normals is not None:
+            data.normals_split_custom_set(normals.reshape(-1, 3)[source["corners"]])
+        self._transform(data, source["matrix"])
+        data.update()
+
+    @staticmethod
+    def _transform(data, matrix: Matrix) -> None:
+        """Move ``data`` by ``matrix`` as apply_transforms moves a copy into world space."""
+        if matrix == Matrix.Identity(4):
+            return
+        if not data.shape_keys:
+            data.transform(matrix)
+            return
+        count = len(data.vertices)
+        transform_matrix = np.array(matrix).astype(np.float32)
+        for points in (data.vertices, *(block.data for block in data.shape_keys.key_blocks)):
+            pos = np.zeros(count * 3, dtype=np.float32)
+            points.foreach_get("co", pos)
+            pos = np.c_[pos.reshape(-1, 3), np.ones(count)]
+            points.foreach_set("co", (transform_matrix @ pos.T).T[:, :3].flatten())
+
+    def _close(self) -> None:
+        handler, self._handler, self.copies = self._handler, None, None
+        try:
+            if handler is not None:
+                handler.restore_meshes()
+        finally:
+            if self._contexts is not None:
+                contexts, self._contexts = self._contexts, None
+                contexts.close()
+
 
 def get_export_stats(context: Context) -> None:
     global _export_stats

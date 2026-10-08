@@ -100,5 +100,50 @@ internal static class AnimationMatchingFixture
         references[secondTimeline.Id] = [motion];
         check(AnimationMatching.Find("live-fingerprint", [candidate], [idle, secondTimeline], references).Length == 2,
             "a binding shared by two active timelines remains ambiguous");
+
+        // move_a holds the walk, run, sprint and jump; each movement row's TMB names its own clip.
+        static AnimationPap Paps(params string[] clips)
+        {
+            using var stream = new MemoryStream();
+            using var writer = new BinaryWriter(stream);
+            var havok = 26 + 40 * clips.Length;
+            writer.Write("pap "u8); writer.Write(0x20001); writer.Write((short)clips.Length);
+            writer.Write((short)801); writer.Write((byte)0); writer.Write((byte)0);
+            writer.Write(26); writer.Write(havok); writer.Write(havok + 8);
+            for (var i = 0; i < clips.Length; i++)
+            {
+                var name = Encoding.UTF8.GetBytes(clips[i]);
+                writer.Write(name); writer.Write(new byte[32 - name.Length]);
+                writer.Write((short)0); writer.Write((short)i); writer.Write(0);
+            }
+            writer.Write(new byte[8]);
+            return new AnimationPap(stream.ToArray());
+        }
+        var moveA = new AnimationPapCandidate(new AnimationResource(movementAPath, "move_a.pap", "move-hash"),
+            Paps("cbnm_01f_lp0", "cbnm_02f_f", "cbnm_02f_lp0", "cbnm_jump_1", "cbnm_sprint_lp0"),
+            ImmutableDictionary<int, string>.Empty.Add(0, "walk").Add(1, "run-start").Add(2, "run").Add(3, "jump").Add(4, "sprint"));
+        var run = walking with { Id = 22, Key = "normal/run", Family = [22] };
+        var runStart = walking with { Id = 25, Key = "normal/run_start", Family = [25] };
+        var jump = walking with { Id = 31, Key = "normal/jump_start", Family = [31] };
+        var moves = new Dictionary<ushort, ImmutableHashSet<string>>
+        {
+            [walking.Id] = ["cbnm_01f_lp0"], [run.Id] = ["cbnm_02f_lp0"], [runStart.Id] = ["cbnm_02f_f"], [jump.Id] = ["cbnm_jump_1", "cfxf_clench"],
+        };
+        check(AnimationCatalog.IsMovement(run) && AnimationCatalog.IsMovement(jump) && !AnimationCatalog.IsMovement(standing) &&
+              AnimationCatalog.CandidatePapPaths(run, tree).SequenceEqual([movementAPath, movementBPath]) &&
+              AnimationCatalog.PapPath(jump, movementAPath, tree) == movementAPath,
+            "run, sprint and jump rows resolve the shared movement PAPs like the walk");
+        check(AnimationMatching.Find("run", [moveA], [run], moves) is [{ Entry.Name: "cbnm_02f_lp0", Timeline.Id: 22 }] &&
+              AnimationMatching.Find("jump", [moveA], [jump], moves) is [{ Entry.Name: "cbnm_jump_1", Timeline.Id: 31 }],
+            "a running or jumping character is matched to its own clip of move_a");
+        check(AnimationMatching.Find("run", [moveA], [run, runStart], moves) is [{ Timeline.Id: 22 }] &&
+              AnimationMatching.Find("run-start", [moveA], [run, runStart], moves) is [{ Entry.Name: "cbnm_02f_f", Timeline.Id: 25 }],
+            "two movement rows playing at once each keep their own clip instead of both claiming the file");
+        check(AnimationMatching.Find("walk", [moveA], [run], moves).IsEmpty &&
+              AnimationMatching.Find("sprint", [moveA], [walking, run], moves).IsEmpty,
+            "a clip of move_a another movement row plays is not taken for the active row");
+        check(AnimationMatching.Find("sprint", [moveA], [run], new Dictionary<ushort, ImmutableHashSet<string>>()) is [{ Entry.Name: "cbnm_sprint_lp0" }] &&
+              AnimationMatching.Find("sprint", [moveA], [run], new Dictionary<ushort, ImmutableHashSet<string>> { [run.Id] = ["custom_run"] }) is [{ Entry.Name: "cbnm_sprint_lp0" }],
+            "without a TMB naming one of its clips, a movement row still matches any clip of the shared files");
     }
 }

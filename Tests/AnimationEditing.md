@@ -460,6 +460,21 @@ emitter, light, simple animation colours in use); Glow and Opacity scale each
 particle's main Bri/A curve and the lights' Bri; Light range scales point lights'
 DstS. Offline, all 16,339 library and vanilla effects read, an empty look changes no
 byte, and a full look changes only those numbers.
+In Preview and Live the effect's own game path points at an edited copy in the preview's
+temporary mod (a new revision file per change), because the game keeps the playing clip's
+PAP loaded: a preview's rebuilt timeline, naming copies, was never read (reported
+2026-10-07 on Angel Dust's dustsmoke, Live off). Penumbra hashes the resolved file, so
+the next spawn of the effect loads the new look.
+- [ ] Preview the smoking emote with a recoloured dustsmoke: it shows the new colour.
+  Change the colour while the preview plays: the next puff (each loop restarts it)
+  has it, with no Preview again and no replay. The hint says looks change when the
+  effect starts again.
+- [ ] Turn Live on and change a look: the same happens over the clip's own file. Turn
+  Live off: the effect goes back to its own look on its next start.
+- [x] Check whether the rest of a Preview shows (2026-10-07): recolours showed, but a
+  removed expression kept playing. A replay never re-reads the clip's file even at a new
+  revision path, so Preview now redraws the GPose character after showing a revision,
+  as the in-place edits redraw the player (see Preview below).
 - [ ] Tint an effect red and preview in GPose: the whole effect turns red, lights and
   model particles too. Above 1 it gets brighter.
 - [ ] Size 2 doubles it, Offset Y 1 lifts it, Turn Y 90 turns it a quarter (if it
@@ -492,8 +507,15 @@ Length:
 Preview (GPose):
 - [ ] Preview adds a temporary Penumbra mod (Penumbra's Temporary view shows it at
   maximum priority) and the GPose actor plays the edited clip, even when another mod
-  replaces the same PAP. A new revision plays without a redraw; check idles and
-  movement, which may need a redraw.
+  replaces the same PAP. Replaying alone kept the old file (2026-10-07), so Preview
+  redraws the GPose character after each new revision (Penumbra RedrawObject, waiting
+  for GameObjectRedrawn), then plays.
+- [ ] Remove an expression and press Preview: the character flickers once and the
+  expression no longer plays. Press Preview again after another change: it shows too.
+- [ ] Stop puts the character back: it is redrawn once more and plays its own file
+  (the removed expression is back when the emote plays). Turning Live on after a
+  preview waits for that redraw. Check whether a Brio or Ktisis pose survives the
+  redraws.
 - [ ] Pause freezes body and face; scrubbing moves the pose without drift; Resume and
   speed work; sounds and effects fire only while playing. Check alongside Brio and
   Ktisis, which hook the same speed function.
@@ -738,3 +760,69 @@ gestures are covered offline in MotionLayerFixture and MotionEditsFixture):
   Delete and Alt+arrows act on that bone alone. The layer's own row still moves whole keys.
 - [ ] Save and Edit again: the eases come back with the layers, and the saved motion matches
   what Live showed.
+
+## Animations tab into the Timeline (2026-10-08, pending)
+
+The Animations tab keeps only the listener and a Timeline section; every other tool moved into
+the Timeline window. Covered offline (TimelineToolsFixture): LivePose stacks and .livepose files
+as an offset layer, the loader's list (also run against the real sheets: 7 idles, 4 ground
+sits, 5 chair sits, 3 bed poses, 16 movement tracks, 29 expressions) and all 56 files in
+E:\FFXIVmods\Poses\LivePose, unticked bones as an undoable document edit, a timeline save's
+request carrying unticked bones and the repair target, Edit again refusing such saves, and the
+save's bone problems. Live display, playback, the bake and the layout need the game.
+
+Animations tab:
+- [ ] The tab shows the list and, below it, the selected clip's name, length and mod, any
+  effect loop warning and Open timeline. No tool tabs are left.
+- [ ] With nothing selected, Open timeline opens the Timeline window on its loader.
+- [ ] An edit that did not finish shows a banner pointing to Edits in the Timeline window.
+- [ ] Switching to another tab with the Timeline window open keeps the listener running
+  (the window's Source page still updates); closing both stops it.
+
+Loader (GPose only):
+- [ ] With no clip open, the window shows Load an animation, Edits and Record live pose tabs.
+- [ ] Outside GPose every row is greyed with "Enter GPose to play the preview."
+- [ ] In GPose pick Emotes > Dance: the GPose character dances, the line says it waits, and the
+  timeline opens Dance by itself within a second or two. The character keeps dancing.
+- [ ] Idles > Idle pose 3, Ground sits > Ground sit pose 2, Chair sits > Chair sit pose 4 and
+  Lying > Lying pose 1 each play that /changepose pose and open its loop.
+- [ ] Movement > Run, Sprint and Jump Start each open their own track (run_start etc. too).
+- [ ] Expressions > Smile plays on the face and opens the expression's timeline.
+- [ ] Other: search "chair talk", play it, and its timeline opens.
+- [ ] The toolbar's folder button opens the loader as a popup while a clip is open; with unsaved
+  changes the inline Discard / Keep editing question comes first.
+- [ ] Something that never plays (a weapon skill without the weapon) shows the warning after
+  about six seconds; Cancel stops waiting. Stop in the preview bar puts the character back.
+
+Side panel:
+- [ ] Tabs: Properties, Source, Bones (Face for an expression), Edits, Record. Selecting an
+  event or layer jumps back to Properties.
+- [ ] Source shows mod, file, game path, model, startup (Open opens the startup's timeline),
+  live skeleton and Made for; an ambiguous clip's skeleton can be chosen here, and the Bones
+  window follows the choice. The cog opens Settings.
+- [ ] Bones: untick a hair bone with Live on in GPose: the hair goes to physics at once.
+  Ctrl+Z ticks it again. Keep only Vanilla unticks the iv_/ya_ bones. Save writes the clip
+  without them and the saved file plays the same.
+- [ ] Unticking a bone a layer moves blocks Save and names the bone.
+- [ ] Edits lists saved edits with Edit again, Undo and Restore offsets. Undo of the open clip's
+  save reads the timeline again; with unsaved changes it is greyed.
+- [ ] Record records and sends to Blender as the old tab did; the countdown slider wraps below
+  Length in the narrow panel.
+
+LivePose:
+- [ ] Add > Offset layer from LivePose: a layer named LivePose covering the clip with one key
+  appears and is selected; with Live on the pose shows twice until "Clear them in LivePose",
+  and "Put them back" restores LivePose's own.
+- [ ] Add > Offset layer from a .livepose file: pick one from E:\FFXIVmods\Poses\LivePose; the
+  layer is named after the file and Live shows the pose. Bones the skeleton lacks are counted.
+- [ ] A LivePose adjustment that keeps scale from its children (LivePose's default) bakes the
+  same as the old Rebake with LivePose did.
+- [ ] On an expression: Face page > Bake LivePose into the face and Save the face without
+  them run the old face rebakes, into a new mod or in place as the footer says.
+
+Save footer:
+- [ ] Skeleton: Keep its own / Repair onto Vanilla, IVCS, IVCS + YAS (missing ones greyed with a
+  reason). Choosing one enables Save without other changes and shows the highest index.
+- [ ] Repair onto the skeleton the clip was made for is refused. A repaired save plays in game
+  and its Edits row says "timeline edit, repaired onto ...".
+- [ ] A save with unticked bones or a repair bakes the layers in; Edit again on it explains why.

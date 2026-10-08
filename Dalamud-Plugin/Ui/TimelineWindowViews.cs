@@ -322,6 +322,38 @@ internal static class TimelineWindowViews
     }
 
     /// <summary>
+    /// What stops saving with <paramref name="doc"/>'s bones left out and a repair onto <paramref name="repair"/>,
+    /// as the old rebakes refused them; null when nothing does. Bone layers on a bone left out would be lost,
+    /// and a repair onto the skeleton the clip was already made for changes nothing.
+    /// </summary>
+    public static string? BonesProblem(TimelineDocument doc, AnimationClip clip, SkeletonStandard? repair)
+    {
+        var excluded = doc.ExcludedBones;
+        if (AnimationBones.Problem(clip, excluded) is { } exclusion)
+            return exclusion;
+        if (!excluded.IsEmpty)
+        {
+            var left = excluded.ToHashSet(StringComparer.Ordinal);
+            var moved = doc.Motion.Where(MotionEvaluator.Active)
+                .SelectMany(layer => layer.Kind == MotionLayerKind.Amplitude ? layer.Bones.AsEnumerable() : layer.Keys.SelectMany(key => key.Bones.Keys))
+                .Where(left.Contains).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            if (moved.Length > 0)
+                return $"Bone layers move {string.Join(", ", moved.Take(3).Select(AnimationPresentation.BoneName))}" +
+                       (moved.Length > 3 ? $" and {moved.Length - 3} more" : "") + ", which you unticked under Bones. Tick it again or take it out of the layer.";
+        }
+        if (repair is not { } target)
+            return null;
+        var name = AnimationBones.StandardName(target);
+        if (AnimationBones.Plan(clip, target, excluded) is not { } plan)
+            return $"No {name} skeleton was found for this animation's model.";
+        if (plan.Kept.IsEmpty)
+            return $"None of the bones this animation moves are on the {name} skeleton.";
+        if (excluded.IsEmpty && clip.Resolution?.Selected?.Skeleton.Fingerprint == plan.Target.Skeleton.Fingerprint)
+            return $"The animation was already made for the {name} skeleton. Choose Keep its own.";
+        return null;
+    }
+
+    /// <summary>
     /// A warning about events that start at or after the motion's end, or null when none do. Vanilla
     /// never has any; whether the game still plays them is untested, so the warning doesn't promise.
     /// </summary>
@@ -455,18 +487,29 @@ internal static class TimelineWindowViews
 
     /// <summary>
     /// The expression library the timeline uses after choosing an item that needs
-    /// <paramref name="itemPack"/>; a timeline loads only one, so a different one is refused.
+    /// <paramref name="itemPack"/>; a timeline loads only one, so a different one is refused while
+    /// a face still plays from it (<paramref name="documentPackInUse"/>).
     /// </summary>
-    public static string? PackAfter(string? documentPack, string? itemPack, out string? error)
+    public static string? PackAfter(string? documentPack, string? itemPack, out string? error, bool documentPackInUse = true)
     {
         error = null;
         if (string.IsNullOrEmpty(itemPack) || string.Equals(documentPack, itemPack, StringComparison.OrdinalIgnoreCase))
             return documentPack;
-        if (string.IsNullOrEmpty(documentPack))
+        if (string.IsNullOrEmpty(documentPack) || !documentPackInUse)
             return itemPack;
-        error = $"This timeline already uses the {documentPack} expressions. It can only use one set.";
+        error = TimelineEdits.PackInUse(documentPack);
         return documentPack;
     }
+
+    /// <summary>
+    /// The library to place a face from, of the ones that hold it (<paramref name="packs"/>, the
+    /// preferred first): none for a face always loaded, the timeline's own when it holds the face,
+    /// else the preferred one.
+    /// </summary>
+    public static string? PackFor(ImmutableArray<string> packs, string? documentPack) =>
+        packs.IsDefaultOrEmpty ? null
+        : !string.IsNullOrEmpty(documentPack) && packs.Contains(documentPack, StringComparer.OrdinalIgnoreCase) ? documentPack
+        : packs[0];
 
     /// <summary>Seconds as whole frames, rounded half away from zero.</summary>
     public static int Frames(float seconds) => TimelineSnap.Round(seconds * (double)TimelineDocument.Fps);

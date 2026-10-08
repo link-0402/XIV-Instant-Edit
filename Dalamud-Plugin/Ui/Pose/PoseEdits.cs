@@ -18,11 +18,12 @@ internal static class PoseEdits
 {
     /// <summary>
     /// A bone's value in <paramref name="layer"/> at <paramref name="frame"/>, as the panels show it: its
-    /// keys' (between keys the layer's way, held outside them), else no change for an offset, else
-    /// <paramref name="motion"/>, the clip's own transform, for a pose. Null while that is unknown.
+    /// keys' (between keys the layer's way, held outside them or round a <paramref name="loop"/> the layer
+    /// covers), else no change for an offset, else <paramref name="motion"/>, the clip's own transform, for
+    /// a pose. Null while that is unknown.
     /// </summary>
-    public static MotionTransform? Value(MotionLayer layer, string bone, int frame, MotionTransform? motion) =>
-        MotionEvaluator.KeyValue(layer, bone, frame) ?? (layer.Kind == MotionLayerKind.Pose ? motion : MotionTransform.Identity);
+    public static MotionTransform? Value(MotionLayer layer, string bone, int frame, MotionTransform? motion, float loop = 0) =>
+        MotionEvaluator.KeyValue(layer, bone, frame, loop) ?? (layer.Kind == MotionLayerKind.Pose ? motion : MotionTransform.Identity);
 
     /// <summary>Whether the key at <paramref name="frame"/> sets <paramref name="bone"/>'s position: a pose key otherwise only turns it.</summary>
     public static bool Moved(MotionLayer layer, string bone, int frame) =>

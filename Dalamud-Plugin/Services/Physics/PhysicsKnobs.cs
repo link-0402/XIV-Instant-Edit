@@ -19,12 +19,6 @@ internal enum PhysicsKnob
     PushBack,
 }
 
-/// <summary> A range of a setting, in the units the builder shows it in. </summary>
-internal readonly record struct PhysicsRange(float Low, float High)
-{
-    public bool Contains(float value) => value >= Low - 1e-6f && value <= High + 1e-6f;
-}
-
 /// <summary>
 /// What each slider reads and writes on a chain, in the units the builder shows: swing in degrees,
 /// length and size in centimetres. The bone's settings live on the chain or its first point; the

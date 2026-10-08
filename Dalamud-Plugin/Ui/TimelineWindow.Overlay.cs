@@ -203,7 +203,7 @@ public sealed partial class TimelineWindow
         Matrix4x4 modelView, Matrix4x4 projection, ImGuiViewportPtr viewport, bool enabled)
     {
         if (layer == null || GizmoOperation(layer, frame, out _) is not { } operation || selection.Primary is not { } bone ||
-            !actorPose.Index.TryGetValue(bone, out var at) || Targets(layer, frame, skeleton, loaded) is not { Count: > 0 } targets ||
+            !actorPose.Index.TryGetValue(bone, out var at) || Targets(layer, frame, skeleton, loaded, current.Document) is not { Count: > 0 } targets ||
             FramesAt(loaded, current.Document, layer, frame) is not { } frames)
         {
             EndGizmo(true);

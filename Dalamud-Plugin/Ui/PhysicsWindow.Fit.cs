@@ -19,20 +19,20 @@ internal sealed partial class PhysicsWindow
     private PhysicsDocument? fitDocument;
     private int fitRevision;
 
-    /// <summary> The breast size the last fit measured, which chest levels suit their firmness to. </summary>
-    private PhysicsSizeMeasure? measuredChest;
+    private const string FitLabel = "Fit to my body";
+
+    private static float FitButtonWidth => ImGui.CalcTextSize(FitLabel).X + ImGui.GetStyle().FramePadding.X * 2;
 
     /// <summary> "Fit to my body": measures the body and fits a copy of the file as it is now. </summary>
-    private void DrawFitButton(PhysicsDocument current, bool small)
+    private void DrawFitButton(PhysicsDocument current)
     {
         using (ImRaii.Disabled(Busy || target == null))
         {
-            var clicked = small ? ImGui.SmallButton("Fit to my body##fit") : ImGui.Selectable("Fit to my body##fit");
-            if (clicked)
+            if (ImGui.Button($"{FitLabel}##fit"))
                 StartFit(current);
         }
-        Tip("Measures your body standing still, with your body mod, Customize+ and bust size. Sizes the collision, suits the chest's " +
-            "firmness to your size and keeps swings from sinking into your body. Take your gear off first. You see every change first.\n\n" +
+        Tip("Measures your body standing still, with your body mod, Customize+ and bust size. Sizes the collision and keeps " +
+            "swings from sinking into your body. Take your gear off first. You see every change first.\n\n" +
             BustScalingNote);
     }
 
@@ -40,7 +40,6 @@ internal sealed partial class PhysicsWindow
     private static string FitValue(PhysicsFitItem item, float value) => item.Target switch
     {
         PhysicsFitTarget.Swing => $"{value:0}°",
-        PhysicsFitTarget.Firmness => $"{value:0.000#}",
         _ => $"{value * 100:0.0} cm",
     };
 
@@ -55,7 +54,7 @@ internal sealed partial class PhysicsWindow
         fitting = Task.Run(async () =>
         {
             var measured = await service.MeasureBodyAsync(life.Token).ConfigureAwait(false);
-            return (PhysicsFit.Measure(file, measured.Body, measured.Skeleton, measured.Chest), measured.Warnings, measured.Note);
+            return (PhysicsFit.Measure(file, measured.Body, measured.Skeleton), measured.Warnings, measured.Note);
         });
     }
 
@@ -70,7 +69,6 @@ internal sealed partial class PhysicsWindow
             return;
         }
         (fit, fitWarnings, fitNote) = done.Result;
-        measuredChest = fit.Chest ?? measuredChest;
         fitChosen.Clear();
         for (var i = 0; i < fit.Items.Count; i++)
             if (fit.Items[i].Changes)
@@ -100,12 +98,7 @@ internal sealed partial class PhysicsWindow
         }
         ImGui.TextColored(Theme.Label, "Fit to your body");
         Widgets.MutedWrapped($"{fitNote} Your animation, jiggle and posing don't count.");
-        if (result.Chest is { } chest)
-        {
-            Widgets.MutedWrapped($"Your breasts measure {chest.Label}: {chest.Ratio:0.00} times the game's own body " +
-                                 $"({chest.BaseRatio:0.00} before Customize+ and the bust slider).");
-            Widgets.MutedWrapped(BustScalingNote);
-        }
+        Widgets.MutedWrapped(BustScalingNote);
         foreach (var warning in fitWarnings)
         {
             using var color = ImRaii.PushColor(ImGuiCol.Text, Theme.Warning);
@@ -183,7 +176,7 @@ internal sealed partial class PhysicsWindow
             return;
         }
         var chosen = fitChosen.Order().Select(i => result.Items[i]).ToList();
-        Change(current, () => PhysicsFit.Apply(current.File, chosen));
+        Change(current, () => PhysicsFit.Apply(current.File, chosen), FitLabel);
         Say(FeedbackSeverity.Success, $"Fitted {chosen.Count} setting{(chosen.Count == 1 ? "" : "s")} to your body. Preview to see them.");
     }
 }

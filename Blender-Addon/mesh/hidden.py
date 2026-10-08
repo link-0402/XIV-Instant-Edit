@@ -1,34 +1,36 @@
-"""Find the vertices that no camera angle can see, and delete them.
+"""Find the vertices that other meshes cover, like skin under a top, and delete them.
 
-A face counts as seen when a ray from one of its sample points escapes to
-infinity. The samples are the face's corners and its centre, and the rays go
-towards directions spread evenly over the sphere, each sample with its own
-rotation of that set so neighbouring samples cover the gaps between each
-other's directions. The rules follow how the game draws a model:
+A vertex counts as covered when rays leaving it within 45 degrees of its
+normal all hit a surface that hides what lies behind it. Looking at a covered
+vertex from anywhere in that cone shows the cover instead; from further to the
+side, a viewer sees at most a sliver through the gap between skin and gear.
+The rules follow how the game draws a model:
 
-- A face whose material culls backfaces is seen only from its front, and a ray
-  passes through it from behind. Faces without a material count as visible
-  from both sides but never hide anything from behind.
-- A face hides what lies behind it where its material is at least 90%
-  opaque. When an image's alpha drives the material's Alpha, directly or
-  through math nodes like the material preview's alpha test, a ray that hits
-  the face reads that image where it hits, so a top's opaque parts hide the
-  skin and its sheer parts don't. Gear the game draws solid because its
-  material has no alpha threshold hides everywhere, whatever an older import
-  drew. A mesh marked for transparency sorting, a Transparent BSDF or an alpha
-  the test cannot follow hides nothing.
-- Surfaces closer to a sample than a small tolerance do not hide it, so a mesh
-  lying on a copy of itself (a mannequin, a Backfaces duplicate) survives.
+- Faces with the vertex's own material never cover it, so skin parts don't
+  hide each other's folds. Only Itself instead tests a mesh against its own
+  faces alone, for layers inside one mesh.
+- A face whose material culls backfaces covers only with its front, so a ray
+  passes through it from behind. Faces without a material cover with their
+  front too. A vertex of a face drawn from both sides (no culling, or no
+  material) must be covered on both sides.
+- A face covers where its material is at least 90% opaque. When an image's
+  alpha drives the material's Alpha, directly or through math nodes like the
+  material preview's alpha test, a ray that hits the face reads that image
+  where it hits, so a top's opaque parts cover the skin and its sheer parts
+  don't. Gear the game draws solid because its material has no alpha
+  threshold covers everywhere, whatever an older import drew. A mesh marked
+  for transparency sorting, a Transparent BSDF or an alpha the test cannot
+  follow covers nothing.
+- Surfaces closer to a vertex than a small tolerance do not cover it, so a
+  mesh lying on a copy of itself (a mannequin, a Backfaces duplicate) survives.
 - The test uses each mesh's own vertices in the rest pose, without modifiers.
   Each shp_ shape key is another state of the scene, with the key applied to
-  every mesh that has it; a face seen in any state is kept.
+  every mesh that has it; a vertex must be covered in every state.
 
-A vertex is deleted when no face that uses it is seen, which also deletes
-those faces. A hidden face whose corners all belong to seen faces stays, so
-the edge of a covered area never opens a gap, and a margin of hidden vertices
-around the seen ones stays too: a band just under the edge of a covering mesh
-shows only at grazing angles the sampled directions can miss, and animations
-move the covering mesh against what it covers.
+A covered vertex is deleted with the faces that use it, unless one of those
+faces has an uncovered corner: that face stays whole, so the edge of a covered
+area never opens a gap. A margin of rings of covered vertices around the
+uncovered ones stays too, as animations move the cover against what it covers.
 """
 
 from __future__ import annotations
@@ -47,18 +49,13 @@ from ..instant_edit.context import mesh_ids_from_name
 from ..instant_edit.material_preview import drawn_solid
 
 
-DIRECTIONS = 256
-_ROTATIONS = 16
-# Directions closer than about 3 degrees to a face's plane do not count: a
-# face seen that edge-on covers no pixels.
-_MIN_DOT = 0.05
-# A face's centre is tested within 60 degrees of its normal, which is where a
-# hole in whatever covers it shows its middle.
-_CENTRE_MIN_DOT = 0.5
+CONE_DEGREES = 45.0
+# The rays of the cone: one along the normal and rings of 6 and 12 around it.
+_RINGS = 2
 # A ray that passes through this many culled backfaces counts as escaped.
 _MAX_HOPS = 64
 # Relative to the size of the scene: the step past a surface a ray continues
-# from, and the distance within which a surface does not hide a sample.
+# from, and the distance within which a surface does not cover a vertex.
 _STEP = 1e-6
 _TOLERANCE = 1e-4
 # What a face hides: nothing, what lies behind its front, or both sides.
@@ -86,29 +83,17 @@ _MATH = {
 }
 
 
-def _sphere_directions(count: int) -> np.ndarray:
-    """``count`` unit vectors spread evenly over the sphere (a Fibonacci lattice)."""
-    index = np.arange(count) + 0.5
-    z = 1.0 - 2.0 * index / count
-    radius = np.sqrt(1.0 - z * z)
-    angle = np.pi * (1.0 + 5.0 ** 0.5) * index
-    return np.stack((radius * np.cos(angle), radius * np.sin(angle), z), axis=1)
-
-
-def _rotations(count: int) -> list[np.ndarray]:
-    """Fixed random rotations, so the result does not change between runs."""
-    rng = np.random.default_rng(0x5EE)
-    matrices = []
-    for _ in range(count):
-        w, x, y, z = rng.normal(size=4)
-        norm = (w * w + x * x + y * y + z * z) ** 0.5
-        w, x, y, z = w / norm, x / norm, y / norm, z / norm
-        matrices.append(np.array((
-            (1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)),
-            (2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)),
-            (2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)),
-        )))
-    return matrices
+def _cone(degrees: float, rings: int) -> np.ndarray:
+    """Unit vectors around +Z out to ``degrees`` from it: +Z, then ring r of 6r vectors."""
+    vectors = [(0.0, 0.0, 1.0)]
+    for ring in range(1, rings + 1):
+        tilt = math.radians(degrees) * ring / rings
+        count = 6 * ring
+        for index in range(count):
+            # Offset each ring by half a step so its rays fall between the last ring's.
+            turn = 2.0 * math.pi * (index + 0.5 * (ring - 1)) / count
+            vectors.append((math.sin(tilt) * math.cos(turn), math.sin(tilt) * math.sin(turn), math.cos(tilt)))
+    return np.array(vectors)
 
 
 def shape_key_states(obj) -> dict[str, np.ndarray]:
@@ -253,6 +238,14 @@ def material_cover(material) -> bool | _Opacity:
     return cover
 
 
+def material_key(material) -> str | None:
+    """The material's name without the .001 Blender adds to a second import of it."""
+    if material is None:
+        return None
+    base, dot, suffix = material.name.rpartition(".")
+    return base if dot and len(suffix) == 3 and suffix.isdigit() else material.name
+
+
 def mesh_lod(obj) -> int | None:
     """The LOD an Instant Edit part name gives, or None for other meshes."""
     try:
@@ -263,22 +256,25 @@ def mesh_lod(obj) -> int | None:
 
 @dataclass
 class _Mesh:
-    """One object's triangles and positions in world space."""
+    """One object's triangles, normals and positions in world space."""
 
     obj: object
     matrix: np.ndarray
     basis: np.ndarray
     states: dict[str, np.ndarray]
+    # Per vertex: the average of its corner normals in world space, and
+    # whether a face using it is drawn from both sides.
+    normals: np.ndarray
+    two_sided: np.ndarray
     triangles: np.ndarray
-    triangle_polygons: np.ndarray
-    # Each polygon's vertices: polygon_vertices[polygon_starts[i]:][:polygon_sizes[i]].
-    polygon_vertices: np.ndarray
+    # The vertex of each face corner, the first corner of each face and its corner count.
+    loop_vertices: np.ndarray
     polygon_starts: np.ndarray
     polygon_sizes: np.ndarray
     edges: np.ndarray
-    # Per triangle: seen from the front only, and what it hides (_BLOCKS_*).
-    culled: np.ndarray
+    # Per triangle: what it hides (_BLOCKS_*) and the material_key of its material.
     blocks: np.ndarray
+    materials: list
     # Per triangle: the index into ``opacities`` of the image that says where
     # it hides, or -1 where all of it does. Each entry has its triangles' UVs.
     opacity_index: np.ndarray
@@ -300,8 +296,8 @@ class _Mesh:
         triangle_loops = triangle_loops.reshape(-1, 3)
         polygons = np.empty(len(mesh.loop_triangles), dtype=np.int64)
         mesh.loop_triangles.foreach_get("polygon_index", polygons)
-        polygon_vertices = np.empty(len(mesh.loops), dtype=np.int64)
-        mesh.loops.foreach_get("vertex_index", polygon_vertices)
+        loop_vertices = np.empty(len(mesh.loops), dtype=np.int64)
+        mesh.loops.foreach_get("vertex_index", loop_vertices)
         polygon_starts = np.empty(len(mesh.polygons), dtype=np.int64)
         mesh.polygons.foreach_get("loop_start", polygon_starts)
         polygon_sizes = np.empty(len(mesh.polygons), dtype=np.int64)
@@ -309,6 +305,13 @@ class _Mesh:
         edges = np.empty(len(mesh.edges) * 2, dtype=np.int64)
         mesh.edges.foreach_get("vertices", edges)
         matrix = np.array(obj.matrix_world, dtype=np.float64)
+        corner_normals = np.empty(len(mesh.loops) * 3, dtype=np.float64)
+        mesh.corner_normals.foreach_get("vector", corner_normals)
+        normals = np.zeros((count, 3))
+        np.add.at(normals, loop_vertices, corner_normals.reshape(-1, 3))
+        # Normals follow the inverse transpose, which keeps them pointing out
+        # of a scaled or mirrored mesh.
+        normals = normals @ np.linalg.inv(matrix[:3, :3])
         if np.linalg.det(matrix[:3, :3]) < 0:
             # Blender draws a mirrored object with its faces turned back
             # around; do the same so the world-space normals point outwards.
@@ -341,96 +344,139 @@ class _Mesh:
                     opacities.append((cover, uv_corners[layer.name]))
             slot_covers.append(cover)
             slot_opacity.append(index)
-        slot_culled = np.array([material is not None and material.use_backface_culling for material in slots])
         slot_blocks = np.array([
             _BLOCKS_NOTHING if transparent or cover is False
             else _BLOCKS_FRONT if material is None or material.use_backface_culling
             else _BLOCKS_BOTH
             for material, cover in zip(slots, slot_covers)
         ], dtype=np.int8)
-        material_index = np.zeros(len(mesh.polygons), dtype=np.int64)
-        mesh.polygons.foreach_get("material_index", material_index)
-        material_index = np.minimum(material_index[polygons], len(slots) - 1)
-        return cls(obj, matrix, basis.reshape(-1, 3), shape_key_states(obj), triangles, polygons,
-                   polygon_vertices, polygon_starts, polygon_sizes, edges.reshape(-1, 2),
-                   slot_culled[material_index], slot_blocks[material_index],
+        polygon_material = np.zeros(len(mesh.polygons), dtype=np.int64)
+        mesh.polygons.foreach_get("material_index", polygon_material)
+        polygon_material = np.minimum(polygon_material, len(slots) - 1)
+        material_index = polygon_material[polygons]
+        slot_keys = [material_key(material) for material in slots]
+        # Faces without a material are drawn from both sides too.
+        slot_culled = np.array([material is not None and material.use_backface_culling for material in slots])
+        two_sided = np.zeros(count, dtype=bool)
+        two_sided[loop_vertices[~slot_culled[np.repeat(polygon_material, polygon_sizes)]]] = True
+        return cls(obj, matrix, basis.reshape(-1, 3), shape_key_states(obj), normals, two_sided, triangles,
+                   loop_vertices, polygon_starts, polygon_sizes, edges.reshape(-1, 2),
+                   slot_blocks[material_index], [slot_keys[index] for index in material_index.tolist()],
                    np.array(slot_opacity, dtype=np.int64)[material_index], opacities)
 
     def world(self, local: np.ndarray) -> np.ndarray:
         return local @ self.matrix[:3, :3].T + self.matrix[:3, 3]
 
+    def own_materials(self) -> frozenset:
+        """The materials its faces use."""
+        return frozenset(self.materials)
 
-def _rows(keys: np.ndarray, values: np.ndarray, count: int) -> tuple[np.ndarray, np.ndarray]:
-    """Group ``values`` by ``keys`` in 0..count-1: row i is values[starts[i]:starts[i + 1]]."""
-    order = np.argsort(keys, kind="stable")
-    return np.searchsorted(keys[order], np.arange(count + 1)), values[order]
+
+class _Scene:
+    """The covering triangles of one scene state in a BVH tree."""
+
+    def __init__(self, meshes: list[_Mesh], positions: list[np.ndarray], extent: float, ignored: frozenset):
+        """Faces whose material_key is in ``ignored`` cover nothing."""
+        points = []
+        triangles = []
+        self.blocks = []
+        # Per triangle: None where all of it hides, else its opacity image,
+        # corners and UVs for reading the image where a ray hits.
+        self.textures = []
+        offset = 0
+        for mesh, world in zip(meshes, positions):
+            used = np.array([material not in ignored for material in mesh.materials], dtype=bool)
+            used &= mesh.blocks != _BLOCKS_NOTHING
+            chosen = np.flatnonzero(used)
+            points.append(world)
+            triangles.append(mesh.triangles[chosen] + offset)
+            self.blocks += mesh.blocks[chosen].tolist()
+            for triangle in chosen.tolist():
+                index = mesh.opacity_index[triangle]
+                if index < 0:
+                    self.textures.append(None)
+                    continue
+                opacity, uvs = mesh.opacities[index]
+                corners = [Vector(point) for point in world[mesh.triangles[triangle]].tolist()]
+                uv = [Vector((u, v, 0.0)) for u, v in uvs[triangle].tolist()]
+                self.textures.append((opacity, *corners, *uv))
+            offset += len(world)
+        co = np.concatenate(points) if points else np.zeros((0, 3))
+        faces = np.concatenate(triangles) if triangles else np.zeros((0, 3), dtype=np.int64)
+        self.tree = BVHTree.FromPolygons(co.tolist(), faces.tolist(), all_triangles=True)
+        self.step = max(extent * _STEP, 1e-7)
+        self.tolerance = max(extent * _TOLERANCE, self.step * 2)
+
+    def escapes(self, point: Vector, direction: Vector) -> bool:
+        """Whether nothing covers ``point`` from a viewer far away along ``direction``."""
+        ray_cast = self.tree.ray_cast
+        blocks = self.blocks
+        textures = self.textures
+        step = direction * self.step
+        origin = point + step
+        travelled = self.step
+        for _hop in range(_MAX_HOPS):
+            location, normal, index, distance = ray_cast(origin, direction)
+            if location is None:
+                return True
+            travelled += distance
+            # The viewer looks back along the ray, so it sees the front of a
+            # surface whose normal points along the ray.
+            if travelled > self.tolerance and (blocks[index] == _BLOCKS_BOTH or normal.dot(direction) > 0.0):
+                texture = textures[index]
+                if texture is None:
+                    return False
+                uv = barycentric_transform(location, *texture[1:])
+                if texture[0].hides(uv.x, uv.y):
+                    return False
+            origin = location + step
+            travelled += self.step
+        return True
+
+    def covered(self, point: np.ndarray, normal: np.ndarray, cone: np.ndarray, two_sided: bool) -> bool:
+        """Whether every ray of ``cone``, turned to point along ``normal`` (and
+        against it for a vertex drawn from both sides), is covered."""
+        length = float(np.linalg.norm(normal))
+        if length == 0.0:
+            return False
+        normal = normal / length
+        side = np.cross(normal, (1.0, 0.0, 0.0) if abs(normal[0]) < 0.9 else (0.0, 1.0, 0.0))
+        side /= np.linalg.norm(side)
+        directions = cone @ np.stack((side, np.cross(normal, side), normal))
+        if two_sided:
+            directions = np.concatenate((directions, -directions))
+        origin = Vector(point.tolist())
+        return not any(self.escapes(origin, Vector(direction)) for direction in directions.tolist())
 
 
 class _Target:
-    """What the search knows about one mesh whose vertices may go.
-
-    A polygon is open while it is not seen and one of its vertices is not kept
-    yet: only then can a test of it still change which vertices go.
-    """
+    """One mesh whose covered vertices may go, with its vertices welded at seams."""
 
     def __init__(self, mesh: _Mesh):
         self.mesh = mesh
-        vertex_count = len(mesh.basis)
-        polygon_count = len(mesh.polygon_starts)
-        self.polygon_seen = np.zeros(polygon_count, dtype=bool)
-        self.vertex_kept = np.zeros(vertex_count, dtype=bool)
-        # How many of each polygon's vertices are not kept yet.
-        self.polygon_unkept = mesh.polygon_sizes.copy()
-        loop_polygons = np.zeros(len(mesh.polygon_vertices), dtype=np.int64)
-        for polygon, (start, size) in enumerate(zip(mesh.polygon_starts.tolist(), mesh.polygon_sizes.tolist())):
-            loop_polygons[start:start + size] = polygon
-        self.vertex_polygon_starts, self.vertex_polygons = _rows(mesh.polygon_vertices, loop_polygons, vertex_count)
-        corners = mesh.triangles.ravel()
-        self.vertex_triangle_starts, self.vertex_triangles = _rows(
-            corners, np.arange(len(corners)) // 3, vertex_count)
-
-    def polygon_vertices(self, polygon: int) -> np.ndarray:
-        mesh = self.mesh
-        start = mesh.polygon_starts[polygon]
-        return mesh.polygon_vertices[start:start + mesh.polygon_sizes[polygon]]
-
-    def mark_seen(self, triangles) -> None:
-        polygons = np.unique(self.mesh.triangle_polygons[triangles])
-        new = polygons[~self.polygon_seen[polygons]]
-        if not len(new):
-            return
-        self.polygon_seen[new] = True
-        vertices = np.unique(np.concatenate([self.polygon_vertices(polygon) for polygon in new.tolist()]))
-        vertices = vertices[~self.vertex_kept[vertices]]
-        self.vertex_kept[vertices] = True
-        starts = self.vertex_polygon_starts
-        rows = [self.vertex_polygons[starts[vertex]:starts[vertex + 1]] for vertex in vertices.tolist()]
-        if rows:
-            np.subtract.at(self.polygon_unkept, np.concatenate(rows), 1)
-
-    def triangle_open(self, triangles: np.ndarray) -> np.ndarray:
-        polygons = self.mesh.triangle_polygons[triangles]
-        return ~self.polygon_seen[polygons] & (self.polygon_unkept[polygons] > 0)
-
-    def open_triangles(self) -> np.ndarray:
-        return np.flatnonzero(self.triangle_open(np.arange(len(self.mesh.triangles))))
-
-    def triangles_at(self, vertex: int) -> np.ndarray:
-        starts = self.vertex_triangle_starts
-        return self.vertex_triangles[starts[vertex]:starts[vertex + 1]]
+        points, first, weld = np.unique(mesh.basis, axis=0, return_index=True, return_inverse=True)
+        self.weld = weld.ravel()
+        # One vertex per welded position, and the welded normal and sides there.
+        self.first = first
+        self.normals = np.zeros((len(points), 3))
+        np.add.at(self.normals, self.weld, mesh.normals)
+        self.two_sided = np.zeros(len(points), dtype=bool)
+        np.logical_or.at(self.two_sided, self.weld, mesh.two_sided)
+        self.uncovered = np.zeros(len(points), dtype=bool)
 
     def hidden_vertices(self, margin: int) -> np.ndarray:
-        """Vertices with faces, none of them seen, more than ``margin`` edges from a kept vertex.
-
-        Vertices split at a seam count as one vertex, so they are kept together.
-        """
+        """Covered vertices with faces, none of whose faces has an uncovered corner,
+        more than ``margin`` edges from those faces."""
         mesh = self.mesh
-        if not len(mesh.basis):
+        if not len(mesh.basis) or not len(mesh.polygon_starts):
             return np.zeros(0, dtype=np.int64)
-        _points, weld = np.unique(mesh.basis, axis=0, return_inverse=True)
-        weld = weld.ravel()
-        kept = np.zeros(weld.max() + 1, dtype=bool)
-        kept[weld[self.vertex_kept]] = True
+        weld = self.weld
+        kept = self.uncovered.copy()
+        corners = weld[mesh.loop_vertices]
+        loop_polygons = np.repeat(np.arange(len(mesh.polygon_starts)), mesh.polygon_sizes)
+        touched = np.zeros(len(mesh.polygon_starts), dtype=bool)
+        np.logical_or.at(touched, loop_polygons, kept[corners])
+        kept[corners[touched[loop_polygons]]] = True
         first, second = weld[mesh.edges[:, 0]], weld[mesh.edges[:, 1]]
         for _ring in range(margin):
             grown = kept.copy()
@@ -439,108 +485,9 @@ class _Target:
             if np.array_equal(grown, kept):
                 break
             kept = grown
-        has_face = np.diff(self.vertex_polygon_starts) > 0
+        has_face = np.zeros(len(mesh.basis), dtype=bool)
+        has_face[mesh.loop_vertices] = True
         return np.flatnonzero(has_face & ~kept[weld])
-
-
-class _Scene:
-    """Every occluding triangle of one scene state in a BVH tree."""
-
-    def __init__(self, meshes: list[_Mesh], positions: list[np.ndarray], extent: float):
-        offsets = np.cumsum([0] + [len(co) for co in positions])
-        co =np.concatenate(positions) if positions else np.zeros((0, 3))
-        triangles = np.concatenate([mesh.triangles + offset for mesh, offset in zip(meshes, offsets)]) \
-            if meshes else np.zeros((0, 3), dtype=np.int64)
-        self.tree = BVHTree.FromPolygons(co.tolist(), triangles.tolist(), all_triangles=True)
-        self.blocks = np.concatenate([mesh.blocks for mesh in meshes]).tolist() if meshes else []
-        # Per triangle: None where all of it hides, else its opacity image,
-        # corners and UVs for reading the image where a ray hits.
-        self.textures: list = [None] * len(triangles)
-        start = 0
-        for mesh, world in zip(meshes, positions):
-            for index, (opacity, uvs) in enumerate(mesh.opacities):
-                for triangle in np.flatnonzero(mesh.opacity_index == index).tolist():
-                    corners = [Vector(point) for point in world[mesh.triangles[triangle]].tolist()]
-                    uv = [Vector((u, v, 0.0)) for u, v in uvs[triangle].tolist()]
-                    self.textures[start + triangle] = (opacity, *corners, *uv)
-            start += len(mesh.triangles)
-        self.step = max(extent * _STEP, 1e-7)
-        self.tolerance = max(extent * _TOLERANCE, self.step * 2)
-
-
-class _Search:
-    """Casts the rays for the targets of one scene state."""
-
-    def __init__(self, scene: _Scene, directions: int):
-        self.scene = scene
-        base = _sphere_directions(directions)
-        self.sets = [base @ rotation.T for rotation in _rotations(_ROTATIONS)]
-        self.vectors = [[Vector(d) for d in directions.tolist()] for directions in self.sets]
-        self.steps = [[d * scene.step for d in vectors] for vectors in self.vectors]
-        self.samples = 0
-
-    def escapes(self, point: Vector, direction: Vector, step: Vector) -> bool:
-        """Whether nothing hides ``point`` from a viewer far away along ``direction``."""
-        scene = self.scene
-        ray_cast = scene.tree.ray_cast
-        blocks = scene.blocks
-        textures = scene.textures
-        tolerance = scene.tolerance
-        origin = point + step
-        travelled = scene.step
-        for _hop in range(_MAX_HOPS):
-            location, normal, index, distance = ray_cast(origin, direction)
-            if location is None:
-                return True
-            travelled += distance
-            # The viewer looks back along the ray, so it sees the front of a
-            # surface whose normal points along the ray.
-            kind = blocks[index]
-            if travelled > tolerance and kind and (kind == _BLOCKS_BOTH or normal.dot(direction) > 0.0):
-                texture = textures[index]
-                if texture is None:
-                    return False
-                uv = barycentric_transform(location, *texture[1:])
-                if texture[0].hides(uv.x, uv.y):
-                    return False
-            origin = location + step
-            travelled += scene.step
-        return True
-
-    def test(self, target: _Target, point: np.ndarray, triangles: np.ndarray, normals: np.ndarray,
-             min_dot: float = _MIN_DOT) -> None:
-        """Mark the ``triangles`` that ``point``, a point on each of them, shows to some viewer."""
-        rotation = self.samples % _ROTATIONS
-        self.samples += 1
-        mesh = target.mesh
-        dots = self.sets[rotation] @ normals[triangles].T
-        both_sides = ~mesh.culled[triangles]
-        allowed = (dots > min_dot) | (both_sides & (dots < -min_dot))
-        wanted = allowed.any(axis=1)
-        if not wanted.any():
-            return
-        # Try the directions the faces point to first; most seen faces show on the first ray.
-        score = np.where(both_sides, np.abs(dots), dots).max(axis=1)
-        order = np.flatnonzero(wanted)
-        order = order[np.argsort(-score[order], kind="stable")].tolist()
-        pending = np.ones(len(triangles), dtype=bool)
-        vectors = self.vectors[rotation]
-        steps = self.steps[rotation]
-        origin = Vector(point.tolist())
-        position = 0
-        while position < len(order):
-            row = order[position]
-            position += 1
-            if not self.escapes(origin, vectors[row], steps[row]):
-                continue
-            target.mark_seen(triangles[pending & allowed[row]])
-            # Faces whose vertices are all kept by now no longer matter either.
-            pending &= ~allowed[row] & target.triangle_open(triangles)
-            if not pending.any():
-                return
-            wanted = allowed[:, pending].any(axis=1)
-            order = [later for later in order[position:] if wanted[later]]
-            position = 0
 
 
 def _state_positions(mesh: _Mesh, state: str | None) -> np.ndarray:
@@ -548,60 +495,24 @@ def _state_positions(mesh: _Mesh, state: str | None) -> np.ndarray:
     return mesh.world(local)
 
 
-def _search_state(targets: list[_Target], meshes: list[_Mesh], state: str | None, extent: float,
-                  directions: int, progress) -> None:
-    positions = [_state_positions(mesh, state) for mesh in meshes]
-    scene = _Scene(meshes, positions, extent)
-    search = _Search(scene, directions)
-    index = {id(mesh): position for position, mesh in enumerate(meshes)}
-    for target in targets:
-        mesh = target.mesh
-        co = positions[index[id(mesh)]]
-        corners = co[mesh.triangles]
-        normals = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])
-        lengths = np.linalg.norm(normals, axis=1)
-        normals = np.divide(normals, lengths[:, None], out=np.zeros_like(normals), where=lengths[:, None] > 0)
-
-        open_triangles = target.open_triangles()
-        if not len(open_triangles):
-            continue
-        # Corner samples: one per position, shared by every face that meets there,
-        # including faces of vertices the import split at a seam.
-        open_vertices = np.unique(mesh.triangles[open_triangles])
-        points, group = np.unique(co[open_vertices], axis=0, return_inverse=True)
-        group = group.ravel()
-        members = [[] for _ in range(len(points))]
-        for vertex, position in zip(open_vertices.tolist(), group.tolist()):
-            members[position].append(vertex)
-        for position, vertices in enumerate(members):
-            progress()
-            triangles = np.unique(np.concatenate([target.triangles_at(vertex) for vertex in vertices]))
-            triangles = triangles[target.triangle_open(triangles)]
-            if len(triangles):
-                search.test(target, points[position], triangles, normals)
-
-        # Centre samples catch a face whose middle shows between covered corners.
-        for triangle in target.open_triangles().tolist():
-            progress()
-            triangle = np.array((triangle,))
-            if target.triangle_open(triangle)[0]:
-                search.test(target, corners[triangle[0]].mean(axis=0), triangle, normals, _CENTRE_MIN_DOT)
+def _state_moves(meshes: list[_Mesh], state: str) -> bool:
+    return any(state in mesh.states and not np.array_equal(mesh.states[state], mesh.basis) for mesh in meshes)
 
 
-def hidden_vertices(targets, occluders=None, *, margin: int = 2, directions: int = DIRECTIONS,
+def hidden_vertices(targets, occluders=None, *, margin: int = 1, cone_degrees: float = CONE_DEGREES,
                     progress=None) -> dict:
-    """Map each target's mesh to the indices of its vertices no viewer can see.
+    """Map each target's mesh to the indices of its vertices that other meshes cover.
 
-    ``occluders`` are the meshes that can hide the targets' vertices besides
-    the targets themselves; None means each target is tested on its own. A
+    ``occluders`` are the meshes that can cover the targets' vertices besides
+    the targets themselves, and faces with a target's own material never
+    cover it; None means each target is tested against its own faces alone. A
     target only counts meshes of its own LOD among the occluders, and meshes
     without an Instant Edit name as every LOD (and as LOD 0 when they are the
-    targets). Hidden vertices up to
-    ``margin`` edges from a seen one stay. ``progress`` is called with the
-    fraction done.
+    targets). Covered vertices up to ``margin`` edges from an uncovered one
+    stay. ``progress`` is called with the fraction done.
 
     The result has one entry per mesh datablock, keyed by one of the objects
-    using it: a vertex of a mesh several objects show must be hidden in each.
+    using it: a vertex of a mesh several objects show must be covered in each.
     """
     targets = list(dict.fromkeys(obj for obj in targets if obj.type == "MESH"))
     if occluders is not None:
@@ -616,58 +527,56 @@ def hidden_vertices(targets, occluders=None, *, margin: int = 2, directions: int
             read[obj] = _Mesh.read(obj, covers)
         return read[obj]
 
-    scenes = []
+    # Each test: the targets, the meshes that may cover them, and the
+    # materials that cover nothing in it.
+    tests = []
     if occluders is None:
-        scenes = [([obj], [obj]) for obj in targets]
+        tests = [([obj], [obj], frozenset()) for obj in targets]
     else:
-        by_lod: dict = {}
+        by_scene: dict = {}
         for obj in targets:
-            by_lod.setdefault(mesh_lod(obj) or 0, []).append(obj)
-        for lod, group in by_lod.items():
+            lod = mesh_lod(obj) or 0
+            by_scene.setdefault((lod, mesh_of(obj).own_materials()), []).append(obj)
+        for (lod, materials), group in by_scene.items():
             others = [obj for obj in occluders if obj not in group and mesh_lod(obj) in {lod, None}]
-            scenes.append((group, group + others))
+            tests.append((group, group + others, materials))
 
     plan = []
-    for group, members in scenes:
+    for group, members, ignored in tests:
         meshes = [mesh_of(obj) for obj in members]
-        states = sorted({name for mesh in meshes for name in mesh.states})
-        plan.append((group, meshes, [None] + states))
-    total = sum(
-        (len(read[obj].basis) + len(read[obj].triangles)) * len(states)
-        for group, _meshes, states in plan for obj in group
-    ) or 1
+        states = [None] + sorted({name for mesh in meshes for name in mesh.states if _state_moves(meshes, name)})
+        plan.append((group, meshes, ignored, states))
+    search_targets = {obj: _Target(read[obj]) for group, *_rest in plan for obj in group}
+    total = sum(len(search_targets[obj].first) * len(states) for group, _m, _i, states in plan for obj in group) or 1
     done = 0
+    cone = _cone(cone_degrees, _RINGS)
 
-    def tick():
-        nonlocal done
-        done += 1
-        if progress is not None and done % 512 == 0:
-            progress(min(done / total, 1.0))
-
-    result = {}
-    for group, meshes, states in plan:
+    for group, meshes, ignored, states in plan:
         corners = np.concatenate([mesh.world(mesh.basis) for mesh in meshes if len(mesh.basis)] or [np.zeros((1, 3))])
         extent = float(np.linalg.norm(corners.max(axis=0) - corners.min(axis=0)))
-        search_targets = [_Target(read[obj]) for obj in group]
+        index = {id(mesh): position for position, mesh in enumerate(meshes)}
         for state in states:
-            live = [target for target in search_targets if len(target.open_triangles())]
-            if not live:
-                break
-            if state is not None and not _state_moves(meshes, state):
-                continue
-            _search_state(live, meshes, state, extent, directions, tick)
-        for target in search_targets:
-            obj = target.mesh.obj
-            owner, hidden = result.get(obj.data.as_pointer(), (obj, None))
-            found = target.hidden_vertices(margin)
-            result[obj.data.as_pointer()] = (owner, found if hidden is None else np.intersect1d(hidden, found))
+            positions = [_state_positions(mesh, state) for mesh in meshes]
+            scene = _Scene(meshes, positions, extent, ignored)
+            for obj in group:
+                target = search_targets[obj]
+                world = positions[index[id(target.mesh)]]
+                for count, position in enumerate(np.flatnonzero(~target.uncovered).tolist()):
+                    if not scene.covered(world[target.first[position]], target.normals[position], cone,
+                                         target.two_sided[position]):
+                        target.uncovered[position] = True
+                    if progress is not None and count % 256 == 255:
+                        progress(min((done + count) / total, 1.0))
+                done += len(target.first)
+
+    result = {}
+    for obj, target in search_targets.items():
+        owner, hidden = result.get(obj.data.as_pointer(), (obj, None))
+        found = target.hidden_vertices(margin)
+        result[obj.data.as_pointer()] = (owner, found if hidden is None else np.intersect1d(hidden, found))
     if progress is not None:
         progress(1.0)
     return dict(result.values())
-
-
-def _state_moves(meshes: list[_Mesh], state: str) -> bool:
-    return any(state in mesh.states and not np.array_equal(mesh.states[state], mesh.basis) for mesh in meshes)
 
 
 def remove_vertices(obj, indices) -> int:

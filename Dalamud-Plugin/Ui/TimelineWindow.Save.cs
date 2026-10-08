@@ -47,11 +47,18 @@ public sealed partial class TimelineWindow
             ImGui.SetNextItemWidth(Math.Min(Theme.Scaled(380), Math.Max(Theme.Scaled(120), ImGui.GetContentRegionAvail().X - Theme.Scaled(90))));
             ImGui.InputText("Mod name", ref modName, 128);
         }
+        // An expression's face keeps its own skeleton and every bone.
+        if (!loaded.Standalone)
+            DrawRepairChoice(loaded);
 
         var doc = current.Document;
         RefreshDocumentTexts(doc);
+        var clip = Fresh(loaded).Clip;
+        var repair = loaded.Standalone ? null : repairTarget;
         var problem = TimelineWindowViews.SaveProblem(loaded.Document != null, loaded.ReadOnlyReason,
-            destination == AnimationDestination.InPlace, canReplace, doc.LengthChanged, Fresh(loaded).Clip.Resolution, doc.MotionChanged);
+                          destination == AnimationDestination.InPlace, canReplace, doc.LengthChanged, clip.Resolution,
+                          AnimationBakeRules.ChangesMotion(doc, repair))
+                      ?? (loaded.Standalone ? null : TimelineWindowViews.BonesProblem(doc, clip, repair));
         if (problem != null)
             Widgets.Banner("##timeline-save-problem", FeedbackSeverity.Warning, problem);
         else if (saveError != null)
@@ -111,7 +118,7 @@ public sealed partial class TimelineWindow
             return "Undoing the last save.";
         if (loadTask != null)
             return "Reading the timeline.";
-        if (!current.Dirty)
+        if (!current.Dirty && repairTarget == null)
             return "Nothing changed since the last save.";
         if (current.Gesture != TimelineGesture.None)
             return "Finish the drag first.";
@@ -133,6 +140,7 @@ public sealed partial class TimelineWindow
         var target = Fresh(loaded);
         var place = destination;
         var name = modName.Trim();
+        var repair = target.Standalone ? null : repairTarget;
         // Effect looks are saved as copies of their effects, packaged like imports.
         TimelineDocument saved;
         ImmutableDictionary<string, byte[]> added;
@@ -152,7 +160,7 @@ public sealed partial class TimelineWindow
         saveError = null;
         saveMessage = null;
         jobClip = ClipKey(loaded);
-        KeepMotionForSave(target, document);
+        KeepMotionForSave(target, document, repair);
         StopPreview();
         var ending = previewStop ?? Task.CompletedTask;
         previewStop = null;
@@ -164,7 +172,7 @@ public sealed partial class TimelineWindow
             return await framework.RunOnFrameworkThread(() =>
             {
                 playback.Stop();
-                return service.EditTimeline(target, saved, place, name, added, beside, motionFrames);
+                return service.EditTimeline(target, saved, place, name, added, beside, motionFrames, repair);
             });
         });
     }
@@ -193,7 +201,7 @@ public sealed partial class TimelineWindow
         if (pendingSaveId is { } stale && !service.Busy && service.LastResult?.Id != stale)
         {
             pendingSaveId = null;
-            saveError = "The save's result is unknown. Check Recent edits in the Animations tab.";
+            saveError = "The save's result is unknown. Check Edits in the side panel.";
             motionCarry = null;
         }
         var sameClip = source != null && ClipKey(source) == jobClip;
@@ -206,6 +214,8 @@ public sealed partial class TimelineWindow
             {
                 editor?.MarkSaved();
                 lastSaveId = job;
+                // The saved file is on the standard skeleton now; another repair would change nothing.
+                repairTarget = null;
                 saveMessage = destination == AnimationDestination.NewMod ? "Saved into a new mod." : "Saved.";
                 Load(source!.Capture, source.Startup, true);
             }
@@ -231,12 +241,12 @@ public sealed partial class TimelineWindow
     /// <summary>
     /// Before a save: keeps the motion the layers apply to, and the layers themselves, so the clip read
     /// back after the save goes on editing them rather than stacking them on the saved result. A new
-    /// length bakes them in for good.
+    /// length, bones left out or a repair bake them in for good.
     /// </summary>
-    private void KeepMotionForSave(AnimationTimelineSource loaded, TimelineDocument document)
+    private void KeepMotionForSave(AnimationTimelineSource loaded, TimelineDocument document, SkeletonStandard? repair)
     {
         var clip = ClipKey(loaded);
-        if (document.LengthChanged)
+        if (AnimationBakeRules.BakesLayersIn(document, repair))
         {
             motionBase = null;
             motionCarry = null;

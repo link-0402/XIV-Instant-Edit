@@ -52,9 +52,10 @@ internal sealed partial class PhysicsWindow
                 {
                     foreach (var index in outsideChest)
                         PhysicsValidation.Apply(current.File, PhysicsFix.ChestGroup, index);
-                });
+                }, "Chest group for all body areas");
             Tip($"{outsideChest.Count} body areas aren't in the chest group, so tops that turn off breast physics don't stop them.");
         }
+        var labels = PhysicsAreas.Labels(current.File);
         for (var i = 0; i < simulators.Count; i++)
         {
             using var id = ImRaii.PushId(i);
@@ -68,7 +69,7 @@ internal sealed partial class PhysicsWindow
             var level = all.Where(issue => issue.Simulator == i).Select(issue => (PhysicsIssueLevel?)issue.Level).Min();
             using (ImRaii.PushColor(ImGuiCol.Text, simulator.Excluded ? Theme.Inactive : level == PhysicsIssueLevel.Error ? Theme.Error : Theme.Text))
             {
-                if (ImGui.Selectable($"{info.Label}##area", selected == i))
+                if (ImGui.Selectable($"{labels[i]}##area", selected == i))
                     selected = i;
             }
             if (ImGui.IsItemHovered())
@@ -81,29 +82,25 @@ internal sealed partial class PhysicsWindow
             }
         }
 
+        ImGui.Spacing();
+        Widgets.SectionHeader("Add an area");
+        Tip("Areas your skeleton has bones for that this file doesn't move yet, or one copied from another file.");
         if (target is { } found)
         {
-            var addable = PhysicsTemplates.Addable(current.File, found.Character.Skeleton);
-            if (addable.Count > 0)
+            foreach (var kind in PhysicsTemplates.Addable(current.File, found.Character.Skeleton))
             {
-                ImGui.Spacing();
-                Widgets.SectionHeader("Add", "your skeleton has these");
-                foreach (var kind in addable)
-                {
-                    using var id = ImRaii.PushId(kind.Key);
-                    var label = kind.Skeleton == "Vanilla" ? kind.Label : $"{kind.Label} ({kind.Skeleton})";
-                    if (ImGui.Selectable($"+ {label}##add"))
-                        Change(current, () =>
-                        {
-                            if (current.AddArea(kind, found.Character.Skeleton) is { } index)
-                                selected = index;
-                        });
-                    Tip($"New physics for {string.Join(", ", PhysicsTemplates.Bones(kind, found.Character.Skeleton).Select(bone => bone.Name))}, " +
-                        "measured on your skeleton. Tune it, then preview.");
-                }
+                using var id = ImRaii.PushId(kind.Key);
+                var label = kind.Skeleton == "Vanilla" ? kind.Label : $"{kind.Label} ({kind.Skeleton})";
+                if (ImGui.Selectable($"+ {label}##add"))
+                    Change(current, () =>
+                    {
+                        if (current.AddArea(kind, found.Character.Skeleton) is { } index)
+                            selected = index;
+                    });
+                Tip($"New physics for {string.Join(", ", PhysicsTemplates.Bones(kind, found.Character.Skeleton).Select(bone => bone.Name))}, " +
+                    "measured on your skeleton. Tune it, then preview.");
             }
         }
-        ImGui.Spacing();
         using (ImRaii.Disabled(Busy))
         {
             if (ImGui.Selectable("+ Import from a file##import"))
@@ -116,7 +113,6 @@ internal sealed partial class PhysicsWindow
         if (ImGui.Selectable($"Collision shapes ({shapes})##shapes", selected == ShapesView))
             selected = ShapesView;
         Tip("The capsules and spheres areas can bump into, such as arms and legs.");
-        DrawFitButton(current, small: false);
     }
 
     private void DrawImportPopup(PhysicsDocument current)
@@ -134,18 +130,20 @@ internal sealed partial class PhysicsWindow
         if (file.Simulators.Count == 0)
             Widgets.Hint("This file has no areas.");
         var moved = current.File.Simulators.Where(s => !s.Excluded).SelectMany(PhysicsAreas.RootBones).ToHashSet(StringComparer.Ordinal);
+        var labels = PhysicsAreas.Labels(file);
         for (var i = 0; i < file.Simulators.Count; i++)
         {
             using var id = ImRaii.PushId(i);
             var info = PhysicsAreas.Classify(file.Simulators[i]);
+            var label = labels[i];
             var overlap = info.Bones.Any(moved.Contains);
-            if (ImGui.Selectable($"{info.Label}{(overlap ? "  (you already move these)" : "")}##pick"))
+            if (ImGui.Selectable($"{label}{(overlap ? "  (you already move these)" : "")}##pick"))
             {
                 var index = i;
-                Change(current, () => selected = current.ImportArea(file, index));
+                Change(current, () => selected = current.ImportArea(file, index), $"Import {label} from {importName}");
                 Say(FeedbackSeverity.Info, overlap
-                    ? $"Imported {info.Label}. Turn your old area for these bones off, or both move them."
-                    : $"Imported {info.Label} from {importName}.");
+                    ? $"Imported {label}. Turn your old area for these bones off, or both move them."
+                    : $"Imported {label} from {importName}.");
                 importFile = null;
                 ImGui.CloseCurrentPopup();
             }
@@ -160,10 +158,13 @@ internal sealed partial class PhysicsWindow
         }
     }
 
-    /// <summary> A discrete change: one undo step, then the views and the automatic preview catch up. </summary>
-    private void Change(PhysicsDocument current, Action edit)
+    /// <summary>
+    /// A discrete change: one undo step, then the views and the automatic preview catch up. A name says
+    /// what a change of many settings was, for undo and redo.
+    /// </summary>
+    private void Change(PhysicsDocument current, Action edit, string? name = null)
     {
-        current.Checkpoint();
+        current.Checkpoint(name);
         edit();
         current.Changed();
         Edited(current);
@@ -178,7 +179,7 @@ internal sealed partial class PhysicsWindow
         var info = PhysicsAreas.Classify(simulator);
         using var id = ImRaii.PushId($"area-{index}");
 
-        ImGui.TextColored(Theme.Text, info.Label);
+        ImGui.TextColored(Theme.Text, PhysicsAreas.Labels(file)[index]);
         ImGui.SameLine(0, Theme.Gap);
         ImGui.TextColored(Theme.Muted, $"{simulator.Chains.Count} chain{(simulator.Chains.Count == 1 ? "" : "s")}");
         var button = ImGui.GetFrameHeight();
@@ -212,7 +213,7 @@ internal sealed partial class PhysicsWindow
         var targets = Targets(file, index);
         if (targets.Count == 0)
             return;
-        SetSliderArea(current, targets);
+        SetSliderStart(current, targets);
 
         ImGui.Spacing();
         Widgets.SectionHeader("Movement");
@@ -268,14 +269,15 @@ internal sealed partial class PhysicsWindow
             return;
         ImGui.SameLine();
         using var id = ImRaii.PushId(issue.Text);
-        if (ImGui.SmallButton("Fix"))
-            Change(current, () => PhysicsValidation.Apply(current.File, issue.Fix, issue.Simulator));
-        Tip(issue.Fix switch
+        var fix = issue.Fix switch
         {
             PhysicsFix.ChestGroup => "Move it to the chest group.",
             PhysicsFix.RemoveBroken => "Remove the links to things that don't exist.",
             _ => "Limit the swing to 0° to 180°.",
-        });
+        };
+        if (ImGui.SmallButton("Fix"))
+            Change(current, () => PhysicsValidation.Apply(current.File, issue.Fix, issue.Simulator), $"Fix: {fix.TrimEnd('.')}");
+        Tip(fix);
     }
 
     private void DrawChainChoice(PhybFile file, int index)
@@ -344,7 +346,6 @@ internal sealed partial class PhysicsWindow
         var file = current.File;
         var (s0, c0) = targets[0];
         var first = file.Simulators[s0].Chains[c0];
-        DrawLevels(current, targets);
 
         if (PhysicsKnobs.MainSpring(file.Simulators[s0], c0) is not null)
             KnobSlider(current, targets, PhysicsKnob.Firmness, "Firmness", "How hard it springs back to rest. Lower is bouncier.", 0, 0.2f, "%.4f",
@@ -381,40 +382,6 @@ internal sealed partial class PhysicsWindow
         KnobSlider(current, targets, PhysicsKnob.Wind, "Wind", "How much wind moves it.", 0, 0.2f, "%.4f", ImGuiSliderFlags.Logarithmic);
     }
 
-    /// <summary>
-    /// Firm to very soft for areas popular presets agree on, each level a preset's settings. The level
-    /// the chains match is filled. Chest levels take the firmness that suits the breast size the last
-    /// fit measured.
-    /// </summary>
-    private void DrawLevels(PhysicsDocument current, List<(int Simulator, int Chain)> targets)
-    {
-        if (sliderArea is not { } area || PhysicsLevels.For(area) is not { Count: > 0 } levels)
-            return;
-        var (s0, c0) = targets[0];
-        var matched = PhysicsLevels.Match(current.File.Simulators[s0], c0, area);
-        var sized = PhysicsLevels.SizeFitted(area);
-        var scale = sized && measuredChest is { } chest ? PhysicsSize.ChestScale(chest.Ratio) : 1;
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Label, "Intensity");
-        Tip("Settings taken from popular presets, from the firmest to the softest.");
-        ImGui.SameLine(LabelWidth);
-        foreach (var level in levels)
-        {
-            var on = ReferenceEquals(level, matched);
-            bool clicked;
-            using (ImRaii.PushColor(ImGuiCol.Button, Theme.Selection, on).Push(ImGuiCol.ButtonHovered, Theme.WithAlpha(Theme.Selection, .85f), on))
-                clicked = ImGui.Button($"{level.Name}##level-{level.Name}");
-            var sizeNote = !sized ? string.Empty
-                : measuredChest is { } measured ? $" Firmness for {measured.Label} breasts."
-                : " Fit to my body to suit its firmness to your size.";
-            Tip(level.Detail + sizeNote);
-            if (clicked)
-                Change(current, () => PhysicsLevels.Apply(current.File, targets, level, area, target?.Character.Skeleton, scale));
-            ImGui.SameLine();
-        }
-        ImGui.NewLine();
-    }
-
     /// <summary> A slider for a knob of the edited chains: shows the first's value and sets them all. </summary>
     private void KnobSlider(PhysicsDocument current, List<(int Simulator, int Chain)> targets, PhysicsKnob knob, string label, string tip,
         float min, float max, string format, ImGuiSliderFlags flags = ImGuiSliderFlags.None)
@@ -426,9 +393,8 @@ internal sealed partial class PhysicsWindow
     }
 
     /// <summary>
-    /// A labelled slider; the drag is one undo step and previews when let go. With a knob, a strip under
-    /// it shows where most presets set it for this area, and a mark the game's own value. Returns
-    /// whether the value changed.
+    /// A labelled slider; the drag is one undo step and previews when let go. With a knob, a mark under
+    /// it shows where the value started. Returns whether the value changed.
     /// </summary>
     private bool Slider(PhysicsDocument current, string label, string tip, ref float value, float min, float max, string format,
         ImGuiSliderFlags flags = ImGuiSliderFlags.None, PhysicsKnob? knob = null)
@@ -444,7 +410,7 @@ internal sealed partial class PhysicsWindow
         if (ImGui.IsItemDeactivatedAfterEdit())
             Edited(current);
         if (knob is { } shown)
-            DrawBand(shown, min, max, format, (flags & ImGuiSliderFlags.Logarithmic) != 0);
+            DrawStartMark(shown, min, max, format, (flags & ImGuiSliderFlags.Logarithmic) != 0);
         return changed;
     }
 
@@ -461,7 +427,7 @@ internal sealed partial class PhysicsWindow
     private void DrawCollision(PhysicsDocument current, int index, List<(int Simulator, int Chain)> targets)
     {
         var file = current.File;
-        KnobSlider(current, targets, PhysicsKnob.Size, "Size", "The tip's size when it bumps into the shapes below.", 0, 20, "%.1f cm");
+        KnobSlider(current, targets, PhysicsKnob.Size, "Size", "The tip's size when it collides with the shapes below.", 0, 20, "%.1f cm");
 
         var names = file.Collision.Names.Select(name => name.Text).Distinct().ToList();
         if (names.Count == 0)
@@ -470,7 +436,7 @@ internal sealed partial class PhysicsWindow
             return;
         }
         ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Label, "Bumps into");
+        ImGui.TextColored(Theme.Label, "Collision with");
         Tip("Shapes these chains stay out of, such as arms and legs. Each shape costs a little performance.");
         ImGui.SameLine(LabelWidth);
         using var group = ImRaii.Group();
@@ -485,7 +451,7 @@ internal sealed partial class PhysicsWindow
                 PhysicsBumps.Some => 1u,
                 _ => 0u,
             };
-            if (ImGui.CheckboxFlags(name, ref bits, 3u))
+            if (ImGui.CheckboxFlags($"{PhysicsShapeNames.Label(file.Collision, name, target?.Character.Skeleton)}##check", ref bits, 3u))
             {
                 var on = bits == 3u;
                 Change(current, () =>
@@ -493,11 +459,11 @@ internal sealed partial class PhysicsWindow
                     if (!on)
                         PhysicsCollisions.Remove(file, targets, name);
                     else if (!PhysicsCollisions.Add(file, targets, name))
-                        Say(FeedbackSeverity.Warning, $"A chain can bump into {PhysicsCollisions.MaxShapes} shapes at most.");
+                        Say(FeedbackSeverity.Warning, $"A chain can collide with {PhysicsCollisions.MaxShapes} shapes at most.");
                 });
             }
             if (state == PhysicsBumps.Some)
-                Tip($"Only some of these points bump into it: {string.Join(", ", Bumping(file, targets, name))}. Tick to make all of them.");
+                Tip($"Only some of these points collide with it: {string.Join(", ", Bumping(file, targets, name))}. Tick to make all of them.");
             var references = targets.Select(target => target.Simulator).Distinct()
                 .SelectMany(s => file.Simulators[s].Collisions.Where(reference => reference.Name.Text == name)).ToList();
             if (state == PhysicsBumps.None || references.Count == 0)
@@ -512,7 +478,7 @@ internal sealed partial class PhysicsWindow
         }
     }
 
-    /// <summary> The chains that bump into a shape, all of their points or some. </summary>
+    /// <summary> The chains that collide with a shape, all of their points or some. </summary>
     private static IEnumerable<string> Bumping(PhybFile file, List<(int Simulator, int Chain)> targets, string name)
         => targets.Where(target => PhysicsCollisions.State(file, [target], name) != PhysicsBumps.None)
             .Select(target => PhysicsValidation.ChainLabel(file.Simulators[target.Simulator].Chains[target.Chain], target.Chain));

@@ -16,6 +16,9 @@ internal enum PhysicsSourceKind
 /// <summary> The starting file of a document: its kind, a label to show and where it was read from. </summary>
 internal sealed record PhysicsSource(PhysicsSourceKind Kind, string Label, string Path);
 
+/// <summary> A state undo or redo goes to, and the name of the change between, like "Fit to my body", when it has one. </summary>
+internal sealed record PhysicsStep(PhybFile File, string? Name);
+
 /// <summary>
 /// A physics file being edited: the working copy, undo and redo, and what was last saved or loaded, so
 /// the builder knows when there is something to save. Simulators can be left out without deleting
@@ -25,8 +28,8 @@ internal sealed record PhysicsSource(PhysicsSourceKind Kind, string Label, strin
 internal sealed class PhysicsDocument
 {
     private const int MaxUndo = 200;
-    private readonly List<PhybFile> undo = [];
-    private readonly List<PhybFile> redo = [];
+    private readonly List<PhysicsStep> undo = [];
+    private readonly List<PhysicsStep> redo = [];
     private readonly string layout;
     private byte[] baseline;
     private int outputRevision = -1;
@@ -35,6 +38,7 @@ internal sealed class PhysicsDocument
     public PhysicsDocument(PhybFile file, PhysicsSource source, ushort race)
     {
         File = file;
+        Start = file.Clone();
         Source = source;
         Race = race;
         layout = Layout(file);
@@ -42,11 +46,17 @@ internal sealed class PhysicsDocument
     }
 
     public PhybFile File { get; private set; }
+
+    /// <summary> The file as it was opened, which the sliders mark their starting values from. </summary>
+    public PhybFile Start { get; }
     public PhysicsSource Source { get; private set; }
     public ushort Race { get; }
 
     /// <summary> Counts every change, for views that cache what they show. </summary>
     public int Revision { get; private set; }
+
+    /// <summary> Counts every change to the undo and redo lists, for views that describe the next step. </summary>
+    public int History { get; private set; }
 
     /// <summary> Differs from what was loaded or last saved. </summary>
     public bool Dirty => !OutputBytes().AsSpan().SequenceEqual(baseline);
@@ -54,13 +64,17 @@ internal sealed class PhysicsDocument
     public bool CanUndo => undo.Count > 0;
     public bool CanRedo => redo.Count > 0;
 
-    /// <summary> Call before a change, once per change: a slider's whole drag is one undo step. </summary>
-    public void Checkpoint()
+    /// <summary>
+    /// Call before a change, once per change: a slider's whole drag is one undo step. A name says what
+    /// a change of many settings was, such as a fit.
+    /// </summary>
+    public void Checkpoint(string? name = null)
     {
-        undo.Add(File.Clone());
+        undo.Add(new PhysicsStep(File.Clone(), name));
         if (undo.Count > MaxUndo)
             undo.RemoveAt(0);
         redo.Clear();
+        History++;
     }
 
     /// <summary> Call after the working copy changed. </summary>
@@ -69,19 +83,39 @@ internal sealed class PhysicsDocument
     public bool Undo() => Step(undo, redo);
     public bool Redo() => Step(redo, undo);
 
+    /// <summary> Where undo would go and what it changes back, or null when there is nothing to undo. </summary>
+    public PhysicsStep? NextUndo() => Peek(undo);
+
+    /// <summary> Where redo would go and what it changes again, or null when there is nothing to redo. </summary>
+    public PhysicsStep? NextRedo() => Peek(redo);
+
     /// <summary> Moves one step, skipping steps that change nothing, such as a slider clicked without moving it. </summary>
-    private bool Step(List<PhybFile> from, List<PhybFile> to)
+    private bool Step(List<PhysicsStep> from, List<PhysicsStep> to)
     {
         var current = State(File);
-        while (from.Count > 0 && State(from[^1]).AsSpan().SequenceEqual(current))
+        while (from.Count > 0 && State(from[^1].File).AsSpan().SequenceEqual(current))
             from.RemoveAt(from.Count - 1);
+        History++;
         if (from.Count == 0)
             return false;
-        to.Add(File);
-        File = from[^1];
+        var step = from[^1];
+        to.Add(step with { File = File });
+        File = step.File;
         from.RemoveAt(from.Count - 1);
         Revision++;
         return true;
+    }
+
+    /// <summary> The step <see cref="Step"/> would take, skipping the same steps. </summary>
+    private PhysicsStep? Peek(List<PhysicsStep> from)
+    {
+        if (from.Count == 0)
+            return null;
+        var current = State(File);
+        for (var i = from.Count - 1; i >= 0; i--)
+            if (!State(from[i].File).AsSpan().SequenceEqual(current))
+                return from[i];
+        return null;
     }
 
     /// <summary> A file's bytes and which simulators are off: everything a step can change. </summary>

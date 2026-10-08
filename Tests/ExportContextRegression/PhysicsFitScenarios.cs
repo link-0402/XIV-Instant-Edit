@@ -190,7 +190,7 @@ internal static class PhysicsFitScenarios
         var fit = PhysicsFit.Measure(SyntheticFile(0.12f), body, skeleton);
         PhysicsFitItem? Item(string name) => fit.Items.FirstOrDefault(item => item.Name == name);
         Require(Item("forearm_l") is { Target: PhysicsFitTarget.Capsule } forearm && MathF.Abs(forearm.Fitted - 0.03f) <= 0.0015f &&
-                forearm.Label == "forearm_l: left forearm",
+                forearm.Label == "Left forearm (forearm_l)",
             "physics fit: a limb's shape becomes the limb's own thickness");
         Require(Item("thigh_l") is { } thigh && MathF.Abs(thigh.Fitted - 0.03f) <= 0.0015f && thigh.Detail.Contains("skirt", StringComparison.Ordinal),
             "physics fit: a shape the skirt bumps into leaves room for the skirt points' own size, as the game's thighs and skirts do");

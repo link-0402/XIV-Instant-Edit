@@ -76,6 +76,57 @@ internal static class MotionEdits
         return doc with { Motion = doc.Motion.Add(added), NextMotionKey = next };
     }
 
+    /// <summary>
+    /// Adds an offset layer over the whole clip holding <paramref name="bones"/>' changes in one key, so
+    /// they stay the same all the way through: what LivePose adjustments become. Named
+    /// <paramref name="name"/>, cut to <see cref="MaxName"/>. Unchanged with an error when
+    /// <paramref name="bones"/> is empty or the document has no room for another layer.
+    /// </summary>
+    public static TimelineDocument AddOffsets(TimelineDocument doc, string name, IReadOnlyDictionary<string, BoneTransform> bones,
+        out string key, out string? error)
+    {
+        key = string.Empty;
+        if (bones.Count == 0)
+        {
+            error = "There are no adjustments to add.";
+            return doc;
+        }
+        var added = Add(doc, MotionLayerKind.Offset, 0, Math.Max(TimelineDocument.MinLength, doc.Length), out key, out error);
+        if (error != null)
+            return doc;
+        var index = IndexOf(added, key);
+        var values = ImmutableDictionary.CreateRange(StringComparer.Ordinal, bones);
+        name = string.IsNullOrWhiteSpace(name) ? added.Motion[index].Name : name.Trim();
+        var layer = added.Motion[index] with
+        {
+            Name = name.Length > MaxName ? name[..MaxName] : name,
+            Interpolation = MotionInterpolation.Linear,
+            Keys = [new MotionKey(0, values)],
+        };
+        return added with { Motion = added.Motion.SetItem(index, layer) };
+    }
+
+    /// <summary>
+    /// Leaves <paramref name="bones"/> out of the saved animation, or with <paramref name="excluded"/> false
+    /// puts them back. The excluded bones stay sorted, so the same set is always the same list.
+    /// </summary>
+    public static TimelineDocument SetExcluded(TimelineDocument doc, IEnumerable<string> bones, bool excluded)
+    {
+        var set = doc.ExcludedBones.ToHashSet(StringComparer.Ordinal);
+        var changed = false;
+        foreach (var bone in bones)
+            if (!string.IsNullOrEmpty(bone))
+                changed |= excluded ? set.Add(bone) : set.Remove(bone);
+        return changed ? doc with { ExcludedBones = [.. set.Order(StringComparer.Ordinal)] } : doc;
+    }
+
+    /// <summary>Leaves exactly <paramref name="bones"/> out of the saved animation, sorted.</summary>
+    public static TimelineDocument ExcludeOnly(TimelineDocument doc, IEnumerable<string> bones)
+    {
+        ImmutableArray<string> sorted = [.. bones.Where(bone => !string.IsNullOrEmpty(bone)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
+        return sorted.SequenceEqual(doc.ExcludedBones, StringComparer.Ordinal) ? doc : doc with { ExcludedBones = sorted };
+    }
+
     public static TimelineDocument Remove(TimelineDocument doc, string key) =>
         IndexOf(doc, key) is var index and >= 0 ? doc with { Motion = doc.Motion.RemoveAt(index) } : doc;
 

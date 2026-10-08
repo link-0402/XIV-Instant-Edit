@@ -27,10 +27,34 @@ internal sealed class AnimationCatalog
     private static readonly ImmutableHashSet<ushort> ExplicitIdleIds =
         [3, 3124, 3126, 3182, 3184, 7405, 7407, 642, 643, 653, 654, 3136, 3138, 3171,
             3132, 3134, 8002, 8004, 585, 3140, 3142, 7367, 8063, 8066, 8068];
-    private static readonly ImmutableHashSet<ushort> ExplicitWalkIds = [13, 14, 15, 16, 17, 18, 19, 20];
+    /// <summary>
+    /// The normal movement rows (outside battle stance). They share two PAPs: move_a holds the
+    /// forward walk and run, the back walk, sprint and the jump; move_b the side steps and the turns.
+    /// Each row's TMB names the one clip it plays.
+    /// </summary>
+    private static readonly ImmutableDictionary<ushort, string> MovementNames = new Dictionary<ushort, string>
+    {
+        [7] = "Turn Left", [8] = "Turn Right",
+        [13] = "Walk", [14] = "Walk Left", [15] = "Walk Right", [16] = "Walk Back",
+        [22] = "Run", [23] = "Run Left", [24] = "Run Right",
+        [25] = "Run Start", [26] = "Run Start Back Right", [27] = "Run Start Back Left",
+        [30] = "Sprint", [31] = "Jump Start", [32] = "Jump Falling", [33] = "Jump Landing",
+    }.ToImmutableDictionary();
+    private static readonly ImmutableHashSet<string> MovementKeys =
+    [
+        "normal/turn_loop_l", "normal/turn_loop_r", "normal/walk", "normal/walk_l", "normal/walk_r", "normal/walk_b",
+        "normal/run", "normal/run_l", "normal/run_r", "normal/run_start", "normal/run_start_br", "normal/run_start_bl",
+        "normal/sprint", "normal/jump_start", "normal/jump_falling", "normal/jump_landing",
+    ];
 
     internal static bool IsExplicitIdle(ushort id) => ExplicitIdleIds.Contains(id);
-    internal static bool IsExplicitWalk(ushort id) => ExplicitWalkIds.Contains(id);
+    /// <summary>The normal movement rows by name, each playing one clip of the shared movement PAPs.</summary>
+    internal static IReadOnlyDictionary<ushort, string> Movement => MovementNames;
+    internal static bool IsMovement(ushort id) => MovementNames.ContainsKey(id);
+    /// <summary>A movement row's name (Run, Jump Start), or null for any other timeline.</summary>
+    internal static string? MovementName(ushort id) => MovementNames.GetValueOrDefault(id);
+    /// <summary>A timeline that plays one clip of the shared movement PAPs.</summary>
+    internal static bool IsMovement(Timeline timeline) => MovementKeys.Contains(timeline.Key);
 
     public AnimationCatalog(IDataManager data)
     {
@@ -71,8 +95,8 @@ internal sealed class AnimationCatalog
         // Sitting can report either the transition/start row or the loop row:
         // chair sit 642 -> 643, ground sit 653 -> 654.
         foreach (var id in ExplicitIdleIds) { groups.TryAdd(id, [id]); names.TryAdd(id, "Idle"); }
-        // Normal walking can report a directional/start/end row from the same cycle.
-        foreach (var id in ExplicitWalkIds) { groups.TryAdd(id, [id]); names.TryAdd(id, "Walk"); }
+        // Walking, running, sprinting, jumping and turning each report their own row.
+        foreach (var (id, name) in MovementNames) { groups.TryAdd(id, [id]); names.TryAdd(id, name); }
         foreach (var (id, family) in groups)
             if (sheet.TryGetRow(id, out var row) && !row.Key.IsEmpty)
                 timelines[id] = new Timeline(id, row.Key.ExtractText(), names[id], row.LoadType, row.IsLoop,
@@ -82,7 +106,7 @@ internal sealed class AnimationCatalog
     private static ImmutableArray<string> PapKeys(Timeline timeline) => timeline.Key switch
     {
         "normal/idle" => ["resident/idle"],
-        _ when timeline.Key.StartsWith("normal/walk", StringComparison.Ordinal) => ["resident/move_a", "resident/move_b"],
+        _ when IsMovement(timeline) => ["resident/move_a", "resident/move_b"],
         _ => [timeline.Key],
     };
 

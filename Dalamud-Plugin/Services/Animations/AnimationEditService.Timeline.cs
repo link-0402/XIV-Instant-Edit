@@ -235,9 +235,10 @@ internal sealed partial class AnimationEditService
     /// <paramref name="motionFrames"/> are facial motions' own lengths (see <see cref="TimelineConvert.Apply"/>).
     /// </summary>
     public void PreviewTimeline(AnimationTimelineSource source, TimelineDocument document,
-        Func<AnimationTimelineBuild, CancellationToken, Task<string>> show, IReadOnlyDictionary<string, int>? motionFrames = null) => Launch(async token =>
+        Func<AnimationTimelineBuild, CancellationToken, Task<string>> show, IReadOnlyDictionary<string, int>? motionFrames = null,
+        SkeletonStandard? repair = null) => Launch(async token =>
     {
-        var request = TimelineRequest(source, document, AnimationDestination.NewMod, "");
+        var request = TimelineRequest(source, document, AnimationDestination.NewMod, "", repair);
         // A preview is never journaled, so a length change bakes in a folder of its own.
         var work = Path.Combine(Path.GetTempPath(), "XIV Instant Edit timeline preview", request.Id.ToString("N"));
         try
@@ -259,20 +260,23 @@ internal sealed partial class AnimationEditService
     /// <paramref name="beside"/> names as a copy of another (see <see cref="TimelineImport.Beside"/>)
     /// is mapped wherever that file is instead, when the animation's mod is what provides it.
     /// <paramref name="motionFrames"/> are facial motions' own lengths (see <see cref="TimelineConvert.Apply"/>).
+    /// The document's excluded bones lose their tracks, and with <paramref name="repair"/> the motion is
+    /// retargeted onto that standard skeleton, as the old rebakes did, in the same bake.
     /// </summary>
     /// <returns>The job's id, which <see cref="LastResult"/> carries once it ends; null when another job is running.</returns>
     public Guid? EditTimeline(AnimationTimelineSource source, TimelineDocument document, AnimationDestination destination,
         string modName, IReadOnlyDictionary<string, byte[]> added, IReadOnlyDictionary<string, string>? beside = null,
-        IReadOnlyDictionary<string, int>? motionFrames = null)
+        IReadOnlyDictionary<string, int>? motionFrames = null, SkeletonStandard? repair = null)
     {
         if (Busy) return null;
-        var request = TimelineRequest(source, document, destination, modName.Trim());
+        var request = TimelineRequest(source, document, destination, modName.Trim(), repair);
         Launch(async token =>
         {
             if (destination == AnimationDestination.NewMod && !PenumbraService.IsSafeNewModName(request.ModName))
                 throw new InvalidDataException("Choose a valid mod name before saving.");
             if (source.Document == null) throw new InvalidOperationException(source.ReadOnlyReason ?? "This timeline can't be edited.");
             var capture = request.Capture;
+            CheckBones(request, source);
             await CheckActorAsync(capture, false);
             // The file must still be the one the editor loaded, or the edit would drop newer work.
             await resources.CheckAsync(capture.CollectionId, [source.Resource], token);
@@ -286,7 +290,7 @@ internal sealed partial class AnimationEditService
             var (files, reused, owners) = await AddedFilesAsync(capture, destination, source.Resource, added, beside, token);
             var outputs = ImmutableDictionary<string, byte[]>.Empty.Add(built.GamePath, built.Bytes);
             // The motion the layers were baked onto goes with the journal, so the edit can be opened again.
-            var motionBase = MotionBase(source, document, manifest.Files[edited]);
+            var motionBase = MotionBase(source, document, manifest.Files[edited], request.RepairTarget);
             var journaled = motionBase == null ? request
                 : request with { Timeline = request.Timeline! with { MotionBaseHash = AnimationPap.Hash(motionBase) } };
             var journal = await commits.PrepareAsync(journaled, manifest, outputs, token,
@@ -302,7 +306,7 @@ internal sealed partial class AnimationEditService
             await commits.CommitAsync(journal, manifest, async () =>
             {
                 await CheckActorAsync(capture, false);
-                if (ChangesMotion(document)) await resources.CheckSkeletonsAsync(capture, [source.Clip], token);
+                if (AnimationBakeRules.ChangesMotion(document, request.RepairTarget)) await resources.CheckSkeletonsAsync(capture, [source.Clip], token);
                 await framework.RunOnFrameworkThread(() => CheckIdentityOnFramework(capture, false));
             }, message =>
             {
@@ -322,18 +326,37 @@ internal sealed partial class AnimationEditService
                 await framework.RunOnFrameworkThread(() => Observer.UpdateSources(capture.Id, updated));
             }
             journal.State = "Completed"; journal.PoseClearOutcome = "NotApplicable";
-            journal.Message = document.MotionChanged ? "Animation saved." : "Timeline saved.";
+            journal.Message = AnimationBakeRules.ChangesMotion(document, request.RepairTarget) ? "Animation saved." : "Timeline saved.";
             journals.Save(journal); Status = journal.Message;
         }, request.Id, source.Clip);
         return request.Id;
     }
 
-    private static AnimationBakeRequest TimelineRequest(AnimationTimelineSource source, TimelineDocument document,
-        AnimationDestination destination, string modName)
+    internal static AnimationBakeRequest TimelineRequest(AnimationTimelineSource source, TimelineDocument document,
+        AnimationDestination destination, string modName, SkeletonStandard? repair = null)
         => new(Guid.NewGuid(), source.Capture, destination, modName, false, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None,
             AnimationOperation.EditTimeline,
+            ExcludedBones: source.Standalone ? [] : document.ExcludedBones,
+            RepairTarget: source.Standalone ? null : repair,
             Timeline: new AnimationTimelineEdit(source.Startup, source.EntryIndex, RetimeSeconds(document),
                 document.MotionChanged ? document.Motion : []));
+
+    /// <summary>
+    /// Refuses bones left out or a repair the clip can't take: as the old rebakes refused them, before
+    /// anything is read.
+    /// </summary>
+    private static void CheckBones(AnimationBakeRequest request, AnimationTimelineSource source)
+    {
+        if (request.ExcludedBones.IsEmpty && request.RepairTarget == null)
+            return;
+        if (source.Standalone)
+            throw new InvalidOperationException("An expression's face keeps every bone.");
+        var clip = source.Clip;
+        if (AnimationBones.Problem(clip, request.ExcludedBones) is { } exclusion)
+            throw new InvalidDataException(exclusion);
+        if (request.RepairTarget is { } target && AnimationBones.Standard(clip, target) == null)
+            throw new InvalidOperationException($"No {AnimationBones.StandardName(target)} skeleton was found for this animation.");
+    }
 
     /// <summary>
     /// How long the motion becomes, in seconds; null when the length stays. The document's length is
@@ -342,8 +365,8 @@ internal sealed partial class AnimationEditService
     internal static float? RetimeSeconds(TimelineDocument document) =>
         document.LengthChanged ? document.Length / (float)TimelineDocument.Fps : null;
 
-    /// <summary>Whether saving <paramref name="document"/> bakes the motion: a new length, or bone layers that change it.</summary>
-    internal static bool ChangesMotion(TimelineDocument document) => document.LengthChanged || document.MotionChanged;
+    /// <summary>Whether saving <paramref name="document"/> bakes the motion: a new length, bone layers that change it, or bones left out.</summary>
+    internal static bool ChangesMotion(TimelineDocument document) => AnimationBakeRules.ChangesMotion(document);
 
     /// <summary>The file beside a journal that holds the motion its edit's bone layers were baked onto.</summary>
     internal const string MotionBaseName = "motion-base.pap";
@@ -351,10 +374,10 @@ internal sealed partial class AnimationEditService
     /// <summary>
     /// The file whose motion saving <paramref name="document"/> bakes its layers onto: the base the window
     /// keeps, else <paramref name="file"/>, the clip's file as it is. Null when the save bakes no layers, or
-    /// a new length too, which bakes them in for good.
+    /// a new length, bones left out or a repair too, which bake them in for good.
     /// </summary>
-    internal static byte[]? MotionBase(AnimationTimelineSource source, TimelineDocument document, byte[] file) =>
-        source.Standalone || !document.MotionChanged || document.LengthChanged ? null : source.BaseMotion ?? file;
+    internal static byte[]? MotionBase(AnimationTimelineSource source, TimelineDocument document, byte[] file, SkeletonStandard? repair = null) =>
+        source.Standalone || !document.MotionChanged || AnimationBakeRules.BakesLayersIn(document, repair) ? null : source.BaseMotion ?? file;
 
     /// <summary>Keeps the motion beside the journal. Without it the edit still saves; it just can't be opened again.</summary>
     private void KeepMotionBase(Guid id, byte[] motion)
@@ -377,6 +400,8 @@ internal sealed partial class AnimationEditService
         { State: "Undone" or "FilesUndone" } => "This edit was undone.",
         { State: not "Completed" } => "This edit did not finish.",
         { Request.Timeline.DurationSeconds: not null } => "This edit changed the length, which baked its layers in for good.",
+        { Request.ExcludedBones.IsEmpty: false } or { Request.RepairTarget: not null } =>
+            "This edit left out bones or repaired the skeleton, which baked its layers in for good.",
         { Request.Timeline.MotionBaseHash: null } => "This edit kept no copy of the motion from before it.",
         _ => null,
     };
@@ -441,7 +466,7 @@ internal sealed partial class AnimationEditService
         // With a base (the file before the window saved layers into it) the motion comes from the base:
         // a bake applies the layers to it again, and with nothing to bake its own motion comes back.
         var motion = source.BaseMotion ?? pap;
-        var baked = ChangesMotion(document);
+        var baked = AnimationBakeRules.ChangesMotion(document, request.RepairTarget);
         if (baked)
         {
             native.EnsureAvailable();
@@ -449,6 +474,9 @@ internal sealed partial class AnimationEditService
                 throw new InvalidOperationException(clip.Resolution?.Reason ?? (document.LengthChanged
                     ? "Choose the skeleton this animation was made for before changing its length."
                     : "Choose the skeleton this animation was made for before changing its motion."));
+            // Layers on bones the standard lacks would be lost without a word.
+            if (document.MotionChanged && request.RepairTarget is { } target && AnimationBones.Standard(clip, target) is { } standard)
+                MotionEvaluator.CheckBones(document.Motion, standard.Skeleton);
             await resources.CheckSkeletonsAsync(request.Capture, [clip], token);
             var skeleton = (await resources.ReadSkeletonAsync(request.Capture.CollectionId, selected.Source, token)).Bytes;
             Directory.CreateDirectory(workDirectory);

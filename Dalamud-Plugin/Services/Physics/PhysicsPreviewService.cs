@@ -33,6 +33,7 @@ internal sealed class PhysicsPreviewService : IDisposable
     private const string RecordFile = "PhysicsPreview.json";
     private const int VerifyAttempts = 10;
     private static readonly TimeSpan VerifyDelay = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan RedrawSettle = TimeSpan.FromMilliseconds(1500);
     private static readonly TimeSpan StaleAge = TimeSpan.FromHours(24);
     private static readonly Regex SessionName = new("^[0-9a-f]{16}$", RegexOptions.CultureInvariant);
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
@@ -160,7 +161,10 @@ internal sealed class PhysicsPreviewService : IDisposable
                 TryDelete(Path.Combine(sessionFolder, older));
             if (oldSession != null && !sameSession)
                 TryDelete(oldSession);
-            return await penumbra.RedrawObjectAsync(objectIndex).ConfigureAwait(false);
+            log.Information($"Physics preview {next} registered in {collection.Name} at {gamePath}.");
+            if (await penumbra.RedrawObjectAsync(objectIndex).ConfigureAwait(false) is { } redraw)
+                return redraw;
+            return await KeepAfterRedrawAsync(objectIndex, collection.Id, gamePath, file, bytes.Length, linked.Token).ConfigureAwait(false);
         }
         finally
         {
@@ -216,6 +220,36 @@ internal sealed class PhysicsPreviewService : IDisposable
                 throw new IOException("Penumbra did not use the preview. Check that mods are enabled.");
             await Task.Delay(VerifyDelay, life.Token).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Once the redraw has had time to load, checks that Penumbra still serves the preview. If something
+    /// switched the path back meanwhile (a mod reloaded by another plugin, say), the preview is added
+    /// again and the character redrawn once more. Returns a warning when it still loses, naming the file
+    /// that wins, and logs what it found either way.
+    /// </summary>
+    private async Task<string?> KeepAfterRedrawAsync(int objectIndex, Guid collection, string gamePath, string file, int size, CancellationToken token)
+    {
+        await Task.Delay(RedrawSettle, token).ConfigureAwait(false);
+        var resolved = (await penumbra.ResolveCollectionPathsAsync(collection, [gamePath]).ConfigureAwait(false))[0];
+        if (PathRules.SamePhysicalPath(resolved, file))
+        {
+            log.Information($"Physics preview still served after the redraw ({size} bytes).");
+            return null;
+        }
+        log.Warning($"Physics preview lost after the redraw: Penumbra resolves {gamePath} to {resolved ?? "nothing"} instead of {file}. Adding it again.");
+        var added = await framework.RunOnFrameworkThread(() =>
+            penumbra.AddTemporaryModOnFramework(Tag, collection, new Dictionary<string, string> { [gamePath] = file }, Priority)).ConfigureAwait(false);
+        if (added != PenumbraApiEc.Success)
+            return $"Penumbra dropped the preview after the redraw and could not add it again ({added}).";
+        try { await VerifyAsync(collection, gamePath, file).ConfigureAwait(false); }
+        catch (IOException)
+        {
+            var winner = (await penumbra.ResolveCollectionPathsAsync(collection, [gamePath]).ConfigureAwait(false))[0];
+            log.Warning($"Physics preview still loses to {winner ?? "nothing"}.");
+            return $"Penumbra uses {Path.GetFileName(winner) ?? "another file"} instead of the preview. Turn your physics mod off and preview again.";
+        }
+        return await penumbra.RedrawObjectAsync(objectIndex).ConfigureAwait(false);
     }
 
     private Task<(bool Gone, string? Error)> RemoveAsync(PhysicsPreviewRecord current)

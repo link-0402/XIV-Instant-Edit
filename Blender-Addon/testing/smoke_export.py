@@ -1318,8 +1318,8 @@ def run() -> None:
             raise AssertionError("Calculate Heels Offset should default to disabled")
         if not bpy.context.scene.xiv_ie_settings.simple_import_set_export_directory:
             raise AssertionError("Set Simple Export Folder on Import should default to enabled")
-        if not bpy.context.scene.xiv_ie_settings.resolve_mesh_group_conflicts:
-            raise AssertionError("Offset Incoming Mesh Group IDs should default to enabled")
+        if bpy.context.scene.xiv_ie_settings.resolve_mesh_group_conflicts:
+            raise AssertionError("Offset Clashing Mesh IDs should default to disabled")
         bpy.context.scene.xiv_ie_settings.keep_shapekeys = True
         settings = bpy.context.scene.xiv_ie_settings
         settings.simple_import_armature = "EXISTING"

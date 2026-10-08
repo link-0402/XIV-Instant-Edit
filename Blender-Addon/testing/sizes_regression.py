@@ -262,10 +262,11 @@ def fake_api(version: int = 1):
         if progress is not None:
             progress(0.5)
             progress(1.0)
+        picks = api.picks if sizes is None else [(size.name, size.now) for size in sizes]
         # Every size but the body's own shows the mesh's Medium key.
         return [FakeSized(name, FakeSize(name, now), {obj: None if now else "Medium" for obj in target},
                           ["Resized in 0.1 s"] if index == 0 else [])
-                for index, (name, now) in enumerate(api.picks)]
+                for index, (name, now) in enumerate(picks)]
 
     api.picked_sizes = picked_sizes
     api.resize_collection = resize_collection
@@ -529,8 +530,112 @@ def run_magic_fit(addon, root: Path) -> None:
         sys.path[:] = [path for path in sys.path if path not in (str(root), str(root / "tests"))]
 
 
+# ---- Exports from the same copies ---------------------------------------------------------------
+
+
+def _vertex_streams(addon, path: Path) -> list[dict]:
+    """Each LOD 0 mesh's vertex streams of an exported model: {stream: structured array}."""
+    model_module = importlib.import_module(f"{addon.__name__}.xivpy.model")
+    schema = importlib.import_module(f"{addon.__name__}.io.model.com.schema")
+    model = model_module.XIVModel.from_file(str(path))
+    meshes = []
+    for index, mesh in enumerate(model.meshes[:model.lods[0].mesh_count]):
+        types = schema.get_array_type(model.vertex_declarations[index])
+        meshes.append({stream: np.frombuffer(model.buffers, array_type, mesh.vertex_count,
+                                             mesh.vertex_buffer_offset[stream])
+                       for stream, array_type in types.items()})
+    return meshes
+
+
+def _sphere(armature, name: str):
+    """A UV sphere to export: UV seams, a sharp ring, a size key and a kept shp key, moved and turned."""
+    mesh = bpy.data.meshes.new(name)
+    work = bmesh.new()
+    work.loops.layers.uv.new("uv0")
+    bmesh.ops.create_uvsphere(work, u_segments=16, v_segments=8, radius=0.3, calc_uvs=True)
+    work.to_mesh(mesh)
+    work.free()
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    _make_exportable(obj, armature, name)
+    obj.data.shade_smooth()
+    for edge in obj.data.edges:
+        co = (obj.data.vertices[edge.vertices[0]].co + obj.data.vertices[edge.vertices[1]].co) / 2
+        edge.use_edge_sharp = abs(co.z) < 1e-4
+    obj.location = (0.1, 0.2, 0.05)
+    obj.rotation_euler = (0.0, 0.0, 0.5)
+    obj.shape_key_add(name="Basis", from_mix=False)
+    co = _positions(obj)
+    for key_name, offset in (("Size", co * (0.15, 0.05, 0.1)), ("shp_test", co * (0.0, 0.0, 0.2))):
+        key = obj.shape_key_add(name=key_name, from_mix=False)
+        key.value = 0.0
+        key.data.foreach_set("co", (co + offset).astype(np.float32).ravel())
+    return obj
+
+
+def run_shape_exports(addon) -> None:
+    export = importlib.import_module(f"{addon.__name__}.mesh.export")
+    settings = bpy.context.scene.xiv_ie_settings
+    settings.model_format = "MDL"
+    settings.keep_shapekeys = True
+    armature = _rig("ShapesSkeleton")
+    obj = _sphere(armature, "0.0 Sphere")
+    size = obj.data.shape_keys.key_blocks["Size"]
+    kept = obj.data.shape_keys.key_blocks["shp_test"]
+    kept.value = 0.4
+
+    def both(folder: Path, label: str) -> list[tuple[Path, Path]]:
+        """Each shape written through ShapeExports and by a fresh export."""
+        pairs = []
+        with export.ShapeExports([obj], "MDL") as exports:
+            _require(exports.copies is not None and obj.name == "0.0 Sphere" and not obj.hide_get() and
+                     abs(kept.value - 0.4) < 1e-6,
+                     f"{label}: the copies are made once and the mesh keeps its name, visibility and keys",
+                     f"{exports.copies is not None}, {obj.name}, {obj.hide_get()}, {kept.value}")
+            for value in (0.0, 1.0, 0.5):
+                size.value = value
+                exports.write(folder / f"fast {label} {value}")
+        for value in (0.0, 1.0, 0.5):
+            size.value = value
+            export.export_result(folder / f"full {label} {value}", "MDL", export_objects=[obj])
+            pairs.append((folder / f"full {label} {value}.mdl", folder / f"fast {label} {value}.mdl"))
+        size.value = 0.0
+        return pairs
+
+    with tempfile.TemporaryDirectory(prefix="xiv-ie-shape-exports-") as folder:
+        folder = Path(folder)
+        pairs = both(folder, "plain")
+        _require(all(full.read_bytes() == fast.read_bytes() for full, fast in pairs),
+                 "exports from the same copies are byte for byte fresh exports of each shape")
+        _require(obj.name == "0.0 Sphere" and abs(kept.value - 0.4) < 1e-6 and size.value == 0.0 and
+                 not [item.name for item in bpy.data.objects if item.name.startswith(("xiv_ie_size_copy",
+                                                                                      "temp_export"))],
+                 "afterwards the copies are gone and the mesh is as it was")
+
+        # Custom normals are set again on the split copies: the normals come out within 0.001.
+        normals = np.empty(len(obj.data.loops) * 3, dtype=np.float32)
+        obj.data.corner_normals.foreach_get("vector", normals)
+        normals = normals.reshape(-1, 3) + (0.05, 0.0, 0.0)
+        obj.data.normals_split_custom_set(normals / np.linalg.norm(normals, axis=1)[:, None])
+        worst = {}
+        for full, fast in both(folder, "custom"):
+            for a, b in zip(_vertex_streams(addon, full), _vertex_streams(addon, fast)):
+                for stream in a:
+                    for field in a[stream].dtype.names:
+                        difference = np.abs(a[stream][field].astype(np.float64) -
+                                            b[stream][field].astype(np.float64)).max()
+                        worst[field] = max(worst.get(field, 0.0), float(difference))
+        _require(worst["position"] == 0.0 and worst["normal"] < 1e-3 and worst["tangent"] <= 1 and
+                 all(value == 0.0 for field, value in worst.items()
+                     if field not in ("position", "normal", "tangent")),
+                 "with custom normals, only normals and tangents differ, and barely", str(worst))
+    settings.keep_shapekeys = False
+
+
 def run() -> None:
     with addon_session("_xiv_instant_edit_sizes") as addon:
+        with temporary_scene_data():
+            run_shape_exports(addon)
         with temporary_scene_data():
             run_stand_in(addon)
         root = _magic_fit_root()

@@ -282,7 +282,7 @@ public sealed partial class TimelineWindow
     private static bool Matches(TimelineCatalogItem item, string filter) =>
         filter.Length == 0 ||
         item.Label.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-        item.Detail.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+        item.Sources.Any(source => source.Contains(filter, StringComparison.OrdinalIgnoreCase)) ||
         item.Path.Contains(filter, StringComparison.OrdinalIgnoreCase);
 
     /// <summary> The rows in view only; returns true when one was picked and placed. </summary>
@@ -304,15 +304,19 @@ public sealed partial class TimelineWindow
                     var item = rows[index];
                     using var id = ImRaii.PushId(index);
                     var clicked = ImGui.Selectable(item.Label);
+                    // Of the libraries that hold a face, the timeline's own when it is one of them.
+                    var pack = TimelineWindowViews.PackFor(item.Packs, current.Document.FacePack);
                     if (ImGui.IsItemHovered() && item.Path.Length > 0)
-                        ImGui.SetTooltip(item.Pack is { } pack ? $"{item.Path}\nNeeds the {pack} expressions." : item.Path);
+                        ImGui.SetTooltip(pack == null ? item.Path
+                            : string.Equals(pack, current.Document.FacePack, StringComparison.OrdinalIgnoreCase) ? $"{item.Path}\nFrom this timeline's {pack} expressions."
+                            : $"{item.Path}\nNeeds the {pack} expressions.");
                     if (item.Detail.Length > 0)
                     {
                         ImGui.SameLine(0, Theme.Gap);
                         ImGui.TextColored(Theme.Muted, item.Detail);
                     }
                     if (clicked && !picked)
-                        picked = Place(current, pickerKind, pickerFrame, pickerTarget, item.Path, item.Pack, item.Prop, item.Frames ?? 0);
+                        picked = Place(current, pickerKind, pickerFrame, pickerTarget, item.Path, pack, item.Prop, item.Frames ?? 0);
                 }
             clipper.End();
         }
@@ -377,7 +381,9 @@ public sealed partial class TimelineWindow
             current.Replace(ev with { Values = values });
             return true;
         }
-        var facePack = TimelineWindowViews.PackAfter(doc.FacePack, pack, out var error);
+        // The face being swapped out no longer holds the library.
+        var facePack = TimelineWindowViews.PackAfter(doc.FacePack, pack, out var error,
+            TimelineEdits.UsesPack(doc, current.ResidentMotions, except: key));
         if (error != null)
         {
             pickerError = error;

@@ -20,7 +20,6 @@ internal sealed partial class PhysicsWindow
         var collision = current.File.Collision;
         Widgets.SectionHeader("Collision shapes", "areas bump into the ones they tick");
         Widgets.MutedWrapped("Sizes and places are in centimetres, in the space of the bone each end sits on.");
-        DrawFitButton(current, small: true);
         ImGui.Spacing();
         for (var i = 0; i < collision.Capsules.Count; i++)
         {
@@ -55,10 +54,11 @@ internal sealed partial class PhysicsWindow
     private bool ShapeHeader(PhysicsDocument current, string name, string detail, Action remove)
     {
         ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Text, name);
+        ImGui.TextColored(Theme.Text, PhysicsShapeNames.Label(current.File.Collision, name, target?.Character.Skeleton));
         ImGui.SameLine(0, Theme.Gap);
         ImGui.TextColored(Theme.Muted, detail);
-        var users = current.File.Simulators.Where(s => UsesShape(s, name)).Select(s => PhysicsAreas.Classify(s).Label).Distinct().ToList();
+        var labels = PhysicsAreas.Labels(current.File);
+        var users = Enumerable.Range(0, current.File.Simulators.Count).Where(s => UsesShape(current.File.Simulators[s], name)).Select(s => labels[s]).ToList();
         ImGui.SameLine(0, Theme.Gap);
         ImGui.TextColored(users.Count == 0 ? Theme.Hint : Theme.Label, users.Count == 0 ? "unused" : $"used by {string.Join(", ", users)}");
         if (users.Count > 0)

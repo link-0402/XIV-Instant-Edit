@@ -36,7 +36,7 @@ public sealed partial class TimelineWindow
             current.Redo();
 
         ImGui.SameLine(0, Theme.Scaled(12));
-        if (Widgets.IconButton("##timeline-add", FontAwesomeIcon.Plus, "Add an expression, lip sync, sound, effect or prop at the playhead, or a bone layer", !readOnly))
+        if (Widgets.IconButton("##timeline-add", FontAwesomeIcon.Plus, "Add an expression, lip sync, sound, effect or prop at the playhead, a bone layer, or your LivePose adjustments", !readOnly))
             ImGui.OpenPopup(AddMenu);
         DrawAddMenu(current);
         ImGui.SameLine(0, Theme.Scaled(2));
@@ -59,6 +59,8 @@ public sealed partial class TimelineWindow
                     : "Open the Bones window: pick bones on a body map and pose them in the selected bone layer."))
                 ToggleBones();
         }
+        ImGui.SameLine(0, Theme.Scaled(2));
+        DrawLoadButton();
 
         ImGui.SameLine(0, Theme.Scaled(12));
         ImGui.AlignTextToFramePadding();
@@ -124,6 +126,10 @@ public sealed partial class TimelineWindow
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(TimelineWindowViews.LayerKindHint(kind) + " Covers the whole clip; drag its ends to narrow it.");
         }
+        if (source == null)
+            return;
+        ImGui.Separator();
+        DrawLivePoseItems(source);
     }
 
     /// <summary> One line each for an import running or done, an edit the editor refused and a header length the motion disagrees with. </summary>
@@ -150,6 +156,8 @@ public sealed partial class TimelineWindow
         }
         if (current.LastError is { } error)
             Note(null, Theme.Warning, error);
+        DrawLoaderStatus();
+        DrawLivePoseNote();
         DrawEffectProblems(current);
         DrawSavedLayers();
     }

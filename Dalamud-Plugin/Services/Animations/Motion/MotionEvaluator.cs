@@ -112,12 +112,14 @@ internal static class MotionEvaluator
     /// <summary>
     /// Applies the active layers to <paramref name="clip"/> in place, in order, each to the motion the
     /// ones before it made, then keeps every bone's rotation on its previous sample's hemisphere.
+    /// On a looping clip, layers covering it wrap their keys round (<see cref="Wraps"/>).
     /// Throws for a layer naming a bone the clip's skeleton does not have.
     /// </summary>
     public static void Apply(MotionClip clip, IReadOnlyList<MotionLayer> layers, CancellationToken token = default)
     {
         Validate(layers);
         var index = Index(clip.Skeleton);
+        var loop = clip.Loops ? clip.Frame(clip.Samples - 1) : 0;
         foreach (var layer in layers)
         {
             token.ThrowIfCancellationRequested();
@@ -127,13 +129,13 @@ internal static class MotionEvaluator
             switch (layer.Kind)
             {
                 case MotionLayerKind.Offset:
-                    ApplyOffset(clip, layer, Tracks(layer, index, mask, false), token);
+                    ApplyOffset(clip, layer, Tracks(layer, index, mask, false), WrapOf(layer, loop), token);
                     break;
                 case MotionLayerKind.Amplitude:
                     ApplyAmplitude(clip, layer, (IReadOnlyCollection<int>?)mask ?? Enumerable.Range(0, clip.Bones).ToArray(), token);
                     break;
                 case MotionLayerKind.Pose:
-                    ApplyPose(clip, layer, Tracks(layer, index, mask, false), Tracks(layer, index, mask, true), token);
+                    ApplyPose(clip, layer, Tracks(layer, index, mask, false), Tracks(layer, index, mask, true), WrapOf(layer, loop), token);
                     break;
             }
         }
@@ -166,10 +168,22 @@ internal static class MotionEvaluator
     }
 
     /// <summary>
-    /// A bone's keyed value at <paramref name="frame"/>: between two keys it goes the earlier key's way
-    /// (<see cref="KeyEase"/>), before the first and after the last it holds. Null when no key has the bone.
+    /// Whether <paramref name="layer"/>'s keys wrap around a loop <paramref name="loop"/> frames long (0 for
+    /// a clip that plays once): the layer covers the whole loop, so after its last key each bone goes back
+    /// toward its first key, which comes round again one loop later. The loop's last frame then matches its
+    /// first, and the motion doesn't jump each time it starts over.
     /// </summary>
-    public static MotionTransform? KeyValue(MotionLayer layer, string bone, float frame)
+    public static bool Wraps(MotionLayer layer, float loop) => loop > 0 && layer.Start < 1 && layer.End > loop - 1;
+
+    /// <summary>The loop length <see cref="Sample"/> wraps <paramref name="layer"/>'s keys around: <paramref name="loop"/> when it wraps, else 0.</summary>
+    private static float WrapOf(MotionLayer layer, float loop) => Wraps(layer, loop) ? loop : 0;
+
+    /// <summary>
+    /// A bone's keyed value at <paramref name="frame"/>: between two keys it goes the earlier key's way
+    /// (<see cref="KeyEase"/>), before the first and after the last it holds, or on a loop the layer
+    /// covers (<see cref="Wraps"/>) goes the last key's way round to the first. Null when no key has the bone.
+    /// </summary>
+    public static MotionTransform? KeyValue(MotionLayer layer, string bone, float frame, float loop = 0)
     {
         var frames = new List<int>();
         var values = new List<MotionTransform>();
@@ -181,7 +195,7 @@ internal static class MotionEvaluator
                 values.Add(Normalized(MotionTransform.From(value)));
                 curves.Add(CurveOf(layer, key));
             }
-        return frames.Count == 0 ? null : Sample(frames.ToArray(), values.ToArray(), curves.ToArray(), frame);
+        return frames.Count == 0 ? null : Sample(frames.ToArray(), values.ToArray(), curves.ToArray(), frame, WrapOf(layer, loop));
     }
 
     /// <summary>How the bones go from <paramref name="key"/> to their next keys: its own way, else the layer's.</summary>
@@ -203,10 +217,18 @@ internal static class MotionEvaluator
 
     /// <summary>
     /// The value at <paramref name="frame"/> on a bone's keys (frames ascending, at least one), each
-    /// stretch between two keys following the earlier key's curve (null holds it).
+    /// stretch between two keys following the earlier key's curve (null holds it). With a
+    /// <paramref name="loop"/> length, the stretch past the last key runs on its curve to the first key
+    /// one loop later, and frames before the first key are the end of that stretch.
     /// </summary>
-    internal static MotionTransform Sample(int[] frames, MotionTransform[] values, MotionCurve?[] curves, float frame)
+    internal static MotionTransform Sample(int[] frames, MotionTransform[] values, MotionCurve?[] curves, float frame, float loop = 0)
     {
+        if (frames.Length > 1 && loop > 0 && frames[^1] - frames[0] < loop && (frame < frames[0] || frame > frames[^1]))
+        {
+            var since = frame > frames[^1] ? frame - frames[^1] : frame + loop - frames[^1];
+            var across = curves[^1] is { } wrap ? wrap.Ease(since / (frames[0] + loop - frames[^1])) : 0;
+            return Lerp(values[^1], values[0], across);
+        }
         if (frames.Length == 1 || frame <= frames[0])
             return values[0];
         if (frame >= frames[^1])
@@ -311,7 +333,7 @@ internal static class MotionEvaluator
         }
     }
 
-    private static void ApplyOffset(MotionClip clip, MotionLayer layer, Dictionary<int, Track> tracks, CancellationToken token)
+    private static void ApplyOffset(MotionClip clip, MotionLayer layer, Dictionary<int, Track> tracks, float loop, CancellationToken token)
     {
         if (tracks.Count == 0)
             return;
@@ -337,7 +359,7 @@ internal static class MotionEvaluator
                 var parentModel = parent >= 0 ? model[parent] : Quaternion.Identity;
                 if (tracks.TryGetValue(b, out var track))
                 {
-                    local = OffsetBone(local, parentModel, Sample(track.Frames, track.Values, track.Curves, frame), strength, rotate, move, scale);
+                    local = OffsetBone(local, parentModel, Sample(track.Frames, track.Values, track.Curves, frame, loop), strength, rotate, move, scale);
                     clip.Set(i, b, local);
                 }
                 model[b] = parent >= 0 ? Quaternion.Normalize(parentModel * local.Rotation) : Quaternion.Normalize(local.Rotation);
@@ -376,10 +398,12 @@ internal static class MotionEvaluator
     /// One pose with the offset and pose layers applied at <paramref name="frame"/>, in order, the way
     /// <see cref="Apply"/> applies them to a sample there. Amplitudes are left out: they scale motion
     /// around its average over their section, which one pose does not have. The Bones window turns
-    /// bones in the space the layers leave the bones above them in. Throws for a layer naming a bone
-    /// the skeleton does not have.
+    /// bones in the space the layers leave the bones above them in. <paramref name="loop"/> is the
+    /// clip's length in frames when it loops, else 0. Throws for a layer naming a bone the skeleton
+    /// does not have.
     /// </summary>
-    public static MotionTransform[] ApplyAt(SkeletonDescription skeleton, ReadOnlySpan<MotionTransform> local, IReadOnlyList<MotionLayer> layers, float frame)
+    public static MotionTransform[] ApplyAt(SkeletonDescription skeleton, ReadOnlySpan<MotionTransform> local, IReadOnlyList<MotionLayer> layers,
+        float frame, float loop = 0)
     {
         if (local.Length != skeleton.Bones.Length)
             throw new InvalidDataException("The pose does not match the skeleton.");
@@ -394,6 +418,7 @@ internal static class MotionEvaluator
             var move = layer.Components.HasFlag(PoseComponents.Position);
             var scale = layer.Components.HasFlag(PoseComponents.Scale);
             var mask = Mask(layer, index);
+            var wrap = WrapOf(layer, loop);
             if (layer.Kind == MotionLayerKind.Offset)
             {
                 var strength = Fade(layer, frame) * layer.Amount;
@@ -406,7 +431,7 @@ internal static class MotionEvaluator
                     var parent = skeleton.Bones[b].Parent;
                     var parentModel = parent >= 0 ? model[parent] : Quaternion.Identity;
                     if (tracks.TryGetValue(b, out var track))
-                        pose[b] = OffsetBone(pose[b], parentModel, Sample(track.Frames, track.Values, track.Curves, frame), strength, rotate, move, scale);
+                        pose[b] = OffsetBone(pose[b], parentModel, Sample(track.Frames, track.Values, track.Curves, frame, wrap), strength, rotate, move, scale);
                     model[b] = parent >= 0 ? Quaternion.Normalize(parentModel * pose[b].Rotation) : Quaternion.Normalize(pose[b].Rotation);
                 }
                 continue;
@@ -416,10 +441,10 @@ internal static class MotionEvaluator
                 continue;
             if (rotate || scale)
                 foreach (var (b, track) in Tracks(layer, index, mask, false))
-                    pose[b] = PoseBone(pose[b], Sample(track.Frames, track.Values, track.Curves, frame), weight, rotate, scale);
+                    pose[b] = PoseBone(pose[b], Sample(track.Frames, track.Values, track.Curves, frame, wrap), weight, rotate, scale);
             if (move)
                 foreach (var (b, track) in Tracks(layer, index, mask, true))
-                    pose[b] = pose[b] with { Position = Vector3.Lerp(pose[b].Position, Sample(track.Frames, track.Values, track.Curves, frame).Position, weight) };
+                    pose[b] = pose[b] with { Position = Vector3.Lerp(pose[b].Position, Sample(track.Frames, track.Values, track.Curves, frame, wrap).Position, weight) };
         }
         return pose;
     }
@@ -485,7 +510,7 @@ internal static class MotionEvaluator
     }
 
     private static void ApplyPose(MotionClip clip, MotionLayer layer, Dictionary<int, Track> tracks, Dictionary<int, Track> positions,
-        CancellationToken token)
+        float loop, CancellationToken token)
     {
         var rotate = layer.Components.HasFlag(PoseComponents.Rotation);
         var move = layer.Components.HasFlag(PoseComponents.Position);
@@ -500,11 +525,11 @@ internal static class MotionEvaluator
                 continue;
             if (rotate || scale)
                 foreach (var (b, track) in tracks)
-                    clip.Set(i, b, PoseBone(clip.Get(i, b), Sample(track.Frames, track.Values, track.Curves, frame), weight, rotate, scale));
+                    clip.Set(i, b, PoseBone(clip.Get(i, b), Sample(track.Frames, track.Values, track.Curves, frame, loop), weight, rotate, scale));
             if (move)
                 foreach (var (b, track) in positions)
                 {
-                    var target = Sample(track.Frames, track.Values, track.Curves, frame);
+                    var target = Sample(track.Frames, track.Values, track.Curves, frame, loop);
                     var value = clip.Get(i, b);
                     clip.Set(i, b, value with { Position = Vector3.Lerp(value.Position, target.Position, weight) });
                 }

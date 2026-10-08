@@ -103,6 +103,13 @@ public sealed partial class TimelineWindow
                 ImGui.TextUnformatted(TimelineWindowViews.KindName(ev.Magic));
                 Fact("Lane");
                 ImGui.TextUnformatted(TimelineWindowViews.LaneName(ev.Lane));
+                if (FromPack(current, ev))
+                {
+                    Fact("Set");
+                    ImGui.TextUnformatted(current.Document.FacePack);
+                    if (ImGui.IsItemHovered())
+                        ImGui.SetTooltip("This face comes from the timeline's expression set. A timeline uses one set.\nIt goes when its last face does.");
+                }
                 DrawTiming(current, ev, editable, movable);
                 DrawPath(current, ev, kind, editable);
                 if (kind != null)

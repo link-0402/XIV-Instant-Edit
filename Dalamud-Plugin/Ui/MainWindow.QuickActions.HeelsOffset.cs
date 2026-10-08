@@ -21,9 +21,8 @@ public sealed partial class MainWindow
     }
 
     private QuickAction HeelsOffsetCard => new("heels-offset", FontAwesomeIcon.ShoePrints, "Heels offset",
-        "Measures how far your shoes reach below the ground and writes the matching Simple Heels offset into their model, so that " +
-        "heels stand on the ground instead of sinking into it. When your gear hides your feet, the legs or one-piece body model that " +
-        "holds them gets the offset.",
+        "Measures the gear your feet stand in: your shoes, or the legs or body gear when it hides them. Writes the Simple Heels " +
+        "offset into that model, so you stand on the ground instead of sinking in or floating.",
         DrawHeelsOffsetAction,
         () => _config.AutoFixHeels = false);
 
@@ -137,8 +136,8 @@ public sealed partial class MainWindow
             var count => $", without {count} parts your outfit hides",
         };
         var checkedAt = result.Automatic ? $" Checked automatically at {result.Time.ToString("HH:mm", CultureInfo.InvariantCulture)}." : "";
-        Widgets.MutedWrapped($"Measured in the standard pose{scaling}{hidden}. Simple Heels scales the offset to your height; " +
-                             $"animations and Customize+ scaling aren't included.{checkedAt}");
+        Widgets.MutedWrapped($"Measured in the standard pose{scaling}{hidden}. Simple Heels scales the offset to your height. " +
+                             $"Animations and Customize+ aren't taken into account.{checkedAt}");
         foreach (var warning in result.Warnings)
             HeelsText(Theme.Warning, warning);
 

@@ -166,7 +166,7 @@ public sealed partial class MainWindow
 
         ImGui.Spacing();
         Widgets.HintWrapped($"Blender keys the clip onto \"{AnimationArmature}\" at its own frame rate. " +
-                            "Physics bones keep their rest pose; use Record live pose in the Animations tab to include them.");
+                            "Physics bones keep their rest pose; use Record in the Timeline window to include them.");
         DrawSendButtons(state, service, skeleton is null ? null : () => service.SendFileToBlender(clip, skeleton, DeliverAnimationAsync));
     }
 
@@ -254,13 +254,7 @@ public sealed partial class MainWindow
         return selected;
     }
 
-    private static string SkeletonLabel(SkeletonCandidate candidate)
-    {
-        var provider = candidate.Source.Resource.ModName ?? candidate.Source.Resource.ModDirectory ??
-                       (candidate.Source.Kind == SkeletonSourceKind.Game ? "Vanilla game" : "Current collection");
-        var bones = candidate.Source.LeadingBones > 0 ? $"its first {candidate.Skeleton.Bones.Length} bones" : $"{candidate.Skeleton.Bones.Length} bones";
-        return $"{AnimationPresentation.SourceModelName(candidate)} · {provider} · {bones}";
-    }
+    private static string SkeletonLabel(SkeletonCandidate candidate) => AnimationPresentation.SkeletonLabel(candidate);
 
     private static string ClipLabel(AnimationFileClip clip)
         => $"{clip.Name} · {clip.Duration:0.##} s{(clip.Face ? " · face" : "")}";

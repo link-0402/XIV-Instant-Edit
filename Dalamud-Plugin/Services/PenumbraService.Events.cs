@@ -26,11 +26,21 @@ public sealed partial class PenumbraService : IDisposable
     /// </summary>
     public event Action? ModsChanged;
 
+    /// <summary>
+    /// Raised, on Penumbra's thread, with the object index once Penumbra drew a redrawn object again.
+    /// Handlers must be cheap and must not call back into Penumbra.
+    /// </summary>
+    internal event Action<int>? ObjectRedrawn;
+
     private void SubscribeToResourceChanges(IDalamudPluginInterface pi)
     {
         _openMainWindow = new OpenMainWindow(pi);
         _modSettingChanged = ModSettingChanged.Subscriber(pi, (_, _, _, _) => RaiseResourcesChanged());
-        _gameObjectRedrawn = GameObjectRedrawn.Subscriber(pi, (_, _) => RaiseResourcesChanged());
+        _gameObjectRedrawn = GameObjectRedrawn.Subscriber(pi, (_, index) =>
+        {
+            ObjectRedrawn?.Invoke(index);
+            RaiseResourcesChanged();
+        });
         _modAdded = ModAdded.Subscriber(pi, _ => RaiseModsChanged());
         _modDeleted = ModDeleted.Subscriber(pi, _ => RaiseModsChanged());
         _modMoved = ModMoved.Subscriber(pi, (_, _) => RaiseModsChanged());

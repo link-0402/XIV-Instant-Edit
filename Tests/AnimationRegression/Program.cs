@@ -1,4 +1,4 @@
-﻿using System.Buffers.Binary;
+using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.IO.Compression;
 using System.Numerics;
@@ -36,6 +36,7 @@ MotionEditsFixture.Run(Check, Reject);
 PoseEditorFixture.Run(Check, Reject);
 PoseFileFixture.Run(Check, Reject);
 EditAgainFixture.Run(Check);
+TimelineToolsFixture.Run(Check, Reject);
 // Writes the fixture take as the plugin sends it, for reading back in Blender.
 if (args is ["--write-sample-take", var takePath])
     File.WriteAllBytes(takePath, AnimationTakeFormat.Write(AnimationExportFixture.SampleTake(), "Skeleton", false, "1.2.4"));
@@ -200,7 +201,9 @@ Check(AnimationPresentation.ListItems([waitingStartup]) is [{ Startup: false }, 
     "a detected startup remains visible with its active loop while its skeleton is prepared");
 Check(AnimationPresentation.AnimationName(standing) == "Standing Idle - Loop 0" &&
       AnimationPresentation.AnimationName(standing, true) == "Chair Sitting Idle 1 - Startup" &&
-      AnimationPresentation.AnimationName(recentReady) == "Movement - Running" &&
+      AnimationPresentation.AnimationName(recentReady) == "Movement - Walk" &&
+      AnimationPresentation.AnimationName(recentReady with { DisplayName = "Run", Clip = recentReady.Clip with { Timeline = 22 } }) == "Movement - Run" &&
+      AnimationPresentation.AnimationState(recentReady, false) == "Movement" &&
       AnimationPresentation.AnimationName(capture with { DisplayName = "Joy" }) == "Joy" &&
       AnimationPresentation.AnimationName(standing with { DisplayName = "Change Pose", Clip = standing.Clip with
       { GamePath = "chara/human/c0801/animation/a0001/bt_common/emote/pose05_loop.pap" } }) == "Standing Idle - Loop 5",
@@ -245,9 +248,10 @@ var runtimeCleared = cleared with { Bones = ReadBones(BuildPose(pose, cleared)) 
 Check(AnimationPoseRules.Same(runtimeCleared, cleared), "scoped adapter rebuilding preserves disabled IK tuning after Position clearing");
 Check(AnimationCatalog.IsExplicitIdle(642) && AnimationCatalog.IsExplicitIdle(643) &&
       AnimationCatalog.IsExplicitIdle(653) && AnimationCatalog.IsExplicitIdle(654) &&
-    Enumerable.Range(13, 8).All(id => AnimationCatalog.IsExplicitWalk((ushort)id)) &&
-      !AnimationCatalog.IsExplicitWalk(41),
-    "chair/ground sit timelines and normal walk-cycle rows remain eligible without enabling battle walk rows");
+    new ushort[] { 7, 8, 13, 14, 15, 16, 22, 23, 24, 25, 26, 27, 30, 31, 32, 33 }.All(AnimationCatalog.IsMovement) &&
+      !AnimationCatalog.IsMovement(17) && !AnimationCatalog.IsMovement(41) && !AnimationCatalog.IsMovement(50) &&
+      AnimationCatalog.MovementName(30) == "Sprint" && AnimationCatalog.MovementName(3) == null,
+    "chair/ground sit timelines and normal walk, run, sprint, jump and turn rows remain eligible without enabling battle movement rows");
 var config = new List<LivePose.LivePoseCacheEntry>
 {
     new() { TimelineId = 42, Pose = [new() { BonePoseInfoId = new("hand", 0, 0), Stacks = [] },

@@ -177,7 +177,7 @@ public sealed partial class MainWindow
                 return "No animation is playing.";
             if (!AnimationPresentation.Ready(capture))
                 return capture.Clip.Resolution is { State: SkeletonResolutionState.Ambiguous }
-                    ? "Several skeletons fit this animation. Choose the one it was made for in the Animations tab."
+                    ? "Several skeletons fit this animation. Choose the one it was made for under Source in the Timeline window."
                     : capture.Clip.Resolution?.Reason ?? "Finding the skeleton the animation was made for.";
         }
         return null;

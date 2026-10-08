@@ -136,7 +136,12 @@ public sealed partial class MainWindow : Window, IDisposable
             RequestRefresh();
     }
 
-    public override void OnClose() => animations?.StopObservation();
+    public override void OnClose()
+    {
+        // The Timeline window keeps the listener running while it is open.
+        if (timelineListens?.Invoke() != true)
+            animations?.StopObservation();
+    }
 
     /// <summary> Penumbra reported a mod-setting change or a redraw; refresh once things settle. </summary>
     private void OnResourcesChanged()
@@ -230,10 +235,10 @@ public sealed partial class MainWindow : Window, IDisposable
         }
 
         _activeTab = activeTab;
-        // The listener runs only while the Animations tab is open, or Quick Actions waits to send
-        // your character in the animation it plays: until a skeleton library is saved, its first
-        // match builds one.
-        if (!animationsTabActive && !(activeTab == MainTab.QuickActions && CharacterSendListens))
+        // The listener runs only while the Animations tab or the Timeline window is open, or Quick
+        // Actions waits to send your character in the animation it plays: until a skeleton library is
+        // saved, its first match builds one.
+        if (!animationsTabActive && !(activeTab == MainTab.QuickActions && CharacterSendListens) && timelineListens?.Invoke() != true)
             animations?.StopObservation();
         DrawTextureDialogs();
         DrawAnimationSendDialog();

@@ -186,8 +186,10 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 // own, IVCS or IVCS + YAS), never the live rig: skeleton mods that
                 // pile every group into one rig move bones to indices far beyond what
                 // other players' skeletons have, and sync plugins refuse such files.
-                // Bones the chosen standard lacks are left out by that choice.
-                targetDescription = request.Operation == AnimationOperation.RepairSkeleton
+                // Bones the chosen standard lacks are left out by that choice. A timeline
+                // save repairs too when it names a standard.
+                var repairing = AnimationBakeRules.Repairs(request);
+                targetDescription = repairing
                     ? (request.RepairTarget is { } standard ? AnimationBones.Standard(clip, standard)?.Skeleton : null)
                         ?? throw new InvalidDataException("The skeleton to repair onto was not found. Refresh the capture.")
                     : sourceDescription;
@@ -197,7 +199,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 excluded = AnimationBones.Indices(targetDescription, request.ExcludedBones);
                 retarget = sourceDescription.Fingerprint == targetDescription.Fingerprint ? null :
                     new AnimationRetarget(sourceDescription, targetDescription, AnimationSkeleton.Channels(originalBinding),
-                        dropMissing: request.Operation == AnimationOperation.RepairSkeleton);
+                        dropMissing: repairing);
                 skeleton = retarget == null ? sourceSkeleton : AnimationSkeleton.Materialize(targetDescription, arena);
                 sampler = new AnimationNative.Sampler(sourceSkeleton, originalBinding);
                 var rawBinding = arena.BorrowBinding(originalBinding);
@@ -334,7 +336,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         {
             if (!EditsMotion) return;
             if (expected.Count != frames) throw new InvalidOperationException("The animation must be sampled before its bone layers apply.");
-            var clip = new MotionClip(targetDescription, duration, frames);
+            var clip = new MotionClip(targetDescription, duration, frames) { Loops = this.clip.IsLoop };
             for (var f = 0; f < frames; f++)
                 for (var b = 0; b < expected[f].Length; b++)
                     clip.Set(f, b, FromHavok(expected[f][b]));
@@ -371,6 +373,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             {
                 SourceTracks = retarget == null ? [.. sourceTracks] : [.. retarget.MapTracks(sourceTracks)],
                 BlendHint = blendHint,
+                Loops = this.clip.IsLoop,
             };
             for (var f = 0; f < frames; f++)
                 for (var b = 0; b < expected[f].Length; b++)

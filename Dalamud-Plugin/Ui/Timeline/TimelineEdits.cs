@@ -167,17 +167,44 @@ internal static class TimelineEdits
     }
 
     /// <summary>
+    /// Whether <paramref name="ev"/> plays a face or lip motion from the timeline's expression library
+    /// (TMB TMPP): one on the expression or lip sync lane that isn't among the motions the face always
+    /// has loaded (<paramref name="resident"/>, by motion name). Without that list every face counts,
+    /// so a library is never dropped while it might be needed.
+    /// </summary>
+    public static bool FromPack(TimelineDocument doc, TimelineEvent ev, IReadOnlySet<string>? resident) =>
+        !string.IsNullOrEmpty(doc.FacePack) && ev.Lane is TimelineLane.Expression or TimelineLane.LipSync && ev.Path.Length > 0 &&
+        resident?.Contains(ev.Path) != true;
+
+    /// <summary>Whether an event of <paramref name="doc"/>, other than <paramref name="except"/>, plays a motion from its library (<see cref="FromPack"/>).</summary>
+    public static bool UsesPack(TimelineDocument doc, IReadOnlySet<string>? resident, string? except = null) =>
+        Events(doc).Any(ev => ev.Key != except && FromPack(doc, ev, resident));
+
+    /// <summary>
+    /// <paramref name="next"/>, an edit of <paramref name="before"/>, without its expression library once
+    /// the edit took away the last face that played from it: a timeline loads only one, so another
+    /// library's faces can come in. A library the timeline never used keeps its place until replaced.
+    /// </summary>
+    public static TimelineDocument ReleasePack(TimelineDocument before, TimelineDocument next, IReadOnlySet<string>? resident) =>
+        !string.IsNullOrEmpty(next.FacePack) && string.Equals(before.FacePack, next.FacePack, StringComparison.OrdinalIgnoreCase) &&
+        UsesPack(before, resident) && !UsesPack(next, resident)
+            ? next with { FacePack = null }
+            : next;
+
+    /// <summary>
     /// Appends <paramref name="events"/> with new "n" keys. Events sharing a group keep sharing one,
     /// new for this Add. A <paramref name="pack"/> (the expression library they need) becomes the
-    /// timeline's when it has none; a timeline loads only one, so a different one is refused. Added
-    /// events are never conditional: saving puts each on a new track without a condition, even a copy
-    /// of a conditional one.
+    /// timeline's when it has none, or one no face plays from (<see cref="UsesPack"/> with
+    /// <paramref name="resident"/>); a timeline loads only one, so a different one in use is refused.
+    /// Added events are never conditional: saving puts each on a new track without a condition, even
+    /// a copy of a conditional one.
     /// </summary>
-    public static TimelineDocument Add(TimelineDocument doc, IEnumerable<TimelineEvent> events, string? pack, out string? error) =>
-        Add(doc, events, pack, out _, out error);
+    public static TimelineDocument Add(TimelineDocument doc, IEnumerable<TimelineEvent> events, string? pack, out string? error,
+        IReadOnlySet<string>? resident = null) =>
+        Add(doc, events, pack, out _, out error, resident);
 
     public static TimelineDocument Add(TimelineDocument doc, IEnumerable<TimelineEvent> events, string? pack,
-        out ImmutableArray<string> created, out string? error)
+        out ImmutableArray<string> created, out string? error, IReadOnlySet<string>? resident = null)
     {
         created = [];
         error = null;
@@ -192,11 +219,11 @@ internal static class TimelineEdits
         var facePack = doc.FacePack;
         if (!string.IsNullOrEmpty(pack))
         {
-            if (string.IsNullOrEmpty(facePack))
+            if (string.IsNullOrEmpty(facePack) || !string.Equals(facePack, pack, StringComparison.OrdinalIgnoreCase) && !UsesPack(doc, resident))
                 facePack = pack;
             else if (!string.Equals(facePack, pack, StringComparison.OrdinalIgnoreCase))
             {
-                error = $"This timeline already uses the {facePack} expressions. It can only use one set.";
+                error = PackInUse(facePack);
                 return doc;
             }
         }
@@ -325,6 +352,27 @@ internal static class TimelineEdits
     public static bool CanLoop(TimelineDocument doc, TimelineEvent ev, IReadOnlyDictionary<string, int>? motionFrames) =>
         doc.Expression && TimelineDocument.CanKeep(ev) && TimelineDocument.Moves(ev, motionFrames) is { } own &&
         (long)ev.Start + own <= TimelineDocument.MaxFrames;
+
+    /// <summary>Why a face from another library can't come in while <paramref name="pack"/>'s faces are on the timeline.</summary>
+    public static string PackInUse(string pack) =>
+        $"This timeline uses the {pack} expressions, and can only use one set. Remove those first.";
+
+    /// <summary>Whether two documents are the same: their events by <see cref="Same(TimelineEvent, TimelineEvent)"/>, the rest as records.</summary>
+    public static bool Same(TimelineDocument a, TimelineDocument b)
+    {
+        if (ReferenceEquals(a, b))
+            return true;
+        if (a with { Events = b.Events } != b)
+            return false;
+        var x = Events(a);
+        var y = Events(b);
+        if (x.Length != y.Length)
+            return false;
+        for (var i = 0; i < x.Length; i++)
+            if (!Same(x[i], y[i]))
+                return false;
+        return true;
+    }
 
     /// <summary>Field-by-field equality, comparing values by content rather than by dictionary instance.</summary>
     public static bool Same(TimelineEvent a, TimelineEvent b)

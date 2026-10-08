@@ -24,7 +24,7 @@ internal sealed record PhysicsCharacter(
 /// <summary> A body model the character draws: its model slot, its loaded file, and the parts and shapes it turns on. </summary>
 internal sealed record PhysicsDrawnModel(int Slot, string File, uint Attributes, uint Shapes);
 
-/// <summary> What the character's appearance says about its body's scale: clan (1 to 16), sex, body type and bust size (0 to 100). </summary>
+/// <summary> What the drawn appearance says about the body's scale: clan (1 to 16), sex, body type and bust size (0 to 100). </summary>
 internal readonly record struct PhysicsCustomize(int Clan, bool Female, int BodyType, int BustSize);
 
 /// <summary>
@@ -95,7 +95,10 @@ internal static unsafe class PhysicsLiveReader
                     models.Add(new PhysicsDrawnModel(slot, Painter.PainterVisibility.NormalizePath(file), drawn->EnabledAttributeIndexMask,
                         drawn->EnabledShapeKeyIndexMask));
             }
-        ref var customize = ref ((Character*)player.Address)->DrawData.CustomizeData;
+        // The drawn model's appearance: Glamourer changes the bust size there and leaves the character's own as it was.
+        ref var customize = ref drawObject->GetModelType() == CharacterBase.ModelType.Human
+            ? ref ((Human*)drawObject)->Customize
+            : ref ((Character*)player.Address)->DrawData.CustomizeData;
         var look = new PhysicsCustomize(customize.Tribe, customize.Sex == 1, customize.BodyType, customize.BustSize);
         return (new PhysicsBodyCapture(player.ObjectIndex, player.Address, character, models, frames, look), null);
     }

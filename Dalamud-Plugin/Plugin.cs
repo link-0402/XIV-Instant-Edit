@@ -218,7 +218,9 @@ public sealed class Plugin : IDalamudPlugin
             () => _settingsWindow!.Open());
         _window.AttachAnimations(_animations, animationError);
         _window.AttachRecorder(_recorder);
-        _window.AttachTimeline(_timelineWindow.Open, _timelineWindow.EditAgain);
+        _window.AttachTimeline(_timelineWindow.Open, _timelineWindow.Show, () => _timelineWindow.Listens);
+        _timelineWindow.AttachListening(() => _window.ListensForAnimations);
+        _timelineWindow.AttachTools(() => _settingsWindow!.Open(), _window.DrawRecorderPanel);
         _window.AttachPainter(_painterJobs);
         // Game skeletons for Blender's armatures: sent with imports, and asked for by the add-on.
         var skeletons = new ModelSkeletonResolver(_penumbra, data, framework, objects, log);

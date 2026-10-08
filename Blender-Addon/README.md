@@ -95,9 +95,10 @@ Everything is in the **IE - Instant Edit** tab of the 3D Viewport's sidebar (pre
   list imports or restores them.
 - **Tools**: **Vertex Data**, like TexTools' Modify Model Vertices (clear UV2 or copy UV1 into it,
   clear vertex colors or their alpha, clear hair flow, on the selected meshes), **Remove Hidden
-  Vertices** (deletes what no camera angle can see on the selected meshes, such as skin under a
-  top; its redo panel chooses whether other visible meshes can hide them and how many rings of
-  hidden vertices stay at the edges), **Apply Racial Scaling** (reshapes the selected meshes for
+  Vertices** (deletes what other meshes cover on the selected meshes, such as skin under a top:
+  covered from every angle within 45 degrees of the surface's normal, by a material other than
+  its own, so skin never covers skin; its redo panel chooses whether other visible meshes or only
+  the mesh itself can cover them and how many rings of covered vertices stay at the edges), **Apply Racial Scaling** (reshapes the selected meshes for
   another race, like c0201 gear for a Miqo'te, as the game's racial deformer does: shape keys and
   normals too, with the deformer your character's collection loads, so the plugin must be running;
   the result exports as that race's model, like a scaled import; applying another race replaces the

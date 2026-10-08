@@ -13,11 +13,10 @@ internal sealed record PhysicsTarget(PhysicsCharacter Character, Guid Collection
     PhysicsLoadedFile Skeleton);
 
 /// <summary>
-/// Your body as the game draws it, standing in the measuring pose, to fit physics to; its breast size
-/// when it has breasts; what to know about the measuring; and a line saying what shaped it.
+/// Your body as the game draws it, standing in the measuring pose, to fit physics to; what to know
+/// about the measuring; and a line saying what shaped it.
 /// </summary>
-internal sealed record PhysicsBodyMeasure(PhysicsBody Body, PhysicsSkeleton Skeleton, IReadOnlyList<string> Warnings, PhysicsSizeMeasure? Chest = null,
-    string Note = "");
+internal sealed record PhysicsBodyMeasure(PhysicsBody Body, PhysicsSkeleton Skeleton, IReadOnlyList<string> Warnings, string Note = "");
 
 /// <summary>
 /// The physics builder's game side: finds your character, its skeleton and the body physics its
@@ -286,65 +285,9 @@ internal sealed class PhysicsBuilderService : IDisposable
         var measured = await Task.Run(() => PhysicsBody.Measure(models, rest, pose), token).ConfigureAwait(false);
         if (measured.MissingBones > 0)
             warnings.Add($"Your skeleton lacks {measured.MissingBones} bones your body models use; their skin was measured unposed.");
-        PhysicsSizeMeasure? chest = null;
-        if (PhysicsSize.HasBreasts(capture.Character.Race))
-            chest = await Task.Run(() => ChestSize(models, scaling, skeleton, rest, pose), token).ConfigureAwait(false);
         var shaped = plus is null ? "your body mod" : "your body mod and Customize+ profile";
         var note = look.Female ? $"Measured standing still with {shaped}, bust size {look.BustSize}." : $"Measured standing still with {shaped}.";
-        return new PhysicsBodyMeasure(measured, skeleton, warnings, chest, note);
-    }
-
-    /// <summary> The game's own body, which breast sizes are measured against. </summary>
-    private const string GameChest = "chara/equipment/e0000/model/c0201e0000_top.mdl";
-
-    /// <summary>
-    /// Breast size: your body's base shape (at rest, without Customize+) against the game's own body,
-    /// reshaped for your race the same way, grown by the breast bones' scale in the measuring pose
-    /// (Customize+ and the bust size).
-    /// </summary>
-    private PhysicsSizeMeasure? ChestSize(IReadOnlyList<PhysicsBodyModel> models, RacialScalingSource? scaling, PhysicsSkeleton skeleton,
-        Dictionary<string, PhysicsFrame> rest, IReadOnlyDictionary<string, PhysicsFrame> pose)
-    {
-        try
-        {
-            if (data.GetFile(GameChest)?.Data is not { } game)
-                return null;
-            RacialDeformer? deformer = null;
-            try { deformer = scaling?.For(GameChest)?.Deformer; }
-            catch (InvalidDataException) { }
-            var own = PhysicsBody.Measure(models, rest, rest);
-            var reference = PhysicsBody.Measure([new PhysicsBodyModel("game body", game, deformer, null, 0)], rest, rest);
-            return PhysicsSize.Measure(own, reference, skeleton, pose);
-        }
-        catch (InvalidDataException e)
-        {
-            log.Debug(e, "Could not measure the breast size.");
-            return null;
-        }
-    }
-
-    private readonly Dictionary<ushort, Task<PhybFile?>> vanilla = [];
-
-    /// <summary> The game's own body physics for a race, read once; null when it has none or it can't be read. </summary>
-    public Task<PhybFile?> VanillaAsync(ushort race)
-    {
-        lock (vanilla)
-        {
-            if (!vanilla.TryGetValue(race, out var task))
-                vanilla[race] = task = Task.Run(() =>
-                {
-                    try
-                    {
-                        return data.GetFile(PhysicsPaths.BodyPhysics(race))?.Data is { } bytes ? PhybFile.Parse(bytes) : null;
-                    }
-                    catch (InvalidDataException e)
-                    {
-                        log.Debug(e, "Could not read the game's body physics for c{Race:D4}.", race);
-                        return null;
-                    }
-                });
-            return task;
-        }
+        return new PhysicsBodyMeasure(measured, skeleton, warnings, note);
     }
 
     private byte[]? ReadModel(string actual, string gamePath)

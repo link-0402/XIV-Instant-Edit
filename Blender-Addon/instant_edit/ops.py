@@ -21,7 +21,8 @@ from ..materials     import (
     is_body_material,
 )
 from ..mesh.export   import (export_result, get_export_stats, check_triangulation, check_weights,
-                             check_uv_layers, check_dropped_shape_keys, draw_dropped_shape_keys, flush_edit_mode)
+                             check_uv_layers, check_dropped_shape_keys, draw_dropped_shape_keys, flush_edit_mode,
+                             ShapeExports)
 from ..mesh.objects  import visible_meshobj
 from ..properties    import get_settings
 from ..xivpy.model   import XIVModel
@@ -1935,20 +1936,36 @@ class QuickExport(Operator):
         draw_dropped_shape_keys(layout, getattr(self, "_dropped_shape_keys", []))
 
     def execute(self, context: Context):
+        if sizes.wanted(get_instant_edit_props()):
+            # A size at a time, Blender drawing between them (sizes.start).
+            try:
+                steps = sizes_export_steps(context, export_destination_context(context))
+            except Exception as e:
+                self._failed(self.report, e)
+                return {"CANCELLED"}
+            return sizes.start(context, steps, self._done, self._failed, self.report,
+                               "Nothing was sent to Penumbra.")
         try:
             perform_instant_export(context)
         except Exception as e:
-            props = get_instant_edit_props()
-            props.last_status = f"Export failed: {e}"
-            self.report({"ERROR"}, f"Export failed: {e}")
+            self._failed(self.report, e)
             return {"CANCELLED"}
+        self._done(self.report, None)
+        return {"FINISHED"}
+
+    @staticmethod
+    def _done(report, _result) -> None:
         status = get_instant_edit_props().last_status
-        self.report(
+        report(
             {"WARNING"} if " with warnings:" in status or "could not refresh" in status else {"INFO"},
             status,
         )
-        get_export_stats(context)
-        return {"FINISHED"}
+        get_export_stats(bpy.context)
+
+    @staticmethod
+    def _failed(report, error) -> None:
+        get_instant_edit_props().last_status = f"Export failed: {error}"
+        report({"ERROR"}, f"Export failed: {error}")
 
 
 class MashupDestination(Operator):
@@ -3273,6 +3290,13 @@ def build_sizes_payload(ref, export_id: str, files: list[dict], default_size: st
 def perform_sizes_export(context: Context, ref) -> Path:
     """Quick Export at each size picked in Magic Fit's Resize panel (see sizes), every size an option
     of one Penumbra group. The plugin gets all of them in one request."""
+    return sizes.run(sizes_export_steps(context, ref))
+
+
+def sizes_export_steps(context: Context, ref):
+    """perform_sizes_export's work as steps (see sizes.export_steps), a size at a time, then sending
+    them; returns the model's path. ``context`` is only read before the first step: later steps may
+    run from a modal operator, after the operator that started them is gone."""
     props = get_instant_edit_props()
     group_name, group_id = _sizes_target(props, ref)
     export_objects = export_objects_for_scope(ref, getattr(props, "export_scope", "VISIBLE"))
@@ -3298,22 +3322,30 @@ def perform_sizes_export(context: Context, ref) -> Path:
     temp_dir = create_job("exports", export_id)
     try:
         files = []
+        exports = None
+
+        def session():
+            nonlocal exports
+            exports = ShapeExports(export_objects, "MDL")
+            return exports
 
         def export(sized, index):
             mdl_path = temp_dir / f"size_{index}.mdl"
-            saved_materials = _use_mashup_source_materials(export_objects, ref.context_id)
-            try:
-                with _exporting_as_mdl():
-                    export_result(mdl_path.with_suffix(""), "MDL", export_objects=export_objects)
-            finally:
-                _restore_object_materials(saved_materials)
+            exports.write(mdl_path.with_suffix(""))
             if not mdl_path.is_file():
                 raise ValueError(f"Export produced no .mdl file for {sized.name}.")
             byte_size, digest = _file_digest(mdl_path)
             files.append({"name": sized.name, "filePath": str(mdl_path), "size": byte_size, "sha256": digest})
 
-        results = sizes.export_each(export_objects, export)
+        saved_materials = _use_mashup_source_materials(export_objects, ref.context_id)
+        try:
+            with _exporting_as_mdl():
+                results = yield from sizes.export_steps(export_objects, export, session)
+        finally:
+            _restore_object_materials(saved_materials)
         default_size = sizes.default_name(results)
+        yield sizes.Step(len(results), len(results), "", "Sending the sizes to Penumbra")
+        context = bpy.context
 
         def payload(current_ref):
             return build_sizes_payload(
@@ -3350,6 +3382,7 @@ CLASSES = [
     SelectExportContext,
     OpenContextFolder,
     QuickExport,
+    sizes.RunSizeExports,
     MashupDestination,
     SaveNewModName,
     VanillaModName,

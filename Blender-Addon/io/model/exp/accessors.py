@@ -213,27 +213,27 @@ def create_corner_vertex_map(obj: Object, loop_vertices: NDArray, corner_arrays:
     for idx, arr in enumerate(corner_arrays):
         _validate_corner_array(obj, f"corner attribute {idx}", arr, loop_count)
 
-    exported_indices = np.empty(loop_count, dtype=np.uint32)
-    source_vertices: list[int] = []
-    source_loops: list[int] = []
-    vertex_map: dict[tuple, int] = {}
+    if loop_count == 0:
+        empty = np.empty(0, dtype=np.uint32)
+        return empty, empty.copy(), empty.copy()
 
-    for loop_idx, source_vertex in enumerate(loop_vertices):
-        key = (int(source_vertex),) + tuple(
-            np.ascontiguousarray(arr[loop_idx]).tobytes() for arr in corner_arrays
-        )
-        export_vertex = vertex_map.get(key)
-        if export_vertex is None:
-            export_vertex = len(source_vertices)
-            vertex_map[key] = export_vertex
-            source_vertices.append(int(source_vertex))
-            source_loops.append(loop_idx)
-        exported_indices[loop_idx] = export_vertex
+    # Corners are the same vertex when their vertex and the bytes of every attribute match.
+    # Each corner's bytes become one row; equal rows are one vertex, numbered in the order
+    # their first corner comes.
+    columns = [np.ascontiguousarray(loop_vertices, dtype=np.uint32).reshape(loop_count, 1)]
+    columns += [np.ascontiguousarray(arr).reshape(loop_count, -1) for arr in corner_arrays]
+    rows = np.ascontiguousarray(np.concatenate([column.view(np.uint8) for column in columns], axis=1))
+    keys = rows.view(np.dtype((np.void, rows.shape[1]))).ravel()
+    _unique, first_loops, inverse = np.unique(keys, return_index=True, return_inverse=True)
+    order = np.argsort(first_loops, kind="stable")
+    numbers = np.empty(len(order), dtype=np.uint32)
+    numbers[order] = np.arange(len(order), dtype=np.uint32)
+    source_loops = first_loops[order].astype(np.uint32)
 
     return (
-        exported_indices,
-        np.asarray(source_vertices, dtype=np.uint32),
-        np.asarray(source_loops, dtype=np.uint32),
+        numbers[inverse.ravel()],
+        np.asarray(loop_vertices, dtype=np.uint32)[source_loops],
+        source_loops,
     )
 
 

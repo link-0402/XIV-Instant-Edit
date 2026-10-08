@@ -90,6 +90,14 @@ internal sealed record TimelineDocument(
     public bool MotionChanged => MotionEvaluator.Changes(Motion);
 
     /// <summary>
+    /// Bones the clip animates that saving leaves without a track, by name, in order: nothing in the
+    /// animation drives them any more, so physics or the skeleton's rest takes them back. Empty for none.
+    /// </summary>
+    public ImmutableArray<string> ExcludedBones { get => excluded; init => excluded = value.IsDefault ? [] : value; }
+
+    private readonly ImmutableArray<string> excluded = [];
+
+    /// <summary>
     /// An expression's own timeline (chara/action/facial/pose/smile.tmb), not a clip's: it has no
     /// motion, so its length can't change, and a kept moving face on it loops (<see cref="Loops"/>).
     /// </summary>

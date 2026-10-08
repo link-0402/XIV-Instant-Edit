@@ -25,6 +25,24 @@ def get_mesh_ids(obj: Object) -> tuple[int, int]:
         raise XIVMeshIDError(f"{obj.name}: Couldn't parse Mesh IDs.")
     return group, part
 
+# Set on an export copy prepare_export_mesh already prepared, which a model exported again
+# from the same copies (sizes, see mesh.export.ShapeExports) then takes as it is.
+PREPARED_PROPERTY = "xiv_ie_export_prepared"
+
+
+def prepare_export_mesh(obj: Object) -> None:
+    """Put an export copy in the topology the MDL writer reads: in world space, without loose
+    vertices, split along UV seams and sharp edges."""
+    apply_transforms(obj)
+    remove_loose_verts(obj)
+    # Shape-key export follows Yet Another Addon's vertex-domain contract:
+    # split UV seams and sharp edges before reading shape-key coordinates.
+    # The stream accessor remains corner-aware for meshes passed directly
+    # to it, but the normal model-export path must use this canonicalized
+    # topology so shape indices and shape vertices stay aligned.
+    split_seams(obj)
+
+
 def prepare_submeshes(export_obj: list[Object], model_attributes: list[str], lod_level: int) -> list[list[Object]]:
     mesh_dict: dict[int, dict[int, Object]] = defaultdict(dict)
     for obj in export_obj:
@@ -41,14 +59,8 @@ def prepare_submeshes(export_obj: list[Object], model_attributes: list[str], lod
                 continue
             model_attributes.append(attr)
 
-        apply_transforms(obj)
-        remove_loose_verts(obj)
-        # Shape-key export follows Yet Another Addon's vertex-domain contract:
-        # split UV seams and sharp edges before reading shape-key coordinates.
-        # The stream accessor remains corner-aware for meshes passed directly
-        # to it, but the normal model-export path must use this canonicalized
-        # topology so shape indices and shape vertices stay aligned.
-        split_seams(obj)
+        if not obj.get(PREPARED_PROPERTY):
+            prepare_export_mesh(obj)
         mesh_dict[group][part] = obj
 
     mesh_indices = sorted(mesh_dict.keys())
