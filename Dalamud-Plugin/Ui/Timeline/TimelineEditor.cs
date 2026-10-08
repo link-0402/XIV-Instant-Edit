@@ -150,6 +150,12 @@ internal sealed class TimelineEditor
     }
 
     /// <summary>
+    /// The face and lip motions the face always has loaded, by motion name: they need no expression
+    /// library (see <see cref="TimelineEdits.FromPack"/>). Null while unknown, when every face counts.
+    /// </summary>
+    public IReadOnlySet<string>? ResidentMotions { get; set; }
+
+    /// <summary>
     /// The skeleton's bone indices by name, so bone rows list parents first; null while unknown, when
     /// they go by name. Set a new instance when the skeleton changes.
     /// </summary>
@@ -561,12 +567,15 @@ internal sealed class TimelineEditor
 
     public bool Redo() => gesture == TimelineGesture.None && History.Redo();
 
-    /// <summary>Makes <paramref name="doc"/> current as one undo step; false when it is the current one.</summary>
+    /// <summary>
+    /// Makes <paramref name="doc"/> current as one undo step; false when it is the current one. An edit
+    /// that took away the last face of the timeline's expression library drops the library too.
+    /// </summary>
     public bool Commit(TimelineDocument doc)
     {
         if (gesture != TimelineGesture.None || ReferenceEquals(doc, Document))
             return false;
-        History.Commit(doc);
+        History.Commit(TimelineEdits.ReleasePack(Document, doc, ResidentMotions));
         return true;
     }
 
@@ -586,7 +595,7 @@ internal sealed class TimelineEditor
             if (first >= 0 && shift != 0)
                 added = added.ConvertAll(ev => ev with { Start = ev.Start + shift });
         }
-        var next = TimelineEdits.Add(doc, added, pack, out var created, out var error);
+        var next = TimelineEdits.Add(doc, added, pack, out var created, out var error, ResidentMotions);
         LastError = error;
         if (!Commit(next))
             return false;
@@ -696,6 +705,7 @@ internal sealed class TimelineEditor
         var next = TimelineEdits.Replace(Document, ev, motionFrames);
         if (ReferenceEquals(next, Document))
             return false;
+        next = TimelineEdits.ReleasePack(Document, next, ResidentMotions);
         if (History.InGesture)
             History.Preview(next);
         else

@@ -310,6 +310,8 @@ def remove_hidden(*objects, **options) -> set:
 def check_remove_hidden_vertices() -> None:
     with temporary_scene_data():
         opaque = material("Opaque")
+        # Covers need a material of their own: faces never cover vertices of their own material.
+        gear = material("Gear")
         two_sided = material("Two Sided", culled=False)
         sheer = material("Sheer", alpha=0.5)
         # Older imports drew the eye occlusion shell opaque; its shader still tells.
@@ -322,9 +324,29 @@ def check_remove_hidden_vertices() -> None:
                     and len(nested.data.vertices) == 8 and len(nested.data.polygons) == 6
                     and all(max(abs(value) for value in vertex.co) == 1.0 for vertex in nested.data.vertices),
                     "a box sealed inside the same mesh is removed and the shell stays")
+            nested = mesh_object("0.1 Nested", box((0, 0, 0), 1.0), box((0, 0, 0), 0.3), surface=opaque)
+            require(remove_hidden(nested) == {"FINISHED"} and len(nested.data.vertices) == 16,
+                    "Visible Meshes leaves a mesh's own folds alone")
 
         with temporary_scene_data():
-            shell = mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=opaque)
+            mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=material("Opaque"))
+            inner = mesh_object("0.1 Inner", box((0, 0, 0), 0.3), surface=opaque)
+            remove_hidden(inner)
+            require(len(inner.data.vertices) == 8,
+                    "faces with the vertex's own material, a second import of it included, never cover it")
+
+        with temporary_scene_data():
+            # A slit over the middle column: the next columns see it only from
+            # more than 45 degrees off their normal.
+            plane = mesh_object("0.1 Plane", grid(0.0), surface=opaque)
+            mesh_object("0.0 Slabs", box((-1.04, 0.0, 0.15), (0.96, 1.5, 0.05)),
+                        box((1.04, 0.0, 0.15), (0.96, 1.5, 0.05)), surface=gear)
+            remove_hidden(plane)
+            require(len(plane.data.vertices) == 33 and max(abs(vertex.co.x) for vertex in plane.data.vertices) < 0.21,
+                    "a vertex seen only from more than 45 degrees off its normal counts as covered")
+
+        with temporary_scene_data():
+            shell = mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=gear)
             inner = mesh_object("0.1 Inner", box((0, 0, 0), 0.3), surface=opaque)
             require(remove_hidden(inner, hidden_by="SELF") == {"FINISHED"} and len(inner.data.vertices) == 8,
                     "Only Itself ignores the other meshes")
@@ -341,14 +363,14 @@ def check_remove_hidden_vertices() -> None:
             ("a two-sided face whose back the opening shows", False, two_sided, 25),
         ):
             with temporary_scene_data():
-                mesh_object("0.0 Cup", box((0, 0, 0), 1.0, open_top=True), surface=opaque)
+                mesh_object("0.0 Cup", box((0, 0, 0), 1.0, open_top=True), surface=gear)
                 plane = mesh_object("0.1 Plane", grid(-0.5, 0.5, 4, up=up), surface=surface)
                 remove_hidden(plane)
                 require(len(plane.data.vertices) == kept, f"{label} keeps {kept} of 25 vertices")
 
         for label, surface, transparent in (("a see-through material", sheer, False),
                                             ("an eye occlusion shell", eye_occlusion, False),
-                                            ("a mesh sorted for transparency", opaque, True)):
+                                            ("a mesh sorted for transparency", gear, True)):
             with temporary_scene_data():
                 shell = mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=surface)
                 shell["xiv_transparency"] = transparent
@@ -391,7 +413,7 @@ def check_remove_hidden_vertices() -> None:
         for label, flip in (("a mannequin on the same spot", False), ("a Backfaces copy", True)):
             with temporary_scene_data():
                 body = mesh_object("0.0 Body", box((0, 0, 0), 0.5), surface=opaque)
-                copy = mesh_object("Mannequin", box((0, 0, 0), 0.5), surface=opaque)
+                copy = mesh_object("Mannequin", box((0, 0, 0), 0.5), surface=gear)
                 if flip:
                     copy.data.flip_normals()
                 remove_hidden(body)
@@ -399,7 +421,7 @@ def check_remove_hidden_vertices() -> None:
 
         with temporary_scene_data():
             skin = mesh_object("0.0 Skin", grid(0.0), surface=opaque)
-            mesh_object("0.1 Cover", box((-0.7, 0.0, 0.2), (0.8, 1.5, 0.3)), surface=opaque)
+            mesh_object("0.1 Cover", box((-0.7, 0.0, 0.2), (0.8, 1.5, 0.3)), surface=gear)
             data = skin.data
             normals = [Vector((vertex.co.x * 0.3, vertex.co.y * 0.3, 1.0)).normalized() for vertex in data.vertices]
             data.normals_split_custom_set_from_vertices(normals)
@@ -436,7 +458,7 @@ def check_remove_hidden_vertices() -> None:
                     "the remaining shape key offsets are unchanged")
 
         with temporary_scene_data():
-            mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=opaque)
+            mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=gear)
             inner = mesh_object("0.1 Inner", box((0, 0, 0), 0.3), surface=opaque)
             inner.shape_key_add(name="Basis")
             outside = inner.shape_key_add(name="shp_out")
@@ -449,7 +471,7 @@ def check_remove_hidden_vertices() -> None:
             require(len(inner.data.vertices) == 0, "shape keys the game never applies do not count")
 
         with temporary_scene_data():
-            shell = mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=opaque)
+            shell = mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=gear)
             shell.shape_key_add(name="Basis")
             away = shell.shape_key_add(name="shp_open")
             for point in away.data:
@@ -459,13 +481,13 @@ def check_remove_hidden_vertices() -> None:
             require(len(inner.data.vertices) == 8, "a shp_ shape key that moves the cover away keeps what it covers")
 
         with temporary_scene_data():
-            mesh_object("0.0 Shell LOD1", box((0, 0, 0), 1.0), surface=opaque)
+            mesh_object("0.0 Shell LOD1", box((0, 0, 0), 1.0), surface=gear)
             inner = mesh_object("0.1 Inner", box((0, 0, 0), 0.3), surface=opaque)
             remove_hidden(inner)
             require(len(inner.data.vertices) == 8, "another LOD's meshes do not hide a part")
 
         with temporary_scene_data():
-            shell = mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=opaque)
+            shell = mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=gear)
             shell.scale = (-1.0, 1.0, 1.0)
             bpy.context.view_layer.update()
             inner = mesh_object("0.1 Inner", box((0, 0, 0), 0.3), surface=opaque)
@@ -473,7 +495,7 @@ def check_remove_hidden_vertices() -> None:
             require(len(inner.data.vertices) == 0, "a mirrored mesh still hides what it encloses")
 
         with temporary_scene_data():
-            mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=opaque)
+            mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=gear)
             inner = mesh_object("0.1 Inner", box((0, 0, 0), 0.3), surface=opaque)
             twin = bpy.data.objects.new("0.2 Twin", inner.data)
             twin.location = (5.0, 0.0, 0.0)
@@ -483,7 +505,7 @@ def check_remove_hidden_vertices() -> None:
             require(len(inner.data.vertices) == 8, "a mesh another object shows in the open keeps its vertices")
 
         with temporary_scene_data():
-            mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=opaque)
+            mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=gear)
             first = mesh_object("0.1 Inner A", box((-0.5, 0, 0), 0.2), surface=opaque)
             second = mesh_object("0.2 Inner B", box((0.5, 0, 0), 0.2), surface=opaque)
             select_only(first, second)

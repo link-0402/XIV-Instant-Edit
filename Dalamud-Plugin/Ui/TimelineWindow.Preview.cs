@@ -27,6 +27,8 @@ public sealed partial class TimelineWindow
     // The GPose actor whose collection got the preview; playing on another would show the unedited clip.
     private ushort? previewActor;
     private TimelineDocument? previewDocument;
+    // A preview redrew the character to load its files, so ending it redraws it again.
+    private volatile bool previewRedrawn;
     private bool previewJob;
     private string? previewError;
     private Task? previewStop;
@@ -51,7 +53,7 @@ public sealed partial class TimelineWindow
                 StartPreview(current, loaded);
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(blocked ?? "Build the edited clip and play it on your GPose character. Nothing is saved.");
+            ImGui.SetTooltip(blocked ?? "Build the edited clip, redraw your GPose character with it and play it. Nothing is saved.");
 
         ImGui.SameLine(0, Theme.Scaled(2));
         DrawLiveToggle(current, loaded, "##timeline-live");
@@ -118,7 +120,7 @@ public sealed partial class TimelineWindow
 
         if (liveWanted)
         {
-            ImGui.TextColored(Theme.Hint, "Live shows bone layers only. Preview shows sounds, effects and a new length too.");
+            ImGui.TextColored(Theme.Hint, "Live shows bone layers and effect looks. Preview shows sounds, effects and a new length too.");
             return;
         }
         if (!shown && !preview.Active)
@@ -127,6 +129,7 @@ public sealed partial class TimelineWindow
             ImGui.TextColored(Theme.Warning, "⚠ Others using this collection see the preview too.");
         ImGui.TextColored(Theme.Hint, previewDocument != null && !ReferenceEquals(previewDocument, current.Document)
             ? "Changed since the preview. Press Preview again."
+            : !shownLooks.IsEmpty ? "Effect looks change when the effect starts again."
             : "Sounds and effects play only while the preview plays.");
     }
 
@@ -205,14 +208,19 @@ public sealed partial class TimelineWindow
         var document = current.Document;
         var target = Fresh(loaded);
         var clip = target.Clip;
-        TimelineDocument shown;
-        ImmutableDictionary<string, byte[]> added;
+        TimelineDocument rest, shown;
+        ImmutableDictionary<string, byte[]> added, lookFiles;
+        ImmutableDictionary<string, TimelineEffectEdit> looks;
         try
         {
             if (LookMissing(document) is { } missing)
                 throw new InvalidDataException(missing);
-            // Effect looks play from copies of their effects, as a save writes them.
-            (shown, var used) = WithLooks(document);
+            // Effect looks point the effect's own path at an edited copy: the game may keep playing the clip's
+            // loaded file, which names that path, and later look changes then show without building again.
+            (rest, looks) = TimelineEffectLooks.Redirectable(document);
+            lookFiles = TimelineEffectLooks.Redirected(looks, EffectBytes);
+            // Looks that differ between events of one effect play from copies, as a save writes them.
+            (shown, var used) = WithLooks(rest);
             added = TimelineWindowViews.AddedFiles(shown, used);
         }
         catch (InvalidDataException e)
@@ -222,25 +230,33 @@ public sealed partial class TimelineWindow
         }
         var speed = speedPercent / 100f;
         var generation = ++previewGeneration;
+        ForgetPreviewLooks();
         previewActor = index;
         previewError = null;
         previewJob = true;
         previewDocument = document;
+        previewRest = rest;
         lastSeekFrame = -1;
         animations!.PreviewTimeline(target, shown, async (built, token) =>
         {
-            var files = new Dictionary<string, byte[]>(added, StringComparer.OrdinalIgnoreCase) { [built.GamePath] = built.Bytes };
-            await preview.ShowAsync(index, files, token);
+            var baseFiles = added.SetItem(built.GamePath, built.Bytes);
+            await preview.ShowAsync(index, baseFiles.SetItems(lookFiles), token);
             if (generation != previewGeneration)
             {
                 // Stopped or replaced while it was being built: take it down again.
                 await preview.StopAsync();
                 return "Preview ended.";
             }
+            // The character keeps the clip's loaded file until it is drawn again, as after an in-place edit;
+            // a stop redraws it once more to put its own file back.
+            previewRedrawn = true;
+            var redraw = await preview.RedrawAsync(index, token);
             var played = await framework.RunOnFrameworkThread(() =>
             {
                 if (generation != previewGeneration)
                     return false;
+                previewBaseFiles = baseFiles;
+                shownLooks = looks;
                 previewFingerprint = built.BindingFingerprint;
                 previewTimeline = clip.Timeline;
                 previewFace = target.Standalone;
@@ -250,8 +266,8 @@ public sealed partial class TimelineWindow
                     playback.SetSpeed(speed);
                 return true;
             });
-            return played ? "Preview playing." : "Preview on. " + playback.Error;
-        }, current.MotionFrames);
+            return played ? redraw == null ? "Preview playing." : "Preview playing. " + redraw : "Preview on. " + playback.Error;
+        }, current.MotionFrames, target.Standalone ? null : repairTarget);
     }
 
     private void TogglePlay()
@@ -284,6 +300,7 @@ public sealed partial class TimelineWindow
     {
         StopLive();
         previewGeneration++;
+        ForgetPreviewLooks();
         try
         {
             if (playback.Active)
@@ -296,13 +313,31 @@ public sealed partial class TimelineWindow
         previewFingerprint = null;
         previewDocument = null;
         lastSeekFrame = -1;
+        var redraw = previewRedrawn ? previewActor : null;
+        previewRedrawn = false;
+        StopTemporaryMod(redraw);
+    }
+
+    /// <summary>
+    /// Removes the preview's temporary mod on a task, then redraws <paramref name="redraw"/>, the character
+    /// a preview redrew, so it drops the previewed files and loads its own again.
+    /// </summary>
+    private void StopTemporaryMod(ushort? redraw = null)
+    {
         if (!preview.Active && !preview.Busy)
             return;
-        var stop = preview.StopAsync();
+        var stop = redraw is { } index ? StopAndRedraw(index) : preview.StopAsync();
         // The window may close before this ends; a failure still reaches the log.
         _ = stop.ContinueWith(task => log.Warning(task.Exception!, "Could not end the animation preview."),
             CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
         previewStop = stop;
+    }
+
+    private async Task StopAndRedraw(ushort index)
+    {
+        await preview.StopAsync();
+        if (await preview.RedrawAsync(index, CancellationToken.None) is { } error)
+            log.Warning("The character was not redrawn after the preview: {Error}", error);
     }
 
     private void PollPreview()
@@ -326,6 +361,7 @@ public sealed partial class TimelineWindow
             previewFingerprint = null;
             previewDocument = null;
             lastSeekFrame = -1;
+            ForgetPreviewLooks();
         }
     }
 

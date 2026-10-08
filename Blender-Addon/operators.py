@@ -25,7 +25,7 @@ from .materials import (
 from .mesh_list import (DragSession, ListMetrics, list_parts, moved_part, placement_plan, scene_parts,
                         untangled_placement)
 from .mesh.export import (check_triangulation, check_uv_layers, check_weights, dropped_shape_keys_warning, export_result,
-                          get_export_stats)
+                          get_export_stats, ShapeExports)
 from .mesh.hidden import hidden_vertices, remove_vertices
 from .mesh.racial_scaling import apply_deformer
 from .mesh.objects import visible_meshobj
@@ -289,32 +289,49 @@ class XIVIE_OT_simple_export(Operator):
         scaled = simple_export_warning(objects)
         dropped = dropped_shape_keys_warning(objects)
 
-        written = []
-        try:
-            if sizes.wanted():
-                # A file per size picked in Magic Fit, the size added to its name.
+        def done(report, written):
+            from .instant_edit.ops import refresh_variant_targets_after_operation
+
+            get_export_stats(bpy.context)
+            refresh_error = refresh_variant_targets_after_operation(bpy.context)
+            message = f"Exported {', '.join(written)}" if written else f"Exported {name}{suffix}"
+            if scaled or dropped:
+                message += ". " + " ".join(warning for warning in (scaled, dropped) if warning)
+            if refresh_error is not None:
+                message += f"; Penumbra targets could not refresh: {refresh_error}"
+            report({"WARNING"} if refresh_error is not None or scaled or dropped else {"INFO"}, message)
+
+        def failed(report, error):
+            report({"ERROR"}, f"Export failed: {error}")
+
+        if sizes.wanted():
+            # A file per size picked in Magic Fit, the size added to its name, a size at a time
+            # with Blender drawing between them (sizes.start).
+            def steps():
+                written = []
+                exports = None
+
+                def session():
+                    nonlocal exports
+                    exports = ShapeExports(objects, settings.model_format)
+                    return exports
+
                 def export(sized, _index):
                     file_name = f"{name} {sizes.file_part(sized.name)}"
-                    export_result(directory / file_name, settings.model_format, export_objects=objects)
+                    exports.write(directory / file_name)
                     written.append(file_name + suffix)
 
-                sizes.export_each(objects, export)
-            else:
-                export_result(directory / name, settings.model_format, export_objects=objects)
-            get_export_stats(context)
+                yield from sizes.export_steps(objects, export, session)
+                return written
+
+            return sizes.start(context, steps(), done, failed, self.report,
+                               "The sizes exported so far stay in the folder.")
+        try:
+            export_result(directory / name, settings.model_format, export_objects=objects)
         except Exception as error:
-            self.report({"ERROR"}, f"Export failed: {error}")
+            failed(self.report, error)
             return {"CANCELLED"}
-
-        from .instant_edit.ops import refresh_variant_targets_after_operation
-
-        refresh_error = refresh_variant_targets_after_operation(context)
-        message = f"Exported {', '.join(written)}" if written else f"Exported {name}{suffix}"
-        if scaled or dropped:
-            message += ". " + " ".join(warning for warning in (scaled, dropped) if warning)
-        if refresh_error is not None:
-            message += f"; Penumbra targets could not refresh: {refresh_error}"
-        self.report({"WARNING"} if refresh_error is not None or scaled or dropped else {"INFO"}, message)
+        done(self.report, [])
         return {"FINISHED"}
 
 
@@ -919,7 +936,7 @@ class XIVIE_OT_duplicate_backfaces(Operator):
 class XIVIE_OT_remove_hidden_vertices(Operator):
     bl_idname = "xiv_ie.remove_hidden_vertices"
     bl_label = "Remove Hidden Vertices"
-    bl_description = "Delete the vertices of the selected meshes that no camera angle can see"
+    bl_description = "Delete the vertices of the selected meshes that other meshes cover, like skin under a top"
     bl_options = {"REGISTER", "UNDO"}
 
     # Set by the Mesh Groups right-click menu, which works on that part only.
@@ -931,19 +948,19 @@ class XIVIE_OT_remove_hidden_vertices(Operator):
         name="Hidden By",
         items=(
             ("VISIBLE", "Visible Meshes",
-             "Every visible mesh can hide vertices, like clothes covering the body. "
+             "Visible meshes with another material cover vertices, like clothes covering the body. "
              "Hide meshes the game does not draw together with these first, such as a mannequin"),
-            ("SELF", "Only Itself", "Only a mesh's own faces can hide its vertices"),
+            ("SELF", "Only Itself", "Only a mesh's own faces cover its vertices, like layers inside one mesh"),
         ),
         default="VISIBLE",
     )  # type: ignore
     margin: IntProperty(
         name="Margin",
         description=(
-            "Keep this many rings of hidden vertices around the visible ones, so no gap opens "
+            "Keep this many rings of covered vertices around the visible ones, so no gap opens "
             "where an animation moves the covering mesh"
         ),
-        default=2,
+        default=1,
         min=0,
         soft_max=5,
         max=20,
@@ -953,9 +970,11 @@ class XIVIE_OT_remove_hidden_vertices(Operator):
     def description(cls, context, properties):
         target = "this part" if properties.part_only else "the selected meshes"
         return (
-            f"Delete the vertices of {target} that no camera angle can see, with the faces that use them.\n"
-            "Tests the rest pose and each shp_ shape key the way the game draws them: see-through parts of a "
-            "material hide nothing, and neither does the back of a face whose material culls backfaces"
+            f"Delete the vertices of {target} that other meshes cover, like skin under a top, with the faces "
+            "that use them.\n"
+            "A vertex counts as covered when the cover hides it from every angle within 45 degrees of its "
+            "normal, in the rest pose and each shp_ shape key. See-through parts of a material cover nothing, "
+            "and neither does the back of a face whose material culls backfaces"
         )
 
     @classmethod
@@ -997,7 +1016,7 @@ class XIVIE_OT_remove_hidden_vertices(Operator):
         total = sum(removed.values())
         changed = [obj for obj, count in removed.items() if count]
         if not total:
-            self.report({"INFO"}, "No hidden vertices to remove")
+            self.report({"INFO"}, "No covered vertices to remove")
             return {"FINISHED"}
         where = changed[0].name if len(changed) == 1 else f"{len(changed)} meshes"
         self.report({"INFO"}, f"Removed {total:,} hidden vertices from {where}")

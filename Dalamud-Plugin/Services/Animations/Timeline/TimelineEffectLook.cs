@@ -295,6 +295,49 @@ internal static class TimelineEffectLooks
         return (doc with { Events = events }, [.. copies.Values]);
     }
 
+    /// <summary>
+    /// The looks a preview shows by pointing their effect's own game path at an edited copy: one per
+    /// path whose events all have that same look. The game keeps a playing clip's file loaded, so a
+    /// preview's rebuilt timeline, naming copies, may never be read; the effect's own path is asked
+    /// for again whenever the effect starts. Returns the document with those looks taken off; looks
+    /// that differ between events of one effect stay on for <see cref="Bake"/>.
+    /// </summary>
+    public static (TimelineDocument Document, ImmutableDictionary<string, TimelineEffectEdit> Looks) Redirectable(TimelineDocument doc)
+    {
+        var none = ImmutableDictionary<string, TimelineEffectEdit>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
+        if (doc.Events.IsDefault || doc.Events.All(e => e.Look == null))
+            return (doc, none);
+        var looks = none.ToBuilder();
+        foreach (var group in doc.Events.Where(e => e.Path.Length > 0).GroupBy(e => e.Path, StringComparer.OrdinalIgnoreCase))
+            if (group.First().Look is { IsEmpty: false } look && group.All(e => Equals(e.Look, look)))
+                looks[group.Key] = look;
+        if (looks.Count == 0)
+            return (doc, none);
+        var events = doc.Events.Select(e => e.Look != null && looks.ContainsKey(e.Path) ? e with { Look = null } : e).ToImmutableArray();
+        return (doc with { Events = events }, looks.ToImmutable());
+    }
+
+    /// <summary>
+    /// The files that show <paramref name="looks"/> (see <see cref="Redirectable"/>): each effect's own
+    /// game path with its look written in. A look that changes nothing is left out.
+    /// </summary>
+    public static ImmutableDictionary<string, byte[]> Redirected(IReadOnlyDictionary<string, TimelineEffectEdit> looks, Func<string, byte[]?> effect)
+    {
+        var files = ImmutableDictionary.CreateBuilder<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (path, look) in looks)
+        {
+            var bytes = effect(path) ?? throw new InvalidDataException($"{Path.GetFileName(path)} could not be read, so its look can't be used.");
+            var edited = Apply(bytes, look);
+            if (!edited.AsSpan().SequenceEqual(bytes))
+                files[path] = edited;
+        }
+        return files.ToImmutable();
+    }
+
+    /// <summary>Whether two sets of looks by game path are the same.</summary>
+    public static bool SameLooks(IReadOnlyDictionary<string, TimelineEffectEdit> a, IReadOnlyDictionary<string, TimelineEffectEdit> b) =>
+        a.Count == b.Count && a.All(pair => b.TryGetValue(pair.Key, out var other) && pair.Value.Equals(other));
+
     /// <summary>The name a copy of <paramref name="gamePath"/> starts with: an earlier copy's name without its content hash.</summary>
     internal static string BaseName(string gamePath)
     {

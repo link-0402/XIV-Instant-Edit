@@ -159,11 +159,18 @@ internal static class TimelineCatalogFixture
             "resident faces and blinks are expressions without a library, labelled by their expression emote when one exists");
         check(Expression("cfxf_smile", "smile") is { Label: "Smile", Origin: TimelineCatalogOrigin.Expression } &&
               Expression("cfxf_laugh", "emot/laugh") is { Origin: TimelineCatalogOrigin.Emote, Detail: "Laugh" } &&
-              Expression("cfxf_smile", "emot/laugh") is { Label: "Smile" } &&
+              Expression("cfxf_laugh", "emot/laugh")!.Packs.SequenceEqual(["emot/laugh"]) &&
               !data.Expressions.Any(e => e.Path == "cfxf_angry" && e.Pack != null) &&
               !data.Expressions.Any(e => e.Path == "cfxf_missing") &&
               data.LipShapes.Any(l => l.Path == "cfxl_lip_laugh" && l.Pack == "emot/laugh"),
             "library expressions name their TMPP library, only libraries the face has are offered, and resident motions are not repeated");
+        check(data.Expressions.Count(e => e.Path == "cfxf_smile") == 1 && Expression("cfxf_smile", "smile") is { } smile &&
+              smile.Packs.SequenceEqual(["smile", "emot/laugh"]) && smile.Detail == "Expression and 1 more" &&
+              smile.Sources.SequenceEqual(["Expression", "Laugh"]) &&
+              data.ResidentMotions is { } resident && resident.Contains("cfxf_angry") && resident.Contains("cfxl_lip_nor1") &&
+              !resident.Contains("cfxf_smile") && TimelineCatalogData.Empty.ResidentMotions == null,
+            "a face many libraries hold is listed once, preferring its expression's library and knowing the others; " +
+            "the always loaded faces are known by name");
         check(Expression("cfxf_laugh", "emot/laugh")!.Request(TimelineAddKind.Expression, 12, 30) ==
               new TimelineAddRequest(TimelineAddKind.Expression, 12, "cfxf_laugh", 30, "emot/laugh"),
             "a catalog item becomes the add request that places it");

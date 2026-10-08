@@ -25,6 +25,9 @@ public sealed partial class MainWindow
 
     internal void AttachRecorder(AnimationRecorder? value) => recorder = value;
 
+    /// <summary>The recorder, drawn in the Timeline window's Record page; it sends to Blender through this window.</summary>
+    internal void DrawRecorderPanel() => DrawRecorder();
+
     // As a character send names its armature, so animations find the armature it built.
     private string AnimationArmature => CharacterSendPlan.ArmatureName(_config.AnimationArmatureName);
 
@@ -47,9 +50,9 @@ public sealed partial class MainWindow
             ImGui.SameLine();
             if (ImGui.RadioButton("You", recordingSubject == RecordingSubject.Self)) recordingSubject = RecordingSubject.Self;
             ImGui.SameLine();
-            if (ImGui.RadioButton("Current target", recordingSubject == RecordingSubject.Target)) recordingSubject = RecordingSubject.Target;
+            if (ImGui.RadioButton("Target", recordingSubject == RecordingSubject.Target)) recordingSubject = RecordingSubject.Target;
             ImGui.SameLine();
-            Widgets.HelpTip("In GPose, You is your posed copy and Current target is the GPose target, " +
+            Widgets.HelpTip("In GPose, You is your posed copy and Target is the GPose target, " +
                             "such as an actor that Brio plays a walk on.");
 
             var seconds = _config.RecordingSeconds;
@@ -57,7 +60,9 @@ public sealed partial class MainWindow
             if (ImGui.SliderFloat("Length", ref seconds, AnimationRecorder.MinimumSeconds, AnimationRecorder.MaximumSeconds, "%.1f s"))
                 _config.RecordingSeconds = Math.Clamp(seconds, AnimationRecorder.MinimumSeconds, AnimationRecorder.MaximumSeconds);
             if (ImGui.IsItemDeactivatedAfterEdit()) _saveConfig();
-            ImGui.SameLine(0, Theme.Scaled(16));
+            // The Timeline window's side panel is narrow: the countdown goes below the length there.
+            if (ImGui.GetContentRegionAvail().X > Theme.Scaled(460))
+                ImGui.SameLine(0, Theme.Scaled(16));
             var delay = _config.RecordingDelaySeconds;
             ImGui.SetNextItemWidth(Theme.Scaled(150));
             if (ImGui.SliderFloat("Countdown", ref delay, 0, AnimationRecorder.MaximumDelaySeconds, "%.0f s"))

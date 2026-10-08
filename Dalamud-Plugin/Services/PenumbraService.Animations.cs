@@ -112,6 +112,33 @@ public sealed partial class PenumbraService
         if (RedrawPlayerOwnedEntitiesOnFramework() is { } error) throw new IOException(error);
     });
 
+    /// <summary>
+    /// Redraws one object and waits until Penumbra drew it again, at most <paramref name="timeout"/>, so
+    /// it has loaded its animation files anew. Null when it was redrawn, else why not.
+    /// </summary>
+    internal async Task<string?> RedrawObjectAndWaitAsync(int objectIndex, TimeSpan timeout, CancellationToken token)
+    {
+        var drawn = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnRedrawn(int index)
+        {
+            if (index == objectIndex)
+                drawn.TrySetResult();
+        }
+        ObjectRedrawn += OnRedrawn;
+        try
+        {
+            if (await RedrawObjectAsync(objectIndex).ConfigureAwait(false) is { } error)
+                return error;
+            try { await drawn.Task.WaitAsync(timeout, token).ConfigureAwait(false); }
+            catch (TimeoutException) { return "The character was not redrawn in time."; }
+            return null;
+        }
+        finally
+        {
+            ObjectRedrawn -= OnRedrawn;
+        }
+    }
+
     internal Task DisableAnimationModAsync(AnimationEditJournal journal) => _framework.RunOnFrameworkThread(() =>
     {
         if (!_getModList.Invoke().ContainsKey(journal.ModDirectory)) return;

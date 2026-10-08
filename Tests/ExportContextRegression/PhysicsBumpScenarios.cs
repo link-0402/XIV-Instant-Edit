@@ -3,7 +3,7 @@ using static InstantEdit.TestSupport.Assertions;
 
 /// <summary>
 /// Which shapes chains bump into, as the game reads a point's bits: the simulator's shapes, then the
-/// chain's own. The builder's "Bumps into" list shows that, and ticking or unticking a shape changes
+/// chain's own. The builder's "Collision with" list shows that, and ticking or unticking a shape changes
 /// only the chosen chains' bits, renumbering every chain's bits when a shape joins or leaves a list.
 /// </summary>
 internal static class PhysicsBumpScenarios
@@ -16,6 +16,7 @@ internal static class PhysicsBumpScenarios
         CheckChainShapes();
         CheckLimit();
         CheckBrokenLinks();
+        CheckNames();
     }
 
     private static PhybCollisionRef Ref(string name) => new() { Name = PhybName.From(name), Type = PhybCollisionType.Outside };
@@ -150,5 +151,21 @@ internal static class PhysicsBumpScenarios
         Require(simulator.Collisions.Single().Name.Text == "kept" && chain.Collisions.Single().Name.Text == "own" && chain.Nodes[1].CollisionFlags == 0b11 &&
                 PhysicsCollisions.State(file, [(0, 0)], "own") == PhysicsBumps.All,
             "physics bumps: removing broken links keeps the chain's own shapes on their renumbered bits");
+    }
+
+    /// <summary> The list names each shape by the body part it covers, followed by the shape's own name. </summary>
+    private static void CheckNames()
+    {
+        var file = new PhybFile();
+        file.Collision.Capsules.Add(new PhybCapsule { Name = PhybName.From("forearm_l"), StartBone = PhybName.From("j_te_l"), EndBone = PhybName.From("j_ude_b_l") });
+        file.Collision.Capsules.Add(new PhybCapsule { Name = PhybName.From("asi_r_a"), StartBone = PhybName.From("j_asi_a_r"), EndBone = PhybName.From("j_asi_b_r") });
+        file.Collision.Capsules.Add(new PhybCapsule { Name = PhybName.From("arms"), StartBone = PhybName.From("j_te_l"), EndBone = PhybName.From("j_te_r") });
+        file.Collision.Spheres.Add(new PhybSphere { Name = PhybName.From("Belly"), Bone = PhybName.From("iv_fukubu_phys") });
+        Require(PhysicsShapeNames.Label(file.Collision, "forearm_l", null) == "Left forearm (forearm_l)" &&
+                PhysicsShapeNames.Label(file.Collision, "asi_r_a", null) == "Right thigh (asi_r_a)" &&
+                PhysicsShapeNames.Label(file.Collision, "arms", null) == "Left hand to right hand (arms)" &&
+                PhysicsShapeNames.Label(file.Collision, "Belly", null) == "Belly" &&
+                PhysicsShapeNames.Label(file.Collision, "missing", null) == "missing",
+            "physics bumps: shapes are named by the body part they cover, the part nearer the body for limbs");
     }
 }

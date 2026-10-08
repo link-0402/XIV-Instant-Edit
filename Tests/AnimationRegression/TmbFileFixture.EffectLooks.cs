@@ -146,9 +146,51 @@ internal static partial class TmbFileFixture
         check(ReferenceEquals(TimelineEffectLooks.Bake(doc, Read, imports).Document, doc),
             "a timeline without looks is saved as it is");
         reject(() => TimelineEffectLooks.Bake(withLooks, _ => null, imports), "a look on an effect that wasn't read is refused, not dropped");
+        Previewing(check, reject, withLooks, effect, edit);
         check(TimelineEffectLooks.BaseName("vfx/instant_edit/carpet_loop_0a1b2c3d.avfx") == "carpet_loop" &&
               TimelineEffectLooks.BaseName("vfx/mod/a_0a1b2c3d.avfx") == "a_0a1b2c3d",
             "a copy of a copy drops only an instant_edit copy's hash from its name");
+    }
+
+    /// <summary>
+    /// Looks in a preview: the game may keep playing the clip's loaded file, so a look shows by pointing
+    /// its effect's own path at an edited copy. That works only when every event of the effect has the
+    /// same look; the rest are baked into copies as a save does. A change of looks alone leaves the
+    /// rest of the previewed document the same, so the running preview only needs its files updated.
+    /// </summary>
+    private static void Previewing(Action<bool, string> check, Action<Action, string> reject, TimelineDocument withLooks, byte[] effect,
+        TimelineEffectEdit edit)
+    {
+        const string plainPath = "vfx/mod/eff/plain.avfx";
+        TimelineEvent Ev(TimelineDocument d, string key) => d.Events.Single(e => e.Key == key);
+        // t4 and t5 share glow.avfx and its look; t6 is the import with its own look; t7 gets a file of its own whose look changes nothing.
+        var doc = withLooks with { Events = [.. withLooks.Events.Select(e => e.Key == "t7" ? e with { Path = plainPath } : e)] };
+        var (rest, looks) = TimelineEffectLooks.Redirectable(doc);
+        check(looks.Count == 3 && looks[GlowPath.ToUpperInvariant()] == edit && looks.ContainsKey("vfx/instant_edit/other_loop_0a1b2c3d.avfx") &&
+              rest.Events.All(e => e.Look == null) && rest.Events.Select(e => e.Path).SequenceEqual(doc.Events.Select(e => e.Path)),
+            "a preview points each effect whose events share one look at its edited copy, and keeps the timeline's paths");
+        var files = TimelineEffectLooks.Redirected(looks, _ => effect);
+        check(files.Count == 2 && files[GlowPath].SequenceEqual(TimelineEffectLooks.Apply(effect, edit)) && !files.ContainsKey(plainPath),
+            "the redirected files hold each effect with its look; a look that changes nothing adds no file");
+        reject(() => TimelineEffectLooks.Redirected(looks, _ => null), "a look whose effect wasn't read is refused");
+
+        var mixed = TimelineEdits.Replace(doc, Ev(doc, "t5") with { Look = new TimelineEffectEdit { Hue = 10 } });
+        var (mixedRest, mixedLooks) = TimelineEffectLooks.Redirectable(mixed);
+        check(!mixedLooks.ContainsKey(GlowPath) && Ev(mixedRest, "t4").Look == edit && Ev(mixedRest, "t5").Look!.Hue == 10 &&
+              !TimelineEdits.Same(mixedRest, rest),
+            "events of one effect with different looks keep them for copies, and the preview needs building again");
+
+        var retinted = TimelineEdits.Replace(doc, Ev(doc, "t6") with { Look = new TimelineEffectEdit { Hue = 90 } });
+        var (retintedRest, retintedLooks) = TimelineEffectLooks.Redirectable(retinted);
+        check(TimelineEdits.Same(retintedRest, rest) && !ReferenceEquals(retintedRest, rest) &&
+              !TimelineEffectLooks.SameLooks(retintedLooks, looks) &&
+              TimelineEffectLooks.SameLooks(TimelineEffectLooks.Redirectable(doc).Looks, looks) &&
+              !TimelineEdits.Same(TimelineEdits.Replace(retintedRest, Ev(retintedRest, "t4") with { Start = 9 }), rest) &&
+              !TimelineEdits.Same(rest with { Length = rest.Length + 1 }, rest),
+            "a changed look leaves the previewed document the same but its looks not; a move or a new length doesn't");
+        var unlooked = TimelineEdits.Replace(doc, Ev(doc, "t4") with { Look = null });
+        check(TimelineEffectLooks.Redirectable(rest).Looks.IsEmpty && !TimelineEffectLooks.Redirectable(unlooked).Looks.ContainsKey(GlowPath),
+            "a document without looks has nothing to redirect, and an effect with an unchanged event isn't redirected");
     }
 
     /// <summary>

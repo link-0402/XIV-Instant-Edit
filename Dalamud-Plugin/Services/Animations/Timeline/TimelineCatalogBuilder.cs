@@ -35,6 +35,19 @@ internal sealed record TimelineCatalogItem(string Label, string Path, TimelineCa
 {
     /// <summary>The add request that places this item at <paramref name="start"/>.</summary>
     public TimelineAddRequest Request(TimelineAddKind kind, int start, int duration = 0) => new(kind, start, Path, duration, Pack, Prop);
+
+    /// <summary>
+    /// Every expression library that has the motion, <see cref="Pack"/> (the one it prefers) first; empty
+    /// when the face always has it loaded. Many emotes' libraries hold the same face, listed once.
+    /// </summary>
+    public ImmutableArray<string> Packs { get => packs.IsDefault ? Pack is { } pack ? [pack] : [] : packs; init => packs = value; }
+
+    private readonly ImmutableArray<string> packs;
+
+    /// <summary>Every emote or list the item comes from, for the picker's search; <see cref="Detail"/> names the first.</summary>
+    public ImmutableArray<string> Sources { get => sources.IsDefault ? [Detail] : sources; init => sources = value; }
+
+    private readonly ImmutableArray<string> sources;
 }
 
 /// <summary>A WeaponTimeline row: what a C031 entry plays on a summoned prop.</summary>
@@ -126,6 +139,36 @@ internal sealed record TimelineCatalogData(
         ? ImmutableDictionary<string, int>.Empty
         : Expressions.Concat(LipShapes).Where(item => item.Frames is > 0)
             .GroupBy(item => item.Path, StringComparer.Ordinal).ToImmutableDictionary(group => group.Key, group => group.First().Frames!.Value, StringComparer.Ordinal);
+
+    /// <summary>
+    /// The expressions and lip shapes the face always has loaded, by motion name: they need no library.
+    /// Null before the lists are built, when no face is known to be loaded.
+    /// </summary>
+    public ImmutableHashSet<string>? ResidentMotions { get; } = Expressions.IsDefault || LipShapes.IsDefault || Expressions.IsEmpty
+        ? null
+        : Expressions.Concat(LipShapes).Where(item => item.Pack == null).Select(item => item.Path).ToImmutableHashSet(StringComparer.Ordinal);
+
+    /// <summary>
+    /// <paramref name="items"/> with every motion listed once: a face many emotes' libraries hold keeps
+    /// the first one's label and library, and knows them all (<see cref="TimelineCatalogItem.Packs"/>).
+    /// </summary>
+    internal static ImmutableArray<TimelineCatalogItem> Merged(IEnumerable<TimelineCatalogItem> items)
+    {
+        var groups = new List<List<TimelineCatalogItem>>();
+        var byMotion = new Dictionary<string, List<TimelineCatalogItem>>(StringComparer.Ordinal);
+        foreach (var item in items)
+        {
+            if (!byMotion.TryGetValue(item.Path, out var group))
+                groups.Add(byMotion[item.Path] = group = []);
+            group.Add(item);
+        }
+        return [.. groups.Select(group => group.Count == 1 ? group[0] : group[0] with
+        {
+            Detail = $"{group[0].Detail} and {group.Count - 1} more",
+            Packs = [.. group.Select(i => i.Pack).OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase)],
+            Sources = [.. group.Select(i => i.Detail).Distinct(StringComparer.Ordinal)],
+        })];
+    }
 }
 
 /// <summary>
@@ -271,7 +314,8 @@ internal sealed class TimelineCatalogBuilder(Func<string, bool> exists, Func<str
         }
 
         if (unreadable > 0) notes.Add($"{unreadable} game {(unreadable == 1 ? "file" : "files")} could not be read.");
-        return new TimelineCatalogData([.. expressions], [.. lips], sounds.Items, effects.Items, [.. props],
+        // A face many emotes' libraries hold is listed once.
+        return new TimelineCatalogData(TimelineCatalogData.Merged(expressions), TimelineCatalogData.Merged(lips), sounds.Items, effects.Items, [.. props],
             [.. sheets.WeaponTimelines.Where(w => w.Key.Length > 0).OrderBy(w => w.Id)],
             modFiles.WithComparers(StringComparer.OrdinalIgnoreCase), [.. notes]);
 

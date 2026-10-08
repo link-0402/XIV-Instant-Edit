@@ -86,7 +86,7 @@ public sealed partial class TimelineWindow
         ImGui.Separator();
         ImGui.Spacing();
         if (skeleton == null)
-            Widgets.HintWrapped(Fresh(loaded).Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for in the Source tab to pick bones.");
+            Widgets.HintWrapped(Fresh(loaded).Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for under Source to pick bones.");
         else if (layer.Kind == MotionLayerKind.Amplitude)
             DrawLayerLimit(current, layer, skeleton, readOnly, true);
         else
@@ -325,7 +325,7 @@ public sealed partial class TimelineWindow
         var frame = current.Playhead;
         var inside = frame >= layer.Start && frame <= layer.End;
         var pose = layer.Kind == MotionLayerKind.Pose;
-        if (Targets(layer, frame, skeleton, loaded) is not { Count: > 0 } targets)
+        if (Targets(layer, frame, skeleton, loaded, current.Document) is not { Count: > 0 } targets)
         {
             DrawMotionWait();
             return;
@@ -458,8 +458,9 @@ public sealed partial class TimelineWindow
     /// The selected bones the skeleton has, primary first, each with its value in the layer at
     /// <paramref name="frame"/>; null while a pose layer waits for the clip's own motion.
     /// </summary>
-    private List<PoseTarget>? Targets(MotionLayer layer, int frame, SkeletonDescription skeleton, AnimationTimelineSource loaded)
+    private List<PoseTarget>? Targets(MotionLayer layer, int frame, SkeletonDescription skeleton, AnimationTimelineSource loaded, TimelineDocument doc)
     {
+        var loop = LoopFrames(loaded, doc);
         var (index, _) = BoneTree(skeleton);
         (MotionTransform[] Local, MotionTransform[] Model)? motion = null;
         if (layer.Kind == MotionLayerKind.Pose && (motion = MotionPose(loaded, frame)) == null)
@@ -467,12 +468,15 @@ public sealed partial class TimelineWindow
         var targets = new List<PoseTarget>();
         foreach (var bone in selection.Primary is { } primary ? selection.Bones.Where(name => name != primary).Prepend(primary) : selection.Bones)
         {
-            if (!index.TryGetValue(bone, out var at) || PoseEdits.Value(layer, bone, frame, motion?.Local[at]) is not { } value)
+            if (!index.TryGetValue(bone, out var at) || PoseEdits.Value(layer, bone, frame, motion?.Local[at], loop) is not { } value)
                 continue;
             targets.Add(new PoseTarget(bone, value, PoseEdits.Moved(layer, bone, frame)));
         }
         return targets;
     }
+
+    /// <summary>The clip's length in frames when the game loops it, which layers covering it wrap their keys round; else 0.</summary>
+    private static float LoopFrames(AnimationTimelineSource loaded, TimelineDocument doc) => loaded.Clip.IsLoop && !doc.Expression ? doc.Length : 0;
 
     /// <summary>The decoded motion when it is this clip's current one; null while it is read, which this starts.</summary>
     private MotionClip? DecodedPose(AnimationTimelineSource loaded)

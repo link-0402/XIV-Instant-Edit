@@ -43,7 +43,7 @@ public sealed partial class TimelineWindow
         if (current.Document.LengthChanged)
             return "Live can't show a new length. Use Preview.";
         if (loaded.Clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: not null })
-            return loaded.Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for in the Source tab first.";
+            return loaded.Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for under Source first.";
         return null;
     }
 
@@ -66,6 +66,7 @@ public sealed partial class TimelineWindow
             return;
         liveWanted = false;
         liveStarted = false;
+        StopLiveLooks();
         try
         {
             motionDisplay?.Stop();
@@ -112,6 +113,9 @@ public sealed partial class TimelineWindow
             }
             if (!liveStarted)
             {
+                // An ending preview redraws the character with its own file first.
+                if (previewStop is { IsCompleted: false })
+                    return;
                 if (playback.ActorIndex() is not { } actor)
                 {
                     StopLive();
@@ -134,7 +138,7 @@ public sealed partial class TimelineWindow
                 lastSeekFrame = -1;
                 // After a save the game plays either file until it reloads the clip: the one saved or the one before.
                 if (!motionDisplay.Start(actor, clip.BindingFingerprint, [fresh.FileFingerprint, fresh.BaseFingerprint ?? string.Empty],
-                        decoded, current.Document.Motion))
+                        decoded, current.Document.Motion, current.Document.ExcludedBones))
                 {
                     var error = motionDisplay.Error;
                     StopLive();
@@ -144,7 +148,7 @@ public sealed partial class TimelineWindow
                 liveStarted = true;
                 return;
             }
-            motionDisplay.Show(current.Document.Motion);
+            motionDisplay.Show(current.Document.Motion, current.Document.ExcludedBones);
         }
         catch (InvalidOperationException e)
         {

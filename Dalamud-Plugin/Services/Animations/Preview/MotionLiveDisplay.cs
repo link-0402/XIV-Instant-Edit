@@ -44,9 +44,18 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     private Session? session;
     private Task<Built?>? evaluation;
     private CancellationTokenSource? evaluationCancel;
-    private ImmutableArray<MotionLayer> evaluating;
+    private Edits evaluating;
     private long updates;
     private bool disposed;
+
+    /// <summary>
+    /// What the display shows over the clip: its bone layers and the bones left out. Two are the same
+    /// when they hold the same arrays, as an unchanged document's are.
+    /// </summary>
+    private readonly record struct Edits(ImmutableArray<MotionLayer> Layers, ImmutableArray<string> Excluded)
+    {
+        public bool Changes => MotionEvaluator.Changes(Layers) || !Excluded.IsDefaultOrEmpty;
+    }
 
     /// <summary>What a swapped control held before: the clip's own binding and track weights.</summary>
     private struct Original
@@ -69,9 +78,9 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         public required IReadOnlySet<string> Accepted { get; init; }
         /// <summary>The clip's motion as decoded, which layers apply to.</summary>
         public required MotionClip Base { get; init; }
-        /// <summary>The layers to show; a new set is built as soon as the last build ends.</summary>
-        public ImmutableArray<MotionLayer> Requested { get; set; } = [];
-        public ImmutableArray<MotionLayer> Shown { get; set; } = [];
+        /// <summary>The edits to show; a new set is built as soon as the last build ends.</summary>
+        public Edits Requested { get; set; } = new([], []);
+        public Edits Shown { get; set; } = new([], []);
         /// <summary>The copy to show, or null to show the clip's own motion.</summary>
         public Built? Current { get; set; }
         /// <summary>Swapped controls by address, with what they held.</summary>
@@ -84,6 +93,8 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         /// <summary>Owns the samples, the shells and the weights handed to controls.</summary>
         public required AnimationNative.Arena Arena { get; init; }
         public required short[] Tracks { get; init; }
+        /// <summary>For each of <see cref="Tracks"/>, its place among the clip's own tracks, or -1 for one the layers added.</summary>
+        public required int[] Sources { get; init; }
         public required int Frames { get; init; }
         public required int FloatTracks { get; init; }
         public required nint Transforms { get; init; }
@@ -114,16 +125,18 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     public int Showing => session?.Swapped.Count ?? 0;
 
     /// <summary>Whether the controls show <paramref name="layers"/> now, with nothing left to apply.</summary>
-    public bool Shows(ImmutableArray<MotionLayer> layers) => session is { } current && evaluation == null && current.Shown == layers;
+    public bool Shows(ImmutableArray<MotionLayer> layers) => session is { } current && evaluation == null && current.Shown.Layers == layers;
 
     public string Error { get; private set; } = string.Empty;
 
     /// <summary>
     /// Starts showing <paramref name="layers"/> over <paramref name="decoded"/> on the GPose actor at
     /// <paramref name="actorIndex"/>, wherever it plays the clip: a binding with <paramref name="fingerprint"/>
-    /// or one of <paramref name="alsoAccepted"/>, whose tracks begin with the decoded ones.
+    /// or one of <paramref name="alsoAccepted"/>, whose tracks begin with the decoded ones. The
+    /// <paramref name="excluded"/> bones lose their tracks, as a save leaves them out.
     /// </summary>
-    public bool Start(ushort actorIndex, string fingerprint, IEnumerable<string> alsoAccepted, MotionClip decoded, ImmutableArray<MotionLayer> layers)
+    public bool Start(ushort actorIndex, string fingerprint, IEnumerable<string> alsoAccepted, MotionClip decoded, ImmutableArray<MotionLayer> layers,
+        ImmutableArray<string> excluded = default)
     {
         RequireFrameworkThread();
         Stop();
@@ -140,17 +153,20 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
             Accepted = alsoAccepted.Append(fingerprint).Where(print => print.Length > 0).ToHashSet(StringComparer.Ordinal),
         };
         Error = string.Empty;
-        Show(layers);
+        Show(layers, excluded);
         return true;
     }
 
-    /// <summary>The layers to show. A changed set is applied off the framework thread, then swapped in.</summary>
-    public void Show(ImmutableArray<MotionLayer> layers)
+    /// <summary>
+    /// The layers to show, and the bones left out. A changed set is applied off the framework thread,
+    /// then swapped in.
+    /// </summary>
+    public void Show(ImmutableArray<MotionLayer> layers, ImmutableArray<string> excluded = default)
     {
         RequireFrameworkThread();
         if (session == null || layers.IsDefault)
             return;
-        session.Requested = layers;
+        session.Requested = new Edits(layers, excluded.IsDefault ? [] : excluded);
         Evaluate();
     }
 
@@ -176,11 +192,11 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     {
         if (session is not { } current || evaluation != null || current.Requested == current.Shown)
             return;
-        var layers = current.Requested;
-        if (!MotionEvaluator.Changes(layers))
+        var edits = current.Requested;
+        if (!edits.Changes)
         {
             // Nothing to change: the clip shows its own motion.
-            current.Shown = layers;
+            current.Shown = edits;
             Swap(current, null);
             return;
         }
@@ -188,8 +204,8 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         evaluationCancel = new CancellationTokenSource();
         var token = evaluationCancel.Token;
         var decoded = current.Base;
-        evaluating = layers;
-        evaluation = Task.Run(() => (Built?)Build(decoded, layers, token), token);
+        evaluating = edits;
+        evaluation = Task.Run(() => (Built?)Build(decoded, edits.Layers, edits.Excluded, token), token);
     }
 
     private void OnUpdate(IFramework _)
@@ -231,7 +247,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         if (evaluation is not { IsCompleted: true } done)
             return;
         evaluation = null;
-        var layers = evaluating;
+        var edits = evaluating;
         if (done.IsCanceled)
         {
             Evaluate();
@@ -242,7 +258,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
             var error = done.Exception?.InnerException ?? done.Exception;
             Error = error?.Message ?? "The edits could not be applied.";
             if (session is { } failed)
-                failed.Shown = layers;
+                failed.Shown = edits;
             Evaluate();
             return;
         }
@@ -254,7 +270,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
             return;
         }
         built.Add(copy);
-        current.Shown = layers;
+        current.Shown = edits;
         Error = string.Empty;
         Swap(current, copy);
         Evaluate();
@@ -357,14 +373,14 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         return binding;
     }
 
-    /// <summary>Track weights for the copy: the control's own for the clip's tracks, full for the tracks the layers added.</summary>
+    /// <summary>Track weights for the copy: the control's own for the clip's tracks it kept, full for the tracks the layers added.</summary>
     private static hkArray<byte> Weights(Built copy, Original original)
     {
         if (original.Weights.Length == 0 || original.Weights.Data == null)
             return original.Weights;
         var weights = copy.Arena.Array<byte>(copy.Tracks.Length);
         for (var i = 0; i < copy.Tracks.Length; i++)
-            weights.Data[i] = i < original.Weights.Length ? original.Weights.Data[i] : (byte)255;
+            weights.Data[i] = copy.Sources[i] is var from and >= 0 && from < original.Weights.Length ? original.Weights.Data[from] : (byte)255;
         return weights;
     }
 
@@ -499,22 +515,39 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     /// <summary>
     /// Applies <paramref name="layers"/> to a copy of <paramref name="decoded"/> and lays the result out as
     /// an interleaved animation's samples: the clip's own tracks, then a track for every bone the layers
-    /// moved that had none, encoded with the clip's blend hint. Runs off the framework thread.
+    /// moved that had none, encoded with the clip's blend hint. The <paramref name="excluded"/> bones get
+    /// no track, as in a saved file that leaves them out. Runs off the framework thread.
     /// </summary>
-    private static Built Build(MotionClip decoded, ImmutableArray<MotionLayer> layers, CancellationToken token)
+    private static Built Build(MotionClip decoded, ImmutableArray<MotionLayer> layers, ImmutableArray<string> excluded, CancellationToken token)
     {
         var edited = decoded.Clone();
         MotionEvaluator.Apply(edited, layers, token);
-        var tracks = new List<short>(decoded.SourceTracks);
+        var left = new HashSet<int>();
+        if (!excluded.IsDefaultOrEmpty)
+        {
+            var index = MotionEvaluator.Index(decoded.Skeleton);
+            foreach (var name in excluded)
+                if (index.TryGetValue(name, out var bone))
+                    left.Add(bone);
+        }
+        var tracks = new List<short>();
+        var sources = new List<int>();
+        for (var t = 0; t < decoded.SourceTracks.Length; t++)
+            if (!left.Contains(decoded.SourceTracks[t]))
+            {
+                tracks.Add(decoded.SourceTracks[t]);
+                sources.Add(t);
+            }
         var tracked = decoded.SourceTracks.ToHashSet();
         for (var b = 0; b < edited.Bones; b++)
         {
-            if (tracked.Contains((short)b))
+            if (tracked.Contains((short)b) || left.Contains(b))
                 continue;
             for (var i = 0; i < edited.Samples; i++)
                 if (!Near(edited.Get(i, b), decoded.Get(i, b)))
                 {
                     tracks.Add(checked((short)b));
+                    sources.Add(-1);
                     break;
                 }
         }
@@ -536,7 +569,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
                 values.AsSpan().CopyTo(new Span<float>(floats, values.Length));
             return new Built
             {
-                Arena = arena, Tracks = [.. tracks], Frames = edited.Samples, FloatTracks = decoded.FloatTracks,
+                Arena = arena, Tracks = [.. tracks], Sources = [.. sources], Frames = edited.Samples, FloatTracks = decoded.FloatTracks,
                 Transforms = (nint)transforms, Floats = (nint)floats,
             };
         }

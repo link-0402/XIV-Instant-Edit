@@ -3,37 +3,35 @@ using System.Numerics;
 namespace InstantEdit.Services.Physics;
 
 /// <summary>
-/// What a fit sets: a collision shape's size, the size of one chain's moving points, a chain's
-/// firmness (its main spring) or its swing limit.
+/// What a fit sets: a collision shape's size, the size of one chain's moving points, or a chain's
+/// swing limit.
 /// </summary>
 internal enum PhysicsFitTarget
 {
     Capsule,
     Sphere,
     Chain,
-    Firmness,
     Swing,
 }
 
 /// <summary>
 /// A setting measured on the body: <see cref="Name"/> is the shape's name, or for a chain its bone,
 /// with the simulator and chain in <see cref="Simulator"/> and <see cref="Chain"/>. Sizes are radii in
-/// model units (metres), swings degrees, firmness the spring's strength.
+/// model units (metres), swings degrees.
 /// </summary>
 internal sealed record PhysicsFitItem(PhysicsFitTarget Target, string Name, int Simulator, int Chain, string Label, string Detail, float Current,
     float Fitted)
 {
-    /// <summary> The fit differs from the file: half a millimetre, half a degree, or a twentieth of the firmness. </summary>
+    /// <summary> The fit differs from the file: half a millimetre, or half a degree. </summary>
     public bool Changes => Target switch
     {
         PhysicsFitTarget.Swing => MathF.Abs(Fitted - Current) >= 0.5f,
-        PhysicsFitTarget.Firmness => MathF.Abs(Fitted - Current) >= Math.Max(0.0002f, MathF.Abs(Current) * 0.05f),
         _ => MathF.Abs(Fitted - Current) >= 0.0005f,
     };
 }
 
-/// <summary> The settings a fit measured, the breast size it measured them for, and what it couldn't measure, in plain words. </summary>
-internal sealed record PhysicsFitResult(IReadOnlyList<PhysicsFitItem> Items, IReadOnlyList<string> Notes, PhysicsSizeMeasure? Chest = null);
+/// <summary> The settings a fit measured, and what it couldn't measure, in plain words. </summary>
+internal sealed record PhysicsFitResult(IReadOnlyList<PhysicsFitItem> Items, IReadOnlyList<string> Notes);
 
 /// <summary>
 /// Sizes a physics file's collision to a measured body. Only collision that body areas or the skirt use
@@ -50,9 +48,8 @@ internal sealed record PhysicsFitResult(IReadOnlyList<PhysicsFitItem> Items, IRe
 /// </list>
 /// Skin counts by area, so a dense nipple mesh doesn't outweigh the breast around it. A helper bone
 /// without skin of its own, like the elbow's, is measured on the limb it sits on.
-/// Beyond collision, a chest set to an intensity level gets the firmness size-based presets give its
-/// breast size (<see cref="PhysicsSize"/>), and body areas whose swing would let their skin sink into
-/// the torso get a lower limit (<see cref="PhysicsClearance"/>); limits are only ever lowered.
+/// Beyond collision, body areas whose swing would let their skin sink into the torso get a lower limit
+/// (<see cref="PhysicsClearance"/>); limits are only ever lowered.
 /// </summary>
 internal static class PhysicsFit
 {
@@ -65,7 +62,7 @@ internal static class PhysicsFit
     private const float Smallest = 0.005f;
     private const float Largest = 0.5f;
 
-    public static PhysicsFitResult Measure(PhybFile file, PhysicsBody body, PhysicsSkeleton skeleton, PhysicsSizeMeasure? chest = null)
+    public static PhysicsFitResult Measure(PhybFile file, PhysicsBody body, PhysicsSkeleton skeleton)
     {
         var items = new List<PhysicsFitItem>();
         var notes = new List<string>();
@@ -75,7 +72,7 @@ internal static class PhysicsFit
         {
             if (!users.TryGetValue(capsule.Name.Text, out var use) || !use.Fits)
                 continue;
-            var label = $"{capsule.Name.Text}: {PartLabel(capsule.StartBone.Text, capsule.EndBone.Text, skeleton)}";
+            var label = PhysicsShapeNames.Label(file.Collision, capsule.Name.Text, skeleton);
             if (!body.Pose.TryGetValue(capsule.StartBone.Text, out var start) || !body.Pose.TryGetValue(capsule.EndBone.Text, out var end))
             {
                 notes.Add($"{capsule.Name.Text}: your skeleton lacks its bones.");
@@ -109,7 +106,7 @@ internal static class PhysicsFit
                 notes.Add($"{sphere.Name.Text}: none of your skin moves with {sphere.Bone.Text}.");
                 continue;
             }
-            items.Add(Shape(PhysicsFitTarget.Sphere, sphere.Name.Text, $"{sphere.Name.Text}: {PartLabel(sphere.Bone.Text, sphere.Bone.Text, skeleton)}",
+            items.Add(Shape(PhysicsFitTarget.Sphere, sphere.Name.Text, PhysicsShapeNames.Label(file.Collision, sphere.Name.Text, skeleton),
                 sphere.Thickness, measured, use));
         }
 
@@ -142,42 +139,8 @@ internal static class PhysicsFit
                         chain.Nodes[^1].Radius, Clamp(measured.Value)));
             }
         }
-        Firmness(file, chest, items, notes);
         Swings(file, body, skeleton, items, notes);
-        return new PhysicsFitResult(items, notes, chest);
-    }
-
-    /// <summary> Chest chains set to a level get its firmness for the measured breast size. </summary>
-    private static void Firmness(PhybFile file, PhysicsSizeMeasure? chest, List<PhysicsFitItem> items, List<string> notes)
-    {
-        if (chest is null)
-            return;
-        var scale = PhysicsSize.ChestScale(chest.Ratio);
-        var unmatched = false;
-        for (var s = 0; s < file.Simulators.Count; s++)
-        {
-            var simulator = file.Simulators[s];
-            if (simulator.Excluded)
-                continue;
-            for (var c = 0; c < simulator.Chains.Count; c++)
-            {
-                var chain = simulator.Chains[c];
-                if (chain.Nodes.Count < 2 || PhysicsAreas.KindOf(chain.Nodes[0].Bone.Text) is not { } kind || !PhysicsLevels.SizeFitted(kind.Key))
-                    continue;
-                if (PhysicsLevels.Match(simulator, c, kind.Key) is not { Firmness: { } firmness } level ||
-                    PhysicsKnobs.MainSpring(simulator, c) is not { } spring)
-                {
-                    unmatched = true;
-                    continue;
-                }
-                var root = chain.Nodes[0].Bone.Text;
-                items.Add(new PhysicsFitItem(PhysicsFitTarget.Firmness, root, s, c, $"{kind.Label}{Side(root)}: firmness",
-                    $"{level.Name}, for {chest.Label} breasts. Size-based presets make bigger breasts softer.", spring.Stiffness,
-                    MathF.Round(firmness * scale, 4)));
-            }
-        }
-        if (unmatched)
-            notes.Add("Chest firmness: pick an intensity for the chest, then fit again to suit it to your size.");
+        return new PhysicsFitResult(items, notes);
     }
 
     /// <summary> Body areas whose swing lets their skin sink into the torso get the swing that stays clear. </summary>
@@ -225,7 +188,7 @@ internal static class PhysicsFit
                     foreach (var sphere in file.Collision.Spheres.Where(shape => shape.Name.Text == item.Name))
                         sphere.Thickness = item.Fitted;
                     break;
-                case PhysicsFitTarget.Chain or PhysicsFitTarget.Firmness or PhysicsFitTarget.Swing:
+                case PhysicsFitTarget.Chain or PhysicsFitTarget.Swing:
                     if (item.Simulator < 0 || item.Simulator >= file.Simulators.Count ||
                         item.Chain < 0 || item.Chain >= file.Simulators[item.Simulator].Chains.Count)
                         break;
@@ -233,12 +196,7 @@ internal static class PhysicsFit
                     var chain = simulator.Chains[item.Chain];
                     if (chain.Nodes.Count < 2 || chain.Nodes[0].Bone.Text != item.Name)
                         break;
-                    var knob = item.Target switch
-                    {
-                        PhysicsFitTarget.Firmness => PhysicsKnob.Firmness,
-                        PhysicsFitTarget.Swing => PhysicsKnob.Swing,
-                        _ => PhysicsKnob.Size,
-                    };
+                    var knob = item.Target == PhysicsFitTarget.Swing ? PhysicsKnob.Swing : PhysicsKnob.Size;
                     // Sizes are metres here and centimetres on the slider.
                     PhysicsKnobs.Write(simulator, item.Chain, knob, knob == PhysicsKnob.Size ? item.Fitted * 100 : item.Fitted);
                     break;
@@ -473,47 +431,4 @@ internal static class PhysicsFit
 
     private static string Side(string bone)
         => bone.EndsWith("_l", StringComparison.Ordinal) ? ", left" : bone.EndsWith("_r", StringComparison.Ordinal) ? ", right" : string.Empty;
-
-    /// <summary> "Left forearm" for a shape between two bones: the part of the bone nearer the body. </summary>
-    internal static string PartLabel(string from, string to, PhysicsSkeleton skeleton)
-    {
-        var path = PathBones(from, to, skeleton);
-        var bone = path.Count > 0 ? path[^1] : from;
-        // A shape that crosses the body names both ends.
-        if (path.Count > 2 && Side(from) != Side(to))
-            return $"{Sided(from)} to {Sided(to)}";
-        return Sided(bone);
-    }
-
-    /// <summary> "left forearm" for j_ude_b_l. </summary>
-    private static string Sided(string bone)
-        => (bone.EndsWith("_l", StringComparison.Ordinal) ? "left " : bone.EndsWith("_r", StringComparison.Ordinal) ? "right " : string.Empty) + Part(bone);
-
-    private static string Part(string bone)
-    {
-        var name = bone.EndsWith("_l", StringComparison.Ordinal) || bone.EndsWith("_r", StringComparison.Ordinal) ? bone[..^2] : bone;
-        return name switch
-        {
-            "j_sako" => "shoulder",
-            "j_ude_a" or "n_hkata" => "upper arm",
-            "j_ude_b" or "n_hte" => "forearm",
-            "n_hhiji" => "elbow",
-            "j_te" => "hand",
-            "j_asi_a" => "thigh",
-            "j_asi_b" => "knee",
-            "j_asi_c" => "calf",
-            "j_asi_d" or "j_asi_e" => "foot",
-            "j_mune" or "iv_c_mune" => "breast",
-            "iv_shiri" or "ya_shiri_phys" => "butt cheek",
-            "j_kosi" => "hips",
-            "j_sebo_a" => "waist",
-            "j_sebo_b" => "chest",
-            "j_sebo_c" => "upper back",
-            "j_kubi" => "neck",
-            _ when name.StartsWith("j_oya", StringComparison.Ordinal) || name.StartsWith("j_hito", StringComparison.Ordinal) ||
-                   name.StartsWith("j_naka", StringComparison.Ordinal) || name.StartsWith("j_kusu", StringComparison.Ordinal) ||
-                   name.StartsWith("j_ko_", StringComparison.Ordinal) => "fingers",
-            _ => bone,
-        };
-    }
 }

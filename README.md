@@ -21,10 +21,12 @@ Penumbra mods.
   your smallclothes on their shared skin material, and the head if you tick it, so tattoos and body paint can cross
   the wrists, waist, ankles and neck.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Painting-in-Substance-Painter)
-- **Animations**: bake LivePose adjustments into animations, repair their skeletons, give bones back to physics, and
-  send animations or a recorded live pose to Blender. Edit an animation's timeline: its length, sounds, expressions,
+- **Animations**: the listener finds what your character plays; open it in the timeline, or load any emote, idle,
+  sit, movement track or expression onto your GPose character from there. Edit its length, sounds, expressions,
   lip sync, effects and props, with a preview in GPose. Change how it moves with bone layers, shown live on your
-  character in GPose, and key whole poses from .pose files, your posed character or other animations.
+  character in GPose, from LivePose adjustments, .livepose and .pose files, your posed character or other
+  animations. Give bones back to physics, repair the skeleton when you save, and send animations or a recorded live
+  pose to Blender.
   [Editing](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-Animations) ·
   [Timeline](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-the-Timeline) ·
   [In Blender](https://github.com/link-0402/XIV-Instant-Edit/wiki/Animations-in-Blender)

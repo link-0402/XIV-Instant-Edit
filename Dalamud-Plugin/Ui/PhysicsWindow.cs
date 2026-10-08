@@ -360,14 +360,48 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
         }
         ImGui.SameLine();
         var history = ImGui.GetFrameHeight() * 2 + ImGui.GetStyle().ItemSpacing.X;
-        ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetWindowContentRegionMax().X - history - Theme.Gap * 3 - MotionsWidth));
+        var right = FitButtonWidth + Theme.Gap * 3 + MotionsWidth + Theme.Gap * 3 + history;
+        ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetWindowContentRegionMax().X - right));
+        DrawFitButton(current);
+        ImGui.SameLine(0, Theme.Gap * 3);
         DrawMotions();
         ImGui.SameLine(0, Theme.Gap * 3);
-        if (Widgets.IconButton("##physics-undo", FontAwesomeIcon.Undo, "Undo (Ctrl+Z)", current.CanUndo))
+        if (Widgets.IconButton("##physics-undo", FontAwesomeIcon.Undo, null, current.CanUndo))
             Undo(current);
+        HistoryTip(current, undo: true);
         ImGui.SameLine();
-        if (Widgets.IconButton("##physics-redo", FontAwesomeIcon.Redo, "Redo (Ctrl+Y)", current.CanRedo))
+        if (Widgets.IconButton("##physics-redo", FontAwesomeIcon.Redo, null, current.CanRedo))
             Redo(current);
+        HistoryTip(current, undo: false);
+    }
+
+    private (PhysicsDocument? Document, int Revision, int History) historyShown;
+    private string undoTip = string.Empty;
+    private string redoTip = string.Empty;
+
+    /// <summary> Undo's and redo's tooltip: what the step changes, in the controls' own words and values. </summary>
+    private void HistoryTip(PhysicsDocument current, bool undo)
+    {
+        if (!ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            return;
+        if (!ReferenceEquals(historyShown.Document, current) || historyShown.Revision != current.Revision || historyShown.History != current.History)
+        {
+            historyShown = (current, current.Revision, current.History);
+            undoTip = StepText("Undo (Ctrl+Z)", current, current.NextUndo());
+            redoTip = StepText("Redo (Ctrl+Y)", current, current.NextRedo());
+        }
+        Tip(undo ? undoTip : redoTip);
+    }
+
+    private static string StepText(string action, PhysicsDocument current, PhysicsStep? step)
+    {
+        if (step is null)
+            return action;
+        var lines = new List<string> { action };
+        if (step.Name is { } name)
+            lines.Add(name);
+        lines.AddRange(PhysicsChanges.Describe(current.File, step.File));
+        return string.Join("\n", lines);
     }
 
     private void Undo(PhysicsDocument current)

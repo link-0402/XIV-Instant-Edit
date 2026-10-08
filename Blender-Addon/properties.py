@@ -88,7 +88,7 @@ class XIVIEExportSettings(PropertyGroup):
     resolve_mesh_group_conflicts: BoolProperty(
         name="Offset Clashing Mesh IDs",
         description="Offset incoming mesh group IDs when they conflict with existing visible groups",
-        default=True,
+        default=False,
     )  # type: ignore
     simple_import_skeleton: PointerProperty(
         type=Object,

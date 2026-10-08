@@ -200,7 +200,7 @@ class ModelImport:
             if mesh.vertex_count > 0
         }
         settings = getattr(getattr(bpy.context, "scene", None), "xiv_ie_settings", None)
-        resolve_mesh_group_conflicts = getattr(settings, "resolve_mesh_group_conflicts", True)
+        resolve_mesh_group_conflicts = getattr(settings, "resolve_mesh_group_conflicts", False)
         self.mesh_group_offset = (
             mesh_group_conflict_offset(incoming_groups, occupied_mesh_group_ids(bpy.context))
             if resolve_mesh_group_conflicts

@@ -15,10 +15,10 @@ namespace InstantEdit.Ui;
 
 /// <summary>
 /// The timeline editor for one animation clip: its motion, expressions, lip sync, sounds, effects
-/// and props on lanes like a video editor, its length, a properties panel, pickers and imports, a
-/// save footer like the rebakes' and a GPose preview. Slow work runs on tasks polled every frame,
-/// so the draw path never reads files. Split by concern: canvas, properties, pickers and imports,
-/// save footer and preview bar each live in their own partial file.
+/// and props on lanes like a video editor, its length, a side panel (properties, source, animated
+/// bones, saved edits, recorder), pickers and imports, a loader that plays any animation on the GPose
+/// actor, a save footer and a GPose preview. Slow work runs on tasks polled every frame, so the draw
+/// path never reads files. Split by concern: each part lives in its own partial file.
 /// </summary>
 public sealed partial class TimelineWindow : Window, IDisposable
 {
@@ -105,6 +105,13 @@ public sealed partial class TimelineWindow : Window, IDisposable
     /// <summary> Whether the document must not change now: nothing to edit, or a save, undo or reload is running. </summary>
     private bool ReadOnly => source?.Document == null || loadTask != null || saveTask != null || pendingSaveId != null || undoPending;
 
+    /// <summary>Opens the window as it is: its clip, or with none the loader.</summary>
+    internal void Show()
+    {
+        IsOpen = true;
+        BringToFront();
+    }
+
     /// <summary>
     /// Shows the timeline of <paramref name="capture"/>'s clip, or of its startup. With unsaved
     /// changes to another clip it first asks, inline, whether to discard them.
@@ -170,6 +177,14 @@ public sealed partial class TimelineWindow : Window, IDisposable
         pending = PendingAction.None;
         pendingOpen = null;
         pendingAgain = null;
+        loaderWaiting = null;
+        loaderMessage = null;
+        livePoseReading = false;
+        livePoseNote = null;
+        livePoseClearable = null;
+        // The listener stays on while the Animations tab still shows it.
+        if (mainListens?.Invoke() != true)
+            animations?.StopObservation();
         // The Bones window poses this window's clip; it goes with it, and so do its bones on the character.
         bonesWindow.IsOpen = false;
         EndGizmo(true);
@@ -224,7 +239,11 @@ public sealed partial class TimelineWindow : Window, IDisposable
     {
         if (animations is not { } service)
             return;
-        StopPreview();
+        // What the loader plays keeps playing while its timeline opens; a preview or Live ends.
+        if (playback.Active && previewFingerprint == null && !liveWanted && !preview.Active && !previewJob)
+            StopTemporaryMod();
+        else
+            StopPreview();
         loadCancel?.Cancel();
         loadCancel?.Dispose();
         loadCancel = new CancellationTokenSource();
@@ -303,6 +322,10 @@ public sealed partial class TimelineWindow : Window, IDisposable
             saveMessage = null;
             lastSaveId = null;
             scrollY = 0;
+            repairTarget = null;
+            animatedBoneFilter = string.Empty;
+            livePoseNote = null;
+            livePoseClearable = null;
         }
         if (again != null && loaded.BaseMotion != null)
         {
@@ -359,8 +382,9 @@ public sealed partial class TimelineWindow : Window, IDisposable
     }
 
     /// <summary>
-    /// The source with the clip's latest skeleton match: choosing a skeleton in the Source tab after
-    /// opening the timeline must still allow a length change.
+    /// The source with the clip's latest skeleton match: choosing a skeleton under Source after
+    /// opening the timeline must still allow a length change. Only a capture of the same file counts:
+    /// the Live preview plays a copy under the same capture, and its match knows no choice.
     /// </summary>
     private AnimationTimelineSource Fresh(AnimationTimelineSource current)
     {
@@ -372,11 +396,17 @@ public sealed partial class TimelineWindow : Window, IDisposable
                 continue;
             var clip = current.Startup ? capture.Startup : capture.Clip;
             if (clip != null && clip.GamePath == current.Clip.GamePath && clip.BindingFingerprint == current.Clip.BindingFingerprint &&
-                !ReferenceEquals(clip.Resolution, current.Clip.Resolution))
-                return current with { Clip = current.Clip with { Resolution = clip.Resolution } };
+                clip.SourceContext == current.Clip.SourceContext)
+                return ReferenceEquals(clip.Resolution, current.Clip.Resolution)
+                    ? current
+                    : current with { Clip = current.Clip with { Resolution = clip.Resolution } };
             break;
         }
-        return current;
+        // The capture shows another file now (the preview copy), so a choice made under Source
+        // reaches the timeline through the match kept for its own file.
+        return animations.Observer.LatestResolution(current.Clip) is { } latest && !ReferenceEquals(latest, current.Clip.Resolution)
+            ? current with { Clip = current.Clip with { Resolution = latest } }
+            : current;
     }
 
     public override void Draw()
@@ -385,13 +415,22 @@ public sealed partial class TimelineWindow : Window, IDisposable
         if (animations == null)
         {
             Widgets.Banner("##timeline-unavailable", FeedbackSeverity.Warning, animationError ?? "Animation editing is unavailable.");
+            if (drawRecorder != null)
+            {
+                ImGui.Spacing();
+                drawRecorder();
+            }
             return;
         }
+        // The listener runs while this window is open: the loader and the clip's skeleton choice read it.
+        animations.StartObservation();
         PollLoad();
         PollSave();
         PollImport();
         PollPreview();
         PollLengths();
+        PollLibrary();
+        PollLoader();
         if (source != null && ImGui.GetFrameCount() % 30 == 0)
             source = Fresh(source);
 
@@ -407,17 +446,26 @@ public sealed partial class TimelineWindow : Window, IDisposable
             ImGui.Spacing();
             Widgets.Banner("##timeline-read-only", FeedbackSeverity.Warning,
                 "This timeline can't be edited. " + (source.ReadOnlyReason ?? "Its file could not be read."));
+            ImGui.Spacing();
+            DrawLoadButton();
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Hint, "Load another animation");
+            DrawLoaderStatus();
             return;
         }
+        PollLivePose(editor, source);
         if (loadError != null)
             Widgets.Banner("##timeline-reload-error", FeedbackSeverity.Error, "Reading the timeline again failed: " + loadError);
         if (catalogKey != null)
             catalog.Request(catalogKey);
         editor.MotionFrames = MotionFrames(source);
+        editor.ResidentMotions = catalog.Data.ResidentMotions;
         editor.BoneOrder = source.Clip.Resolution?.Selected?.Skeleton is { } skeleton ? BoneTree(skeleton).Index : null;
 
         SyncPlayback(editor, source);
         UpdateLive(editor, source);
+        SyncLooks(editor);
         CheckGizmo();
         DrawToolbar(editor);
         DrawPreviewBar(editor, source);
@@ -439,6 +487,10 @@ public sealed partial class TimelineWindow : Window, IDisposable
         RespectCloseHotkey = editor.Gesture == TimelineGesture.None;
     }
 
+    /// <summary>
+    /// Before a clip is open: the loader fills the window, with the saved edits and the recorder
+    /// beside it in tabs.
+    /// </summary>
     private void DrawNothingOpen()
     {
         if (loadTask != null)
@@ -453,10 +505,26 @@ public sealed partial class TimelineWindow : Window, IDisposable
         {
             Widgets.Banner("##timeline-load-error", FeedbackSeverity.Error,
                 (loadErrorAgain ? "The edit could not be opened again. " : "The timeline could not be read: ") + loadError);
-            return;
+            ImGui.Spacing();
         }
-        Widgets.EmptyState(FontAwesomeIcon.Film, "No timeline open",
-            "Select an animation in the Animations tab, then press Open timeline in its Timeline tab.");
+        DrawLoaderStatus();
+        using var tabs = ImRaii.TabBar("##timeline-start");
+        if (!tabs.Success)
+            return;
+        if (ImGui.BeginTabItem("Load an animation"))
+        {
+            Widgets.HintWrapped("Pick an animation to play on your GPose character and edit it here, " +
+                                "or open one from the Animations tab.");
+            ImGui.Spacing();
+            DrawLoader(ImGui.GetContentRegionAvail().Y);
+            ImGui.EndTabItem();
+        }
+        DrawEditsTab();
+        if (drawRecorder != null && ImGui.BeginTabItem("Record live pose"))
+        {
+            DrawPage(drawRecorder);
+            ImGui.EndTabItem();
+        }
     }
 
     /// <summary> The clip's name and state, the mod it comes from and its length. </summary>
@@ -515,12 +583,12 @@ public sealed partial class TimelineWindow : Window, IDisposable
         Load(next.Capture, next.Startup, false, pendingAgain);
     }
 
-    /// <summary> The lanes on the left and the selected event's properties on the right, split like the Mod Browser. </summary>
+    /// <summary> The lanes on the left and the side panel on the right, split like the Mod Browser. </summary>
     private void DrawBody(TimelineEditor current, float width, float height)
     {
         var splitter = Theme.Scaled(6);
         if (propertiesWidth <= 0)
-            propertiesWidth = Theme.Scaled(300);
+            propertiesWidth = Theme.Scaled(320);
         var minimumCanvas = Theme.Scaled(320);
         var minimumProperties = Theme.Scaled(220);
         propertiesWidth = Math.Clamp(propertiesWidth, minimumProperties, Math.Max(minimumProperties, width - minimumCanvas - splitter));
@@ -532,8 +600,8 @@ public sealed partial class TimelineWindow : Window, IDisposable
         propertiesWidth -= dragged - canvasWidth;
         ImGui.SameLine(0, 0);
         using var panel = ImRaii.Child("##timeline-properties", new Vector2(0, height), true);
-        if (panel.Success)
-            DrawProperties(current);
+        if (panel.Success && source != null)
+            DrawSidePanel(current, source);
     }
 
     private static string ErrorText(Exception? error)

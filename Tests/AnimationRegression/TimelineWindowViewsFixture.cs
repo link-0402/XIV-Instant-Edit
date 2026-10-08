@@ -241,6 +241,11 @@ internal static class TimelineWindowViewsFixture
         texts.Add(error ?? "");
         check(kept == "smile" && error != null && error.Contains("smile", StringComparison.Ordinal),
             "A second library is refused with a short reason");
+        check(TimelineWindowViews.PackAfter("illusio_vitae", "smile", out error, documentPackInUse: false) == "smile" && error == null,
+            "A library no face plays from gives way");
+        check(TimelineWindowViews.PackFor([], "smile") == null && TimelineWindowViews.PackFor(["smile", "emot/laugh"], "EMOT/LAUGH") == "EMOT/LAUGH" &&
+              TimelineWindowViews.PackFor(["smile", "emot/laugh"], "illusio_vitae") == "smile" && TimelineWindowViews.PackFor(["smile"], null) == "smile",
+            "A face is placed from no library when always loaded, from the timeline's own when it has the face, else from its first");
     }
 
     private static void Texts(Action<bool, string> check, List<string> texts)

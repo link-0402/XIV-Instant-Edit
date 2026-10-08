@@ -16,6 +16,43 @@ internal static class TimelineEditorFixture
     private static TimelineDocument Doc(int length, params TimelineEvent[] events) => new(length, length, null, [.. events], 1);
 
     /// <summary>
+    /// A timeline's expression library goes with its last face, so another library's faces can come
+    /// in; faces the face always has loaded don't hold it. <paramref name="laughs"/> holds two faces
+    /// from emot/laugh.
+    /// </summary>
+    private static void Libraries(Action<bool, string> check, TimelineDocument laughs)
+    {
+        var resident = ImmutableHashSet.Create(StringComparer.Ordinal, "cfxf_angry");
+        var faces = laughs.Events.Where(e => e.Lane == TimelineLane.Expression).ToArray();
+        check(faces.All(f => TimelineEdits.FromPack(laughs, f, resident)) && TimelineEdits.UsesPack(laughs, resident) &&
+              !TimelineEdits.FromPack(laughs with { FacePack = null }, faces[0], resident) &&
+              !TimelineEdits.FromPack(laughs, laughs.Events.First(e => e.Lane != TimelineLane.Expression), resident),
+            "faces on a timeline with a library play from it; other events and timelines without one don't");
+
+        var oneLeft = TimelineEdits.Delete(laughs, [faces[0].Key]);
+        var none = TimelineEdits.Delete(oneLeft, [faces[1].Key]);
+        check(TimelineEdits.ReleasePack(laughs, oneLeft, resident).FacePack == "emot/laugh" &&
+              TimelineEdits.ReleasePack(oneLeft, none, resident).FacePack == null,
+            "the library stays while one of its faces does, and goes with the last");
+        var angry = TimelineEdits.Replace(oneLeft, faces[1] with { Path = "cfxf_angry" });
+        check(TimelineEdits.ReleasePack(oneLeft, angry, resident).FacePack == null &&
+              TimelineEdits.ReleasePack(oneLeft, angry, null).FacePack == "emot/laugh",
+            "swapping the last face for an always loaded one drops the library, unless which faces are always loaded is unknown");
+        var unused = none with { FacePack = "illusio_vitae" };
+        check(TimelineEdits.ReleasePack(unused, TimelineEdits.Move(unused, [], 0), resident).FacePack == "illusio_vitae" &&
+              TimelineEdits.Add(unused, [Ev("", TimelineLane.Expression, 5, 30, true, magic: "C010", path: "cfxf_smile")], "smile", out var takeError,
+                  resident) is { FacePack: "smile" } && takeError == null &&
+              TimelineEdits.Add(angry, [Ev("", TimelineLane.Expression, 5, 30, true, magic: "C010", path: "cfxf_smile")], "smile", out var residentError,
+                  resident) is { FacePack: "smile" } && residentError == null,
+            "a library no face plays from stays until a face from another library takes its place, beside always loaded faces too");
+
+        var editor = new TimelineEditor(oneLeft) { ResidentMotions = resident };
+        editor.Select(faces[1].Key);
+        check(editor.DeleteSelection() && editor.Document.FacePack == null && editor.Undo() && editor.Document.FacePack == "emot/laugh",
+            "deleting the last face in the editor drops the library in the same undo step");
+    }
+
+    /// <summary>
     /// The editor fixture document, 100 frames: the locked motion, a resizable expression, a sound
     /// marker, a movable footstep in Other, a resizable effect and a locked effect.
     /// Rows: Motion 0, Expression 1, LipSync 2, Sound 3, Effect 4, Prop 5, Other 6.
@@ -404,12 +441,13 @@ internal static class TimelineEditorFixture
         var again = TimelineEdits.Add(added, [Ev("", TimelineLane.Prop, 30, group: "prop"), Ev("", TimelineLane.Prop, 30, group: "prop")], null, out _);
         check(again.Events[4].Group is { } second && again.Events[5].Group == second && second != group && again.NextKey == 11,
             "each Add makes its own group");
-        var face = TimelineEdits.Add(props, [Ev("", TimelineLane.Expression, 5, 30, true, magic: "C010")], "emot/laugh", out var faceError);
-        var same = TimelineEdits.Add(face, [Ev("", TimelineLane.Expression, 40, 30, true, magic: "C010")], "EMOT/LAUGH", out var sameError);
-        var other = TimelineEdits.Add(same, [Ev("", TimelineLane.Expression, 60, 30, true, magic: "C010")], "bad", out var otherError);
+        var face = TimelineEdits.Add(props, [Ev("", TimelineLane.Expression, 5, 30, true, magic: "C010", path: "cfxf_laugh")], "emot/laugh", out var faceError);
+        var same = TimelineEdits.Add(face, [Ev("", TimelineLane.Expression, 40, 30, true, magic: "C010", path: "cfxf_smile")], "EMOT/LAUGH", out var sameError);
+        var other = TimelineEdits.Add(same, [Ev("", TimelineLane.Expression, 60, 30, true, magic: "C010", path: "cfxf_sad")], "bad", out var otherError);
         check(faceError == null && face.FacePack == "emot/laugh" && sameError == null && same.Events.Length == 3 && same.FacePack == "emot/laugh" &&
               ReferenceEquals(other, same) && otherError is { Length: > 0 } && !otherError.Contains('…') && !otherError.Contains("..."),
             "an expression library is set by the first Add that needs one and a different one is refused");
+        Libraries(check, same);
         check(TimelineEdits.Add(face, [Ev("", TimelineLane.Sound, 1)], null, out _).FacePack == "emot/laugh" &&
               ReferenceEquals(TimelineEdits.Add(props, [], "bad", out var emptyError), props) && emptyError == null &&
               ReferenceEquals(TimelineEdits.Add(props, [Ev("", TimelineLane.Sound, -1)], null, out var badError), props) && badError != null,

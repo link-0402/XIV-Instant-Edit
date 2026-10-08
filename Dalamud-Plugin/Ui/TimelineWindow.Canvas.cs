@@ -26,6 +26,8 @@ public sealed partial class TimelineWindow
     ];
     private static readonly string[] LaneGlyphs = [.. LaneIcons.Select(icon => icon.ToIconString())];
     private static readonly string LockGlyph = FontAwesomeIcon.Lock.ToIconString();
+    // A face from the timeline's expression library.
+    private static readonly string PackGlyph = FontAwesomeIcon.Book.ToIconString();
     // Offset, amplitude and pose layers.
     private static readonly FontAwesomeIcon[] LayerIcons = [FontAwesomeIcon.Bone, FontAwesomeIcon.WaveSquare, FontAwesomeIcon.StreetView];
     private static readonly string[] LayerGlyphs = [.. LayerIcons.Select(icon => icon.ToIconString())];
@@ -458,6 +460,13 @@ public sealed partial class TimelineWindow
     }
 
     /// <summary>
+    /// Whether <paramref name="ev"/> is a face from the timeline's expression library, marked with a
+    /// book; unmarked until the catalog knows which faces are always loaded.
+    /// </summary>
+    private static bool FromPack(TimelineEditor current, TimelineEvent ev) =>
+        current.ResidentMotions is { } resident && TimelineEdits.FromPack(current.Document, ev, resident);
+
+    /// <summary>
     /// One event: a clip is a filled bar over its duration, a marker a diamond on its frame, and a
     /// sound also shows how long its file plays. Selected events get an accent outline, locked ones
     /// are dimmed with a lock, conditional ones a small dot.
@@ -512,6 +521,11 @@ public sealed partial class TimelineWindow
         if (locked && labelRight - labelLeft > Theme.Scaled(14))
         {
             drawList.AddText(UiBuilder.IconFont, fontSize * .8f, new Vector2(labelLeft, middle - fontSize * .4f), U32(Theme.Muted), LockGlyph);
+            labelLeft += fontSize;
+        }
+        if (FromPack(current, ev) && labelRight - labelLeft > Theme.Scaled(14))
+        {
+            drawList.AddText(UiBuilder.IconFont, fontSize * .8f, new Vector2(labelLeft, middle - fontSize * .4f), U32(Theme.Text), PackGlyph);
             labelLeft += fontSize;
         }
         if (labelRight - labelLeft > Theme.Scaled(18))
@@ -773,6 +787,8 @@ public sealed partial class TimelineWindow
                 ImGui.TextUnformatted("Lasts " + TimelineWindowViews.DurationText(played));
             if (ev.Path.Length > 0)
                 ImGui.TextColored(Theme.Hint, ev.Path);
+            if (FromPack(current, ev))
+                ImGui.TextUnformatted($"From the {current.Document.FacePack} expressions.");
             if (ev.LockReason is { Length: > 0 } reason)
                 ImGui.TextColored(Theme.Warning, (ev.Access == TimelineAccess.Locked ? "Locked: " : "Move only: ") + reason);
             if (ev.Conditional)

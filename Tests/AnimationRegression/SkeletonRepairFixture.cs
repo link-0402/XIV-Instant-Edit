@@ -138,6 +138,15 @@ internal static class SkeletonRepairFixture
         var untouchedCapture = AnimationObserver.ApplyUpdatedSources([sourcedCapture], "other-clip", [staleSource with { Hash = "after-edit-hash" }]);
         check(refreshedByEdit.Single().Sources.Single().Hash == "after-edit-hash" && untouchedCapture.Single().Sources.Single().Hash == "before-edit-hash",
             "an in-place edit's refreshed source hash reaches only its own captured clip, by id and game path");
+        // The walk and the run both live in move_a: saving one moves the other onto the saved file too.
+        var sibling = sourcedCapture with { Id = "run", Clip = clip with { Name = "run", BindingIndex = 1 } };
+        var otherFile = sourcedCapture with { Id = "idle", Sources = [staleSource with { GamePath = "idle.pap" }] };
+        var otherCollection = sibling with { Id = "elsewhere", CollectionId = Guid.NewGuid() };
+        var siblings = AnimationObserver.ApplyUpdatedSources([sourcedCapture, sibling, otherFile, otherCollection], "walk",
+            [staleSource with { Hash = "after-edit-hash" }]);
+        check(siblings[1].Sources.Single().Hash == "after-edit-hash" && siblings[2].Sources.Single().Hash == "before-edit-hash" &&
+              siblings[3].Sources.Single().Hash == "before-edit-hash",
+            "an in-place edit refreshes other clips captured from the same file in the same collection, and nothing else");
         var selectedResolution = ambiguity with { State = SkeletonResolutionState.Matched, Selected = ambiguity.Candidates[0] };
         var request = new AnimationBakeRequest(Guid.NewGuid(), capture with { Clip = clip with { Resolution = selectedResolution }, Startup = clip with { Resolution = selectedResolution } },
             AnimationDestination.NewMod, "Repair", true, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.RepairSkeleton);

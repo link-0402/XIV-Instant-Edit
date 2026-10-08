@@ -122,7 +122,7 @@ internal sealed class AnimationObserver : IDisposable
             runtimeCache.Clear(); resourceCache.Clear(); parsedPaps.Clear(); motionCache.Clear(); durations.Clear();
             resourceCollection = Guid.Empty; resourceMapKey = null;
         }
-        if (current == 0) { Status = "Log in to observe player emotes, idles, and walk cycles."; return; }
+        if (current == 0) { Status = "Log in to observe player emotes, idles, and movement."; return; }
         var changed = !lastStamp.HasValue || stamp is null || !lastStamp.Value.SameAs(stamp.Value);
         var now = DateTime.UtcNow;
         // Leave the last scheduled stamp untouched while work is in flight. If
@@ -175,7 +175,7 @@ internal sealed class AnimationObserver : IDisposable
             token.ThrowIfCancellationRequested();
             if (pair.Runtime is not { } runtime) { MarkNotPlaying(); Status = "Waiting for an eligible player animation."; return; }
             var active = runtime.Timelines.Distinct().Select(catalog.Find).OfType<AnimationCatalog.Timeline>().ToArray();
-            if (active.Length == 0) { MarkNotPlaying(); Status = "No eligible emote, idle, or walk cycle is playing."; return; }
+            if (active.Length == 0) { MarkNotPlaying(); Status = "No eligible emote, idle, or movement is playing."; return; }
             var collection = await penumbra.GetCollectionTargetAsync(runtime.ObjectIndex) ?? throw new IOException("The player collection is unavailable.");
             token.ThrowIfCancellationRequested();
             var paths = await penumbra.GetResourcePathsAsync(runtime.ObjectIndex) ?? throw new IOException("Penumbra's player resource snapshot is unavailable.");
@@ -514,20 +514,34 @@ internal sealed class AnimationObserver : IDisposable
         motionCache.Clear();
     }
     internal static ImmutableArray<AnimationCapture> ApplyUpdatedSources(ImmutableArray<AnimationCapture> history,
-        string captureId, ImmutableArray<AnimationResource> updatedResources) =>
-        history.Select(c => c.Id != captureId ? c : c with
-        {
-            Sources = c.Sources.Select(s => updatedResources.FirstOrDefault(u => u.GamePath == s.GamePath) ?? s).ToImmutableArray(),
-            ExpressionTimeline = c.ExpressionTimeline is { } timeline
-                ? updatedResources.FirstOrDefault(u => u.GamePath == timeline.GamePath) ?? timeline
-                : null,
-        }).ToImmutableArray();
+        string captureId, ImmutableArray<AnimationResource> updatedResources)
+    {
+        // Other clips read from the same file (the walk and the run both live in move_a) get its new version too.
+        var before = history.FirstOrDefault(c => c.Id == captureId) is { } edited
+            ? edited.Sources.Select(s => (edited.CollectionId, s)).ToHashSet()
+            : [];
+        AnimationResource Updated(AnimationResource source) => updatedResources.FirstOrDefault(u => u.GamePath == source.GamePath) ?? source;
+        return history.Select(c => c.Id != captureId
+            ? c.Sources.Any(s => before.Contains((c.CollectionId, s)))
+                ? c with { Sources = c.Sources.Select(s => before.Contains((c.CollectionId, s)) ? Updated(s) : s).ToImmutableArray() }
+                : c
+            : c with
+            {
+                Sources = c.Sources.Select(Updated).ToImmutableArray(),
+                ExpressionTimeline = c.ExpressionTimeline is { } timeline
+                    ? updatedResources.FirstOrDefault(u => u.GamePath == timeline.GamePath) ?? timeline
+                    : null,
+            }).ToImmutableArray();
+    }
     public void ReportOperationError(AnimationClip clip, string? error)
     {
         var key = ChoiceKey(clip);
         if (error == null) operationErrors.TryRemove(key, out _); else operationErrors[key] = error;
         history = history.Select(c => ChoiceKey(c.Clip) == key ? c with { Clip = c.Clip with { LastOperationError = error } } : c).ToImmutableArray();
     }
+    /// <summary>The latest skeleton match for this clip from this file, or null when none is kept.</summary>
+    public SkeletonResolution? LatestResolution(AnimationClip clip)
+        => resolutions.TryGetValue(ChoiceKey(clip), out var cached) ? cached.Result : null;
     public AnimationClip ChooseSkeleton(AnimationClip clip, SkeletonCandidate candidate)
     {
         if (clip.Resolution == null || !clip.Resolution.Candidates.Contains(candidate)) throw new InvalidOperationException("Skeleton candidate changed. Refresh the capture.");

@@ -352,6 +352,10 @@ def _target_groups(props) -> list:
     return groups
 
 
+# The target entry that exports Magic Fit's sizes into a group, an option per size.
+NEW_SIZE_OPTIONS = "Add Sizes as Options"
+
+
 def _target_summary(props, sized: bool = False, race: int | None = None) -> tuple[str, str]:
     """Text and icon for the export target dropdown; ``race`` names the race model's race."""
     selection = props.variant_target
@@ -370,7 +374,7 @@ def _target_summary(props, sized: bool = False, race: int | None = None) -> tupl
         return "Choose a Target", "QUESTION"
     if sized:
         # Sizes go into the group, an option of a group standing for it.
-        return f"{target.group_name} › Sizes", "ADD"
+        return f"{target.group_name} › {NEW_SIZE_OPTIONS}", "ADD"
     if target.kind == "GROUP":
         return f"{target.group_name} › New Option", "ADD"
     return f"{target.group_name} › {target.option_name}", "FILE"
@@ -403,9 +407,20 @@ class XIVIE_MT_export_targets(Menu):
             for group, options in _target_groups(props):
                 layout.separator()
                 layout.label(text=group.group_name, icon="OUTLINER_COLLECTION")
+                picked = props.variant_target == group.selection_id
+                # Sizes go into the whole group: its options are only shown.
+                column = layout.column()
+                column.enabled = not sized
                 for option in options:
-                    target(layout, option.selection_id, option.option_name)
-                target(layout, group.selection_id, "Sizes" if sized else "New Option...")
+                    target(column, option.selection_id, option.option_name)
+                    picked = picked or (sized and props.variant_target == option.selection_id)
+                # Not an option of the group: it adds them.
+                layout.operator(
+                    "xiv_ie.select_variant_target",
+                    text=NEW_SIZE_OPTIONS if sized else "New Option...",
+                    icon="ADD",
+                    depress=picked,
+                ).selection_id = group.selection_id
         else:
             layout.separator()
             layout.operator("xiv_ie.refresh_variant_targets", text="Load Mod Options", icon="FILE_REFRESH")

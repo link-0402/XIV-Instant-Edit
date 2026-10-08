@@ -9,9 +9,11 @@ namespace InstantEdit.Services.Animations.Preview;
 /// character's effective collection. Nothing goes into Penumbra's mod folder or mod list: the files
 /// live in the cache (outside Penumbra's folder, so sync plugins don't upload them) and the mod only
 /// in Penumbra's memory. Every revision gets a new folder, because the game and Penumbra never
-/// re-read a file path they already loaded; the clip still has to be replayed (or the character
-/// redrawn, for idle and movement) before the game loads it. A record in the config folder is saved
-/// before Penumbra is called, so a crash or a failed unload is cleaned up on the next load.
+/// re-read a file path they already loaded. Replaying the clip is not enough: the character keeps its
+/// loaded animation files until it is redrawn (<see cref="RedrawAsync"/>; seen in game 2026-10-07,
+/// a removed expression kept playing), while an effect is asked for again whenever it starts. A record
+/// in the config folder is saved before Penumbra is called, so a crash or a failed unload is cleaned
+/// up on the next load.
 /// </summary>
 internal sealed class AnimationPreviewService : IDisposable
 {
@@ -154,7 +156,17 @@ internal sealed class AnimationPreviewService : IDisposable
         }
     }
 
-    /// <summary> Removes the temporary mod and deletes the preview's files. The character keeps the loaded preview until the clip replays or it is redrawn. </summary>
+    /// <summary>
+    /// Redraws the character at <paramref name="objectIndex"/> and waits until it is drawn again, so it
+    /// loads the preview's files (or, after a stop, its own again), as the in-place edits' redraw does.
+    /// Null when it was redrawn, else why not.
+    /// </summary>
+    public Task<string?> RedrawAsync(ushort objectIndex, CancellationToken token) =>
+        _disposed ? Task.FromResult<string?>(null) : _penumbra.RedrawObjectAndWaitAsync(objectIndex, RedrawWait, token);
+
+    private static readonly TimeSpan RedrawWait = TimeSpan.FromSeconds(3);
+
+    /// <summary> Removes the temporary mod and deletes the preview's files. The character keeps the loaded preview until it is redrawn. </summary>
     public Task StopAsync() => _disposed ? Task.CompletedTask : Task.Run(StopCoreAsync, CancellationToken.None);
 
     private async Task StopCoreAsync()

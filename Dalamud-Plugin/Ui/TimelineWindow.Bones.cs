@@ -46,6 +46,8 @@ public sealed partial class TimelineWindow
     // A drag on the rotation ball is running as one undo step.
     private bool ballEditing;
     private string boneSearch = string.Empty;
+    // Why choosing the source skeleton here failed.
+    private string? skeletonChoiceError;
     // The skeleton the selection was last checked against.
     private string? selectionSkeleton;
     // Bone indices by name and children by parent, for one skeleton.
@@ -77,7 +79,7 @@ public sealed partial class TimelineWindow
         if (source is not { Document: not null } loaded || editor is not { } current)
         {
             Widgets.EmptyState(FontAwesomeIcon.Child, "No timeline open",
-                "Open an animation's timeline in the Animations tab. This window poses its bones.");
+                "Open or load an animation in the Timeline window. This window poses its bones.");
             return;
         }
         if (loaded.Standalone)
@@ -88,8 +90,15 @@ public sealed partial class TimelineWindow
         var fresh = Fresh(loaded);
         if (fresh.Clip.Resolution?.Selected?.Skeleton is not { } skeleton)
         {
-            Widgets.EmptyState(FontAwesomeIcon.Child, "Skeleton unknown",
-                fresh.Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for in the Source tab first.");
+            if (fresh.Clip.Resolution is { State: SkeletonResolutionState.Ambiguous, Candidates.Length: > 0 } open)
+            {
+                Widgets.EmptyState(FontAwesomeIcon.Child, "Choose the skeleton",
+                    "Several skeletons fit this animation. Choose the one it was made for.");
+                DrawSkeletonChoice(fresh, open);
+            }
+            else
+                Widgets.EmptyState(FontAwesomeIcon.Child, "Skeleton unknown",
+                    fresh.Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for under Source first.");
             return;
         }
         KeepSelection(skeleton);
@@ -118,6 +127,42 @@ public sealed partial class TimelineWindow
                 DrawBonesPanel(current, loaded, layer, skeleton);
         }
         HandleBonesKeys(current);
+    }
+
+    /// <summary>
+    /// The skeletons that fit the clip equally well, to choose the one it was made for. The choice is
+    /// shared with the Timeline window's Source page, so both keep it.
+    /// </summary>
+    private void DrawSkeletonChoice(AnimationTimelineSource fresh, SkeletonResolution resolution)
+    {
+        ImGui.Spacing();
+        var width = Math.Min(Theme.Scaled(480), ImGui.GetContentRegionAvail().X);
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + Math.Max(0, (ImGui.GetContentRegionAvail().X - width) / 2));
+        ImGui.SetNextItemWidth(width);
+        using (ImRaii.Disabled(animations!.Busy))
+        using (var combo = ImRaii.Combo("##bones-skeleton", "Choose the skeleton it was made for"))
+        {
+            if (combo.Success)
+                foreach (var candidate in resolution.Candidates)
+                {
+                    if (ImGui.Selectable($"{AnimationPresentation.SkeletonLabel(candidate)} · {Path.GetFileName(candidate.Source.Resource.ResolvedPath)}##{AnimationSkeletonIndex.SelectionId(candidate)}"))
+                    {
+                        try
+                        {
+                            source = fresh with { Clip = animations.Observer.ChooseSkeleton(fresh.Clip, candidate) };
+                            skeletonChoiceError = null;
+                        }
+                        catch (InvalidOperationException e)
+                        {
+                            skeletonChoiceError = e.Message;
+                        }
+                    }
+                    if (ImGui.IsItemHovered())
+                        ImGui.SetTooltip(candidate.Rationale + "\n" + candidate.Source.Resource.ResolvedPath);
+                }
+        }
+        if (skeletonChoiceError != null)
+            Widgets.HintWrapped(skeletonChoiceError);
     }
 
     /// <summary> Live and pause, the layer's previous and next key, the layer and the playhead. </summary>
@@ -674,8 +719,9 @@ public sealed partial class TimelineWindow
         MotionTransform[] before, after;
         try
         {
-            before = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion.Take(at).ToArray(), frame);
-            after = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion, frame);
+            var loop = LoopFrames(loaded, doc);
+            before = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion.Take(at).ToArray(), frame, loop);
+            after = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion, frame, loop);
         }
         catch (InvalidDataException)
         {

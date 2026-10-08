@@ -63,6 +63,9 @@ class MeshNameInfo:
     prefix: bool
 
 
+# The name a sizes export gives its hidden working copies (mesh/export.py) until it writes them.
+SIZE_COPY_NAME = "xiv_ie_size_copy"
+
 _MESH_ID_PREFIX = re.compile(r"^(\d+)\.(\d+)(?:\s+(.*))?$")
 _MESH_ID_SUFFIX = re.compile(r"^(.+?)\s+(\d+)\.(\d+)$")
 # Blender puts a duplicate's ".001" after the LOD suffix.
@@ -503,6 +506,9 @@ def validate_context(context_id: str, scene=None) -> ContextRef:
     objects = tuple(collection.objects)
     mesh_objects = []
     for obj in objects:
+        if obj.name.startswith(SIZE_COPY_NAME):
+            # A sizes export's hidden working copy, seen while the panel redraws mid-export.
+            continue
         tagged_context_id = _value(obj, "context_id", "")
         if tagged_context_id:
             _check_aliases(obj, REQUIRED_OBJECT_FIELDS + ("plugin_instance_id", "capability"))

@@ -64,6 +64,9 @@ internal sealed class MotionClip
     /// <summary>The decoded clip's blend hint: 0 normal, 1 or 2 additive (see <see cref="AnimationRetarget.Encode(BoneTransform, BoneTransform, sbyte)"/>).</summary>
     public sbyte BlendHint { get; init; }
 
+    /// <summary>Whether the game plays the clip as a loop, its last sample running back into its first.</summary>
+    public bool Loops { get; init; }
+
     /// <summary>A sample's time in seconds; the last is exactly the duration, as the bake samples it.</summary>
     public float Time(int sample) => sample == Samples - 1 ? Duration : Duration * sample / (Samples - 1);
 
@@ -100,7 +103,7 @@ internal sealed class MotionClip
     /// <summary>A copy to apply layers to, so this decode stays the unedited motion.</summary>
     public MotionClip Clone()
     {
-        var copy = new MotionClip(Skeleton, Duration, Samples, TrackFloats, FloatTracks) { SourceTracks = SourceTracks, BlendHint = BlendHint };
+        var copy = new MotionClip(Skeleton, Duration, Samples, TrackFloats, FloatTracks) { SourceTracks = SourceTracks, BlendHint = BlendHint, Loops = Loops };
         data.CopyTo(copy.data, 0);
         return copy;
     }

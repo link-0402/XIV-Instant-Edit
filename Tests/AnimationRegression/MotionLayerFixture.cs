@@ -20,6 +20,7 @@ internal static class MotionLayerFixture
         Fades(check);
         Offsets(check);
         Keys(check);
+        Loops(check);
         Eases(check, reject);
         Amplitudes(check);
         Poses(check);
@@ -162,6 +163,44 @@ internal static class MotionLayerFixture
             "stepped keys hold until the next key");
         var applied = Applied(linear);
         check(Degrees(applied.Get(15, Index(Hand)).Rotation, Q(Vector3.UnitY, 45)) < .01f, "applied keys turn the bone by their value at each sample");
+    }
+
+    /// <summary>
+    /// A layer over a whole looping clip with keys inside it (as the user's walk: keys at 4 and 10 on a
+    /// 35-frame loop) must leave the loop seamless: its last sample has to match its first, or the
+    /// motion jumps each time the loop starts over.
+    /// </summary>
+    private static void Loops(Action<bool, string> check)
+    {
+        var looping = new MotionClip(Rig(), 1, 31) { Loops = true };
+        looping.CopyFrom(Clip());
+        check(looping.Clone().Loops && !Clip().Loops, "a clone keeps whether its clip loops");
+        var layer = Layer(MotionLayerKind.Offset, keys: [Key(4, (Hand, T(Vector3.Zero, Q(Vector3.UnitY, 10)))), Key(10, (Hand, T(Vector3.Zero, Q(Vector3.UnitY, 30))))]);
+        var hand = Index(Hand);
+        var once = Applied(layer);
+        check(Math.Abs(Degrees(once.Get(0, hand).Rotation, Quaternion.Identity) - 10) < .01f &&
+              Math.Abs(Degrees(once.Get(30, hand).Rotation, Quaternion.Identity) - 30) < .01f,
+            "on a clip that plays once, keys hold before the first and after the last");
+        MotionEvaluator.Apply(looping, [layer]);
+        // From the key at 10 (30 degrees) back to the key at 4 (10 degrees), 24 frames later at frame 34 = 4 + 30.
+        check(Degrees(looping.Get(0, hand).Rotation, looping.Get(30, hand).Rotation) < .01f &&
+              Math.Abs(Degrees(looping.Get(0, hand).Rotation, Quaternion.Identity) - (30 - 20 * 20 / 24f)) < .01f &&
+              Math.Abs(Degrees(looping.Get(20, hand).Rotation, Quaternion.Identity) - (30 - 20 * 10 / 24f)) < .01f &&
+              Math.Abs(Degrees(looping.Get(7, hand).Rotation, Quaternion.Identity) - 20) < .01f,
+            "on a loop, a layer covering it goes from its last key round to its first, so the loop's last frame matches its first");
+        check(Math.Abs(Degrees(MotionEvaluator.KeyValue(layer, Hand, 0, 30)!.Value.Rotation, looping.Get(0, hand).Rotation)) < .01f &&
+              Degrees(MotionEvaluator.ApplyAt(Rig(), Pose(Clip(), 25), [layer], 25, 30)[hand].Rotation, looping.Get(25, hand).Rotation) < .01f,
+            "the panels show the wrapped keys the bake applies");
+        var section = layer with { Start = 2, End = 28 };
+        check(Math.Abs(Degrees(MotionEvaluator.KeyValue(section, Hand, 20, 30)!.Value.Rotation, Quaternion.Identity) - 30) < .01f &&
+              !MotionEvaluator.Wraps(section, 30) && MotionEvaluator.Wraps(layer, 30) && !MotionEvaluator.Wraps(layer, 0),
+            "a layer over part of a loop keeps holding its end keys");
+        var ends = Layer(MotionLayerKind.Offset, keys: [Key(0, (Hand, T(Vector3.Zero, Q(Vector3.UnitY, 10)))), Key(30, (Hand, T(Vector3.Zero, Q(Vector3.UnitY, 30))))]);
+        check(Math.Abs(Degrees(MotionEvaluator.KeyValue(ends, Hand, 30, 30)!.Value.Rotation, Quaternion.Identity) - 30) < .01f,
+            "keys on both ends of a loop keep their own values");
+        var stepped = layer with { Interpolation = MotionInterpolation.Step };
+        check(Math.Abs(Degrees(MotionEvaluator.KeyValue(stepped, Hand, 2, 30)!.Value.Rotation, Quaternion.Identity) - 30) < .01f,
+            "a stepped last key holds round the loop until the first key");
     }
 
     private static void Eases(Action<bool, string> check, Action<Action, string> reject)
