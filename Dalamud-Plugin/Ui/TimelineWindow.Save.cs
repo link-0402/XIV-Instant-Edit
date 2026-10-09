@@ -234,7 +234,9 @@ public sealed partial class TimelineWindow
                 saveError = service.Status;
             else
                 saveMessage = "The last save was undone.";
-            Load(source!.Capture, source.Startup, true);
+            // While this window edits layers on a motion of its own, a file that is again what an earlier
+            // layered edit saved brings that edit's layers back as the saved state, so it matches the file.
+            Load(source!.Capture, source.Startup, true, afterUndo: motionBase?.Clip == ClipKey(source));
         }
     }
 
@@ -288,13 +290,9 @@ public sealed partial class TimelineWindow
     /// </summary>
     private AnimationEditJournal? SavedLayers(AnimationTimelineSource current)
     {
-        if (animations is not { } service || current.BaseMotion != null || current.Document == null || current.Standalone)
+        if (animations is not { } service || current.BaseMotion != null)
             return null;
-        foreach (var journal in service.Recovery)
-            if (journal.Request.Capture.CollectionId == current.Capture.CollectionId && journal.Request.Timeline?.Startup == current.Startup &&
-                AnimationEditService.EditAgainProblem(journal) == null && AnimationEditService.EditAgainFileProblem(journal, current) == null)
-                return journal;
-        return null;
+        return AnimationEditService.SavedLayersJournal(service.Recovery, current);
     }
 
     /// <summary> Offers to bring back the layers the open clip was saved with, which new layers would otherwise go on top of. </summary>

@@ -310,8 +310,9 @@ class _Mesh:
         normals = np.zeros((count, 3))
         np.add.at(normals, loop_vertices, corner_normals.reshape(-1, 3))
         # Normals follow the inverse transpose, which keeps them pointing out
-        # of a scaled or mirrored mesh.
-        normals = normals @ np.linalg.inv(matrix[:3, :3])
+        # of a scaled or mirrored mesh. The pseudo-inverse also takes a mesh
+        # scaled flat to zero, which a plain inverse refuses.
+        normals = normals @ np.linalg.pinv(matrix[:3, :3])
         if np.linalg.det(matrix[:3, :3]) < 0:
             # Blender draws a mirrored object with its faces turned back
             # around; do the same so the world-space normals point outwards.

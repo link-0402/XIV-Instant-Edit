@@ -77,8 +77,8 @@ public sealed class Configuration : IPluginConfiguration
 
     /// <summary>
     /// Send models made for another race (most female gear is c0201) to Blender and Substance Painter
-    /// reshaped for the character's race, as the game's racial deformer shows them. For preview only:
-    /// the plugin refuses exports of scaled imports. Send my character to Blender scales without it.
+    /// reshaped for the character's race, as the game's racial deformer shows them. A scaled import
+    /// exports only as the character's race's model. Send my character to Blender scales without it.
     /// </summary>
     public bool ApplyRacialScaling { get; set; }
 

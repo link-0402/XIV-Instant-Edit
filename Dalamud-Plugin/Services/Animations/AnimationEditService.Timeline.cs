@@ -105,10 +105,50 @@ internal sealed partial class AnimationEditService
         CancellationToken token)
     {
         if (EditAgainProblem(journal) is { } problem) throw new InvalidOperationException(problem);
-        var edit = journal.Request.Timeline!;
-        var loaded = await LoadTimelineAsync(capture, edit.Startup, token);
+        var loaded = await LoadTimelineAsync(capture, journal.Request.Timeline!.Startup, token);
         if (loaded.Document == null)
             return loaded;
+        return await WithEditAgainAsync(journal, loaded, token);
+    }
+
+    /// <summary>
+    /// Reads the clip after an undo. When its file is again exactly what an earlier layered edit saved,
+    /// that edit's bone layers come back on the motion from before it, as Edit again brings them;
+    /// otherwise, or when that motion can't be read, the clip comes as it is.
+    /// </summary>
+    public async Task<AnimationTimelineSource> LoadTimelineAfterUndoAsync(AnimationCapture capture, bool startup, CancellationToken token)
+    {
+        var loaded = await LoadTimelineAsync(capture, startup, token);
+        if (SavedLayersJournal(Recovery, loaded) is not { } journal)
+            return loaded;
+        try { return await WithEditAgainAsync(journal, loaded, token); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            log.Warning(e, "Could not bring back the bone layers of the edit the undone save went back to.");
+            return loaded;
+        }
+    }
+
+    /// <summary>
+    /// The newest finished edit with bone layers that saved exactly <paramref name="current"/>'s file and
+    /// can be edited again; null when there is none.
+    /// </summary>
+    internal static AnimationEditJournal? SavedLayersJournal(IEnumerable<AnimationEditJournal> recovery, AnimationTimelineSource current)
+    {
+        if (current.Document == null || current.Standalone)
+            return null;
+        foreach (var journal in recovery)
+            if (journal.Request.Capture.CollectionId == current.Capture.CollectionId && journal.Request.Timeline?.Startup == current.Startup &&
+                EditAgainProblem(journal) == null && EditAgainFileProblem(journal, current) == null)
+                return journal;
+        return null;
+    }
+
+    /// <summary><paramref name="loaded"/> with <paramref name="journal"/>'s layers back on its kept motion; throws when they can't come back.</summary>
+    private async Task<AnimationTimelineSource> WithEditAgainAsync(AnimationEditJournal journal, AnimationTimelineSource loaded,
+        CancellationToken token)
+    {
+        var edit = journal.Request.Timeline!;
         if (EditAgainFileProblem(journal, loaded) is { } changed) throw new IOException(changed);
         byte[] motion;
         try { motion = await File.ReadAllBytesAsync(Path.Combine(journals.DirectoryFor(journal.Id), MotionBaseName), token); }

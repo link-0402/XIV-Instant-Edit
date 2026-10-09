@@ -87,6 +87,10 @@ internal static partial class TmbFileFixture
                   is var unsafeEdit && TimelineEffectLooks.Read(unsafeEdit).Tint == new Vector3(0, TimelineEffectEdit.MaxTint, 0) &&
               Near(Values(unsafeEdit, "Ptcl", "Col", "Bri"), [2]),
             "values out of range are clamped and invalid ones ignored");
+        static byte[] Key(params float[] values) => Chunk("Keys", [.. BitConverter.GetBytes((short)0), .. BitConverter.GetBytes((short)1), .. Floats(values)]);
+        var extreme = Chunk("AVFX", Chunk("Ptcl", Chunk("Col", [.. Chunk("RGB", Key(3e38f, 0, -3e38f)), .. Chunk("A", Key(1, 1, 3e38f))])));
+        check(TimelineEffectLooks.Apply(extreme, new TimelineEffectEdit { Saturation = 0, Opacity = 2 }).SequenceEqual(extreme),
+            "a colour or value that a change would push past a float's range stays as it is");
 
         Saving(check, reject, effect, edit);
     }

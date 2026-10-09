@@ -742,7 +742,7 @@ older journals are covered offline in EditAgainFixture):
 
 Docs (Phase 8):
 - [ ] The changelog's 2.2.0 lists the bone layer entries under Timeline, and the Animations
-  tab's Timeline tab says the motion can change too.
+  tab's hint beside the open-timeline button names bone layers.
 
 Key eases and bone rows (2026-10-07; curves, per-key sampling, bone key moves, rows, hits and
 gestures are covered offline in MotionLayerFixture and MotionEditsFixture):

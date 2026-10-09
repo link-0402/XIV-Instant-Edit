@@ -45,6 +45,8 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private bool loadKeepsView;
     // The saved edit a load brings back with its bone layers (Edit again), until it ends.
     private AnimationEditJournal? loadingAgain;
+    // The load follows an undo and may bring back the layers of the edit it went back to.
+    private bool loadingAfterUndo;
     private string? loadError;
     // The failed load was an Edit again.
     private bool loadErrorAgain;
@@ -195,6 +197,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         loadTask = null;
         loading = null;
         loadingAgain = null;
+        loadingAfterUndo = false;
         loadError = null;
         source = null;
         catalogKey = null;
@@ -233,9 +236,10 @@ public sealed partial class TimelineWindow : Window, IDisposable
     /// <summary>
     /// Reads the clip's timeline on a task. <paramref name="keepView"/> reloads the clip already
     /// shown after a save or undo, keeping its view and playhead. With <paramref name="again"/> the
-    /// clip comes with that saved edit's bone layers back (Edit again).
+    /// clip comes with that saved edit's bone layers back (Edit again). <paramref name="afterUndo"/> brings
+    /// back the layers of the edit an undone save went back to, if there is one, as the saved state.
     /// </summary>
-    private void Load(AnimationCapture capture, bool startup, bool keepView, AnimationEditJournal? again = null)
+    private void Load(AnimationCapture capture, bool startup, bool keepView, AnimationEditJournal? again = null, bool afterUndo = false)
     {
         if (animations is not { } service)
             return;
@@ -250,6 +254,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         var token = loadCancel.Token;
         loading = (capture, startup);
         loadingAgain = again;
+        loadingAfterUndo = afterUndo;
         loadKeepsView = keepView;
         loadError = null;
         pending = PendingAction.None;
@@ -270,9 +275,9 @@ public sealed partial class TimelineWindow : Window, IDisposable
         {
             await ending;
             await preview.StopAsync();
-            return again == null
-                ? await service.LoadTimelineAsync(capture, startup, token)
-                : await service.LoadTimelineAgainAsync(again, capture, token);
+            return again != null ? await service.LoadTimelineAgainAsync(again, capture, token)
+                : afterUndo ? await service.LoadTimelineAfterUndoAsync(capture, startup, token)
+                : await service.LoadTimelineAsync(capture, startup, token);
         }, token);
     }
 
@@ -284,6 +289,8 @@ public sealed partial class TimelineWindow : Window, IDisposable
         loading = null;
         var again = loadingAgain;
         loadingAgain = null;
+        var afterUndo = loadingAfterUndo;
+        loadingAfterUndo = false;
         if (task.IsCanceled)
             return;
         if (task.IsFaulted)
@@ -292,14 +299,15 @@ public sealed partial class TimelineWindow : Window, IDisposable
             loadErrorAgain = again != null;
             return;
         }
-        Apply(task.Result, loadKeepsView, again);
+        Apply(task.Result, loadKeepsView, again, afterUndo);
     }
 
-    private void Apply(AnimationTimelineSource loaded, bool keepView, AnimationEditJournal? again = null)
+    private void Apply(AnimationTimelineSource loaded, bool keepView, AnimationEditJournal? again = null, bool afterUndo = false)
     {
         var sameClip = source != null && ClipKey(source) == ClipKey(loaded);
-        // Edit again: the saved layers apply to the motion from before their edit while this clip stays open.
-        if (again != null && loaded.BaseMotion is { } kept && loaded.BaseHash is { } keptHash)
+        // Edit again, or an undo back to a layered edit: the saved layers apply to the motion from before
+        // their edit while this clip stays open.
+        if ((again != null || afterUndo) && loaded.BaseMotion is { } kept && loaded.BaseHash is { } keptHash)
             motionBase = (ClipKey(loaded), kept, loaded.BaseFingerprint ?? string.Empty, keptHash);
         // A clip read again after this window saved bone layers into it keeps editing them on the motion
         // from before: the carried layers come back, and the base stays the motion they apply to.

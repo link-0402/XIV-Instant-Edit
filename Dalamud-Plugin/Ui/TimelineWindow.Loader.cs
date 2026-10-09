@@ -39,7 +39,8 @@ public sealed partial class TimelineWindow
 
     private void EnsureLibrary()
     {
-        if (libraryTask != null || !library.IsEmpty)
+        // A failed read is not started again every frame; its error stays shown.
+        if (libraryTask != null || !library.IsEmpty || libraryError != null)
             return;
         libraryTask = Task.Run(() => AnimationLibrary.Read(data));
     }

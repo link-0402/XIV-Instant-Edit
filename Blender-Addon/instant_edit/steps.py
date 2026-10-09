@@ -145,7 +145,8 @@ class RunExportSteps(bpy.types.Operator):
     def modal(self, context, event):
         step = self._step
         waiting = step is not None and step.wait is not None and not step.wait.done()
-        if event.type == "ESC" and event.value == "PRESS" and not waiting:
+        # Not even once the work ended: the plugin may have written the export already.
+        if event.type == "ESC" and event.value == "PRESS" and (step is None or step.wait is None):
             try:
                 self._steps.close()
             finally:
