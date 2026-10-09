@@ -354,7 +354,7 @@ public sealed class TextureEditService : IDisposable
     {
         var path = Get(id).Session.Directory;
         TextureFiles.EnsureLocalPath(path);
-        Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        Process.Start(new ProcessStartInfo(path) { UseShellExecute = true })?.Dispose();
     }
     private void ValidateEditor()
     {
@@ -392,7 +392,7 @@ public sealed class TextureEditService : IDisposable
         if (!File.Exists(file)) throw new IOException("The working TGA is missing. Discard this session and reopen the texture.");
         var start = new ProcessStartInfo(_config.TextureEditorPath) { UseShellExecute = false };
         start.ArgumentList.Add(file);
-        Process.Start(start);
+        Process.Start(start)?.Dispose();
     }
 
     public async Task SetPausedAsync(Guid id, bool paused)

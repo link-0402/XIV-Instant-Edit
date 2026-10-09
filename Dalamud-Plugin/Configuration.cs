@@ -149,6 +149,12 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary> Quick Actions cards the user removed from the tab. Cards not listed show, so new ones appear on their own. </summary>
     public List<string> HiddenQuickActions { get; set; } = [];
 
+    /// <summary>
+    /// Quick Actions cards in the order the user moved them into. Cards not listed follow in their built-in order.
+    /// Automatic cards always come before one-time ones, whatever this says.
+    /// </summary>
+    public List<string> QuickActionOrder { get; set; } = [];
+
     /// <summary> The physics builder's mod folder in Penumbra, empty until the first save. </summary>
     public string PhysicsModDirectory { get; set; } = "";
 

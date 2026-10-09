@@ -463,7 +463,7 @@ public sealed partial class MainWindow
                     }
                     var start = new ProcessStartInfo(exe) { UseShellExecute = false };
                     start.ArgumentList.Add(job.ProjectPath);
-                    Process.Start(start);
+                    Process.Start(start)?.Dispose();
                     SetTextureStatus("Opening the project in Substance Painter", FeedbackSeverity.Info);
                     return;
                 }

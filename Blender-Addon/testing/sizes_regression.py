@@ -310,6 +310,29 @@ def _run_stand_in(addon, plugin) -> None:
              sizes.option_name_issue([" Large"]) and sizes.option_name_issue(["..."]),
              "size names that can't be options are found")
 
+    def yab(name, **values):
+        size = FakeSize(name)
+        size.values = {"chest_size": 1.0, "leg_size": 0.0, "lavabod": 0.0, "rue": 0.0, **values}
+        return size
+
+    _require(sizes.option_names([yab("Large", chest_size=0.0), yab("Medium"), yab("Large Rue", chest_size=0.0, rue=1.0),
+                                 yab("Omoi Lavabod", chest_size=0.0, lavabod=1.0),
+                                 yab("Omoi LaRue", chest_size=0.0, lavabod=1.0, rue=1.0)])
+             == ["YAB Large", "YAB Medium", "Rue Large", "Lava Omoi", "LaRue Omoi"],
+             "YAB sizes are named by body, then chest size")
+    _require(sizes.option_names([yab("Large", chest_size=0.0), yab("Large Skull", chest_size=0.0, leg_size=1.0),
+                                 yab("Teardrop Lavabod Skull", leg_size=1.0, lavabod=1.0)])
+             == ["YAB Large - Melon", "YAB Large - Skull", "Lava Teardrop - Skull"],
+             "chest and legs are both named when both vary")
+    _require(sizes.option_names([yab("Base"), yab("Skull", leg_size=1.0), yab("Masc Legs Rue", leg_size=3.0, rue=1.0)])
+             == ["YAB Melon", "YAB Skull", "Rue Masc Legs"], "only the legs are named when only they vary")
+    _require(sizes.option_names([yab("Rue", rue=1.0), yab("Base")]) == ["Rue Medium", "YAB Medium"],
+             "a body change alone still names the chest size")
+    _require(sizes.option_names([yab("Base"), yab("Buff", buff=1.0)]) == ["YAB Medium", "YAB Medium Buff"],
+             "sizes alike but for unnamed settings take Magic Fit's other words")
+    _require(sizes.option_names([FakeSize("Large"), FakeSize("Medium")]) == ["Large", "Medium"],
+             "sizes of other bodies keep Magic Fit's names")
+
     armature = _rig()
     mesh = bpy.data.meshes.new("SizesTop")
     mesh.from_pydata([(x * 0.1, 0.0, z * 0.1) for x in range(4) for z in range(4)], [],
@@ -502,16 +525,16 @@ def run_magic_fit(addon, root: Path) -> None:
             props.variant_target = "NEW_GROUP"
             props.variant_group_name = "Size"
             props.export_sizes = True
-            _require(sizes.export_names(props) == ["Large", "Medium"], "Magic Fit's picked sizes are listed")
+            _require(sizes.export_names(props) == ["YAB Large", "YAB Medium"], "Magic Fit's picked sizes are listed")
 
             ops.perform_instant_export(bpy.context)
             payload = plugin.payloads[-1]
-            _require([size["name"] for size in payload["sizes"]] == ["Large", "Medium"] and
-                     payload["defaultSize"] == "Large", "Magic Fit's sizes are exported, the body's own on")
+            _require([size["name"] for size in payload["sizes"]] == ["YAB Large", "YAB Medium"] and
+                     payload["defaultSize"] == "YAB Large", "Magic Fit's sizes are exported, the body's own on")
             key = suit.data.shape_keys.key_blocks["Medium"]
             resized = _positions(suit, "Medium")
-            large_co = _model_positions(addon, plugin.files[-1]["Large"])
-            medium_co = _model_positions(addon, plugin.files[-1]["Medium"])
+            large_co = _model_positions(addon, plugin.files[-1]["YAB Large"])
+            medium_co = _model_positions(addon, plugin.files[-1]["YAB Medium"])
             _require(_distance(large_co, own) < 1e-4 and _distance(medium_co, resized) < 1e-4 and
                      np.abs(resized - own).max() > 0.005,
                      "Magic Fit's sizes: the clothing as it is and resized to Medium")
@@ -519,7 +542,7 @@ def run_magic_fit(addon, root: Path) -> None:
             # Looking at Medium, the size the body shows still exports the clothing as it fits the body.
             key.value = 1.0
             ops.perform_instant_export(bpy.context)
-            large_co = _model_positions(addon, plugin.files[-1]["Large"])
+            large_co = _model_positions(addon, plugin.files[-1]["YAB Large"])
             _require(_distance(large_co, own) < 1e-4 and key.value == 1.0,
                      "the size the body shows exports as the clothing fits it, also while it shows Medium")
     finally:

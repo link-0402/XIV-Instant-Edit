@@ -223,7 +223,9 @@ class XIVIE_OT_simple_export(Operator):
 
     def invoke(self, context: Context, event):
         # Racially scaled meshes are for preview; confirm before writing their scaled shape.
-        # Confirm too before leaving out shape keys while Keep Shape Keys is off.
+        # Confirm too before leaving out shape keys while Keep Shape Keys is off, and before a
+        # batch of Magic Fit sizes, which takes a while.
+        from .instant_edit import sizes
         from .instant_edit.racial_scaling import simple_export_warning
 
         try:
@@ -232,15 +234,18 @@ class XIVIE_OT_simple_export(Operator):
             objects = []
         scaled = simple_export_warning(objects)
         dropped = dropped_shape_keys_warning(objects)
-        if not scaled and not dropped:
+        size_count = sizes.batch_count()
+        batch = " ".join(sizes.batch_warning(size_count)) if size_count else ""
+        if not scaled and not dropped and not batch:
             return self.execute(context)
         return context.window_manager.invoke_confirm(
             self,
             event,
-            title="Export Racially Scaled Meshes?" if scaled else "Export Without Shape Keys?",
-            message=" ".join(warning for warning in (scaled, dropped) if warning),
+            title="Export Racially Scaled Meshes?" if scaled
+            else "Export Without Shape Keys?" if dropped else f"Export {size_count} Sizes?",
+            message=" ".join(warning for warning in (batch, scaled, dropped) if warning),
             confirm_text="Export",
-            icon="WARNING",
+            icon="WARNING" if scaled or dropped else "QUESTION",
         )
 
     def execute(self, context: Context):
@@ -283,7 +288,7 @@ class XIVIE_OT_simple_export(Operator):
         if uv_problems:
             self.report({"ERROR"}, " ".join(uv_problems))
             return {"CANCELLED"}
-        from .instant_edit import sizes
+        from .instant_edit import sizes, steps
         from .instant_edit.racial_scaling import simple_export_warning
 
         scaled = simple_export_warning(objects)
@@ -306,8 +311,8 @@ class XIVIE_OT_simple_export(Operator):
 
         if sizes.wanted():
             # A file per size picked in Magic Fit, the size added to its name, a size at a time
-            # with Blender drawing between them (sizes.start).
-            def steps():
+            # with Blender drawing between them (steps.start).
+            def size_steps():
                 written = []
                 exports = None
 
@@ -316,15 +321,15 @@ class XIVIE_OT_simple_export(Operator):
                     exports = ShapeExports(objects, settings.model_format)
                     return exports
 
-                def export(sized, _index):
-                    file_name = f"{name} {sizes.file_part(sized.name)}"
+                def export(_sized, _index, size_name):
+                    file_name = f"{name} {sizes.file_part(size_name)}"
                     exports.write(directory / file_name)
                     written.append(file_name + suffix)
 
                 yield from sizes.export_steps(objects, export, session)
                 return written
 
-            return sizes.start(context, steps(), done, failed, self.report,
+            return steps.start(context, size_steps(), done, failed, self.report,
                                "The sizes exported so far stay in the folder.")
         try:
             export_result(directory / name, settings.model_format, export_objects=objects)
