@@ -372,6 +372,21 @@ internal static class PhysicsScenarios
         var turnedOn = PhybFile.Parse(off.OutputBytes());
         Require(turnedOn.Version == PhybFile.CurrentVersion && turnedOn.DataType == 2 && turnedOn.Simulators.Count == 1,
             "physics document: adding an area to a file that turned physics off turns it on");
+
+        // The game's files say 3 with shapes and 2 without; shapes imported into a file without any count.
+        var bare = new PhysicsDocument(PhybFile.Parse(turnedOn.ToBytes()), new PhysicsSource(PhysicsSourceKind.File, "Bare", "bare.phyb"), 801);
+        bare.Checkpoint();
+        bare.ImportArea(other, 0);
+        var cleared = new PhysicsDocument(PhybFile.Parse(Sample().ToBytes()), new PhysicsSource(PhysicsSourceKind.File, "Sample", "sample.phyb"), 801);
+        cleared.Checkpoint();
+        cleared.File.Collision = new PhybCollision();
+        cleared.Changed();
+        Require(bare.Output().DataType == 3 && cleared.Output().DataType == 2,
+            "physics document: the data type follows whether the file has shapes");
+        cleared.File.Simulators.ForEach(simulator => simulator.Excluded = true);
+        cleared.Changed();
+        Require(PhybFile.Parse(cleared.OutputBytes()).EmptySimulatorList,
+            "physics document: with every area off the file still lists its simulators, none, instead of ending early");
     }
 
     private static void CheckModFiles(string testRoot)

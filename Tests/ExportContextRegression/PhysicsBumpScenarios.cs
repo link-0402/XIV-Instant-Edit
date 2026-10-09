@@ -16,6 +16,7 @@ internal static class PhysicsBumpScenarios
         CheckChainShapes();
         CheckLimit();
         CheckBrokenLinks();
+        CheckConnectors();
         CheckNames();
     }
 
@@ -187,6 +188,34 @@ internal static class PhysicsBumpScenarios
         Require(simulator.Collisions.Single().Name.Text == "kept" && chain.Collisions.Single().Name.Text == "own" && chain.Nodes[1].CollisionFlags == 0b11 &&
                 PhysicsCollisions.State(file, [(0, 0)], "own") == PhysicsBumps.All,
             "physics bumps: removing broken links keeps the chain's own shapes on their renumbered bits");
+    }
+
+    /// <summary>
+    /// A connector's bits count the simulator's shapes, like a point's: every game skirt's connectors set
+    /// bits 2 and 3 for the thighs, and no game or library file sets one past that list.
+    /// </summary>
+    private static void CheckConnectors()
+    {
+        var skirt = Skirt();
+        var simulator = skirt.Simulators[0];
+        simulator.Connectors.Add(new PhybConnector { Chain1 = 0, Chain2 = 1, Node1 = 1, Node2 = 1, CollisionFlags = 12, ContinuousCollisionFlags = 12 });
+        PhysicsCollisions.Remove(skirt, [(0, 0), (0, 1)], "asi_r_c");
+        Require(simulator.Collisions.Count == 3 && simulator.Connectors[0].CollisionFlags == 6 && simulator.Connectors[0].ContinuousCollisionFlags == 6,
+            "physics bumps: a connector's bits move down with the simulator's shapes");
+        PhysicsCollisions.Add(skirt, [(0, 0)], "arm");
+        Require(simulator.Collisions.Count == 4 && simulator.Connectors[0].CollisionFlags == 6,
+            "physics bumps: a new simulator shape leaves the connectors' bits where they are");
+        PhysicsCollisions.Remove(skirt, [(0, 0), (0, 1)], "asi_l_a");
+        Require(simulator.Collisions.Any(r => r.Name.Text == "asi_l_a") && simulator.Connectors[0].CollisionFlags == 6 &&
+                PhysicsCollisions.State(skirt, [(0, 0), (0, 1)], "asi_l_a") == PhysicsBumps.None,
+            "physics bumps: a shape a connector still bumps into stays listed");
+
+        var broken = Skirt();
+        broken.Collision.Capsules.RemoveAt(0);
+        broken.Simulators[0].Connectors.Add(new PhybConnector { Chain1 = 0, Chain2 = 1, Node1 = 1, Node2 = 1, CollisionFlags = 12 });
+        PhysicsValidation.Apply(broken, PhysicsFix.RemoveBroken, 0);
+        Require(broken.Simulators[0].Collisions.Count == 3 && broken.Simulators[0].Connectors.Single().CollisionFlags == 6,
+            "physics bumps: removing broken links moves the connectors' bits along");
     }
 
     /// <summary> The list names each shape by the body part it covers, followed by the shape's own name. </summary>

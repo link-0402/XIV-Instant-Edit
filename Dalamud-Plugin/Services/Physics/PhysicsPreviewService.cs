@@ -222,7 +222,8 @@ internal sealed class PhysicsPreviewService : IDisposable
             shared = false;
             notice = null;
         }
-        if (redrawObject is { } index)
+        // Without a preview there's nothing to put back, such as when closing the builder after a save.
+        if (redrawObject is { } index && (current != null || folder != null))
             await penumbra.RedrawObjectAsync(index).ConfigureAwait(false);
     }
 

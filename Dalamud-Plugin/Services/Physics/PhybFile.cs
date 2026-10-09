@@ -217,6 +217,7 @@ internal sealed class PhybConnector
     public float Friction;
     public float Dampening;
     public float Repulsion;
+    /// <summary> Bit n: collide with the simulator's collision shape n (its Collisions, not CollisionConnectors). </summary>
     public uint CollisionFlags;
     public uint ContinuousCollisionFlags;
 
