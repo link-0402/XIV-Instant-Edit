@@ -76,10 +76,15 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
     public override void OnClose()
     {
         StopMoving();
-        // The preview is a look at unsaved settings; closing the builder puts your saved physics back.
-        if (service.Preview.Active)
-            _ = service.StopPreviewAsync(target).ContinueWith(task => log.Warning(task.Exception!, "Could not stop the physics preview."),
-                TaskContinuationOptions.OnlyOnFaulted);
+        autoPreviewDue = 0;
+        // The preview is a look at unsaved settings; closing the builder puts your saved physics back,
+        // also after a preview that was still on its way (unless the builder is open again by then).
+        if (!service.Preview.Active && working == null)
+            return;
+        var found = target;
+        _ = ((Task?)working ?? Task.CompletedTask)
+            .ContinueWith(_ => IsOpen ? Task.CompletedTask : service.StopPreviewAsync(found), TaskScheduler.Default).Unwrap()
+            .ContinueWith(task => log.Warning(task.Exception!, "Could not stop the physics preview."), TaskContinuationOptions.OnlyOnFaulted);
     }
 
     public void Dispose()
@@ -193,6 +198,8 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
     {
         if (working != null)
             return;
+        // A save, a stop or a preview of its own replaces a pending automatic preview, which would show the preview again after it.
+        autoPreviewDue = 0;
         workDone = done;
         working = Task.Run(action);
     }

@@ -201,6 +201,13 @@ internal static class PhysicsValidation
                 }
             chain.Collisions = keptChain;
         }
+        // A connector's bits count the simulator's shapes only.
+        if (keptSimulator.Count != simulator.Collisions.Count)
+            foreach (var connector in simulator.Connectors)
+            {
+                connector.CollisionFlags = Renumbered(connector.CollisionFlags, simulator.Collisions, keptSimulator);
+                connector.ContinuousCollisionFlags = Renumbered(connector.ContinuousCollisionFlags, simulator.Collisions, keptSimulator);
+            }
         simulator.Collisions = keptSimulator;
     }
 

@@ -148,9 +148,13 @@ internal sealed class PhysicsDocument
         file.Simulators.RemoveAll(simulator => simulator.Excluded);
         if (file.Extension != null && Layout(file) != layout)
             file.Extension = null;
-        // A file with simulators needs the data type that says so.
-        if (file.Version != 0 && file.Simulators.Count > 0 && file.DataType is 0 or 1)
+        // The data type says which sections the file has: the game's files with simulators say 3 with
+        // shapes and 2 without. It follows the shapes, so ones imported into a file that had none are read.
+        if (file.Version != 0 && file.Simulators.Count > 0)
             file.DataType = file.Collision.IsEmpty ? 2u : 3u;
+        // With every area off or removed, the file still lists none instead of ending where its simulators would start.
+        if (file.Simulators.Count == 0 && file.DataType is 2 or 3)
+            file.EmptySimulatorList = true;
         return file;
     }
 

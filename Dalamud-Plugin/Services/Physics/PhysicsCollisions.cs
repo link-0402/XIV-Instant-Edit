@@ -13,7 +13,9 @@ internal enum PhysicsBumps
 /// simulator's shape n, and the bits after the simulator's shapes name the chain's own (the game's
 /// gear files set bit 2 for a chain shape after two simulator shapes). The continuous collision bits
 /// copy the collision bits wherever a file uses them. Bits past both lists name nothing; presets often
-/// set them (255 for two shapes), and an edit here drops them.
+/// set them (255 for two shapes), and an edit here drops them. Connectors have bits too, over the
+/// simulator's shapes only (the game's skirts set bits 2 and 3 for the thighs), so they move along
+/// when a simulator shape joins or leaves the list, and a shape a connector uses stays listed.
 /// </summary>
 internal static class PhysicsCollisions
 {
@@ -119,7 +121,8 @@ internal static class PhysicsCollisions
         {
             for (var index = Math.Min(simulator.Collisions.Count, MaxShapes) - 1; index >= 0; index--)
             {
-                if (simulator.Collisions[index].Name.Text != shape || simulator.Chains.Any(chain => Uses(chain, 1u << index)))
+                if (simulator.Collisions[index].Name.Text != shape || simulator.Chains.Any(chain => Uses(chain, 1u << index)) ||
+                    simulator.Connectors.Any(connector => ((connector.CollisionFlags | connector.ContinuousCollisionFlags) & (1u << index)) != 0))
                     continue;
                 // The bits move while the lists still have their old lengths.
                 var removed = index;
@@ -149,11 +152,16 @@ internal static class PhysicsCollisions
                 yield return (file.Simulators[s], file.Simulators[s].Chains[c]);
     }
 
-    /// <summary> Moves every chain's bits by <paramref name="map"/> (-1 drops a bit), over the bits its lists had. </summary>
+    /// <summary> Moves every chain's and connector's bits by <paramref name="map"/> (-1 drops a bit), over the bits its lists had. </summary>
     private static void Renumber(PhybSimulator simulator, Func<int, int> map)
     {
         foreach (var chain in simulator.Chains)
             Renumber(chain, simulator.Collisions.Count + chain.Collisions.Count, map);
+        foreach (var connector in simulator.Connectors)
+        {
+            connector.CollisionFlags = Map(connector.CollisionFlags, simulator.Collisions.Count, map);
+            connector.ContinuousCollisionFlags = Map(connector.ContinuousCollisionFlags, simulator.Collisions.Count, map);
+        }
     }
 
     private static void Renumber(PhybChain chain, int named, Func<int, int> map)

@@ -35,13 +35,14 @@ public sealed partial class PenumbraService
         var collection = await GetCollectionTargetAsync(objectIndex).ConfigureAwait(false)
             ?? throw new IOException("Your character's Penumbra collection is unavailable. Try again once your character is loaded.");
 
+        string? root;
         string modDirectory;
         string relative;
         bool created;
         await _exportGate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            var root = await _framework.RunOnFrameworkThread(GetModDirectory).ConfigureAwait(false);
+            root = await _framework.RunOnFrameworkThread(GetModDirectory).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
                 throw new IOException("Penumbra's mod directory is unavailable.");
             root = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
@@ -92,8 +93,8 @@ public sealed partial class PenumbraService
             _exportGate.Release();
         }
 
-        var root2 = await _framework.RunOnFrameworkThread(GetModDirectory).ConfigureAwait(false) ?? string.Empty;
-        var newIdentifier = ReadModStableIdentifier(Path.Combine(root2, modDirectory)) ?? Guid.Empty;
+        // Read here on the thread pool: an await on the framework thread would continue there.
+        var newIdentifier = ReadModStableIdentifier(Path.Combine(root, modDirectory)) ?? Guid.Empty;
         var warnings = new List<string>();
         if (created)
         {

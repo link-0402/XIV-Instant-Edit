@@ -102,7 +102,7 @@ internal sealed class PhysicsBuilderService : IDisposable
     private async Task<PhysicsLoadedFile> DescribeAsync(string gamePath, string? resolved)
     {
         if (string.IsNullOrWhiteSpace(resolved) || !Path.IsPathFullyQualified(resolved))
-            return new PhysicsLoadedFile(gamePath, resolved ?? gamePath, "the game's own file", false, false);
+            return new PhysicsLoadedFile(gamePath, string.IsNullOrWhiteSpace(resolved) ? gamePath : resolved, "the game's own file", false, false);
         if (IsPreviewFile(resolved))
             return new PhysicsLoadedFile(gamePath, resolved, "the preview", false, true);
         var mod = await penumbra.ModOfFileAsync(resolved).ConfigureAwait(false);
@@ -134,9 +134,11 @@ internal sealed class PhysicsBuilderService : IDisposable
                     throw new InvalidOperationException("The preview is on. Stop it to start from what your mods load.");
                 if (!Path.IsPathFullyQualified(loaded.ResolvedPath))
                 {
-                    var bytes = await Task.Run(() => data.GetFile(gamePath)?.Data).ConfigureAwait(false)
-                        ?? throw new FileNotFoundException($"The game has no body physics file for c{race:D4}.");
-                    return new PhysicsDocument(PhybFile.Parse(bytes), new PhysicsSource(kind, "The game's own file", gamePath), race);
+                    // A game file: the race's own, or the one a file swap names.
+                    var swapped = PathRules.NormalizeGamePath(loaded.ResolvedPath);
+                    var bytes = await Task.Run(() => data.GetFile(swapped)?.Data).ConfigureAwait(false)
+                        ?? throw new FileNotFoundException($"The game has no body physics file at {swapped}.");
+                    return new PhysicsDocument(PhybFile.Parse(bytes), new PhysicsSource(kind, "The game's own file", swapped), race);
                 }
                 return new PhysicsDocument(await ReadFileAsync(loaded.ResolvedPath).ConfigureAwait(false),
                     new PhysicsSource(loaded.Mine ? PhysicsSourceKind.Mine : kind, loaded.Mine ? "Your physics mod" : loaded.Label, loaded.ResolvedPath), race);
@@ -260,7 +262,7 @@ internal sealed class PhysicsBuilderService : IDisposable
             }
             if (!PhysicsPaths.IsBareBody(gamePath))
                 warnings.Add($"You're wearing {slot} gear, so the fit measured the gear, not your skin.");
-            var bytes = await Task.Run(() => ReadModel(actual, gamePath), token).ConfigureAwait(false);
+            var bytes = await Task.Run(() => ReadModel(actual), token).ConfigureAwait(false);
             if (bytes is null)
             {
                 warnings.Add($"Your {slot} model couldn't be read, so it wasn't measured.");
@@ -290,7 +292,7 @@ internal sealed class PhysicsBuilderService : IDisposable
         return new PhysicsBodyMeasure(measured, skeleton, warnings, note);
     }
 
-    private byte[]? ReadModel(string actual, string gamePath)
+    private byte[]? ReadModel(string actual)
     {
         try
         {
@@ -299,7 +301,8 @@ internal sealed class PhysicsBuilderService : IDisposable
                 var info = new FileInfo(actual);
                 return info.Exists && info.Length is > 0 and <= MaxModelBytes ? File.ReadAllBytes(info.FullName) : null;
             }
-            return data.GetFile(gamePath.Length > 0 ? gamePath : actual)?.Data;
+            // The file Penumbra redirects to, which a file swap makes another game file than the slot's own path.
+            return data.GetFile(PathRules.NormalizeGamePath(actual))?.Data;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or InvalidDataException)
         {
