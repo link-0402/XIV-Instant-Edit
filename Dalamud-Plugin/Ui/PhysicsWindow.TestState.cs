@@ -125,7 +125,9 @@ internal sealed partial class PhysicsWindow
                     ["type"] = chain.Type,
                     ["dampening"] = chain.Dampening,
                     ["collisions"] = new JsonArray(chain.Collisions.Select(reference => (JsonNode)reference.Name.Text).ToArray()),
-                    ["nodeCollisions"] = new JsonArray(chain.Nodes.Select(node => (JsonNode)Bits(node.CollisionFlags, shapes)).ToArray()),
+                    // A node's bits name the simulator's shapes, then the chain's own.
+                    ["nodeCollisions"] = new JsonArray(chain.Nodes.Select(node => (JsonNode)Bits(node.CollisionFlags,
+                        PhysicsCollisions.BitShapes(simulator, chain).Select(reference => reference.Name.Text).ToArray())).ToArray()),
                 }).ToArray());
                 area["connectorList"] = new JsonArray(simulator.Connectors.Select(connector => (JsonNode)new JsonObject
                 {
@@ -152,7 +154,7 @@ internal sealed partial class PhysicsWindow
         return areas;
     }
 
-    /// <summary> The shapes a collision bit field names: bit n is the simulator's shape n; bits past them show as #n. </summary>
+    /// <summary> The shapes a collision bit field names, bit n naming <paramref name="shapes"/>[n]; bits past them name nothing and show as #n. </summary>
     private static string Bits(uint flags, IReadOnlyList<string> shapes)
         => string.Join(", ", Enumerable.Range(0, 32).Where(bit => (flags & (1u << bit)) != 0)
             .Select(bit => bit < shapes.Count ? shapes[bit] : $"#{bit}"));
