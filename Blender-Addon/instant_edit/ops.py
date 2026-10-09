@@ -9,6 +9,7 @@ import threading
 import uuid
 import time
 from contextlib import contextmanager
+from functools import partial
 from queue import Empty, Queue
 from urllib.error import URLError
 
@@ -40,7 +41,7 @@ from .material_preview import (cleanup_preview_bundle, discard_preview_data,
 from .cache import create_job, finish_job
 from .diagnostics import record_failure, record_protocol_failure, record_remote_failure
 from .skeleton import create_armature, load_skeleton
-from . import character as character_send, racial_scaling, sizes
+from . import character as character_send, racial_scaling, sizes, steps
 
 
 # ---- Dalamud plugin HTTP transport ----
@@ -1912,16 +1913,27 @@ class QuickExport(Operator):
             return bpy.ops.xiv_ie.save_new_mod_name("INVOKE_DEFAULT", name="")
         self._confirm_unsafe_export = unsafe_export_warning_state(context, blocking=True)
         self._dropped_shape_keys = quick_export_dropped_shape_keys(context)
+        self._size_count = sizes.batch_count(props)
         if self._confirm_unsafe_export or self._dropped_shape_keys:
             # invoke_confirm never calls draw(); a props dialog shows the materials and meshes.
             return context.window_manager.invoke_props_dialog(
                 self, width=460,
                 title="Export Without Mashup?" if self._confirm_unsafe_export else "Export Without Shape Keys?",
                 confirm_text="Export Anyway")
+        if self._size_count:
+            return context.window_manager.invoke_props_dialog(
+                self, width=360, title=f"Export {self._size_count} Sizes?", confirm_text="Export")
         return self.execute(context)
 
     def draw(self, context):
         layout = self.layout
+        size_count = getattr(self, "_size_count", 0)
+        if size_count:
+            column = layout.column(align=True)
+            for index, line in enumerate(sizes.batch_warning(size_count)):
+                column.label(text=line, icon="TIME" if index == 0 else "BLANK1")
+            if getattr(self, "_confirm_unsafe_export", False) or getattr(self, "_dropped_shape_keys", []):
+                layout.separator()
         if getattr(self, "_confirm_unsafe_export", False):
             missing_materials = material_coverage_missing_materials(
                 context, cache_only=True)
@@ -1936,22 +1948,9 @@ class QuickExport(Operator):
         draw_dropped_shape_keys(layout, getattr(self, "_dropped_shape_keys", []))
 
     def execute(self, context: Context):
-        if sizes.wanted(get_instant_edit_props()):
-            # A size at a time, Blender drawing between them (sizes.start).
-            try:
-                steps = sizes_export_steps(context, export_destination_context(context))
-            except Exception as e:
-                self._failed(self.report, e)
-                return {"CANCELLED"}
-            return sizes.start(context, steps, self._done, self._failed, self.report,
-                               "Nothing was sent to Penumbra.")
-        try:
-            perform_instant_export(context)
-        except Exception as e:
-            self._failed(self.report, e)
-            return {"CANCELLED"}
-        self._done(self.report, None)
-        return {"FINISHED"}
+        # A step at a time, Blender drawing between them (steps.start).
+        return steps.start(context, instant_export_steps(context), self._done, self._failed, self.report,
+                           "Nothing was sent to Penumbra.")
 
     @staticmethod
     def _done(report, _result) -> None:
@@ -2086,20 +2085,8 @@ class VanillaModName(Operator):
             confirm_text="Create Mod")
 
     def execute(self, context: Context):
-        try:
-            perform_instant_export(context, new_mod_name=self.name)
-        except Exception as error:
-            props = get_instant_edit_props()
-            props.last_status = f"Export failed: {error}"
-            self.report({"ERROR"}, props.last_status)
-            return {"CANCELLED"}
-        status = get_instant_edit_props().last_status
-        self.report(
-            {"WARNING"} if " with warnings:" in status or "could not refresh" in status else {"INFO"},
-            status,
-        )
-        get_export_stats(context)
-        return {"FINISHED"}
+        return steps.start(context, instant_export_steps(context, new_mod_name=self.name), QuickExport._done,
+                           QuickExport._failed, self.report, "Nothing was sent to Penumbra.")
 
 
 # ---- Context and mesh-part management operators ----
@@ -2950,10 +2937,22 @@ def perform_instant_export(
     new_mod_name: str | None = None,
 ) -> Path:
     """Export one validated context through its authenticated plugin route."""
+    return steps.run(instant_export_steps(context, destination, new_mod_name))
+
+
+def instant_export_steps(
+    context: Context,
+    destination: str | None = None,
+    new_mod_name: str | None = None,
+):
+    """perform_instant_export's work as steps (see steps.start): the model is written, then sent
+    with the plugin's answer awaited on a worker thread; returns the model's path. ``context`` is
+    only read before the first step: later steps may run from a modal operator, after the operator
+    that started them is gone."""
     ref = export_destination_context(context, destination)
     props = get_instant_edit_props()
     if sizes.wanted(props):
-        return perform_sizes_export(context, ref)
+        return (yield from sizes_export_steps(context, ref))
     pending = ref.destination_state == "new_mod_required"
     if pending:
         name = (new_mod_name or "").strip()
@@ -2967,7 +2966,7 @@ def perform_instant_export(
     if not pending and props.variant_target == MASHUP_TARGET:
         raise ValueError("Use Quick Export to choose the mashup destination and name.")
     if wants_race_model(props, ref, export_objects_for_scope(ref, getattr(props, "export_scope", "VISIBLE"))):
-        return perform_race_export(context, ref, new_mod_name)
+        return (yield from race_export_steps(context, ref, new_mod_name))
     in_place = not pending and props.variant_target == IN_PLACE_TARGET
     variant_target = None if pending or in_place else selected_variant_target(props)
     if variant_target is not None and props.variant_targets_context_id != ref.context_id:
@@ -3007,6 +3006,7 @@ def perform_instant_export(
     temp_dir = create_job("exports", export_id)
     mdl_path = temp_dir / f"model_{export_id}.mdl"
     try:
+        yield steps.Step("Exporting the model.", 0, 2)
         saved_materials = _use_mashup_source_materials(export_objects, ref.context_id)
         try:
             with _exporting_as_mdl():
@@ -3038,7 +3038,8 @@ def perform_instant_export(
                 est_entries=est_entries,
             )
 
-        result, ref = _send_with_reattach(context, ref, payload, "/export")
+        result, ref = yield from _send_with_reattach(ref, payload, "/export", steps.Step("Sending to Penumbra.", 1, 2))
+        context = bpy.context
         props.last_export_id = export_id
         ref = _apply_promoted_context(context, ref, result)
         target_file_path = Path(result.get("targetFilePath") or ref.target_file_path)
@@ -3080,12 +3081,14 @@ def perform_instant_export(
             print(f"XIV Instant Edit: could not remove export cache job: {error}")
 
 
-def _send_with_reattach(context: Context, ref, payload_for, endpoint: str):
-    """Send an export to the plugin; when a saved scene outlived the runtime context or the plugin
+def _send_with_reattach(ref, payload_for, endpoint: str, step: steps.Step):
+    """Send an export to the plugin, awaiting its answer on a worker thread while the export shows
+    ``step`` (steps.in_background); when a saved scene outlived the runtime context or the plugin
     instance, reattach once and send again with the plugin-issued capability and instance id.
     Returns (the plugin's answer, the Context it went out with)."""
     try:
-        return _send_plugin_export_to(ref, payload_for(ref), endpoint), ref
+        send = partial(_send_plugin_export_to, ref, payload_for(ref), endpoint)
+        return (yield from steps.in_background(send, step)), ref
     except PluginResponseError as error:
         if error.status != 410 and not (
             error.status == 401 and error.code == "plugin_instance_mismatch"
@@ -3093,12 +3096,14 @@ def _send_with_reattach(context: Context, ref, payload_for, endpoint: str):
             raise
         from .recovery import reattach_collection
 
-        if not reattach_collection(ref.collection, context.scene):
+        scene = bpy.context.scene
+        if not reattach_collection(ref.collection, scene):
             raise ValueError(
                 f"plugin returned HTTP {error.status} ({error.code}); context recovery failed"
             ) from error
-        ref = validate_context(ref.context_id, context.scene)
-        return _send_plugin_export_to(ref, payload_for(ref), endpoint), ref
+        ref = validate_context(ref.context_id, scene)
+        send = partial(_send_plugin_export_to, ref, payload_for(ref), endpoint)
+        return (yield from steps.in_background(send, step)), ref
 
 
 def _apply_promoted_context(context: Context, ref, result: dict):
@@ -3125,7 +3130,7 @@ def build_race_payload(ref, export_id: str, mdl_path: Path, byte_size: int, sha2
                        attribute_masks: dict[str, int] | None = None,
                        est_entries: list[dict] | None = None) -> dict:
     """Build the plugin's request to write the meshes as ``race``'s own copy of the model (see
-    perform_race_export); ``new_mod_name`` names the mod a game model's first export creates."""
+    race_export_steps); ``new_mod_name`` names the mod a game model's first export creates."""
     payload = {
         "schema": "instant-edit.export-race",
         "version": 1,
@@ -3150,10 +3155,11 @@ def build_race_payload(ref, export_id: str, mdl_path: Path, byte_size: int, sha2
     return payload
 
 
-def perform_race_export(context: Context, ref, new_mod_name: str | None = None) -> Path:
+def race_export_steps(context: Context, ref, new_mod_name: str | None = None):
     """Quick Export meshes shaped for another race as that race's own copy of the model: the plugin
     writes it next to the imported file (c0801e6000_top.mdl), maps it beside the original and sets the
-    EQDP entry that makes the race load it. A game model's first export creates its mod with it."""
+    EQDP entry that makes the race load it. A game model's first export creates its mod with it.
+    Steps, as in instant_export_steps."""
     props = get_instant_edit_props()
     export_objects = export_objects_for_scope(ref, getattr(props, "export_scope", "VISIBLE"))
     if not export_objects:
@@ -3179,6 +3185,7 @@ def perform_race_export(context: Context, ref, new_mod_name: str | None = None) 
     temp_dir = create_job("exports", export_id)
     mdl_path = temp_dir / f"model_{export_id}.mdl"
     try:
+        yield steps.Step("Exporting the model.", 0, 2)
         saved_materials = _use_mashup_source_materials(export_objects, ref.context_id)
         try:
             with _exporting_as_mdl():
@@ -3195,7 +3202,9 @@ def perform_race_export(context: Context, ref, new_mod_name: str | None = None) 
                 new_mod_name=new_mod_name if pending else None, attribute_tags=attribute_tags,
                 attribute_masks=attribute_masks, est_entries=est_entries)
 
-        result, ref = _send_with_reattach(context, ref, payload, "/export/race")
+        result, ref = yield from _send_with_reattach(
+            ref, payload, "/export/race", steps.Step("Sending to Penumbra.", 1, 2))
+        context = bpy.context
         props.last_export_id = export_id
         ref = _apply_promoted_context(context, ref, result)
         target_file_path = result.get("targetFilePath") or racial_scaling.race_model_path(ref.source_game_path, race)
@@ -3287,16 +3296,12 @@ def build_sizes_payload(ref, export_id: str, files: list[dict], default_size: st
     return payload
 
 
-def perform_sizes_export(context: Context, ref) -> Path:
-    """Quick Export at each size picked in Magic Fit's Resize panel (see sizes), every size an option
-    of one Penumbra group. The plugin gets all of them in one request."""
-    return sizes.run(sizes_export_steps(context, ref))
-
-
 def sizes_export_steps(context: Context, ref):
-    """perform_sizes_export's work as steps (see sizes.export_steps), a size at a time, then sending
-    them; returns the model's path. ``context`` is only read before the first step: later steps may
-    run from a modal operator, after the operator that started them is gone."""
+    """Quick Export at each size picked in Magic Fit's Resize panel (see sizes), every size an option
+    of one Penumbra group, as steps (see sizes.export_steps): a size at a time, then sending them, the
+    plugin getting all of them in one request; returns the model's path. ``context`` is only read
+    before the first step: later steps may run from a modal operator, after the operator that
+    started them is gone."""
     props = get_instant_edit_props()
     group_name, group_id = _sizes_target(props, ref)
     export_objects = export_objects_for_scope(ref, getattr(props, "export_scope", "VISIBLE"))
@@ -3329,13 +3334,13 @@ def sizes_export_steps(context: Context, ref):
             exports = ShapeExports(export_objects, "MDL")
             return exports
 
-        def export(sized, index):
+        def export(_sized, index, name):
             mdl_path = temp_dir / f"size_{index}.mdl"
             exports.write(mdl_path.with_suffix(""))
             if not mdl_path.is_file():
-                raise ValueError(f"Export produced no .mdl file for {sized.name}.")
+                raise ValueError(f"Export produced no .mdl file for {name}.")
             byte_size, digest = _file_digest(mdl_path)
-            files.append({"name": sized.name, "filePath": str(mdl_path), "size": byte_size, "sha256": digest})
+            files.append({"name": name, "filePath": str(mdl_path), "size": byte_size, "sha256": digest})
 
         saved_materials = _use_mashup_source_materials(export_objects, ref.context_id)
         try:
@@ -3343,19 +3348,21 @@ def sizes_export_steps(context: Context, ref):
                 results = yield from sizes.export_steps(export_objects, export, session)
         finally:
             _restore_object_materials(saved_materials)
-        default_size = sizes.default_name(results)
-        yield sizes.Step(len(results), len(results), "", "Sending the sizes to Penumbra")
-        context = bpy.context
+        names = [file["name"] for file in files]
+        default_size = sizes.default_name(results, names)
 
         def payload(current_ref):
             return build_sizes_payload(
                 current_ref, export_id, files, default_size, props, group_name, group_id,
                 attribute_tags=attribute_tags, attribute_masks=attribute_masks, est_entries=est_entries)
 
-        result, ref = _send_with_reattach(context, ref, payload, "/export/sizes")
+        result, ref = yield from _send_with_reattach(
+            ref, payload, "/export/sizes",
+            sizes.Step(len(results), len(results), "", "Sending the sizes to Penumbra"))
+        context = bpy.context
         props.last_export_id = export_id
         group = result.get("destinationName") or group_name
-        status = f"Exported {len(results)} sizes to {group}: {', '.join(sized.name for sized in results)}"
+        status = f"Exported {len(results)} sizes to {group}: {', '.join(names)}"
         warnings = ([est_issue] if est_issue else []) + list(result.get("warnings", []))
         props.last_status = (
             f"{status} with warnings: {plugin_warning_summary(warnings)}" if warnings else status
@@ -3382,7 +3389,7 @@ CLASSES = [
     SelectExportContext,
     OpenContextFolder,
     QuickExport,
-    sizes.RunSizeExports,
+    steps.RunExportSteps,
     MashupDestination,
     SaveNewModName,
     VanillaModName,

@@ -42,7 +42,8 @@ public sealed partial class MainWindow
         {
             if (_compression is { Enabled: true } service)
                 service.SetEnabled(false);
-        });
+        },
+        () => _compression is { Enabled: true });
 
     private void DrawTextureCompressionAction()
     {

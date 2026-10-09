@@ -637,7 +637,7 @@ public sealed partial class MainWindow
     {
         try
         {
-            Process.Start(new ProcessStartInfo(directory) { UseShellExecute = true });
+            Process.Start(new ProcessStartInfo(directory) { UseShellExecute = true })?.Dispose();
         }
         catch (Exception e)
         {

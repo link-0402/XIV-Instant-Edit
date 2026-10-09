@@ -32,6 +32,22 @@ def remove_loose_verts(obj: Object) -> None:
     obj.data.update()
 
 def split_seams(obj: Object):
+    # Edit Mode takes in every selected mesh: with the other export copies selected, each split
+    # redid the work for all of them, and the user's other selected meshes got their hidden faces
+    # revealed and seams marked. Only ``obj`` is edited; the selection comes back afterwards.
+    others = [other for other in bpy.context.selected_objects if other is not obj]
+    for other in others:
+        other.select_set(False)
+    try:
+        _split_seams(obj)
+    finally:
+        for other in others:
+            try:
+                other.select_set(True)
+            except (ReferenceError, RuntimeError):
+                pass
+
+def _split_seams(obj: Object):
     bpy.context.view_layer.objects.active = obj
     if obj.data.shape_keys:
         obj.active_shape_key_index = 0

@@ -235,7 +235,7 @@ internal sealed class PainterJobService : IDisposable
         var exe = string.IsNullOrWhiteSpace(_config.PainterExecutablePath) ? PainterInstallation.DetectExecutable() : _config.PainterExecutablePath;
         if (string.IsNullOrWhiteSpace(exe) || !File.Exists(exe))
             return "Substance Painter isn't running. Start it (with the XIV Instant Edit plugin enabled) or set its executable in Settings.";
-        try { Process.Start(new ProcessStartInfo(exe) { UseShellExecute = false }); }
+        try { Process.Start(new ProcessStartInfo(exe) { UseShellExecute = false })?.Dispose(); }
         catch (Exception error) when (error is System.ComponentModel.Win32Exception or IOException or InvalidOperationException)
         {
             return "Substance Painter could not be started: " + error.Message;

@@ -24,7 +24,8 @@ public sealed partial class MainWindow
         "Measures the gear your feet stand in: your shoes, or the legs or body gear when it hides them. Writes the Simple Heels " +
         "offset into that model, so you stand on the ground instead of sinking in or floating.",
         DrawHeelsOffsetAction,
-        () => _config.AutoFixHeels = false);
+        () => _config.AutoFixHeels = false,
+        () => _config.AutoFixHeels);
 
     private void DrawHeelsOffsetAction()
     {
