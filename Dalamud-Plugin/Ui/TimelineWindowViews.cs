@@ -251,10 +251,11 @@ internal static class TimelineWindowViews
 
     /// <summary>
     /// The Keep switch's tooltip. A moving face (a mod's animated one) loops on an expression's
-    /// timeline; anywhere else it holds still once kept.
+    /// timeline; anywhere else, or when <paramref name="tooShort"/> to loop, it holds still once kept.
     /// </summary>
-    public static string KeepTip(TimelineEvent ev, bool moves, bool loops) =>
+    public static string KeepTip(TimelineEvent ev, bool moves, bool loops, bool tooShort = false) =>
         loops ? $"Keep this face on after the expression ends. It loops for about {LoopMinutes(ev)} minutes, then returns to neutral. Another expression replaces it sooner."
+        : tooShort ? "Keep this face on after the timeline ends, until another expression replaces it. It holds still once kept. " + TimelineDocument.TooShortToLoop
         : moves ? "Keep this face on after the timeline ends, until another expression replaces it. It holds still once kept."
         : "Keep this face on after the timeline ends, until another expression replaces it.";
 
@@ -440,6 +441,20 @@ internal static class TimelineWindowViews
                 if (import.Files.ContainsKey(gamePath))
                     beside[gamePath] = original;
         return beside.ToImmutable();
+    }
+
+    /// <summary>
+    /// How each added copy the save packages is built again from its original as the save finds it
+    /// (<see cref="TimelineImport.Rebuild"/>), by game path, for the imports <paramref name="doc"/> uses.
+    /// </summary>
+    public static ImmutableDictionary<string, Func<byte[], byte[]>> AddedRebuild(TimelineDocument doc, IEnumerable<TimelineImport> imports)
+    {
+        var rebuild = ImmutableDictionary.CreateBuilder<string, Func<byte[], byte[]>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var import in Used(doc, imports))
+            foreach (var (gamePath, build) in import.Rebuild ?? ImmutableDictionary<string, Func<byte[], byte[]>>.Empty)
+                if (import.Files.ContainsKey(gamePath))
+                    rebuild[gamePath] = build;
+        return rebuild.ToImmutable();
     }
 
     /// <summary>The imports whose game path an event of <paramref name="doc"/> uses.</summary>

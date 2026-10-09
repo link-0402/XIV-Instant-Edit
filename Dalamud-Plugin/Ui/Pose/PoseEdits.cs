@@ -80,10 +80,11 @@ internal static class PoseEdits
     /// way, each about its own joint, and scaled as much. <paramref name="space"/> gives a bone's frame: the
     /// rotation from character space to the space its value turns in, for an offset the bone's own rotation
     /// before the offset, for a pose its parent's. <paramref name="moved"/> sets whether pose keys set the
-    /// bones' positions; null leaves each bone's as it is.
+    /// bones' positions; null leaves each bone's as it is. A pose bone whose key starts setting its position
+    /// here moves from the clip's own (<paramref name="own"/>), as in <see cref="Move"/>.
     /// </summary>
     public static TimelineDocument Set(TimelineDocument doc, string layer, int frame, PoseTarget primary, MotionTransform value,
-        IReadOnlyList<PoseTarget> others, Func<string, Quaternion> space, bool offset, bool? moved = null)
+        IReadOnlyList<PoseTarget> others, Func<string, Quaternion> space, bool offset, bool? moved = null, Func<string, Vector3?>? own = null)
     {
         doc = MotionEdits.SetKey(doc, layer, frame, primary.Bone, value.ToBone(), moved);
         var frameOf = Quaternion.Normalize(space(primary.Bone));
@@ -99,10 +100,11 @@ internal static class PoseEdits
         {
             if (string.Equals(other.Bone, primary.Bone, StringComparison.Ordinal))
                 continue;
-            var own = Quaternion.Normalize(space(other.Bone));
+            var frameOfOther = Quaternion.Normalize(space(other.Bone));
+            var from = !offset && moved == true && !other.Moved ? own?.Invoke(other.Bone) ?? other.Value.Position : other.Value.Position;
             var changed = new MotionTransform(
-                other.Value.Position + (offset ? move : Vector3.Transform(move, Quaternion.Inverse(own))),
-                Quaternion.Normalize(Quaternion.Inverse(own) * turn * own * Quaternion.Normalize(other.Value.Rotation)),
+                from + (offset ? move : Vector3.Transform(move, Quaternion.Inverse(frameOfOther))),
+                Quaternion.Normalize(Quaternion.Inverse(frameOfOther) * turn * frameOfOther * Quaternion.Normalize(other.Value.Rotation)),
                 ClampScale(other.Value.Scale * scale));
             doc = MotionEdits.SetKey(doc, layer, frame, other.Bone, changed.ToBone(), moved);
         }
@@ -149,6 +151,17 @@ internal static class PoseEdits
         }
         return doc;
     }
+
+    /// <summary>The least weight a layer needs at the playhead for the gizmo to change its keys: below it the bone barely moves.</summary>
+    public const float MinFollowWeight = .05f;
+
+    /// <summary>
+    /// A gizmo drag's turn and move in character space, made to a layer that applies its keys at
+    /// <paramref name="weight"/> there (<see cref="MotionEvaluator.Weight"/>): scaled by its inverse, so the bone
+    /// turns and moves as far as the gizmo did. Null where the layer barely applies.
+    /// </summary>
+    public static (Quaternion Turn, Vector3 Move)? Follow(Quaternion turn, Vector3 move, float weight) =>
+        weight >= MinFollowWeight ? (MotionEvaluator.Pow(turn, 1 / weight), move / weight) : null;
 
     /// <summary>
     /// Keys <paramref name="pose"/> at <paramref name="frame"/> in a pose layer for each of <paramref name="bones"/> it

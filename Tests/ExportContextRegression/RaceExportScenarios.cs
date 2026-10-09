@@ -17,6 +17,8 @@ internal static class RaceExportScenarios
         OptionsThatUseTheModelGetTheRaceModel(Path.Combine(testRoot, "RaceOptions"));
         ExportingAgainKeepsTheFileAndEntry(Path.Combine(testRoot, "RaceAgain"));
         FilesTheModUsesAreNotTaken(Path.Combine(testRoot, "RaceUsedFiles"));
+        SharedRaceFilesAreNotWrittenOver(Path.Combine(testRoot, "RaceShared"));
+        RestoreUndoesTheOptions(Path.Combine(testRoot, "RaceRestore"));
         AccessoriesAndNewMods(Path.Combine(testRoot, "RaceAccessory"));
         UnusableModsAreRefused(Path.Combine(testRoot, "RaceRefused"));
         RequestsAreValidated();
@@ -176,6 +178,77 @@ internal static class RaceExportScenarios
         Require(plan.RelativePath == "Files/c0801e6001_top 2.mdl" &&
                 Eqdp(plan.Meta["DefaultData"]).Single()["Manipulation"]!["Entry"]!.GetValue<int>() == 0b1100,
             "race export: a file the mod uses elsewhere is never taken, and without the game's file the material flag is on");
+    }
+
+    private static void SharedRaceFilesAreNotWrittenOver(string root)
+    {
+        // An "all races" mod: one file for every race, so the c0801 path already maps the imported model.
+        Write(root, Metadata(Files((TopPath, "Files/top.mdl"), (RacePath, "Files/top.mdl"))));
+        File.WriteAllText(Path.Combine(root, "Files", "c0801e6001_top.mdl"), "an author's alternative");
+        var plan = Plan(root, "Files/top.mdl", 801, 1, "a file mapped at both races' paths");
+        Require(plan.RelativePath == "Files/c0801e6001_top 2.mdl" &&
+                plan.Meta["DefaultData"]!["Files"]![TopPath]!.GetValue<string>() == "Files/top.mdl" &&
+                plan.Meta["DefaultData"]!["Files"]![RacePath]!.GetValue<string>() == "Files/c0801e6001_top 2.mdl",
+            "race export: a file mapped at another race's path keeps it; the race gets a new file, past an unmapped one already there");
+
+        // The race's file is also another option's c0801 model, for a model this export doesn't touch.
+        Write(root, Metadata(
+            Files((TopPath, "Files/top.mdl"), (RacePath, "Files/miqo.mdl")),
+            Group("Style", ("Alt", Files((TopPath, "Files/alt.mdl"), (RacePath, "Files/miqo.mdl"))))));
+        plan = Plan(root, "Files/top.mdl", 801, 1, "a race file another option maps");
+        var meta = JsonNode.Parse(File.ReadAllText(Path.Combine(root, "meta.json")))!;
+        Require(plan.RelativePath != "Files/miqo.mdl" &&
+                meta["DefaultData"]!["Files"]![RacePath]!.GetValue<string>() == plan.RelativePath &&
+                Option(meta, "Style", "Alt")["Files"]![RacePath]!.GetValue<string>() == "Files/miqo.mdl",
+            "race export: a race file another option maps is never written over; that option keeps it");
+    }
+
+    private static void RestoreUndoesTheOptions(string root)
+    {
+        var defaultData = Files((TopPath, "Files/top.mdl"), (RacePath, "Files/miqo.mdl"));
+        defaultData["Manipulations"] = new JsonArray(
+            new JsonObject { ["Type"] = "Imc", ["Manipulation"] = new JsonObject { ["PrimaryId"] = 6001 } },
+            new JsonObject
+            {
+                ["Type"] = "Eqdp",
+                ["Manipulation"] = new JsonObject
+                {
+                    ["Entry"] = 0, ["Gender"] = "Female", ["Race"] = "Miqote", ["SetId"] = 6001, ["Slot"] = "Body",
+                },
+            });
+        Write(root, Metadata(defaultData, Group("Style", ("Plain", Files((TopPath, "Files/top.mdl"))))));
+        var metaPath = Path.Combine(root, "meta.json");
+        var before = JsonNode.Parse(File.ReadAllText(metaPath))!;
+        var plan = Plan(root, "Files/top.mdl", 801, 1, "a race export to undo");
+        var state = new JsonObject
+        {
+            ["schema"] = "instant-edit.race-export", ["version"] = 1, ["racePath"] = RacePath,
+            ["raceFile"] = plan.RelativePath, ["containers"] = plan.Undo.DeepClone(),
+        };
+        Require(plan.RelativePath == "Files/miqo.mdl", "race export restore: the race's own file is reused");
+        var warnings = PenumbraService.RestoreRaceExportMeta(root, state);
+        var after = JsonNode.Parse(File.ReadAllText(metaPath))!;
+        Require(warnings.Count == 0 &&
+                JsonNode.DeepEquals(after["DefaultData"], before["DefaultData"]) &&
+                JsonNode.DeepEquals(Option(after, "Style", "Plain"), Option(before, "Style", "Plain")),
+            "race export restore: every option's race mapping and EQDP entries are back as they were, the new ones gone");
+
+        state["containers"]![1]!["container"] = "option:gone";
+        Require(PenumbraService.RestoreRaceExportMeta(root, state).Single().Contains("no longer exists") &&
+                PenumbraService.RestoreRaceExportMeta(root, new JsonObject { ["schema"] = "other" }).Single().Contains("unreadable"),
+            "race export restore: an option that's gone or an unreadable record is a warning");
+
+        // The record rides beside the imported model's backup and goes with it.
+        var store = new ModelBackupStore(Path.Combine(root, "Config"));
+        var model = Path.Combine(root, "Files", "top.mdl");
+        File.WriteAllText(model, "model");
+        var backup = store.Create(model, "RaceRestore", "Files/top.mdl");
+        store.WriteRaceState(backup, state);
+        Require(store.ReadEstState(backup) is null && JsonNode.DeepEquals(store.ReadRaceState(backup), state),
+            "race export restore: the record is kept beside the backup, apart from its EST entries");
+        File.Delete(backup);
+        store.Cleanup();
+        Require(!File.Exists(backup + ".race.json"), "race export restore: a backup's record goes with it");
     }
 
     private static void AccessoriesAndNewMods(string root)

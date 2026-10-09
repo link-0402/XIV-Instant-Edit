@@ -43,6 +43,7 @@ def deformer_matrix(scale: float, degrees: float, translation) -> list[float]:
 BONES = {
     "j_sebo_a": deformer_matrix(1.1, 12.0, (0.01, 0.02, 0.03)),
     "j_mune_l": deformer_matrix(0.9, -8.0, (-0.02, 0.0, 0.01)),
+    "j_kao": deformer_matrix(1.4, 0.0, (0.0, 0.1, 0.0)),  # No vertex group names it.
 }
 
 
@@ -232,8 +233,8 @@ def check_reshape() -> None:
         error = error_from([moved(co, WEIGHTS[index], AU_RA_BONES) for index, co in enumerate(before)])
         require(result == {"FINISHED"} and error < 1e-5
                 and body.data.get(racial.APPLIED_PROPERTY) == "c0201 to c1401"
-                and {(request[2]["modelRace"], request[2]["race"]) for request in requests} == {(201, 1401), (201, 801)},
-                f"another race replaces the scaling instead of stacking on it (error {error:.2e})")
+                and {(request[2]["modelRace"], request[2]["race"]) for request in requests} == {(201, 1401)},
+                f"another race replaces the scaling, kept with the mark, instead of stacking on it (error {error:.2e})")
         error = max((Vector(keys["shp_wrst"].data[index].co) - moved(co, WEIGHTS[index], AU_RA_BONES)).length
                     for index, co in enumerate(shape_before))
         require(error < 1e-5, f"shape keys follow the replaced scaling (error {error:.2e})")
@@ -257,6 +258,28 @@ def check_reshape() -> None:
         error = error_from([moved(co, WEIGHTS[index]) for index, co in enumerate(before)])
         require(result == {"FINISHED"} and error < 1e-5 and body.data.get(racial.APPLIED_PROPERTY) == "c0201 to c0801",
                 f"a mesh taken back to its own race can be reshaped again (error {error:.2e})")
+        stored = racial.applied_matrices(body)
+        require(stored is not None and set(stored) == {"j_sebo_a", "j_mune_l"}
+                and all(np.array_equal(stored[name], np.reshape(BONES[name], (3, 4))) for name in stored),
+                "the mesh data keeps the matrices it was reshaped with, for its own vertex groups")
+
+        # A skeleton mod or another collection changes what the plugin answers in between.
+        other = {name: deformer_matrix(1.3, 20.0, (0.05, 0.0, 0.0)) for name in BONES}
+        with patch.dict(DEFORMERS, {801: (801, other)}), patch.object(plugin_http, "post_json", post):
+            result = bpy.ops.xiv_ie.apply_racial_scaling(model_race="201", race="201")
+        error = error_from(before)
+        require(result == {"FINISHED"} and error < 1e-5 and racial.APPLIED_MATRICES_PROPERTY not in body.data,
+                f"taking the scaling off undoes the matrices applied, not the collection's current ones (error {error:.2e})")
+
+        with patch.object(plugin_http, "post_json", post):
+            bpy.ops.xiv_ie.apply_racial_scaling(model_race="201", race="801")
+            del body.data[racial.APPLIED_MATRICES_PROPERTY]
+            result = bpy.ops.xiv_ie.apply_racial_scaling(model_race="201", race="201")
+        error = error_from(before)
+        require(result == {"FINISHED"} and error < 1e-5,
+                f"a mark from before the matrices were kept is taken off with the plugin's (error {error:.2e})")
+        with patch.object(plugin_http, "post_json", post):
+            bpy.ops.xiv_ie.apply_racial_scaling(model_race="201", race="801")
 
         check_export(body, world)
 
@@ -307,7 +330,8 @@ def check_undo() -> None:
         bpy.ops.ed.undo()
         body = bpy.data.objects[names[1]]
         error = max((Vector(vertex.co) - point).length for vertex, point in zip(body.data.vertices, before))
-        require(error < 1e-6 and racial.APPLIED_PROPERTY not in body.data and racial.APPLIED_PROPERTY not in body,
+        require(error < 1e-6 and racial.APPLIED_PROPERTY not in body.data and racial.APPLIED_PROPERTY not in body
+                and racial.APPLIED_MATRICES_PROPERTY not in body.data,
                 "undo takes the racial scaling and its mark off together")
         select_only(body)
         with patch.object(plugin_http, "post_json", post):

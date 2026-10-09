@@ -14,6 +14,7 @@ internal static class SizesExportScenarios
         NewGroupGetsAnOptionPerSize(Path.Combine(testRoot, "SizesNewGroup"));
         SelectedGroupKeepsItsFiles(Path.Combine(testRoot, "SizesSelectedGroup"));
         FilesTheModUsesAreNotTaken(Path.Combine(testRoot, "SizesUsedFiles"));
+        SharedOptionFilesAreNotReused(Path.Combine(testRoot, "SizesSharedFiles"));
         UnusableGroupsAndNamesAreRefused(Path.Combine(testRoot, "SizesRefused"));
         RequestsAreValidated();
         ReceiptsMatchTheWholeRequest();
@@ -84,11 +85,13 @@ internal static class SizesExportScenarios
         meta = Plan(root, ["Small", "Large", "Medium Rue", "Rue/Buff"], "size", "Large", out plan);
         group = meta["Groups"]!.AsArray().Single()!;
         Require(OptionNames(group).SequenceEqual(["Large", "Medium Rue", "Rue/Buff", "Small"]) &&
-                group["DefaultSettings"]!.GetValue<int>() == 0 &&
+                group["DefaultSettings"]!.GetValue<int>() == 1 &&
                 Mapped(group, "Large") == "Files/c0101e0001_top Large.mdl" &&
                 Mapped(group, "Small") == "Files/c0101e0001_top Small.mdl" &&
-                plan.Files[0].RelativePath == "Files/c0101e0001_top Small.mdl",
-            "sizes: exporting again reuses the group by name, keeps each size's file and adds the new size");
+                plan.Files[0].RelativePath == "Files/c0101e0001_top Small.mdl" &&
+                plan.Replaced.SetEquals(["Files/c0101e0001_top Large.mdl", "Files/c0101e0001_top Medium Rue.mdl",
+                    "Files/c0101e0001_top Rue-Buff.mdl"]),
+            "sizes: exporting again reuses the group by name, keeps its default and each size's file, and adds the new size");
     }
 
     private static void SelectedGroupKeepsItsFiles(string root)
@@ -116,8 +119,8 @@ internal static class SizesExportScenarios
         Require(written["Name"]!.GetValue<string>() == "Body" && plan.GroupName == "Body" &&
                 written["Priority"]!.GetValue<int>() == 7 &&
                 OptionNames(written).SequenceEqual(["None", "large", "Small"]) &&
-                written["DefaultSettings"]!.GetValue<int>() == 2,
-            "sizes: a selected group keeps its name, priority and other options");
+                written["DefaultSettings"]!.GetValue<int>() == 0,
+            "sizes: a selected group keeps its name, priority, default and other options");
         Require(Mapped(written, "large") == "Files/custom/large.mdl" &&
                 Mapped(written, "Small") == "Files/c0101e0001_top Small.mdl",
             "sizes: a size the group has keeps its file; a new size gets one next to the model");
@@ -144,8 +147,36 @@ internal static class SizesExportScenarios
         Require(Mapped(group, "Medium") == "Files/c0101e0001_top Medium 2.mdl" &&
                 Mapped(group, "Large") == "Files/c0101e0001_top Large 2.mdl",
             "sizes: files the mod maps elsewhere, there or not, are never taken");
-        Require(Mapped(group, "Small") == "Files/c0101e0001_top Small.mdl",
-            "sizes: a file nothing maps any more is taken again");
+        Require(Mapped(group, "Small") == "Files/c0101e0001_top Small 2.mdl" && File.ReadAllText(orphan) == "left over",
+            "sizes: a file nothing maps but that is there (an alternative or a leftover) is never taken");
+    }
+
+    private static void SharedOptionFilesAreNotReused(string root)
+    {
+        Directory.CreateDirectory(Path.Combine(root, "Files"));
+        // The size option's file is also another group's model: exporting the size must not change that one.
+        var size = new JsonObject
+        {
+            ["Id"] = Guid.NewGuid(), ["Name"] = "Size", ["Type"] = "Single", ["DefaultSettings"] = 1,
+            ["Options"] = new JsonArray(
+                new JsonObject { ["Id"] = Guid.NewGuid(), ["Name"] = "Large", ["Files"] = new JsonObject { [GamePath] = "Files/big.mdl" } },
+                new JsonObject { ["Id"] = Guid.NewGuid(), ["Name"] = "Small", ["Files"] = new JsonObject { [GamePath] = "Files/small.mdl" } }),
+        };
+        var other = new JsonObject
+        {
+            ["Id"] = Guid.NewGuid(), ["Name"] = "Outfit", ["Type"] = "Single",
+            ["Options"] = new JsonArray(new JsonObject
+            {
+                ["Id"] = Guid.NewGuid(), ["Name"] = "Bulky", ["Files"] = new JsonObject { [GamePath] = "Files/big.mdl" },
+            }),
+        };
+        File.WriteAllText(Path.Combine(root, "meta.json"), Metadata(null, size, other).ToJsonString());
+        var meta = Plan(root, ["Large", "Small"], "Size", "Large", out var plan);
+        var group = meta["Groups"]![0]!;
+        Require(Mapped(group, "Large") == "Files/c0101e0001_top Large.mdl" && Mapped(group, "Small") == "Files/small.mdl" &&
+                Mapped(meta["Groups"]![1]!, "Bulky") == "Files/big.mdl" &&
+                plan.Replaced.SetEquals(["Files/small.mdl"]) && group["DefaultSettings"]!.GetValue<int>() == 1,
+            "sizes: a size whose file another group maps gets a new file; the group's default stays the author's");
     }
 
     private static void UnusableGroupsAndNamesAreRefused(string root)

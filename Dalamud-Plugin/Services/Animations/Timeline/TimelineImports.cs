@@ -10,10 +10,12 @@ namespace InstantEdit.Services.Animations.Timeline;
 /// game lacks). <paramref name="Seconds"/> is a sound's length, 0 when unknown or for effects.
 /// <paramref name="Beside"/> names, for a file that is an edited copy, the game path of the file it
 /// copies: saved in place, the copy is mapped wherever that file is (such as a mod's toggle
-/// option), so it comes and goes with it.
+/// option), so it comes and goes with it. <paramref name="Rebuild"/> makes such a copy the same way
+/// from another file: when the mod maps the original to different files in different options, each
+/// of those gets its own copy. A copy without one is mapped only where the original is the file it was made from.
 /// </summary>
 internal sealed record TimelineImport(string GamePath, ImmutableDictionary<string, byte[]> Files, float Seconds,
-    ImmutableDictionary<string, string>? Beside = null);
+    ImmutableDictionary<string, string>? Beside = null, ImmutableDictionary<string, Func<byte[], byte[]>>? Rebuild = null);
 
 /// <summary>
 /// Turns files picked on disk into packaged timeline resources. Each gets a new game path under

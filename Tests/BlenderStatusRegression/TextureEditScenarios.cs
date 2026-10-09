@@ -86,6 +86,7 @@ internal static class TextureEditScenarios
             await MetadataRewritesAsync(Path.Combine(root, "metadata"));
             await WaitingAsync(Path.Combine(root, "waiting"));
             await WaitingRetriesAsync(Path.Combine(root, "waiting-retries"));
+            await UnlistedModPauseAsync(Path.Combine(root, "unlisted-mod"));
             await CacheCleanupAsync(Path.Combine(root, "cache-cleanup"));
             await DiscardAllAsync(Path.Combine(root, "discard-all"));
             await SharedTexturesAsync(Path.Combine(root, "shared"));
@@ -647,6 +648,44 @@ internal static class TextureEditScenarios
             "once the check passes, both waiting saves go through");
     }
 
+    /// <summary>
+    /// Saves waiting for Penumbra to list the session's mod again pause the session after a while, so it
+    /// doesn't try again forever. Waiting for Penumbra itself never pauses it.
+    /// </summary>
+    private static async Task UnlistedModPauseAsync(string root)
+    {
+        using var f = new Fixture(root, (uint)TexFile.TextureFormat.BC7);
+        var id = await f.Service.StartAsync(f.Request, false);
+        var s = f.Service.Sessions.Single();
+        f.Service.UnlistedModPause = TimeSpan.Zero;
+        f.Backend.Wait = "Penumbra isn't available right now.";
+        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 66));
+        await f.Service.ProcessPendingAsync(true);
+        await f.Service.ProcessPendingAsync(true);
+        Check(f.Service.Sessions.Single() is { Waiting: true, Paused: false }, "waiting for Penumbra itself never pauses the session");
+
+        f.Service.UnlistedModPause = TimeSpan.FromMinutes(5);
+        f.Backend.Wait = "Penumbra doesn't list the texture's mod right now.";
+        f.Backend.ModUnlisted = true;
+        await f.Service.ProcessPendingAsync(true);
+        Check(f.Service.Sessions.Single() is { Waiting: true, Paused: false }, "a session whose mod Penumbra doesn't list waits at first");
+        f.Service.UnlistedModPause = TimeSpan.Zero;
+        await f.Service.ProcessPendingAsync(true);
+        Check(f.Backend.Commits == 0 && f.Service.Sessions.Single() is { Paused: true, Waiting: false, Conflict: false } p &&
+              p.Status.StartsWith("Paused: Penumbra doesn't list the texture's mod.", StringComparison.Ordinal),
+            "after a while of that, the session pauses and says why");
+        var checks = f.Backend.Checks;
+        await f.Service.ProcessPendingAsync(true);
+        Check(f.Backend.Checks == checks, "a paused session isn't tried again");
+
+        f.Backend.Wait = null;
+        f.Backend.ModUnlisted = false;
+        await f.Service.SetPausedAsync(id, false);
+        await f.Service.ProcessPendingAsync(true);
+        Check(f.Backend.Commits == 1 && f.Service.Sessions.Single() is { Paused: false, Waiting: false },
+            "Resume saves once Penumbra lists the mod again");
+    }
+
     private static async Task CacheCleanupAsync(string root)
     {
         using (var f = new Fixture(Path.Combine(root, "stale"), (uint)TexFile.TextureFormat.BC7))
@@ -1020,6 +1059,8 @@ internal static class TextureEditScenarios
         public Action? OnEncode;
         /// <summary>Set to make saves wait, as when Penumbra is unavailable or the character shows another file.</summary>
         public string? Wait;
+        /// <summary>The wait is for Penumbra to list the mod again.</summary>
+        public bool ModUnlisted;
         private string Meta => Path.Combine(ModRoot, "meta.json");
         /// <summary>The TEX files converted to TGA, as the converter received them.</summary>
         public readonly List<byte[]> TargaInputs = [];
@@ -1063,7 +1104,7 @@ internal static class TextureEditScenarios
         public Task CheckAsync(TextureEditSession s, CancellationToken token)
         {
             Checks++;
-            if (Wait is { } wait) throw new TextureWaitException(wait);
+            if (Wait is { } wait) throw new TextureWaitException(wait, ModUnlisted);
             if (!s.NeedsMod && File.Exists(Meta)) PenumbraService.EnsureTextureMappingForRegression(s);
             return Task.CompletedTask;
         }

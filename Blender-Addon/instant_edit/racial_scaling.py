@@ -8,7 +8,9 @@ custom property, "c0201 to c0801". Simple Export asks first and warns about thes
 The Tools panel's Apply Racial Scaling reshapes meshes in Blender instead, with the deformer
 matrices the plugin reads from the player's collection. The mesh data (not the object, so undo and
 duplicates keep it with the vertices it describes) carries xiv_applied_racial_scaling,
-"c0201 to c0801", so applying another race replaces that scaling instead of stacking on it.
+"c0201 to c0801", so applying another race replaces that scaling instead of stacking on it. Next
+to it, xiv_applied_racial_scaling_matrices keeps the matrices that were applied (for the mesh's
+vertex groups), so taking them off later undoes exactly those, even after the collection changed.
 
 Either way the meshes are shaped for the target race, so Quick Export and mashups refuse to write
 them into a model of another race (the c0201 file they came from). Quick Export's Save as c0801
@@ -22,6 +24,7 @@ import numpy as np
 
 PROPERTY = "xiv_racial_scaling"
 APPLIED_PROPERTY = "xiv_applied_racial_scaling"
+APPLIED_MATRICES_PROPERTY = "xiv_applied_racial_scaling_matrices"
 _RACE = re.compile(r"c\d{4}")
 # A model's race in a game path or file name: c0201e6000_top.mdl, chara/human/c0801/...
 _MODEL_RACE = re.compile(r"(?i)(?<![a-z0-9])c(\d{4})(?:[abefhtz]\d{4}|/)")
@@ -55,12 +58,29 @@ def applied(obj) -> tuple[int, int] | None:
     return (model_race, race) if model_race in RACE_LABELS and race in RACE_LABELS and model_race != race else None
 
 
-def set_applied(obj, model_race: int, race: int) -> None:
-    """Record the mesh's scaling; none when it is back to the model's own race."""
+def applied_matrices(obj) -> dict[str, np.ndarray] | None:
+    """The {bone: 3×4 matrix} Apply Racial Scaling left on the mesh, or None for a mark from before
+    they were kept (or a damaged one)."""
+    try:
+        stored = json.loads(str(obj.data.get(APPLIED_MATRICES_PROPERTY) or ""))
+        matrices = {str(name): np.array(values, dtype=np.float64).reshape(3, 4) for name, values in stored.items()}
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return matrices if all(np.all(np.isfinite(matrix)) for matrix in matrices.values()) else None
+
+
+def set_applied(obj, model_race: int, race: int, matrices: dict[str, np.ndarray]) -> None:
+    """Record the mesh's scaling and the ``matrices`` applied for it; none when it is back to the
+    model's own race."""
     if model_race == race:
         obj.data.pop(APPLIED_PROPERTY, None)
+        obj.data.pop(APPLIED_MATRICES_PROPERTY, None)
     else:
         obj.data[APPLIED_PROPERTY] = f"c{model_race:04d} to c{race:04d}"
+        groups = {group.name for group in obj.vertex_groups}
+        obj.data[APPLIED_MATRICES_PROPERTY] = json.dumps(
+            {name: [float(value) for value in matrix.ravel()] for name, matrix in matrices.items()
+             if name in groups}, separators=(",", ":"))
     # Before 2026-10-04 the mark sat on the object, where undo could leave it behind.
     obj.pop(APPLIED_PROPERTY, None)
 

@@ -262,6 +262,9 @@ internal sealed class TimelineEditor
     {
         if (gesture != TimelineGesture.None)
             Release();
+        // The canvas draws before the properties panel, so a field edit this click ends is still
+        // open: close it as its own step before this press starts another.
+        History.End();
         LastError = null;
         SnapGuide = null;
         dragged = false;

@@ -98,7 +98,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
         if (!available)
             throw new TextureWaitException("Penumbra isn't available right now.");
         if (registered is null && Directory.Exists(root) && File.Exists(file))
-            throw new TextureWaitException("Penumbra doesn't list the texture's mod right now.");
+            throw new TextureWaitException("Penumbra doesn't list the texture's mod right now.", modUnlisted: true);
         if (registered is null || !registered.CandidateRoots.Any(candidate =>
                 string.Equals(Path.GetFullPath(candidate), Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase) ||
                 (Path.GetFileName(candidate).Equals("Files", StringComparison.OrdinalIgnoreCase) &&
@@ -447,4 +447,8 @@ public sealed partial class PenumbraService : ITextureEditBackend
 internal sealed class TextureConflictException(string message) : IOException(message);
 
 /// <summary>A save that can't go through right now, such as while Penumbra loads; the session tries it again.</summary>
-internal sealed class TextureWaitException(string message) : IOException(message);
+internal sealed class TextureWaitException(string message, bool modUnlisted = false) : IOException(message)
+{
+    /// <summary>Penumbra runs but doesn't list the mod, which may not end; the session pauses after a while.</summary>
+    public bool ModUnlisted { get; } = modUnlisted;
+}

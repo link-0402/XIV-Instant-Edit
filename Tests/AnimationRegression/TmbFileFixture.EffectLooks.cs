@@ -140,6 +140,9 @@ internal static partial class TmbFileFixture
         check(other.Files.Count == 2 && other.Files["vfx/instant_edit/tex/spark.atex"].SequenceEqual(new byte[] { 1, 2, 3 }) &&
               other.Beside![other.GamePath] == "vfx/mod/eff/other.avfx" && !other.GamePath.Contains("0a1b2c3d", StringComparison.Ordinal),
             "a copy of an import takes its other files along and maps beside what the import copies, without the old hash in its name");
+        check(glow.Rebuild![glow.GamePath](effect).SequenceEqual(glow.Files[glow.GamePath]) &&
+              other.Rebuild is { } otherRebuild && !otherRebuild.ContainsKey(other.GamePath),
+            "a look's copy is made the same way from another file of its effect; a copy of a copy that can't be made again has none");
         var saved = TmbFile.Parse(TimelineConvert.Apply(bytes, baked)).Entries.Where(e => e.Magic == "C173").Select(e => e.Text).ToList();
         var used = imports.Values.Concat(copies).ToList();
         check(saved.SequenceEqual([glow.GamePath, glow.GamePath, other.GamePath, GlowPath]) &&

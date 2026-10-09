@@ -804,8 +804,11 @@ def export_target_issues(
         issue = sizes_export_issue(props, ref)
         if issue:
             issues.append(("ERROR", issue))
-        if not sizes.picked_names(context.scene):
+        size_names = sizes.picked_names(context.scene)
+        if not size_names:
             issues.append(("ERROR", sizes.NO_SIZES))
+        elif sizes.option_name_issue(size_names):
+            issues.append(("ERROR", sizes.option_name_issue(size_names)))
     selection = getattr(props, "variant_target", "NEW_GROUP")
     if selection == MASHUP_TARGET:
         show_target, enabled, message = mashup_target_state(context, ref)

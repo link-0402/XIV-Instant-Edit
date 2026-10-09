@@ -26,6 +26,7 @@ internal static class PoseEditorFixture
         Turns(check);
         Moves(check);
         Gizmo(check);
+        Follows(check);
         Following(check);
         Frames(check);
         Mirrors(check);
@@ -208,6 +209,14 @@ internal static class PoseEditorFixture
         check(At(moved, 15, Twin) is { } shifted &&
               Near(Vector3.Transform(shifted.Position - twin.Value.Position, Space(Twin)), Vector3.Transform(target.Position - hand.Value.Position, Space(Hand))),
             "a pose's move goes the same way for every selected bone, each in its parent's space");
+        var clipPosition = new Vector3(.5f, .5f, .5f);
+        var fromClip = PoseEdits.Set(pose, "m1", 15, hand with { Moved = true }, target, [twin, twin with { Bone = Neck, Moved = true }], Space, false, true,
+            bone => clipPosition);
+        check(At(fromClip, 15, Twin) is { } started &&
+              Near(Vector3.Transform(started.Position - clipPosition, Space(Twin)), Vector3.Transform(target.Position - hand.Value.Position, Space(Hand))) &&
+              At(fromClip, 15, Neck) is { } kept &&
+              Near(Vector3.Transform(kept.Position - twin.Value.Position, Space(Neck)), Vector3.Transform(target.Position - hand.Value.Position, Space(Hand))),
+            "a pose's move starts a bone its key only turned from the clip's own position, and one it moved from its key's");
 
         var keyed = PoseEdits.Key(pose, "m1", 5, [hand with { Moved = true }, twin], true);
         check(At(keyed, 5, Hand) == hand.Value.ToBone() && At(keyed, 5, Twin) == twin.Value.ToBone() &&
@@ -316,6 +325,33 @@ internal static class PoseEditorFixture
         check(Degrees(none, Quaternion.Identity) < 1e-3f && Near(moved, new Vector3(0, .5f, -.1f)), "a gizmo move reads back as the move in character space");
         var (back, _) = PoseGizmo.Delta(PoseGizmo.Bone(Vector3.Zero, Q(Vector3.UnitY, 170)), PoseGizmo.Bone(Vector3.Zero, Q(Vector3.UnitY, -170)));
         check(back.W >= 0 && Degrees(back, Q(Vector3.UnitY, 20)) < 1e-3f, "a turn reads back the short way, with one sign");
+    }
+
+    /// <summary>
+    /// A gizmo drag on a layer that applies its keys at a quarter (half strength, halfway through its fade
+    /// in): the keys change four times as far, so the bone turns and moves exactly as far as the gizmo.
+    /// </summary>
+    private static void Follows(Action<bool, string> check)
+    {
+        var rig = Rig();
+        var pose = Clip().Pose(5);
+        var model = MotionEvaluator.ModelSpace(rig, pose);
+        var doc = Doc(MotionLayerKind.Offset);
+        doc = doc with { Motion = [doc.Motion[0] with { Amount = .5f, FadeIn = 10 }] };
+        var weight = MotionEvaluator.Weight(doc.Motion[0], 5);
+        var drag = Q(Vector3.UnitY, 10);
+        var shift = new Vector3(.1f, -.05f, .02f);
+        // An offset turns about the bone's own rotation in character space.
+        Quaternion Frame(string bone) => bone == Hand ? model[2].Rotation : Quaternion.Identity;
+        PoseTarget still = new(Hand, MotionTransform.Identity, false);
+        var follow = PoseEdits.Follow(drag, shift, weight) ?? (Quaternion.Identity, Vector3.Zero);
+        check(Math.Abs(weight - .25f) < 1e-5f && Degrees(follow.Turn, Q(Vector3.UnitY, 40)) < 1e-3f && Near(follow.Move, shift * 4) &&
+              PoseEdits.Follow(drag, shift, .01f) == null && PoseEdits.Follow(drag, shift, float.NaN) == null,
+            "a gizmo drag changes the keys by its turn and move over the layer's weight there, and not at all where the layer barely applies");
+        var turned = MotionEvaluator.ModelSpace(rig, MotionEvaluator.ApplyAt(rig, pose, PoseEdits.Turn(doc, "m1", 5, [still], follow.Turn, Frame).Motion, 5));
+        var moved = MotionEvaluator.ModelSpace(rig, MotionEvaluator.ApplyAt(rig, pose, PoseEdits.Move(doc, "m1", 5, [still], follow.Move, Frame, true).Motion, 5));
+        check(Degrees(turned[2].Rotation, drag * model[2].Rotation) < 1e-2f && Near(moved[2].Position - model[2].Position, shift),
+            "so the bone turns and moves as far as the gizmo");
     }
 
     /// <summary>A chain root, a, b, c with a side bone x on the root: the bones an edit changes when several are selected.</summary>

@@ -42,7 +42,7 @@ public sealed partial class PenumbraService
         await _exportGate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            root = await _framework.RunOnFrameworkThread(GetModDirectory).ConfigureAwait(false);
+            (root, var listed) = await _framework.RunOnFrameworkThread(() => (GetModDirectory(), TryGetModList(out var mods) ? mods : null)).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
                 throw new IOException("Penumbra's mod directory is unavailable.");
             root = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
@@ -50,21 +50,16 @@ public sealed partial class PenumbraService
                 throw new IOException("Penumbra's mod directory is an unsupported linked folder.");
             await LeaveFrameworkThread();
 
-            var existing = directory is { } known && IsSafeModName(known) && Path.Combine(root, known) is var folder &&
-                           Directory.Exists(folder) && identifier != Guid.Empty && ReadModStableIdentifier(folder) == identifier
-                ? folder
-                : null;
-            if (existing != null)
+            // The mod renamed in Penumbra keeps its identifier, so saves follow it to its new folder.
+            if (FindPhysicsModFolder(root, directory, identifier, listed?.Keys) is { } existing)
             {
-                modDirectory = directory!;
-                relative = UpdatePhysicsModFiles(existing, gamePath, bytes);
+                modDirectory = existing;
+                relative = UpdatePhysicsModFiles(Path.Combine(root, existing), gamePath, bytes);
                 created = false;
             }
             else
             {
-                var modList = await _framework.RunOnFrameworkThread(() => TryGetModList(out var mods) ? mods : null).ConfigureAwait(false)
-                    ?? throw new IOException("Could not retrieve the Penumbra mod list.");
-                await LeaveFrameworkThread();
+                var modList = listed ?? throw new IOException("Could not retrieve the Penumbra mod list.");
                 modDirectory = UniqueModName(name, candidate =>
                     modList.Keys.Any(key => string.Equals(key, candidate, StringComparison.OrdinalIgnoreCase)) ||
                     modList.Values.Any(value => string.Equals(value, candidate, StringComparison.OrdinalIgnoreCase)) ||
@@ -248,6 +243,37 @@ public sealed partial class PenumbraService
             return (null, string.Empty);
         var file = PhysicsModFile(folder, NormalizeGamePath(gamePath));
         return file is null ? (null, string.Empty) : (await File.ReadAllBytesAsync(file).ConfigureAwait(false), file);
+    }
+
+    /// <summary> The physics mod's folder now: <paramref name="directory"/>, the folder it was renamed to, or null when it's gone. </summary>
+    internal async Task<string?> FindPhysicsModAsync(string directory, Guid identifier)
+    {
+        var root = await _framework.RunOnFrameworkThread(GetModDirectory).ConfigureAwait(false);
+        await LeaveFrameworkThread();
+        if (string.IsNullOrWhiteSpace(root))
+            return null;
+        if (FindPhysicsModFolder(root, directory, identifier, null) is { } same)
+            return same;
+        var mods = await _framework.RunOnFrameworkThread(() => TryGetModList(out var list) ? list : null).ConfigureAwait(false);
+        await LeaveFrameworkThread();
+        return FindPhysicsModFolder(root, directory, identifier, mods?.Keys);
+    }
+
+    /// <summary>
+    /// The folder in <paramref name="root"/> of the mod with <paramref name="identifier"/>: <paramref name="directory"/>
+    /// while it still is that mod, else the one of <paramref name="folders"/> that is (Penumbra keeps a mod's
+    /// identifier when it renames its folder). Null when none is, or more than one.
+    /// </summary>
+    internal static string? FindPhysicsModFolder(string root, string? directory, Guid identifier, IEnumerable<string>? folders)
+    {
+        if (identifier == Guid.Empty)
+            return null;
+        bool Is(string name) => IsSafeModName(name) && Path.Combine(root, name) is var folder && Directory.Exists(folder) &&
+                                ReadModStableIdentifier(folder) == identifier;
+        if (directory != null && Is(directory))
+            return directory;
+        var found = (folders ?? []).Where(name => !string.Equals(name, directory, StringComparison.OrdinalIgnoreCase) && Is(name)).Take(2).ToList();
+        return found.Count == 1 ? found[0] : null;
     }
 
     /// <summary> Turns the physics mod on or off in the object's collection. </summary>

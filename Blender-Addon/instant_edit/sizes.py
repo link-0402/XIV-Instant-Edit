@@ -19,6 +19,8 @@ from .props import get_instant_edit_props
 # The api.VERSION of Magic Fit this module was written for.
 API_VERSION = 1
 NO_SIZES = "Pick sizes in Magic Fit's Resize panel."
+# The most sizes Instant Edit takes in one export (its ExportServer.Sizes MaxSizes).
+MAX_SIZES = 64
 _INVALID_FILE_CHARACTERS = frozenset('<>:"/\\|?*')
 
 
@@ -121,6 +123,9 @@ def file_part(name: str) -> str:
 
 def option_name_issue(names) -> str:
     """Why sizes of these names can't be Penumbra options, or "" when they can."""
+    names = list(names)
+    if len(names) > MAX_SIZES:
+        return f"Pick at most {MAX_SIZES} sizes."
     seen = set()
     for name in names:
         if not name or name != name.strip() or len(name) > 120 or any(ord(char) < 32 for char in name) \

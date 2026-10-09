@@ -189,14 +189,16 @@ internal static class TimelineConvert
             else if (TimelineDocument.Kept(target) && changed) keeps.Add(id);
             var entry = file.Find(id)!;
             // A motion at its own speed ignores its frame range. Given time control it plays the range
-            // over its length, so the range becomes the whole motion: 0 to its own length. Unknown, an
-            // empty range (VFXEditor's default 0 to 0) becomes 0 to 1 for a face (a pose, as vanilla
-            // timed faces have it) or 0 to the length stored for anything else; another is kept.
+            // over its length, so the range becomes the whole motion: 0 to its own length. Unknown, a
+            // face gets 0 to 1 (a pose, as vanilla timed faces have it), whatever range it stored: a
+            // range past the face drops it at once. Anything else keeps a range it stored, and an empty
+            // one (VFXEditor's default 0 to 0) becomes 0 to the length stored.
             if (TimelineDocument.OwnPace(old) && target.Values.GetValueOrDefault(TmbEntrySchema.TimeControlField) != 0)
             {
                 float? end = motionFrames != null && motionFrames.TryGetValue(target.Path, out var frames) && frames > 0 ? frames
+                    : TimelineDocument.Holds(old) ? 1
                     : entry.Single(28) > entry.Single(24) ? null
-                    : TimelineDocument.Holds(old) ? 1 : Math.Max(1, old.Duration);
+                    : Math.Max(1, old.Duration);
                 if (end is { } value)
                 {
                     file.SetSingle(id, 24, 0);
@@ -262,6 +264,7 @@ internal static class TimelineConvert
             ? (play.Duration, play.From, play.To)
             : (own, 0f, (float)own);
         if ((long)e.Start + length > TimelineDocument.MaxFrames) throw new InvalidDataException($"{Describe(e)} starts too late to loop.");
+        if (TimelineDocument.LoopCopies(e.Start, length) > TimelineDocument.MaxLoopCopies) throw new InvalidDataException(TimelineDocument.TooShortToLoop);
         file.SetInt32(id, 12, length);
         file.SetSingle(id, 24, from);
         file.SetSingle(id, 28, to);

@@ -204,6 +204,10 @@ internal static class AudioFixture
         var badAudio = template.ToArray();
         BinaryPrimitives.WriteInt32LittleEndian(badAudio.AsSpan(AudioTableAt), 0x7FFFFFF0);
         reject(() => ScdFile.Read(badAudio), "an audio offset outside the file is refused");
+        var badSound = template.ToArray();
+        BinaryPrimitives.WriteInt32LittleEndian(badSound.AsSpan(ScdFile.SoundTableOffset), 0x7FFFFFF0);
+        reject(() => ScdFile.Read(badSound), "a sound offset outside the file is refused");
+        check(ScdFile.TrySeconds(badSound) == null, "TrySeconds gives null for a sound offset near int.MaxValue");
         var badTrack = template.ToArray();
         BinaryPrimitives.WriteInt16LittleEndian(badTrack.AsSpan(SoundAt + 32 + 2), 5);
         reject(() => ScdFile.Read(badTrack), "a sound naming a missing audio entry is refused");

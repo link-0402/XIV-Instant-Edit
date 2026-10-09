@@ -37,9 +37,13 @@ internal static class MotionEvaluator
     /// <summary>
     /// How much of <paramref name="layer"/> applies at <paramref name="frame"/>, before its amount:
     /// 0 outside its range, rising over its fade in and falling over its fade out on a smoothstep.
+    /// Past a layer reaching the end of a motion <paramref name="end"/> frames long (<see cref="ReachesEnd"/>),
+    /// its last frame's weight holds.
     /// </summary>
-    public static float Fade(MotionLayer layer, float frame)
+    public static float Fade(MotionLayer layer, float frame, float end = 0)
     {
+        if (frame > layer.End && ReachesEnd(layer, end))
+            frame = layer.End;
         if (!float.IsFinite(frame) || frame < layer.Start - FrameTolerance || frame > layer.End + FrameTolerance)
             return 0;
         frame = Math.Clamp(frame, layer.Start, layer.End);
@@ -49,6 +53,26 @@ internal static class MotionEvaluator
         if (layer.FadeOut > 0 && frame > layer.End - layer.FadeOut)
             weight = Math.Min(weight, AnimationPoseRules.SmoothStep((layer.End - frame) / layer.FadeOut));
         return Math.Clamp(weight, 0, 1);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="layer"/> reaches the end of a motion <paramref name="end"/> frames long (0 when
+    /// unknown). A timeline's length may be a frame off its motion's, from the file's header, or a fraction
+    /// short of it (<see cref="TimelineDocument.SameLength"/>), so a layer ending at most a frame before the
+    /// motion's length in whole frames reaches it: it goes on over the motion's last samples, and a looping
+    /// clip starts over with the layer as it ended rather than popping back to the unedited motion.
+    /// </summary>
+    public static bool ReachesEnd(MotionLayer layer, float end) =>
+        end > 0 && float.IsFinite(end) && layer.End >= Math.Round(end, MidpointRounding.AwayFromZero) - 1;
+
+    /// <summary>
+    /// How strongly an offset or pose layer applies its keys at <paramref name="frame"/>: an offset's strength
+    /// (its amount, up to <see cref="MaxAmount"/>), a pose's blend toward the keyed pose, both through its fades.
+    /// </summary>
+    public static float Weight(MotionLayer layer, float frame, float end = 0)
+    {
+        var weight = Fade(layer, frame, end) * layer.Amount;
+        return layer.Kind == MotionLayerKind.Pose ? Math.Min(1, weight) : weight;
     }
 
     /// <summary>Checks one layer; throws <see cref="InvalidDataException"/> naming what is wrong.</summary>
@@ -112,14 +136,16 @@ internal static class MotionEvaluator
     /// <summary>
     /// Applies the active layers to <paramref name="clip"/> in place, in order, each to the motion the
     /// ones before it made, then keeps every bone's rotation on its previous sample's hemisphere.
-    /// On a looping clip, layers covering it wrap their keys round (<see cref="Wraps"/>).
+    /// On a looping clip, layers covering it wrap their keys round (<see cref="Wraps"/>), and layers reaching
+    /// its end cover its last samples (<see cref="ReachesEnd"/>).
     /// Throws for a layer naming a bone the clip's skeleton does not have.
     /// </summary>
     public static void Apply(MotionClip clip, IReadOnlyList<MotionLayer> layers, CancellationToken token = default)
     {
         Validate(layers);
         var index = Index(clip.Skeleton);
-        var loop = clip.Loops ? clip.Frame(clip.Samples - 1) : 0;
+        var end = clip.Frame(clip.Samples - 1);
+        var loop = clip.Loops ? end : 0;
         foreach (var layer in layers)
         {
             token.ThrowIfCancellationRequested();
@@ -129,13 +155,13 @@ internal static class MotionEvaluator
             switch (layer.Kind)
             {
                 case MotionLayerKind.Offset:
-                    ApplyOffset(clip, layer, Tracks(layer, index, mask, false), WrapOf(layer, loop), token);
+                    ApplyOffset(clip, layer, Tracks(layer, index, mask, false), WrapOf(layer, loop), end, token);
                     break;
                 case MotionLayerKind.Amplitude:
-                    ApplyAmplitude(clip, layer, (IReadOnlyCollection<int>?)mask ?? Enumerable.Range(0, clip.Bones).ToArray(), token);
+                    ApplyAmplitude(clip, layer, (IReadOnlyCollection<int>?)mask ?? Enumerable.Range(0, clip.Bones).ToArray(), end, token);
                     break;
                 case MotionLayerKind.Pose:
-                    ApplyPose(clip, layer, Tracks(layer, index, mask, false), Tracks(layer, index, mask, true), WrapOf(layer, loop), token);
+                    ApplyPose(clip, layer, Tracks(layer, index, mask, false), Tracks(layer, index, mask, true), WrapOf(layer, loop), end, token);
                     break;
             }
         }
@@ -173,7 +199,7 @@ internal static class MotionEvaluator
     /// toward its first key, which comes round again one loop later. The loop's last frame then matches its
     /// first, and the motion doesn't jump each time it starts over.
     /// </summary>
-    public static bool Wraps(MotionLayer layer, float loop) => loop > 0 && layer.Start < 1 && layer.End > loop - 1;
+    public static bool Wraps(MotionLayer layer, float loop) => loop > 0 && layer.Start < 1 && ReachesEnd(layer, loop);
 
     /// <summary>The loop length <see cref="Sample"/> wraps <paramref name="layer"/>'s keys around: <paramref name="loop"/> when it wraps, else 0.</summary>
     private static float WrapOf(MotionLayer layer, float loop) => Wraps(layer, loop) ? loop : 0;
@@ -343,7 +369,7 @@ internal static class MotionEvaluator
         }
     }
 
-    private static void ApplyOffset(MotionClip clip, MotionLayer layer, Dictionary<int, Track> tracks, float loop, CancellationToken token)
+    private static void ApplyOffset(MotionClip clip, MotionLayer layer, Dictionary<int, Track> tracks, float loop, float end, CancellationToken token)
     {
         if (tracks.Count == 0)
             return;
@@ -359,7 +385,7 @@ internal static class MotionEvaluator
             if ((i & 63) == 0)
                 token.ThrowIfCancellationRequested();
             var frame = clip.Frame(i);
-            var strength = Fade(layer, frame) * layer.Amount;
+            var strength = Weight(layer, frame, end);
             if (strength <= 0)
                 continue;
             for (var b = 0; b <= last; b++)
@@ -409,11 +435,11 @@ internal static class MotionEvaluator
     /// <see cref="Apply"/> applies them to a sample there. Amplitudes are left out: they scale motion
     /// around its average over their section, which one pose does not have. The Bones window turns
     /// bones in the space the layers leave the bones above them in. <paramref name="loop"/> is the
-    /// clip's length in frames when it loops, else 0. Throws for a layer naming a bone the skeleton
-    /// does not have.
+    /// clip's length in frames when it loops, else 0; <paramref name="end"/> its length in frames, 0 when
+    /// unknown. Throws for a layer naming a bone the skeleton does not have.
     /// </summary>
     public static MotionTransform[] ApplyAt(SkeletonDescription skeleton, ReadOnlySpan<MotionTransform> local, IReadOnlyList<MotionLayer> layers,
-        float frame, float loop = 0)
+        float frame, float loop = 0, float end = 0)
     {
         if (local.Length != skeleton.Bones.Length)
             throw new InvalidDataException("The pose does not match the skeleton.");
@@ -431,7 +457,7 @@ internal static class MotionEvaluator
             var wrap = WrapOf(layer, loop);
             if (layer.Kind == MotionLayerKind.Offset)
             {
-                var strength = Fade(layer, frame) * layer.Amount;
+                var strength = Weight(layer, frame, end);
                 var tracks = Tracks(layer, index, mask, false);
                 if (strength <= 0 || tracks.Count == 0)
                     continue;
@@ -446,7 +472,7 @@ internal static class MotionEvaluator
                 }
                 continue;
             }
-            var weight = Math.Min(1, Fade(layer, frame) * layer.Amount);
+            var weight = Weight(layer, frame, end);
             if (weight <= 0)
                 continue;
             if (rotate || scale)
@@ -459,13 +485,13 @@ internal static class MotionEvaluator
         return pose;
     }
 
-    private static void ApplyAmplitude(MotionClip clip, MotionLayer layer, IReadOnlyCollection<int> bones, CancellationToken token)
+    private static void ApplyAmplitude(MotionClip clip, MotionLayer layer, IReadOnlyCollection<int> bones, float end, CancellationToken token)
     {
         var rotate = layer.Components.HasFlag(PoseComponents.Rotation);
         var move = layer.Components.HasFlag(PoseComponents.Position);
         int first = -1, last = -1;
         for (var i = 0; i < clip.Samples; i++)
-            if (Inside(layer, clip.Frame(i)))
+            if (Inside(layer, clip.Frame(i), end))
             {
                 if (first < 0) first = i;
                 last = i;
@@ -506,7 +532,7 @@ internal static class MotionEvaluator
                 continue;
             for (var i = first; i <= last; i++)
             {
-                var factor = 1 + (layer.Amount - 1) * Fade(layer, clip.Frame(i));
+                var factor = 1 + (layer.Amount - 1) * Fade(layer, clip.Frame(i), end);
                 if (Math.Abs(factor - 1) < 1e-6f)
                     continue;
                 var value = clip.Get(i, b);
@@ -520,7 +546,7 @@ internal static class MotionEvaluator
     }
 
     private static void ApplyPose(MotionClip clip, MotionLayer layer, Dictionary<int, Track> tracks, Dictionary<int, Track> positions,
-        float loop, CancellationToken token)
+        float loop, float end, CancellationToken token)
     {
         var rotate = layer.Components.HasFlag(PoseComponents.Rotation);
         var move = layer.Components.HasFlag(PoseComponents.Position);
@@ -530,7 +556,7 @@ internal static class MotionEvaluator
             if ((i & 63) == 0)
                 token.ThrowIfCancellationRequested();
             var frame = clip.Frame(i);
-            var weight = Math.Min(1, Fade(layer, frame) * layer.Amount);
+            var weight = Weight(layer, frame, end);
             if (weight <= 0)
                 continue;
             if (rotate || scale)
@@ -546,7 +572,8 @@ internal static class MotionEvaluator
         }
     }
 
-    private static bool Inside(MotionLayer layer, float frame) => frame >= layer.Start - FrameTolerance && frame <= layer.End + FrameTolerance;
+    private static bool Inside(MotionLayer layer, float frame, float end) =>
+        frame >= layer.Start - FrameTolerance && (frame <= layer.End + FrameTolerance || ReachesEnd(layer, end));
 
     /// <summary>The bones a layer is limited to, by index; null when it is not limited.</summary>
     private static HashSet<int>? Mask(MotionLayer layer, Dictionary<string, int> index)

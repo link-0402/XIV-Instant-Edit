@@ -42,8 +42,8 @@ internal static class VariantExportScenarios
         }
         var meta = JsonNode.Parse(File.ReadAllText(metaPath))!;
         var group = meta["Groups"]!.AsArray().Single()!;
-        Require(group["Options"]!.AsArray().Count == 3 && group["DefaultSettings"]!.GetValue<int>() == 2,
-            "v4: name-based reuse retains both new options and None");
+        Require(group["Options"]!.AsArray().Count == 3 && group["DefaultSettings"]!.GetValue<int>() == 1,
+            "v4: name-based reuse retains both new options and None, and keeps the default the first export set");
         Require(Guid.TryParse(group["Id"]!.GetValue<string>(), out _) &&
                 group["Options"]!.AsArray().All(option => Guid.TryParse(option!["Id"]!.GetValue<string>(), out _)) &&
                 DateTimeOffset.Parse(meta["LastWrite"]!.GetValue<string>()) > DateTimeOffset.UtcNow.AddMinutes(-1) &&
@@ -104,8 +104,8 @@ internal static class VariantExportScenarios
                 written["Options"]!.AsArray().All(option =>
                     !string.Equals(option?["Name"]?.GetValue<string>(), "None", StringComparison.OrdinalIgnoreCase)) &&
                 written["Options"]![1]!["Files"]![GamePath]!.GetValue<string>() == "Files/new.mdl" &&
-                written["DefaultSettings"]!.GetValue<int>() == 1,
-            "v4: optional and extension metadata survives adding and selecting the new option");
+                written["DefaultSettings"] is null,
+            "v4: optional and extension metadata survives adding the new option, and the group keeps its own default");
         Require(JsonNode.DeepEquals(writtenMeta["Groups"]![1], sibling) &&
                 JsonNode.DeepEquals(writtenMeta["Groups"]![2], oldName) && writtenMeta["Groups"]!.AsArray().Count == 3,
             "v4: duplicate and cached names cannot redirect the selected write");
@@ -508,12 +508,19 @@ internal static class VariantExportScenarios
                 ImcGroup(plain)["DefaultEntry"]!["MaterialId"]!.GetValue<int>() == 1,
             "accessory attribute groups: a mod without IMC changes of its own keeps every variant's game entry");
 
+        // An earlier export made an IMC group; now the mod changes one variant's effect, which that group would undo.
         var mixed = Folder("NecklaceMixed");
-        var mixedBefore = File.ReadAllText(Path.Combine(mixed, "meta.json"));
-        Require(PenumbraService.WriteAttributeGroupsForRegression(mixed, necklace, tags, masks, Imc((1, Entry(1, vfx: 7))), game)?
-                    .StartsWith("attribute_group_imc_mixed:", StringComparison.Ordinal) == true &&
-                File.ReadAllText(Path.Combine(mixed, "meta.json")) == mixedBefore,
-            "accessory attribute groups: one group can't keep IMC changes that differ between variants, so none is written");
+        string[] mixedTags = [.. tags, "atrx_cape"];
+        Require(PenumbraService.WriteAttributeGroupsForRegression(mixed, necklace, mixedTags, masks, Imc((1, Entry(1))), game) is null,
+            "accessory attribute groups: the earlier export's groups are written");
+        Require(PenumbraService.WriteAttributeGroupsForRegression(mixed, necklace, mixedTags, masks, Imc((1, Entry(1, vfx: 7))), game)?
+                    .StartsWith("attribute_group_imc_mixed:", StringComparison.Ordinal) == true,
+            "accessory attribute groups: one group can't keep IMC changes that differ between variants, which is said");
+        var mixedGroups = JsonNode.Parse(File.ReadAllText(Path.Combine(mixed, "meta.json")))!["Groups"]!.AsArray().OfType<JsonObject>().ToArray();
+        Require(mixedGroups.All(group => group["Type"]?.GetValue<string>() != "Imc") &&
+                mixedGroups.Single(group => group["Type"]?.GetValue<string>() == "Multi")["Options"]!.AsArray()
+                    .Single()!["Name"]!.GetValue<string>() == "atrx_cape",
+            "accessory attribute groups: then the earlier IMC group goes, so the mod's variants stay, and the atrx_ toggles are still written");
 
         // The converted cloak still carried the body's atr_tv_ tags, which a necklace's IMC entry never hides.
         var converted = Folder("ConvertedCloak");

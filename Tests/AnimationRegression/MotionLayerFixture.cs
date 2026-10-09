@@ -21,6 +21,7 @@ internal static class MotionLayerFixture
         Offsets(check);
         Keys(check);
         Loops(check);
+        Ends(check);
         Eases(check, reject);
         Amplitudes(check);
         Poses(check);
@@ -201,6 +202,51 @@ internal static class MotionLayerFixture
         var stepped = layer with { Interpolation = MotionInterpolation.Step };
         check(Math.Abs(Degrees(MotionEvaluator.KeyValue(stepped, Hand, 2, 30)!.Value.Rotation, Quaternion.Identity) - 30) < .01f,
             "a stepped last key holds round the loop until the first key");
+    }
+
+    /// <summary>
+    /// A timeline's length can be a frame off its motion's (a 45-frame header on a 46-frame motion) or a
+    /// fraction short of it (31 frames for 31.25): a layer reaching the timeline's end must still cover the
+    /// motion's last samples, or a loop pops back to the unedited motion each time it starts over.
+    /// </summary>
+    private static void Ends(Action<bool, string> check)
+    {
+        var hand = Index(Hand);
+        // The rig at rest for a motion this many frames long.
+        static MotionClip Still(float frames, int samples, bool loops)
+        {
+            var clip = new MotionClip(Rig(), frames / 30, samples) { Loops = loops };
+            clip.CopyFrom(MotionClip.FromPoses(Rig(), frames / 30, [.. Enumerable.Range(0, samples).Select(_ => Rig().Bones.Select(bone => bone.Reference).ToArray())]));
+            return clip;
+        }
+        var turn = Key(0, (Hand, T(Vector3.Zero, Q(Vector3.UnitY, 30))));
+
+        var header = Layer(MotionLayerKind.Offset, 0, 45, keys: turn);
+        var once = Still(46, 47, false);
+        MotionEvaluator.Apply(once, [header]);
+        check(Degrees(once.Get(46, hand).Rotation, Q(Vector3.UnitY, 30)) < .01f && MotionEvaluator.Fade(header, 46, 46) == 1 &&
+              MotionEvaluator.Fade(header, 46) == 0,
+            "a layer reaching a timeline a frame shorter than its motion covers the motion's last sample");
+        var keys = Layer(MotionLayerKind.Offset, 0, 45, keys: [Key(4, (Hand, T(Vector3.Zero, Q(Vector3.UnitY, 10)))), Key(10, (Hand, T(Vector3.Zero, Q(Vector3.UnitY, 30))))]);
+        var looping = Still(46, 47, true);
+        MotionEvaluator.Apply(looping, [keys]);
+        // From the key at 10 (30 degrees) round to the key at 4, one 46-frame loop later: 36 of 40 frames at the loop's ends.
+        check(MotionEvaluator.Wraps(keys, 46) && Degrees(looping.Get(0, hand).Rotation, looping.Get(46, hand).Rotation) < .01f &&
+              Math.Abs(Degrees(looping.Get(0, hand).Rotation, Quaternion.Identity) - (30 - 20 * 36 / 40f)) < .01f,
+            "a layer reaching a timeline a frame shorter than its looping motion wraps its keys round the motion's loop");
+
+        var fraction = Still(31.25f, 32, false);
+        var whole = Layer(MotionLayerKind.Offset, 0, 31, keys: turn);
+        MotionEvaluator.Apply(fraction, [whole]);
+        check(Math.Abs(fraction.Frame(31) - 31.25f) < 1e-4f && Degrees(fraction.Get(31, hand).Rotation, Q(Vector3.UnitY, 30)) < .01f,
+            "a layer reaching a timeline rounded down from a fractional motion covers the motion's last sample");
+        var faded = Still(31.25f, 32, false);
+        MotionEvaluator.Apply(faded, [whole with { FadeOut = 5 }, Layer(MotionLayerKind.Offset, 0, 29, keys: turn) with { Key = "m2" }]);
+        check(Degrees(faded.Get(31, hand).Rotation, Quaternion.Identity) < .01f && !MotionEvaluator.ReachesEnd(whole with { End = 29 }, 31.25f) &&
+              MotionEvaluator.ReachesEnd(whole with { End = 30 }, 31.25f),
+            "past its end a layer keeps its last weight, faded out to none, and one ending earlier than a frame before the motion's end stops there");
+        check(Degrees(MotionEvaluator.ApplyAt(Rig(), Pose(Still(46, 47, false), 46), [header], 46, 0, 46)[hand].Rotation, Q(Vector3.UnitY, 30)) < .01f,
+            "the panels cover the motion's end as the bake does");
     }
 
     private static void Eases(Action<bool, string> check, Action<Action, string> reject)

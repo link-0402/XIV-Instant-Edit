@@ -21,7 +21,8 @@ namespace InstantEdit.Services.Animations.Preview;
 /// as for any clip (<see cref="LiveBindings"/>). Only GPose actors (index 200 and up)
 /// are touched. Every swapped control is put back on Stop, when the actor leaves or GPose ends,
 /// and on unload. A built copy is freed only after no control of the actor has held it for a while;
-/// one that might still be held is left allocated rather than freed under the game.
+/// one that might still be held is left allocated rather than freed under the game. A copy is
+/// never swapped in where the actor's skeleton lacks one of its tracks' bones.
 /// Every call must come from the framework thread.
 /// </summary>
 internal sealed unsafe class MotionLiveDisplay : IDisposable
@@ -32,6 +33,17 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     // Framework updates a built copy stays allocated once no control holds it: the game may still
     // read a skeleton being taken down for a frame or two.
     private const int ReleaseUpdates = 300;
+    // The same for a copy a newer one of the session replaced while its actor is there, whose controls
+    // were all read this update. The game reads a control's binding only in its own animation update, and
+    // every control that showed the copy moved to the newer one when it was swapped in, so a few updates
+    // without any control holding it are enough. A drag builds copy after copy; keeping each for
+    // ReleaseUpdates could hold gigabytes on a long clip.
+    private const int ReplacedUpdates = 30;
+    // Edits that keep changing (a drag) build a new copy at most this often, in milliseconds after the
+    // last build ended; the latest edits always build in the end.
+    private const long BuildInterval = 100;
+    // The message when a copy has a track for a bone the actor's skeleton lacks.
+    private const string SkeletonMismatch = "Your character's skeleton doesn't have every bone these layers move.";
 
     private readonly IFramework framework;
     private readonly IObjectTable objects;
@@ -45,6 +57,8 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     private Task<Built?>? evaluation;
     private CancellationTokenSource? evaluationCancel;
     private Edits evaluating;
+    // When the last build ended (Environment.TickCount64).
+    private long builtAt;
     private long updates;
     private bool disposed;
 
@@ -95,6 +109,8 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         public required short[] Tracks { get; init; }
         /// <summary>For each of <see cref="Tracks"/>, its place among the clip's own tracks, or -1 for one the layers added.</summary>
         public required int[] Sources { get; init; }
+        /// <summary>How many bones a skeleton needs for every one of <see cref="Tracks"/>: one past the highest.</summary>
+        public required int Bones { get; init; }
         public required int Frames { get; init; }
         public required int FloatTracks { get; init; }
         public required nint Transforms { get; init; }
@@ -103,6 +119,8 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         public readonly Dictionary<nint, nint> Shells = [];
         /// <summary>The update when no control held it any more; -1 while one may.</summary>
         public long ReleasedAt = -1;
+        /// <summary>The session it was built for.</summary>
+        public Session? Owner;
     }
 
     public MotionLiveDisplay(IFramework framework, IObjectTable objects, IClientState clientState, AnimationNative native, IPluginLog log)
@@ -200,6 +218,9 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
             Swap(current, null);
             return;
         }
+        // Each update tries again until the interval has passed.
+        if (Environment.TickCount64 - builtAt < BuildInterval)
+            return;
         evaluationCancel?.Dispose();
         evaluationCancel = new CancellationTokenSource();
         var token = evaluationCancel.Token;
@@ -214,6 +235,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         try
         {
             PollEvaluation();
+            Evaluate();
             if (session is { } current)
             {
                 var chara = Actor(current);
@@ -247,6 +269,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         if (evaluation is not { IsCompleted: true } done)
             return;
         evaluation = null;
+        builtAt = Environment.TickCount64;
         var edits = evaluating;
         if (done.IsCanceled)
         {
@@ -269,6 +292,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
             built.Add(copy);
             return;
         }
+        copy.Owner = current;
         built.Add(copy);
         current.Shown = edits;
         Error = string.Empty;
@@ -293,19 +317,31 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         }
     }
 
-    /// <summary>Swaps the current copy into every control of the actor that plays the clip and doesn't show it yet.</summary>
+    /// <summary>
+    /// Swaps the current copy into every control of the actor that plays the clip and doesn't show it yet.
+    /// A copy with a track for a bone the control's skeleton lacks is never swapped in: Havok would write
+    /// that track outside the pose. The clip's own motion comes back and the session ends with why.
+    /// </summary>
     private void Attach(Session current, Character* chara)
     {
         if (current.Current is not { } copy)
             return;
+        var mismatch = false;
         ForEachControl(chara, (control, skeleton, resource) =>
         {
+            if (mismatch)
+                return;
             var binding = control->Binding.ptr;
             if (Holder((nint)binding) is { } holder)
             {
                 // An older copy moves to the current one; a control nothing recorded keeps what it has.
                 if (holder != copy && current.Swapped.TryGetValue((nint)control, out var before))
-                    Put(control, before, copy, current.Fingerprint);
+                {
+                    if (copy.Bones > skeleton->Bones.Length)
+                        mismatch = true;
+                    else
+                        Put(control, before, copy, current.Fingerprint);
+                }
                 return;
             }
             string print;
@@ -313,10 +349,20 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
             catch (InvalidDataException) { return; }
             if (!current.Accepted.Contains(print) || !Fits(binding, current.Base))
                 return;
+            if (copy.Bones > skeleton->Bones.Length)
+            {
+                mismatch = true;
+                return;
+            }
             var original = new Original { Binding = (nint)binding, Weights = control->TransformTrackWeights };
             current.Swapped[(nint)control] = original;
             Put(control, original, copy, current.Fingerprint);
         });
+        if (!mismatch)
+            return;
+        // Ended rather than tried again every update: Live stays off until it is turned on again.
+        Restore(current, chara);
+        End(SkeletonMismatch);
     }
 
     /// <summary>Puts back what every swapped control of the actor held.</summary>
@@ -413,8 +459,9 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     }
 
     /// <summary>
-    /// Frees built copies no control has held for <see cref="ReleaseUpdates"/> updates. While the
-    /// actor is there, a copy any of its controls still holds is kept.
+    /// Frees built copies no control has held for <see cref="ReleaseUpdates"/> updates, or for
+    /// <see cref="ReplacedUpdates"/> when the session's actor is there and a newer copy replaced it.
+    /// While the actor is there, a copy any of its controls still holds is kept.
     /// </summary>
     private void Release()
     {
@@ -441,7 +488,8 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
             if (copy.ReleasedAt < 0)
                 copy.ReleasedAt = updates;
             // A copy no control ever held goes at once.
-            if (copy.Shells.Count > 0 && updates - copy.ReleasedAt < ReleaseUpdates)
+            var wait = held != null && copy.Owner == session ? ReplacedUpdates : ReleaseUpdates;
+            if (copy.Shells.Count > 0 && updates - copy.ReleasedAt < wait)
                 continue;
             foreach (var shell in copy.Shells.Values)
                 LiveBindings.Remove(shell);
@@ -569,7 +617,8 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
                 values.AsSpan().CopyTo(new Span<float>(floats, values.Length));
             return new Built
             {
-                Arena = arena, Tracks = [.. tracks], Sources = [.. sources], Frames = edited.Samples, FloatTracks = decoded.FloatTracks,
+                Arena = arena, Tracks = [.. tracks], Sources = [.. sources], Bones = tracks.Count == 0 ? 0 : tracks.Max() + 1,
+                Frames = edited.Samples, FloatTracks = decoded.FloatTracks,
                 Transforms = (nint)transforms, Floats = (nint)floats,
             };
         }

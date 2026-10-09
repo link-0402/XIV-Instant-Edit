@@ -342,6 +342,9 @@ public sealed partial class TimelineWindow
         }
         Func<string, Quaternion> space = frames != null ? frames.Space : _ => Quaternion.Identity;
         List<PoseTarget> others = [.. turned.Where(target => target.Bone != bone)];
+        // A pose bone whose key only turned it starts a move from the clip's own position here.
+        var motion = pose ? MotionPose(loaded, frame) : null;
+        Func<string, Vector3?> own = name => motion is { } known && index.TryGetValue(name, out var at) ? known.Local[at].Position : null;
 
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Muted, $"At {TimelineWindowViews.FrameText(frame)}");
@@ -374,7 +377,7 @@ public sealed partial class TimelineWindow
                 if (layer.Components.HasFlag(PoseComponents.Rotation))
                     DrawTurn(current, layer, primary, others, space, frame, pose);
                 if (layer.Components.HasFlag(PoseComponents.Position))
-                    DrawMove(current, layer, primary, targets, others, space, frame, pose);
+                    DrawMove(current, layer, primary, targets, others, space, own, frame, pose);
                 if (layer.Components.HasFlag(PoseComponents.Scale))
                     DrawScale(current, layer, primary, others, space, frame, pose);
             }
@@ -475,8 +478,15 @@ public sealed partial class TimelineWindow
         return targets;
     }
 
-    /// <summary>The clip's length in frames when the game loops it, which layers covering it wrap their keys round; else 0.</summary>
-    private static float LoopFrames(AnimationTimelineSource loaded, TimelineDocument doc) => loaded.Clip.IsLoop && !doc.Expression ? doc.Length : 0;
+    /// <summary>The motion's length in frames when the game loops it, which layers covering it wrap their keys round; else 0.</summary>
+    private static float LoopFrames(AnimationTimelineSource loaded, TimelineDocument doc) => loaded.Clip.IsLoop && !doc.Expression ? MotionEnd(loaded, doc) : 0;
+
+    /// <summary>
+    /// The motion's length in frames, as the bake and Live sample it: the clip's own, which the timeline's may
+    /// be a frame off; with a new length, the new one.
+    /// </summary>
+    private static float MotionEnd(AnimationTimelineSource loaded, TimelineDocument doc) =>
+        !doc.LengthChanged && loaded.Clip.Duration > 0 ? loaded.Clip.Duration * TimelineDocument.Fps : doc.Length;
 
     /// <summary>The decoded motion when it is this clip's current one; null while it is read, which this starts.</summary>
     private MotionClip? DecodedPose(AnimationTimelineSource loaded)
@@ -524,10 +534,11 @@ public sealed partial class TimelineWindow
 
     /// <summary>
     /// Move: an offset's move in character space, or a pose's local position, in centimetres.
-    /// <paramref name="others"/> move the same way; Set position marks every selected bone.
+    /// <paramref name="others"/> move the same way, a pose's from the clip's own position (<paramref name="own"/>)
+    /// where their keys only turned them; Set position marks every selected bone.
     /// </summary>
     private static void DrawMove(TimelineEditor current, MotionLayer layer, PoseTarget primary, IReadOnlyList<PoseTarget> targets,
-        IReadOnlyList<PoseTarget> others, Func<string, Quaternion> space, int frame, bool pose)
+        IReadOnlyList<PoseTarget> others, Func<string, Quaternion> space, Func<string, Vector3?> own, int frame, bool pose)
     {
         Fact("Move");
         if (pose)
@@ -553,7 +564,7 @@ public sealed partial class TimelineWindow
             current.BeginFieldEdit();
         if (changed)
             current.Change(PoseEdits.Set(current.Document, layer.Key, frame, primary, primary.Value with { Position = centimetres / 100 }, others,
-                space, !pose, pose ? true : null));
+                space, !pose, pose ? true : null, own));
         if (ImGui.IsItemDeactivated())
             current.EndFieldEdit();
         if (ImGui.IsItemHovered())

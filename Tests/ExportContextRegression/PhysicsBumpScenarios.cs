@@ -192,7 +192,8 @@ internal static class PhysicsBumpScenarios
 
     /// <summary>
     /// A connector's bits count the simulator's shapes, like a point's: every game skirt's connectors set
-    /// bits 2 and 3 for the thighs, and no game or library file sets one past that list.
+    /// bits 2 and 3 for the thighs, and no game or library file sets one past that list. Unticking a shape
+    /// clears it on connectors between the edited chains only.
     /// </summary>
     private static void CheckConnectors()
     {
@@ -206,9 +207,18 @@ internal static class PhysicsBumpScenarios
         Require(simulator.Collisions.Count == 4 && simulator.Connectors[0].CollisionFlags == 6,
             "physics bumps: a new simulator shape leaves the connectors' bits where they are");
         PhysicsCollisions.Remove(skirt, [(0, 0), (0, 1)], "asi_l_a");
-        Require(simulator.Collisions.Any(r => r.Name.Text == "asi_l_a") && simulator.Connectors[0].CollisionFlags == 6 &&
-                PhysicsCollisions.State(skirt, [(0, 0), (0, 1)], "asi_l_a") == PhysicsBumps.None,
-            "physics bumps: a shape a connector still bumps into stays listed");
+        Require(simulator.Collisions.Select(r => r.Name.Text).SequenceEqual(["asi_l_c", "asi_r_a", "arm"]) &&
+                simulator.Connectors[0].CollisionFlags == 2 && simulator.Connectors[0].ContinuousCollisionFlags == 2,
+            "physics bumps: unticking a shape for both chains a connector links clears the connector's bit too, so the shape can leave the list");
+        simulator.Chains.Add(Chain("j_sk_b_a_l", 0));
+        simulator.Connectors.Add(new PhybConnector { Chain1 = 0, Chain2 = 2, Node1 = 1, Node2 = 1, CollisionFlags = 2 });
+        PhysicsCollisions.Remove(skirt, [(0, 0), (0, 1)], "asi_r_a");
+        Require(simulator.Collisions.Any(r => r.Name.Text == "asi_r_a") && simulator.Connectors[0].CollisionFlags == 0 &&
+                simulator.Connectors[1].CollisionFlags == 2 && PhysicsCollisions.State(skirt, [(0, 0), (0, 1)], "asi_r_a") == PhysicsBumps.None,
+            "physics bumps: a connector to a chain that isn't being edited keeps its bit, and the shape stays listed");
+        PhysicsCollisions.Add(skirt, [(0, 0), (0, 1)], "asi_r_a");
+        Require(simulator.Connectors[0].CollisionFlags == 2 && simulator.Connectors[0].ContinuousCollisionFlags == 0 && simulator.Connectors[1].CollisionFlags == 2,
+            "physics bumps: ticking a shape for both chains a connector links sets the connector's bit too");
 
         var broken = Skirt();
         broken.Collision.Capsules.RemoveAt(0);

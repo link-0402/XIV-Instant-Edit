@@ -27,6 +27,8 @@ public sealed class TextureEditService : IDisposable
         public long RetryAt;
         /// <summary>The working image's last failed save only had to wait.</summary>
         public bool Waiting;
+        /// <summary>When saves started waiting for Penumbra to list the mod again (tick count), or 0.</summary>
+        public long UnlistedSince;
         public volatile bool Enabled = !session.Paused;
         public long VariantGeneration;
         /// <summary>Save tracking per variant TGA name; only touched while holding the queue gate.</summary>
@@ -45,6 +47,7 @@ public sealed class TextureEditService : IDisposable
             Failures = 0;
             RetryAt = 0;
             Waiting = false;
+            UnlistedSince = 0;
             Session.Waiting = false;
         }
         public void Dispose() { Enabled = false; Interlocked.Increment(ref Generation); Watcher?.Dispose(); }
@@ -86,6 +89,9 @@ public sealed class TextureEditService : IDisposable
 
     /// <summary> Sessions this returns true for are never removed as stale (a Painter project still links them). </summary>
     internal Func<Guid, bool>? KeepSession { get; set; }
+
+    /// <summary> How long saves wait for Penumbra to list a session's mod again before the session pauses. </summary>
+    internal TimeSpan UnlistedModPause { get; set; } = TimeSpan.FromMinutes(10);
 
     private void RaiseFileChanged(string path)
     {
@@ -787,13 +793,30 @@ public sealed class TextureEditService : IDisposable
             s.Waiting = false;
             runtime.Enabled = false;
         }
+        // Penumbra running without listing the mod can last, as when its mod folder moved and the old
+        // one was kept. After a while of that, the session pauses instead of trying again forever.
+        var unlisted = waiting && error is TextureWaitException { ModUnlisted: true };
+        if (unlisted && runtime.UnlistedSince == 0)
+            runtime.UnlistedSince = Environment.TickCount64;
+        else if (!unlisted && variantName is null && !fromPainter)
+            runtime.UnlistedSince = 0;
+        var pause = unlisted && Environment.TickCount64 - runtime.UnlistedSince >= UnlistedModPause.TotalMilliseconds;
+        if (pause)
+        {
+            changed = true;
+            s.Status = "Paused: Penumbra doesn't list the texture's mod. Resume once it does, or open the texture again.";
+            s.Paused = true;
+            s.Waiting = false;
+            runtime.Enabled = false;
+        }
         // A save that keeps waiting only needs the session list to show it.
         if (!changed)
         {
             Publish();
             return;
         }
-        _log(error, waiting ? "A texture save is waiting and will be tried again." : "Texture save failed; the previous destination remains available.");
+        _log(error, pause ? "A texture session paused: Penumbra hasn't listed its mod for a while."
+            : waiting ? "A texture save is waiting and will be tried again." : "Texture save failed; the previous destination remains available.");
         try { Persist(); }
         catch (Exception storageError)
         {
@@ -815,7 +838,10 @@ public sealed class TextureEditService : IDisposable
         state.RetryAt = 0;
         state.Waiting = false;
         if (runtime.Failures == 0)
+        {
             runtime.Session.Waiting = false;
+            runtime.UnlistedSince = 0;
+        }
     }
 
     private async Task ApplyVariantSavesAsync(Runtime runtime, bool force)

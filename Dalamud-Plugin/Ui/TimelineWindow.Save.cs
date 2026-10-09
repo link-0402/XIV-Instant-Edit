@@ -145,11 +145,13 @@ public sealed partial class TimelineWindow
         TimelineDocument saved;
         ImmutableDictionary<string, byte[]> added;
         ImmutableDictionary<string, string> beside;
+        ImmutableDictionary<string, Func<byte[], byte[]>> rebuild;
         try
         {
             (saved, var used) = WithLooks(document);
             added = TimelineWindowViews.AddedFiles(saved, used);
             beside = TimelineWindowViews.AddedBeside(saved, used);
+            rebuild = TimelineWindowViews.AddedRebuild(saved, used);
         }
         catch (InvalidDataException e)
         {
@@ -172,7 +174,7 @@ public sealed partial class TimelineWindow
             return await framework.RunOnFrameworkThread(() =>
             {
                 playback.Stop();
-                return service.EditTimeline(target, saved, place, name, added, beside, motionFrames, repair);
+                return service.EditTimeline(target, saved, place, name, added, beside, motionFrames, repair, rebuild);
             });
         });
     }

@@ -94,15 +94,17 @@ internal sealed class PhysicsBuilderService : IDisposable
         var physicsPath = PhysicsPaths.BodyPhysics(character.Race);
         var skeletonPath = PhysicsPaths.BodySkeleton(character.Race);
         var resolved = await penumbra.ResolveCollectionPathsAsync(collection.Id, [physicsPath, skeletonPath]).ConfigureAwait(false);
+        await FollowModAsync(lookAgain: false).ConfigureAwait(false);
         return new PhysicsTarget(character, collection.Id, collection.Name,
-            await DescribeAsync(physicsPath, resolved[0]).ConfigureAwait(false),
-            await DescribeAsync(skeletonPath, resolved[1]).ConfigureAwait(false));
+            await DescribeAsync(physicsPath, resolved[0], PhysicsPaths.BodyPhysics).ConfigureAwait(false),
+            await DescribeAsync(skeletonPath, resolved[1], PhysicsPaths.BodySkeleton).ConfigureAwait(false));
     }
 
-    private async Task<PhysicsLoadedFile> DescribeAsync(string gamePath, string? resolved)
+    private async Task<PhysicsLoadedFile> DescribeAsync(string gamePath, string? resolved, Func<ushort, string> racePath)
     {
         if (string.IsNullOrWhiteSpace(resolved) || !Path.IsPathFullyQualified(resolved))
-            return new PhysicsLoadedFile(gamePath, string.IsNullOrWhiteSpace(resolved) ? gamePath : resolved, "the game's own file", false, false);
+            return new PhysicsLoadedFile(gamePath, string.IsNullOrWhiteSpace(resolved) ? gamePath : resolved,
+                PhysicsPaths.GameFileLabel(gamePath, resolved, racePath), false, false);
         if (IsPreviewFile(resolved))
             return new PhysicsLoadedFile(gamePath, resolved, "the preview", false, true);
         var mod = await penumbra.ModOfFileAsync(resolved).ConfigureAwait(false);
@@ -138,7 +140,8 @@ internal sealed class PhysicsBuilderService : IDisposable
                     var swapped = PathRules.NormalizeGamePath(loaded.ResolvedPath);
                     var bytes = await Task.Run(() => data.GetFile(swapped)?.Data).ConfigureAwait(false)
                         ?? throw new FileNotFoundException($"The game has no body physics file at {swapped}.");
-                    return new PhysicsDocument(PhybFile.Parse(bytes), new PhysicsSource(kind, "The game's own file", swapped), race);
+                    var label = PhysicsPaths.GameFileLabel(gamePath, swapped, PhysicsPaths.BodyPhysics);
+                    return new PhysicsDocument(PhybFile.Parse(bytes), new PhysicsSource(kind, char.ToUpperInvariant(label[0]) + label[1..], swapped), race);
                 }
                 return new PhysicsDocument(await ReadFileAsync(loaded.ResolvedPath).ConfigureAwait(false),
                     new PhysicsSource(loaded.Mine ? PhysicsSourceKind.Mine : kind, loaded.Mine ? "Your physics mod" : loaded.Label, loaded.ResolvedPath), race);
@@ -147,6 +150,7 @@ internal sealed class PhysicsBuilderService : IDisposable
             {
                 if (!HasMod)
                     throw new InvalidOperationException("You haven't saved a physics mod yet.");
+                await FollowModAsync(lookAgain: true).ConfigureAwait(false);
                 var (bytes, path) = await penumbra.ReadPhysicsModAsync(config.PhysicsModDirectory, config.PhysicsModIdentifier, gamePath).ConfigureAwait(false);
                 if (bytes is null)
                     throw new FileNotFoundException($"Your physics mod has no body physics for c{race:D4}, or it was deleted.");
@@ -311,14 +315,58 @@ internal sealed class PhysicsBuilderService : IDisposable
         }
     }
 
-    /// <summary> Turns your physics mod on or off in your collection and redraws your character. </summary>
+    /// <summary>
+    /// Turns your physics mod on or off in your collection and redraws your character. Turning it off
+    /// stops the preview first, which sits above every mod and would still show.
+    /// </summary>
     public async Task<string?> SetModEnabledAsync(PhysicsTarget target, bool enabled)
     {
         if (!HasMod)
             return "You haven't saved a physics mod yet.";
+        await FollowModAsync(lookAgain: true).ConfigureAwait(false);
+        string? stopProblem = null;
+        if (!enabled)
+        {
+            try { await Preview.StopAsync(redrawObject: null).ConfigureAwait(false); }
+            catch (Exception e) when (e is IOException or InvalidOperationException) { stopProblem = e.Message; }
+        }
         if (await penumbra.SetPhysicsModEnabledAsync(config.PhysicsModDirectory, target.Character.ObjectIndex, enabled).ConfigureAwait(false) is { } error)
-            return error;
-        return await penumbra.RedrawObjectAsync(target.Character.ObjectIndex).ConfigureAwait(false);
+            return stopProblem is null ? error : $"{error} The preview is still on: {stopProblem}";
+        var redraw = await penumbra.RedrawObjectAsync(target.Character.ObjectIndex).ConfigureAwait(false);
+        if (stopProblem is null)
+            return redraw;
+        var still = $"{config.PhysicsModDirectory} is off, but the preview is still on: {stopProblem}";
+        return redraw is null ? still : $"{still} {redraw}";
+    }
+
+    // The folder and identifier a look for your renamed mod last found nothing for.
+    private (string Directory, Guid Identifier)? lostMod;
+
+    /// <summary>
+    /// Follows your physics mod when it was renamed in Penumbra: finds the folder with its identifier and
+    /// remembers it, so saves keep going into it. Unless <paramref name="lookAgain"/>, a mod that's gone
+    /// is only looked for once, so reading your character again stays quick.
+    /// </summary>
+    private async Task FollowModAsync(bool lookAgain)
+    {
+        if (!HasMod)
+            return;
+        var known = (Directory: config.PhysicsModDirectory, Identifier: config.PhysicsModIdentifier);
+        if (!lookAgain && lostMod == known)
+            return;
+        var found = await penumbra.FindPhysicsModAsync(known.Directory, known.Identifier).ConfigureAwait(false);
+        lostMod = found is null ? known : null;
+        if (found is null || found == known.Directory)
+            return;
+        await framework.RunOnFrameworkThread(() =>
+        {
+            // A save in the meantime already chose the folder.
+            if (config.PhysicsModDirectory != known.Directory)
+                return;
+            config.PhysicsModDirectory = found;
+            saveConfig();
+        }).ConfigureAwait(false);
+        log.Information($"Your physics mod was renamed from {known.Directory} to {found}.");
     }
 
     public void Dispose() => Preview.Dispose();

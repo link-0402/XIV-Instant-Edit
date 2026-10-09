@@ -67,8 +67,23 @@ public sealed partial class ModelBackupStore
     /// <c>&lt;backup&gt;.est.json</c>. Restoring the backup puts them back.
     /// </summary>
     public void WriteEstState(string backupPath, System.Text.Json.Nodes.JsonObject state)
+        => WriteSidecar(SidecarPath(backupPath, EstStateSuffix), state);
+
+    public System.Text.Json.Nodes.JsonObject? ReadEstState(string backupPath)
+        => ReadSidecar(SidecarPath(backupPath, EstStateSuffix));
+
+    /// <summary>
+    /// What a race export changed in its mod's options, kept beside the backup taken of the imported
+    /// model before it as <c>&lt;backup&gt;.race.json</c>. Restoring the backup undoes those changes too.
+    /// </summary>
+    public void WriteRaceState(string backupPath, System.Text.Json.Nodes.JsonObject state)
+        => WriteSidecar(SidecarPath(backupPath, RaceStateSuffix), state);
+
+    public System.Text.Json.Nodes.JsonObject? ReadRaceState(string backupPath)
+        => ReadSidecar(SidecarPath(backupPath, RaceStateSuffix));
+
+    private static void WriteSidecar(string path, System.Text.Json.Nodes.JsonObject state)
     {
-        var path = EstStatePath(backupPath);
         var temporary = path + ".tmp";
         try
         {
@@ -82,9 +97,8 @@ public sealed partial class ModelBackupStore
         }
     }
 
-    public System.Text.Json.Nodes.JsonObject? ReadEstState(string backupPath)
+    private static System.Text.Json.Nodes.JsonObject? ReadSidecar(string path)
     {
-        var path = EstStatePath(backupPath);
         if (!File.Exists(path) || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
             return null;
         try
@@ -97,25 +111,27 @@ public sealed partial class ModelBackupStore
         }
     }
 
-    private string EstStatePath(string backupPath)
+    private string SidecarPath(string backupPath, string suffix)
     {
         var full = Path.GetFullPath(backupPath);
         if (!PathRules.IsPathWithin(full, _root) || !BackupNameRegex().IsMatch(Path.GetFileName(full)))
             throw new ArgumentException("The managed backup path is invalid.");
-        return full + EstStateSuffix;
+        return full + suffix;
     }
 
     private const string EstStateSuffix = ".est.json";
+    private const string RaceStateSuffix = ".race.json";
 
-    // A backup's EST state goes with it: once the .bak is gone (expired, cleared, or removed by the add-on) so is this.
+    // A backup's EST and race states go with it: once the .bak is gone (expired, cleared, or removed by the add-on) so are they.
     private static void DeleteOrphanedEstStates(string directory)
     {
-        foreach (var path in Directory.EnumerateFiles(directory, "*" + EstStateSuffix, SearchOption.TopDirectoryOnly))
-        {
-            var backup = path[..^EstStateSuffix.Length];
-            if (BackupNameRegex().IsMatch(Path.GetFileName(backup)) && !File.Exists(backup))
-                File.Delete(path);
-        }
+        foreach (var suffix in new[] { EstStateSuffix, RaceStateSuffix })
+            foreach (var path in Directory.EnumerateFiles(directory, "*" + suffix, SearchOption.TopDirectoryOnly))
+            {
+                var backup = path[..^suffix.Length];
+                if (BackupNameRegex().IsMatch(Path.GetFileName(backup)) && !File.Exists(backup))
+                    File.Delete(path);
+            }
     }
 
     /// <summary> The backups kept of a mod file, newest first; none when the target isn't one the store backs up. </summary>

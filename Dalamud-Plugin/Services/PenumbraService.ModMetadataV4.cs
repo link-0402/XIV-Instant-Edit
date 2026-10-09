@@ -332,24 +332,45 @@ public sealed partial class PenumbraService
     }
 
     /// <summary>
+    /// The mod-relative files the DefaultData, groups, options and containers of the mod map
+    /// <paramref name="gamePath"/> to, each once, in the order they come.
+    /// </summary>
+    internal static IReadOnlyList<string> AnimationMappedFiles(string modRoot, string gamePath)
+    {
+        var result = new List<string>();
+        foreach (var files in AnimationMappingContainers(LoadV4ModMetadata(modRoot)))
+            foreach (var pair in files)
+                if (SameGamePath(pair.Key, gamePath) && NormalizedModFile(JsonString(pair.Value)) is { Length: > 0 } file &&
+                    !result.Contains(file, StringComparer.OrdinalIgnoreCase))
+                    result.Add(file);
+        return result;
+    }
+
+    private static string? NormalizedModFile(string? value) => value?.Replace('\\', '/').Trim().TrimStart('/');
+
+    /// <summary>
     /// Map <paramref name="gamePath"/> to <paramref name="relativePath"/> in every DefaultData,
     /// group, option and container that maps <paramref name="ownerGamePath"/>, so a file an
     /// animation edit added (an imported sound) plays wherever that animation does, or a copy
     /// wherever its original is. Refuses when the mod already maps <paramref name="gamePath"/> anywhere.
+    /// With <paramref name="ownerFile"/>, only where the owner is that mod-relative file: a copy made
+    /// from one of the files a mod's options map its original to. Then only those must not map
+    /// <paramref name="gamePath"/> yet, since the other files' own copies take it in the others.
     /// </summary>
-    internal static void AddAnimationResourceMapping(string modRoot, string ownerGamePath, string gamePath, string relativePath)
+    internal static void AddAnimationResourceMapping(string modRoot, string ownerGamePath, string gamePath, string relativePath,
+        string? ownerFile = null)
     {
         var meta = LoadV4ModMetadata(modRoot);
         var containers = AnimationMappingContainers(meta).ToArray();
-        if (containers.Any(files => files.Any(pair => SameGamePath(pair.Key, gamePath))))
+        var owners = containers.Where(files => files.Any(pair => SameGamePath(pair.Key, ownerGamePath) &&
+            (ownerFile == null || string.Equals(NormalizedModFile(JsonString(pair.Value)), NormalizedModFile(ownerFile),
+                StringComparison.OrdinalIgnoreCase))))
+            .ToArray();
+        if ((ownerFile == null ? containers : owners).Any(files => files.Any(pair => SameGamePath(pair.Key, gamePath))))
             throw new InvalidDataException($"The mod already maps {gamePath}.");
-        var added = false;
-        foreach (var files in containers.Where(files => files.Any(pair => SameGamePath(pair.Key, ownerGamePath))))
-        {
+        if (owners.Length == 0) throw new InvalidDataException($"The mod no longer maps {ownerGamePath}{(ownerFile == null ? "" : $" to {ownerFile}")}.");
+        foreach (var files in owners)
             files[gamePath] = relativePath;
-            added = true;
-        }
-        if (!added) throw new InvalidDataException($"The mod no longer maps {ownerGamePath}.");
         TouchV4ModMetadata(meta);
         WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
     }

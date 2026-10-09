@@ -193,9 +193,9 @@ public sealed partial class TimelineWindow
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip((loops ? TimelineWindowViews.LoopText(ev) : TimelineWindowViews.KeptText) + ".");
         }
-        else if (TimelineDocument.Holds(ev))
+        else if (TimelineDocument.Holds(ev) && TimelineDocument.Moves(ev, current.MotionFrames) == null)
         {
-            // The game ignores the stored length; show how long the face really shows.
+            // The game ignores the stored length; show how long the pose really shows. A moving face plays its own length.
             ImGui.TextUnformatted(TimelineWindowViews.DurationText(current.Document.HeldEnd(ev) - ev.Start));
             ImGui.SameLine(0, Theme.Gap);
             ImGui.TextColored(Theme.Muted, "held");
@@ -239,7 +239,8 @@ public sealed partial class TimelineWindow
                 current.Keep(ev.Key, kept);
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(TimelineWindowViews.KeepTip(ev, TimelineDocument.Moves(ev, current.MotionFrames) != null, loops));
+            ImGui.SetTooltip(TimelineWindowViews.KeepTip(ev, TimelineDocument.Moves(ev, current.MotionFrames) != null, loops,
+                TimelineEdits.TooShortToLoop(current.Document, ev, current.MotionFrames)));
     }
 
     /// <summary> The event's file or motion, or a prop's model, with Choose for one that can take another. </summary>

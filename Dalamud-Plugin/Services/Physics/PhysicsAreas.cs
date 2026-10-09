@@ -21,7 +21,7 @@ internal enum PhysicsPart
 
 /// <summary>
 /// The starting values of an area added from scratch: a chain per bone from the bone to a tip at
-/// <paramref name="Tip"/> (in the bone's space), and a spring pulling the tip back to where it rests.
+/// <paramref name="Tip"/> (in the bone's space), and a spring pulling the tip back toward where it rests.
 /// </summary>
 internal sealed record PhysicsTemplate(
     Vector3 Tip,
