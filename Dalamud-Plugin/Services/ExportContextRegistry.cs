@@ -939,6 +939,31 @@ public sealed class ExportContextRegistry : IDisposable
                PenumbraService.IsSafeRelativeResourcePath(locator.SourceRelativePath);
     }
 
+    /// <summary> One context and its exports, as the test tools report them. </summary>
+    public sealed record ContextSummary(
+        PersistedExportContext Context,
+        int PendingExports,
+        IReadOnlyList<(string ExportId, string FilePath, DateTimeOffset CreatedAt, DateTimeOffset? CompletedAt, ExportReceipt? Receipt)> Exports);
+
+    /// <summary> The contexts this instance holds, newest first, with their export receipts. </summary>
+    public IReadOnlyList<ContextSummary> Summaries()
+    {
+        lock (_lock)
+        {
+            return _contexts.Values
+                .OrderByDescending(entry => entry.Context.LastTouchedAtUtc)
+                .Select(entry => new ContextSummary(
+                    PersistedExportContext.FromContext(entry.Context),
+                    entry.Exports.Values.Count(export => export.CompletedAt is null),
+                    entry.Exports
+                        .OrderByDescending(pair => pair.Value.CreatedAt)
+                        .Select(pair => (pair.Key, pair.Value.FilePath, pair.Value.CreatedAt, pair.Value.CompletedAt,
+                            pair.Value.Completion.Task.IsCompletedSuccessfully ? pair.Value.Completion.Task.Result : null))
+                        .ToArray()))
+                .ToArray();
+        }
+    }
+
     private void Persist()
     {
         if (_persist is null)

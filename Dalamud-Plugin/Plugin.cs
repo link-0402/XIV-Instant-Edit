@@ -42,6 +42,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly Services.Heels.HeelsOffsetService _heels;
     private readonly Services.Physics.PhysicsBuilderService _physics;
     private readonly PhysicsWindow           _physicsWindow;
+    private readonly Services.Testing.BridgeTools? _bridgeTools;
     private readonly Services.TextureCompression.TextureCompressionService _compression;
     private readonly WindowSystem            _windowSystem;
     private readonly MainWindow              _window;
@@ -125,8 +126,8 @@ public sealed class Plugin : IDalamudPlugin
         // open and stay open in GPose; a window that isn't open shows nothing either way.
         pi.UiBuilder.DisableGposeUiHide = true;
         _backups   = new ModelBackupStore(storageRoot);
-        _penumbra  = new PenumbraService(pi, framework, log, objects, data, _backups,
-            new EstEntryStore(configDirectory));
+        var estEntries = new EstEntryStore(configDirectory);
+        _penumbra  = new PenumbraService(pi, framework, log, objects, data, _backups, estEntries);
         // One attributor serves the On Screen snapshot and the Edit/material-preview flows,
         // so both share its mod index and cached stable identifiers.
         var resourceSources = new ResourceSourceAttributor(_penumbra, log);
@@ -250,6 +251,9 @@ public sealed class Plugin : IDalamudPlugin
         // In GPose your posed character walks or runs for the builder through the Timeline preview's playback.
         _physicsWindow = new PhysicsWindow(_physics, _animationPlayback, _config, SaveConfiguration, log);
         _window.AttachPhysics(_physicsWindow.Open);
+        // Test tools for XIV Bridge (Tests/*.md checks), only when running as a dev plugin.
+        if (pi.IsDev)
+            _bridgeTools = new Services.Testing.BridgeTools(pi, framework, log, _config, _contexts, _backups, estEntries, _physicsWindow);
         // Automatic cache cleanup also removes old exports from the cache's export folder, and the
         // originals of textures optimized more than a week ago.
         _textures.AdditionalCacheCleanup = () =>
@@ -410,6 +414,7 @@ public sealed class Plugin : IDalamudPlugin
 
     public void Dispose()
     {
+        _bridgeTools?.Dispose();
         _commands.RemoveHandler("/ie");
         _commands.RemoveHandler("/iesettings");
         _pi.UiBuilder.Draw -= _windowSystem.Draw;
