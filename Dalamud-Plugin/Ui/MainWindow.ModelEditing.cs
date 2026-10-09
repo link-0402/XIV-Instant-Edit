@@ -239,8 +239,8 @@ public sealed partial class MainWindow
         try
         {
             var bytes = character?.Bytes ?? await ReadModelBytesAsync(model, cancellationToken).ConfigureAwait(false);
-            // Blender gets the model as the character wears it, for preview: the import context
-            // records the scaling, and the plugin refuses every export from it. A character send
+            // Blender gets the model as the character wears it: the import context records the
+            // scaling, and the plugin exports it only as the character's race's model. A character send
             // resolved the scaling once for all its models.
             var (scaling, scalingWarning) = character is null
                 ? await ResolveRacialScalingAsync(actor, model.GamePath, cancellationToken).ConfigureAwait(false)

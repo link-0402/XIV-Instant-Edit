@@ -496,6 +496,15 @@ def check_remove_hidden_vertices() -> None:
 
         with temporary_scene_data():
             mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=gear)
+            flat = mesh_object("0.2 Flat", box((3.0, 0, 0), 0.3), surface=gear)
+            flat.scale = (1.0, 1.0, 0.0)
+            bpy.context.view_layer.update()
+            inner = mesh_object("0.1 Inner", box((0, 0, 0), 0.3), surface=opaque)
+            require(remove_hidden(inner) == {"FINISHED"} and len(inner.data.vertices) == 0,
+                    "a visible mesh scaled flat to zero doesn't stop the test")
+
+        with temporary_scene_data():
+            mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=gear)
             inner = mesh_object("0.1 Inner", box((0, 0, 0), 0.3), surface=opaque)
             twin = bpy.data.objects.new("0.2 Twin", inner.data)
             twin.location = (5.0, 0.0, 0.0)

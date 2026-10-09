@@ -22,6 +22,7 @@ internal static class EditAgainFixture
         Rules(check);
         Captures(check);
         Files(check);
+        Undos(check);
         Journals(check);
     }
 
@@ -130,6 +131,41 @@ internal static class EditAgainFixture
         check(again.Document!.Motion.SequenceEqual(edit.Motion) && again.Document.Events.IsEmpty && again.BaseMotion is [4, 5] &&
               again.BaseHash == "base" && again.MotionSource is [4, 5] && again.MotionClip.BindingFingerprint == "print" && again.Pap is [1],
             "edited again, the layers apply to the motion from before the edit, while the events and the file stay as saved");
+    }
+
+    // Undo last save: the edit whose layers the file holds again becomes the window's saved state.
+    private static void Undos(Action<bool, string> check)
+    {
+        var capture = Capture("a", 7, Clip());
+        var doc = new TimelineDocument(30, 30, null, [], 1);
+        AnimationTimelineSource Loaded(string hash, AnimationCapture? from = null) =>
+            new(from ?? capture, false, capture.Clip, new AnimationResource(Pap, "dance.pap", hash), [1], 0, [], doc, null);
+        AnimationEditJournal With(AnimationEditJournal journal, string state) => new()
+        {
+            Id = journal.Id, Request = journal.Request, State = state, Files = journal.Files,
+        };
+        var a = Journal(capture, afterHash: "A1", baseHash: "B0");
+        var a2 = Journal(capture, afterHash: "A2", baseHash: "B0");
+        check(AnimationEditService.SavedLayersJournal([a2, a], Loaded("A2")) == a2,
+            "after saving A2 over A, the file holds A2's layers");
+        ImmutableArray<AnimationEditJournal> undone = [With(a2, "Undone"), a];
+        check(AnimationEditService.SavedLayersJournal(undone, Loaded("A1")) == a,
+            "undoing A2 brings back A, the edit whose saved file it is again, with its layers on its kept motion");
+        var a3 = Journal(capture, afterHash: "A3", baseHash: "B0");
+        check(AnimationEditService.SavedLayersJournal([a3, .. undone], Loaded("A3")) == a3 &&
+              AnimationEditService.SavedLayersJournal([With(a3, "Undone"), .. undone], Loaded("A1")) == a,
+            "A3 saved after that undo holds its own layers, and undoing it goes back to A again");
+        var again = AnimationEditService.WithSavedLayers(Loaded("A1"), a.Request.Timeline!, [4], "print");
+        check(again.Document!.Motion.SequenceEqual(a.Request.Timeline!.Motion) && again.BaseHash == "B0" && again.BaseMotion is [4],
+            "the brought back state is A's layers on the motion from before A, as Edit again opens it");
+        check(AnimationEditService.SavedLayersJournal(undone, Loaded("B0")) == null &&
+              AnimationEditService.SavedLayersJournal([Journal(capture, afterHash: "E", layers: false), .. undone], Loaded("E")) == null &&
+              AnimationEditService.SavedLayersJournal([Journal(capture, afterHash: "A1", baseHash: null)], Loaded("A1")) == null,
+            "a file no layered edit saved, an events-only save or an edit that kept no motion brings nothing back");
+        check(AnimationEditService.SavedLayersJournal(undone, Loaded("A1", Capture("b", 7, Clip(), collection: Guid.NewGuid()))) == null &&
+              AnimationEditService.SavedLayersJournal(undone, Loaded("A1") with { EntryIndex = -1 }) == null &&
+              AnimationEditService.SavedLayersJournal(undone, Loaded("A1") with { Document = null }) == null,
+            "nor one in another collection, an expression's timeline or a clip that can't be edited");
     }
 
     private static void Journals(Action<bool, string> check)

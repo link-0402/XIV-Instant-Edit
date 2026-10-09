@@ -239,6 +239,17 @@ internal static class MotionLayerFixture
             "the bake follows each key's ease, as the panels show it");
         check(MotionEvaluator.KeyEase(layer, layer.Keys[0]) == MotionInterpolation.Step && MotionEvaluator.KeyEase(layer, layer.Keys[1]) == MotionInterpolation.Linear,
             "a key goes its own way, else the layer's");
+        var windUp = Layer(MotionLayerKind.Pose, keys:
+        [
+            Key(0, (Hand, new BoneTransform(Vector3.Zero, Quaternion.Identity, new Vector3(.01f)))) with
+                { Ease = MotionInterpolation.Custom, Curve = new MotionCurve(1 / 3f, MotionCurve.MinY, 2 / 3f, MotionCurve.MinY) },
+            Key(10, (Hand, new BoneTransform(Vector3.Zero, Quaternion.Identity, Vector3.One))) with
+                { Ease = MotionInterpolation.Custom, Curve = new MotionCurve(1 / 3f, MotionCurve.MaxY, 2 / 3f, MotionCurve.MaxY) },
+            Key(20, (Hand, new BoneTransform(Vector3.Zero, Quaternion.Identity, new Vector3(MotionEvaluator.MaxScale)))),
+        ]);
+        check(MotionEvaluator.KeyValue(windUp, Hand, 5)!.Value.Scale == new Vector3(MotionEvaluator.MinScale) &&
+              MotionEvaluator.KeyValue(windUp, Hand, 15)!.Value.Scale == new Vector3(MotionEvaluator.MaxScale),
+            "a curve that winds up or overshoots never takes a scale past zero or past the largest a key holds");
 
         reject(() => MotionEvaluator.Validate(layer with { Interpolation = MotionInterpolation.Custom }), "a layer can't use a key's own curve");
         reject(() => MotionEvaluator.Validate(layer with { Keys = layer.Keys.SetItem(1, layer.Keys[1] with { Ease = MotionInterpolation.Custom }) }),

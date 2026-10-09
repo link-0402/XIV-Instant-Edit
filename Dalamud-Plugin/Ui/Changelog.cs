@@ -47,7 +47,7 @@ internal static class ChangelogCatalog
             Entry("Repair onto the game's, IVCS or IVCS + YAS skeleton when you save.", 1),
             Entry("Source, saved edits and the live pose recorder are in the timeline's side panel.", 1),
             Highlight("Quick Actions: 'Body physics' builds customizable body physics, optimized for your character."),
-            Entry("Start from scratch or any other physics preset you're already using, matched for your chararacter's skeleton.", 1),
+            Entry("Start from scratch or any other physics preset you're already using, matched for your character's skeleton.", 1),
             Entry("Tune each area with plain sliders, both sides at once, and preview it on your character before you save.", 1),
             Entry("It saves into a mod of its own, above your other mods, that you can open and change again any time.", 1),
             Entry("'Fit to my body' measures your body standing still, with your body mod, Customize+ and bust size, and sizes the arms, legs and collision tips that bump into each other to match your character's shape.", 1),

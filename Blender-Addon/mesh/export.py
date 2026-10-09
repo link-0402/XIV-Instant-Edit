@@ -7,7 +7,7 @@ from pathlib         import Path
 from bpy.types       import Context, UILayout
 from mathutils       import Matrix
 
-from .heels          import apply_calculated_heels_offset
+from .heels          import apply_calculated_heels_offset, is_heels_offset_attribute
 from .objects        import visible_meshobj, armature_for_object
 from .shapes         import get_shape_mix
 from ..io.model      import ModelExport, SceneHandler, exportable_shape_keys
@@ -299,6 +299,7 @@ class ShapeExports:
         copies = [source["copy"] for source in self.copies]
         settings = get_settings()
         with self._named_copies():
+            self._reset_heels_offsets()
             heels_offset = apply_calculated_heels_offset(copies) if settings.calculate_heels_offset else None
             if settings.backup_models_on_export:
                 create_backup(file_path.parent, file_path.name + ".mdl")
@@ -359,6 +360,7 @@ class ShapeExports:
                 attribute.data.foreach_set("value", np.arange(count, dtype=np.int32))
             prepare_export_mesh(copy)
             copy[PREPARED_PROPERTY] = True
+            source["heels"] = {key: copy[key] for key in copy.keys() if is_heels_offset_attribute(key)}
             for key, name, count in (("vertices", self._SOURCE_VERTEX, len(copy.data.vertices)),
                                      ("corners", self._SOURCE_CORNER, len(copy.data.loops))):
                 values = np.empty(count, dtype=np.int32)
@@ -402,6 +404,16 @@ class ShapeExports:
                 source["copy"].name = self._COPY_NAME
             for source in sources:
                 source["original"].name = source["name"]
+
+    def _reset_heels_offsets(self) -> None:
+        """Give the copies back the heels_offset attributes they were made with: an offset calculated
+        for an earlier shape would stay on them, though a shape with nothing below the floor gets none."""
+        for source in self.copies:
+            copy = source["copy"]
+            for key in [key for key in copy.keys() if is_heels_offset_attribute(key)]:
+                del copy[key]
+            for key, value in source["heels"].items():
+                copy[key] = value
 
     def _move_copies(self) -> None:
         """Give the copies the shape the meshes show now, with their kept and game shape keys off,

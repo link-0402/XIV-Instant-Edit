@@ -17,6 +17,9 @@ internal sealed record PhysicsPreviewRecord
     public required DateTime CreatedUtc { get; init; }
 }
 
+/// <summary> The check after a preview's redraw found the preview gone and added it again; a warning when it still loses. </summary>
+internal sealed record PhysicsPreviewNotice(string? Warning);
+
 /// <summary>
 /// Shows a physics file on your character before it is saved: a Penumbra temporary mod at the highest
 /// priority in your collection points the body's physics file at a copy in the cache, then your
@@ -53,6 +56,7 @@ internal sealed class PhysicsPreviewService : IDisposable
     private int revision;
     private string collectionName = string.Empty;
     private bool shared;
+    private PhysicsPreviewNotice? notice;
     private volatile bool disposed;
 
     public PhysicsPreviewService(PenumbraService penumbra, IFramework framework, IPluginLog log, string configDirectory, Func<string> cacheRoot)
@@ -77,6 +81,17 @@ internal sealed class PhysicsPreviewService : IDisposable
     public bool Shared { get { lock (sync) return shared; } }
 
     public string CollectionName { get { lock (sync) return collectionName; } }
+
+    /// <summary> What the check after a redraw last did, taken once; null when there is nothing new. </summary>
+    public PhysicsPreviewNotice? TakeNotice()
+    {
+        lock (sync)
+        {
+            var taken = notice;
+            notice = null;
+            return taken;
+        }
+    }
 
     /// <summary>
     /// Shows <paramref name="bytes"/> as <paramref name="gamePath"/> on the collection of the object at
@@ -164,7 +179,8 @@ internal sealed class PhysicsPreviewService : IDisposable
             log.Information($"Physics preview {next} registered in {collection.Name} at {gamePath}.");
             if (await penumbra.RedrawObjectAsync(objectIndex).ConfigureAwait(false) is { } redraw)
                 return redraw;
-            return await KeepAfterRedrawAsync(objectIndex, collection.Id, gamePath, file, bytes.Length, linked.Token).ConfigureAwait(false);
+            CheckAfterRedraw(objectIndex, collection.Id, gamePath, file, bytes.Length, sessionFolder, next);
+            return null;
         }
         finally
         {
@@ -204,6 +220,7 @@ internal sealed class PhysicsPreviewService : IDisposable
             revision = 0;
             collectionName = string.Empty;
             shared = false;
+            notice = null;
         }
         if (redrawObject is { } index)
             await penumbra.RedrawObjectAsync(index).ConfigureAwait(false);
@@ -223,20 +240,52 @@ internal sealed class PhysicsPreviewService : IDisposable
     }
 
     /// <summary>
-    /// Once the redraw has had time to load, checks that Penumbra still serves the preview. If something
-    /// switched the path back meanwhile (a mod reloaded by another plugin, say), the preview is added
-    /// again and the character redrawn once more. Returns a warning when it still loses, naming the file
-    /// that wins, and logs what it found either way.
+    /// Once the redraw has had time to load, checks that Penumbra still serves the preview, without
+    /// keeping the builder busy meanwhile. If something switched the path back (a mod reloaded by another
+    /// plugin, say), the preview is added again and the character redrawn once more, unless a newer
+    /// preview or a stop came first. What it did waits in <see cref="TakeNotice"/>; it logs what it found
+    /// either way.
     /// </summary>
-    private async Task<string?> KeepAfterRedrawAsync(int objectIndex, Guid collection, string gamePath, string file, int size, CancellationToken token)
-    {
-        await Task.Delay(RedrawSettle, token).ConfigureAwait(false);
-        var resolved = (await penumbra.ResolveCollectionPathsAsync(collection, [gamePath]).ConfigureAwait(false))[0];
-        if (PathRules.SamePhysicalPath(resolved, file))
+    private void CheckAfterRedraw(int objectIndex, Guid collection, string gamePath, string file, int size, string sessionFolder, int shown)
+        => _ = Task.Run(async () =>
         {
-            log.Information($"Physics preview still served after the redraw ({size} bytes).");
-            return null;
-        }
+            try
+            {
+                await Task.Delay(RedrawSettle, life.Token).ConfigureAwait(false);
+                if (!Showing(sessionFolder, shown))
+                    return;
+                var resolved = (await penumbra.ResolveCollectionPathsAsync(collection, [gamePath]).ConfigureAwait(false))[0];
+                if (PathRules.SamePhysicalPath(resolved, file))
+                {
+                    log.Information($"Physics preview still served after the redraw ({size} bytes).");
+                    return;
+                }
+                await gate.WaitAsync(life.Token).ConfigureAwait(false);
+                try
+                {
+                    if (!Showing(sessionFolder, shown))
+                        return;
+                    var warning = await AddAgainAsync(objectIndex, collection, gamePath, file, resolved).ConfigureAwait(false);
+                    lock (sync) notice = new PhysicsPreviewNotice(warning);
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception e) { log.Warning(e, "Could not check the physics preview after the redraw."); }
+        });
+
+    /// <summary> Whether revision <paramref name="shown"/> of <paramref name="sessionFolder"/> is still the preview Penumbra has. </summary>
+    private bool Showing(string sessionFolder, int shown)
+    {
+        lock (sync) return session == sessionFolder && revision == shown;
+    }
+
+    /// <summary> Adds a preview that lost its path again and redraws; a warning when it still loses, naming the file that wins. </summary>
+    private async Task<string?> AddAgainAsync(int objectIndex, Guid collection, string gamePath, string file, string? resolved)
+    {
         log.Warning($"Physics preview lost after the redraw: Penumbra resolves {gamePath} to {resolved ?? "nothing"} instead of {file}. Adding it again.");
         var added = await framework.RunOnFrameworkThread(() =>
             penumbra.AddTemporaryModOnFramework(Tag, collection, new Dictionary<string, string> { [gamePath] = file }, Priority)).ConfigureAwait(false);

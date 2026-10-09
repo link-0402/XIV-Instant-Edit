@@ -179,6 +179,14 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
                 Say(FeedbackSeverity.Error, Unwrap(work.Exception));
             Find();
         }
+        if (service.Preview.TakeNotice() is { } notice)
+        {
+            // The check after a preview's redraw added the preview again and redrew your character.
+            motionCheckDue = Environment.TickCount64 + MotionCheckDelayMs;
+            if (notice.Warning != null)
+                Say(FeedbackSeverity.Warning, notice.Warning);
+            Find();
+        }
     }
 
     private void Run(Func<Task<string?>> action, Func<string?, string> done)

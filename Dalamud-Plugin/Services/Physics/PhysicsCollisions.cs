@@ -47,19 +47,30 @@ internal static class PhysicsCollisions
         return bumping == 0 ? PhysicsBumps.None : bumping == points ? PhysicsBumps.All : PhysicsBumps.Some;
     }
 
+    /// <summary> Whether any of the chains has a moving point, so ticking or unticking a shape changes something. </summary>
+    public static bool HasPoints(PhybFile file, IEnumerable<(int Simulator, int Chain)> chains) => Valid(file, chains).Any();
+
+    /// <summary> Whether <see cref="Add"/> would succeed, without changing anything. </summary>
+    public static bool CanAdd(PhybFile file, IEnumerable<(int Simulator, int Chain)> chains, string shape)
+    {
+        foreach (var simulator in Valid(file, chains).Select(target => target.Simulator).Distinct())
+        {
+            var listed = simulator.Collisions.FindIndex(reference => reference.Name.Text == shape);
+            if (listed >= MaxShapes || (listed < 0 && simulator.Chains.Any(chain => simulator.Collisions.Count + chain.Collisions.Count >= MaxShapes)))
+                return false;
+        }
+        return true;
+    }
+
     /// <summary>
     /// Makes every moving point of the chains bump into <paramref name="shape"/>, listing it in the
     /// simulator when it isn't yet. False, with nothing changed, when a chain would need a 33rd bit.
     /// </summary>
     public static bool Add(PhybFile file, IReadOnlyList<(int Simulator, int Chain)> chains, string shape)
     {
+        if (!CanAdd(file, chains, shape))
+            return false;
         var targets = Valid(file, chains).ToList();
-        foreach (var simulator in targets.Select(target => target.Simulator).Distinct())
-        {
-            var listed = simulator.Collisions.FindIndex(reference => reference.Name.Text == shape);
-            if (listed >= MaxShapes || (listed < 0 && simulator.Chains.Any(chain => simulator.Collisions.Count + chain.Collisions.Count >= MaxShapes)))
-                return false;
-        }
         foreach (var simulator in targets.Select(target => target.Simulator).Distinct())
         {
             if (simulator.Collisions.Any(reference => reference.Name.Text == shape))
@@ -115,7 +126,8 @@ internal static class PhysicsCollisions
                 Renumber(simulator, bit => bit < removed ? bit : bit == removed ? -1 : bit - 1);
                 simulator.Collisions.RemoveAt(index);
             }
-            foreach (var chain in simulator.Chains)
+            // Only the chains being edited lose an own shape they no longer use.
+            foreach (var chain in targets.Where(target => target.Simulator == simulator).Select(target => target.Chain))
                 for (var own = chain.Collisions.Count - 1; own >= 0; own--)
                 {
                     var removed = simulator.Collisions.Count + own;
@@ -127,7 +139,8 @@ internal static class PhysicsCollisions
         }
     }
 
-    private static bool Uses(PhybChain chain, uint bit) => chain.Nodes.Skip(1).Any(node => (node.CollisionFlags & bit) != 0);
+    // A point that collides continuously with a shape uses it even without the normal bit.
+    private static bool Uses(PhybChain chain, uint bit) => chain.Nodes.Skip(1).Any(node => ((node.CollisionFlags | node.ContinuousCollisionFlags) & bit) != 0);
 
     private static IEnumerable<(PhybSimulator Simulator, PhybChain Chain)> Valid(PhybFile file, IEnumerable<(int Simulator, int Chain)> chains)
     {

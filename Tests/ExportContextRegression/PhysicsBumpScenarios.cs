@@ -83,6 +83,8 @@ internal static class PhysicsBumpScenarios
                 (chest.Simulators[0].Chains[1].Nodes[1].CollisionFlags & ~0b1111111u) == 0 &&
                 chest.Simulators[0].Flags.HasFlag(PhybSimulatorFlags.CollisionsHandled),
             "physics bumps: ticking a shape the area doesn't list adds it, and bits that named nothing are dropped");
+        Require(chest.Simulators[0].Chains[0].Nodes[1].CollisionFlags == 109 && chest.Simulators[0].Chains[0].Nodes[1].ContinuousCollisionFlags == 109,
+            "physics bumps: continuous bits move with the collision bits when a shape joins the list");
     }
 
     private static void CheckRemove()
@@ -95,6 +97,11 @@ internal static class PhysicsBumpScenarios
                 PhysicsCollisions.State(chest, [(0, 0), (0, 1)], "elbow_r") == PhysicsBumps.All &&
                 PhysicsCollisions.State(chest, [(0, 0), (0, 1)], "hand_l") == PhysicsBumps.None,
             "physics bumps: a shape no point bumps into any more leaves the list, and the shapes after it keep their points");
+        var shared = Chest();
+        PhysicsCollisions.Remove(shared, [(0, 0)], "hand_l");
+        Require(shared.Simulators[0].Collisions.Count == 6 && shared.Simulators[0].Chains[0].Nodes[1].CollisionFlags == 296 &&
+                shared.Simulators[0].Chains[1].Nodes[1].CollisionFlags == 300 && PhysicsCollisions.State(shared, [(0, 1)], "hand_l") == PhysicsBumps.All,
+            "physics bumps: a shape another chain still bumps into stays listed, on the same bit");
         var skirt = Skirt();
         PhysicsCollisions.Remove(skirt, [(0, 0)], "asi_l_a");
         Require(skirt.Simulators[0].Collisions.Count == 3 && PhysicsCollisions.State(skirt, [(0, 1)], "asi_r_a") == PhysicsBumps.All &&
@@ -135,6 +142,35 @@ internal static class PhysicsBumpScenarios
         Require(!PhysicsCollisions.Add(file, [(0, 0)], "one_more") && simulator.Collisions.Count == 32 && simulator.Chains[0].Nodes[1].CollisionFlags == 0 &&
                 PhysicsCollisions.Add(file, [(0, 0)], "shape_31") && simulator.Chains[0].Nodes[1].CollisionFlags == 1u << 31,
             "physics bumps: a chain can bump into 32 shapes; a 33rd is refused without changing anything");
+        var full = new PhybFile();
+        var area = new PhybSimulator { Collisions = Enumerable.Range(0, 31).Select(i => Ref($"shape_{i}")).ToList() };
+        var chain = Chain("j_mune_l", 1u << 31);
+        chain.Collisions.Add(Ref("own"));
+        area.Chains.Add(chain);
+        full.Simulators.Add(area);
+        Require(PhysicsCollisions.State(full, [(0, 0)], "own") == PhysicsBumps.All && !PhysicsCollisions.Add(full, [(0, 0)], "one_more") &&
+                area.Collisions.Count == 31 && chain.Nodes[1].CollisionFlags == 1u << 31,
+            "physics bumps: a chain's own shape counts toward the 32, so a new area shape is refused");
+        PhysicsCollisions.Remove(full, [(0, 0)], "own");
+        Require(chain.Collisions.Count == 0 && chain.Nodes[1].CollisionFlags == 0,
+            "physics bumps: a chain's own shape on bit 31 can be unticked");
+
+        // Unticking tidies only the chains being edited, and a shape a point only touches continuously stays listed.
+        var tidy = new PhybFile();
+        var shared = new PhybSimulator { Collisions = [Ref("arm")] };
+        var picked = Chain("j_mune_l", 1);
+        var other = Chain("j_mune_r", 0);
+        other.Collisions.Add(Ref("arm"));
+        var continuous = Chain("j_mune_c", 0);
+        continuous.Nodes[1].ContinuousCollisionFlags = 1;
+        shared.Chains.AddRange([picked, other, continuous]);
+        tidy.Simulators.Add(shared);
+        PhysicsCollisions.Remove(tidy, [(0, 0)], "arm");
+        Require(other.Collisions.Count == 1 && shared.Collisions.Count == 1 && continuous.Nodes[1].ContinuousCollisionFlags == 1,
+            "physics bumps: unticking leaves other chains' own shapes alone and keeps a shape a point still bumps into continuously");
+        Require(!PhysicsCollisions.HasPoints(tidy, [(0, 5)]) && PhysicsCollisions.HasPoints(tidy, [(0, 0)]) &&
+                PhysicsCollisions.CanAdd(tidy, [(0, 0)], "arm"),
+            "physics bumps: a tick is checked before it makes an undo step");
     }
 
     private static void CheckBrokenLinks()

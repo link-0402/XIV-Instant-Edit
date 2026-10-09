@@ -237,7 +237,8 @@ internal static class TimelineEffectLooks
             {
                 case Part.Rgb when safe.Recolors:
                     var rgb = ReadRgb(avfx, at);
-                    if (float.IsFinite(rgb.X) && float.IsFinite(rgb.Y) && float.IsFinite(rgb.Z) && safe.Recolor(rgb) is var changed && changed != rgb)
+                    if (float.IsFinite(rgb.X) && float.IsFinite(rgb.Y) && float.IsFinite(rgb.Z) && safe.Recolor(rgb) is var changed && changed != rgb &&
+                        float.IsFinite(changed.X) && float.IsFinite(changed.Y) && float.IsFinite(changed.Z))
                         WriteRgb(output, at, changed);
                     break;
                 case Part.ByteRgb when safe.Recolors:
@@ -517,7 +518,7 @@ internal static class TimelineEffectLooks
     private static void Scale(byte[] avfx, byte[] output, int at, float factor)
     {
         var value = BinaryPrimitives.ReadSingleLittleEndian(avfx.AsSpan(at));
-        if (float.IsFinite(value))
+        if (float.IsFinite(value * factor))
             BinaryPrimitives.WriteSingleLittleEndian(output.AsSpan(at), value * factor);
     }
 

@@ -635,6 +635,28 @@ def run_shape_exports(addon) -> None:
                                                                                       "temp_export"))],
                  "afterwards the copies are gone and the mesh is as it was")
 
+        # A heels offset calculated for one shape doesn't stay on the copies for a shape with nothing
+        # below the floor.
+        heels = settings.calculate_heels_offset
+        settings.calculate_heels_offset = True
+        lift = obj.shape_key_add(name="Lift", from_mix=False)
+        lift.data.foreach_set("co", (_positions(obj) + (0.0, 0.0, 0.5)).astype(np.float32).ravel())
+        lift.value = 0.0
+        with export.ShapeExports([obj], "MDL") as exports:
+            exports.write(folder / "fast heels low")
+            calculated = any(note.startswith("Calculated heels_offset")
+                             for notes in export._export_stats.values() for note in notes)
+            lift.value = 1.0
+            exports.write(folder / "fast heels high")
+        export.export_result(folder / "full heels high", "MDL", export_objects=[obj])
+        lift.value = 0.0
+        export.export_result(folder / "full heels low", "MDL", export_objects=[obj])
+        obj.shape_key_remove(lift)
+        settings.calculate_heels_offset = heels
+        _require(calculated and all((folder / f"full heels {shape}.mdl").read_bytes() ==
+                                    (folder / f"fast heels {shape}.mdl").read_bytes() for shape in ("low", "high")),
+                 "a heels offset is calculated for each shape on its own, none for a shape above the floor")
+
         # Custom normals are set again on the split copies: the normals come out within 0.001.
         normals = np.empty(len(obj.data.loops) * 3, dtype=np.float32)
         obj.data.corner_normals.foreach_get("vector", normals)

@@ -210,7 +210,7 @@ public sealed record InstantEditImportContext
     [JsonIgnore]
     public string SourceOptionStatus { get; init; } = "unknown";
 
-    /// <summary>The racial scaling the model was sent with for preview, which refuses its exports; null when it went unscaled.</summary>
+    /// <summary>The racial scaling the model was sent with, which limits its exports to the character's race's model; null when it went unscaled.</summary>
     [JsonIgnore]
     public RacialScalingRecord? RacialScaling { get; init; }
 

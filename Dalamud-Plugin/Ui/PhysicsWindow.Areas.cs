@@ -454,18 +454,27 @@ internal sealed partial class PhysicsWindow
             if (ImGui.CheckboxFlags($"{PhysicsShapeNames.Label(file.Collision, name, target?.Character.Skeleton)}##check", ref bits, 3u))
             {
                 var on = bits == 3u;
-                Change(current, () =>
-                {
-                    if (!on)
-                        PhysicsCollisions.Remove(file, targets, name);
-                    else if (!PhysicsCollisions.Add(file, targets, name))
-                        Say(FeedbackSeverity.Warning, $"A chain can collide with {PhysicsCollisions.MaxShapes} shapes at most.");
-                });
+                // Nothing to change, or a refused tick, leaves no undo step behind.
+                if (!PhysicsCollisions.HasPoints(file, targets))
+                    Say(FeedbackSeverity.Warning, "These chains have no moving points to collide.");
+                else if (on && !PhysicsCollisions.CanAdd(file, targets, name))
+                    Say(FeedbackSeverity.Warning, $"A chain can collide with {PhysicsCollisions.MaxShapes} shapes at most.");
+                else
+                    Change(current, () =>
+                    {
+                        if (on)
+                            PhysicsCollisions.Add(file, targets, name);
+                        else
+                            PhysicsCollisions.Remove(file, targets, name);
+                    });
             }
             if (state == PhysicsBumps.Some)
-                Tip($"Only some of these points collide with it: {string.Join(", ", Bumping(file, targets, name))}. Tick to make all of them.");
+                Tip($"Only some points collide with it, on: {string.Join(", ", Bumping(file, targets, name))}. Tick to make all of them.");
+            // The area's entries for the shape, and the chains' own.
             var references = targets.Select(target => target.Simulator).Distinct()
-                .SelectMany(s => file.Simulators[s].Collisions.Where(reference => reference.Name.Text == name)).ToList();
+                .SelectMany(s => file.Simulators[s].Collisions.Where(reference => reference.Name.Text == name))
+                .Concat(targets.SelectMany(target => file.Simulators[target.Simulator].Chains[target.Chain].Collisions.Where(reference => reference.Name.Text == name)))
+                .ToList();
             if (state == PhysicsBumps.None || references.Count == 0)
                 continue;
             ImGui.SameLine();

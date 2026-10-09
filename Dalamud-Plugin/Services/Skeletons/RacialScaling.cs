@@ -7,8 +7,8 @@ namespace InstantEdit.Services.Skeletons;
 
 /// <summary>
 /// A model of one race reshaped for a character of another, as the game shows it: most female gear
-/// is a c0201 model that a c0801 character wears through the racial deformer. For preview only:
-/// nothing exported from a scaled import is written back.
+/// is a c0201 model that a c0801 character wears through the racial deformer. A scaled import
+/// is never written back into another race's model, only saved as the character's race's own.
 /// </summary>
 internal sealed record RacialScaling(ushort ModelRace, ushort CharacterRace, RacialDeformer Deformer)
 {

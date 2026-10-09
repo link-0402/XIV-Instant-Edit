@@ -227,7 +227,7 @@ internal static class MotionEvaluator
         {
             var since = frame > frames[^1] ? frame - frames[^1] : frame + loop - frames[^1];
             var across = curves[^1] is { } wrap ? wrap.Ease(since / (frames[0] + loop - frames[^1])) : 0;
-            return Lerp(values[^1], values[0], across);
+            return Eased(values[^1], values[0], across);
         }
         if (frames.Length == 1 || frame <= frames[0])
             return values[0];
@@ -243,7 +243,17 @@ internal static class MotionEvaluator
         }
         var t = (frame - frames[low]) / (frames[high] - frames[low]);
         t = curves[low] is { } curve ? curve.Ease(t) : 0;
-        return Lerp(values[low], values[high], t);
+        return Eased(values[low], values[high], t);
+    }
+
+    /// <summary>
+    /// <see cref="Lerp"/> along a key's curve. A curve that overshoots or winds up leaves 0 to 1, which
+    /// could carry a scale past zero; it stays within the range a key may hold.
+    /// </summary>
+    private static MotionTransform Eased(MotionTransform from, MotionTransform to, float t)
+    {
+        var value = Lerp(from, to, t);
+        return t is >= 0 and <= 1 ? value : value with { Scale = Vector3.Clamp(value.Scale, new Vector3(MinScale), new Vector3(MaxScale)) };
     }
 
     /// <summary>Uniform interpolation: positions and scales on a line, rotations the short way round.</summary>
