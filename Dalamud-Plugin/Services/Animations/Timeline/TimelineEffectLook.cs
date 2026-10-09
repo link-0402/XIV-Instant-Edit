@@ -290,7 +290,7 @@ internal static class TimelineEffectLooks
             if (!AnimationDependencies.SafeGamePath(gamePath))
                 throw new InvalidDataException("The effect's name cannot be used in a game path.");
             if (!copies.ContainsKey(gamePath))
-                copies[gamePath] = Copy(ev.Path, gamePath, edited, imports.GetValueOrDefault(ev.Path));
+                copies[gamePath] = Copy(ev.Path, gamePath, edited, look, imports.GetValueOrDefault(ev.Path));
             return ev with { Path = gamePath, Look = null };
         }).ToImmutableArray();
         return (doc with { Events = events }, [.. copies.Values]);
@@ -346,10 +346,16 @@ internal static class TimelineEffectLooks
         return gamePath.StartsWith("vfx/instant_edit/", StringComparison.OrdinalIgnoreCase) ? HashSuffix.Replace(name, string.Empty) : name;
     }
 
-    private static TimelineImport Copy(string original, string gamePath, byte[] edited, TimelineImport? import)
+    /// <summary>
+    /// The copy of <paramref name="original"/> with <paramref name="look"/>. It can be made the same way
+    /// from another file of the effect it is mapped beside (see <see cref="TimelineImport.Rebuild"/>): a
+    /// copy of a copy, such as a looping one, makes that copy first, and can't be made when that can't.
+    /// </summary>
+    private static TimelineImport Copy(string original, string gamePath, byte[] edited, TimelineEffectEdit look, TimelineImport? import)
     {
         var files = ImmutableDictionary.CreateBuilder<string, byte[]>(StringComparer.OrdinalIgnoreCase);
         var beside = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+        var rebuild = ImmutableDictionary.CreateBuilder<string, Func<byte[], byte[]>>(StringComparer.OrdinalIgnoreCase);
         if (import != null)
         {
             foreach (var (path, bytes) in import.Files)
@@ -358,10 +364,20 @@ internal static class TimelineEffectLooks
             foreach (var (path, of) in import.Beside ?? ImmutableDictionary<string, string>.Empty)
                 if (!path.Equals(original, StringComparison.OrdinalIgnoreCase) && files.ContainsKey(path))
                     beside[path] = of;
+            foreach (var (path, build) in import.Rebuild ?? ImmutableDictionary<string, Func<byte[], byte[]>>.Empty)
+                if (beside.ContainsKey(path))
+                    rebuild[path] = build;
         }
         files[gamePath] = edited;
         beside[gamePath] = import?.Beside?.GetValueOrDefault(original) ?? original;
-        return new TimelineImport(gamePath, files.ToImmutable(), 0, beside.ToImmutable());
+        if (import?.Beside?.ContainsKey(original) == true)
+        {
+            if (import.Rebuild?.GetValueOrDefault(original) is { } first)
+                rebuild[gamePath] = other => Apply(first(other), look);
+        }
+        else
+            rebuild[gamePath] = other => Apply(other, look);
+        return new TimelineImport(gamePath, files.ToImmutable(), 0, beside.ToImmutable(), rebuild.ToImmutable());
     }
 
     /// <summary>Where the numbers the editor reads and changes are.</summary>

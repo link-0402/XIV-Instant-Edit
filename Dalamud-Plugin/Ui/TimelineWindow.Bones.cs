@@ -720,8 +720,9 @@ public sealed partial class TimelineWindow
         try
         {
             var loop = LoopFrames(loaded, doc);
-            before = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion.Take(at).ToArray(), frame, loop);
-            after = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion, frame, loop);
+            var end = MotionEnd(loaded, doc);
+            before = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion.Take(at).ToArray(), frame, loop, end);
+            after = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion, frame, loop, end);
         }
         catch (InvalidDataException)
         {

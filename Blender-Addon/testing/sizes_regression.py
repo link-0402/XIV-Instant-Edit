@@ -309,6 +309,9 @@ def _run_stand_in(addon, plugin) -> None:
     _require(sizes.option_name_issue(["Large", "Medium"]) == "" and sizes.option_name_issue(["Large", "large"]) and
              sizes.option_name_issue([" Large"]) and sizes.option_name_issue(["..."]),
              "size names that can't be options are found")
+    many = [f"Size {index}" for index in range(sizes.MAX_SIZES + 1)]
+    _require(sizes.option_name_issue(many[:-1]) == "" and sizes.option_name_issue(many) == "Pick at most 64 sizes.",
+             "more sizes than Instant Edit takes are found before the export")
 
     def yab(name, **values):
         size = FakeSize(name)

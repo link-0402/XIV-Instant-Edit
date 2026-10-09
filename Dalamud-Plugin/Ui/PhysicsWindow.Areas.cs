@@ -367,7 +367,7 @@ internal sealed partial class PhysicsWindow
                                 PhysicsTemplates.RestSpring(file.Simulators[s].Chains[c], (short)c, found.Character.Skeleton, 0.04f) is { } added)
                                 file.Simulators[s].Attracts.Add(added);
                     });
-                Tip("Adds a spring that pulls the tip back to where it rests, measured on your skeleton.");
+                Tip("Adds a spring that pulls the tip back toward where it rests, like the game's breasts.");
             }
         }
 

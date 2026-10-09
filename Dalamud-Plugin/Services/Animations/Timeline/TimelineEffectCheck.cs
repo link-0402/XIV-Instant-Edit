@@ -56,9 +56,12 @@ internal static class TimelineEffectCheck
     /// <summary>
     /// The C173 events whose effect stops. <paramref name="effects"/> holds what was read of each
     /// effect by game path; effects missing from it are not judged, and an effect that ends itself or
-    /// whose sound stops counts only when a copy that keeps it going could be made.
+    /// whose sound stops counts only when a copy that keeps it going could be made. An effect ends
+    /// itself too soon only when the stop can cut it short: <paramref name="clipLoops"/>, or the stop
+    /// falls inside the clip.
     /// </summary>
-    public static ImmutableArray<Problem> Find(TimelineDocument document, IReadOnlyDictionary<string, TimelineEffectInfo> effects)
+    public static ImmutableArray<Problem> Find(TimelineDocument document, IReadOnlyDictionary<string, TimelineEffectInfo> effects,
+        bool clipLoops = true)
     {
         var problems = ImmutableArray.CreateBuilder<Problem>();
         foreach (var ev in document.Events.IsDefault ? [] : document.Events)
@@ -75,7 +78,7 @@ internal static class TimelineEffectCheck
                     effect.Loops.Max(r => r.End - r.Start)));
             if (effect.Looping is not { } copy)
                 continue;
-            if (effect.EndsAt is { } end)
+            if (effect.EndsAt is { } end && (clipLoops || (long)ev.Start + end < document.Length))
                 problems.Add(new Problem(ev.Key, ev.Path, TimelineEffectIssue.EndsItself, value, end, copy));
             if (effect.SoundSeconds is { } seconds)
                 problems.Add(new Problem(ev.Key, ev.Path, TimelineEffectIssue.SoundStops, value,

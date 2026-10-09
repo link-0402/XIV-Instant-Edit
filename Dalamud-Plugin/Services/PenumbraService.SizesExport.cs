@@ -8,8 +8,12 @@ public sealed partial class PenumbraService
     /// <summary>A size's exported model: its option name and the staged file.</summary>
     public sealed record SizeExportFile(string Name, string ExportedFile);
 
-    /// <summary>Where a size export writes: the group update, the group's name and each size's option file.</summary>
-    internal sealed record SizeGroupPlan(VariantGroupWrite Group, string GroupName, IReadOnlyList<GroupOptionFile> Files);
+    /// <summary>
+    /// Where a size export writes: the group update, the group's name, each size's option file, and the
+    /// files of those that the group already maps (<paramref name="Replaced"/>), which the export writes over.
+    /// </summary>
+    internal sealed record SizeGroupPlan(VariantGroupWrite Group, string GroupName, IReadOnlyList<GroupOptionFile> Files,
+        IReadOnlySet<string> Replaced);
 
     /// <summary>A size's option name: as a group name, and with something left to name its file after.</summary>
     internal static bool IsSafeSizeName(string? value)
@@ -24,10 +28,11 @@ public sealed partial class PenumbraService
     }
 
     /// <summary>
-    /// Plan a size export into a Single group, one option per size named after it, the option named
-    /// <paramref name="defaultSize"/> on by default. A size the group already has keeps the file it maps
-    /// the model to, so exporting again replaces it; the others get a new file next to the imported model,
-    /// named after the model and the size, that the mod doesn't use. A new group gets no None option.
+    /// Plan a size export into a Single group, one option per size named after it. A new group gets no
+    /// None option and has the option named <paramref name="defaultSize"/> on by default; an existing one
+    /// keeps its default. A size the group already has keeps the file it maps the model to, so exporting
+    /// again replaces it, unless the mod maps that file elsewhere too; the others get a new file next to
+    /// the imported model, named after the model and the size, that the mod doesn't use or hold.
     /// </summary>
     internal static string? PlanSizeGroup(
         string modFolder,
@@ -49,7 +54,7 @@ public sealed partial class PenumbraService
                 return "invalid_penumbra_variant";
             var meta = LoadV4ModMetadata(modFolder);
             var lookupError = FindOptionGroup(meta["Groups"] as JsonArray ?? [], sourceGamePath, groupName, targetId,
-                out var existingGroup, out _, out _);
+                out var existingGroup, out var existingIndex, out _);
             if (lookupError is not null)
                 return lookupError;
             var root = Path.GetFullPath(modFolder);
@@ -59,14 +64,17 @@ public sealed partial class PenumbraService
 
             var files = new string?[sizeNames.Count];
             var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // A size keeps its option's file only when no other option or group maps that file too.
             if (existingGroup?["Options"] is JsonArray options)
                 for (var index = 0; index < sizeNames.Count; index++)
                     if (FindOption(options, sizeNames[index])?["Files"] is JsonObject mappings &&
                         TryNormalizeRelativeModPath(
                             JsonString(mappings.FirstOrDefault(pair => SameGamePath(pair.Key, sourceGamePath)).Value),
                             out var mapped) &&
+                        !IsMappedOutsideOption(meta, root, Path.Combine(root, mapped), sizeNames[index]) &&
                         taken.Add(mapped))
                         files[index] = mapped;
+            var replaced = files.OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             var used = MappedModFiles(meta);
             var stem = Path.GetFileNameWithoutExtension(sourceGamePath.Replace('\\', '/').Split('/')[^1]);
@@ -77,7 +85,9 @@ public sealed partial class PenumbraService
                 {
                     var candidate = Path.Combine(directory, (count == 1 ? name : $"{name} {count}") + ".mdl");
                     var relative = Path.GetRelativePath(root, candidate).Replace('\\', '/');
-                    if (IsSafeRelativeModPath(relative) && !used.Contains(relative) && taken.Add(relative))
+                    // An unmapped file already there (an author's alternative or a leftover) is never taken either.
+                    if (IsSafeRelativeModPath(relative) && !used.Contains(relative) && !File.Exists(candidate) &&
+                        taken.Add(relative))
                         files[index] = relative;
                 }
                 if (files[index] is null)
@@ -89,8 +99,9 @@ public sealed partial class PenumbraService
                 out var prepared, sourceOption, targetId);
             if (groupError is not null)
                 return groupError;
+            // An existing group keeps the default its author chose (BuildOptionGroup); only a new group starts on the shown size.
             plan = new SizeGroupPlan(prepared!,
-                existingGroup is null ? groupName : JsonString(existingGroup["Name"]) ?? groupName, optionFiles);
+                existingGroup is null ? groupName : JsonString(existingGroup["Name"]) ?? groupName, optionFiles, replaced);
             return null;
         }
         catch (Exception e)
@@ -212,8 +223,13 @@ public sealed partial class PenumbraService
 
             var targets = plan!.Files.Select(file => (file.RelativePath, Path: Path.Combine(
                 resolved.Target.Folder, file.RelativePath.Replace('/', Path.DirectorySeparatorChar)))).ToArray();
-            for (var index = 0; index < sizes.Count; index++)
+            // New files first: the files the group already maps are live, so they're only written over once
+            // every new one is in place.
+            var order = Enumerable.Range(0, sizes.Count)
+                .OrderBy(index => plan.Replaced.Contains(targets[index].RelativePath)).ToArray();
+            for (var step = 0; step < order.Length; step++)
             {
+                var index = order[step];
                 var (relative, targetFile) = targets[index];
                 // The backup keeps the model's EST entries too, so restoring it undoes this export's EST change.
                 var estState = backupExisting && File.Exists(targetFile)
@@ -222,10 +238,15 @@ public sealed partial class PenumbraService
                 var writeError = WriteModelToOriginalLocation(
                     resolved.Target.Folder, targetFile, sizes[index].ExportedFile, backupExisting,
                     resolved.Target.Directory, relative, estState);
-                if (writeError is not null)
-                    return new ExportResult(false, "write_failed", index == 0
-                        ? writeError
-                        : $"{writeError} {index} of {sizes.Count} sizes were written; the group wasn't changed.");
+                if (writeError is null)
+                    continue;
+                var replacedSizes = order.Take(step).Where(done => plan.Replaced.Contains(targets[done].RelativePath))
+                    .Select(done => sizes[done].Name).ToArray();
+                return new ExportResult(false, "write_failed", step == 0
+                    ? writeError
+                    : replacedSizes.Length == 0
+                        ? $"{writeError} {step} of {sizes.Count} sizes were written as new files; the group wasn't changed."
+                        : $"{writeError} The models of {string.Join(", ", replacedSizes)} were already replaced; the group wasn't changed.");
             }
             var defaultIndex = Math.Max(0, sizes.ToList().FindIndex(size =>
                 string.Equals(size.Name, defaultSize, StringComparison.OrdinalIgnoreCase)));

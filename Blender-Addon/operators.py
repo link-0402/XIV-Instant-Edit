@@ -1119,7 +1119,9 @@ class XIVIE_OT_apply_racial_scaling(Operator):
         notes.label(text="Uses your character's collection, so skeleton mods count.")
 
     def execute(self, context: Context):
-        from .instant_edit.racial_scaling import PROPERTY, applied, race_label, request_deformer, set_applied
+        from .instant_edit.racial_scaling import (
+            PROPERTY, applied, applied_matrices, race_label, request_deformer, set_applied,
+        )
 
         # (mesh, model race, race it is shaped for now or None), once per mesh data.
         plans, meshes, previews = [], set(), []
@@ -1140,9 +1142,17 @@ class XIVIE_OT_apply_racial_scaling(Operator):
                 deformers[model_race, race] = request_deformer(model_race, race)
             return deformers[model_race, race]
 
+        def scaling_now(obj, model_race: int, current: int | None):
+            # The matrices applied earlier, kept with the mark; marks from before they were kept
+            # take the collection's current ones.
+            if not current:
+                return None
+            stored = applied_matrices(obj)
+            return stored if stored is not None else deformer(model_race, current)[1]
+
         try:
             steps = [(obj, model_race, current, *deformer(model_race, int(self.race)),
-                      deformer(model_race, current)[1] if current else None)
+                      scaling_now(obj, model_race, current))
                      for obj, model_race, current in plans]
         except ValueError as error:
             self.report({"ERROR"}, f"Racial scaling failed: {error}")
@@ -1153,7 +1163,7 @@ class XIVIE_OT_apply_racial_scaling(Operator):
             if race == (current or model_race):
                 unchanged.append(obj.name)
             elif apply_deformer(obj, matrices, previous):
-                set_applied(obj, model_race, race)
+                set_applied(obj, model_race, race, matrices)
                 obj.update_tag()
                 changed.append(obj)
             else:

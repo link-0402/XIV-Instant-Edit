@@ -225,7 +225,7 @@ internal sealed class ScdFile
 
     private static ScdSound ReadSound(byte[] bytes, int offset, int trackCount, ImmutableArray<ScdAudio> audio)
     {
-        if (offset < SoundTableOffset || offset + 16 > bytes.Length)
+        if (offset < SoundTableOffset || offset + 16L > bytes.Length)
             throw new InvalidDataException("An SCD sound entry lies outside the file.");
         var tracks = bytes[offset];
         var type = bytes[offset + 3];

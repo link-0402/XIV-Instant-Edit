@@ -529,9 +529,13 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
             using (ImRaii.Disabled(target == null || Busy))
             {
                 if (ImGui.Button("Turn my mod off"))
-                    Run(() => service.SetModEnabledAsync(target!, false), warning => warning ?? $"{service.ModDirectory} is off. Your other physics mods apply again.");
+                {
+                    var previewing = service.Preview.Active;
+                    Run(() => service.SetModEnabledAsync(target!, false), warning => warning ??
+                        (previewing ? $"Preview off and {service.ModDirectory} off. " : $"{service.ModDirectory} is off. ") + "Your other physics mods apply again.");
+                }
             }
-            Tip("Turns your physics mod off in your collection. Saving turns it on again.");
+            Tip("Stops the preview and turns your physics mod off in your collection. Saving turns it on again.");
         }
         if (working != null || service.Preview.Busy)
         {

@@ -34,9 +34,10 @@ public sealed partial class TimelineWindow
     private readonly ActorPose actorPose = new();
     private bool showOnCharacter = true;
     private bool gizmoMove;
-    // The editor a gizmo drag runs in as one undo step, and the last frame the drag was drawn.
+    // The editor a gizmo drag runs in as one undo step.
     private TimelineEditor? gizmoEditor;
-    private int gizmoFrame;
+    // Whether the mouse was over the gizmo's rings or handles last frame: then the gizmo takes the click, not a dot.
+    private bool gizmoOver;
     // Where the last drag left the gizmo on a bone, layer and frame, until Live shows the change there.
     private (string Layer, string Bone, int Frame, Matrix4x4 Matrix, int Since, int Shown)? gizmoHeld;
     // Each bone's dot this frame, by the clip skeleton's bone index.
@@ -61,7 +62,8 @@ public sealed partial class TimelineWindow
         {
             if (playback.ActorIndex() is not { } posing)
                 return null;
-            return (liveWanted || playback.Active) && previewActor is { } shown ? shown : posing;
+            // Not while Live only waits to start: the actor of an earlier preview may be another one.
+            return (liveStarted || playback.Active) && previewActor is { } shown ? shown : posing;
         }
         catch (InvalidOperationException)
         {
@@ -72,6 +74,8 @@ public sealed partial class TimelineWindow
     /// <summary>The overlay's whole content; called from its draw.</summary>
     internal void DrawBonesOverlay()
     {
+        var overGizmo = gizmoOver;
+        gizmoOver = false;
         if (animations == null || source is not { Document: not null, Standalone: false } loaded || editor is not { } current)
         {
             EndGizmo(true);
@@ -107,9 +111,9 @@ public sealed partial class TimelineWindow
                           PoseGizmo.Project(actorPose.Positions[at], toClip, viewport.Pos, viewport.Size, out dotAt[b]);
         }
 
-        // A dot takes the mouse when no window, field, popup or drag has it.
+        // A dot takes the mouse when no window, field, popup, drag or the gizmo has it.
         var hover = -1;
-        if (gizmoEditor == null && !ImGui.IsWindowHovered(ImGuiHoveredFlags.AnyWindow) && !ImGui.IsAnyItemActive() &&
+        if (gizmoEditor == null && !overGizmo && !ImGui.IsWindowHovered(ImGuiHoveredFlags.AnyWindow) && !ImGui.IsAnyItemActive() &&
             !ImGui.IsPopupOpen("", ImGuiPopupFlags.AnyPopupId | ImGuiPopupFlags.AnyPopupLevel) &&
             (!ImGui.IsAnyMouseDown() || ImGui.IsMouseClicked(ImGuiMouseButton.Left)))
         {
@@ -130,9 +134,10 @@ public sealed partial class TimelineWindow
 
         var primary = selection.Primary is { } chosen && index.TryGetValue(chosen, out var chosenIndex) ? chosenIndex : -1;
         DrawOverlayBones(skeleton, layer, frame, animated, primary, hover);
-        DrawGizmo(current, loaded, skeleton, layer, frame, modelView, camera.Projection, viewport, hover < 0);
+        DrawGizmo(current, loaded, skeleton, layer, frame, modelView, camera.Projection, viewport);
 
-        if (hover < 0)
+        // The mouse reached the gizmo this frame: it takes the click.
+        if (hover < 0 || gizmoOver)
             return;
         // The game must not take the click as well.
         ImGui.SetNextFrameWantCaptureMouse(true);
@@ -197,10 +202,11 @@ public sealed partial class TimelineWindow
     /// The gizmo on the primary bone, in the character's model space: its own axes are the bone's and its
     /// world axes the character's, forced with several bones as for the ball. Each frame of a drag turns or
     /// moves every bone the edit changes (see <see cref="PoseEdits.Turned"/>) by what the gizmo did since
-    /// the frame before, in character space. Off while a dot under the mouse takes the click.
+    /// the frame before, in character space. While the mouse is over its rings or handles it takes the
+    /// click, and the dots under it don't (<see cref="gizmoOver"/>); a click elsewhere goes to a dot.
     /// </summary>
     private void DrawGizmo(TimelineEditor current, AnimationTimelineSource loaded, SkeletonDescription skeleton, MotionLayer? layer, int frame,
-        Matrix4x4 modelView, Matrix4x4 projection, ImGuiViewportPtr viewport, bool enabled)
+        Matrix4x4 modelView, Matrix4x4 projection, ImGuiViewportPtr viewport)
     {
         if (layer == null || GizmoOperation(layer, frame, out _) is not { } operation || selection.Primary is not { } bone ||
             !actorPose.Index.TryGetValue(bone, out var at) || Targets(layer, frame, skeleton, loaded, current.Document) is not { Count: > 0 } targets ||
@@ -212,6 +218,9 @@ public sealed partial class TimelineWindow
         }
         var turned = targets.Count > 1 ? PoseEdits.Turned(targets, bone, skeleton) : targets;
         var character = characterAxes || turned.Count > 1;
+        // A fade or an amount makes the bone move less than its keys: a drag changes them by more, so the
+        // bone follows the gizmo. Where the layer barely applies, nothing changes and the gizmo stays on the bone.
+        var weight = MotionEvaluator.Weight(layer, frame, MotionEnd(loaded, current.Document));
 
         // After a drag the gizmo stays where it was left until Live shows the change, rather than jump
         // back to the bone as the game still shows it.
@@ -235,11 +244,14 @@ public sealed partial class TimelineWindow
         ImGuizmo.SetRect(viewport.Pos.X, viewport.Pos.Y, viewport.Size.X, viewport.Size.Y);
         ImGuizmo.SetOrthographic(false);
         ImGuizmo.AllowAxisFlip(false);
-        ImGuizmo.Enable(enabled);
         var moved = ImGuizmo.Manipulate(ref view, ref projection, operation, character ? ImGuizmoMode.World : ImGuizmoMode.Local, ref matrix);
         var dragging = ImGuizmo.IsUsing();
         var over = ImGuizmo.IsOver();
+        gizmoOver = over;
+        if (over && weight < PoseEdits.MinFollowWeight)
+            ImGui.SetTooltip("The layer barely applies here.");
         ImGuizmo.Enable(true);
+        ImGuizmo.AllowAxisFlip(true);
         ImGuizmo.SetID(NoGizmoId);
 
         // The game must not turn its camera with the drag.
@@ -252,22 +264,21 @@ public sealed partial class TimelineWindow
         }
         if (gizmoEditor == null)
             return;
-        gizmoFrame = ImGui.GetFrameCount();
-        if (moved && ReferenceEquals(gizmoEditor, current))
+        var (turn, move) = PoseGizmo.Delta(before, matrix);
+        if (moved && ReferenceEquals(gizmoEditor, current) && PoseEdits.Follow(turn, move, weight) is { } follow)
         {
-            var (turn, move) = PoseGizmo.Delta(before, matrix);
             if (operation == ImGuizmoOperation.Translate)
             {
                 var offset = layer.Kind == MotionLayerKind.Offset;
                 var motion = offset ? null : MotionPose(loaded, frame);
                 var (index, _) = BoneTree(skeleton);
-                current.Change(PoseEdits.Move(current.Document, layer.Key, frame, turned, move, frames.Space, offset,
+                current.Change(PoseEdits.Move(current.Document, layer.Key, frame, turned, follow.Move, frames.Space, offset,
                     name => motion is { } own && index.TryGetValue(name, out var b) ? own.Local[b].Position : null));
             }
             else
-                current.Change(PoseEdits.Turn(current.Document, layer.Key, frame, turned, turn, frames.Space));
+                current.Change(PoseEdits.Turn(current.Document, layer.Key, frame, turned, follow.Turn, frames.Space));
         }
-        gizmoHeld = (layer.Key, bone, frame, matrix, 0, 0);
+        gizmoHeld = weight >= PoseEdits.MinFollowWeight ? (layer.Key, bone, frame, matrix, 0, 0) : null;
         if (!dragging)
             EndGizmo(false);
     }
@@ -322,10 +333,13 @@ public sealed partial class TimelineWindow
         ImGuizmo.SetID(NoGizmoId);
     }
 
-    /// <summary>Ends a drag whose overlay stopped drawing: GPose ended or the Bones window closed under it.</summary>
-    private void CheckGizmo()
+    /// <summary>
+    /// Ends a drag whose overlay stopped drawing: GPose ended or the Bones window closed under it. The
+    /// overlay checks every frame, so this holds while the Timeline window is collapsed too.
+    /// </summary>
+    internal void CheckGizmo()
     {
-        if (gizmoEditor != null && ImGui.GetFrameCount() - gizmoFrame > 1)
+        if (gizmoEditor != null && !OverlayWanted)
             EndGizmo(true);
     }
 

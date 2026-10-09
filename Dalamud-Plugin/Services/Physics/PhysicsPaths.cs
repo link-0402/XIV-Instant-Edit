@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using InstantEdit.Services.GameFiles;
 using InstantEdit.Services.Painter;
 
 namespace InstantEdit.Services.Physics;
@@ -14,6 +15,21 @@ internal static class PhysicsPaths
 
     /// <summary> <c>chara/human/c0801/skeleton/base/b0001/skl_c0801b0001.sklb</c> for 801. </summary>
     public static string BodySkeleton(ushort race) => $"chara/human/c{race:D4}/skeleton/base/b0001/skl_c{race:D4}b0001.sklb";
+
+    /// <summary>
+    /// Names the game file Penumbra loads for <paramref name="gamePath"/>: "the game's own file", "the
+    /// game's file for Female Au Ra" when a file swap points it at another race's (<paramref name="racePath"/>
+    /// gives a race's path), or "another game file".
+    /// </summary>
+    public static string GameFileLabel(string gamePath, string? loaded, Func<ushort, string> racePath)
+    {
+        var path = PathRules.NormalizeGamePath(loaded);
+        if (path.Length == 0 || string.Equals(path, PathRules.NormalizeGamePath(gamePath), StringComparison.OrdinalIgnoreCase))
+            return "the game's own file";
+        return GameRaces.All.FirstOrDefault(race => string.Equals(racePath(race.Code), path, StringComparison.OrdinalIgnoreCase)) is { } swapped
+            ? $"the game's file for {swapped.Label}"
+            : "another game file";
+    }
 
     /// <summary> Whether a model's game path is bare body: smallclothes or the Emperor's New gear. </summary>
     public static bool IsBareBody(string gamePath) => BareBody.IsMatch(gamePath.Replace('\\', '/'));

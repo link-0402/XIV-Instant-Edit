@@ -16,6 +16,7 @@ internal enum PhysicsBumps
 /// set them (255 for two shapes), and an edit here drops them. Connectors have bits too, over the
 /// simulator's shapes only (the game's skirts set bits 2 and 3 for the thighs), so they move along
 /// when a simulator shape joins or leaves the list, and a shape a connector uses stays listed.
+/// Ticking or unticking a shape also sets or clears it on connectors between two of the chosen chains.
 /// </summary>
 internal static class PhysicsCollisions
 {
@@ -65,7 +66,7 @@ internal static class PhysicsCollisions
     }
 
     /// <summary>
-    /// Makes every moving point of the chains bump into <paramref name="shape"/>, listing it in the
+    /// Makes every moving point of the chains, and every connector between two of them, bump into <paramref name="shape"/>, listing it in the
     /// simulator when it isn't yet. False, with nothing changed, when a chain would need a 33rd bit.
     /// </summary>
     public static bool Add(PhybFile file, IReadOnlyList<(int Simulator, int Chain)> chains, string shape)
@@ -94,28 +95,39 @@ internal static class PhysicsCollisions
             }
             simulator.Flags |= PhybSimulatorFlags.CollisionsHandled;
         }
+        foreach (var (simulator, connector) in Linking(file, chains))
+        {
+            var bit = 1u << simulator.Collisions.FindIndex(reference => reference.Name.Text == shape);
+            if (connector.ContinuousCollisionFlags != 0)
+                connector.ContinuousCollisionFlags |= bit;
+            connector.CollisionFlags |= bit;
+        }
         return true;
     }
 
     /// <summary>
-    /// Stops every moving point of the chains bumping into <paramref name="shape"/>. A simulator or chain
-    /// shape no point bumps into any more leaves its list, and the bits after it move down.
+    /// Stops every moving point of the chains, and every connector between two of them, bumping into
+    /// <paramref name="shape"/>. A simulator or chain shape nothing bumps into any more leaves its list,
+    /// and the bits after it move down.
     /// </summary>
     public static void Remove(PhybFile file, IReadOnlyList<(int Simulator, int Chain)> chains, string shape)
     {
         var targets = Valid(file, chains).ToList();
         foreach (var (simulator, chain) in targets)
         {
-            var shapes = BitShapes(simulator, chain);
-            var mask = 0u;
-            for (var bit = 0; bit < shapes.Count; bit++)
-                if (shapes[bit].Name.Text == shape)
-                    mask |= 1u << bit;
+            var mask = Mask(BitShapes(simulator, chain), shape);
             foreach (var node in chain.Nodes.Skip(1))
             {
                 node.CollisionFlags &= ~mask;
                 node.ContinuousCollisionFlags &= ~mask;
             }
+        }
+        // A connector to a chain that isn't being edited keeps its bit, so the shape stays listed for it.
+        foreach (var (simulator, connector) in Linking(file, chains))
+        {
+            var mask = Mask(simulator.Collisions.Take(MaxShapes).ToList(), shape);
+            connector.CollisionFlags &= ~mask;
+            connector.ContinuousCollisionFlags &= ~mask;
         }
         foreach (var simulator in targets.Select(target => target.Simulator).Distinct())
         {
@@ -144,6 +156,29 @@ internal static class PhysicsCollisions
 
     // A point that collides continuously with a shape uses it even without the normal bit.
     private static bool Uses(PhybChain chain, uint bit) => chain.Nodes.Skip(1).Any(node => ((node.CollisionFlags | node.ContinuousCollisionFlags) & bit) != 0);
+
+    // The bits that name the shape.
+    private static uint Mask(IReadOnlyList<PhybCollisionRef> shapes, string shape)
+    {
+        var mask = 0u;
+        for (var bit = 0; bit < shapes.Count; bit++)
+            if (shapes[bit].Name.Text == shape)
+                mask |= 1u << bit;
+        return mask;
+    }
+
+    /// <summary> The connectors whose two chains are both among <paramref name="chains"/>, with their simulator. </summary>
+    private static IEnumerable<(PhybSimulator Simulator, PhybConnector Connector)> Linking(PhybFile file, IEnumerable<(int Simulator, int Chain)> chains)
+    {
+        foreach (var group in chains.Where(target => target.Simulator >= 0 && target.Simulator < file.Simulators.Count).GroupBy(target => target.Simulator))
+        {
+            var simulator = file.Simulators[group.Key];
+            var edited = group.Select(target => target.Chain).ToHashSet();
+            foreach (var connector in simulator.Connectors)
+                if (edited.Contains(connector.Chain1) && edited.Contains(connector.Chain2))
+                    yield return (simulator, connector);
+        }
+    }
 
     private static IEnumerable<(PhybSimulator Simulator, PhybChain Chain)> Valid(PhybFile file, IEnumerable<(int Simulator, int Chain)> chains)
     {

@@ -23,7 +23,7 @@ internal static partial class TmbFileFixture
         Length(check, original);
         HeaderLength(check, reject);
         Templates(check, reject, original);
-        Refusals(reject, original);
+        Refusals(check, reject, original);
         Pap(check, reject, original);
         ReviewFixes(check, original);
         EffectLoops(check);
@@ -105,6 +105,22 @@ internal static partial class TmbFileFixture
               TimelineDocument.Moves(movingDoc.Events[0], null) == null &&
               TimelineEdits.Keep(movingDoc, movingDoc.Events[0].Key, false, frames).Events[0].Duration == 600,
             "a moving face let go lasts its own length; a pose holds to the end");
+
+        // A moving face without time control plays once at its own length, longer or shorter than the
+        // clip; given time control it keeps that length and its whole range, so its pace stays.
+        var lengths = new Dictionary<string, int> { ["cfxf_comeon"] = 600, ["cfxf_chew"] = 20 };
+        foreach (var (motion, own) in new[] { ("cfxf_comeon", 600), ("cfxf_chew", 20) })
+        {
+            var free = new Tmb().Head(150, null, 2).Actor(2, 3).Track(3, 4).Face(4, 10, 10, 0, 0, motion).Build();
+            var freeDoc = TimelineConvert.Read(TmbFile.Parse(free));
+            var freeFace = freeDoc.Events.Single();
+            var ticked = TimelineEdits.Replace(freeDoc, freeFace with { Values = freeFace.Values.SetItem(TmbEntrySchema.TimeControlField, 1) }, lengths);
+            var written = TmbFile.Parse(TimelineConvert.Apply(free, ticked, lengths)).Entries.Single();
+            check(freeDoc.PlayedFrames(freeFace, lengths) == own && TimelineLayout.Build(freeDoc, null, lengths).EndOf(0) == 10 + own &&
+                  freeDoc.PlayedFrames(freeFace) == 140 && ticked.Events.Single().Duration == own &&
+                  written.Int32(12) == own && written.Single(24) == 0 && written.Single(28) == own,
+                $"a {own}-frame moving face without time control plays its own length, and keeps its pace given time control");
+        }
 
         // Lip sync, blinks and the clip's own motion are never kept.
         var mixed = new Tmb().Head(100, null, 2).Actor(2, 3, 4, 5).Track(3, 6).Track(4, 7).Track(5, 8)
@@ -216,6 +232,21 @@ internal static partial class TmbFileFixture
         var late = doc with { Events = [face with { Start = 32500 }] };
         check(!TimelineEdits.CanLoop(late, late.Events[0], frames) && !TimelineDocument.Loops(TimelineEdits.Keep(late, face.Key, true, frames).Events[0]),
             "a face too late for a second play is kept without a loop");
+        var posed = TimelineEdits.Replace(looped, looped.Events[0] with { Path = "cfxf_smile" }, frames);
+        check(!posed.Events[0].Loop && TimelineDocument.Kept(posed.Events[0]) &&
+              Faces(TimelineConvert.Apply(taunt, posed, frames)) is [{ Duration: -1 }] &&
+              TimelineEdits.Replace(looped, looped.Events[0] with { Start = 30 }).Events[0].Loop,
+            "a looping face swapped for a pose stops looping and saves kept; one that keeps its face keeps looping");
+
+        // At most 100 copies: from frame 0, a 328-frame face loops (99 copies), a 300-frame one (109) is too short.
+        var shortFace = new Dictionary<string, int> { ["cfxf_comeon"] = 300 };
+        check(TimelineEdits.CanLoop(doc, face, new Dictionary<string, int> { ["cfxf_comeon"] = 328 }) && !TimelineEdits.TooShortToLoop(doc, face, frames) &&
+              !TimelineEdits.CanLoop(doc, face, shortFace) && TimelineEdits.TooShortToLoop(doc, face, shortFace) &&
+              TimelineEdits.Keep(doc, face.Key, true, shortFace).Events[0] is { Loop: false } heldStill && TimelineDocument.Kept(heldStill),
+            "a face too short to loop is kept holding still");
+        var pose = Open(Taunt(150, 1));
+        reject(() => TimelineConvert.Apply(Taunt(150, 1), TimelineEdits.Keep(pose, pose.Events[0].Key, true, frames), shortFace),
+            "a save refuses a loop of a face too short to loop");
     }
 
     private readonly record struct C010(short Time, int Duration, int Flags, float From, float To);
@@ -355,6 +386,15 @@ internal static partial class TmbFileFixture
               AnimationDependencies.ReadVfxPaths(copy.Files[copy.GamePath]).Sounds.SequenceEqual([soundCopy]) &&
               TimelineEffectFiles.UnloopedSeconds(copy.Files[soundCopy], 0) == null,
             "the looping copy turns off the kill, plays a looping copy of the sound, and names what each copy replaces");
+        // Another option's file of the effect or sound gets its own copy, made the same way.
+        var rebuilt = copy.Rebuild![copy.GamePath];
+        var silent = rebuilt(Effect(0xFF, 455));
+        var unkilled = rebuilt(Effect(0, 455, music));
+        check(rebuilt(carpet).SequenceEqual(copy.Files[copy.GamePath]) &&
+              TimelineEffectFiles.EndsAt(silent) == null && AnimationDependencies.ReadVfxPaths(silent).Sounds.IsEmpty &&
+              AnimationDependencies.ReadVfxPaths(unkilled).Sounds.SequenceEqual([soundCopy]) &&
+              copy.Rebuild[soundCopy](scd).SequenceEqual(copy.Files[soundCopy]),
+            "the looping copy is made the same way from another file: its kill turned off, the sounds it plays renamed");
 
         static Tmb Async(Tmb tmb, short id, int time, int loop, string path) =>
             tmb.Item("C173", 0x44, id, time).I32(12, loop).Text(20, path).Bind(24, 1, 0, -1).I32(28, 3).I32(32, 2);
@@ -376,6 +416,9 @@ internal static partial class TmbFileFixture
                   ("t4", TimelineEffectIssue.EndsItself, 908), ("t4", TimelineEffectIssue.SoundStops, 910), ("t7", TimelineEffectIssue.LoopsOnce, 130)]) &&
               problems[1].Text == "carpet ends itself after 30.3 s." && problems[2].Text == "carpet's sound stops after 30.3 s.",
             "an effect that ends itself or whose sound stops is found when a copy that keeps it going exists");
+        check(!TimelineEffectCheck.Find(doc, effects, clipLoops: false).Any(p => p.Issue == TimelineEffectIssue.EndsItself) &&
+              TimelineEffectCheck.Find(doc with { Length = 1000 }, effects, clipLoops: false).Count(p => p.Issue == TimelineEffectIssue.EndsItself) == 1,
+            "a clip that doesn't loop warns of an effect ending itself only when the stop falls inside the clip");
         check(InstantEdit.Ui.TimelineWindowViews.EffectLoopWarning(problems) == "2 effects stop: carpet, cloud." &&
               InstantEdit.Ui.TimelineWindowViews.EffectLoopWarning([.. problems.Take(2)]) ==
                   "carpet plays its loop once, then pauses for 30.3 s. carpet ends itself after 30.3 s.",
@@ -583,7 +626,7 @@ internal static partial class TmbFileFixture
         var output = TmbFile.Parse(TimelineConvert.Apply(original, changed));
         var reread = TimelineConvert.Read(output).Events.ToDictionary(x => x.Key);
         check(reread["t10"].Values["SoundIndex"] == 3 && reread["t10"].Values["PositionFlags"] == 5 && reread["t10"].Values["BindId"] == 71 &&
-              reread["t11"] is { Path: "cfxf_smile" } && output.Find(11)!.Int32(20) == 0x08000001 && output.Find(11)!.Single(28) == 40 &&
+              reread["t11"] is { Path: "cfxf_smile" } && output.Find(11)!.Int32(20) == 0x08000001 && output.Find(11)!.Single(28) == 1 &&
               output.Find(11)!.Int32(36) == 380 && reread["t12"] is { Path: "vfx/test/eff/other.avfx", Duration: 45 } &&
               output.Find(12)!.Vector(32).SequenceEqual([2f, 1f, 1f]) && output.Find(12)!.Int32(64) == 1 && output.Find(12)!.SByte(25) == 1 &&
               output.Find(12)!.Int32(68) == 5 && !output.Entries.Any(x => x.Text == "cfxf_laugh"),
@@ -599,6 +642,15 @@ internal static partial class TmbFileFixture
         check(TimelineDocument.Holds(heldDoc.Events[1]) && timedFace.Int32(12) == 100 && timedFace.Int32(20) == 1 &&
               timedFace.Single(24) == 0 && timedFace.Single(28) == 1 && timedFace.Text == "cfxf_smile",
             "a holding face given time control keeps a range it can play");
+        // Mods often store 0 to the length (0 to 10 here); past a pose's own frames, that range would drop it.
+        var stored = new Tmb().Head(100, null, 2).Actor(2, 3, 4).Track(3, 5).Track(4, 6).Motion(5, 100).Face(6, 0, 10, 0, 10, "cfxf_smile").Build();
+        var storedDoc = TimelineConvert.Read(TmbFile.Parse(stored));
+        var storedFace = TmbFile.Parse(TimelineConvert.Apply(stored, storedDoc with
+        {
+            Events = [.. storedDoc.Events.Select(x => x.Key == "t6" ? x with { Values = x.Values.SetItem(TmbEntrySchema.TimeControlField, 1) } : x)],
+        })).Find(6)!;
+        check(storedFace.Single(24) == 0 && storedFace.Single(28) == 1,
+            "a holding face of unknown length given time control plays the pose range 0 to 1, whatever range it stored");
 
         // Lip sync given time control plays its range over its length, so the range must be the whole motion.
         TmbFile.Entry Timed(byte[] bytes, IReadOnlyDictionary<string, int>? lengths)
@@ -837,7 +889,7 @@ internal static partial class TmbFileFixture
         reject(() => TimelineTemplates.Create(new(TimelineAddKind.Sound, -1, "sound/test/se.scd")), "a negative start is refused");
     }
 
-    private static void Refusals(Action<Action, string> reject, byte[] original)
+    private static void Refusals(Action<bool, string> check, Action<Action, string> reject, byte[] original)
     {
         var sound = At(original, "C063");
         reject(() => TmbFile.Parse(Patch(original, b => "C999"u8.CopyTo(b.AsSpan(sound)))), "an unknown entry kind is refused");
@@ -853,7 +905,40 @@ internal static partial class TmbFileFixture
         reject(() => TmbFile.Parse(Patch(original, b => Int(b, At(original, "C012") + 36, 0))), "a vector without values is refused");
         reject(() => TmbFile.Parse(Patch(original, b => "TMAL"u8.CopyTo(b.AsSpan(12)))), "a timeline must start with its header item");
         reject(() => TmbFile.Parse(Patch(original, b => "TMLX"u8.CopyTo(b))), "a timeline must start with TMLB");
+
+        // Curves: the end pointer before the start, and row or group counts that don't match the data.
+        var curve = At(original, "TMFC");
+        var rows = curve + 12 + Read(original, curve + 12);
+        reject(() => TmbFile.Parse(Patch(original, b => Int(b, curve + 24, Read(original, curve + 12) - 4))), "curves ending before they start are refused");
+        reject(() => TmbFile.Parse(Patch(original, b => Int(b, rows + 12, 3))).CurveTimes(15), "curve rows not matching the curve data are refused");
+        reject(() => TmbFile.Parse(Patch(original, b => Int(b, rows + 12, -1))).CurveTimes(15), "a huge curve row count is refused");
+        reject(() => TmbFile.Parse(Patch(original, b => Int(b, curve + 16, 1000))).CurveTimes(15), "more curve groups than the data holds are refused");
+        // Id lists and condition terms past their limit or past the timeline.
+        var track = At(original, "TMTR");
+        reject(() => TmbFile.Parse(Patch(original, b => Int(b, track + 16, 4097))), "an id list longer than 4096 is refused");
+        reject(() => TmbFile.Parse(Patch(original, b => Int(b, track + 16, 2000))), "an id list running past the timeline is refused");
+        var condition = track + 0x18 + 8 + Read(original, track + 0x18 + 20);
+        reject(() => TmbFile.Parse(Patch(original, b => Int(b, condition + 4, 1025))), "a condition of more than 1024 terms is refused");
+        reject(() => TmbFile.Parse(Patch(original, b => Int(b, condition + 4, 1000))), "a condition running past the timeline is refused");
+        // Several entries pointing at one large range would each copy it.
+        var blob = new Tmb().Head(30, null, 2).Actor(2, 3).Track(3).Item("TMFC", 0x20, 4).Extra(12, new byte[4000])
+            .Item("TMFC", 0x20, 5).Item("TMFC", 0x20, 6).Build();
+        byte[] Share(int count) => Patch(blob, b =>
+        {
+            var first = At(blob, "TMFC");
+            var data = first + 3 * 0x20;
+            for (var i = 0; i < 3; i++)
+            {
+                var at = first + i * 0x20;
+                Int(b, at + 12, data - (at + 12));
+                Int(b, at + 24, data + (i < count ? 4000 : 0) - (at + 12));
+            }
+        });
+        check(TmbFile.Parse(Share(1)).Entries.Length == 3, "one entry pointing at a large range of data reads");
+        reject(() => TmbFile.Parse(Share(2)), "entries sharing one large range of data are refused");
     }
+
+    private static int Read(byte[] bytes, int at) => BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(at));
 
     private static void Pap(Action<bool, string> check, Action<Action, string> reject, byte[] sample)
     {

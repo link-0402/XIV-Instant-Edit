@@ -93,6 +93,8 @@ public sealed partial class PenumbraService
                 _log.Warning(e, "Could not read the EST entries to keep with the pre-restore backup.");
             }
             var restoredEst = _backups.ReadEstState(backupPath);
+            // A race export's restore point also undoes what the export changed in the mod's options.
+            var raceState = _backups.ReadRaceState(backupPath);
             var writeError = RestoreModelBackup(targetPath, backupPath, sourceModDirectory, effectiveRelativePath, currentEst);
             if (writeError is not null)
                 return new ExportResult(false, "restore_write_failed", writeError);
@@ -109,6 +111,18 @@ public sealed partial class PenumbraService
                 {
                     _log.Error(e, "Could not restore the backup's EST entries.");
                     warnings.Add($"The backup's EST entries could not be restored: {e.Message}");
+                }
+            }
+            if (raceState is not null)
+            {
+                try
+                {
+                    warnings.AddRange(UndoRaceExport(resolved.Target.Folder, resolved.Target.Directory, raceState));
+                }
+                catch (Exception e)
+                {
+                    _log.Error(e, "Could not undo the race export's option changes.");
+                    warnings.Add($"The race model's options could not be restored: {e.Message}");
                 }
             }
 

@@ -293,7 +293,8 @@ internal static class TimelineEdits
     /// kept exactly). Starts stay inside the TMB's range. A motion at its own speed that gets time
     /// control and no new duration lasts what it played (<see cref="TimelineDocument.PlayedFrames"/>
     /// with <paramref name="motionFrames"/>), so it keeps playing the same. Only an effect keeps a
-    /// look, and only while it keeps its file: a look is made for one effect's colours.
+    /// look, and only while it keeps its file: a look is made for one effect's colours. A looping face
+    /// that becomes one that can't loop (<see cref="CanLoop"/>), such as a pose, stops looping.
     /// </summary>
     public static TimelineDocument Replace(TimelineDocument doc, TimelineEvent ev, IReadOnlyDictionary<string, int>? motionFrames = null)
     {
@@ -315,6 +316,9 @@ internal static class TimelineEdits
             TimelineAccess.Movable => old with { Start = start },
             _ => old,
         };
+        // Another face loops only when it moves too: a pose has no length to repeat.
+        if (updated.Loop && updated.Path != old.Path && !CanLoop(doc, updated, motionFrames))
+            updated = updated with { Loop = false };
         if (TimelineDocument.OwnPace(old) && old.Resizable && updated.Duration == old.Duration &&
             updated.Values.GetValueOrDefault(TmbEntrySchema.TimeControlField) != 0)
             updated = updated with { Duration = Math.Max(1, doc.PlayedFrames(old, motionFrames)) };
@@ -347,11 +351,17 @@ internal static class TimelineEdits
 
     /// <summary>
     /// Whether keeping <paramref name="ev"/> makes it loop: a moving face on an expression's timeline
-    /// that starts early enough for a second play to fit.
+    /// that starts early enough for a second play to fit, and long enough to need at most
+    /// <see cref="TimelineDocument.MaxLoopCopies"/> copies.
     /// </summary>
     public static bool CanLoop(TimelineDocument doc, TimelineEvent ev, IReadOnlyDictionary<string, int>? motionFrames) =>
         doc.Expression && TimelineDocument.CanKeep(ev) && TimelineDocument.Moves(ev, motionFrames) is { } own &&
-        (long)ev.Start + own <= TimelineDocument.MaxFrames;
+        TimelineDocument.LoopCopies(ev.Start, own) is >= 1 and <= TimelineDocument.MaxLoopCopies;
+
+    /// <summary>Whether <paramref name="ev"/> would loop (<see cref="CanLoop"/>) but is too short: it needs more than <see cref="TimelineDocument.MaxLoopCopies"/> copies.</summary>
+    public static bool TooShortToLoop(TimelineDocument doc, TimelineEvent ev, IReadOnlyDictionary<string, int>? motionFrames) =>
+        doc.Expression && TimelineDocument.CanKeep(ev) && TimelineDocument.Moves(ev, motionFrames) is { } own &&
+        TimelineDocument.LoopCopies(ev.Start, own) > TimelineDocument.MaxLoopCopies;
 
     /// <summary>Why a face from another library can't come in while <paramref name="pack"/>'s faces are on the timeline.</summary>
     public static string PackInUse(string pack) =>

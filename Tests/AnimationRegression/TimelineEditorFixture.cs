@@ -182,6 +182,27 @@ internal static class TimelineEditorFixture
               !editor.Replace(Event(editor, "t1") with { Start = 5 }) && !editor.Replace(Event(editor, "t3")) && editor.History.UndoCount == 1,
             "a change outside a field edit is one step; locked events and unchanged values change nothing");
 
+        // The canvas draws before the panel: a click on the ruler that ends a field edit arrives first.
+        var typed = Editor();
+        typed.BeginFieldEdit();
+        typed.Replace(Event(typed, "t2") with { Start = 13 });
+        typed.Press(Hit(typed, new(150, 10)));
+        typed.EndFieldEdit();
+        typed.Release();
+        check(!typed.History.InGesture && typed.History.UndoCount == 1 && typed.History.CanUndo && Event(typed, "t2").Start == 13,
+            "a field edit ended by a click on the canvas is its own undo step");
+
+        // A copy names the loaded entry it copies only while that document is loaded.
+        var copier = Editor();
+        copier.Select("t2");
+        copier.Copy();
+        check(copier.Paste() && Event(copier, copier.Primary!) is { CloneOf: "t2" } pasted && pasted.Key.StartsWith('n') &&
+              TimelineEdits.Add(copier.Document, [pasted with { Start = 3 }], null, out _).Events[^1].CloneOf == "t2",
+            "a pasted copy of a loaded entry keeps naming it, and so does a copy of that copy");
+        copier.Reset(Sample());
+        check(copier.Paste() && Event(copier, copier.Primary!) is { CloneOf: null, Key: ['n', ..] },
+            "pasted after a reload, a copy is built like a new event");
+
         editor.Select("t3");
         editor.Select("t5", ctrl: true);
         check(editor.ContextMenu(Hit(editor, At(85, 4))) == 85 && editor.Selected.Count == 2 && editor.Primary == "t5" &&

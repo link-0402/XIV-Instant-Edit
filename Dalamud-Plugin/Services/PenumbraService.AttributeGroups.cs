@@ -80,20 +80,23 @@ public sealed partial class PenumbraService
         if (inputError is not null)
             return inputError;
         ImcGroupEntry? imcEntry = null;
+        string? refusal = null;
         if (identity is not null && suffixMasks.Count > 0)
         {
             imcEntry = resolveImcEntry(identity);
+            // Part toggles the checks refuse get no IMC group, and one an earlier export made goes too, or it
+            // would keep undoing the mod's variants; the atrx_ toggles are still written. The refusal is the warning.
             if (imcEntry.Error is not null)
-                return imcEntry.Error;
-            if (imcEntry.Entry is null)
+                (refusal, imcEntry) = (imcEntry.Error, null);
+            else if (imcEntry.Entry is null)
                 return "attribute_group_imc_unavailable: Could not resolve the current IMC entry for this model. Re-import it with game data available, then retry the export.";
         }
 
         var error = PrepareAttributeGroups(
-            modFolder, resolvedGamePath, tags, masks, imcEntry, out var prepared);
+            modFolder, resolvedGamePath, tags, masks, imcEntry, out var prepared, withoutImc: refusal is not null);
         if (error is not null)
             return error;
-        return prepared is null ? null : CommitAttributeGroups(prepared);
+        return (prepared is null ? null : CommitAttributeGroups(prepared)) ?? refusal;
     }
 
     /// <summary>
@@ -244,7 +247,8 @@ public sealed partial class PenumbraService
         IReadOnlyList<string> tags,
         IReadOnlyDictionary<string, int>? masks,
         ImcGroupEntry? imcEntry,
-        out AttributeGroupWrite? prepared)
+        out AttributeGroupWrite? prepared,
+        bool withoutImc = false)
     {
         prepared = null;
         var inputError = NormalizeAttributeGroupInput(
@@ -269,7 +273,7 @@ public sealed partial class PenumbraService
 
         UpdateManagedAtrDefaults(meta, identity, previousManagedAtrTags, customTags);
 
-        if (suffixMasks.Count > 0)
+        if (suffixMasks.Count > 0 && !withoutImc)
         {
             if (imcEntry?.Entry is not { } defaultImcEntry)
                 return "attribute_group_imc_unavailable: No current IMC entry was supplied for the generated group.";

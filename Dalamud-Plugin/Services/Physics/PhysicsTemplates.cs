@@ -5,11 +5,17 @@ namespace InstantEdit.Services.Physics;
 /// <summary>
 /// Builds simulators the way the game's own breast physics is built, for any bones a skeleton has:
 /// each bone gets a chain of itself and a tip, its swing cone points where the tip rests, and a spring
-/// on the bone's parent pulls the tip back to its rest place. Everything is measured on the skeleton,
-/// so the result fits skeleton mods' bones as well as vanilla's.
+/// on the bone's parent pulls the tip toward a point a little beyond its rest place. Everything is
+/// measured on the skeleton, so the result fits skeleton mods' bones as well as vanilla's.
 /// </summary>
 internal static class PhysicsTemplates
 {
+    /// <summary>
+    /// How far out a new area's spring pulls, in tip lengths from the bone along the line to the tip's
+    /// rest place: the game's breasts (c0801) pull a 14.5 cm tip toward a point 19.4 cm out.
+    /// </summary>
+    public const float SpringReach = 1.34f;
+
     /// <summary> The bones of an area the skeleton has, or none when the area has no template. </summary>
     public static IReadOnlyList<PhysicsBone> Bones(PhysicsAreaKind kind, PhysicsSkeleton skeleton)
         => kind.Template is null ? [] : kind.Bones.Select(skeleton.Get).OfType<PhysicsBone>().Where(bone => bone.Parent.Length > 0).ToList();
@@ -63,11 +69,11 @@ internal static class PhysicsTemplates
                     },
                 ],
             });
-            // The tip's rest place in the parent's space: where the spring pulls it back to.
+            // In the parent's space, past the tip's rest place on the line from the bone, as the game's breasts.
             simulator.Attracts.Add(new PhybAttract
             {
                 Bone = PhybName.From(bone.Parent),
-                Offset = bone.Position + rest,
+                Offset = bone.Position + rest * SpringReach,
                 Chain = index,
                 Node = 1,
                 Stiffness = template.Firmness,
@@ -77,8 +83,8 @@ internal static class PhysicsTemplates
     }
 
     /// <summary>
-    /// A spring for a chain that has none: pulls its tip back to where it rests, measured on the
-    /// skeleton. Null when the skeleton lacks the chain's bone.
+    /// A spring for a chain that has none: pulls its tip toward where it rests, anchored past that
+    /// place as the game's breasts are (<see cref="SpringReach"/>). Null when the skeleton lacks the chain's bone.
     /// </summary>
     public static PhybAttract? RestSpring(PhybChain chain, short chainIndex, PhysicsSkeleton skeleton, float stiffness)
     {
@@ -91,7 +97,7 @@ internal static class PhysicsTemplates
         return new PhybAttract
         {
             Bone = PhybName.From(bone.Parent),
-            Offset = bone.Position + rest,
+            Offset = bone.Position + rest * SpringReach,
             Chain = chainIndex,
             Node = 1,
             Stiffness = stiffness,

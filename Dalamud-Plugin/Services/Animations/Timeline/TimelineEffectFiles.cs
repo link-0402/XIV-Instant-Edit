@@ -123,27 +123,42 @@ internal static class TimelineEffectFiles
     /// The copy of the effect at <paramref name="effectPath"/> that keeps going: its scheduled kill
     /// turned off when <paramref name="endsItself"/>, and each of <paramref name="sounds"/> (game
     /// path and file) replaced by a copy with loop points. Every copy gets its own content-named
-    /// game path under instant_edit/ and is mapped beside the file it copies.
+    /// game path under instant_edit/ and is mapped beside the file it copies. Each copy can be made
+    /// the same way from another file of its original (see <see cref="TimelineImport.Rebuild"/>):
+    /// its kill turned off when it has one, the sounds it plays renamed to their looping copies.
     /// </summary>
     public static TimelineImport LoopingCopy(string effectPath, byte[] avfx, bool endsItself,
         IEnumerable<(string Path, byte[] Scd)> sounds, double minSeconds)
     {
         var files = ImmutableDictionary.CreateBuilder<string, byte[]>(StringComparer.OrdinalIgnoreCase);
         var beside = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+        var rebuild = ImmutableDictionary.CreateBuilder<string, Func<byte[], byte[]>>(StringComparer.OrdinalIgnoreCase);
         var copy = endsItself ? WithoutScheduledKills(avfx) : avfx;
+        var renamed = new List<(string From, string To)>();
         foreach (var (path, scd) in sounds)
         {
             var looped = WithLoopPoints(scd, minSeconds);
             var soundPath = TimelineImports.SoundPath(Path.GetFileNameWithoutExtension(path) + "_loop.scd", looped);
             files[soundPath] = looped;
             beside[soundPath] = path;
+            rebuild[soundPath] = other => WithLoopPoints(other, minSeconds);
             copy = WithSound(copy, path, soundPath);
+            renamed.Add((path, soundPath));
         }
         var gamePath = TimelineImports.EffectPath(Path.GetFileNameWithoutExtension(effectPath) + "_loop.avfx", copy);
         if (!AnimationDependencies.SafeGamePath(gamePath)) throw new InvalidDataException("The effect's name cannot be used in a game path.");
         files[gamePath] = copy;
         beside[gamePath] = effectPath;
-        return new TimelineImport(gamePath, files.ToImmutable(), 0, beside.ToImmutable());
+        rebuild[gamePath] = other =>
+        {
+            var result = endsItself && EndsAt(other) != null ? WithoutScheduledKills(other) : other;
+            var plays = AnimationDependencies.ReadVfxPaths(other).Sounds;
+            foreach (var (from, to) in renamed)
+                if (plays.Contains(from, StringComparer.OrdinalIgnoreCase))
+                    result = WithSound(result, from, to);
+            return result;
+        };
+        return new TimelineImport(gamePath, files.ToImmutable(), 0, beside.ToImmutable(), rebuild.ToImmutable());
     }
 
     private static IEnumerable<ScdAudio> Unlooped(ScdFile file, double minSeconds) =>

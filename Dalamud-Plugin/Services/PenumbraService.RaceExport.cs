@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Painter;
@@ -13,9 +14,13 @@ public sealed partial class PenumbraService
 
     /// <summary>
     /// Where a race export writes: the race's game path, the file the mod maps there (new or the one it
-    /// already mapped), the updated metadata and the options it went into.
+    /// already mapped), the updated metadata and the options it went into. <paramref name="Undo"/> holds
+    /// what each of those options had before (see <see cref="RestoreRaceExportMeta"/>).
     /// </summary>
-    internal sealed record RaceModelPlan(string GamePath, string RelativePath, JsonObject Meta, IReadOnlyList<string> Containers);
+    internal sealed record RaceModelPlan(string GamePath, string RelativePath, JsonObject Meta, IReadOnlyList<string> Containers,
+        JsonArray Undo);
+
+    private const string RaceStateSchema = "instant-edit.race-export";
 
     /// <summary>The gender-race code of a player race such as <c>c0801</c> (801), or null.</summary>
     internal static int? PlayerRaceCode(string? race) => EstRaceCode(race);
@@ -100,8 +105,8 @@ public sealed partial class PenumbraService
     /// Plan a race export: every container (default data, option or combination) that maps the imported
     /// model at <paramref name="sourceGamePath"/>, or already maps it at the race's path, maps the race's
     /// path to one file and turns on the race's EQDP model flag. The file is the one those containers
-    /// already map there, else a new one next to the imported model named after the race's game file
-    /// (<c>c0801e6000_top.mdl</c>) that the mod doesn't use yet.
+    /// already map there when the mod maps it nowhere else, else a new one next to the imported model
+    /// named after the race's game file (<c>c0801e6000_top.mdl</c>) that the mod doesn't use or hold yet.
     /// </summary>
     internal static string? PlanRaceModel(
         string modFolder,
@@ -148,6 +153,10 @@ public sealed partial class PenumbraService
             return $"The mod's options map {racePath} to different files.";
 
         var relative = mapped.SingleOrDefault();
+        // The race's file is written over only when nothing else uses it: an "all races" mod mapping one
+        // file at several races' paths, or another option mapping it, gets a new file instead.
+        if (relative is not null && !OnlyMappedAt(meta, relative, racePath, containers.Select(container => container.Data)))
+            relative = null;
         if (relative is null)
         {
             var used = MappedModFiles(meta);
@@ -156,25 +165,102 @@ public sealed partial class PenumbraService
             for (var count = 1; count <= 100 && relative is null; count++)
             {
                 var candidate = $"{directory}{(count == 1 ? stem : $"{stem} {count}")}.mdl";
+                // An unmapped file already there (an author's alternative or a leftover) is never taken either.
                 if (IsSafeRelativeModPath(candidate) && !used.Contains(candidate) &&
-                    !string.Equals(candidate, model, StringComparison.OrdinalIgnoreCase))
+                    !string.Equals(candidate, model, StringComparison.OrdinalIgnoreCase) &&
+                    !File.Exists(Path.Combine(modFolder, candidate.Replace('/', Path.DirectorySeparatorChar))))
                     relative = candidate;
             }
             if (relative is null)
                 return $"No free file name for the c{race:D4} model.";
         }
 
+        var undo = new JsonArray();
         foreach (var container in containers)
         {
             var files = (JsonObject)container.Data["Files"]!;
+            var before = new JsonObject();
             foreach (var key in files.Select(pair => pair.Key).Where(key => SameGamePath(key, racePath)).ToArray())
+            {
+                before[key] = files[key]?.DeepClone();
                 files.Remove(key);
+            }
+            var eqdp = new JsonArray();
+            if (container.Data["Manipulations"] is JsonArray manipulations)
+                for (var at = 0; at < manipulations.Count; at++)
+                    if (manipulations[at] is JsonObject item && MatchesEqdp(item, identity, race))
+                        eqdp.Add(new JsonObject { ["index"] = at, ["item"] = item.DeepClone() });
+            undo.Add(new JsonObject { ["container"] = container.Key, ["label"] = container.Label, ["files"] = before, ["eqdp"] = eqdp });
             files[racePath] = relative;
             SetEqdpModel(container.Data, identity, race, gameEqdpBits);
         }
         TouchV4ModMetadata(meta);
-        plan = new RaceModelPlan(racePath, relative, meta, containers.Select(container => container.Label).ToArray());
+        plan = new RaceModelPlan(racePath, relative, meta, containers.Select(container => container.Label).ToArray(), undo);
         return null;
+    }
+
+    /// <summary>
+    /// Undo a race export's changes to the mod's options, as <paramref name="state"/> recorded them
+    /// (see <see cref="RaceModelPlan.Undo"/>): each option's race path mapping and the race's EQDP entries
+    /// for the set and slot go back to what they were. Returns the warnings, such as an option that's gone.
+    /// </summary>
+    internal static List<string> RestoreRaceExportMeta(string modFolder, JsonObject state)
+    {
+        if (!string.Equals(JsonString(state["schema"]), RaceStateSchema, StringComparison.Ordinal) || JsonInt(state["version"]) != 1 ||
+            JsonString(state["racePath"]) is not { } racePath || !IsSafeGamePath(racePath) ||
+            ParseAttributeModelIdentity(racePath) is not { } identity || EqdpSlotIndex(identity) < 0 ||
+            state["containers"] is not JsonArray recorded)
+            return ["The backup's race model record is unreadable, so the mod's options were not restored."];
+        var warnings = new List<string>();
+        var meta = LoadV4ModMetadata(modFolder);
+        var containers = EstContainers(meta).ToDictionary(container => container.Key, StringComparer.Ordinal);
+        foreach (var item in recorded.OfType<JsonObject>())
+        {
+            if (!containers.TryGetValue(JsonString(item["container"]) ?? "", out var container))
+            {
+                warnings.Add($"The Penumbra option \"{JsonString(item["label"])}\" no longer exists, so its race model wasn't restored.");
+                continue;
+            }
+            if (container.Data["Files"] is not JsonObject files)
+                container.Data["Files"] = files = new JsonObject();
+            foreach (var key in files.Select(pair => pair.Key).Where(key => SameGamePath(key, racePath)).ToArray())
+                files.Remove(key);
+            foreach (var (key, value) in item["files"] as JsonObject ?? new JsonObject())
+                if (SameGamePath(key, racePath))
+                    files[key] = value?.DeepClone();
+
+            if (container.Data["Manipulations"] is not JsonArray manipulations)
+                container.Data["Manipulations"] = manipulations = [];
+            for (var at = manipulations.Count - 1; at >= 0; --at)
+                if (manipulations[at] is JsonObject current && MatchesEqdp(current, identity, identity.RaceCode))
+                    manipulations.RemoveAt(at);
+            foreach (var entry in (item["eqdp"] as JsonArray ?? []).OfType<JsonObject>().OrderBy(entry => JsonInt(entry["index"])))
+                if (entry["item"] is JsonObject previous && MatchesEqdp(previous, identity, identity.RaceCode))
+                    manipulations.Insert(Math.Clamp(JsonInt(entry["index"]), 0, manipulations.Count), previous.DeepClone());
+        }
+        TouchV4ModMetadata(meta);
+        WriteJsonAtomic(Path.Combine(modFolder, "meta.json"), meta);
+        return warnings;
+    }
+
+    /// <summary>
+    /// Whether every mapping of <paramref name="file"/> in the mod (default data, options and combining
+    /// containers) is <paramref name="gamePath"/> in one of <paramref name="containers"/>.
+    /// </summary>
+    private static bool OnlyMappedAt(JsonObject meta, string file, string gamePath, IEnumerable<JsonObject> containers)
+    {
+        var allowed = containers.ToHashSet(ReferenceEqualityComparer.Instance);
+        bool MapsElsewhere(JsonNode? node) => node is JsonObject container && container["Files"] is JsonObject files &&
+            files.Any(pair => TryNormalizeRelativeModPath(JsonString(pair.Value)?.TrimStart('/', '\\'), out var mapped) &&
+                              string.Equals(mapped, file, StringComparison.OrdinalIgnoreCase) &&
+                              (!SameGamePath(pair.Key, gamePath) || !allowed.Contains(container)));
+        if (MapsElsewhere(meta["DefaultData"]))
+            return false;
+        foreach (var group in (meta["Groups"] as JsonArray ?? []).OfType<JsonObject>())
+            foreach (var key in new[] { "Options", "Containers" })
+                if (group[key] is JsonArray entries && entries.Any(MapsElsewhere))
+                    return false;
+        return true;
     }
 
     /// <summary>The model's slot bits in the game's EQDP file for the race, or null when it can't be read.</summary>
@@ -265,9 +351,17 @@ public sealed partial class PenumbraService
             var estState = backupExisting && File.Exists(targetFile)
                 ? CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, plan.RelativePath, _estEntries)
                 : null;
+            if (backupExisting)
+            {
+                var backupError = CreateRaceRestorePoint(resolved.Target.Folder, resolved.Target.Directory,
+                    resolved.Target.FilePath, plan, targetFile, exportedFile, estState);
+                if (backupError is not null)
+                    return new ExportResult(false, "write_failed", backupError);
+            }
+            // The restore point already backed up the race's file.
             var writeError = WriteModelToOriginalLocation(
-                resolved.Target.Folder, targetFile, exportedFile, backupExisting,
-                resolved.Target.Directory, plan.RelativePath, estState);
+                resolved.Target.Folder, targetFile, exportedFile, false,
+                resolved.Target.Directory, plan.RelativePath);
             if (writeError is not null)
                 return new ExportResult(false, "write_failed", writeError);
             committedTarget = targetFile;
@@ -328,6 +422,91 @@ public sealed partial class PenumbraService
         {
             _exportGate.Release();
         }
+    }
+
+    /// <summary>
+    /// A race export's restore point: a backup of the race's file when it has one, then a backup of the
+    /// imported model, the one its import lists, carrying what the export changes (the race's file, and
+    /// each option's mapping and EQDP entries before it). Restoring that backup undoes the whole export.
+    /// </summary>
+    private string? CreateRaceRestorePoint(string modFolder, string modDirectory, string importedFile, RaceModelPlan plan,
+        string raceFile, string exportedFile, JsonObject? estState)
+    {
+        if (_backups is null)
+            return "Managed backup storage is unavailable.";
+        if (!File.Exists(importedFile))
+            return "The imported model is missing, so no backup could be made.";
+        try
+        {
+            var state = new JsonObject
+            {
+                ["schema"] = RaceStateSchema,
+                ["version"] = 1,
+                ["racePath"] = plan.GamePath,
+                ["raceFile"] = plan.RelativePath,
+                ["created"] = !File.Exists(raceFile),
+                ["writtenHash"] = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(exportedFile))),
+                ["containers"] = plan.Undo.DeepClone(),
+            };
+            var importedRelative = Path.GetRelativePath(modFolder, importedFile).Replace('\\', '/');
+            var sameFile = PathRules.SamePhysicalPath(Path.GetFullPath(raceFile), Path.GetFullPath(importedFile));
+            if (File.Exists(raceFile) && !sameFile)
+            {
+                var raceBackup = _backups.Create(raceFile, modDirectory, plan.RelativePath);
+                if (estState is not null)
+                    _backups.WriteEstState(raceBackup, estState);
+                state["raceBackup"] = Path.GetFileName(raceBackup);
+            }
+            var restorePoint = _backups.Create(importedFile, modDirectory, importedRelative);
+            if (sameFile && estState is not null)
+                _backups.WriteEstState(restorePoint, estState);
+            _backups.WriteRaceState(restorePoint, state);
+            return null;
+        }
+        catch (Exception e)
+        {
+            return $"Could not back up the models before the export: {e.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Restoring a race export's restore point (see <see cref="CreateRaceRestorePoint"/>), after the imported
+    /// model is back: the options as they were, then the race's file from its backup, or, when the export
+    /// made it, gone, unless the mod maps it again or it changed since. Returns the warnings.
+    /// </summary>
+    private List<string> UndoRaceExport(string modFolder, string modDirectory, JsonObject state)
+    {
+        var warnings = RestoreRaceExportMeta(modFolder, state);
+        if (JsonString(state["raceFile"]) is not { } relative || !IsSafeRelativeModPath(relative))
+            return warnings;
+        var raceFile = Path.GetFullPath(Path.Combine(modFolder, relative.Replace('/', Path.DirectorySeparatorChar)));
+        if (!IsPathWithin(raceFile, modFolder) || HasReparsePointInPath(modFolder, Path.GetDirectoryName(raceFile)!))
+            return warnings;
+        if (JsonString(state["raceBackup"]) is { } backupName)
+        {
+            string backup;
+            try
+            {
+                backup = _backups!.Resolve(_backups.Describe(modDirectory, relative).Id, backupName);
+            }
+            catch (Exception e) when (e is FileNotFoundException or ArgumentException)
+            {
+                warnings.Add($"The backup of {relative} is gone, so it wasn't restored.");
+                return warnings;
+            }
+            if (RestoreModelBackup(raceFile, backup, modDirectory, relative) is { } error)
+                warnings.Add(error);
+        }
+        else if (state["created"] is JsonValue created && created.TryGetValue<bool>(out var made) && made && File.Exists(raceFile) &&
+                 !MappedModFiles(LoadV4ModMetadata(modFolder)).Contains(relative))
+        {
+            if (!string.Equals(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(raceFile))), JsonString(state["writtenHash"]),
+                    StringComparison.OrdinalIgnoreCase))
+                warnings.Add($"{relative} changed after the export, so it was kept.");
+            else
+                File.Delete(raceFile);
+        }
+        return warnings;
     }
 
     /// <summary>A game model's first race export: the race's model in a new mod's default data, with the EQDP entry.</summary>

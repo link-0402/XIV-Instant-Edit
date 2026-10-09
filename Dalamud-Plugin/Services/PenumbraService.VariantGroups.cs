@@ -645,7 +645,9 @@ public sealed partial class PenumbraService
             ["Description"] = marker,
             ["Priority"] = priority,
         };
-        result["DefaultSettings"] = selectedIndex;
+        // An existing group keeps its own default; its options keep their places, so the index stays valid.
+        if (existingGroup is null)
+            result["DefaultSettings"] = selectedIndex;
         result["Options"] = options;
         return result;
     }

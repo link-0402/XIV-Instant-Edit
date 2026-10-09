@@ -32,7 +32,12 @@ internal sealed class BonesOverlay : Window
         InhibitAtkCollision = false;
     }
 
-    public override bool DrawConditions() => timeline.OverlayWanted;
+    public override bool DrawConditions()
+    {
+        // A drag the overlay no longer draws ends here, even while the Timeline window doesn't draw.
+        timeline.CheckGizmo();
+        return timeline.OverlayWanted;
+    }
 
     public override void PreDraw()
     {

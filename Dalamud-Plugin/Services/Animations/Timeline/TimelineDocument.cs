@@ -146,13 +146,14 @@ internal sealed record TimelineDocument(
     public static bool Holds(TimelineEvent ev) => OwnPace(ev) && IsFace(ev);
 
     /// <summary>
-    /// How many frames the game plays <paramref name="ev"/> for: a holding face until
-    /// <see cref="HeldEnd"/>, another motion at its own speed its own length when
-    /// <paramref name="motionFrames"/> (the face's animation files, by motion name) knows it, and
-    /// anything else the length it stores.
+    /// How many frames the game plays <paramref name="ev"/> for: a holding pose until
+    /// <see cref="HeldEnd"/>, a moving face (<see cref="Moves"/>) or another motion at its own speed
+    /// its own length when <paramref name="motionFrames"/> (the face's animation files, by motion
+    /// name) knows it, and anything else the length it stores. A moving face plays once at its own
+    /// length, so giving it time control with this length keeps its pace.
     /// </summary>
     public int PlayedFrames(TimelineEvent ev, IReadOnlyDictionary<string, int>? motionFrames = null) =>
-        Holds(ev) || Kept(ev) ? HeldEnd(ev) - ev.Start
+        Kept(ev) || Holds(ev) && Moves(ev, motionFrames) == null ? HeldEnd(ev) - ev.Start
         : OwnPace(ev) && motionFrames != null && motionFrames.TryGetValue(ev.Path, out var frames) && frames > 0 ? frames
         : ev.Duration;
 
@@ -194,6 +195,18 @@ internal sealed record TimelineDocument(
     /// at once, and the expression's timeline never repeats.
     /// </summary>
     public static bool Loops(TimelineEvent ev) => ev.Loop && Kept(ev);
+
+    /// <summary>The most copies a looping face is saved as after its first play: a short face would need thousands.</summary>
+    public const int MaxLoopCopies = 100;
+
+    /// <summary>Why a moving face needing more than <see cref="MaxLoopCopies"/> copies doesn't loop.</summary>
+    public const string TooShortToLoop = "This face is too short to loop. Use a face made to loop.";
+
+    /// <summary>
+    /// How many copies follow the first play of a face that loops every <paramref name="length"/>
+    /// frames from <paramref name="start"/>, as a save writes them: back to back up to <see cref="MaxFrames"/>.
+    /// </summary>
+    public static long LoopCopies(int start, int length) => length <= 0 ? long.MaxValue : Math.Max(0, ((long)MaxFrames - start) / length);
 
     /// <summary>The longest a pose is: every vanilla face is a 2-frame clip whose frames are equal.</summary>
     public const int PoseFrames = 2;

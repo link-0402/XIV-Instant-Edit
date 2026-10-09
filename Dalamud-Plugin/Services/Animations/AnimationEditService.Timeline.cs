@@ -34,7 +34,7 @@ internal sealed record AnimationTimelineSource(AnimationCapture Capture, bool St
 
     /// <summary>Effects that stop although the animation goes on, in <paramref name="document"/>; see <see cref="TimelineEffectCheck"/>.</summary>
     public ImmutableArray<TimelineEffectCheck.Problem> EffectProblems(TimelineDocument document) =>
-        Effects is { Count: > 0 } effects ? TimelineEffectCheck.Find(document, effects) : [];
+        Effects is { Count: > 0 } effects ? TimelineEffectCheck.Find(document, effects, Clip.IsLoop) : [];
 
     /// <summary>The fingerprint of the clip's binding in <see cref="Pap"/>, the file as loaded; empty when unknown.</summary>
     public string FileFingerprint { get; init; } = string.Empty;
@@ -298,7 +298,9 @@ internal sealed partial class AnimationEditService
     /// <paramref name="added"/> holds the files the timeline needs that no mod has yet, such as
     /// imported sounds, by game path; they are packaged next to the animation. A file
     /// <paramref name="beside"/> names as a copy of another (see <see cref="TimelineImport.Beside"/>)
-    /// is mapped wherever that file is instead, when the animation's mod is what provides it.
+    /// is mapped wherever that file is instead, when the animation's mod is what provides it; when the
+    /// mod maps that file to different files in different options, each gets its own copy, made by
+    /// <paramref name="rebuild"/> (see <see cref="TimelineImport.Rebuild"/>).
     /// <paramref name="motionFrames"/> are facial motions' own lengths (see <see cref="TimelineConvert.Apply"/>).
     /// The document's excluded bones lose their tracks, and with <paramref name="repair"/> the motion is
     /// retargeted onto that standard skeleton, as the old rebakes did, in the same bake.
@@ -306,7 +308,8 @@ internal sealed partial class AnimationEditService
     /// <returns>The job's id, which <see cref="LastResult"/> carries once it ends; null when another job is running.</returns>
     public Guid? EditTimeline(AnimationTimelineSource source, TimelineDocument document, AnimationDestination destination,
         string modName, IReadOnlyDictionary<string, byte[]> added, IReadOnlyDictionary<string, string>? beside = null,
-        IReadOnlyDictionary<string, int>? motionFrames = null, SkeletonStandard? repair = null)
+        IReadOnlyDictionary<string, int>? motionFrames = null, SkeletonStandard? repair = null,
+        IReadOnlyDictionary<string, Func<byte[], byte[]>>? rebuild = null)
     {
         if (Busy) return null;
         var request = TimelineRequest(source, document, destination, modName.Trim(), repair);
@@ -327,14 +330,14 @@ internal sealed partial class AnimationEditService
                 throw new IOException("The animation file changed while saving. Open the timeline again.");
             var built = await BuildTimelineAsync(request, source, manifest.Files[edited], document, motionFrames,
                 journals.DirectoryFor(request.Id), token);
-            var (files, reused, owners) = await AddedFilesAsync(capture, destination, source.Resource, added, beside, token);
+            var (files, reused, owners, copies) = await AddedFilesAsync(capture, destination, source.Resource, added, beside, rebuild, token);
             var outputs = ImmutableDictionary<string, byte[]>.Empty.Add(built.GamePath, built.Bytes);
             // The motion the layers were baked onto goes with the journal, so the edit can be opened again.
             var motionBase = MotionBase(source, document, manifest.Files[edited], request.RepairTarget);
             var journaled = motionBase == null ? request
                 : request with { Timeline = request.Timeline! with { MotionBaseHash = AnimationPap.Hash(motionBase) } };
             var journal = await commits.PrepareAsync(journaled, manifest, outputs, token,
-                files.Count > 0 ? (edited, files, owners) : null);
+                files.Count > 0 ? (edited, files, owners, copies) : null);
             if (motionBase != null)
                 KeepMotionBase(journal.Id, motionBase);
             if (reused.Count > 0)
@@ -559,14 +562,18 @@ internal sealed partial class AnimationEditService
     /// provides it, it is listed as reused so undoing the edit that added it waits for this one.
     /// <c>Owners</c> holds the copies mapped beside their original: those whose original the
     /// edited animation's mod maps itself. Every other file is mapped with the animation.
+    /// <c>Copies</c> holds those whose original the mod maps to several files (see <see cref="OwnCopies"/>).
     /// </summary>
-    private async Task<(IReadOnlyDictionary<string, byte[]> Files, List<string> Reused, IReadOnlyDictionary<string, string> Owners)>
+    private async Task<(IReadOnlyDictionary<string, byte[]> Files, List<string> Reused, IReadOnlyDictionary<string, string> Owners,
+            IReadOnlyDictionary<string, AnimationCommitService.AddedCopies> Copies)>
         AddedFilesAsync(AnimationCapture capture, AnimationDestination destination, AnimationResource edited,
-            IReadOnlyDictionary<string, byte[]> added, IReadOnlyDictionary<string, string>? beside, CancellationToken token)
+            IReadOnlyDictionary<string, byte[]> added, IReadOnlyDictionary<string, string>? beside,
+            IReadOnlyDictionary<string, Func<byte[], byte[]>>? rebuild, CancellationToken token)
     {
         var result = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         var reused = new List<string>();
         var owners = new Dictionary<string, string>(StringComparer.Ordinal);
+        var copies = new Dictionary<string, AnimationCommitService.AddedCopies>(StringComparer.Ordinal);
         foreach (var (gamePath, bytes) in added)
         {
             if (!AnimationCommitService.AddedGamePath(gamePath)) throw new InvalidDataException($"{gamePath} can't be added to the mod.");
@@ -595,7 +602,13 @@ internal sealed partial class AnimationEditService
                         var (provider, _) = await resources.ReadAsync(capture.CollectionId, original, token);
                         if (provider.ModDirectory == edited.ModDirectory && provider.ModRoot is { } providerRoot &&
                             PathRules.SamePhysicalPath(providerRoot, root))
+                        {
+                            var own = OwnCopies(root, original, provider.ResolvedPath, rebuild?.GetValueOrDefault(gamePath),
+                                problem => log.Warning($"{gamePath}: {problem}"));
                             owners[gamePath] = original;
+                            if (own != null)
+                                copies[gamePath] = own;
+                        }
                     }
                     // Unreadable, the copy is simply mapped with the animation.
                     catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException) { }
@@ -603,6 +616,46 @@ internal sealed partial class AnimationEditService
             }
             result[gamePath] = bytes;
         }
-        return (result, reused, owners);
+        return (result, reused, owners, copies);
+    }
+
+    /// <summary>
+    /// For a copy made from <paramref name="resolved"/>, the file the mod maps <paramref name="original"/> to
+    /// in the options in use: when the mod maps it to other files in other options too (a "Gold" and a
+    /// "Silver" effect), the copy is mapped only where the original is that file, and each other file gets
+    /// a copy of its own made by <paramref name="rebuild"/>, at the same game path. A file no copy can be
+    /// made from gets none: there the timeline's copy is missing, never another option's. Options that
+    /// don't map the original get no copy, as before. Null when the mod maps the original to one file,
+    /// or the one in use isn't among its files.
+    /// </summary>
+    internal static AnimationCommitService.AddedCopies? OwnCopies(string root, string original, string resolved,
+        Func<byte[], byte[]>? rebuild, Action<string> skipped)
+    {
+        var mapped = PenumbraService.AnimationMappedFiles(root, original);
+        if (mapped.Count < 2 || mapped.FirstOrDefault(file => PathRules.SamePhysicalPath(Path.Combine(root, file), resolved)) is not { } from)
+            return null;
+        var others = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in mapped.Where(file => !string.Equals(file, from, StringComparison.OrdinalIgnoreCase)))
+        {
+            if (rebuild == null)
+            {
+                skipped($"no copy can be made from {file}, so the options using it don't get one.");
+                continue;
+            }
+            try
+            {
+                var path = Path.GetFullPath(Path.Combine(root, file));
+                var info = new FileInfo(path);
+                if (!PathRules.IsPathWithin(path, root) || !info.Exists || info.Length > AnimationPap.MaxFileSize)
+                    throw new IOException($"{file} is missing or can't be read.");
+                others[file] = rebuild(File.ReadAllBytes(path));
+            }
+            // Another option's file may be anything; one that can't be copied must not keep the edit from saving.
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                skipped($"no copy could be made from {file} ({e.Message}), so the options using it don't get one.");
+            }
+        }
+        return new AnimationCommitService.AddedCopies(from, others);
     }
 }

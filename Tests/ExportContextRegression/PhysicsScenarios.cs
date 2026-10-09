@@ -25,6 +25,7 @@ internal static class PhysicsScenarios
         CheckValidation();
         CheckDocument();
         CheckModFiles(testRoot);
+        CheckLoadedLabels();
         CheckPosed();
         CheckVanillaFiles();
         PhysicsFitScenarios.Run();
@@ -231,6 +232,17 @@ internal static class PhysicsScenarios
         ], ["j_kao"]);
     }
 
+    /// <summary> Where c0801's own body physics anchors the left breast's spring, on j_sebo_b. </summary>
+    private static readonly Vector3 GameChestSpring = new(0.075f, 0.1929f, 0.077f);
+
+    /// <summary> c0801's breast bones in their bind pose, from the game's base skeleton. </summary>
+    private static PhysicsSkeleton GameChest() => new(
+    [
+        new PhysicsBone("j_sebo_b", "j_sebo_a", new Vector3(0.12164748f, 0, 0), new Quaternion(0, 0, 0.040669296f, 0.9991726f)),
+        new PhysicsBone("j_mune_l", "j_sebo_b", new Vector3(0.05731833f, 0.004540924f, 0.033198476f), new Quaternion(-0.72570795f, -0.6785303f, -0.07961082f, 0.08128255f)),
+        new PhysicsBone("j_mune_r", "j_sebo_b", new Vector3(0.05731833f, 0.004540962f, -0.033198595f), new Quaternion(-0.7257079f, -0.6785302f, 0.07961077f, -0.081282414f)),
+    ]);
+
     private static void CheckTemplates()
     {
         var skeleton = Skeleton();
@@ -238,8 +250,12 @@ internal static class PhysicsScenarios
         var tip = Vector3.Transform(new Vector3(0.145f, 0, 0), skeleton.Get("j_mune_l")!.Rotation);
         Require(chest.Group == PhysicsAreas.ChestGroup && chest.Chains.Count == 2 && chest.Chains.All(c => c.Nodes.Count == 2 && c.Nodes[1].Bone.IsEmpty) &&
                 chest.Attracts.Count == 2 && chest.Attracts[0].Bone.Text == "j_sebo_b" && chest.Attracts[0].Node == 1 &&
-                Vector3.Distance(chest.Attracts[0].Offset, skeleton.Get("j_mune_l")!.Position + tip) < 1e-5f,
-            "physics: a new area's springs pull each tip back to its rest place in the parent bone's space, in the chest group");
+                Vector3.Distance(chest.Attracts[0].Offset, skeleton.Get("j_mune_l")!.Position + tip * PhysicsTemplates.SpringReach) < 1e-5f,
+            "physics: a new area's springs pull each tip toward a point past its rest place, in the parent bone's space, in the chest group");
+        var game = PhysicsTemplates.Build(PhysicsAreas.Find("chest")!, GameChest())!;
+        var off = Vector3.Distance(game.Attracts[0].Offset, GameChestSpring);
+        Require(off < 0.006f && Vector3.Distance(game.Attracts[1].Offset, GameChestSpring with { Z = -GameChestSpring.Z }) < 0.006f,
+            $"physics: a new chest on c0801's bind pose springs {off * 1000:F1} mm from the game's own spring point");
         Require(Vector3.Distance(Vector3.Normalize(chest.Chains[0].Nodes[0].ConeAxisOffset), Vector3.Normalize(tip)) < 1e-5f &&
                 MathF.Abs(chest.Chains[0].Nodes[0].ConeMaxAngle - PhysicsTemplates.Radians(8)) < 1e-6f,
             "physics: a new area's swing is measured from where its tip rests, like the game's breasts");
@@ -253,8 +269,8 @@ internal static class PhysicsScenarios
         Require(PhysicsTemplates.Addable(file, skeleton).Any(kind => kind.Key == "chest"), "physics: bones of an area that's off can be given a new one");
         var bare = new PhybChain { LastBoneOffset = new Vector3(0.1f, 0, 0), Nodes = [new PhybNode { Bone = PhybName.From("iv_shiri_l") }, new PhybNode()] };
         Require(PhysicsTemplates.RestSpring(bare, 3, skeleton, 0.04f) is { Chain: 3, Node: 1, Stiffness: 0.04f } spring &&
-                spring.Bone.Text == "j_kosi" && Vector3.Distance(spring.Offset, new Vector3(0.206f, 0.062f, 0.066f)) < 1e-5f,
-            "physics: a chain without a spring can get one that holds its tip where it rests");
+                spring.Bone.Text == "j_kosi" && Vector3.Distance(spring.Offset, new Vector3(0.106f + 0.1f * PhysicsTemplates.SpringReach, 0.062f, 0.066f)) < 1e-5f,
+            "physics: a chain without a spring can get one anchored past where its tip rests, as the game's breasts");
     }
 
     private static void CheckValidation()
@@ -414,6 +430,28 @@ internal static class PhysicsScenarios
         var third = PenumbraService.UpdatePhysicsModFiles(folder, gamePath.ToUpperInvariant(), [6]);
         files = JsonNode.Parse(File.ReadAllText(Path.Combine(folder, "meta.json")))!["DefaultData"]!["Files"]!.AsObject();
         Require(third.EndsWith(".3.phyb", StringComparison.Ordinal) && files.Count == 2, "physics mod: game paths match whatever their case");
+
+        // Renamed in Penumbra, the mod keeps its identifier, and saves follow it.
+        var identifier = PenumbraService.ReadModStableIdentifierForRegression(folder)!.Value;
+        Require(PenumbraService.FindPhysicsModFolder(testRoot, "PhysicsMod", identifier, null) == "PhysicsMod" &&
+                PenumbraService.FindPhysicsModFolder(testRoot, "PhysicsMod", Guid.NewGuid(), ["PhysicsMod"]) is null,
+            "physics mod: the mod is found in its folder while that folder has its identifier");
+        Directory.Move(folder, Path.Combine(testRoot, "PhysicsMod Renamed"));
+        Require(PenumbraService.FindPhysicsModFolder(testRoot, "PhysicsMod", identifier, ["Another Mod", "PhysicsMod Renamed"]) == "PhysicsMod Renamed" &&
+                PenumbraService.FindPhysicsModFolder(testRoot, "PhysicsMod", identifier, ["Another Mod"]) is null,
+            "physics mod: a mod renamed in Penumbra is found by its identifier");
+    }
+
+    /// <summary> "Loaded now" names a game file a file swap picks by its race. </summary>
+    private static void CheckLoadedLabels()
+    {
+        var own = PhysicsPaths.BodyPhysics(801);
+        Require(PhysicsPaths.GameFileLabel(own, own.ToUpperInvariant(), PhysicsPaths.BodyPhysics) == "the game's own file" &&
+                PhysicsPaths.GameFileLabel(own, null, PhysicsPaths.BodyPhysics) == "the game's own file" &&
+                PhysicsPaths.GameFileLabel(own, PhysicsPaths.BodyPhysics(1401), PhysicsPaths.BodyPhysics) == "the game's file for Female Au Ra" &&
+                PhysicsPaths.GameFileLabel(own, "chara/equipment/e0001/phy_e0001.phyb", PhysicsPaths.BodyPhysics) == "another game file" &&
+                PhysicsPaths.GameFileLabel(PhysicsPaths.BodySkeleton(801), PhysicsPaths.BodySkeleton(201), PhysicsPaths.BodySkeleton) == "the game's file for Female Midlander",
+            "physics: a swapped game file is named by the race it belongs to, or as another game file");
     }
 
     /// <summary> In GPose the builder reads your posed copy: the first GPose actor with your name, as Penumbra finds it to redraw. </summary>
@@ -464,6 +502,11 @@ internal static class PhysicsScenarios
         Require(c0801.Simulators.Any(s => PhysicsAreas.Classify(s).Part == PhysicsPart.Chest && s.Group == PhysicsAreas.ChestGroup) &&
                 c0801.Simulators.Select(s => PhysicsAreas.Classify(s).Label).Contains("Skirt"),
             "physics: the game's Miqo'te file has the chest in group 7 and the skirt");
+        var chest = c0801.Simulators.First(s => PhysicsAreas.Classify(s).Part == PhysicsPart.Chest);
+        var left = chest.Chains.FindIndex(chain => chain.Nodes[0].Bone.Text == "j_mune_l");
+        Require(chest.Attracts.Any(a => a.Chain == left && a.Node == 1 && a.Bone.Text == "j_sebo_b" && Vector3.Distance(a.Offset, GameChestSpring) < 1e-4f) &&
+                MathF.Abs(chest.Chains[left].LastBoneOffset.Length() - 0.145f) < 1e-3f,
+            "physics: the game's Miqo'te breasts pull a 14.5 cm tip toward the spring point new chests are checked against");
         _ = skeleton;
         PhysicsFitScenarios.CheckGameBody(game);
         PhysicsTuneScenarios.CheckGame(game);

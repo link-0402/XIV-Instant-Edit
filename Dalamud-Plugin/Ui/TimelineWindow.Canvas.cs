@@ -779,7 +779,7 @@ public sealed partial class TimelineWindow
             ImGui.SameLine(0, Theme.Gap);
             ImGui.TextColored(Theme.Muted, TimelineWindowViews.KindName(ev.Magic));
             ImGui.TextUnformatted("Starts at " + TimelineWindowViews.FrameText(ev.Start));
-            if (TimelineDocument.Holds(ev))
+            if (TimelineDocument.Holds(ev) && TimelineDocument.Moves(ev, current.MotionFrames) == null)
                 ImGui.TextUnformatted(TimelineWindowViews.HoldText(current.Document, ev));
             else if (TimelineDocument.Kept(ev))
                 ImGui.TextUnformatted(TimelineDocument.Loops(ev) ? TimelineWindowViews.LoopText(ev) : TimelineWindowViews.KeptText);

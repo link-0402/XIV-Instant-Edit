@@ -1,4 +1,5 @@
 ﻿using System.Text.Json.Nodes;
+using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
 
@@ -83,10 +84,83 @@ internal static class AnimationTimelineCommitFixture
             PenumbraService.RemoveAnimationResourceMapping(root, copy, copyRelative);
             check(JsonNode.Parse(File.ReadAllText(metaPath))!["Groups"]![1]!["Options"]![0]!["Files"]!.AsObject().Count == 1,
                 "undo removes the copy's mapping and keeps the original's");
+            check(PenumbraService.AnimationMappedFiles(root, "vfx/mod/bgm.avfx").SequenceEqual(["toggles/bgm.avfx"]) &&
+                  AnimationEditService.OwnCopies(root, "vfx/mod/bgm.avfx", Path.Combine(root, "toggles", "bgm.avfx"), Reverse, _ => { }) == null,
+                "an original the mod maps to one file keeps one copy, mapped wherever it is, as before");
+
+            PerFileCopies(root, check, reject);
         }
         finally
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    private static byte[] Reverse(byte[] bytes) => [.. bytes.Reverse()];
+
+    /// <summary>
+    /// An effect the mod maps to a different file in each option ("Gold", "Silver"): each option gets a copy
+    /// made from its own file, at the copy's one game path, and an option without the effect gets none.
+    /// </summary>
+    private static void PerFileCopies(string parent, Action<bool, string> check, Action<Action, string> reject)
+    {
+        var root = Path.Combine(parent, "PerFile");
+        Directory.CreateDirectory(Path.Combine(root, "fx"));
+        const string effect = "vfx/mod/aura.avfx";
+        const string copy = "vfx/instant_edit/aura_loop_0a1b2c3d.avfx";
+        const string gold = "instant_edit/vfx/instant_edit/aura_loop_0a1b2c3d.avfx";
+        const string silver = "instant_edit/vfx/instant_edit/aura_loop_0a1b2c3d_2.avfx";
+        File.WriteAllBytes(Path.Combine(root, "fx", "gold.avfx"), [1, 2, 3]);
+        File.WriteAllBytes(Path.Combine(root, "fx", "silver.avfx"), [4, 5, 6]);
+        var meta = PenumbraService.CreateV4ModMetadata("Per File", "Author", "Description", "1.0", new JsonObject
+        {
+            ["Files"] = new JsonObject(), ["FileSwaps"] = new JsonObject(), ["Manipulations"] = new JsonArray(),
+        });
+        meta["Groups"] = new JsonArray(new JsonObject
+        {
+            ["Type"] = "Single", ["Id"] = Guid.NewGuid().ToString("D"), ["Name"] = "Effect",
+            ["Options"] = new JsonArray(
+                new JsonObject { ["Id"] = Guid.NewGuid().ToString("D"), ["Name"] = "Gold", ["Files"] = new JsonObject { [effect] = "fx\\gold.avfx" } },
+                new JsonObject { ["Id"] = Guid.NewGuid().ToString("D"), ["Name"] = "Silver", ["Files"] = new JsonObject { [effect] = "fx/silver.avfx" } },
+                new JsonObject { ["Id"] = Guid.NewGuid().ToString("D"), ["Name"] = "None", ["Files"] = new JsonObject() }),
+        });
+        var metaPath = Path.Combine(root, "meta.json");
+        File.WriteAllText(metaPath, meta.ToJsonString());
+
+        var skipped = new List<string>();
+        var copies = AnimationEditService.OwnCopies(root, effect, Path.Combine(root, "fx", "gold.avfx"), Reverse, skipped.Add);
+        check(PenumbraService.AnimationMappedFiles(root, effect).SequenceEqual(["fx/gold.avfx", "fx/silver.avfx"]) &&
+              copies is { From: "fx/gold.avfx" } && copies.Others.Count == 1 &&
+              copies.Others["fx/silver.avfx"].SequenceEqual(new byte[] { 6, 5, 4 }) && skipped.Count == 0,
+            "a copy made from the gold file is the gold options' own; the silver file gets a copy made the same way");
+        var none = AnimationEditService.OwnCopies(root, effect, Path.Combine(root, "fx", "gold.avfx"), null, skipped.Add);
+        check(none is { From: "fx/gold.avfx", Others.Count: 0 } && skipped.Single().Contains("fx/silver.avfx"),
+            "without a way to make it again, the silver options get no copy rather than the gold one");
+
+        PenumbraService.AddAnimationResourceMapping(root, effect, copy, gold, "fx/gold.avfx");
+        PenumbraService.AddAnimationResourceMapping(root, effect, copy, silver, "fx/silver.avfx");
+        var options = JsonNode.Parse(File.ReadAllText(metaPath))!["Groups"]![0]!["Options"]!;
+        check(options[0]!["Files"]![copy]!.GetValue<string>() == gold && options[1]!["Files"]![copy]!.GetValue<string>() == silver &&
+              options[2]!["Files"]![copy] is null,
+            "each option maps the copy's one game path to the copy of its own file; an option without the effect gets none");
+        reject(() => PenumbraService.AddAnimationResourceMapping(root, effect, copy, "instant_edit/other.avfx", "fx/gold.avfx"),
+            "an option that maps the copy already is never mapped twice");
+        reject(() => PenumbraService.AddAnimationResourceMapping(root, effect, "vfx/instant_edit/x_00000000.avfx", "instant_edit/x.avfx", "fx/bronze.avfx"),
+            "a copy of a file no option maps any more is refused");
+        PenumbraService.RemoveAnimationResourceMapping(root, copy, silver);
+        options = JsonNode.Parse(File.ReadAllText(metaPath))!["Groups"]![0]!["Options"]!;
+        check(options[0]!["Files"]![copy]!.GetValue<string>() == gold && options[1]!["Files"]![copy] is null,
+            "undo removes each option's copy by its own file");
+
+        // Activation: the copy's game path resolves to the copy of the file in use; the others are only checked intact.
+        AnimationFileChange Added(string relative, string from) => new(copy, Path.Combine(root, relative), "Per File", root, relative,
+            "", "after", "", "staged", AddedFor: effect, AddedForFile: from);
+        var validated = new List<string>();
+        AnimationCommitService.VerifyActivationAsync([Added(gold, "fx/gold.avfx"), Added(silver, "fx/silver.avfx")],
+            _ => Task.FromResult(Path.Combine(root, gold)), file => validated.Add(file.RelativePath), () => Task.CompletedTask).GetAwaiter().GetResult();
+        check(validated.SequenceEqual([gold, silver]), "activation resolves the copy once, to the copy of the file in use, and checks every copy");
+        reject(() => AnimationCommitService.VerifyActivationAsync([Added(gold, "fx/gold.avfx")],
+                _ => Task.FromResult(Path.Combine(root, silver)), _ => { }, () => Task.CompletedTask).GetAwaiter().GetResult(),
+            "activation still fails when the copy resolves to another option's copy");
     }
 }

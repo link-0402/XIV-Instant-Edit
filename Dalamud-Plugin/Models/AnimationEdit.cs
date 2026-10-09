@@ -162,4 +162,9 @@ internal sealed record AnimationFileChange(string GamePath, string Target, strin
     // Set for a file the edit added, such as an imported sound: the game path of the
     // edited animation, whose mappings in place gain one for this file too. Undo
     // removes the file and that mapping. Null for every edited file.
-    string? AddedFor = null);
+    string? AddedFor = null,
+    // Set for an added copy whose original the mod maps to different files in different
+    // options: the mod-relative file it was made from. Only the options mapping AddedFor to
+    // that file map this copy; the copies of the others share its game path. Null maps it
+    // wherever AddedFor is, as journals written before this existed did.
+    string? AddedForFile = null);

@@ -13,11 +13,13 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
     /// imported sounds, keyed by game path) next to the edited animation they belong to. In
     /// place, an added file lands in that animation's mod and every option mapping its owner
     /// maps it too: the file <c>Owners</c> names for it (an edited copy's original), else the
-    /// animation.
+    /// animation. A copy <c>Copies</c> lists is mapped only where its original is the file it was
+    /// made from, and the copies made from the original's other files go beside it at the same game path.
     /// </summary>
     public async Task<AnimationEditJournal> PrepareAsync(AnimationBakeRequest request, AnimationDependencyManifest manifest,
         ImmutableDictionary<string, byte[]> outputs, CancellationToken token,
-        (string For, IReadOnlyDictionary<string, byte[]> Files, IReadOnlyDictionary<string, string>? Owners)? added = null)
+        (string For, IReadOnlyDictionary<string, byte[]> Files, IReadOnlyDictionary<string, string>? Owners,
+            IReadOnlyDictionary<string, AddedCopies>? Copies)? added = null)
     {
         var journal = new AnimationEditJournal { Id = request.Id, Request = RecoveryRequest(request),
             PoseBefore = request.Operation == AnimationOperation.BakeOffsets ? request.Capture.Pose : null };
@@ -104,25 +106,44 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                     var source = manifest.Resources.Single(r => r.GamePath == extra.For);
                     mod = source.ModDirectory!; root = source.ModRoot!; relative = AddedFolder + gamePath;
                 }
-                var target = Path.GetFullPath(Path.Combine(root, relative));
-                TextureFiles.EnsureLocalPath(target);
-                if (!PathRules.IsPathWithin(target, root)) throw new IOException("The output escapes its mod directory.");
-                if (File.Exists(target)) throw new IOException($"{target} already exists.");
-                var staged = Path.Combine(dir, journal.Files.Count + ".staged");
-                await File.WriteAllBytesAsync(staged, bytes, token);
-                var after = AnimationPap.Hash(bytes);
-                if (AnimationPap.Hash(await File.ReadAllBytesAsync(staged, token)) != after) throw new IOException("Staged output validation failed.");
                 var owner = extra.Owners?.GetValueOrDefault(gamePath) ?? extra.For;
                 if (!AnimationDependencies.SafeGamePath(owner) || (files.ContainsKey(owner) && owner != extra.For) || extra.Files.ContainsKey(owner))
                     throw new InvalidDataException($"{gamePath} can't be mapped beside {owner}.");
-                journal.Files.Add(new AnimationFileChange(gamePath, target, mod, root, relative, "", after, "", staged, AddedFor: owner));
+                var copies = request.Destination == AnimationDestination.InPlace ? extra.Copies?.GetValueOrDefault(gamePath) : null;
+                await StageAddedAsync(gamePath, bytes, mod, root, relative, owner, copies?.From);
+                // The copies made from the original's other files share its game path, each in a file of its own.
+                var number = 1;
+                foreach (var (from, copy) in copies?.Others ?? ImmutableDictionary<string, byte[]>.Empty)
+                    await StageAddedAsync(gamePath, copy, mod, root,
+                        $"{Path.ChangeExtension(relative, null)}_{++number}{Path.GetExtension(relative)}", owner, from);
             }
         }
         if (journal.Files.Select(f => f.Target).Distinct(StringComparer.OrdinalIgnoreCase).Count() != journal.Files.Count)
             throw new IOException("Several edited game paths share one source file. Use Create new mod to separate them.");
         store.Save(journal);
         return journal;
+
+        // Stages a file the edit adds, mapped beside its owner: only where the owner is ownerFile, when there is one.
+        async Task StageAddedAsync(string gamePath, byte[] bytes, string mod, string root, string relative, string owner, string? ownerFile)
+        {
+            var target = Path.GetFullPath(Path.Combine(root, relative));
+            TextureFiles.EnsureLocalPath(target);
+            if (!PathRules.IsPathWithin(target, root)) throw new IOException("The output escapes its mod directory.");
+            if (File.Exists(target)) throw new IOException($"{target} already exists.");
+            var staged = Path.Combine(dir, journal.Files.Count + ".staged");
+            await File.WriteAllBytesAsync(staged, bytes, token);
+            var after = AnimationPap.Hash(bytes);
+            if (AnimationPap.Hash(await File.ReadAllBytesAsync(staged, token)) != after) throw new IOException("Staged output validation failed.");
+            journal.Files.Add(new AnimationFileChange(gamePath, target, mod, root, relative, "", after, "", staged,
+                AddedFor: owner, AddedForFile: ownerFile));
+        }
     }
+
+    /// <summary>
+    /// An added copy whose original the edited mod maps to several files (one per option): <paramref name="From"/>
+    /// is the file it was made from, <paramref name="Others"/> the copies made the same way from the others, by file.
+    /// </summary>
+    internal sealed record AddedCopies(string From, IReadOnlyDictionary<string, byte[]> Others);
 
     /// <summary>Where an in-place edit puts the files it adds, inside the edited animation's mod.</summary>
     internal const string AddedFolder = "instant_edit/";
@@ -220,7 +241,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                     // An added file plays wherever its owner is: every option that maps the
                     // animation, or the original of a copy, maps it too. A new mod's metadata maps it below.
                     if (file.AddedFor is { } owner && journal.Request.Destination == AnimationDestination.InPlace)
-                        PenumbraService.AddAnimationResourceMapping(file.ModRoot, owner, file.GamePath, file.RelativePath);
+                        PenumbraService.AddAnimationResourceMapping(file.ModRoot, owner, file.GamePath, file.RelativePath, file.AddedForFile);
                 }
                 if (journal.Request.Destination == AnimationDestination.NewMod)
                 {
@@ -257,11 +278,17 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
     internal static async Task VerifyActivationAsync(IEnumerable<AnimationFileChange> files,
         Func<string, Task<string>> resolve, Action<AnimationFileChange> validate, Func<Task> redraw)
     {
+        var checkedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)
         {
-            var resolved = await resolve(file.GamePath);
-            if (!PathRules.SamePhysicalPath(resolved, file.Target))
-                throw new IOException($"Activation failed: {file.GamePath} resolves to {resolved}, expected {file.Target}.");
+            // Copies of one added file made from each of its original's files share its game path, which resolves
+            // to the first: the one made from the file the collection resolves now. The others only need to be intact.
+            if (file.AddedForFile == null || checkedPaths.Add(file.GamePath))
+            {
+                var resolved = await resolve(file.GamePath);
+                if (!PathRules.SamePhysicalPath(resolved, file.Target))
+                    throw new IOException($"Activation failed: {file.GamePath} resolves to {resolved}, expected {file.Target}.");
+            }
             validate(file);
         }
         // Do not enqueue a native character rebuild until every mapping and file passed.

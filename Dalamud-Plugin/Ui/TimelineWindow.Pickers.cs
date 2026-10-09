@@ -23,7 +23,10 @@ public sealed partial class TimelineWindow
     private const int WeaponNone = -2;
 
     private sealed record ImportedItem(TimelineAddKind Kind, TimelineCatalogItem Item);
-    private sealed record ImportJob(TimelineAddKind Kind, int Frame, string? Target, string Name, string? Clip);
+    // Generation is the document load the import began on, TargetPath the target's path then: a reload
+    // renumbers loaded entries' keys, and an undo can give an added one's key to another event.
+    private sealed record ImportJob(TimelineAddKind Kind, int Frame, string? Target, string Name, string? Clip,
+        int Generation, string? TargetPath);
 
     private TimelineAddKind pickerKind;
     private int pickerFrame;
@@ -46,6 +49,8 @@ public sealed partial class TimelineWindow
     private readonly Dictionary<string, TimelineImport> imports = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<ImportedItem> importedItems = [];
     private int importsVersion;
+    // Counts document loads (see ImportJob).
+    private int loadGeneration;
     private Task<TimelineImport>? importTask;
     private ImportJob? importing;
     private string? importError;
@@ -378,8 +383,7 @@ public sealed partial class TimelineWindow
             }
             var values = (ev.Values ?? ImmutableDictionary<string, double>.Empty)
                 .SetItem("Model", prop.Model).SetItem("Body", prop.Body).SetItem("Variant", prop.Variant);
-            current.Replace(ev with { Values = values });
-            return true;
+            return Applied(current, current.Replace(ev with { Values = values }));
         }
         // The face being swapped out no longer holds the library.
         var facePack = TimelineWindowViews.PackAfter(doc.FacePack, pack, out var error,
@@ -391,16 +395,28 @@ public sealed partial class TimelineWindow
         }
         var updated = ev with { Path = path };
         // A face from a library the timeline does not load yet brings the library with it, as one step.
-        if (!string.Equals(facePack, doc.FacePack, StringComparison.Ordinal))
-            current.Commit(TimelineEdits.Replace(doc with { FacePack = facePack }, updated));
-        else
-            current.Replace(updated);
-        return true;
+        return Applied(current, !string.Equals(facePack, doc.FacePack, StringComparison.Ordinal)
+            ? current.Commit(TimelineEdits.Replace(doc with { FacePack = facePack }, updated))
+            : current.Replace(updated));
+    }
+
+    /// <summary>
+    /// Whether a change of the event went in. The editor refuses one while a drag runs; one that
+    /// changed nothing (the event already had it) counts as done.
+    /// </summary>
+    private bool Applied(TimelineEditor current, bool changed)
+    {
+        if (changed || current.Gesture == TimelineGesture.None)
+            return true;
+        pickerError = "Finish the drag first.";
+        return false;
     }
 
     private void OpenImportDialog(TimelineAddKind kind)
     {
-        var job = new ImportJob(kind, pickerFrame, pickerTarget, string.Empty, source is { } current ? ClipKey(current) : null);
+        var target = editor != null ? TimelineEdits.Find(editor.Document, pickerTarget) : null;
+        var job = new ImportJob(kind, pickerFrame, pickerTarget, string.Empty, source is { } current ? ClipKey(current) : null,
+            loadGeneration, target?.Path);
         var volume = importVolume / 100f;
         var sound = kind == TimelineAddKind.Sound;
         fileDialog.OpenFileDialog(sound ? "Choose a sound" : "Choose an effect", sound ? TimelineWindowViews.SoundFilter : TimelineWindowViews.EffectFilter,
@@ -459,7 +475,9 @@ public sealed partial class TimelineWindow
         if (import.Seconds > 0)
             catalog.RememberSeconds(import.GamePath, import.Seconds);
         var name = job?.Name ?? import.GamePath;
-        if (job == null || editor == null || source == null || job.Clip != ClipKey(source) || ReadOnly)
+        if (job == null || editor == null || source == null || job.Clip != ClipKey(source) || ReadOnly ||
+            job.Target != null && (job.Generation != loadGeneration || TimelineEdits.Find(editor.Document, job.Target) is not { } target ||
+                                   TimelineWindowViews.PickerFor(target) != job.Kind || target.Path != job.TargetPath))
         {
             importMessage = $"{name} was imported. Pick it from the list to place it.";
             return;
