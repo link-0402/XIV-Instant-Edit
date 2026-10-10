@@ -171,6 +171,7 @@ try
     ModCleanUpScenarios.RunTextures(testRoot);
     ModCleanUpScenarios.RunLocations(testRoot);
     ModCleanUpScenarios.RunDuplicates(testRoot);
+    LibraryFilterScenarios.Run(testRoot);
     CollectionActivationScenarios.Run();
     UiViewModelScenarios.Run();
     AnimationRowScenarios.Run();
