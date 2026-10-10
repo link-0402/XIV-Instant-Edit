@@ -120,7 +120,12 @@ internal sealed partial class CheckView
         if (check.Error is { } error)
             ImGui.TextColored(Theme.Bad, error);
         if (check.LastOperation is { } last)
-            ImGui.TextColored(last.Ok ? Theme.Good : Theme.Bad, last.Message);
+        {
+            var lines = last.Message.Split('\n');
+            ImGui.TextColored(last.Ok ? Theme.Good : Theme.Bad, lines[0]);
+            if (lines.Length > 1)
+                Gui.Tooltip(last.Message);
+        }
     }
 
     private void StartCheck()
@@ -191,7 +196,10 @@ internal sealed partial class CheckView
         ImGui.SameLine();
         if (ImGui.Selectable($"{finding.Title}##sel", SelectedFinding == finding.Key, ImGuiSelectableFlags.None,
                 new Vector2(ImGui.CalcTextSize(finding.Title).X, 0)))
+        {
             SelectedFinding = finding.Key;
+            SelectedTexture = null;
+        }
         Gui.Tooltip(finding.Detail);
         if (finding.Where is { } where)
         {
@@ -294,7 +302,7 @@ internal sealed partial class CheckView
         foreach (var table in report.Variants)
         {
             ImGui.PushID(table.ModelPath + table.Option.Serialize());
-            Gui.SectionHeader(Path(table.ModelPath), $"{table.ModelPath}\n{table.Where}");
+            Gui.SectionHeader(FileName(table.ModelPath), $"{table.ModelPath}\n{table.Where}");
             if (table.Note is { } note)
                 Gui.HintWrapped(note);
             if (ImGui.BeginTable("##variants", 5, ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingStretchProp))
@@ -388,5 +396,5 @@ internal sealed partial class CheckView
         _                => FontAwesomeIcon.InfoCircle,
     };
 
-    private static string Path(string gamePath) => gamePath[(gamePath.LastIndexOf('/') + 1)..];
+    private static string FileName(string gamePath) => gamePath[(gamePath.LastIndexOf('/') + 1)..];
 }

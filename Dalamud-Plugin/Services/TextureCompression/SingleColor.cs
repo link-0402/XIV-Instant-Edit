@@ -154,22 +154,15 @@ internal static class SingleColor
     /// <summary> A <see cref="Size"/> × <see cref="Size"/> BGRA32 TEX of one color, without mipmaps, for Penumbra to encode. </summary>
     public static byte[] Tex((byte B, byte G, byte R, byte A) color)
     {
-        var bytes = new byte[TextureCost.HeaderSize + Size * Size * 4];
-        BinaryPrimitives.WriteUInt32LittleEndian(bytes, 0x00800000);
-        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4), TextureCost.Bgra8);
-        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(8), Size);
-        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(10), Size);
-        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(12), 1);
-        bytes[14] = 1;
-        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(28), TextureCost.HeaderSize);
-        for (var i = TextureCost.HeaderSize; i < bytes.Length; i += 4)
+        var pixels = new byte[Size * Size * 4];
+        for (var i = 0; i < pixels.Length; i += 4)
         {
-            bytes[i] = color.B;
-            bytes[i + 1] = color.G;
-            bytes[i + 2] = color.R;
-            bytes[i + 3] = color.A;
+            pixels[i] = color.B;
+            pixels[i + 1] = color.G;
+            pixels[i + 2] = color.R;
+            pixels[i + 3] = color.A;
         }
-        return bytes;
+        return TextureFiles.BgraTex(pixels, Size, Size);
     }
 
     /// <summary>

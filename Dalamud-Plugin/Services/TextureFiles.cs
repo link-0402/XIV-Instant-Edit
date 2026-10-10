@@ -220,6 +220,24 @@ internal static class TextureFiles
         return h;
     }
 
+    /// <summary>A BGRA32 TEX of the given pixels, one level, no mipmaps: what Penumbra is handed to encode.</summary>
+    public static byte[] BgraTex(ReadOnlySpan<byte> bgra, int width, int height)
+    {
+        var size = checked(width * height * 4);
+        if (bgra.Length < size)
+            throw new ArgumentException("The pixels don't fill the texture.", nameof(bgra));
+        var bytes = new byte[80 + size];
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes, 0x00800000);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4), Uncompressed);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(8), checked((ushort)width));
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(10), checked((ushort)height));
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(12), 1);
+        bytes[14] = 1;
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(28), 80);
+        bgra[..size].CopyTo(bytes.AsSpan(80));
+        return bytes;
+    }
+
     public static int FullMipCount(int w, int h) => Math.Min(13, 1 + System.Numerics.BitOperations.Log2((uint)Math.Max(w, h)));
 
     /// <summary>
