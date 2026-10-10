@@ -97,4 +97,25 @@ public static class SlotInfo
     public static bool IsAccessory(EquipSlot slot) => _accessories.Contains(slot);
 
     public static List<EquipSlot> AllSlots { get; } = new List<EquipSlot>(KeyMap.Keys);
+
+    /// <summary>The slot's part in an item's IMC file (mirrors Penumbra's ImcFile.PartIndex): head and earrings 0, body and neck 1, and so on.</summary>
+    public static int ImcPartIndex(EquipSlot slot) => (int)slot % 5;
+
+    /// <summary>Where the slot's two bits (material, model) sit in a 16-bit EQDP entry.</summary>
+    public static int EqdpShift(EquipSlot slot) => (int)slot % 5 * 2;
+
+    /// <summary>The prefix of the variant attributes (atr_?v_a to atr_?v_j) an IMC attribute mask turns on for the slot.</summary>
+    public static string VariantAttributePrefix(EquipSlot slot) => slot switch
+    {
+        EquipSlot.Head      => "atr_mv_",
+        EquipSlot.Body      => "atr_tv_",
+        EquipSlot.Hands     => "atr_gv_",
+        EquipSlot.Legs      => "atr_dv_",
+        EquipSlot.Feet      => "atr_sv_",
+        EquipSlot.Earring   => "atr_ev_",
+        EquipSlot.Neck      => "atr_nv_",
+        EquipSlot.Wrists    => "atr_wv_",
+        EquipSlot.RingRight => "atr_rv_",
+        _                   => "atr_lv_",
+    };
 }

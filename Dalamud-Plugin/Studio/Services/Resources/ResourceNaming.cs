@@ -15,12 +15,133 @@ internal interface IItemNames
     IReadOnlyList<(string Name, EquipSlot Slot)> ForSet(bool accessory, ushort setId);
 }
 
+internal enum GameRootKind
+{
+    Equipment,
+    Accessory,
+    Weapon,
+    Monster,
+    Demihuman,
+    Hair,
+    Face,
+    Tail,
+    Ear,
+    Body,
+    Common,
+    OtherChara,
+    Other,
+}
+
+/// <summary>The item a game path belongs to: a gear set, a hairstyle, a weapon body. Character features are race-agnostic.</summary>
+internal readonly record struct GameRoot(GameRootKind Kind, ushort Primary, ushort Secondary, string Name)
+{
+    /// <summary>Roots other mods commonly request files of, so no one mod can know every user.</summary>
+    public bool IsShared => Kind is GameRootKind.Body or GameRootKind.Common or GameRootKind.OtherChara or GameRootKind.Other;
+
+    public string Label => Kind switch
+    {
+        GameRootKind.Equipment => $"Equipment e{Primary:D4}",
+        GameRootKind.Accessory => $"Accessory a{Primary:D4}",
+        GameRootKind.Weapon    => $"Weapon w{Primary:D4} b{Secondary:D4}",
+        GameRootKind.Monster   => $"Monster m{Primary:D4} b{Secondary:D4}",
+        GameRootKind.Demihuman => $"Demihuman d{Primary:D4} e{Secondary:D4}",
+        GameRootKind.Hair      => $"Hair {Primary}",
+        GameRootKind.Face      => $"Face {Primary}",
+        GameRootKind.Tail      => $"Tail {Primary}",
+        GameRootKind.Ear       => $"Ears {Primary}",
+        GameRootKind.Body      => $"Body b{Primary:D4}",
+        _                      => Name,
+    };
+
+    public override string ToString() => Label;
+}
+
 /// <summary>
 /// How game paths group and what to call the groups: which model set a file belongs to, where the
 /// game looks up a material a model names, and a readable title for each entry of the contents pane.
 /// </summary>
 internal static class ResourceNaming
 {
+    private static readonly HashSet<string> GameFolders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "common", "bgcommon", "bg", "cut", "chara", "shader", "ui", "sound", "vfx", "ui_script", "exd", "game_script", "music",
+    };
+
+    private static readonly Regex RootFolder = new(
+        @"^chara/(?:(?<kind>equipment)/e(?<a>\d{4})|(?<kind>accessory)/a(?<a>\d{4})|(?<kind>weapon)/w(?<a>\d{4})/obj/body/b(?<b>\d{4})|(?<kind>monster)/m(?<a>\d{4})/obj/body/b(?<b>\d{4})|(?<kind>demihuman)/d(?<a>\d{4})/obj/equipment/e(?<b>\d{4})|human/c\d{4}/obj/(?<kind>hair|face|tail|zear|body)/[hftzb](?<a>\d{4}))(?:/|$)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>Whether a path starts with one of the game's top-level folders; anything else can never be requested.</summary>
+    public static bool HasValidRoot(string path)
+    {
+        path = Project.PathNormalizer.GamePath(path);
+        var slash = path.IndexOf('/');
+        return slash > 0 && GameFolders.Contains(path[..slash]) && !path.Split('/').Any(segment => segment is "" or "." or "..");
+    }
+
+    /// <summary>
+    /// Whether a redirection key is a game path with folders glued in front ("Group/Option/chara/..."),
+    /// which the game never requests; <paramref name="realPath"/> is the game path inside it.
+    /// </summary>
+    public static bool IsMangledKey(string key, out string realPath)
+    {
+        realPath = string.Empty;
+        if (HasValidRoot(key))
+            return false;
+        var segments = Project.PathNormalizer.GamePath(key).Split('/');
+        for (var i = 1; i < segments.Length - 1; ++i)
+        {
+            if (!GameFolders.Contains(segments[i]))
+                continue;
+            var candidate = string.Join('/', segments[i..]);
+            if (!HasValidRoot(candidate))
+                continue;
+            realPath = candidate;
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>The item a game path belongs to.</summary>
+    public static GameRoot RootOf(string gamePath)
+    {
+        var path = Project.PathNormalizer.GamePath(gamePath);
+        var match = RootFolder.Match(path);
+        if (match.Success)
+        {
+            var a = ushort.Parse(match.Groups["a"].Value);
+            var b = match.Groups["b"].Success ? ushort.Parse(match.Groups["b"].Value) : (ushort)0;
+            var kind = match.Groups["kind"].Value switch
+            {
+                "equipment" => GameRootKind.Equipment,
+                "accessory" => GameRootKind.Accessory,
+                "weapon"    => GameRootKind.Weapon,
+                "monster"   => GameRootKind.Monster,
+                "demihuman" => GameRootKind.Demihuman,
+                "hair"      => GameRootKind.Hair,
+                "face"      => GameRootKind.Face,
+                "tail"      => GameRootKind.Tail,
+                "zear"      => GameRootKind.Ear,
+                _           => GameRootKind.Body,
+            };
+            return new GameRoot(kind, a, b, string.Empty);
+        }
+        if (path.StartsWith("chara/common/", StringComparison.Ordinal)) return new GameRoot(GameRootKind.Common, 0, 0, "Shared character files");
+        if (path.StartsWith("chara/", StringComparison.Ordinal)) return new GameRoot(GameRootKind.OtherChara, 0, 0, "Other character files");
+        var slash = path.IndexOf('/');
+        return new GameRoot(GameRootKind.Other, 0, 0, slash > 0 ? path[..slash] : path);
+    }
+
+    /// <summary>A texture path's DX11 twin: the same file name with the -- prefix added, or taken off when it has one.</summary>
+    public static string Dx11Twin(string texturePath)
+    {
+        var path = Project.PathNormalizer.GamePath(texturePath);
+        var slash = path.LastIndexOf('/');
+        var folder = slash < 0 ? string.Empty : path[..(slash + 1)];
+        var name = path[(slash + 1)..];
+        return name.StartsWith("--", StringComparison.Ordinal) ? folder + name[2..] : folder + "--" + name;
+    }
+
     private static readonly Regex SetFolder = new(
         @"^(chara/(?:equipment/e\d{4}|accessory/a\d{4}|weapon/w\d{4}/obj/body/b\d{4}|monster/m\d{4}/obj/body/b\d{4}|demihuman/d\d{4}/obj/equipment/e\d{4}|human/c\d{4}/obj/(?:hair|face|tail|zear|body)/[hftzb]\d{4}))/",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);

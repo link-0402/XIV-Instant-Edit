@@ -598,7 +598,7 @@ public sealed class GameDataService : IItemNames
             var imc = _data.GetFile<ImcFile>(path);
             if (imc == null) return null;
 
-            int partIdx = ImcPartIndex(slot);
+            int partIdx = SlotInfo.ImcPartIndex(slot);
             var parts = imc.GetParts();
             if (partIdx >= parts.Length || (imc.PartMask & (1 << partIdx)) == 0)
                 return null;
@@ -630,22 +630,6 @@ public sealed class GameDataService : IItemNames
             return null;
         }
     }
-
-    /// <summary>Maps a slot to its part index within an item's IMC file. Mirrors Penumbra's own ImcFile.PartIndex.</summary>
-    private static int ImcPartIndex(EquipSlot slot) => slot switch
-    {
-        EquipSlot.Head      => 0,
-        EquipSlot.Earring   => 0,
-        EquipSlot.Body      => 1,
-        EquipSlot.Neck      => 1,
-        EquipSlot.Hands     => 2,
-        EquipSlot.Wrists    => 2,
-        EquipSlot.Legs      => 3,
-        EquipSlot.RingRight => 3,
-        EquipSlot.Feet      => 4,
-        EquipSlot.RingLeft  => 4,
-        _                   => 0,
-    };
 
     // ─────────────────────────────────────────────────────────────────────────
     // Internal helpers

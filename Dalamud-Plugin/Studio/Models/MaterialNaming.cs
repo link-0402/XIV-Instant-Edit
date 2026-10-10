@@ -1,6 +1,25 @@
 using System;
+using System.Text.RegularExpressions;
+using InstantEdit.Studio.Services.Project;
+using InstantEdit.Studio.Services.Resources;
 
 namespace InstantEdit.Studio.Models;
+
+public enum MaterialRequestKind
+{
+    /// <summary>The game requests <see cref="MaterialRequest.Path"/>.</summary>
+    Path,
+
+    /// <summary>A skin material: the game puts in the wearer's skin race, so the path depends on who wears the model.</summary>
+    Skin,
+
+    /// <summary>The name can't be turned into a game path.</summary>
+    Invalid,
+}
+
+/// <summary>What the game requests for one material name of a model.</summary>
+public sealed record MaterialRequest(MaterialRequestKind Kind, string? Path, ushort SkinBody = 0, string? SkinSuffix = null,
+    string? Reason = null, bool Approximate = false);
 
 /// <summary>
 /// Material and texture file naming following the TexTools convention (see
@@ -114,6 +133,107 @@ public static class MaterialNaming
     /// </summary>
     public static string ImcGamePath(EquipSlot slot, ushort modelId)
         => $"{ItemFolder(slot, modelId)}/{SlotInfo.ItemPrefix(slot)}{modelId:D4}.imc";
+
+    private static readonly Regex SkinName = new(@"^mt_c\d{4}b(?<body>\d{4})_(?<suffix>.+)\.mtrl$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    private static readonly Regex HairName = new(@"c(?<race>\d{4})h(?<id>\d{4})", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex TailId = new(@"t(?<id>\d{4})", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// The game path the game requests for a material name stored in a model, with the IMC material
+    /// set it picked: gear, weapons, monsters and demihumans look in the model's material/vNNNN folder
+    /// (as Penumbra's resource tree resolves them), hair in the shared roots the game hard-codes,
+    /// faces and Viera ears in a folder without variants. Skin materials on gear depend on the wearer.
+    /// </summary>
+    public static MaterialRequest Resolve(ModelPathInfo model, string materialName, byte materialSet)
+    {
+        var name = materialName.Replace('\\', '/').Trim().TrimStart('/');
+        if (name.Length == 0 || !name.EndsWith(".mtrl", StringComparison.OrdinalIgnoreCase))
+            return new MaterialRequest(MaterialRequestKind.Invalid, null, Reason: $"'{materialName}' is not a material name.");
+        if (name.Contains('/'))
+            return ResourceNaming.HasValidRoot(name)
+                ? new MaterialRequest(MaterialRequestKind.Path, PathNormalizer.GamePath(name))
+                : new MaterialRequest(MaterialRequestKind.Invalid, null, Reason: $"'{materialName}' is not a valid game path.");
+
+        var skin = SkinName.Match(name);
+        if (skin.Success && model.Kind is GameModelKind.Equipment or GameModelKind.Body)
+        {
+            var body = ushort.Parse(skin.Groups["body"].Value);
+            var suffix = skin.Groups["suffix"].Value.ToLowerInvariant();
+            // A body model is the wearer, so its skin materials resolve for the model's own skin race;
+            // gear hands skin materials to whoever wears it.
+            return model.Kind == GameModelKind.Body
+                ? new MaterialRequest(MaterialRequestKind.Path, SkinPath(model.Race, body, suffix))
+                : new MaterialRequest(MaterialRequestKind.Skin, null, body, suffix);
+        }
+
+        name = name.ToLowerInvariant();
+        switch (model.Kind)
+        {
+            case GameModelKind.Equipment:
+            case GameModelKind.Accessory:
+            case GameModelKind.Demihuman:
+            case GameModelKind.Monster:
+                return new MaterialRequest(MaterialRequestKind.Path, $"{model.Directory}/material/v{materialSet:D4}/{name}");
+            case GameModelKind.Weapon:
+                // Gunbreaker and machinist style 20xx sets share one "c" material; off-hand mirroring isn't reproduced.
+                if (model.PrimaryId / 100 == 20 && name.Length > 14 && name[14] == 'c')
+                    return new MaterialRequest(MaterialRequestKind.Path, "chara/weapon/w2001/obj/body/b0001/material/v0001/mt_w2001b0001_c.mtrl");
+                return new MaterialRequest(MaterialRequestKind.Path, $"{model.Directory}/material/v{materialSet:D4}/{name}", Approximate: true);
+            case GameModelKind.Hair:
+            {
+                var root = HairMaterialRace(model.Race, model.PrimaryId);
+                var rebased = HairName.Replace(name, match =>
+                    ushort.Parse(match.Groups["race"].Value) == model.Race && ushort.Parse(match.Groups["id"].Value) == model.PrimaryId
+                        ? $"c{root:D4}h{model.PrimaryId:D4}"
+                        : match.Value);
+                return new MaterialRequest(MaterialRequestKind.Path, $"chara/human/c{root:D4}/obj/hair/h{model.PrimaryId:D4}/material/v0001/{rebased}");
+            }
+            case GameModelKind.Face:
+            case GameModelKind.Ear:
+                return new MaterialRequest(MaterialRequestKind.Path, $"{model.Directory}/material/{name}");
+            case GameModelKind.Tail:
+            {
+                // A tail model may name another tail's materials; Hrothgar tails share t0001 with several variants.
+                var directory = model.Directory;
+                var tail = TailId.Match(name[(name.IndexOf('_') + 1)..]);
+                if (tail.Success && ushort.Parse(tail.Groups["id"].Value) != model.PrimaryId)
+                    directory = directory[..^4] + tail.Groups["id"].Value;
+                return new MaterialRequest(MaterialRequestKind.Path, $"{directory}/material/v0001/{name}", Approximate: model.Race is 1501 or 1601);
+            }
+            default:
+                return new MaterialRequest(MaterialRequestKind.Path, $"{model.Directory}/material/v0001/{name}");
+        }
+    }
+
+    /// <summary>The body material a skin material resolves to for a wearer of race <paramref name="wearerRace"/>.</summary>
+    public static string SkinPath(ushort wearerRace, ushort body, string suffix)
+    {
+        var race = RaceInfo.SkinRace(wearerRace);
+        return $"chara/human/c{race:D4}/obj/body/b{body:D4}/material/v0001/mt_c{race:D4}b{body:D4}_{suffix}.mtrl";
+    }
+
+    /// <summary>
+    /// The race whose folder a hairstyle's materials come from: styles 101-115 use the Midlander
+    /// ones except for Miqo'te, 116-200 always do, Hrothgar never share.
+    /// </summary>
+    public static ushort HairMaterialRace(ushort race, ushort hairId)
+    {
+        if (race is 1501 or 1601 || hairId < 101 || hairId >= 201) return race;
+        if (hairId < 116 && race is 701 or 801) return race;
+        return RaceInfo.IsFemaleCode(race) ? (ushort)201 : (ushort)101;
+    }
+
+    /// <summary>The texture path the game requests for a material's texture entry: DX11 ones carry the -- prefix.</summary>
+    public static string TexturePath(string path, bool dx11)
+    {
+        path = PathNormalizer.GamePath(path);
+        if (!dx11) return path;
+        var slash = path.LastIndexOf('/');
+        return slash < 0 ? "--" + path : $"{path[..(slash + 1)]}--{path[(slash + 1)..]}";
+    }
 
     /// <summary>
     /// Lower-cases a file name, strips an extension if present, and removes
