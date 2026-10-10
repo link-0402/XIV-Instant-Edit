@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
@@ -49,6 +50,8 @@ public sealed class PenumbraIpcService : IDisposable
     public event Action<string, string>? ModMoved;
     /// <summary>Penumbra's mod directory changed (new directory, whether it is valid).</summary>
     public event Action<string, bool>? ModDirectoryChanged;
+    /// <summary>A mod's settings changed in a collection (mod folder name). May be raised off the framework thread.</summary>
+    public event Action<string>? ModSettingChanged;
 
     private ICallGateSubscriber<object>? _initializedSub;
     private ICallGateSubscriber<object>? _disposedSub;
@@ -56,6 +59,7 @@ public sealed class PenumbraIpcService : IDisposable
     private ICallGateSubscriber<string, object>? _modDeletedSub;
     private ICallGateSubscriber<string, string, object>? _modMovedSub;
     private ICallGateSubscriber<string, bool, object>? _modDirectorySub;
+    private IDisposable? _modSettingSub;
 
     public PenumbraIpcService(IDalamudPluginInterface pi, IPluginLog log)
     {
@@ -104,6 +108,13 @@ public sealed class PenumbraIpcService : IDisposable
             _modDirectorySub.Subscribe(OnModDirectoryChanged);
         }
         catch (Exception ex) { _log.Debug(ex, "[Studio] Could not subscribe to Penumbra's mod events"); }
+
+        try
+        {
+            _modSettingSub = Penumbra.Api.IpcSubscribers.ModSettingChanged.Subscriber(pi,
+                (Penumbra.Api.Enums.ModSettingChange _, Guid _, string mod, bool _) => ModSettingChanged?.Invoke(mod));
+        }
+        catch (Exception ex) { _log.Debug(ex, "[Studio] Could not subscribe to Penumbra.ModSettingChanged"); }
     }
 
     private void OnPenumbraInitialized() => PenumbraInitialized?.Invoke();
@@ -121,6 +132,7 @@ public sealed class PenumbraIpcService : IDisposable
         try { _modDeletedSub?.Unsubscribe(OnModDeleted); }           catch { /* ignore */ }
         try { _modMovedSub?.Unsubscribe(OnModMoved); }               catch { /* ignore */ }
         try { _modDirectorySub?.Unsubscribe(OnModDirectoryChanged); } catch { /* ignore */ }
+        try { _modSettingSub?.Dispose(); }                            catch { /* ignore */ }
     }
 
     /// <summary>Returns true when Penumbra is loaded and its IPC is reachable.</summary>
@@ -303,6 +315,77 @@ public sealed class PenumbraIpcService : IDisposable
     {
         try   { _redrawAll.InvokeAction(0); }   // RedrawType.Redraw
         catch (Exception ex) { _log.Debug(ex, "[Studio] RedrawAll failed"); }
+    }
+
+    private Penumbra.Api.IpcSubscribers.GetAllModSettings? _getAllModSettings;
+    private Penumbra.Api.IpcSubscribers.GetChangedItemAdapterList? _getChangedItemList;
+    private Penumbra.Api.IpcSubscribers.OpenMainWindow? _openMainWindow;
+
+    /// <summary>
+    /// Whether each mod is enabled in a collection, by mod folder name: inherited settings count,
+    /// temporary settings from other plugins don't. Null when Penumbra cannot say. May be called off
+    /// the framework thread.
+    /// </summary>
+    public IReadOnlyDictionary<string, bool>? GetAllModSettings(Guid collection)
+    {
+        try
+        {
+            _getAllModSettings ??= new Penumbra.Api.IpcSubscribers.GetAllModSettings(_pi);
+            var (ec, settings) = _getAllModSettings.Invoke(collection, false, true, 0);
+            if (ec != Penumbra.Api.Enums.PenumbraApiEc.Success || settings is null)
+                return null;
+            var enabled = new Dictionary<string, bool>(settings.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var (mod, setting) in settings)
+                enabled[mod] = setting.Item1;
+            return enabled;
+        }
+        catch (Exception ex) { _log.Debug(ex, "[Studio] GetAllModSettings failed"); return null; }
+    }
+
+    /// <summary>
+    /// Penumbra's identified changed items of every mod, by mod folder name, with what kind of thing
+    /// each is. Null when Penumbra cannot say. May be called off the framework thread.
+    /// </summary>
+    internal IReadOnlyDictionary<string, IReadOnlyList<(string Name, Library.ChangeKind Kind)>>? ChangedItemKinds()
+    {
+        try
+        {
+            _getChangedItemList ??= new Penumbra.Api.IpcSubscribers.GetChangedItemAdapterList(_pi);
+            var result = new Dictionary<string, IReadOnlyList<(string, Library.ChangeKind)>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (mod, items) in _getChangedItemList.Invoke())
+                result[mod] = items.Select(item => (item.Key, KindOf(item.Value))).ToArray();
+            return result;
+        }
+        catch (Exception ex) { _log.Debug(ex, "[Studio] GetChangedItemAdapterList failed"); return null; }
+    }
+
+    /// <summary>What a changed item is, from the type of Penumbra's object for it (Mod Optimizer's rules).</summary>
+    private static Library.ChangeKind KindOf(object? value) => value?.GetType().Name switch
+    {
+        "EquipItem"                                              => Library.ChangeKind.Item,
+        "Emote"                                                  => Library.ChangeKind.Emote,
+        { } name when name.StartsWith("ValueTuple", StringComparison.Ordinal) => Library.ChangeKind.Face,
+        _                                                        => Library.ChangeKind.Other,
+    };
+
+    /// <summary>Opens Penumbra's main window on the mods tab with a mod selected; null on success, else what went wrong.</summary>
+    public string? OpenModPage(string folderName)
+    {
+        try
+        {
+            _openMainWindow ??= new Penumbra.Api.IpcSubscribers.OpenMainWindow(_pi);
+            return _openMainWindow.Invoke(Penumbra.Api.Enums.TabType.Mods, folderName, string.Empty) switch
+            {
+                Penumbra.Api.Enums.PenumbraApiEc.Success    => null,
+                Penumbra.Api.Enums.PenumbraApiEc.ModMissing => "Penumbra could not find this mod. Refresh and try again.",
+                var ec                                      => $"Penumbra could not select the mod ({ec}).",
+            };
+        }
+        catch (Exception ex)
+        {
+            _log.Debug(ex, "[Studio] OpenMainWindow failed");
+            return "Penumbra's main window could not be opened.";
+        }
     }
 
     /// <summary>Returns all Penumbra collections as (Guid Id, string Name) pairs, or null on failure.</summary>

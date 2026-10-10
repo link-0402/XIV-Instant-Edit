@@ -253,6 +253,8 @@ internal sealed class StudioHost : IDisposable
                 _windows.RemoveWindow(window);
                 window.Editor.Close();
                 _closing.Add(window.Editor);
+                // What was written into the mod shows in the library's filters from here on.
+                Library.Changed(window.Editor.Project.FolderName);
                 continue;
             }
             window.Editor.Update();

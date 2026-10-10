@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using InstantEdit.Studio.Models.Project;
+using InstantEdit.Studio.Services.Library;
 
 namespace InstantEdit.Studio.Services.Project;
 
@@ -39,6 +40,12 @@ internal sealed class ModLibrary : IDisposable
     private readonly Action<string>         _onDeleted;
     private readonly Action<string, string> _onMoved;
     private readonly Action<string, bool>   _onDirectory;
+    private readonly Action<string>         _onSetting;
+
+    // Penumbra's changed items of every mod, asked for once and kept a few seconds while a scan reads them.
+    private readonly object _kindsGate = new();
+    private IReadOnlyDictionary<string, IReadOnlyList<(string Name, ChangeKind Kind)>>? _kinds;
+    private DateTime _kindsAt;
 
     private Task<List<InstalledMod>>? _listing;
     private bool _listingStale = true;
@@ -59,6 +66,28 @@ internal sealed class ModLibrary : IDisposable
         ipc.ModDeleted          += _onDeleted;
         ipc.ModMoved            += _onMoved;
         ipc.ModDirectoryChanged += _onDirectory;
+        // Settings change often (every slider): the scans only count them, so this runs on Penumbra's thread.
+        Scans = new LibraryScans(() => ipc.GetCollections(), ipc.GetAllModSettings, ChangedItemKinds);
+        _onSetting = _ => Scans.InvalidateUsage();
+        ipc.ModSettingChanged += _onSetting;
+    }
+
+    /// <summary>The library filters' data: mods enabled nowhere, duplicates, what each mod changes.</summary>
+    public LibraryScans Scans { get; }
+
+    private IReadOnlyList<(string, ChangeKind)> ChangedItemKinds(string folderName)
+    {
+        IReadOnlyDictionary<string, IReadOnlyList<(string Name, ChangeKind Kind)>>? kinds;
+        lock (_kindsGate)
+        {
+            if (_kinds is null || DateTime.UtcNow - _kindsAt > TimeSpan.FromSeconds(10))
+            {
+                _kinds = _host.PenumbraIpc.ChangedItemKinds();
+                _kindsAt = DateTime.UtcNow;
+            }
+            kinds = _kinds;
+        }
+        return kinds is not null && kinds.TryGetValue(folderName, out var items) ? items : Array.Empty<(string, ChangeKind)>();
     }
 
     public void Dispose()
@@ -68,6 +97,8 @@ internal sealed class ModLibrary : IDisposable
         ipc.ModDeleted          -= _onDeleted;
         ipc.ModMoved            -= _onMoved;
         ipc.ModDirectoryChanged -= _onDirectory;
+        ipc.ModSettingChanged   -= _onSetting;
+        Scans.Cancel();
     }
 
     /// <summary>Waiting for Penumbra to finish importing a package, which then opens.</summary>
@@ -120,6 +151,7 @@ internal sealed class ModLibrary : IDisposable
     private void OnModAdded(string folderName)
     {
         _listingStale = true;
+        Changed(folderName);
         if (!IsInstalling)
             return;
 
@@ -132,13 +164,26 @@ internal sealed class ModLibrary : IDisposable
     private void OnModDeleted(string folderName)
     {
         _listingStale = true;
+        Changed(folderName);
         _host.OnModDeleted(folderName);
     }
 
     private void OnModMoved(string from, string to)
     {
         _listingStale = true;
+        Changed(from);
+        Changed(to);
         _host.OnModMoved(from, to);
+    }
+
+    /// <summary>A mod was added, removed, renamed or written into: the filters read it again, and the collections.</summary>
+    public void Changed(string folderName)
+    {
+        lock (_kindsGate)
+            _kinds = null;
+        _changedItems.Remove(folderName);
+        Scans.Invalidate(folderName);
+        Scans.InvalidateUsage();
     }
 
     // ─────────────────────────────────────────────────────────────────────────
