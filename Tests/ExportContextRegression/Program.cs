@@ -163,6 +163,7 @@ try
     CheckSessionStore(testRoot);
     SelectorStabilityScenarios.Run(testRoot);
     ModHandoffScenarios.Run(testRoot);
+    ModCheckScenarios.RunReaders(testRoot);
     CollectionActivationScenarios.Run();
     UiViewModelScenarios.Run();
     AnimationRowScenarios.Run();

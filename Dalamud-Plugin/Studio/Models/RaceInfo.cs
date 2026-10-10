@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace InstantEdit.Studio.Models;
 
@@ -109,4 +111,71 @@ public static class RaceInfo
         new(PlayerRace.Viera,      PlayerGender.Male),   // 1701
         new(PlayerRace.Viera,      PlayerGender.Female), // 1801
     };
+
+    // ── Race codes as Penumbra numbers them (101 for c0101) ──────────────────
+
+    /// <summary>The 18 playable race codes, 101 to 1801.</summary>
+    public static readonly IReadOnlyList<ushort> PlayableCodes = AllRaces.Select(Code).ToArray();
+
+    public static ushort Code(RaceGender race) => ushort.Parse(race.RaceCode);
+
+    /// <summary>The playable race of a code, or null for NPC and unknown codes.</summary>
+    public static RaceGender? FromCode(ushort code)
+    {
+        foreach (var race in AllRaces)
+            if (Code(race) == code)
+                return race;
+        return null;
+    }
+
+    public static bool IsPlayableCode(ushort code) => code % 100 == 1 && code / 100 is >= 1 and <= 18;
+
+    public static bool IsFemaleCode(ushort code) => code / 100 % 2 == 0;
+
+    /// <summary>The race a race falls back to for a model it has none of (Penumbra's GenderRace.Fallback).</summary>
+    public static ushort Fallback(ushort code) => code switch
+    {
+        201  => 101,
+        1501 => 901,   // Hrothgar male to Roegadyn male
+        1201 => 1101,  // Lalafell female to Lalafell male
+        _ when IsFemaleCode(code) => 201,
+        _ => 101,
+    };
+
+    /// <summary>The race whose body skin a race wears: Elezen and Miqo'te the Midlander one, Roegadyn female the Highlander female one.</summary>
+    public static ushort SkinRace(ushort code) => code switch
+    {
+        501 or 701 => 101,
+        601 or 801 => 201,
+        1001 => 401,
+        1201 => 1101,
+        _ => code,
+    };
+
+    /// <summary>The model race of the Race, Gender and Tribe customize bytes; Hyur clans have codes of their own.</summary>
+    public static ushort? FromCustomize(byte race, byte gender, byte tribe)
+    {
+        int? baseCode = (race, tribe) switch
+        {
+            (1, 1) => 1, (1, 2) => 3, (2, _) => 5, (3, _) => 11, (4, _) => 7,
+            (5, _) => 9, (6, _) => 13, (7, _) => 15, (8, _) => 17, _ => null,
+        };
+        if (baseCode is not { } value || gender > 1) return null;
+        return (ushort)((value + gender) * 100 + 1);
+    }
+
+    /// <summary>
+    /// The race whose gear model a character of <paramref name="race"/> loads (Penumbra's
+    /// ResolveEqdpRaceCode): its own when its EQDP model bit is set, else its fallback's when that
+    /// one's is, else Midlander male. Only one fallback level is tried.
+    /// </summary>
+    public static ushort ResolveModelRace(ushort race, bool accessory, Func<ushort, bool> hasModel)
+    {
+        if (race == 101) return 101;
+        if (accessory && race % 10 != 1) return 101;
+        if (hasModel(race)) return race;
+        var fallback = Fallback(race);
+        if (fallback == 101) return 101;
+        return hasModel(fallback) ? fallback : (ushort)101;
+    }
 }
