@@ -72,9 +72,9 @@ internal static class EditAgainFixture
         check(AnimationEditService.EditAgainProblem(Journal(capture, baseHash: null)) != null,
             "nor one that kept no motion from before it, as edits saved before Edit again");
         check(AnimationEditService.EditAgainProblem(Journal(capture, state: "Undone")) == "This edit was undone." &&
-              AnimationEditService.EditAgainProblem(Journal(capture, state: "FilesUndone")) == "This edit was undone." &&
+              AnimationEditService.EditAgainProblem(Journal(capture, state: "FilesUndone")) == "This edit was not saved." &&
               AnimationEditService.EditAgainProblem(Journal(capture, state: "RecoveryRequired")) == "This edit did not finish.",
-            "nor an edit that was undone or did not finish");
+            "nor an edit that was undone, not saved (refused or rolled back) or did not finish");
 
         var doc = new TimelineDocument(30, 30, null, [], 1);
         var layered = doc with { Motion = [Layer()] };

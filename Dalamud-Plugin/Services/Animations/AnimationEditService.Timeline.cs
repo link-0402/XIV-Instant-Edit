@@ -55,8 +55,13 @@ internal sealed record AnimationTimelineSource(AnimationCapture Capture, bool St
     /// <summary>The PAP whose motion the layers apply to: <see cref="BaseMotion"/>, else the file's own.</summary>
     public byte[] MotionSource => BaseMotion ?? Pap;
 
-    /// <summary>The clip as found in <see cref="MotionSource"/>, with that binding's fingerprint.</summary>
-    public AnimationClip MotionClip => BaseMotion == null ? Clip : Clip with { BindingFingerprint = BaseFingerprint ?? string.Empty };
+    /// <summary>
+    /// The clip as found in <see cref="MotionSource"/>, with that binding's fingerprint. After a save or an undo the
+    /// file read is no longer the one captured, so the capture's own fingerprint would refuse it.
+    /// </summary>
+    public AnimationClip MotionClip => BaseMotion != null ? Clip with { BindingFingerprint = BaseFingerprint ?? string.Empty }
+        : FileFingerprint.Length > 0 && FileFingerprint != Clip.BindingFingerprint ? Clip with { BindingFingerprint = FileFingerprint }
+        : Clip;
 }
 
 /// <summary>
@@ -440,7 +445,8 @@ internal sealed partial class AnimationEditService
     {
         { Request: not { Operation: AnimationOperation.EditTimeline, Timeline.Motion.IsEmpty: false } } =>
             "Only edits with bone layers can be edited again.",
-        { State: "Undone" or "FilesUndone" } => "This edit was undone.",
+        { State: "Undone" } => "This edit was undone.",
+        { State: "FilesUndone" } => "This edit was not saved.",
         { State: not "Completed" } => "This edit did not finish.",
         { Request.Timeline.DurationSeconds: not null } => "This edit changed the length, which baked its layers in for good.",
         { Request.ExcludedBones.IsEmpty: false } or { Request.RepairTarget: not null } =>
@@ -523,14 +529,15 @@ internal sealed partial class AnimationEditService
             await resources.CheckSkeletonsAsync(request.Capture, [clip], token);
             var skeleton = (await resources.ReadSkeletonAsync(request.Capture.CollectionId, selected.Source, token)).Bytes;
             Directory.CreateDirectory(workDirectory);
-            motion = await baker.BakeAsync(source.BaseMotion ?? pap, skeleton, source.BaseMotion == null ? clip : source.MotionClip, request,
+            motion = await baker.BakeAsync(source.BaseMotion ?? pap, skeleton, source.MotionClip, request,
                 workDirectory, message => Status = message, token, () => CheckIdentityOnFramework(request.Capture, true));
         }
         var result = new AnimationPap(motion).WithTimeline(source.EntryIndex, timeline);
         CheckTimelineOutput(pap, result, source.EntryIndex, timeline, !baked && source.BaseMotion == null);
+        // Unbaked, the motion is the file's own: what the game plays once it loads the file.
         var fingerprint = baked || source.BaseMotion != null
             ? await framework.RunOnFrameworkThread(() => AnimationRuntime.InspectPap(result).GetValueOrDefault(clip.BindingIndex, ""))
-            : clip.BindingFingerprint;
+            : source.MotionClip.BindingFingerprint;
         return new AnimationTimelineBuild(source.Resource.GamePath, result, fingerprint);
     }
 

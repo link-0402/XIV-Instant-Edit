@@ -880,6 +880,18 @@ internal static partial class TmbFileFixture
                   TimelineLane.Expression, TimelineLane.LipSync]),
             "added entries read back on their lanes");
 
+        // Given time control, an added lip plays its whole motion over its length, as a loaded one does (test 172).
+        var stretchedLip = lip with { Key = "n1", Duration = 80, Values = lip.Values.SetItem(TmbEntrySchema.TimeControlField, 1) };
+        var addedTimed = TmbFile.Parse(TimelineConvert.Apply(bare, doc with { Events = doc.Events.AddRange(new[] { stretchedLip, face with { Key = "n2" } }), NextKey = 3 },
+            new Dictionary<string, int> { ["cfxl_lip_nor1"] = 40, ["cfxf_smile"] = 2 }));
+        var addedUnknown = TmbFile.Parse(TimelineConvert.Apply(bare, doc with { Events = doc.Events.Add(stretchedLip), NextKey = 2 }));
+        // Added entries come after the sample's own (which has a lip too).
+        check(addedTimed.Entries.Last(x => x.Text == "cfxl_lip_nor1") is { } timedLip && timedLip.Int32(20) == 1 && timedLip.Int32(12) == 80 &&
+              timedLip.Single(24) == 0 && timedLip.Single(28) == 40 &&
+              addedTimed.Entries.Last(x => x.Text == "cfxf_smile") is { } pose && pose.Single(24) == 0 && pose.Single(28) == 1 &&
+              addedUnknown.Entries.Last(x => x.Text == "cfxl_lip_nor1").Single(28) == 80,
+            "an added lip given time control plays 0 to its own length over its length; unknown, 0 to its length; an added pose keeps 0 to 1");
+
         reject(() => TimelineTemplates.Create(new(TimelineAddKind.Sound, 0, "vfx/test/eff/test.avfx")), "a sound needs an .scd path");
         reject(() => TimelineTemplates.Create(new(TimelineAddKind.Effect, 0, "/vfx/x.avfx")), "an effect needs a game path");
         reject(() => TimelineTemplates.Create(new(TimelineAddKind.Expression, 0, "cfxl_lip_nor1")), "lip sync is not an expression");

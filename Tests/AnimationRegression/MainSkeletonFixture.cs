@@ -78,6 +78,10 @@ internal static unsafe class MainSkeletonFixture
         check(AnimationSkeletonIndex.Rank(predictive, [otherMod, live], described, GamePath) is
               { State: SkeletonResolutionState.Matched, Selected.Source.Kind: SkeletonSourceKind.Collection },
             "among first bones that fit equally well, the character's own skeleton file is chosen");
+        var renamedLive = live with { Skeleton = described with { Name = "nflb rig" } };
+        check(AnimationSkeletonIndex.Rank(predictive, [otherMod, candidate, renamedLive], described, GamePath) is
+              { State: SkeletonResolutionState.Matched, Selected.Source.Kind: SkeletonSourceKind.Collection },
+            "the character's own skeleton file wins over other files' first bones whose skeleton name matches the animation's");
 
         var whole = candidate with
         {

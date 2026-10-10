@@ -417,7 +417,8 @@ public sealed partial class TimelineWindow : Window, IDisposable
     /// <summary>
     /// The source with the clip's latest skeleton match: choosing a skeleton under Source after
     /// opening the timeline must still allow a length change. Only a capture of the same file counts:
-    /// the Live preview plays a copy under the same capture, and its match knows no choice.
+    /// the Live preview plays a copy under the same capture, and its match knows no choice. The
+    /// capture gets the match too, since saves, face edits and reloads send it.
     /// </summary>
     private AnimationTimelineSource Fresh(AnimationTimelineSource current)
     {
@@ -430,16 +431,21 @@ public sealed partial class TimelineWindow : Window, IDisposable
             var clip = current.Startup ? capture.Startup : capture.Clip;
             if (clip != null && clip.GamePath == current.Clip.GamePath && clip.BindingFingerprint == current.Clip.BindingFingerprint &&
                 clip.SourceContext == current.Clip.SourceContext)
-                return ReferenceEquals(clip.Resolution, current.Clip.Resolution)
-                    ? current
-                    : current with { Clip = current.Clip with { Resolution = clip.Resolution } };
+                return ReferenceEquals(clip.Resolution, current.Clip.Resolution) ? current : WithResolution(current, clip.Resolution);
             break;
         }
         // The capture shows another file now (the preview copy), so a choice made under Source
         // reaches the timeline through the match kept for its own file.
         return animations.Observer.LatestResolution(current.Clip) is { } latest && !ReferenceEquals(latest, current.Clip.Resolution)
-            ? current with { Clip = current.Clip with { Resolution = latest } }
+            ? WithResolution(current, latest)
             : current;
+    }
+
+    /// <summary><paramref name="current"/> with its clip matched to <paramref name="resolution"/>, in its capture too.</summary>
+    private static AnimationTimelineSource WithResolution(AnimationTimelineSource current, SkeletonResolution? resolution)
+    {
+        var clip = current.Clip with { Resolution = resolution };
+        return current with { Clip = clip, Capture = current.Startup ? current.Capture with { Startup = clip } : current.Capture with { Clip = clip } };
     }
 
     public override void Draw()
@@ -464,7 +470,8 @@ public sealed partial class TimelineWindow : Window, IDisposable
         PollLengths();
         PollLibrary();
         PollLoader();
-        if (source != null && ImGui.GetFrameCount() % 30 == 0)
+        // Every frame: the bone rows' order, Live and the save all read the clip's match.
+        if (source != null)
             source = Fresh(source);
 
         DrawPendingBanner();
@@ -516,6 +523,9 @@ public sealed partial class TimelineWindow : Window, IDisposable
             footerHeight = ImGui.GetFrameHeightWithSpacing() * 3 + ImGui.GetStyle().ItemSpacing.Y * 2;
         var height = Math.Max(Theme.Scaled(120), avail.Y - footerHeight - ImGui.GetStyle().ItemSpacing.Y);
         DrawBody(editor, avail.X, height);
+        // A link in the side panel (the Source page's startup Open) may have started reading another clip.
+        if (source == null)
+            return;
 
         var footerStart = ImGui.GetCursorPosY();
         DrawSaveFooter(editor, source);

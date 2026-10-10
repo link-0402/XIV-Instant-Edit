@@ -246,6 +246,7 @@ def fake_api(version: int = 1):
     api.picks = [("Large", True), ("Medium", False)]
     api.calls = []
     api.failure = None
+    api.too_many = False
 
     class ResizeError(Exception):
         pass
@@ -253,6 +254,9 @@ def fake_api(version: int = 1):
     api.ResizeError = ResizeError
 
     def picked_sizes(scene=None):
+        # As Magic Fit: picks making more than its 64 sizes are refused.
+        if api.too_many:
+            raise ResizeError("The sizes picked make more than 64 sizes: pick fewer")
         return [FakeSize(name, now) for name, now in api.picks]
 
     def resize_collection(target, sizes=None, *, scene=None, body=None, progress=None):
@@ -401,6 +405,18 @@ def _run_stand_in(addon, plugin) -> None:
             bpy.context, ref, material_coverage_warning=False)]
         _require(sizes.NO_SIZES in issues, "with no sizes picked, readiness says to pick them")
         api.picks = [("Large", True), ("Medium", False)]
+        # Magic Fit refuses picks making more than 64 sizes: readiness and Quick Export say so (bridge test 10).
+        api.too_many = True
+        issues = [message for _severity, message in ops.export_target_issues(
+            bpy.context, ref, material_coverage_warning=False)]
+        try:
+            list(sizes.export_steps([], lambda *_: None))
+            refusal = ""
+        except ValueError as error:
+            refusal = str(error)
+        _require(sizes.picked_names() == [] and sizes.TOO_MANY in issues and sizes.NO_SIZES not in issues and
+                 refusal == sizes.TOO_MANY, "more than 64 picked sizes read as too many, not as none, and the export refuses")
+        api.too_many = False
 
         # Quick Export to a new group.
         values = [block.value for block in top.data.shape_keys.key_blocks]

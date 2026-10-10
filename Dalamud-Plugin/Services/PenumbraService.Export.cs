@@ -318,9 +318,10 @@ public sealed partial class PenumbraService
                     AddRaceModelEqdp(staging, modelGamePath, race.Value);
                 if (createAttributeGroups && attributeTags is { Count: > 0 })
                 {
+                    // A new mod of a game model has no variant settings of its own to keep.
                     var attributeError = WriteAttributeGroups(
                         staging, context.ResolvedGamePath, attributeTags, attributeMasks,
-                        context.ResourceManifest?.Manipulations);
+                        context.ResourceManifest?.Manipulations ?? new System.Text.Json.Nodes.JsonArray());
                     if (attributeError is not null)
                         throw new InvalidDataException(attributeError);
                 }

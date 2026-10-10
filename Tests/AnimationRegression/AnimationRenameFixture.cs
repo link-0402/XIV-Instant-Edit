@@ -86,6 +86,20 @@ internal static class AnimationRenameFixture
             check(sharedUpdated["DefaultData"]!["Files"]![gamePath]!.GetValue<string>() == newRelative &&
                   sharedUpdated["DefaultData"]!["Files"]![otherGamePath]!.GetValue<string>() == oldRelative,
                 "only the edited game path's own mapping moves; the unrelated one keeps pointing at the original file");
+
+            // A mod that maps with backslashes gets them back on undo, not forward slashes (test 166).
+            var backslashRoot = Path.Combine(root, "backslash");
+            Directory.CreateDirectory(backslashRoot);
+            var backslashed = oldRelative.Replace('/', '\\');
+            File.WriteAllText(Path.Combine(backslashRoot, "meta.json"), PenumbraService.CreateV4ModMetadata("Backslash Test", "Author", "Description", "1.0",
+                new JsonObject { ["Files"] = new JsonObject { [gamePath] = backslashed }, ["FileSwaps"] = new JsonObject(), ["Manipulations"] = new JsonArray() })
+                .ToJsonString());
+            PenumbraService.RenameAnimationFileMapping(backslashRoot, gamePath, oldRelative, newRelative);
+            var forward = JsonNode.Parse(File.ReadAllText(Path.Combine(backslashRoot, "meta.json")))!["DefaultData"]!["Files"]![gamePath]!.GetValue<string>();
+            PenumbraService.RenameAnimationFileMapping(backslashRoot, gamePath, newRelative, oldRelative);
+            var back = JsonNode.Parse(File.ReadAllText(Path.Combine(backslashRoot, "meta.json")))!["DefaultData"]!["Files"]![gamePath]!.GetValue<string>();
+            check(forward == newRelative.Replace('/', '\\') && back == backslashed,
+                "a rename and its undo keep the mod's backslashes in its mapping");
         }
         finally
         {

@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json.Nodes;
+using Dalamud.Plugin.Ipc.Exceptions;
 using InstantEdit.Models;
 using Penumbra.Api.Enums;
 using Penumbra.Api.IpcSubscribers;
@@ -18,7 +19,10 @@ public sealed partial class PenumbraService : ITextureEditBackend
         if (string.Equals(Path.GetFullPath(input), Path.GetFullPath(output), StringComparison.OrdinalIgnoreCase))
             throw new IOException("Texture conversions require a separate output file.");
         if (File.Exists(output)) File.Delete(output);
-        var conversion = new ConvertTextureFile(_pi).Invoke(input, output, format, mipMaps);
+        Task conversion;
+        // Penumbra does the conversion: while it is unloaded a save waits for it, as the checks after this do.
+        try { conversion = new ConvertTextureFile(_pi).Invoke(input, output, format, mipMaps); }
+        catch (IpcNotReadyError) { throw new TextureWaitException("Penumbra isn't available right now."); }
         await conversion.ConfigureAwait(false);
     }
 

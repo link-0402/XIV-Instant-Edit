@@ -69,11 +69,43 @@ internal static class AnimationLibrary
             row.TextCommand.IsValid ? row.TextCommand.Value.Command.ExtractText() : string.Empty,
             row.EmoteCategory.IsValid ? row.EmoteCategory.Value.Name.ExtractText() : string.Empty,
             [.. row.ActionTimeline.Select(t => t.RowId is > 0 and <= ushort.MaxValue ? (ushort)t.RowId : (ushort)0)])).ToArray();
-        return Build(timelines, emotes);
+        return Build(timelines, emotes, Empty(data, timelines, emotes));
     }
 
-    /// <summary>The loader's items in group order, from the sheets' rows.</summary>
-    public static ImmutableArray<AnimationLibraryItem> Build(IEnumerable<TimelineRow> timelineRows, IEnumerable<EmoteRow> emoteRows)
+    /// <summary>
+    /// The emotes' versions whose timeline file holds nothing: the game goes straight to the loop, so playing
+    /// one shows nothing to open. Most starts without a motion file of their own are such (Bomb Dance's).
+    /// </summary>
+    private static HashSet<ushort> Empty(IDataManager data, IEnumerable<TimelineRow> timelines, IEnumerable<EmoteRow> emotes)
+    {
+        var keys = new Dictionary<ushort, string>();
+        foreach (var row in timelines)
+            if (row.Key.Length > 0)
+                keys.TryAdd(row.Id, row.Key);
+        var empty = new HashSet<ushort>();
+        foreach (var id in emotes.SelectMany(e => e.Timelines.Skip(1)).Where(id => id > 0).Distinct())
+        {
+            if (!keys.TryGetValue(id, out var key) || !AnimationDependencies.SafeGamePath($"chara/action/{key}.tmb"))
+                continue;
+            try
+            {
+                if (data.GetFile($"chara/action/{key}.tmb")?.Data is { } bytes && Timeline.TmbFile.Parse(bytes).Entries.IsEmpty)
+                    empty.Add(id);
+            }
+            catch (InvalidDataException)
+            {
+                // A timeline this can't read stays listed.
+            }
+        }
+        return empty;
+    }
+
+    /// <summary>
+    /// The loader's items in group order, from the sheets' rows. The <paramref name="empty"/> timelines
+    /// play nothing and are left out.
+    /// </summary>
+    public static ImmutableArray<AnimationLibraryItem> Build(IEnumerable<TimelineRow> timelineRows, IEnumerable<EmoteRow> emoteRows,
+        IReadOnlySet<ushort>? empty = null)
     {
         var timelines = new Dictionary<ushort, TimelineRow>();
         foreach (var row in timelineRows)
@@ -106,7 +138,7 @@ internal static class AnimationLibrary
             Add(AnimationLibraryGroup.Emotes, main, emote.Name, emote.Command);
             var seen = new HashSet<ushort> { main };
             for (var i = 1; i < Math.Min(emote.Timelines.Length, Versions.Length); i++)
-                if (Versions[i] is { } version && emote.Timelines[i] is var id and > 0 && seen.Add(id))
+                if (Versions[i] is { } version && emote.Timelines[i] is var id and > 0 && empty?.Contains(id) != true && seen.Add(id))
                     Add(AnimationLibraryGroup.Emotes, id, $"{emote.Name} ({version})", emote.Command);
         }
 
@@ -133,7 +165,7 @@ internal static class AnimationLibrary
 
         // Every other timeline, by its key.
         foreach (var row in timelines.Values.OrderBy(row => row.Key, StringComparer.Ordinal).ThenBy(row => row.Id))
-            if (!listed.Contains(row.Id))
+            if (!listed.Contains(row.Id) && empty?.Contains(row.Id) != true)
                 items.Add(new AnimationLibraryItem(AnimationLibraryGroup.Other, row.Id, KeyName(row.Key),
                     $"#{row.Id.ToString(CultureInfo.InvariantCulture)} · {row.Key}", row.Key,
                     AnimationCatalog.IsExpressionKey(row.LoadType, row.Key)));

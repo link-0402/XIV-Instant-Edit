@@ -48,7 +48,18 @@ internal sealed class AnimationResourceCache
 
 internal sealed class AnimationResources(PenumbraService penumbra, IDataManager data, IFramework framework, IPluginLog log)
 {
-    private readonly ResourceSourceAttributor sources = new(penumbra, log);
+    private readonly ResourceSourceAttributor sources = Attributor(penumbra, log);
+
+    /// <summary>
+    /// The mod index, read again whenever Penumbra adds, deletes or moves a mod: a clip read right
+    /// after a save into a new mod must name that mod, or in place would refuse it as the game's files.
+    /// </summary>
+    private static ResourceSourceAttributor Attributor(PenumbraService penumbra, IPluginLog log)
+    {
+        var attributor = new ResourceSourceAttributor(penumbra, log);
+        penumbra.ModsChanged += attributor.Invalidate;
+        return attributor;
+    }
 
     public async Task<(SkeletonSource Source, byte[] Bytes)> ReadSkeletonAsync(Guid collection, SkeletonSource source, CancellationToken token)
     {

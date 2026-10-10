@@ -7,8 +7,45 @@ using InstantEdit.Services.Animations;
 
 internal static unsafe class NativeValidationFixture
 {
+    // The game's spline constructor and the two settings it fills (ffxiv_dx11.exe 2026.09), with every call pointed into this buffer.
+    private const string SplineCtor =
+        "48 89 5C 24 10 57 48 83 EC 40 48 8B DA 48 8B F9 E8 DB 2A FF FF 48 8D 05 4C BC 61 00 48 89 07 48 8D 4C 24 20 C7 47 64 00 00 00 80 " +
+        "33 C0 48 89 47 58 89 47 60 48 89 47 68 89 47 70 C7 47 74 00 00 00 80 48 89 47 78 89 87 80 00 00 00 C7 87 84 00 00 00 00 00 00 80 " +
+        "48 89 87 88 00 00 00 89 87 90 00 00 00 C7 87 94 00 00 00 00 00 00 80 48 89 87 98 00 00 00 89 87 A0 00 00 00 " +
+        "C7 87 A4 00 00 00 00 00 00 80 E8 17 FF FF FF 48 8D 4C 24 50 E8 4D FF FF FF 4C 8D 4C 24 50 48 8B D3 4C 8D 44 24 20 48 8B CF " +
+        "E8 C8 08 00 00 48 8B 5C 24 58 48 8B C7 48 83 C4 40 5F C3";
+    private const string TrackDefaults =
+        "C7 41 0C 6F 12 83 3A 48 8B C1 C7 41 08 6F 12 83 3A C7 41 04 6F 12 83 3A C7 01 6F 12 83 3A C7 41 14 03 00 03 00 C7 41 10 03 00 03 00 C7 41 18 01 01 01 01 C3";
+    private const string AnimationDefaults = "B8 00 01 00 00 66 89 01 48 8B C1 C6 41 02 00 C3";
+
+    /// <summary>The bake's compression takes the game's spline constructor apart only when its code is exactly as expected.</summary>
+    private static void SplineConstructor(Action<bool, string> check)
+    {
+        static byte[] Bytes(string hex) => [.. hex.Split(' ').Select(part => Convert.ToByte(part, 16))];
+        var code = new byte[0x200];
+        Bytes(SplineCtor).CopyTo(code, 0);
+        Bytes(TrackDefaults).CopyTo(code, 0x100);
+        Bytes(AnimationDefaults).CopyTo(code, 0x140);
+        void Point(int at, int target, int length) => BitConverter.TryWriteBytes(code.AsSpan(at + length - 4), target - (at + length));
+        Point(0x10, 0x180, 5); Point(0x15, 0x1C0, 7); Point(0x84, 0x100, 5); Point(0x8E, 0x140, 5); Point(0xA3, 0x1A0, 5);
+        fixed (byte* start = code)
+        {
+            var parts = AnimationNative.SplineParts(start);
+            check(parts == ((nint)(start + 0x180), (nint)(start + 0x1C0), (nint)(start + 0x100), (nint)(start + 0x1A0)),
+                "the game's spline constructor gives its base constructor, vtable, default track settings and init");
+            code[0x1F] ^= 0xFF;
+            check(AnimationNative.SplineParts(start) is { Base: 0, Vtable: 0, TrackDefaults: 0, Init: 0 }, "a constructor whose code differs is used as it is");
+            code[0x1F] ^= 0xFF;
+            code[0x100 + 0x1E] = 0x02;
+            check(AnimationNative.SplineParts(start) is { Base: 0, Init: 0 }, "so is one whose default track settings look different");
+        }
+        check(sizeof(AnimationNative.TrackCompression) == 0x1C && sizeof(AnimationNative.AnimationCompression) == 4,
+            "the compression settings have the sizes the constructor fills");
+    }
+
     public static void Run(Action<bool, string> check, Action<Action, string> reject)
     {
+        SplineConstructor(check);
         using var arena = new AnimationNative.Arena();
         var animation = arena.Alloc<AnimationNative.Interleaved>();
         animation->Animation.Type = hkaAnimation.AnimationType.InterleavedAnimation;

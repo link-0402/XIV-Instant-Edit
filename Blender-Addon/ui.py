@@ -23,7 +23,7 @@ from .instant_edit.ops import (MASHUP_TARGET, RACE_TARGET, SAVE_NEW_MOD_TARGET,
 from .instant_edit.props import DEFAULT_STATUS, IN_PLACE_TARGET, get_instant_edit_props
 from .instant_edit.racial_scaling import race_model_path
 from .instant_edit.server import server_status
-from .instant_edit.sizes import NO_SIZES, export_names, magic_fit_api, picked_names
+from .instant_edit.sizes import NO_SIZES, export_names, magic_fit_api, picked_issue, picked_names
 from .materials import (
     attribute_display_name,
     material_mismatch_parts,
@@ -574,7 +574,7 @@ class XIVIE_PT_export_scope_popover(Panel):
                 hint = toggles.row()
                 hint.active = False
                 width = _display_wrap_width(context, self.bl_ui_units_x) - 4
-                hint.label(text=_size_list(names, width) if names else NO_SIZES, icon="BLANK1")
+                hint.label(text=_size_list(names, width) if names else picked_issue(context.scene) or NO_SIZES, icon="BLANK1")
 
 
 # ---- Instant Edit (session) panel ---------------------------------------------------

@@ -21,6 +21,7 @@ API_VERSION = 1
 NO_SIZES = "Pick sizes in Magic Fit's Resize panel."
 # The most sizes Instant Edit takes in one export (its ExportServer.Sizes MaxSizes).
 MAX_SIZES = 64
+TOO_MANY = f"Pick at most {MAX_SIZES} sizes."
 _INVALID_FILE_CHARACTERS = frozenset('<>:"/\\|?*')
 
 
@@ -42,15 +43,40 @@ def wanted(props=None) -> bool:
     return bool(getattr(props, "export_sizes", False)) and magic_fit_api() is not None
 
 
+def _picked(api, scene=None) -> list:
+    """Magic Fit's picked sizes. Magic Fit refuses picks that make more sizes than it lists (64, as many as an
+    export takes): that raises ValueError(TOO_MANY)."""
+    try:
+        return list(api.picked_sizes(scene))
+    except getattr(api, "ResizeError", ()) as error:
+        raise ValueError(TOO_MANY) from error
+
+
 def picked_names(scene=None) -> list[str]:
-    """The names of the sizes picked in Magic Fit's Resize panel; none without Magic Fit or sizes."""
+    """The names of the sizes picked in Magic Fit's Resize panel; none without Magic Fit or sizes, or with too many."""
     api = magic_fit_api()
     if api is None:
         return []
     try:
-        return option_names(api.picked_sizes(scene))
+        return option_names(_picked(api, scene))
     except (AttributeError, ReferenceError, RuntimeError, TypeError, ValueError):
         return []
+
+
+def picked_issue(scene=None) -> str:
+    """Why an export can't go out at the sizes picked in Magic Fit, or "" when it can."""
+    api = magic_fit_api()
+    if api is None:
+        return ""
+    try:
+        names = option_names(_picked(api, scene))
+    except ValueError as error:
+        if str(error) == TOO_MANY:
+            return TOO_MANY
+        names = []
+    except (AttributeError, ReferenceError, RuntimeError, TypeError):
+        names = []
+    return option_name_issue(names) if names else NO_SIZES
 
 
 # The YAB devkit's words for its sizes, as Magic Fit names them (its sizing._Yab).
@@ -125,7 +151,7 @@ def option_name_issue(names) -> str:
     """Why sizes of these names can't be Penumbra options, or "" when they can."""
     names = list(names)
     if len(names) > MAX_SIZES:
-        return f"Pick at most {MAX_SIZES} sizes."
+        return TOO_MANY
     seen = set()
     for name in names:
         if not name or name != name.strip() or len(name) > 120 or any(ord(char) < 32 for char in name) \
@@ -188,7 +214,7 @@ def export_steps(objects, export, session=None):
     api = magic_fit_api()
     if api is None:
         raise ValueError("Magic Fit isn't enabled.")
-    picked = list(api.picked_sizes())
+    picked = _picked(api)
     if not picked:
         raise ValueError(NO_SIZES)
     names = option_names(picked)

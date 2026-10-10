@@ -522,6 +522,14 @@ internal static class VariantExportScenarios
                     .Single()!["Name"]!.GetValue<string>() == "atrx_cape",
             "accessory attribute groups: then the earlier IMC group goes, so the mod's variants stay, and the atrx_ toggles are still written");
 
+        // An import whose capture failed read none of the mod's IMC entries: they are unknown, not absent (bridge test 09).
+        var unknown = Folder("NecklaceUnknown");
+        Require(PenumbraService.WriteAttributeGroupsForRegression(unknown, necklace, mixedTags, masks, null, game)?
+                    .StartsWith("attribute_group_imc_unknown:", StringComparison.Ordinal) == true &&
+                JsonNode.Parse(File.ReadAllText(Path.Combine(unknown, "meta.json")))!["Groups"]!.AsArray().OfType<JsonObject>()
+                    .All(group => group["Type"]?.GetValue<string>() != "Imc"),
+            "accessory attribute groups: with the mod's own variant entries unknown, no IMC group is written over them, which is said");
+
         // The converted cloak still carried the body's atr_tv_ tags, which a necklace's IMC entry never hides.
         var converted = Folder("ConvertedCloak");
         var convertedBefore = File.ReadAllText(Path.Combine(converted, "meta.json"));

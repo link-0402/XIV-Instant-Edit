@@ -586,11 +586,12 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
                 var referenceOnlyText = referenceOnly.Length == 0 ? "0 reference-only bones" : referenceOnly.Length <= 4
                     ? $"{referenceOnly.Length} reference-only bone{(referenceOnly.Length == 1 ? "" : "s")} ({string.Join(", ", referenceOnly)})"
                     : $"{referenceOnly.Length} reference-only bones";
-                // Among first bones that fit equally well, those of the character's own skeleton
-                // file are the ones the animation plays on.
+                // Among first bones that fit, those of the character's own skeleton file are the ones the
+                // animation plays on: the game decodes it against their rest pose. That outweighs another
+                // file whose skeleton has the name the animation was made for.
                 var live = c.Source.LeadingBones > 0 && c.Source.Kind == SkeletonSourceKind.Collection && provenance == 2 ? 1 : 0;
-                var rank = modelScore * 10000000000000000L + name * 1000000000000000L + provenance * 10000000000000L +
-                    overlap * 10000000L + live * 100000L - referenceOnly.Length;
+                var rank = modelScore * 10000000000000000L + live * 2000000000000000L + name * 1000000000000000L +
+                    provenance * 10000000000000L + overlap * 10000000L - referenceOnly.Length;
                 var leadingText = c.Source.LeadingBones > 0 ? $"; only its first {c.Source.LeadingBones} bones, as no whole skeleton fits" : "";
                 return c with { Rank = rank,
                     Rationale = $"Source model {(model ?? "unconfirmed")} (score {modelScore}); skeleton name {(name == 1 ? "matches" : "unconfirmed")}; variant match {provenance}; {overlap} ordered bones/parents match; {referenceOnlyText}{leadingText}" };

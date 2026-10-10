@@ -106,6 +106,8 @@ public sealed partial class PenumbraService
     /// at its one material, gets its entries written into the group when they're all the same; when
     /// they differ, no single group can keep them and none is made. <paramref name="gameEntries"/> holds
     /// the game's entries by variant, 0 to the file's count; without it, only the mod's variant 1 is known.
+    /// Null <paramref name="sourceManipulations"/> means the import couldn't read the mod's entries: then a model
+    /// with variants gets no group, since it could undo entries nobody knows.
     /// </summary>
     private static ImcGroupEntry PlanImcGroupEntry(
         AttributeModelIdentity identity,
@@ -115,6 +117,10 @@ public sealed partial class PenumbraService
         var own = SourceImcEntries(identity, sourceManipulations);
         if (gameEntries is not { Count: > 1 })
             return Usable(new ImcGroupEntry(own.GetValueOrDefault(1) ?? gameEntries?.FirstOrDefault(), true));
+        if (sourceManipulations is null)
+            return new ImcGroupEntry(null, false,
+                "attribute_group_imc_unknown: The import didn't read this mod's variant settings, so a part toggle group could undo them. " +
+                "Import the model again, then export.");
 
         var count = gameEntries.Count - 1;
         if (own.All(pair => pair.Key < 1 || pair.Key > count || SameImcEntry(pair.Value, gameEntries[pair.Key])))

@@ -15,7 +15,8 @@ public sealed partial class TimelineWindow
 {
     private const int RecoveryRows = 20;
 
-    private static bool NeedsAttention(AnimationEditJournal journal) => journal.State is not ("Completed" or "Undone");
+    // A save that was refused, or failed and was rolled back, left no files to put back.
+    private static bool NeedsAttention(AnimationEditJournal journal) => journal.State is not ("Completed" or "Undone" or "FilesUndone");
 
     /// <summary>How many recorded edits did not finish and need an undo; none while an edit is still running.</summary>
     internal static int RecoveryAttention(AnimationEditService service)
@@ -48,6 +49,7 @@ public sealed partial class TimelineWindow
     {
         "Completed" => (Theme.Success, "Completed"),
         "Undone" => (Theme.Muted, "Undone"),
+        "FilesUndone" => (Theme.Muted, "Not saved"),
         "Prepared" or "ClearingOffsets" => (Theme.Warning, "Interrupted"),
         _ => (Theme.Warning, journal.State),
     };

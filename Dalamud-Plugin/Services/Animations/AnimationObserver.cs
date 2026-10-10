@@ -31,6 +31,8 @@ internal sealed class AnimationObserver : IDisposable
     private readonly ConcurrentDictionary<string, (DateTime At, SkeletonResolution Result)> resolutions = [];
     private readonly ConcurrentDictionary<string, string> manualChoices = [];
     private readonly ConcurrentDictionary<string, string> operationErrors = [];
+    // Timelines outside the emotes, idles and movement that the loader played: heard from then on.
+    private readonly ConcurrentDictionary<ushort, byte> heard = [];
     private Task matching = Task.CompletedTask;
     private readonly CancellationTokenSource lifetime = new();
     private readonly RuntimeCaptureCache runtimeCache = new();
@@ -174,7 +176,8 @@ internal sealed class AnimationObserver : IDisposable
                 log.Debug($"Animation observation framework capture took {frameworkMillis:F2} ms.");
             token.ThrowIfCancellationRequested();
             if (pair.Runtime is not { } runtime) { MarkNotPlaying(); Status = "Waiting for an eligible player animation."; return; }
-            var active = runtime.Timelines.Distinct().Select(catalog.Find).OfType<AnimationCatalog.Timeline>().ToArray();
+            var active = runtime.Timelines.Distinct().Select(id => catalog.Find(id) ?? (heard.ContainsKey(id) ? catalog.FindAny(id) : null))
+                .OfType<AnimationCatalog.Timeline>().ToArray();
             if (active.Length == 0) { MarkNotPlaying(); Status = "No eligible emote, idle, or movement is playing."; return; }
             var collection = await penumbra.GetCollectionTargetAsync(runtime.ObjectIndex) ?? throw new IOException("The player collection is unavailable.");
             token.ThrowIfCancellationRequested();
@@ -410,8 +413,12 @@ internal sealed class AnimationObserver : IDisposable
                 await framework.RunOnFrameworkThread(() =>
                 {
                     if (expectedGeneration != generation || expectedRevision != skeletons.Revision) return;
+                    // A skeleton chosen under Source while this match ran wins over what it found before: the
+                    // choice is in the kept matches, which this match's own result went into too.
+                    AnimationClip Latest(AnimationClip clip) =>
+                        resolutions.TryGetValue(ChoiceKey(clip), out var latest) ? clip with { Resolution = latest.Result } : clip;
                     history = history.Select(c => c.Id == capture.Id && ChoiceKey(c.Clip) == ChoiceKey(capture.Clip)
-                        ? c with { Clip = resolved, Startup = startup } : c).ToImmutableArray();
+                        ? c with { Clip = Latest(resolved), Startup = startup == null ? null : Latest(startup) } : c).ToImmutableArray();
                 });
             }
         }
@@ -532,6 +539,12 @@ internal sealed class AnimationObserver : IDisposable
                     ? updatedResources.FirstOrDefault(u => u.GamePath == timeline.GamePath) ?? timeline
                     : null,
             }).ToImmutableArray();
+    }
+    /// <summary>Hears <paramref name="timeline"/> from now on, when it is one of the game's other timelines (the loader's Other rows).</summary>
+    public void Hear(ushort timeline)
+    {
+        if (catalog.Find(timeline) == null && catalog.FindAny(timeline) != null)
+            heard[timeline] = 0;
     }
     public void ReportOperationError(AnimationClip clip, string? error)
     {
