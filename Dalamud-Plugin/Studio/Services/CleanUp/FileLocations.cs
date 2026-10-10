@@ -131,12 +131,12 @@ internal static class FileLocations
 
         var metaPath = Path.Combine(folder, PenumbraModMeta.FileName);
         var created = new List<string>();
-        using var operation = backups.Begin(folder, project.Meta.Identifier ?? Guid.Empty, $"Moved {plan.Moves.Count} files", cacheRoot);
-        byte[] original;
+        using var operation = backups.Begin(folder, ModBackupStore.IdOf(folder), $"Moved {plan.Moves.Count} files", cacheRoot);
+        MetaFiles original;
         try
         {
-            original = File.ReadAllBytes(metaPath);
-            operation.Keep(PenumbraModMeta.FileName);
+            original = MetaFiles.Take(folder);
+            operation.KeepMeta();
             foreach (var relPath in plan.Obsolete)
                 operation.Keep(relPath);
 
@@ -155,8 +155,16 @@ internal static class FileLocations
                 operation.Keep(move.ToRel);
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                 var temp = target + ".instant-edit-tmp";
-                File.Copy(source, temp, overwrite: true);
-                File.Move(temp, target);
+                try
+                {
+                    File.Copy(source, temp, overwrite: true);
+                    File.Move(temp, target);
+                }
+                catch
+                {
+                    DeleteCreated(new[] { temp });   // no half-written file is left in the mod
+                    throw;
+                }
                 created.Add(target);
             }
 
@@ -183,9 +191,7 @@ internal static class FileLocations
         {
             if (plan.Moves.Count > 0 && (!penumbra.Reload(name) || !penumbra.IsPresent(name)))
             {
-                var temp = metaPath + ".instant-edit-tmp";
-                File.WriteAllBytes(temp, original);
-                File.Move(temp, metaPath, overwrite: true);
+                original.PutBack(folder);
                 await OnOwner(() => project.RefreshFromDisk(force: true)).ConfigureAwait(false);
                 DeleteCreated(created);
                 keep = false;   // the mod is as it was

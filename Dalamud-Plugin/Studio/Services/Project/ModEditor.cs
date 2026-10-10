@@ -90,8 +90,8 @@ internal sealed class ModEditor : IDisposable
     /// <summary>Whether the mod is still open here (not closed, and not deleted in Penumbra).</summary>
     public bool IsOpen => Session.Project != null;
 
-    /// <summary>Closed, with nothing left to write into the mod: the host can let go of it.</summary>
-    public bool Finished => !IsOpen && !Sync.Busy && _copying == null;
+    /// <summary>Closed, with nothing left to write into the mod (a repair or clean-up included): the host can let go of it.</summary>
+    public bool Finished => !IsOpen && !Sync.Busy && _copying == null && !Check.Busy;
 
     /// <summary>The mod's name, or its folder's when it has none.</summary>
     public string Name => string.IsNullOrWhiteSpace(Project.Meta.Name) ? Project.FolderName : Project.Meta.Name;
@@ -179,6 +179,9 @@ internal sealed class ModEditor : IDisposable
 
     public void Dispose()
     {
+        // A repair or clean-up under way is given a moment to finish what it changed (and record it in the backups).
+        Check.Cancel();
+        Check.WaitForOperation(TimeSpan.FromSeconds(5));
         Sync.Dispose();
         Graphs.Dispose();
         _watcher.Dispose();

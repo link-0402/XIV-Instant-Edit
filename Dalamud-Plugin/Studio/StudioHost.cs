@@ -237,6 +237,8 @@ internal sealed class StudioHost : IDisposable
     public void Draw()
     {
         Thumbnails.NewFrame();
+        if (Configuration.TakeSaveRequest())
+            Configuration.Save();   // asked for by a worker
         Builds.Update();   // finishes a build even while the build window is closed
         Library.Update();  // Penumbra's mod events and the library listing
 
@@ -294,6 +296,8 @@ internal sealed class StudioHost : IDisposable
         _open.Clear();
         _closing.Clear();
         Library.Dispose();
+        if (Configuration.TakeSaveRequest())
+            Configuration.Save();
 
         _windows.RemoveAllWindows();
         _buildWindow.Dispose();

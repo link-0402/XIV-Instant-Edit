@@ -133,7 +133,22 @@ public sealed class StudioSettings
 
     public void Save() => _save?.Invoke();
 
+    private volatile bool _saveSoon;
+
+    /// <summary>Asks for a save on the next frame: workers don't save the configuration while the render thread may be changing it.</summary>
+    public void SaveSoon() => _saveSoon = true;
+
+    /// <summary>True once after <see cref="SaveSoon"/>. Render thread.</summary>
+    internal bool TakeSaveRequest()
+    {
+        if (!_saveSoon)
+            return false;
+        _saveSoon = false;
+        return true;
+    }
+
     /// <summary>Files clean-up or repairs couldn't delete because something held them; deleted when they are free.</summary>
+    /// <summary>Replaced whole, never changed in place (see <see cref="Services.CleanUp.PendingCleanup"/>), so a save reading it while a worker adds a file sees one list or the other.</summary>
     public List<PendingFile> PendingCleanup { get; set; } = new();
 
     /// <summary>Whether an item has any saved models or materials, regardless of modpack membership.</summary>

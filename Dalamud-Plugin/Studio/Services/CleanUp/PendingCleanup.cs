@@ -13,12 +13,15 @@ namespace InstantEdit.Studio.Services.CleanUp;
 /// <summary>Files clean-up or repairs left behind because something held them, deleted once they are free.</summary>
 internal static class PendingCleanup
 {
+    // The list is replaced, never changed in place, under this lock.
+    private static readonly object Lock = new();
+
     /// <summary>Notes a file to delete later (once per mod and path), and saves the settings.</summary>
     public static void Add(StudioSettings settings, string modFolder, string relPath, string reason)
     {
         var normalized = relPath.Replace('\\', '/');
         bool listed;
-        lock (settings.PendingCleanup)
+        lock (Lock)
             listed = settings.PendingCleanup.Any(p => string.Equals(p.ModFolder, modFolder, StringComparison.OrdinalIgnoreCase)
                                           && string.Equals(p.RelPath, normalized, StringComparison.OrdinalIgnoreCase));
         if (listed)
@@ -35,9 +38,12 @@ internal static class PendingCleanup
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
-        lock (settings.PendingCleanup)
-            settings.PendingCleanup.Add(new PendingFile { ModFolder = modFolder, RelPath = normalized, Reason = reason, Since = DateTime.UtcNow, Size = size, LastWriteUtc = lastWrite });
-        settings.Save();
+        lock (Lock)
+            settings.PendingCleanup = new List<PendingFile>(settings.PendingCleanup)
+            {
+                new PendingFile { ModFolder = modFolder, RelPath = normalized, Reason = reason, Since = DateTime.UtcNow, Size = size, LastWriteUtc = lastWrite },
+            };
+        settings.SaveSoon();
     }
 
     /// <summary>
@@ -51,9 +57,7 @@ internal static class PendingCleanup
         var cleaned = 0;
         var dropped = false;
         var references = new Dictionary<string, HashSet<string>?>(StringComparer.OrdinalIgnoreCase);
-        PendingFile[] entries;
-        lock (settings.PendingCleanup)
-            entries = settings.PendingCleanup.ToArray();
+        var entries = settings.PendingCleanup.ToArray();
         foreach (var entry in entries)
         {
             token.ThrowIfCancellationRequested();
@@ -83,14 +87,14 @@ internal static class PendingCleanup
             }
         }
         if (cleaned > 0 || dropped)
-            settings.Save();
+            settings.SaveSoon();
         return cleaned;
     }
 
     private static void Remove(StudioSettings settings, PendingFile entry)
     {
-        lock (settings.PendingCleanup)
-            settings.PendingCleanup.Remove(entry);
+        lock (Lock)
+            settings.PendingCleanup = settings.PendingCleanup.Where(p => !ReferenceEquals(p, entry)).ToList();
     }
 
     /// <summary>Whether a waiting file is still the one that was left and still unused by the mod.</summary>

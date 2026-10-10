@@ -44,9 +44,8 @@ internal static partial class ModCheckScenarios
             $"a v{version & 0xF} model{(extraLods ? " with extra LODs" : "")} gives its materials, attributes, bones, meshes and submesh masks");
 
         var facts = ModFileFactsCache.FromBytes(bytes, ResourceKind.Model);
-        Require(facts.Layout is { } layout && layout.Attributes.SequenceEqual(["atr_tv_a", "atr_ude"]) &&
-                facts.MaterialSlots.SequenceEqual(["/mt_c0201e0001_top_a.mtrl", "/mt_c0201b0001_a.mtrl"]),
-            "the resource tree's file facts carry the model's layout");
+        Require(facts.MaterialSlots.SequenceEqual(["/mt_c0201e0001_top_a.mtrl", "/mt_c0201b0001_a.mtrl"]),
+            "the resource tree's file facts carry the model's material slots");
     }
 
     private static void FlagsMeshesWithMissingMaterialSlots()

@@ -73,14 +73,17 @@ internal static class RepairApplier
         var metaPath = Path.Combine(project.FolderPath, PenumbraModMeta.FileName);
         var folder = project.FolderPath;
         var name = project.FolderName;
+        // The files this plugin wrote, read where the open mod lives; they are never deleted as unused.
+        IReadOnlySet<string> ledger = new HashSet<string>(StringComparer.Ordinal);
+        await OnOwner(() => ledger = project.Sidecar.Ledger.Files.Select(f => PathNormalizer.RelKey(f.RelPath)).ToHashSet(StringComparer.Ordinal)).ConfigureAwait(false);
 
-        using var operation = backups.Begin(folder, project.Meta.Identifier ?? Guid.Empty,
+        using var operation = backups.Begin(folder, ModBackupStore.IdOf(folder),
             $"Applied {repairs.Count} fix{(repairs.Count == 1 ? string.Empty : "es")}", cacheRoot);
-        byte[] original;
+        MetaFiles original;
         try
         {
-            original = File.ReadAllBytes(metaPath);
-            operation.Keep(PenumbraModMeta.FileName);
+            original = MetaFiles.Take(folder);
+            operation.KeepMeta();
             foreach (var relPath in deletions.Select(d => d.RelPath).Concat(released).Distinct(StringComparer.OrdinalIgnoreCase))
                 if (File.Exists(ModPaths.Resolve(project.FolderPath, relPath)))
                     operation.Keep(relPath);
@@ -124,9 +127,7 @@ internal static class RepairApplier
             {
                 if (!penumbra.Reload(name) || !penumbra.IsPresent(name))
                 {
-                    var temp = metaPath + ".instant-edit-tmp";
-                    File.WriteAllBytes(temp, original);
-                    File.Move(temp, metaPath, overwrite: true);
+                    original.PutBack(folder);
                     keep = false;   // the mod is as it was
                     await OnOwner(() => project.RefreshFromDisk(force: true)).ConfigureAwait(false);
                     penumbra.Reload(name);
@@ -150,8 +151,14 @@ internal static class RepairApplier
                 delete.Add(deletion.RelPath);
             }
             foreach (var relPath in released)
-                if (!referenced.Contains(relPath) && File.Exists(ModPaths.Resolve(project.FolderPath, relPath)))
-                    delete.Add(relPath);
+            {
+                var info = new FileInfo(ModPaths.Resolve(folder, relPath));
+                if (referenced.Contains(relPath) || !info.Exists || ledger.Contains(PathNormalizer.RelKey(relPath)))
+                    continue;
+                if (info.LastWriteTimeUtc > report.At)
+                    continue;   // written since the check: not the file it saw
+                delete.Add(relPath);
+            }
 
             int deleted = 0, pending = 0;
             foreach (var relPath in delete.Distinct(StringComparer.OrdinalIgnoreCase))

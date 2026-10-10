@@ -48,4 +48,15 @@ internal sealed class RepairSelection
 
     /// <summary>How many repairs applying would make.</summary>
     public int Count => Effective().Count;
+
+    /// <summary>A copy of the ticks and choices as they are now, for an apply on a worker while the view stays editable.</summary>
+    public RepairSelection Snapshot()
+    {
+        var copy = new RepairSelection(_report) { DeleteReleasedFiles = DeleteReleasedFiles };
+        copy._ticked.Clear();
+        copy._ticked.UnionWith(_ticked);
+        foreach (var (id, label) in _choices)
+            copy._choices[id] = label;
+        return copy;
+    }
 }

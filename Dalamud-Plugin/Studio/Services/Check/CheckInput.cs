@@ -39,6 +39,9 @@ internal sealed class CheckInput
     /// <summary>A copy of the mod's meta.json; the check never writes it.</summary>
     public required PenumbraModMeta Meta { get; init; }
 
+    /// <summary>meta.json's fingerprint when <see cref="Meta"/> was copied, so an edit made before the check runs makes its report stale.</summary>
+    public MetaFingerprint? Fingerprint { get; init; }
+
     public required IVanillaFiles Game { get; init; }
     public IItemVariants? Items { get; init; }
 
@@ -53,7 +56,7 @@ internal sealed class CheckInput
     /// <summary>The same input, checked against a collection.</summary>
     public CheckInput WithCollection(ICollectionView? collection) => new()
     {
-        Folder = Folder, Meta = Meta, Game = Game, Items = Items, PlayerRace = PlayerRace, Collection = collection, LedgerRelKeys = LedgerRelKeys,
+        Folder = Folder, Meta = Meta, Fingerprint = Fingerprint, Game = Game, Items = Items, PlayerRace = PlayerRace, Collection = collection, LedgerRelKeys = LedgerRelKeys,
     };
 
     public static CheckInput From(ModProject project, IVanillaFiles game, IItemVariants? items, ushort? player, ICollectionView? collection)
@@ -65,6 +68,7 @@ internal sealed class CheckInput
         {
             Folder        = project.FolderPath,
             Meta          = project.Meta.Clone(),
+            Fingerprint   = MetaFingerprint.Of(project.FolderPath),
             Game          = game,
             Items         = items,
             PlayerRace    = player,
@@ -78,8 +82,9 @@ internal sealed class CheckInput
         ICollectionView? collection = null)
         => new()
         {
-            Folder     = folder,
-            Meta       = PenumbraModMeta.Load(folder),
+            Folder      = folder,
+            Fingerprint = MetaFingerprint.Of(folder),
+            Meta        = PenumbraModMeta.Load(folder),
             Game       = game,
             Items      = items,
             PlayerRace = player,
