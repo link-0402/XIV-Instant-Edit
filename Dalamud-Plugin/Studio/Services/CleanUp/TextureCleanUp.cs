@@ -65,6 +65,22 @@ internal static class TextureCleanUp
         return null;
     }
 
+    /// <summary>Why a texture can't be given a format (keeping one the encoder can't write), or null when it can.</summary>
+    public static string? WhyNotFormat(TexInfo info, TextureFormatChoice format)
+    {
+        if (format != TextureFormatChoice.Keep)
+            return null;
+        try
+        {
+            TextureFiles.OutputType(info.Format);
+            return null;
+        }
+        catch (NotSupportedException)
+        {
+            return $"Its format ({TextureCost.FormatName(info.Format)}) can't be written again; pick Auto or a BC format.";
+        }
+    }
+
     /// <summary>The mod's textures in a resource graph, each file once, with the uses its materials give it.</summary>
     public static IReadOnlyList<TextureCandidate> Scan(ResourceGraph graph, Func<ResourceNode, byte[]?> readFile)
     {
@@ -144,7 +160,7 @@ internal static class TextureCleanUp
         int changed = 0, kept = 0;
         long saved = 0;
         var problems = new List<string>();
-        using var operation = backups.Begin(folder, project.Meta.Identifier ?? Guid.Empty, "Textures", cacheRoot);
+        using var operation = backups.Begin(folder, ModBackupStore.IdOf(folder), "Textures", cacheRoot);
         var work = Path.Combine(Path.GetTempPath(), "InstantEdit", "texture-cleanup", Guid.NewGuid().ToString("N"));
         try
         {
@@ -176,6 +192,11 @@ internal static class TextureCleanUp
                 {
                     full = ModPaths.Resolve(folder, relPath);
                     original = await File.ReadAllBytesAsync(full, token).ConfigureAwait(false);
+                    if (TextureCost.Read(original) != info)
+                    {
+                        problems.Add($"{name}: left as it is, it changed since the list was made. Look again.");
+                        continue;
+                    }
                     operation.Keep(relPath);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
@@ -219,8 +240,17 @@ internal static class TextureCleanUp
                 lock (ModFiles.Gate)
                 {
                     var temp = full + ".instant-edit-tmp";
-                    File.WriteAllBytes(temp, encoded);
-                    File.Move(temp, full, overwrite: true);
+                    try
+                    {
+                        File.WriteAllBytes(temp, encoded);
+                        File.Move(temp, full, overwrite: true);
+                    }
+                    catch
+                    {
+                        try { File.Delete(temp); }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                        throw;
+                    }
                 }
                 changed++;
                 saved += original.LongLength - encoded.LongLength;

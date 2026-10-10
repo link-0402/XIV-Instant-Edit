@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace InstantEdit.Studio.Services.Backups;
 
-/// <summary>Deleting files the game or another program may be holding: a few tries with growing pauses.</summary>
+/// <summary>Deleting files the game or another program may be holding: a few tries with growing pauses, each under <see cref="Project.ModFiles.Gate"/>.</summary>
 internal static class FileRetry
 {
     /// <summary>Deletes a file; false when it is still locked after the last try. A missing file counts as deleted.</summary>
@@ -16,9 +16,13 @@ internal static class FileRetry
         {
             try
             {
-                if (!File.Exists(path))
-                    return true;
-                File.Delete(path);
+                // Under the mod files' lock, like every other write into a mod.
+                lock (Project.ModFiles.Gate)
+                {
+                    if (!File.Exists(path))
+                        return true;
+                    File.Delete(path);
+                }
                 return true;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

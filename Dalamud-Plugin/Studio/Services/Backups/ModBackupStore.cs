@@ -100,17 +100,37 @@ internal sealed partial class ModBackupStore
         }
     }
 
+    /// <summary>The mod's id from its meta.json on disk (read on the worker, not from the open mod), or empty.</summary>
+    public static Guid IdOf(string modFolder)
+    {
+        try
+        {
+            return Project.PenumbraModMeta.Load(modFolder).Identifier ?? Guid.Empty;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Newtonsoft.Json.JsonException or InvalidDataException)
+        {
+            return Guid.Empty;
+        }
+    }
+
     /// <summary>Starts an operation on a mod. Nothing is recorded until <see cref="BackupOperation.Commit"/>.</summary>
     public BackupOperation Begin(string modFolder, Guid modId, string label, string cacheRoot)
         => new(this, new BackupEntry { ModFolder = Key(modFolder), ModId = modId, At = DateTime.UtcNow, Label = label }, modFolder, cacheRoot);
 
-    /// <summary>A mod's operations, newest first.</summary>
-    public IReadOnlyList<BackupEntry> For(string modFolder)
+    /// <summary>
+    /// A mod's operations, newest first. With <paramref name="modId"/>, also those made under a folder
+    /// that no longer exists by the mod with that id: Penumbra renamed it. (A folder that still exists
+    /// is another install, even when it shares the id.)
+    /// </summary>
+    public IReadOnlyList<BackupEntry> For(string modFolder, Guid modId = default)
     {
         var key = Key(modFolder);
+        BackupEntry[] entries;
         lock (_lock)
-            return _journal.Entries.Where(entry => string.Equals(entry.ModFolder, key, StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(entry => entry.At).ToArray();
+            entries = _journal.Entries.ToArray();
+        return entries.Where(entry => string.Equals(entry.ModFolder, key, StringComparison.OrdinalIgnoreCase)
+                                   || modId != Guid.Empty && entry.ModId == modId && !Directory.Exists(entry.ModFolder))
+            .OrderByDescending(entry => entry.At).ToArray();
     }
 
     /// <summary>
@@ -301,6 +321,20 @@ internal sealed class BackupOperation : IDisposable
             }
         }
         _entry.Files.Add(new BackupFile { RelPath = normalized, ShaBefore = sha });
+    }
+
+    /// <summary>
+    /// Keeps meta.json before it is written, and for a mod in Penumbra's old layout its split files and
+    /// the names they are set aside under, so a restore brings the old layout back as it was.
+    /// </summary>
+    public void KeepMeta()
+    {
+        Keep(Project.PenumbraModMeta.FileName);
+        foreach (var file in MetaFiles.LegacyFiles(_modFolder))
+        {
+            Keep(file);
+            Keep(file + Project.PenumbraModMeta.BackupSuffix);
+        }
     }
 
     /// <summary>Takes a kept file back out of the operation: it was left as it was after all.</summary>

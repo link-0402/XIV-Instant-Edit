@@ -122,12 +122,12 @@ internal static class DuplicateFiles
         }
 
         var metaPath = Path.Combine(folder, PenumbraModMeta.FileName);
-        using var operation = backups.Begin(folder, project.Meta.Identifier ?? Guid.Empty, $"Removed {replacement.Count} duplicate files", cacheRoot);
-        byte[] original;
+        using var operation = backups.Begin(folder, ModBackupStore.IdOf(folder), $"Removed {replacement.Count} duplicate files", cacheRoot);
+        MetaFiles original;
         try
         {
-            original = File.ReadAllBytes(metaPath);
-            operation.Keep(PenumbraModMeta.FileName);
+            original = MetaFiles.Take(folder);
+            operation.KeepMeta();
             foreach (var other in replacement.Keys)
                 operation.Keep(other);
             await OnOwner(() => project.EditStructure(meta =>
@@ -148,9 +148,7 @@ internal static class DuplicateFiles
         {
             if (!penumbra.Reload(name) || !penumbra.IsPresent(name))
             {
-                var temp = metaPath + ".instant-edit-tmp";
-                File.WriteAllBytes(temp, original);
-                File.Move(temp, metaPath, overwrite: true);
+                original.PutBack(folder);
                 keep = false;   // the mod is as it was
                 await OnOwner(() => project.RefreshFromDisk(force: true)).ConfigureAwait(false);
                 penumbra.Reload(name);

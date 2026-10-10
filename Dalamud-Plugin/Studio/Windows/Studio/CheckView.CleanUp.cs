@@ -18,8 +18,8 @@ namespace InstantEdit.Studio.Windows.Studio;
 /// <summary>The Check view's Clean up tab: the mod's textures, resized and compressed.</summary>
 internal sealed partial class CheckView
 {
-    private static readonly int[] SizeCaps = { 0, 4096, 2048, 1024, 512, 256 };
-    private static readonly string[] SizeCapLabels = { "Keep size", "4096", "2048", "1024", "512", "256" };
+    private static readonly int[] SizeCaps = { 0, 4096, 2048, 1024, 512, 256, 128, 64, 32, 16 };
+    private static readonly string[] SizeCapLabels = { "Keep size", "4096", "2048", "1024", "512", "256", "128", "64", "32", "16" };
     private static readonly TextureFormatChoice[] Formats = Enum.GetValues<TextureFormatChoice>();
     private static readonly string[] FormatLabels = { "Auto", "Keep format", "BC1", "BC3", "BC4", "BC5", "BC7" };
 
@@ -30,8 +30,28 @@ internal sealed partial class CheckView
     /// <summary>The texture picked in Clean up, for the inspector.</summary>
     internal TextureCandidate? SelectedTexture { get; private set; }
 
+    // Why the last scan of each list failed, shown instead of an empty list.
+    private string? _texturesError, _locationsError, _duplicatesError;
+    private int _listsMadeAt;
+
+    /// <summary>Lists made before an operation finished (a restore, another clean-up) are out of date: they are dropped.</summary>
+    private void DropListsAfterOperations()
+    {
+        if (Check.OperationsDone == _listsMadeAt)
+            return;
+        _listsMadeAt = Check.OperationsDone;
+        _textures = null;
+        _locations = null;
+        _duplicates = null;
+        _texturesError = _locationsError = _duplicatesError = null;
+        SelectedTexture = null;
+    }
+
+    private static string? ScanError(Task scan) => scan.IsFaulted ? $"The files couldn't be read: {scan.Exception?.GetBaseException().Message}" : null;
+
     partial void DrawMoreTabs()
     {
+        DropListsAfterOperations();
         if (ImGui.BeginTabItem("Clean up###cleanup"))
         {
             DrawTextures();
@@ -58,7 +78,8 @@ internal sealed partial class CheckView
         if (_duplicateScan is { IsCompleted: true } scan)
         {
             _duplicateScan = null;
-            _duplicates = scan.IsCompletedSuccessfully ? scan.Result : Array.Empty<DuplicateSet>();
+            _duplicates = scan.IsCompletedSuccessfully ? scan.Result : null;
+            _duplicatesError = ScanError(scan);
         }
         if (!ImGui.CollapsingHeader("Duplicate files###duplicates"))
             return;
@@ -73,6 +94,8 @@ internal sealed partial class CheckView
             ImGui.SameLine();
             Gui.Hint("Comparing files");
         }
+        if (_duplicatesError is { } duplicatesError)
+            ImGui.TextColored(Theme.Bad, duplicatesError);
         if (_duplicates is not { } sets)
             return;
         if (sets.Count == 0)
@@ -110,6 +133,7 @@ internal sealed partial class CheckView
         var meta = project.Meta.Clone();
         var folder = project.FolderPath;
         var ledger = project.Sidecar.Ledger.Files.Select(f => Services.Project.PathNormalizer.RelKey(f.RelPath)).ToHashSet(StringComparer.Ordinal);
+        _duplicatesError = null;
         _duplicateScan = Task.Run(() => DuplicateFiles.Scan(meta, folder, ledger, System.Threading.CancellationToken.None));
     }
 
@@ -144,7 +168,7 @@ internal sealed partial class CheckView
         Gui.HintWrapped("What fixes and clean-up changed in this mod, for a week. Restoring puts back the files that still hold what the change left; files changed since are left alone.");
         if (_host.Backups.LoadError is { Length: > 0 } error)
             ImGui.TextColored(Theme.Warn, error);
-        var entries = _host.Backups.For(project.FolderPath);
+        var entries = _host.Backups.For(project.FolderPath, project.Meta.Identifier ?? Guid.Empty);
         if (entries.Count == 0)
         {
             Gui.Hint("Nothing was changed here yet.");
@@ -197,7 +221,8 @@ internal sealed partial class CheckView
         if (_locationScan is { IsCompleted: true } scan)
         {
             _locationScan = null;
-            _locations = scan.IsCompletedSuccessfully ? scan.Result : new LocationPlan(Array.Empty<LocationMove>(), Array.Empty<string>());
+            _locations = scan.IsCompletedSuccessfully ? scan.Result : null;
+            _locationsError = ScanError(scan);
         }
         if (!ImGui.CollapsingHeader("File locations###locations"))
             return;
@@ -208,6 +233,8 @@ internal sealed partial class CheckView
             if (Gui.IconTextButton(FontAwesomeIcon.Search, _locations == null ? "See what would move" : "Look again", "List the moves without changing anything."))
                 StartLocationScan();
         }
+        if (_locationsError is { } locationsError)
+            ImGui.TextColored(Theme.Bad, locationsError);
         if (_locations is not { } plan)
             return;
         if (plan.Moves.Count == 0 && plan.Obsolete.Count == 0)
@@ -241,6 +268,7 @@ internal sealed partial class CheckView
         var meta = project.Meta.Clone();
         var folder = project.FolderPath;
         var ledger = project.Sidecar.Ledger.Files.Select(f => Services.Project.PathNormalizer.RelKey(f.RelPath)).ToHashSet(StringComparer.Ordinal);
+        _locationsError = null;
         _locationScan = Task.Run(() => FileLocations.Plan(meta, folder, ledger));
     }
 
@@ -271,9 +299,10 @@ internal sealed partial class CheckView
         if (_textureScan is { IsCompleted: true } scan)
         {
             _textureScan = null;
-            _textures = scan.IsCompletedSuccessfully ? scan.Result : Array.Empty<TextureCandidate>();
+            _textures = scan.IsCompletedSuccessfully ? scan.Result : null;
+            _texturesError = ScanError(scan);
             _textureChoices.Clear();
-            foreach (var candidate in _textures)
+            foreach (var candidate in _textures ?? Array.Empty<TextureCandidate>())
                 _textureChoices[candidate.RelPath] = (candidate.Preselected, 0, 0);
         }
 
@@ -290,6 +319,8 @@ internal sealed partial class CheckView
             ImGui.SameLine();
             Gui.Hint("Reading the textures");
         }
+        if (_texturesError is { } texturesError)
+            ImGui.TextColored(Theme.Bad, texturesError);
         if (_textures is not { } textures)
             return;
         if (textures.Count == 0)
@@ -355,7 +386,9 @@ internal sealed partial class CheckView
                 return new TextureJob(c, Formats[choice.Format], cap == 0 ? int.MaxValue : cap);
             })
             .ToList();
+        var unwritable = jobs.Select(j => (j.Candidate, Reason: TextureCleanUp.WhyNotFormat(j.Candidate.Info, j.Format))).FirstOrDefault(j => j.Reason != null);
         var why = jobs.Count == 0 ? "Tick the textures to change."
+            : unwritable.Reason is { } formatReason ? $"{Path.GetFileName(unwritable.Candidate.RelPath)}: {formatReason}"
             : Check.Busy ? "Wait until the change under way is done."
             : _editor.Sync.Busy ? Services.Check.RepairApplier.BusyReason
             : !_host.PenumbraIpc.CanConvertTextures ? "Penumbra is not available to encode textures."
@@ -374,6 +407,7 @@ internal sealed partial class CheckView
     {
         var graph = _session.Graph;
         var game = _host.GameData.VanillaFiles;
+        _texturesError = null;
         _textureScan = Task.Run(() => TextureCleanUp.Scan(graph, node => node.Origin == OriginKind.ModFile
             ? File.Exists(node.DiskPath) ? File.ReadAllBytes(node.DiskPath) : null
             : game.TryReadBytes(node.GamePath)));

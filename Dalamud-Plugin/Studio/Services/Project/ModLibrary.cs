@@ -42,10 +42,9 @@ internal sealed class ModLibrary : IDisposable
     private readonly Action<string, bool>   _onDirectory;
     private readonly Action<string>         _onSetting;
 
-    // Penumbra's changed items of every mod, asked for once and kept a few seconds while a scan reads them.
+    // Penumbra's changed items of every mod, asked for once and kept until a mod changes or the library is listed again.
     private readonly object _kindsGate = new();
     private IReadOnlyDictionary<string, IReadOnlyList<(string Name, ChangeKind Kind)>>? _kinds;
-    private DateTime _kindsAt;
 
     private Task<List<InstalledMod>>? _listing;
     private bool _listingStale = true;
@@ -80,11 +79,7 @@ internal sealed class ModLibrary : IDisposable
         IReadOnlyDictionary<string, IReadOnlyList<(string Name, ChangeKind Kind)>>? kinds;
         lock (_kindsGate)
         {
-            if (_kinds is null || DateTime.UtcNow - _kindsAt > TimeSpan.FromSeconds(10))
-            {
-                _kinds = _host.PenumbraIpc.ChangedItemKinds();
-                _kindsAt = DateTime.UtcNow;
-            }
+            _kinds ??= _host.PenumbraIpc.ChangedItemKinds();
             kinds = _kinds;
         }
         return kinds is not null && kinds.TryGetValue(folderName, out var items) ? items : Array.Empty<(string, ChangeKind)>();
@@ -211,6 +206,8 @@ internal sealed class ModLibrary : IDisposable
         _listingStale = false;
         _sortPaths.Clear();
         _changedItems.Clear();
+        lock (_kindsGate)
+            _kinds = null;
         var snapshot = mods.ToList();
         _listing = Task.Run(() => snapshot
             .Select(kv => Peek(root, kv.Key, kv.Value))

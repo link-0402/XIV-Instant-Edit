@@ -14,15 +14,16 @@ internal sealed class CheckInspector
 
     public void Draw()
     {
+        // A texture picked in Clean up needs no check.
+        if (_view.SelectedTexture is { } texture)
+        {
+            DrawTexture(texture);
+            return;
+        }
         var report = _view.Check.Report;
         if (report is null)
         {
             Gui.HintWrapped("Check the mod, then pick a problem to see it here.");
-            return;
-        }
-        if (_view.SelectedTexture is { } texture)
-        {
-            DrawTexture(texture);
             return;
         }
         if (_view.SelectedFinding is not { } key || report.Findings.FirstOrDefault(f => f.Key == key) is not { } finding)

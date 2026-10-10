@@ -232,15 +232,18 @@ internal sealed partial class CheckView
                 continue;
             ImGui.Indent(Theme.S(24));
             var ticked = selection.IsTicked(repair.Id);
-            if (ImGui.Checkbox($"{repair.Title}##{repair.Id}", ref ticked))
-                selection.Set(repair.Id, ticked);
+            using (Gui.Disabled(Check.Busy))
+            {
+                if (ImGui.Checkbox($"{repair.Title}##{repair.Id}", ref ticked))
+                    selection.Set(repair.Id, ticked);
+            }
             Gui.Tooltip(repair.Explanation);
             if (repair.Candidates is { Count: > 1 } candidates)
             {
                 ImGui.SameLine();
                 ImGui.SetNextItemWidth(Theme.S(220));
                 var current = selection.Choice(repair.Id) ?? candidates[0].Label;
-                if (ImGui.BeginCombo($"##cand{repair.Id}", current))
+                if (!Check.Busy && ImGui.BeginCombo($"##cand{repair.Id}", current))
                 {
                     foreach (var candidate in candidates)
                     {
@@ -263,8 +266,11 @@ internal sealed partial class CheckView
             return;
         ImGui.Separator();
         var deleteReleased = selection.DeleteReleasedFiles;
-        if (ImGui.Checkbox("Also delete files the fixes leave unused", ref deleteReleased))
-            selection.DeleteReleasedFiles = deleteReleased;
+        using (Gui.Disabled(Check.Busy))
+        {
+            if (ImGui.Checkbox("Also delete files the fixes leave unused", ref deleteReleased))
+                selection.DeleteReleasedFiles = deleteReleased;
+        }
         Gui.Tooltip("Files a removed or changed redirection pointed at, when nothing else uses them. They are backed up first.");
 
         var count = selection.Count;
@@ -287,11 +293,13 @@ internal sealed partial class CheckView
             return;
         _editor.Flush();
         var host = _host;
+        // The ticks as they are now: the view stays drawn while the worker applies them.
+        var chosen = selection.Snapshot();
         Check.StartOperation("Applying fixes", async token =>
         {
             if (BackupFolder.TryResolve(() => host.CacheRoot, out var problem) is not { } cacheRoot)
                 return (false, problem);
-            var result = await RepairApplier.ApplyAsync(project, report, selection, host.Backups, cacheRoot, host.Reloader, host.Configuration, token,
+            var result = await RepairApplier.ApplyAsync(project, report, chosen, host.Backups, cacheRoot, host.Reloader, host.Configuration, token,
                 OnFramework).ConfigureAwait(false);
             return (result.Ok, result.Message);
         }, checkAfter: true);
@@ -378,8 +386,11 @@ internal sealed partial class CheckView
                     if (row.RepairId is { } repairId && selection is not null)
                     {
                         var ticked = selection.IsTicked(repairId);
-                        if (ImGui.Checkbox($"##{repairId}", ref ticked))
-                            selection.Set(repairId, ticked);
+                        using (Gui.Disabled(Check.Busy))
+                        {
+                            if (ImGui.Checkbox($"##{repairId}", ref ticked))
+                                selection.Set(repairId, ticked);
+                        }
                         Gui.Tooltip(report.Find(repairId)?.Explanation);
                         ImGui.SameLine();
                     }

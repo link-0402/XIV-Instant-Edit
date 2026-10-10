@@ -40,7 +40,7 @@ internal sealed partial class ModCheck
 
     public static ModCheckReport Run(CheckInput input, IProgress<CheckProgress>? progress, CancellationToken token)
     {
-        var fingerprint = MetaFingerprint.Of(input.Folder);
+        var fingerprint = input.Fingerprint ?? MetaFingerprint.Of(input.Folder);
         progress?.Report(new CheckProgress("Reading the mod's files", 0, 5));
         var check = new ModCheck(input, token);
         check.Analyze(progress);

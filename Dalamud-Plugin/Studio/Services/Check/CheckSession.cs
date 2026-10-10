@@ -43,6 +43,9 @@ internal sealed class CheckSession
     /// <summary>What the operation under way is ("Applying fixes"), or null.</summary>
     public string? OperationLabel { get; private set; }
 
+    /// <summary>How many operations have finished; lists made before the last one are out of date.</summary>
+    public int OperationsDone { get; private set; }
+
     /// <summary>How the last operation went.</summary>
     public (bool Ok, string Message)? LastOperation { get; private set; }
 
@@ -81,6 +84,21 @@ internal sealed class CheckSession
         _operation = Task.Run(() => work(token), token);
     }
 
+    /// <summary>Waits up to <paramref name="timeout"/> for the operation under way (the plugin is unloading); whether it finished.</summary>
+    public bool WaitForOperation(TimeSpan timeout)
+    {
+        if (_operation is not { } operation)
+            return true;
+        try
+        {
+            return operation.Wait(timeout);
+        }
+        catch (AggregateException)
+        {
+            return true;   // it ended, by failing or being cancelled
+        }
+    }
+
     /// <summary>Takes in finished work. Render thread, every frame.</summary>
     public void Update()
     {
@@ -106,6 +124,7 @@ internal sealed class CheckSession
             _operation = null;
             OperationLabel = null;
             _operating = false;
+            OperationsDone++;
             Volatile.Write(ref _progress, null);
             LastOperation = operation.IsCompletedSuccessfully
                 ? operation.Result
