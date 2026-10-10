@@ -104,7 +104,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
                 (Path.GetFileName(candidate).Equals("Files", StringComparison.OrdinalIgnoreCase) &&
                  string.Equals(Path.GetDirectoryName(Path.GetFullPath(candidate)), Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase))) ||
             !File.Exists(file))
-            throw new TextureConflictException("The texture's mod moved, was removed, or is no longer available. Reopen the texture from On Screen or the Mod Browser.");
+            throw new TextureConflictException("The texture's mod moved, was removed, or is no longer available. Reopen the texture from On Screen or its mod window.");
     }
 
     private bool MatchesTextureActor(TextureEditSession session)
@@ -214,7 +214,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
             return;
         }
         throw new TextureConflictException(gamePaths.Count == 0
-            ? "The mod no longer uses this texture's file. Reopen the texture from On Screen or the Mod Browser."
+            ? "The mod no longer uses this texture's file. Reopen the texture from On Screen or its mod window."
             : "The mod now uses this texture's file differently. Reconnect its session in the Sessions tab to keep editing it.");
     }
 
@@ -308,7 +308,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
             await ValidateTextureDestinationAsync(session.ModDirectory, session.ModRoot, session.RelativePath, session.TargetFile, token).ConfigureAwait(false);
             var gamePaths = TextureGamePaths(session.ModRoot, session.RelativePath);
             if (gamePaths.Count == 0)
-                throw new IOException("The mod no longer uses this texture's file. Open the texture again from On Screen or the Mod Browser.");
+                throw new IOException("The mod no longer uses this texture's file. Open the texture again from On Screen or its mod window.");
             await ValidateLiveTextureMappingAsync(session, SessionTextureFiles(session), false).ConfigureAwait(false);
             var bytes = TextureFiles.Read(session.TargetFile);
             var header = TextureFiles.ReadOriginal(bytes).Header;

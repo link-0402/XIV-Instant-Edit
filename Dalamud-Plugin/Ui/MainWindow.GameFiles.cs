@@ -44,7 +44,7 @@ public sealed partial class MainWindow
             _gameExport.Finished -= OnGameExportFinished;
     }
 
-    /// <summary> Master/detail like the Mod Browser: the categories on the left, a category's vanilla models on the right. </summary>
+    /// <summary> Master/detail: the categories on the left, a category's vanilla models on the right. </summary>
     private void DrawGameFilesTab()
     {
         ImGui.Spacing();
@@ -279,7 +279,7 @@ public sealed partial class MainWindow
         return _gameSlotCounts;
     }
 
-    /// <summary> Every Game Files row imports and edits for the first on-screen character, as the Mod Browser does. </summary>
+    /// <summary> Every Game Files row imports and edits for the first on-screen character. </summary>
     private ActorView GameFilesActor()
     {
         var index = _onScreen.Items.FirstOrDefault()?.ObjectIndex ?? 0;

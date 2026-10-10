@@ -129,40 +129,6 @@ internal static class ResourceViews
             children);
     }
 
-    /// <summary> The Mod Browser view of a scanned mod: one flat row per resource, sorted by game path. </summary>
-    public static ActorView BuildModView(PenumbraModSnapshot snapshot, int importObjectIndex)
-    {
-        var roots = snapshot.Resources
-            .Select(resource => new ResourceView(
-                ResourceType(resource.GamePath),
-                string.Empty,
-                Path.GetFileName(resource.GamePath),
-                resource.GamePath,
-                resource.ActualPath,
-                $"Loaded from: {snapshot.Name}",
-                snapshot.Name,
-                snapshot.Directory,
-                snapshot.RootPath,
-                resource.RelativePath,
-                snapshot.StableId,
-                ResourceSourceState.LoadedMod,
-                ResourceSection.Other.ToString(),
-                ResourceType(resource.GamePath),
-                int.MaxValue,
-                resource.OptionMapping,
-                resource.OptionMemberships,
-                new List<ResourceView>()))
-            .OrderBy(resource => resource.GamePath, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        return new ActorView(
-            null,
-            "Mod",
-            snapshot.Name,
-            roots,
-            importObjectIndex);
-    }
-
     /// <summary> A Game Files row: a vanilla file read from the game's own data, with no actor or mod behind it. </summary>
     public static ResourceView GameFile(string gamePath, string name)
         => new(

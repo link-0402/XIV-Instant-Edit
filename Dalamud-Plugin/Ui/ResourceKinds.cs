@@ -27,11 +27,6 @@ internal sealed class ResourceKindChipSet
     public static ResourceKindChipSet OnScreen { get; } = new(ResourceKinds.Model | ResourceKinds.Texture | ResourceKinds.Material,
         (ResourceKinds.Model, "Models"), (ResourceKinds.Texture, "Textures"), (ResourceKinds.Material, "Materials"));
 
-    /// <summary> The Mod Browser also lists a mod's animation files, which can be sent to Blender. </summary>
-    public static ResourceKindChipSet ModBrowser { get; } = new(ResourceKinds.Editable,
-        (ResourceKinds.Model, "Models"), (ResourceKinds.Texture, "Textures"), (ResourceKinds.Material, "Materials"),
-        (ResourceKinds.Animation, "Animations"));
-
     /// <summary> Every kind the browser lists: what its "All" chip shows. </summary>
     public ResourceKinds Listed { get; }
 
@@ -62,7 +57,7 @@ internal static class TextureRoleClassifier
 
     /// <summary>
     /// The role of a texture row. Penumbra names a material's texture nodes after the shader
-    /// sampler they are bound to (g_SamplerNormal, …), which is authoritative; Mod Browser rows
+    /// sampler they are bound to (g_SamplerNormal, …), which is authoritative; rows of a mod window
     /// and samplers whose names Penumbra could not read fall back to the game's file-name suffixes.
     /// </summary>
     public static TextureRole Classify(ResourceKinds kinds, string? name, string? gamePath, string? actualPath)
@@ -124,7 +119,7 @@ internal static class TextureRoleClassifier
 }
 
 /// <summary>
-/// Classifies resource rows for the On Screen and Mod Browser type filters. Rows are
+/// Classifies resource rows for On Screen's type filters and the hand-offs. Rows are
 /// classified once when their view is built, so drawing only compares flags.
 /// </summary>
 internal static class ResourceKindClassifier

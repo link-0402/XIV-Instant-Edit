@@ -625,7 +625,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         Load(next.Capture, next.Startup, false, pendingAgain);
     }
 
-    /// <summary> The lanes on the left and the side panel on the right, split like the Mod Browser. </summary>
+    /// <summary> The lanes on the left and the side panel on the right, with a splitter between them. </summary>
     private void DrawBody(TimelineEditor current, float width, float height)
     {
         var splitter = Theme.Scaled(6);

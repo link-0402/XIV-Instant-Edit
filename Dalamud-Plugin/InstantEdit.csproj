@@ -27,7 +27,7 @@
     <Author>Luci_xiv</Author>
     <Name>XIV Instant Edit</Name>
     <Punchline>Send on-screen models straight to Blender and back.</Punchline>
-    <Description>Allows for easy and instant editing of Penumbra model files in Blender and saving them right back to the game. Model editing uses the XIV Instant Edit Blender add-on, which the first-time setup installs for you.</Description>
+    <Description>Allows for easy and instant editing of Penumbra model files in Blender and saving them right back to the game. Model editing uses the XIV Instant Edit Blender add-on, which the first-time setup installs for you. The Mod Browser opens any Penumbra mod to see and change its files, and builds new modpacks.</Description>
     <RepoUrl>https://github.com/link-0402/XIV-Instant-Edit</RepoUrl>
     <IconUrl>https://raw.githubusercontent.com/link-0402/XIV-Instant-Edit/main/Dalamud-Plugin/images/icon.png</IconUrl>
     <ApplicableVersion>any</ApplicableVersion>
@@ -45,6 +45,31 @@
     <PackageReference Include="Penumbra.Api" Version="5.15.1" />
     <!-- Managed Ogg Vorbis decoder (MIT) for sound import; CopyLocalLockFileAssemblies ships NVorbis.dll in the plugin. -->
     <PackageReference Include="NVorbis" Version="0.10.5" />
+    <!-- The Mod Browser's texture conversion and image reading, and the Sims 4 importer's mesh export. -->
+    <PackageReference Include="BCnEncoder.Net" Version="2.3.0" />
+    <PackageReference Include="SharpGLTF.Toolkit" Version="1.0.5" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+  </ItemGroup>
+
+  <!--
+    ImageSharp 4 needs a paid license key to build, so the Mod Browser stays on 3.1 (Six Labors
+    Split License, free for open source). Its open advisories are in TIFF encoding, BigTIFF and ICC
+    profile decoding, and histogram equalization. The plugin never encodes TIFF or equalizes, and it
+    decodes only through Studio/Services/StudioImages.cs: no TIFF decoder, and metadata (ICC
+    profiles included) skipped. Drop these suppressions when moving to a version without them.
+  -->
+  <ItemGroup>
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-gwg2-r3hj-4w44" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-j3p4-wp97-rph4" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-j9gm-c75j-xc9q" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-wmxv-xphr-5c9g" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-jjfr-hcj7-qf5w" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The Mod Browser's bundled material presets (from TexTools) and placeholder textures, read from beside the DLL. -->
+    <None Include="Studio\Resources\MaterialPresets\**" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Studio\Resources\DummyTextures\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

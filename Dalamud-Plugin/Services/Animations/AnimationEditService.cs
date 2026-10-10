@@ -28,7 +28,7 @@ internal sealed partial class AnimationEditService : IDisposable
     private ImmutableArray<AnimationEditJournal> recovery;
     private LivePoseOffsetBackup? offsetBackup;
     public AnimationObserver Observer { get; }
-    /// <summary>PAP files no character is playing, such as a mod's animations in the Mod Browser.</summary>
+    /// <summary>PAP files no character is playing, such as a mod's animations sent from a mod window.</summary>
     public AnimationFiles Files { get; }
     public bool Busy => !work.IsCompleted;
     public bool CanCancel { get; private set; }

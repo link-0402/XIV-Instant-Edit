@@ -27,9 +27,8 @@ public sealed partial class MainWindow
 
     // View-model state: drawing must not rebuild, re-classify, or re-search the resource
     // tree every frame. The views are replaced when the snapshot or the vanilla toggle changes.
-    // On Screen and the Mod Browser keep their own kind filters; _kinds is the drawn browser's.
+    // On Screen's kind filter; _kinds is the drawn browser's.
     private readonly ResourceKindSelection _screenKinds = new(ResourceKindChipSet.OnScreen.Listed);
-    private readonly ResourceKindSelection _modKinds = new(ResourceKindChipSet.ModBrowser.Listed);
     private ResourceKindSelection _kinds;
     private readonly ResourceSearch _search = new();
     private readonly ResourceTypeCounter _counter = new();
@@ -37,12 +36,6 @@ public sealed partial class MainWindow
     private IReadOnlyList<OnScreenObject>? _actorSnapshot;
     private bool _actorSnapshotIncludesVanilla;
     private List<ActorView> _actors = [];
-
-    private enum RowLayout
-    {
-        OnScreen,
-        Mod,
-    }
 
     private void DrawOnScreenTab()
     {
@@ -113,16 +106,13 @@ public sealed partial class MainWindow
 
     private void DrawActor(ActorView actor)
     {
-        if (actor.Entity is null)
-        {
-            DrawModTable(actor);
+        // On Screen's views always have their character.
+        if (actor.Entity is not { } entity)
             return;
-        }
-
-        var actorId = ExpansionState.ActorKey(actor.Entity);
+        var actorId = ExpansionState.ActorKey(entity);
         using var id = ImRaii.PushId(actorId);
         var flat = _kinds.IsFlat;
-        var defaultExpanded = flat || actor.Entity.ObjectIndex == 0;
+        var defaultExpanded = flat || entity.ObjectIndex == 0;
         var expanded = _expansion.IsExpanded(actorId, defaultExpanded, !flat && _search.Active);
         if (DrawActorHeader(actor, expanded))
             _expansion.Toggle(actorId, expanded, defaultExpanded);
@@ -132,7 +122,7 @@ public sealed partial class MainWindow
         using var table = ImRaii.Table("##resource-table", 4, ResourceTableFlags);
         if (!table.Success)
             return;
-        SetupColumns(RowLayout.OnScreen);
+        SetupColumns();
         DrawSection(actor, ResourceSection.CharacterFeatures, "Character features", ExpansionState.SectionKey(actorId, ResourceSection.CharacterFeatures));
         DrawSection(actor, ResourceSection.Gear, "Gear", ExpansionState.SectionKey(actorId, ResourceSection.Gear));
         DrawSection(actor, ResourceSection.Other, "Other", ExpansionState.SectionKey(actorId, ResourceSection.Other));
@@ -222,20 +212,11 @@ public sealed partial class MainWindow
             ImGui.SetTooltip(RowColourLabel(node));
     }
 
-    private void SetupColumns(RowLayout layout)
+    private void SetupColumns()
     {
-        if (layout == RowLayout.OnScreen)
-        {
-            ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, .34f);
-            ImGui.TableSetupColumn("Source", ImGuiTableColumnFlags.WidthStretch, .18f);
-            ImGui.TableSetupColumn("Path", ImGuiTableColumnFlags.WidthStretch, .48f);
-        }
-        else
-        {
-            ImGui.TableSetupColumn("Resource", ImGuiTableColumnFlags.WidthStretch, .36f);
-            ImGui.TableSetupColumn("Path", ImGuiTableColumnFlags.WidthStretch, .42f);
-            ImGui.TableSetupColumn("Option", ImGuiTableColumnFlags.WidthStretch, .22f);
-        }
+        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, .34f);
+        ImGui.TableSetupColumn("Source", ImGuiTableColumnFlags.WidthStretch, .18f);
+        ImGui.TableSetupColumn("Path", ImGuiTableColumnFlags.WidthStretch, .48f);
         ImGui.TableSetupColumn("##actions", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoHide, ActionsColumnWidth());
         ImGui.TableHeadersRow();
     }
@@ -253,37 +234,6 @@ public sealed partial class MainWindow
         if (PainterEnabled)
             width += Button(FontAwesomeIcon.PaintRoller) + Theme.Scaled(2);
         return MathF.Max(width, Theme.Scaled(58));
-    }
-
-    private void DrawModTable(ActorView actor)
-    {
-        // BuildModView sorts the roots by game path once, so this only filters them.
-        using var table = ImRaii.Table("##mod-resource-table", 4, ResourceTableFlags);
-        if (!table.Success)
-            return;
-        SetupColumns(RowLayout.Mod);
-
-        // A mod has no actor identity for the search to match, so the search filters its rows.
-        var filterBySearch = _search.Active;
-        if (_kinds.IsFlat)
-        {
-            var row = 0;
-            foreach (var root in actor.Roots)
-            {
-                if (!_kinds.AdmitsSubtree(root))
-                    continue;
-                foreach (var resource in root.Flattened)
-                    if (_kinds.Admits(resource) && (!filterBySearch || _search.Matches(resource)))
-                        DrawFlatNode(actor, root, resource, $"mod:flat:{row++}", RowLayout.Mod);
-            }
-        }
-        else
-        {
-            var index = 0;
-            foreach (var root in actor.Roots)
-                if (_kinds.AdmitsSubtree(root) && (!filterBySearch || _search.Matches(root)))
-                    DrawNode(actor, root, $"mod:{index++}", new TreeGuide(0, 0, 0, false), filterBySearch, filterBySearch, RowLayout.Mod);
-        }
     }
 
     private void DrawSection(ActorView actor, ResourceSection section, string label, string key)
@@ -316,17 +266,17 @@ public sealed partial class MainWindow
             foreach (var root in ordered)
                 foreach (var resource in root.Flattened)
                     if (_kinds.Admits(resource) && (!filterBySearch || _search.Matches(resource)))
-                        DrawFlatNode(actor, root, resource, $"{key}:flat:{row++}", RowLayout.OnScreen);
+                        DrawFlatNode(actor, root, resource, $"{key}:flat:{row++}");
         }
         else
         {
             for (var i = 0; i < ordered.Count; i++)
-                DrawNode(actor, ordered[i], $"{key}:{i}", new TreeGuide(Theme.TreeIndent, 0, 0, false), filterBySearch, searchActive, RowLayout.OnScreen);
+                DrawNode(actor, ordered[i], $"{key}:{i}", new TreeGuide(Theme.TreeIndent, 0, 0, false), filterBySearch, searchActive);
         }
     }
 
     /// <summary> One row of the flattened (kind-filtered) view: the resource itself, with its parent item as context. </summary>
-    private void DrawFlatNode(ActorView actor, ResourceView item, ResourceView resource, string scope, RowLayout layout)
+    private void DrawFlatNode(ActorView actor, ResourceView item, ResourceView resource, string scope)
     {
         using var id = ImRaii.PushId(SafeId(scope));
         ImGui.TableNextRow();
@@ -351,7 +301,7 @@ public sealed partial class MainWindow
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Hint, context);
         }
-        DrawRowCells(actor, resource, layout);
+        DrawRowCells(actor, resource);
         DrawRowMenu(actor, resource);
     }
 
@@ -400,7 +350,7 @@ public sealed partial class MainWindow
     }
 
     /// <summary> One row of the tree view, followed by its admitted children when expanded. </summary>
-    private void DrawNode(ActorView actor, ResourceView node, string scope, TreeGuide guide, bool filterBySearch, bool autoExpandSearch, RowLayout layout)
+    private void DrawNode(ActorView actor, ResourceView node, string scope, TreeGuide guide, bool filterBySearch, bool autoExpandSearch)
     {
         var key = ExpansionState.NodeKey(scope, node);
         using var id = ImRaii.PushId(key);
@@ -447,7 +397,7 @@ public sealed partial class MainWindow
         ImGui.OpenPopupOnItemClick(RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
         if (hovered)
             DrawRowHover(node, presentation, key);
-        DrawRowCells(actor, node, layout);
+        DrawRowCells(actor, node);
         DrawRowMenu(actor, node);
 
         if (!expanded || !hasChildren)
@@ -466,33 +416,19 @@ public sealed partial class MainWindow
                 continue;
             var i = childIndex++;
             if (!filterBySearch || _search.Matches(child))
-                DrawNode(actor, child, $"{scope}:{i}", guide.Child(++drawn == visible), filterBySearch, autoExpandSearch, layout);
+                DrawNode(actor, child, $"{scope}:{i}", guide.Child(++drawn == visible), filterBySearch, autoExpandSearch);
         }
     }
 
-    private void DrawRowCells(ActorView actor, ResourceView node, RowLayout layout)
+    private void DrawRowCells(ActorView actor, ResourceView node)
     {
-        var column = 1;
-        if (layout == RowLayout.OnScreen)
-        {
-            ImGui.TableSetColumnIndex(column++);
-            DrawSourceBadge(node);
-        }
+        ImGui.TableSetColumnIndex(1);
+        DrawSourceBadge(node);
 
-        ImGui.TableSetColumnIndex(column++);
+        ImGui.TableSetColumnIndex(2);
         Widgets.PathText(Safe(node.SourceRelativePath, Safe(node.GamePath, node.ActualPath)), Safe(node.ActualPath));
 
-        if (layout == RowLayout.Mod)
-        {
-            ImGui.TableSetColumnIndex(column++);
-            ImGui.AlignTextToFramePadding();
-            if (node.OptionMapping.Length > 0)
-                ImGui.TextUnformatted(node.OptionMapping);
-            else
-                ImGui.TextColored(Theme.Hint, "Unmapped");
-        }
-
-        ImGui.TableSetColumnIndex(column);
+        ImGui.TableSetColumnIndex(3);
         DrawRowActions(actor, node);
     }
 
@@ -614,8 +550,8 @@ public sealed partial class MainWindow
         ImGui.Separator();
         if (ImGui.MenuItem("Open in Penumbra"))
             OpenInPenumbra(node);
-        if (actor.Entity is not null && ImGui.MenuItem("Show in Mod Browser"))
-            ShowInModBrowser(node.SourceModDirectory);
+        if (ImGui.MenuItem("Open mod"))
+            OpenModWindow(node.SourceModRootPath, node.SourceModDirectory);
     }
 
     private static string? ContainingFolder(ResourceView node)
@@ -657,16 +593,6 @@ public sealed partial class MainWindow
             _log.Warning(e, "Could not open the mod in Penumbra.");
             SetStatus($"Could not open the mod in Penumbra: {e.Message}", FeedbackSeverity.Warning);
         }
-    }
-
-    private void ShowInModBrowser(string modDirectory)
-    {
-        _modFilter = string.Empty;
-        CancelModLoad();
-        _selectedModDirectory = modDirectory;
-        _loadedModDirectory = null;
-        _loadedModView = null;
-        _pendingTab = MainTab.ModBrowser;
     }
 
     private void DrawSlotIcon(string slot, string resourceIcon, string section)

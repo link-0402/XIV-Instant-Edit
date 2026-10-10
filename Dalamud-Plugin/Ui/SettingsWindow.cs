@@ -279,6 +279,61 @@ public sealed class SettingsWindow : Window
             _config.ShowNotifications = showNotifications;
             Save();
         }
+
+        Divider();
+        DrawModBrowserSettings();
+    }
+
+    private static readonly string[] CompressionLabels = ["None", "BC3", "BC7", "BC5"];
+
+    /// <summary> The Mod Browser's library, mod windows and build window. </summary>
+    private void DrawModBrowserSettings()
+    {
+        var studio = _config.Studio;
+        Widgets.SectionHeader("Mod Browser");
+        var thumbnails = studio.ShowThumbnails;
+        if (Toggle("Show mod images and texture previews", ref thumbnails,
+                "Pictures on the library's tiles, and previews of textures in mod windows and the build window."))
+        {
+            studio.ShowThumbnails = thumbnails;
+            Save();
+        }
+        ImGui.Spacing();
+        var redraw = studio.RedrawAfterBuild;
+        if (Toggle("Redraw everyone after each change written into a mod", ref redraw,
+                "Characters only show changed files once they are redrawn. Applies to builds too."))
+        {
+            studio.RedrawAfterBuild = redraw;
+            Save();
+        }
+        ImGui.Spacing();
+
+        var compression = (int)studio.DefaultCompression;
+        ImGui.SetNextItemWidth(Theme.Scaled(140));
+        if (ImGui.Combo("Compress new textures", ref compression, CompressionLabels, CompressionLabels.Length))
+        {
+            studio.DefaultCompression = (Studio.Models.TextureCompression)compression;
+            Save();
+        }
+        Widgets.HelpTip("What textures you add from now on start on. BC7 looks best but is slow on large images. " +
+                        "BC3 is much quicker. BC5 keeps only red and green, so pick it per texture. None keeps the raw pixels.");
+
+        var scale = studio.TileScale;
+        ImGui.SetNextItemWidth(Theme.Scaled(140));
+        if (ImGui.SliderFloat("Tile size", ref scale, 0.75f, 1.6f, "%.2fx"))
+            studio.TileScale = scale;
+        if (ImGui.IsItemDeactivatedAfterEdit())
+            Save();
+        ImGui.SameLine(0, Theme.Gap);
+        if (ImGui.Button("Reset pane sizes"))
+        {
+            studio.ContentsWidth = Studio.Windows.UI.Theme.DefaultContentsWidth;
+            studio.InspectorWidth = Studio.Windows.UI.Theme.DefaultInspectorWidth;
+            studio.BrowserWidth = Studio.Windows.UI.Theme.DefaultBrowserWidth;
+            studio.MetaPaneHeight = 220;
+            studio.TileScale = 1f;
+            Save();
+        }
     }
 
     // ---- Advanced --------------------------------------------------------------------------

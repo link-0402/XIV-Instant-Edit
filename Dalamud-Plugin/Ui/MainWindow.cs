@@ -19,7 +19,6 @@ public sealed partial class MainWindow : Window, IDisposable
     private const string OptionsPopupName = "##instant-edit-options";
     private const string HistoryPopupName = "##instant-edit-status-history";
     private const string KofiUrl = "https://ko-fi.com/luci_xiv";
-    private const string ModBrowserAmbiguityWarning = "Imports from the Mod Browser can be ambiguous when a mod maps the same model in several options. Use the On Screen tab for Mashups and for saving to new modpacks.";
     private const int AutoRefreshDelayMs = 1000;
     private readonly Configuration _config; private readonly PenumbraService _penumbra; private readonly OnScreenService _onScreen;
     private readonly BlenderClient _blender; private readonly IDataManager _data; private readonly IChatGui _chat; private readonly IPluginLog _log;
@@ -37,13 +36,7 @@ public sealed partial class MainWindow : Window, IDisposable
     private BlenderConnectionState _blenderState = BlenderConnectionState.Offline;
     private bool _blenderChecking; private int _editing;
     private DateTime _lastBlenderCheck = DateTime.MinValue;
-    private DateTime _lastModListRefresh = DateTime.MinValue;
-    private string _filter = string.Empty, _modFilter = string.Empty;
-    private string? _selectedModDirectory, _loadedModDirectory;
-    private IReadOnlyList<PenumbraMod> _mods = Array.Empty<PenumbraMod>();
-    private ActorView? _loadedModView;
-    private CancellationTokenSource? _modLoadCts;
-    private bool _modLoading, _modLoadFailed;
+    private string _filter = string.Empty;
     private MainTab _activeTab = MainTab.OnScreen;
     private MainTab? _pendingTab;
     private long _resourcesChangedTicks;
@@ -112,9 +105,6 @@ public sealed partial class MainWindow : Window, IDisposable
         DetachPainter();
         DetachGameFiles();
         _lifetimeCts.Cancel();
-        _modLoadCts?.Cancel();
-        _modLoadCts?.Dispose();
-        _modLoadCts = null;
         IReadOnlyDictionary<string, IDalamudTextureWrap> icons;
         lock (_stateLock)
         {
@@ -241,7 +231,7 @@ public sealed partial class MainWindow : Window, IDisposable
         if (!animationsTabActive && !(activeTab == MainTab.QuickActions && CharacterSendListens) && timelineListens?.Invoke() != true)
             animations?.StopObservation();
         DrawTextureDialogs();
-        DrawAnimationSendDialog();
+        DrawAnimationSendDialog(MainOwner);
         DrawPainterDialogs();
         DrawGameFileExportDialog();
         DrawNeckSeamDialog();

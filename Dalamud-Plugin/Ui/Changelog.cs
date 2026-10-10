@@ -23,6 +23,11 @@ internal static class ChangelogCatalog
     public static IReadOnlyList<ChangelogRelease> Releases { get; } =
     [
         Release("2.2.0",
+            Highlight("Mod Browser: every Penumbra mod is a tile now. Click one to open it in a window of its own."),
+            Entry("See what a mod is made of: its options, models with their materials and textures, animations, effects and sounds.", 1),
+            Entry("Drop your own files on anything to replace it, add files, and make groups and options. Changes go straight into the mod.", 1),
+            Entry("Edit a model in Blender, a texture in your image editor or send an animation to Blender from the mod window. Exports go back into the option you picked it from.", 1),
+            Entry("Build a new mod from gear ported from another game, Sims 4 packages included, and build it into Penumbra.", 1),
             Highlight("Animations: the new Timeline window opens an animation laid out like a video editor."),
             Entry("Change the animation's length. Its sounds and effects can move with it.", 1),
             Entry("Add sounds, facial expressions, lip sync, effects and props, and drag them where you want them.", 1),

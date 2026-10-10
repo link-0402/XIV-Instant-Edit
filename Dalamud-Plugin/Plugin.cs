@@ -1,5 +1,6 @@
 using Dalamud.Game.Command;
 using Dalamud.Game.ClientState.Objects.Types;
+using Dalamud.Interface.DragDrop;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
@@ -44,6 +45,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly PhysicsWindow           _physicsWindow;
     private readonly Services.Testing.BridgeTools? _bridgeTools;
     private readonly Services.TextureCompression.TextureCompressionService _compression;
+    private readonly Studio.StudioHost       _studio;
     private readonly WindowSystem            _windowSystem;
     private readonly MainWindow              _window;
     private readonly ChangelogWindow         _changelogWindow;
@@ -66,7 +68,8 @@ public sealed class Plugin : IDalamudPlugin
         ISigScanner sigScanner,
         INotificationManager notifications,
         ITargetManager targets,
-        ICondition condition)
+        ICondition condition,
+        IDragDropManager dragDrop)
     {
         _pi       = pi;
         _commands = commands;
@@ -287,6 +290,11 @@ public sealed class Plugin : IDalamudPlugin
             _toolSetup,
             cacheStartupError);
         _settingsWindow.AttachAnimations(_animations, animationError);
+        // The Mod Browser: Penumbra's mods as a library, a window per open mod, and the modpack builder.
+        Studio.StudioServices.Initialize(pi, log, data, textureProvider, dragDrop, framework);
+        _config.Studio.AttachSave(SaveConfiguration);
+        _studio = new Studio.StudioHost(_config.Studio, configDirectory, _settingsWindow.Open);
+        _window.AttachStudio(_studio);
 
         _windowSystem = new WindowSystem();
         _windowSystem.AddWindow(_window);
@@ -299,6 +307,7 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.AddWindow(_physicsWindow);
 
         _pi.UiBuilder.Draw += _windowSystem.Draw;
+        _pi.UiBuilder.Draw += _studio.Draw;
         _pi.UiBuilder.Draw += _setupWindow.DrawFileDialog;
         _pi.UiBuilder.Draw += _toolSetup.DrawFileDialog;
         _pi.UiBuilder.Draw += _window.DrawFileDialog;
@@ -418,6 +427,7 @@ public sealed class Plugin : IDalamudPlugin
         _commands.RemoveHandler("/ie");
         _commands.RemoveHandler("/iesettings");
         _pi.UiBuilder.Draw -= _windowSystem.Draw;
+        _pi.UiBuilder.Draw -= _studio.Draw;
         _pi.UiBuilder.Draw -= _setupWindow.DrawFileDialog;
         _pi.UiBuilder.Draw -= _toolSetup.DrawFileDialog;
         _pi.UiBuilder.Draw -= _window.DrawFileDialog;
@@ -447,6 +457,8 @@ public sealed class Plugin : IDalamudPlugin
         _textures.AdditionalCacheCleanup = null;
         _gameExport.Dispose();
         _window.Dispose();
+        // Writes what the open mods and the modpack still have pending.
+        _studio.Dispose();
         _compression.Dispose();
         _heels.Dispose();
         // Removes the physics preview's temporary mod, so it goes before Penumbra.
