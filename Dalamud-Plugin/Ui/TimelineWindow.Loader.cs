@@ -239,6 +239,7 @@ public sealed partial class TimelineWindow
             return false;
         }
         animations?.StartObservation();
+        animations?.Observer.Hear(item.Timeline);
         loaderWaiting = (item, index, DateTime.UtcNow);
         loaderMessage = null;
         return true;
@@ -250,18 +251,20 @@ public sealed partial class TimelineWindow
         if (loaderWaiting is not { } waiting || animations is not { } service)
             return;
         // Another clip may have opened meanwhile, or the actor went back to its own animation.
-        foreach (var capture in service.Observer.History)
-        {
-            if (!capture.Playing || capture.ActorIndex != waiting.Actor)
-                continue;
-            var startup = capture.Clip.Timeline != waiting.Item.Timeline && capture.Startup?.Timeline == waiting.Item.Timeline;
-            if (capture.Clip.Timeline != waiting.Item.Timeline && !startup)
-                continue;
-            loaderWaiting = null;
-            loaderMessage = null;
-            Open(capture, startup);
+        AnimationClip? Played(AnimationCapture capture) => capture.Clip.Timeline == waiting.Item.Timeline ? capture.Clip
+            : capture.Startup?.Timeline == waiting.Item.Timeline ? capture.Startup : null;
+        var playing = service.Observer.History.Where(capture => capture.Playing && capture.ActorIndex == waiting.Actor && Played(capture) != null).ToArray();
+        if (playing.Length == 0)
             return;
-        }
+        // One timeline can play several clips, such as Dance's cbem_dance and its 6-bone cbep_e_dance: the one moving
+        // the most bones opens, once each knows its skeleton (or the loader's patience runs out).
+        if (playing.Length > 1 && DateTime.UtcNow - waiting.Since < LoaderPatience &&
+            playing.Any(capture => Played(capture)!.Resolution is null or { State: SkeletonResolutionState.Searching }))
+            return;
+        var chosen = playing.MaxBy(capture => Played(capture)!.Resolution?.TrackBones.Length ?? 0)!;
+        loaderWaiting = null;
+        loaderMessage = null;
+        Open(chosen, chosen.Clip.Timeline != waiting.Item.Timeline);
     }
 
     /// <summary>The loader's line while it waits, or why it couldn't play.</summary>

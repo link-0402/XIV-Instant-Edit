@@ -302,7 +302,8 @@ public sealed partial class PenumbraService
                 if (string.IsNullOrWhiteSpace(value) ||
                     !string.Equals(value.Replace('\\', '/').Trim(), oldNormalized, StringComparison.OrdinalIgnoreCase))
                     continue;
-                if (SameGamePath(pair.Key, gamePath)) { files[pair.Key] = newRelativePath; renamed = true; }
+                // Written with the separators the mod used, so undoing the rename gives back exactly what was there.
+                if (SameGamePath(pair.Key, gamePath)) { files[pair.Key] = SeparatorsLike(value, newRelativePath); renamed = true; }
                 else stillReferenced = true;
             }
         }
@@ -323,6 +324,10 @@ public sealed partial class PenumbraService
         WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
         return stillReferenced;
     }
+
+    /// <summary><paramref name="path"/> with backslashes when <paramref name="like"/> has them and no forward slashes, else as it is.</summary>
+    internal static string SeparatorsLike(string like, string path) =>
+        like.Contains('\\') && !like.Contains('/') ? path.Replace('/', '\\') : path;
 
     /// <summary>Whether a DefaultData, group, option or container of the mod maps <paramref name="gamePath"/> to a file.</summary>
     internal static bool ModMapsGamePath(string modRoot, string gamePath)

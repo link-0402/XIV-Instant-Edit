@@ -97,13 +97,13 @@ public sealed partial class TimelineWindow
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Muted, service.Status);
         }
-        else if (liveWanted && (decodeTask != null || motionDisplay?.Building == true))
+        else if (liveWanted && (decodeTask != null || motionDisplay?.Building == true || liveDrawWait != null))
         {
             ImGui.SameLine(0, Theme.Scaled(12));
             Widgets.Spinner();
             ImGui.SameLine(0, Theme.Gap);
             ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, decodeTask != null ? decodeStatus : "Applying the bone layers");
+            ImGui.TextColored(Theme.Muted, decodeTask != null ? decodeStatus : liveDrawWait != null ? "Waiting for your character" : "Applying the bone layers");
         }
         else if (FirstText(liveError, liveWanted ? motionDisplay?.Error : null, previewError, preview.Error, playback.Error) is { } error)
         {
@@ -392,8 +392,11 @@ public sealed partial class TimelineWindow
                 }
                 return;
             }
+            // After a save the game plays the clip as captured until it loads the saved file, then that file.
             if (follow && !playback.Active && current.Gesture == TimelineGesture.None && loaded.Clip.BindingFingerprint.Length > 0 &&
-                playback.CurrentTime(loaded.Clip.BindingFingerprint) is { } live)
+                (playback.CurrentTime(loaded.Clip.BindingFingerprint) ??
+                 (loaded.FileFingerprint.Length > 0 && loaded.FileFingerprint != loaded.Clip.BindingFingerprint
+                     ? playback.CurrentTime(loaded.FileFingerprint) : null)) is { } live)
             {
                 current.Playhead = TimelineWindowViews.Frames(live);
                 lastSeekFrame = current.Playhead;

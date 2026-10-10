@@ -354,20 +354,23 @@ internal static class PoseEditorFixture
             "so the bone turns and moves as far as the gizmo");
     }
 
-    /// <summary>A chain root, a, b, c with a side bone x on the root: the bones an edit changes when several are selected.</summary>
+    /// <summary>
+    /// A chain root, a, b, c with a side bone x on the root and an attachment y on a (as n_hkata_l hangs from the upper
+    /// arm): the bones an edit changes when several are selected.
+    /// </summary>
     private static void Following(Action<bool, string> check)
     {
         var chain = new SkeletonDescription("chain", "chain-print",
         [
             new(Root, -1, 0, T(Vector3.Zero)), new("j_a", 0, 0, T(Vector3.UnitY)), new("j_b", 1, 0, T(Vector3.UnitY)),
-            new("j_c", 2, 0, T(Vector3.UnitY)), new("j_x", 0, 0, T(Vector3.UnitX)),
+            new("j_c", 2, 0, T(Vector3.UnitY)), new("j_x", 0, 0, T(Vector3.UnitX)), new("n_y", 1, 0, T(Vector3.UnitZ)),
         ], [], [], []);
-        PoseTarget[] all = [.. new[] { "j_a", "j_b", "j_c", "j_x" }.Select(bone => new PoseTarget(bone, MotionTransform.Identity, false))];
+        PoseTarget[] all = [.. new[] { "j_a", "j_b", "j_c", "j_x", "n_y" }.Select(bone => new PoseTarget(bone, MotionTransform.Identity, false))];
         string[] Turned(string primary) => [.. PoseEdits.Turned(all, primary, chain).Select(target => target.Bone)];
         check(Turned("j_a").SequenceEqual(["j_a", "j_x"]) && Turned("j_x").SequenceEqual(["j_a", "j_x"]),
             "bones below a changed selected bone follow it instead of turning twice");
         check(Turned("j_b").SequenceEqual(["j_b", "j_x"]) && Turned("j_c").SequenceEqual(["j_c", "j_x"]),
-            "the primary bone always changes, and the selected bones above it stay");
+            "the primary bone always changes, and the selected bones above it stay, with what else hangs from them");
         check(PoseEdits.Turned([all[0]], "j_a", chain).Count == 1, "one bone alone is the bone that changes");
     }
 

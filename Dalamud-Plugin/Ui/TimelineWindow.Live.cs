@@ -28,6 +28,9 @@ public sealed partial class TimelineWindow
     // Why the last read of this version of the clip failed; it is not read again until Live asks or the clip changes.
     private string? decodeError;
     private string? failedDecodeKey;
+    // Until when Live waits for the GPose character to be drawn again, as after the redraw that ends a preview.
+    private DateTime? liveDrawWait;
+    private static readonly TimeSpan LiveDrawWait = TimeSpan.FromSeconds(10);
 
     /// <summary>Why Live can't start now; null when it can.</summary>
     private string? LiveBlocked(TimelineEditor current, AnimationTimelineSource loaded, bool available, string reason)
@@ -53,24 +56,29 @@ public sealed partial class TimelineWindow
         liveWanted = true;
         liveStarted = false;
         liveError = null;
+        liveDrawWait = null;
         // Turning Live on reads a clip again whose last read failed.
         failedDecodeKey = null;
         decodeError = null;
         EnsureDecode(Fresh(loaded));
     }
 
-    /// <summary>Puts the clip's own motion back and ends its playback. Stop, every reload and every save end Live here.</summary>
-    private void StopLive()
+    /// <summary>
+    /// Puts the clip's own motion back and ends its playback. Stop, every reload and every save end Live here.
+    /// <paramref name="keepPlaying"/> leaves the clip playing, plain, as the loader leaves it.
+    /// </summary>
+    private void StopLive(bool keepPlaying = false)
     {
         if (!liveWanted)
             return;
         liveWanted = false;
         liveStarted = false;
+        liveDrawWait = null;
         StopLiveLooks();
         try
         {
             motionDisplay?.Stop();
-            if (playback.Active)
+            if (playback.Active && !keepPlaying)
                 playback.Stop();
         }
         catch (InvalidOperationException e)
@@ -88,6 +96,8 @@ public sealed partial class TimelineWindow
         if (!liveWanted || motionDisplay == null)
             return;
         var fresh = Fresh(loaded);
+        if (!liveStarted && WaitingForDraw())
+            return;
         if (LiveBlocked(current, fresh, PlaybackAvailable(out var reason), reason) is { } blocked)
         {
             StopLive();
@@ -106,16 +116,14 @@ public sealed partial class TimelineWindow
         {
             if (liveStarted && !motionDisplay.Active)
             {
+                // The display ended itself, such as on a skeleton without a bone the layers move: the clip plays on.
                 var ended = motionDisplay.Error;
-                StopLive();
+                StopLive(keepPlaying: true);
                 liveError = ended.Length > 0 ? ended : "The live edits stopped.";
                 return;
             }
             if (!liveStarted)
             {
-                // An ending preview redraws the character with its own file first.
-                if (previewStop is { IsCompleted: false })
-                    return;
                 if (playback.ActorIndex() is not { } actor)
                 {
                     StopLive();
@@ -155,6 +163,25 @@ public sealed partial class TimelineWindow
             StopLive();
             liveError = e.Message;
         }
+    }
+
+    /// <summary>
+    /// Before Live starts: whether to wait for the character. An ending preview redraws it with its own file first,
+    /// and Penumbra reports that redraw done before the character has its skeleton again, so Live waits a while.
+    /// </summary>
+    private bool WaitingForDraw()
+    {
+        if (previewStop is { IsCompleted: false })
+            return true;
+        ushort? actor;
+        try { actor = playback.ActorIndex(); }
+        catch (InvalidOperationException) { return false; }
+        if (actor is not { } index || playback.Drawn(index))
+        {
+            liveDrawWait = null;
+            return false;
+        }
+        return (liveDrawWait ??= DateTime.UtcNow + LiveDrawWait) > DateTime.UtcNow;
     }
 
     /// <summary>Identifies a decode: the clip, its file version, the skeleton it is read on and the motion layers apply to.</summary>

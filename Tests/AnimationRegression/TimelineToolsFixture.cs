@@ -169,6 +169,10 @@ internal static class TimelineToolsFixture
         check(other.Any(i => i.Timeline == 783) && other.Any(i => i.Timeline == 919 && i.Name == "Idle celeb") &&
               other.All(i => i.Timeline is not (3 or 703 or 605 or 5)),
             "every other timeline is listed once by a name from its key, rows without a key are not");
+        var withEmpty = AnimationLibrary.Build([.. timelines, new(3188, "emote/dance01_loop", 2), new(3187, "emote/dance01_start", 2)],
+            [.. emotes, Emote(102, "Bomb Dance", "/bombdance", "General", 3188, 3187)], new HashSet<ushort> { 3187 });
+        check(withEmpty.Any(i => i.Name == "Bomb Dance") && withEmpty.All(i => i.Timeline != 3187) && withEmpty.Any(i => i.Name == "Sit (start)"),
+            "a version whose timeline holds nothing (Bomb Dance's start) is left out, also from Other; other starts stay");
         check(AnimationLibrary.KeyName("event_base/event_base_chair_talk") == "Chair talk" && AnimationLibrary.KeyName("emote/dance") == "Dance" &&
               AnimationLibrary.KeyName("x") == "X",
             "a key's name drops its folder and the folder's prefix");

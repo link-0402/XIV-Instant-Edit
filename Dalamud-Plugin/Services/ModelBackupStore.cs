@@ -25,11 +25,10 @@ public sealed partial class ModelBackupStore
 
     public ManagedBackupTarget Describe(string modDirectory, string targetRelativePath)
     {
+        // An expression's timeline (.tmb) is backed up when it is edited in place.
         if (!PenumbraService.IsSafeModName(modDirectory) ||
             !(PenumbraService.IsSafeRelativeModelPath(targetRelativePath) ||
-              PenumbraService.IsSafeGameResourcePath(targetRelativePath, ".tex") ||
-              PenumbraService.IsSafeGameResourcePath(targetRelativePath, ".mtrl") ||
-              PenumbraService.IsSafeGameResourcePath(targetRelativePath, ".pap")))
+              PenumbraService.IsSafeGameResourcePath(targetRelativePath, ".tex", ".mtrl", ".pap", ".tmb")))
             throw new ArgumentException("The backup target is invalid.");
         var key = $"{modDirectory.Trim().ToLowerInvariant()}\n{targetRelativePath.Replace('\\', '/').Trim().ToLowerInvariant()}";
         var id = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))).ToLowerInvariant();
@@ -208,6 +207,6 @@ public sealed partial class ModelBackupStore
     [GeneratedRegex("^[0-9a-f]{64}$", RegexOptions.CultureInvariant)]
     private static partial Regex TargetIdRegex();
 
-    [GeneratedRegex("^[^\\\\/:*?\"<>|]+\\.(?:mdl|fbx|tex|pap|mtrl)\\.(?<stamp>\\d{8}T\\d{6}\\.\\d{6}Z)\\.bak$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    [GeneratedRegex("^[^\\\\/:*?\"<>|]+\\.(?:mdl|fbx|tex|pap|mtrl|tmb)\\.(?<stamp>\\d{8}T\\d{6}\\.\\d{6}Z)\\.bak$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
     private static partial Regex BackupNameRegex();
 }

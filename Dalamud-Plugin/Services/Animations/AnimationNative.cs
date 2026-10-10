@@ -25,6 +25,12 @@ internal unsafe sealed class AnimationNative
 {
     private readonly nint interleavedVtbl;
     private readonly delegate* unmanaged<Spline*, Interleaved*, Spline*> compress;
+    // The spline constructor taken apart (see SplineParts): its base constructor, its vtable, the default
+    // track settings it starts from and its init, which takes them. Null when the code looks different.
+    private readonly delegate* unmanaged<Spline*, Interleaved*, Spline*> splineBase;
+    private readonly nint splineVtbl;
+    private readonly delegate* unmanaged<TrackCompression*, TrackCompression*> splineTrackDefaults;
+    private readonly delegate* unmanaged<Spline*, Interleaved*, TrackCompression*, AnimationCompression*, void> splineInit;
     private readonly delegate* unmanaged<void*, int, float, void> ccdCtor;
     private readonly delegate* unmanaged<void*, byte*, hkArray<CcdConstraint>*, hkaPose*, byte*> ccdSolve;
     private readonly delegate* unmanaged<byte*, TwoJointSetup*, hkaPose*, byte*> twoJointSolve;
@@ -40,6 +46,11 @@ internal unsafe sealed class AnimationNative
             compress = (delegate* unmanaged<Spline*, Interleaved*, Spline*>)scanner.ScanText(
                 "48 89 5C 24 ?? 57 48 83 EC 40 48 8B DA 48 8B F9 E8 ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ??");
             if (interleavedVtbl == 0 || compress == null) throw new InvalidOperationException("An animation runtime signature was not resolved.");
+            var spline = SplineParts((byte*)compress);
+            splineBase = (delegate* unmanaged<Spline*, Interleaved*, Spline*>)spline.Base;
+            splineVtbl = spline.Vtable;
+            splineTrackDefaults = (delegate* unmanaged<TrackCompression*, TrackCompression*>)spline.TrackDefaults;
+            splineInit = (delegate* unmanaged<Spline*, Interleaved*, TrackCompression*, AnimationCompression*, void>)spline.Init;
         }
         catch (Exception e) { UnavailableReason = "This game build is not compatible with animation baking: " + e.Message; }
         try
@@ -658,11 +669,97 @@ internal unsafe sealed class AnimationNative
         Vector3.Distance(Translation(a), Translation(b)) <= tolerance && Vector3.Distance(Scale(a), Scale(b)) <= tolerance &&
         1 - Math.Abs(Quaternion.Dot(Quaternion.Normalize(Rotation(a)), Quaternion.Normalize(Rotation(b)))) <= tolerance;
 
+    // hkaSplineCompressedAnimation's TrackCompressionParams and AnimationCompressionParams, laid out as the game's
+    // spline constructor fills them (SplineParts checks its code).
+    [StructLayout(LayoutKind.Sequential, Size = 0x1C)]
+    internal struct TrackCompression
+    {
+        public float RotationTolerance, TranslationTolerance, ScaleTolerance, FloatTolerance;
+        public ushort RotationDegree, TranslationDegree, ScaleDegree, FloatDegree;
+        public byte RotationQuantization, TranslationQuantization, ScaleQuantization, FloatQuantization;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Size = 4)]
+    internal struct AnimationCompression
+    {
+        public ushort MaxFramesPerBlock;
+        public byte SampleSingleTracks;
+    }
+
+    /// <summary>
+    /// The position and scale tolerance a bake compresses with. The game's own (0.001) left up to 7 mm on skirt
+    /// bones, more than a bake's check allows (0.002): unchanged dances and stretched emotes could not be saved.
+    /// Measured 2026-10-10 on ten dances and emotes: at this value the worst was 0.33 mm and 0.0006 in scale, for
+    /// files 5 to 17% larger. (0.0002 was worse on one dance's scales than 0.0005: keep a margin.)
+    /// </summary>
+    internal const float BakeTolerance = 0.00005f;
+
+    // The game's spline constructor, the compress signature in full: it copy-constructs the hkaAnimation base from
+    // the raw animation, sets its vtable, empties its five arrays, fills default track and animation settings and
+    // calls init with them. The five call and address operands are left open.
+    private static readonly int?[] SplineCtorCode = Pattern(
+        "48 89 5C 24 ?? 57 48 83 EC 40 48 8B DA 48 8B F9 E8 ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ?? 48 89 07 48 8D 4C 24 20 " +
+        "C7 47 64 00 00 00 80 33 C0 48 89 47 58 89 47 60 48 89 47 68 89 47 70 C7 47 74 00 00 00 80 48 89 47 78 " +
+        "89 87 80 00 00 00 C7 87 84 00 00 00 00 00 00 80 48 89 87 88 00 00 00 89 87 90 00 00 00 C7 87 94 00 00 00 00 00 00 80 " +
+        "48 89 87 98 00 00 00 89 87 A0 00 00 00 C7 87 A4 00 00 00 00 00 00 80 E8 ?? ?? ?? ?? 48 8D 4C 24 50 E8 ?? ?? ?? ?? " +
+        "4C 8D 4C 24 50 48 8B D3 4C 8D 44 24 20 48 8B CF E8 ?? ?? ?? ??");
+    // The default track settings: four tolerances, four degrees (two per dword) and four quantizations, 0x1C bytes.
+    private static readonly int?[] TrackDefaultsCode = Pattern(
+        "C7 41 0C ?? ?? ?? ?? 48 8B C1 C7 41 08 ?? ?? ?? ?? C7 41 04 ?? ?? ?? ?? C7 01 ?? ?? ?? ?? " +
+        "C7 41 14 ?? ?? ?? ?? C7 41 10 ?? ?? ?? ?? C7 41 18 ?? ?? ?? ?? C3");
+    // The default animation settings: 256 frames per block, no single-track sampling.
+    private static readonly int?[] AnimationDefaultsCode = Pattern("B8 00 01 00 00 66 89 01 48 8B C1 C6 41 02 00 C3");
+
+    private static int?[] Pattern(string text) => [.. text.Split(' ').Select(part => part == "??" ? (int?)null : Convert.ToInt32(part, 16))];
+
+    private static bool Matches(byte* code, int?[] pattern)
+    {
+        for (var i = 0; i < pattern.Length; i++)
+            if (pattern[i] is { } expected && code[i] != expected)
+                return false;
+        return true;
+    }
+
+    /// <summary>
+    /// The addresses of the spline constructor's parts (base constructor, vtable, default track settings, init), when
+    /// its code is as expected; else all zero, and compression calls the constructor itself.
+    /// </summary>
+    internal static (nint Base, nint Vtable, nint TrackDefaults, nint Init) SplineParts(byte* ctor)
+    {
+        static nint Target(byte* call) => (nint)(call + 5 + *(int*)(call + 1));
+        if (!Matches(ctor, SplineCtorCode) || !Matches((byte*)Target(ctor + 0x84), TrackDefaultsCode) ||
+            !Matches((byte*)Target(ctor + 0x8E), AnimationDefaultsCode))
+            return default;
+        return (Target(ctor + 0x10), (nint)(ctor + 0x1C + *(int*)(ctor + 0x18)), Target(ctor + 0x84), Target(ctor + 0xA3));
+    }
+
     public hkaAnimation* Compress(Arena arena, Interleaved* animation)
     {
         EnsureAvailable();
         var spline = arena.Alloc<Spline>();
-        if (compress(spline, animation) != spline || *(nint*)spline == 0)
+        if (splineInit != null)
+        {
+            // What the game's constructor does, with BakeTolerance for positions and scales.
+            splineBase(spline, animation);
+            *(nint*)spline = splineVtbl;
+            var empty = unchecked((int)0x80000000);
+            spline->BlockOffsets = new() { CapacityAndFlags = empty };
+            spline->FloatBlockOffsets = new() { CapacityAndFlags = empty };
+            spline->TransformOffsets = new() { CapacityAndFlags = empty };
+            spline->FloatOffsets = new() { CapacityAndFlags = empty };
+            spline->Data = new() { CapacityAndFlags = empty };
+            var track = arena.Alloc<TrackCompression>();
+            splineTrackDefaults(track);
+            track->TranslationTolerance = Math.Min(track->TranslationTolerance, BakeTolerance);
+            track->ScaleTolerance = Math.Min(track->ScaleTolerance, BakeTolerance);
+            var settings = arena.Alloc<AnimationCompression>();
+            settings->MaxFramesPerBlock = 256;
+            settings->SampleSingleTracks = 0;
+            splineInit(spline, animation, track, settings);
+        }
+        else if (compress(spline, animation) != spline)
+            throw new InvalidDataException("The native spline compressor did not construct an animation.");
+        if (*(nint*)spline == 0)
             throw new InvalidDataException("The native spline compressor did not construct an animation.");
         return (hkaAnimation*)spline;
     }

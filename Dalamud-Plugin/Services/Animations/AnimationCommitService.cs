@@ -177,6 +177,20 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
     public async Task CommitAsync(AnimationEditJournal journal, AnimationDependencyManifest manifest,
         Func<Task> checkActor, Action<string> status, CancellationToken token)
     {
+        try { await CommitCoreAsync(journal, manifest, checkActor, status, token); }
+        // Refused or cancelled before any file was written: nothing was saved and nothing needs undoing.
+        catch (Exception error) when (journal.State == "Prepared")
+        {
+            journal.State = "FilesUndone";
+            journal.Message = error is OperationCanceledException ? "Cancelled before saving." : error.Message;
+            store.Save(journal);
+            throw;
+        }
+    }
+
+    private async Task CommitCoreAsync(AnimationEditJournal journal, AnimationDependencyManifest manifest,
+        Func<Task> checkActor, Action<string> status, CancellationToken token)
+    {
         await penumbra.AnimationExportAsync(async () =>
         {
             await checkActor();
@@ -323,6 +337,14 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
         if (journal.State == "Prepared")
         { journal.State = "FilesUndone"; journal.Message = "The prepared job had not changed any files."; store.Save(journal); return; }
         foreach (var file in journal.Files) ValidateTarget(journal, file);
+        if (journal.Request.Destination == AnimationDestination.NewMod && !Directory.Exists(journal.ModRoot) &&
+            journal.State is "Committing" or "RecoveryRequired" && journal.ModFileHashes.Count == 0)
+        {
+            // A commit that stopped before the mod's metadata was written, with no folder: it was never made,
+            // so nothing of this job is left. A finished mod whose folder is gone was moved, and is refused below.
+            journal.State = "FilesUndone"; store.Save(journal);
+            return;
+        }
         if (journal.Request.Destination == AnimationDestination.NewMod)
         {
             var marker = Path.Combine(journal.ModRoot, ".instant-edit-animation.json");

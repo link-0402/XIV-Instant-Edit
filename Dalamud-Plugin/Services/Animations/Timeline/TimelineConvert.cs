@@ -147,6 +147,7 @@ internal static class TimelineConvert
                 throw new InvalidDataException($"Cannot copy {Describe(origin)}.");
             var copy = file.CloneEntry(Id(origin.Key));
             Update(file, copy, origin, e, scaled);
+            TimedRange(file, copy, origin, e, motionFrames, false);
             expected.Add((e with { Conditional = false }, copy));
             if (TimelineDocument.Loops(e)) loops.Add((e, copy, PlayOf(Id(origin.Key))));
             else if (TimelineDocument.Kept(e)) keeps.Add(copy);
@@ -159,6 +160,9 @@ internal static class TimelineConvert
                 if (e.CloneOf is not { } from || !before.ContainsKey(from))
                 {
                     var added = Add(file, e);
+                    // An added motion was at its own speed until it was given time control, if it has been.
+                    if (e.Values.ContainsKey(TmbEntrySchema.TimeControlField))
+                        TimedRange(file, added, e with { Values = e.Values.SetItem(TmbEntrySchema.TimeControlField, 0) }, e, motionFrames, true);
                     expected.Add((e with { Conditional = false }, added));
                     if (TimelineDocument.Loops(e)) loops.Add((e, added, null));
                     else if (TimelineDocument.Kept(e)) keeps.Add(added);
@@ -187,24 +191,8 @@ internal static class TimelineConvert
             expected.Add((target with { Conditional = old.Conditional }, id));
             if (TimelineDocument.Loops(target) && (!chained || changed)) loops.Add((target, id, PlayOf(id)));
             else if (TimelineDocument.Kept(target) && changed) keeps.Add(id);
+            TimedRange(file, id, old, target, motionFrames, false);
             var entry = file.Find(id)!;
-            // A motion at its own speed ignores its frame range. Given time control it plays the range
-            // over its length, so the range becomes the whole motion: 0 to its own length. Unknown, a
-            // face gets 0 to 1 (a pose, as vanilla timed faces have it), whatever range it stored: a
-            // range past the face drops it at once. Anything else keeps a range it stored, and an empty
-            // one (VFXEditor's default 0 to 0) becomes 0 to the length stored.
-            if (TimelineDocument.OwnPace(old) && target.Values.GetValueOrDefault(TmbEntrySchema.TimeControlField) != 0)
-            {
-                float? end = motionFrames != null && motionFrames.TryGetValue(target.Path, out var frames) && frames > 0 ? frames
-                    : TimelineDocument.Holds(old) ? 1
-                    : entry.Single(28) > entry.Single(24) ? null
-                    : Math.Max(1, old.Duration);
-                if (end is { } value)
-                {
-                    file.SetSingle(id, 24, 0);
-                    file.SetSingle(id, 28, value);
-                }
-            }
             if (target.Duration == old.Duration) continue;
             if (old.Magic == "C010" && (entry.Int32(20) & 1) == 0 && entry.Single(28) == old.Duration)
                 file.SetSingle(id, 28, target.Duration);
@@ -234,6 +222,32 @@ internal static class TimelineConvert
         var output = file.ToArray(out var ids);
         Verify(output, edited, expected, ids);
         return output;
+    }
+
+    /// <summary>
+    /// A motion at its own speed (<paramref name="paced"/>) ignores its frame range. Given time control
+    /// (<paramref name="timed"/>) it plays the range over its length, so the range becomes the whole motion: 0 to
+    /// its own length. Unknown, a face gets 0 to 1 (a pose, as vanilla timed faces have it), whatever range it
+    /// stored: a range past the face drops it at once. Anything else keeps a range it stored, and an empty one
+    /// (VFXEditor's default 0 to 0) becomes 0 to the length stored. An <paramref name="added"/> entry stores the
+    /// template's range only, and an added pose keeps the template's 0 to 1.
+    /// </summary>
+    private static void TimedRange(TmbFile file, short id, TimelineEvent paced, TimelineEvent timed,
+        IReadOnlyDictionary<string, int>? motionFrames, bool added)
+    {
+        if (!TimelineDocument.OwnPace(paced) || timed.Values.GetValueOrDefault(TmbEntrySchema.TimeControlField) == 0)
+            return;
+        var entry = file.Find(id)!;
+        var known = motionFrames != null && motionFrames.TryGetValue(timed.Path, out var frames) &&
+                    frames > (added && TimelineDocument.Holds(paced) ? TimelineDocument.PoseFrames : 0) ? frames : (int?)null;
+        float? end = known is { } own ? own
+            : TimelineDocument.Holds(paced) ? 1
+            : !added && entry.Single(28) > entry.Single(24) ? null
+            : Math.Max(1, paced.Duration);
+        if (end is not { } value)
+            return;
+        file.SetSingle(id, 24, 0);
+        file.SetSingle(id, 28, value);
     }
 
     /// <summary>

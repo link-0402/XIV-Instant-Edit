@@ -72,7 +72,11 @@ internal static class SkeletonRepairFixture
         {
             var encoded = AnimationRetarget.Encode(modified, reference, hint);
             var rotationAfterBlend = hint == 2 ? reference.Rotation * encoded.Rotation : encoded.Rotation * reference.Rotation;
-            check(Vector3.Distance(encoded.Position + reference.Position, modified.Position) < 1e-6 &&
+            // The game applies a deprecated-additive track as delta * reference (measured on Smile's face): the delta
+            // turns the reference's position too.
+            var positionAfterBlend = hint == 2 ? encoded.Position + reference.Position
+                : encoded.Position + Vector3.Transform(reference.Position, encoded.Rotation);
+            check(Vector3.Distance(positionAfterBlend, modified.Position) < 1e-5 &&
                 Vector3.Distance(encoded.Scale * reference.Scale, modified.Scale) < 1e-6 && Math.Abs(Quaternion.Dot(rotationAfterBlend, modified.Rotation)) > .99999f,
                 $"blend hint {hint} reconstructs retargeted translation, scale and noncommuting rotation against the destination rest pose");
         }

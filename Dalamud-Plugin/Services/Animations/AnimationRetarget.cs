@@ -120,6 +120,12 @@ internal sealed class AnimationRetarget
             Quaternion.Normalize(targetRest.Rotation * Quaternion.Inverse(sourceRest.Rotation) * value.Rotation),
             targetRest.Scale * (value.Scale / sourceRest.Scale));
     }
+    /// <summary>
+    /// The track value that gives <paramref name="pose"/> on <paramref name="reference"/> under blend hint <paramref name="hint"/>.
+    /// The game applies a deprecated-additive track (1) as delta * reference, a QS product: position delta.t +
+    /// delta.r * reference.t, rotation delta.r * reference.r, scale delta.s * reference.s (fitted in game on Smile's
+    /// face, 2026-10-10). An additive track (2) adds its position and turns after the reference.
+    /// </summary>
     internal static BoneTransform Encode(BoneTransform pose, BoneTransform reference, sbyte hint)
     {
         if (hint == 0) return pose;
@@ -127,8 +133,10 @@ internal sealed class AnimationRetarget
         if (Math.Abs(reference.Scale.X * reference.Scale.Y * reference.Scale.Z) < 1e-12f)
             throw new InvalidDataException("Cannot encode additive animation against a singular reference pose.");
         var inverse = Quaternion.Inverse(reference.Rotation);
-        return new(pose.Position - reference.Position,
-            Quaternion.Normalize(hint == 2 ? inverse * pose.Rotation : pose.Rotation * inverse), pose.Scale / reference.Scale);
+        if (hint == 2)
+            return new(pose.Position - reference.Position, Quaternion.Normalize(inverse * pose.Rotation), pose.Scale / reference.Scale);
+        var rotation = Quaternion.Normalize(pose.Rotation * inverse);
+        return new(pose.Position - Vector3.Transform(reference.Position, rotation), rotation, pose.Scale / reference.Scale);
     }
     /// <summary><see cref="Encode(BoneTransform, BoneTransform, sbyte)"/> on values, for loops over every sample of a clip.</summary>
     internal static Motion.MotionTransform Encode(Motion.MotionTransform pose, Motion.MotionTransform reference, sbyte hint)
@@ -138,8 +146,10 @@ internal sealed class AnimationRetarget
         if (Math.Abs(reference.Scale.X * reference.Scale.Y * reference.Scale.Z) < 1e-12f)
             throw new InvalidDataException("Cannot encode additive animation against a singular reference pose.");
         var inverse = Quaternion.Inverse(reference.Rotation);
-        return new(pose.Position - reference.Position,
-            Quaternion.Normalize(hint == 2 ? inverse * pose.Rotation : pose.Rotation * inverse), pose.Scale / reference.Scale);
+        if (hint == 2)
+            return new(pose.Position - reference.Position, Quaternion.Normalize(inverse * pose.Rotation), pose.Scale / reference.Scale);
+        var rotation = Quaternion.Normalize(pose.Rotation * inverse);
+        return new(pose.Position - Vector3.Transform(reference.Position, rotation), rotation, pose.Scale / reference.Scale);
     }
     internal static float MapFloat(float value, float sourceReference, float targetReference, sbyte hint) =>
         hint == 0 ? value : value - sourceReference + targetReference;

@@ -40,27 +40,31 @@ internal static class PoseEdits
 
     /// <summary>
     /// The selected bones an edit turns, moves and scales: the primary bone and every other selected bone
-    /// with no selected bone above it. The bones above the primary one stay out, and a bone below a
-    /// changed one follows it rather than turning twice.
+    /// with no selected bone above it. The bones above the primary one stay out, with the rest of what
+    /// hangs from them (an arm's attachment bones when the hand is primary), and a bone below a changed
+    /// one follows it rather than turning twice.
     /// </summary>
     public static List<PoseTarget> Turned(IReadOnlyList<PoseTarget> targets, string primary, SkeletonDescription skeleton)
     {
         var index = MotionEvaluator.Index(skeleton);
-        var chosen = new HashSet<int>();
+        var selected = new HashSet<int>();
         foreach (var target in targets)
             if (index.TryGetValue(target.Bone, out var at))
-                chosen.Add(at);
-        if (index.TryGetValue(primary, out var first))
+                selected.Add(at);
+        var first = index.TryGetValue(primary, out var found) ? found : -1;
+        var abovePrimary = new HashSet<int>();
+        if (first >= 0)
             for (var above = skeleton.Bones[first].Parent; above >= 0; above = skeleton.Bones[above].Parent)
-                chosen.Remove(above);
+                abovePrimary.Add(above);
         var turned = new List<PoseTarget>();
         foreach (var target in targets)
         {
-            if (!index.TryGetValue(target.Bone, out var at) || !chosen.Contains(at))
+            if (!index.TryGetValue(target.Bone, out var at) || abovePrimary.Contains(at))
                 continue;
             var follows = false;
-            for (var above = skeleton.Bones[at].Parent; above >= 0 && !follows; above = skeleton.Bones[above].Parent)
-                follows = chosen.Contains(above);
+            if (at != first)
+                for (var above = skeleton.Bones[at].Parent; above >= 0 && !follows; above = skeleton.Bones[above].Parent)
+                    follows = selected.Contains(above);
             if (!follows)
                 turned.Add(target);
         }

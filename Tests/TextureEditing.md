@@ -114,6 +114,29 @@ agent.
 - With a variant showing, use the brush action on that texture in On Screen: the
   existing session reopens and the variant's TGA opens in the editor.
 
+## Unlisted mod pause (2026-10-10, pending)
+
+Ticked items were verified in game on 2026-10-10 by the XIV Bridge in-game tests
+(`XIV-Bridge/tests/instant-edit/textures`, run with `python -I tools/run_tests.py tests/instant-edit/textures`):
+a texture session of the plugin's own service code, on Instant Edit's Penumbra backend, for a texture
+in a Penumbra test mod, with its session list and cache in a temporary folder.
+- [x] Open a texture session, then point Penumbra's mod directory at another folder (keep the old
+  one) and save the texture. The session waits at first; after 10 minutes the card says "Paused:
+  Penumbra doesn't list the texture's mod. Resume once it does, or open the texture again."
+  Test 01: Penumbra stops listing the mod (its mod manager's RemoveMod; the folder and file stay),
+  and the wait is shortened to 8 s. The save shows "Save waiting: Penumbra doesn't list the
+  texture's mod right now." and leaves the mod's file alone; after the wait the status is the exact
+  paused text above.
+- [x] Point Penumbra back and press Resume: the texture saves.
+  Test 01: once Penumbra lists the mod again, the paused session doesn't save by itself; Resume
+  (the call the card's button makes) saves it: "Texture saved and redrawn", and the mod's file
+  is the committed texture.
+- [x] Disabling and re-enabling the Penumbra plugin while a save waits never pauses the session.
+  Test 02 unloads and loads Penumbra through Dalamud's plugin manager (gone about 20 s) with the
+  real 10-minute wait. The session never pauses, and the save goes through once Penumbra is back.
+  While Penumbra is off the card reads "Save waiting: Penumbra isn't available right now." (2026-10-10,
+  after the fix that makes the TGA decode wait rather than fail when Penumbra's IPC is missing).
+
 ## Dropping an image on On Screen (2026-10-10, pending)
 
 `Tests/BlenderStatusRegression` covers the service side (decode, commit, undo, restart, refusals).

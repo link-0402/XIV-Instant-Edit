@@ -21,6 +21,8 @@ internal sealed class AnimationCatalog
 
     internal static bool IsExpressionKey(byte loadType, string key) => loadType == 0 && key.StartsWith(FacialPrefix, StringComparison.Ordinal);
     private readonly Dictionary<ushort, Timeline> timelines = [];
+    // Every other timeline the game has, for the ones the loader plays (see FindAny); none in tests.
+    private readonly IReadOnlyDictionary<ushort, Timeline> others = new Dictionary<ushort, Timeline>();
     private readonly Lazy<PapLoadTable?> papTable;
     /// <summary>The game's PAP load table, or null when it can't be read: then every race loads its own paths.</summary>
     public PapLoadTable? PapTable => papTable.Value;
@@ -101,8 +103,23 @@ internal sealed class AnimationCatalog
             if (sheet.TryGetRow(id, out var row) && !row.Key.IsEmpty)
                 timelines[id] = new Timeline(id, row.Key.ExtractText(), names[id], row.LoadType, row.IsLoop,
                     family.Order().ToImmutableArray(), starts.TryGetValue(id, out var candidates) ? candidates.Order().ToImmutableArray() : []);
+        var others = new Dictionary<ushort, Timeline>();
+        foreach (var row in sheet)
+            if (row.RowId is > 0 and <= ushort.MaxValue && !timelines.ContainsKey((ushort)row.RowId) && !row.Key.IsEmpty)
+            {
+                var key = row.Key.ExtractText();
+                others[(ushort)row.RowId] = new Timeline((ushort)row.RowId, key, AnimationLibrary.KeyName(key), row.LoadType, row.IsLoop,
+                    [(ushort)row.RowId], []);
+            }
+        this.others = others;
     }
     public Timeline? Find(ushort id) => timelines.GetValueOrDefault(id);
+
+    /// <summary>
+    /// <see cref="Find"/>, or any other timeline the game has, on its own: the loader's Other rows, which the
+    /// listener hears only when the loader plays them, not whenever a character does.
+    /// </summary>
+    public Timeline? FindAny(ushort id) => timelines.GetValueOrDefault(id) ?? others.GetValueOrDefault(id);
     private static ImmutableArray<string> PapKeys(Timeline timeline) => timeline.Key switch
     {
         "normal/idle" => ["resident/idle"],
@@ -137,8 +154,9 @@ internal sealed class AnimationCatalog
             var parts = path.Split('/');
             if (parts.Length != 7 || parts[0] != "chara" || parts[1] != "human" || parts[3] != "skeleton" ||
                 !path.EndsWith(".sklb", StringComparison.Ordinal)) continue;
-            // A race without its own copy plays the one the game's load table names.
-            if (timeline.LoadType == 2 && parts[4] == "base")
+            // A race without its own copy plays the one the game's load table names. Body timelines of both
+            // load types read bt_common: "(on the ground)" emotes play emote/add_*.pap with load type 0.
+            if (timeline.LoadType is 0 or 2 && !timeline.IsExpression && parts[4] == "base")
                 foreach (var key in PapKeys(timeline))
                     candidates.Add(Loaded($"chara/human/{parts[2]}/animation/a0001/bt_common/{key}.pap", table));
             else if (timeline.IsExpression && parts[4] == "face")

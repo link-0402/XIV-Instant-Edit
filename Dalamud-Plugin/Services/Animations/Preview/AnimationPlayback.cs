@@ -107,6 +107,13 @@ internal sealed unsafe class AnimationPlayback : IDisposable
         return GPoseActor() is { } actor ? actor.ObjectIndex : null;
     }
 
+    /// <summary>Whether the GPose character at <paramref name="index"/> is drawn with its skeleton, so a clip can play on it.</summary>
+    public bool Drawn(ushort index)
+    {
+        RequireFrameworkThread();
+        return GPoseCharacter(index) is { } actor && Problem(actor) == null;
+    }
+
     /// <summary>
     /// How the character bones are edited on is turned in the world: the GPose actor, else your own
     /// character. The Bones window's rotation ball shows its rings that way; null when neither is drawn.
