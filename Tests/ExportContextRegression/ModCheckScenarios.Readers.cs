@@ -1,4 +1,6 @@
 using InstantEdit.Studio.Models;
+using InstantEdit.Studio.Models.Resources;
+using InstantEdit.Studio.Services;
 using InstantEdit.Studio.Services.Resources;
 using static InstantEdit.TestSupport.Assertions;
 
@@ -15,6 +17,99 @@ internal static partial class ModCheckScenarios
         ResolvesMaterialPathsLikeTheGame();
         RecognisesGameRootsAndMangledKeys();
         ResolvesRaceModelsLikePenumbra();
+        foreach (var (version, extraLods) in new[] { (ModCheckFixtures.ModelVersion5, false), (ModCheckFixtures.ModelVersion6, false), (ModCheckFixtures.ModelVersion6, true) })
+            ReadsModelMaterialsAttributesAndSubmeshes(version, extraLods);
+        FlagsMeshesWithMissingMaterialSlots();
+        TruncatedModelFallsBackToTheStringTable();
+        ReadsMaterialTexturesFlagsAndSamplers();
+        ReadsImcRowsAndEqdpEntries();
+        SniffsFileKinds();
+    }
+
+    private static void ReadsModelMaterialsAttributesAndSubmeshes(uint version, bool extraLods)
+    {
+        var bytes = ModCheckFixtures.Mdl(["/mt_c0201e0001_top_a.mtrl", "/mt_c0201b0001_a.mtrl"],
+        [
+            new ModCheckFixtures.Mesh(0, new ModCheckFixtures.Submesh("atr_tv_a"), new ModCheckFixtures.Submesh()),
+            new ModCheckFixtures.Mesh(1, new ModCheckFixtures.Submesh("atr_ude")),
+        ], version: version, extraLods: extraLods);
+
+        var info = ModelLayoutReader.Read(bytes);
+
+        Require(info.Structured && info.Version == version &&
+                info.Materials.SequenceEqual(["/mt_c0201e0001_top_a.mtrl", "/mt_c0201b0001_a.mtrl"]) &&
+                info.Attributes.SequenceEqual(["atr_tv_a", "atr_ude"]) && info.Bones.SequenceEqual(["j_kosi", "j_sebo_a"]) &&
+                info.Lod0Meshes.Select(mesh => mesh.MaterialIndex).SequenceEqual([0, 1]) &&
+                info.SubmeshAttributeMasks.SequenceEqual([1u, 0u, 2u]) && info.MeshesWithInvalidMaterial.Count == 0,
+            $"a v{version & 0xF} model{(extraLods ? " with extra LODs" : "")} gives its materials, attributes, bones, meshes and submesh masks");
+
+        var facts = ModFileFactsCache.FromBytes(bytes, ResourceKind.Model);
+        Require(facts.Layout is { } layout && layout.Attributes.SequenceEqual(["atr_tv_a", "atr_ude"]) &&
+                facts.MaterialSlots.SequenceEqual(["/mt_c0201e0001_top_a.mtrl", "/mt_c0201b0001_a.mtrl"]),
+            "the resource tree's file facts carry the model's layout");
+    }
+
+    private static void FlagsMeshesWithMissingMaterialSlots()
+    {
+        var info = ModelLayoutReader.Read(ModCheckFixtures.Mdl(["/mt_a.mtrl"], [new ModCheckFixtures.Mesh(3, new ModCheckFixtures.Submesh())]));
+        Require(info.Structured && info.MeshesWithInvalidMaterial.SequenceEqual([0]),
+            "a mesh pointing past the material list is flagged");
+    }
+
+    private static void TruncatedModelFallsBackToTheStringTable()
+    {
+        var bytes = ModCheckFixtures.Mdl(["/mt_c0201e0001_top_a.mtrl", "/mt_c0201e0001_top_b.mtrl"]);
+        var stringTableSize = BitConverter.ToUInt32(bytes, 0x44 + 4);
+        var truncated = bytes[..(0x44 + 8 + (int)stringTableSize + 10)];
+
+        var info = ModelLayoutReader.Read(truncated);
+        Require(!info.Structured && info.Materials.SequenceEqual(["/mt_c0201e0001_top_a.mtrl", "/mt_c0201e0001_top_b.mtrl"]),
+            "a truncated model still names the materials in its string table");
+        Reject(() => ModelLayoutReader.Read(ModCheckFixtures.Tex()), "a texture is not read as a model");
+    }
+
+    private static void ReadsMaterialTexturesFlagsAndSamplers()
+    {
+        var bytes = ModCheckFixtures.Mtrl(["chara/equipment/e0001/texture/a_n.tex", "chara/equipment/e0001/texture/a_m.tex"], dx11: [true, false],
+            samplers: [new ModCheckFixtures.Sampler(ModCheckFixtures.SamplerNormal, 0), new ModCheckFixtures.Sampler(ModCheckFixtures.SamplerMask, 5)]);
+
+        var info = MtrlReader.Read(bytes);
+
+        Require(MtrlReader.LooksLikeMtrl(bytes) && info.ShaderPackageName == "character.shpk" &&
+                info.TextureOffsets.Select(t => t.Path).SequenceEqual(["chara/equipment/e0001/texture/a_n.tex", "chara/equipment/e0001/texture/a_m.tex"]) &&
+                info.TextureOffsets[0].Dx11 && !info.TextureOffsets[1].Dx11,
+            "a material gives its shader, its textures and which are DX11 textures");
+        Require(info.ShaderDataParsed && info.Samplers.Select(s => (int)s.TextureIndex).SequenceEqual([0, 5]) && !info.LegacyColorTable,
+            "a material gives its samplers and the textures they point at");
+        Require(MtrlReader.Read(ModCheckFixtures.Mtrl(["chara/a/b.tex"], colorTableSize: 544)).LegacyColorTable,
+            "an Endwalker-sized colour table is a legacy one");
+    }
+
+    private static void ReadsImcRowsAndEqdpEntries()
+    {
+        var imc = ImcReader.Parse(ModCheckFixtures.Imc([[(1, 0x3FF), (1, 0x3FF)], [(1, 0x3FF), (2, 0x3FE)]]))!;
+        Require(imc.VariantCount == 1 && imc.Entry(1, 1) is { MaterialId: 2, AttributeMask: 0x3FE } &&
+                imc.Entry(1, 2) is null && imc.Entry(5, 0) is null,
+            "an IMC file gives each part's material set and attribute mask per variant");
+
+        var eqdp = EqdpReader.Parse(ModCheckFixtures.Eqdp(new Dictionary<ushort, ushort> { [128] = 0x008A, [600] = 0x0200 }))!;
+        Require(eqdp.Entry(128) == 0x008A && eqdp.Entry(600) == 0x0200 && eqdp.Entry(300) == 0 && eqdp.Entry(9000) == 0,
+            "an EQDP file gives each set's entry, zero for empty blocks and sets beyond the table");
+        Require(((0x008A >> SlotInfo.EqdpShift(EquipSlot.Body)) & 2) != 0 && ((0x0002 >> SlotInfo.EqdpShift(EquipSlot.Body)) & 2) == 0,
+            "the second bit of a slot's pair says the race has its own model");
+    }
+
+    private static void SniffsFileKinds()
+    {
+        Require(FileSniffer.Sniff(ModCheckFixtures.Tex(), ModCheckFixtures.Tex().Length) == FileKind.Tex &&
+                FileSniffer.Sniff(ModCheckFixtures.Mdl(["/mt_a.mtrl"]), 1000) == FileKind.Mdl &&
+                FileSniffer.Sniff(ModCheckFixtures.Mtrl(["chara/a/b.tex"]), 1000) == FileKind.Mtrl &&
+                FileSniffer.Sniff(ModCheckFixtures.Png(), 12) == FileKind.Png &&
+                FileSniffer.Sniff([], 0) == FileKind.Empty &&
+                FileSniffer.Sniff("hello world, not a texture at all............................................................"u8, 90) == FileKind.Unknown,
+            "files are recognised by their content");
+        Require(FileSniffer.ExpectedKind("chara/a/b.tex") == FileKind.Tex && FileSniffer.ExpectedKind("chara/a/b.avfx") is null,
+            "only textures, models and materials are checked against their extension");
     }
 
     private static void ParsesModelPaths()

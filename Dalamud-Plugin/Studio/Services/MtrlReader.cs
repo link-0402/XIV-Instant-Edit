@@ -12,6 +12,9 @@ public readonly struct MtrlTextureOffset
     public readonly string Path;
     public readonly ushort Flags;
     public MtrlTextureOffset(string path, ushort flags) { Path = path; Flags = flags; }
+
+    /// <summary>The game requests DX11 textures with a "--" prefix on the file name.</summary>
+    public bool Dx11 => (Flags & 0x8000) != 0;
 }
 
 /// <summary>One UV/color set entry: a resolved name plus its raw index/unknown bytes.</summary>
@@ -48,6 +51,9 @@ public sealed class MtrlSampler
     public byte TextureIndex;
     public byte[] Padding = new byte[3];
     public MtrlSampler Clone() => new() { Id = Id, Settings = Settings, TextureIndex = TextureIndex, Padding = Padding.ToArray() };
+
+    /// <summary>Samplers without a texture point at index 255.</summary>
+    public bool HasTexture => TextureIndex != byte.MaxValue;
 }
 
 /// <summary>
@@ -91,6 +97,12 @@ public sealed class MtrlInfo
     /// <summary>The shader constant value block that <see cref="Constants"/> point into, raw.</summary>
     public byte[] ShaderValues = Array.Empty<byte>();
 
+    /// <summary>
+    /// An Endwalker colour table (16 rows of 32 bytes, with or without its 32-byte dye table) on a
+    /// character.shpk material; Dawntrail doubled both, and the game no longer reads the old one.
+    /// </summary>
+    public bool LegacyColorTable => ShaderPackageName.Equals("character.shpk", StringComparison.OrdinalIgnoreCase) && DataSetSize is 512 or 544;
+
     /// <summary>A deep copy, so a shared template can be edited per material without touching the original.</summary>
     public MtrlInfo Clone() => new()
     {
@@ -129,6 +141,11 @@ public sealed class MtrlInfo
 public static class MtrlReader
 {
     private const int HeaderSize = 16;
+
+    public const uint Signature = 0x01030000;
+
+    public static bool LooksLikeMtrl(ReadOnlySpan<byte> data)
+        => data.Length >= HeaderSize && System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(data) == Signature;
 
     public static MtrlInfo Read(byte[] data)
     {

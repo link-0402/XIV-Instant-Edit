@@ -37,8 +37,11 @@ internal sealed class EqdpReader
         => $"chara/xls/charadb/{(accessory ? "accessorydeformerparameter" : "equipmentdeformerparameter")}/c{race.RaceCode}.eqdp";
 
     public static EqdpReader? Load(GameDataService gameData, RaceGender race, bool accessory)
+        => gameData.GetVanillaFileBytes(PathFor(race, accessory)) is { } bytes ? Parse(bytes) : null;
+
+    /// <summary>A table from its bytes (the game's file, or one a mod ships), or null when it is not one.</summary>
+    public static EqdpReader? Parse(byte[] bytes)
     {
-        var bytes = gameData.GetVanillaFileBytes(PathFor(race, accessory));
         if (bytes is not { Length: > IdentifierSize + PreambleSize })
             return null;
 
