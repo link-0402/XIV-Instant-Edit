@@ -34,8 +34,88 @@ internal sealed partial class CheckView
         if (ImGui.BeginTabItem("Clean up###cleanup"))
         {
             DrawTextures();
+            ImGui.Spacing();
+            DrawLocations();
             ImGui.EndTabItem();
         }
+    }
+
+    // ── File locations ───────────────────────────────────────────────────────
+
+    private Task<LocationPlan>? _locationScan;
+    private LocationPlan? _locations;
+
+    private void DrawLocations()
+    {
+        if (_locationScan is { IsCompleted: true } scan)
+        {
+            _locationScan = null;
+            _locations = scan.IsCompletedSuccessfully ? scan.Result : new LocationPlan(Array.Empty<LocationMove>(), Array.Empty<string>());
+        }
+        if (!ImGui.CollapsingHeader("File locations###locations"))
+            return;
+        Gui.HintWrapped("Move the mod's files to where Penumbra keeps them: the default files at their game path, an option's under its group and option. "
+                      + "Images and files Instant Edit wrote stay where they are. Old files are backed up before they go.");
+        using (Gui.Disabled(_locationScan != null || Check.Busy || _session.Project == null))
+        {
+            if (Gui.IconTextButton(FontAwesomeIcon.Search, _locations == null ? "See what would move" : "Look again", "List the moves without changing anything."))
+                StartLocationScan();
+        }
+        if (_locations is not { } plan)
+            return;
+        if (plan.Moves.Count == 0 && plan.Obsolete.Count == 0)
+        {
+            Gui.Hint("Everything is where Penumbra keeps it.");
+            return;
+        }
+        ImGui.TextUnformatted($"{plan.Moves.Count} file{(plan.Moves.Count == 1 ? string.Empty : "s")} move, {plan.Obsolete.Count} unused file{(plan.Obsolete.Count == 1 ? string.Empty : "s")} go.");
+        foreach (var move in plan.Moves.Take(8))
+            ImGui.TextColored(Theme.Faint, $"{move.FromRel}  to  {move.ToRel}");
+        if (plan.Moves.Count > 8)
+            Gui.Hint($"and {plan.Moves.Count - 8} more");
+
+        var why = Check.Busy ? "Wait until the change under way is done."
+            : _editor.Sync.Busy ? Services.Check.RepairApplier.BusyReason
+            : !_host.PenumbraIpc.IsAvailable ? "Penumbra is not available."
+            : null;
+        using (Gui.Disabled(why != null))
+        {
+            if (Gui.PrimaryButton(FontAwesomeIcon.FolderOpen, "Move the files", Theme.S(200), why ?? "Copy, change the mappings, then delete the old files."))
+                StartLocations(plan);
+        }
+        if (why != null)
+            Gui.Tooltip(why);
+    }
+
+    private void StartLocationScan()
+    {
+        if (_session.Project is not { } project)
+            return;
+        var meta = project.Meta.Clone();
+        var folder = project.FolderPath;
+        var ledger = project.Sidecar.Ledger.Files.Select(f => Services.Project.PathNormalizer.RelKey(f.RelPath)).ToHashSet(StringComparer.Ordinal);
+        _locationScan = Task.Run(() => FileLocations.Plan(meta, folder, ledger));
+    }
+
+    private void StartLocations(LocationPlan plan)
+    {
+        if (_session.Project is not { } project)
+            return;
+        _editor.Flush();
+        var host = _host;
+        var cacheRoot = host.CacheRoot;
+        _locations = null;
+        Check.StartOperation("Moving files", async token =>
+        {
+            var result = await FileLocations.ApplyAsync(project, plan, host.Backups, cacheRoot, host.Reloader, host.Configuration, token, OnFramework)
+                .ConfigureAwait(false);
+            if (result.Problems.Count > 0)
+                return (false, result.Problems[0]);
+            var message = $"Moved {result.Changed} file{(result.Changed == 1 ? string.Empty : "s")}";
+            if (result.Pending > 0)
+                message += $"; {result.Pending} locked file{(result.Pending == 1 ? " is" : "s are")} removed later";
+            return (true, message + ".");
+        }, checkAfter: true);
     }
 
     private void DrawTextures()

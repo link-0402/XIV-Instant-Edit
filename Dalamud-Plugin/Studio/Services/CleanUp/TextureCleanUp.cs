@@ -140,6 +140,7 @@ internal static class TextureCleanUp
         string cacheRoot, IModReloader penumbra, StudioSettings settings, IProgress<CheckProgress>? progress, CancellationToken token)
     {
         var folder = project.FolderPath;
+        await PendingCleanup.RetryAsync(settings, _ => false, token, folder).ConfigureAwait(false);
         int changed = 0, kept = 0;
         long saved = 0;
         var problems = new List<string>();
