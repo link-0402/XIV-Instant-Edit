@@ -64,6 +64,8 @@ public sealed record TextureEditSession
     /// <summary>The group's option that maps nothing, so the edited texture itself shows.</summary>
     public Guid? OriginalOptionId { get; set; }
     public List<TextureVariant> Variants { get; set; } = [];
+    /// <summary>The image last dropped over this texture, kept until it is undone.</summary>
+    public TextureReplacement? Replacement { get; set; }
     public string Directory => Path.Combine(CacheRoot, "texture-edits", Id.ToString("N"));
     public string WorkingFile => Path.Combine(Directory, Path.ChangeExtension(Path.GetFileName(GamePath), ".tga"));
     public string TargetFile => Path.Combine(ModRoot, RelativePath.Replace('/', Path.DirectorySeparatorChar));
@@ -89,6 +91,20 @@ public sealed record TextureVariant
     public DateTimeOffset? LastSaved { get; set; }
 }
 
+/// <summary>
+/// An image file dropped over a texture in On Screen. Undo puts back what it replaced while the
+/// destination still holds what the drop committed (<see cref="Hash"/>); any later save ends that.
+/// </summary>
+public sealed record TextureReplacement
+{
+    /// <summary>The dropped file's name.</summary>
+    public string File { get; init; } = "";
+    /// <summary>The backup of the texture the drop replaced; empty when the drop created the mod, so the captured original was there.</summary>
+    public string Backup { get; init; } = "";
+    public string Hash { get; init; } = "";
+    public DateTimeOffset At { get; init; }
+}
+
 internal sealed record TextureSource(byte[] Bytes, TextureEditSession Session);
 internal sealed record TextureCommit(string Hash, string Backup, string Message);
 /// <summary>The destination as it is now, which a conflicted session takes as its last save when it reconnects.</summary>
@@ -98,8 +114,11 @@ internal sealed record TextureRebase(string Hash, string MappingFingerprint, uin
 /// <param name="ShowOption">The variant-group option to select in the session's collection, if any.</param>
 internal sealed record TextureRefresh(TextureEditSession Session, Guid? ShowOption);
 
-/// <summary> A texture Substance Painter exported for a session: a 32-bit TGA, or null to go back to the captured original. </summary>
-internal sealed record ExternalTextureSave(Guid SessionId, byte[]? Tga);
+/// <summary>
+/// A texture Substance Painter exported for a session: a 32-bit TGA, or null to go back to the captured original.
+/// <paramref name="DroppedFile"/> names the image file instead when the TGA is one dropped over the texture.
+/// </summary>
+internal sealed record ExternalTextureSave(Guid SessionId, byte[]? Tga, string? DroppedFile = null);
 
 internal enum ExternalTextureOutcome { Applied, Unchanged, Restored, Failed }
 

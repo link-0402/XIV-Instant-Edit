@@ -62,6 +62,7 @@ internal static class ChangelogCatalog
             Entry("Animations: the listener now finds emotes your race plays from another race's files, like a Miqo'te dancing with a Midlander male's Popotostep mod."),
             Entry("Animations: running, sprinting, jumping, side steps and turning now show up on their own, not just the walk, so you can open each in the timeline."),
             Entry("On Screen no longer lists gear your other gear hides, such as legs under a robe. Send my character leaves it out too."),
+            Entry("On Screen: drop an image on a texture to replace it. Hold it on the row until the row lights up, then let go. Undo is in the row's menu."),
             Entry("Heels offset: when your gear hides your feet, the legs or body model now gets the offset instead of the hidden shoes."),
             Entry("Optimize textures: a notification now says what each run compressed, resized or cropped."),
             Entry("Part toggles: exports now refuse another slot's tags, like body tags on a necklace, which could never hide, and say which names to use. Toggle groups also keep a mod's own variant materials instead of switching them back to the game's."),

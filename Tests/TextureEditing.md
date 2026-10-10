@@ -114,6 +114,29 @@ agent.
 - With a variant showing, use the brush action on that texture in On Screen: the
   existing session reopens and the variant's TGA opens in the editor.
 
+## Dropping an image on On Screen (2026-10-10, pending)
+
+`Tests/BlenderStatusRegression` covers the service side (decode, commit, undo, restart, refusals).
+These checks need the game and Explorer:
+- [ ] Drag a PNG from Explorer over a mod texture row in On Screen. The row fills from the
+  left over about a second while the tooltip says "Hold here to replace <texture>", then lights
+  up with an accent outline and "Let go to replace <texture> with <file>". Let go: the actor
+  redraws with the image, the status says "Replaced <texture> with <file>. Undo is in the row's
+  menu.", and the Textures tab lists the texture's session.
+- [ ] Let go before the row lights up: nothing is replaced and the status asks to hold the
+  image until the row lights up. Moving onto another row starts its fill over.
+- [ ] Drag over a model, a material, white.tex or a row with a folder or two files: no fill;
+  texture rows that refuse the drag are outlined red and say why.
+- [ ] The row's menu (dots button or right-click) shows **Undo replace**. It puts the old
+  texture back, the actor redraws, and the item is gone. After another drop and an editor
+  save of the texture's TGA, the item is gone too.
+- [ ] Drop a JPEG, a TGA, a DDS and a mod's .tex: each replaces the texture. An image whose
+  size isn't a multiple of 4 on a BC texture is refused with why, and the file stays.
+- [ ] With "Include vanilla" on, drop on a Game Data texture: the "Replace a vanilla texture"
+  dialog asks for the mod name, the new mod shows the image, and Undo puts the game's texture
+  back into that mod.
+- [ ] Reload the plugin after a drop: Undo replace is still offered and works.
+
 ## Implementation validation environment
 
 The local environment uses Blender 5.2.1 LTS. The model export smoke suite fails

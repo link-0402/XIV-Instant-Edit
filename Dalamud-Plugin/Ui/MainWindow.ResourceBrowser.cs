@@ -9,6 +9,7 @@ using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using FileDrop = InstantEdit.Studio.Windows.UI.FileDrop;
 
 namespace InstantEdit.Ui;
 
@@ -39,6 +40,8 @@ public sealed partial class MainWindow
 
     private void DrawOnScreenTab()
     {
+        // Images dragged in from Explorer can be dropped on texture rows.
+        FileDrop.BeginExternalSource();
         ImGui.Spacing();
         _kinds = _screenKinds;
         var actors = ReadActors();
@@ -282,6 +285,7 @@ public sealed partial class MainWindow
         ImGui.TableNextRow();
         TintRow(resource);
         ImGui.TableSetColumnIndex(0);
+        var rowLeft = ImGui.GetCursorScreenPos().X;
         ImGui.SetCursorPosX(ImGui.GetCursorPosX() + Theme.TreeIndent);
         DrawSlotIcon(Safe(item.Slot, ResourceViews.KindLabel(item.Type)), item.Icon, item.Section);
         ImGui.SameLine(0, Theme.Gap);
@@ -301,7 +305,7 @@ public sealed partial class MainWindow
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Hint, context);
         }
-        DrawRowCells(actor, resource);
+        DrawRowCells(actor, resource, rowLeft);
         DrawRowMenu(actor, resource);
     }
 
@@ -364,6 +368,7 @@ public sealed partial class MainWindow
         ImGui.TableNextRow();
         TintRow(node);
         ImGui.TableSetColumnIndex(0);
+        var rowLeft = ImGui.GetCursorScreenPos().X;
         DrawTreeGuides(guide, hasChildren);
         // ImGui's persistent Indent state is reset while changing table rows/cells, so each
         // element is placed at its column's offset from the cell start.
@@ -397,7 +402,7 @@ public sealed partial class MainWindow
         ImGui.OpenPopupOnItemClick(RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
         if (hovered)
             DrawRowHover(node, presentation, key);
-        DrawRowCells(actor, node);
+        DrawRowCells(actor, node, rowLeft);
         DrawRowMenu(actor, node);
 
         if (!expanded || !hasChildren)
@@ -420,7 +425,8 @@ public sealed partial class MainWindow
         }
     }
 
-    private void DrawRowCells(ActorView actor, ResourceView node)
+    /// <summary> The row's other cells; <paramref name="rowLeft"/> is where its first cell starts on screen. </summary>
+    private void DrawRowCells(ActorView actor, ResourceView node, float rowLeft)
     {
         ImGui.TableSetColumnIndex(1);
         DrawSourceBadge(node);
@@ -429,6 +435,8 @@ public sealed partial class MainWindow
         Widgets.PathText(Safe(node.SourceRelativePath, Safe(node.GamePath, node.ActualPath)), Safe(node.ActualPath));
 
         ImGui.TableSetColumnIndex(3);
+        if (IsTextureRow(node))
+            DrawTextureDrop(actor, node, rowLeft);
         DrawRowActions(actor, node);
     }
 
@@ -478,7 +486,7 @@ public sealed partial class MainWindow
             var available = TextureEditAvailable(node);
             if (Widgets.IconButton("##edit-texture", FontAwesomeIcon.PaintBrush,
                     available
-                        ? "Open as a 32-bit TGA in your configured editor. Shared references to this texture will also change."
+                        ? "Open as a 32-bit TGA in your configured editor. Shared references to this texture will also change.\nOr drop an image on the row to replace the texture."
                         : TextureEditBlock(node) is { Length: > 0 } blocked ? blocked
                         : "This texture has no verified writable mod source.",
                     available && Volatile.Read(ref _textureBusy) == 0))
@@ -522,6 +530,15 @@ public sealed partial class MainWindow
             using var disabled = ImRaii.Disabled(!TextureEditAvailable(node) || Volatile.Read(ref _textureBusy) != 0);
             if (ImGui.MenuItem("Edit texture"))
                 StartTextureEdit(node, actor);
+        }
+        // Shown while the texture still holds an image dropped on it.
+        if (texture && UndoableReplace(node, actor) is { Replacement: { } drop } replaced)
+        {
+            using (ImRaii.Disabled(Volatile.Read(ref _textureBusy) != 0))
+                if (ImGui.MenuItem("Undo replace"))
+                    UndoTextureReplace(replaced);
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip($"Put back the texture from before {drop.File} was dropped on it.");
         }
         var animation = ResourceViews.IsAnimation(node);
         if (animation)
