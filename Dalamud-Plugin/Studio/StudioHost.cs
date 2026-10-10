@@ -97,6 +97,9 @@ internal sealed class StudioHost : IDisposable
         _playerRace   = playerRace;
         Backups       = new Services.Backups.ModBackupStore(configDirectory);
         Backups.Load();
+        // Files clean-up couldn't delete last time, because something held them; no mod is open yet.
+        if (settings.PendingCleanup.Count > 0)
+            _ = System.Threading.Tasks.Task.Run(() => Services.CleanUp.PendingCleanup.RetryAsync(settings, _ => false, System.Threading.CancellationToken.None));
         var pi = StudioServices.PluginInterface;
 
         PenumbraIpc      = new PenumbraIpcService(pi, StudioServices.Log);
