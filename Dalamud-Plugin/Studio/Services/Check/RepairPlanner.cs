@@ -35,6 +35,8 @@ internal sealed partial class ModCheck
         RequestFindings();
         MaterialProblemFindings();
         RaceFindings();
+        LiveFindings();
+        LeftoverFindings();
 
         foreach (var repair in _repairs)
             _findings.FirstOrDefault(finding => finding.Key == repair.FindingKey)?.RepairIds.Add(repair.Id);
