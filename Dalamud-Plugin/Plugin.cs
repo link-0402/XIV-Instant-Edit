@@ -262,6 +262,7 @@ public sealed class Plugin : IDalamudPlugin
         _textures.AdditionalCacheCleanup = () =>
         {
             _compression.ExpireBackups();
+            _studio?.Backups.Expire(DateTime.UtcNow, TextureFiles.CacheRootFor(_config.TextureCacheDirectory));
             var (files, bytes) = _gameExport.CleanCache(TextureFiles.CacheRootFor(_config.TextureCacheDirectory));
             if (files > 0)
                 _log.Information($"Cache cleanup removed {files:N0} old Game Files export files ({bytes / (double)(1L << 20):0.0} MB).");
@@ -293,7 +294,11 @@ public sealed class Plugin : IDalamudPlugin
         // The Mod Browser: Penumbra's mods as a library, a window per open mod, and the modpack builder.
         Studio.StudioServices.Initialize(pi, log, data, textureProvider, dragDrop, framework);
         _config.Studio.AttachSave(SaveConfiguration);
-        _studio = new Studio.StudioHost(_config.Studio, configDirectory, _settingsWindow.Open);
+        _studio = new Studio.StudioHost(_config.Studio, configDirectory, _settingsWindow.Open,
+            () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory),
+            () => objects.LocalPlayer is { } player && player.Customize.Length > 4
+                ? Studio.Models.RaceInfo.FromCustomize(player.Customize[0], player.Customize[1], player.Customize[4])
+                : null);
         _window.AttachStudio(_studio);
 
         _windowSystem = new WindowSystem();
