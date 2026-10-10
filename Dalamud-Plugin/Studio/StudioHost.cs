@@ -74,14 +74,34 @@ internal sealed class StudioHost : IDisposable
     /// <summary>Instant Edit's hand-offs (Blender, the texture editor) for the files of an open mod; set by the main window.</summary>
     public IModHandoff? Handoff { get; set; }
 
-    public StudioHost(StudioSettings settings, string configDirectory, Action openSettings)
+    /// <summary>Backups of the files clean-up and repairs change, kept in the cache folder for a week.</summary>
+    public Services.Backups.ModBackupStore Backups { get; }
+
+    /// <summary>Penumbra reading a mod again, for repairs and clean-up.</summary>
+    public Services.Check.IModReloader Reloader { get; }
+
+    private readonly Func<string> _cacheRoot;
+    private readonly Func<ushort?> _playerRace;
+
+    /// <summary>Instant Edit's cache folder, made sure of on every call.</summary>
+    public string CacheRoot => _cacheRoot();
+
+    /// <summary>The local player's race code (101 for c0101), or null. Framework thread only.</summary>
+    public ushort? PlayerRace() => _playerRace();
+
+    public StudioHost(StudioSettings settings, string configDirectory, Action openSettings, Func<string> cacheRoot, Func<ushort?> playerRace)
     {
         Configuration = settings;
         _openSettings = openSettings;
+        _cacheRoot    = cacheRoot;
+        _playerRace   = playerRace;
+        Backups       = new Services.Backups.ModBackupStore(configDirectory);
+        Backups.Load();
         var pi = StudioServices.PluginInterface;
 
         PenumbraIpc      = new PenumbraIpcService(pi, StudioServices.Log);
         PenumbraTextures = new PenumbraTextureConverter(PenumbraIpc);
+        Reloader         = new Services.Check.PenumbraModReloader(PenumbraIpc);
         GameData         = new GameDataService(StudioServices.DataManager, StudioServices.Log);
         // Reading the whole Item sheet takes a moment; do it off the render thread so loading the
         // plugin does not hitch the game. The item browser shows a wait state.

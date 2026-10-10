@@ -59,6 +59,21 @@ internal sealed class FakeCollectionView(Dictionary<string, string> provided, bo
         : null;
 }
 
+/// <summary>Penumbra reloading a mod: succeeds unless told otherwise, and counts the reloads.</summary>
+internal sealed class FakeReloader : IModReloader
+{
+    public bool ReloadSucceeds { get; init; } = true;
+    public int ReloadCalls { get; private set; }
+
+    public bool Reload(string folderName)
+    {
+        ReloadCalls++;
+        return ReloadSucceeds;
+    }
+
+    public bool IsPresent(string folderName) => true;
+}
+
 /// <summary>A mod folder in the test root, written file by file.</summary>
 internal sealed class TestModFolder : IDisposable
 {

@@ -133,6 +133,9 @@ public sealed class StudioSettings
 
     public void Save() => _save?.Invoke();
 
+    /// <summary>Files clean-up or repairs couldn't delete because something held them; deleted when they are free.</summary>
+    public List<PendingFile> PendingCleanup { get; set; } = new();
+
     /// <summary>Whether an item has any saved models or materials, regardless of modpack membership.</summary>
     public bool HasWork(uint key)
         => (MaterialsByItem.TryGetValue(key, out var m) && m.Count > 0)
@@ -146,4 +149,14 @@ public sealed class StudioSettings
         if (RecentProjects.Count > 12)
             RecentProjects.RemoveRange(12, RecentProjects.Count - 12);
     }
+}
+
+/// <summary>A file of a mod that couldn't be deleted because something held it.</summary>
+[Serializable]
+public sealed class PendingFile
+{
+    public string ModFolder { get; set; } = string.Empty;
+    public string RelPath { get; set; } = string.Empty;
+    public string Reason { get; set; } = string.Empty;
+    public DateTime Since { get; set; }
 }
