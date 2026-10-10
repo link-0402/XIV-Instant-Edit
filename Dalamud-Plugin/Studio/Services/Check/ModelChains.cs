@@ -285,6 +285,43 @@ internal sealed partial class ModCheck
         return check;
     }
 
+    // ── Findings ─────────────────────────────────────────────────────────────
+
+    private void ModelFindings()
+    {
+        foreach (var walk in _walks)
+        {
+            if (walk.Error is not null)
+                AddFinding($"F002:{walk.Container.Option.Serialize()}:{walk.Path}", "F002", CheckCategory.Materials, Severity.Error, "Model can't be read",
+                    $"{walk.Path}: {walk.Error}", walk.Path, walk.Container, "Export the model again, or replace the file.");
+            else if (walk.Layout is { MeshesWithInvalidMaterial.Count: > 0 } layout)
+                AddFinding($"C008:{walk.Path}", "C008", CheckCategory.Materials, Severity.Error, "A mesh uses a material the model doesn't list",
+                    $"{walk.Path}: mesh {string.Join(", ", layout.MeshesWithInvalidMaterial)} uses a material slot past the model's {layout.Materials.Count} materials.",
+                    walk.Path, walk.Container, "Give every mesh a material that exists in your model editor, and export it again.");
+            if (walk.Info is null)
+                _notes.Add($"{walk.Path} is not a model path the check knows, so its material folders were not checked.");
+            else if (walk.Layout is { Structured: false } unstructured)
+                _notes.Add($"{walk.Path}: the model's layout could not be followed ({unstructured.StructureError}); its material names were read from its string table.");
+            if (walk.Info?.Kind == GameModelKind.Weapon)
+                _notes.Add($"{walk.Path}: off-hand weapon mirroring is not followed, so its material paths are approximate and nothing in it is offered for removal.");
+        }
+    }
+
+    private void MaterialProblemFindings()
+    {
+        foreach (var check in _materials.Values.DistinctBy(check => check.Path))
+        {
+            if (check.Error is not null && check.Source.RelPath is { } relPath && State(relPath) is { Exists: true, Kind: FileKind.Mtrl })
+                AddFinding($"F002:{check.Path}", "F002", CheckCategory.Materials, Severity.Error, "Material can't be read",
+                    $"{check.Path}: {check.Error}", check.Path, check.Root, "Export the material again, or replace the file.");
+            foreach (var (code, severity, message) in check.Problems)
+                AddFinding($"{code}:{check.Path}:{message}", code, CheckCategory.Materials, severity,
+                    code switch { "C003" => "Material has a texture path that isn't one", "C004" => "Material sampler has no texture", _ => "Material is from before Dawntrail" },
+                    $"{check.Path}: {message}", check.Path, check.Root,
+                    code == "C009" ? null : "Fix the material in Penumbra's material editor (Advanced Editing, Materials).");
+        }
+    }
+
     private static readonly Dictionary<uint, string> SamplerNames = new()
     {
         [0x115306BE] = "diffuse",

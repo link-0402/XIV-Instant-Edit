@@ -25,6 +25,12 @@ internal static partial class ModCheckScenarios
         MaterialOnlyInASiblingOptionIsBroken();
         MaterialInEveryOptionOfASingleGroupIsAlwaysProvided();
         MaterialOnlyInAMultiOptionIsConditional();
+        HealthyModHasNoFindings();
+        Dx11TexturesAreRequestedWithTheirPrefix();
+        ReportsBrokenMaterialsAndFiles();
+        ImcGroupsDecideMaterialSets();
+        AttributeMasksThatHideEverythingAreReported();
+        RaceModelsNoRaceLoadsAreErrors();
     }
 
     // ── Reading a mod's options ──────────────────────────────────────────────
@@ -244,5 +250,90 @@ internal static partial class ModCheckScenarios
         var finding = report.Findings.Single(f => f.Code == "C006");
         Require(finding.Severity == Severity.Warning && finding.RepairIds.All(id => !report.Find(id)!.Preselected),
             "a material only a multi-choice option provides is a warning, and copying it is left unticked");
+    }
+
+    // ── Chains, variants and races ───────────────────────────────────────────
+
+    private static void HealthyModHasNoFindings()
+    {
+        using var mod = GearMod();
+        var report = Check(mod);
+        Require(report.Count(Severity.Error) == 0 && report.Count(Severity.Warning) == 0 && !report.Repairs.Any(r => r.Preselected),
+            "a healthy gear mod has no errors, no warnings and nothing to repair");
+        Require(report.Variants.Single().Rows.All(row => row.Status is null) && report.Races.Single().Rows.Count == 18,
+            "its variant table is clean, and its race table lists every playable race");
+    }
+
+    private static void Dx11TexturesAreRequestedWithTheirPrefix()
+    {
+        using var mod = GearMod(material: ModCheckFixtures.Mtrl([GearTexture], dx11: [true]));
+        var report = Check(mod);
+
+        const string prefixed = "chara/equipment/e0005/texture/--mt_c0201e0005_top_a_base.tex";
+        var finding = report.Findings.Single(f => f.Code == "C002");
+        var fix = report.Find(finding.RepairIds.Single())!;
+        Require(finding.GamePath == prefixed && fix.Preselected &&
+                fix.EditsFor(null).Single() == new AddFileEdit(OptionRef.Default, prefixed, "files/base.tex"),
+            "a DX11 texture is asked for with the -- prefix, and its twin without it is the certain fix");
+    }
+
+    private static void ReportsBrokenMaterialsAndFiles()
+    {
+        using var mod = GearMod(material: ModCheckFixtures.Mtrl([GearTexture], shader: "missing.shpk",
+            samplers: [new ModCheckFixtures.Sampler(ModCheckFixtures.SamplerDiffuse, 3)]));
+        mod.File("files/base.tex", ModCheckFixtures.Png());
+        var report = Check(mod);
+
+        Require(report.Findings.Count(f => f.Code == "C005") == 1, "a shader that doesn't exist is reported");
+        Require(report.Findings.Count(f => f.Code == "C004") == 1, "a sampler pointing past the material's textures is reported");
+        Require(report.Findings.Single(f => f.Code == "F001").Detail.Contains("PNG", StringComparison.Ordinal),
+            "a PNG renamed to .tex is reported as a PNG");
+    }
+
+    private static void ImcGroupsDecideMaterialSets()
+    {
+        using var mod = GearMod();
+        var meta = JObject.Parse(mod.ReadMeta());
+        ((JArray)meta["Groups"]!).Add(new JObject
+        {
+            ["Type"] = "Imc",
+            ["Name"] = "Sets",
+            ["Identifier"] = new JObject { ["ObjectType"] = "Equipment", ["PrimaryId"] = 5, ["Variant"] = 1, ["EquipSlot"] = "Body" },
+            ["DefaultEntry"] = new JObject { ["MaterialId"] = 1, ["AttributeMask"] = 1023 },
+            ["AllVariants"] = true,
+            ["OnlyAttributes"] = false,
+            ["Options"] = new JArray(),
+        });
+
+        Require(Check(mod, GearGame(bodyMaterialSet: 2)).Findings.Count(f => f.Code is "V001" or "C001") == 1,
+            "a variant whose material set the mod doesn't provide is reported");
+        mod.Meta(meta.ToString());
+        Require(!Check(mod, GearGame(bodyMaterialSet: 2)).Findings.Any(f => f.Code is "V001" or "C001"),
+            "an IMC group that points every variant at a provided material set fixes it");
+    }
+
+    private static void AttributeMasksThatHideEverythingAreReported()
+    {
+        using var mod = GearMod(model: ModCheckFixtures.Mdl(["/mt_c0201e0005_top_a.mtrl"],
+            [new ModCheckFixtures.Mesh(0, new ModCheckFixtures.Submesh("atr_tv_b"), new ModCheckFixtures.Submesh("atr_tv_b", "atr_ude"))]));
+        Require(Check(mod, GearGame(mask: 0x3FD)).Findings.Count(f => f.Code == "V003") == 1,
+            "an attribute mask that hides every part of the model is reported");
+        Require(!Check(mod, GearGame(mask: 0x3FF)).Findings.Any(f => f.Code == "V003"),
+            "a mask that leaves a part visible is fine");
+    }
+
+    private static void RaceModelsNoRaceLoadsAreErrors()
+    {
+        using var mod = GearMod();
+        var meta = JObject.Parse(mod.ReadMeta());
+        meta["DefaultData"]!["Files"]!["chara/equipment/e0005/model/c1401e0005_top.mdl"] = "files/model.mdl";
+        mod.Meta(meta.ToString());
+
+        var report = Check(mod, player: 1401);
+        var finding = report.Findings.Single(f => f.Code == "R001");
+        var table = report.Races.Single();
+        Require(finding.Severity == Severity.Error && table.Shipped.Order().SequenceEqual(new ushort[] { 201, 1401 }) &&
+                table.Rows.Single(row => row.Race == 1401) is { UsesModModel: true, Loaded: 201, ViaFallback: true, IsPlayer: true },
+            "a race model the EQDP data never loads is an error; that race wears the model it falls back to");
     }
 }

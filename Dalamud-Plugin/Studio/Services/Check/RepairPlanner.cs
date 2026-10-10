@@ -28,14 +28,81 @@ internal sealed partial class ModCheck
 
     private ModCheckReport BuildReport(MetaFingerprint? fingerprint)
     {
+        StructureFindings();
+        FileFindings();
+        ModelFindings();
+        VariantFindings();
         RequestFindings();
+        MaterialProblemFindings();
+        RaceFindings();
 
         foreach (var repair in _repairs)
             _findings.FirstOrDefault(finding => finding.Key == repair.FindingKey)?.RepairIds.Add(repair.Id);
 
         var findings = _findings.OrderByDescending(finding => finding.Severity).ThenBy(finding => finding.Category).ToArray();
-        return new ModCheckReport(_input.Folder, fingerprint, DateTime.UtcNow, findings, _repairs, Array.Empty<VariantTable>(),
-            Array.Empty<RaceTable>(), _input.Collection?.Context, _input.PlayerRace, _notes);
+        return new ModCheckReport(_input.Folder, fingerprint, DateTime.UtcNow, findings, _repairs, BuildVariantTables(),
+            RaceTableViews(), _input.Collection?.Context, _input.PlayerRace, _notes);
+    }
+
+    // ── Structure and files ──────────────────────────────────────────────────
+
+    private void StructureFindings()
+    {
+        foreach (var issue in _model.Issues)
+        {
+            var (code, title) = issue.Kind switch
+            {
+                MetaIssueKind.NonStringMapping => ("S002", "Redirection doesn't point at a file"),
+                MetaIssueKind.EscapingPath     => ("S003", "Redirection points outside the mod folder"),
+                MetaIssueKind.InvalidGamePath  => ("S004", "Redirection has a game path that isn't one"),
+                MetaIssueKind.BadGroup         => ("S007", "Option group is broken"),
+                _                              => ("S008", "Manipulation is broken"),
+            };
+            AddFinding($"{code}:{issue.Location}", code, CheckCategory.Structure, Severity.Error, title,
+                $"{issue.Message} ({PenumbraModMeta.FileName}{(issue.Location.Length > 0 ? $", {issue.Location}" : string.Empty)})",
+                issue.GamePath, manual: "Penumbra skips this entry. Fix or remove it in Penumbra's Edit Mod tab.");
+        }
+    }
+
+    private void FileFindings()
+    {
+        foreach (var group in _model.Mappings.Where(m => !m.Shadowed && ResourceNaming.HasValidRoot(m.Key)).GroupBy(m => m.RelPath, StringComparer.OrdinalIgnoreCase))
+        {
+            var state = State(group.Key);
+            var paths = string.Join(", ", group.Select(m => m.Key).Distinct().Take(4));
+            if (!state.Exists)
+            {
+                foreach (var mapping in group)
+                {
+                    var key = $"S006:{mapping.Container.Option.Serialize()}:{mapping.Key}";
+                    AddFinding(key, "S006", CheckCategory.Structure, Severity.Error, "Redirected file is missing",
+                        $"{mapping.Key} points at {mapping.RelPath}, which doesn't exist{(state.Error is null ? "." : $" ({state.Error}).")} The game fails to load it.",
+                        mapping.Key, mapping.Container);
+                    var sameName = SameNameFiles(mapping.RelPath);
+                    var candidates = sameName
+                        .Select(file => new RepairCandidate(file, sameName.Count == 1 ? RepairConfidence.High : RepairConfidence.Low, "A file with the same name elsewhere in the mod",
+                            new RepairEdit[] { new RetargetFileEdit(mapping.Container.Option, mapping.Key, mapping.RelPath, file) }))
+                        .ToList();
+                    if (_game.Exists(mapping.Key))
+                        candidates.Add(new RepairCandidate("Remove the redirection (use the game's file)", RepairConfidence.Medium, "The path exists in the game",
+                            new RepairEdit[] { new RemoveFileEdit(mapping.Container.Option, mapping.Key, mapping.RelPath) }));
+                    if (candidates.Count > 0)
+                        AddRepair($"retarget:{mapping.Container.Option.Serialize()}:{mapping.Key}", key, CheckCategory.Structure, $"Fix the missing file for {ShortName(mapping.Key)}",
+                            "Point the redirection at a file that exists.", candidates);
+                }
+                continue;
+            }
+
+            var mismatched = group.Where(m => FileSniffer.ExpectedKind(m.Key) is { } expected && expected != state.Kind).ToArray();
+            if (mismatched.Length == 0)
+                continue;
+            var wanted = FileSniffer.ExpectedKind(mismatched[0].Key)!.Value;
+            AddFinding($"F001:{group.Key}", "F001", CheckCategory.Structure, Severity.Error, $"File is not {FileSniffer.Describe(wanted)}",
+                $"{group.Key} is {FileSniffer.Describe(state.Kind)}, but it is used as {paths}. The game can't load it.",
+                mismatched[0].Key, manual: wanted == FileKind.Tex
+                    ? "Turn the image into a .tex file, with Penumbra's texture import in Advanced Editing for example."
+                    : "Replace the file with a valid one exported from Penumbra, TexTools or a model editor.");
+        }
     }
 
     private CheckFinding AddFinding(string key, string code, CheckCategory category, Severity severity, string title, string detail,

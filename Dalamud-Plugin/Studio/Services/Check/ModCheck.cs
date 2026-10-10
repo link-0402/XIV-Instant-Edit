@@ -59,6 +59,8 @@ internal sealed partial class ModCheck
 
         progress?.Report(new CheckProgress("Tracing models, materials and textures", 1, 5));
         WalkModels();
+        progress?.Report(new CheckProgress("Checking race models", 3, 5));
+        BuildRaceTables();
     }
 
     // ── Index ────────────────────────────────────────────────────────────────
