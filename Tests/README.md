@@ -148,3 +148,6 @@ FFXIV/Penumbra integration remains a separate manual check.
 
 See [texture editing acceptance checks](TextureEditing.md) for the Photoshop and
 live-game scenarios required before releasing texture editing.
+
+See [Mod Browser acceptance checks](ModBrowserEditing.md) for the mod windows, the
+build window and Instant Edit's hand-offs from them in the live game.

@@ -100,7 +100,7 @@ public sealed partial class MainWindow
         if (sessions.Count == 0)
         {
             Widgets.EmptyState(FontAwesomeIcon.Images, "No texture sessions",
-                "Choose Textures in On Screen or Mod Browser, then use the brush action on a texture. Set your editor executable in Settings first.");
+                "Use the brush on a texture in On Screen, or in a mod opened from the Mod Browser. Set your editor executable in Settings first.");
             return;
         }
 

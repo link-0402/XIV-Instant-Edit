@@ -1,11 +1,12 @@
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Studio;
 using InstantEdit.Ui;
 using static InstantEdit.TestSupport.Assertions;
 
 /// <summary>
 /// Animation rows in the resource browsers: which .pap files count as character animations that
-/// can be sent to Blender, and how the Mod Browser lists them. None of this touches ImGui or Dalamud.
+/// can be sent to Blender, and how a mod window hands them off. None of this touches ImGui or Dalamud.
 /// </summary>
 internal static class AnimationRowScenarios
 {
@@ -30,33 +31,31 @@ internal static class AnimationRowScenarios
                 (ResourceKinds.Editable & ResourceKinds.Animation) != 0 && new ResourceKindSelection().Admitted.HasFlag(ResourceKinds.Animation),
             "the Animations filter and the tree view admit animation rows");
 
-        var snapshot = new PenumbraModSnapshot("DanceMod", "Dance Mod", @"C:\mods\Dance", [
-            new PenumbraModResource(emote, @"C:\mods\Dance\dance01.pap", "dance01.pap", "Dance: On", ["Dance: On"]),
-            new PenumbraModResource("chara/equipment/e0001/model/c0101e0001_top.mdl", @"C:\mods\Dance\top.mdl", "top.mdl", "", []),
-        ]);
-        var view = ResourceViews.BuildModView(snapshot, 0);
+        // A mod window hands a mod's animation packs to Blender as sendable rows of their option.
+        var dance = new ModHandoffMod("Dance Mod", "DanceMod", @"C:\mods\Dance", null);
+        var view = ModHandoffBridge.Mod(dance, [
+            new ModHandoffFile(emote, @"C:\mods\Dance\dance01.pap", "dance01.pap", "", "", [], "Default"),
+            new ModHandoffFile("chara/equipment/e0001/model/c0101e0001_top.mdl", @"C:\mods\Dance\top.mdl", "top.mdl", "", "", [], "Default"),
+        ], 0);
         var row = view.Roots.Single(r => r.GamePath == emote);
         Require(row.Type == "Animation" && row.Kinds == ResourceKinds.Animation && ResourceViews.IsAnimation(row) &&
                 row.SourceState == ResourceSourceState.LoadedMod && row.ActualPath == @"C:\mods\Dance\dance01.pap" &&
-                row.OptionMapping == "Dance: On",
-            "the Mod Browser lists a mod's animation packs as sendable animation rows with their option");
+                row.OptionMapping == "Default",
+            "a mod window hands a mod's animation packs off as sendable animation rows with their option");
         Require(view.Summary == "1 model · 1 animation", "a mod's summary counts its animations");
         Require(!ResourceViews.IsAnimation(view.Roots.Single(r => r.Type == "Model")), "models are not animation rows");
 
         // Animations your character plays have their own tab; On Screen lists no animation rows.
         var onScreen = ResourceKindChipSet.OnScreen;
-        var modBrowser = ResourceKindChipSet.ModBrowser;
-        Require(onScreen.Chips.All(chip => chip.Kind != ResourceKinds.Animation) && (onScreen.Listed & ResourceKinds.Animation) == 0 &&
-                modBrowser.Chips.Any(chip => chip.Kind == ResourceKinds.Animation) && modBrowser.Listed == ResourceKinds.Editable,
-            "On Screen offers no Animations filter, and the Mod Browser keeps it");
-        Require(onScreen.Counts.SequenceEqual([onScreen.Listed, ResourceKinds.Model, ResourceKinds.Texture, ResourceKinds.Material]) &&
-                modBrowser.Counts.Count == modBrowser.Chips.Count + 1 && modBrowser.Counts[0] == ResourceKinds.Editable,
+        Require(onScreen.Chips.All(chip => chip.Kind != ResourceKinds.Animation) && (onScreen.Listed & ResourceKinds.Animation) == 0,
+            "On Screen offers no Animations filter");
+        Require(onScreen.Counts.SequenceEqual([onScreen.Listed, ResourceKinds.Model, ResourceKinds.Texture, ResourceKinds.Material]),
             "the All chip counts every listed row, followed by one count per chip");
         var screenKinds = new ResourceKindSelection(onScreen.Listed);
         Require(!screenKinds.Admits(row) && !screenKinds.AdmitsSubtree(row) && screenKinds.AdmitsSubtree(view.Roots.Single(r => r.Type == "Model")),
             "On Screen never shows an animation row, even if Penumbra reported one");
         screenKinds.Toggle(ResourceKinds.Model);
-        Require(screenKinds.Admitted == ResourceKinds.Model && new ResourceKindSelection(modBrowser.Listed).Admits(row),
-            "a kind filter narrows what the browser lists, and the Mod Browser lists animation rows");
+        Require(screenKinds.Admitted == ResourceKinds.Model && new ResourceKindSelection(ResourceKinds.Editable).Admits(row),
+            "a kind filter narrows what the browser lists, and every editable kind admits animation rows");
     }
 }

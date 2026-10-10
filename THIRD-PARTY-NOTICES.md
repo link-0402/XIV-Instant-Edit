@@ -72,6 +72,25 @@ The gizmo itself is ImGuizmo through Dalamud's `Dalamud.Bindings.ImGuizmo`, a
 Dalamud-provided dependency. Pose files are read as Anamnesis, Ktisis and Brio write
 them; no code from those tools is included.
 
+# Mod Browser
+
+The Mod Browser (`Dalamud-Plugin/Studio/`) is XIV Port Studio by the same author,
+brought into Instant Edit and licensed with it under GPL-3.0-or-later.
+
+Its bundled material presets (`Dalamud-Plugin/Studio/Resources/MaterialPresets/`)
+are preset materials from [FFXIV TexTools](https://github.com/TexTools/FFXIV_TexTools_UI)
+(GPL-3.0).
+
+It ships these libraries unmodified beside the plugin:
+
+- [BCnEncoder.Net](https://github.com/Nominom/BCnEncoder.NET) 2.3.0 (MIT) compresses
+  textures, with its dependency CommunityToolkit.HighPerformance (MIT).
+- [SharpGLTF](https://github.com/vpenades/SharpGLTF) 1.0.5 (MIT; Toolkit, Runtime
+  and Core) writes the Sims 4 importer's meshes as glTF.
+- [SixLabors.ImageSharp](https://github.com/SixLabors/ImageSharp) 3.1.12 reads and
+  resizes images, under the Six Labors Split License 1.0, whose Apache License 2.0
+  terms apply to open source software such as Instant Edit.
+
 # Sound import
 
 The SCD sound file layout (header, entry tables, sound, track and audio entries,

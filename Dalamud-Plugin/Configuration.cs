@@ -164,6 +164,9 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary> The physics builder previews every change on your character once you let go of a control. </summary>
     public bool PhysicsAutoPreview { get; set; }
 
+    /// <summary> The Mod Browser: the modpack being built, recent mods, layout and defaults for new content. </summary>
+    public Studio.StudioSettings Studio { get; set; } = new();
+
     /// <summary>Legacy v9 context payload retained only for one-time migration or storage fallback.</summary>
     public List<PersistedExportContext> ExportContexts { get; set; } = [];
 

@@ -162,6 +162,7 @@ try
     EstEntryScenarios.Run(testRoot);
     CheckSessionStore(testRoot);
     SelectorStabilityScenarios.Run(testRoot);
+    ModHandoffScenarios.Run(testRoot);
     CollectionActivationScenarios.Run();
     UiViewModelScenarios.Run();
     AnimationRowScenarios.Run();

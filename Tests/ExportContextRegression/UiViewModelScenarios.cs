@@ -6,7 +6,7 @@ using static InstantEdit.TestSupport.Assertions;
 
 /// <summary>
 /// The window view models: kind filters, search, expansion keys, the status feed, session
-/// grouping and the mod-view builder. None of these touch ImGui or Dalamud.
+/// grouping and the row builders. None of these touch ImGui or Dalamud.
 /// </summary>
 internal static class UiViewModelScenarios
 {
@@ -162,14 +162,6 @@ internal static class UiViewModelScenarios
         Require(ExpansionState.NodeKey("s", blank) == "s:Resource:Unnamed resource::ab",
             "node keys fall back for blank fields and strip embedded nulls");
 
-        // ---- Mod list filter ----
-        var mods = new List<PenumbraMod> { new("dir-a", "Alpha Gear"), new("dir-b", "Beta Hair") };
-        var modList = new ModListFilter();
-        Require(ReferenceEquals(modList.Apply(mods, ""), mods), "an empty mod filter returns the source list");
-        Require(modList.Apply(mods, "beta").Single().Directory == "dir-b" && modList.Apply(mods, "DIR-A").Single().Name == "Alpha Gear",
-            "the mod filter matches name or directory case-insensitively");
-        Require(ReferenceEquals(modList.Apply(mods, "beta"), modList.Apply(mods, "beta")), "mod filter results are memoised");
-
         // ---- Status feed ----
         var now = new DateTimeOffset(2026, 9, 24, 12, 0, 0, TimeSpan.Zero);
         var feed = new StatusFeed(3, () => now);
@@ -212,19 +204,7 @@ internal static class UiViewModelScenarios
         Require(grouped.Select(g => g.Group).SequenceEqual(["ModA", "New Tex", "ModB"]) && grouped[0].Sessions.Count == 2,
             "sessions group by target mod in first-seen order");
 
-        // ---- Mod view, safety gates, display names, section roots ----
-        var snapshot = new PenumbraModSnapshot("ModDir", "Mod Name", @"C:\mods\Mod", [
-            new PenumbraModResource("chara/z.tex", @"C:\mods\Mod\z.tex", "z.tex", "Group: Option", ["Group: Option"]),
-            new PenumbraModResource("chara/A.mdl", @"C:\mods\Mod\A.mdl", "A.mdl", "", []),
-        ]);
-        var modView = ResourceViews.BuildModView(snapshot, 3);
-        Require(modView.Entity is null && modView.Category == "Mod" && modView.ImportObjectIndex == 3,
-            "mod views have no actor and keep the import index");
-        Require(modView.Roots.Select(r => r.GamePath).SequenceEqual(["chara/A.mdl", "chara/z.tex"])
-                && modView.Roots[1].OptionMapping == "Group: Option"
-                && modView.Roots[0].SourceState == ResourceSourceState.LoadedMod
-                && modView.Roots[0].Type == "Model",
-            "mod rows sort by game path and keep their option mapping");
+        // ---- Safety gates, display names, section roots ----
         Require(ResourceViews.IsSafeModel(modelView), "a rooted mod model with a directory is editable");
         Require(ResourceViews.IsSafeModel(ResourceViews.FromNode(Node("Mdl", "v", safeModelPath, safeModelPath, ResourceSourceState.GameData))),
             "a vanilla model with a game path is editable");

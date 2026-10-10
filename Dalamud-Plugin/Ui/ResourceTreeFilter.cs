@@ -185,26 +185,3 @@ internal sealed class ExpansionState
         return UiText.SafeId($"{scope}:{type}:{name}:{gamePath}:{actualPath}");
     }
 }
-
-/// <summary> The Mod Browser's mod list filter, memoised per list and search text. </summary>
-internal sealed class ModListFilter
-{
-    private IReadOnlyList<PenumbraMod>? _source;
-    private string _text = string.Empty;
-    private IReadOnlyList<PenumbraMod> _result = [];
-
-    public IReadOnlyList<PenumbraMod> Apply(IReadOnlyList<PenumbraMod> mods, string text)
-    {
-        text = UiText.Safe(text);
-        if (ReferenceEquals(mods, _source) && string.Equals(text, _text, StringComparison.Ordinal))
-            return _result;
-
-        _source = mods;
-        _text = text;
-        _result = text.Length == 0
-            ? mods
-            : mods.Where(mod => mod.Name.Contains(text, StringComparison.OrdinalIgnoreCase)
-                             || mod.Directory.Contains(text, StringComparison.OrdinalIgnoreCase)).ToArray();
-        return _result;
-    }
-}

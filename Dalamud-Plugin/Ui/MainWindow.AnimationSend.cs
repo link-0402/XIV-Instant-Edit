@@ -8,13 +8,17 @@ using InstantEdit.Services.Animations;
 namespace InstantEdit.Ui;
 
 /// <summary>
-/// The "Send animation to Blender" dialog behind the pen of an animation row: a PAP file from the
-/// Mod Browser, whose clip and source skeleton are chosen here, or an animation in the Animations
-/// tab, which the listener detected on your character and whose skeleton it already matched.
+/// The "Send animation to Blender" dialog behind the pen of an animation row: a PAP file of a mod
+/// open in a mod window, whose clip and source skeleton are chosen here, or an animation in the
+/// Animations tab, which the listener detected on your character and whose skeleton it already matched.
+/// The dialog shows in the window whose row opened it (see <see cref="AnimationSendState.Owner"/>).
 /// </summary>
 public sealed partial class MainWindow
 {
     private const string AnimationSendPopup = "Send animation to Blender";
+
+    /// <summary> The main window, as the owner of the dialogs its own rows open. </summary>
+    private const string MainOwner = "main";
 
     private sealed class AnimationSendState(CancellationToken lifetime) : IDisposable
     {
@@ -29,6 +33,9 @@ public sealed partial class MainWindow
         public Task<SkeletonResolution>? Resolution { get; set; }
         public SkeletonCandidate? Chosen { get; set; }
         public bool Sent { get; set; }
+
+        /// <summary> The window that opened the dialog and draws it: the main window or a mod window. </summary>
+        public string Owner { get; init; } = MainOwner;
 
         public void Dispose()
         {
@@ -54,7 +61,7 @@ public sealed partial class MainWindow
             : "Only animation files inside a mod folder can be sent from here.";
     }
 
-    private void OpenAnimationSend(ResourceView node)
+    private void OpenAnimationSend(ResourceView node, string owner = MainOwner)
     {
         if (AnimationSendBlock(node) is { } blocked)
         {
@@ -64,12 +71,12 @@ public sealed partial class MainWindow
         animationSend?.Dispose();
         if (_animationRows.TryGetValue(node, out var detected))
         {
-            animationSend = new AnimationSendState(_lifetimeCts.Token) { CaptureId = detected.CaptureId, Startup = detected.Startup };
+            animationSend = new AnimationSendState(_lifetimeCts.Token) { CaptureId = detected.CaptureId, Startup = detected.Startup, Owner = owner };
             return;
         }
         var source = new AnimationFileSource(node.GamePath, node.ActualPath, Safe(node.DisplayName, Path.GetFileName(node.ActualPath)),
             node.SourceModName.Length > 0 ? node.SourceModName : null, node.SourceModDirectory.Length > 0 ? node.SourceModDirectory : null);
-        var state = new AnimationSendState(_lifetimeCts.Token) { File = source };
+        var state = new AnimationSendState(_lifetimeCts.Token) { File = source, Owner = owner };
         state.Inspection = animations!.Files.InspectAsync(source, state.Token);
         animationSend = state;
     }
@@ -81,10 +88,10 @@ public sealed partial class MainWindow
         ImGui.CloseCurrentPopup();
     }
 
-    private void DrawAnimationSendDialog()
+    private void DrawAnimationSendDialog(string owner)
     {
         var state = animationSend;
-        if (state is null)
+        if (state is null || state.Owner != owner)
             return;
         if (!ImGui.IsPopupOpen(AnimationSendPopup))
             ImGui.OpenPopup(AnimationSendPopup);
