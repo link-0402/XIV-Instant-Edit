@@ -34,6 +34,9 @@ internal sealed class ModEditor : IDisposable
     public ModSync Sync { get; }
     public ResourceGraphService Graphs { get; }
 
+    /// <summary>The Check view's check of the mod, its report and the repairs and clean-up started from it.</summary>
+    public InstantEdit.Studio.Services.Check.CheckSession Check { get; } = new();
+
     /// <summary>How the mod is set for the player in Penumbra (enabled, which options).</summary>
     public ActiveSettings Settings { get; }
 
@@ -110,6 +113,8 @@ internal sealed class ModEditor : IDisposable
             Host.PenumbraIpc.ReloadMod(open.FolderName);
 
         Sync.Update();
+        Check.Update();
+        Check.Watch(open);
         Graphs.Update(Session);
         Session.Graph = Graphs.Current;
         Session.FlushIfDue();

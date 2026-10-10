@@ -38,9 +38,18 @@ internal static class RepairApplier
         => !string.Equals(Path.GetFullPath(project.FolderPath).TrimEnd('\\', '/'), Path.GetFullPath(report.Folder).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)
         || report.Fingerprint is null || MetaFingerprint.Of(project.FolderPath) != report.Fingerprint;
 
+    /// <param name="onOwnerThread">Runs an action on the thread that owns <paramref name="project"/> (the framework thread in game); inline when null.</param>
     public static async Task<ApplyResult> ApplyAsync(ModProject project, ModCheckReport report, RepairSelection selection, ModBackupStore backups,
-        string cacheRoot, IModReloader penumbra, StudioSettings settings, CancellationToken token)
+        string cacheRoot, IModReloader penumbra, StudioSettings settings, CancellationToken token, Func<Action, Task>? onOwnerThread = null)
     {
+        Task OnOwner(Action action)
+        {
+            if (onOwnerThread is not null)
+                return onOwnerThread(action);
+            action();
+            return Task.CompletedTask;
+        }
+
         if (Changed(project, report))
             return new ApplyResult(false, ChangedReason, 0, 0, 0);
         var repairs = selection.Effective();
@@ -74,12 +83,12 @@ internal static class RepairApplier
         var counts = new EditCounts();
         try
         {
-            project.EditStructure(meta =>
+            await OnOwner(() => project.EditStructure(meta =>
             {
                 // Every edit is tried on a copy first, so a stale one stops the whole apply before anything changes.
                 ApplyEdits(meta.Clone(), edits, new EditCounts());
                 ApplyEdits(meta, edits, counts);
-            });
+            })).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
         {
@@ -95,7 +104,7 @@ internal static class RepairApplier
                 var temp = metaPath + ".instant-edit-tmp";
                 File.WriteAllBytes(temp, original);
                 File.Move(temp, metaPath, overwrite: true);
-                project.RefreshFromDisk();
+                await OnOwner(() => project.RefreshFromDisk(force: true)).ConfigureAwait(false);
                 penumbra.Reload(name);
                 return new ApplyResult(false, "Penumbra didn't take the repaired mod, so its meta.json was put back.", 0, 0, 0);
             }

@@ -50,6 +50,12 @@ internal sealed class CheckInput
     /// <summary>Files this plugin wrote into the mod (the sidecar's ledger), as comparison keys: never offered for deletion.</summary>
     public IReadOnlySet<string> LedgerRelKeys { get; init; } = new HashSet<string>(StringComparer.Ordinal);
 
+    /// <summary>The same input, checked against a collection.</summary>
+    public CheckInput WithCollection(ICollectionView? collection) => new()
+    {
+        Folder = Folder, Meta = Meta, Game = Game, Items = Items, PlayerRace = PlayerRace, Collection = collection, LedgerRelKeys = LedgerRelKeys,
+    };
+
     public static CheckInput From(ModProject project, IVanillaFiles game, IItemVariants? items, ushort? player, ICollectionView? collection)
     {
         var ledger = new HashSet<string>(StringComparer.Ordinal);

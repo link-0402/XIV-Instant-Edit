@@ -6,7 +6,7 @@ namespace InstantEdit.Studio.Models;
 internal enum StageId { Browse, Details, ModInfo, Build }
 
 /// <summary>What Edit mode's centre shows: the mod at a glance, the entry picked on the left as a tree, or the game's items to add.</summary>
-internal enum StudioView { Overview, Resources, Browse }
+internal enum StudioView { Overview, Resources, Browse, Check }
 
 /// <summary>What kind of object a <see cref="Target"/> points at.</summary>
 internal enum TargetKind { Item, Model, Material, Texture, Build, Project, Resource, Option, Group }
