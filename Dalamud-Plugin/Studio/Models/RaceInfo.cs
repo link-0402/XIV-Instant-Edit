@@ -130,6 +130,25 @@ public static class RaceInfo
 
     public static bool IsPlayableCode(ushort code) => code % 100 == 1 && code / 100 is >= 1 and <= 18;
 
+    /// <summary>The race code of Penumbra's "Race"/"Gender" spellings in meta.json ("AuRa", "Female").</summary>
+    public static bool TryFromPenumbra(string? race, string? gender, out ushort code)
+    {
+        foreach (var candidate in AllRaces)
+        {
+            if (string.Equals(candidate.PenumbraRace, race, StringComparison.OrdinalIgnoreCase)
+             && string.Equals(candidate.PenumbraGender, gender, StringComparison.OrdinalIgnoreCase))
+            {
+                code = Code(candidate);
+                return true;
+            }
+        }
+        code = 0;
+        return false;
+    }
+
+    /// <summary>A race code for people: "Miqo'te (Female)", or "c0104" for NPC and unknown codes.</summary>
+    public static string NameOf(ushort code) => FromCode(code)?.DisplayName ?? $"c{code:D4}";
+
     public static bool IsFemaleCode(ushort code) => code / 100 % 2 == 0;
 
     /// <summary>The race a race falls back to for a model it has none of (Penumbra's GenderRace.Fallback).</summary>

@@ -1,5 +1,99 @@
 using System.Buffers.Binary;
 using System.Text;
+using InstantEdit.Studio.Models;
+using InstantEdit.Studio.Services.Check;
+using InstantEdit.Studio.Services.Project;
+using InstantEdit.Studio.Services.Resources;
+
+/// <summary>The game's files for a mod check scenario: only what a test adds exists.</summary>
+internal sealed class FakeVanillaFiles : IVanillaFiles
+{
+    private readonly Dictionary<string, byte[]> _files = new(StringComparer.OrdinalIgnoreCase);
+
+    public FakeVanillaFiles Add(string gamePath, byte[]? content = null)
+    {
+        _files[PathNormalizer.GamePath(gamePath)] = content ?? [0];
+        return this;
+    }
+
+    /// <summary>Gives every playable race an EQDP file; races without an entry have no model of their own for the set.</summary>
+    public FakeVanillaFiles WithEqdp(ushort setId, IReadOnlyDictionary<ushort, ushort> entries, bool accessory = false)
+    {
+        foreach (var race in RaceInfo.PlayableCodes)
+            Add(ModelNaming.EqdpPath(race, accessory), ModCheckFixtures.Eqdp(new Dictionary<ushort, ushort> { [setId] = entries.GetValueOrDefault(race) }));
+        return this;
+    }
+
+    public bool Exists(string gamePath) => _files.ContainsKey(PathNormalizer.GamePath(gamePath));
+
+    public byte[]? TryReadBytes(string gamePath) => _files.GetValueOrDefault(PathNormalizer.GamePath(gamePath));
+}
+
+/// <summary>Item names by model and variant.</summary>
+internal sealed class FakeItemVariants : IItemVariants
+{
+    private readonly Dictionary<(GameModelKind, ushort, EquipSlot?, int), List<string>> _items = new();
+
+    public FakeItemVariants Add(GameModelKind kind, ushort set, EquipSlot slot, int variant, string name)
+    {
+        if (!_items.TryGetValue((kind, set, slot, variant), out var list))
+            _items[(kind, set, slot, variant)] = list = [];
+        list.Add(name);
+        return this;
+    }
+
+    public IReadOnlyList<string> Names(GameModelKind kind, ushort primaryId, ushort secondaryId, EquipSlot? slot, int variant)
+        => _items.GetValueOrDefault((kind, primaryId, slot, variant)) ?? (IReadOnlyList<string>)[];
+}
+
+/// <summary>A player's collection: the game paths other mods provide, under X:\Penumbra\&lt;mod&gt;\.</summary>
+internal sealed class FakeCollectionView(Dictionary<string, string> provided, bool? enabled = true) : ICollectionView
+{
+    public CollectionContext Context { get; } = new("Test Collection", enabled, 0, null);
+
+    public IReadOnlyDictionary<string, string?> Resolve(IReadOnlyList<string> gamePaths)
+        => gamePaths.ToDictionary(path => path, path => provided.GetValueOrDefault(path));
+
+    public string? ModOf(string resolvedPath) => resolvedPath.StartsWith(@"X:\Penumbra\", StringComparison.OrdinalIgnoreCase)
+        ? resolvedPath[@"X:\Penumbra\".Length..].Split('\\')[0]
+        : null;
+}
+
+/// <summary>A mod folder in the test root, written file by file.</summary>
+internal sealed class TestModFolder : IDisposable
+{
+    public TestModFolder(string? name = null)
+    {
+        Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "InstantEditModCheck", name ?? Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path);
+    }
+
+    public string Path { get; }
+
+    public TestModFolder File(string relative, byte[] content)
+    {
+        var full = System.IO.Path.Combine(Path, relative.Replace('/', System.IO.Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(full)!);
+        System.IO.File.WriteAllBytes(full, content);
+        return this;
+    }
+
+    public TestModFolder Meta(string json)
+    {
+        System.IO.File.WriteAllText(System.IO.Path.Combine(Path, "meta.json"), json);
+        return this;
+    }
+
+    public bool Exists(string relative) => System.IO.File.Exists(System.IO.Path.Combine(Path, relative.Replace('/', System.IO.Path.DirectorySeparatorChar)));
+
+    public string ReadMeta() => System.IO.File.ReadAllText(System.IO.Path.Combine(Path, "meta.json"));
+
+    public void Dispose()
+    {
+        try { Directory.Delete(Path, recursive: true); }
+        catch (IOException) { }
+    }
+}
 
 /// <summary>
 /// Minimal but well-formed game files for the mod check scenarios, laid out as Mod Optimizer's

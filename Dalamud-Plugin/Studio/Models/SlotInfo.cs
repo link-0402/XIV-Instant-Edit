@@ -98,6 +98,21 @@ public static class SlotInfo
 
     public static List<EquipSlot> AllSlots { get; } = new List<EquipSlot>(KeyMap.Keys);
 
+    /// <summary>The slot of Penumbra's spelling in manipulation JSON ("Ears", "RFinger" …).</summary>
+    public static bool TryFromPenumbra(string? name, out EquipSlot slot)
+    {
+        foreach (var (candidate, label) in LabelMap)
+        {
+            if (string.Equals(label, name, StringComparison.OrdinalIgnoreCase))
+            {
+                slot = candidate;
+                return true;
+            }
+        }
+        slot = default;
+        return false;
+    }
+
     /// <summary>The slot's part in an item's IMC file (mirrors Penumbra's ImcFile.PartIndex): head and earrings 0, body and neck 1, and so on.</summary>
     public static int ImcPartIndex(EquipSlot slot) => (int)slot % 5;
 
