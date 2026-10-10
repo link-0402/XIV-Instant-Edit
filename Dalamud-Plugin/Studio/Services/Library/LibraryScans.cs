@@ -41,6 +41,7 @@ internal sealed class LibraryScans
     private volatile IReadOnlyDictionary<string, IReadOnlyList<string>>? _duplicatesOf;
     private volatile IReadOnlyDictionary<string, IReadOnlyList<ChangeTag>>? _changes;
     private volatile CheckProgress? _progress;
+    private int _revision;
 
     /// <param name="collections">Penumbra's collections by id; null when Penumbra can't be asked.</param>
     /// <param name="enabledByMod">A collection's mods by folder name and whether each is enabled, inheritance on, temporary settings off.</param>
@@ -66,6 +67,9 @@ internal sealed class LibraryScans
 
     /// <summary>What each mod changes, by folder name; null until scanned.</summary>
     public IReadOnlyDictionary<string, IReadOnlyList<ChangeTag>>? Changes => _changes;
+
+    /// <summary>Goes up each time a scan publishes results, so a view knows to filter again.</summary>
+    public int Revision => Volatile.Read(ref _revision);
 
     /// <summary>The running scan, or a finished task (tests wait on it).</summary>
     internal Task Idle => _running;
@@ -123,6 +127,7 @@ internal sealed class LibraryScans
                     _usage = ModUsageScan.From(collections, _enabledByMod);
                 // Read once, also when Penumbra didn't answer, so a missing Penumbra isn't asked every frame.
                 _usageReadFor = generation;
+                Interlocked.Increment(ref _revision);
             }
             if (readCopies)
             {
@@ -135,6 +140,7 @@ internal sealed class LibraryScans
                         others[folder] = set.Where(f => !string.Equals(f, folder, StringComparison.OrdinalIgnoreCase)).ToArray();
                 _duplicatesOf = others;
                 _duplicatesFor = stamp;
+                Interlocked.Increment(ref _revision);
             }
             if (readChanges)
             {
@@ -147,6 +153,7 @@ internal sealed class LibraryScans
                 }
                 _changes = changes;
                 _changesFor = stamp;
+                Interlocked.Increment(ref _revision);
             }
             Prune(mods);
         }

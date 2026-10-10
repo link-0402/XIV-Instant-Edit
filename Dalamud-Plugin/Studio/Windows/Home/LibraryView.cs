@@ -5,6 +5,7 @@ using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
+using InstantEdit.Studio.Services.Library;
 using InstantEdit.Studio.Services.Project;
 using InstantEdit.Studio.Windows.UI;
 
@@ -23,15 +24,35 @@ internal sealed class LibraryView
     private readonly ModLibrary _library;
     private readonly TextureThumbnailCache _thumbs;
 
+    // In SearchIn's order.
+    private static readonly string[] SearchInLabels =
+        { "Name, author or tag", "Anything it changes", "Item", "Emote", "Face", "Standing idle", "Groundsit", "Chair sit" };
+    private static readonly string[] SearchHints =
+    {
+        "Search name, author or tag", "Item, emote, face or pose", "Item name or model id (e6016)", "Emote name",
+        "Race, gender and face number", "Race or pose number", "Race or pose number", "Race or pose number",
+    };
+    private static readonly string[] ShowLabels = { "All mods", "Not enabled anywhere", "Duplicates" };
+    private const int ShowUnused = 1, ShowDuplicates = 2;
+
     private string _search = string.Empty;
     private int _sort;
+    private int _searchIn;
+    private int _show;
     private string? _error;
 
-    // The filtered, sorted list, kept until the listing, the search or the sort changes.
+    // The filtered, sorted list, kept until the listing, the search, the sort, a filter or the scans' results change.
     private IReadOnlyList<InstalledMod>? _source;
     private string? _shownSearch;
     private int _shownSort = -1;
+    private int _shownSearchIn = -1;
+    private int _shownShow = -1;
+    private int _shownRevision = -1;
     private List<InstalledMod> _shown = new();
+
+    // The tile whose right-click menu is open.
+    private InstalledMod? _menuFor;
+    private bool _openMenu;
 
     public LibraryView(StudioHost host)
     {
@@ -193,8 +214,15 @@ internal sealed class LibraryView
         ImGui.Spacing();
         Gui.SectionHeader(installed == null ? "Your mods" : $"Your mods ({installed.Count})");
 
-        ImGui.SetNextItemWidth(Math.Max(Theme.S(200), ImGui.GetContentRegionAvail().X - Theme.S(220)));
-        ImGui.InputTextWithHint("##search", "Search name, author or tag", ref _search, 256);
+        float spacing0 = ImGui.GetStyle().ItemSpacing.X;
+        ImGui.SetNextItemWidth(Theme.S(170));
+        ImGui.Combo("##searchin", ref _searchIn, SearchInLabels, SearchInLabels.Length);
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(Math.Max(Theme.S(160), ImGui.GetContentRegionAvail().X - Theme.S(170 + 150 + 40) - spacing0 * 3));
+        ImGui.InputTextWithHint("##search", SearchHints[_searchIn], ref _search, 256);
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(Theme.S(170));
+        ImGui.Combo("##show", ref _show, ShowLabels, ShowLabels.Length);
         ImGui.SameLine();
         ImGui.SetNextItemWidth(Theme.S(150));
         ImGui.Combo("##sort", ref _sort, SortLabels, SortLabels.Length);
@@ -214,32 +242,86 @@ internal sealed class LibraryView
             return;
         }
 
+        // A filter that needs a scan of the library starts one, and shows its progress until the results are in.
+        var scans = _library.Scans;
+        var kind = (SearchIn)_searchIn;
+        bool needChanges = kind != SearchIn.NameAuthorTag;
+        scans.Need(usage: _show == ShowUnused, duplicates: _show == ShowDuplicates, changes: needChanges, installed);
+        var usage = scans.Usage;
+        var duplicates = scans.DuplicatesOf;
+        var changes = scans.Changes;
+        bool waiting = (_show == ShowUnused && usage == null) || (_show == ShowDuplicates && duplicates == null) || (needChanges && changes == null);
+        if (scans.Progress is { } progress)
+        {
+            Gui.Icon(FontAwesomeIcon.Hourglass, Theme.Accent);
+            ImGui.SameLine();
+            ImGui.TextColored(Theme.Accent, $"Checking {installed.Count} mods");
+            ImGui.SameLine();
+            Gui.Hint(progress.Total > 1 ? $"{progress.Phase} ({progress.Current} of {progress.Total})" : progress.Phase);
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Cancel##scan"))
+            {
+                // The filters go back to what needs no scan, or the next frame would start it again.
+                scans.Cancel();
+                _show = 0;
+                _searchIn = 0;
+            }
+            ImGui.Spacing();
+        }
+        if (waiting)
+        {
+            if (scans.Progress == null)
+                Gui.Hint(_show == ShowUnused ? "Penumbra did not say which mods are enabled." : "Waiting for the scan.");
+            return;
+        }
+
         var search = _search.Trim();
-        if (!ReferenceEquals(_source, installed) || _shownSearch != search || _shownSort != _sort)
+        if (!ReferenceEquals(_source, installed) || _shownSearch != search || _shownSort != _sort
+            || _shownSearchIn != _searchIn || _shownShow != _show || _shownRevision != scans.Revision)
         {
             IEnumerable<InstalledMod> mods = installed;
-            if (search.Length > 0)
+            if (!needChanges)
             {
-                mods = mods.Where(m => m.Name.Contains(search, StringComparison.OrdinalIgnoreCase)
-                                    || m.Author.Contains(search, StringComparison.OrdinalIgnoreCase)
-                                    || m.FolderName.Contains(search, StringComparison.OrdinalIgnoreCase)
-                                    || m.Tags.Any(t => t.Contains(search, StringComparison.OrdinalIgnoreCase)));
+                if (search.Length > 0)
+                {
+                    mods = mods.Where(m => m.Name.Contains(search, StringComparison.OrdinalIgnoreCase)
+                                        || m.Author.Contains(search, StringComparison.OrdinalIgnoreCase)
+                                        || m.FolderName.Contains(search, StringComparison.OrdinalIgnoreCase)
+                                        || m.Tags.Any(t => t.Contains(search, StringComparison.OrdinalIgnoreCase)));
+                }
             }
+            else if (changes != null)
+            {
+                mods = mods.Where(m => changes.TryGetValue(m.FolderName, out var tags) && ChangesIndex.Matches(tags, kind, search));
+            }
+            if (_show == ShowUnused && usage != null)
+                mods = mods.Where(m => !usage.Used.Contains(m.FolderName));
+            if (_show == ShowDuplicates && duplicates != null)
+                mods = mods.Where(m => duplicates.ContainsKey(m.FolderName));
             mods = _sort switch
             {
                 1 => mods.OrderByDescending(m => m.LastWrite),
                 2 => mods.OrderBy(m => m.Author, StringComparer.OrdinalIgnoreCase).ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase),
                 _ => mods.OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase),
             };
+            // Copies of one mod sit next to each other, where the first of them sorts.
+            if (_show == ShowDuplicates)
+                mods = mods.GroupBy(m => m.Name.Trim(), StringComparer.OrdinalIgnoreCase).SelectMany(g => g);
             _shown = mods.ToList();
             _source = installed;
             _shownSearch = search;
             _shownSort = _sort;
+            _shownSearchIn = _searchIn;
+            _shownShow = _show;
+            _shownRevision = scans.Revision;
         }
 
         if (_shown.Count == 0)
         {
-            Gui.Hint(installed.Count == 0 ? "Penumbra has no mods yet." : "No mod matches the search.");
+            Gui.Hint(installed.Count == 0 ? "Penumbra has no mods yet."
+                : _show == ShowDuplicates && search.Length == 0 && !needChanges ? "No mod is installed twice."
+                : _show == ShowUnused && search.Length == 0 && !needChanges ? "Every mod is enabled somewhere."
+                : "No mod matches the search.");
             return;
         }
 
@@ -266,16 +348,47 @@ internal sealed class LibraryView
                 if (index >= shown.Count)
                     break;
                 if (c > 0) ImGui.SameLine(0, spacing);
-                DrawMod(shown[index], new Vector2(tileW, tileH));
+                DrawMod(shown[index], new Vector2(tileW, tileH), usage, duplicates, needChanges ? changes : null, kind, search);
             }
         });
+        DrawMenu();
         ImGui.EndChild();
+    }
+
+    /// <summary>The right-click menu of a library tile.</summary>
+    private void DrawMenu()
+    {
+        if (_openMenu)
+        {
+            ImGui.OpenPopup("##modmenu");
+            _openMenu = false;
+        }
+        if (_menuFor is not { } mod || !ImGui.BeginPopup("##modmenu"))
+            return;
+        if (ImGui.MenuItem("Open"))
+            Open(mod.FullPath);
+        if (ImGui.MenuItem("Open the mod's folder"))
+        {
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{mod.FullPath}\"") { UseShellExecute = true });
+                _error = null;
+            }
+            catch (Exception ex)
+            {
+                _error = $"The folder could not be opened: {ex.Message}";
+            }
+        }
+        if (ImGui.MenuItem("Select in Penumbra"))
+            _error = _host.PenumbraIpc.OpenModPage(mod.FolderName);
+        ImGui.EndPopup();
     }
 
     /// <summary>The tile hovered last frame: its mod's changed items are asked of Penumbra (once).</summary>
     private string? _hovered;
 
-    private void DrawMod(InstalledMod mod, Vector2 size)
+    private void DrawMod(InstalledMod mod, Vector2 size, ModUsage? usage, IReadOnlyDictionary<string, IReadOnlyList<string>>? duplicates,
+        IReadOnlyDictionary<string, IReadOnlyList<ChangeTag>>? changes, SearchIn kind, string search)
     {
         var folder = _library.SortPath(mod);
         var badges = new List<Badge>();
@@ -283,8 +396,15 @@ internal sealed class LibraryView
             badges.Add(new Badge("Open", Theme.Good, "Open in a window."));
         if (mod.HasProject)
             badges.Add(new Badge("Your files", Theme.Accent, "Has files of your own that are kept in step with their sources."));
+        if (usage != null && !usage.Used.Contains(mod.FolderName))
+            badges.Add(new Badge("Unused", Theme.Warn, "Not enabled in any collection."));
+        if (duplicates != null && duplicates.TryGetValue(mod.FolderName, out var copies))
+            badges.Add(new Badge("Duplicate", Theme.Accent, $"Same files as: {string.Join(", ", copies)}"));
 
-        var changed = _library.ChangedItems(mod, fetch: mod.FolderName == _hovered);
+        // With a changes search, the tooltip lists what the mod changes and marks what matched.
+        var changed = changes != null && changes.TryGetValue(mod.FolderName, out var tags)
+            ? ChangesText(tags, kind, search)
+            : _library.ChangedItems(mod, fetch: mod.FolderName == _hovered);
         var detail = mod.Tags.Count > 0 ? string.Join(", ", mod.Tags) : folder;
         var result = Tile.Draw(new TileSpec
         {
@@ -305,6 +425,21 @@ internal sealed class LibraryView
             _hovered = mod.FolderName;
         if (result.Clicked)
             Open(mod.FullPath);
+        if (result.RightClicked)
+        {
+            _menuFor = mod;
+            _openMenu = true;
+        }
+    }
+
+    /// <summary>A mod's changes one per line, the ones the search matched first and marked "> ", the first ten.</summary>
+    private static string ChangesText(IReadOnlyList<ChangeTag> tags, SearchIn kind, string search)
+    {
+        var lines = tags.Select(tag => (Tag: tag, Hit: ChangesIndex.Matches(new[] { tag }, kind, search)))
+            .OrderBy(line => line.Hit ? 0 : 1)
+            .Select(line => line.Hit ? $"> {line.Tag.Label}" : $"  {line.Tag.Label}")
+            .ToList();
+        return string.Join("\n", lines.Take(10)) + (lines.Count > 10 ? $"\nand {lines.Count - 10} more" : string.Empty);
     }
 
     private Action<float>? Image(InstalledMod? mod)
