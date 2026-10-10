@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using InstantEdit.Models;
+using InstantEdit.Services.Painter;
 using Penumbra.Api.Enums;
 
 namespace InstantEdit.Services;
@@ -756,13 +757,15 @@ public sealed class TextureEditService : IDisposable
     /// <summary>
     /// Records a failed save. A conflict pauses the whole session. A failed save of a watched TGA is tried
     /// again after a growing delay, and one that only has to wait, for Penumbra or for the character to
-    /// show the file again, says so. A Painter send isn't tried again; Painter sends anew. Callers hold the queue gate.
+    /// show the file again, says so. A save from outside, named by <paramref name="external"/> (a Painter
+    /// texture or a dropped image), isn't tried again; it is sent anew. Callers hold the queue gate.
     /// </summary>
-    private void ReportSaveFailure(Runtime runtime, Exception error, string? variantName = null, bool fromPainter = false)
+    private void ReportSaveFailure(Runtime runtime, Exception error, string? variantName = null, string? external = null)
     {
         var s = runtime.Session;
-        var waiting = error is TextureWaitException && !fromPainter;
-        var subject = variantName is not null ? $"Variant \"{variantName}\"" : fromPainter ? "Painter texture" : "Save";
+        var fromOutside = external is not null;
+        var waiting = error is TextureWaitException && !fromOutside;
+        var subject = variantName is not null ? $"Variant \"{variantName}\"" : external ?? "Save";
         var message = $"{subject} {(waiting ? "waiting" : "not applied")}: {error.Message}";
         var changed = s.Status != message;
         s.Status = message;
@@ -774,14 +777,14 @@ public sealed class TextureEditService : IDisposable
             state.Waiting = waiting;
             if (FindVariant(s, variantName) is { } variant) variant.Status = (waiting ? "Waiting: " : "Save not applied: ") + error.Message;
         }
-        else if (!fromPainter)
+        else if (!fromOutside)
         {
             runtime.Failures = Math.Min(runtime.Failures + 1, 5);
             runtime.RetryAt = Environment.TickCount64 + Math.Min(30000, 1000 * (1 << runtime.Failures));
             runtime.Waiting = waiting;
         }
         // Only the working image's own outcome ends a wait for it.
-        if (variantName is null && !fromPainter)
+        if (variantName is null && !fromOutside)
             s.Waiting = waiting;
         else if (waiting)
             s.Waiting = true;
@@ -798,7 +801,7 @@ public sealed class TextureEditService : IDisposable
         var unlisted = waiting && error is TextureWaitException { ModUnlisted: true };
         if (unlisted && runtime.UnlistedSince == 0)
             runtime.UnlistedSince = Environment.TickCount64;
-        else if (!unlisted && variantName is null && !fromPainter)
+        else if (!unlisted && variantName is null && !fromOutside)
             runtime.UnlistedSince = 0;
         var pause = unlisted && Environment.TickCount64 - runtime.UnlistedSince >= UnlistedModPause.TotalMilliseconds;
         if (pause)
@@ -1147,7 +1150,7 @@ public sealed class TextureEditService : IDisposable
                     ResumeIfPaused(runtime);
                     var outcome = save.Tga is null
                         ? await RestoreOriginalAsync(runtime).ConfigureAwait(false)
-                        : await ApplyExternalSaveAsync(runtime, save.Tga).ConfigureAwait(false);
+                        : await ApplyExternalSaveAsync(runtime, save.Tga, save.DroppedFile).ConfigureAwait(false);
                     results.Add(new ExternalTextureResult(save.SessionId, outcome, s.Status));
                     if (outcome is ExternalTextureOutcome.Applied or ExternalTextureOutcome.Restored)
                         refresh.Add(s);
@@ -1155,7 +1158,7 @@ public sealed class TextureEditService : IDisposable
                 catch (Exception error) when (error is not OperationCanceledException || !_life.IsCancellationRequested)
                 {
                     if (error is not OperationCanceledException)
-                        ReportSaveFailure(runtime, error, fromPainter: true);
+                        ReportSaveFailure(runtime, error, external: save.DroppedFile is null ? "Painter texture" : "Dropped image");
                     results.Add(new ExternalTextureResult(save.SessionId, ExternalTextureOutcome.Failed,
                         error is OperationCanceledException ? "The save was interrupted." : error.Message));
                 }
@@ -1172,8 +1175,12 @@ public sealed class TextureEditService : IDisposable
         return results;
     }
 
-    // Callers hold the queue gate.
-    private async Task<ExternalTextureOutcome> ApplyExternalSaveAsync(Runtime runtime, byte[] tga)
+    /// <summary>
+    /// Applies a Painter export, or an image dropped over the texture when <paramref name="dropped"/>
+    /// names its file; a drop is recorded so <see cref="UndoReplaceAsync"/> can put back what it replaced.
+    /// Callers hold the queue gate.
+    /// </summary>
+    private async Task<ExternalTextureOutcome> ApplyExternalSaveAsync(Runtime runtime, byte[] tga, string? dropped = null)
     {
         var s = runtime.Session;
         EnsureWritable(s);
@@ -1196,13 +1203,13 @@ public sealed class TextureEditService : IDisposable
         if (pixelHash == s.PixelHash && format == s.SavedFormat)
         {
             MirrorWorkingFile(runtime, tga, hash);
-            s.Status = "Painter texture unchanged";
+            s.Status = dropped is null ? "Painter texture unchanged" : $"{dropped} is the same as the texture";
             Persist();
             return ExternalTextureOutcome.Unchanged;
         }
         // Nothing is encoded for a texture that can't be applied now.
         await _backend.CheckAsync(s, _life.Token).ConfigureAwait(false);
-        s.Status = "Converting Painter texture";
+        s.Status = dropped is null ? "Converting Painter texture" : $"Converting {dropped}";
         Publish();
         await _backend.ConvertAsync(snapshot, output, TextureFiles.OutputType(format), s.MipMaps).ConfigureAwait(false);
         _life.Token.ThrowIfCancellationRequested();
@@ -1217,11 +1224,133 @@ public sealed class TextureEditService : IDisposable
         s.Width = width;
         s.Height = height;
         s.LastSaved = DateTimeOffset.UtcNow;
-        s.Status = "Saved from Substance Painter";
+        s.Status = dropped is null ? "Saved from Substance Painter" : $"Replaced with {dropped}";
+        if (dropped is not null)
+            s.Replacement = new TextureReplacement { File = dropped, Backup = result.Backup, Hash = result.Hash, At = DateTimeOffset.UtcNow };
         RaiseFileChanged(s.TargetFile);
         MirrorWorkingFile(runtime, tga, hash);
         if (!PersistCommit(runtime)) throw new IOException(s.Status);
         return ExternalTextureOutcome.Applied;
+    }
+
+    /// <summary>Scratch folder for dropped images and undone drops, kept out of the watched top level.</summary>
+    private const string DropWorkFolder = "drop-work";
+
+    /// <summary>
+    /// Puts an image file in place of a texture, as dropping one on its row in On Screen does. The
+    /// texture's session opens (or carries on) without the editor, and the image is converted, backed up
+    /// and committed as a Painter export is. The session keeps what the drop replaced for <see cref="UndoReplaceAsync"/>.
+    /// </summary>
+    internal async Task<ExternalTextureResult> ReplaceAsync(TextureEditRequest request, string image)
+    {
+        var id = await StartAsync(request, launchEditor: false).ConfigureAwait(false);
+        var session = Sessions.First(s => s.Id == id);
+        // The drop would land on the texture under the variant, where nobody sees it.
+        if (VariantShowing(session, request) is { } variant)
+            throw new IOException($"Your character shows this texture's variant \"{variant.Name}\". " +
+                $"Select \"{PenumbraService.OriginalTextureOptionName}\" in its Penumbra group to replace the texture itself.");
+        var tga = await ReadImageAsTgaAsync(session, image).ConfigureAwait(false);
+        var results = await ApplyExternalAsync([new ExternalTextureSave(id, tga, Path.GetFileName(image))], _life.Token).ConfigureAwait(false);
+        return results.Single();
+    }
+
+    /// <summary>
+    /// The image as the 32-bit TGA saves take. PNG, JPEG and TGA are decoded here; DDS and TEX go
+    /// through the converter, which reads the game's formats (a TEX with its mip offsets normalized first).
+    /// </summary>
+    private async Task<byte[]> ReadImageAsTgaAsync(TextureEditSession s, string image)
+    {
+        var name = Path.GetFileName(image);
+        var extension = Path.GetExtension(image).ToLowerInvariant();
+        if (extension is not (".png" or ".jpg" or ".jpeg" or ".tga" or ".dds" or ".tex"))
+            throw new IOException($"{name} is not a png, jpeg, tga, dds or .tex image.");
+        var info = new FileInfo(image);
+        if (!info.Exists) throw new IOException($"{name} no longer exists.");
+        if (info.Length is <= 0 or > TextureFiles.MaxBytes) throw new IOException($"{name} is empty or too large.");
+        var bytes = await File.ReadAllBytesAsync(image, _life.Token).ConfigureAwait(false);
+        RgbaImage pixels;
+        if (extension is ".dds" or ".tex")
+        {
+            var work = Path.Combine(s.Directory, DropWorkFolder);
+            TextureFiles.EnsureLocalPath(work);
+            Directory.CreateDirectory(work);
+            var input = Path.Combine(work, "dropped" + extension);
+            var output = Path.Combine(work, "dropped.tga");
+            File.WriteAllBytes(input, extension == ".tex" ? TextureFiles.NormalizeMipOffsets(bytes) : bytes);
+            await _backend.ConvertAsync(input, output, TextureType.Targa, false).ConfigureAwait(false);
+            pixels = TgaImage.Read(TextureFiles.Read(output));
+        }
+        else
+        {
+            using var decoded = SixLabors.ImageSharp.Image.Load<SixLabors.ImageSharp.PixelFormats.Rgba32>(Studio.Services.StudioImages.Decoder, bytes);
+            pixels = new RgbaImage(decoded.Width, decoded.Height);
+            decoded.CopyPixelDataTo(pixels.Pixels);
+        }
+        return TgaImage.WriteBgra32(pixels);
+    }
+
+    /// <summary>Whether the texture still holds the image dropped over it, so Undo can put back what it replaced.</summary>
+    public static bool CanUndoReplace(TextureEditSession session)
+        => session.Replacement is { } drop && drop.Hash == session.LastCommittedHash && !session.NeedsMod && !session.Conflict;
+
+    /// <summary>The session whose drop over the request's texture can still be undone, if any.</summary>
+    public TextureEditSession? FindUndoableReplace(TextureEditRequest request)
+        => Sessions.FirstOrDefault(s => CanUndoReplace(s) && IsReusableFor(s, request) && VariantShowing(s, request) is null);
+
+    /// <summary>
+    /// Puts back the texture an image was dropped over: the backup the drop made, or the captured original
+    /// when the drop created the texture's mod. The working image follows, so a later editor save starts
+    /// from what the game shows.
+    /// </summary>
+    public async Task UndoReplaceAsync(Guid id)
+    {
+        await _gate.WaitAsync(_life.Token).ConfigureAwait(false);
+        try
+        {
+            EnsureReady();
+            var runtime = Get(id);
+            var s = runtime.Session;
+            if (!CanUndoReplace(s) || s.Replacement is not { } drop)
+                throw new IOException("The texture changed after the image was dropped on it, so there is nothing to undo.");
+            var source = drop.Backup.Length == 0 ? Path.Combine(s.Directory, "original.tex")
+                : _backups.Resolve(_backups.Describe(s.ModDirectory, s.RelativePath).Id, Path.GetFileName(drop.Backup));
+            // A backup of the captured file is written back with its mip offsets normalized, as a restore does.
+            var (original, header) = TextureFiles.ReadOriginal(TextureFiles.Read(source));
+            if (!TextureFiles.IsSessionFormat(header.Format, s)) throw new IOException("The backup does not match this session.");
+            var result = await _backend.CommitAsync(s, original, () => !_life.IsCancellationRequested, _life.Token).ConfigureAwait(false);
+            s.LastCommittedHash = result.Hash;
+            s.LastBackup = result.Backup;
+            s.SavedFormat = header.Format;
+            s.Width = header.Width;
+            s.Height = header.Height;
+            s.LastSaved = DateTimeOffset.UtcNow;
+            s.Replacement = null;
+            s.Status = $"Undid the drop of {drop.File}";
+            RaiseFileChanged(s.TargetFile);
+            var work = Path.Combine(s.Directory, DropWorkFolder);
+            TextureFiles.EnsureLocalPath(work);
+            Directory.CreateDirectory(work);
+            var restored = Path.Combine(work, "restored.tex");
+            File.WriteAllBytes(restored, original);
+            await FollowWorkingImageAsync(runtime, restored).ConfigureAwait(false);
+            if (!PersistCommit(runtime)) throw new IOException(s.Status);
+            _life.Token.ThrowIfCancellationRequested();
+            var refresh = await RefreshOneAsync(s, s.OriginalOptionId).ConfigureAwait(false);
+            if (refresh.Contains("attention", StringComparison.Ordinal)) s.Status += ". " + refresh;
+            Persist();
+        }
+        catch (TextureConflictException error) when (_sessions.TryGetValue(id, out var conflicted))
+        {
+            // As a failed save: the file changed outside the session, which stops until it is reconnected.
+            conflicted.Session.Conflict = true;
+            conflicted.Session.Paused = true;
+            conflicted.Session.Waiting = false;
+            conflicted.Session.Status = error.Message;
+            conflicted.Enabled = false;
+            Persist();
+            throw;
+        }
+        finally { _gate.Release(); }
     }
 
     /// <summary>
@@ -1247,16 +1376,25 @@ public sealed class TextureEditService : IDisposable
         s.LastSaved = DateTimeOffset.UtcNow;
         s.Status = "Original restored from Substance Painter";
         RaiseFileChanged(s.TargetFile);
-        // The working image follows, so a later editor save starts from what the game shows.
+        await FollowWorkingImageAsync(runtime, originalPath).ConfigureAwait(false);
+        if (!PersistCommit(runtime)) throw new IOException(s.Status);
+        return ExternalTextureOutcome.Restored;
+    }
+
+    /// <summary>
+    /// After a texture went back to an earlier file, the working image follows, so a later editor save
+    /// starts from what the game shows. <paramref name="tex"/> is that file, with its mip offsets normalized.
+    /// </summary>
+    private async Task FollowWorkingImageAsync(Runtime runtime, string tex)
+    {
+        var s = runtime.Session;
         var snapshot = Path.Combine(s.Directory, "snapshot.tga");
         var pixels = Path.Combine(s.Directory, "pixels.tex");
-        await _backend.ConvertAsync(originalPath, snapshot, TextureType.Targa, false).ConfigureAwait(false);
+        await _backend.ConvertAsync(tex, snapshot, TextureType.Targa, false).ConfigureAwait(false);
         await _backend.ConvertAsync(snapshot, pixels, TextureType.RgbaTex, false).ConfigureAwait(false);
         var tga = TextureFiles.Read(snapshot);
         s.PixelHash = TextureFiles.PixelHash(TextureFiles.Read(pixels));
         MirrorWorkingFile(runtime, tga, TextureFiles.Hash(tga));
-        if (!PersistCommit(runtime)) throw new IOException(s.Status);
-        return ExternalTextureOutcome.Restored;
     }
 
     /// <summary>
@@ -1277,7 +1415,7 @@ public sealed class TextureEditService : IDisposable
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
-            _log(error, "The working TGA could not be updated after a Painter save; the game already has the new texture.");
+            _log(error, "The working TGA could not be updated after a Painter save, a drop or its undo; the game already has the new texture.");
         }
     }
 

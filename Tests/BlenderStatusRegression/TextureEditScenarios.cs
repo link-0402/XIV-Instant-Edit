@@ -94,6 +94,8 @@ internal static class TextureEditScenarios
             await PainterBatchAsync(Path.Combine(root, "painter"));
             PainterJobMod(Path.Combine(root, "painter-mod"));
             await MisplacedMipsAsync(Path.Combine(root, "misplaced-mips"));
+            await DroppedImageAsync(Path.Combine(root, "dropped"));
+            await DroppedVanillaImageAsync(Path.Combine(root, "dropped-vanilla"));
         }
         finally
         {
@@ -1004,6 +1006,91 @@ internal static class TextureEditScenarios
             Check(!s.NeedsMod && s.Variants.Single().RelativePath.Length > 0 && File.ReadAllBytes(s.TargetFile).SequenceEqual(intact),
                 "a variant of such a texture creates its mod with the original's offsets normalized");
         }
+    }
+
+    /// <summary>
+    /// An image dropped on a texture in On Screen replaces it through the texture's session, and Undo
+    /// puts back what it replaced while the texture still holds the drop.
+    /// </summary>
+    private static async Task DroppedImageAsync(string root)
+    {
+        using var f = new Fixture(root, (uint)TexFile.TextureFormat.BC7);
+        var images = Path.Combine(root, "images");
+        Directory.CreateDirectory(images);
+        var png = Png(Path.Combine(images, "Red Top.png"), 8, 8, 30);
+
+        var result = await f.Service.ReplaceAsync(f.Request, png);
+        var s = f.Service.Sessions.Single();
+        Check(result.Outcome == ExternalTextureOutcome.Applied && f.Backend.Commits == 1 && File.ReadAllBytes(s.TargetFile)[80] == 30 &&
+              TextureFiles.ReadTex(File.ReadAllBytes(s.TargetFile)).Format == (uint)TexFile.TextureFormat.BC7,
+            "a dropped PNG is decoded and committed in the texture's own compression");
+        Check(s is { Paused: false, Replacement: { File: "Red Top.png" } drop } && drop.Hash == s.LastCommittedHash &&
+              File.ReadAllBytes(drop.Backup).SequenceEqual(f.Backend.Original) && File.ReadAllBytes(s.WorkingFile)[18] == 30,
+            "the session records the drop with the backup of what it replaced, and the working TGA takes the image");
+        Check(TextureEditService.CanUndoReplace(s) && f.Service.FindUndoableReplace(f.Request)?.Id == s.Id &&
+              f.Service.FindUndoableReplace(f.Request with { ActualPath = Path.Combine(root, "other.tex") }) is null,
+            "the drop is found again from the texture's row, and only from it");
+
+        f.Service.Dispose();
+        await f.Service.Completion;
+        using var service = new TextureEditService(f.Backend, f.Config, f.ConfigDir, f.Backups, (_, _) => { }, false);
+        Check(service.FindUndoableReplace(f.Request)?.Replacement?.File == "Red Top.png", "a drop can still be undone after a restart");
+
+        await service.UndoReplaceAsync(s.Id);
+        s = service.Sessions.Single();
+        Check(File.ReadAllBytes(s.TargetFile).SequenceEqual(f.Backend.Original) && f.Backend.Commits == 2 &&
+              s is { Replacement: null, Paused: false } && !TextureEditService.CanUndoReplace(s) && service.FindUndoableReplace(f.Request) is null,
+            "undo puts back exactly the texture the drop replaced and ends the drop");
+        Check(File.ReadAllBytes(s.WorkingFile)[18] == 12 && f.Backend.TargaInputs[^1].SequenceEqual(f.Backend.Original),
+            "the working TGA follows the texture that was put back");
+        await RejectAsync(() => service.UndoReplaceAsync(s.Id), "a drop is undone only once");
+
+        var tex = Path.Combine(images, "Same.tex");
+        File.WriteAllBytes(tex, UncompressedOffsets(Tex((uint)TexFile.TextureFormat.BC7, 8, 8, 3, 12)));
+        result = await service.ReplaceAsync(f.Request, tex);
+        Check(f.Backend.TargaInputs[^1].SequenceEqual(Tex((uint)TexFile.TextureFormat.BC7, 8, 8, 3, 12)),
+            "a dropped TEX goes through the converter with its mip offsets normalized");
+        Check(result.Outcome == ExternalTextureOutcome.Unchanged && f.Backend.Commits == 2 && service.FindUndoableReplace(f.Request) is null,
+            "an image the same as the texture commits nothing and leaves nothing to undo");
+
+        await service.ReplaceAsync(f.Request, png);
+        s = service.Sessions.Single();
+        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 40));
+        await service.ProcessPendingAsync(true);
+        Check(f.Backend.Commits == 4 && File.ReadAllBytes(s.TargetFile)[80] == 40 && service.FindUndoableReplace(f.Request) is null,
+            "a later editor save ends the drop's undo");
+        await RejectAsync(() => service.UndoReplaceAsync(s.Id), "undo refuses once the texture changed after the drop");
+
+        await RejectAsync(() => service.ReplaceAsync(f.Request, Path.Combine(images, "notes.txt")), "a file that isn't an image is refused");
+        result = await service.ReplaceAsync(f.Request, Png(Path.Combine(images, "Odd.png"), 6, 8, 50));
+        Check(result.Outcome == ExternalTextureOutcome.Failed && result.Message.Contains("divisible by 4"),
+            "an image the texture's block compression can't hold is refused with why");
+        Check(f.Backend.Commits == 4 && File.ReadAllBytes(s.TargetFile)[80] == 40, "refused drops leave the texture alone");
+    }
+
+    /// <summary> An image dropped on a vanilla texture creates its mod; undo puts the game's texture back in that mod. </summary>
+    private static async Task DroppedVanillaImageAsync(string root)
+    {
+        using var f = new Fixture(root, (uint)TexFile.TextureFormat.BC7, vanilla: true);
+        var png = Png(Path.Combine(root, "Blue.png"), 8, 8, 60);
+        var result = await f.Service.ReplaceAsync(f.Request, png);
+        var s = f.Service.Sessions.Single();
+        Check(result.Outcome == ExternalTextureOutcome.Applied && !s.NeedsMod && File.ReadAllBytes(s.TargetFile)[80] == 60 &&
+              s.Replacement is { Backup: "" } && f.Service.FindUndoableReplace(f.Request)?.Id == s.Id,
+            "a drop on a vanilla texture creates its mod and can be undone");
+        await f.Service.UndoReplaceAsync(s.Id);
+        Check(File.ReadAllBytes(s.TargetFile).SequenceEqual(f.Backend.Original) && f.Service.Sessions.Single().Replacement is null,
+            "undo writes the captured game texture back into the new mod");
+    }
+
+    /// <summary> An 8-bit RGBA PNG of one colour whose blue channel is <paramref name="blue"/>; the fake converter keeps a TGA's first byte (blue). </summary>
+    private static string Png(string path, int width, int height, byte blue)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using var image = new SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>(width, height,
+            new SixLabors.ImageSharp.PixelFormats.Rgba32(200, 100, blue, 255));
+        SixLabors.ImageSharp.ImageExtensions.SaveAsPng(image, path);
+        return path;
     }
 
     private static void SetStale(string directory)

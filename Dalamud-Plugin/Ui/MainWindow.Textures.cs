@@ -4,6 +4,9 @@ using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using DroppedPaths = InstantEdit.Studio.Windows.UI.DroppedPaths;
+using FileDrop = InstantEdit.Studio.Windows.UI.FileDrop;
+using HeldDrop = InstantEdit.Studio.Windows.UI.HeldDrop;
 
 namespace InstantEdit.Ui;
 
@@ -11,6 +14,8 @@ public sealed partial class MainWindow
 {
     private readonly TextureEditService _textures;
     private TextureEditRequest? _newTexture;
+    /// <summary> The image dropped on a vanilla texture while its new mod is named, or null for an edit. </summary>
+    private string? _newTextureImage;
     private string _textureModName = "";
     private const string CleanUpTexturesDialog = "Clean up texture sessions";
     private Guid? _discardTexture;
@@ -28,17 +33,21 @@ public sealed partial class MainWindow
     private static string TextureEditBlock(ResourceView resource)
         => SharedTextures.EditBlock(resource.GamePath, resource.SourceState == ResourceSourceState.GameData);
 
+    /// <summary> The texture session request for the row's texture, as the actor shows it. </summary>
+    private static TextureEditRequest TextureRequest(ResourceView resource, ActorView actor)
+        // Game Files rows have no actor; their new mod goes to the import object's collection.
+        => new(resource.GamePath, resource.ActualPath,
+            resource.SourceState == ResourceSourceState.GameData ? "" : resource.SourceModDirectory,
+            resource.SourceModRootPath, resource.SourceRelativePath,
+            actor.Entity?.ObjectIndex, actor.Entity?.Address.ToInt64() ?? 0,
+            CollectionObjectIndex: actor.Entity is null && resource.SourceState == ResourceSourceState.GameData ? actor.ImportObjectIndex : null);
+
     /// <summary> Opens (or resumes) a texture edit session for the row's texture. </summary>
     private void StartTextureEdit(ResourceView resource, ActorView actor)
     {
         if (!IsTextureRow(resource) || !TextureEditAvailable(resource) || Volatile.Read(ref _textureBusy) != 0)
             return;
-        // Game Files rows have no actor; their new mod goes to the import object's collection.
-        var request = new TextureEditRequest(resource.GamePath, resource.ActualPath,
-            resource.SourceState == ResourceSourceState.GameData ? "" : resource.SourceModDirectory,
-            resource.SourceModRootPath, resource.SourceRelativePath,
-            actor.Entity?.ObjectIndex, actor.Entity?.Address.ToInt64() ?? 0,
-            CollectionObjectIndex: actor.Entity is null && resource.SourceState == ResourceSourceState.GameData ? actor.ImportObjectIndex : null);
+        var request = TextureRequest(resource, actor);
         if (resource.SourceState == ResourceSourceState.GameData)
         {
             // Reopen existing vanilla work without asking for a second destination.
@@ -223,24 +232,32 @@ public sealed partial class MainWindow
         ImGui.SetNextWindowSizeConstraints(Theme.Scaled(440, 0), Theme.Scaled(640, 400));
         if (ImGui.BeginPopupModal("New texture mod", ImGuiWindowFlags.AlwaysAutoResize))
         {
-            Widgets.SectionHeader("Edit a vanilla texture");
-            Widgets.HintWrapped("The first successful save creates a new mod with this name and enables it in the actor's collection.");
+            // A dropped image goes into the new mod straight away; an edit with its first save.
+            var image = _newTextureImage;
+            Widgets.SectionHeader(image is null ? "Edit a vanilla texture" : "Replace a vanilla texture");
+            Widgets.HintWrapped(image is null
+                ? "The first successful save creates a new mod with this name and enables it in the actor's collection."
+                : $"{Path.GetFileName(image)} goes into a new mod with this name, enabled in the actor's collection.");
             ImGui.Spacing();
             ImGui.SetNextItemWidth(-1);
             ImGui.InputTextWithHint("##texture-mod-name", "Mod name", ref _textureModName, 120);
             ImGui.Spacing();
             using (ImRaii.Disabled(string.IsNullOrWhiteSpace(_textureModName)))
             {
-                if (ImGui.Button("Open texture"))
+                if (ImGui.Button(image is null ? "Open texture" : "Replace texture"))
                 {
                     var request = _newTexture! with { NewModName = _textureModName.Trim() };
                     _newTexture = null;
+                    _newTextureImage = null;
                     ImGui.CloseCurrentPopup();
-                    TextureAction(async () => { await _textures.StartAsync(request).ConfigureAwait(false); });
+                    if (image is null)
+                        TextureAction(async () => { await _textures.StartAsync(request).ConfigureAwait(false); });
+                    else
+                        RunTextureReplace(request, image);
                 }
             }
             ImGui.SameLine();
-            if (ImGui.Button("Cancel")) { _newTexture = null; ImGui.CloseCurrentPopup(); }
+            if (ImGui.Button("Cancel")) { _newTexture = null; _newTextureImage = null; ImGui.CloseCurrentPopup(); }
             ImGui.EndPopup();
         }
         if (_discardTexture.HasValue && !ImGui.IsPopupOpen("Discard texture session")) ImGui.OpenPopup("Discard texture session");
@@ -353,6 +370,129 @@ public sealed partial class MainWindow
                 Interlocked.Exchange(ref _painterBusy, 0);
                 Interlocked.Exchange(ref _textureBusy, 0);
             }
+        });
+    }
+
+    /// <summary> How long a dragged image has to rest on a texture row before it can be dropped there. </summary>
+    private static readonly TimeSpan TextureDropHold = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Makes the row a drop target for an image that replaces its texture. The drag has to rest on the
+    /// row for <see cref="TextureDropHold"/> first, so an image carried across the list can't land on
+    /// the wrong texture. Called in the actions cell before its buttons; the cursor is left where it was.
+    /// </summary>
+    private void DrawTextureDrop(ActorView actor, ResourceView node, float rowLeft)
+    {
+        if (!FileDrop.IsDragging)
+            return;
+        var start = ImGui.GetCursorScreenPos();
+        // The row from its first cell to this one, within the visible part of the list. The cells'
+        // padding stays out, so the target never makes the row taller.
+        var windowMin = ImGui.GetWindowPos();
+        var min = Vector2.Max(new Vector2(rowLeft, start.Y), windowMin);
+        var max = Vector2.Min(new Vector2(start.X + ImGui.GetContentRegionAvail().X, start.Y + ImGui.GetFrameHeight()), windowMin + ImGui.GetWindowSize());
+        if (max.X <= min.X || max.Y <= min.Y)
+            return;
+        // The table clips each cell to its column; the target spans them all.
+        ImGui.PushClipRect(min, max, false);
+        ImGui.SetCursorScreenPos(min);
+        ImGui.Dummy(max - min);
+        var name = Path.GetFileName(node.GamePath);
+        var outcome = FileDrop.HeldTarget("##texture-drop", TextureDropHold, paths => TextureDropBlock(node, paths),
+            (paths, ready) => ready ? $"Let go to replace {name} with {paths.Describe()}" : $"Hold here to replace {name}", out var dropped);
+        ImGui.PopClipRect();
+        ImGui.SetCursorScreenPos(start);
+        if (outcome == HeldDrop.Dropped)
+            ReplaceTexture(node, actor, dropped.Files[0]);
+        else if (outcome == HeldDrop.TooSoon)
+            SetStatus("Hold the image on the texture until its row lights up, then let go.", FeedbackSeverity.Warning);
+    }
+
+    /// <summary> Why the dragged files can't replace the row's texture, or null when they can. </summary>
+    private string? TextureDropBlock(ResourceView node, DroppedPaths paths)
+    {
+        if (paths.Files.Count != 1 || paths.Folders.Count != 0)
+            return "Drop one image.";
+        if (!FileDrop.IsImage(paths.Files[0]))
+            return $"{Path.GetFileName(paths.Files[0])} is not a png, jpeg, tga, dds or .tex image.";
+        if (!TextureEditAvailable(node))
+            return TextureEditBlock(node) is { Length: > 0 } blocked ? blocked : "This texture has no verified writable mod source.";
+        return Volatile.Read(ref _textureBusy) != 0 ? "Another texture change is still running." : null;
+    }
+
+    /// <summary> Replaces the row's texture with a dropped image. A vanilla texture first asks for the new mod's name, as editing it does. </summary>
+    private void ReplaceTexture(ResourceView resource, ActorView actor, string image)
+    {
+        var request = TextureRequest(resource, actor);
+        if (resource.SourceState == ResourceSourceState.GameData && _textures.FindReusable(request) is null)
+        {
+            _newTexture = request;
+            _newTextureImage = image;
+            _textureModName = Sanitize("Texture Edit " + Path.GetFileNameWithoutExtension(resource.GamePath));
+            return;
+        }
+        RunTextureReplace(request, image);
+    }
+
+    private void RunTextureReplace(TextureEditRequest request, string image)
+    {
+        if (Interlocked.CompareExchange(ref _textureBusy, 1, 0) != 0) return;
+        var texture = Path.GetFileName(request.GamePath);
+        var file = Path.GetFileName(image);
+        SetStatus($"Replacing {texture} with {file}", FeedbackSeverity.Info);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var result = await _textures.ReplaceAsync(request, image).ConfigureAwait(false);
+                // The session's status after the drop says whether the reload and redraw went through.
+                var refresh = _textures.Sessions.FirstOrDefault(s => s.Id == result.SessionId)?.Status ?? "";
+                if (result.Outcome == ExternalTextureOutcome.Applied && refresh.Contains("attention", StringComparison.Ordinal))
+                    SetStatus($"Replaced {texture} with {file}, but {refresh}", FeedbackSeverity.Warning);
+                else if (result.Outcome == ExternalTextureOutcome.Applied)
+                    SetStatus($"Replaced {texture} with {file}. Undo is in the row's menu.", FeedbackSeverity.Success);
+                else if (result.Outcome == ExternalTextureOutcome.Unchanged)
+                    SetStatus($"{file} is the same as {texture}, so nothing changed.", FeedbackSeverity.Info);
+                else
+                    SetStatus($"Could not replace {texture}: {result.Message}", FeedbackSeverity.Error);
+            }
+            catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
+            catch (Exception error)
+            {
+                _log.Warning(error, "Could not replace a texture with a dropped image.");
+                SetStatus($"Could not replace {texture}: {error.Message}", FeedbackSeverity.Error);
+            }
+            finally { Interlocked.Exchange(ref _textureBusy, 0); }
+        });
+    }
+
+    /// <summary> The session holding an image dropped on the row's texture, while the drop can still be undone. </summary>
+    private TextureEditSession? UndoableReplace(ResourceView resource, ActorView actor)
+        => IsTextureRow(resource) ? _textures.FindUndoableReplace(TextureRequest(resource, actor)) : null;
+
+    /// <summary> Puts back the texture an image was dropped on. </summary>
+    private void UndoTextureReplace(TextureEditSession session)
+    {
+        if (Interlocked.CompareExchange(ref _textureBusy, 1, 0) != 0) return;
+        var texture = Path.GetFileName(session.GamePath);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _textures.UndoReplaceAsync(session.Id).ConfigureAwait(false);
+                var status = _textures.Sessions.FirstOrDefault(s => s.Id == session.Id)?.Status ?? "";
+                SetStatus(status.Contains("attention", StringComparison.Ordinal)
+                    ? $"{texture} is back, but {status}"
+                    : $"{texture} is back to how it was before {session.Replacement?.File}.",
+                    status.Contains("attention", StringComparison.Ordinal) ? FeedbackSeverity.Warning : FeedbackSeverity.Success);
+            }
+            catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
+            catch (Exception error)
+            {
+                _log.Warning(error, "Could not undo a texture replacement.");
+                SetStatus($"Could not undo the replace of {texture}: {error.Message}", FeedbackSeverity.Error);
+            }
+            finally { Interlocked.Exchange(ref _textureBusy, 0); }
         });
     }
 

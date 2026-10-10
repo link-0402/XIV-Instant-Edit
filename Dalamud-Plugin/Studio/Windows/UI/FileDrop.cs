@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.DragDrop;
 
@@ -26,6 +27,16 @@ internal sealed record DroppedPaths(IReadOnlyList<string> Files, IReadOnlyList<s
         if (Folders.Count > 0) parts.Add($"{Folders.Count} folder(s)");
         return string.Join(", ", parts);
     }
+}
+
+/// <summary>What a held drop target (<see cref="FileDrop.HeldTarget"/>) did this frame.</summary>
+internal enum HeldDrop
+{
+    None,
+    /// <summary>The drag rested on the target long enough and was let go: the files are dropped.</summary>
+    Dropped,
+    /// <summary>The drag was let go before the target was ready; the files are dropped nowhere.</summary>
+    TooSoon,
 }
 
 /// <summary>
@@ -141,6 +152,103 @@ internal static class FileDrop
         if (reason != null)
             ImGui.SetTooltip(reason);
         return landed;
+    }
+
+    /// <summary>Whether files or folders are being dragged over the game right now.</summary>
+    public static bool IsDragging => Dragging() != null;
+
+    /// <summary>The held target the drag rests on, the frame it was last seen there, and since when (ImGui time).</summary>
+    private static uint _heldId;
+    private static int _heldFrame = -2;
+    private static double _heldSince;
+
+    /// <summary>
+    /// A drop target on the last drawn item that takes a drop only once the drag has rested on it for
+    /// <paramref name="hold"/>, so files carried across it on the way to another target can't land
+    /// there by accident. While it charges, a bar fills the item from the left; once it is ready, the
+    /// whole item is lit and outlined in the accent colour. <paramref name="hint"/> is its tooltip,
+    /// given whether it is ready. A refused drag is outlined red with why, as on <see cref="Target"/>.
+    /// <paramref name="id"/> tells the target apart from the others while the drag moves.
+    /// </summary>
+    public static HeldDrop HeldTarget(string id, TimeSpan hold, Func<DroppedPaths, string?> reject, Func<DroppedPaths, bool, string> hint,
+        out DroppedPaths dropped)
+    {
+        dropped = DroppedPaths.Empty;
+        var hovering = Dragging();
+        if (hovering == null)
+            return HeldDrop.None;
+
+        var key = ImGui.GetID(id);
+        var min = ImGui.GetItemRectMin();
+        var max = ImGui.GetItemRectMax();
+        if (!ImGui.BeginDragDropTarget())
+            return HeldDrop.None;
+
+        // The hold starts over whenever the drag comes onto this target, from another one or from outside.
+        var frame = ImGui.GetFrameCount();
+        var now = ImGui.GetTime();
+        if (key != _heldId || _heldFrame < frame - 1)
+        {
+            _heldId = key;
+            _heldSince = now;
+        }
+        _heldFrame = frame;
+
+        var reason = reject(hovering);
+        var progress = reason == null ? Math.Clamp((float)((now - _heldSince) / hold.TotalSeconds), 0f, 1f) : 0f;
+        var ready = reason == null && progress >= 1f;
+        var draw = ImGui.GetWindowDrawList();
+        var rounding = ImGui.GetStyle().FrameRounding;
+        // Outlines sit just inside the item, which may be all the room its clip rectangle gives them.
+        var inset = new Vector2(1f);
+        if (reason != null)
+        {
+            draw.AddRect(min + inset, max - inset, ImGui.GetColorU32(Theme.Bad), rounding, ImDrawFlags.None, 2f);
+        }
+        else if (ready)
+        {
+            draw.AddRectFilled(min, max, ImGui.GetColorU32(Theme.Accent with { W = 0.22f }), rounding);
+            draw.AddRect(min + inset, max - inset, ImGui.GetColorU32(Theme.Accent), rounding, ImDrawFlags.None, 2f);
+        }
+        else
+        {
+            draw.AddRectFilled(min, new Vector2(min.X + (max.X - min.X) * progress, max.Y), ImGui.GetColorU32(Theme.Accent with { W = 0.22f }), rounding);
+            draw.AddRect(min + inset, max - inset, ImGui.GetColorU32(Theme.Accent with { W = 0.45f }), rounding, ImDrawFlags.None, 1f);
+        }
+
+        // A drop is taken in any case, so one let go too soon is used up rather than left to another target.
+        bool landed = false;
+        bool external = ImGui.GetDragDropPayload().IsDataType(ExternalLabel);
+        if (reason == null && !external
+            && !ImGui.AcceptDragDropPayload(InternalLabel, ImGuiDragDropFlags.AcceptNoDrawDefaultRect).IsNull && _internal != null)
+        {
+            dropped = _internal;
+            _internal = null;
+            landed = true;
+        }
+        ImGui.EndDragDropTarget();
+
+        // Dalamud's target (outside ours, see Target) previews with ImGui's own rectangle, which would
+        // look ready while the hold still charges; this target draws its own instead.
+        if (reason == null && external && _external != null)
+        {
+            ImGui.PushStyleColor(ImGuiCol.DragDropTarget, Vector4.Zero);
+            if (_external.CreateImGuiTarget(ExternalLabel, out var files, out var dirs))
+            {
+                dropped = new DroppedPaths(files, dirs);
+                landed = true;
+            }
+            ImGui.PopStyleColor();
+        }
+
+        ImGui.SetTooltip(reason ?? hint(hovering, ready));
+        if (!landed)
+            return HeldDrop.None;
+        _heldFrame = -2;
+        if (ready)
+            return HeldDrop.Dropped;
+        dropped = DroppedPaths.Empty;
+        return HeldDrop.TooSoon;
     }
 
     // ── Acceptance rules shared by the inputs ─────────────────────────────────
