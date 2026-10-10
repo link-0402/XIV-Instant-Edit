@@ -159,4 +159,8 @@ public sealed class PendingFile
     public string RelPath { get; set; } = string.Empty;
     public string Reason { get; set; } = string.Empty;
     public DateTime Since { get; set; }
+
+    /// <summary>The file's size and last write when it was left; a file that differs later is something else and is kept. Null in older settings.</summary>
+    public long? Size { get; set; }
+    public DateTime? LastWriteUtc { get; set; }
 }

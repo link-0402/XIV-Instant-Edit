@@ -63,7 +63,7 @@ internal static partial class ModCheckScenarios
         Directory.Move(mod.Path, moved);
         try
         {
-            Require(RepairApplier.WhyNot(project, report, false, true) == RepairApplier.ChangedReason,
+            Require(RepairApplier.WhyNot(project, report, false, true, stale: MetaFingerprint.Of(project.FolderPath) != report.Fingerprint) == RepairApplier.ChangedReason,
                 "a mod moved after its check is not repaired");
             var (store, cache) = NewBackups(testRoot);
             var result = RepairApplier.ApplyAsync(project, report, new RepairSelection(report), store, cache, new FakeReloader(), new StudioSettings(),
@@ -235,10 +235,10 @@ internal static partial class ModCheckScenarios
         using var mod = StellarBladeMod();
         var report = CheckStellarBlade(mod);
         var project = ModProject.Load(mod.Path);
-        Require(RepairApplier.WhyNot(null, report, false, true) == "The mod is closed." &&
-                RepairApplier.WhyNot(project, report, true, true) == "Wait a moment, until every change is written into the mod." &&
-                RepairApplier.WhyNot(project, report, false, false) == "Penumbra is not available." &&
-                RepairApplier.WhyNot(project, report, false, true) is null,
+        Require(RepairApplier.WhyNot(null, report, false, true, stale: false) == "The mod is closed." &&
+                RepairApplier.WhyNot(project, report, true, true, stale: false) == "Wait a moment, until every change is written into the mod." &&
+                RepairApplier.WhyNot(project, report, false, false, stale: false) == "Penumbra is not available." &&
+                RepairApplier.WhyNot(project, report, false, true, stale: false) is null,
             "repairs say why they can't run: closed, still writing, no Penumbra");
     }
 }

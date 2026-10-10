@@ -19,13 +19,14 @@ internal sealed class CheckSession
     private CheckProgress? _progress;
     private Task<(bool Ok, string Message)>? _operation;
     private bool _checkAfter;
+    private volatile bool _operating;
     private bool _checkRequested;
     private (ModCheckReport Report, ResourceGraph Graph, IReadOnlyDictionary<string, (Severity Severity, string Title)> Markers)? _markers;
 
     public ModCheckReport? Report { get; private set; }
     public RepairSelection? Selection { get; private set; }
 
-    /// <summary>The running check's last progress line.</summary>
+    /// <summary>The running check's or operation's last progress line.</summary>
     public CheckProgress? Progress => Volatile.Read(ref _progress);
 
     public bool Running => _run is not null;
@@ -61,8 +62,11 @@ internal sealed class CheckSession
         }, token);
     }
 
+    /// <summary>Stops the running check, or the operation under way where it can still stop (a batch between files; repairs before meta.json is written).</summary>
     public void Cancel() => _cancel?.Cancel();
 
+    /// <summary>Where an operation reports how far it is; shown as <see cref="Progress"/>.</summary>
+    public IProgress<CheckProgress> OperationProgress => new SyncProgress(p => { if (_operating) Volatile.Write(ref _progress, p); });
     /// <summary>Starts a change to the mod. With <paramref name="checkAfter"/>, a new check is asked for once it is done.</summary>
     public void StartOperation(string label, Func<CancellationToken, Task<(bool Ok, string Message)>> work, bool checkAfter)
     {
@@ -72,6 +76,8 @@ internal sealed class CheckSession
         var token = _cancel.Token;
         OperationLabel = label;
         _checkAfter = checkAfter;
+        Volatile.Write(ref _progress, null);
+        _operating = true;
         _operation = Task.Run(() => work(token), token);
     }
 
@@ -99,6 +105,8 @@ internal sealed class CheckSession
         {
             _operation = null;
             OperationLabel = null;
+            _operating = false;
+            Volatile.Write(ref _progress, null);
             LastOperation = operation.IsCompletedSuccessfully
                 ? operation.Result
                 : (false, operation.IsCanceled ? "Cancelled." : $"It failed: {operation.Exception?.GetBaseException().Message}");

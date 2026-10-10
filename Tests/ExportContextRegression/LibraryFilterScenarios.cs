@@ -15,6 +15,49 @@ internal static class LibraryFilterScenarios
         DuplicateFinderMatchesIdenticalInstallsDespiteDifferentGuids();
         OnlyModsSharingANameAreRead();
         InvalidateRescansOnlyThatMod();
+        SameNamedModsWithOtherFilesAreNotHashed();
+        CaseTwinRedirectionsDontBreakTheFingerprint();
+        AFailingModDoesntStopTheScan();
+    }
+
+    private static void SameNamedModsWithOtherFilesAreNotHashed()
+    {
+        using var small = CurrentMod("Same", Guid.NewGuid().ToString(), "A");
+        using var large = CurrentMod("Same", Guid.NewGuid().ToString(), "A much larger file");
+        var mods = new[] { Installed(small, "Same"), Installed(large, "Same") };
+        var read = new List<string>();
+        var sets = DuplicateModScan.Find(mods, folder => { read.Add(folder); return DuplicateModScan.Fingerprint(folder); });
+        Require(sets.Count == 0 && read.Count == 0, "same-named mods whose files differ in size are told apart without hashing");
+    }
+
+    private static void CaseTwinRedirectionsDontBreakTheFingerprint()
+    {
+        using var mod = CurrentMod("Twins", Guid.NewGuid().ToString(), "A");
+        var meta = JObject.Parse(File.ReadAllText(Path.Combine(mod.Path, "meta.json")));
+        var files = (JObject)meta["DefaultData"]!["Files"]!;
+        files["chara/Twin.bin"] = "files/a.bin";
+        files["chara/twin.bin"] = "files/default.bin";
+        mod.Meta(meta.ToString());
+        ModFingerprint? print = null;
+        try { print = DuplicateModScan.Fingerprint(mod.Path); }
+        catch (ArgumentException) { }
+        Require(print is not null, "game paths that differ only in case still give a fingerprint");
+    }
+
+    private static void AFailingModDoesntStopTheScan()
+    {
+        using var copyA = CurrentMod("Copy", Guid.NewGuid().ToString(), "A");
+        using var copyB = CurrentMod("Copy", Guid.NewGuid().ToString(), "A");
+        var mods = new[] { Installed(copyA, "Copy"), Installed(copyB, "Copy") };
+        var calls = 0;
+        var scans = new LibraryScans(() => new Dictionary<Guid, string>(), _ => null, _ => Array.Empty<(string, ChangeKind)>(),
+            folder => { Interlocked.Increment(ref calls); throw new InvalidOperationException("unexpected"); });
+        scans.Need(usage: false, duplicates: true, changes: false, mods);
+        scans.Idle.Wait(TimeSpan.FromSeconds(30));
+        Require(scans.DuplicatesOf is { Count: 0 }, "a mod that can't be read is no duplicate, and the scan finishes");
+        scans.Need(usage: false, duplicates: true, changes: false, mods);
+        scans.Idle.Wait(TimeSpan.FromSeconds(30));
+        Require(calls == 2, "and the finished scan isn't started again");
     }
 
     private static ChangeTag Single(string gamePath)

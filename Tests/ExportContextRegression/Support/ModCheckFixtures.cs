@@ -65,9 +65,17 @@ internal sealed class FakeReloader : IModReloader
     public bool ReloadSucceeds { get; init; } = true;
     public int ReloadCalls { get; private set; }
 
+    /// <summary>Thrown by the first reload, as when the plugin goes away mid-operation.</summary>
+    public Exception? Throws { get; set; }
+
     public bool Reload(string folderName)
     {
         ReloadCalls++;
+        if (Throws is { } error)
+        {
+            Throws = null;
+            throw error;
+        }
         return ReloadSucceeds;
     }
 
