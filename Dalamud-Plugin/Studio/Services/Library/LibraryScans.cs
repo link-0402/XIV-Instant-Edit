@@ -71,6 +71,9 @@ internal sealed class LibraryScans
     /// <summary>Goes up each time a scan publishes results, so a view knows to filter again.</summary>
     public int Revision => Volatile.Read(ref _revision);
 
+    /// <summary>Why the last scan stopped early, or null. What it was asked for isn't scanned again until a mod changes.</summary>
+    public string? Error { get; private set; }
+
     /// <summary>The running scan, or a finished task (tests wait on it).</summary>
     internal Task Idle => _running;
 
@@ -118,6 +121,7 @@ internal sealed class LibraryScans
 
     private void Scan(InstalledMod[] mods, (long, long) stamp, long? readUsage, bool readCopies, bool readChanges, CancellationToken token)
     {
+        Error = null;
         try
         {
             if (readUsage is { } generation)
@@ -160,6 +164,15 @@ internal sealed class LibraryScans
         catch (OperationCanceledException)
         {
         }
+        catch (Exception ex)
+        {
+            // Not asked for again every frame: the next change to a mod (or the collections) starts it again.
+            Error = $"The library couldn't be checked: {ex.Message}";
+            if (readCopies) _duplicatesFor = stamp;
+            if (readChanges) _changesFor = stamp;
+            if (readUsage is { } failed) _usageReadFor = failed;
+            Interlocked.Increment(ref _revision);
+        }
         finally
         {
             _progress = null;
@@ -176,9 +189,9 @@ internal sealed class LibraryScans
         {
             print = _fingerprint(mod.FullPath, token);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            print = null;
+            print = null;   // a mod that can't be read is no duplicate
         }
         lock (_gate)
             _prints[mod.FolderName] = (mod.LastWrite, print);
@@ -196,7 +209,7 @@ internal sealed class LibraryScans
         {
             paths = ChangesIndex.GamePathsOf(PenumbraModMeta.Load(mod.FullPath)).ToArray();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Newtonsoft.Json.JsonException or InvalidDataException)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             paths = Array.Empty<string>();
         }

@@ -271,7 +271,7 @@ internal sealed class LibraryView
         if (waiting)
         {
             if (scans.Progress == null)
-                Gui.Hint(_show == ShowUnused ? "Penumbra did not say which mods are enabled." : "Waiting for the scan.");
+                Gui.Hint(scans.Error ?? (_show == ShowUnused ? "Penumbra did not say which mods are enabled." : "Waiting for the scan."));
             return;
         }
 

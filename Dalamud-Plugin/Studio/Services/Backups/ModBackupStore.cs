@@ -20,6 +20,9 @@ internal sealed class BackupFile
 
     /// <summary>Where the operation moved the file, when it moved it.</summary>
     public string? MovedTo { get; set; }
+
+    /// <summary>The operation deleted it, but something held it, so pending clean-up deletes it later: still there with its old contents counts as deleted.</summary>
+    public bool Pending { get; set; }
 }
 
 /// <summary>One operation on one mod ("Applied 4 fixes", "Compressed 12 textures") and the files it changed.</summary>
@@ -132,7 +135,9 @@ internal sealed partial class ModBackupStore
                 var path = ModPaths.Resolve(modFolder, file.RelPath);
                 var moved = file.MovedTo is { } to ? ModPaths.Resolve(modFolder, to) : null;
                 var current = moved is null ? HashOf(path) : HashOf(moved);
-                if (!string.Equals(current, file.ShaAfter, StringComparison.OrdinalIgnoreCase) || moved is not null && File.Exists(path))
+                var asLeft = string.Equals(current, file.ShaAfter, StringComparison.OrdinalIgnoreCase)
+                          || file.Pending && string.Equals(current, file.ShaBefore, StringComparison.OrdinalIgnoreCase);
+                if (!asLeft || moved is not null && File.Exists(path))
                 {
                     skipped.Add(file.RelPath);
                     continue;
@@ -310,13 +315,20 @@ internal sealed class BackupOperation : IDisposable
         file.MovedTo = toRel.Replace('\\', '/');
     }
 
-    /// <summary>Records what each kept file holds now, and saves the operation in the journal.</summary>
+    /// <summary>Notes that a kept file was meant to be deleted but is left for pending clean-up.</summary>
+    public void Pending(string relPath)
+    {
+        Keep(relPath);
+        _entry.Files.First(f => string.Equals(f.RelPath, relPath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase)).Pending = true;
+    }
+
+    /// <summary>Records what each kept file holds now (a pending one as deleted), and saves the operation in the journal.</summary>
     public void Commit()
     {
         if (_committed || _entry.Files.Count == 0)
             return;
         foreach (var file in _entry.Files)
-            file.ShaAfter = ModBackupStore.HashOf(ModPaths.Resolve(_modFolder, file.MovedTo ?? file.RelPath));
+            file.ShaAfter = file.Pending ? null : ModBackupStore.HashOf(ModPaths.Resolve(_modFolder, file.MovedTo ?? file.RelPath));
         _store.Record(_entry);
         _committed = true;
     }

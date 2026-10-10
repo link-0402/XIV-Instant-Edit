@@ -6,6 +6,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using InstantEdit.Studio.Models;
 using InstantEdit.Studio.Services;
+using InstantEdit.Studio.Services.Backups;
 using InstantEdit.Studio.Services.Check;
 using InstantEdit.Studio.Services.Project;
 using InstantEdit.Studio.Windows.UI;
@@ -105,7 +106,15 @@ internal sealed partial class CheckView
         }
         else if (check.OperationLabel is { } label)
         {
-            ImGui.TextColored(Theme.Accent, label);
+            ImGui.TextColored(Theme.Accent, check.Progress is { Total: > 1 } step ? $"{label} ({step.Current} of {step.Total})" : label);
+            if (check.Progress is { Total: > 0 } shown)
+            {
+                ImGui.SameLine();
+                ImGui.ProgressBar((float)shown.Current / shown.Total, new Vector2(Theme.S(120), 0), string.Empty);
+            }
+            ImGui.SameLine();
+            if (Gui.IconButton(FontAwesomeIcon.Times, "canceloperation", "Stop. A batch stops after the file it is on; files already changed stay changed and can be restored."))
+                check.Cancel();
         }
         else if (check.Report is { } report)
         {
@@ -261,7 +270,7 @@ internal sealed partial class CheckView
         var count = selection.Count;
         var why = count == 0 ? "Tick the fixes to apply."
             : Check.Busy ? "Wait until the check or the change under way is done."
-            : RepairApplier.WhyNot(_session.Project, report, _editor.Sync.Busy, _host.PenumbraIpc.IsAvailable);
+            : RepairApplier.WhyNot(_session.Project, report, _editor.Sync.Busy, _host.PenumbraIpc.IsAvailable, Check.IsStale);
         using (Gui.Disabled(why != null))
         {
             if (Gui.PrimaryButton(FontAwesomeIcon.Wrench, count == 1 ? "Apply 1 fix" : $"Apply {count} fixes", Theme.S(200),
@@ -278,9 +287,10 @@ internal sealed partial class CheckView
             return;
         _editor.Flush();
         var host = _host;
-        var cacheRoot = host.CacheRoot;
         Check.StartOperation("Applying fixes", async token =>
         {
+            if (BackupFolder.TryResolve(() => host.CacheRoot, out var problem) is not { } cacheRoot)
+                return (false, problem);
             var result = await RepairApplier.ApplyAsync(project, report, selection, host.Backups, cacheRoot, host.Reloader, host.Configuration, token,
                 OnFramework).ConfigureAwait(false);
             return (result.Ok, result.Message);

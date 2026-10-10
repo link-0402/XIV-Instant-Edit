@@ -91,6 +91,7 @@ internal static class DuplicateFiles
         }
 
         var folder = project.FolderPath;
+        var name = project.FolderName;
         await PendingCleanup.RetryAsync(settings, _ => false, token, folder).ConfigureAwait(false);
         if (sets.Count == 0)
             return new CleanUpResult(0, 0, Array.Empty<string>(), 0, 0);
@@ -141,34 +142,44 @@ internal static class DuplicateFiles
             return new CleanUpResult(0, 0, new[] { $"Nothing was changed: {ex.Message}" }, 0, 0);
         }
 
-        if (!penumbra.Reload(project.FolderName) || !penumbra.IsPresent(project.FolderName))
+        // meta.json is written: from here on it goes to the end, and what changed is in the backups whatever happens.
+        var keep = true;
+        try
         {
-            var temp = metaPath + ".instant-edit-tmp";
-            File.WriteAllBytes(temp, original);
-            File.Move(temp, metaPath, overwrite: true);
-            await OnOwner(() => project.RefreshFromDisk(force: true)).ConfigureAwait(false);
-            penumbra.Reload(project.FolderName);
-            return new CleanUpResult(0, 0, new[] { "Penumbra didn't take the new mappings, so meta.json was put back." }, 0, 0);
-        }
-
-        int pending = 0;
-        long freed = 0;
-        foreach (var other in replacement.Keys)
-        {
-            token.ThrowIfCancellationRequested();
-            var path = ModPaths.Resolve(folder, other);
-            var size = File.Exists(path) ? new FileInfo(path).Length : 0;
-            if (await FileRetry.DeleteAsync(path, token).ConfigureAwait(false))
+            if (!penumbra.Reload(name) || !penumbra.IsPresent(name))
             {
-                freed += size;
-                continue;
+                var temp = metaPath + ".instant-edit-tmp";
+                File.WriteAllBytes(temp, original);
+                File.Move(temp, metaPath, overwrite: true);
+                keep = false;   // the mod is as it was
+                await OnOwner(() => project.RefreshFromDisk(force: true)).ConfigureAwait(false);
+                penumbra.Reload(name);
+                return new CleanUpResult(0, 0, new[] { "Penumbra didn't take the new mappings, so meta.json was put back." }, 0, 0);
             }
-            PendingCleanup.Add(settings, folder, other, "A duplicate file was locked after its mappings moved.");
-            pending++;
+
+            int pending = 0;
+            long freed = 0;
+            foreach (var other in replacement.Keys)
+            {
+                var path = ModPaths.Resolve(folder, other);
+                var size = File.Exists(path) ? new FileInfo(path).Length : 0;
+                if (await FileRetry.DeleteAsync(path, CancellationToken.None).ConfigureAwait(false))
+                {
+                    freed += size;
+                    continue;
+                }
+                PendingCleanup.Add(settings, folder, other, "A duplicate file was locked after its mappings moved.");
+                operation.Pending(other);
+                pending++;
+            }
+            FileRetry.DeleteEmptyDirectories(folder);
+            return new CleanUpResult(replacement.Count, 0, Array.Empty<string>(), pending, freed);
         }
-        FileRetry.DeleteEmptyDirectories(folder);
-        operation.Commit();
-        return new CleanUpResult(replacement.Count, 0, Array.Empty<string>(), pending, freed);
+        finally
+        {
+            if (keep)
+                operation.Commit();
+        }
     }
 
     private static bool SameBytes(string first, string second)

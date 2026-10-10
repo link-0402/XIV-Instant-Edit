@@ -67,9 +67,14 @@ internal static class FileLocations
         var referenced = new HashSet<string>(model.Mappings.Select(m => m.RelPath), StringComparer.OrdinalIgnoreCase);
         foreach (var move in moves)
             referenced.Add(move.ToRel);
+        // Files every mapping of which moves away; these go wherever they are, at the mod's top level too.
+        var released = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var source in moves.Select(m => m.FromRel).Distinct(StringComparer.OrdinalIgnoreCase))
             if (model.Mappings.All(m => !PathNormalizer.SameRel(m.RelPath, source) || moves.Any(mv => mv.Option == m.Container.Option && mv.GamePath == m.Key)))
+            {
                 referenced.Remove(source);
+                released.Add(source.Replace('\\', '/'));
+            }
         referenced.UnionWith(model.SkippedMappings.Select(s => s.RelPath));
         referenced.UnionWith(model.AuxiliaryPaths);
 
@@ -77,7 +82,8 @@ internal static class FileLocations
         foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
         {
             var relPath = Path.GetRelativePath(folder, file).Replace('\\', '/');
-            if (!relPath.Contains('/') || referenced.Contains(relPath) || Protected(relPath, ledgerRelKeys))
+            // Other files at the top level are the mod's own (readme, meta.json); only the subfolders are swept.
+            if (!relPath.Contains('/') && !released.Contains(relPath) || referenced.Contains(relPath) || Protected(relPath, ledgerRelKeys))
                 continue;
             var extension = Path.GetExtension(relPath);
             if (extension.Equals(".json", StringComparison.OrdinalIgnoreCase) || extension.Equals(".bak", StringComparison.OrdinalIgnoreCase))
@@ -118,6 +124,7 @@ internal static class FileLocations
         }
 
         var folder = project.FolderPath;
+        var name = project.FolderName;
         await PendingCleanup.RetryAsync(settings, _ => false, token, folder).ConfigureAwait(false);
         if (plan.Moves.Count == 0 && plan.Obsolete.Count == 0)
             return new CleanUpResult(0, 0, Array.Empty<string>(), 0, 0);
@@ -170,34 +177,52 @@ internal static class FileLocations
             return new CleanUpResult(0, 0, new[] { $"Nothing was moved: {ex.Message}" }, 0, 0);
         }
 
-        if (plan.Moves.Count > 0 && (!penumbra.Reload(project.FolderName) || !penumbra.IsPresent(project.FolderName)))
+        // meta.json is written: from here on it goes to the end, and what changed is in the backups whatever happens.
+        var keep = true;
+        try
         {
-            var temp = metaPath + ".instant-edit-tmp";
-            File.WriteAllBytes(temp, original);
-            File.Move(temp, metaPath, overwrite: true);
-            await OnOwner(() => project.RefreshFromDisk(force: true)).ConfigureAwait(false);
-            DeleteCreated(created);
-            penumbra.Reload(project.FolderName);
-            return new CleanUpResult(0, 0, new[] { "Penumbra didn't take the moved files, so everything was put back." }, 0, 0);
-        }
-
-        int pending = 0;
-        long freed = 0;
-        foreach (var relPath in plan.Obsolete)
-        {
-            var path = ModPaths.Resolve(folder, relPath);
-            var size = File.Exists(path) ? new FileInfo(path).Length : 0;
-            if (await FileRetry.DeleteAsync(path, token).ConfigureAwait(false))
+            if (plan.Moves.Count > 0 && (!penumbra.Reload(name) || !penumbra.IsPresent(name)))
             {
-                freed += size;
-                continue;
+                var temp = metaPath + ".instant-edit-tmp";
+                File.WriteAllBytes(temp, original);
+                File.Move(temp, metaPath, overwrite: true);
+                await OnOwner(() => project.RefreshFromDisk(force: true)).ConfigureAwait(false);
+                DeleteCreated(created);
+                keep = false;   // the mod is as it was
+                penumbra.Reload(name);
+                return new CleanUpResult(0, 0, new[] { "Penumbra didn't take the moved files, so everything was put back." }, 0, 0);
             }
-            PendingCleanup.Add(settings, folder, relPath, "An old file was locked after its mapping moved.");
-            pending++;
+
+            // The list was made earlier: a file an option uses again since (after a restore, say) stays.
+            var used = PendingCleanup.ReferencedBy(folder);
+            int pending = 0;
+            long freed = 0;
+            foreach (var relPath in plan.Obsolete)
+            {
+                if (used is null || used.Contains(relPath))
+                {
+                    operation.Forget(relPath);
+                    continue;
+                }
+                var path = ModPaths.Resolve(folder, relPath);
+                var size = File.Exists(path) ? new FileInfo(path).Length : 0;
+                if (await FileRetry.DeleteAsync(path, CancellationToken.None).ConfigureAwait(false))
+                {
+                    freed += size;
+                    continue;
+                }
+                PendingCleanup.Add(settings, folder, relPath, "An old file was locked after its mapping moved.");
+                operation.Pending(relPath);
+                pending++;
+            }
+            FileRetry.DeleteEmptyDirectories(folder);
+            return new CleanUpResult(plan.Moves.Count, 0, Array.Empty<string>(), pending, freed);
         }
-        FileRetry.DeleteEmptyDirectories(folder);
-        operation.Commit();
-        return new CleanUpResult(plan.Moves.Count, 0, Array.Empty<string>(), pending, freed);
+        finally
+        {
+            if (keep)
+                operation.Commit();
+        }
     }
 
     private static void DeleteCreated(IEnumerable<string> created)

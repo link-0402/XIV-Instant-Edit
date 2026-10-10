@@ -8,6 +8,7 @@ using Dalamud.Interface;
 using InstantEdit.Services.TextureCompression;
 using InstantEdit.Studio.Models.Resources;
 using InstantEdit.Studio.Services;
+using InstantEdit.Studio.Services.Backups;
 using InstantEdit.Studio.Services.CleanUp;
 using InstantEdit.Studio.Windows.UI;
 using Penumbra.Api.Enums;
@@ -118,10 +119,11 @@ internal sealed partial class CheckView
             return;
         _editor.Flush();
         var host = _host;
-        var cacheRoot = host.CacheRoot;
         _duplicates = null;
         Check.StartOperation("Removing duplicates", async token =>
         {
+            if (BackupFolder.TryResolve(() => host.CacheRoot, out var problem) is not { } cacheRoot)
+                return (false, problem);
             var result = await DuplicateFiles.ApplyAsync(project, sets, host.Backups, cacheRoot, host.Reloader, host.Configuration, token, OnFramework)
                 .ConfigureAwait(false);
             if (result.Problems.Count > 0)
@@ -174,9 +176,10 @@ internal sealed partial class CheckView
         _editor.Flush();
         var host = _host;
         var folder = project.FolderPath;
-        var cacheRoot = host.CacheRoot;
         Check.StartOperation("Restoring", _ =>
         {
+            if (BackupFolder.TryResolve(() => host.CacheRoot, out var problem) is not { } cacheRoot)
+                return Task.FromResult((false, problem));
             var result = host.Backups.Restore(entryId, folder, cacheRoot, host.Reloader);
             var message = $"Restored {result.Restored} file{(result.Restored == 1 ? string.Empty : "s")}"
                         + (result.Skipped.Count > 0 ? $"; {result.Skipped.Count} changed since and left alone:\n{string.Join("\n", result.Skipped)}" : ".");
@@ -247,10 +250,11 @@ internal sealed partial class CheckView
             return;
         _editor.Flush();
         var host = _host;
-        var cacheRoot = host.CacheRoot;
         _locations = null;
         Check.StartOperation("Moving files", async token =>
         {
+            if (BackupFolder.TryResolve(() => host.CacheRoot, out var problem) is not { } cacheRoot)
+                return (false, problem);
             var result = await FileLocations.ApplyAsync(project, plan, host.Backups, cacheRoot, host.Reloader, host.Configuration, token, OnFramework)
                 .ConfigureAwait(false);
             if (result.Problems.Count > 0)
@@ -382,13 +386,15 @@ internal sealed partial class CheckView
             return;
         _editor.Flush();
         var host = _host;
-        var cacheRoot = host.CacheRoot;
         _textures = null;
         SelectedTexture = null;
+        var progress = Check.OperationProgress;
         Check.StartOperation("Changing textures", async token =>
         {
+            if (BackupFolder.TryResolve(() => host.CacheRoot, out var problem) is not { } cacheRoot)
+                return (false, problem);
             var result = await TextureCleanUp.ApplyAsync(project, jobs, PenumbraConvert(host.PenumbraIpc), host.Backups, cacheRoot, host.Reloader,
-                host.Configuration, null, token).ConfigureAwait(false);
+                host.Configuration, progress, token).ConfigureAwait(false);
             var message = $"Changed {result.Changed} texture{(result.Changed == 1 ? string.Empty : "s")}, {Size(result.BytesSaved)} saved"
                         + (result.Problems.Count > 0 ? $"; {result.Problems.Count} left as they were (hover for why)." : ".");
             return (result.Problems.Count == 0 || result.Changed > 0, result.Problems.Count > 0 ? $"{message}\n{string.Join("\n", result.Problems)}" : message);

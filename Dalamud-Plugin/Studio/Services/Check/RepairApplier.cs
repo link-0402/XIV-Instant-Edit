@@ -24,19 +24,25 @@ internal static class RepairApplier
     public const string BusyReason = "Wait a moment, until every change is written into the mod.";
     public const string ChangedReason = "The mod changed since it was checked. Check it again.";
 
-    /// <summary>Why the repairs can't be applied now, or null when they can.</summary>
-    public static string? WhyNot(ModProject? project, ModCheckReport report, bool syncBusy, bool penumbraAvailable)
+    /// <summary>
+    /// Why the repairs can't be applied now, or null when they can. Drawn every frame, so it doesn't
+    /// read meta.json: <paramref name="stale"/> is the session's watch (<see cref="CheckSession.IsStale"/>),
+    /// and <see cref="ApplyAsync"/> compares the fingerprint itself.
+    /// </summary>
+    public static string? WhyNot(ModProject? project, ModCheckReport report, bool syncBusy, bool penumbraAvailable, bool stale)
     {
         if (project is null) return "The mod is closed.";
         if (syncBusy) return BusyReason;
         if (!penumbraAvailable) return "Penumbra is not available.";
-        if (!Changed(project, report)) return null;
-        return ChangedReason;
+        if (stale || Moved(project, report) || report.Fingerprint is null) return ChangedReason;
+        return null;
     }
 
+    private static bool Moved(ModProject project, ModCheckReport report)
+        => !string.Equals(Path.GetFullPath(project.FolderPath).TrimEnd('\\', '/'), Path.GetFullPath(report.Folder).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
+
     private static bool Changed(ModProject project, ModCheckReport report)
-        => !string.Equals(Path.GetFullPath(project.FolderPath).TrimEnd('\\', '/'), Path.GetFullPath(report.Folder).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)
-        || report.Fingerprint is null || MetaFingerprint.Of(project.FolderPath) != report.Fingerprint;
+        => Moved(project, report) || report.Fingerprint is null || MetaFingerprint.Of(project.FolderPath) != report.Fingerprint;
 
     /// <param name="onOwnerThread">Runs an action on the thread that owns <paramref name="project"/> (the framework thread in game); inline when null.</param>
     public static async Task<ApplyResult> ApplyAsync(ModProject project, ModCheckReport report, RepairSelection selection, ModBackupStore backups,
@@ -50,6 +56,8 @@ internal static class RepairApplier
             return Task.CompletedTask;
         }
 
+        if (token.IsCancellationRequested)
+            return new ApplyResult(false, "Cancelled. Nothing was changed.", 0, 0, 0);
         if (Changed(project, report))
             return new ApplyResult(false, ChangedReason, 0, 0, 0);
         var repairs = selection.Effective();
@@ -63,8 +71,10 @@ internal static class RepairApplier
                 .OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
             : Array.Empty<string>();
         var metaPath = Path.Combine(project.FolderPath, PenumbraModMeta.FileName);
+        var folder = project.FolderPath;
+        var name = project.FolderName;
 
-        using var operation = backups.Begin(project.FolderPath, project.Meta.Identifier ?? Guid.Empty,
+        using var operation = backups.Begin(folder, project.Meta.Identifier ?? Guid.Empty,
             $"Applied {repairs.Count} fix{(repairs.Count == 1 ? string.Empty : "es")}", cacheRoot);
         byte[] original;
         try
@@ -94,72 +104,82 @@ internal static class RepairApplier
         {
             return new ApplyResult(false, $"{ex.Message} Nothing was changed.", 0, 0, 0);
         }
-        token.ThrowIfCancellationRequested();
 
-        if (counts.Any)
+        // meta.json is written: from here on the operation goes to the end (a cancel would leave it half done),
+        // and whatever happens, what changed is in the backups.
+        var keep = true;
+        try
         {
-            var name = project.FolderName;
-            if (!penumbra.Reload(name) || !penumbra.IsPresent(name))
+            return await Finish().ConfigureAwait(false);
+        }
+        finally
+        {
+            if (keep)
+                operation.Commit();
+        }
+
+        async Task<ApplyResult> Finish()
+        {
+            if (counts.Any)
             {
-                var temp = metaPath + ".instant-edit-tmp";
-                File.WriteAllBytes(temp, original);
-                File.Move(temp, metaPath, overwrite: true);
-                await OnOwner(() => project.RefreshFromDisk(force: true)).ConfigureAwait(false);
-                penumbra.Reload(name);
-                return new ApplyResult(false, "Penumbra didn't take the repaired mod, so its meta.json was put back.", 0, 0, 0);
+                if (!penumbra.Reload(name) || !penumbra.IsPresent(name))
+                {
+                    var temp = metaPath + ".instant-edit-tmp";
+                    File.WriteAllBytes(temp, original);
+                    File.Move(temp, metaPath, overwrite: true);
+                    keep = false;   // the mod is as it was
+                    await OnOwner(() => project.RefreshFromDisk(force: true)).ConfigureAwait(false);
+                    penumbra.Reload(name);
+                    return new ApplyResult(false, "Penumbra didn't take the repaired mod, so its meta.json was put back.", 0, 0, 0);
+                }
             }
-        }
 
-        // Only now that Penumbra has the new mappings, and only files nothing points at any more.
-        var model = CheckModel.Build(PenumbraModMeta.Load(project.FolderPath), project.FolderPath);
-        var referenced = new HashSet<string>(model.Mappings.Select(m => m.RelPath), StringComparer.OrdinalIgnoreCase);
-        referenced.UnionWith(model.SkippedMappings.Select(s => s.RelPath));
-        referenced.UnionWith(model.AuxiliaryPaths);
-        var delete = new List<string>();
-        foreach (var deletion in deletions)
-        {
-            var info = new FileInfo(ModPaths.Resolve(project.FolderPath, deletion.RelPath));
-            if (referenced.Contains(deletion.RelPath) || !info.Exists)
-                continue;
-            if (info.Length != deletion.Size || info.LastWriteTimeUtc != deletion.LastWriteUtc)
-                continue;   // changed since the check
-            delete.Add(deletion.RelPath);
-        }
-        foreach (var relPath in released)
-            if (!referenced.Contains(relPath) && File.Exists(ModPaths.Resolve(project.FolderPath, relPath)))
-                delete.Add(relPath);
-
-        int deleted = 0, pending = 0;
-        foreach (var relPath in delete.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            if (await FileRetry.DeleteAsync(ModPaths.Resolve(project.FolderPath, relPath), token).ConfigureAwait(false))
+            // Only now that Penumbra has the new mappings, and only files nothing points at any more.
+            var model = CheckModel.Build(PenumbraModMeta.Load(project.FolderPath), project.FolderPath);
+            var referenced = new HashSet<string>(model.Mappings.Select(m => m.RelPath), StringComparer.OrdinalIgnoreCase);
+            referenced.UnionWith(model.SkippedMappings.Select(s => s.RelPath));
+            referenced.UnionWith(model.AuxiliaryPaths);
+            var delete = new List<string>();
+            foreach (var deletion in deletions)
             {
-                deleted++;
-                continue;
+                var info = new FileInfo(ModPaths.Resolve(project.FolderPath, deletion.RelPath));
+                if (referenced.Contains(deletion.RelPath) || !info.Exists)
+                    continue;
+                if (info.Length != deletion.Size || info.LastWriteTimeUtc != deletion.LastWriteUtc)
+                    continue;   // changed since the check
+                delete.Add(deletion.RelPath);
             }
-            settings.PendingCleanup.Add(new PendingFile
-            {
-                ModFolder = project.FolderPath, RelPath = relPath, Reason = "A file a repair left unused was locked.", Since = DateTime.UtcNow,
-            });
-            pending++;
-        }
-        if (deleted > 0)
-            FileRetry.DeleteEmptyDirectories(project.FolderPath);
-        if (pending > 0)
-            settings.Save();
-        operation.Commit();
+            foreach (var relPath in released)
+                if (!referenced.Contains(relPath) && File.Exists(ModPaths.Resolve(project.FolderPath, relPath)))
+                    delete.Add(relPath);
 
-        var parts = new List<string>();
-        if (counts.Added > 0) parts.Add($"{counts.Added} redirection{(counts.Added == 1 ? string.Empty : "s")} added");
-        if (counts.Removed > 0) parts.Add($"{counts.Removed} removed");
-        if (counts.Changed > 0) parts.Add($"{counts.Changed} changed");
-        if (counts.AddedMeta > 0) parts.Add($"{counts.AddedMeta} metadata added");
-        if (counts.RemovedMeta > 0) parts.Add($"{counts.RemovedMeta} metadata removed");
-        var message = $"Applied {repairs.Count} fix{(repairs.Count == 1 ? string.Empty : "es")}";
-        if (parts.Count > 0) message += $" ({string.Join(", ", parts)})";
-        if (deleted > 0) message += $"; deleted {deleted} unused file{(deleted == 1 ? string.Empty : "s")}";
-        if (pending > 0) message += $"; {pending} locked file{(pending == 1 ? " is" : "s are")} removed later";
-        return new ApplyResult(true, message + ".", repairs.Count, deleted, pending);
+            int deleted = 0, pending = 0;
+            foreach (var relPath in delete.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (await FileRetry.DeleteAsync(ModPaths.Resolve(folder, relPath), CancellationToken.None).ConfigureAwait(false))
+                {
+                    deleted++;
+                    continue;
+                }
+                CleanUp.PendingCleanup.Add(settings, folder, relPath, "A file a repair left unused was locked.");
+                operation.Pending(relPath);
+                pending++;
+            }
+            if (deleted > 0)
+                FileRetry.DeleteEmptyDirectories(folder);
+
+            var parts = new List<string>();
+            if (counts.Added > 0) parts.Add($"{counts.Added} redirection{(counts.Added == 1 ? string.Empty : "s")} added");
+            if (counts.Removed > 0) parts.Add($"{counts.Removed} removed");
+            if (counts.Changed > 0) parts.Add($"{counts.Changed} changed");
+            if (counts.AddedMeta > 0) parts.Add($"{counts.AddedMeta} metadata added");
+            if (counts.RemovedMeta > 0) parts.Add($"{counts.RemovedMeta} metadata removed");
+            var message = $"Applied {repairs.Count} fix{(repairs.Count == 1 ? string.Empty : "es")}";
+            if (parts.Count > 0) message += $" ({string.Join(", ", parts)})";
+            if (deleted > 0) message += $"; deleted {deleted} unused file{(deleted == 1 ? string.Empty : "s")}";
+            if (pending > 0) message += $"; {pending} locked file{(pending == 1 ? " is" : "s are")} removed later";
+            return new ApplyResult(true, message + ".", repairs.Count, deleted, pending);
+        }
     }
 
     private sealed class EditCounts

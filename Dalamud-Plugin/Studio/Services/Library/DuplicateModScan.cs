@@ -77,12 +77,20 @@ internal static class DuplicateModScan
         return new ModFingerprint(NameKey(meta.Name), files, structure.ToString(Formatting.None));
     }
 
-    /// <summary>Sets of folder names of identical installs, each set sorted by folder name.</summary>
+    /// <summary>
+    /// Sets of folder names of identical installs, each set sorted by folder name. Mods that share a
+    /// name are first compared by their file list (paths and sizes, no reading); only those whose
+    /// lists match are hashed.
+    /// </summary>
     /// <param name="fingerprint">Reads a mod by its full path; null leaves the mod out.</param>
     public static IReadOnlyList<IReadOnlyList<string>> Find(IReadOnlyList<InstalledMod> mods, Func<string, ModFingerprint?> fingerprint,
         IProgress<CheckProgress>? progress = null, CancellationToken token = default)
     {
-        var candidates = mods.GroupBy(mod => NameKey(mod.Name)).Where(group => group.Count() > 1).SelectMany(group => group).ToArray();
+        var candidates = mods.GroupBy(mod => NameKey(mod.Name)).Where(group => group.Count() > 1)
+            .SelectMany(group => group.GroupBy(mod => Listing(mod.FullPath) ?? $"\0unreadable\0{mod.FolderName}", StringComparer.Ordinal))
+            .Where(group => group.Count() > 1)
+            .SelectMany(group => group)
+            .ToArray();
         var prints = new List<(InstalledMod Mod, string Key)>();
         for (int i = 0; i < candidates.Length; i++)
         {
@@ -98,6 +106,24 @@ internal static class DuplicateModScan
     }
 
     private static string NameKey(string name) => name.Trim().ToLowerInvariant();
+
+    /// <summary>The mod's payload files by relative path and size, without reading them; null when the folder can't be listed.</summary>
+    internal static string? Listing(string folder)
+    {
+        try
+        {
+            var files = new DirectoryInfo(folder).EnumerateFiles("*", SearchOption.AllDirectories)
+                .Select(file => (Rel: Path.GetRelativePath(folder, file.FullName).Replace('\\', '/').ToLowerInvariant(), file.Length))
+                .Where(file => !IsMetadata(file.Rel))
+                .OrderBy(file => file.Rel, StringComparer.Ordinal)
+                .Select(file => $"{file.Rel}\0{file.Length}");
+            return string.Join('\n', files);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>meta.json and Penumbra's other root .json files, backups and half-written files: not the mod's payload.</summary>
     private static bool IsMetadata(string rel)
@@ -120,10 +146,15 @@ internal static class DuplicateModScan
                     if (property.Name is "Files" or "FileSwaps" && property.Value is JObject mapping)
                     {
                         // Game paths and relative paths are compared without case or slash style, as Penumbra does.
+                        // Keys that differ only in case (Penumbra uses one of them) are kept together, sorted.
                         var entries = mapping.Properties()
-                            .Select(p => new JProperty(p.Name.ToLowerInvariant(),
-                                p.Value.Type == JTokenType.String ? p.Value.Value<string>()!.Replace('\\', '/').ToLowerInvariant() : p.Value))
-                            .OrderBy(p => p.Name, StringComparer.Ordinal);
+                            .Select(p => (Key: p.Name.ToLowerInvariant(),
+                                Value: p.Value.Type == JTokenType.String ? p.Value.Value<string>()!.Replace('\\', '/').ToLowerInvariant() : p.Value.ToString(Formatting.None)))
+                            .GroupBy(e => e.Key, StringComparer.Ordinal)
+                            .OrderBy(g => g.Key, StringComparer.Ordinal)
+                            .Select(g => g.Count() == 1
+                                ? new JProperty(g.Key, g.First().Value)
+                                : new JProperty(g.Key, new JArray(g.Select(e => e.Value).Order(StringComparer.Ordinal))));
                         obj.Add(new JProperty(property.Name, new JObject(entries)));
                         continue;
                     }
