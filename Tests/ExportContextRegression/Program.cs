@@ -166,6 +166,7 @@ try
     ModCheckScenarios.RunReaders(testRoot);
     ModCheckScenarios.RunAnalysis(testRoot);
     ModCheckScenarios.RunApply(testRoot);
+    ModCheckScenarios.RunSession(testRoot);
     ModCleanUpScenarios.RunBackups(testRoot);
     CollectionActivationScenarios.Run();
     UiViewModelScenarios.Run();

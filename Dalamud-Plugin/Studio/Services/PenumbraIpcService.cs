@@ -264,6 +264,40 @@ public sealed class PenumbraIpcService : IDisposable
         catch (Exception ex) { _log.Debug(ex, "[Studio] GetCurrentModSettings failed"); return null; }
     }
 
+    /// <summary>Whether a mod is on in a collection (inherited settings included) and at what priority. Null when it has no settings there.</summary>
+    public (bool Enabled, int Priority)? ModState(Guid collection, string modDirectory)
+    {
+        try
+        {
+            var (ec, settings) = _getCurrentModSettings.InvokeFunc(collection, modDirectory, string.Empty, false);
+            if ((PenumbraApiEc)ec != PenumbraApiEc.Success || settings is not { } s)
+                return null;
+            return (s.Item1, s.Item2);
+        }
+        catch (Exception ex) { _log.Debug(ex, "[Studio] GetCurrentModSettings failed"); return null; }
+    }
+
+    private Penumbra.Api.IpcSubscribers.ResolvePlayerPathsAsync? _resolvePlayerPaths;
+
+    /// <summary>
+    /// What the player's collection resolves game paths to: a file on disk or another game path, the
+    /// path itself where nothing redirects it. May be called off the framework thread.
+    /// </summary>
+    public async Task<string[]?> ResolvePlayerPaths(string[] gamePaths)
+    {
+        try
+        {
+            _resolvePlayerPaths ??= new Penumbra.Api.IpcSubscribers.ResolvePlayerPathsAsync(_pi);
+            var (forward, _) = await _resolvePlayerPaths.Invoke(gamePaths, Array.Empty<string>()).ConfigureAwait(false);
+            return forward;
+        }
+        catch (Exception ex)
+        {
+            _log.Debug(ex, "[Studio] ResolvePlayerPathsAsync failed");
+            return null;
+        }
+    }
+
     /// <summary>Redraws every actor, so changed files show without re-equipping anything.</summary>
     public void RedrawAll()
     {

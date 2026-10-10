@@ -13,7 +13,7 @@ namespace InstantEdit.Studio.Services;
 /// Provides slot + item browsing over the game's Item sheet so the user can
 /// pick which piece of gear the imported outfit should replace.
 /// </summary>
-public sealed class GameDataService : IItemNames
+public sealed class GameDataService : IItemNames, Check.IItemVariants
 {
     private readonly IDataManager _data;
     private readonly IPluginLog   _log;
@@ -712,6 +712,89 @@ public sealed class GameDataService : IItemNames
         _itemsBySlot  = bySlot;   // published last: readers treat non-null as "fully built"
         _log.Information("[Studio] Item cache built: {0} equipment/accessory items", _cacheCount);
         return bySlot;
+    }
+
+    // ── Item names by model and variant (for mod checks) ─────────────────────
+
+    private readonly object _variantLock = new();
+    private volatile Dictionary<(GameModelKind, ushort, ushort, EquipSlot?, int), List<string>>? _itemsByVariant;
+
+    /// <summary>
+    /// The items that use a model in an IMC variant: gear by set, slot and variant (an item counts for
+    /// every slot it covers; rings for both hands), weapons by model, body and variant. Built once,
+    /// on first use, from whatever thread asks.
+    /// </summary>
+    public IReadOnlyList<string> Names(GameModelKind kind, ushort primaryId, ushort secondaryId, EquipSlot? slot, int variant)
+    {
+        var index = _itemsByVariant;
+        if (index == null)
+            lock (_variantLock)
+                index = _itemsByVariant ??= BuildVariantIndex();
+        var key = kind == GameModelKind.Weapon ? (kind, primaryId, secondaryId, (EquipSlot?)null, variant) : (kind, primaryId, (ushort)0, slot, variant);
+        return index.TryGetValue(key, out var names) ? names : Array.Empty<string>();
+    }
+
+    private Dictionary<(GameModelKind, ushort, ushort, EquipSlot?, int), List<string>> BuildVariantIndex()
+    {
+        var index = new Dictionary<(GameModelKind, ushort, ushort, EquipSlot?, int), List<string>>();
+        void Add((GameModelKind, ushort, ushort, EquipSlot?, int) key, string name)
+        {
+            if (!index.TryGetValue(key, out var list))
+                index[key] = list = new List<string>();
+            if (!list.Contains(name))
+                list.Add(name);
+        }
+        void AddWeapon(ulong model, string name)
+        {
+            if (model != 0)
+                Add((GameModelKind.Weapon, (ushort)model, (ushort)(model >> 16), null, (int)((model >> 32) & 0xFFFF)), name);
+        }
+
+        try
+        {
+            foreach (var row in _data.GetExcelSheet<Item>())
+            {
+                var name = row.Name.ToString();
+                if (string.IsNullOrWhiteSpace(name) || row.EquipSlotCategory.RowId == 0)
+                    continue;
+                var category = row.EquipSlotCategory.Value;
+                if (category.MainHand > 0 || category.OffHand > 0)
+                {
+                    AddWeapon(row.ModelMain, name);
+                    AddWeapon(row.ModelSub, name);
+                    continue;
+                }
+                var set = (ushort)row.ModelMain;
+                var variant = (int)((row.ModelMain >> 16) & 0xFFFF);
+                if (set == 0)
+                    continue;
+                foreach (var slot in SlotsOf(category))
+                    Add((SlotInfo.IsAccessory(slot) ? GameModelKind.Accessory : GameModelKind.Equipment, set, 0, slot, variant), name);
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "[Studio] Failed to index items by variant");
+        }
+        return index;
+    }
+
+    private static IEnumerable<EquipSlot> SlotsOf(EquipSlotCategory category)
+    {
+        if (category.Head > 0) yield return EquipSlot.Head;
+        if (category.Body > 0) yield return EquipSlot.Body;
+        if (category.Gloves > 0) yield return EquipSlot.Hands;
+        if (category.Legs > 0) yield return EquipSlot.Legs;
+        if (category.Feet > 0) yield return EquipSlot.Feet;
+        if (category.Ears > 0) yield return EquipSlot.Earring;
+        if (category.Neck > 0) yield return EquipSlot.Neck;
+        if (category.Wrists > 0) yield return EquipSlot.Wrists;
+        // Rings fit either hand.
+        if (category.FingerR > 0 || category.FingerL > 0)
+        {
+            yield return EquipSlot.RingRight;
+            yield return EquipSlot.RingLeft;
+        }
     }
 
     /// <summary>

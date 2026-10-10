@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
@@ -40,6 +42,7 @@ internal sealed class ModWindow : Window
     private readonly ModBrowseView _browse;
     private readonly SyncStatus _status;
     private readonly InspectorRouter _inspector;
+    private readonly CheckView _check;
 
     private int _validatedRevision = -1;
     private readonly Stopwatch _sinceValidated = new();
@@ -51,6 +54,7 @@ internal sealed class ModWindow : Window
         (StudioView.Overview,  "Overview",  FontAwesomeIcon.BoxOpen, "The mod, and everything in it at a glance."),
         (StudioView.Resources, "Resources", FontAwesomeIcon.Sitemap, "The entry picked on the left, as a tree: drop files on any tile to replace it."),
         (StudioView.Browse,    "Add from game", FontAwesomeIcon.Tshirt, "Add gear or a character feature from the game to the mod, to put files of your own on."),
+        (StudioView.Check,     "Check",     FontAwesomeIcon.Stethoscope, "Check why items don't show up, and clean up the mod's files."),
     };
 
     public ModEditor Editor { get; }
@@ -79,6 +83,7 @@ internal sealed class ModWindow : Window
         _overview  = new OverviewView(editor, _session, thumbnails, _actions);
         _browse    = new ModBrowseView(host, _session);
         _status    = new SyncStatus(host, _session, _sync);
+        _check     = new CheckView(host, editor, _session);
         _inspector = new InspectorRouter(_session,
             new ResourceInspector(editor, _session, thumbnails, _actions, textures, _handoffs),
             new ProjectInspector(editor, _session),
@@ -267,6 +272,7 @@ internal sealed class ModWindow : Window
             {
                 case StudioView.Overview: _overview.Draw();      break;
                 case StudioView.Browse:   _browse.DrawCanvas();  break;
+                case StudioView.Check:    _check.DrawCanvas();   break;
                 default:                  _tree.Draw();          break;
             }
         }
@@ -283,6 +289,8 @@ internal sealed class ModWindow : Window
         {
             if (_session.ActiveView == StudioView.Browse)
                 _browse.DrawInspector();
+            else if (_session.ActiveView == StudioView.Check)
+                _check.DrawInspector();
             else
                 _inspector.Draw();
         }
@@ -317,20 +325,21 @@ internal sealed class ModWindow : Window
                 _session.AddItem(dropped, _session.AddInto);
 
             if (view.View == StudioView.Resources)
-                DrawViewBadge();
+                DrawViewBadge(_session.Issues.Where(i => i.Target.Kind == TargetKind.Resource).Select(i => i.Severity));
+            else if (view.View == StudioView.Check && Editor.Check is { Report: { } report, IsStale: false })
+                DrawViewBadge(report.Findings.Select(f => f.Severity));
         }
         ImGui.PopStyleVar();
     }
 
-    /// <summary>A small count bubble in the top-right corner of the button just drawn: the problems with the mod's files.</summary>
-    private void DrawViewBadge()
+    /// <summary>A small count bubble in the top-right corner of the button just drawn: its errors, else its warnings.</summary>
+    private static void DrawViewBadge(IEnumerable<Severity> severities)
     {
         int errors = 0, warnings = 0;
-        foreach (var issue in _session.Issues)
+        foreach (var severity in severities)
         {
-            if (issue.Target.Kind != TargetKind.Resource) continue;
-            if (issue.Severity == Severity.Error) errors++;
-            else if (issue.Severity == Severity.Warning) warnings++;
+            if (severity == Severity.Error) errors++;
+            else if (severity == Severity.Warning) warnings++;
         }
         if (errors + warnings == 0)
             return;

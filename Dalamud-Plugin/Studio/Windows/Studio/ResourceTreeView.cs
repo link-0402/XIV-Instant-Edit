@@ -650,6 +650,13 @@ internal sealed class ResourceTreeView
         }
 
         var worst = WorstFor(node);
+        var issueText = worst == null ? null : IssuesText(i => Names(i.Target, node));
+        if (CheckMark(node) is { } mark)
+        {
+            if (worst == null || mark.Severity > worst.Value)
+                worst = mark.Severity;
+            issueText = issueText == null ? $"Check: {mark.Title}" : $"{issueText}\nCheck: {mark.Title}";
+        }
         var result = Tile.Draw(new TileSpec
         {
             Id          = row.Key,
@@ -669,7 +676,7 @@ internal sealed class ResourceTreeView
             Selected    = _session.Selection == target,
             Dimmed      = node.Origin == OriginKind.Vanilla && replacement == null,
             Issue       = worst,
-            IssueText   = worst == null ? null : IssuesText(i => Names(i.Target, node)),
+            IssueText   = issueText,
             Drop        = drop,
             Tooltip     = node.GamePath,
         }, new Vector2(width, height));
@@ -774,6 +781,15 @@ internal sealed class ResourceTreeView
             slot.UseVariants = slot.UseWhiteDummy = false;
             _session.TouchReplacements();
         });
+    }
+
+    /// <summary>The worst finding of the mod's last check about this file, while that check still matches the mod.</summary>
+    private (Severity Severity, string Title)? CheckMark(ResourceNode node)
+    {
+        var check = _editor.Check;
+        if (check.Report is null || check.IsStale)
+            return null;
+        return check.Markers(_session.Graph).TryGetValue(node.Id, out var mark) ? mark : null;
     }
 
     private string IssuesText(Func<PortIssue, bool> about)
