@@ -740,97 +740,46 @@ internal sealed class TextureCompressionService : IDisposable
             return new Outcome(null, null);
         }
 
-        var twoChannel = candidate.Uses.Count > 0 && candidate.Uses.All(use => use.Role == TextureRole.Index);
-        var target = twoChannel ? TextureCost.Bc5 : TextureCost.Bc7;
         var source = TextureFiles.NormalizeMipOffsets(original);
-        // Mipmaps only when the original has them: a texture drawn without them keeps its look far away.
-        var mipMaps = (source[14] & 0x7F) > 1;
         var work = Path.Combine(Path.GetTempPath(), "InstantEdit", "texture-compression", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(work);
         try
         {
-            var input = Path.Combine(work, "original.tex");
-            var output = Path.Combine(work, "compressed.tex");
-            var check = Path.Combine(work, "check.tex");
-            await File.WriteAllBytesAsync(input, source, token).ConfigureAwait(false);
-            byte[] encoded;
-            (ArraySegment<byte> Pixels, int Width, int Height) decoded;
-            ArraySegment<byte> originalPixels = default;
-            (byte B, byte G, byte R, byte A)? color = null;
-            int width = info.Width, height = info.Height;
-            // The colors the game samples from the original: its own pixels when they are BGRA32, else Penumbra's decode.
-            async Task<ArraySegment<byte>> OriginalPixelsAsync()
+            VerifiedEncodeResult outcome;
+            try
             {
-                if (info.Format == TextureCost.Bgra8)
-                    return TextureCost.TopLevelBgra(source).Pixels;
-                var plain = Path.Combine(work, "plain.tex");
-                await ConvertAsync(input, plain, TextureType.RgbaTex, mipMaps).ConfigureAwait(false);
-                return TextureCost.TopLevelBgra(await File.ReadAllBytesAsync(plain, token).ConfigureAwait(false)).Pixels;
+                outcome = await VerifiedEncode.RunAsync(new VerifiedEncodeRequest(source, info, candidate.Uses, null, null, AllowSingleColor: true),
+                    ConvertAsync, work, token).ConfigureAwait(false);
             }
-
-            CompressionCheckResult result;
-            while (true)
+            catch (Exception e) when (e is not OperationCanceledException)
             {
-                try
-                {
-                    if (originalPixels.Array is null && SingleColor.MayHoldOneColor(new MemoryStream(source, false), info))
-                    {
-                        originalPixels = await OriginalPixelsAsync().ConfigureAwait(false);
-                        color = SingleColor.ColorOf(originalPixels, info.Width, info.Height, twoChannel);
-                    }
-                    if (color is null && !CompressionCapture.Compressible(info))
-                    {
-                        // A compressed texture whose blocks repeat a pattern rather than one color.
-                        if (stamp is { } seen)
-                            _manyColors[candidate.File] = seen;
-                        return new Outcome(null, null);
-                    }
-                    var encode = input;
-                    if (color is { } one)
-                    {
-                        encode = Path.Combine(work, "single-color.tex");
-                        await File.WriteAllBytesAsync(encode, SingleColor.Tex(one), token).ConfigureAwait(false);
-                        width = height = SingleColor.Size;
-                    }
-                    await ConvertAsync(encode, output, TextureFiles.OutputType(target), mipMaps).ConfigureAwait(false);
-                    encoded = await File.ReadAllBytesAsync(output, token).ConfigureAwait(false);
-                    TextureFiles.ValidateOutput(encoded, target, width, height, mipMaps);
-                    await ConvertAsync(output, check, TextureType.RgbaTex, mipMaps).ConfigureAwait(false);
-                    decoded = TextureCost.TopLevelBgra(await File.ReadAllBytesAsync(check, token).ConfigureAwait(false));
-                    if (originalPixels.Array is null)
-                        originalPixels = await OriginalPixelsAsync().ConfigureAwait(false);
-                }
-                catch (Exception e) when (e is not OperationCanceledException)
-                {
-                    lock (_sessionLock)
-                        _failed.Add(ContentKey(candidate.File, sha));
-                    throw;
-                }
-                if (decoded.Width != width || decoded.Height != height)
-                    throw new InvalidDataException("Penumbra decoded the compressed texture at another size.");
-
-                // A shrunk texture is compared as the game samples it, stretched over the original's pixels.
-                result = color is null
-                    ? CompressionCheck.Compare(originalPixels, decoded.Pixels, info.Width, info.Height, candidate.Uses, twoChannel)
-                    : CompressionCheck.Compare(originalPixels, SingleColor.Stretch(decoded.Pixels, width, height, info.Width, info.Height), info.Width, info.Height,
-                        candidate.Uses, twoChannel, SingleColor.CheckTolerances);
-                // An uncompressed texture the stricter one-color check keeps may still compress at its own size.
-                if (result.Passed || color is null || !CompressionCapture.Compressible(info))
-                    break;
-                _log.Debug($"{candidate.Label} holds nearly one color, but shrinking it changes it ({result.Problem}); compressing it at its own size instead.");
-                color = null;
-                width = info.Width;
-                height = info.Height;
+                lock (_sessionLock)
+                    _failed.Add(ContentKey(candidate.File, sha));
+                throw;
             }
+            if (outcome.Outcome == VerifiedEncodeOutcome.NotCompressible)
+            {
+                // A compressed texture whose blocks repeat a pattern rather than one color.
+                if (stamp is { } seen)
+                    _manyColors[candidate.File] = seen;
+                return new Outcome(null, null);
+            }
+            if (outcome.RetriedAtFullSize)
+                _log.Debug($"{candidate.Label} holds nearly one color, but shrinking it changes it; compressing it at its own size instead.");
+            var result = outcome.Check!;
+            var target = outcome.Target;
+            var shrunk = outcome.OneColor;
+            int width = outcome.Width, height = outcome.Height;
             if (!result.Passed)
             {
-                _log.Information($"Kept {candidate.Label} as it is{(color is null ? string.Empty : " (one color)")}: {result.Problem} (cut-outs {result.CutoutChange:P3}, tile {result.CutoutTileChange:P1}; " +
+                _log.Information($"Kept {candidate.Label} as it is{(shrunk ? " (one color)" : string.Empty)}: {result.Problem} (cut-outs {result.CutoutChange:P3}, tile {result.CutoutTileChange:P1}; " +
                                  $"opacity {result.OpacityChange:P3}, tile {result.OpacityTileChange:P1}; rows {result.RowChange:P4}, tile {result.RowTileChange:P1}; " +
                                  $"normals p99 {result.NormalAngleP99:0.0} degrees; large errors {result.LargeErrorShare:P3}).");
                 Backups.RecordKept(new KeptTexture { File = candidate.File, Sha256 = sha, Reason = result.Problem, CheckVersion = CompressionCheck.Version });
                 return new Outcome(null, result.Problem);
             }
             token.ThrowIfCancellationRequested();
+            var encoded = outcome.Encoded!;
 
             // The original goes into the cache folder and the list first, so no crash can lose it.
             var backup = TextureBackupStore.StoreBackup(cacheRoot, original, sha);
@@ -840,7 +789,7 @@ internal sealed class TextureCompressionService : IDisposable
                 ModStableId = candidate.Source.ModStableId, RelativePath = candidate.Source.RelativePath, Backup = backup,
                 OriginalSha256 = sha, OriginalLength = original.LongLength, OriginalFormat = info.Format,
                 CompressedSha256 = TextureBackupStore.Hash(encoded), CompressedLength = encoded.LongLength, CompressedFormat = target,
-                Width = info.Width, Height = info.Height, Shrunk = color is not null, Compressed = DateTimeOffset.UtcNow,
+                Width = info.Width, Height = info.Height, Shrunk = shrunk, Compressed = DateTimeOffset.UtcNow,
             };
             Backups.Record(entry);
             try
@@ -854,7 +803,7 @@ internal sealed class TextureCompressionService : IDisposable
             }
             lock (_sessionLock)
                 _compressedOriginals.Add(ContentKey(candidate.File, sha));
-            _log.Information(color is null
+            _log.Information(!shrunk
                 ? $"Compressed {candidate.Label} to {TextureCost.FormatName(target)}: {original.LongLength:N0} to {encoded.LongLength:N0} bytes."
                 : $"Shrank {candidate.Label}, one color, from {info.Width} × {info.Height} {TextureCost.FormatName(info.Format)} to {width} × {height} " +
                   $"{TextureCost.FormatName(target)}: {original.LongLength:N0} to {encoded.LongLength:N0} bytes.");

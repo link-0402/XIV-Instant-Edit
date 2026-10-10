@@ -298,6 +298,10 @@ internal sealed class BackupOperation : IDisposable
         _entry.Files.Add(new BackupFile { RelPath = normalized, ShaBefore = sha });
     }
 
+    /// <summary>Takes a kept file back out of the operation: it was left as it was after all.</summary>
+    public void Forget(string relPath)
+        => _entry.Files.RemoveAll(file => string.Equals(file.RelPath, relPath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
+
     /// <summary>Notes that a kept file was moved, so a restore moves it back.</summary>
     public void Moved(string fromRel, string toRel)
     {

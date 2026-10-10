@@ -20,6 +20,11 @@ internal sealed class CheckInspector
             Gui.HintWrapped("Check the mod, then pick a problem to see it here.");
             return;
         }
+        if (_view.SelectedTexture is { } texture)
+        {
+            DrawTexture(texture);
+            return;
+        }
         if (_view.SelectedFinding is not { } key || report.Findings.FirstOrDefault(f => f.Key == key) is not { } finding)
         {
             DrawSummary(report);
@@ -77,6 +82,33 @@ internal sealed class CheckInspector
             ImGui.PopID();
             ImGui.Spacing();
         }
+    }
+
+    private static void DrawTexture(Services.CleanUp.TextureCandidate texture)
+    {
+        using (Fonts.Title())
+            ImGui.TextWrapped(System.IO.Path.GetFileName(texture.RelPath));
+        ImGui.Separator();
+        ImGui.Spacing();
+        Gui.LabeledValue("In the mod", texture.RelPath);
+        Gui.LabeledValue("Size", $"{texture.Info.Width}×{texture.Info.Height}, {texture.Info.Mips} mip level{(texture.Info.Mips == 1 ? string.Empty : "s")}");
+        Gui.LabeledValue("Format", InstantEdit.Services.TextureCompression.TextureCost.FormatName(texture.Info.Format));
+        if (texture.Note is { } note)
+        {
+            ImGui.Spacing();
+            ImGui.TextWrapped(note);
+        }
+        if (texture.GamePaths.Count > 0)
+        {
+            ImGui.Spacing();
+            Gui.SectionHeader("Game paths");
+            foreach (var path in texture.GamePaths)
+                ImGui.TextColored(Theme.Muted, path);
+        }
+        ImGui.Spacing();
+        Gui.SectionHeader("Used as", "How the mod's materials read it; the check after encoding looks at what these uses need.");
+        foreach (var use in texture.Uses)
+            ImGui.BulletText(use.Material.Length > 0 ? $"{use.Role} in {System.IO.Path.GetFileName(use.Material)}" : use.Role.ToString());
     }
 
     private static void DrawSummary(Services.Check.ModCheckReport report)

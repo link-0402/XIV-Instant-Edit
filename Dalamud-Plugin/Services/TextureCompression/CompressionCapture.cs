@@ -161,6 +161,16 @@ internal static class CompressionCapture
                 materials[key] = material = readMaterial(materialNode);
         }
         var materialPath = materialNode is null ? string.Empty : PathRules.NormalizeGamePath(materialNode.GamePath);
+        return UsesIn(material, materialPath, gamePath,
+            () => TextureRoleClassifier.Classify(ResourceKinds.Texture, texture.Name, texture.GamePath, texture.ActualPath));
+    }
+
+    /// <summary>
+    /// How a material reads a texture at <paramref name="gamePath"/>: one use per sampler naming it.
+    /// When the material can't be read, or no sampler names the path, <paramref name="fallbackRole"/> gives the role.
+    /// </summary>
+    internal static IEnumerable<TextureUse> UsesIn(SkinMaterial? material, string materialPath, string gamePath, Func<TextureRole> fallbackRole)
+    {
         var threshold = material is not null && material.HasConstant(TextureUse.AlphaThresholdConstant) && material.Constant(TextureUse.AlphaThresholdConstant) is { Length: > 0 } values
             ? values[0]
             : 0f;
@@ -182,7 +192,7 @@ internal static class CompressionCapture
         if (!found)
             yield return new TextureUse
             {
-                Role = TextureRoleClassifier.Classify(ResourceKinds.Texture, texture.Name, texture.GamePath, texture.ActualPath),
+                Role = fallbackRole(),
                 ShaderPackage = material?.ShaderPackage ?? string.Empty, Material = materialPath, AlphaThreshold = threshold, Translucent = translucent,
             };
     }

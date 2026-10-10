@@ -1,0 +1,186 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
+using InstantEdit.Services.TextureCompression;
+using InstantEdit.Studio.Models.Resources;
+using InstantEdit.Studio.Services;
+using InstantEdit.Studio.Services.CleanUp;
+using InstantEdit.Studio.Windows.UI;
+using Penumbra.Api.Enums;
+
+namespace InstantEdit.Studio.Windows.Studio;
+
+/// <summary>The Check view's Clean up tab: the mod's textures, resized and compressed.</summary>
+internal sealed partial class CheckView
+{
+    private static readonly int[] SizeCaps = { 0, 4096, 2048, 1024, 512, 256 };
+    private static readonly string[] SizeCapLabels = { "Keep size", "4096", "2048", "1024", "512", "256" };
+    private static readonly TextureFormatChoice[] Formats = Enum.GetValues<TextureFormatChoice>();
+    private static readonly string[] FormatLabels = { "Auto", "Keep format", "BC1", "BC3", "BC4", "BC5", "BC7" };
+
+    private Task<IReadOnlyList<TextureCandidate>>? _textureScan;
+    private IReadOnlyList<TextureCandidate>? _textures;
+    private readonly Dictionary<string, (bool Ticked, int Format, int Cap)> _textureChoices = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The texture picked in Clean up, for the inspector.</summary>
+    internal TextureCandidate? SelectedTexture { get; private set; }
+
+    partial void DrawMoreTabs()
+    {
+        if (ImGui.BeginTabItem("Clean up###cleanup"))
+        {
+            DrawTextures();
+            ImGui.EndTabItem();
+        }
+    }
+
+    private void DrawTextures()
+    {
+        if (_textureScan is { IsCompleted: true } scan)
+        {
+            _textureScan = null;
+            _textures = scan.IsCompletedSuccessfully ? scan.Result : Array.Empty<TextureCandidate>();
+            _textureChoices.Clear();
+            foreach (var candidate in _textures)
+                _textureChoices[candidate.RelPath] = (candidate.Preselected, 0, 0);
+        }
+
+        if (!ImGui.CollapsingHeader("Textures###textures", ImGuiTreeNodeFlags.DefaultOpen))
+            return;
+        Gui.HintWrapped("Make textures smaller and compress them. Every result is checked before it replaces a file, and every original is backed up.");
+        using (Gui.Disabled(_textureScan != null || Check.Busy || ReferenceEquals(_session.Graph, ResourceGraph.Empty)))
+        {
+            if (Gui.IconTextButton(FontAwesomeIcon.Search, _textures == null ? "Find the textures" : "Look again", "List the mod's textures and how its materials use them."))
+                StartTextureScan();
+        }
+        if (_textureScan != null)
+        {
+            ImGui.SameLine();
+            Gui.Hint("Reading the textures");
+        }
+        if (_textures is not { } textures)
+            return;
+        if (textures.Count == 0)
+        {
+            Gui.Hint("The mod has no textures of its own.");
+            return;
+        }
+
+        if (ImGui.BeginTable("##textures", 6, ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.ScrollY,
+                new System.Numerics.Vector2(-1, Math.Min(ImGui.GetContentRegionAvail().Y - ImGui.GetFrameHeightWithSpacing() * 2, Theme.S(26) * (textures.Count + 1) + Theme.S(8)))))
+        {
+            ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, Theme.S(24));
+            ImGui.TableSetupColumn("Texture");
+            ImGui.TableSetupColumn("Now", ImGuiTableColumnFlags.WidthFixed, Theme.S(110));
+            ImGui.TableSetupColumn("Used as", ImGuiTableColumnFlags.WidthFixed, Theme.S(90));
+            ImGui.TableSetupColumn("Size", ImGuiTableColumnFlags.WidthFixed, Theme.S(100));
+            ImGui.TableSetupColumn("Format", ImGuiTableColumnFlags.WidthFixed, Theme.S(110));
+            ImGui.TableSetupScrollFreeze(0, 1);
+            ImGui.TableHeadersRow();
+            foreach (var candidate in textures)
+            {
+                ImGui.PushID(candidate.RelPath);
+                var choice = _textureChoices.GetValueOrDefault(candidate.RelPath);
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                using (Gui.Disabled(!candidate.Selectable))
+                {
+                    var ticked = choice.Ticked;
+                    if (ImGui.Checkbox("##tick", ref ticked))
+                        _textureChoices[candidate.RelPath] = choice with { Ticked = ticked };
+                }
+                ImGui.TableNextColumn();
+                if (ImGui.Selectable($"{Path.GetFileName(candidate.RelPath)}##sel", ReferenceEquals(SelectedTexture, candidate)))
+                {
+                    SelectedTexture = candidate;
+                    SelectedFinding = null;
+                }
+                Gui.Tooltip(candidate.Note is { } note ? $"{candidate.RelPath}\n{note}" : candidate.RelPath);
+                ImGui.TableNextColumn();
+                ImGui.TextColored(Theme.Muted, $"{candidate.Info.Width}×{candidate.Info.Height} {TextureCost.FormatName(candidate.Info.Format)}");
+                ImGui.TableNextColumn();
+                ImGui.TextColored(Theme.Faint, string.Join(", ", candidate.Uses.Select(u => u.Role.ToString()).Distinct()));
+                ImGui.TableNextColumn();
+                ImGui.SetNextItemWidth(-1);
+                var cap = choice.Cap;
+                if (ImGui.Combo("##cap", ref cap, SizeCapLabels, SizeCapLabels.Length))
+                    _textureChoices[candidate.RelPath] = (_textureChoices[candidate.RelPath].Ticked, choice.Format, cap);
+                ImGui.TableNextColumn();
+                ImGui.SetNextItemWidth(-1);
+                var format = choice.Format;
+                if (ImGui.Combo("##format", ref format, FormatLabels, FormatLabels.Length))
+                    _textureChoices[candidate.RelPath] = (_textureChoices[candidate.RelPath].Ticked, format, _textureChoices[candidate.RelPath].Cap);
+                ImGui.PopID();
+            }
+            ImGui.EndTable();
+        }
+
+        var jobs = textures.Where(c => c.Selectable && _textureChoices.GetValueOrDefault(c.RelPath).Ticked)
+            .Select(c =>
+            {
+                var choice = _textureChoices[c.RelPath];
+                var cap = SizeCaps[choice.Cap];
+                return new TextureJob(c, Formats[choice.Format], cap == 0 ? int.MaxValue : cap);
+            })
+            .ToList();
+        var why = jobs.Count == 0 ? "Tick the textures to change."
+            : Check.Busy ? "Wait until the change under way is done."
+            : _editor.Sync.Busy ? Services.Check.RepairApplier.BusyReason
+            : !_host.PenumbraIpc.CanConvertTextures ? "Penumbra is not available to encode textures."
+            : null;
+        using (Gui.Disabled(why != null))
+        {
+            if (Gui.PrimaryButton(FontAwesomeIcon.Compress, jobs.Count == 1 ? "Change 1 texture" : $"Change {jobs.Count} textures", Theme.S(200),
+                    why ?? "Back up each texture, encode it, check it, and replace it only when it passes."))
+                StartTextureCleanUp(jobs);
+        }
+        if (why != null)
+            Gui.Tooltip(why);
+    }
+
+    private void StartTextureScan()
+    {
+        var graph = _session.Graph;
+        var game = _host.GameData.VanillaFiles;
+        _textureScan = Task.Run(() => TextureCleanUp.Scan(graph, node => node.Origin == OriginKind.ModFile
+            ? File.Exists(node.DiskPath) ? File.ReadAllBytes(node.DiskPath) : null
+            : game.TryReadBytes(node.GamePath)));
+        SelectedTexture = null;
+    }
+
+    private void StartTextureCleanUp(IReadOnlyList<TextureJob> jobs)
+    {
+        if (_session.Project is not { } project)
+            return;
+        _editor.Flush();
+        var host = _host;
+        var cacheRoot = host.CacheRoot;
+        _textures = null;
+        SelectedTexture = null;
+        Check.StartOperation("Changing textures", async token =>
+        {
+            var result = await TextureCleanUp.ApplyAsync(project, jobs, PenumbraConvert(host.PenumbraIpc), host.Backups, cacheRoot, host.Reloader,
+                host.Configuration, null, token).ConfigureAwait(false);
+            var message = $"Changed {result.Changed} texture{(result.Changed == 1 ? string.Empty : "s")}, {Size(result.BytesSaved)} saved"
+                        + (result.Problems.Count > 0 ? $"; {result.Problems.Count} left as they were (hover for why)." : ".");
+            return (result.Problems.Count == 0 || result.Changed > 0, result.Problems.Count > 0 ? $"{message}\n{string.Join("\n", result.Problems)}" : message);
+        }, checkAfter: false);
+    }
+
+    /// <summary>Penumbra's texture conversion, asked on the framework thread; the conversion itself runs where Penumbra puts it.</summary>
+    private static TexConvert PenumbraConvert(PenumbraIpcService ipc) => async (input, output, type, mipMaps) =>
+    {
+        var work = StudioServices.Framework.RunOnTick(() =>
+            ipc.ConvertTextureFile(input, output, (int)type, mipMaps) ?? Task.FromException(new IOException("Penumbra could not convert the texture.")));
+        if (await Task.WhenAny(work, Task.Delay(TimeSpan.FromMinutes(5))).ConfigureAwait(false) != work)
+            throw new TimeoutException("Penumbra took too long to convert the texture.");
+        await work.ConfigureAwait(false);
+    };
+
+    private static string Size(long bytes)
+        => bytes >= 1 << 20 ? $"{bytes / (double)(1 << 20):0.#} MiB" : bytes >= 1 << 10 ? $"{bytes / 1024.0:0.#} KiB" : $"{Math.Max(0, bytes)} B";
+}
