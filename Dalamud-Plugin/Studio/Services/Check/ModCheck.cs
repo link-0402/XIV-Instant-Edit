@@ -59,8 +59,15 @@ internal sealed partial class ModCheck
 
         progress?.Report(new CheckProgress("Tracing models, materials and textures", 1, 5));
         WalkModels();
+        CollectShippedRoots();
+        progress?.Report(new CheckProgress("Checking materials no model uses", 2, 5));
+        ClassifyMaterialsAndValidateStandalone();
         progress?.Report(new CheckProgress("Checking race models", 3, 5));
         BuildRaceTables();
+        progress?.Report(new CheckProgress("Checking your Penumbra collection", 4, 5));
+        ResolveExternal();
+        ClassifyRemaining();
+        FindOrphans();
     }
 
     // ── Index ────────────────────────────────────────────────────────────────

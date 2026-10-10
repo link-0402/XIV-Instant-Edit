@@ -31,6 +31,8 @@ internal static partial class ModCheckScenarios
         ImcGroupsDecideMaterialSets();
         AttributeMasksThatHideEverythingAreReported();
         RaceModelsNoRaceLoadsAreErrors();
+        RunRepairs();
+        RunStellarBlade();
     }
 
     // ── Reading a mod's options ──────────────────────────────────────────────
