@@ -164,6 +164,7 @@ try
     SelectorStabilityScenarios.Run(testRoot);
     ModHandoffScenarios.Run(testRoot);
     ModCheckScenarios.RunReaders(testRoot);
+    ModCheckScenarios.RunAnalysis(testRoot);
     CollectionActivationScenarios.Run();
     UiViewModelScenarios.Run();
     AnimationRowScenarios.Run();

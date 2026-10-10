@@ -45,9 +45,28 @@ internal static class ModelLayoutReader
     private const int TerrainShadowMeshSize = 20;
     private const int SubmeshSize = 16;
     private const int TerrainShadowSubmeshSize = 12;
+    private const int MaxMetadataBytes = 64 * 1024 * 1024;
 
     public static bool LooksLikeModel(ReadOnlySpan<byte> data)
         => data.Length >= HeaderSize && BinaryPrimitives.ReadUInt32LittleEndian(data) is Version5 or Version6;
+
+    /// <summary>Reads only the metadata in front of a model file's vertex and index buffers.</summary>
+    public static ModelLayout ReadFile(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        Span<byte> header = stackalloc byte[HeaderSize];
+        if (stream.Length < HeaderSize)
+            throw new InvalidDataException("MDL header is truncated.");
+        stream.ReadExactly(header);
+        if (!LooksLikeModel(header))
+            throw new InvalidDataException("The file is not a model (unknown MDL version).");
+        var wanted = HeaderSize + (long)BinaryPrimitives.ReadUInt32LittleEndian(header[4..]) + BinaryPrimitives.ReadUInt32LittleEndian(header[8..]);
+        var length = (int)Math.Min(Math.Min(wanted, stream.Length), MaxMetadataBytes);
+        var data = new byte[length];
+        stream.Position = 0;
+        stream.ReadExactly(data);
+        return Read(data);
+    }
 
     /// <summary>The model's layout; throws <see cref="InvalidDataException"/> for a file that is not a model.</summary>
     public static ModelLayout Read(ReadOnlySpan<byte> data)
