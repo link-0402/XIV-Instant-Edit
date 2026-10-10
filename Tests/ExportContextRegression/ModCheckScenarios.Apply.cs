@@ -19,6 +19,79 @@ internal static partial class ModCheckScenarios
         AddedEqdpEntryLoadsTheRaceModel(testRoot);
         RepairsStopWhenTheBackupCantBeStored(testRoot);
         RepairsSayWhyTheyCantRun(testRoot);
+        RepairsKeepPenumbrasPathStyle(testRoot);
+        AModMovedAfterItsCheckIsNotRepaired(testRoot);
+        RepairsAndRestoreWorkInNonAsciiFolders(testRoot);
+    }
+
+    private static void RepairsKeepPenumbrasPathStyle(string testRoot)
+    {
+        using var mod = new TestModFolder()
+            .File("files/model.mdl", ModCheckFixtures.Mdl(["/mt_c0201e0005_top_a.mtrl"]))
+            .File("files/material.mtrl", ModCheckFixtures.Mtrl([GearTexture]))
+            .File("moved/base.tex", ModCheckFixtures.Tex());
+        mod.Meta(new JObject
+        {
+            ["FileVersion"] = 4,
+            ["Name"] = "Penumbra style",
+            ["DefaultData"] = new JObject
+            {
+                ["Files"] = new JObject
+                {
+                    [GearModel] = @"files\model.mdl",
+                    [GearMaterial.ToUpperInvariant()] = @"FILES\material.mtrl",
+                    [GearTexture] = @"files\base.tex",
+                },
+            },
+        }.ToString());
+
+        var report = Check(mod);
+        Require(!report.Findings.Any(f => f.Code is "C001" or "S004"), "upper-case keys and paths are matched without case");
+        var result = ApplyRecommended(mod, report, new FakeReloader(), testRoot);
+        var files = (JObject)JObject.Parse(mod.ReadMeta())["DefaultData"]!["Files"]!;
+        Require(result.Ok && files[GearTexture]!.Value<string>() == @"moved\base.tex" &&
+                files.Properties().Any(p => p.Name == GearMaterial.ToUpperInvariant()),
+            "a retarget into a backslash meta.json writes a backslash path, and other keys keep their spelling");
+    }
+
+    private static void AModMovedAfterItsCheckIsNotRepaired(string testRoot)
+    {
+        var mod = StellarBladeMod();
+        var report = CheckStellarBlade(mod);
+        var project = ModProject.Load(mod.Path);
+        var moved = mod.Path + " renamed";
+        Directory.Move(mod.Path, moved);
+        try
+        {
+            Require(RepairApplier.WhyNot(project, report, false, true) == RepairApplier.ChangedReason,
+                "a mod moved after its check is not repaired");
+            var (store, cache) = NewBackups(testRoot);
+            var result = RepairApplier.ApplyAsync(project, report, new RepairSelection(report), store, cache, new FakeReloader(), new StudioSettings(),
+                CancellationToken.None).GetAwaiter().GetResult();
+            Require(!result.Ok && result.Message == RepairApplier.ChangedReason && !Directory.Exists(mod.Path),
+                "applying anyway stops before writing anything");
+        }
+        finally
+        {
+            Directory.Delete(moved, recursive: true);
+        }
+    }
+
+    private static void RepairsAndRestoreWorkInNonAsciiFolders(string testRoot)
+    {
+        using var source = StellarBladeMod();
+        using var mod = new TestModFolder($"Ünïcode Mod Ä {Guid.NewGuid():N}");
+        foreach (var file in Directory.EnumerateFiles(source.Path, "*", SearchOption.AllDirectories))
+            mod.File(Path.GetRelativePath(source.Path, file), File.ReadAllBytes(file));
+        var before = mod.ReadMeta();
+        var (store, cache) = NewBackups(testRoot);
+
+        var result = ApplyRecommended(mod, CheckStellarBlade(mod), new FakeReloader(), testRoot, store: store, cache: cache);
+        Require(result.Ok && SbHairFiles.All(file => !mod.Exists(file)), $"repairs work in a folder named with spaces and accents ({result.Message})");
+
+        var restored = store.Restore(store.For(mod.Path).Single().Id, mod.Path, cache, new FakeReloader());
+        Require(restored.Skipped.Count == 0 && mod.ReadMeta() == before && SbHairFiles.All(mod.Exists),
+            "restoring the repairs puts meta.json and every deleted file back");
     }
 
     private static (ModBackupStore Store, string Cache) NewBackups(string testRoot)
