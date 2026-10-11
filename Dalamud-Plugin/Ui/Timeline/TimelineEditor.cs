@@ -655,10 +655,11 @@ internal sealed class TimelineEditor
         if (clipboard.IsEmpty)
             return false;
         // Copied from another clip (or before a save reloaded this one), the entries they name are
-        // not this document's: those copies are built like new ones.
+        // not this document's: those copies are built like new ones, and a pin names that
+        // document's alternatives, so they play any.
         var same = ReferenceEquals(clipboardLoaded, loaded);
         return Add(clipboard.Select(ev => same ? ev with { Start = ev.Start + playhead }
-            : ev with { Start = ev.Start + playhead, Key = "", CloneOf = null }), clipboardPack);
+            : ev with { Start = ev.Start + playhead, Key = "", CloneOf = null, Pin = null }), clipboardPack);
     }
 
     // Properties panel and context menu.
@@ -709,6 +710,24 @@ internal sealed class TimelineEditor
         if (ReferenceEquals(next, Document))
             return false;
         next = TimelineEdits.ReleasePack(Document, next, ResidentMotions);
+        if (History.InGesture)
+            History.Preview(next);
+        else
+            History.Commit(next);
+        return true;
+    }
+
+    /// <summary>
+    /// Sets or drops the changes to the sound <paramref name="key"/> (see <see cref="TimelineEdits.SetSound"/>):
+    /// live during a field edit, else one undo step. False when nothing changed or a drag is running.
+    /// </summary>
+    public bool SetSound(TimelineSoundKey key, TimelineSoundEdit? edit)
+    {
+        if (gesture != TimelineGesture.None)
+            return false;
+        var next = TimelineEdits.SetSound(Document, key, edit);
+        if (ReferenceEquals(next, Document))
+            return false;
         if (History.InGesture)
             History.Preview(next);
         else

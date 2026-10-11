@@ -31,6 +31,7 @@ TmbFileFixture.Run(Check, Reject);
 TimelineEditorFixture.Run(Check, Reject);
 AudioFixture.Run(Check, Reject);
 ScdModelFixture.Run(Check, Reject);
+TimelineSoundFixture.Run(Check, Reject);
 TimelineWindowViewsFixture.Run(Check, Reject);
 MotionLayerFixture.Run(Check, Reject);
 MotionEditsFixture.Run(Check, Reject);
