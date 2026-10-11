@@ -90,6 +90,27 @@ internal sealed partial class ModCheck
     private IReadOnlyList<CheckContainer> Active(CheckContainer root)
         => root.IsDefault ? new[] { root } : new[] { root, _default };
 
+    /// <summary>What is on for a material from <paramref name="root"/> that a model from <paramref name="via"/> loads: both options and the default files.</summary>
+    private IReadOnlyList<CheckContainer> Active(CheckContainer root, CheckContainer? via)
+        => via is null || ReferenceEquals(via, root) || via.IsDefault ? Active(root)
+            : root.IsDefault ? new[] { via, root } : new[] { root, via, _default };
+
+    private static bool ExclusiveWith(CheckContainer provider, CheckContainer root, CheckContainer? via)
+        => provider.IsExclusiveWith(root) || via is not null && provider.IsExclusiveWith(via);
+
+    /// <summary>
+    /// Whether Penumbra takes <paramref name="a"/>'s redirection of a path over <paramref name="b"/>'s when both are on:
+    /// the higher group priority wins, then the later group; inside a group the higher option priority, then the earlier option; the default files lose.
+    /// </summary>
+    private static bool Outranks(CheckContainer a, CheckContainer b)
+    {
+        if (a.IsDefault || b.IsDefault)
+            return !a.IsDefault && b.IsDefault;
+        if (a.GroupIndex != b.GroupIndex)
+            return a.GroupPriority != b.GroupPriority ? a.GroupPriority > b.GroupPriority : a.GroupIndex > b.GroupIndex;
+        return a.OptionPriority != b.OptionPriority ? a.OptionPriority > b.OptionPriority : a.OptionIndex < b.OptionIndex;
+    }
+
     // ── Files ────────────────────────────────────────────────────────────────
 
     private sealed record FileState(string RelPath, bool Exists, FileKind Kind, long Size, DateTime LastWriteUtc, string? Error);
@@ -116,11 +137,14 @@ internal sealed partial class ModCheck
 
     // ── Resolution ───────────────────────────────────────────────────────────
 
-    /// <summary>Where the game gets <paramref name="path"/> from when <paramref name="root"/> asks for it.</summary>
-    private PathResolution Resolve(string path, CheckContainer root, int depth = 0)
+    /// <summary>
+    /// Where the game gets <paramref name="path"/> from when <paramref name="root"/> asks for it, with
+    /// <paramref name="via"/> also on (the option of the model whose material asks).
+    /// </summary>
+    private PathResolution Resolve(string path, CheckContainer root, CheckContainer? via = null, int depth = 0)
     {
         path = PathNormalizer.GamePath(path);
-        var active = Active(root);
+        var active = Active(root, via);
         foreach (var container in active)
         {
             if (_files[container].TryGetValue(path, out var mapping))
@@ -128,7 +152,7 @@ internal sealed partial class ModCheck
                     container.IsDefault ? null : container.DisplayName);
             if (depth < 4 && _model.Swaps[container].TryGetValue(path, out var target))
             {
-                var swapped = Resolve(target, root, depth + 1);
+                var swapped = Resolve(target, root, via, depth + 1);
                 return swapped with
                 {
                     RequestedPath = path,
@@ -144,10 +168,12 @@ internal sealed partial class ModCheck
             return new PathResolution(ResolutionSource.Vanilla, path);
         if (providers is { Count: > 0 })
         {
-            var names = providers.Select(provider => provider.Container.DisplayName).Distinct().ToArray();
-            var exclusive = providers.All(provider => provider.Container.IsExclusiveWith(root));
-            return new PathResolution(exclusive ? ResolutionSource.Exclusive : ResolutionSource.Conditional, path, providers[0].RelPath,
-                providers[0].Container.Option, Providers: names);
+            // Options that can never be on together with the asking ones are not worth naming when others can be.
+            var possible = providers.Where(provider => !ExclusiveWith(provider.Container, root, via)).ToArray();
+            var shown = possible.Length > 0 ? possible : providers.ToArray();
+            var names = shown.Select(provider => provider.Container.DisplayName).Distinct().ToArray();
+            return new PathResolution(possible.Length == 0 ? ResolutionSource.Exclusive : ResolutionSource.Conditional, path, shown[0].RelPath,
+                shown[0].Container.Option, Providers: names);
         }
         var searched = string.Join(" or ", active.Select(container => container.DisplayName));
         return new PathResolution(ResolutionSource.Unresolved, path, Detail: $"not redirected by {searched}, and not a game file");
