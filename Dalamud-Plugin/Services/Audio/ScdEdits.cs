@@ -100,26 +100,45 @@ internal static partial class ScdEdits
     /// <summary>Sets how long one entry's track waits after KeyOn, by changing its last Interval (or adding one after KeyOn).</summary>
     public static void SetWait(ScdModel m, int sound, int entry, int milliseconds)
     {
+        CheckWait(m.Tracks[ExistingTrack(m, sound, entry)].Commands, milliseconds);
+        WriteWait(m.Tracks[OwnTrack(m, sound, entry)].Commands, milliseconds);
+    }
+
+    /// <summary>Refuses a wait the track can't take: negative, a track without KeyOn, one that loops or jumps, or less than its earlier pauses.</summary>
+    private static void CheckWait(List<ScdCommand> track, int milliseconds)
+    {
         if (milliseconds < 0)
             throw new ArgumentOutOfRangeException(nameof(milliseconds), "A wait can't be negative.");
-        var track = m.Tracks[ExistingTrack(m, sound, entry)].Commands;
         var keyOn = track.FindIndex(c => c.Type == ScdTrack.KeyOn);
         if (keyOn < 0)
             throw new InvalidDataException("This sound's track never starts its audio, so its wait can't be set.");
-        if (track.Any(c => c.Type is ScdTrack.LoopStart or ScdTrack.LoopEnd or ScdTrack.Jump))
+        if (track.Any(c => c.Type is ScdTrack.LoopStart or ScdTrack.LoopEnd || Jumps(c)))
             throw new InvalidDataException("This sound's track loops, so its wait can't be set.");
-        var intervals = Enumerable.Range(keyOn, track.Count - keyOn).Where(i => track[i].Type == ScdTrack.Interval).ToArray();
-        var others = intervals.SkipLast(1).Sum(i => BinaryPrimitives.ReadInt32LittleEndian(track[i].Payload));
-        if (milliseconds < others)
+        if (milliseconds < Intervals(track, keyOn).SkipLast(1).Sum(i => BinaryPrimitives.ReadInt32LittleEndian(track[i].Payload)))
             throw new ArgumentOutOfRangeException(nameof(milliseconds), "This track already waits longer than that before its last pause.");
-        var commands = m.Tracks[OwnTrack(m, sound, entry)].Commands;
-        var payload = new byte[4];
-        BinaryPrimitives.WriteInt32LittleEndian(payload, milliseconds - others);
-        if (intervals.Length == 0)
-            commands.Insert(keyOn + 1, new ScdCommand(ScdTrack.Interval, payload));
-        else
-            commands[intervals[^1]] = commands[intervals[^1]] with { Payload = payload };
     }
+
+    /// <summary>Sets the last Interval after KeyOn so the waits after KeyOn add up to <paramref name="milliseconds"/>, adding one after KeyOn when there is none.</summary>
+    private static void WriteWait(List<ScdCommand> track, int milliseconds)
+    {
+        CheckWait(track, milliseconds);
+        var keyOn = track.FindIndex(c => c.Type == ScdTrack.KeyOn);
+        var intervals = Intervals(track, keyOn);
+        var payload = new byte[4];
+        BinaryPrimitives.WriteInt32LittleEndian(payload, milliseconds - intervals.SkipLast(1).Sum(i => BinaryPrimitives.ReadInt32LittleEndian(track[i].Payload)));
+        if (intervals.Length == 0)
+            track.Insert(keyOn + 1, new ScdCommand(ScdTrack.Interval, payload));
+        else
+            track[intervals[^1]] = track[intervals[^1]] with { Payload = payload };
+    }
+
+    private static int[] Intervals(List<ScdCommand> track, int keyOn)
+        => [.. Enumerable.Range(keyOn, track.Count - keyOn).Where(i => track[i].Type == ScdTrack.Interval)];
+
+    /// <summary>Jump and ZeroOneJump move by byte offsets inside the track, so nothing may be added before them.</summary>
+    private static bool Jumps(ScdCommand command) => command.Type is ScdTrack.Jump or ZeroOneJump;
+
+    private const int ZeroOneJump = 0x3E;
 
     /// <summary>An audio entry's length in whole milliseconds, rounded up; 0 for no audio.</summary>
     public static int AudioMilliseconds(ScdModel m, int audio)
@@ -160,7 +179,7 @@ internal static partial class ScdEdits
     /// </summary>
     public static void SetLoop(ScdModel m, int sound, bool on)
     {
-        var target = m.Sounds[sound];
+        var target = RequireSound(m, sound);
         if (target.Type == ScdSound.Empty)
             throw new InvalidDataException("This sound can't loop.");
         target.Attributes = on ? target.Attributes | ScdSound.LoopAttribute : target.Attributes & ~ScdSound.LoopAttribute;
@@ -179,7 +198,7 @@ internal static partial class ScdEdits
     /// <summary>Sets the extra block's play length to the longest audio the sound plays, when it has one.</summary>
     public static void UpdatePlayLength(ScdModel m, int sound)
     {
-        var target = m.Sounds[sound];
+        var target = RequireSound(m, sound);
         if (target.ExtraAt >= 0 && target.Entries.Count > 0)
             target.PlayLength = target.Entries.Max(e => AudioMilliseconds(m, e.Audio));
     }
@@ -192,14 +211,23 @@ internal static partial class ScdEdits
 
     private static void RequireNoJumps(List<ScdCommand> commands)
     {
-        if (commands.Any(c => c.Type == ScdTrack.Jump))
+        if (commands.Any(Jumps))
             throw new InvalidDataException("This sound's track jumps, so nothing can be added to it.");
     }
 
     private static int ExistingTrack(ScdModel m, int sound, int entry)
     {
-        var track = m.Sounds[sound].Entries[entry].Track;
+        var track = RequireEntry(m, sound, entry).Track;
         return track >= 0 && track < m.Tracks.Count ? track : throw new InvalidDataException("This sound plays no track.");
+    }
+
+    private static ScdModelSound RequireSound(ScdModel m, int sound)
+        => sound >= 0 && sound < m.Sounds.Count ? m.Sounds[sound] : throw new InvalidDataException("The sound file has no such sound.");
+
+    private static ScdModelEntry RequireEntry(ScdModel m, int sound, int entry)
+    {
+        var entries = RequireSound(m, sound).Entries;
+        return entry >= 0 && entry < entries.Count ? entries[entry] : throw new InvalidDataException("This sound has no such alternative.");
     }
 
     /// <summary>The entry's track, copied first when any other entry of any sound plays it too.</summary>
