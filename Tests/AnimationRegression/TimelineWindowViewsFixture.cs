@@ -32,6 +32,7 @@ internal static class TimelineWindowViewsFixture
         GamePaths(check, texts);
         Packs(check, texts);
         Texts(check, texts);
+        Sounds(check, texts);
         check(texts.All(text => !text.Contains("...", StringComparison.Ordinal) && !text.Contains('\u2026')),
             "Timeline window texts never use an ellipsis");
     }
@@ -246,6 +247,32 @@ internal static class TimelineWindowViewsFixture
         check(TimelineWindowViews.PackFor([], "smile") == null && TimelineWindowViews.PackFor(["smile", "emot/laugh"], "EMOT/LAUGH") == "EMOT/LAUGH" &&
               TimelineWindowViews.PackFor(["smile", "emot/laugh"], "illusio_vitae") == "smile" && TimelineWindowViews.PackFor(["smile"], null) == "smile",
             "A face is placed from no library when always loaded, from the timeline's own when it has the face, else from its first");
+    }
+
+    /// <summary>The sound inspector's words: what each option of a sound event does.</summary>
+    private static void Sounds(Action<bool, string> check, List<string> texts)
+    {
+        check(TimelineWindowViews.PlaysText(1) == "Once" && TimelineWindowViews.PlaysText(-1) == "Keep looping" && TimelineWindowViews.PlaysText(90) == "Custom (90)",
+            "Plays names the loop values");
+        check(TimelineWindowViews.RangeHint(10, 30) == "Full volume within 10, silent past 30." && TimelineWindowViews.RangeHint(2.5f, 7.25f) == "Full volume within 2.5, silent past 7.3." &&
+              TimelineWindowViews.RangeHint(null, null) == "Fades as the camera moves away.", "the range hint uses the file's ranges");
+        check(TimelineWindowViews.WhichText(null, ["o0", "o1", "o2"]) == "Random, any of 3" && TimelineWindowViews.WhichText("o1", ["o0", "o1", "o2"]) == "Only #2",
+            "Which sound names random and pinned");
+        var culture = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("de-DE");
+            check(TimelineWindowViews.RangeHint(2.5f, 7.25f) == "Full volume within 2.5, silent past 7.3." && TimelineWindowViews.PlaysText(1.5) == "Custom (1.5)",
+                "sound numbers don't follow the user's culture");
+        }
+        finally { CultureInfo.CurrentCulture = culture; }
+        var scd = ScdModelFixture.RandomSet(2);
+        var model = InstantEdit.Services.Audio.ScdModel.Read(scd);
+        InstantEdit.Services.Audio.ScdEdits.SetLoop(model, 0, true);
+        check(!TimelineWindowViews.FileLoops(scd, 0) && TimelineWindowViews.FileLoops(model.Write(), 0) && !TimelineWindowViews.FileLoops(scd, 5),
+            "a file loops when its sound is marked to loop and its audio has loop points");
+        texts.AddRange(["Fades with distance", "Stops with the animation", "Cut off when the emote ends.", "Add loop points", "The character's position.",
+            "The file has no loop points, so it plays once.", TimelineWindowViews.RangeHint(null, null)]);
     }
 
     private static void Texts(Action<bool, string> check, List<string> texts)

@@ -112,7 +112,10 @@ public sealed partial class TimelineWindow
                 }
                 DrawTiming(current, ev, editable, movable);
                 DrawPath(current, ev, kind, editable);
-                if (kind != null)
+                // A sound's options say what they do instead of showing its raw fields.
+                if (ev.Magic == "C063")
+                    DrawSoundEvent(current, ev, editable);
+                else if (kind != null)
                     foreach (var field in kind.Fields)
                     {
                         Fact(field.Label);
