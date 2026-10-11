@@ -353,20 +353,38 @@ public sealed class PenumbraIpcService : IDisposable
             _getChangedItemList ??= new Penumbra.Api.IpcSubscribers.GetChangedItemAdapterList(_pi);
             var result = new Dictionary<string, IReadOnlyList<(string, Library.ChangeKind)>>(StringComparer.OrdinalIgnoreCase);
             foreach (var (mod, items) in _getChangedItemList.Invoke())
-                result[mod] = items.Select(item => (item.Key, KindOf(item.Value))).ToArray();
+                result[mod] = items.Select(item => (item.Key, Library.ChangesIndex.KindOfChangedItem(item.Value))).ToArray();
             return result;
         }
         catch (Exception ex) { _log.Debug(ex, "[Studio] GetChangedItemAdapterList failed"); return null; }
     }
 
-    /// <summary>What a changed item is, from the type of Penumbra's object for it (Mod Optimizer's rules).</summary>
-    private static Library.ChangeKind KindOf(object? value) => value?.GetType().Name switch
+    /// <summary>
+    /// Each mod's import date and the folder Penumbra files it under ("Gear/Shoes", empty at the top),
+    /// by mod folder name, read in one pass over Penumbra's mod list. Null when Penumbra cannot say.
+    /// Call on the framework thread.
+    /// </summary>
+    internal IReadOnlyDictionary<string, (DateTime Added, string Folder)>? ModListFacts()
     {
-        "EquipItem"                                              => Library.ChangeKind.Item,
-        "Emote"                                                  => Library.ChangeKind.Emote,
-        { } name when name.StartsWith("ValueTuple", StringComparison.Ordinal) => Library.ChangeKind.Face,
-        _                                                        => Library.ChangeKind.Other,
-    };
+        try
+        {
+            using var list = new Penumbra.Api.IpcSubscribers.GetModListAdapter(_pi).Invoke();
+            var result = new Dictionary<string, (DateTime, string)>(list.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var mod in list)
+            {
+                using (mod)
+                {
+                    DateTime added = default;
+                    string folder = string.Empty;
+                    try { added = mod.ImportDate.UtcDateTime; } catch (Exception) { /* left unknown */ }
+                    try { folder = mod.Folder ?? string.Empty; } catch (Exception) { /* at the top */ }
+                    result[mod.Identifier] = (added, folder);
+                }
+            }
+            return result;
+        }
+        catch (Exception ex) { _log.Debug(ex, "[Studio] GetModListAdapter failed"); return null; }
+    }
 
     /// <summary>Opens Penumbra's main window on the mods tab with a mod selected; null on success, else what went wrong.</summary>
     public string? OpenModPage(string folderName)

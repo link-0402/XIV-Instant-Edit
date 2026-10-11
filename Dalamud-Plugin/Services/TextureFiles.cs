@@ -26,6 +26,7 @@ internal static class TextureFiles
     private static readonly HashSet<string> OwnedRootFiles = new(StringComparer.OrdinalIgnoreCase)
     {
         "TextureSessions.json", "TextureSessions.json.tmp", "pending-context-revocations.json",
+        "library-scans.json", "library-scans.json.tmp",
     };
     private static readonly System.Text.RegularExpressions.Regex OwnedRootTemporary = new(
         @"^\.pending-context-revocations\.json\.[0-9a-f]{32}\.tmp$",

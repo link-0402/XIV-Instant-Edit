@@ -31,12 +31,8 @@ public sealed partial class MainWindow
     }
 
     private QuickAction TextureCompressionCard => new("texture-compression", FontAwesomeIcon.CompressArrowsAlt, "Optimize textures",
-        "Automatically optimize your character's textures when they load. Every compression is checked for visual quality impact " +
-        "and dismissed if it negatively affects the appearance. " +
-        $"Single-color textures shrink to {SingleColor.Size} × {SingleColor.Size} pixels. Optionally checks hair and automatically crops " +
-        "its textures and UVs if it only uses a small portion of them, as is often the case for Sims 4 hair. " +
-        "Both of those have no impact on visuals and merely save storage space and the VRAM that sync plugins count. " +
-        "Originals are backed up for a week.",
+        "Automatically optimize your character's textures shortly after they load. Every compression is checked for visual quality impact " +
+        "Originals are backed up for a week and can be easily restored for the current appearance.",
         DrawTextureCompressionAction,
         () =>
         {
@@ -75,11 +71,10 @@ public sealed partial class MainWindow
             if (ImGui.Checkbox("Also refit hair that uses only part of its textures##quick-compression-refit", ref refit))
                 service.SetRefitHair(refit);
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Hair ported from The Sims 4 often keeps its strands in one corner of a texture several times their size.\n" +
+                ImGui.SetTooltip("Hair ported from other games often keeps its strands in one corner of a texture several times their size.\n" +
                                  "This moves the UVs of every model in the hair's mod that uses those textures onto that part, in every option\n" +
-                                 "and for every race, and cuts the textures down to it. What is drawn stays the same, pixel for pixel.\n" +
-                                 "It covers everything drawn with the hair shader, which also draws eyebrows, lashes, ears and tails.\n" +
-                                 "Hair is left as it is when the game's own models or materials, or another shader, could read the same files.");
+                                 "and for every race, and cuts the textures down to the active area. This never has a visual impact.\n" +
+                                 "It covers everything drawn with the hair shader, which also includes eyebrows, lashes, ears and tails.");
         }
         Widgets.HintWrapped(TextureCompressionViews.Status(service.Phase, service.Progress));
         if (service.Backups.LoadError.Length > 0)
@@ -106,7 +101,6 @@ public sealed partial class MainWindow
             if (_compressionDetails.Count > 0 && ImGui.IsItemHovered())
                 ImGui.SetTooltip(string.Join("\n", _compressionDetails));
         }
-        Widgets.MutedWrapped("An optimized file changes for every mod option, item and collection that uses it, like any edit to a mod's file.");
         if (CacheInTempFolder())
             Widgets.HintWrapped("The cache folder is inside Windows' temporary folder, which cleanup tools can empty. " +
                                 "To keep the backups safe, choose another cache folder in Settings.");
@@ -167,7 +161,7 @@ public sealed partial class MainWindow
                 service.OptimizeNow();
             }
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-                ImGui.SetTooltip("Optimize your character's textures now, including restored ones.");
+                ImGui.SetTooltip("Optimize all loaded textures of your current appearance.");
             if (!backups)
                 return;
             ImGui.SameLine();

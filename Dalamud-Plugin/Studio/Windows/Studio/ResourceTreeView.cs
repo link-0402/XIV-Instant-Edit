@@ -746,8 +746,9 @@ internal sealed class ResourceTreeView
     internal static string FormatSize(long bytes) => bytes switch
     {
         < 1024        => $"{bytes} B",
-        < 1024 * 1024 => $"{bytes / 1024.0:0.#} KiB",
-        _             => $"{bytes / (1024.0 * 1024.0):0.#} MiB",
+        < 1024 * 1024        => $"{bytes / 1024.0:0.#} KiB",
+        < 1024L * 1024 * 1024 => $"{bytes / (1024.0 * 1024.0):0.#} MiB",
+        _                    => $"{bytes / (1024.0 * 1024.0 * 1024.0):0.##} GiB",
     };
 
     private Action<float>? NodeThumb(ResourceNode node)
