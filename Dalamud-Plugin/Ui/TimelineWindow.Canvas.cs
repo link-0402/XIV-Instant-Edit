@@ -28,6 +28,7 @@ public sealed partial class TimelineWindow
     private static readonly string LockGlyph = FontAwesomeIcon.Lock.ToIconString();
     // A face from the timeline's expression library.
     private static readonly string PackGlyph = FontAwesomeIcon.Book.ToIconString();
+    private static readonly string PinGlyph = FontAwesomeIcon.Thumbtack.ToIconString();
     // Offset, amplitude and pose layers.
     private static readonly FontAwesomeIcon[] LayerIcons = [FontAwesomeIcon.Bone, FontAwesomeIcon.WaveSquare, FontAwesomeIcon.StreetView];
     private static readonly string[] LayerGlyphs = [.. LayerIcons.Select(icon => icon.ToIconString())];
@@ -455,8 +456,42 @@ public sealed partial class TimelineWindow
             if (end < first || ev.Start > last)
                 continue;
             DrawEvent(drawList, current, ev, labels[index], end, geometry, view, trackLeft, top + pad, top + geometry.Row - pad,
-                hotKey != null && string.Equals(ev.Key, hotKey, StringComparison.Ordinal));
+                hotKey != null && string.Equals(ev.Key, hotKey, StringComparison.Ordinal), SoundMarkOf(doc, ev));
         }
+    }
+
+    /// <summary>
+    /// What a sound clip shows besides its bar: the frame its solid part ends at (int.MaxValue while
+    /// its file is read), a pin, its file's changes, and something to check (a sound that ends before
+    /// its audio, or Keep looping on a file that plays once).
+    /// </summary>
+    private readonly record struct SoundMark(int SolidEnd, bool Pinned, bool Changed, bool Check);
+
+    private SoundMark? SoundMarkOf(TimelineDocument doc, TimelineEvent ev)
+    {
+        if (ev.Magic != "C063" || TimelineSoundKey.Of(ev) is not { } key)
+            return null;
+        var pinned = ev.Pin != null;
+        var changed = doc.SoundEdits.ContainsKey(key);
+        if (ShownIfRead(doc, key) is not { Seconds.IsEmpty: false } shown)
+            return pinned || changed ? new SoundMark(int.MaxValue, pinned, changed, false) : null;
+        var span = TimelineWindowViews.SoundSpan(shown.Seconds, ev.Pin is { } pin && shown.Ids.IndexOf(pin) is >= 0 and var index ? index : null);
+        var loop = ev.Values?.GetValueOrDefault("Loop", 1) ?? 1;
+        return new SoundMark(ev.Start + span.Solid, pinned, changed, shown.EndsEarly || loop == -1 && !shown.Loops);
+    }
+
+    /// <summary> A dashed outline: what a random sound may still play after its shortest alternative ends. </summary>
+    private static void DashedOutline(ImDrawListPtr drawList, float x0, float y0, float x1, float y1, uint colour, float thickness)
+    {
+        var dash = Theme.Scaled(4);
+        var gap = Theme.Scaled(3);
+        for (var x = x0; x < x1; x += dash + gap)
+        {
+            var end = Math.Min(x + dash, x1);
+            drawList.AddLine(new Vector2(x, y0), new Vector2(end, y0), colour, thickness);
+            drawList.AddLine(new Vector2(x, y1), new Vector2(end, y1), colour, thickness);
+        }
+        drawList.AddLine(new Vector2(x1, y0), new Vector2(x1, y1), colour, thickness);
     }
 
     /// <summary>
@@ -468,11 +503,13 @@ public sealed partial class TimelineWindow
 
     /// <summary>
     /// One event: a clip is a filled bar over its duration, a marker a diamond on its frame, and a
-    /// sound also shows how long its file plays. Selected events get an accent outline, locked ones
-    /// are dimmed with a lock, conditional ones a small dot.
+    /// sound also shows how long its file plays: solid to its shortest alternative, dashed to its
+    /// longest. Selected events get an accent outline, locked ones are dimmed with a lock, pinned
+    /// sounds get a pin, conditional ones a small dot, a changed look or sound an accent dot and a
+    /// sound with something to check an amber one.
     /// </summary>
     private static void DrawEvent(ImDrawListPtr drawList, TimelineEditor current, TimelineEvent ev, string label, int end,
-        TimelineGeometry geometry, TimelineView view, float trackLeft, float y0, float y1, bool hot)
+        TimelineGeometry geometry, TimelineView view, float trackLeft, float y0, float y1, bool hot, SoundMark? sound = null)
     {
         var (left, right) = geometry.EventSpan(ev, end, view);
         var x0 = trackLeft + left;
@@ -503,9 +540,14 @@ public sealed partial class TimelineWindow
         {
             var centre = trackLeft + view.X(ev.Start);
             var half = Math.Min((y1 - y0) / 2, Theme.Scaled(7));
-            if (x1 > centre + half + 1)
-                drawList.AddRectFilled(new Vector2(centre, middle - half * .6f), new Vector2(x1, middle + half * .6f),
+            // A random sound is solid while every alternative plays, dashed while only the longer ones do.
+            var solid = sound is { SolidEnd: var solidEnd and < int.MaxValue } ? Math.Clamp(trackLeft + view.X(solidEnd), centre, x1) : x1;
+            if (solid > centre + half + 1)
+                drawList.AddRectFilled(new Vector2(centre, middle - half * .6f), new Vector2(solid, middle + half * .6f),
                     U32(Theme.WithAlpha(colour, hot ? .32f : .22f)), rounding);
+            if (x1 > solid + 1)
+                DashedOutline(drawList, Math.Max(solid, centre + half), middle - half * .6f, x1, middle + half * .6f,
+                    U32(Theme.WithAlpha(colour, hot ? .7f : .5f)), line);
             if (selected)
             {
                 var ring = half + Theme.Scaled(2);
@@ -528,17 +570,30 @@ public sealed partial class TimelineWindow
             drawList.AddText(UiBuilder.IconFont, fontSize * .8f, new Vector2(labelLeft, middle - fontSize * .4f), U32(Theme.Text), PackGlyph);
             labelLeft += fontSize;
         }
+        if (sound is { Pinned: true } && labelRight - labelLeft > Theme.Scaled(14))
+        {
+            drawList.AddText(UiBuilder.IconFont, fontSize * .8f, new Vector2(labelLeft, middle - fontSize * .4f), U32(Theme.Text), PinGlyph);
+            labelLeft += fontSize;
+        }
         if (labelRight - labelLeft > Theme.Scaled(18))
         {
             drawList.PushClipRect(new Vector2(labelLeft, y0), new Vector2(labelRight, y1), true);
             drawList.AddText(new Vector2(labelLeft, middle - fontSize / 2), U32(locked ? Theme.Muted : Theme.Text), label);
             drawList.PopClipRect();
         }
+        var dot = badgeX;
         if (ev.Conditional)
-            drawList.AddCircleFilled(new Vector2(badgeX, y0 + Theme.Scaled(3)), Theme.Scaled(2.5f), U32(Theme.Info));
-        if (ev.Look != null)
-            drawList.AddCircleFilled(new Vector2(badgeX - (ev.Conditional ? Theme.Scaled(7) : 0), y0 + Theme.Scaled(3)), Theme.Scaled(2.5f),
-                U32(Theme.Accent));
+        {
+            drawList.AddCircleFilled(new Vector2(dot, y0 + Theme.Scaled(3)), Theme.Scaled(2.5f), U32(Theme.Info));
+            dot -= Theme.Scaled(7);
+        }
+        if (ev.Look != null || sound is { Changed: true })
+        {
+            drawList.AddCircleFilled(new Vector2(dot, y0 + Theme.Scaled(3)), Theme.Scaled(2.5f), U32(Theme.Accent));
+            dot -= Theme.Scaled(7);
+        }
+        if (sound is { Check: true })
+            drawList.AddCircleFilled(new Vector2(dot, y0 + Theme.Scaled(3)), Theme.Scaled(2.5f), U32(Theme.Warning));
     }
 
     /// <summary>

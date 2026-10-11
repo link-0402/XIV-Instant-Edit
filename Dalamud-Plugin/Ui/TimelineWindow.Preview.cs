@@ -212,21 +212,26 @@ public sealed partial class TimelineWindow
         var target = Fresh(loaded);
         var clip = target.Clip;
         TimelineDocument rest, shown;
-        ImmutableDictionary<string, byte[]> added, lookFiles;
+        ImmutableDictionary<string, byte[]> added, lookFiles, soundFiles;
         ImmutableDictionary<string, TimelineEffectEdit> looks;
         try
         {
-            if (LookMissing(document) is { } missing)
+            if ((LookMissing(document) ?? SoundMissing(document)) is { } missing)
                 throw new InvalidDataException(missing);
             // Effect looks point the effect's own path at an edited copy: the game may keep playing the clip's
             // loaded file, which names that path, and later look changes then show without building again.
             (rest, looks) = TimelineEffectLooks.Redirectable(document);
             lookFiles = TimelineEffectLooks.Redirected(looks, EffectBytes);
+            // So do changes to a sound file with one sound; pins and other sound changes play from copies.
+            (rest, soundFiles) = TimelineSoundEdits.Redirectable(rest, SoundBytes, ImportBytes);
             // Looks that differ between events of one effect play from copies, as a save writes them.
             (shown, var used) = WithLooks(rest);
+            var sounds = WithSounds(shown, _ => TimelineSoundRoute.Copy, path => soundFiles.GetValueOrDefault(path) ?? SoundBytes(path));
+            shown = sounds.Document;
+            used.AddRange(sounds.Copies);
             added = TimelineWindowViews.AddedFiles(shown, used);
         }
-        catch (InvalidDataException e)
+        catch (Exception e) when (e is InvalidDataException or ArgumentException)
         {
             previewError = e.Message;
             return;
@@ -243,7 +248,7 @@ public sealed partial class TimelineWindow
         animations!.PreviewTimeline(target, shown, async (built, token) =>
         {
             var baseFiles = added.SetItem(built.GamePath, built.Bytes);
-            await preview.ShowAsync(index, baseFiles.SetItems(lookFiles), token);
+            await preview.ShowAsync(index, baseFiles.SetItems(lookFiles).SetItems(soundFiles), token);
             if (generation != previewGeneration)
             {
                 // Stopped or replaced while it was being built: take it down again.
@@ -261,6 +266,7 @@ public sealed partial class TimelineWindow
                     return false;
                 previewBaseFiles = baseFiles;
                 shownLooks = looks;
+                shownSounds = soundFiles;
                 previewFingerprint = built.BindingFingerprint;
                 previewTimeline = clip.Timeline;
                 previewFace = target.Standalone;
