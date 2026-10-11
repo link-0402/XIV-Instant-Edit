@@ -276,10 +276,10 @@ internal static class ReviewFixSimsScenarios
 
     // ── Fixtures ────────────────────────────────────────────────────────────
 
-    private sealed record Res(uint Type, ulong Instance, byte[] Data, uint? MemSize = null, ushort Compression = 0);
+    internal sealed record Res(uint Type, ulong Instance, byte[] Data, uint? MemSize = null, ushort Compression = 0);
 
     /// <summary>A DBPF 2.1 package with no constant key parts; entries with a compression type get the compressed flag.</summary>
-    private static void WritePackage(string path, params Res[] resources)
+    internal static void WritePackage(string path, params Res[] resources)
     {
         using var ms = new MemoryStream();
         using var bw = new BinaryWriter(ms);
@@ -346,7 +346,7 @@ internal static class ReviewFixSimsScenarios
     }
 
     /// <summary>A 32-bit BGRA DDS of <paramref name="pixels"/> pixels, each 0x40302010 (B 10, G 20, R 30, A 40).</summary>
-    private static byte[] UncompressedDds(int width, int height, int pixels)
+    internal static byte[] UncompressedDds(int width, int height, int pixels)
     {
         using var ms = new MemoryStream();
         using var bw = new BinaryWriter(ms);

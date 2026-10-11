@@ -265,6 +265,13 @@ public class LedgerFile
     /// </summary>
     public bool EditedElsewhere { get; set; }
 
+    /// <summary>
+    /// The file was written, but meta.json could not be pointed at it then (it couldn't be read or
+    /// saved): the next update points the entry at it, even when the file itself has nothing new.
+    /// </summary>
+    [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+    public bool EntryNotPointed { get; set; }
+
     /// <summary>For a material made here: its shader and the texture of each role, so changes made here can be carried over onto a copy edited elsewhere.</summary>
     public LedgerMaterial? Material { get; set; }
 

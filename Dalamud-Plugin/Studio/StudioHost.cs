@@ -165,10 +165,23 @@ internal sealed class StudioHost : IDisposable
 
         Configuration.TouchRecent(editor.Project.FolderPath);
         Configuration.Save();
-        var window = new ModWindow(this, editor, Thumbnails, CascadePosition());
+        var window = new ModWindow(this, editor, Thumbnails, CascadePosition(), FreeWindowId(editor.Project.FolderPath));
         _open[folder] = window;
         _toAdd.Add(window);
         return true;
+    }
+
+    /// <summary>
+    /// A window id for a mod opened from <paramref name="folder"/>: the folder itself, or with a number
+    /// added while a window renamed away from that folder (by Penumbra) still uses it.
+    /// </summary>
+    private string FreeWindowId(string folder)
+    {
+        var used = _open.Values.Concat(_toAdd).Select(w => w.WindowId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var id = folder;
+        for (int n = 2; used.Contains(id); n++)
+            id = $"{folder}#{n}";
+        return id;
     }
 
     /// <summary>Whether a mod folder is open in a window.</summary>
@@ -214,26 +227,29 @@ internal sealed class StudioHost : IDisposable
     // Penumbra's events (from the library)
     // ─────────────────────────────────────────────────────────────────────────
 
-    public void OnModDeleted(string folderName)
+    /// <summary>
+    /// Penumbra deleted the mod <paramref name="folderName"/> in its mod directory <paramref name="modRoot"/>.
+    /// Only a window of that very folder closes: a folder of the same name opened from elsewhere stays.
+    /// </summary>
+    public void OnModDeleted(string? modRoot, string folderName)
     {
-        foreach (var window in _open.Values.Where(w => SameFolderName(w.Editor.Project.FolderName, folderName)).ToList())
+        foreach (var window in _open.Values.Where(w => ModLibrary.IsModFolder(w.Editor.Project.FolderPath, modRoot, folderName)).ToList())
         {
             window.Editor.OnDeleted();
             window.IsOpen = false;
         }
     }
 
-    public void OnModMoved(string from, string to)
+    /// <summary>Penumbra renamed the mod folder <paramref name="from"/> in <paramref name="modRoot"/> to <paramref name="to"/>.</summary>
+    public void OnModMoved(string? modRoot, string from, string to)
     {
-        foreach (var (key, window) in _open.Where(p => SameFolderName(p.Value.Editor.Project.FolderName, from)).ToList())
+        foreach (var (key, window) in _open.Where(p => ModLibrary.IsModFolder(p.Value.Editor.Project.FolderPath, modRoot, from)).ToList())
         {
             window.Editor.OnMoved(to);
             _open.Remove(key);
             _open[Key(window.Editor.Project.FolderPath) ?? window.Editor.Project.FolderPath] = window;
         }
     }
-
-    private static bool SameFolderName(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
     // ─────────────────────────────────────────────────────────────────────────
     // Frame
@@ -248,9 +264,24 @@ internal sealed class StudioHost : IDisposable
         Builds.Update();   // finishes a build even while the build window is closed
         Library.Update();  // Penumbra's mod events and the library listing
 
-        foreach (var window in _toAdd)
-            _windows.AddWindow(window);
-        _toAdd.Clear();
+        if (_toAdd.Count > 0)
+        {
+            // Taken off the list first: a window that can't be added must not stop every later frame here.
+            var adding = _toAdd.ToList();
+            _toAdd.Clear();
+            foreach (var window in adding)
+            {
+                try
+                {
+                    _windows.AddWindow(window);
+                }
+                catch (Exception ex)
+                {
+                    StudioServices.Log.Warning(ex, "[Studio] Could not show the window of {0}", window.Editor.Project.FolderPath);
+                    window.IsOpen = false;   // closed below like any other, so its editor still finishes
+                }
+            }
+        }
 
         foreach (var (key, window) in _open.ToList())
         {
@@ -258,7 +289,8 @@ internal sealed class StudioHost : IDisposable
             {
                 // Closed: the editor lets go of the mod, and finishes writing it after the window is gone.
                 _open.Remove(key);
-                _windows.RemoveWindow(window);
+                if (_windows.Windows.Contains(window))
+                    _windows.RemoveWindow(window);
                 window.Editor.Close();
                 _closing.Add(window.Editor);
                 // What was written into the mod shows in the library's filters from here on.

@@ -34,11 +34,13 @@ internal static class PortValidator
         if (!penumbraAvailable)
             issues.Add(new(Severity.Error, new Target(TargetKind.Build), "Penumbra is not available — the mod folder cannot be resolved."));
 
-        // Game path → the item that writes it first, to catch two items overwriting each other's files.
+        // Place and game path → the item that writes it first, to catch two items overwriting each
+        // other's files. Like the build, a file in one option and the same path in another are apart.
         var writtenBy = new Dictionary<string, PortItem>(StringComparer.OrdinalIgnoreCase);
+        var writtenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in session.Items)
-            ValidateItem(item, gameData, templates, models, images, writtenBy, issues);
-        ValidateSharedTextures(session, writtenBy, issues);
+            ValidateItem(session, item, gameData, templates, models, images, writtenBy, writtenPaths, issues);
+        ValidateSharedTextures(session, writtenPaths, issues);
         ValidatePlaces(session, issues);
 
         issues.Sort((a, b) => b.Severity.CompareTo(a.Severity));
@@ -91,8 +93,8 @@ internal static class PortValidator
         }
     }
 
-    private static void ValidateItem(PortItem item, GameDataService gameData, MaterialTemplates templates,
-        ModelFileCache models, ImageFileCache images, Dictionary<string, PortItem> writtenBy, List<PortIssue> issues)
+    private static void ValidateItem(PortSession session, PortItem item, GameDataService gameData, MaterialTemplates templates,
+        ModelFileCache models, ImageFileCache images, Dictionary<string, PortItem> writtenBy, HashSet<string> writtenPaths, List<PortIssue> issues)
     {
         var subject = item.Subject;
         var itemTarget = new Target(TargetKind.Item, item.Key);
@@ -116,8 +118,8 @@ internal static class PortValidator
         ValidateModels(item, gameData, models, issues);
         ValidateMeta(item, gameData, issues);
         ValidateMaterials(item, gameData, templates, images, issues);
-        ValidateWrittenMaterials(item, gameData, issues);
-        ValidateAcrossItems(item, writtenBy, issues);
+        ValidateWrittenMaterials(item, session, gameData, issues);
+        ValidateAcrossItems(item, WrittenFiles(session, item, gameData), writtenBy, writtenPaths, issues);
     }
 
     private static void ValidateModels(PortItem item, GameDataService gameData, ModelFileCache models, List<PortIssue> issues)
@@ -397,7 +399,7 @@ internal static class PortValidator
     }
 
     /// <summary>The .mtrl files an item writes: one per material, and per race copy for hair.</summary>
-    private static void ValidateWrittenMaterials(PortItem item, GameDataService gameData, List<PortIssue> issues)
+    private static void ValidateWrittenMaterials(PortItem item, PortSession session, GameDataService gameData, List<PortIssue> issues)
     {
         var subject = item.Subject;
         var races = gameData.MaterialRaces(subject, item.Models);
@@ -426,11 +428,12 @@ internal static class PortValidator
             if (string.IsNullOrWhiteSpace(name))
                 continue;   // reported by ValidateMaterials
             var target = new Target(TargetKind.Material, item.Key, m);
+            var place = session.PlaceOf(item, item.Materials[m]);
 
-            // Each race copy of each material must land on its own file.
+            // Each race copy of each material must land on its own file (in the option it goes into).
             foreach (var race in races)
             {
-                var path = subject.MaterialGamePath(subject.MaterialNameFor(name, race), race);
+                var path = WrittenKey(place, subject.MaterialGamePath(subject.MaterialNameFor(name, race), race));
                 if (byPath.TryGetValue(path, out var first) && first != m)
                 {
                     issues.Add(new(Severity.Error, target,
@@ -442,41 +445,69 @@ internal static class PortValidator
         }
     }
 
-    /// <summary>Two items in the pack writing the same file (e.g. two gear items sharing a model id) overwrite each other.</summary>
-    private static void ValidateAcrossItems(PortItem item, Dictionary<string, PortItem> writtenBy, List<PortIssue> issues)
+    /// <summary>
+    /// The files an item writes, each with the place it goes into, as the build places them: a
+    /// model, material or texture into its own place (else the item's), and a slot of variants into
+    /// its variant group. Materials go under the races the build writes them for (the shared race of
+    /// a feature, see <see cref="GameDataService.MaterialRaces"/>).
+    /// </summary>
+    private static List<(string Place, string Path, Target Target)> WrittenFiles(PortSession session, PortItem item, GameDataService gameData)
     {
         var subject = item.Subject;
-        var paths = new List<(string Path, Target Target)>();
+        var files = new List<(string Place, string Path, Target Target)>();
 
         for (int i = 0; i < item.Models.Count; i++)
-            paths.Add((subject.ModelGamePath(item.Models[i].RaceGender), new Target(TargetKind.Model, item.Key, i)));
+        {
+            var model = item.Models[i];
+            var place = model.UseVariants && !model.UseDummy ? VariantPlace(session.VariantGroupOf(model), item) : session.PlaceOf(item, model);
+            files.Add((place, subject.ModelGamePath(model.RaceGender), new Target(TargetKind.Model, item.Key, i)));
+        }
 
-        var races = subject.MaterialRaces(item.Models);
+        var races = gameData.MaterialRaces(subject, item.Models);
         for (int m = 0; m < item.Materials.Count; m++)
         {
             var mat = item.Materials[m];
             if (string.IsNullOrWhiteSpace(mat.Name)) continue;
+            var materialPlace = session.PlaceOf(item, mat);
             foreach (var race in races)
-                paths.Add((subject.MaterialGamePath(subject.MaterialNameFor(mat.Name, race), race), new Target(TargetKind.Material, item.Key, m)));
+                files.Add((materialPlace, subject.MaterialGamePath(subject.MaterialNameFor(mat.Name, race), race), new Target(TargetKind.Material, item.Key, m)));
             for (int t = 0; t < mat.Textures.Count; t++)
             {
-                if (mat.Textures[t].IsShared) continue;   // points at another material's file, writes nothing
-                paths.Add((subject.TextureGamePath(MaterialNaming.ComposeTextureName(mat.Name, mat.Textures[t].Postfix)),
+                var tex = mat.Textures[t];
+                if (tex.IsShared) continue;   // points at another material's file, writes nothing
+                var place = tex.UseVariants && !tex.UseWhiteDummy ? VariantPlace(session.VariantGroupOf(tex), item) : session.PlaceOf(item, mat, tex);
+                files.Add((place, subject.TextureGamePath(MaterialNaming.ComposeTextureName(mat.Name, tex.Postfix)),
                     new Target(TargetKind.Texture, item.Key, m, t)));
             }
         }
+        return files;
+    }
 
+    /// <summary>Variant files go into the options of their group: two slots filling one group share those options.</summary>
+    private static string VariantPlace(PackGroup? group, PortItem item)
+        => group != null ? $"variants:{group.Id}" : $"variants:item:{item.Key}";
+
+    /// <summary>A file's key: its place and its game path, the way the build tells files apart.</summary>
+    internal static string WrittenKey(string place, string gamePath) => $"{place}|{gamePath}";
+
+    /// <summary>Two items in the pack writing the same file into the same place (e.g. two gear items sharing a model id) overwrite each other.</summary>
+    internal static void ValidateAcrossItems(PortItem item, IReadOnlyList<(string Place, string Path, Target Target)> files,
+        Dictionary<string, PortItem> writtenBy, HashSet<string> writtenPaths, List<PortIssue> issues)
+    {
+        var subject = item.Subject;
         var reported = new HashSet<Target>();
-        foreach (var (path, target) in paths)
+        foreach (var (place, path, target) in files)
         {
-            if (writtenBy.TryGetValue(path, out var owner))
+            writtenPaths.Add(path);
+            var key = WrittenKey(place, path);
+            if (writtenBy.TryGetValue(key, out var owner))
             {
                 if (owner != item && reported.Add(target))
                     issues.Add(new(Severity.Error, target,
                         $"{subject.DisplayName} and {owner.Subject.DisplayName} both write {path} — one overwrites the other."));
                 continue;
             }
-            writtenBy[path] = item;
+            writtenBy[key] = item;
         }
     }
 
@@ -488,7 +519,7 @@ internal static class PortValidator
     /// A shared texture only points at a game path; something in the pack must still write it,
     /// or the material falls back to whatever the game has there (usually nothing).
     /// </summary>
-    private static void ValidateSharedTextures(PortSession session, Dictionary<string, PortItem> writtenBy, List<PortIssue> issues)
+    private static void ValidateSharedTextures(PortSession session, HashSet<string> writtenPaths, List<PortIssue> issues)
     {
         foreach (var item in session.Items)
         {
@@ -498,7 +529,7 @@ internal static class PortValidator
                 for (int t = 0; t < mat.Textures.Count; t++)
                 {
                     var tex = mat.Textures[t];
-                    if (!tex.IsShared || writtenBy.ContainsKey(tex.SharedGamePath)) continue;
+                    if (!tex.IsShared || writtenPaths.Contains(tex.SharedGamePath)) continue;
                     issues.Add(new(Severity.Warning, new Target(TargetKind.Texture, item.Key, m, t),
                         $"{mat.Name} / {TextureTypeInfo.DisplayName(tex.Type)}: shares {tex.SharedGamePath}, but nothing in this modpack writes it " +
                         "(was the original renamed or removed?) — make it separate, or copy the material again."));

@@ -177,6 +177,7 @@ try
     ReviewFixBuildScenarios.Run(testRoot);
     ReviewFixSimsScenarios.Run(testRoot);
     ReviewFixEditingScenarios.Run(testRoot);
+    ReviewFixLowsScenarios.Run(testRoot);
     ModCheckScenarios.RunReviewFixes(testRoot);
     ModCleanUpScenarios.RunReviewFixes(testRoot);
     ModCheckScenarios.RunMinors(testRoot);

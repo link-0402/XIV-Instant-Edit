@@ -989,19 +989,25 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
     /// <summary>
     /// Takes a file out of an option of the mod right away (its meta.json entry; the file itself stays
     /// in the folder unless <paramref name="deleteFile"/> and nothing else uses it). Penumbra reads the
-    /// mod again afterwards.
+    /// mod again afterwards. <paramref name="expectedRel"/> is the file the user was asked about: meta.json
+    /// is read again first, and when the entry points somewhere else by then (an option moved up in
+    /// Penumbra, say), nothing is removed or deleted.
     /// </summary>
-    public bool RemoveModFile(string gamePath, OptionRef option, bool deleteFile)
+    public bool RemoveModFile(string gamePath, OptionRef option, bool deleteFile, string expectedRel)
     {
         if (Project is not { } project)
             return false;
 
         string? removedRel = null;
-        if (!TryEditStructure(project, meta =>
-            {
-                if (meta.TryGetFile(option, gamePath, out var rel) && meta.RemoveFile(option, gamePath))
-                    removedRel = rel;
-            }) || removedRel == null)
+        bool changed = false;
+        if (!TryEditStructure(project, meta => removedRel = RemoveFileIfStill(meta, option, gamePath, expectedRel, out changed)))
+            return false;
+        if (changed)
+        {
+            Notify($"{Path.GetFileName(gamePath)} was changed in the mod since you asked, so nothing was removed. Look again and remove it then.", Severity.Warning);
+            return false;
+        }
+        if (removedRel == null)
             return false;
 
         ClearReplacement(gamePath, option);
@@ -1011,6 +1017,24 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
                 (_, ex) => Notify($"The entry was removed, but the file could not be deleted: {ex.Message}", Severity.Warning));
         Revision++;
         return true;
+    }
+
+    /// <summary>
+    /// Takes the entry <paramref name="option"/> / <paramref name="gamePath"/> out of <paramref name="meta"/>
+    /// when it still points at <paramref name="expectedRel"/>; returns the file it pointed at, or null.
+    /// <paramref name="changed"/> says it points at another file now (left as it is).
+    /// </summary>
+    internal static string? RemoveFileIfStill(PenumbraModMeta meta, OptionRef option, string gamePath, string expectedRel, out bool changed)
+    {
+        changed = false;
+        if (!meta.TryGetFile(option, gamePath, out var rel))
+            return null;
+        if (!PathNormalizer.SameRel(rel, expectedRel))
+        {
+            changed = true;
+            return null;
+        }
+        return meta.RemoveFile(option, gamePath) ? rel : null;
     }
 
     // ─────────────────────────────────────────────────────────────────────────

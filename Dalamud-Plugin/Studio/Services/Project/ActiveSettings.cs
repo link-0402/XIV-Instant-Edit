@@ -84,23 +84,27 @@ internal sealed class ActiveSettings
     }
 
     /// <summary>Penumbra names groups and options by name; the editor by id (a Combining group by container).</summary>
-    private static HashSet<OptionRef> Map(PenumbraModMeta meta, Dictionary<string, List<string>> picked)
+    internal static HashSet<OptionRef> Map(PenumbraModMeta meta, Dictionary<string, List<string>> picked)
     {
         var result = new HashSet<OptionRef>();
         foreach (var group in meta.Groups)
         {
-            if (!picked.TryGetValue(group.Name, out var names) || names.Count == 0)
-                continue;
+            picked.TryGetValue(group.Name, out var names);
 
+            // A Combining group always applies one container: the one of the picked options, or the
+            // first ("c#0") when nothing is picked.
             if (group.Type == ModGroupType.Combining)
             {
                 int mask = 0;
-                for (int i = 0; i < group.Options.Count && i < 31; i++)
+                for (int i = 0; names != null && i < group.Options.Count && i < 31; i++)
                     if (names.Contains(group.Options[i].Name, StringComparer.Ordinal))
                         mask |= 1 << i;
                 result.Add(new OptionRef(group.Id, $"c#{mask}"));
                 continue;
             }
+
+            if (names == null || names.Count == 0)
+                continue;
 
             foreach (var option in group.Options.Where(o => names.Contains(o.Name, StringComparer.Ordinal)))
                 result.Add(option.Ref);

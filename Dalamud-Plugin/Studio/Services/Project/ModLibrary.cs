@@ -57,7 +57,8 @@ internal sealed class ModLibrary : IDisposable
     private bool _listingStale = true;
     private readonly Dictionary<string, string> _changedItems = new(StringComparer.OrdinalIgnoreCase);
 
-    private DateTime? _installRequested;
+    /// <summary>Packages handed to Penumbra to import, waiting for the mod each one becomes.</summary>
+    private readonly List<PendingImport> _imports = new();
 
     public ModLibrary(StudioHost host)
     {
@@ -121,7 +122,15 @@ internal sealed class ModLibrary : IDisposable
     }
 
     /// <summary>Waiting for Penumbra to finish importing a package, which then opens.</summary>
-    public bool IsInstalling => _installRequested is { } at && DateTime.UtcNow - at < InstallWait;
+    public bool IsInstalling
+    {
+        get
+        {
+            var now = DateTime.UtcNow;
+            _imports.RemoveAll(i => now - i.Requested >= InstallWait);
+            return _imports.Count > 0;
+        }
+    }
 
     /// <summary>The listing is out of date: a mod was added (a copy, say) or Penumbra's folder changed.</summary>
     public void MarkStale() => _listingStale = true;
@@ -159,8 +168,74 @@ internal sealed class ModLibrary : IDisposable
             return false;
         }
 
-        _installRequested = DateTime.UtcNow;
+        // Penumbra only queued it: the import may still fail, and other mods can be added meanwhile.
+        // So the mod that opens is the one that matches this package, not just the next one added.
+        _imports.Add(new PendingImport(Path.GetFileNameWithoutExtension(packagePath), PackageModName(packagePath), DateTime.UtcNow));
         return true;
+    }
+
+    /// <summary>A package handed to Penumbra: its file name, the mod name it carries (when it could be read), and when.</summary>
+    internal sealed record PendingImport(string FileStem, string? ModName, DateTime Requested);
+
+    /// <summary>
+    /// The mod name inside a package (a .pmp's meta.json, a .ttmp2's TTMPL.mpl), which Penumbra names
+    /// the imported mod and its folder after. Null when the package has none or can't be read.
+    /// </summary>
+    internal static string? PackageModName(string packagePath)
+    {
+        try
+        {
+            using var zip = System.IO.Compression.ZipFile.OpenRead(packagePath);
+            foreach (var entryName in new[] { PenumbraModMeta.FileName, "TTMPL.mpl" })
+            {
+                var entry = zip.Entries.FirstOrDefault(e => string.Equals(e.FullName, entryName, StringComparison.OrdinalIgnoreCase));
+                if (entry == null || entry.Length > 4 * 1024 * 1024)
+                    continue;
+                using var reader = new JsonTextReader(new StreamReader(entry.Open())) { DateParseHandling = DateParseHandling.None };
+                if (!reader.Read() || reader.TokenType != JsonToken.StartObject)
+                    continue;
+                while (reader.Read() && reader.TokenType == JsonToken.PropertyName)
+                {
+                    var key = (string?)reader.Value;
+                    if (!reader.Read())
+                        break;
+                    if (key == "Name" && reader.TokenType == JsonToken.String && reader.Value is string name && !string.IsNullOrWhiteSpace(name))
+                        return name;
+                    reader.Skip();
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Not a zip (an old .ttmp, say), or damaged: Penumbra says so itself; the file name is matched instead.
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Whether a mod Penumbra just added (<paramref name="folderName"/>, named <paramref name="modName"/>
+    /// in its meta.json) is the one <paramref name="import"/> asked for. Names are compared on their
+    /// letters and digits only, as Penumbra drops characters a folder can't have and numbers repeats ("Name (2)").
+    /// </summary>
+    internal static bool MatchesImport(PendingImport import, string folderName, string? modName)
+    {
+        var folder = Letters(folderName);
+        var name   = Letters(modName);
+        foreach (var expected in new[] { Letters(import.ModName), Letters(import.FileStem) })
+        {
+            if (expected.Length == 0)
+                continue;
+            if (expected == name || expected == folder)
+                return true;
+            // A folder Penumbra numbered because the name was taken: "Name (2)".
+            if (folder.StartsWith(expected, StringComparison.Ordinal) && folder.Length > expected.Length
+                && folder.AsSpan(expected.Length).IndexOfAnyExceptInRange('0', '9') < 0)
+                return true;
+        }
+        return false;
+
+        static string Letters(string? text)
+            => text == null ? string.Empty : new string(text.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -174,17 +249,24 @@ internal sealed class ModLibrary : IDisposable
         if (!IsInstalling)
             return;
 
-        _installRequested = null;
         var root = _host.PenumbraIpc.GetModDirectory();
-        if (!string.IsNullOrEmpty(root))
-            _host.OpenMod(Path.Combine(root, folderName), out _);
+        if (string.IsNullOrEmpty(root))
+            return;
+        var folder = Path.Combine(root, folderName);
+        var name = Peek(root, folderName, folderName, default).Name;
+        // A mod added by anything else meanwhile (a copy, a build, an export) is not opened.
+        var import = _imports.FirstOrDefault(i => MatchesImport(i, folderName, name));
+        if (import == null)
+            return;
+        _imports.Remove(import);
+        _host.OpenMod(folder, out _);
     }
 
     private void OnModDeleted(string folderName)
     {
         _listingStale = true;
         Changed(folderName);
-        _host.OnModDeleted(folderName);
+        _host.OnModDeleted(_host.PenumbraIpc.GetModDirectory(), folderName);
     }
 
     private void OnModMoved(string from, string to)
@@ -192,7 +274,27 @@ internal sealed class ModLibrary : IDisposable
         _listingStale = true;
         Changed(from);
         Changed(to);
-        _host.OnModMoved(from, to);
+        _host.OnModMoved(_host.PenumbraIpc.GetModDirectory(), from, to);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="folderPath"/> is the mod <paramref name="folderName"/> of Penumbra's mod
+    /// directory <paramref name="modRoot"/>. Penumbra's events name a mod by its folder name only, and a
+    /// folder of the same name opened from elsewhere (a backup, an extracted pack) is not that mod.
+    /// </summary>
+    internal static bool IsModFolder(string folderPath, string? modRoot, string folderName)
+    {
+        if (string.IsNullOrWhiteSpace(modRoot) || string.IsNullOrWhiteSpace(folderName) || string.IsNullOrWhiteSpace(folderPath))
+            return false;
+        try
+        {
+            static string Full(string path) => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return string.Equals(Full(folderPath), Full(Path.Combine(modRoot, folderName)), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     /// <summary>A mod was added, removed, renamed or written into: the filters read it again, and the collections.</summary>

@@ -1412,7 +1412,7 @@ internal sealed class ResourceActions
         bool confirmed = ImGui.Button("Remove", new Vector2(Theme.S(110), 0));
         ImGui.PopStyleColor();
         bool removed = false;
-        if (confirmed && Wrote(() => removed = _session.RemoveModFile(remove.GamePath, remove.Option, _removeDeletes && !shared)))
+        if (confirmed && Wrote(() => removed = _session.RemoveModFile(remove.GamePath, remove.Option, _removeDeletes && !shared, remove.RelPath)))
         {
             if (removed)
                 _session.Notify($"Removed {Path.GetFileName(remove.GamePath)} from {project.Meta.OptionLabel(remove.Option)}.", Severity.Info);

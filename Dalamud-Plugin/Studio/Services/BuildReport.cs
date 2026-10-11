@@ -89,8 +89,13 @@ internal sealed class ItemBuildRequest
 internal sealed class BuildRequest
 {
     public required string ModRoot         { get; init; }
+
+    /// <summary>The mod's folder name (made safe for a folder, see <see cref="PortSession.SanitizeFolderName"/>).</summary>
     public required string ModName         { get; init; }
     public required string PluginDirectory { get; init; }
+
+    /// <summary>The mod's name as the user typed it, for meta.json. Empty means <see cref="ModName"/>.</summary>
+    public string DisplayName { get; init; } = string.Empty;
 
     /// <summary>The mod folder the build makes: one that does not exist yet.</summary>
     public string ModPath => System.IO.Path.Combine(ModRoot, ModName);

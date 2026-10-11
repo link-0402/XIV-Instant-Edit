@@ -139,6 +139,9 @@ internal sealed class ModEditor : IDisposable
         else if (_watcher.Failed && DateTime.UtcNow >= _nextPoll)
         {
             _nextPoll = DateTime.UtcNow + PollEvery;
+            // A watcher that stopped (a network share dropped, say) is started again when it can be;
+            // until then the files are looked at on this timer.
+            _watcher.Watch(project.FolderPath);
             Graphs.Refresh();
         }
     }
