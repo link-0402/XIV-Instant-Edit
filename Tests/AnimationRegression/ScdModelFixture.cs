@@ -8,6 +8,104 @@ internal static class ScdModelFixture
     {
         RoundTrip(check, reject);
         Values(check, reject);
+        Structure(check, reject);
+    }
+
+    private static void Structure(Action<bool, string> check, Action<Action, string> reject)
+    {
+        var m = ScdModel.Read(RandomSet(4));
+        ScdEdits.Remove(m, 0, 1);
+        ScdEdits.Compact(m);
+        check(m.Sounds[0].Entries.Count == 3 && m.Tracks.Count == 3 && m.Audio.Count == 3 && m.Audio.All(a => !a.Null && a.Codec != ScdCodec.Empty) &&
+              ScdEdits.Shares(m.Sounds[0]) is { Shares: [33, 33, 34] } && ScdFile.Read(m.Write()).Sounds[0].Tracks.Length == 3,
+            "Remove drops the entry, its track and audio and the empty slot, renumbers, and spreads the chances again");
+        reject(() =>
+        {
+            var one = ScdModel.Read(RandomSet(1));
+            ScdEdits.Remove(one, 0, 0);
+        }, "the last alternative can't be removed");
+        // Review focus 2: audio another sound, or another alternative, still plays survives.
+        var two = TwoSoundsSharingAudio();
+        ScdEdits.Remove(two, 0, 0);
+        ScdEdits.Compact(two);
+        check(two.Sounds[1].Entries[0].Audio is var a && a >= 0 && two.Audio[a].Seconds > 0 && ScdFile.Read(two.Write()).Sounds.Length == 2,
+            "audio another sound still plays survives Remove and Compact");
+        var twin = ScdModel.Read(RandomSet(3));
+        twin.Sounds[0].Entries[2] = twin.Sounds[0].Entries[2] with { Audio = twin.Sounds[0].Entries[1].Audio };
+        var twinSeconds = twin.Audio[twin.Sounds[0].Entries[1].Audio].Seconds;
+        ScdEdits.Remove(twin, 0, 1);
+        ScdEdits.Compact(twin);
+        check(twin.Audio[twin.Sounds[0].Entries[1].Audio].Seconds == twinSeconds, "audio another alternative still plays survives Remove and Compact");
+        var clip = ScdEdits.Clips(AudioFixture.Template())[0];
+        var added = ScdModel.Read(RandomSet(2));
+        ScdEdits.Add(added, 0, clip);
+        check(added.Sounds[0].Entries.Count == 3 && ScdEdits.Shares(added.Sounds[0]) is { Shares: [33, 33, 34] } &&
+              ScdEdits.Wait(added, added.Sounds[0].Entries[2].Track) == ScdEdits.AudioMilliseconds(added, added.Sounds[0].Entries[2].Audio) &&
+              added.Sounds[0].Entries[2].Track == added.Tracks.Count - 1,
+            "Add appends a cloned track waiting the clip's length and an even share");
+        var withNothing = ScdModel.Read(RandomSet(2));
+        ScdEdits.SetShares(withNothing.Sounds[0], [40, 40]);
+        ScdEdits.Add(withNothing, 0, clip);
+        check(ScdEdits.Shares(withNothing.Sounds[0]) is { Shares: [23, 23, 34], Nothing: 20 }, "Add keeps the share that plays nothing");
+        var replaced = ScdModel.Read(RandomSet(3));
+        var before = replaced.Sounds[0].Entries[1];
+        ScdEdits.Replace(replaced, 0, 1, clip);
+        check(replaced.Sounds[0].Entries[1].Track == before.Track && replaced.Sounds[0].Entries[1].Limit == before.Limit &&
+              ScdEdits.Wait(replaced, before.Track) == ScdEdits.AudioMilliseconds(replaced, replaced.Sounds[0].Entries[1].Audio), "Replace keeps track and chance, matches the wait");
+        var sharedReplace = ScdModel.Read(RandomSet(4, sharedTrack: true));
+        var sharedWait = ScdEdits.Wait(sharedReplace, sharedReplace.Sounds[0].Entries[2].Track);
+        ScdEdits.Replace(sharedReplace, 0, 3, clip);
+        check(ScdEdits.Wait(sharedReplace, sharedReplace.Sounds[0].Entries[2].Track) == sharedWait, "Replace on a shared track leaves the other alternative's wait alone");
+        var single = ScdModel.Read(AudioFixture.Template());
+        ScdEdits.ToRandom(single.Sounds[0]);
+        ScdEdits.Add(single, 0, clip);
+        check(single.Sounds[0] is { Type: 12, Entries.Count: 2 } && ScdEdits.Shares(single.Sounds[0]) is { Shares: [50, 50] } &&
+              ScdFile.Read(single.Write()).Sounds[0].Tracks.Length == 2, "a one-shot becomes a 50/50 random set");
+        reject(() => ScdEdits.ToRandom(ScdModel.Read(RandomSet(2)).Sounds[0]), "only a one-shot becomes a random set");
+        reject(() => ScdEdits.Add(ScdModel.Read(AudioFixture.Template()), 0, clip), "a one-shot takes no second sound until it is a random set");
+        var only = ScdEdits.KeepOnly(ScdModel.Read(RandomSet(3)), 0, 2);
+        check(only.Sounds.Count == 1 && only.Sounds[0].Entries is [{ Limit: 100, Order: 0 }] && only.Audio.Count == 1 && only.Tracks.Count == 1 &&
+              only.MaxRange(0) == MaxRange && only.Sounds[0].PlayLength == ScdEdits.AudioMilliseconds(only, 0),
+            "KeepOnly leaves one sound with one alternative at 100%");
+        var kept = ScdEdits.KeepSound(TwoSoundsSharingAudio(), 1);
+        check(kept.Sounds.Count == 1 && kept.Sounds[0].Type == 1 && ScdFile.Read(kept.Write()).Sounds.Length == 1, "KeepSound keeps one sound as sound 0");
+        check(ScdModel.Read(ScdModel.Read(RandomSet(3, vorbisLast: true)).Write()) is var v && v.Audio[^1].Codec == ScdCodec.Vorbis, "Vorbis audio survives edits");
+        var silent = ScdModel.Read(RandomSet(2));
+        silent.Sounds[0].Entries[1] = silent.Sounds[0].Entries[1] with { Audio = 1 };
+        reject(() => ScdEdits.Clips(silent.Write()), "a sound with an alternative that plays no audio gives no clips");
+        var inner = ScdModel.Read(RandomSet(2));
+        inner.Tracks[0].Commands.Insert(0, new ScdCommand(0x3C, new byte[4]));
+        reject(() => ScdEdits.KeepOnly(inner, 0, 0), "a track that plays another sound can't be cut out");
+        // 448 vanilla and library sounds of type 16 have no entries at all.
+        var empty = ScdModel.Read(RandomSet(2));
+        empty.Sounds[0].Entries.Clear();
+        check(new Action[] { () => ScdEdits.KeepOnly(empty, 0, 0), () => ScdEdits.Remove(ScdModel.Read(RandomSet(2)), 0, 5),
+                () => ScdEdits.SetWait(ScdModel.Read(RandomSet(2)), 0, 5, 100), () => ScdEdits.Replace(ScdModel.Read(RandomSet(2)), 0, -1, clip) }
+            .All(edit => Refuses<InvalidDataException>(edit)), "an alternative the sound doesn't have is refused in plain words");
+    }
+
+    private static bool Refuses<T>(Action action) where T : Exception
+    {
+        try { action(); }
+        catch (T) { return true; }
+        catch { return false; }
+        return false;
+    }
+
+    /// <summary>RandomSet(2) plus a second, Normal sound with its own layout and track, whose entry plays audio 0.</summary>
+    private static ScdModel TwoSoundsSharingAudio()
+    {
+        var m = ScdModel.Read(RandomSet(2));
+        var normal = m.Sounds[0].Clone();
+        normal.Type = ScdSound.Normal;
+        normal.Entries = [new ScdModelEntry(m.Tracks.Count, 0)];
+        normal.Trailing = [];
+        m.Sounds.Add(normal);
+        m.Layouts.Add(m.Layouts[0]!.ToArray());
+        var track = m.Tracks[0].Clone();
+        track.Trailing = [];
+        m.Tracks.Add(track);
+        return m;
     }
 
     private static void Values(Action<bool, string> check, Action<Action, string> reject)
