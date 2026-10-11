@@ -67,6 +67,7 @@ internal sealed class PenumbraModMeta
 {
     public const string FileName     = "meta.json";
     public const string BackupSuffix = ".instant-edit-backup";
+    public const string TempSuffix   = ".instant-edit-tmp";
 
     private const string DefaultDataKey = "DefaultData";
     private const string GroupsKey      = "Groups";
@@ -196,9 +197,23 @@ internal sealed class PenumbraModMeta
             Root["FileVersion"] = 4;
         SetOrInsert(Root, "LastWrite", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture), "Name");
 
-        var tmp = path + ".instant-edit-tmp";
-        File.WriteAllText(tmp, Serialize(), new UTF8Encoding(false));
-        File.Move(tmp, path, overwrite: true);
+        var tmp = path + TempSuffix;
+        try
+        {
+            File.WriteAllText(tmp, Serialize(), new UTF8Encoding(false));
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch (Exception)
+        {
+            // Locked, read-only or a full disk: no half-written copy is left in the mod folder.
+            try
+            {
+                if (File.Exists(tmp))
+                    File.Delete(tmp);
+            }
+            catch (Exception) { /* left behind; the next save writes over it */ }
+            throw;
+        }
 
         if (WasLegacy)
         {

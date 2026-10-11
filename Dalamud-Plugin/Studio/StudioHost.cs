@@ -153,6 +153,12 @@ internal sealed class StudioHost : IDisposable
             error = "Your last changes are still being written into it. Try again in a moment.";
             return false;
         }
+        // A build makes this folder from scratch; it is opened once the build is done.
+        if (Builds.IsWriting(folder))
+        {
+            error = "It is still being built. Try again when the build is done.";
+            return false;
+        }
 
         if (ModEditor.TryOpen(this, folder, out error) is not { } editor)
             return false;

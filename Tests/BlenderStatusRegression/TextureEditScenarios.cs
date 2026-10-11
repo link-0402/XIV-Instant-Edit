@@ -7,7 +7,7 @@ using InstantEdit.Services;
 using Lumina.Data.Files;
 using Penumbra.Api.Enums;
 
-internal static class TextureEditScenarios
+internal static partial class TextureEditScenarios
 {
     private static void Check(bool condition, string message)
     {

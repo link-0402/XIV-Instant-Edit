@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Numerics;
 using SharpGLTF.Geometry;
@@ -43,10 +44,15 @@ public static class SimsMeshExporter
     /// <paramref name="crop"/> is set, UV0 is rescaled to match textures that had their
     /// unused half cropped away, so the model and the images stay in step.
     /// </summary>
-    public static void ExportGlb(SimsGeomMesh mesh, string path, string meshName, SimsHalfCrop crop = default)
+    /// <returns>How many faces were left out because an index fell outside the vertex list.</returns>
+    public static int ExportGlb(SimsGeomMesh mesh, string path, string meshName, SimsHalfCrop crop = default)
     {
         if (mesh.VertexCount == 0 || mesh.FaceCount == 0)
             throw new InvalidOperationException("Mesh has no geometry to export.");
+
+        int skipped = CountBadFaces(mesh);
+        if (skipped == mesh.FaceCount)
+            throw new InvalidDataException("Every face of this mesh points outside its vertex list.");
 
         var scene = new SceneBuilder();
         var material = new MaterialBuilder(meshName).WithDoubleSide(true);
@@ -57,7 +63,20 @@ public static class SimsMeshExporter
             BuildRigid(mesh, scene, material, meshName, crop);
 
         scene.ToGltf2().SaveGLB(path);
+        return skipped;
     }
+
+    private static int CountBadFaces(SimsGeomMesh mesh)
+    {
+        int bad = 0;
+        for (int i = 0; i + 2 < mesh.Indices.Length; i += 3)
+            if (!InRange(mesh, mesh.Indices[i]) || !InRange(mesh, mesh.Indices[i + 1]) || !InRange(mesh, mesh.Indices[i + 2]))
+                bad++;
+        return bad;
+    }
+
+    /// <summary>Unsigned compare, so a 32-bit index that wrapped negative counts as out of range.</summary>
+    private static bool InRange(SimsGeomMesh mesh, int index) => (uint)index < (uint)mesh.VertexCount;
 
     private static void BuildRigid(SimsGeomMesh mesh, SceneBuilder scene, MaterialBuilder material,
         string meshName, SimsHalfCrop crop)
@@ -95,7 +114,7 @@ public static class SimsMeshExporter
         for (int i = 0; i + 2 < mesh.Indices.Length; i += 3)
         {
             int a = mesh.Indices[i], b = mesh.Indices[i + 1], c = mesh.Indices[i + 2];
-            if (a >= mesh.VertexCount || b >= mesh.VertexCount || c >= mesh.VertexCount)
+            if (!InRange(mesh, a) || !InRange(mesh, b) || !InRange(mesh, c))
                 continue;
             emit(a, b, c);
         }

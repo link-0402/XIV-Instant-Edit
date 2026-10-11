@@ -783,7 +783,7 @@ public sealed partial class PenumbraService
 
             var attributeWarnings = createAttributeGroups && attributeTags is { Count: > 0 }
                 ? WriteAttributeGroups(target.Folder, activeContext.ResolvedGamePath, attributeTags,
-                    attributeMasks, activeContext.ResourceManifest?.Manipulations)
+                    attributeMasks, KnownManipulations(activeContext))
                 : null;
 
             var warnings = ExternalMashupWarnings(prepared.RequiredExternalMods).ToList();
@@ -905,7 +905,7 @@ public sealed partial class PenumbraService
             {
                 var attributeError = WriteAttributeGroups(
                     staging, activeContext.ResolvedGamePath, attributeTags, attributeMasks,
-                    activeContext.ResourceManifest?.Manipulations);
+                    KnownManipulations(activeContext));
                 if (attributeError is not null)
                     throw new InvalidDataException(attributeError);
             }

@@ -49,6 +49,41 @@ internal static class ModelMaterialLinks
     }
 
     /// <summary>
+    /// Keeps every model's explicit picks (stored indices into the item's materials) on the same
+    /// materials after the materials list changed: <paramref name="map"/> takes each old index to its
+    /// new one, or to <see cref="Keep"/> / <see cref="Auto"/>. Covers the race models' own links and
+    /// every variant file's. <see cref="Auto"/> and <see cref="Keep"/> entries are not indices and stay.
+    /// </summary>
+    public static void Remap(IEnumerable<RaceModelEntry> models, Func<int, int> map)
+    {
+        foreach (var model in models)
+        {
+            RemapList(model.MaterialLinks, map);
+            foreach (var links in model.VariantMaterialLinks)
+                RemapList(links, map);
+        }
+    }
+
+    private static void RemapList(List<int> links, Func<int, int> map)
+    {
+        for (int i = 0; i < links.Count; i++)
+            if (links[i] >= 0)
+                links[i] = map(links[i]);
+    }
+
+    /// <summary>The material at <paramref name="index"/> was removed: picks of it keep the file's own name, later ones move up.</summary>
+    public static Func<int, int> Removed(int index) => i => i == index ? Keep : i > index ? i - 1 : i;
+
+    /// <summary>A material was inserted at <paramref name="index"/>: picks at or after it move down.</summary>
+    public static Func<int, int> Inserted(int index) => i => i >= index ? i + 1 : i;
+
+    /// <summary>Two materials swapped places.</summary>
+    public static Func<int, int> Swapped(int a, int b) => i => i == a ? b : i == b ? a : i;
+
+    /// <summary>The materials were replaced as a whole: every pick goes back to the automatic match.</summary>
+    public static Func<int, int> Reset => _ => Auto;
+
+    /// <summary>
     /// Material names that name a shared body / feature group — a common base body mod's own body
     /// ("bibo"), its pubic overlay ("bibopube"), or its piercings — rather than anything an item
     /// ported here would supply. These sit in some mesh material slots right alongside the slots an

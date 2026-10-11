@@ -194,9 +194,25 @@ internal static class ResourceNaming
     }
 
     /// <summary>
+    /// The game path the game requests for a material a model names relatively: where
+    /// <see cref="MaterialFolder"/> says, except that a hair model naming its own race's material for
+    /// a shared hairstyle is rebased onto the race the game shares it under ("/mt_c0801h0127_hir_a.mtrl"
+    /// on c0801's h0127 loads c0201's), as <see cref="MaterialNaming.Resolve"/> does.
+    /// </summary>
+    public static string RelativeMaterialPath(string modelPath, string materialFileName)
+    {
+        var name = materialFileName.Replace('\\', '/').Trim().TrimStart('/').ToLowerInvariant();
+        if (ModelNaming.Parse(modelPath) is { Kind: GameModelKind.Hair } hair
+            && MaterialNaming.Resolve(hair, name, 1) is { Kind: MaterialRequestKind.Path, Path: { Length: > 0 } path })
+            return path;
+        return $"{MaterialFolder(name) ?? FallbackMaterialFolder(modelPath)}/{name}";
+    }
+
+    /// <summary>
     /// The folder the game looks a material up in when a model names it relatively
     /// ("/mt_c0201e6114_sho_a.mtrl"): the name itself says which model set it belongs to. Gear always
     /// resolves through variant v0001 here; a mod may also carry other variants, which are matched by name.
+    /// Faces and Viera ears have no variant folder.
     /// </summary>
     public static string? MaterialFolder(string materialFileName)
     {
@@ -210,9 +226,9 @@ internal static class ResourceNaming
             ("c", "e") => $"chara/equipment/e{b}/material/v0001",
             ("c", "a") => $"chara/accessory/a{b}/material/v0001",
             ("c", "h") => $"chara/human/c{a}/obj/hair/h{b}/material/v0001",
-            ("c", "f") => $"chara/human/c{a}/obj/face/f{b}/material/v0001",
+            ("c", "f") => $"chara/human/c{a}/obj/face/f{b}/material",
             ("c", "t") => $"chara/human/c{a}/obj/tail/t{b}/material/v0001",
-            ("c", "z") => $"chara/human/c{a}/obj/zear/z{b}/material/v0001",
+            ("c", "z") => $"chara/human/c{a}/obj/zear/z{b}/material",
             ("c", "b") => $"chara/human/c{a}/obj/body/b{b}/material/v0001",
             ("w", "b") => $"chara/weapon/w{a}/obj/body/b{b}/material/v0001",
             ("m", "b") => $"chara/monster/m{a}/obj/body/b{b}/material/v0001",
@@ -221,14 +237,20 @@ internal static class ResourceNaming
         };
     }
 
-    /// <summary>Where a model's own materials live when the name does not say: its folder, with model swapped for material/v0001.</summary>
+    /// <summary>
+    /// Where a model's own materials live when the name does not say: its folder, with model swapped
+    /// for material/v0001 (just material/ for faces and Viera ears, which have no variants).
+    /// </summary>
     public static string FallbackMaterialFolder(string modelPath)
     {
         var folder = Path.GetDirectoryName(modelPath)?.Replace('\\', '/') ?? string.Empty;
-        return folder.EndsWith("/model", StringComparison.Ordinal)
-            ? folder[..^"/model".Length] + "/material/v0001"
-            : folder;
+        if (!folder.EndsWith("/model", StringComparison.Ordinal))
+            return folder;
+        var set = folder[..^"/model".Length];
+        return NoVariantSet.IsMatch(set) ? set + "/material" : set + "/material/v0001";
     }
+
+    private static readonly Regex NoVariantSet = new(@"/obj/(?:face/f|zear/z)\d{4}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     /// <summary>The variant-free part of a material folder ("…/material/v0001" → "…/material/"), for matching any variant.</summary>
     public static string MaterialFolderStem(string folder)

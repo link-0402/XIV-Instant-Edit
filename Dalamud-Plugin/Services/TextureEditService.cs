@@ -623,6 +623,9 @@ public sealed class TextureEditService : IDisposable
                 Path.GetFileName(session.WorkingFile), "texture.tga",
                 Path.Combine(VariantWorkFolder, "snapshot.tga"), Path.Combine(VariantWorkFolder, "pixels.tex"),
                 Path.Combine(VariantWorkFolder, "converted.tex"),
+                // A drop removes these once it is converted; one that stopped halfway can leave them.
+                Path.Combine(DropWorkFolder, "dropped.dds"), Path.Combine(DropWorkFolder, "dropped.tex"),
+                Path.Combine(DropWorkFolder, "dropped.tga"), Path.Combine(DropWorkFolder, "restored.tex"),
             }.Concat(session.Variants.Select(v => v.Name + ".tga"))
                 .Select(name => Path.GetFullPath(Path.Combine(session.Directory, name))), StringComparer.OrdinalIgnoreCase);
             if (Directory.EnumerateFiles(session.Directory, "*", SearchOption.AllDirectories)
@@ -1166,8 +1169,10 @@ public sealed class TextureEditService : IDisposable
             if (refresh.Count > 0)
             {
                 var status = await _backend.RefreshAsync(refresh.Select(s => new TextureRefresh(s, s.OriginalOptionId)).ToList(), _life.Token).ConfigureAwait(false);
+                // A session paused to keep its working TGA goes on saying so, with any refresh warning.
                 foreach (var s in refresh)
-                    s.Status = status;
+                    s.Status = !s.Paused ? status
+                        : status.Contains("attention", StringComparison.Ordinal) ? s.Status + ". " + status : s.Status;
                 Persist();
             }
         }
@@ -1202,8 +1207,9 @@ public sealed class TextureEditService : IDisposable
         var pixelHash = TextureFiles.PixelHash(rawPixels);
         if (pixelHash == s.PixelHash && format == s.SavedFormat)
         {
-            MirrorWorkingFile(runtime, tga, hash);
-            s.Status = dropped is null ? "Painter texture unchanged" : $"{dropped} is the same as the texture";
+            var mirrored = MirrorWorkingFile(runtime, tga, hash);
+            s.Status = (dropped is null ? "Painter texture unchanged" : $"{dropped} is the same as the texture") +
+                (mirrored ? "" : KeptWorkingImage);
             Persist();
             return ExternalTextureOutcome.Unchanged;
         }
@@ -1228,7 +1234,7 @@ public sealed class TextureEditService : IDisposable
         if (dropped is not null)
             s.Replacement = new TextureReplacement { File = dropped, Backup = result.Backup, Hash = result.Hash, At = DateTimeOffset.UtcNow };
         RaiseFileChanged(s.TargetFile);
-        MirrorWorkingFile(runtime, tga, hash);
+        if (!MirrorWorkingFile(runtime, tga, hash)) s.Status += KeptWorkingImage;
         if (!PersistCommit(runtime)) throw new IOException(s.Status);
         return ExternalTextureOutcome.Applied;
     }
@@ -1276,9 +1282,13 @@ public sealed class TextureEditService : IDisposable
             Directory.CreateDirectory(work);
             var input = Path.Combine(work, "dropped" + extension);
             var output = Path.Combine(work, "dropped.tga");
-            File.WriteAllBytes(input, extension == ".tex" ? TextureFiles.NormalizeMipOffsets(bytes) : bytes);
-            await _backend.ConvertAsync(input, output, TextureType.Targa, false).ConfigureAwait(false);
-            pixels = TgaImage.Read(TextureFiles.Read(output));
+            try
+            {
+                File.WriteAllBytes(input, extension == ".tex" ? TextureFiles.NormalizeMipOffsets(bytes) : bytes);
+                await _backend.ConvertAsync(input, output, TextureType.Targa, false).ConfigureAwait(false);
+                pixels = TgaImage.Read(TextureFiles.Read(output));
+            }
+            finally { DeleteDropWork(input, output); }
         }
         else
         {
@@ -1287,6 +1297,23 @@ public sealed class TextureEditService : IDisposable
             decoded.CopyPixelDataTo(pixels.Pixels);
         }
         return TgaImage.WriteBgra32(pixels);
+    }
+
+    /// <summary>Removes a drop's scratch files once they're used, so automatic cleanup can remove the session again.</summary>
+    private void DeleteDropWork(params string[] files)
+    {
+        foreach (var file in files)
+        {
+            try
+            {
+                TextureFiles.EnsureLocalPath(file);
+                File.Delete(file);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                _log(error, "A dropped image's scratch file could not be removed; cache cleanup removes it with its session.");
+            }
+        }
     }
 
     /// <summary>Whether the texture still holds the image dropped over it, so Undo can put back what it replaced.</summary>
@@ -1331,8 +1358,12 @@ public sealed class TextureEditService : IDisposable
             TextureFiles.EnsureLocalPath(work);
             Directory.CreateDirectory(work);
             var restored = Path.Combine(work, "restored.tex");
-            File.WriteAllBytes(restored, original);
-            await FollowWorkingImageAsync(runtime, restored).ConfigureAwait(false);
+            try
+            {
+                File.WriteAllBytes(restored, original);
+                if (!await FollowWorkingImageAsync(runtime, restored).ConfigureAwait(false)) s.Status += KeptWorkingImage;
+            }
+            finally { DeleteDropWork(restored); }
             if (!PersistCommit(runtime)) throw new IOException(s.Status);
             _life.Token.ThrowIfCancellationRequested();
             var refresh = await RefreshOneAsync(s, s.OriginalOptionId).ConfigureAwait(false);
@@ -1376,7 +1407,7 @@ public sealed class TextureEditService : IDisposable
         s.LastSaved = DateTimeOffset.UtcNow;
         s.Status = "Original restored from Substance Painter";
         RaiseFileChanged(s.TargetFile);
-        await FollowWorkingImageAsync(runtime, originalPath).ConfigureAwait(false);
+        if (!await FollowWorkingImageAsync(runtime, originalPath).ConfigureAwait(false)) s.Status += KeptWorkingImage;
         if (!PersistCommit(runtime)) throw new IOException(s.Status);
         return ExternalTextureOutcome.Restored;
     }
@@ -1384,8 +1415,9 @@ public sealed class TextureEditService : IDisposable
     /// <summary>
     /// After a texture went back to an earlier file, the working image follows, so a later editor save
     /// starts from what the game shows. <paramref name="tex"/> is that file, with its mip offsets normalized.
+    /// False when the working image held unsaved edits and was kept (see <see cref="MirrorWorkingFile"/>).
     /// </summary>
-    private async Task FollowWorkingImageAsync(Runtime runtime, string tex)
+    private async Task<bool> FollowWorkingImageAsync(Runtime runtime, string tex)
     {
         var s = runtime.Session;
         var snapshot = Path.Combine(s.Directory, "snapshot.tga");
@@ -1394,21 +1426,34 @@ public sealed class TextureEditService : IDisposable
         await _backend.ConvertAsync(snapshot, pixels, TextureType.RgbaTex, false).ConfigureAwait(false);
         var tga = TextureFiles.Read(snapshot);
         s.PixelHash = TextureFiles.PixelHash(TextureFiles.Read(pixels));
-        MirrorWorkingFile(runtime, tga, TextureFiles.Hash(tga));
+        return MirrorWorkingFile(runtime, tga, TextureFiles.Hash(tga));
     }
+
+    /// <summary>Added to the status of a texture applied while the working TGA was kept.</summary>
+    private const string KeptWorkingImage = ". Paused to keep your unsaved TGA edits";
 
     /// <summary>
     /// Writes an applied image over the working TGA and records it, so the watcher treats it as
     /// already saved. If the file is locked the old image and hash stay, which the watcher ignores too.
+    /// A working TGA with edits the game doesn't have yet (a paused session, a save that waits or failed,
+    /// one still settling) is kept, as Restore keeps it, and the session pauses so those edits don't go
+    /// over the applied texture; Resume saves them. Returns false then.
     /// </summary>
-    private void MirrorWorkingFile(Runtime runtime, byte[] tga, string hash)
+    private bool MirrorWorkingFile(Runtime runtime, byte[] tga, string hash)
     {
         var s = runtime.Session;
-        if (s.WorkingHash == hash)
-            return;
         try
         {
             TextureFiles.EnsureLocalPath(s.WorkingFile);
+            if (File.Exists(s.WorkingFile) && TextureFiles.Hash(TextureFiles.Read(s.WorkingFile)) != s.WorkingHash)
+            {
+                s.Paused = true;
+                runtime.Enabled = false;
+                runtime.Succeeded();
+                return false;
+            }
+            if (s.WorkingHash == hash)
+                return true;
             File.WriteAllBytes(s.WorkingFile, tga);
             s.WorkingHash = hash;
             runtime.Succeeded();
@@ -1417,6 +1462,7 @@ public sealed class TextureEditService : IDisposable
         {
             _log(error, "The working TGA could not be updated after a Painter save, a drop or its undo; the game already has the new texture.");
         }
+        return true;
     }
 
     private Runtime Get(Guid id) => _sessions.TryGetValue(id, out var runtime) ? runtime : throw new IOException("Texture session no longer exists.");

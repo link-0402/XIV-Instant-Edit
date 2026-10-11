@@ -63,6 +63,19 @@ internal static class PathNormalizer
         return slash > 0 && dot > slash + 1 && dot < p.Length - 1;
     }
 
+    /// <summary>
+    /// Whether every part of a typed game path can be a folder or file name in a mod folder: no "."
+    /// or ".." part, and none of the characters Windows cannot store in a name.
+    /// </summary>
+    public static bool HasStorableSegments(string path)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        foreach (var part in path.Trim().Split('/'))
+            if (part is "." or ".." || part.IndexOfAny(invalid) >= 0)
+                return false;
+        return true;
+    }
+
     /// <summary>A file or folder name made safe for a path segment (used for option folders inside a mod).</summary>
     public static string SafeSegment(string name)
     {

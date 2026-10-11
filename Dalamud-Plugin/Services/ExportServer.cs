@@ -1237,7 +1237,7 @@ public sealed partial class ExportServer : IDisposable
                 attributeTags,
                 attributeMasks,
                 target.ResolvedGamePath,
-                target.ResourceManifest?.Manipulations,
+                PenumbraService.KnownManipulations(target),
                 estEntries).ConfigureAwait(false);
             return new ExportReceipt(
                 result.Success,

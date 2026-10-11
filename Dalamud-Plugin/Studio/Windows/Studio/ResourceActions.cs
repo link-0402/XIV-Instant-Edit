@@ -33,6 +33,7 @@ internal sealed class ResourceActions
     private const string RenamePopupId       = "Rename##StudioRename";
     private const string RemoveOptionPopupId = "Remove the option?##StudioRemoveOption";
     private const string RemoveGroupPopupId  = "Remove the group?##StudioRemoveGroup";
+    private const string ClearPopupId        = "Throw away this material?##StudioClearMaterial";
 
     private readonly StudioHost _host;
     private readonly ModSession _session;
@@ -79,6 +80,13 @@ internal sealed class ResourceActions
     private (string GamePath, OptionRef Option, string RelPath)? _remove;
     private bool _removeDeletes;
     private bool _openRemove;
+
+    /// <summary>A material made here about to be thrown away, once confirmed.</summary>
+    private (string GamePath, OptionRef Option, string FileName, bool Added)? _clear;
+    private bool _openClear;
+
+    /// <summary>Set when a dialog's change of meta.json could not be written; the dialog stays open and says so.</summary>
+    private bool _writeFailed;
 
     /// <summary>A material being made, and the model slot it is for (if any).</summary>
     private sealed class PendingMaterial
@@ -165,11 +173,26 @@ internal sealed class ResourceActions
             Gui.Dialogs.OpenFileDialog($"Replace {node.FileName}", ResourceKinds.DialogFilter(node.GamePath), Done, 1);
     }
 
+    /// <summary>
+    /// Drops what is set up here for a resource. A material made here (its shader and every slot's
+    /// image) is only thrown away after asking; anything else goes at once.
+    /// </summary>
     public void ClearReplacement(ResourceNode node)
     {
         var option = _session.OptionFor(node);
-        if (_session.ClearReplacement(node.GamePath, option))
-            _session.Notify(node.Origin == OriginKind.Added ? $"{node.FileName} is taken back out of the mod." : $"{node.FileName}: back to the mod's own file.", Severity.Info);
+        if (_session.FindReplacement(node.GamePath, option) is { Authored: not null })
+        {
+            _clear = (node.GamePath, option, node.FileName, node.Origin == OriginKind.Added);
+            _openClear = true;
+            return;
+        }
+        Clear(node.GamePath, option, node.FileName, node.Origin == OriginKind.Added);
+    }
+
+    private void Clear(string gamePath, OptionRef option, string fileName, bool added)
+    {
+        if (_session.ClearReplacement(gamePath, option))
+            _session.Notify(added ? $"{fileName} is taken back out of the mod." : $"{fileName}: back to the mod's own file.", Severity.Info);
     }
 
     /// <summary>Asks before taking a file out of its option.</summary>
@@ -227,7 +250,7 @@ internal sealed class ResourceActions
             .FirstOrDefault(n => n.Kind == ResourceKind.Material && string.Equals(n.FileName, file, StringComparison.OrdinalIgnoreCase));
     }
 
-    /// <summary>A name for a new material: <paramref name="like"/> with its letter moved on until nothing in the folder has it yet.</summary>
+    /// <summary>A name for a new material: <paramref name="like"/> with its letter moved on until neither the mod nor the game has it yet.</summary>
     private string NextName(string folder, string like, ResourceNode model)
     {
         if (like.Length == 0)
@@ -236,19 +259,23 @@ internal sealed class ResourceActions
         for (char letter = 'a'; letter <= 'z'; letter++)
         {
             var name = stem + letter;
-            if (!Taken($"{folder}/{name}.mtrl"))
+            var path = $"{folder}/{name}.mtrl";
+            if (!TakenByMod(path) && !InGame(path))
                 return name;
         }
         return stem + "new";
     }
 
     /// <summary>Whether the mod (or a replacement) already has a file at this game path.</summary>
-    private bool Taken(string gamePath)
+    private bool TakenByMod(string gamePath)
     {
         var path = PathNormalizer.GamePath(gamePath);
         return _session.Graph.FindAll(path).Any(n => n.IsModContent)
             || _session.Project?.Sidecar.Replacements.Any(r => PathNormalizer.SameGamePath(r.GamePath, path)) == true;
     }
+
+    /// <summary>Whether the game has a file at this path: a new material there would stand in for it everywhere it is used.</summary>
+    private bool InGame(string gamePath) => _host.GameData.VanillaFiles.Exists(PathNormalizer.GamePath(gamePath));
 
     /// <summary>Asks before taking an item added from the game back out of the mod.</summary>
     public void AskRemoveItem(AddedItem item)
@@ -439,7 +466,7 @@ internal sealed class ResourceActions
 
     /// <summary>
     /// Where a file probably goes: an image becomes a .tex, and lands in the entry's model set folder
-    /// (textures under texture/, materials under material/v0001/, models under model/) or next to the
+    /// (textures under texture/, materials under material/v0001/ or material/, models under model/) or next to the
     /// entry's other files. Without an entry the user types the path.
     /// </summary>
     private static string GuessGamePath(string source, ResourceRoot? context)
@@ -471,7 +498,7 @@ internal sealed class ResourceActions
             return target switch
             {
                 ".tex"  => $"{set}/texture/{name}",
-                ".mtrl" => $"{set}/material/v0001/{name}",
+                ".mtrl" => $"{ResourceNaming.FallbackMaterialFolder($"{set}/model/{name}")}/{name}",   // faces and ears have no v0001
                 ".mdl"  => $"{set}/model/{name}",
                 _       => $"{set}/{name}",
             };
@@ -481,6 +508,8 @@ internal sealed class ResourceActions
         return slash > 0 ? $"{sample[..slash]}/{name}" : name;
     }
 
+    private const string BadSegments = "A game path can't have \".\" or \"..\" folders, or : * ? \" < > | in it.";
+
     private static string? PathProblem(string gamePath, string source)
     {
         var path = PathNormalizer.GamePath(gamePath);
@@ -488,6 +517,8 @@ internal sealed class ResourceActions
             return "Where in the game should this go? Type its game path.";
         if (!PathNormalizer.LooksLikeGamePath(path))
             return "That does not look like a game path (folder/name.ext, forward slashes).";
+        if (!PathNormalizer.HasStorableSegments(path))
+            return BadSegments;
         if (!ResourceKinds.Accepts(path, source))
         {
             var accepted = ResourceKinds.AcceptedSources(path);
@@ -507,31 +538,16 @@ internal sealed class ResourceActions
 
     public void DrawPopups()
     {
-        if (_openAdd)
-        {
-            ImGui.OpenPopup(AddPopupId);
-            _openAdd = false;
-        }
-        if (_openRemove)
-        {
-            ImGui.OpenPopup(RemovePopupId);
-            _openRemove = false;
-        }
-        if (_openMaterial)
-        {
-            ImGui.OpenPopup(NewMaterialPopupId);
-            _openMaterial = false;
-        }
-        if (_openRemoveItem)
-        {
-            ImGui.OpenPopup(RemoveItemPopupId);
-            _openRemoveItem = false;
-        }
+        Open(ref _openAdd, AddPopupId);
+        Open(ref _openRemove, RemovePopupId);
+        Open(ref _openMaterial, NewMaterialPopupId);
+        Open(ref _openRemoveItem, RemoveItemPopupId);
         Open(ref _openNewGroup, NewGroupPopupId);
         Open(ref _openNewOption, NewOptionPopupId);
         Open(ref _openRename, RenamePopupId);
         Open(ref _openRemoveOption, RemoveOptionPopupId);
         Open(ref _openRemoveGroup, RemoveGroupPopupId);
+        Open(ref _openClear, ClearPopupId);
 
         DrawAddPopup();
         DrawRemovePopup();
@@ -542,14 +558,67 @@ internal sealed class ResourceActions
         DrawRenamePopup();
         DrawRemoveOptionPopup();
         DrawRemoveGroupPopup();
+        DrawClearPopup();
 
-        static void Open(ref bool flag, string id)
+        void Open(ref bool flag, string id)
         {
             if (!flag)
                 return;
             ImGui.OpenPopup(id);
             flag = false;
+            _writeFailed = false;
         }
+    }
+
+    /// <summary>
+    /// Makes a dialog's change of meta.json; true when the dialog can close. When it could not be
+    /// written nothing changed: the dialog stays open and says so (the status line says why).
+    /// </summary>
+    private bool Wrote(Action change)
+    {
+        _session.StructureFailed = false;
+        change();
+        _writeFailed = _session.StructureFailed;
+        return !_writeFailed;
+    }
+
+    /// <summary>The line a dialog shows after its change could not be written.</summary>
+    private void DrawWriteFailure()
+    {
+        if (_writeFailed)
+            ImGui.TextColored(Theme.Bad, "meta.json could not be written, so nothing changed. Try again.");
+    }
+
+    private void DrawClearPopup()
+    {
+        if (!ImGui.BeginPopupModal(ClearPopupId, ImGuiWindowFlags.AlwaysAutoResize))
+            return;
+        if (_session.Project == null || _clear is not { } clear)
+        {
+            ImGui.CloseCurrentPopup();
+            ImGui.EndPopup();
+            return;
+        }
+
+        ImGui.TextUnformatted($"Throw away the material set up here for {clear.FileName}?");
+        ImGui.TextColored(Theme.Muted, "Its shader and every texture slot's image go. This can't be undone.");
+        ImGui.Spacing();
+        ImGui.PushStyleColor(ImGuiCol.Text, Theme.Bad);
+        bool confirmed = ImGui.Button("Throw it away", new Vector2(Theme.S(130), 0));
+        ImGui.PopStyleColor();
+        if (confirmed)
+        {
+            Clear(clear.GamePath, clear.Option, clear.FileName, clear.Added);
+            _clear = null;
+            ImGui.CloseCurrentPopup();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("Cancel", new Vector2(Theme.S(110), 0)))
+        {
+            _clear = null;
+            ImGui.CloseCurrentPopup();
+        }
+        ImGui.EndPopup();
     }
 
     // ── Groups and options ───────────────────────────────────────────────────
@@ -584,17 +653,22 @@ internal sealed class ResourceActions
             ImGui.TextColored(Theme.Warn, problem);
         }
 
+        DrawWriteFailure();
         ImGui.Spacing();
         using (Gui.Disabled(problem != null))
         {
             if ((Gui.PrimaryButton(FontAwesomeIcon.FolderPlus, "Make it", Theme.S(140)) || enter) && problem == null)
             {
-                if (_session.AddGroup(name, _newMulti ? ModGroupType.Multi : ModGroupType.Single) is { } id)
+                string? id = null;
+                if (Wrote(() => id = _session.AddGroup(name, _newMulti ? ModGroupType.Multi : ModGroupType.Single)))
                 {
-                    _session.Notify($"{name} is in the mod now — drop files on it to make its options.", Severity.Info);
-                    _session.FocusGroup(id);
+                    if (id != null)
+                    {
+                        _session.Notify($"{name} is in the mod now — drop files on it to make its options.", Severity.Info);
+                        _session.FocusGroup(id);
+                    }
+                    ImGui.CloseCurrentPopup();
                 }
-                ImGui.CloseCurrentPopup();
             }
         }
         ImGui.SameLine();
@@ -646,14 +720,19 @@ internal sealed class ResourceActions
             ImGui.TextColored(Theme.Warn, problem);
         }
 
+        DrawWriteFailure();
         ImGui.Spacing();
         using (Gui.Disabled(problem != null))
         {
             if ((Gui.PrimaryButton(FontAwesomeIcon.Plus, "Add it", Theme.S(140)) || enter) && problem == null)
             {
-                if (_session.MakeOptions(group.Id, null, new[] { name }) is [var option])
-                    _session.FocusOption(option);
-                ImGui.CloseCurrentPopup();
+                List<OptionRef>? made = null;
+                if (Wrote(() => made = _session.MakeOptions(group.Id, null, new[] { name })))
+                {
+                    if (made is [var option])
+                        _session.FocusOption(option);
+                    ImGui.CloseCurrentPopup();
+                }
             }
         }
         ImGui.SameLine();
@@ -692,16 +771,21 @@ internal sealed class ResourceActions
         else if (_renameOption == null)
             ImGui.TextColored(Theme.Faint, "Collections remember what is picked in a group by its name: after a rename it may need picking again.");
 
+        DrawWriteFailure();
         ImGui.Spacing();
         using (Gui.Disabled(problem != null))
         {
             if ((Gui.PrimaryButton(FontAwesomeIcon.Check, "Rename", Theme.S(120)) || enter) && problem == null)
             {
-                if (_renameOption is { } renamed)
-                    _session.RenameOption(renamed, name);
-                else
-                    _session.RenameGroup(group.Id, name);
-                ImGui.CloseCurrentPopup();
+                var renamed = _renameOption;
+                if (Wrote(() =>
+                    {
+                        if (renamed is { } option)
+                            _session.RenameOption(option, name);
+                        else
+                            _session.RenameGroup(group.Id, name);
+                    }))
+                    ImGui.CloseCurrentPopup();
             }
         }
         ImGui.SameLine();
@@ -727,9 +811,8 @@ internal sealed class ResourceActions
         int yours = project.Sidecar.Replacements.Count(r => OptionRef.Parse(r.Option) == option);
         DrawRemoveDetails(files, yours);
 
-        if (ConfirmRemove())
+        if (ConfirmRemove() && Wrote(() => _session.RemoveOption(option, _removeOptionFiles)))
         {
-            _session.RemoveOption(option, _removeOptionFiles);
             _removeOption = null;
             ImGui.CloseCurrentPopup();
         }
@@ -754,9 +837,8 @@ internal sealed class ResourceActions
         int yours = project.Sidecar.Replacements.Count(r => sets.Contains(OptionRef.Parse(r.Option)));
         DrawRemoveDetails(files, yours);
 
-        if (ConfirmRemove())
+        if (ConfirmRemove() && Wrote(() => _session.RemoveGroup(group.Id, _removeOptionFiles)))
         {
-            _session.RemoveGroup(group.Id, _removeOptionFiles);
             _removeGroup = null;
             ImGui.CloseCurrentPopup();
         }
@@ -771,6 +853,7 @@ internal sealed class ResourceActions
         ImGui.TextColored(Theme.Muted, "This edits the mod's meta.json now (a copy of the original is kept the first time).");
         if (files > 0)
             ImGui.Checkbox("Also delete its files from the mod folder (those nothing else uses)", ref _removeOptionFiles);
+        DrawWriteFailure();
         ImGui.Spacing();
     }
 
@@ -820,7 +903,9 @@ internal sealed class ResourceActions
         var path = PathNormalizer.GamePath($"{m.Folder.Trim().TrimEnd('/')}/{name}.mtrl");
         string? problem = name.Length == 0 ? "Give it a name."
                         : !PathNormalizer.LooksLikeGamePath(path) ? "That folder does not look like a game path (forward slashes, no drive)."
-                        : Taken(path) ? "The mod already has a material there — edit that one instead, or pick another name."
+                        : !PathNormalizer.HasStorableSegments(path) ? BadSegments
+                        : TakenByMod(path) ? "The mod already has a material there — edit that one instead, or pick another name."
+                        : InGame(path) ? "The game already has a material with that name. Pick another name."
                         : null;
         Gui.Label(string.Empty);
         ImGui.TextColored(problem != null ? Theme.Warn : Theme.Faint, problem ?? path);
@@ -1056,6 +1141,7 @@ internal sealed class ResourceActions
 
         if (general != null)
             ImGui.TextColored(Theme.Warn, general);
+        DrawWriteFailure();
 
         ImGui.Spacing();
         bool allGood = problems.Count == 0 && general == null && _adds.Count > 0;
@@ -1064,7 +1150,8 @@ internal sealed class ResourceActions
             var label = _addMode == AddMode.OwnOptions ? $"Add {_adds.Count} option(s)" : $"Add {_adds.Count} file(s)";
             if (Gui.PrimaryButton(FontAwesomeIcon.Plus, label, Theme.S(170)) && allGood)
             {
-                if (Commit(meta, group))
+                bool done = false;
+                if (Wrote(() => done = Commit(meta, group)) && done)
                 {
                     _adds.Clear();
                     ImGui.CloseCurrentPopup();
@@ -1300,8 +1387,9 @@ internal sealed class ResourceActions
             return;
 
         var project = _session.Project;
-        if (project == null || _remove is not { } remove)
+        if (project == null || _remove is not { } remove || !project.Meta.TryGetFile(remove.Option, remove.GamePath, out _))
         {
+            _remove = null;
             ImGui.CloseCurrentPopup();
             ImGui.EndPopup();
             return;
@@ -1311,19 +1399,22 @@ internal sealed class ResourceActions
         ImGui.TextColored(Theme.Muted, remove.GamePath);
         ImGui.Spacing();
         ImGui.TextColored(Theme.Muted, "This edits the mod's meta.json now (a copy of the original is kept the first time).");
-        bool shared = project.Meta.AllFiles().Count(f => PathNormalizer.SameRel(f.RelPath, remove.RelPath)) > 1;
+        // Another entry may use the same file, or an entry repointed here goes back to it later.
+        bool shared = project.RelKeysInUse(remove.Option, remove.GamePath).Contains(PathNormalizer.RelKey(remove.RelPath));
         using (Gui.Disabled(shared))
             ImGui.Checkbox("Also delete the file from the mod folder", ref _removeDeletes);
         if (shared)
-            Gui.Tooltip("Another option uses the same file, so it stays.");
+            Gui.Tooltip("Something else in the mod still uses this file, so it stays.");
+        DrawWriteFailure();
 
         ImGui.Spacing();
         ImGui.PushStyleColor(ImGuiCol.Text, Theme.Bad);
         bool confirmed = ImGui.Button("Remove", new Vector2(Theme.S(110), 0));
         ImGui.PopStyleColor();
-        if (confirmed)
+        bool removed = false;
+        if (confirmed && Wrote(() => removed = _session.RemoveModFile(remove.GamePath, remove.Option, _removeDeletes && !shared)))
         {
-            if (_session.RemoveModFile(remove.GamePath, remove.Option, _removeDeletes && !shared))
+            if (removed)
                 _session.Notify($"Removed {Path.GetFileName(remove.GamePath)} from {project.Meta.OptionLabel(remove.Option)}.", Severity.Info);
             _remove = null;
             ImGui.CloseCurrentPopup();

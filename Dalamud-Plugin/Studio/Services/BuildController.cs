@@ -12,19 +12,14 @@ namespace InstantEdit.Studio.Services;
 /// the result is kept for the Build stage to show.
 ///
 /// A build writes the whole pack into "&lt;mod directory&gt;/&lt;mod name&gt;" as a plain Penumbra mod —
-/// nothing of the pack is kept in the mod. Rebuilding writes the same folder again, keeping the
-/// mod's id; a folder of that name that belongs to another mod is never written into.
+/// nothing of the pack is kept in the mod. A build only ever makes a new mod: it writes into a folder
+/// that does not exist yet, and never into one that does, its own earlier build included. A built mod
+/// is changed by opening it in Edit mode.
 /// </summary>
 internal sealed class BuildController
 {
     private readonly StudioHost _host;
     private readonly PortSession _session;
-
-    // Who owns the folder a build would write, looked up again only when its meta.json changes.
-    private string? _ownerFolder;
-    private (DateTime, long) _ownerStamp;
-    private Guid? _ownerId;
-    private string? _ownerProblem;
 
     public BuildController(StudioHost host, PortSession session)
     {
@@ -55,61 +50,25 @@ internal sealed class BuildController
         if (_host.AnySyncRunning)              { reason = "Wait a moment, until the mod edited last is written.";     return false; }
 
         var root = _host.PenumbraIpc.GetModDirectory();
-        if (!string.IsNullOrEmpty(root) && FolderProblem(Path.Combine(root, FolderName)) is { } problem)
+        if (!string.IsNullOrEmpty(root))
         {
-            reason = problem;
-            return false;
+            var folder = Path.Combine(root, FolderName);
+            if (LastReport is { FatalError: null, Cancelled: false } last
+                && string.Equals(last.ModPath, folder, StringComparison.OrdinalIgnoreCase)
+                && Directory.Exists(folder))
+            {
+                reason = "This mod is built. Use \"Edit the built mod\" to change it, or give the modpack another name to build a new mod.";
+                return false;
+            }
+            if (BuildTarget.Problem(folder) is { } problem)
+            {
+                reason = problem;
+                return false;
+            }
         }
 
         reason = string.Empty;
         return true;
-    }
-
-    /// <summary>
-    /// Why the build may not write into <paramref name="folder"/>: it exists, and its meta.json says
-    /// it is another mod (another id) — one of the library's own, or one built from an earlier pack.
-    /// Null when the folder is free, or holds this pack's earlier build.
-    /// </summary>
-    private string? FolderProblem(string folder)
-    {
-        var metaPath = Path.Combine(folder, PenumbraModMeta.FileName);
-        (DateTime, long) stamp;
-        try
-        {
-            var info = new FileInfo(metaPath);
-            stamp = info.Exists ? (info.LastWriteTimeUtc, info.Length) : (default, -1);
-        }
-        catch (Exception)
-        {
-            stamp = (default, -1);
-        }
-
-        var id = _host.Configuration.ModId;
-        if (string.Equals(_ownerFolder, folder, StringComparison.OrdinalIgnoreCase) && _ownerStamp == stamp && _ownerId == id)
-            return _ownerProblem;
-
-        _ownerFolder  = folder;
-        _ownerStamp   = stamp;
-        _ownerId      = id;
-        _ownerProblem = null;
-        if (stamp.Item2 < 0)
-        {
-            if (Directory.Exists(folder) && Directory.EnumerateFileSystemEntries(folder).Any())
-                _ownerProblem = $"A folder named {Path.GetFileName(folder)} is already in Penumbra's mod directory — give this mod another name in the Overview.";
-            return _ownerProblem;
-        }
-
-        try
-        {
-            var meta = PenumbraModMeta.Load(folder);
-            if (meta.Identifier == null || meta.Identifier != id)
-                _ownerProblem = $"Another mod already lives in {Path.GetFileName(folder)} (\"{meta.Name}\") — give this mod another name in the Overview, so that one is not written over.";
-        }
-        catch (Exception)
-        {
-            _ownerProblem = $"{Path.GetFileName(folder)} already holds a mod whose meta.json cannot be read — give this mod another name in the Overview.";
-        }
-        return _ownerProblem;
     }
 
     public void Start()
@@ -144,7 +103,6 @@ internal sealed class BuildController
             return;
 
         Running = null;
-        _ownerFolder = null;   // the folder is the pack's own now
         BuildReport report;
         if (job.Task.IsCompletedSuccessfully)
         {
@@ -158,12 +116,12 @@ internal sealed class BuildController
                 1 => job.Request.Items[0].Subject.DisplayName,
                 _ => $"{job.Request.Items.Count} items",
             };
-            report = new BuildReport { ModName = job.Request.ModName, ModPath = job.Request.ModRoot, ItemsSummary = itemsSummary };
+            report = new BuildReport { ModName = job.Request.ModName, ModPath = job.Request.ModPath, ItemsSummary = itemsSummary };
             report.FatalError = job.Task.Exception?.GetBaseException().Message ?? "unknown error";
         }
 
-        // Penumbra reads a rebuilt mod again; a new one is registered with it directly, so it shows
-        // up without the user having to run a full mod-directory rediscovery.
+        // The new mod is registered with Penumbra directly, so it shows up without the user having
+        // to run a full mod-directory rediscovery.
         if (report.FatalError == null && !report.Cancelled)
         {
             var ipc = _host.PenumbraIpc;
@@ -173,6 +131,11 @@ internal sealed class BuildController
             report.AddModResult = result;
             if (_host.Configuration.RedrawAfterBuild)
                 ipc.RedrawAll();
+
+            // That folder is a mod of its own now, changed in Edit mode. The next build (under
+            // another name) makes another mod, with an id of its own.
+            _host.Configuration.ModId = null;
+            _host.Configuration.Save();
         }
 
         LastReport = report;
@@ -180,5 +143,46 @@ internal sealed class BuildController
         _session.Notify(report.Summary(), report.Succeeded ? Severity.Info : report.Failed > 0 || report.FatalError != null
             ? Severity.Error
             : Severity.Warning);
+    }
+
+    /// <summary>Whether a build is writing <paramref name="folder"/> right now.</summary>
+    public bool IsWriting(string folder)
+    {
+        if (Running is not { } job)
+            return false;
+        try
+        {
+            return string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(job.Request.ModPath)),
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder)), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+}
+
+/// <summary>Where a build may write: only into a mod folder that does not exist yet.</summary>
+internal static class BuildTarget
+{
+    /// <summary>
+    /// Why a build may not write into <paramref name="folder"/>, or null when it may. A build only
+    /// makes new mods, so any folder that is already there is refused, empty or not, whoever made it:
+    /// a mod that exists is changed by opening it, never by building over it.
+    /// </summary>
+    public static string? Problem(string folder)
+    {
+        bool exists;
+        try
+        {
+            exists = Directory.Exists(folder) || File.Exists(folder);
+        }
+        catch (Exception)
+        {
+            exists = true;
+        }
+        return exists
+            ? $"{Path.GetFileName(folder)} is already in Penumbra's mod folder. Open it from the library to edit it, or give this mod another name in the Overview."
+            : null;
     }
 }

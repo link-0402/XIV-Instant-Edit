@@ -13,7 +13,8 @@ namespace InstantEdit.Studio.Services.Project;
 /// <summary>
 /// One mod in Penumbra's mod directory, as the library lists it. <see cref="Added"/> is when Penumbra
 /// imported it; <see cref="Folder"/> is where Penumbra files it in its own list ("Gear/Shoes", empty
-/// at the top), not where it lives on disk.
+/// at the top), not where it lives on disk. <see cref="ImagePath"/> is the full path of its preview
+/// image, empty when it has none (see <see cref="ModLibrary.TileImage"/>).
 /// </summary>
 internal sealed record InstalledMod(
     string FolderName,
@@ -349,6 +350,27 @@ internal sealed class ModLibrary : IDisposable
         }
 
         return new InstalledMod(folderName, full, string.IsNullOrWhiteSpace(name) ? folderName : name, author, tags,
-            image, lastWrite, StudioProjectStore.Exists(full), added, facts.Folder ?? string.Empty);
+            TileImage(full, image), lastWrite, StudioProjectStore.Exists(full), added, facts.Folder ?? string.Empty);
+    }
+
+    /// <summary>
+    /// The file a meta.json "Image" value points at, checked once here on the listing worker rather
+    /// than by the tiles every frame. Only a file inside the mod folder counts: an absolute or network
+    /// path in a downloaded mod's meta.json would otherwise be looked up from the render thread.
+    /// Empty when there is no such file.
+    /// </summary>
+    internal static string TileImage(string modFolder, string image)
+    {
+        if (!PathNormalizer.IsSafeRel(image) || image.Contains(':'))
+            return string.Empty;
+        try
+        {
+            var path = PathNormalizer.ToDiskPath(modFolder, image);
+            return File.Exists(path) ? path : string.Empty;
+        }
+        catch (Exception)
+        {
+            return string.Empty;
+        }
     }
 }

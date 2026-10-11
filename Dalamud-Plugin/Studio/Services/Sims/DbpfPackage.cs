@@ -64,6 +64,22 @@ public sealed class DbpfPackage : IDisposable
     private const uint DbpfMagic      = 0x46504244;   // "DBPF"
     private const uint CompressedFlag = 0x80000000;
 
+    /// <summary>
+    /// Largest resource this reader will hold in memory, packed or unpacked. The sizes come
+    /// from a downloaded file and every byte lands in the game process, so a claim is never
+    /// allocated as-is. The biggest real CAS resource is an uncompressed 4096x4096 RGBA DDS
+    /// (64 MB); 256 MB leaves room for oversized custom content and still stops a forged
+    /// size or a zlib bomb from asking for gigabytes.
+    /// </summary>
+    internal const int MaxResourceSize = 256 * 1024 * 1024;
+
+    /// <summary>
+    /// Most output one packed byte can yield: deflate tops out just above 1032:1, and
+    /// RefPack's longest command (4 bytes for 1028 copied bytes) stays far below that. A
+    /// declared size past this ratio cannot be real and is refused before allocating.
+    /// </summary>
+    internal const int MaxCompressionRatio = 1032;
+
     // Compression types found on index entries.
     private const ushort CompressionNone       = 0x0000;
     private const ushort CompressionZlib       = 0x5A42;
@@ -143,6 +159,7 @@ public sealed class DbpfPackage : IDisposable
             entry.Offset = _reader.ReadUInt32();
             uint fileSize = _reader.ReadUInt32();
             entry.FileSize        = (int)(fileSize & ~CompressedFlag);
+            // Bit 31 makes this negative; Read refuses it rather than allocating for it.
             entry.MemSize         = (int)_reader.ReadUInt32();
             entry.CompressionType = _reader.ReadUInt16();
             _reader.ReadUInt16();                    // committed flag
@@ -158,8 +175,14 @@ public sealed class DbpfPackage : IDisposable
     /// <summary>Reads and decompresses one resource.</summary>
     public byte[] Read(DbpfEntry entry)
     {
-        if (entry.Offset < 0 || entry.Offset + entry.FileSize > _stream.Length)
+        if (entry.Offset < 0 || entry.FileSize < 0 || entry.Offset + entry.FileSize > _stream.Length)
             throw new InvalidDataException($"Resource {entry.KeyString} points outside the file.");
+        if (entry.FileSize > MaxResourceSize)
+            throw new InvalidDataException($"Resource {entry.KeyString} is too large to read ({entry.FileSize:N0} bytes).");
+
+        bool packed = entry.CompressionType != CompressionNone;
+        if (packed)
+            CheckDeclaredSize(entry.MemSize, entry.FileSize, $"Resource {entry.KeyString}");
 
         _stream.Position = entry.Offset;
         var raw = _reader.ReadBytes(entry.FileSize);
@@ -167,7 +190,7 @@ public sealed class DbpfPackage : IDisposable
         return entry.CompressionType switch
         {
             CompressionNone       => raw,
-            CompressionZlib       => Inflate(raw, entry.MemSize),
+            CompressionZlib       => Inflate(raw, entry.MemSize, MaxResourceSize),
             CompressionRefPack    => RefPack.Decompress(raw, entry.MemSize),
             CompressionStreamable => throw new NotSupportedException(
                 $"Resource {entry.KeyString} uses streamable compression (0x5A43), which this importer cannot read."),
@@ -191,20 +214,56 @@ public sealed class DbpfPackage : IDisposable
         }
     }
 
-    private static byte[] Inflate(byte[] source, int expectedSize)
+    /// <summary>
+    /// Rejects an unpacked size that is negative (bit 31 set in the index), above
+    /// <see cref="MaxResourceSize"/>, or more than <paramref name="packedSize"/> could ever
+    /// expand to. Zero means "not stated" and is allowed; the unpacker then caps the output.
+    /// </summary>
+    internal static void CheckDeclaredSize(long declared, long packedSize, string what)
+    {
+        if (declared < 0 || declared > MaxResourceSize)
+            throw new InvalidDataException($"{what} declares an impossible unpacked size ({declared:N0} bytes).");
+        if (declared > packedSize * MaxCompressionRatio + 1024)
+            throw new InvalidDataException(
+                $"{what} claims {declared:N0} bytes from {packedSize:N0} packed bytes, more than any compression yields.");
+    }
+
+    /// <summary>
+    /// Inflates a zlib resource. A stated size is allocated once (the caller has checked it);
+    /// without one the output grows only up to <paramref name="maxSize"/> or what the packed
+    /// size could yield, whichever is smaller, and a stream that keeps going past that fails.
+    /// </summary>
+    internal static byte[] Inflate(byte[] source, int expectedSize, int maxSize)
     {
         using var input = new MemoryStream(source, writable: false);
         using var zlib  = new ZLibStream(input, CompressionMode.Decompress);
 
         if (expectedSize > 0)
         {
+            if (expectedSize > maxSize)
+                throw new InvalidDataException($"Packed resource is too large to unpack ({expectedSize:N0} bytes).");
             var buffer = new byte[expectedSize];
-            zlib.ReadExactly(buffer, 0, expectedSize);
+            try
+            {
+                zlib.ReadExactly(buffer, 0, expectedSize);
+            }
+            catch (EndOfStreamException)
+            {
+                throw new InvalidDataException("Packed resource ends before its stated size.");
+            }
             return buffer;
         }
 
+        long limit = Math.Min(maxSize, (long)source.Length * MaxCompressionRatio + 1024);
         using var output = new MemoryStream();
-        zlib.CopyTo(output);
+        var chunk = new byte[81920];
+        int read;
+        while ((read = zlib.Read(chunk, 0, chunk.Length)) > 0)
+        {
+            if (output.Length + read > limit)
+                throw new InvalidDataException($"Packed resource unpacks to more than {limit:N0} bytes.");
+            output.Write(chunk, 0, read);
+        }
         return output.ToArray();
     }
 

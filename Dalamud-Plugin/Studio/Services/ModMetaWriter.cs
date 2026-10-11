@@ -102,7 +102,7 @@ public sealed class ModEstOverride
 /// <summary>The mod's identity and descriptive fields as written into meta.json.</summary>
 public sealed class ModMetaInfo
 {
-    /// <summary>Mod identifier. Reusing it across rebuilds keeps Penumbra's settings for the mod.</summary>
+    /// <summary>Mod identifier: new for every mod a build makes.</summary>
     public Guid   Identifier  { get; init; } = Guid.NewGuid();
     public string Author      { get; init; } = string.Empty;
     public string Description { get; init; } = string.Empty;
@@ -128,9 +128,24 @@ public static class ModMetaWriter
     {
         info ??= new ModMetaInfo();
 
-        using var stream = File.Create(Path.Combine(modPath, "meta.json"));
-        using var j = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true });
+        // Written next to it and then moved over it, so meta.json is never seen half written.
+        var path = Path.Combine(modPath, "meta.json");
+        var tmp  = path + ".tmp";
+        try
+        {
+            using (var stream = File.Create(tmp))
+            using (var j = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
+                WriteMeta(j, modName, defaults, groups, info);
+            File.Move(tmp, path, overwrite: true);
+        }
+        finally
+        {
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch (Exception) { /* a stray .tmp is harmless */ }
+        }
+    }
 
+    private static void WriteMeta(Utf8JsonWriter j, string modName, ModCarrier defaults, IReadOnlyList<ModGroupOut> groups, ModMetaInfo info)
+    {
         j.WriteStartObject();
         j.WriteNumber("FileVersion", 4);
         j.WriteString("Identifier", info.Identifier);

@@ -50,14 +50,20 @@ internal sealed class TextureThumbnailCache : IDisposable
     private readonly Dictionary<string, FolderListing> _folders = new(StringComparer.OrdinalIgnoreCase);
     private long _frame;
 
-    /// <summary>Advances the frame clock and trims the cache. Call once per frame.</summary>
+    /// <summary>
+    /// Advances the frame clock and trims the cache. Call once per frame. Thumbnails drawn in the
+    /// last frame are kept even past <see cref="Capacity"/>: evicting them would only load them
+    /// again straight away, every frame, while more than that many are on screen.
+    /// </summary>
     public void NewFrame()
     {
         _frame++;
         if (_entries.Count <= Capacity)
             return;
 
-        foreach (var key in _entries.OrderBy(e => e.Value.LastUsed).Take(_entries.Count - Capacity).Select(e => e.Key).ToList())
+        var stale = _entries.Where(e => e.Value.LastUsed < _frame - 1).OrderBy(e => e.Value.LastUsed)
+            .Take(_entries.Count - Capacity).Select(e => e.Key).ToList();
+        foreach (var key in stale)
         {
             Release(_entries[key]);
             _entries.Remove(key);

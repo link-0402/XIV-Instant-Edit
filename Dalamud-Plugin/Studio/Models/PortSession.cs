@@ -362,6 +362,7 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
         ApplyTextureDefaults(layout.SelectMany(m => m.Textures));
         item.Materials.Clear();
         item.Materials.AddRange(layout);
+        ModelMaterialLinks.Remap(item.Models, ModelMaterialLinks.Reset);
         Focus(new Target(TargetKind.Material, item.Key, 0));
         MarkDirty();
         Notify($"Matched {layout.Count} vanilla material(s): {string.Join(", ", layout.Select(m => m.Name))}.", Severity.Info);
@@ -574,6 +575,7 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
 
         int at = afterIndex >= 0 && afterIndex < item.Materials.Count ? afterIndex + 1 : item.Materials.Count;
         item.Materials.Insert(at, copy);
+        ModelMaterialLinks.Remap(item.Models, ModelMaterialLinks.Inserted(at));
         Focus(new Target(TargetKind.Material, item.Key, at));
         MarkDirty();
         Notify(keepTexturePaths
@@ -632,6 +634,7 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
     {
         if (index < 0 || index >= item.Materials.Count) return;
         item.Materials.RemoveAt(index);
+        ModelMaterialLinks.Remap(item.Models, ModelMaterialLinks.Removed(index));
         Selection = item.Materials.Count > 0
             ? new Target(TargetKind.Material, item.Key, Math.Min(index, item.Materials.Count - 1))
             : new Target(TargetKind.Item, item.Key);
@@ -644,6 +647,7 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
         int to = index + delta;
         if (index < 0 || index >= item.Materials.Count || to < 0 || to >= item.Materials.Count) return;
         (item.Materials[index], item.Materials[to]) = (item.Materials[to], item.Materials[index]);
+        ModelMaterialLinks.Remap(item.Models, ModelMaterialLinks.Swapped(index, to));
         Selection = new Target(TargetKind.Material, item.Key, to);
         MarkDirty();
     }

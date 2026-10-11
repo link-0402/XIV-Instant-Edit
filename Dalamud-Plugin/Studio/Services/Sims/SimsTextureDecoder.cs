@@ -76,6 +76,17 @@ public static class SimsTextureDecoder
     private const uint FourCcDst3 = 0x33545344;   // "DST3"
     private const uint FourCcDst5 = 0x35545344;   // "DST5"
 
+    /// <summary>
+    /// Largest side accepted. The Sims 4 itself stops at 4096; 8192 leaves room for
+    /// oversized custom content while keeping one decode (blocks, pixels, RGBA and the
+    /// thumbnail image) to about a gigabyte at worst, since a header is just two numbers
+    /// and a downloaded file can claim anything.
+    /// </summary>
+    internal const int MaxTextureSide = 8192;
+
+    /// <summary>Most blocks one RLE command can cover: its count is the top 14 bits.</summary>
+    private const int MaxBlocksPerRleCommand = 0xFFFF >> 2;
+
     /// <summary>Decodes a texture resource of any of the supported types.</summary>
     public static DecodedTexture Decode(uint resourceType, byte[] data)
     {
@@ -123,8 +134,11 @@ public static class SimsTextureDecoder
 
         if (mipCount <= 0)
             throw new InvalidDataException("RLE texture declares no mip levels.");
+        CheckDimensions(width, height);
 
         bool isRles = tag == TagRles;
+        if (16 + (long)mipCount * (isRles ? 24 : 20) > data.Length)
+            throw new InvalidDataException("RLE texture is too small for its mip table.");
 
         var mips = new MipOffsets[mipCount];
         for (int i = 0; i < mipCount; i++)
@@ -143,15 +157,24 @@ public static class SimsTextureDecoder
         // stream runs until the next mip's begins.
         int commandEnd = mipCount > 1 ? mips[1].Command : data.Length;
 
-        int mipWidth  = Math.Max(width, 1);
-        int mipHeight = Math.Max(height, 1);
+        int mipWidth  = width;
+        int mipHeight = height;
         int blocksX = Math.Max((mipWidth  + 3) / 4, 1);
         int blocksY = Math.Max((mipHeight + 3) / 4, 1);
         int blockLimit = blocksX * blocksY;
-        var blocks = new byte[blockLimit * 16];
 
         var cursor = mips[0];
         int command = cursor.Command;
+        if (command < 0 || command > data.Length || commandEnd < command || commandEnd > data.Length)
+            throw new InvalidDataException("RLE command stream lies outside the resource.");
+
+        // Every block has to come from a command, and one command covers at most
+        // MaxBlocksPerRleCommand of them, so a stream too short to reach the last block is
+        // refused before the block buffer is allocated rather than left zero-filled.
+        if ((long)(commandEnd - command) / 2 * MaxBlocksPerRleCommand < blockLimit)
+            throw new InvalidDataException("RLE command stream is too short for the image size.");
+
+        var blocks = new byte[blockLimit * 16];
 
         // The four streams line up with the four fields of a DXT5 block, not with the
         // block as a whole: two carry the colour halves for every block that has colour,
@@ -211,7 +234,21 @@ public static class SimsTextureDecoder
             }
         }
 
+        if (blockIndex != blockLimit)
+            throw new InvalidDataException(
+                $"RLE command stream covers {blockIndex:N0} of {blockLimit:N0} blocks.");
+
         return BuildDds(blocks, mipWidth, mipHeight, fourCc);
+    }
+
+    /// <summary>Refuses zero, negative and oversized dimensions before anything is sized from them.</summary>
+    private static void CheckDimensions(int width, int height)
+    {
+        if (width <= 0 || height <= 0)
+            throw new InvalidDataException("Texture declares zero dimensions.");
+        if (width > MaxTextureSide || height > MaxTextureSide)
+            throw new InvalidDataException(
+                $"Texture is {width}x{height}; the largest supported side is {MaxTextureSide}.");
     }
 
     /// <summary>Renders a FourCC back as its four characters, for error messages.</summary>
@@ -261,6 +298,9 @@ public static class SimsTextureDecoder
 
     private static DecodedTexture DecodeDds(byte[] dds, string sourceFormat)
     {
+        if (dds.Length < 128)
+            throw new InvalidDataException("DDS is too small to hold its header.");
+
         using var ms = new MemoryStream(dds, writable: false);
         using var br = new BinaryReader(ms);
 
@@ -286,11 +326,12 @@ public static class SimsTextureDecoder
         uint aMask   = br.ReadUInt32();
         ms.Position += 20;                      // dwCaps..dwCaps4 + reserved2
 
-        if (width <= 0 || height <= 0)
-            throw new InvalidDataException("DDS declares zero dimensions.");
+        CheckDimensions(width, height);
 
         if (fourCc == FourCcDx10)
         {
+            if (dds.Length < 148)
+                throw new InvalidDataException("DDS is too small to hold its DX10 header.");
             uint dxgiFormat = br.ReadUInt32();
             ms.Position += 16;
             return DecodeBlocks(dds, (int)ms.Position, width, height, DxgiToFormat(dxgiFormat), sourceFormat);
@@ -315,10 +356,10 @@ public static class SimsTextureDecoder
     }
 
     /// <summary>Bytes one mip level occupies: whole 4x4 blocks, at this format's block size.</summary>
-    private static int BlockDataLength(int width, int height, CompressionFormat format)
+    private static long BlockDataLength(int width, int height, CompressionFormat format)
     {
-        int blocksX = Math.Max((width  + 3) / 4, 1);
-        int blocksY = Math.Max((height + 3) / 4, 1);
+        long blocksX = Math.Max((width  + 3) / 4, 1);
+        long blocksY = Math.Max((height + 3) / 4, 1);
         return blocksX * blocksY * BytesPerBlock(format);
     }
 
@@ -346,17 +387,17 @@ public static class SimsTextureDecoder
         // and handing all of it to the decoder makes it lay the smaller levels out as if
         // they were more rows of the full-size image — the picture then comes back as the
         // texture tiled at shrinking scales rather than as an error.
-        int mip0Length = BlockDataLength(width, height, format);
+        long mip0Length = BlockDataLength(width, height, format);
         if (dataOffset + mip0Length > dds.Length)
             throw new InvalidDataException("DDS is truncated: it does not hold a complete first mip level.");
 
         var blockData = new byte[mip0Length];
-        Buffer.BlockCopy(dds, dataOffset, blockData, 0, mip0Length);
+        Buffer.BlockCopy(dds, dataOffset, blockData, 0, (int)mip0Length);
 
         var decoder = new BcDecoder();
         var pixels  = decoder.DecodeRaw(blockData, width, height, format);
 
-        var rgba = new byte[width * height * 4];
+        var rgba = new byte[(long)width * height * 4];
         for (int i = 0; i < pixels.Length && i * 4 + 3 < rgba.Length; i++)
         {
             rgba[i * 4]     = pixels[i].r;
@@ -381,15 +422,17 @@ public static class SimsTextureDecoder
             throw new InvalidDataException($"Unsupported uncompressed DDS bit depth {rgbBits}.");
 
         int bytesPerPixel = rgbBits / 8;
-        var rgba = new byte[width * height * 4];
+        int pixelCount = width * height;            // at most MaxTextureSide squared, so no overflow
+        if (dataOffset + (long)pixelCount * bytesPerPixel > dds.Length)
+            throw new InvalidDataException("DDS is truncated: it does not hold every pixel of the first mip level.");
+
+        var rgba = new byte[(long)pixelCount * 4];
 
         int rShift = MaskShift(rMask), gShift = MaskShift(gMask), bShift = MaskShift(bMask), aShift = MaskShift(aMask);
 
-        for (int i = 0; i < width * height; i++)
+        for (int i = 0; i < pixelCount; i++)
         {
             int at = dataOffset + i * bytesPerPixel;
-            if (at + bytesPerPixel > dds.Length)
-                break;
 
             uint value = bytesPerPixel == 4
                 ? BitConverter.ToUInt32(dds, at)

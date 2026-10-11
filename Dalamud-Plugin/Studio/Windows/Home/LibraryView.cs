@@ -486,11 +486,12 @@ internal sealed class LibraryView
         return string.Join("\n", lines.Take(10)) + (lines.Count > 10 ? $"\nand {lines.Count - 10} more" : string.Empty);
     }
 
+    /// <summary>The tile's preview image: found and checked when the library was listed, never here per frame.</summary>
     private Action<float>? Image(InstalledMod? mod)
     {
         if (mod == null || mod.ImagePath.Length == 0 || !_host.Configuration.ShowThumbnails)
             return null;
-        var path = PathNormalizer.ToDiskPath(mod.FullPath, mod.ImagePath);
-        return File.Exists(path) ? side => _thumbs.DrawFile(path, side) : null;
+        var path = mod.ImagePath;
+        return side => _thumbs.DrawFile(path, side);
     }
 }

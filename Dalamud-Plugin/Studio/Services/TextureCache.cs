@@ -128,7 +128,9 @@ internal sealed class TextureCache
     }
 
     /// <summary>Drops the oldest entries once the folder grows past its limit. Called after each update.</summary>
-    public void Prune()
+    public void Prune() => Prune(MaxBytes);
+
+    internal void Prune(long maxBytes)
     {
         if (_directory == null || !Directory.Exists(_directory))
             return;
@@ -137,14 +139,23 @@ internal sealed class TextureCache
         {
             var files = new DirectoryInfo(_directory).GetFiles("*.tex");
             long total = files.Sum(f => f.Length);
-            if (total <= MaxBytes)
+            if (total <= maxBytes)
                 return;
 
             foreach (var file in files.OrderBy(f => f.LastWriteTimeUtc))
             {
-                file.Delete();
-                total -= file.Length;
-                if (total <= MaxBytes)
+                // The length first: once deleted, FileInfo.Length throws for the file that is gone.
+                long size = file.Length;
+                try
+                {
+                    file.Delete();
+                }
+                catch (Exception)
+                {
+                    continue;   // in use, say; the next one frees the space instead
+                }
+                total -= size;
+                if (total <= maxBytes)
                     return;
             }
         }
