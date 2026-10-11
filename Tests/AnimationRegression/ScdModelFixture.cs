@@ -93,7 +93,7 @@ internal static class ScdModelFixture
     }
 
     /// <summary>RandomSet(2) plus a second, Normal sound with its own layout and track, whose entry plays audio 0.</summary>
-    private static ScdModel TwoSoundsSharingAudio()
+    internal static ScdModel TwoSoundsSharingAudio()
     {
         var m = ScdModel.Read(RandomSet(2));
         var normal = m.Sounds[0].Clone();

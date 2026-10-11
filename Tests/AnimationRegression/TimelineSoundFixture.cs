@@ -11,6 +11,80 @@ internal static class TimelineSoundFixture
     public static void Run(Action<bool, string> check, Action<Action, string> reject)
     {
         Edits(check, reject);
+        Baking(check, reject);
+    }
+
+    private static void Baking(Action<bool, string> check, Action<Action, string> reject)
+    {
+        var scd = ScdModelFixture.RandomSet(3);
+        byte[]? Bytes(string path) => path.Equals(Moan, StringComparison.OrdinalIgnoreCase) ? scd : null;
+        byte[]? NoImport(string path) => null;
+        var key = new TimelineSoundKey(Moan, 0);
+        var louder = TimelineSoundEdits.Initial(ScdModel.Read(scd), 0) with { Volume = 0.5f };
+        var docWithEdit = Doc(Sound("n1"), Sound("n2")) with { SoundEdits = ImmutableDictionary<TimelineSoundKey, TimelineSoundEdit>.Empty.Add(key, louder) };
+        TimelineDocument DocWithEditAndPin(string pinned, string pin) =>
+            docWithEdit with { Events = [.. docWithEdit.Events.Select(e => e.Key == pinned ? e with { Pin = pin } : e)] };
+
+        var baked = TimelineSoundEdits.Bake(docWithEdit, Bytes, NoImport, _ => TimelineSoundRoute.Copy);
+        check(baked.Document.SoundEdits.IsEmpty && baked.Copies is [{ GamePath: var copy, Beside: var beside }] &&
+              copy.StartsWith("sound/instant_edit/moan_") && beside![copy] == Moan && baked.Document.Events.All(e => e.Path == copy) &&
+              ScdModel.Read(baked.Copies[0].Files[copy]).Sounds[0].Volume == 0.5f && baked.InPlace.IsEmpty,
+            "a copied edit points every unpinned event at one copy, mapped beside the original");
+        var inPlace = TimelineSoundEdits.Bake(docWithEdit, Bytes, NoImport, _ => TimelineSoundRoute.InPlace);
+        check(inPlace.Copies.IsEmpty && inPlace.InPlace["SOUND/moan.scd"].BaseHash == InstantEdit.Services.Animations.AnimationPap.Hash(scd) &&
+              inPlace.Document.Events.All(e => e.Path == Moan) && ScdModel.Read(inPlace.InPlace[Moan].Bytes).Sounds[0].Volume == 0.5f,
+            "an in-place edit keeps the path and carries the original's hash");
+        var unchanged = docWithEdit with { SoundEdits = docWithEdit.SoundEdits.SetItem(key, louder with { Volume = null }) };
+        check(TimelineSoundEdits.Bake(unchanged, Bytes, NoImport, _ => TimelineSoundRoute.Copy) is { Copies.IsEmpty: true, InPlace.IsEmpty: true } same &&
+              same.Document.Events.All(e => e.Path == Moan) && same.Document.SoundEdits.IsEmpty, "an edit that changes nothing keeps the file");
+        // Review focus 4: one event pinned, one not, with an edit.
+        var mixed = TimelineSoundEdits.Bake(DocWithEditAndPin("n1", "o2"), Bytes, NoImport, _ => TimelineSoundRoute.Copy);
+        check(mixed.Copies.Length == 2 && TimelineEdits.Find(mixed.Document, "n1") is { Pin: null } p && p.Values["SoundIndex"] == 0 && p.Path.Contains("moan_3_") &&
+              ScdModel.Read(mixed.Copies.Single(c => c.GamePath == p.Path).Files[p.Path]) is { Sounds: [{ Volume: 0.5f, Entries.Count: 1 }] } &&
+              mixed.Copies.Single(c => c.GamePath == p.Path).Beside![p.Path] == Moan && TimelineEdits.Find(mixed.Document, "n2")!.Path.StartsWith("sound/instant_edit/moan_") &&
+              !TimelineEdits.Find(mixed.Document, "n2")!.Path.Contains("moan_3_"),
+            "a pinned event gets a keep-only copy cut from the edited file");
+        var pinOnly = TimelineSoundEdits.Bake(Doc(Sound("n1", pin: "o1"), Sound("n2")), Bytes, NoImport, _ => TimelineSoundRoute.InPlace);
+        check(pinOnly.Copies.Length == 1 && pinOnly.InPlace.IsEmpty && TimelineEdits.Find(pinOnly.Document, "n2")!.Path == Moan &&
+              ScdModel.Read(pinOnly.Copies[0].Files[pinOnly.Copies[0].GamePath]).Sounds[0].Entries.Count == 1,
+            "a pin without edits copies one alternative and leaves the file alone");
+        reject(() => TimelineSoundEdits.Bake(Doc(Sound("n1", pin: "a7")), Bytes, NoImport, _ => TimelineSoundRoute.Copy), "a pin naming a sound the file lacks is refused");
+        // Review focus 1: sound index 1 of a two-sound file.
+        var twoBytes = ScdModelFixture.TwoSoundsSharingAudio().Write();
+        var twoModel = ScdModel.Read(twoBytes);
+        var key1 = new TimelineSoundKey(Moan, 1);
+        var docOnSound1 = Doc(Sound("n1", index: 1, pin: "o0"), Sound("n2", index: 1)) with
+        {
+            SoundEdits = ImmutableDictionary<TimelineSoundKey, TimelineSoundEdit>.Empty.Add(key1, TimelineSoundEdits.Initial(twoModel, 1) with { Volume = 0.5f }),
+        };
+        var two = TimelineSoundEdits.Bake(docOnSound1, path => path == Moan ? twoBytes : null, NoImport, _ => TimelineSoundRoute.Copy);
+        var editedCopy = ScdModel.Read(two.Copies.Single(c => c.GamePath == TimelineEdits.Find(two.Document, "n2")!.Path).Files.Values.Single());
+        var pinCopy = ScdModel.Read(two.Copies.Single(c => c.GamePath == TimelineEdits.Find(two.Document, "n1")!.Path).Files.Values.Single());
+        check(editedCopy.Sounds[0].Volume == twoModel.Sounds[0].Volume && editedCopy.Sounds[1].Volume == 0.5f && TimelineEdits.Find(two.Document, "n2")!.Values["SoundIndex"] == 1 &&
+              pinCopy.Sounds is [{ Volume: 0.5f, Type: 1 }] && TimelineEdits.Find(two.Document, "n1")!.Values["SoundIndex"] == 0,
+            "an edit of sound 1 changes only sound 1, and its pin copy plays it as sound 0");
+        // Review focus 3: an unreadable file without edits.
+        var docWithoutEdits = Doc(Sound("n1"));
+        check(TimelineSoundEdits.Bake(docWithoutEdits, _ => null, NoImport, _ => TimelineSoundRoute.Copy).Document == docWithoutEdits &&
+              TimelineSoundEdits.Bake(docWithEdit with { SoundEdits = docWithEdit.SoundEdits.Add(new("sound/other.scd", 0), louder) }, Bytes, NoImport,
+                  _ => TimelineSoundRoute.Copy).Copies.Length == 1,
+            "a sound that can't be read never blocks a document without its edits, and an edit no event plays is dropped");
+        reject(() => TimelineSoundEdits.Bake(docWithEdit, _ => null, NoImport, _ => TimelineSoundRoute.Copy), "an edited sound that can't be read is refused");
+        var (rest, files) = TimelineSoundEdits.Redirectable(DocWithEditAndPin("n1", "o2"), Bytes, NoImport);
+        check(files.ContainsKey("SOUND/MOAN.SCD") && ScdModel.Read(files[Moan]).Sounds[0].Volume == 0.5f && rest.SoundEdits.IsEmpty && TimelineEdits.Find(rest, "n1")!.Pin == "o2",
+            "preview points the file's own path at the edit and leaves pins for a rebuild");
+        var removedFirst = DocWithEditAndPin("n1", "o2") with
+        {
+            SoundEdits = docWithEdit.SoundEdits.SetItem(key, louder with { Alternatives = [.. louder.Alternatives.Skip(1).Select(a => a with { Share = 50 })] }),
+        };
+        var (shifted, shiftedFiles) = TimelineSoundEdits.Redirectable(removedFirst, Bytes, NoImport);
+        var rebuilt = TimelineSoundEdits.Bake(shifted, path => shiftedFiles.GetValueOrDefault(path) ?? Bytes(path), NoImport, _ => TimelineSoundRoute.Copy);
+        check(TimelineEdits.Find(shifted, "n1")!.Pin == "o1" && rebuilt.Copies.Length == 1 && TimelineEdits.Find(rebuilt.Document, "n2")!.Path == Moan &&
+              ScdModel.Read(rebuilt.Copies[0].Files.Values.Single()).Audio.Single().Seconds == ScdModel.Read(scd).Audio[3].Seconds,
+            "a redirected file's pins name their alternative's place in it, so the rebuild cuts the right one");
+        var twoSounds = docOnSound1 with { Events = [.. docOnSound1.Events.Select(e => e with { Pin = null })] };
+        check(TimelineSoundEdits.Redirectable(twoSounds, path => path == Moan ? twoBytes : null, NoImport) is var (twoRest, twoFiles) && twoFiles.IsEmpty &&
+              twoRest.SoundEdits.Count == 1, "a file with several sounds isn't redirected; its edit waits for a rebuild");
     }
 
     private static TimelineEvent Sound(string key, string path = Moan, int index = 0, string? pin = null) =>

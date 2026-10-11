@@ -63,7 +63,7 @@ internal sealed record TimelineSoundEdit(ImmutableArray<TimelineSoundAlternative
 }
 
 /// <summary>Reading and writing sound edits. Dalamud-free.</summary>
-internal static class TimelineSoundEdits
+internal static partial class TimelineSoundEdits
 {
     /// <summary>The edit that changes nothing: the sound's own alternatives with their chances, or raw limits when they don't follow the convention.</summary>
     public static TimelineSoundEdit Initial(ScdModel m, int sound)
