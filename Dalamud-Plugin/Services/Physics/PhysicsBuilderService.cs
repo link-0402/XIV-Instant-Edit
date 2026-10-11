@@ -31,7 +31,7 @@ internal sealed class PhysicsBuilderService : IDisposable
 {
     public const string ModName = "IE Physics";
     private const string ModDescription =
-        "Body physics made with XIV Instant Edit's physics builder (Quick Actions > Body physics). Open the builder to change it.";
+        "Body physics made with XIV Instant Edit's physics builder (Quick Actions > Body physics builder). Open the builder to change it.";
 
     private const long MaxModelBytes = 256L * 1024 * 1024;
 

@@ -41,6 +41,7 @@ OWNED_ROOT_DIRECTORIES = frozenset(name.casefold() for name in (
 ))
 OWNED_ROOT_FILES = frozenset(name.casefold() for name in (
     "TextureSessions.json", "TextureSessions.json.tmp", "pending-context-revocations.json",
+    "library-scans.json", "library-scans.json.tmp",
 ))
 OWNED_ROOT_TEMPORARY_RE = re.compile(r"^\.pending-context-revocations\.json\.[0-9a-f]{32}\.tmp$", re.IGNORECASE)
 

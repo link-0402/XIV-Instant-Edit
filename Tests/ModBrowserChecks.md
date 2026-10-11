@@ -15,11 +15,24 @@ acceptance list, rewritten for the Mod Browser). Use copies of real mods where a
    Duplicate badge whose tooltip names the other folder, next to each other in the list. A copy with
    one file changed is not listed.
 4. "Search in": Item with "e6016" or an item name, Emote with an emote name, Face with "au ra 101",
-   Standing idle / Groundsit / Chair sit with a race or pose number. Each lists only mods that change
-   that thing, and the tile tooltip's "Changes:" list marks what matched with "> ".
-5. Cancel during a scan: the filters go back to "Name, author or tag" and "All mods".
+   Hair with a race and hair number, Standing idle / Groundsit / Chair sit with a race or pose number.
+   Each lists only mods that change that thing, and the tile tooltip's "Changes:" list marks what
+   matched with "> ". Face lists no hair, tail, ear or face paint mods; Hair lists hairstyles.
+5. Cancel during a scan: the filters go back to "Name" and "All mods" (and the sort to "Name" from "Size").
 6. Right-click a tile: Open, Open the mod's folder (Explorer opens it) and Select in Penumbra
    (Penumbra's mod tab opens with the mod selected).
+6a. "Search in" Name, Author and Tag each search only that field. Folder searches where Penumbra
+    files the mod ("Gear/Shoes"); the tile tooltip's "In Penumbra:" line shows it.
+6b. "Show: Active" lists the mods enabled in your character's collection (the combo's tooltip names
+    it), and those tiles carry an Active badge in every view. "Disabled" lists all the others.
+    Toggle a mod in Penumbra: its badge and the lists follow within a moment. Assign your character
+    another collection: both follow within a couple of seconds.
+6c. Sort by "Size": the largest mods come first, and each tile's detail line starts with its size.
+    Sort by "Date added": the newest imports come first, with "Added <date>" on each tile, matching
+    Penumbra's import dates.
+6d. Disk cache: after a Size sort or a changes search, the cache folder holds library-scans.json.
+    Reload the plugin and repeat: the "Checking N mods" line passes in moments, since only new or
+    changed mods are read. Ctrl+click the refresh button: every mod is read again (the slow pass).
 
 ## Check and repair
 

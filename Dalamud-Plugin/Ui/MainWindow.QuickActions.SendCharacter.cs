@@ -72,21 +72,12 @@ public sealed partial class MainWindow
             CharacterPoseChoice("Current pose", CharacterPose.Current);
             ImGui.SameLine();
             CharacterPoseChoice("Playing animation", CharacterPose.Animation);
-            ImGui.SameLine();
-            Widgets.HelpTip("Current pose records one frame of your character's live pose, with the game's bone physics and " +
-                            "LivePose; Customize+ is paused for it, as for recordings. Playing animation samples the file of the " +
-                            "animation your character plays, whose physics bones keep their rest pose. Either becomes an action " +
-                            "on the character's armature.");
             var weapons = _config.CharacterSendWeapons;
             if (ImGui.Checkbox("Include weapons", ref weapons))
             {
                 _config.CharacterSendWeapons = weapons;
                 _saveConfig();
             }
-            ImGui.SameLine();
-            Widgets.HelpTip("A weapon's own skeleton names its bones like the body's, so each weapon gets an armature of its own, " +
-                            "hung from the bone that holds it in the game. It follows the pose and still exports where its " +
-                            "skeleton puts it.");
         }
 
         var capture = DrawCharacterAnimation();

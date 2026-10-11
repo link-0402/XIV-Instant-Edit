@@ -115,6 +115,20 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     }
 
     /// <summary>
+    /// Whether the GPose character at <paramref name="index"/> is drawn and visible. A redraw gives it its skeleton a few frames
+    /// before it shows, and a timeline started before that plays without any of its sounds (seen in game 2026-10-10: a play on
+    /// Penumbra's redraw event asked for none, not even an effect's music; one 0.25 s later asked for all).
+    /// </summary>
+    public bool Shown(ushort index)
+    {
+        RequireFrameworkThread();
+        if (GPoseCharacter(index) is not { } actor || Problem(actor) != null)
+            return false;
+        var drawObject = ((FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject*)actor.Address)->DrawObject;
+        return drawObject != null && drawObject->IsVisible;
+    }
+
+    /// <summary>
     /// How the character bones are edited on is turned in the world: the GPose actor, else your own
     /// character. The Bones window's rotation ball shows its rings that way; null when neither is drawn.
     /// </summary>

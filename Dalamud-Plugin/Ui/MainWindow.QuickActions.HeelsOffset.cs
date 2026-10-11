@@ -21,8 +21,8 @@ public sealed partial class MainWindow
     }
 
     private QuickAction HeelsOffsetCard => new("heels-offset", FontAwesomeIcon.ShoePrints, "Heels offset",
-        "Measures the gear your feet stand in: your shoes, or the legs or body gear when it hides them. Writes the Simple Heels " +
-        "offset into that model, so you stand on the ground instead of sinking in or floating.",
+        "Measures the necessary offset for the gear piece currently determining your height. This is typically your shoes, but can also be on the legs or body model if foot gear is hidden." +
+        "Writes the Simple Heels offset into that model, so you stand on the ground instead of sinking in or floating.",
         DrawHeelsOffsetAction,
         () => _config.AutoFixHeels = false,
         () => _config.AutoFixHeels);
@@ -47,10 +47,6 @@ public sealed partial class MainWindow
             _config.AutoFixHeels = automatic;
             _saveConfig();
         }
-        ImGui.SameLine();
-        Widgets.HelpTip("Fixes each feet model you put on once it has loaded, or the legs or body model when your gear hides your feet, " +
-                        "also while this window is closed. It writes into your mods' files, keeping a backup of each for a week, and " +
-                        "redraws your character. It waits during combat, cutscenes and GPose, and leaves the game's own files alone.");
         if (busy)
         {
             ImGui.SameLine();
@@ -129,16 +125,6 @@ public sealed partial class MainWindow
         else
             Widgets.HintWrapped("Simple Heels isn't running, or this version of it isn't supported.");
 
-        var scaling = result.Scaling is { } scaled ? $", reshaped from c{scaled.ModelRace:D4} for {scaled.CharacterLabel}" : "";
-        var hidden = measurement.HiddenParts switch
-        {
-            0 => "",
-            1 => ", without 1 part your outfit hides",
-            var count => $", without {count} parts your outfit hides",
-        };
-        var checkedAt = result.Automatic ? $" Checked automatically at {result.Time.ToString("HH:mm", CultureInfo.InvariantCulture)}." : "";
-        Widgets.MutedWrapped($"Measured in the standard pose{scaling}{hidden}. Simple Heels scales the offset to your height. " +
-                             $"Animations and Customize+ aren't taken into account.{checkedAt}");
         foreach (var warning in result.Warnings)
             HeelsText(Theme.Warning, warning);
 

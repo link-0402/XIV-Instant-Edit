@@ -18,6 +18,154 @@ internal static class LibraryFilterScenarios
         SameNamedModsWithOtherFilesAreNotHashed();
         CaseTwinRedirectionsDontBreakTheFingerprint();
         AFailingModDoesntStopTheScan();
+        HairIsHairAndNoFace();
+        CustomizationItemsAreSortedByWhatTheyChange();
+        NameAuthorTagAndFolderAreSearchedApart();
+        SizeIsEveryFileInTheFolder();
+        ActiveIsReadForTheCollectionAsked();
+        ScansAreKeptAcrossRestarts(testRoot);
+        ABrokenCacheFileMeansAFullScan(testRoot);
+    }
+
+    private static void HairIsHairAndNoFace()
+    {
+        var hair = Single("chara/human/c0101/obj/hair/h0005/model/c0101h0005_hir.mdl");
+        Require(hair.Kind == ChangeKind.Hair && hair.Label == "Midlander (Male) hair 5 (h0005)", $"a hair path is hair (got {hair.Kind} '{hair.Label}')");
+        Require(ChangesIndex.Matches(new[] { hair }, SearchIn.Hair, "midlander 5") && !ChangesIndex.Matches(new[] { hair }, SearchIn.Face, ""),
+            "Hair finds it and Face doesn't");
+    }
+
+    // Penumbra's customization changed items are (race, gender, customize index, value) tuples; only the index's name matters.
+    private enum CustomizeIndex : byte { Face = 5, Hairstyle = 6, TailShape = 18, FacePaint = 19 }
+
+    private static void CustomizationItemsAreSortedByWhatTheyChange()
+    {
+        object Customization(CustomizeIndex index) => ((byte)1, (byte)1, index, (byte)5);
+        Require(ChangesIndex.KindOfChangedItem(Customization(CustomizeIndex.Face)) == ChangeKind.Face, "a face customization is a face");
+        Require(ChangesIndex.KindOfChangedItem(Customization(CustomizeIndex.Hairstyle)) == ChangeKind.Hair, "a hairstyle is hair");
+        Require(ChangesIndex.KindOfChangedItem(Customization(CustomizeIndex.TailShape)) == ChangeKind.Other
+             && ChangesIndex.KindOfChangedItem(Customization(CustomizeIndex.FacePaint)) == ChangeKind.Other, "tails, ears and face paint are neither");
+        Require(ChangesIndex.KindOfChangedItem(null) == ChangeKind.Other && ChangesIndex.KindOfChangedItem(3) == ChangeKind.Other, "anything else is other");
+    }
+
+    private static void NameAuthorTagAndFolderAreSearchedApart()
+    {
+        var mod = new InstalledMod("disk_folder", @"C:\mods\disk_folder", "Bunny Ears", "Kitsune", new[] { "Accessory" }, string.Empty,
+            new DateTime(2026, 9, 1), false, Folder: "Gear/Head");
+        Require(ChangesIndex.MatchesListing(mod, SearchIn.Name, "bunny") && !ChangesIndex.MatchesListing(mod, SearchIn.Name, "kitsune"), "Name searches the name only");
+        Require(ChangesIndex.MatchesListing(mod, SearchIn.Author, "kitsune") && !ChangesIndex.MatchesListing(mod, SearchIn.Author, "bunny"), "Author searches the author only");
+        Require(ChangesIndex.MatchesListing(mod, SearchIn.Tag, "access") && !ChangesIndex.MatchesListing(mod, SearchIn.Tag, "bunny"), "Tag searches the tags only");
+        Require(ChangesIndex.MatchesListing(mod, SearchIn.Folder, "gear/head") && ChangesIndex.MatchesListing(mod, SearchIn.Folder, "head")
+             && !ChangesIndex.MatchesListing(mod, SearchIn.Folder, "disk_folder"), "Folder searches Penumbra's folders, not the folder on disk");
+        Require(ChangesIndex.MatchesListing(mod, SearchIn.Tag, "") && !ChangesIndex.MatchesListing(mod, SearchIn.Item, "bunny"),
+            "an empty search matches; a changes search is no listing search");
+        Require(!ChangesIndex.IsChangesSearch(SearchIn.Folder) && ChangesIndex.IsChangesSearch(SearchIn.Hair), "Folder needs no scan; Hair does");
+    }
+
+    private static void SizeIsEveryFileInTheFolder()
+    {
+        using var mod = CurrentMod("Sized", Guid.NewGuid().ToString(), "ABC");
+        var expected = Directory.EnumerateFiles(mod.Path, "*", SearchOption.AllDirectories).Sum(f => new FileInfo(f).Length);
+        var scans = new LibraryScans(() => new Dictionary<Guid, string>(), _ => null, _ => Array.Empty<(string, ChangeKind)>());
+        var mods = new[] { Installed(mod, "Sized") };
+        scans.Need(usage: false, duplicates: false, changes: false, mods, sizes: true);
+        scans.Idle.Wait(TimeSpan.FromSeconds(30));
+        Require(scans.Sizes is { } sizes && sizes[mods[0].FolderName] == expected, $"the size is every file in the folder ({expected} bytes)");
+    }
+
+    private static void ActiveIsReadForTheCollectionAsked()
+    {
+        var mine = Guid.NewGuid();
+        var other = Guid.NewGuid();
+        var asked = new List<Guid>();
+        var scans = new LibraryScans(() => new Dictionary<Guid, string>(), id =>
+        {
+            lock (asked) asked.Add(id);
+            return id == mine ? new Dictionary<string, bool> { ["A"] = true, ["B"] = false } : new Dictionary<string, bool> { ["B"] = true };
+        }, _ => Array.Empty<(string, ChangeKind)>());
+        var mods = Array.Empty<InstalledMod>();
+
+        void Settle(Guid collection)
+        {
+            scans.Need(usage: false, duplicates: false, changes: false, mods, activeIn: collection);
+            scans.Idle.Wait(TimeSpan.FromSeconds(30));
+        }
+
+        Settle(mine);
+        Require(scans.Active is { } active && active.SetEquals(["a"]), "the mods enabled in the collection are active, by folder name ignoring case");
+        Settle(mine);
+        Require(asked.Count == 1, "asking again for the same collection reads nothing");
+        Settle(other);
+        Require(asked.Count == 2 && scans.Active!.SetEquals(["B"]), "another collection is read again");
+        scans.InvalidateUsage();
+        Settle(other);
+        Require(asked.Count == 3, "a settings change reads it again");
+    }
+
+    private static void ScansAreKeptAcrossRestarts(string testRoot)
+    {
+        var cacheFile = Path.Combine(testRoot, $"library-scans-{Guid.NewGuid():N}.json");
+        using var copyA = CurrentMod("Copy", Guid.NewGuid().ToString(), "A");
+        using var copyB = CurrentMod("Copy", Guid.NewGuid().ToString(), "A");
+        copyA.File("chara/human/c0101/obj/hair/h0005/model/c0101h0005_hir.mdl", "M"u8.ToArray());
+        var meta = JObject.Parse(File.ReadAllText(Path.Combine(copyA.Path, "meta.json")));
+        ((JObject)meta["DefaultData"]!["Files"]!)["chara/human/c0101/obj/hair/h0005/model/c0101h0005_hir.mdl"] = "chara/human/c0101/obj/hair/h0005/model/c0101h0005_hir.mdl";
+        copyA.Meta(meta.ToString());
+        copyB.File("chara/human/c0101/obj/hair/h0005/model/c0101h0005_hir.mdl", "M"u8.ToArray());
+        copyB.Meta(meta.ToString());
+        var mods = new[] { Installed(copyA, "Copy"), Installed(copyB, "Copy") };
+
+        (LibraryScans Scans, List<string> Prints, List<string> Items) Start()
+        {
+            var prints = new List<string>();
+            var items = new List<string>();
+            var scans = new LibraryScans(() => new Dictionary<Guid, string>(), _ => null,
+                folder => { lock (items) items.Add(folder); return new[] { ("Dance", ChangeKind.Emote) }; },
+                folder => { lock (prints) prints.Add(folder); return DuplicateModScan.Fingerprint(folder); },
+                () => cacheFile);
+            return (scans, prints, items);
+        }
+
+        void Settle(LibraryScans scans, IReadOnlyList<InstalledMod> list)
+        {
+            scans.Need(usage: false, duplicates: true, changes: true, list, sizes: true);
+            scans.Idle.Wait(TimeSpan.FromSeconds(30));
+        }
+
+        var first = Start();
+        Settle(first.Scans, mods);
+        Require(first.Prints.Count == 2 && first.Items.Count == 2 && File.Exists(cacheFile), "the first session reads every mod and saves what it found");
+        var sizes = first.Scans.Sizes!;
+
+        var second = Start();
+        Settle(second.Scans, mods);
+        Require(second.Prints.Count == 0 && second.Items.Count == 0, "a new session reads nothing for mods that didn't change");
+        Require(second.Scans.DuplicatesOf is { } dups && dups[mods[0].FolderName].SequenceEqual([mods[1].FolderName]),
+            "the duplicates come back from the cache");
+        Require(second.Scans.Changes is { } changes && ChangesIndex.Matches(changes[mods[0].FolderName], SearchIn.Hair, "midlander")
+             && ChangesIndex.Matches(changes[mods[0].FolderName], SearchIn.Emote, "dance"), "what each mod changes comes back from the cache");
+        Require(second.Scans.Sizes is { } kept && kept[mods[0].FolderName] == sizes[mods[0].FolderName] && kept[mods[1].FolderName] == sizes[mods[1].FolderName],
+            "the sizes come back from the cache");
+
+        var moved = new[] { mods[0], mods[1] with { LastWrite = mods[1].LastWrite.AddMinutes(1) } };
+        var third = Start();
+        Settle(third.Scans, moved);
+        Require(third.Prints.SequenceEqual([copyB.Path]) && third.Items.SequenceEqual([mods[1].FolderName]),
+            "a mod with a new last-write time is read again, and only it");
+    }
+
+    private static void ABrokenCacheFileMeansAFullScan(string testRoot)
+    {
+        var cacheFile = Path.Combine(testRoot, $"library-scans-{Guid.NewGuid():N}.json");
+        File.WriteAllText(cacheFile, "{ not json");
+        using var mod = CurrentMod("Broken", Guid.NewGuid().ToString(), "A");
+        var items = 0;
+        var scans = new LibraryScans(() => new Dictionary<Guid, string>(), _ => null,
+            _ => { Interlocked.Increment(ref items); return Array.Empty<(string, ChangeKind)>(); }, null, () => cacheFile);
+        scans.Need(usage: false, duplicates: false, changes: true, new[] { Installed(mod, "Broken") });
+        scans.Idle.Wait(TimeSpan.FromSeconds(30));
+        Require(items == 1 && scans.Error is null && scans.Changes is { Count: 1 }, "an unreadable cache file is ignored and the mods are read");
+        Require(JObject.Parse(File.ReadAllText(cacheFile))["Version"] is not null, "and it is written again");
     }
 
     private static void SameNamedModsWithOtherFilesAreNotHashed()

@@ -594,7 +594,7 @@ a constant two-key clip, so the face shows at once and holds. Seen in game on
 shows for the whole 100-frame loop. The editor now draws such a face until the next
 face or the end and marks it "held". 4,912 library faces are like this, 3,434 of them
 with the empty 0 to 0 range VFXEditor writes.
-- [ ] Open that mod: the Smile spans the whole loop, reads "held" and has no resize
+- [x] Open that mod: the Smile spans the whole loop, reads "held" and has no resize
   edges. Tick Time control: it keeps its span and becomes resizable. Shorten it to 30
   frames and save in place (the range becomes 0 to 1). In game the smile now ends
   after 1 s and comes back with each loop.
@@ -604,6 +604,7 @@ with the empty 0 to 0 range VFXEditor writes.
   Unticked: since a later suite run, and after a relog, the same test fails three times running. The first loop is
   still right (smile to frame 32, neutral from 40), but over two loops the rest-of-loop samples average 8.5° (max 16.7°),
   so the smile seems to stay on in a later loop. The second loop's samples weren't seen yet; rerun 169 and look.
+  Passes again on its own (2026-10-10, after the day's fixes).
 - [x] Give a held face a timed face later in the clip. The editor ends the held face
   where the timed one starts and shows nothing after it ends. Check what the game
   shows after the timed face ends: the held face, or the neutral face.
@@ -644,8 +645,17 @@ the SCD's loop end (1,827,659, the value mode B's redcarpet2.scd already uses).
   enable byte (13-14 bytes) and a sound copy looping over all of it (0..1827659); Preview plays; the in-place save maps
   the copies in Music, Props, Sparkles and Floor Cloud Thingy; Music off no longer resolves its copy; the mode A walk is
   unchanged; Undo removes the copies and mappings. Not checked: dancing for over a minute (eyes and ears).
-- [ ] Check whether -1 on the bgm effect (it doesn't loop, it was 909) changes
+- [x] Check whether -1 on the bgm effect (it doesn't loop, it was 909) changes
   anything, and whether the copies' effects double up when the dance loops.
+  (XIV Bridge tests/instant-edit/animations/190, 2026-10-10, by the files' live reference counts in the game's
+  resource map: over three dance loops no copy's count grows, so nothing doubles up; saved in place, the music's
+  looping copy plays and is still playing at 35 s with -1 and with 909 alike: the value changes nothing.)
+- [x] Preview plays an effect's music. Found and fixed 2026-10-10 (XIV Bridge animations/190, tools/diagnostics/
+  music-isolate.csx, music-timing.csx): a Preview played no sound at all, not even the unedited Red Carpet dance's
+  music or the emote's own sound. It played on Penumbra's redraw event, when the character has its skeleton but
+  doesn't show yet (it shows 65 to 120 ms later), and a timeline started then asks for none of its sounds. The
+  preview now waits until the character shows (at most 2 s). 190 passes: the preview plays the looping music copy.
+  Listen once in game that the music plays from the preview's start.
 
 Effect looks (2026-10-07):
 Selecting an effect (C012 or C173) shows a Look section. Tint, size, offset and turn
@@ -715,12 +725,12 @@ Length:
   (XIV Bridge tests/instant-edit/animations/179, 2026-10-10, Ball Dance: 196 to 294 frames; every event's start scaled
   (a face and 12 footsteps; it has no sounds), the motion lasts 9.8 s for 6.53 s and the save validated. Many other
   emotes fail pose validation on a length change; see the ninth session's notes in XIV Bridge's HANDOFF.md.)
-- [ ] Make a one-shot emote longer. Check whether the shared chara/action/<key>.tmb
+- [x] Make a one-shot emote longer. Check whether the shared chara/action/<key>.tmb
   cuts it off at the old length. If it does, the editor needs an option to edit that
   file too.
-  Not checked (XIV Bridge tests/instant-edit/animations/180, 2026-10-10): every one-shot emote tried (Wave, Bow, Clap,
-  …) is a loop in the ActionTimeline sheet, and the loader holds the timeline in GPose. It needs the emote used for
-  real outside GPose: manual.
+  (XIV Bridge tests/instant-edit/animations/180, 2026-10-10: it doesn't. Played on the GPose actor without the loader's
+  hold, as the game starts it, Wave's own timeline ends 3.19 s after it starts (its motion is 3.57 s); made one second
+  longer and saved into a new mod it ends at 4.20 s.)
 - [ ] A clip with root motion or Havok annotations refuses a length change with a
   clear reason.
   Not checked (XIV Bridge tests/instant-edit/animations/181, 2026-10-10): no loader row's game file has root motion or
@@ -756,6 +766,9 @@ Preview (GPose):
   Partly checked (XIV Bridge tests/instant-edit/animations/184, 2026-10-10): Stop redraws once more and the clip's own
   file plays again with the removed expression; Live asked for right after Stop waits until the character is drawn
   again, then starts. Not checked: a Brio or Ktisis pose.
+  Found with 202 (2026-10-10): after the preview's redraw the GPose character's head turns to the camera (35° on the
+  neck, GPose's Face Camera) and stays so after Stop, where it looked ahead before. Check by eye whether a Face Camera
+  turned off by hand survives a Preview, and decide whether the preview should keep the head as it was.
 - [ ] Pause freezes body and face; scrubbing moves the pose without drift; Resume and
   speed work; sounds and effects fire only while playing. Check alongside Brio and
   Ktisis, which hook the same speed function.
@@ -839,7 +852,7 @@ face once at its own length.
   (XIV Bridge tests/instant-edit/animations/201, 2026-10-10, after the fixes that send the matched clip and bake
   deprecated-additive faces the way the game applies them.)
 - [ ] Send an expression to Blender with the pen.
-- [ ] Open an expression's timeline. The header shows a face, the length can't change
+- [x] Open an expression's timeline. The header shows a face, the length can't change
   and Save writes only the TMB. Preview in GPose plays the expression on the face
   only: the body keeps its pose. Stop returns the face to neutral.
   (XIV Bridge tests/instant-edit/animations/202, 2026-10-10, Smile: the length is fixed and its handle only scrubs; the
@@ -847,6 +860,10 @@ face once at its own length.
   face back (0.02°); the save writes only chara/action/facial/pose/smile.tmb.)
   Unticked: since a later suite run, and after a relog, the body moves 6.5-7.3° (the idle sways 0.9°) while the face
   preview plays, and the face is 0.58° off neutral after Stop. Not explained yet; rerun 202.
+  Explained 2026-10-10: all of it is the neck (j_kubi 35°; arms, legs and spine stay within 1.3° of their idle): the
+  head turns to the camera after the preview's redraw and stays so after Stop. That is GPose's Face Camera (on again at
+  every GPose start; the user turns it off by hand), not the expression playing on the body. The script now leaves
+  the neck out and passes. See the redraw item under Preview.
 - [ ] Tick Keep on /smile's face and save in place. In game the smile stays after the
   expression ends, until another expression replaces it. Undo last save restores it.
   Partly checked (XIV Bridge tests/instant-edit/animations/203, 2026-10-10), saved into a new mod rather than in place

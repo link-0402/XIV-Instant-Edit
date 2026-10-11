@@ -7,6 +7,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using InstantEdit.Studio.Services.Library;
 using InstantEdit.Studio.Services.Project;
+using InstantEdit.Studio.Windows.Studio;
 using InstantEdit.Studio.Windows.UI;
 
 namespace InstantEdit.Studio.Windows.Home;
@@ -18,7 +19,8 @@ namespace InstantEdit.Studio.Windows.Home;
 /// </summary>
 internal sealed class LibraryView
 {
-    private static readonly string[] SortLabels = { "Name", "Recently changed", "Author" };
+    private static readonly string[] SortLabels = { "Name", "Recently changed", "Author", "Size", "Date added" };
+    private const int SortChanged = 1, SortAuthor = 2, SortSize = 3, SortAdded = 4;
 
     private readonly StudioHost _host;
     private readonly ModLibrary _library;
@@ -26,14 +28,17 @@ internal sealed class LibraryView
 
     // In SearchIn's order.
     private static readonly string[] SearchInLabels =
-        { "Name, author or tag", "Anything it changes", "Item", "Emote", "Face", "Standing idle", "Groundsit", "Chair sit" };
+    {
+        "Name", "Author", "Tag", "Folder", "Anything it changes", "Item", "Emote", "Face", "Hair", "Standing idle", "Groundsit", "Chair sit",
+    };
     private static readonly string[] SearchHints =
     {
-        "Search name, author or tag", "Item, emote, face or pose", "Item name or model id (e6016)", "Emote name",
-        "Race, gender and face number", "Race or pose number", "Race or pose number", "Race or pose number",
+        "Search mod names", "Search authors", "Search tags", "Folder in Penumbra (Gear/Shoes)",
+        "Item, emote, face, hair or pose", "Item name or model id (e6016)", "Emote name",
+        "Race, gender and face number", "Race, gender and hair number", "Race or pose number", "Race or pose number", "Race or pose number",
     };
-    private static readonly string[] ShowLabels = { "All mods", "Not enabled anywhere", "Duplicates" };
-    private const int ShowUnused = 1, ShowDuplicates = 2;
+    private static readonly string[] ShowLabels = { "All mods", "Active", "Disabled", "Not enabled anywhere", "Duplicates" };
+    private const int ShowActive = 1, ShowDisabled = 2, ShowUnused = 3, ShowDuplicates = 4;
 
     private string _search = string.Empty;
     private int _sort;
@@ -221,16 +226,25 @@ internal sealed class LibraryView
         ImGui.SetNextItemWidth(Math.Max(Theme.S(160), ImGui.GetContentRegionAvail().X - Theme.S(170 + 150 + 40) - spacing0 * 3));
         ImGui.InputTextWithHint("##search", SearchHints[_searchIn], ref _search, 256);
         ImGui.SameLine();
+        var collection = _library.PlayerCollection();
         ImGui.SetNextItemWidth(Theme.S(170));
         ImGui.Combo("##show", ref _show, ShowLabels, ShowLabels.Length);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(collection is { } shownIn
+                ? $"Active and Disabled go by {shownIn.Name}, the collection your character uses."
+                : "Active and Disabled go by the collection your character uses.");
         ImGui.SameLine();
         ImGui.SetNextItemWidth(Theme.S(150));
         ImGui.Combo("##sort", ref _sort, SortLabels, SortLabels.Length);
         ImGui.SameLine();
         using (Gui.Disabled(_library.IsListing))
         {
-            if (Gui.IconButton(FontAwesomeIcon.SyncAlt, "refresh", "List Penumbra's mods again"))
+            if (Gui.IconButton(FontAwesomeIcon.SyncAlt, "refresh", "List Penumbra's mods again.\nCtrl+click to also read every mod's files again."))
+            {
+                if (ImGui.GetIO().KeyCtrl)
+                    _library.Scans.ForgetAll();
                 _library.RefreshInstalled();
+            }
         }
         ImGui.Spacing();
 
@@ -243,14 +257,21 @@ internal sealed class LibraryView
         }
 
         // A filter that needs a scan of the library starts one, and shows its progress until the results are in.
+        // The player's collection is always read: every tile shows whether its mod is active there.
         var scans = _library.Scans;
         var kind = (SearchIn)_searchIn;
-        bool needChanges = kind != SearchIn.NameAuthorTag;
-        scans.Need(usage: _show == ShowUnused, duplicates: _show == ShowDuplicates, changes: needChanges, installed);
+        bool needChanges = ChangesIndex.IsChangesSearch(kind);
+        bool needActive = _show is ShowActive or ShowDisabled;
+        bool needSizes = _sort == SortSize;
+        scans.Need(usage: _show == ShowUnused, duplicates: _show == ShowDuplicates, changes: needChanges, installed,
+            sizes: needSizes, activeIn: collection?.Id);
         var usage = scans.Usage;
+        var active = scans.Active;
         var duplicates = scans.DuplicatesOf;
         var changes = scans.Changes;
-        bool waiting = (_show == ShowUnused && usage == null) || (_show == ShowDuplicates && duplicates == null) || (needChanges && changes == null);
+        var sizes = scans.Sizes;
+        bool waiting = (_show == ShowUnused && usage == null) || (_show == ShowDuplicates && duplicates == null) || (needChanges && changes == null)
+                    || (needActive && active == null) || (needSizes && sizes == null);
         if (scans.Progress is { } progress)
         {
             Gui.Icon(FontAwesomeIcon.Hourglass, Theme.Accent);
@@ -265,13 +286,20 @@ internal sealed class LibraryView
                 scans.Cancel();
                 _show = 0;
                 _searchIn = 0;
+                if (_sort == SortSize)
+                    _sort = 0;
             }
             ImGui.Spacing();
         }
         if (waiting)
         {
             if (scans.Progress == null)
-                Gui.Hint(scans.Error ?? (_show == ShowUnused ? "Penumbra did not say which mods are enabled." : "Waiting for the scan."));
+            {
+                Gui.Hint(scans.Error
+                    ?? (_show == ShowUnused && usage == null ? "Penumbra did not say which mods are enabled."
+                      : needActive && active == null && collection == null ? "Penumbra did not say which collection your character uses."
+                      : "Waiting for the scan."));
+            }
             return;
         }
 
@@ -283,26 +311,28 @@ internal sealed class LibraryView
             if (!needChanges)
             {
                 if (search.Length > 0)
-                {
-                    mods = mods.Where(m => m.Name.Contains(search, StringComparison.OrdinalIgnoreCase)
-                                        || m.Author.Contains(search, StringComparison.OrdinalIgnoreCase)
-                                        || m.FolderName.Contains(search, StringComparison.OrdinalIgnoreCase)
-                                        || m.Tags.Any(t => t.Contains(search, StringComparison.OrdinalIgnoreCase)));
-                }
+                    mods = mods.Where(m => ChangesIndex.MatchesListing(m, kind, search));
             }
             else if (changes != null)
             {
                 mods = mods.Where(m => changes.TryGetValue(m.FolderName, out var tags) && ChangesIndex.Matches(tags, kind, search));
             }
+            if (_show == ShowActive && active != null)
+                mods = mods.Where(m => active.Contains(m.FolderName));
+            if (_show == ShowDisabled && active != null)
+                mods = mods.Where(m => !active.Contains(m.FolderName));
             if (_show == ShowUnused && usage != null)
                 mods = mods.Where(m => !usage.Used.Contains(m.FolderName));
             if (_show == ShowDuplicates && duplicates != null)
                 mods = mods.Where(m => duplicates.ContainsKey(m.FolderName));
             mods = _sort switch
             {
-                1 => mods.OrderByDescending(m => m.LastWrite),
-                2 => mods.OrderBy(m => m.Author, StringComparer.OrdinalIgnoreCase).ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase),
-                _ => mods.OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase),
+                SortChanged => mods.OrderByDescending(m => m.LastWrite),
+                SortAuthor  => mods.OrderBy(m => m.Author, StringComparer.OrdinalIgnoreCase).ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase),
+                SortSize    => mods.OrderByDescending(m => sizes != null && sizes.TryGetValue(m.FolderName, out var size) ? size : -1)
+                                   .ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase),
+                SortAdded   => mods.OrderByDescending(m => m.Added).ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase),
+                _           => mods.OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase),
             };
             // Copies of one mod sit next to each other, where the first of them sorts.
             if (_show == ShowDuplicates)
@@ -318,9 +348,12 @@ internal sealed class LibraryView
 
         if (_shown.Count == 0)
         {
+            bool unsearched = search.Length == 0 && !needChanges;
             Gui.Hint(installed.Count == 0 ? "Penumbra has no mods yet."
-                : _show == ShowDuplicates && search.Length == 0 && !needChanges ? "No mod is installed twice."
-                : _show == ShowUnused && search.Length == 0 && !needChanges ? "Every mod is enabled somewhere."
+                : _show == ShowDuplicates && unsearched ? "No mod is installed twice."
+                : _show == ShowUnused && unsearched ? "Every mod is enabled somewhere."
+                : _show == ShowActive && unsearched ? $"No mod is active in {collection?.Name ?? "your collection"}."
+                : _show == ShowDisabled && unsearched ? $"Every mod is active in {collection?.Name ?? "your collection"}."
                 : "No mod matches the search.");
             return;
         }
@@ -348,7 +381,7 @@ internal sealed class LibraryView
                 if (index >= shown.Count)
                     break;
                 if (c > 0) ImGui.SameLine(0, spacing);
-                DrawMod(shown[index], new Vector2(tileW, tileH), usage, duplicates, needChanges ? changes : null, kind, search);
+                DrawMod(shown[index], new Vector2(tileW, tileH), usage, active, collection?.Name, duplicates, needChanges ? changes : null, sizes, kind, search);
             }
         });
         DrawMenu();
@@ -387,11 +420,14 @@ internal sealed class LibraryView
     /// <summary>The tile hovered last frame: its mod's changed items are asked of Penumbra (once).</summary>
     private string? _hovered;
 
-    private void DrawMod(InstalledMod mod, Vector2 size, ModUsage? usage, IReadOnlyDictionary<string, IReadOnlyList<string>>? duplicates,
-        IReadOnlyDictionary<string, IReadOnlyList<ChangeTag>>? changes, SearchIn kind, string search)
+    private void DrawMod(InstalledMod mod, Vector2 size, ModUsage? usage, IReadOnlySet<string>? active, string? collection,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? duplicates, IReadOnlyDictionary<string, IReadOnlyList<ChangeTag>>? changes,
+        IReadOnlyDictionary<string, long>? sizes, SearchIn kind, string search)
     {
-        var folder = _library.SortPath(mod);
+        var folder = mod.Folder;
         var badges = new List<Badge>();
+        if (active != null && active.Contains(mod.FolderName))
+            badges.Add(new Badge("Active", Theme.Good, $"Enabled in {collection ?? "your collection"}."));
         if (_host.IsModOpen(mod.FullPath))
             badges.Add(new Badge("Open", Theme.Good, "Open in a window."));
         if (mod.HasProject)
@@ -406,6 +442,12 @@ internal sealed class LibraryView
             ? ChangesText(tags, kind, search)
             : _library.ChangedItems(mod, fetch: mod.FolderName == _hovered);
         var detail = mod.Tags.Count > 0 ? string.Join(", ", mod.Tags) : folder;
+        long? bytes = sizes != null && sizes.TryGetValue(mod.FolderName, out var known) ? known : null;
+        // The sort's own value leads the detail line, so the order can be read off the tiles.
+        if (_sort == SortSize && bytes is { } sorted)
+            detail = detail.Length > 0 ? $"{ResourceTreeView.FormatSize(sorted)} · {detail}" : ResourceTreeView.FormatSize(sorted);
+        else if (_sort == SortAdded && mod.Added != default)
+            detail = $"Added {mod.Added.ToLocalTime():yyyy-MM-dd}{(detail.Length > 0 ? $" · {detail}" : string.Empty)}";
         var result = Tile.Draw(new TileSpec
         {
             Id        = mod.FolderName,
@@ -417,6 +459,8 @@ internal sealed class LibraryView
             DrawThumb = Image(mod),
             Badges    = badges,
             Tooltip   = $"{mod.Name}\n{mod.FullPath}{(folder.Length > 0 ? $"\nIn Penumbra: {folder}" : string.Empty)}"
+                      + (bytes is { } total ? $"\nSize: {ResourceTreeView.FormatSize(total)}" : string.Empty)
+                      + (mod.Added != default ? $"\nAdded: {mod.Added.ToLocalTime():yyyy-MM-dd HH:mm}" : string.Empty)
                       + (!string.IsNullOrEmpty(changed) ? $"\n\nChanges:\n{changed}" : string.Empty)
                       + "\n\nClick to open it in a window.",
         }, size);

@@ -33,6 +33,9 @@ public sealed partial class TimelineWindow
     private string? previewError;
     private Task? previewStop;
     private int lastSeekFrame = -1;
+    // A redrawn character shows 65 to 120 ms after Penumbra's redraw event (in game, 2026-10-10).
+    private static readonly TimeSpan ShowWait = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan ShowPoll = TimeSpan.FromMilliseconds(15);
 
     private void DrawPreviewBar(TimelineEditor current, AnimationTimelineSource loaded)
     {
@@ -251,6 +254,7 @@ public sealed partial class TimelineWindow
             // a stop redraws it once more to put its own file back.
             previewRedrawn = true;
             var redraw = await preview.RedrawAsync(index, token);
+            await WaitUntilShown(index, token);
             var played = await framework.RunOnFrameworkThread(() =>
             {
                 if (generation != previewGeneration)
@@ -268,6 +272,18 @@ public sealed partial class TimelineWindow
             });
             return played ? redraw == null ? "Preview playing." : "Preview playing. " + redraw : "Preview on. " + playback.Error;
         }, current.MotionFrames, target.Standalone ? null : repairTarget);
+    }
+
+    /// <summary>
+    /// Waits until the redrawn character at <paramref name="index"/> shows, at most <see cref="ShowWait"/> (a character hidden
+    /// in GPose never does): it shows a few frames after Penumbra's redraw event, and a clip started before that plays without
+    /// its sounds.
+    /// </summary>
+    private async Task WaitUntilShown(ushort index, CancellationToken token)
+    {
+        var until = DateTime.UtcNow + ShowWait;
+        while (DateTime.UtcNow < until && !await framework.RunOnFrameworkThread(() => playback.Shown(index)))
+            await Task.Delay(ShowPoll, token);
     }
 
     private void TogglePlay()

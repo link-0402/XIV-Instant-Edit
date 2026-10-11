@@ -10,7 +10,11 @@ using InstantEdit.Studio.Services.Library;
 
 namespace InstantEdit.Studio.Services.Project;
 
-/// <summary>One mod in Penumbra's mod directory, as the library lists it.</summary>
+/// <summary>
+/// One mod in Penumbra's mod directory, as the library lists it. <see cref="Added"/> is when Penumbra
+/// imported it; <see cref="Folder"/> is where Penumbra files it in its own list ("Gear/Shoes", empty
+/// at the top), not where it lives on disk.
+/// </summary>
 internal sealed record InstalledMod(
     string FolderName,
     string FullPath,
@@ -19,7 +23,9 @@ internal sealed record InstalledMod(
     IReadOnlyList<string> Tags,
     string ImagePath,
     DateTime LastWrite,
-    bool HasProject);
+    bool HasProject,
+    DateTime Added = default,
+    string Folder = "");
 
 /// <summary>
 /// Penumbra's installed mods for the Mod Browser's library, importing a package, and Penumbra's
@@ -48,7 +54,6 @@ internal sealed class ModLibrary : IDisposable
 
     private Task<List<InstalledMod>>? _listing;
     private bool _listingStale = true;
-    private readonly Dictionary<string, string> _sortPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _changedItems = new(StringComparer.OrdinalIgnoreCase);
 
     private DateTime? _installRequested;
@@ -66,13 +71,30 @@ internal sealed class ModLibrary : IDisposable
         ipc.ModMoved            += _onMoved;
         ipc.ModDirectoryChanged += _onDirectory;
         // Settings change often (every slider): the scans only count them, so this runs on Penumbra's thread.
-        Scans = new LibraryScans(() => ipc.GetCollections(), ipc.GetAllModSettings, ChangedItemKinds);
+        Scans = new LibraryScans(() => ipc.GetCollections(), ipc.GetAllModSettings, ChangedItemKinds,
+            cacheFile: () => Path.Combine(_host.CacheRoot, LibraryScanCache.FileName));
         _onSetting = _ => Scans.InvalidateUsage();
         ipc.ModSettingChanged += _onSetting;
     }
 
-    /// <summary>The library filters' data: mods enabled nowhere, duplicates, what each mod changes.</summary>
+    /// <summary>The library filters' data: mods enabled nowhere or in the player's collection, duplicates, what each mod changes, sizes.</summary>
     public LibraryScans Scans { get; }
+
+    private static readonly TimeSpan CollectionEvery = TimeSpan.FromSeconds(2);
+    private DateTime _nextCollection;
+    private (Guid Id, string Name)? _playerCollection;
+
+    /// <summary>The collection the player's character is drawn with, asked of Penumbra every couple of seconds. Framework thread.</summary>
+    public (Guid Id, string Name)? PlayerCollection()
+    {
+        var now = DateTime.UtcNow;
+        if (now >= _nextCollection)
+        {
+            _nextCollection = now + CollectionEvery;
+            _playerCollection = _host.PenumbraIpc.PlayerCollection();
+        }
+        return _playerCollection;
+    }
 
     private IReadOnlyList<(string, ChangeKind)> ChangedItemKinds(string folderName)
     {
@@ -94,6 +116,7 @@ internal sealed class ModLibrary : IDisposable
         ipc.ModDirectoryChanged -= _onDirectory;
         ipc.ModSettingChanged   -= _onSetting;
         Scans.Cancel();
+        Scans.Flush();
     }
 
     /// <summary>Waiting for Penumbra to finish importing a package, which then opens.</summary>
@@ -204,15 +227,36 @@ internal sealed class ModLibrary : IDisposable
             return;
 
         _listingStale = false;
-        _sortPaths.Clear();
         _changedItems.Clear();
         lock (_kindsGate)
             _kinds = null;
         var snapshot = mods.ToList();
+        var facts = ListFacts(snapshot.Select(kv => kv.Key));
         _listing = Task.Run(() => snapshot
-            .Select(kv => Peek(root, kv.Key, kv.Value))
+            .Select(kv => Peek(root, kv.Key, kv.Value, facts.TryGetValue(kv.Key, out var fact) ? fact : default))
             .OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
             .ToList());
+    }
+
+    /// <summary>
+    /// Each mod's import date and Penumbra folder, asked of Penumbra on this (the framework) thread.
+    /// When Penumbra's mod list can't be read, the folders are asked mod by mod and the dates stay
+    /// unknown (the listing then uses the folder's creation time).
+    /// </summary>
+    private IReadOnlyDictionary<string, (DateTime Added, string Folder)> ListFacts(IEnumerable<string> folderNames)
+    {
+        var ipc = _host.PenumbraIpc;
+        if (ipc.ModListFacts() is { } facts)
+            return facts;
+        var folders = new Dictionary<string, (DateTime, string)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var folderName in folderNames)
+        {
+            // Penumbra files a mod under its own name when it has no folder.
+            var path = ipc.GetModSortPath(folderName);
+            int slash = path.LastIndexOf('/');
+            folders[folderName] = (default, slash > 0 ? path[..slash] : string.Empty);
+        }
+        return folders;
     }
 
     /// <summary>
@@ -234,25 +278,12 @@ internal sealed class ModLibrary : IDisposable
         return text;
     }
 
-    /// <summary>Where Penumbra files a mod in its own list ("Gear/Shoes"), fetched once per mod as tiles come into view.</summary>
-    public string SortPath(InstalledMod mod)
-    {
-        if (_sortPaths.TryGetValue(mod.FolderName, out var cached))
-            return cached;
-        var path = _host.PenumbraIpc.IsAvailable ? _host.PenumbraIpc.GetModSortPath(mod.FolderName) : string.Empty;
-        // Penumbra files a mod under its own name when it has no folder; that adds nothing to show.
-        int slash = path.LastIndexOf('/');
-        cached = slash > 0 ? path[..slash] : string.Empty;
-        _sortPaths[mod.FolderName] = cached;
-        return cached;
-    }
-
     /// <summary>
     /// The library's view of one mod: the descriptive fields at the top of its meta.json, read as a
     /// stream and abandoned at the file lists (which Penumbra writes last), so thousands of mods list
-    /// in moments.
+    /// in moments. <paramref name="facts"/> is what Penumbra said of it.
     /// </summary>
-    private static InstalledMod Peek(string root, string folderName, string penumbraName)
+    private static InstalledMod Peek(string root, string folderName, string penumbraName, (DateTime Added, string? Folder) facts)
     {
         var full = Path.Combine(root, folderName);
         string name = penumbraName, author = string.Empty, image = string.Empty;
@@ -310,8 +341,14 @@ internal sealed class ModLibrary : IDisposable
             try { lastWrite = Directory.GetLastWriteTimeUtc(full); }
             catch (Exception) { /* leave unknown */ }
         }
+        var added = facts.Added;
+        if (added == default)
+        {
+            try { added = Directory.GetCreationTimeUtc(full); }
+            catch (Exception) { /* leave unknown */ }
+        }
 
         return new InstalledMod(folderName, full, string.IsNullOrWhiteSpace(name) ? folderName : name, author, tags,
-            image, lastWrite, StudioProjectStore.Exists(full));
+            image, lastWrite, StudioProjectStore.Exists(full), added, facts.Folder ?? string.Empty);
     }
 }

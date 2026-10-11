@@ -10,9 +10,9 @@ public sealed partial class MainWindow
 
     internal void AttachPhysics(Action open) => _openPhysics = open;
 
-    private QuickAction PhysicsCard => new("body-physics", FontAwesomeIcon.Feather, "Body physics",
-        "Builds body physics for the skeleton your character uses. Start from the game's file, the physics your mods load or any preset, " +
-        "tune each area with sliders, preview it on your character, then save it to a mod you can keep changing.",
+    private QuickAction PhysicsCard => new("body-physics", FontAwesomeIcon.Feather, "Body physics builder",
+        "Build and customize a body physics preset for your character with collissions fit around your body and Customize+ profile." +
+        "Easily tune each area with sliders to your liking, preview the result right away, then save it permanently to a mod.",
         DrawPhysicsAction);
 
     private void DrawPhysicsAction()

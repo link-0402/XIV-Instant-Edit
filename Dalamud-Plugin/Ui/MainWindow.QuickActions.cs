@@ -29,12 +29,12 @@ public sealed partial class MainWindow
     /// <summary> Every card in its built-in order. The tab sorts them with <see cref="OrderedQuickActions"/>. </summary>
     private QuickAction[] QuickActions => _quickActions ??=
     [
-        NeckSeamCard,
         TextureCompressionCard,
-        PaintSkinCard,
         HeelsOffsetCard,
-        SendCharacterCard,
+        NeckSeamCard,
         PhysicsCard,
+        PaintSkinCard,
+        SendCharacterCard,
     ];
 
     private QuickAction NeckSeamCard => new("skin-seams", FontAwesomeIcon.UserCheck, "Fix skin seams",

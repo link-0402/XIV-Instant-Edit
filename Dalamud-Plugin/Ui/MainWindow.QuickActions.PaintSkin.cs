@@ -41,7 +41,7 @@ public sealed partial class MainWindow
 
         using (ImRaii.Disabled(Volatile.Read(ref _painterBusy) != 0))
         {
-            if (ImGui.Button("Paint my skin##quick-paint-skin"))
+            if (ImGui.Button("Open in Substance Painter##quick-paint-skin"))
                 StartSkinPainter(character, face);
         }
     }

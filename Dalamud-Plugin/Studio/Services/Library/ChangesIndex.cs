@@ -9,23 +9,26 @@ using Newtonsoft.Json.Linq;
 namespace InstantEdit.Studio.Services.Library;
 
 /// <summary>What kind of thing a mod changes.</summary>
-internal enum ChangeKind { Item, Emote, Face, StandingIdle, GroundSit, ChairSit, Other }
+internal enum ChangeKind { Item, Emote, Face, Hair, StandingIdle, GroundSit, ChairSit, Other }
 
 /// <summary>One thing a mod changes: an item, a face, an idle pose. <see cref="Search"/> is the text a search is matched against.</summary>
 internal sealed record ChangeTag(ChangeKind Kind, string Label, string Search);
 
-/// <summary>What the library's search box searches.</summary>
-internal enum SearchIn { NameAuthorTag, Anything, Item, Emote, Face, StandingIdle, GroundSit, ChairSit }
+/// <summary>What the library's search box searches: a field of the listing (up to Folder), or what mods change.</summary>
+internal enum SearchIn { Name, Author, Tag, Folder, Anything, Item, Emote, Face, Hair, StandingIdle, GroundSit, ChairSit }
 
 /// <summary>
-/// What a mod changes, for the library's "Search in" filter. Faces, idles and sit poses are
-/// recognised from the game paths the mod redirects; items and emotes also come from Penumbra's
-/// changed items. Mod Optimizer's replacement index, rebuilt here. Dalamud-free.
+/// What a mod changes, for the library's "Search in" filter. Faces, hair, idles and sit poses are
+/// recognised from the game paths the mod redirects; items, emotes, faces and hair also come from
+/// Penumbra's changed items. Mod Optimizer's replacement index, rebuilt here. Dalamud-free.
 /// </summary>
 internal static partial class ChangesIndex
 {
     [GeneratedRegex(@"^chara/human/c(?<race>\d{4})/obj/face/f(?<face>\d{4})/", RegexOptions.IgnoreCase)]
     private static partial Regex FaceRegex();
+
+    [GeneratedRegex(@"^chara/human/c(?<race>\d{4})/obj/hair/h(?<hair>\d{4})/", RegexOptions.IgnoreCase)]
+    private static partial Regex HairRegex();
 
     [GeneratedRegex(@"^chara/human/c(?<race>\d{4})/animation/a0001/bt_common/(?:resident/(?<base>idle)\.pap|emote/(?<prefix>s_|j_|l_)?pose(?<pose>\d{2})_(?:loop|start)\.pap|emote/(?<emote>[a-z0-9_]+)\.pap)$", RegexOptions.IgnoreCase)]
     private static partial Regex AnimationRegex();
@@ -46,17 +49,61 @@ internal static partial class ChangesIndex
         return tags.OrderBy(tag => tag.Kind).ThenBy(tag => tag.Label, StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
+    /// <summary>Whether a search looks in what mods change (which needs a scan), not in the listing's fields.</summary>
+    public static bool IsChangesSearch(SearchIn kind) => kind > SearchIn.Folder;
+
     /// <summary>
     /// Whether any tag of the kind searched holds every word of the query (an empty query: any tag of
-    /// that kind). <see cref="SearchIn.NameAuthorTag"/> is the library's own search and matches nothing here.
+    /// that kind). A listing search (<see cref="IsChangesSearch"/> false) matches nothing here.
     /// </summary>
     public static bool Matches(IReadOnlyList<ChangeTag> tags, SearchIn kind, string query)
     {
-        if (kind == SearchIn.NameAuthorTag)
+        if (!IsChangesSearch(kind))
             return false;
         var terms = Normalize(query).Split(' ', StringSplitOptions.RemoveEmptyEntries);
         return tags.Any(tag => Covers(kind, tag.Kind) && terms.All(term => tag.Search.Contains(term, StringComparison.Ordinal)));
     }
+
+    /// <summary>
+    /// Whether one field of a mod's listing holds the query: its name, author, one of its tags, or the
+    /// folder Penumbra files it under. An empty query matches; a changes search matches nothing here.
+    /// </summary>
+    public static bool MatchesListing(InstalledMod mod, SearchIn kind, string query)
+    {
+        if (query.Length == 0)
+            return !IsChangesSearch(kind);
+        return kind switch
+        {
+            SearchIn.Name   => mod.Name.Contains(query, StringComparison.OrdinalIgnoreCase),
+            SearchIn.Author => mod.Author.Contains(query, StringComparison.OrdinalIgnoreCase),
+            SearchIn.Tag    => mod.Tags.Any(tag => tag.Contains(query, StringComparison.OrdinalIgnoreCase)),
+            SearchIn.Folder => mod.Folder.Contains(query, StringComparison.OrdinalIgnoreCase),
+            _               => false,
+        };
+    }
+
+    /// <summary>
+    /// What one of Penumbra's changed items is, from the type of Penumbra's object for it. A
+    /// customization is a (race, gender, customize index, value) tuple: only its index tells a face
+    /// from a hairstyle, a tail, ears or face paint (which are none of the searched kinds).
+    /// </summary>
+    public static ChangeKind KindOfChangedItem(object? value) => value switch
+    {
+        null => ChangeKind.Other,
+        System.Runtime.CompilerServices.ITuple { Length: 4 } customization
+            when value.GetType().Name.StartsWith("ValueTuple", StringComparison.Ordinal) => customization[2]?.ToString() switch
+            {
+                "Face"      => ChangeKind.Face,
+                "Hairstyle" => ChangeKind.Hair,
+                _           => ChangeKind.Other,
+            },
+        _ => value.GetType().Name switch
+        {
+            "EquipItem" => ChangeKind.Item,
+            "Emote"     => ChangeKind.Emote,
+            _           => ChangeKind.Other,
+        },
+    };
 
     /// <summary>Every game path a mod's options redirect or swap, from meta.json.</summary>
     public static IEnumerable<string> GamePathsOf(PenumbraModMeta meta)
@@ -92,6 +139,7 @@ internal static partial class ChangesIndex
         SearchIn.Item         => tag == ChangeKind.Item,
         SearchIn.Emote        => tag == ChangeKind.Emote,
         SearchIn.Face         => tag == ChangeKind.Face,
+        SearchIn.Hair         => tag == ChangeKind.Hair,
         SearchIn.StandingIdle => tag == ChangeKind.StandingIdle,
         SearchIn.GroundSit    => tag == ChangeKind.GroundSit,
         SearchIn.ChairSit     => tag == ChangeKind.ChairSit,
@@ -107,6 +155,14 @@ internal static partial class ChangesIndex
             var race = face.Groups["race"].Value;
             var id = face.Groups["face"].Value;
             return Tag(ChangeKind.Face, $"{RaceName(race)} face {int.Parse(id)} (f{id})", $"c{race}");
+        }
+
+        var hair = HairRegex().Match(gamePath);
+        if (hair.Success)
+        {
+            var race = hair.Groups["race"].Value;
+            var id = hair.Groups["hair"].Value;
+            return Tag(ChangeKind.Hair, $"{RaceName(race)} hair {int.Parse(id)} (h{id})", $"c{race}");
         }
 
         var animation = AnimationRegex().Match(gamePath);
