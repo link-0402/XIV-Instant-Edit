@@ -7,6 +7,59 @@ internal static class ScdModelFixture
     public static void Run(Action<bool, string> check, Action<Action, string> reject)
     {
         RoundTrip(check, reject);
+        Values(check, reject);
+    }
+
+    private static void Values(Action<bool, string> check, Action<Action, string> reject)
+    {
+        var m = ScdModel.Read(RandomSet(3));
+        check(ScdEdits.Shares(m.Sounds[0]) is { Shares: [33, 33, 34], Nothing: 0 }, "running-total limits 33/66/100 read as shares");
+        ScdEdits.SetShares(m.Sounds[0], [50, 0, 30]);
+        check(m.Sounds[0].Entries.Select(e => (e.Limit, e.Order)).SequenceEqual([((short)50, (short)0), ((short)50, (short)1), ((short)80, (short)2)]) &&
+              ScdEdits.Shares(m.Sounds[0]) is { Shares: [50, 0, 30], Nothing: 20 }, "shares write running totals; a 0% share repeats the limit; the rest plays nothing");
+        reject(() => ScdEdits.SetShares(m.Sounds[0], [60, 30, 20]), "shares over 100% are refused");
+        reject(() => ScdEdits.SetShares(m.Sounds[0], [-1, 50, 50]), "a negative share is refused");
+        reject(() => ScdEdits.SetShares(m.Sounds[0], [50, 50]), "shares for a different number of sounds are refused");
+        var custom = ScdModel.Read(RandomSet(3));
+        ScdEdits.SetLimits(custom.Sounds[0], [(35, 0), (35, 1), (70, 2)]);
+        check(ScdEdits.Shares(custom.Sounds[0]) is { Shares: [35, 0, 35], Nothing: 30 }, "a repeated limit still reads as shares");
+        ScdEdits.SetLimits(custom.Sounds[0], [(33, 1), (66, 2), (100, 3)]);
+        check(ScdEdits.Shares(custom.Sounds[0]) == null, "an order column not counting from 0 is custom");
+        ScdEdits.SetLimits(custom.Sounds[0], [(50, 0), (40, 1), (100, 2)]);
+        check(ScdEdits.Shares(custom.Sounds[0]) == null, "a falling limit is custom");
+        check(ScdEdits.Shares(ScdModel.Read(AudioFixture.Template()).Sounds[0]) == null, "a one-shot has no shares");
+        var shared = ScdModel.Read(RandomSet(4, sharedTrack: true));
+        ScdEdits.SetTrackVolume(shared, 0, 3, 0.5f);
+        check(shared.Tracks.Count == 4 && ScdEdits.TrackVolume(shared, shared.Sounds[0].Entries[3].Track) == 0.5f &&
+              ScdEdits.TrackVolume(shared, shared.Sounds[0].Entries[2].Track) == 1f, "changing one alternative of a shared track splits the track first");
+        ScdEdits.SetWait(shared, 0, 0, 1234);
+        check(ScdEdits.Wait(shared, shared.Sounds[0].Entries[0].Track) == 1234, "the wait after KeyOn is set");
+        ScdEdits.UpdatePlayLength(shared, 0);
+        check(shared.Sounds[0].PlayLength == shared.Sounds[0].Entries.Max(e => ScdEdits.AudioMilliseconds(shared, e.Audio)), "the play length follows the longest audio");
+        check(ScdFile.Read(shared.Write()).TrackOffsets.Length == 4, "a split track is written as its own track");
+        var bare = ScdModel.Read(RandomSet(2));
+        bare.Tracks[0].Commands.RemoveAll(c => c.Type == ScdTrack.Volume);
+        ScdEdits.SetTrackVolume(bare, 0, 0, 0.25f);
+        var bareTrack = bare.Tracks[bare.Sounds[0].Entries[0].Track].Commands;
+        check(ScdEdits.TrackVolume(bare, bare.Sounds[0].Entries[0].Track) == 0.25f &&
+              bareTrack.FindIndex(c => c.Type == ScdTrack.Volume) == bareTrack.FindIndex(c => c.Type == ScdTrack.KeyOn) - 1 &&
+              ScdModel.Read(bare.Write()).Tracks[0].Commands.Count == bareTrack.Count, "a track without a volume gets one just before KeyOn");
+        reject(() => ScdEdits.SetVolume(m.Sounds[0], 2.5f), "a file volume above 2 is refused");
+        reject(() => ScdEdits.SetVolume(m.Sounds[0], float.NaN), "a NaN file volume is refused");
+        reject(() => ScdEdits.SetTrackVolume(m, 0, 0, 1.5f), "a track volume above 1 is refused");
+        reject(() => ScdEdits.SetRange(m, 0, 30, 10), "a range whose fade starts past its silent distance is refused");
+        reject(() => ScdEdits.SetRange(m, 0, 0, 10), "a range that is full volume nowhere is refused");
+        reject(() => ScdEdits.SetBus(m.Sounds[0], 256), "a channel above 255 is refused");
+        ScdEdits.SetVolume(m.Sounds[0], 1.5f);
+        ScdEdits.SetRange(m, 0, 12, 40);
+        ScdEdits.SetBus(m.Sounds[0], 5);
+        check(m.Sounds[0] is { Volume: 1.5f, Bus: 5 } && m.MaxRange(0) == 12 && m.MinRange(0) == 40, "file volume, range and channel are set");
+        ScdEdits.SetLoop(m, 0, true);
+        check((m.Sounds[0].Attributes & 1) != 0 && m.Sounds[0].Entries.All(e => m.Audio[e.Audio].LoopEnd > 0), "Loop on sets the attribute and whole-audio loop points");
+        var written = ScdModel.Read(m.Write());
+        check(ScdFile.Read(m.Write()).Sounds[0].Loops && written.Sounds[0].Entries.SequenceEqual(m.Sounds[0].Entries), "edited files read back through both readers");
+        ScdEdits.SetLoop(m, 0, false);
+        check((m.Sounds[0].Attributes & 1) == 0, "Loop off clears the attribute");
     }
 
     private static void RoundTrip(Action<bool, string> check, Action<Action, string> reject)
