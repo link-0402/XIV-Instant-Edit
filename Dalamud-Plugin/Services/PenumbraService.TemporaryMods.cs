@@ -16,6 +16,8 @@ public sealed partial class PenumbraService
 {
     private AddTemporaryMod? _addTemporaryMod;
     private RemoveTemporaryMod? _removeTemporaryMod;
+    private AddTemporaryModAll? _addTemporaryModAll;
+    private RemoveTemporaryModAll? _removeTemporaryModAll;
     private GetCollections? _getCollections;
 
     /// <summary> The effective collection of an object, with IndividualSet; null when the object has none. </summary>
@@ -34,7 +36,38 @@ public sealed partial class PenumbraService
     /// </summary>
     internal PenumbraApiEc AddTemporaryModOnFramework(string tag, Guid collection, IReadOnlyDictionary<string, string> paths, int priority)
     {
-        if (string.IsNullOrWhiteSpace(tag) || collection == Guid.Empty || paths.Count == 0)
+        if (collection == Guid.Empty)
+            throw new InvalidDataException("The temporary mod is invalid.");
+        return (_addTemporaryMod ??= new AddTemporaryMod(_pi)).Invoke(tag, collection, Redirects(tag, paths), string.Empty, priority);
+    }
+
+    /// <summary>
+    /// Registers, or with the same tag and priority updates in place, a temporary mod in every
+    /// collection, for a file whose game path nothing else uses (such as a sound the Timeline plays
+    /// to listen to). Rooted values are file redirects; no meta manipulations.
+    /// </summary>
+    internal PenumbraApiEc AddTemporaryModAllOnFramework(string tag, IReadOnlyDictionary<string, string> paths, int priority)
+        => (_addTemporaryModAll ??= new AddTemporaryModAll(_pi)).Invoke(tag, Redirects(tag, paths), string.Empty, priority);
+
+    /// <summary> Removes a temporary mod from every collection; Gone as for <see cref="RemoveTemporaryModOnFramework"/>. </summary>
+    internal (bool Gone, string? Error) RemoveTemporaryModAllOnFramework(string tag, int priority)
+    {
+        try
+        {
+            var result = (_removeTemporaryModAll ??= new RemoveTemporaryModAll(_pi)).Invoke(tag, priority);
+            return result is PenumbraApiEc.Success or PenumbraApiEc.NothingChanged
+                ? (true, null)
+                : (false, $"Penumbra could not remove the temporary mod ({result}).");
+        }
+        catch (IpcNotReadyError)
+        {
+            return (true, null);
+        }
+    }
+
+    private static Dictionary<string, string> Redirects(string tag, IReadOnlyDictionary<string, string> paths)
+    {
+        if (string.IsNullOrWhiteSpace(tag) || paths.Count == 0)
             throw new InvalidDataException("The temporary mod is invalid.");
         var redirects = new Dictionary<string, string>(paths.Count, StringComparer.Ordinal);
         foreach (var (gamePath, file) in paths)
@@ -43,7 +76,7 @@ public sealed partial class PenumbraService
                 throw new InvalidDataException($"The temporary mod file for {gamePath} is not a full path.");
             redirects.Add(gamePath, file);
         }
-        return (_addTemporaryMod ??= new AddTemporaryMod(_pi)).Invoke(tag, collection, redirects, string.Empty, priority);
+        return redirects;
     }
 
     /// <summary>
