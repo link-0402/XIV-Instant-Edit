@@ -1337,3 +1337,36 @@ Timeline editor:
   (XIV Bridge tests/instant-edit/animations/254, 2026-10-10, Begone Demon's Look: shockedcross_c377f309.avfx, _2 and _3,
   one per option, each that option's effect with the edit; Undo removes all three and their mappings. In Catch 'Em
   All, no effect of Cheer differs between the Catch Mode options.)
+
+## Sound inspector (2026-10-12)
+
+The Timeline's sound options in plain words and the Sound file section (alternatives, chances,
+volumes, add, replace, remove, pins, Listen), commits 46f54da..a846ebf. Automated suites pass, and
+every vanilla timeline SCD and the whole mod library round-trip through the SCD model; none of this
+has been tried in game. Candidates: Self Spank with Moan (sound/moan.scd, a random set of 10) and
+vanilla emotes with one-shot sounds.
+
+- [ ] Listen, first: an XIV Bridge script finds the play-sound function (E8 ?? ?? ?? ?? E9 ?? ?? ??
+  ?? FE C2), plays sound/battle/etc/SE_Bt_Etc_Clap.scd, then a temporary-mod path made from a keep-only
+  copy of it. Expect no crash and the resource handle seen both times; note which collection resolved
+  the temporary path. Nothing else here should be tried in game before this passes.
+- [ ] 1 Chances: make a two-sound test file at 90/10, play it about 20 times (Listen on the header
+  button), then 10/90. Expect the 90% sound about 18 of 20 times. This confirms or refutes reading the
+  limits as running totals; if not, every set should show raw limits until the real rule is known.
+- [ ] 2 What the wait does: Listen to a moan with its original short wait (amber mark), then after
+  Match length. Describe the difference you hear (the end cut, nothing, or the next sound overlapping).
+  This decides whether "ends before its audio" stays a soft hint or becomes a warning.
+- [ ] 3 One-shot to random set: on a vanilla emote's sound, Add sound (a .wav), Preview. Expect each
+  play to pick either sound about half the time, and the clip on the canvas solid to the shorter
+  sound and dashed to the longer one.
+- [ ] 4 Pinned event: set one moan event to "Only #3". Expect Preview (after Preview again) and the
+  saved mod to play only that moan, from a moan_3_… copy, while the other moan events stay random.
+- [ ] 5 Everywhere or only here: on a mod with two animations that name the same SCD, save a chance
+  change in place. Expect "Change the sound everywhere?" with the right count; Everywhere changes the
+  mod's file (both animations hear it), Only here saves a copy for this animation only. Undo last
+  save puts the mod's file back.
+- [ ] 6 Keep looping: on a looping emote whose sound plays once, set Plays to Keep looping and click
+  Add loop points. Expect the sound to keep going while the emote loops, in Preview and after Save.
+- [ ] 7 Listen on MS-ADPCM, Vorbis and HCA files: each row's button plays that alternative alone, the
+  header button the whole set, and nothing stays served afterwards (the listen_… path no longer
+  resolves a few seconds after the sound ends).
