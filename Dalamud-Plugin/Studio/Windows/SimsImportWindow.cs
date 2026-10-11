@@ -493,7 +493,12 @@ public sealed class SimsImportWindow : Window, IDisposable
         var rows = new List<ResultRow>();
         var listed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        var swatches = SafeFiles(result.DiffuseFolder).Where(FileDrop.IsImage).OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToList();
+        // Only what this run wrote; the folders are never listed, so nothing else in them shows up.
+        var written = result.WrittenFiles.Where(File.Exists).ToList();
+        IEnumerable<string> In(string folder) => written.Where(f =>
+            string.Equals(Path.GetDirectoryName(f), folder, StringComparison.OrdinalIgnoreCase));
+
+        var swatches = In(result.DiffuseFolder).Where(FileDrop.IsImage).OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToList();
         if (swatches.Count > 0)
         {
             rows.Add(new ResultRow("Diffuse swatches", $"folder · {swatches.Count} image(s) → a variant group",
@@ -514,11 +519,12 @@ public sealed class SimsImportWindow : Window, IDisposable
         AddTexture(result.NormalFile, "normal");
         AddTexture(result.SpecularFile, "specular");
 
-        var texturesRoot = Path.Combine(result.RootFolder, "textures");
-        foreach (var file in SafeFilesRecursive(texturesRoot).Where(FileDrop.IsImage).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+        var texturesRoot = Path.Combine(result.RootFolder, "textures") + Path.DirectorySeparatorChar;
+        foreach (var file in written.Where(f => f.StartsWith(texturesRoot, StringComparison.OrdinalIgnoreCase))
+                     .Where(FileDrop.IsImage).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
             AddTexture(file, Path.GetFileName(Path.GetDirectoryName(file)) ?? "texture");
 
-        foreach (var file in SafeFiles(result.ModelFolder).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+        foreach (var file in In(result.ModelFolder).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
         {
             bool mdl = FileDrop.IsModel(file);
             bool mesh = mdl || Path.GetExtension(file).ToLowerInvariant() is ".glb" or ".gltf" or ".fbx" or ".obj";
@@ -529,18 +535,6 @@ public sealed class SimsImportWindow : Window, IDisposable
         }
 
         return rows;
-    }
-
-    private static IEnumerable<string> SafeFiles(string folder)
-    {
-        try { return Directory.Exists(folder) ? Directory.EnumerateFiles(folder).ToList() : new List<string>(); }
-        catch (Exception) { return Array.Empty<string>(); }
-    }
-
-    private static IEnumerable<string> SafeFilesRecursive(string folder)
-    {
-        try { return Directory.Exists(folder) ? Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories).ToList() : new List<string>(); }
-        catch (Exception) { return Array.Empty<string>(); }
     }
 
     private static void Reveal(string path)

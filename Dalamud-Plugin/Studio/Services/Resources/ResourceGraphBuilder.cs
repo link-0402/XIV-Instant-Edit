@@ -366,8 +366,10 @@ internal static class ResourceGraphBuilder
             if (trimmed.Contains('/'))
                 return ResolvePath(model, trimmed, created, missingAllowed: true);   // absolute path
 
-            var fileName = trimmed.ToLowerInvariant();
-            var folder = ResourceNaming.MaterialFolder(fileName) ?? ResourceNaming.FallbackMaterialFolder(model.GamePath);
+            // The path the game requests; a shared hairstyle's name is rebased onto the race it is shared under.
+            var requested = ResourceNaming.RelativeMaterialPath(model.GamePath, trimmed);
+            var folder = requested[..requested.LastIndexOf('/')];
+            var fileName = requested[(folder.Length + 1)..];
             var stem = ResourceNaming.MaterialFolderStem(folder);
 
             if (_modByFileName.TryGetValue(fileName, out var byName))

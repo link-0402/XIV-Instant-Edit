@@ -283,7 +283,7 @@ internal sealed class ItemMetaPanel
         var entries = _host.GameData.HairSkeletonEntries(race);
         ImGui.TextColored(Theme.Muted, $"{race.DisplayName}: {entries.Count} hairstyle(s) with a skeleton");
         ImGui.SetNextItemWidth(Theme.S(180));
-        ImGui.InputTextWithHint("##estsearch", "hair id\u2026", ref _estFilter, 8);
+        ImGui.InputTextWithHint("##estsearch", "hair id", ref _estFilter, 8);
 
         if (ImGui.BeginChild("##estlist", new Vector2(Theme.S(220), Theme.S(240)), false))
         {

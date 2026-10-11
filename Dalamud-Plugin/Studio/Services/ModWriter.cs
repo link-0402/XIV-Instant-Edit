@@ -440,6 +440,13 @@ internal sealed class ModWriter
                 _report.Add(WriteOutcome.Failed, label, gamePath, "the option it was meant for is no longer in the mod", target);
                 continue;
             }
+            // A game path with ".." in it would be written outside the mod folder (Place refuses it):
+            // only this replacement fails, the rest of the update goes ahead.
+            if (!PathNormalizer.IsSafeRel(PathNormalizer.GamePath(gamePath)))
+            {
+                _report.Add(WriteOutcome.Failed, label, gamePath, "not a valid game path: it would write outside the mod folder", target);
+                continue;
+            }
             if (replacement.Authored is { } authored)
             {
                 PrepareAuthoredMaterial(meta, replacement, authored, option, gamePath, target);

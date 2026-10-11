@@ -401,19 +401,40 @@ public static class SimsPackageInspector
         /// <summary>The crop that was applied, for the result panel to describe.</summary>
         public SimsHalfCrop Crop;
 
+        /// <summary>Every file this run wrote, report included; the result list is built from these.</summary>
+        public List<string> WrittenFiles = new();
+
+        /// <summary>Every file this run created or started to, failed ones included; goes into the manifest.</summary>
+        internal readonly List<string> OwnedFiles = new();
+
         public string Report = string.Empty;
     }
+
+    /// <summary>
+    /// Lists the files an extraction wrote into its folder, with the package they came
+    /// from. The next extraction of the same package deletes exactly these and nothing
+    /// else, so files from an earlier run cannot mix into the new one.
+    /// </summary>
+    internal const string ManifestName = "extract-files.txt";
+    private const string ManifestSource = "source=";
 
     /// <summary>
     /// Writes the ticked assets under <paramref name="outputRoot"/> in the layout the
     /// material editor consumes: one folder of diffuse images to point a variant slot
     /// at, and single files for the remaining roles.
+    ///
+    /// Each run starts from a folder holding nothing but its own earlier output: the files
+    /// a previous extraction of this same package listed in its manifest are deleted first.
+    /// When the folder holds anything else (another package with the same file name, files
+    /// the user put there, or output from before manifests existed) nothing is deleted and
+    /// a fresh numbered folder is used instead, so the diffuse variant folder only ever
+    /// holds this run's swatches.
     /// </summary>
     public static ExtractionResult Extract(SimsScanResult scan, string outputRoot,
         SimsHalfCrop crop = default, Action<string>? progress = null)
     {
-        var packageName = MakeSafeName(Path.GetFileNameWithoutExtension(scan.PackagePath));
-        var root = Path.Combine(outputRoot, packageName);
+        var packageName = MakeSafeName(Path.GetFileNameWithoutExtension(scan.PackagePath), "sims_package");
+        var root = ClaimOutputFolder(outputRoot, packageName, scan.PackagePath, out bool newFolder);
 
         var result = new ExtractionResult
         {
@@ -422,61 +443,170 @@ public static class SimsPackageInspector
             DiffuseFolder = Path.Combine(root, "textures", "diffuse"),
         };
 
-        Directory.CreateDirectory(result.ModelFolder);
-        Directory.CreateDirectory(result.DiffuseFolder);
-
-        var report = new StringBuilder();
-        report.AppendLine($"Source package: {scan.PackagePath}");
-        report.AppendLine($"Extracted:      {DateTime.Now:yyyy-MM-dd HH:mm}");
-        if (crop.Crops)
+        try
         {
-            report.AppendLine($"Half crop:      keeping the {crop.Describe()}; textures are halved " +
-                               "and UV0 rescaled to match.");
-        }
-        report.AppendLine();
+            Directory.CreateDirectory(result.ModelFolder);
+            Directory.CreateDirectory(result.DiffuseFolder);
 
-        using var package = new DbpfPackage(scan.PackagePath);
-
-        var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        int extracted = 0, failed = 0;
-
-        foreach (var asset in scan.Assets.Where(a => a.Selected))
-        {
-            try
+            var report = new StringBuilder();
+            report.AppendLine($"Source package: {scan.PackagePath}");
+            report.AppendLine($"Extracted:      {DateTime.Now:yyyy-MM-dd HH:mm}");
+            if (newFolder)
+                report.AppendLine($"Folder:         {packageName} holds other files, so this run went into {Path.GetFileName(root)}.");
+            if (crop.Crops)
             {
-                if (asset.Kind == SimsAssetKind.Mesh)
-                    ExtractMesh(package, asset, result, packageName, usedNames, report, crop, progress);
-                else
-                    ExtractTexture(package, asset, result, root, usedNames, report, crop, progress);
-                extracted++;
+                report.AppendLine($"Half crop:      keeping the {crop.Describe()}; textures are halved " +
+                                   "and UV0 rescaled to match.");
             }
-            catch (Exception ex)
-            {
-                failed++;
-                report.AppendLine($"  X failed:  {asset.Entry.KeyString} — {ex.Message}");
-            }
-        }
-
-        result.Extracted = extracted;
-        result.Failed    = failed;
-        result.Crop      = crop;
-
-        if (scan.Warnings.Count > 0)
-        {
             report.AppendLine();
-            report.AppendLine("Warnings from the scan:");
-            foreach (var warning in scan.Warnings)
-                report.AppendLine($"  - {warning}");
+
+            using var package = new DbpfPackage(scan.PackagePath);
+
+            var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int extracted = 0, failed = 0;
+
+            foreach (var asset in scan.Assets.Where(a => a.Selected))
+            {
+                try
+                {
+                    if (asset.Kind == SimsAssetKind.Mesh)
+                        ExtractMesh(package, asset, result, packageName, usedNames, report, crop, progress);
+                    else
+                        ExtractTexture(package, asset, result, root, usedNames, report, crop, progress);
+                    extracted++;
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    report.AppendLine($"  X failed:  {asset.Entry.KeyString} — {ex.Message}");
+                }
+            }
+
+            result.Extracted = extracted;
+            result.Failed    = failed;
+            result.Crop      = crop;
+
+            if (scan.Warnings.Count > 0)
+            {
+                report.AppendLine();
+                report.AppendLine("Warnings from the scan:");
+                foreach (var warning in scan.Warnings)
+                    report.AppendLine($"  - {warning}");
+            }
+
+            report.AppendLine();
+            report.AppendLine("The .glb is an intermediate, not a finished FFXIV model: open it in Blender,");
+            report.AppendLine("fit it to the target body, and export a .mdl before setting it as a race model.");
+
+            result.Report = report.ToString();
+            var reportPath = Path.Combine(root, "extract-report.txt");
+            WriteOwned(result, reportPath, () => File.WriteAllText(reportPath, result.Report));
         }
-
-        report.AppendLine();
-        report.AppendLine("The .glb is an intermediate, not a finished FFXIV model: open it in Blender,");
-        report.AppendLine("fit it to the target body, and export a .mdl before setting it as a race model.");
-
-        result.Report = report.ToString();
-        File.WriteAllText(Path.Combine(root, "extract-report.txt"), result.Report);
+        finally
+        {
+            // Written even when the run fails part-way, so whatever it did write is still
+            // known to be ours next time.
+            WriteManifest(root, scan.PackagePath, result.OwnedFiles);
+        }
 
         return result;
+    }
+
+    /// <summary>Records <paramref name="path"/> as ours before writing it, so a half-written file is cleaned up too.</summary>
+    private static void WriteOwned(ExtractionResult result, string path, Action write)
+    {
+        result.OwnedFiles.Add(path);
+        write();
+        result.WrittenFiles.Add(path);
+    }
+
+    /// <summary>
+    /// Picks the folder this run writes into: <c>outputRoot/name</c> when it is new or
+    /// holds only this package's earlier output (which is deleted), otherwise the first
+    /// <c>name_2</c>, <c>name_3</c> and so on that qualifies.
+    /// </summary>
+    private static string ClaimOutputFolder(string outputRoot, string name, string packagePath, out bool newFolder)
+    {
+        var source = Path.GetFullPath(packagePath);
+        for (int n = 1; n < 1000; n++)
+        {
+            var folder = Path.GetFullPath(Path.Combine(outputRoot, n == 1 ? name : $"{name}_{n}"));
+            if (!Directory.Exists(folder) || TryReuseFolder(folder, source))
+            {
+                newFolder = n > 1;
+                return folder;
+            }
+        }
+
+        throw new IOException($"No free output folder for {name} in {outputRoot}.");
+    }
+
+    /// <summary>
+    /// Clears <paramref name="folder"/> for a new run when every file in it is one an
+    /// earlier extraction of <paramref name="source"/> listed in its manifest. Returns false
+    /// (deleting nothing) when the manifest names another package or any other file is
+    /// there.
+    /// </summary>
+    private static bool TryReuseFolder(string folder, string source)
+    {
+        try
+        {
+            var prefix = Path.TrimEndingDirectorySeparator(folder) + Path.DirectorySeparatorChar;
+            var manifestPath = Path.Combine(folder, ManifestName);
+            var owned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            if (File.Exists(manifestPath))
+            {
+                var lines = File.ReadAllLines(manifestPath);
+                var from = lines.FirstOrDefault(l => l.StartsWith(ManifestSource, StringComparison.Ordinal));
+                if (from == null ||
+                    !string.Equals(Path.GetFullPath(from[ManifestSource.Length..]), source, StringComparison.OrdinalIgnoreCase))
+                    return false;
+
+                foreach (var line in lines)
+                {
+                    if (line.Length == 0 || line.StartsWith('#') || line.StartsWith(ManifestSource, StringComparison.Ordinal) ||
+                        Path.IsPathRooted(line))
+                        continue;
+                    var path = Path.GetFullPath(Path.Combine(folder, line));
+                    if (path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                        owned.Add(path);
+                }
+                owned.Add(manifestPath);
+            }
+
+            foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
+                if (!owned.Contains(Path.GetFullPath(file)))
+                    return false;
+
+            foreach (var file in owned)
+                if (File.Exists(file))
+                    File.Delete(file);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static void WriteManifest(string root, string packagePath, IEnumerable<string> files)
+    {
+        try
+        {
+            var lines = new List<string>
+            {
+                "# Files Instant Edit wrote here. Extracting the same package again deletes these, and only these.",
+                ManifestSource + Path.GetFullPath(packagePath),
+            };
+            lines.AddRange(files.Select(f => Path.GetRelativePath(root, f)));
+            File.WriteAllLines(Path.Combine(root, ManifestName), lines);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Without a manifest the next run treats these files as someone else's and
+            // uses a fresh folder, which is safe.
+        }
     }
 
     private static void ExtractMesh(DbpfPackage package, SimsAsset asset, ExtractionResult result,
@@ -493,7 +623,8 @@ public static class SimsPackageInspector
         var name  = UniqueName(usedNames, $"{stem}_{level}", ".glb");
         var path  = Path.Combine(result.ModelFolder, name);
 
-        SimsMeshExporter.ExportGlb(mesh, path, Path.GetFileNameWithoutExtension(name), crop);
+        int skippedFaces = 0;
+        WriteOwned(result, path, () => skippedFaces = SimsMeshExporter.ExportGlb(mesh, path, Path.GetFileNameWithoutExtension(name), crop));
 
         // The path shown afterwards should be the highest detail one, whatever order
         // the assets happened to be extracted in.
@@ -505,7 +636,8 @@ public static class SimsPackageInspector
         }
         result.ModelCount++;
 
-        report.AppendLine($"  ok:       model/{name}  ({mesh.VertexCount:N0} verts, {mesh.FaceCount:N0} tris)");
+        report.AppendLine($"  ok:       model/{name}  ({mesh.VertexCount:N0} verts, {mesh.FaceCount - skippedFaces:N0} tris" +
+                          (skippedFaces > 0 ? $", {skippedFaces:N0} with a bad vertex index left out)" : ")"));
     }
 
     private static void ExtractTexture(DbpfPackage package, SimsAsset asset, ExtractionResult result,
@@ -541,7 +673,8 @@ public static class SimsPackageInspector
         var name = UniqueName(usedNames, $"{stem}_{folderName}", ".png");
         var path = Path.Combine(folder, name);
 
-        File.WriteAllBytes(path, decoded.ToPng());
+        var png = decoded.ToPng();
+        WriteOwned(result, path, () => File.WriteAllBytes(path, png));
 
         switch (asset.Role)
         {
@@ -569,18 +702,50 @@ public static class SimsPackageInspector
         return name;
     }
 
-    /// <summary>Strips characters that are invalid in file names and collapses whitespace.</summary>
-    private static string MakeSafeName(string name)
+    /// <summary>
+    /// Longest file or folder stem taken from a package or CAS part name. CAS names run to
+    /// 2048 characters; suffixes such as "_diffuse_12.png" still have to fit in the
+    /// 255-character limit for one path component, with room left for the full path.
+    /// </summary>
+    internal const int MaxNameLength = 80;
+
+    private static readonly HashSet<string> ReservedNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    };
+
+    /// <summary>
+    /// Turns an untrusted name from the package into one safe file or folder name: invalid
+    /// characters and whitespace become underscores, leading and trailing dots go (so "."
+    /// and ".." can never point at the folder itself or its parent, and Windows would drop
+    /// trailing ones anyway), device names such as CON get a prefix, and the result is
+    /// capped at <see cref="MaxNameLength"/>.
+    /// </summary>
+    internal static string MakeSafeName(string name, string fallback = "sims_part")
     {
         if (string.IsNullOrWhiteSpace(name))
-            return "sims_part";
+            return fallback;
 
         var invalid = Path.GetInvalidFileNameChars();
         var chars = name.Trim()
             .Select(c => invalid.Contains(c) || char.IsWhiteSpace(c) ? '_' : c)
             .ToArray();
 
-        var safe = new string(chars).Trim('_');
-        return safe.Length == 0 ? "sims_part" : safe;
+        var safe = new string(chars).Trim('_', '.');
+        if (safe.Length > MaxNameLength)
+        {
+            int cut = char.IsHighSurrogate(safe[MaxNameLength - 1]) ? MaxNameLength - 1 : MaxNameLength;
+            safe = safe[..cut].TrimEnd('_', '.');
+        }
+
+        if (safe.Length == 0)
+            return fallback;
+
+        // Windows reserves device names even with an extension after them ("CON.txt").
+        if (ReservedNames.Contains(safe.Split('.')[0]))
+            safe = "_" + safe;
+        return safe;
     }
 }

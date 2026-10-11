@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -21,7 +22,9 @@ namespace InstantEdit.Studio.Models.Project;
 ///
 /// Stored as <see cref="FileName"/> inside the mod folder, so it travels with the mod. Penumbra
 /// ignores it (it lists it among the folder's unused files). A mod only has one while something of
-/// the user's own is in it; Build mode never writes one.
+/// the user's own is in it; Build mode never writes one. The local files the replacements come from
+/// are not written into it (only their file names): their paths stay on this PC, in
+/// <see cref="LocalSources"/>, so a shared mod carries no user name or folder layout.
 /// </summary>
 [Serializable]
 public class StudioProject
@@ -33,6 +36,13 @@ public class StudioProject
 
     /// <summary>Whether XIV Instant Edit made this mod folder, so writing into it needs no backup first.</summary>
     public bool CreatedHere { get; set; }
+
+    /// <summary>
+    /// Names the file in Instant Edit's config folder that keeps the local source paths of this
+    /// sidecar's replacements (see <see cref="LocalSources"/>). Random, so it says nothing about the
+    /// user; it stays with the folder through a rename. Null until the sidecar is first written.
+    /// </summary>
+    public Guid? LocalId { get; set; }
 
     /// <summary>Resources of the mod being replaced, or added, from local files.</summary>
     public List<ResourceReplacement> Replacements { get; set; } = new();
@@ -66,6 +76,10 @@ public class StudioProject
     /// <summary>Set when reading let go of port set-ups (see <see cref="ReleasePortSetUps"/>), so the file is written again without them.</summary>
     [JsonIgnore]
     public bool ReleasedPorts { get; private set; }
+
+    /// <summary>Set when the file read still held local paths of this PC (written before they were kept in <see cref="LocalSources"/>), so it is written again without them.</summary>
+    [JsonIgnore]
+    public bool HadLocalPaths { get; internal set; }
 
     /// <summary>Whether there is nothing left worth keeping: no replacement, and nothing written by one.</summary>
     [JsonIgnore]
@@ -313,6 +327,8 @@ internal static class StudioProjectStore
         var project = JsonConvert.DeserializeObject<StudioProject>(File.ReadAllText(path), Settings)
             ?? throw new InvalidDataException("empty project file");
         project.ReleasePortSetUps();
+        project.HadLocalPaths = LocalSources.HasInlinePaths(project);
+        LocalSources.Restore(project);
         return project;
     }
 
@@ -397,14 +413,48 @@ internal static class StudioProjectStore
         }
     }
 
-    /// <summary>Writes the sidecar: to a temporary file first, then moved over the old one.</summary>
+    /// <summary>
+    /// Writes the sidecar: to a temporary file first, then moved over the old one. The local source
+    /// paths go into <see cref="LocalSources"/> first and the sidecar only keeps their file names;
+    /// when they cannot be kept there, they stay in the sidecar rather than be lost.
+    /// </summary>
     private static void Write(string folder, StudioProject project)
     {
         Directory.CreateDirectory(folder);
         var path = PathIn(folder);
+        var written = project;
+        if (LocalSources.Root is { } root)
+        {
+            project.LocalId ??= ExistingLocalId(path) ?? Guid.NewGuid();
+            var stripped = DeepClone(project);
+            var sources = LocalSources.Take(stripped);
+            try
+            {
+                LocalSources.Save(root, project.LocalId.Value, Path.GetFileName(folder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)), sources);
+                written = stripped;
+            }
+            catch (Exception)
+            {
+                // Kept in the sidecar this time; moved out with the next write that can.
+            }
+        }
+
         var tmp = path + ".tmp";
-        File.WriteAllText(tmp, JsonConvert.SerializeObject(project, Settings), new UTF8Encoding(false));
+        File.WriteAllText(tmp, JsonConvert.SerializeObject(written, Settings), new UTF8Encoding(false));
         File.Move(tmp, path, overwrite: true);
+    }
+
+    /// <summary>The <see cref="StudioProject.LocalId"/> the sidecar on disk has, so a copy written without one keeps it.</summary>
+    private static Guid? ExistingLocalId(string path)
+    {
+        try
+        {
+            return File.Exists(path) && JObject.Parse(File.ReadAllText(path))["LocalId"]?.ToString() is { } text && Guid.TryParse(text, out var id) ? id : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     public static StudioProject DeepClone(StudioProject project)
@@ -432,5 +482,185 @@ internal static class StudioProjectStore
                 property.ShouldSerialize = _ => false;
             return property;
         }
+    }
+}
+
+/// <summary>
+/// The local files a mod's replacements are made from (a replacement's file, each image of a material
+/// made here), kept on this PC instead of in the mod's sidecar: one small file per sidecar in
+/// Instant Edit's config folder, named by <see cref="StudioProject.LocalId"/>. The sidecar keeps each
+/// file's name only, so a mod exported from Penumbra carries no user name or folder layout.
+///
+/// Keyed by the sidecar's own id rather than the mod folder's name or meta.json's Identifier: the id
+/// stays with the folder when Penumbra renames it, every sidecar has one (many mods have no
+/// Identifier), and a copy of the mod keeps following the same files, as it did when the paths were
+/// in the sidecar. A sidecar whose files are not on this PC (a mod from someone else) keeps the bare
+/// names: the replacements stay, their files are only not found, so the mod keeps what was written.
+///
+/// Durable user data: never in %TEMP%, never cleaned up. Written under <see cref="ModFiles.Gate"/>.
+/// </summary>
+internal static class LocalSources
+{
+    public const string FolderName = "mod-sources";
+
+    private static readonly object Sync = new();
+    private static string? _root;
+    private static bool _resolved;
+
+    /// <summary>
+    /// The folder the files are kept in, under the plugin's config folder; null while it is not known
+    /// (local paths then stay in the sidecar, as before). Tests set it.
+    /// </summary>
+    public static string? Root
+    {
+        get
+        {
+            lock (Sync)
+            {
+                if (!_resolved)
+                    _root = Resolve(out _resolved);
+                return _root;
+            }
+        }
+        set
+        {
+            lock (Sync)
+            {
+                _root     = value;
+                _resolved = true;
+            }
+        }
+    }
+
+    private static string? Resolve(out bool final)
+    {
+        try
+        {
+            var dir = ConfigDirectory();
+            final = dir != null;
+            return dir != null ? Path.Combine(dir, FolderName) : null;
+        }
+        catch (Exception)
+        {
+            final = true;   // no Dalamud to ask (offline tools and tests)
+            return null;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static string? ConfigDirectory() => StudioServices.PluginInterface?.ConfigDirectory.FullName;
+
+    /// <summary>Whether a sidecar still holds local paths of this PC (an older one), so it is written again without them.</summary>
+    public static bool HasInlinePaths(StudioProject project)
+    {
+        if (Root == null)
+            return false;
+        bool any = false;
+        Visit(project, (_, path) =>
+        {
+            any |= IsLocal(path);
+            return path;
+        });
+        return any;
+    }
+
+    /// <summary>Takes the local paths out of <paramref name="project"/> (a copy about to be written), leaving their file names; returns them by entry (null: nothing to keep for it).</summary>
+    public static Dictionary<string, string?> Take(StudioProject project)
+    {
+        var sources = new Dictionary<string, string?>(StringComparer.Ordinal);
+        Visit(project, (key, path) =>
+        {
+            if (!IsLocal(path))
+            {
+                sources[key] = null;
+                return path;
+            }
+            sources[key] = path;
+            return NameOf(path);
+        });
+        return sources;
+    }
+
+    /// <summary>Puts the local paths kept for a sidecar back in place of the file names it holds. Quiet when there is nothing kept for it.</summary>
+    public static void Restore(StudioProject project)
+    {
+        if (project.LocalId is not { } id || Root is not { } root || Read(FileFor(root, id)) is not { } file)
+            return;
+        Visit(project, (key, path) =>
+            !IsLocal(path) && !string.IsNullOrWhiteSpace(path)
+            && file.Sources.TryGetValue(key, out var full) && !string.IsNullOrWhiteSpace(full)
+            && string.Equals(NameOf(full), path, StringComparison.OrdinalIgnoreCase)
+                ? full
+                : path);
+    }
+
+    /// <summary>
+    /// Records the paths of a sidecar's entries. Entries of the file that this sidecar does not have
+    /// are kept: a copy of the mod shares the file.
+    /// </summary>
+    public static void Save(string root, Guid id, string folderName, Dictionary<string, string?> sources)
+    {
+        var path = FileFor(root, id);
+        var file = Read(path) ?? new LocalSourceFile();
+        foreach (var (key, source) in sources)
+        {
+            if (source == null)
+                file.Sources.Remove(key);
+            else
+                file.Sources[key] = source;
+        }
+        if (file.Sources.Count == 0 && !File.Exists(path))
+            return;
+        file.Folder = folderName;
+
+        Directory.CreateDirectory(root);
+        var tmp = path + ".tmp";
+        File.WriteAllText(tmp, JsonConvert.SerializeObject(file, Formatting.Indented), new UTF8Encoding(false));
+        File.Move(tmp, path, overwrite: true);
+    }
+
+    public static string FileFor(string root, Guid id) => Path.Combine(root, $"{id:N}.json");
+
+    private static LocalSourceFile? Read(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? JsonConvert.DeserializeObject<LocalSourceFile>(File.ReadAllText(path)) : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Calls <paramref name="map"/> with each local path field of the sidecar and its key, and sets the field to what it returns.</summary>
+    private static void Visit(StudioProject project, Func<string, string, string> map)
+    {
+        foreach (var replacement in project.Replacements)
+        {
+            var key = $"{replacement.Option}|{PathNormalizer.GamePath(replacement.GamePath)}";
+            replacement.SourcePath = map(key, replacement.SourcePath);
+            if (replacement.Authored is not { } material)
+                continue;
+            for (int i = 0; i < material.Textures.Count; i++)
+                material.Textures[i].SourcePath = map($"{key}|{i}|{material.Textures[i].Type}", material.Textures[i].SourcePath);
+        }
+    }
+
+    private static bool IsLocal(string path) => !string.IsNullOrWhiteSpace(path) && Path.IsPathRooted(path);
+
+    /// <summary>What the sidecar keeps of a local path: the file (or folder) name.</summary>
+    private static string NameOf(string path)
+    {
+        var name = Path.GetFileName(path.TrimEnd('\\', '/'));
+        return name.Length > 0 ? name : "source";
+    }
+
+    private sealed class LocalSourceFile
+    {
+        /// <summary>The mod folder's name when last written, to tell the files apart by hand.</summary>
+        public string Folder { get; set; } = string.Empty;
+
+        public Dictionary<string, string> Sources { get; set; } = new(StringComparer.Ordinal);
     }
 }

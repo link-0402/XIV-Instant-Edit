@@ -80,6 +80,12 @@ public static class SimsGeom
     private const uint UsageTangent    = 6;
     private const uint UsageColor      = 7;
 
+    /// <summary>
+    /// Most UV channels accepted. Game meshes carry one or two; each channel is a full
+    /// per-vertex array, so an uncapped count lets a tiny forged GEOM allocate gigabytes.
+    /// </summary>
+    internal const int MaxUvChannels = 4;
+
     public static SimsGeomMesh Parse(byte[] resource)
     {
         int chunkStart = FindGeomChunk(resource);
@@ -122,6 +128,7 @@ public static class SimsGeom
         for (int i = 0; i < elementCount; i++)
             elements[i] = (br.ReadUInt32(), br.ReadUInt32(), br.ReadByte());
 
+        CheckVertexLayout(elements, vertexCount, ms.Length - ms.Position);
         ReadVertexData(br, mesh, elements, vertexCount);
         ReadFaces(br, mesh);
         mesh.BoneHashes = TryReadBoneHashes(br, ms, mesh.Version, tgiPosition);
@@ -169,6 +176,44 @@ public static class SimsGeom
 
         throw new InvalidDataException("RCOL container holds no GEOM chunk.");
     }
+
+    /// <summary>
+    /// Checks the declared vertex table against the bytes that are actually there, before
+    /// any per-vertex array is allocated: every element needs a non-zero size at least as
+    /// big as what is read from it, the UV channels are capped, and the vertex count times
+    /// the stride has to fit in what is left of the resource.
+    /// </summary>
+    private static void CheckVertexLayout((uint Usage, uint SubType, byte Size)[] elements, int vertexCount, long remaining)
+    {
+        long stride = 0;
+        int uvChannels = 0;
+        foreach (var e in elements)
+        {
+            if (e.Size == 0)
+                throw new InvalidDataException($"GEOM declares a zero-size vertex element (usage {e.Usage}).");
+            if (e.Size < BytesRead(e))
+                throw new InvalidDataException($"GEOM vertex element (usage {e.Usage}) is {e.Size} bytes, too small for its data.");
+            if (e.Usage == UsageUv && ++uvChannels > MaxUvChannels)
+                throw new InvalidDataException($"GEOM declares more than {MaxUvChannels} UV channels.");
+            stride += e.Size;
+        }
+
+        if (vertexCount > 0 && stride == 0)
+            throw new InvalidDataException("GEOM declares vertices but no vertex elements.");
+        if ((long)vertexCount * stride > remaining)
+            throw new InvalidDataException("GEOM vertex data runs past the end of the resource.");
+    }
+
+    /// <summary>Bytes <see cref="ReadVertexData"/> reads from one element of one vertex.</summary>
+    private static int BytesRead((uint Usage, uint SubType, byte Size) e) => e.Usage switch
+    {
+        UsagePosition or UsageNormal => 12,
+        UsageUv                      => 8,
+        UsageBoneAssign              => 4,
+        UsageWeights                 => e.SubType == 1 && e.Size >= 16 ? 16 : 4,
+        UsageColor                   => 4,
+        _                            => 0,
+    };
 
     private static void ReadVertexData(BinaryReader br, SimsGeomMesh mesh,
         (uint Usage, uint SubType, byte Size)[] elements, int vertexCount)
@@ -291,15 +336,20 @@ public static class SimsGeom
             int  indexCount    = br.ReadInt32();
             if (indexCount < 0)
                 throw new InvalidDataException("GEOM declares a negative face-point count.");
+            if (bytesPerIndex is not (1 or 2 or 4))
+                throw new InvalidDataException($"GEOM uses an unsupported index size of {bytesPerIndex} bytes.");
+            if ((long)indexCount * bytesPerIndex > br.BaseStream.Length - br.BaseStream.Position)
+                throw new InvalidDataException("GEOM face data runs past the end of the resource.");
 
             for (int f = 0; f < indexCount; f++)
             {
+                // A 32-bit index past int.MaxValue wraps negative here; the exporter skips
+                // any face whose index is outside the vertex range, negative ones included.
                 indices.Add(bytesPerIndex switch
                 {
                     1 => br.ReadByte(),
                     2 => br.ReadUInt16(),
-                    4 => (int)br.ReadUInt32(),
-                    _ => throw new InvalidDataException($"GEOM uses an unsupported index size of {bytesPerIndex} bytes."),
+                    _ => (int)br.ReadUInt32(),
                 });
             }
         }

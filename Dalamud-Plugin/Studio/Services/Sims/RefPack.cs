@@ -23,7 +23,9 @@ public static class RefPack
     /// <summary>
     /// Decompresses a RefPack stream. <paramref name="expectedSize"/> is the entry's
     /// declared uncompressed size, used to size the output buffer; the header's own
-    /// size field is used when it is absent (zero).
+    /// size field is used when it is absent (zero). Either size is checked against
+    /// <see cref="DbpfPackage.MaxResourceSize"/> and the packed length before anything is
+    /// allocated, and a stream that stops short of that size is an error.
     /// </summary>
     public static byte[] Decompress(byte[] source, int expectedSize)
     {
@@ -32,26 +34,52 @@ public static class RefPack
 
         int pos = 0;
 
-        // Header: a 16-bit big-endian signature whose low byte is 0xFB, optionally
-        // preceded by a 32-bit compressed-size field (flagged by bit 0x80 of the
-        // first byte), followed by a 3- or 4-byte big-endian uncompressed size.
+        // Header: two flag bits, then the 0xFB signature byte. Flag 0x80 makes the size
+        // fields 4 bytes instead of 3, and flag 0x01 means a compressed-size field comes
+        // first (skipped here); the big-endian uncompressed size follows.
         int flags = source[pos++];
         int magic = source[pos++];
         if (magic != 0xFB)
             throw new InvalidDataException($"Not a RefPack stream (signature 0x{flags:X2}{magic:X2}).");
 
-        if ((flags & 0x80) != 0)
-            pos += (flags & 0x01) != 0 ? 4 : 3;   // skip the compressed-size field
+        bool large = (flags & 0x80) != 0;
+        int sizeBytes = large ? 4 : 3;
+        if ((flags & 0x01) != 0)
+            pos += sizeBytes;                     // skip the compressed-size field
 
-        int sizeBytes = (flags & 0x01) != 0 ? 4 : 3;
-        int headerSize = 0;
+        if (pos + sizeBytes > source.Length)
+            throw new InvalidDataException("RefPack stream is too short to contain a header.");
+
+        long headerSize = 0;
         for (int i = 0; i < sizeBytes; i++)
             headerSize = (headerSize << 8) | source[pos++];
 
-        int outSize = expectedSize > 0 ? expectedSize : headerSize;
+        long outSize = expectedSize > 0 ? expectedSize : headerSize;
+        if (outSize == 0)
+            throw new InvalidDataException("RefPack stream declares no output.");
+        DbpfPackage.CheckDeclaredSize(outSize, source.Length, "RefPack stream");
+
         var dest = new byte[outSize];
         int destPos = 0;
 
+        try
+        {
+            Unpack(source, pos, dest, ref destPos);
+        }
+        catch (IndexOutOfRangeException)
+        {
+            // A command whose operand bytes are missing.
+            throw new InvalidDataException("RefPack stream is truncated.");
+        }
+
+        if (destPos != dest.Length)
+            throw new InvalidDataException($"RefPack stream ends after {destPos:N0} of {dest.Length:N0} bytes.");
+
+        return dest;
+    }
+
+    private static void Unpack(byte[] source, int pos, byte[] dest, ref int destPos)
+    {
         while (pos < source.Length)
         {
             int b0 = source[pos++];
@@ -109,8 +137,6 @@ public static class RefPack
             if (b0 >= 0xFC)
                 break;
         }
-
-        return dest;
     }
 
     private static void CopyLiterals(byte[] source, ref int pos, byte[] dest, ref int destPos, int count)

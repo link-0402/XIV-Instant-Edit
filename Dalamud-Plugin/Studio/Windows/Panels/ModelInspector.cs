@@ -426,7 +426,7 @@ internal sealed class ModelInspector
         ImGui.Spacing();
         using (Gui.Disabled(item.Materials.Count == 0))
         {
-            if (Gui.IconTextButton(FontAwesomeIcon.FileExport, "Export a copy\u2026",
+            if (Gui.IconTextButton(FontAwesomeIcon.FileExport, "Export a copy",
                     item.Materials.Count == 0 ? "Add a material first." : "Writes the generated model to a temp folder and copies its path."))
                 _session.ExportDummyModel(item, model);
         }

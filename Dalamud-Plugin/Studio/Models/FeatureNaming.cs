@@ -41,11 +41,14 @@ public static class FeatureNaming
         => $"{Folder(kind, raceCode, id)}/model/c{raceCode}{Kinds[kind].Prefix}{id:D4}_{Kinds[kind].ModelSuffix}.mdl";
 
     /// <summary>
-    /// Material folder. Character features only ever use the v0001 material set, so unlike
-    /// gear there is no variant to redirect.
+    /// Material folder. Hair and tails only ever use the v0001 material set, so unlike gear
+    /// there is no variant to redirect; faces and Viera ears have no variant folder at all
+    /// ("…/face/f0001/material/mt_c0101f0001_fac_a.mtrl"), as <see cref="MaterialNaming.Resolve"/> says.
     /// </summary>
     public static string MaterialFolder(SubjectKind kind, string raceCode, ushort id)
-        => $"{Folder(kind, raceCode, id)}/material/v0001";
+        => kind is SubjectKind.Face or SubjectKind.Ear
+            ? $"{Folder(kind, raceCode, id)}/material"
+            : $"{Folder(kind, raceCode, id)}/material/v0001";
 
     public static string TextureFolder(SubjectKind kind, string raceCode, ushort id)
         => $"{Folder(kind, raceCode, id)}/texture";

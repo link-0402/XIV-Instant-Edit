@@ -64,8 +64,8 @@ public sealed class StudioSettings
     public string ModDescription { get; set; } = string.Empty;
 
     /// <summary>
-    /// Penumbra mod identifier for the pack, so rebuilding keeps the same identity
-    /// (and group/option ids) instead of minting new ones every time.
+    /// Penumbra mod identifier for the pack's build (and the source of its group/option ids).
+    /// Cleared once the build succeeds: a build only makes new mods, so the next one gets its own.
     /// </summary>
     public Guid? ModId { get; set; }
 

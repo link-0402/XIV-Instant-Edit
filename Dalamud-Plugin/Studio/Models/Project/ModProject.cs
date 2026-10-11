@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 using InstantEdit.Studio.Services.Project;
 
@@ -76,6 +77,8 @@ internal sealed class ModProject
         var project = new ModProject(folder, meta, sidecar ?? new StudioProject()) { SidecarError = error, SidecarOnDisk = sidecar != null };
         if (sidecar is { ReleasedPorts: true })
             project.ForgetPortSetUps();
+        else if (sidecar is { HadLocalPaths: true })
+            project.SidecarDirty = true;   // an older sidecar with local paths in it: written again soon without them
         return project;
     }
 
@@ -166,23 +169,146 @@ internal sealed class ModProject
     /// Changes the structure of meta.json (an option's files, its groups) and writes it at once: read
     /// fresh from disk first, so an edit made in Penumbra meanwhile is not lost, then saved, so a later
     /// re-read cannot drop this edit (unlike descriptive fields, structure is not replayed).
+    ///
+    /// The edit is made on a copy that only becomes <see cref="Meta"/> once it is written: when
+    /// meta.json cannot be written (locked by Penumbra or a scanner, read-only, a full disk) or the
+    /// edit throws, this throws and the open mod is left exactly as it was.
     /// </summary>
     public void EditStructure(Action<PenumbraModMeta> edit)
     {
         lock (ModFiles.Gate)
         {
             RefreshFromDisk();
-            int before = Meta.Revision;
-            edit(Meta);
-            if (Meta.Revision == before)
+            var edited = Meta.Clone();
+            int before = edited.Revision;
+            edit(edited);
+            if (edited.Revision == before)
                 return;
-            Meta.Save(FolderPath, backupFirst: !CreatedHere);
+            edited.Save(FolderPath, backupFirst: !CreatedHere);
+            Meta = edited;
             _pendingFields.Clear();
             MetaDirty    = false;
             _metaWritten = true;
             _metaStamp   = MetaStamp();
             Revision++;
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Files the mod still needs
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Every file of the mod folder something still needs, as comparison keys: what meta.json points
+    /// at (except the entry <paramref name="skipOption"/> / <paramref name="skipGamePath"/>, when
+    /// given), and what the ledger says this plugin wrote or will point an entry back at once its
+    /// replacement goes. With <paramref name="readDisk"/> the ledger on disk counts too (an update
+    /// may have written a newer one). Nothing in it is ever deleted.
+    /// </summary>
+    public HashSet<string> RelKeysInUse(OptionRef? skipOption = null, string? skipGamePath = null, bool readDisk = false)
+    {
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var file in Meta.AllFiles())
+        {
+            if (file.IsAbsolute)
+                continue;
+            if (skipOption is { } option && file.Option == option && skipGamePath != null && PathNormalizer.SameGamePath(file.GamePath, skipGamePath))
+                continue;
+            keys.Add(PathNormalizer.RelKey(file.RelPath));
+        }
+
+        var ledgers = new List<WriteLedger> { Sidecar.Ledger };
+        if (readDisk && StudioProjectStore.LoadLedger(FolderPath) is { } onDisk)
+            ledgers.Add(onDisk);
+        foreach (var file in ledgers.SelectMany(l => l.Files))
+        {
+            if (!string.IsNullOrWhiteSpace(file.RelPath))
+                keys.Add(PathNormalizer.RelKey(file.RelPath));
+            if (!string.IsNullOrWhiteSpace(file.OriginalRelPath))
+                keys.Add(PathNormalizer.RelKey(file.OriginalRelPath));
+        }
+        return keys;
+    }
+
+    /// <summary>
+    /// Deletes those of <paramref name="rels"/> (paths inside the mod folder) that nothing still needs
+    /// (see <see cref="RelKeysInUse"/>). Returns how many were deleted; <paramref name="failed"/> hears
+    /// of each one that could not be.
+    /// </summary>
+    public int DeleteUnused(IEnumerable<string> rels, Action<string, Exception>? failed = null)
+    {
+        var inUse = RelKeysInUse(readDisk: true);
+        int deleted = 0;
+        foreach (var rel in rels.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (PathNormalizer.IsAbsolute(rel) || !PathNormalizer.IsSafeRel(rel) || inUse.Contains(PathNormalizer.RelKey(rel)))
+                continue;
+            try
+            {
+                var full = PathNormalizer.ToDiskPath(FolderPath, rel);
+                if (!File.Exists(full))
+                    continue;
+                File.Delete(full);
+                deleted++;
+            }
+            catch (Exception ex)
+            {
+                failed?.Invoke(rel, ex);
+            }
+        }
+        return deleted;
+    }
+
+    /// <summary>What <see cref="ForgetOptions"/> changed.</summary>
+    public readonly record struct ForgetResult(int DroppedReplacements, int Deleted, string? SaveError);
+
+    /// <summary>
+    /// After options left meta.json (already written): what was set up here for them goes too — their
+    /// replacements, added items and ledger entries — and whatever was addressed by position follows
+    /// the options that moved up. The ledger is written at once (the next update reads it from disk);
+    /// only then are <paramref name="deleteFiles"/>, the files they carried, deleted, and only those
+    /// nothing else still needs. Nothing is deleted when the ledger could not be written.
+    /// </summary>
+    public ForgetResult ForgetOptions(IReadOnlyCollection<OptionRef> gone, IReadOnlyDictionary<OptionRef, OptionRef> moved,
+        IReadOnlyCollection<string> deleteFiles, Action<string, Exception>? failed = null)
+    {
+        string? Moved(string serialized)
+            => moved.TryGetValue(OptionRef.Parse(serialized), out var now) ? now.Serialize() : null;
+
+        int dropped = Sidecar.Replacements.RemoveAll(r => gone.Contains(OptionRef.Parse(r.Option)));
+        int items = Sidecar.AddedItems.RemoveAll(i => gone.Contains(OptionRef.Parse(i.Option)));
+        bool changed = dropped + items > 0;
+        foreach (var replacement in Sidecar.Replacements)
+            if (Moved(replacement.Option) is { } now) { replacement.Option = now; changed = true; }
+        foreach (var item in Sidecar.AddedItems)
+            if (Moved(item.Option) is { } now) { item.Option = now; changed = true; }
+
+        // The removed options' entries go before the others move up: left behind, they would sit at
+        // the address of the option that takes their place.
+        bool ledger = Sidecar.Ledger.Files.RemoveAll(f => gone.Contains(OptionRef.Parse(f.Option))) > 0;
+        foreach (var file in Sidecar.Ledger.Files)
+            if (Moved(file.Option) is { } now) { file.Option = now; ledger = true; }
+
+        string? saveError = null;
+        if (ledger)
+        {
+            MarkLedgerDirty();
+            try
+            {
+                Flush();
+            }
+            catch (Exception ex)
+            {
+                saveError = ex.Message;   // kept dirty: written with the next flush
+            }
+        }
+        else if (changed)
+        {
+            MarkSidecarDirty();
+        }
+
+        int deleted = saveError == null && deleteFiles.Count > 0 ? DeleteUnused(deleteFiles, failed) : 0;
+        return new ForgetResult(dropped, deleted, saveError);
     }
 
     /// <summary>Points the project at a folder Penumbra moved it to.</summary>

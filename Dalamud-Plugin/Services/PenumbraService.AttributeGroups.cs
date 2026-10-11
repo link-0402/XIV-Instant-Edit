@@ -55,6 +55,15 @@ public sealed partial class PenumbraService
             : null;
     }
 
+    /// <summary>
+    /// The import's own meta entries that attribute groups must keep. A game model has no mod of its own
+    /// behind it: its mod is the one its exports create, so none are unknown even when the import's
+    /// capture failed. Null only for a mod whose entries the import couldn't read.
+    /// </summary>
+    internal static JsonArray? KnownManipulations(InstantEditImportContext context)
+        => context.ResourceManifest?.Manipulations ??
+           (context.SourceKind == InstantEditImportContext.GameSource ? new JsonArray() : null);
+
     private string? WriteAttributeGroups(
         string modFolder,
         string resolvedGamePath,

@@ -77,17 +77,19 @@ internal static class LegacyMetaReader
             if (g == null)
                 continue;
 
+            // The whole group is kept, every key of it: a combining group's Containers, an IMC group's
+            // Identifier and DefaultEntry, whatever a later format added. Only the ids are new.
             var name = (string?)g["Name"] ?? Path.GetFileNameWithoutExtension(file);
             var groupId = MetaIds.Derive(Guid.Empty, $"legacy/{folderName}/{name}");
-            var group = new JObject
-            {
-                ["Type"] = g["Type"]?.DeepClone() ?? "Single",
-                ["Id"]   = groupId.ToString(),
-                ["Name"] = name,
-            };
-            foreach (var key in new[] { "Description", "Image", "Priority", "Page", "DefaultSettings" })
-                if (g[key] != null)
-                    group[key] = g[key]!.DeepClone();
+            var group = (JObject)g.DeepClone();
+            if (group["Type"] == null)
+                group.AddFirst(new JProperty("Type", "Single"));
+            if ((string?)group["Name"] == null)
+                group["Name"] = name;
+            if (Guid.TryParse(group["Id"]?.ToString(), out var existing))
+                groupId = existing;
+            else
+                SetAfter(group, "Type", "Id", groupId.ToString());
 
             var options = new JArray();
             if (g["Options"] is JArray legacyOptions)
@@ -97,17 +99,14 @@ internal static class LegacyMetaReader
                     if (legacyOptions[i] is not JObject o)
                         continue;
                     var optionName = (string?)o["Name"] ?? $"Option {i + 1}";
-                    var option = new JObject
+                    var option = (JObject)o.DeepClone();
+                    if (!Guid.TryParse(option["Id"]?.ToString(), out _))
                     {
-                        ["Id"]   = MetaIds.Derive(groupId, $"{i}/{optionName}").ToString(),
-                        ["Name"] = optionName,
-                    };
-                    if (o["Description"] != null)
-                        option["Description"] = o["Description"]!.DeepClone();
-                    if (o["Priority"] != null)
-                        option["Priority"] = o["Priority"]!.DeepClone();
-                    foreach (var p in Carrier(o).Properties())
-                        option[p.Name] = p.Value;
+                        option.Remove("Id");
+                        option.AddFirst(new JProperty("Id", MetaIds.Derive(groupId, $"{i}/{optionName}").ToString()));
+                    }
+                    if ((string?)option["Name"] == null)
+                        option["Name"] = optionName;
                     options.Add(option);
                 }
             }
@@ -118,6 +117,17 @@ internal static class LegacyMetaReader
         if (groups.Count > 0)
             root["Groups"] = groups;
         return root;
+    }
+
+    /// <summary>Sets <paramref name="key"/> right after the <paramref name="after"/> property (first when there is none).</summary>
+    private static void SetAfter(JObject target, string after, string key, string value)
+    {
+        target.Remove(key);
+        var property = new JProperty(key, value);
+        if (target.Property(after, StringComparison.Ordinal) is { } anchor)
+            anchor.AddAfterSelf(property);
+        else
+            target.AddFirst(property);
     }
 
     /// <summary>The Files / FileSwaps / Manipulations of a legacy default or option object.</summary>

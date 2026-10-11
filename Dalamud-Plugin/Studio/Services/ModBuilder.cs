@@ -37,6 +37,24 @@ internal sealed class BuildJob
 }
 
 /// <summary>
+/// The names of a build's variant files ("variants/…", "modelvariants/…"): one set for the whole
+/// build, so variants of different items whose source files share a name each keep their own file.
+/// </summary>
+internal sealed class VariantFileNames
+{
+    private readonly HashSet<string> _taken = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>A path in the mod, "folder/name.ext", that no other variant of this build has; "_2", "_3" and on are added when needed.</summary>
+    public string Claim(string folder, string name, string extension)
+    {
+        var rel = $"{folder}/{name}{extension}";
+        for (int n = 2; !_taken.Add(rel); n++)
+            rel = $"{folder}/{name}_{n}{extension}";
+        return rel;
+    }
+}
+
+/// <summary>
 /// Converts every configured local texture to .tex, writes one .mtrl per mesh slot, copies
 /// the race models, and writes one meta.json into a mod folder under Penumbra's mod
 /// directory for every item in the pack. Each file goes into the place it says — the default files,
@@ -78,10 +96,15 @@ internal sealed class ModBuilder
         var report = new BuildReport { ModName = _req.ModName, ModPath = modPath, ItemsSummary = itemsSummary };
         var clock  = Stopwatch.StartNew();
 
-        // Whether this run is the one creating the mod folder, rather than writing into one that
-        // already exists (a rebuild). Only in the first case is it safe to remove the folder again
-        // on cancellation or failure — a rebuild's folder may still hold a previous, good build.
-        bool freshFolder = !Directory.Exists(modPath);
+        // A build only makes new mods: a folder that is already there (a mod, or one made since the
+        // build was asked for) is never written into. So the folder is always this run's own, and
+        // removing it again on cancellation or failure leaves nothing behind.
+        if (BuildTarget.Problem(modPath) is { } problem)
+        {
+            report.FatalError = problem;
+            _job.Report(new BuildProgress(1, 1, "Done"));
+            return report;
+        }
 
         try
         {
@@ -143,8 +166,9 @@ internal sealed class ModBuilder
             report.FatalError = ex.Message;
         }
 
-        if (freshFolder && (report.Cancelled || report.FatalError != null))
-            DeleteLeftovers(modPath);
+        if ((report.Cancelled || report.FatalError != null) && DeleteLeftovers(modPath) is { } leftover)
+            report.Add(BuildOutcome.Failed, BuildCategory.Meta, "Unfinished mod folder", null,
+                $"could not be removed ({leftover}). Delete {modPath} before building again.");
 
         _textures.Prune();
         report.Duration = clock.Elapsed;
@@ -155,16 +179,34 @@ internal sealed class ModBuilder
         return report;
     }
 
-    /// <summary>Removes a mod folder this run created but did not finish, so a cancelled or failed build leaves nothing behind.</summary>
-    private static void DeleteLeftovers(string modPath)
+    /// <summary>
+    /// Removes a mod folder this run created but did not finish, so a cancelled or failed build leaves
+    /// nothing behind. Read-only files (copied from read-only sources) are made writable first, and a
+    /// file briefly held by something else gets a few more tries. Returns why it is still there, or null.
+    /// </summary>
+    internal static string? DeleteLeftovers(string modPath)
     {
-        try
+        for (int attempt = 0; ; attempt++)
         {
-            Directory.Delete(modPath, recursive: true);
-        }
-        catch (Exception ex)
-        {
-            StudioServices.Log.Warning(ex, "[Studio] Could not remove leftover mod folder {0}", modPath);
+            try
+            {
+                if (!Directory.Exists(modPath))
+                    return null;
+                foreach (var file in Directory.EnumerateFiles(modPath, "*", SearchOption.AllDirectories))
+                {
+                    var attributes = File.GetAttributes(file);
+                    if ((attributes & FileAttributes.ReadOnly) != 0)
+                        File.SetAttributes(file, attributes & ~FileAttributes.ReadOnly);
+                }
+                Directory.Delete(modPath, recursive: true);
+                return null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt >= 4)
+                    return ex.Message;
+                Thread.Sleep(100 * (attempt + 1));
+            }
         }
     }
 
@@ -177,6 +219,9 @@ internal sealed class ModBuilder
 
     /// <summary>The folder in the mod each option's files are written under, by place.</summary>
     private readonly Dictionary<string, string> _folders = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Every variant file of the build, across all items, so two never share one file.</summary>
+    private readonly VariantFileNames _variantFiles = new();
 
     /// <summary>One folder per option, "Group/Option", made unique where two options would share one.</summary>
     private void PlanFolders()
@@ -617,7 +662,6 @@ internal sealed class ModBuilder
             return false;
         }
 
-        var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         int added = 0;
 
         foreach (var (filePath, variantIndex) in files)
@@ -638,14 +682,8 @@ internal sealed class ModBuilder
             }
 
             var stem = MaterialNaming.SanitizeFileName(Path.GetFileNameWithoutExtension(filePath));
-            var raceCode = model.RaceGender.RaceCode;
-            var variantFileName = $"{raceCode}_{stem}.mdl";
-            int counter = 2;
-            while (!usedNames.Add(variantFileName))
-                variantFileName = $"{raceCode}_{stem}_{counter++}.mdl";
-
-            var variantRelPath = $"modelvariants/{variantFileName}";
-            var variantPath = Path.Combine(modPath, "modelvariants", variantFileName);
+            var variantRelPath = _variantFiles.Claim("modelvariants", $"{model.RaceGender.RaceCode}_{stem}", ".mdl");
+            var variantPath = Path.Combine(modPath, variantRelPath.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(variantPath)!);
 
             // Each variant carries its own material assignment: they start alike and can differ.
@@ -990,7 +1028,6 @@ internal sealed class ModBuilder
             return false;
         }
 
-        var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         int added = 0;
 
         foreach (var imagePath in images)
@@ -1011,13 +1048,8 @@ internal sealed class ModBuilder
             }
 
             var stem = MaterialNaming.SanitizeFileName(Path.GetFileNameWithoutExtension(imagePath));
-            var fileName = $"{MaterialNaming.SanitizeFileName(textureName)}_{stem}.tex";
-            int counter = 2;
-            while (!usedNames.Add(fileName))
-                fileName = $"{MaterialNaming.SanitizeFileName(textureName)}_{stem}_{counter++}.tex";
-
-            var variantRelPath = $"variants/{fileName}";
-            var variantPath = Path.Combine(modPath, "variants", fileName);
+            var variantRelPath = _variantFiles.Claim("variants", $"{MaterialNaming.SanitizeFileName(textureName)}_{stem}", ".tex");
+            var variantPath = Path.Combine(modPath, variantRelPath.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(variantPath)!);
             File.WriteAllBytes(variantPath, texData);
 

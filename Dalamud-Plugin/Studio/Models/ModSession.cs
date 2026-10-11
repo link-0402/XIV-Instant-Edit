@@ -613,6 +613,35 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
     /// <summary>Opens what an option (or the default files) carries.</summary>
     public void FocusOption(OptionRef option) => Focus(Target.ForRoot(ResourceGraph.OptionRootId(option)));
 
+    /// <summary>
+    /// Set when the last change of meta.json's structure could not be written (nothing changed then,
+    /// and the user was told). Dialogs clear it before a change and stay open while it is set.
+    /// </summary>
+    public bool StructureFailed { get; set; }
+
+    /// <summary>
+    /// Runs a structural edit of meta.json (see <see cref="ModProject.EditStructure"/>). False when
+    /// it could not be written, or the edit itself failed: the open mod is left as it was, the user
+    /// is told, and nothing is thrown at the window drawing it.
+    /// </summary>
+    private bool TryEditStructure(ModProject project, Action<PenumbraModMeta> edit)
+    {
+        try
+        {
+            project.EditStructure(edit);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            StudioServices.Log.Warning(ex, "[Studio] Could not change meta.json of {0}", project.FolderPath);
+            Notify(ex is IOException or UnauthorizedAccessException
+                ? $"meta.json could not be written, so nothing changed: {ex.Message}"
+                : $"Nothing changed: {ex.Message}", Severity.Error);
+            StructureFailed = true;
+            return false;
+        }
+    }
+
     /// <summary>Opens every option of a group, one after the other.</summary>
     public void FocusGroup(string groupId) => Focus(Target.ForRoot(ResourceGraph.GroupRootId(groupId)));
 
@@ -628,7 +657,7 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
 
         List<OptionRef>? made = null;
         string? problem = null;
-        project.EditStructure(meta =>
+        bool written = TryEditStructure(project, meta =>
         {
             var into = groupId;
             if (newGroup is { } fresh)
@@ -657,6 +686,8 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
                     list.Add(option);
             made = list;
         });
+        if (!written)
+            return null;
 
         if (problem != null)
             Notify(problem, Severity.Warning);
@@ -672,13 +703,14 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
     {
         if (Project is not { } project || node.Origin != OriginKind.ModFile)
             return;
-        project.EditStructure(meta =>
-        {
-            if (link)
-                meta.SetFile(option, node.GamePath, node.RelPath);
-            else if (meta.TryGetFile(option, node.GamePath, out var rel) && PathNormalizer.SameRel(rel, node.RelPath))
-                meta.RemoveFile(option, node.GamePath);
-        });
+        if (!TryEditStructure(project, meta =>
+            {
+                if (link)
+                    meta.SetFile(option, node.GamePath, node.RelPath);
+                else if (meta.TryGetFile(option, node.GamePath, out var rel) && PathNormalizer.SameRel(rel, node.RelPath))
+                    meta.RemoveFile(option, node.GamePath);
+            }))
+            return;
         Revision++;
 
         var label = project.Meta.OptionLabel(option);
@@ -703,7 +735,8 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
         if (Project is not { } project)
             return null;
         string? id = null;
-        project.EditStructure(meta => id = meta.AddGroup(name, type));
+        if (!TryEditStructure(project, meta => id = meta.AddGroup(name, type)))
+            return null;
         Revision++;
         return id;
     }
@@ -712,8 +745,8 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
     {
         if (Project is not { } project || name.Trim().Length == 0)
             return;
-        project.EditStructure(meta => meta.RenameGroup(groupId, name.Trim()));
-        Revision++;
+        if (TryEditStructure(project, meta => meta.RenameGroup(groupId, name.Trim())))
+            Revision++;
     }
 
     /// <summary>
@@ -724,16 +757,16 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
     {
         if (Project is not { } project || name.Trim().Length == 0)
             return;
-        project.EditStructure(meta => meta.RenameOption(option, name.Trim()));
-        Revision++;
+        if (TryEditStructure(project, meta => meta.RenameOption(option, name.Trim())))
+            Revision++;
     }
 
     public void SetOptionDescription(OptionRef option, string description)
     {
         if (Project is not { } project)
             return;
-        project.EditStructure(meta => meta.SetOptionDescription(option, description));
-        Revision++;
+        if (TryEditStructure(project, meta => meta.SetOptionDescription(option, description)))
+            Revision++;
     }
 
     /// <summary>
@@ -748,15 +781,13 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
         var moved = new Dictionary<OptionRef, OptionRef>();
         var files = new List<string>();
         bool removed = false;
-        project.EditStructure(meta =>
-        {
-            files = meta.FilesOf(option).Select(f => f.RelPath).ToList();
-            removed = meta.RemoveOption(option, out moved);
-        });
-        if (!removed)
+        if (!TryEditStructure(project, meta =>
+            {
+                files = meta.FilesOf(option).Select(f => f.RelPath).ToList();
+                removed = meta.RemoveOption(option, out moved);
+            }) || !removed)
             return;
-        Forget(new[] { option }, moved, deleteFiles ? files : new List<string>());
-        Notify($"{label} is no longer in the mod.", Severity.Info);
+        Forget(project, new[] { option }, moved, deleteFiles ? files : new List<string>(), label);
     }
 
     /// <summary>Takes a whole group out of the mod; see <see cref="RemoveOption"/>.</summary>
@@ -768,59 +799,25 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
         var files = new List<string>();
         var gone = view.FileSets.Select(o => o.Ref).ToList();
         bool removed = false;
-        project.EditStructure(meta =>
-        {
-            files = gone.SelectMany(o => meta.FilesOf(o)).Select(f => f.RelPath).ToList();
-            removed = meta.RemoveGroup(groupId, out moved);
-        });
-        if (!removed)
+        if (!TryEditStructure(project, meta =>
+            {
+                files = gone.SelectMany(o => meta.FilesOf(o)).Select(f => f.RelPath).ToList();
+                removed = meta.RemoveGroup(groupId, out moved);
+            }) || !removed)
             return;
-        Forget(gone, moved, deleteFiles ? files : new List<string>());
-        Notify($"{view.Name} is no longer in the mod.", Severity.Info);
+        Forget(project, gone, moved, deleteFiles ? files : new List<string>(), view.Name);
     }
 
     /// <summary>
-    /// After options left the mod: what was set up here for them goes too, and whatever was addressed
-    /// by position follows the options that moved up. <paramref name="deleteFiles"/> are the files
-    /// they carried, deleted from the mod folder unless something still uses them.
+    /// After options left the mod (meta.json is written by now): what was set up here for them goes
+    /// too, and whatever was addressed by position follows the options that moved up (see
+    /// <see cref="ModProject.ForgetOptions"/>). <paramref name="deleteFiles"/> are the files they
+    /// carried, deleted from the mod folder unless something still needs them.
     /// </summary>
-    private void Forget(IReadOnlyCollection<OptionRef> gone, Dictionary<OptionRef, OptionRef> moved, List<string> deleteFiles)
+    private void Forget(ModProject project, IReadOnlyCollection<OptionRef> gone, Dictionary<OptionRef, OptionRef> moved, List<string> deleteFiles, string label)
     {
-        if (Project is not { } project)
-            return;
-        var sidecar = project.Sidecar;
-        string? Moved(string serialized)
-            => moved.TryGetValue(OptionRef.Parse(serialized), out var now) ? now.Serialize() : null;
-
-        int dropped = sidecar.Replacements.RemoveAll(r => gone.Contains(OptionRef.Parse(r.Option)));
-        int items = sidecar.AddedItems.RemoveAll(i => gone.Contains(OptionRef.Parse(i.Option)));
-        bool changed = dropped + items > 0;
-        foreach (var replacement in sidecar.Replacements)
-            if (Moved(replacement.Option) is { } now) { replacement.Option = now; changed = true; }
-        foreach (var item in sidecar.AddedItems)
-            if (Moved(item.Option) is { } now) { item.Option = now; changed = true; }
-
-        bool ledger = false;
-        foreach (var file in sidecar.Ledger.Files)
-            if (Moved(file.Option) is { } now) { file.Option = now; ledger = true; }
-
-        if (deleteFiles.Count > 0)
-        {
-            var referenced = project.Meta.ReferencedRelKeys();
-            foreach (var rel in deleteFiles.Distinct(StringComparer.OrdinalIgnoreCase))
-            {
-                if (PathNormalizer.IsAbsolute(rel) || !PathNormalizer.IsSafeRel(rel) || referenced.Contains(PathNormalizer.RelKey(rel)))
-                    continue;
-                try
-                {
-                    File.Delete(PathNormalizer.ToDiskPath(project.FolderPath, rel));
-                }
-                catch (Exception ex)
-                {
-                    StudioServices.Log.Debug(ex, "[Studio] Could not delete {0}", rel);
-                }
-            }
-        }
+        var result = project.ForgetOptions(gone, moved, deleteFiles,
+            (rel, ex) => StudioServices.Log.Debug(ex, "[Studio] Could not delete {0}", rel));
 
         if (Selection is { Kind: TargetKind.Resource } selected
             && (ResourceGraph.OptionOf(selected.Root) is { } option && gone.Contains(option)
@@ -828,16 +825,15 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
                 || ResourceGraph.GroupOf(selected.Root) is { } group && gone.Any(o => o.Group == group)))
             Selection = new Target(TargetKind.Project);
 
-        if (ledger)
-            project.MarkLedgerDirty();
-        else if (changed)
-            project.MarkSidecarDirty();
-        if (dropped > 0)
+        if (result.DroppedReplacements > 0)
             MarkDirty();
         else
             Revision++;
-        if (ledger)
-            Flush();   // the next update reads the ledger from disk
+
+        if (result.SaveError is { } error)
+            Notify($"{label} is no longer in the mod. No file was deleted: {StudioProject.FileName} could not be saved ({error}).", Severity.Warning);
+        else
+            Notify($"{label} is no longer in the mod.", Severity.Info);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1001,27 +997,18 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
             return false;
 
         string? removedRel = null;
-        project.EditStructure(meta =>
-        {
-            if (meta.TryGetFile(option, gamePath, out var rel) && meta.RemoveFile(option, gamePath))
-                removedRel = rel;
-        });
-        if (removedRel == null)
+        if (!TryEditStructure(project, meta =>
+            {
+                if (meta.TryGetFile(option, gamePath, out var rel) && meta.RemoveFile(option, gamePath))
+                    removedRel = rel;
+            }) || removedRel == null)
             return false;
 
         ClearReplacement(gamePath, option);
-        if (deleteFile && !PathNormalizer.IsAbsolute(removedRel) && PathNormalizer.IsSafeRel(removedRel)
-            && !project.Meta.ReferencedRelKeys().Contains(PathNormalizer.RelKey(removedRel)))
-        {
-            try
-            {
-                File.Delete(PathNormalizer.ToDiskPath(project.FolderPath, removedRel));
-            }
-            catch (Exception ex)
-            {
-                Notify($"The entry was removed, but the file could not be deleted: {ex.Message}", Severity.Warning);
-            }
-        }
+        // Kept while anything else needs it — another entry, or an entry repointed here that goes back to it.
+        if (deleteFile)
+            project.DeleteUnused(new[] { removedRel },
+                (_, ex) => Notify($"The entry was removed, but the file could not be deleted: {ex.Message}", Severity.Warning));
         Revision++;
         return true;
     }

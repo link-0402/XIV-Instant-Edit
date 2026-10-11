@@ -814,19 +814,22 @@ public sealed class GameDataService : IItemNames, Check.IItemVariants
 
             var cat = row.EquipSlotCategory.Value;
 
+            // 1 means the item sits in the slot, -1 that it only blocks it (a hooded coat blocks the
+            // head), so only positive values count, as in SlotsOf.
+
             // Equipment (prefix 'e')
-            if (cat.Head   != 0) { slot = EquipSlot.Head;      return true; }
-            if (cat.Body   != 0) { slot = EquipSlot.Body;      return true; }
-            if (cat.Gloves != 0) { slot = EquipSlot.Hands;     return true; }
-            if (cat.Legs   != 0) { slot = EquipSlot.Legs;      return true; }
-            if (cat.Feet   != 0) { slot = EquipSlot.Feet;      return true; }
+            if (cat.Head   > 0) { slot = EquipSlot.Head;      return true; }
+            if (cat.Body   > 0) { slot = EquipSlot.Body;      return true; }
+            if (cat.Gloves > 0) { slot = EquipSlot.Hands;     return true; }
+            if (cat.Legs   > 0) { slot = EquipSlot.Legs;      return true; }
+            if (cat.Feet   > 0) { slot = EquipSlot.Feet;      return true; }
 
             // Accessories (prefix 'a')
-            if (cat.Ears     != 0) { slot = EquipSlot.Earring;   isAcc = true; return true; }
-            if (cat.Neck     != 0) { slot = EquipSlot.Neck;      isAcc = true; return true; }
-            if (cat.Wrists   != 0) { slot = EquipSlot.Wrists;    isAcc = true; return true; }
-            if (cat.FingerR  != 0) { slot = EquipSlot.RingRight; isAcc = true; return true; }
-            if (cat.FingerL  != 0) { slot = EquipSlot.RingLeft;  isAcc = true; return true; }
+            if (cat.Ears     > 0) { slot = EquipSlot.Earring;   isAcc = true; return true; }
+            if (cat.Neck     > 0) { slot = EquipSlot.Neck;      isAcc = true; return true; }
+            if (cat.Wrists   > 0) { slot = EquipSlot.Wrists;    isAcc = true; return true; }
+            if (cat.FingerR  > 0) { slot = EquipSlot.RingRight; isAcc = true; return true; }
+            if (cat.FingerL  > 0) { slot = EquipSlot.RingLeft;  isAcc = true; return true; }
         }
         catch
         {

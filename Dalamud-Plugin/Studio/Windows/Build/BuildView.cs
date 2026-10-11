@@ -56,11 +56,10 @@ internal sealed class BuildView
         if (report == null)
         {
             Gui.HintWrapped("No build yet. Building converts every texture, writes the materials and models for every item in the modpack, " +
-                           "and registers the mod with Penumbra. Rebuilding overwrites the same mod folder and keeps its id, " +
-                           "so Penumbra remembers your settings for it.");
+                           "and adds the new mod to Penumbra.");
             ImGui.Spacing();
-            Gui.HintWrapped("The mod it makes is a plain Penumbra mod: none of this set-up goes into it. Open it from the library " +
-                           "to change its files later — a rebuild writes it again from this pack, over such changes.");
+            Gui.HintWrapped("The mod it makes is a plain Penumbra mod: none of this set-up goes into it. A build only makes new mods. " +
+                           "To change one later, open it from the library.");
             return;
         }
 
@@ -114,7 +113,7 @@ internal sealed class BuildView
         }
         if (!can)
         {
-            // A reason can be a sentence long (another mod in the folder this one would build into).
+            // A reason can be a sentence long (the folder this one would build into is already there).
             ImGui.PushStyleColor(ImGuiCol.Text, Theme.Warn);
             ImGui.TextWrapped(reason);
             ImGui.PopStyleColor();

@@ -159,6 +159,7 @@ try
     VariantExportScenarios.Run(testRoot);
     SizesExportScenarios.Run(testRoot);
     RaceExportScenarios.Run(testRoot);
+    ReviewFixIeSideScenarios.Run(testRoot);
     EstEntryScenarios.Run(testRoot);
     CheckSessionStore(testRoot);
     SelectorStabilityScenarios.Run(testRoot);
@@ -172,6 +173,10 @@ try
     ModCleanUpScenarios.RunLocations(testRoot);
     ModCleanUpScenarios.RunDuplicates(testRoot);
     LibraryFilterScenarios.Run(testRoot);
+    ReviewFixLibraryScenarios.Run(testRoot);
+    ReviewFixBuildScenarios.Run(testRoot);
+    ReviewFixSimsScenarios.Run(testRoot);
+    ReviewFixEditingScenarios.Run(testRoot);
     ModCheckScenarios.RunReviewFixes(testRoot);
     ModCleanUpScenarios.RunReviewFixes(testRoot);
     ModCheckScenarios.RunMinors(testRoot);

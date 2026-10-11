@@ -92,6 +92,9 @@ internal sealed class BuildRequest
     public required string ModName         { get; init; }
     public required string PluginDirectory { get; init; }
 
+    /// <summary>The mod folder the build makes: one that does not exist yet.</summary>
+    public string ModPath => System.IO.Path.Combine(ModRoot, ModName);
+
     /// <summary>
     /// Where converted textures are kept between builds, so the same images are not compressed
     /// again every time (see <see cref="TextureCache"/>). Empty disables the cache.
@@ -140,8 +143,7 @@ internal sealed class BuildReport
     public string? FatalError { get; set; }
 
     /// <summary>
-    /// Filled in on the render thread after the worker finishes: Penumbra's answer to reading the mod
-    /// again (a rebuild), or to adding it (the first build).
+    /// Filled in on the render thread after the worker finishes: Penumbra's answer to adding the new mod.
     /// </summary>
     public PenumbraApiEc? AddModResult { get; set; }
 
