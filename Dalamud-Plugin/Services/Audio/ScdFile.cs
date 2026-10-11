@@ -31,7 +31,12 @@ internal sealed record ScdSound(int Offset, int Type, int Attributes, float Volu
     ImmutableArray<(int Track, int Audio)> Tracks, double Seconds)
 {
     public const int Normal = 1;
+    public const int Cycle = 4;
+    public const int GroupRandom = 12;
+    public const int Empty = 15;
     public const int LoopAttribute = 0x0001;
+    /// <summary>The attribute bits that add an optional block to the entry: routing, bus ducking, acceleration, atomos, extra, bypass.</summary>
+    public const int BlockAttributes = 0x0100 | 0x0400 | 0x0800 | 0x8000 | 0x2000 | 0x0040;
     public const int VolumeField = 8;
     public bool Loops => (Attributes & LoopAttribute) != 0;
 }
@@ -231,7 +236,33 @@ internal sealed class ScdFile
         var type = bytes[offset + 3];
         var attributes = I32(bytes, offset + 4);
         var volume = BinaryPrimitives.ReadSingleLittleEndian(bytes.AsSpan(offset + ScdSound.VolumeField));
-        var at = offset + 16;
+        var (at, extra) = SoundBlocks(bytes, offset + 16, attributes, type);
+        var stride = IsRandom(type) ? 8 : 4;
+        if ((long)at + tracks * stride > bytes.Length)
+            throw new InvalidDataException("An SCD sound entry runs past the end of the file.");
+        var pairs = ImmutableArray.CreateBuilder<(int, int)>(tracks);
+        double seconds = 0;
+        for (var i = 0; i < tracks; i++)
+        {
+            int track = I16(bytes, at + i * stride), index = I16(bytes, at + i * stride + 2);
+            if (track < -1 || track >= trackCount || index < -1 || index >= audio.Length)
+                throw new InvalidDataException("An SCD sound entry names a track or audio entry that does not exist.");
+            pairs.Add((track, index));
+            if (index >= 0)
+                seconds = Math.Max(seconds, audio[index].Seconds);
+        }
+        return new ScdSound(offset, type, attributes, volume, extra, pairs.MoveToImmutable(), seconds);
+    }
+
+    /// <summary>Sound types whose entries are 8 bytes (track, audio, limit, order) instead of 4.</summary>
+    internal static bool IsRandom(int type) => type is TypeRandom or TypeCycle or TypeGroupRandom or TypeGroupOrder;
+
+    /// <summary>
+    /// Walks a sound entry's optional blocks from <paramref name="at"/>, just after its 16-byte head,
+    /// and returns where its track entries start and where its extra block starts (or -1).
+    /// </summary>
+    internal static (int Entries, int Extra) SoundBlocks(byte[] bytes, int at, int attributes, int type)
+    {
         // Optional blocks in this order, each sized by its own size field (routing: 32-bit total; bus ducking: first byte; acceleration: second byte; atomos and extra: 16-bit at +2).
         if ((attributes & AttributeRouting) != 0)
             at += Block(bytes, at, I32(bytes, at), 16);
@@ -251,22 +282,7 @@ internal sealed class ScdFile
             at += 32;
         if (type == TypeEmpty && (attributes & ScdSound.LoopAttribute) != 0)
             at += 8;
-        var random = type is TypeRandom or TypeCycle or TypeGroupRandom or TypeGroupOrder;
-        var stride = random ? 8 : 4;
-        if ((long)at + tracks * stride > bytes.Length)
-            throw new InvalidDataException("An SCD sound entry runs past the end of the file.");
-        var pairs = ImmutableArray.CreateBuilder<(int, int)>(tracks);
-        double seconds = 0;
-        for (var i = 0; i < tracks; i++)
-        {
-            int track = I16(bytes, at + i * stride), index = I16(bytes, at + i * stride + 2);
-            if (track < -1 || track >= trackCount || index < -1 || index >= audio.Length)
-                throw new InvalidDataException("An SCD sound entry names a track or audio entry that does not exist.");
-            pairs.Add((track, index));
-            if (index >= 0)
-                seconds = Math.Max(seconds, audio[index].Seconds);
-        }
-        return new ScdSound(offset, type, attributes, volume, extra, pairs.MoveToImmutable(), seconds);
+        return (at, extra);
     }
 
     private static int Block(byte[] bytes, int at, int size, int minimum)
