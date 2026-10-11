@@ -145,7 +145,8 @@ internal sealed class ModBuilder
 
             var defaults = Carrier(PackPlace.Default);
             var groups = GroupsOut(report);
-            ModMetaWriter.Write(modPath, _req.ModName, defaults, groups, _req.Meta);
+            // Named as the user typed it; only the folder needs a name Windows can store.
+            ModMetaWriter.Write(modPath, string.IsNullOrWhiteSpace(_req.DisplayName) ? _req.ModName : _req.DisplayName, defaults, groups, _req.Meta);
             int written = groups.Count(g => g.Options.Count > 0);
             report.Add(BuildOutcome.Ok, BuildCategory.Meta, "meta.json", "meta.json",
                 $"{defaults.Files.Count} default file(s), {written} group(s) with {groups.Sum(g => g.Options.Count)} option(s)");

@@ -21,6 +21,9 @@ public static class TextureConverter
     private const int TexHeaderSize = 80;
     private const int MaxMipCount   = 13;
 
+    /// <summary>The widest or tallest texture the game can make (and that fits the .tex header).</summary>
+    public const int MaxSide = 16384;
+
     // TexFile.Attribute (bit flags; the texture-type dimension lives at bit 22-24)
     private const uint TextureType2D = 0x00800000;
 
@@ -197,6 +200,16 @@ public static class TextureConverter
     {
         try
         {
+            // The size first, from the header: an image too big for the game isn't decoded at all.
+            using (var header = new MemoryStream(source, writable: false))
+            {
+                var info = Image.Identify(StudioImages.Decoder, header);
+                if (SizeProblem(info.Width, info.Height) is { } problem)
+                {
+                    error = problem;
+                    return null;
+                }
+            }
             error = string.Empty;
             return Image.Load<Rgba32>(StudioImages.Decoder, source);
         }
@@ -207,11 +220,16 @@ public static class TextureConverter
         }
     }
 
+    /// <summary>Why the game can't have a texture of this size, or null when it can.</summary>
+    internal static string? SizeProblem(long width, long height)
+        => width < 1 || height < 1 ? "The image has no pixels."
+         : width > MaxSide || height > MaxSide ? $"The image is {width}x{height}; the game takes textures up to {MaxSide}x{MaxSide}. Make it smaller first."
+         : null;
+
     private static byte[] ImageToBgra(Image<Rgba32> image)
     {
-        var rgba = new byte[image.Width * image.Height * 4];
-        image.CopyPixelDataTo(rgba);
-        var bgra = (byte[])rgba.Clone();
+        var bgra = new byte[image.Width * image.Height * 4];
+        image.CopyPixelDataTo(bgra);
         for (int i = 0; i + 4 <= bgra.Length; i += 4)
             (bgra[i], bgra[i + 2]) = (bgra[i + 2], bgra[i]);
         return bgra;
@@ -258,6 +276,11 @@ public static class TextureConverter
         byte[] pixels;
         if (info.Compressed)
         {
+            if (info.FormatCode == FormatBC6H)
+            {
+                error = "A BC6H (HDR) .dds can't be changed to another format here. Save it as a PNG first.";
+                return false;
+            }
             var format = ToBcEncoderFormat(info.FormatCode);
             if (format == CompressionFormat.Unknown)
             {
@@ -341,6 +364,7 @@ public static class TextureConverter
             FormatBC3 => CompressionFormat.Bc3,
             FormatBC4 => CompressionFormat.Bc4,
             FormatBC5 => CompressionFormat.Bc5,
+            FormatBC7 => CompressionFormat.Bc7,
             _         => CompressionFormat.Unknown,
         };
 
@@ -379,6 +403,11 @@ public static class TextureConverter
         br.ReadUInt32();              // dwPitchOrLinearSize
         br.ReadUInt32();              // dwDepth
         uint ddsMipCount = br.ReadUInt32();
+        if (SizeProblem(width, height) is { } sizeProblem)
+        {
+            error = sizeProblem;
+            return false;
+        }
         br.ReadBytes(44);             // dwReserved1[11]
 
         br.ReadUInt32();              // pf.dwSize (always 32)

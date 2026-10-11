@@ -67,15 +67,21 @@ internal static class PackPlaceUi
     {
         Gui.Label("Options of", "Each variant file becomes the option of this group made for its name. Several slots of variants can fill one group: files of the same name then go into the same option.");
         ImGui.SetNextItemWidth(-1);
+        // The pick is applied after the combo: setting it can make groups (session.Groups changes),
+        // which must not happen while that list is being drawn.
+        bool picked = false;
+        Guid? pick = null;
         if (ImGui.BeginCombo(id, current != null ? $"{current.Name}  ({current.Options.Count} options)" : "a group of its own"))
         {
             if (ImGui.Selectable("A group of its own (made for it)", false))
-                set(null);
+                (picked, pick) = (true, null);
             foreach (var group in session.Groups)
                 if (ImGui.Selectable($"{group.Name}  ({group.Options.Count} options)##{group.Id}", group == current))
-                    set(group.Id);
+                    (picked, pick) = (true, group.Id);
             ImGui.EndCombo();
         }
+        if (picked)
+            set(pick);
         if (current != null)
         {
             Gui.Label(string.Empty);

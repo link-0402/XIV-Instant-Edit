@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 
 namespace InstantEdit.Studio.Services.Sims;
 
@@ -103,18 +104,20 @@ public static class SimsPackageInspector
 {
     private const int ThumbnailSize = 96;
 
-    public static SimsScanResult Scan(string packagePath, Action<string>? progress = null)
+    /// <summary>Lists what a package holds. <paramref name="cancel"/> stops it between resources (OperationCanceledException).</summary>
+    public static SimsScanResult Scan(string packagePath, Action<string>? progress = null, CancellationToken cancel = default)
     {
         var result = new SimsScanResult { PackagePath = packagePath };
 
+        cancel.ThrowIfCancellationRequested();
         using var package = new DbpfPackage(packagePath);
         progress?.Invoke($"Reading index ({package.Entries.Count} resources)");
 
-        var parts = ReadCasParts(package, result, progress);
+        var parts = ReadCasParts(package, result, progress, cancel);
         result.HasCasPartData = parts.Count > 0;
 
-        AddMeshes(package, parts, result, progress);
-        AddTextures(package, parts, result, progress);
+        AddMeshes(package, parts, result, progress, cancel);
+        AddTextures(package, parts, result, progress, cancel);
         SelectDefaults(result);
 
         if (result.Assets.Count == 0)
@@ -138,7 +141,7 @@ public static class SimsPackageInspector
             asset.Selected = asset.LodLevel == 0;
     }
 
-    private static List<SimsCasPart> ReadCasParts(DbpfPackage package, SimsScanResult result, Action<string>? progress)
+    private static List<SimsCasPart> ReadCasParts(DbpfPackage package, SimsScanResult result, Action<string>? progress, CancellationToken cancel)
     {
         var parts = new List<SimsCasPart>();
         var caspEntries = package.Entries.Where(e => e.Type == SimsResourceType.Casp).ToList();
@@ -150,6 +153,7 @@ public static class SimsPackageInspector
 
         foreach (var entry in caspEntries)
         {
+            cancel.ThrowIfCancellationRequested();
             var data = package.TryRead(entry, out var readError);
             if (data == null)
             {
@@ -182,7 +186,7 @@ public static class SimsPackageInspector
     }
 
     private static void AddMeshes(DbpfPackage package, List<SimsCasPart> parts,
-        SimsScanResult result, Action<string>? progress)
+        SimsScanResult result, Action<string>? progress, CancellationToken cancel)
     {
         var geomEntries = package.Entries.Where(e => e.Type == SimsResourceType.Geom).ToList();
         if (geomEntries.Count == 0)
@@ -214,6 +218,7 @@ public static class SimsPackageInspector
 
         foreach (var entry in geomEntries)
         {
+            cancel.ThrowIfCancellationRequested();
             var data = package.TryRead(entry, out var readError);
             if (data == null)
             {
@@ -272,7 +277,7 @@ public static class SimsPackageInspector
     }
 
     private static void AddTextures(DbpfPackage package, List<SimsCasPart> parts,
-        SimsScanResult result, Action<string>? progress)
+        SimsScanResult result, Action<string>? progress, CancellationToken cancel)
     {
         // Roles claimed by CAS parts win over the resource-type guess.
         var roles = new Dictionary<SimsResourceKey, (SimsTextureRole Role, string PartName)>();
@@ -288,6 +293,7 @@ public static class SimsPackageInspector
 
         foreach (var entry in textureEntries)
         {
+            cancel.ThrowIfCancellationRequested();
             var key = new SimsResourceKey(entry.Type, entry.Group, entry.Instance);
             bool known = roles.TryGetValue(key, out var claimed);
 
@@ -431,8 +437,9 @@ public static class SimsPackageInspector
     /// holds this run's swatches.
     /// </summary>
     public static ExtractionResult Extract(SimsScanResult scan, string outputRoot,
-        SimsHalfCrop crop = default, Action<string>? progress = null)
+        SimsHalfCrop crop = default, Action<string>? progress = null, CancellationToken cancel = default)
     {
+        cancel.ThrowIfCancellationRequested();
         var packageName = MakeSafeName(Path.GetFileNameWithoutExtension(scan.PackagePath), "sims_package");
         var root = ClaimOutputFolder(outputRoot, packageName, scan.PackagePath, out bool newFolder);
 
@@ -467,6 +474,8 @@ public static class SimsPackageInspector
 
             foreach (var asset in scan.Assets.Where(a => a.Selected))
             {
+                // Stops between files; the manifest (finally, below) still lists what was written.
+                cancel.ThrowIfCancellationRequested();
                 try
                 {
                     if (asset.Kind == SimsAssetKind.Mesh)

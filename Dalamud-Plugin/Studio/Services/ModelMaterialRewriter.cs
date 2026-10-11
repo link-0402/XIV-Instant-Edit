@@ -218,6 +218,9 @@ public static class ModelMaterialRewriter
             br.ReadUInt16();                    // padding
             uint stringSize = br.ReadUInt32();
             long stringDataPos = ms.Position;
+            // Checked before reading: ReadBytes allocates the whole size it is asked for up front.
+            if (stringSize > ms.Length - stringDataPos)
+                throw new InvalidDataException("the string block runs past the end of the file");
             var strings = br.ReadBytes((int)stringSize);
             if (strings.Length != stringSize)
                 throw new InvalidDataException("the string block runs past the end of the file");

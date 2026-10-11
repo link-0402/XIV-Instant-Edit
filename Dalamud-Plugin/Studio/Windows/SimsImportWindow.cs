@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Numerics;
+using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
@@ -55,6 +56,9 @@ public sealed class SimsImportWindow : Window, IDisposable
     private Task<SimsScanResult>? _scanTask;
     private Task<SimsPackageInspector.ExtractionResult>? _extractTask;
 
+    /// <summary>Stops the scan or extraction under way: the Stop button, closing the window, or the plugin going away.</summary>
+    private CancellationTokenSource? _cts;
+
     /// <summary>The one field the worker writes: its latest progress line.</summary>
     private volatile string _progress = string.Empty;
 
@@ -85,7 +89,31 @@ public sealed class SimsImportWindow : Window, IDisposable
 
     public void Dispose()
     {
+        StopWork();
         _thumbnails.ForgetMemoryEntries();
+    }
+
+    /// <summary>Closed: what runs is stopped, and whatever it would still have found is dropped.</summary>
+    public override void OnClose() => StopWork();
+
+    private void StopWork()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = null;
+        if (Busy)
+            _status = "Stopped.";
+        _scanTask    = null;
+        _extractTask = null;
+    }
+
+    /// <summary>A token for new work; whatever ran before is stopped first.</summary>
+    private CancellationToken NewWork()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = new CancellationTokenSource();
+        return _cts.Token;
     }
 
     private bool Busy => _scanTask is { IsCompleted: false } || _extractTask is { IsCompleted: false };
@@ -146,6 +174,9 @@ public sealed class SimsImportWindow : Window, IDisposable
             Gui.Icon(FontAwesomeIcon.Spinner, Theme.Accent);
             ImGui.SameLine();
             ImGui.TextColored(Theme.Accent, _progress);
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Stop##SimsStop"))
+                StopWork();
         }
         else if (!string.IsNullOrEmpty(_errorMessage))
         {
@@ -583,7 +614,8 @@ public sealed class SimsImportWindow : Window, IDisposable
         _progress     = "Opening package";
 
         var path = _packagePath;
-        _scanTask = Task.Run(() => SimsPackageInspector.Scan(path, s => _progress = s));
+        var cancel = NewWork();
+        _scanTask = Task.Run(() => SimsPackageInspector.Scan(path, s => _progress = s, cancel), cancel);
     }
 
     private void StartExtract()
@@ -608,8 +640,12 @@ public sealed class SimsImportWindow : Window, IDisposable
 
         var outputDir = _outputDir;
         var crop = _cropHalf ? scan.SuggestedCrop : SimsHalfCrop.None;
-        _extractTask = Task.Run(() => SimsPackageInspector.Extract(scan, outputDir, crop, s => _progress = s));
+        var cancel = NewWork();
+        _extractTask = Task.Run(() => SimsPackageInspector.Extract(scan, outputDir, crop, s => _progress = s, cancel), cancel);
     }
+
+    private static bool Stopped(Task task)
+        => task.IsCanceled || task.Exception?.GetBaseException() is OperationCanceledException;
 
     /// <summary>Applies a finished scan or extraction on the render thread.</summary>
     private void CollectFinishedWork()
@@ -617,7 +653,9 @@ public sealed class SimsImportWindow : Window, IDisposable
         if (_scanTask is { IsCompleted: true } scanTask)
         {
             _scanTask = null;
-            if (scanTask.IsCompletedSuccessfully)
+            if (Stopped(scanTask))
+                _status = "Stopped.";
+            else if (scanTask.IsCompletedSuccessfully)
             {
                 var scan = scanTask.Result;
                 BuildLodOptions(scan);
@@ -637,7 +675,9 @@ public sealed class SimsImportWindow : Window, IDisposable
         if (_extractTask is { IsCompleted: true } extractTask)
         {
             _extractTask = null;
-            if (extractTask.IsCompletedSuccessfully)
+            if (Stopped(extractTask))
+                _status = "Stopped.";
+            else if (extractTask.IsCompletedSuccessfully)
             {
                 var result = extractTask.Result;
                 _extraction = result;

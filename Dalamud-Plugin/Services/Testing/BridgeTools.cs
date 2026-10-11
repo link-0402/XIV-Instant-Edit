@@ -186,19 +186,32 @@ internal sealed class BridgeTools : IDisposable
     {
         if (string.IsNullOrEmpty(modDirectory) || string.IsNullOrEmpty(targetRelativePath))
             return [];
-        return backups.List(modDirectory, targetRelativePath).Select(backup =>
+        var rows = new List<JsonNode>();
+        foreach (var backup in backups.List(modDirectory, targetRelativePath))
         {
-            var path = backups.Resolve(backup.TargetId, backup.Name);
-            return (JsonNode)new JsonObject
+            // A backup cleaned up between listing and reading it is left out, not the whole call.
+            string path;
+            long size;
+            try
+            {
+                path = backups.Resolve(backup.TargetId, backup.Name);
+                size = new FileInfo(path).Length;
+            }
+            catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+            rows.Add(new JsonObject
             {
                 ["targetId"] = backup.TargetId,
                 ["name"] = backup.Name,
                 ["created"] = backup.Created.ToString("O"),
-                ["size"] = new FileInfo(path).Length,
+                ["size"] = size,
                 ["estState"] = File.Exists(path + ".est.json"),
                 ["raceState"] = File.Exists(path + ".race.json"),
-            };
-        }).ToArray();
+            });
+        }
+        return rows;
     }
 
     private JsonNode EstEntries(JsonObject arguments)

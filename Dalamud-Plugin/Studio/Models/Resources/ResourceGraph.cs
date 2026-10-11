@@ -178,8 +178,15 @@ internal sealed class ResourceGraph
         Nodes       = nodes;
         Revision    = revision;
         BuildTime   = buildTime;
-        _rootsById = roots.Concat(optionRoots).ToDictionary(r => r.Id, StringComparer.OrdinalIgnoreCase);
-        _optionRoots = optionRoots.Where(r => r.Option != null).ToDictionary(r => r.Option!.Value);
+        // Ids are unique by construction; should two still match (hand-edited group ids), the first
+        // one is kept rather than the whole graph failing.
+        _rootsById = new Dictionary<string, ResourceRoot>(StringComparer.OrdinalIgnoreCase);
+        foreach (var root in roots.Concat(optionRoots))
+            _rootsById.TryAdd(root.Id, root);
+        _optionRoots = new Dictionary<OptionRef, ResourceRoot>();
+        foreach (var root in optionRoots)
+            if (root.Option is { } option)
+                _optionRoots.TryAdd(option, root);
         _byGamePath = nodes.Values
             .GroupBy(n => PathNormalizer.GamePath(n.GamePath))
             .ToDictionary(g => g.Key, g => g.ToList());

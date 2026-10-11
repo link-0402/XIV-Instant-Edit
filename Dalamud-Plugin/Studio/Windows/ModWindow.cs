@@ -59,14 +59,21 @@ internal sealed class ModWindow : Window
 
     public ModEditor Editor { get; }
 
-    internal ModWindow(StudioHost host, ModEditor editor, TextureThumbnailCache thumbnails, Vector2 position)
-        : base($"{editor.Name}###ie-mod:{editor.Project.FolderPath}", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
+    /// <summary>
+    /// The window's ImGui id: the folder it was opened from, so ImGui remembers its size per mod. It
+    /// stays when Penumbra renames the folder; <see cref="StudioHost"/> numbers a later window opened
+    /// at the old folder so the two never share one.
+    /// </summary>
+    internal string WindowId => _windowId;
+
+    internal ModWindow(StudioHost host, ModEditor editor, TextureThumbnailCache thumbnails, Vector2 position, string windowId)
+        : base($"{editor.Name}###ie-mod:{windowId}", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
         _host    = host;
         Editor   = editor;
         _session = editor.Session;
         _sync    = editor.Sync;
-        _windowId = editor.Project.FolderPath;
+        _windowId = windowId;
 
         Size              = new Vector2(1280, 760);
         SizeCondition     = ImGuiCond.FirstUseEver;

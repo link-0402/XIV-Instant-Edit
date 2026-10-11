@@ -168,11 +168,11 @@ internal sealed class ModWriter
     /// <summary>Its files, by <see cref="WriteConflict.KeyFor"/>.</summary>
     private readonly Dictionary<string, LedgerFile> _previousFiles = new(StringComparer.Ordinal);
 
-    /// <summary>Every place this update writes to (relative-path keys).</summary>
-    private readonly HashSet<string> _claimed = new(StringComparer.Ordinal);
+    /// <summary>Every place this update writes to (relative-path keys), and the entry (<see cref="WriteConflict.KeyFor"/>) writing it.</summary>
+    private readonly Dictionary<string, string> _claimed = new(StringComparer.Ordinal);
 
-    /// <summary>Places the last update wrote to, which this one may write to again.</summary>
-    private HashSet<string> _owned = new(StringComparer.Ordinal);
+    /// <summary>Places the last update wrote to, and the entry each was written for; only that entry may write there again.</summary>
+    private Dictionary<string, string> _owned = new(StringComparer.Ordinal);
 
     /// <summary>Every mod-relative path meta.json pointed at when the update was asked for.</summary>
     private HashSet<string> _inUse = new(StringComparer.Ordinal);
@@ -255,7 +255,9 @@ internal sealed class ModWriter
         _previous = StudioProjectStore.LoadLedger(_modPath) ?? _req.PreviousLedger;
         foreach (var file in _previous.Files)
             _previousFiles[WriteConflict.KeyFor(OptionRef.Parse(file.Option), file.GamePath)] = file;
-        _owned = _previous.Files.Select(f => PathNormalizer.RelKey(f.RelPath)).ToHashSet(StringComparer.Ordinal);
+        _owned = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var file in _previous.Files)
+            _owned.TryAdd(PathNormalizer.RelKey(file.RelPath), WriteConflict.KeyFor(OptionRef.Parse(file.Option), file.GamePath));
         _inUse = _req.Meta.ReferencedRelKeys();
     }
 
@@ -270,17 +272,18 @@ internal sealed class ModWriter
     /// </summary>
     private Planned Plan(string gamePath, OptionRef option, string preferredRel, string intent, string label, Target? source)
     {
-        _previousFiles.TryGetValue(WriteConflict.KeyFor(option, gamePath), out var previous);
+        var entry = WriteConflict.KeyFor(option, gamePath);
+        _previousFiles.TryGetValue(entry, out var previous);
         string rel;
         if (previous != null && PathNormalizer.IsSafeRel(previous.RelPath))
         {
             // Where it was written before, so it stays put however the mod's own files moved.
             rel = previous.RelPath;
-            _claimed.Add(PathNormalizer.RelKey(rel));
+            _claimed.TryAdd(PathNormalizer.RelKey(rel), entry);
         }
         else
         {
-            rel = Place(preferredRel);
+            rel = Place(preferredRel, entry);
         }
 
         _files.RemoveAll(p => p.Option == option && PathNormalizer.SameGamePath(p.GamePath, gamePath));
@@ -372,8 +375,10 @@ internal sealed class ModWriter
     /// <summary>
     /// The relative path a file goes to: <paramref name="preferredRel"/>, unless a file this plugin
     /// did not write already lives there — then under "instant_edit\", so the mod's own file is left alone.
+    /// A place this plugin writes (or wrote) for another entry is passed over too: two options whose
+    /// names come out the same as folders ("Red" and "red", "A/B" and "A_B") get places of their own.
     /// </summary>
-    private string Place(string preferredRel)
+    private string Place(string preferredRel, string entry)
     {
         var rel = PathNormalizer.RelPathForMeta(preferredRel);
         if (!PathNormalizer.IsSafeRel(rel))
@@ -395,9 +400,12 @@ internal sealed class ModWriter
             }
 
             var key = PathNormalizer.RelKey(candidate);
-            if (_claimed.Contains(key) || _owned.Contains(key) || !File.Exists(Disk(candidate)))
+            bool free = _claimed.TryGetValue(key, out var claimedBy)
+                ? claimedBy == entry
+                : _owned.TryGetValue(key, out var ownedBy) ? ownedBy == entry : !File.Exists(Disk(candidate));
+            if (free)
             {
-                _claimed.Add(key);
+                _claimed[key] = entry;
                 return candidate;
             }
         }
@@ -586,7 +594,7 @@ internal sealed class ModWriter
         string? rel;
         if (_previousFiles.TryGetValue(WriteConflict.KeyFor(option, gamePath), out var previous))
             rel = previous.OriginalRelPath;
-        else if (!meta.TryGetFile(option, gamePath, out rel) || _owned.Contains(PathNormalizer.RelKey(rel)))
+        else if (!meta.TryGetFile(option, gamePath, out rel) || _owned.ContainsKey(PathNormalizer.RelKey(rel)))
             rel = null;
 
         if (string.IsNullOrEmpty(rel) || !PathNormalizer.IsSafeRel(rel))
@@ -973,12 +981,22 @@ internal sealed class ModWriter
             // Renamed or deleted in Penumbra while the files were written: never write a meta.json
             // (and so a mod folder) back where the mod no longer is.
             EnsureModFolder();
-            var meta = PenumbraModMeta.Load(_modPath);
-            merge = ModMetaMerger.Apply(meta, _output, _previous);
-            if (meta.Revision > 0)
+            try
             {
-                meta.Save(_modPath, backupFirst: !_req.CreatedHere);
-                _report.MetaWritten = true;
+                var meta = PenumbraModMeta.Load(_modPath);
+                merge = ModMetaMerger.Apply(meta, _output, _previous);
+                if (meta.Revision > 0)
+                {
+                    meta.Save(_modPath, backupFirst: !_req.CreatedHere);
+                    _report.MetaWritten = true;
+                }
+            }
+            catch (Exception) when (Directory.Exists(_modPath))
+            {
+                // The files are written, but meta.json wasn't changed: the ledger still has to say
+                // what is on disk now, or the next update takes these files for someone else's.
+                SaveUnmergedLedger();
+                throw;
             }
 
             var ledger = merge.Ledger;
@@ -991,6 +1009,44 @@ internal sealed class ModWriter
 
         _report.Deleted   = DeleteStale(merge.StaleFiles);
         _report.Retracted = merge.Retracted;
+    }
+
+    /// <summary>
+    /// The ledger after files were written but meta.json couldn't be merged: every file as it is on
+    /// disk now, with the entries that were to be pointed at them marked as not pointed yet (the next
+    /// update points them), and the last update's files no replacement asks for any more kept, so the
+    /// next update still takes them back out. Under <see cref="ModFiles.Gate"/>.
+    /// </summary>
+    private void SaveUnmergedLedger()
+    {
+        try
+        {
+            var ledger = UnmergedLedger(_output, _previous);
+            StudioProjectStore.SaveLedger(_modPath, ledger, _req.Sidecar);
+            _report.NewLedger = ledger;
+        }
+        catch (Exception ex)
+        {
+            StudioServices.Log.Warning(ex, "[Studio] Could not record what was written into {0}", _req.ModFolderName);
+        }
+    }
+
+    internal static WriteLedger UnmergedLedger(WriteOutput output, WriteLedger previous)
+    {
+        var ledger = new WriteLedger { UpdatedAt = DateTime.UtcNow };
+        var produced = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var file in output.Files)
+        {
+            var entry = file.Ledger.Clone();
+            if (file.PointEntry)
+                entry.EntryNotPointed = true;
+            ledger.Files.Add(entry);
+            produced.Add(WriteConflict.KeyFor(file.Option, file.GamePath));
+        }
+        foreach (var old in previous.Files)
+            if (!produced.Contains(WriteConflict.KeyFor(OptionRef.Parse(old.Option), old.GamePath)))
+                ledger.Files.Add(old.Clone());
+        return ledger;
     }
 
     /// <summary>
@@ -1011,7 +1067,10 @@ internal sealed class ModWriter
                 var entry = previous!.Clone();
                 entry.Intent   = plan.Intent;
                 entry.Material = plan.Material?.ToLedger() ?? entry.Material;
-                return Output(plan, entry, pointEntry: false);
+                // Written last time, but meta.json couldn't be pointed at it then: it is now.
+                bool point = entry.EntryNotPointed;
+                entry.EntryNotPointed = false;
+                return Output(plan, entry, pointEntry: point);
             }
         }
 

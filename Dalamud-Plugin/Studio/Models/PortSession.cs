@@ -881,10 +881,12 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
             });
         }
 
+        var displayName = string.IsNullOrWhiteSpace(ModName) ? DefaultModName() : ModName.Trim();
         return new BuildRequest
         {
             ModRoot         = modRoot,
-            ModName         = SanitizeFolderName(string.IsNullOrWhiteSpace(ModName) ? DefaultModName() : ModName.Trim()),
+            ModName         = SanitizeFolderName(displayName),
+            DisplayName     = displayName,
             PluginDirectory = _host.PluginDirectory,
             CacheDirectory  = _host.TextureCacheDirectory,
             ConvertTexture  = _host.PenumbraTextures.Available ? _host.PenumbraTextures.Convert : null,
@@ -967,11 +969,27 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
         _                      => "XIV Instant Edit - Mod",
     };
 
-    /// <summary>Replaces path-invalid characters so item names can be used as folder names.</summary>
+    /// <summary>
+    /// Makes a name usable as a folder or file name on Windows: path-invalid characters become '_',
+    /// trailing dots and spaces go (Windows drops them, so the folder would not be the name asked
+    /// for), and a device name (CON, NUL, COM1 and the like) gets a '_' in front.
+    /// </summary>
     public static string SanitizeFolderName(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();
-        var chars = name.Select(c => invalid.Contains(c) ? '_' : c).ToArray();
-        return new string(chars).Trim();
+        var text = new string(name.Select(c => invalid.Contains(c) ? '_' : c).ToArray()).Trim().TrimEnd('.', ' ');
+        if (text.Length == 0)
+            return "Mod";
+        var stem = text.Split('.')[0].TrimEnd(' ');
+        if (ReservedNames.Contains(stem))
+            text = "_" + text;
+        return text;
     }
+
+    private static readonly HashSet<string> ReservedNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    };
 }

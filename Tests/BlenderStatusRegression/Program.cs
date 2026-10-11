@@ -454,6 +454,7 @@ await TextureEditScenarios.RunAsync();
 await TextureEditScenarios.RunReviewFixIeSideAsync();
 await PreviewScenarios.RunAsync();
 await ReviewFixBuildScenarios.RunAsync();
+await ReviewFixLowsScenarios.RunAsync();
 Console.WriteLine("All Blender status and texture regressions passed.");
 
 sealed class StubHandler(

@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using InstantEdit.Studio.Models;
+using InstantEdit.Studio.Models.Project;
 using InstantEdit.Studio.Models.Resources;
 using InstantEdit.Studio.Services.Project;
 
@@ -22,6 +24,7 @@ internal sealed class ResourceGraphService : IDisposable
     private readonly ModFileFactsCache _facts = new();
 
     private Task<ResourceGraph>? _task;
+    private ReplacementSnapshot? _snapshot;
     private CancellationTokenSource? _cts;
     private int _wanted  = int.MinValue;
     private int _running = int.MinValue;
@@ -81,6 +84,7 @@ internal sealed class ResourceGraphService : IDisposable
         {
             if (done.IsCompletedSuccessfully)
             {
+                _snapshot?.Relink(done.Result);
                 Current   = done.Result;
                 LastError = null;
             }
@@ -103,13 +107,14 @@ internal sealed class ResourceGraphService : IDisposable
         var meta = project.Meta;
         var gameData = _host.GameData;
         var ledger = project.Sidecar.Ledger;
+        var snapshot = _snapshot = new ReplacementSnapshot(project.Sidecar.Replacements);
         var input = new GraphInput
         {
             Folder        = project.FolderPath,
             Files         = meta.AllFiles().ToList(),
             Swaps         = meta.AllSwaps().ToList(),
             Manipulations = meta.ManipulationCounts().ToList(),
-            Replacements  = project.Sidecar.Replacements.ToList(),
+            Replacements  = snapshot.Copies,
             Pinned        = project.Sidecar.AddedItems
                 .SelectMany(item => item.Models.Select(path => (OptionRef.Parse(item.Option), path)))
                 .ToList(),
@@ -140,5 +145,47 @@ internal sealed class ResourceGraphService : IDisposable
     {
         Cancel();
         _facts.Clear();
+    }
+}
+
+/// <summary>
+/// The replacements a graph is built from, copied on the render thread: the views edit the live
+/// ones in place (slots added or removed, material names, images) while the worker reads them. The
+/// worker builds from the copies; once the graph is done, <see cref="Relink"/> (render thread again)
+/// points its nodes back at the live replacements and texture slots, which is what the views edit.
+/// </summary>
+internal sealed class ReplacementSnapshot
+{
+    private readonly Dictionary<ResourceReplacement, ResourceReplacement> _replacements = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<TextureSlot, TextureSlot> _slots = new(ReferenceEqualityComparer.Instance);
+
+    public ReplacementSnapshot(IEnumerable<ResourceReplacement> live)
+    {
+        var copies = new List<ResourceReplacement>();
+        foreach (var replacement in live)
+        {
+            var copy = replacement.Clone();
+            copies.Add(copy);
+            _replacements[copy] = replacement;
+            if (copy.Authored is { } copied && replacement.Authored is { } original)
+                for (int i = 0; i < copied.Textures.Count && i < original.Textures.Count; i++)
+                    _slots[copied.Textures[i]] = original.Textures[i];
+        }
+        Copies = copies;
+    }
+
+    /// <summary>What the worker reads.</summary>
+    public IReadOnlyList<ResourceReplacement> Copies { get; }
+
+    /// <summary>Points a graph built from <see cref="Copies"/> at the live replacements and slots.</summary>
+    public void Relink(ResourceGraph graph)
+    {
+        foreach (var node in graph.Nodes.Values)
+        {
+            if (node.Replacement is { } copy && _replacements.TryGetValue(copy, out var replacement))
+                node.Replacement = replacement;
+            if (node.AuthoredSlot is { } slot && _slots.TryGetValue(slot, out var live))
+                node.AuthoredSlot = live;
+        }
     }
 }
