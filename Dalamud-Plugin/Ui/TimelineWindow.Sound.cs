@@ -44,7 +44,29 @@ public sealed partial class TimelineWindow
     /// original can't be read.
     /// </summary>
     private sealed record SoundShown(TimelineSoundEdit? Edit, byte[] Original, TimelineSoundEdit? Initial, byte[] Bytes,
-        ImmutableArray<string> Ids, ScdModel? Model, string? Error);
+        ImmutableArray<string> Ids, ScdModel? Model, string? Error)
+    {
+        /// <summary>Each alternative's length in seconds, in order; empty when the file can't be read.</summary>
+        public ImmutableArray<double> Seconds { get; init; } = [];
+        /// <summary>Some alternative's track ends before its audio.</summary>
+        public bool EndsEarly { get; init; }
+        /// <summary>The sound keeps playing (<see cref="TimelineWindowViews.FileLoops"/>).</summary>
+        public bool Loops { get; init; }
+    }
+
+    /// <summary> <paramref name="shown"/> with what the canvas draws from it: lengths, an alternative that ends early, whether it loops. </summary>
+    private static SoundShown Measured(SoundShown shown, int sound)
+    {
+        if (shown.Model is not { } model || sound < 0 || sound >= model.Sounds.Count)
+            return shown;
+        var entries = model.Sounds[sound].Entries;
+        return shown with
+        {
+            Seconds = [.. entries.Select(e => e.Audio >= 0 && e.Audio < model.Audio.Count ? model.Audio[e.Audio].Seconds : 0)],
+            EndsEarly = entries.Any(e => ScdEdits.Wait(model, e.Track) is > 0 and var wait && wait < ScdEdits.AudioMilliseconds(model, e.Audio)),
+            Loops = TimelineWindowViews.FileLoops(shown.Bytes, sound),
+        };
+    }
 
     /// <summary> Forgets the sounds read for another clip. </summary>
     private void ForgetSounds()
@@ -52,6 +74,7 @@ public sealed partial class TimelineWindow
         soundReads.Clear();
         soundsShown.Clear();
         soundsCollection = null;
+        previewRestCache = null;
     }
 
     /// <summary> The sound at <paramref name="gamePath"/> for the inspector: an import's own bytes, else read from the collection on a task. </summary>
@@ -119,9 +142,14 @@ public sealed partial class TimelineWindow
         {
             shown = Unwritable(edit, original, initial, model, key, e.Message);
         }
+        shown = Measured(shown, key.Sound);
         soundsShown[key] = shown;
         return shown;
     }
+
+    /// <summary> <paramref name="key"/>'s sound as edited once its file is read; null before, without starting a read. </summary>
+    private SoundShown? ShownIfRead(TimelineDocument doc, TimelineSoundKey key) =>
+        source is { } loaded && soundReads.TryGetValue(key.Path, out var read) && read.Bytes != null ? ShownSound(doc, key, loaded) : null;
 
     /// <summary>
     /// What to show for an edit that can't be written: when only its chances are wrong (more than 100%),

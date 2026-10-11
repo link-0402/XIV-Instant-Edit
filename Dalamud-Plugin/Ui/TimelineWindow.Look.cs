@@ -44,10 +44,12 @@ public sealed partial class TimelineWindow
     private ImmutableDictionary<string, byte[]>? previewBaseFiles;
     private TimelineDocument? previewRest;
     private ImmutableDictionary<string, TimelineEffectEdit> shownLooks = ImmutableDictionary<string, TimelineEffectEdit>.Empty;
-    // Live's temporary mod with looks is up (Live itself plays the clip's own file and needs none).
+    // The same for sound changes: each one-sound file's own path points at the edited file (TimelineSoundEdits.Redirectable).
+    private ImmutableDictionary<string, byte[]> shownSounds = ImmutableDictionary<string, byte[]>.Empty;
+    // Live's temporary mod with looks or sounds is up (Live itself plays the clip's own file and needs none).
     private bool liveLooks;
     private Task? lookSync;
-    private (ImmutableDictionary<string, TimelineEffectEdit> Looks, bool Live, int Generation)? lookSyncing;
+    private (ImmutableDictionary<string, TimelineEffectEdit> Looks, ImmutableDictionary<string, byte[]> Sounds, bool Live, int Generation)? lookSyncing;
     private int lookGeneration;
     // The document last compared with the preview, and the one whose looks were last shown or found unshowable.
     private TimelineDocument? staleChecked;
@@ -61,6 +63,7 @@ public sealed partial class TimelineWindow
         previewBaseFiles = null;
         previewRest = null;
         shownLooks = ImmutableDictionary<string, TimelineEffectEdit>.Empty;
+        shownSounds = ImmutableDictionary<string, byte[]>.Empty;
         liveLooks = false;
         staleChecked = null;
         lookChecked = null;
@@ -94,10 +97,11 @@ public sealed partial class TimelineWindow
                 if (task.IsCompletedSuccessfully)
                 {
                     shownLooks = done.Looks;
-                    liveLooks = done.Live && done.Looks.Count > 0;
+                    shownSounds = done.Sounds;
+                    liveLooks = done.Live && (done.Looks.Count > 0 || done.Sounds.Count > 0);
                 }
                 else if (!task.IsCanceled)
-                    previewError = "The effect looks could not be shown. " + ErrorText(task.Exception);
+                    previewError = "The effect looks and sound changes could not be shown. " + ErrorText(task.Exception);
             }
             lookSyncing = null;
             lookChecked = null;
@@ -107,32 +111,48 @@ public sealed partial class TimelineWindow
         if (!live && !previewing)
             return;
         var doc = current.Document;
-        if (previewing && !ReferenceEquals(doc, staleChecked))
+        if (previewing && !ReferenceEquals(doc, staleChecked) && SoundMissing(doc) == null)
         {
             staleChecked = doc;
-            // Only looks changed: the preview shows the document once they are in.
-            previewStale = !TimelineEdits.Same(TimelineEffectLooks.Redirectable(doc).Document, previewRest!);
+            // Only looks or redirected sound changes changed: the preview shows the document once they are in.
+            try { previewStale = !TimelineEdits.Same(PreviewRest(doc).Document, previewRest!); }
+            catch (Exception e) when (e is InvalidDataException or ArgumentException) { previewStale = true; }
             if (!previewStale)
                 previewDocument = doc;
         }
         if (previewing && previewStale || ReferenceEquals(doc, lookChecked) || previewStop is { IsCompleted: false } || preview.Busy ||
-            previewActor is not { } actor || LookMissing(doc) != null)
+            previewActor is not { } actor || LookMissing(doc) != null || SoundMissing(doc) != null)
             return;
         lookChecked = doc;
         var looks = TimelineEffectLooks.Redirectable(doc).Looks;
-        if (TimelineEffectLooks.SameLooks(looks, shownLooks))
+        ImmutableDictionary<string, byte[]> sounds;
+        try { sounds = PreviewRest(doc).Sounds; }
+        catch (Exception e) when (e is InvalidDataException or ArgumentException)
+        {
+            previewError = e.Message;
+            return;
+        }
+        if (TimelineEffectLooks.SameLooks(looks, shownLooks) && SameFiles(sounds, shownSounds))
             return;
         ImmutableDictionary<string, byte[]> files;
-        try { files = (previewing ? previewBaseFiles! : ImmutableDictionary<string, byte[]>.Empty).SetItems(TimelineEffectLooks.Redirected(looks, EffectBytes)); }
+        try
+        {
+            files = (previewing ? previewBaseFiles! : ImmutableDictionary<string, byte[]>.Empty)
+                .SetItems(TimelineEffectLooks.Redirected(looks, EffectBytes)).SetItems(sounds);
+        }
         catch (InvalidDataException e)
         {
             previewError = e.Message;
             return;
         }
-        lookSyncing = (looks, live, lookGeneration);
+        lookSyncing = (looks, sounds, live, lookGeneration);
         // Live without looks needs no temporary mod.
         lookSync = files.Count == 0 ? preview.StopAsync() : preview.ShowAsync(actor, files, CancellationToken.None);
     }
+
+    /// <summary> Whether two sets of files by game path hold the same bytes. </summary>
+    private static bool SameFiles(IReadOnlyDictionary<string, byte[]> a, IReadOnlyDictionary<string, byte[]> b) =>
+        a.Count == b.Count && a.All(pair => b.TryGetValue(pair.Key, out var other) && (ReferenceEquals(pair.Value, other) || pair.Value.AsSpan().SequenceEqual(other)));
 
     /// <summary> Forgets the effects read for another clip. </summary>
     private void ForgetEffects()

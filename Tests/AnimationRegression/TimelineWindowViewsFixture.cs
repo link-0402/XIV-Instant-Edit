@@ -302,6 +302,14 @@ internal static class TimelineWindowViewsFixture
         var custom = own with { Custom = true };
         check(TimelineWindowViews.Placed(custom, null, "sound/instant_edit/new.scd", 1, false).Alternatives[^1] is { Id: "a1", Limit: 100, Order: 2 },
             "a set with its own limits gets the new sound at limit 100");
+        check(TimelineWindowViews.SoundSpan([1.19, 2.59, 1.5], null) == (36, 78) && TimelineWindowViews.SoundSpan([1.19, 2.59, 1.5], 2) == (45, 45) &&
+              TimelineWindowViews.SoundSpan([], null) == (0, 0) && TimelineWindowViews.SoundSpan([1.0], 5) == (30, 30),
+            "a random clip is solid to its shortest sound and runs to its longest; a pinned one is that sound's length");
+        check(TimelineWindowViews.SoundAsk("moan.scd", 3, false) == "moan.scd is also played by 3 other animations in this mod." &&
+              TimelineWindowViews.SoundAsk("moan.scd", 1, true) == "moan.scd is also played by 1 other animation in this mod. Only the file your collection uses changes.",
+            "the save question names the file and how many others play it");
+        texts.AddRange(["Change the sound everywhere?", "Everywhere", "Only here", "Reading the sound files.", "Checking the mod.",
+            TimelineWindowViews.SoundAsk("a.scd", 2, true)]);
         texts.AddRange(["Above 100% may clip.", "These chances follow the file's own rule. Even chances rewrites them.", "Turns this into a random set.",
             "Replace with audio file", "Match length", "Remove", "Add sound", "Even chances", "Match lengths", "Full volume within", "Silent past", "Channel", "Loop",
             TimelineWindowViews.ChanceFooter(80), TimelineWindowViews.ChanceFooter(120), TimelineWindowViews.EndsEarlyTip(1, 2)]);

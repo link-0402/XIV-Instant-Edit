@@ -525,15 +525,42 @@ public sealed partial class TimelineWindow
         catch (Exception e) when (e is not OutOfMemoryException) { return false; }
     }
 
-    /// <summary> How many frames a sound event visibly takes: its file's length once known. </summary>
+    /// <summary>
+    /// How many frames a sound event visibly takes: once its file is read, as its changes leave it (its
+    /// longest alternative, or the one it is pinned to, <see cref="TimelineWindowViews.SoundSpan"/>);
+    /// until then the catalog's length of the file.
+    /// </summary>
     private int VisibleFrames(TimelineEvent ev)
     {
         if (ev.Magic != "C063" || ev.Path.Length == 0)
             return 0;
+        if (editor != null && source is { } loaded && SoundSpanOf(editor.Document, ev, loaded) is { Total: > 0 } span)
+            return span.Total;
         var seconds = catalog.Seconds(ev.Path);
         if (seconds == null)
             pendingLengths.Add(ev.Path);
         return TimelineWindowViews.SoundFrames(seconds);
+    }
+
+    /// <summary>
+    /// The frames a sound event's clip is solid for and lasts (see <see cref="TimelineWindowViews.SoundSpan"/>);
+    /// null before its file is read, which this starts. The path waits in pendingLengths until then.
+    /// </summary>
+    private (int Solid, int Total)? SoundSpanOf(TimelineDocument doc, TimelineEvent ev, Services.Animations.AnimationTimelineSource loaded)
+    {
+        if (TimelineSoundKey.Of(ev) is not { } key || !key.Path.EndsWith(".scd", StringComparison.OrdinalIgnoreCase) ||
+            !Services.Animations.AnimationDependencies.SafeGamePath(key.Path))
+            return null;
+        var read = SoundFor(key.Path, loaded);
+        if (read.Bytes == null)
+        {
+            if (read.Error == null)
+                pendingLengths.Add(ev.Path);
+            return null;
+        }
+        if (ShownSound(doc, key, loaded) is not { Seconds.IsEmpty: false } shown)
+            return null;
+        return TimelineWindowViews.SoundSpan(shown.Seconds, ev.Pin is { } pin && shown.Ids.IndexOf(pin) is >= 0 and var index ? index : null);
     }
 
     /// <summary> Lays the lanes out again once sound lengths that were being read are known. </summary>
@@ -541,10 +568,14 @@ public sealed partial class TimelineWindow
     {
         if (editor == null || pendingLengths.Count == 0 || ImGui.GetFrameCount() % 15 != 0)
             return;
-        if (pendingLengths.RemoveWhere(path => catalog.Seconds(path) != null) == 0)
+        if (pendingLengths.RemoveWhere(path => catalog.Seconds(path) != null || SoundReadEnded(path)) == 0)
             return;
         // A different delegate drops the editor's cached layout.
         editor.VisibleLength = null;
         editor.VisibleLength = VisibleFrames;
     }
+
+    /// <summary> Whether the inspector's read of the sound at <paramref name="path"/> has ended, so its clip can take its length. </summary>
+    private bool SoundReadEnded(string path) =>
+        source is { } loaded && soundReads.ContainsKey(path) && SoundFor(path, loaded) is { } read && (read.Bytes != null || read.Error != null);
 }

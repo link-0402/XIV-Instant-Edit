@@ -75,8 +75,9 @@ public sealed partial class TimelineWindow
         using (ImRaii.Disabled(missing != null))
         {
             if (ImGui.Button("Save"))
-                StartSave(current, loaded);
+                BeginSave(current, loaded);
         }
+        DrawSoundAsk(current, loaded);
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(missing ?? (destination == AnimationDestination.NewMod
                 ? "Save the timeline into a new mod."
@@ -114,6 +115,10 @@ public sealed partial class TimelineWindow
             return problem;
         if (saveTask != null || pendingSaveId != null)
             return "Saving.";
+        if (soundCheck != null)
+            return "Checking the mod.";
+        if (soundAsk != null)
+            return "Answer the question about the sound first.";
         if (undoPending)
             return "Undoing the last save.";
         if (loadTask != null)
@@ -126,7 +131,7 @@ public sealed partial class TimelineWindow
             return "Another edit is running. Wait for it to end.";
         if (destination == AnimationDestination.NewMod && !PenumbraService.IsSafeNewModName(modName.Trim()))
             return "Choose a valid mod name.";
-        return LookMissing(current.Document);
+        return LookMissing(current.Document) ?? SoundMissing(current.Document);
     }
 
     /// <summary>
@@ -141,22 +146,32 @@ public sealed partial class TimelineWindow
         var place = destination;
         var name = modName.Trim();
         var repair = target.Standalone ? null : repairTarget;
-        // Effect looks are saved as copies of their effects, packaged like imports.
+        // Effect looks are saved as copies of their effects, packaged like imports. Sound changes and
+        // pins go into copies too, or over the mod's own sound files where BeginSave allowed it.
         TimelineDocument saved;
         ImmutableDictionary<string, byte[]> added;
         ImmutableDictionary<string, string> beside;
         ImmutableDictionary<string, Func<byte[], byte[]>> rebuild;
+        ImmutableDictionary<string, TimelineSoundReplacement> replaced;
         try
         {
             (saved, var used) = WithLooks(document);
+            var sounds = WithSounds(saved, SoundRoute(place));
+            saved = sounds.Document;
+            used.AddRange(sounds.Copies);
+            replaced = sounds.InPlace;
             added = TimelineWindowViews.AddedFiles(saved, used);
             beside = TimelineWindowViews.AddedBeside(saved, used);
             rebuild = TimelineWindowViews.AddedRebuild(saved, used);
         }
-        catch (InvalidDataException e)
+        catch (Exception e) when (e is InvalidDataException or ArgumentException)
         {
             saveError = e.Message;
             return;
+        }
+        finally
+        {
+            soundInPlace = null;
         }
         var service = animations!;
         saveError = null;
@@ -174,7 +189,8 @@ public sealed partial class TimelineWindow
             return await framework.RunOnFrameworkThread(() =>
             {
                 playback.Stop();
-                return service.EditTimeline(target, saved, place, name, added, beside, motionFrames, repair, rebuild);
+                return service.EditTimeline(target, saved, place, name, added, beside, motionFrames, repair, rebuild,
+                    replaced.IsEmpty ? null : replaced);
             });
         });
     }
@@ -219,6 +235,8 @@ public sealed partial class TimelineWindow
                 // The saved file is on the standard skeleton now; another repair would change nothing.
                 repairTarget = null;
                 saveMessage = destination == AnimationDestination.NewMod ? "Saved into a new mod." : "Saved.";
+                // A sound saved in place is another file now; read it again.
+                ForgetSounds();
                 Load(source!.Capture, source.Startup, true);
             }
             else
@@ -236,6 +254,7 @@ public sealed partial class TimelineWindow
                 saveError = service.Status;
             else
                 saveMessage = "The last save was undone.";
+            ForgetSounds();
             // While this window edits layers on a motion of its own, a file that is again what an earlier
             // layered edit saved brings that edit's layers back as the saved state, so it matches the file.
             Load(source!.Capture, source.Startup, true, afterUndo: motionBase?.Clip == ClipKey(source));

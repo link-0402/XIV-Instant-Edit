@@ -122,6 +122,24 @@ internal static partial class TimelineWindowViews
     }
 
     /// <summary>
+    /// How a sound clip is drawn, in frames at 30 fps rounded up: solid to its shortest alternative and
+    /// on to its longest; a pinned clip is that one alternative's length.
+    /// </summary>
+    public static (int Solid, int Total) SoundSpan(ImmutableArray<double> seconds, int? pinned)
+    {
+        if (seconds.IsDefaultOrEmpty)
+            return (0, 0);
+        if (pinned is { } index && index >= 0 && index < seconds.Length)
+            return (SoundFrames((float)seconds[index]), SoundFrames((float)seconds[index]));
+        return (SoundFrames((float)seconds.Min()), SoundFrames((float)seconds.Max()));
+    }
+
+    /// <summary>What the save question says about one sound file other animations of the mod also play.</summary>
+    public static string SoundAsk(string file, int users, bool several) =>
+        $"{file} is also played by {users} other {(users == 1 ? "animation" : "animations")} in this mod." +
+        (several ? " Only the file your collection uses changes." : "");
+
+    /// <summary>
     /// Whether sound <paramref name="sound"/> of <paramref name="scd"/> keeps playing: marked to loop,
     /// and every Vorbis or MS-ADPCM audio it plays has loop points (without them it plays once).
     /// </summary>
