@@ -25,8 +25,9 @@ public sealed partial class TimelineWindow
     private sealed record ImportedItem(TimelineAddKind Kind, TimelineCatalogItem Item);
     // Generation is the document load the import began on, TargetPath the target's path then: a reload
     // renumbers loaded entries' keys, and an undo can give an added one's key to another event.
+    // Sound is set for a file the Sound file section adds to a set or puts in place of one of its sounds.
     private sealed record ImportJob(TimelineAddKind Kind, int Frame, string? Target, string Name, string? Clip,
-        int Generation, string? TargetPath);
+        int Generation, string? TargetPath, TimelineSoundTarget? Sound = null);
 
     private TimelineAddKind pickerKind;
     private int pickerFrame;
@@ -475,6 +476,14 @@ public sealed partial class TimelineWindow
         if (import.Seconds > 0)
             catalog.RememberSeconds(import.GamePath, import.Seconds);
         var name = job?.Name ?? import.GamePath;
+        if (job?.Sound is { } sound)
+        {
+            if (editor == null || source == null || job.Clip != ClipKey(source) || ReadOnly || job.Generation != loadGeneration)
+                importMessage = $"{name} was imported, but the timeline changed. Add it again.";
+            else
+                PlaceSound(editor, sound, import, name);
+            return;
+        }
         if (job == null || editor == null || source == null || job.Clip != ClipKey(source) || ReadOnly ||
             job.Target != null && (job.Generation != loadGeneration || TimelineEdits.Find(editor.Document, job.Target) is not { } target ||
                                    TimelineWindowViews.PickerFor(target) != job.Kind || target.Path != job.TargetPath))

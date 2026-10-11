@@ -186,7 +186,7 @@ public sealed class Plugin : IDalamudPlugin
         _motionDisplay = _animations == null ? null
             : new Services.Animations.Preview.MotionLiveDisplay(framework, objects, clientState, _animations.Native, log);
         _timelineWindow = new TimelineWindow(_animations, animationError, _timelineCatalog, _animationPreview, _animationPlayback,
-            _motionDisplay, _recorder, data, framework, textureProvider, log);
+            _motionDisplay, _recorder, data, framework, textureProvider, log, _soundPlayer);
         _exportServer = new ExportServer(_config, _penumbra, _contexts, log);
         var painterStore = new Services.Painter.PainterJobStore(configDirectory);
         painterStore.Load();

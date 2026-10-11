@@ -44,8 +44,9 @@ public sealed partial class TimelineWindow
     /// <summary>The side panel: a tab per page, the properties first.</summary>
     private void DrawSidePanel(TimelineEditor current, AnimationTimelineSource loaded)
     {
-        // A look edit ends once its control lets go, even when another page is shown by then.
+        // A look or sound edit ends once its control lets go, even when another page is shown by then.
         EndLookEdit(current);
+        EndSoundEdit(current);
         var selection = $"{current.Primary}|{current.SelectedLayer}|{current.SelectedKey}";
         if (selection != sideSelection)
         {

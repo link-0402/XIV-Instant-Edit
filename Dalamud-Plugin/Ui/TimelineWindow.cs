@@ -9,6 +9,7 @@ using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
+using InstantEdit.Services.Audio;
 using InstantEdit.Ui.Timeline;
 
 namespace InstantEdit.Ui;
@@ -34,6 +35,8 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private readonly IDataManager data;
     private readonly IFramework framework;
     private readonly IPluginLog log;
+    // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
+    private readonly GameSoundPlayer? soundPlayer;
     private readonly FileDialogManager fileDialog = new();
 
     private AnimationTimelineSource? source;
@@ -69,10 +72,11 @@ public sealed partial class TimelineWindow : Window, IDisposable
 
     internal TimelineWindow(AnimationEditService? animations, string? animationError, TimelineCatalog catalog,
         AnimationPreviewService preview, AnimationPlayback playback, MotionLiveDisplay? motionDisplay, AnimationRecorder recorder, IDataManager data,
-        IFramework framework, ITextureProvider textures, IPluginLog log)
+        IFramework framework, ITextureProvider textures, IPluginLog log, GameSoundPlayer? soundPlayer = null)
         : base("Timeline###XIVInstantEditTimeline")
     {
         this.animations = animations;
+        this.soundPlayer = soundPlayer;
         this.recorder = recorder;
         this.animationError = animationError;
         this.catalog = catalog;
@@ -347,6 +351,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         labelDocument = null;
         pendingLengths.Clear();
         lookEditing = false;
+        soundEditing = false;
         if (!sameClip)
         {
             ForgetEffects();

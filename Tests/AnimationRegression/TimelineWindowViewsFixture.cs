@@ -273,6 +273,38 @@ internal static class TimelineWindowViewsFixture
             "a file loops when its sound is marked to loop and its audio has loop points");
         texts.AddRange(["Fades with distance", "Stops with the animation", "Cut off when the emote ends.", "Add loop points", "The character's position.",
             "The file has no loop points, so it plays once.", TimelineWindowViews.RangeHint(null, null)]);
+
+        check(TimelineWindowViews.ChanceFooter(100) == "Adds up to 100%." && TimelineWindowViews.ChanceFooter(80) == "20% plays nothing." &&
+              TimelineWindowViews.ChanceFooter(120) == "Adds up to 120%. Lower some chances.", "the chance footer");
+        check(TimelineWindowViews.EvenShares(3).SequenceEqual([33, 33, 34]) && TimelineWindowViews.EvenShares(10).All(s => s == 10) &&
+              TimelineWindowViews.EvenShares(1).SequenceEqual([100]), "even chances");
+        check(TimelineWindowViews.ChannelName(2) == "Sound effects" && TimelineWindowViews.ChannelName(3) == "Channel 3" && TimelineWindowViews.ChannelName(1) == "BGM" &&
+              TimelineWindowViews.ChannelName(5) == "Ambient" && TimelineWindowViews.ChannelName(16) == "Orchestrion" && TimelineWindowViews.ChannelName(17) == "Performance",
+            "channel names");
+        check(TimelineWindowViews.EndsEarlyTip(147, 1189) == "The track ends 1.04 s before the audio. The end may be cut off.", "ends-early tooltip");
+        check(TimelineWindowViews.SoundSummary(12, 10, 1.19, 2.59, "the mod's own") == "Random set · 10 sounds · 1.2 to 2.6 s · the mod's own" &&
+              TimelineWindowViews.SoundSummary(1, 1, 0.5, 0.5, "vanilla") == "One sound · 1 sound · 0.5 s · vanilla" &&
+              TimelineWindowViews.SoundSummary(4, 2, 1, 2, "imported") == "Cycle · 2 sounds · 1.0 to 2.0 s · imported", "summary line");
+        check(TimelineWindowViews.AddedShares([50, 50], 0, 1).SequenceEqual([33, 33, 34]) && TimelineWindowViews.AddedShares([100], 0, 1).SequenceEqual([50, 50]) &&
+              TimelineWindowViews.AddedShares([40, 40], 20, 1).SequenceEqual([23, 23, 34]) && TimelineWindowViews.AddedShares([100], 0, 2).SequenceEqual([34, 33, 33]) &&
+              TimelineWindowViews.AddedShares([50, 50], 0, 2).SequenceEqual([25, 25, 25, 25]),
+            "added sounds make room for an even share each, as the file edit does for one");
+        var own = new TimelineSoundEdit([new TimelineSoundAlternative("o0", 0, null, 50, 50, 0, null, null), new TimelineSoundAlternative("o1", 1, null, 50, 100, 1, null, null)], false);
+        var added = TimelineWindowViews.Placed(own, null, "sound/instant_edit/new.scd", 2, false);
+        check(added.Alternatives.Select(a => (a.Id, a.Import, a.Entry, a.Share)).SequenceEqual([("o0", (string?)null, 0, 25), ("o1", null, 1, 25), ("a1", "sound/instant_edit/new.scd", 0, 25), ("a2", "sound/instant_edit/new.scd", 1, 25)]),
+            "an .scd with two sounds adds two alternatives, numbered after the others");
+        var replaced = TimelineWindowViews.Placed(own, "o1", "sound/instant_edit/new.scd", 3, false);
+        check(replaced.Alternatives[1] is { Id: "o1", Import: "sound/instant_edit/new.scd", Entry: 0, Share: 50 } && replaced.Alternatives.Length == 2,
+            "a replaced alternative plays the import's first sound and keeps its chance");
+        var oneShot = new TimelineSoundEdit([new TimelineSoundAlternative("o0", 0, null, 100, 0, 0, null, null)], false);
+        check(TimelineWindowViews.Placed(oneShot, null, "sound/instant_edit/new.scd", 1, true) is { Random: true, Alternatives: [{ Share: 50 }, { Id: "a1", Share: 50 }] },
+            "adding to a one-shot makes it a 50/50 random set");
+        var custom = own with { Custom = true };
+        check(TimelineWindowViews.Placed(custom, null, "sound/instant_edit/new.scd", 1, false).Alternatives[^1] is { Id: "a1", Limit: 100, Order: 2 },
+            "a set with its own limits gets the new sound at limit 100");
+        texts.AddRange(["Above 100% may clip.", "These chances follow the file's own rule. Even chances rewrites them.", "Turns this into a random set.",
+            "Replace with audio file", "Match length", "Remove", "Add sound", "Even chances", "Match lengths", "Full volume within", "Silent past", "Channel", "Loop",
+            TimelineWindowViews.ChanceFooter(80), TimelineWindowViews.ChanceFooter(120), TimelineWindowViews.EndsEarlyTip(1, 2)]);
     }
 
     private static void Texts(Action<bool, string> check, List<string> texts)

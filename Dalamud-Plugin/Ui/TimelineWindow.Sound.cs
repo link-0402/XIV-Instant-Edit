@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
@@ -115,12 +117,31 @@ public sealed partial class TimelineWindow
         }
         catch (Exception e) when (e is InvalidDataException or ArgumentException or InvalidOperationException)
         {
-            var ok = model != null && key.Sound >= 0 && key.Sound < model.Sounds.Count;
-            shown = new SoundShown(edit, original, initial, original,
-                ok ? [.. initial!.Alternatives.Select(a => a.Id)] : [], ok ? model : null, e.Message);
+            shown = Unwritable(edit, original, initial, model, key, e.Message);
         }
         soundsShown[key] = shown;
         return shown;
+    }
+
+    /// <summary>
+    /// What to show for an edit that can't be written: when only its chances are wrong (more than 100%),
+    /// the file with those chances left out, so every row stays to fix them; else the file as it is.
+    /// </summary>
+    private SoundShown Unwritable(TimelineSoundEdit? edit, byte[] original, TimelineSoundEdit? initial, ScdModel? model, TimelineSoundKey key, string error)
+    {
+        if (model == null || initial == null)
+            return new SoundShown(edit, original, initial, original, [], null, error);
+        if (edit is { Custom: false })
+            try
+            {
+                var (bytes, ids) = TimelineSoundEdits.Apply(original, key.Sound,
+                    edit with { Alternatives = [.. edit.Alternatives.Select(a => a with { Share = 0 })] }, ImportBytes);
+                return new SoundShown(edit, original, initial, bytes, ids, ScdModel.Read(bytes), error);
+            }
+            catch (Exception e) when (e is InvalidDataException or ArgumentException or InvalidOperationException)
+            {
+            }
+        return new SoundShown(edit, original, initial, original, [.. initial.Alternatives.Select(a => a.Id)], model, error);
     }
 
     /// <summary> The edit to change for <paramref name="shown"/>: the document's, else the one that changes nothing. </summary>
@@ -233,4 +254,374 @@ public sealed partial class TimelineWindow
 
     private static TimelineEvent With(TimelineEvent ev, string field, double value) =>
         ev with { Values = (ev.Values ?? ImmutableDictionary<string, double>.Empty).SetItem(field, value) };
+
+    // A Sound file control's changes until no control is active make one undo step.
+    private bool soundEditing;
+    // The sound playing in game for a listen button, and why the last one couldn't.
+    private Task? listening;
+    private string? listenError;
+
+    /// <summary> Ends the running sound edit once no control is active any more. </summary>
+    private void EndSoundEdit(TimelineEditor current)
+    {
+        if (!soundEditing || ImGui.IsAnyItemActive())
+            return;
+        soundEditing = false;
+        current.EndFieldEdit();
+    }
+
+    private void SetSoundEdit(TimelineEditor current, TimelineSoundKey key, TimelineSoundEdit edit)
+    {
+        if (!soundEditing)
+        {
+            current.BeginFieldEdit();
+            soundEditing = true;
+        }
+        current.SetSound(key, edit);
+    }
+
+    /// <summary>
+    /// The Sound file section under a sound event: what the file is, its volume, its alternatives
+    /// with their chance, volume and length, listen buttons, adding, replacing and removing sounds, and
+    /// More with the hearing range, channel and loop. A file whose sound isn't a one-shot or a random
+    /// set, a locked event and a read-only timeline show it without controls.
+    /// </summary>
+    private void DrawSoundFile(TimelineEditor current, TimelineEvent ev, bool editable)
+    {
+        PollListen();
+        if (source is not { } loaded || TimelineSoundKey.Of(ev) is not { } key || !key.Path.EndsWith(".scd", StringComparison.OrdinalIgnoreCase) ||
+            !AnimationDependencies.SafeGamePath(key.Path))
+            return;
+        ImGui.Spacing();
+        if (!ImGui.CollapsingHeader("Sound file##sound-file", ImGuiTreeNodeFlags.DefaultOpen))
+            return;
+        var read = SoundFor(key.Path, loaded);
+        var shown = ShownSound(current.Document, key, loaded);
+        if (shown == null)
+        {
+            if (read.Error != null)
+                Widgets.HintWrapped("The sound file could not be read. " + read.Error);
+            else
+            {
+                Widgets.Spinner();
+                ImGui.SameLine(0, Theme.Gap);
+                ImGui.AlignTextToFramePadding();
+                ImGui.TextColored(Theme.Muted, "Reading the sound");
+            }
+            return;
+        }
+        if (shown.Model is not { } model || EditOf(shown) is not { } edit)
+        {
+            Widgets.HintWrapped("The sound file could not be read. " + shown.Error);
+            return;
+        }
+        var target = model.Sounds[key.Sound];
+        var random = target.Type == ScdSound.GroupRandom;
+        var oneShot = target.Type == ScdSound.Normal && target.Entries.Count == 1;
+        var changes = editable && (random || target.Type == ScdSound.Normal);
+        var problem = soundPlayer == null ? "Listening isn't available." : soundPlayer.Problem;
+
+        var seconds = target.Entries.Select(e => e.Audio >= 0 && e.Audio < model.Audio.Count ? model.Audio[e.Audio].Seconds : 0).DefaultIfEmpty(0).ToArray();
+        var origin = read.Imported ? "imported" : read.Resource?.ModDirectory != null ? "the mod's own" : "vanilla";
+        ListenButton("##sound-listen-all", shown.Error == null ? "Listen in game to the whole sound, with your changes." : shown.Error, problem,
+            shown.Error == null, () => TimelineListen.Whole(shown.Bytes, key.Sound));
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, TimelineWindowViews.SoundSummary(target.Type, target.Entries.Count, seconds.Min(), seconds.Max(), origin));
+        Widgets.HintWrapped(origin == "the mod's own" ? "Saving in place changes the mod's file. A new mod gets a copy." : "Changes go into a copy of the file.");
+        if (shown.Error != null)
+            Wrapped(Theme.Error, shown.Error);
+        if (listenError != null)
+            Wrapped(Theme.Error, listenError);
+
+        using (var settings = ImRaii.Table("##sound-file-volume", 2, ImGuiTableFlags.SizingFixedFit))
+        {
+            if (settings.Success)
+            {
+                ImGui.TableSetupColumn("##sound-name", ImGuiTableColumnFlags.WidthFixed);
+                ImGui.TableSetupColumn("##sound-value", ImGuiTableColumnFlags.WidthStretch);
+                Fact("Volume");
+                var volume = (edit.Volume ?? target.Volume) * 100;
+                using (ImRaii.Disabled(!editable))
+                {
+                    ImGui.SetNextItemWidth(-1);
+                    if (ImGui.SliderFloat("##sound-volume", ref volume, 0, ScdEdits.MaxFileVolume * 100, "%.0f%%", ImGuiSliderFlags.AlwaysClamp))
+                        SetSoundEdit(current, key, edit with { Volume = MathF.Round(volume) / 100 });
+                }
+                Tip("The whole sound's volume. Ctrl+click to type.");
+                if (volume > 100.5f)
+                    Widgets.HintWrapped("Above 100% may clip.");
+            }
+        }
+
+        DrawAlternatives(current, key, shown, model, edit, changes, random, problem);
+
+        if (random && !edit.Custom)
+        {
+            var sum = shown.Ids.Sum(id => edit.Alternatives.FirstOrDefault(a => a.Id == id)?.Share ?? 0);
+            Wrapped(sum > 100 ? Theme.Error : Theme.Muted, TimelineWindowViews.ChanceFooter(sum));
+        }
+        else if (random)
+            Widgets.HintWrapped("These chances follow the file's own rule. Even chances rewrites them.");
+        if (changes)
+        {
+            using (ImRaii.Disabled(!random && !oneShot || target.Entries.Count >= byte.MaxValue))
+            {
+                if (ImGui.Button("Add sound"))
+                    OpenSoundImport(new TimelineSoundTarget(key, null));
+            }
+            Tip(oneShot ? "Turns this into a random set." : "Adds a .wav, .ogg or .scd file as another sound.");
+            if (random)
+            {
+                ImGui.SameLine();
+                if (ImGui.Button("Even chances"))
+                {
+                    var even = TimelineWindowViews.EvenShares(shown.Ids.Length);
+                    SetSoundEdit(current, key, edit with
+                    {
+                        Custom = false,
+                        Alternatives = [.. edit.Alternatives.Select(a => a with { Share = shown.Ids.IndexOf(a.Id) is >= 0 and var at ? even[at] : 0 })],
+                    });
+                }
+                Tip("Gives every sound the same chance.");
+            }
+            ImGui.SameLine();
+            if (ImGui.Button("Match lengths"))
+                SetSoundEdit(current, key, edit with
+                {
+                    Alternatives = [.. edit.Alternatives.Select(a => shown.Ids.IndexOf(a.Id) is >= 0 and var at
+                        ? a with { WaitMs = ScdEdits.AudioMilliseconds(model, target.Entries[at].Audio) } : a)],
+                });
+            Tip("Lets every sound's track run as long as its audio.");
+        }
+        DrawSoundMore(current, key, model, target, edit, editable);
+    }
+
+    /// <summary> The alternatives table: listen, number, length, chance (or raw limits), volume, an ends-early mark and a row menu. </summary>
+    private void DrawAlternatives(TimelineEditor current, TimelineSoundKey key, SoundShown shown, ScdModel model, TimelineSoundEdit edit,
+        bool changes, bool random, string? problem)
+    {
+        var target = model.Sounds[key.Sound];
+        var columns = edit.Custom && random ? 8 : 7;
+        using var table = ImRaii.Table("##sound-alternatives", columns, ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.RowBg);
+        if (!table.Success)
+            return;
+        ImGui.TableSetupColumn("##listen", ImGuiTableColumnFlags.WidthFixed);
+        ImGui.TableSetupColumn("#", ImGuiTableColumnFlags.WidthFixed);
+        ImGui.TableSetupColumn("Length", ImGuiTableColumnFlags.WidthFixed);
+        if (edit.Custom && random)
+        {
+            ImGui.TableSetupColumn("Limit", ImGuiTableColumnFlags.WidthFixed);
+            ImGui.TableSetupColumn("Order", ImGuiTableColumnFlags.WidthFixed);
+        }
+        else
+            ImGui.TableSetupColumn("Chance", ImGuiTableColumnFlags.WidthFixed);
+        ImGui.TableSetupColumn("Volume", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("##ends", ImGuiTableColumnFlags.WidthFixed);
+        ImGui.TableSetupColumn("##menu", ImGuiTableColumnFlags.WidthFixed);
+        ImGui.TableHeadersRow();
+        for (var i = 0; i < shown.Ids.Length && i < target.Entries.Count; i++)
+        {
+            using var id = ImRaii.PushId(i);
+            var entry = target.Entries[i];
+            var alternative = edit.Alternatives.FirstOrDefault(a => a.Id == shown.Ids[i]);
+            var row = i;
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ListenButton("##listen", "Listen in game to this sound alone.", problem, true, () => TimelineListen.Row(shown.Bytes, key.Sound, row));
+            ImGui.TableNextColumn();
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextUnformatted((i + 1).ToString(CultureInfo.InvariantCulture));
+            ImGui.TableNextColumn();
+            var audioMs = ScdEdits.AudioMilliseconds(model, entry.Audio);
+            ImGui.TextUnformatted(string.Create(CultureInfo.InvariantCulture, $"{audioMs / 1000.0:0.00} s"));
+            if (edit.Custom && random)
+            {
+                ImGui.TableNextColumn();
+                var limit = (int)(alternative?.Limit ?? entry.Limit);
+                using (ImRaii.Disabled(!changes || alternative == null))
+                {
+                    ImGui.SetNextItemWidth(Theme.Scaled(55));
+                    if (ImGui.InputInt("##limit", ref limit, 0, 0) && alternative != null)
+                        SetSoundEdit(current, key, Changed(edit, alternative with { Limit = (short)Math.Clamp(limit, short.MinValue, short.MaxValue) }));
+                }
+                ImGui.TableNextColumn();
+                var order = (int)(alternative?.Order ?? entry.Order);
+                using (ImRaii.Disabled(!changes || alternative == null))
+                {
+                    ImGui.SetNextItemWidth(Theme.Scaled(45));
+                    if (ImGui.InputInt("##order", ref order, 0, 0) && alternative != null)
+                        SetSoundEdit(current, key, Changed(edit, alternative with { Order = (short)Math.Clamp(order, short.MinValue, short.MaxValue) }));
+                }
+            }
+            else
+            {
+                ImGui.TableNextColumn();
+                if (random)
+                {
+                    var share = alternative?.Share ?? 0;
+                    using (ImRaii.Disabled(!changes || alternative == null))
+                    {
+                        ImGui.SetNextItemWidth(Theme.Scaled(70));
+                        if (ImGui.InputInt("##chance", ref share, 0, 0, default, ImGuiInputTextFlags.CharsDecimal) && alternative != null)
+                            SetSoundEdit(current, key, Changed(edit, alternative with { Share = Math.Clamp(share, 0, 100) }));
+                    }
+                    Tip("How often this sound plays, in percent.");
+                }
+                else
+                    ImGui.TextColored(Theme.Muted, "Always");
+            }
+            ImGui.TableNextColumn();
+            var volume = (int)MathF.Round(ScdEdits.TrackVolume(model, entry.Track) * 100);
+            using (ImRaii.Disabled(!changes || alternative == null || entry.Track < 0))
+            {
+                ImGui.SetNextItemWidth(-1);
+                if (ImGui.SliderInt("##volume", ref volume, 0, 100, "%d%%", ImGuiSliderFlags.AlwaysClamp) && alternative != null)
+                    SetSoundEdit(current, key, Changed(edit, alternative with { Volume = volume / 100f }));
+            }
+            Tip("This sound's own volume. Ctrl+click to type.");
+            ImGui.TableNextColumn();
+            var wait = ScdEdits.Wait(model, entry.Track);
+            if (wait > 0 && wait < audioMs)
+            {
+                ImGui.AlignTextToFramePadding();
+                Widgets.Icon(FontAwesomeIcon.ExclamationTriangle, Theme.Warning);
+                Tip(TimelineWindowViews.EndsEarlyTip(wait, audioMs));
+            }
+            ImGui.TableNextColumn();
+            if (!changes || alternative == null)
+                continue;
+            if (Widgets.GhostIconButton("##row-menu", FontAwesomeIcon.EllipsisV, "More for this sound"))
+                ImGui.OpenPopup("##sound-row");
+            using var popup = ImRaii.Popup("##sound-row");
+            if (!popup.Success)
+                continue;
+            if (ImGui.MenuItem("Replace with audio file"))
+                OpenSoundImport(new TimelineSoundTarget(key, alternative.Id));
+            if (ImGui.MenuItem("Match length", "", false, entry.Track >= 0))
+                SetSoundEdit(current, key, Changed(edit, alternative with { WaitMs = audioMs }));
+            if (ImGui.MenuItem("Remove", "", false, random && shown.Ids.Length > 1))
+                SetSoundEdit(current, key, edit with { Alternatives = [.. edit.Alternatives.Where(a => a.Id != alternative.Id)] });
+        }
+    }
+
+    /// <summary> More: the hearing range of a Point layout, the channel and the loop switch, for any sound. </summary>
+    private void DrawSoundMore(TimelineEditor current, TimelineSoundKey key, ScdModel model, ScdModelSound target, TimelineSoundEdit edit, bool editable)
+    {
+        if (!ImGui.CollapsingHeader("More##sound-more"))
+            return;
+        using var table = ImRaii.Table("##sound-more", 2, ImGuiTableFlags.SizingFixedFit);
+        if (!table.Success)
+            return;
+        ImGui.TableSetupColumn("##more-name", ImGuiTableColumnFlags.WidthFixed);
+        ImGui.TableSetupColumn("##more-value", ImGuiTableColumnFlags.WidthStretch);
+        using var disabled = ImRaii.Disabled(!editable);
+        if (model.MaxRange(key.Sound) is { } near && model.MinRange(key.Sound) is { } far)
+        {
+            Fact("Full volume within");
+            ImGui.SetNextItemWidth(Theme.Scaled(110));
+            if (ImGui.InputFloat("##sound-near", ref near, 0, 0, "%.1f") && float.IsFinite(near))
+                SetSoundEdit(current, key, edit with { FullWithin = Math.Clamp(near, .1f, Math.Max(.1f, far)), SilentPast = far });
+            Tip("How far from the camera the sound stays at full volume.");
+            Fact("Silent past");
+            ImGui.SetNextItemWidth(Theme.Scaled(110));
+            if (ImGui.InputFloat("##sound-far", ref far, 0, 0, "%.1f") && float.IsFinite(far))
+                SetSoundEdit(current, key, edit with { FullWithin = near, SilentPast = Math.Max(far, near) });
+            Tip("How far from the camera the sound fades out completely.");
+        }
+        Fact("Channel");
+        var bus = edit.Bus ?? target.Bus;
+        ImGui.SetNextItemWidth(Theme.Scaled(170));
+        using (var combo = ImRaii.Combo("##sound-channel", TimelineWindowViews.ChannelName(bus)))
+        {
+            if (combo.Success)
+                foreach (var option in TimelineWindowViews.KnownChannels.Contains(bus) ? TimelineWindowViews.KnownChannels : [bus, .. TimelineWindowViews.KnownChannels])
+                    if (ImGui.Selectable(TimelineWindowViews.ChannelName(option), option == bus) && option != bus)
+                        SetSoundEdit(current, key, edit with { Bus = option });
+        }
+        Tip("Which of the game's volume sliders the sound follows.");
+        Fact("Loop");
+        var loops = edit.Loop ?? (target.Attributes & ScdSound.LoopAttribute) != 0;
+        using (ImRaii.Disabled(target.Type == ScdSound.Empty))
+        {
+            if (ImGui.Checkbox("##sound-loop", ref loops))
+                SetSoundEdit(current, key, edit with { Loop = loops });
+        }
+        Tip("Marks the sound to loop. Turning it on also loops each audio file from start to end.");
+    }
+
+    /// <summary> <paramref name="edit"/> with <paramref name="alternative"/> in place of the one with its id. </summary>
+    private static TimelineSoundEdit Changed(TimelineSoundEdit edit, TimelineSoundAlternative alternative) =>
+        edit with { Alternatives = [.. edit.Alternatives.Select(a => a.Id == alternative.Id ? alternative : a)] };
+
+    /// <summary> A listen button: plays <paramref name="bytes"/>' sound 0 in game; disabled with the reason when it can't. </summary>
+    private void ListenButton(string id, string tooltip, string? problem, bool allowed, Func<byte[]> bytes)
+    {
+        var busy = listening is { IsCompleted: false };
+        if (Widgets.IconButton(id, FontAwesomeIcon.VolumeUp, problem ?? tooltip, problem == null && allowed && !busy) && soundPlayer is { } player)
+        {
+            listenError = null;
+            try { listening = player.PlayAsync(bytes(), CancellationToken.None); }
+            catch (Exception e) when (e is InvalidDataException or InvalidOperationException or ArgumentException)
+            {
+                listenError = e.Message;
+            }
+        }
+    }
+
+    private void PollListen()
+    {
+        if (listening is not { IsCompleted: true } task)
+            return;
+        listening = null;
+        if (task.IsFaulted)
+            listenError = "The sound could not be played. " + ErrorText(task.Exception);
+    }
+
+    /// <summary> Opens the file dialog for a sound to add to <paramref name="target"/>'s set, or to put in place of one of its sounds. </summary>
+    private void OpenSoundImport(TimelineSoundTarget target)
+    {
+        var job = new ImportJob(TimelineAddKind.Sound, 0, null, string.Empty, source is { } current ? ClipKey(current) : null, loadGeneration, null, target);
+        fileDialog.OpenFileDialog(target.ReplaceId == null ? "Choose a sound to add" : "Choose a sound to put in its place", TimelineWindowViews.SoundFilter,
+            (success, files) =>
+            {
+                if (success && files.Count > 0)
+                    StartImport(job with { Name = Path.GetFileName(files[0]) }, files[0], 1f);
+            }, 1, lastImportFolder, false);
+    }
+
+    /// <summary> An imported file for the Sound file section, placed into its set (see <see cref="TimelineWindowViews.Placed"/>). </summary>
+    private void PlaceSound(TimelineEditor current, TimelineSoundTarget target, TimelineImport import, string name)
+    {
+        if (source is not { } loaded || ShownSound(current.Document, target.Key, loaded) is not { Model: { } model } shown || EditOf(shown) is not { } edit)
+        {
+            importError = $"{name} was imported, but its sound file isn't read.";
+            return;
+        }
+        int clips;
+        try { clips = ScdEdits.Clips(import.Files[import.GamePath]).Length; }
+        catch (InvalidDataException e)
+        {
+            importError = $"{name} can't be used. {e.Message}";
+            return;
+        }
+        var sound = model.Sounds[target.Key.Sound];
+        var oneShot = sound.Type == ScdSound.Normal && sound.Entries.Count == 1;
+        if (target.ReplaceId == null && !oneShot && sound.Type != ScdSound.GroupRandom)
+        {
+            importError = $"{name} can't be added: only a random set or a one-shot takes more sounds.";
+            return;
+        }
+        var placed = TimelineWindowViews.Placed(edit, target.ReplaceId, import.GamePath, clips, target.ReplaceId == null && oneShot);
+        if (current.SetSound(target.Key, placed))
+            importMessage = target.ReplaceId == null ? $"{name} was added." : $"{name} took the sound's place.";
+        else
+            importError = $"{name} was imported but could not be placed. Finish the drag first.";
+    }
+
+    private static void Wrapped(System.Numerics.Vector4 colour, string text)
+    {
+        using var wrap = ImRaii.TextWrapPos(0);
+        ImGui.TextColored(colour, text);
+    }
 }

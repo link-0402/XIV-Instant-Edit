@@ -17,6 +17,7 @@ public sealed partial class TimelineWindow
     private void DrawProperties(TimelineEditor current)
     {
         EndLookEdit(current);
+        EndSoundEdit(current);
         var readOnly = ReadOnly;
         if (current.SelectedLayerValue is { } layer && source != null)
         {
@@ -148,6 +149,7 @@ public sealed partial class TimelineWindow
                 current.DeleteSelection();
         }
         DrawLook(current, ev, editable);
+        DrawSoundFile(current, ev, editable);
     }
 
     private string LabelOf(TimelineDocument doc, TimelineEvent ev)
