@@ -294,7 +294,8 @@ internal static class TimelineEdits
     /// control and no new duration lasts what it played (<see cref="TimelineDocument.PlayedFrames"/>
     /// with <paramref name="motionFrames"/>), so it keeps playing the same. Only an effect keeps a
     /// look, and only while it keeps its file: a look is made for one effect's colours. A looping face
-    /// that becomes one that can't loop (<see cref="CanLoop"/>), such as a pose, stops looping.
+    /// that becomes one that can't loop (<see cref="CanLoop"/>), such as a pose, stops looping. Only a
+    /// sound keeps a pin, and only while it plays the same sound of the same file.
     /// </summary>
     public static TimelineDocument Replace(TimelineDocument doc, TimelineEvent ev, IReadOnlyDictionary<string, int>? motionFrames = null)
     {
@@ -312,6 +313,8 @@ internal static class TimelineEdits
                 Duration = !old.Resizable || ev.Duration == old.Duration ? old.Duration : Math.Max(1, ev.Duration),
                 Values = ev.Values ?? old.Values,
                 Look = old.Lane == TimelineLane.Effect && ev.Path == old.Path && ev.Look is { IsEmpty: false } look ? look : null,
+                // A pin names an alternative of one sound of one file.
+                Pin = old.Lane == TimelineLane.Sound && TimelineSoundKey.Of(ev) is { } key && key == TimelineSoundKey.Of(old) ? ev.Pin : null,
             },
             TimelineAccess.Movable => old with { Start = start },
             _ => old,
@@ -367,12 +370,15 @@ internal static class TimelineEdits
     public static string PackInUse(string pack) =>
         $"This timeline uses the {pack} expressions, and can only use one set. Remove those first.";
 
-    /// <summary>Whether two documents are the same: their events by <see cref="Same(TimelineEvent, TimelineEvent)"/>, the rest as records.</summary>
+    /// <summary>
+    /// Whether two documents are the same: their events by <see cref="Same(TimelineEvent, TimelineEvent)"/>,
+    /// their sound edits by content (<see cref="TimelineSoundEdits.Same"/>), the rest as records.
+    /// </summary>
     public static bool Same(TimelineDocument a, TimelineDocument b)
     {
         if (ReferenceEquals(a, b))
             return true;
-        if (a with { Events = b.Events } != b)
+        if (a with { Events = b.Events, SoundEdits = b.SoundEdits } != b || !TimelineSoundEdits.Same(a.SoundEdits, b.SoundEdits))
             return false;
         var x = Events(a);
         var y = Events(b);
@@ -391,7 +397,8 @@ internal static class TimelineEdits
             return true;
         if (a.Key != b.Key || a.Magic != b.Magic || a.Lane != b.Lane || a.Start != b.Start || a.Duration != b.Duration ||
             a.Resizable != b.Resizable || a.Path != b.Path || a.Access != b.Access || a.LockReason != b.LockReason ||
-            a.Conditional != b.Conditional || a.Group != b.Group || a.CloneOf != b.CloneOf || a.Loop != b.Loop || !Equals(a.Look, b.Look))
+            a.Conditional != b.Conditional || a.Group != b.Group || a.CloneOf != b.CloneOf || a.Loop != b.Loop || !Equals(a.Look, b.Look) ||
+            a.Pin != b.Pin)
             return false;
         if (ReferenceEquals(a.Values, b.Values))
             return true;
@@ -401,6 +408,26 @@ internal static class TimelineEdits
             if (!b.Values.TryGetValue(name, out var other) || !value.Equals(other))
                 return false;
         return true;
+    }
+
+    /// <summary>
+    /// Sets the changes to the sound <paramref name="key"/>, or drops them with null, in one document
+    /// change. Every event playing that sound whose pin names an alternative the new edit no longer
+    /// has plays any again; dropping the edit keeps pins on the file's own alternatives only.
+    /// Returns <paramref name="doc"/> itself when nothing changes.
+    /// </summary>
+    public static TimelineDocument SetSound(TimelineDocument doc, TimelineSoundKey key, TimelineSoundEdit? edit)
+    {
+        var current = doc.SoundEdits.TryGetValue(key, out var found) ? found : null;
+        var edits = edit == null ? doc.SoundEdits.Remove(key) : doc.SoundEdits.Remove(key).Add(key, edit);
+        var ids = edit?.Alternatives.Select(a => a.Id).ToHashSet(StringComparer.Ordinal);
+        bool Stale(string pin) => ids?.Contains(pin) == false || ids == null && !pin.StartsWith(TimelineSoundAlternative.OwnPrefix, StringComparison.Ordinal);
+        var events = Events(doc);
+        var unpinned = events.Select(ev => ev.Pin is { } pin && TimelineSoundKey.Of(ev) == key && Stale(pin) ? ev with { Pin = null } : ev).ToImmutableArray();
+        var pinsChanged = !unpinned.SequenceEqual(events);
+        if (Equals(current, edit) && !pinsChanged)
+            return doc;
+        return doc with { SoundEdits = edits, Events = pinsChanged ? unpinned : doc.Events };
     }
 
     /// <summary>A group offset that keeps starts from <paramref name="first"/> to <paramref name="last"/> in [0, Length - 1].</summary>

@@ -34,6 +34,7 @@ internal enum TimelineAccess : byte
 /// <param name="CloneOf">For a copy of a loaded entry, that entry's "t" key: saving copies every byte of it, not only the fields shown.</param>
 /// <param name="Loop">A kept moving face that loops (see <see cref="TimelineDocument.Loops"/>): saved as copies of itself back to back.</param>
 /// <param name="Look">An effect's changed look (tint, size, colours): saving writes it into a copy of the effect (<see cref="TimelineEffectLooks.Bake"/>); null when unchanged.</param>
+/// <param name="Pin">A sound event that always plays one alternative of its random set: that alternative's id (<see cref="TimelineSoundAlternative.Id"/>); null plays any. Saving gives it a copy of the file holding only that one.</param>
 internal sealed record TimelineEvent(
     string Key,
     string Magic,
@@ -49,7 +50,8 @@ internal sealed record TimelineEvent(
     string? Group = null,
     string? CloneOf = null,
     bool Loop = false,
-    TimelineEffectEdit? Look = null);
+    TimelineEffectEdit? Look = null,
+    string? Pin = null);
 
 /// <summary>
 /// One timeline being edited. Immutable: every edit makes a new document, so undo keeps
@@ -96,6 +98,18 @@ internal sealed record TimelineDocument(
     public ImmutableArray<string> ExcludedBones { get => excluded; init => excluded = value.IsDefault ? [] : value; }
 
     private readonly ImmutableArray<string> excluded = [];
+
+    /// <summary>
+    /// Changes to the sounds the events play, by file and sound index (paths in any case). Saving,
+    /// previewing and listening write them into the files (<see cref="TimelineSoundEdits"/>).
+    /// </summary>
+    public ImmutableDictionary<TimelineSoundKey, TimelineSoundEdit> SoundEdits
+    {
+        get => soundEdits;
+        init => soundEdits = value ?? ImmutableDictionary<TimelineSoundKey, TimelineSoundEdit>.Empty;
+    }
+
+    private readonly ImmutableDictionary<TimelineSoundKey, TimelineSoundEdit> soundEdits = ImmutableDictionary<TimelineSoundKey, TimelineSoundEdit>.Empty;
 
     /// <summary>
     /// An expression's own timeline (chara/action/facial/pose/smile.tmb), not a clip's: it has no

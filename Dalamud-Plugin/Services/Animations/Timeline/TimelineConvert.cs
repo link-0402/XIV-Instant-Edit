@@ -110,6 +110,9 @@ internal static class TimelineConvert
         // A look lives in a copy of its effect; one still on an event would be lost.
         if (!edited.Events.IsDefault && edited.Events.Any(e => e.Look is { IsEmpty: false }))
             throw new InvalidDataException("An effect's look was not written into a copy of the effect.");
+        // Sound changes and pins live in the sound files (TimelineSoundEdits.Bake); left here they would be lost.
+        if (!edited.SoundEdits.IsEmpty || !edited.Events.IsDefault && edited.Events.Any(e => e.Pin != null))
+            throw new InvalidDataException("A sound's changes were not written into its file.");
         var file = TmbFile.Parse(originalTmb);
         var chains = LoopChains(file);
         // How every face played as loaded: a loop is rebuilt from its first play.

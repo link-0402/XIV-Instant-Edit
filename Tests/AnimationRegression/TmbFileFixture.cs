@@ -499,7 +499,7 @@ internal static partial class TmbFileFixture
     /// set), an effect (C012) with vectors, a gameplay push (C117) driving a curve (TMFC), lip sync
     /// (C010 with time control). Ids 2 to 15, curve last and on no track, as vanilla has them.
     /// </summary>
-    private static byte[] Sample(string? pack = "emot/laugh") => new Tmb().Head(100, pack, 2).Actor(2, 3, 4, 5, 6, 7, 8)
+    internal static byte[] Sample(string? pack = "emot/laugh") => new Tmb().Head(100, pack, 2).Actor(2, 3, 4, 5, 6, 7, 8)
         .Track(3, 9).Track(4, 10).Extra(20, Lua).Track(5, 11).Track(6, 12).Track(7, 13).Track(8, 14)
         .Motion(9, 100).Sound(10, 10).Face(11, 5, 40, 0x08000000, 40, "cfxf_laugh").Effect(12).Push(13, 15)
         .Face(14, 50, 20, 1, 1, "cfxl_lip_nor1").Curve(15).Build();
