@@ -13,6 +13,22 @@ internal static class TimelineSoundFixture
         Edits(check, reject);
         Baking(check, reject);
         Usage(check, reject);
+        Listening(check, reject);
+    }
+
+    private static void Listening(Action<bool, string> check, Action<Action, string> reject)
+    {
+        var scd = ScdModelFixture.RandomSet(3);
+        var plan = TimelineListen.For(scd);
+        check(plan.GamePath == $"sound/instant_edit/listen_{TimelineImports.Hash8(scd)}.scd" && InstantEdit.Services.Animations.AnimationDependencies.SafeGamePath(plan.GamePath) &&
+              ReferenceEquals(plan.Bytes, scd) && Math.Abs(plan.Seconds - (ScdFile.Info(scd).SoundSeconds[0] + 2)) < 1e-6,
+            "a listen plan names a unique safe path and lasts the sound plus 2 s");
+        reject(() => TimelineListen.For([1, 2, 3]), "a file that isn't a sound can't be listened to");
+        var two = ScdModelFixture.TwoSoundsSharingAudio().Write();
+        check(ScdModel.Read(TimelineListen.Whole(two, 1)) is { Sounds: [{ Type: 1 }] } && ScdModel.Read(TimelineListen.Whole(scd, 0)).Sounds[0].Entries.Count == 3 &&
+              ScdModel.Read(TimelineListen.Row(scd, 0, 2)) is { Sounds: [{ Entries: [{ Limit: 100 }] }], Audio.Count: 1 } &&
+              ScdModel.Read(TimelineListen.Row(scd, 0, 2)).Audio[0].Seconds == ScdModel.Read(scd).Audio[3].Seconds,
+            "the header plays the whole sound as sound 0, a row only its alternative");
     }
 
     private static void Usage(Action<bool, string> check, Action<Action, string> reject)

@@ -33,6 +33,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly AnimationRecorder       _recorder;
     private readonly Services.Animations.Timeline.TimelineCatalog _timelineCatalog;
     private readonly Services.Animations.Preview.AnimationPreviewService _animationPreview;
+    private readonly Services.Audio.GameSoundPlayer _soundPlayer;
     private readonly Services.Animations.Preview.AnimationPlayback _animationPlayback;
     private readonly Services.Animations.Preview.MotionLiveDisplay? _motionDisplay;
     private readonly TimelineWindow          _timelineWindow;
@@ -178,6 +179,9 @@ public sealed class Plugin : IDalamudPlugin
         _animationPreview = new Services.Animations.Preview.AnimationPreviewService(_penumbra, framework, log, configDirectory,
             () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory), clientState);
         _animationPlayback =new Services.Animations.Preview.AnimationPlayback(framework, objects, clientState, targets, log);
+        // The Timeline's sound inspector plays sounds through the game, served by a temporary mod.
+        _soundPlayer = new Services.Audio.GameSoundPlayer(sigScanner, framework, _penumbra, log,
+            () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory));
         // Bone layers shown live on the GPose actor: an edited copy of the clip swapped into its controls.
         _motionDisplay = _animations == null ? null
             : new Services.Animations.Preview.MotionLiveDisplay(framework, objects, clientState, _animations.Native, log);
@@ -457,6 +461,7 @@ public sealed class Plugin : IDalamudPlugin
         _timelineWindow.Dispose();
         _motionDisplay?.Dispose();
         _animationPlayback.Dispose();
+        _soundPlayer.Dispose();
         _animationPreview.Dispose();
         _timelineCatalog.Dispose();
         _textures.AdditionalCacheCleanup = null;
