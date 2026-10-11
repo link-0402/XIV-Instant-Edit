@@ -328,6 +328,10 @@ Check(AnimationResources.CanReplace(expressionSource) &&
       !AnimationResources.CanReplace(expressionSource with { RelativePath = @"static infinite\comeon.pap" }) &&
       !AnimationResources.CanReplace(expressionSource with { GamePath = "chara/action/facial/pose/comeon.avfx", RelativePath = "comeon.avfx" }),
     "an expression's TMB can be replaced in place, but only by a file of its own type");
+// A sound the Timeline edits is the mod's own SCD, replaced in place like the animation.
+var scdSource = spacedSource with { GamePath = "sound/moan.scd", ResolvedPath = Path.Combine(spacedRoot, "sound", "moan.scd"), RelativePath = "sound/moan.scd" };
+Check(AnimationResources.CanReplace(scdSource) && !AnimationResources.CanReplace(scdSource with { RelativePath = "sound/moan.pap" }),
+    "a mod's SCD can be replaced in place, but only by an SCD");
 
 static byte[] VfxChunk(string key, byte[] payload)
 {

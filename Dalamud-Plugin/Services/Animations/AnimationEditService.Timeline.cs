@@ -250,6 +250,18 @@ internal sealed partial class AnimationEditService
         return (await resources.ReadAsync(collection, gamePath, token)).Bytes;
     }
 
+    /// <summary>
+    /// Reads the sound <paramref name="gamePath"/> as the collection resolves it, for the Timeline's
+    /// sound inspector (see <see cref="TimelineSoundEdits"/>): where it comes from and its bytes.
+    /// Nothing in game changes.
+    /// </summary>
+    public async Task<(AnimationResource Resource, byte[] Bytes)> ReadSoundAsync(Guid collection, string gamePath, CancellationToken token)
+    {
+        if (!gamePath.EndsWith(".scd", StringComparison.OrdinalIgnoreCase) || !AnimationDependencies.SafeGamePath(gamePath))
+            throw new InvalidDataException("This is not a sound the game can load.");
+        return await resources.ReadAsync(collection, gamePath, token);
+    }
+
     /// <summary>The native animation runtime, which the live motion display builds its uncompressed copies with.</summary>
     internal AnimationNative Native => native;
 
@@ -309,12 +321,16 @@ internal sealed partial class AnimationEditService
     /// <paramref name="motionFrames"/> are facial motions' own lengths (see <see cref="TimelineConvert.Apply"/>).
     /// The document's excluded bones lose their tracks, and with <paramref name="repair"/> the motion is
     /// retargeted onto that standard skeleton, as the old rebakes did, in the same bake.
+    /// In place, <paramref name="replaced"/> are the mod's own sound files the edit writes over (see
+    /// <see cref="TimelineSoundEdits.Bake"/>): they are read, checked and journaled with the animation,
+    /// so Undo restores them too.
     /// </summary>
     /// <returns>The job's id, which <see cref="LastResult"/> carries once it ends; null when another job is running.</returns>
     public Guid? EditTimeline(AnimationTimelineSource source, TimelineDocument document, AnimationDestination destination,
         string modName, IReadOnlyDictionary<string, byte[]> added, IReadOnlyDictionary<string, string>? beside = null,
         IReadOnlyDictionary<string, int>? motionFrames = null, SkeletonStandard? repair = null,
-        IReadOnlyDictionary<string, Func<byte[], byte[]>>? rebuild = null)
+        IReadOnlyDictionary<string, Func<byte[], byte[]>>? rebuild = null,
+        IReadOnlyDictionary<string, TimelineSoundReplacement>? replaced = null)
     {
         if (Busy) return null;
         var request = TimelineRequest(source, document, destination, modName.Trim(), repair);
@@ -323,6 +339,8 @@ internal sealed partial class AnimationEditService
             if (destination == AnimationDestination.NewMod && !PenumbraService.IsSafeNewModName(request.ModName))
                 throw new InvalidDataException("Choose a valid mod name before saving.");
             if (source.Document == null) throw new InvalidOperationException(source.ReadOnlyReason ?? "This timeline can't be edited.");
+            if (replaced is { Count: > 0 } && destination != AnimationDestination.InPlace)
+                throw new InvalidDataException("A mod's sound can only be changed when saving in place.");
             var capture = request.Capture;
             CheckBones(request, source);
             await CheckActorAsync(capture, false);
@@ -330,13 +348,16 @@ internal sealed partial class AnimationEditService
             await resources.CheckAsync(capture.CollectionId, [source.Resource], token);
             // The file the timeline lives in: the clip's PAP, or an expression's own TMB.
             var edited = source.Resource.GamePath;
-            var manifest = await resources.ManifestAsync(capture, [edited], destination, token);
-            if (manifest.Resources.Single().Hash != source.Resource.Hash)
+            var manifest = await resources.ManifestAsync(capture, [edited, .. replaced?.Keys ?? []], destination, token);
+            if (manifest.Resources.First(r => string.Equals(r.GamePath, edited, StringComparison.OrdinalIgnoreCase)).Hash != source.Resource.Hash)
                 throw new IOException("The animation file changed while saving. Open the timeline again.");
             var built = await BuildTimelineAsync(request, source, manifest.Files[edited], document, motionFrames,
                 journals.DirectoryFor(request.Id), token);
             var (files, reused, owners, copies) = await AddedFilesAsync(capture, destination, source.Resource, added, beside, rebuild, token);
             var outputs = ImmutableDictionary<string, byte[]>.Empty.Add(built.GamePath, built.Bytes);
+            // The mod's own sounds the edit changes are written over like the animation, at a fresh path.
+            if (replaced is { Count: > 0 })
+                outputs = TimelineSoundUsage.ReplacedOutputs(outputs, manifest.Resources, source.Resource, replaced);
             // The motion the layers were baked onto goes with the journal, so the edit can be opened again.
             var motionBase = MotionBase(source, document, manifest.Files[edited], request.RepairTarget);
             var journaled = motionBase == null ? request

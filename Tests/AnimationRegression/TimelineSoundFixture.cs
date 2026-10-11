@@ -12,6 +12,54 @@ internal static class TimelineSoundFixture
     {
         Edits(check, reject);
         Baking(check, reject);
+        Usage(check, reject);
+    }
+
+    private static void Usage(Action<bool, string> check, Action<Action, string> reject)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "IE sound usage " + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "sub"));
+            byte[] Naming(string path) => [.. new byte[37], .. System.Text.Encoding.ASCII.GetBytes(path), 0, .. new byte[11]];
+            File.WriteAllBytes(Path.Combine(root, "a.pap"), Naming("sound/Moan.scd"));
+            File.WriteAllBytes(Path.Combine(root, "b.tmb"), Naming("SOUND/MOAN.SCD"));
+            File.WriteAllBytes(Path.Combine(root, "c.avfx"), Naming("sound/other.scd"));
+            File.WriteAllBytes(Path.Combine(root, "d.pap"), Naming("sound/moan.scd"));
+            File.WriteAllBytes(Path.Combine(root, "sub", "e.avfx"), Naming("sound/moan.scd"));
+            File.WriteAllBytes(Path.Combine(root, "f.scd"), Naming("sound/moan.scd"));
+            File.WriteAllBytes(Path.Combine(root, "g.pap"), Naming("sound/moan.scd2"[..13]));
+            check(TimelineSoundUsage.OtherUsers(root, Moan, Path.Combine(root, "d.pap")).Order().SequenceEqual(["a.pap", "b.tmb", "sub/e.avfx"]),
+                "other users are the mod's other animations and effects that name the sound, in any case");
+        }
+        finally { Directory.Delete(root, true); }
+        var edited = new InstantEdit.Models.AnimationResource("chara/a.pap", @"C:\mods\M\a.pap", "papHash", "M", @"C:\mods\M", "a.pap");
+        var moan = new InstantEdit.Models.AnimationResource(Moan, @"C:\mods\M\sound\moan.scd", "MOANHASH", "M", @"C:\mods\M", "sound/moan.scd");
+        var outputs = ImmutableDictionary<string, byte[]>.Empty.Add("chara/a.pap", [1]);
+        var replaced = new Dictionary<string, TimelineSoundReplacement> { [Moan] = new("MOANHASH", [2, 3]) };
+        check(TimelineSoundUsage.ReplacedOutputs(outputs, [edited, moan], edited, replaced) is var all && all.Count == 2 && all[Moan].SequenceEqual(new byte[] { 2, 3 }),
+            "an in-place sound joins the animation's outputs");
+        reject(() => TimelineSoundUsage.ReplacedOutputs(outputs, [edited, moan with { Hash = "NEWER" }], edited, replaced), "a sound that changed while saving is refused");
+        reject(() => TimelineSoundUsage.ReplacedOutputs(outputs, [edited, moan with { ModDirectory = "Other" }], edited, replaced), "a sound another mod provides is refused");
+        reject(() => TimelineSoundUsage.ReplacedOutputs(outputs, [edited], edited, replaced), "a sound that wasn't read is refused");
+        check(Refuses(() => TimelineSoundUsage.ReplacedOutputs(outputs, [edited, moan with { Hash = "NEWER" }], edited, replaced), "moan.scd changed while saving. Open the timeline again.") &&
+              Refuses(() => TimelineSoundUsage.ReplacedOutputs(outputs, [edited, moan with { ModDirectory = "Other" }], edited, replaced), "moan.scd belongs to another mod. Save it as a copy."),
+            "the refusals say what to do");
+        // A pin copy of a file saved in place can't be mapped beside it: that file is being rewritten.
+        var scd = ScdModelFixture.RandomSet(3);
+        var both = Doc(Sound("n1", pin: "o1"), Sound("n2")) with
+        {
+            SoundEdits = ImmutableDictionary<TimelineSoundKey, TimelineSoundEdit>.Empty.Add(new(Moan, 0), TimelineSoundEdits.Initial(ScdModel.Read(scd), 0) with { Volume = 0.5f }),
+        };
+        var inPlace = TimelineSoundEdits.Bake(both, p => p == Moan ? scd : null, _ => null, _ => TimelineSoundRoute.InPlace);
+        check(inPlace.InPlace.Count == 1 && inPlace.Copies is [{ Beside: null, Rebuild: null }], "a pin copy of a file saved in place is mapped with the animation");
+    }
+
+    private static bool Refuses(Action action, string message)
+    {
+        try { action(); }
+        catch (IOException e) { return e.Message == message; }
+        return false;
     }
 
     private static void Baking(Action<bool, string> check, Action<Action, string> reject)

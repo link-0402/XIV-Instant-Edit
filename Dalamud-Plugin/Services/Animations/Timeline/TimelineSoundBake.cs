@@ -53,9 +53,11 @@ internal static partial class TimelineSoundEdits
             var edits = keys.Where(doc.SoundEdits.ContainsKey).Select(k => (k.Sound, Edit: doc.SoundEdits[k])).ToArray();
             var (edited, ids) = Written(original, keys.Select(k => k.Sound), doc.SoundEdits.GetValueOrDefault, path, import);
             string? copyPath = null;
+            var rewritten = false;
             if (!edited.AsSpan().SequenceEqual(original))
             {
-                if (route(edits.Length > 0 ? keys.First(doc.SoundEdits.ContainsKey) : keys[0]) == TimelineSoundRoute.InPlace)
+                rewritten = route(edits.Length > 0 ? keys.First(doc.SoundEdits.ContainsKey) : keys[0]) == TimelineSoundRoute.InPlace;
+                if (rewritten)
                     inPlace[path] = new TimelineSoundReplacement(AnimationPap.Hash(original), edited);
                 else
                 {
@@ -78,7 +80,9 @@ internal static partial class TimelineSoundEdits
                     throw new InvalidDataException($"{Path.GetFileName(path)} doesn't have the sound an event always plays any more.");
                 var only = ScdEdits.KeepOnly(ScdModel.Read(edited), index, entry).Write();
                 var pinPath = CopyPath($"{BaseName(path)}_{entry + 1}", only);
-                copies.TryAdd(pinPath, Copy(pinPath, only, path, other => ScdEdits.KeepOnly(ScdModel.Read(Rewritten(other, edits, import)), index, entry).Write()));
+                // A file written over in place can't have copies mapped beside it; they go with the animation.
+                copies.TryAdd(pinPath, rewritten ? Copy(pinPath, only, null, null)
+                    : Copy(pinPath, only, path, other => ScdEdits.KeepOnly(ScdModel.Read(Rewritten(other, edits, import)), index, entry).Write()));
                 updated[i] = ev with { Path = pinPath, Pin = null, Values = (ev.Values ?? ImmutableDictionary<string, double>.Empty).SetItem(TimelineSoundKey.SoundIndexField, 0) };
             }
         }
@@ -150,11 +154,12 @@ internal static partial class TimelineSoundEdits
         return other;
     }
 
-    private static TimelineImport Copy(string gamePath, byte[] bytes, string original, Func<byte[], byte[]> rebuild) =>
+    /// <summary>A copy mapped beside <paramref name="original"/>, made again from its other files by <paramref name="rebuild"/>; without one it is mapped with the animation.</summary>
+    private static TimelineImport Copy(string gamePath, byte[] bytes, string? original, Func<byte[], byte[]>? rebuild) =>
         new(gamePath, ImmutableDictionary<string, byte[]>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase).Add(gamePath, bytes),
             ScdFile.TrySeconds(bytes) ?? 0,
-            ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase).Add(gamePath, original),
-            ImmutableDictionary<string, Func<byte[], byte[]>>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase).Add(gamePath, rebuild));
+            original == null ? null : ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase).Add(gamePath, original),
+            rebuild == null ? null : ImmutableDictionary<string, Func<byte[], byte[]>>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase).Add(gamePath, rebuild));
 
     private static string CopyPath(string name, byte[] bytes)
     {

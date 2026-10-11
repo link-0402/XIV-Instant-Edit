@@ -160,13 +160,13 @@ internal sealed class AnimationResources(PenumbraService penumbra, IDataManager 
         SafeModRelativePath(source.RelativePath, source.GamePath);
 
     /// <summary>
-    /// A PAP's path inside its mod folder, or an expression's TMB's, with the extension of the
-    /// game path it maps. Mod authors name their files freely (e.g. "animations/sybian riding
-    /// groundsit 1 v10.pap"), so this follows the backup store's file-name rules rather than the
-    /// stricter game-path ones.
+    /// A PAP's path inside its mod folder, an expression's TMB's, or a sound's (SCD) the Timeline
+    /// edits, with the extension of the game path it maps. Mod authors name their files freely
+    /// (e.g. "animations/sybian riding groundsit 1 v10.pap"), so this follows the backup store's
+    /// file-name rules rather than the stricter game-path ones.
     /// </summary>
     internal static bool SafeModRelativePath(string relativePath, string gamePath) =>
-        Path.GetExtension(gamePath).ToLowerInvariant() is ".pap" or ".tmb" &&
+        Path.GetExtension(gamePath).ToLowerInvariant() is ".pap" or ".tmb" or ".scd" &&
         PenumbraService.IsSafeGameResourcePath(relativePath.Replace('\\', '/'), Path.GetExtension(gamePath));
 
     /// <summary>
