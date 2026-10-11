@@ -14,7 +14,7 @@ namespace InstantEdit.Ui;
 /// blocked, file dialog filters, the catalog key and the files a save packages. No ImGui or
 /// Dalamud dependencies, so the regression suite can check them.
 /// </summary>
-internal static class TimelineWindowViews
+internal static partial class TimelineWindowViews
 {
     /// <summary>The file dialog filter for sound imports.</summary>
     public const string SoundFilter = "Sounds{.wav,.ogg,.scd}";

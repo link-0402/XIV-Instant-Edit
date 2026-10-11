@@ -205,6 +205,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         motionBase = null;
         motionCarry = null;
         ForgetEffects();
+        ForgetSounds();
     }
 
     public void Dispose()
@@ -349,6 +350,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         if (!sameClip)
         {
             ForgetEffects();
+            ForgetSounds();
             modName = TimelineWindowViews.DefaultModName(AnimationPresentation.DefaultModName(loaded.Capture));
             destination = AnimationDestination.NewMod;
             saveError = null;
