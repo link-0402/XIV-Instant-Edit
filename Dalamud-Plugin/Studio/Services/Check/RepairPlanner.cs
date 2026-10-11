@@ -177,14 +177,25 @@ internal sealed partial class ModCheck
                 }
                 case ResolutionSource.Conditional:
                 {
+                    var others = OtherProviders(request);
+                    var asker = request.Kind == RequestKind.Material ? "model" : "material";
+                    var (gapGroup, missing) = GroupGap(others);
                     AddFinding(key, "C006", CheckCategory.Materials, Severity.Warning, $"{what} depends on another option",
-                        $"{requesters} needs {request.Path}, which only {string.Join(", ", providers)} provide{(providers.Count == 1 ? "s" : string.Empty)}. Without {(providers.Count == 1 ? "that option" : "one of those options")} the item is invisible.",
+                        missing is null
+                            ? $"{requesters} needs {request.Path}, which only {string.Join(", ", providers)} provide{(providers.Count == 1 ? "s" : string.Empty)}. Without {(providers.Count == 1 ? "that option" : "one of those options")} the {asker} fails to load and the item is invisible."
+                            : $"{requesters} needs {request.Path}, which every {gapGroup} option provides except {string.Join(", ", missing.Select(m => $"\"{m}\""))}. With {(missing.Count == 1 ? "that one" : "one of those")} picked the {asker} fails to load and the item is invisible.",
                         request.Path, request.Root);
-                    var copies = Candidates(request).Select(c => c with { Confidence = RepairConfidence.Medium }).ToList();
+                    // The copy is a fallback: the options that provide it now must still win over it when they are on.
+                    var into = others.Any(p => Outranks(request.Target, p.Container)) ? _default : request.Target;
+                    var copies = Candidates(request, into).Select(c => c with { Confidence = RepairConfidence.Medium }).ToList();
                     if (copies.Count > 0)
                         AddRepair($"fix:{request.Target.Option.Serialize()}:{request.Path}", key, CheckCategory.Materials,
-                            $"Also provide {ShortName(request.Path)} in {request.Target.DisplayName}",
-                            "Copy the redirection so it no longer depends on the other option.", copies, forceOptIn: true);
+                            $"Also provide {ShortName(request.Path)} in {into.DisplayName}",
+                            "Copy the redirection so it no longer depends on the other option. "
+                            + (missing is null
+                                ? $"{string.Join(", ", providers)} still win{(providers.Count == 1 ? "s" : string.Empty)} when on."
+                                : $"The {gapGroup} options that provide it still win when picked."),
+                            copies, forceOptIn: true);
                     break;
                 }
                 case ResolutionSource.External:
@@ -196,13 +207,56 @@ internal sealed partial class ModCheck
         }
     }
 
-    /// <summary>Files that could serve a missing request, best first.</summary>
-    private List<RepairCandidate> Candidates(Request request)
+    /// <summary>The mod's other redirections of a request's path: those that can be on together with it, or all when none can.</summary>
+    private IReadOnlyList<CheckMapping> OtherProviders(Request request)
+    {
+        if (!_providers.TryGetValue(request.Path, out var providers))
+            return Array.Empty<CheckMapping>();
+        var possible = providers.Where(p => !ExclusiveWith(p.Container, request.Root, request.Via)).ToArray();
+        return possible.Length > 0 ? possible : providers;
+    }
+
+    /// <summary>When the providers are all but a few options of one single-choice group: that group's name and the options without it.</summary>
+    private (string? Group, IReadOnlyList<string>? Missing) GroupGap(IReadOnlyList<CheckMapping> providers)
+    {
+        var first = providers.FirstOrDefault()?.Container;
+        if (first is not { Kind: ContainerKind.SingleOption } || providers.Any(p => p.Container.GroupIndex != first.GroupIndex))
+            return (null, null);
+        var siblings = _model.Containers.Where(c => c.GroupIndex == first.GroupIndex).ToArray();
+        var missing = siblings.Where(c => !providers.Any(p => ReferenceEquals(p.Container, c))).Select(OptionName).ToArray();
+        if (missing.Length == 0 || siblings.Length - missing.Length < 3 || missing.Length >= siblings.Length - missing.Length)
+            return (null, null);
+        var label = first.DisplayName;
+        var separator = label.LastIndexOf(" › ", StringComparison.Ordinal);
+        return (separator > 0 ? label[..separator] : label, missing);
+    }
+
+    private static string OptionName(CheckContainer container)
+    {
+        var label = container.DisplayName;
+        var separator = label.LastIndexOf(" › ", StringComparison.Ordinal);
+        return separator >= 0 ? label[(separator + 3)..] : label;
+    }
+
+    /// <summary>Whether two options' names share a word, such as "Metal Weathered" and "Metal - 2".</summary>
+    private static bool NamesMatch(CheckContainer a, CheckContainer b)
+    {
+        static IEnumerable<string> Words(CheckContainer container)
+            => System.Text.RegularExpressions.Regex.Split(OptionName(container), "[^\\p{L}]+").Where(word => word.Length >= 3);
+        return !a.IsDefault && !b.IsDefault && Words(a).Intersect(Words(b), StringComparer.OrdinalIgnoreCase).Any();
+    }
+
+    /// <summary>Files that could serve a missing request, best first, redirected in <paramref name="into"/> (the request's target by default).</summary>
+    private List<RepairCandidate> Candidates(Request request, CheckContainer? into = null)
     {
         var path = request.Path;
+        into ??= request.Target;
         var found = new List<(string RelPath, RepairConfidence Confidence, string Reason, CheckMapping? Supersedes)>();
 
-        if (_providers.TryGetValue(path, out var providers))
+        var providers = OtherProviders(request);
+        // Among several, the file of an option named like the one asking comes first: Metal's material gets "Metal - 1"'s texture.
+        var alike = new HashSet<string>(providers.Where(p => NamesMatch(p.Container, request.Target)).Select(p => p.RelPath), StringComparer.OrdinalIgnoreCase);
+        if (providers.Count > 0)
         {
             var files = providers.Select(p => p.RelPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             foreach (var provider in providers.DistinctBy(p => p.RelPath, StringComparer.OrdinalIgnoreCase))
@@ -210,11 +264,11 @@ internal sealed partial class ModCheck
         }
 
         var twin = ResourceNaming.Dx11Twin(path);
-        if (Resolve(twin, request.Root) is { IsModFile: true } twinResolution)
+        if (Resolve(twin, request.Root, request.Via) is { IsModFile: true } twinResolution)
             found.Add((twinResolution.RelPath!, RepairConfidence.High, $"Redirected as {ShortName(twin)}, which differs only by the DX11 '--' prefix", null));
 
         if (SynonymKey(path) is { } synonym)
-            foreach (var container in Active(request.Root))
+            foreach (var container in Active(request.Root, request.Via))
             foreach (var mapping in _files[container].Values.Where(m => m.Class is MappingClass.DeadOwn or MappingClass.Foreign && SynonymKey(m.Key) == synonym))
                 found.Add((mapping.RelPath, RepairConfidence.High, $"Redirected under the wrong name {ShortName(mapping.Key)}", mapping));
 
@@ -238,13 +292,13 @@ internal sealed partial class ModCheck
                     Reason: string.Join("; ", g.Where(c => c.Confidence == best).Select(c => c.Reason).Distinct()),
                     Supersedes: g.Select(c => c.Supersedes).FirstOrDefault(s => s is not null));
             })
-            .OrderBy(c => c.Confidence).ThenBy(c => c.RelPath, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(c => c.Confidence).ThenByDescending(c => alike.Contains(c.RelPath)).ThenBy(c => c.RelPath, StringComparer.OrdinalIgnoreCase)
             .ToList();
         var result = new List<RepairCandidate>();
         foreach (var candidate in merged)
         {
             result.Add(new RepairCandidate(candidate.RelPath, candidate.Confidence, candidate.Reason,
-                new RepairEdit[] { new AddFileEdit(request.Target.Option, path, candidate.RelPath) }));
+                new RepairEdit[] { new AddFileEdit(into.Option, path, candidate.RelPath) }));
             if (candidate.Supersedes is { } dead && candidate.Confidence == RepairConfidence.High
              && request.Resolution.Source is ResolutionSource.Unresolved or ResolutionSource.Exclusive)
                 _supersededBy.TryAdd(dead, $"fix:{request.Target.Option.Serialize()}:{path}");

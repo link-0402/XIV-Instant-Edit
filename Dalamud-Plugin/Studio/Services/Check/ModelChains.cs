@@ -11,7 +11,7 @@ namespace InstantEdit.Studio.Services.Check;
 internal sealed partial class ModCheck
 {
     private readonly List<ModelWalk> _walks = new();
-    private readonly Dictionary<(OptionRef Container, string Path), MaterialCheck> _materials = new();
+    private readonly Dictionary<(OptionRef Container, OptionRef? Via, string Path), MaterialCheck> _materials = new();
     private readonly List<Request> _requests = new();
     private readonly HashSet<string> _requested = new(StringComparer.Ordinal);
 
@@ -56,6 +56,10 @@ internal sealed partial class ModCheck
     {
         public required RequestKind Kind { get; init; }
         public required CheckContainer Root { get; init; }
+
+        /// <summary>The model's option, when the asking material comes from another one; it is on as well.</summary>
+        public CheckContainer? Via { get; init; }
+
         public required string Path { get; init; }
         public required PathResolution Resolution { get; set; }
         public required string Requester { get; init; }
@@ -142,23 +146,25 @@ internal sealed partial class ModCheck
                 if (request.Kind == MaterialRequestKind.Path)
                 {
                     resolved = AddRequest(RequestKind.Material, container, request.Path!, target, $"{ShortName(path)}: {name.TrimStart('/')}");
-                    if (resolved.Resolution.IsModFile)
-                        ValidateMaterial(container, request.Path!, resolved.Resolution);
+                    ValidateMaterialSources(container, request.Path!, resolved.Resolution);
                 }
                 walk.Materials.Add(new MaterialUse { Name = name, MaterialSet = folder, Request = request, Resolved = resolved });
             }
         }
     }
 
-    private Request AddRequest(RequestKind kind, CheckContainer root, string path, CheckContainer target, string requester, string? slot = null)
+    private Request AddRequest(RequestKind kind, CheckContainer root, string path, CheckContainer target, string requester, string? slot = null,
+        CheckContainer? via = null)
     {
         path = PathNormalizer.GamePath(path);
-        var existing = _requests.FirstOrDefault(r => r.Kind == kind && r.Path == path && ReferenceEquals(r.Root, root));
+        if (via is not null && (ReferenceEquals(via, root) || via.IsDefault))
+            via = null;
+        var existing = _requests.FirstOrDefault(r => r.Kind == kind && r.Path == path && ReferenceEquals(r.Root, root) && ReferenceEquals(r.Via, via));
         if (existing is not null)
             return existing;
         var request = new Request
         {
-            Kind = kind, Root = root, Path = path, Resolution = Resolve(path, root), Requester = requester, Target = target, SlotLabel = slot,
+            Kind = kind, Root = root, Via = via, Path = path, Resolution = Resolve(path, root, via), Requester = requester, Target = target, SlotLabel = slot,
         };
         _requests.Add(request);
         _requested.Add(path);
@@ -238,12 +244,32 @@ internal sealed partial class ModCheck
         public List<(string Code, Severity Severity, string Message)> Problems { get; } = new();
     }
 
-    private MaterialCheck ValidateMaterial(CheckContainer root, string path, PathResolution source)
+    /// <summary>
+    /// Checks every file a model's material can be: the one its own option or the default files redirect, or, when
+    /// other options provide it, each of theirs (with that option on), so a broken copy in one option is not hidden by a sound one in another.
+    /// </summary>
+    private void ValidateMaterialSources(CheckContainer model, string path, PathResolution resolution)
     {
-        if (_materials.TryGetValue((root.Option, path), out var check))
+        if (resolution.Source == ResolutionSource.ModFile && resolution.RelPath is not null)
+        {
+            var provider = resolution.Option is { } option ? _model.Find(option) ?? model : model;
+            ValidateMaterial(provider, path, resolution, model);
+            return;
+        }
+        if (resolution.Source is not (ResolutionSource.AlwaysProvided or ResolutionSource.Conditional) || !_providers.TryGetValue(path, out var providers))
+            return;
+        foreach (var mapping in providers.Where(p => !p.Container.IsExclusiveWith(model)))
+            ValidateMaterial(mapping.Container, path, new PathResolution(ResolutionSource.ModFile, path, mapping.RelPath, mapping.Container.Option), model);
+    }
+
+    private MaterialCheck ValidateMaterial(CheckContainer root, string path, PathResolution source, CheckContainer? via = null)
+    {
+        if (via is not null && (ReferenceEquals(via, root) || via.IsDefault))
+            via = null;
+        if (_materials.TryGetValue((root.Option, via?.Option, path), out var check))
             return check;
         check = new MaterialCheck { Path = path, Root = root, Source = source };
-        _materials[(root.Option, path)] = check;
+        _materials[(root.Option, via?.Option, path)] = check;
 
         var state = State(source.RelPath!);
         if (!state.Exists || state.Kind != FileKind.Mtrl)
@@ -263,7 +289,11 @@ internal sealed partial class ModCheck
 
         var target = source.Option is { } option ? _model.Find(option) ?? root : root;
         var mtrl = check.Mtrl;
-        check.Shader = AddRequest(RequestKind.Shader, root, ModelNaming.ShaderPath(mtrl.ShaderPackageName), target, ShortName(path));
+        // Name the option when the material differs between options, so the finding says which copy is broken.
+        var name = _providers.TryGetValue(path, out var copies) && copies.Select(c => c.RelPath).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1 && !target.IsDefault
+            ? $"{ShortName(path)} in {target.DisplayName}"
+            : ShortName(path);
+        check.Shader = AddRequest(RequestKind.Shader, root, ModelNaming.ShaderPath(mtrl.ShaderPackageName), target, name, via: via);
         if (mtrl.LegacyColorTable)
             check.Problems.Add(("C009", Severity.Info, "Uses a colour table from before Dawntrail with character.shpk. It may look wrong until it is updated in Penumbra's material editor."));
         for (var index = 0; index < mtrl.TextureOffsets.Length; ++index)
@@ -276,7 +306,7 @@ internal sealed partial class ModCheck
                 continue;
             }
             check.Textures.Add(AddRequest(RequestKind.Texture, root, MaterialNaming.TexturePath(texture.Path, texture.Dx11), target,
-                $"{ShortName(path)} ({slot})", slot));
+                $"{name} ({slot})", slot, via));
         }
         if (mtrl.ShaderDataParsed)
             foreach (var sampler in mtrl.Samplers.Where(sampler => sampler.HasTexture && sampler.TextureIndex >= mtrl.TextureOffsets.Length))
@@ -309,7 +339,7 @@ internal sealed partial class ModCheck
 
     private void MaterialProblemFindings()
     {
-        foreach (var check in _materials.Values.DistinctBy(check => check.Path))
+        foreach (var check in _materials.Values.DistinctBy(check => (check.Path, check.Source.RelPath?.ToLowerInvariant())))
         {
             if (check.Error is not null && check.Source.RelPath is { } relPath && State(relPath) is { Exists: true, Kind: FileKind.Mtrl })
                 AddFinding($"F002:{check.Path}", "F002", CheckCategory.Materials, Severity.Error, "Material can't be read",
