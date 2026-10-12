@@ -24,6 +24,11 @@ internal static class TimelineSoundFixture
               ReferenceEquals(plan.Bytes, scd) && Math.Abs(plan.Seconds - (ScdFile.Info(scd).SoundSeconds[0] + 2)) < 1e-6,
             "a listen plan names a unique safe path and lasts the sound plus 2 s");
         reject(() => TimelineListen.For([1, 2, 3]), "a file that isn't a sound can't be listened to");
+        var served = Path.Combine(Path.GetTempPath(), "listen_ab12cd34.scd");
+        check(TimelineListen.Served(served, served) && TimelineListen.Served(served.ToUpperInvariant(), served) && TimelineListen.Served(served.Replace('\\', '/'), served) &&
+              !TimelineListen.Served(plan.GamePath, served) && !TimelineListen.Served(null, served) && !TimelineListen.Served("", served) &&
+              !TimelineListen.Served(Path.Combine(Path.GetTempPath(), "other.scd"), served),
+            "a listen file plays only when Penumbra resolves its path to the file just written");
         var two = ScdModelFixture.TwoSoundsSharingAudio().Write();
         check(ScdModel.Read(TimelineListen.Whole(two, 1)) is { Sounds: [{ Type: 1 }] } && ScdModel.Read(TimelineListen.Whole(scd, 0)).Sounds[0].Entries.Count == 3 &&
               ScdModel.Read(TimelineListen.Row(scd, 0, 2)) is { Sounds: [{ Entries: [{ Limit: 100 }] }], Audio.Count: 1 } &&
@@ -134,6 +139,14 @@ internal static class TimelineSoundFixture
                   _ => TimelineSoundRoute.Copy).Copies.Length == 1,
             "a sound that can't be read never blocks a document without its edits, and an edit no event plays is dropped");
         reject(() => TimelineSoundEdits.Bake(docWithEdit, _ => null, NoImport, _ => TimelineSoundRoute.Copy), "an edited sound that can't be read is refused");
+        var applied = 0;
+        var (reused, reusedFiles) = TimelineSoundEdits.Redirectable(DocWithEditAndPin("n1", "o2"), Bytes, NoImport, (bytes, sound, edit) =>
+        {
+            applied++;
+            return TimelineSoundEdits.Apply(bytes, sound, edit, NoImport);
+        });
+        check(applied == 1 && ScdModel.Read(reusedFiles[Moan]).Sounds[0].Volume == 0.5f && reused.SoundEdits.IsEmpty,
+            "preview can reuse a recipe already written for the inspector");
         var (rest, files) = TimelineSoundEdits.Redirectable(DocWithEditAndPin("n1", "o2"), Bytes, NoImport);
         check(files.ContainsKey("SOUND/MOAN.SCD") && ScdModel.Read(files[Moan]).Sounds[0].Volume == 0.5f && rest.SoundEdits.IsEmpty && TimelineEdits.Find(rest, "n1")!.Pin == "o2",
             "preview points the file's own path at the edit and leaves pins for a rebuild");
@@ -207,6 +220,11 @@ internal static class TimelineSoundFixture
         reject(() => TimelineConvert.Apply(tmb, tmbDoc with { Events = [.. tmbDoc.Events.Select(e => e == tmbSound ? e with { Pin = "o0" } : e)] }), "an unbaked pin can't be saved");
         var changed = edit with { Volume = 0.5f };
         check(ScdModel.Read(TimelineSoundEdits.Apply(scd, 0, changed, _ => null).Bytes).Sounds[0].Volume == 0.5f, "the recipe's file volume is applied");
+        var withModel = TimelineSoundEdits.ApplyModel(scd, 0, changed, _ => null);
+        var unchangedModel = TimelineSoundEdits.ApplyModel(scd, 0, edit, _ => null);
+        check(withModel.Model.Write().AsSpan().SequenceEqual(withModel.Bytes) && withModel.Model.Sounds[0].Volume == 0.5f &&
+              ReferenceEquals(unchangedModel.Bytes, scd) && unchangedModel.Model.Write().AsSpan().SequenceEqual(scd),
+            "applying a recipe also gives the file's model, so it needn't be read again");
         // The recipe's order: replace, add, remove, chances, volume and wait per sound.
         var clipFile = AudioFixture.Template();
         var recipe = edit with

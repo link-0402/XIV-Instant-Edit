@@ -18,6 +18,7 @@ public sealed partial class PenumbraService
     private RemoveTemporaryMod? _removeTemporaryMod;
     private AddTemporaryModAll? _addTemporaryModAll;
     private RemoveTemporaryModAll? _removeTemporaryModAll;
+    private ResolveInterfacePath? _resolveInterfacePath;
     private GetCollections? _getCollections;
 
     /// <summary> The effective collection of an object, with IndividualSet; null when the object has none. </summary>
@@ -48,6 +49,10 @@ public sealed partial class PenumbraService
     /// </summary>
     internal PenumbraApiEc AddTemporaryModAllOnFramework(string tag, IReadOnlyDictionary<string, string> paths, int priority)
         => (_addTemporaryModAll ??= new AddTemporaryModAll(_pi)).Invoke(tag, Redirects(tag, paths), string.Empty, priority);
+
+    /// <summary> What the Interface collection resolves <paramref name="gamePath"/> to: the game path itself when nothing changes it. </summary>
+    internal string ResolveInterfacePathOnFramework(string gamePath)
+        => (_resolveInterfacePath ??= new ResolveInterfacePath(_pi)).Invoke(gamePath);
 
     /// <summary> Removes a temporary mod from every collection; Gone as for <see cref="RemoveTemporaryModOnFramework"/>. </summary>
     internal (bool Gone, string? Error) RemoveTemporaryModAllOnFramework(string tag, int priority)

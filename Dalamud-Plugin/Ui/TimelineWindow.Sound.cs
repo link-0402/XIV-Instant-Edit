@@ -64,7 +64,7 @@ public sealed partial class TimelineWindow
         {
             Seconds = [.. entries.Select(e => e.Audio >= 0 && e.Audio < model.Audio.Count ? model.Audio[e.Audio].Seconds : 0)],
             EndsEarly = entries.Any(e => ScdEdits.Wait(model, e.Track) is > 0 and var wait && wait < ScdEdits.AudioMilliseconds(model, e.Audio)),
-            Loops = TimelineWindowViews.FileLoops(shown.Bytes, sound),
+            Loops = TimelineWindowViews.FileLoops(model, sound),
         };
     }
 
@@ -73,8 +73,14 @@ public sealed partial class TimelineWindow
     {
         soundReads.Clear();
         soundsShown.Clear();
+        originalModels.Clear();
         soundsCollection = null;
         previewRestCache = null;
+        // A save's check of the mod, or its question, belongs to the clip it was for.
+        soundCheck = null;
+        soundCheckDocument = null;
+        soundAsk = null;
+        soundInPlace = null;
     }
 
     /// <summary> The sound at <paramref name="gamePath"/> for the inspector: an import's own bytes, else read from the collection on a task. </summary>
@@ -84,6 +90,7 @@ public sealed partial class TimelineWindow
         {
             soundReads.Clear();
             soundsShown.Clear();
+            originalModels.Clear();
             soundsCollection = current.Capture.CollectionId;
         }
         if (!soundReads.TryGetValue(gamePath, out var read))
@@ -131,12 +138,13 @@ public sealed partial class TimelineWindow
         TimelineSoundEdit? initial = null;
         try
         {
-            model = ScdModel.Read(original);
+            model = OriginalModel(key.Path, original);
             if (key.Sound < 0 || key.Sound >= model.Sounds.Count)
                 throw new InvalidDataException("The file has no sound at this sound entry.");
             initial = TimelineSoundEdits.Initial(model, key.Sound);
-            var (bytes, ids) = TimelineSoundEdits.Apply(original, key.Sound, edit ?? initial, ImportBytes);
-            shown = new SoundShown(edit, original, initial, bytes, ids, ReferenceEquals(bytes, original) ? model : ScdModel.Read(bytes), null);
+            // A control held down changes the edit every frame: read the file once, and keep the model the edit wrote.
+            var (bytes, ids, written) = TimelineSoundEdits.ApplyModel(original, key.Sound, edit ?? initial, ImportBytes);
+            shown = new SoundShown(edit, original, initial, bytes, ids, written, null);
         }
         catch (Exception e) when (e is InvalidDataException or ArgumentException or InvalidOperationException)
         {
@@ -145,6 +153,27 @@ public sealed partial class TimelineWindow
         shown = Measured(shown, key.Sound);
         soundsShown[key] = shown;
         return shown;
+    }
+
+    /// <summary> The model of a sound file as read, kept while those bytes are the file's (it is never edited). </summary>
+    private ScdModel OriginalModel(string path, byte[] original)
+    {
+        if (originalModels.TryGetValue(path, out var kept) && ReferenceEquals(kept.Bytes, original))
+            return kept.Model;
+        var model = ScdModel.Read(original);
+        originalModels[path] = (original, model);
+        return model;
+    }
+
+    private readonly Dictionary<string, (byte[] Bytes, ScdModel Model)> originalModels = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary> The inspector's written file for an edit of a file, when it already wrote it; else writes it. For preview. </summary>
+    private (byte[] Bytes, ImmutableArray<string> Ids) AppliedSound(byte[] original, int sound, TimelineSoundEdit edit)
+    {
+        foreach (var (key, shown) in soundsShown)
+            if (key.Sound == sound && shown.Error == null && ReferenceEquals(shown.Original, original) && ReferenceEquals(shown.Edit, edit))
+                return (shown.Bytes, shown.Ids);
+        return TimelineSoundEdits.Apply(original, sound, edit, ImportBytes);
     }
 
     /// <summary> <paramref name="key"/>'s sound as edited once its file is read; null before, without starting a read. </summary>
@@ -162,9 +191,9 @@ public sealed partial class TimelineWindow
         if (edit is { Custom: false })
             try
             {
-                var (bytes, ids) = TimelineSoundEdits.Apply(original, key.Sound,
+                var (bytes, ids, written) = TimelineSoundEdits.ApplyModel(original, key.Sound,
                     edit with { Alternatives = [.. edit.Alternatives.Select(a => a with { Share = 0 })] }, ImportBytes);
-                return new SoundShown(edit, original, initial, bytes, ids, ScdModel.Read(bytes), error);
+                return new SoundShown(edit, original, initial, bytes, ids, written, error);
             }
             catch (Exception e) when (e is InvalidDataException or ArgumentException or InvalidOperationException)
             {

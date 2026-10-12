@@ -87,12 +87,20 @@ internal static partial class TimelineSoundEdits
     /// </summary>
     public static (byte[] Bytes, ImmutableArray<string> Ids) Apply(byte[] original, int sound, TimelineSoundEdit edit, Func<string, byte[]?> import)
     {
+        var (bytes, ids, _) = ApplyModel(original, sound, edit, import);
+        return (bytes, ids);
+    }
+
+    /// <summary><see cref="Apply"/>, also giving the written file's model, so a caller needn't read the file again.</summary>
+    public static (byte[] Bytes, ImmutableArray<string> Ids, ScdModel Model) ApplyModel(byte[] original, int sound, TimelineSoundEdit edit,
+        Func<string, byte[]?> import)
+    {
         var m = ScdModel.Read(original);
         if (sound < 0 || sound >= m.Sounds.Count)
             throw new InvalidDataException("The sound file has no such sound.");
         var initial = Initial(m, sound);
         if (edit.Equals(initial))
-            return (original, [.. initial.Alternatives.Select(a => a.Id)]);
+            return (original, [.. initial.Alternatives.Select(a => a.Id)], m);
         var target = m.Sounds[sound];
         var wanted = edit.Alternatives.IsDefault ? [] : edit.Alternatives;
         if (wanted.IsEmpty)
@@ -147,7 +155,7 @@ internal static partial class TimelineSoundEdits
         var bytes = m.Write();
         if (ScdFile.Read(bytes).Sounds[sound].Tracks.Length != ids.Count)
             throw new InvalidDataException("The changed sound file doesn't read back.");
-        return (bytes, [.. ids]);
+        return (bytes, [.. ids], m);
     }
 
     /// <summary>Whether two documents' sound edits are the same, by content; keys ignore the path's case.</summary>

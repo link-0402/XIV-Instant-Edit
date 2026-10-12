@@ -19,8 +19,10 @@ public sealed partial class TimelineWindow
     /// <summary>A sound file a save would write over in place, how many other animations of the mod name it, and whether the mod maps it to several files.</summary>
     private sealed record SharedSound(string Path, int Users, bool Several);
 
-    // Save checks the mod for other animations that play the sounds it would write over in place.
+    // Save checks the mod for other animations that play the sounds it would write over in place,
+    // for this document; the timeline is read-only meanwhile.
     private Task<List<SharedSound>>? soundCheck;
+    private TimelineDocument? soundCheckDocument;
     // The sounds the question asks about, and the sound files the coming save writes over in place.
     private List<SharedSound>? soundAsk;
     private HashSet<string>? soundInPlace;
@@ -70,6 +72,7 @@ public sealed partial class TimelineWindow
             return;
         }
         var exclude = loaded.Resource.ResolvedPath;
+        soundCheckDocument = current.Document;
         soundCheck = Task.Run(() => candidates.Select(path => new SharedSound(path,
             TimelineSoundUsage.OtherUsers(root, path, exclude).Count, PenumbraService.AnimationMappedFiles(root, path).Count > 1)).ToList());
     }
@@ -109,9 +112,17 @@ public sealed partial class TimelineWindow
         if (soundCheck is { IsCompleted: true } task)
         {
             soundCheck = null;
+            var checkedDocument = soundCheckDocument;
+            soundCheckDocument = null;
             if (!task.IsCompletedSuccessfully)
             {
                 saveError = "The mod could not be checked for other animations playing its sounds. " + ErrorText(task.Exception);
+                soundInPlace = null;
+                return;
+            }
+            if (!ReferenceEquals(checkedDocument, current.Document))
+            {
+                saveError = "The timeline changed while the mod was checked. Save again.";
                 soundInPlace = null;
                 return;
             }
@@ -171,7 +182,7 @@ public sealed partial class TimelineWindow
     {
         if (previewRestCache is { } cached && ReferenceEquals(cached.For, document))
             return cached.Result;
-        var rest = TimelineSoundEdits.Redirectable(TimelineEffectLooks.Redirectable(document).Document, SoundBytes, ImportBytes);
+        var rest = TimelineSoundEdits.Redirectable(TimelineEffectLooks.Redirectable(document).Document, SoundBytes, ImportBytes, AppliedSound);
         previewRestCache = (document, rest);
         return rest;
     }

@@ -109,7 +109,8 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private bool HasUnsavedChanges => editor is { Dirty: true } && source?.Document != null;
 
     /// <summary> Whether the document must not change now: nothing to edit, or a save, undo or reload is running. </summary>
-    private bool ReadOnly => source?.Document == null || loadTask != null || saveTask != null || pendingSaveId != null || undoPending;
+    private bool ReadOnly => source?.Document == null || loadTask != null || saveTask != null || pendingSaveId != null || undoPending ||
+                             soundCheck != null || soundAsk != null;
 
     /// <summary>Opens the window as it is: its clip, or with none the loader.</summary>
     internal void Show()
@@ -210,6 +211,8 @@ public sealed partial class TimelineWindow : Window, IDisposable
         motionCarry = null;
         ForgetEffects();
         ForgetSounds();
+        // A sound played to listen to stops being served with the window.
+        _ = soundPlayer?.StopAsync();
     }
 
     public void Dispose()
