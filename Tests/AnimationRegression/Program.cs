@@ -543,6 +543,12 @@ try
     var backups = new ModelBackupStore(temp); var backup = backups.Create(file, "test", "files/test.pap");
     var target = backups.Describe("test", "files/test.pap");
     Check(backups.Resolve(target.Id, Path.GetFileName(backup)) == backup, "managed PAP backups can be resolved after restart");
+    // A timeline save in place writes over the mod's own sound too; commit backs it up first.
+    var scdFile = Path.Combine(temp, "moan.scd"); File.WriteAllBytes(scdFile, ScdModelFixture.RandomSet(2));
+    var scdBackup = backups.Create(scdFile, "test", "sound/moan.scd");
+    Check(backups.Resolve(backups.Describe("test", "sound/moan.scd").Id, Path.GetFileName(scdBackup)) == scdBackup &&
+          backups.Describe("test", "sound/moan.ie0123abcd.scd").Id.Length > 0,
+        "a mod's sound saved in place is backed up, under its own and its renamed path");
     File.WriteAllText(file, "newer user work");
     Reject(() => AnimationCommitService.RequireHash(file, resource.Hash), "conflict protection refuses to overwrite newer PAP work");
     Check(File.ReadAllText(file) == "newer user work", "failed conflict checks leave later work intact");

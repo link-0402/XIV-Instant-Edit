@@ -28,6 +28,14 @@ internal static class TimelineListen
         return new Plan(gamePath, scd, info.SoundSeconds[0] + ExtraSeconds);
     }
 
+    /// <summary>
+    /// Whether Penumbra serves the listen path from <paramref name="file"/>: <paramref name="resolved"/>,
+    /// what it resolves the path to, is that file. Only then is the game asked to play it, as VFXEditor
+    /// only plays a path whose file exists.
+    /// </summary>
+    public static bool Served(string? resolved, string file) =>
+        !string.IsNullOrWhiteSpace(resolved) && Path.IsPathFullyQualified(resolved) && PathRules.SamePhysicalPath(resolved, file);
+
     /// <summary>The header's listen button: the whole sound <paramref name="sound"/> of the edited file, as sound 0.</summary>
     public static byte[] Whole(byte[] edited, int sound) => ScdEdits.KeepSound(ScdModel.Read(edited), sound).Write();
 

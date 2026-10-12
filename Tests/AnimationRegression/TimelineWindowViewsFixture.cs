@@ -271,6 +271,8 @@ internal static class TimelineWindowViewsFixture
         InstantEdit.Services.Audio.ScdEdits.SetLoop(model, 0, true);
         check(!TimelineWindowViews.FileLoops(scd, 0) && TimelineWindowViews.FileLoops(model.Write(), 0) && !TimelineWindowViews.FileLoops(scd, 5),
             "a file loops when its sound is marked to loop and its audio has loop points");
+        check(TimelineWindowViews.FileLoops(model, 0) && !TimelineWindowViews.FileLoops(InstantEdit.Services.Audio.ScdModel.Read(scd), 0) &&
+              !TimelineWindowViews.FileLoops(model, 5), "a read file answers the same without parsing it again");
         texts.AddRange(["Fades with distance", "Stops with the animation", "Cut off when the emote ends.", "Add loop points", "The character's position.",
             "The file has no loop points, so it plays once.", TimelineWindowViews.RangeHint(null, null)]);
 

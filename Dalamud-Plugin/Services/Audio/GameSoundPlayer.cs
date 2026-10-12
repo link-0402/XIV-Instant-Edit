@@ -30,8 +30,9 @@ internal sealed class GameSoundPlayer : IDisposable
     private readonly SemaphoreSlim gate = new(1, 1);
     private CancellationTokenSource? expiry;
     private string? session;
-    private bool served;
-    private bool disposed;
+    // Read and written from the framework thread and from tasks: Dispose must see a mod being added.
+    private volatile bool served;
+    private volatile bool disposed;
 
     public GameSoundPlayer(ISigScanner scanner, IFramework framework, PenumbraService penumbra, IPluginLog log, Func<string> cacheRoot)
     {
@@ -68,18 +69,30 @@ internal sealed class GameSoundPlayer : IDisposable
         try
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            expiry?.Cancel();
+            EndExpiry();
             await StopServingAsync();
             var file = Path.Combine(Session(), Path.GetFileName(plan.GamePath));
             await File.WriteAllBytesAsync(file, plan.Bytes, token);
             var added = await framework.RunOnFrameworkThread(() =>
-                penumbra.AddTemporaryModAllOnFramework(Tag, new Dictionary<string, string> { [plan.GamePath] = file }, Priority));
+            {
+                // Dispose runs on the framework thread too: either it already ran, or it sees served and removes the mod.
+                if (disposed)
+                    return PenumbraApiEc.NothingChanged;
+                served = true;
+                return penumbra.AddTemporaryModAllOnFramework(Tag, new Dictionary<string, string> { [plan.GamePath] = file }, Priority);
+            });
+            ObjectDisposedException.ThrowIf(disposed, this);
             if (added != PenumbraApiEc.Success)
                 throw new IOException($"Penumbra could not serve the sound ({added}).");
-            served = true;
             // Penumbra's collections take the new path on the frames after it was added.
             await framework.DelayTicks(2, token);
-            await framework.RunOnFrameworkThread(() => Play(plan.GamePath));
+            await framework.RunOnFrameworkThread(() =>
+            {
+                // Only a path Penumbra serves from the file just written is played, as VFXEditor only plays files that exist.
+                if (disposed || !TimelineListen.Served(penumbra.ResolveInterfacePathOnFramework(plan.GamePath), file))
+                    throw new IOException("Penumbra doesn't serve the sound yet, so it wasn't played. Try again.");
+                Play(plan.GamePath);
+            });
             var cancel = expiry = new CancellationTokenSource();
             _ = ExpireAsync(TimeSpan.FromSeconds(plan.Seconds), cancel.Token);
         }
@@ -87,6 +100,33 @@ internal sealed class GameSoundPlayer : IDisposable
         {
             gate.Release();
         }
+    }
+
+    /// <summary>Stops serving the last sound now, as when the Timeline window closes.</summary>
+    public async Task StopAsync()
+    {
+        await gate.WaitAsync();
+        try
+        {
+            EndExpiry();
+            if (!disposed)
+                await StopServingAsync();
+        }
+        catch (Exception e)
+        {
+            log.Warning(e, "Could not stop serving the sound played from the Timeline.");
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private void EndExpiry()
+    {
+        expiry?.Cancel();
+        expiry?.Dispose();
+        expiry = null;
     }
 
     private unsafe void Play(string gamePath)

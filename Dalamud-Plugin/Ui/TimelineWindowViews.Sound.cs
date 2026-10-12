@@ -139,6 +139,13 @@ internal static partial class TimelineWindowViews
         $"{file} is also played by {users} other {(users == 1 ? "animation" : "animations")} in this mod." +
         (several ? " Only the file your collection uses changes." : "");
 
+    /// <summary><see cref="FileLoops(byte[], int)"/> for a file already read.</summary>
+    public static bool FileLoops(ScdModel model, int sound) =>
+        sound >= 0 && sound < model.Sounds.Count && (model.Sounds[sound].Attributes & ScdSound.LoopAttribute) != 0 &&
+        model.Sounds[sound].Entries.Select(e => e.Audio).Where(a => a >= 0 && a < model.Audio.Count).Select(a => model.Audio[a])
+            .Where(a => !a.Null && a.Codec is ScdCodec.Vorbis or ScdCodec.MsAdpcm && a.Data.Length > 0)
+            .All(a => a.LoopEnd > a.LoopStart);
+
     /// <summary>
     /// Whether sound <paramref name="sound"/> of <paramref name="scd"/> keeps playing: marked to loop,
     /// and every Vorbis or MS-ADPCM audio it plays has loop points (without them it plays once).

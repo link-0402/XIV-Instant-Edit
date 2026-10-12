@@ -97,9 +97,12 @@ internal static partial class TimelineSoundEdits
     /// alternative's place in the edited file ("o" + its index), for a <see cref="Bake"/> that reads
     /// the returned files first. Edits no event plays are dropped; others stay for <see cref="Bake"/>.
     /// </summary>
+    /// <param name="apply">Writes an edit into a file as <see cref="Apply"/> does; a caller that already wrote it can hand back its result.</param>
     public static (TimelineDocument Document, ImmutableDictionary<string, byte[]> Files) Redirectable(TimelineDocument doc,
-        Func<string, byte[]?> sound, Func<string, byte[]?> import)
+        Func<string, byte[]?> sound, Func<string, byte[]?> import,
+        Func<byte[], int, TimelineSoundEdit, (byte[] Bytes, ImmutableArray<string> Ids)>? apply = null)
     {
+        apply ??= (original, index, edit) => Apply(original, index, edit, import);
         var files = ImmutableDictionary.CreateBuilder<string, byte[]>(StringComparer.OrdinalIgnoreCase);
         if (doc.SoundEdits.IsEmpty)
             return (doc, files.ToImmutable());
@@ -117,7 +120,7 @@ internal static partial class TimelineSoundEdits
             var original = key.Sound == 0 ? sound(key.Path) ?? throw Unreadable(key.Path) : null;
             if (original == null || ScdFile.Read(original).Sounds.Length != 1)
                 continue;
-            var (bytes, ids) = Apply(original, 0, edit, import);
+            var (bytes, ids) = apply(original, 0, edit);
             if (!ReferenceEquals(bytes, original))
                 files[key.Path] = bytes;
             edits = edits.Remove(key);
