@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Numerics;
+using Dalamud.Bindings.ImGui;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
@@ -226,6 +227,28 @@ public sealed partial class TimelineWindow
         }
         decoded = task.Result;
     }
+
+#if DEBUG
+    /// <summary>
+    /// Test only, beside the Live toggle: shows the clip's first two thirds at that shorter length, to
+    /// see whether the game loops a swapped copy at its own length.
+    /// </summary>
+    private void DrawShortTest(TimelineEditor current, string id)
+    {
+        if (!liveWanted || motionDisplay == null)
+            return;
+        ImGui.SameLine(0, Theme.Gap);
+        var on = MotionLiveDisplay.ShortTest;
+        if (ImGui.Checkbox($"Short test##{id}", ref on))
+        {
+            MotionLiveDisplay.ShortTest = on;
+            if (liveStarted)
+                motionDisplay.Show(current.Document.Motion, current.Document.ExcludedBones);
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Debug: Live shows the first two thirds of the clip at that length.");
+    }
+#endif
 
     /// <summary>Drops the decoded motion and any decode still running, when the window closes or the clip goes.</summary>
     private void ForgetDecode()
