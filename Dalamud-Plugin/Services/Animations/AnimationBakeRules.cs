@@ -22,10 +22,10 @@ internal static class AnimationBakeRules
         document.Stretched || document.Cut || document.MotionChanged || !document.ExcludedBones.IsEmpty || repair != null;
 
     /// <summary>
-    /// Whether saving bakes the layers in for good: a new length, bones left out or a repair. The
-    /// saved file is then no longer the motion the layers apply to plus the layers, so they can't
-    /// be opened again on the motion from before.
+    /// Whether saving bakes its edits in for good: bones left out or a repair. The saved file is then
+    /// no longer the motion from before plus the edits (cuts, a new length, layers), so they can't be
+    /// opened again on it.
     /// </summary>
     public static bool BakesLayersIn(TimelineDocument document, SkeletonStandard? repair = null) =>
-        document.LengthChanged || !document.ExcludedBones.IsEmpty || repair != null;
+        !document.ExcludedBones.IsEmpty || repair != null;
 }

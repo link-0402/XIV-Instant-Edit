@@ -164,7 +164,7 @@ internal sealed partial class AnimationEditService
         if (AnimationPap.Hash(motion) != edit.MotionBaseHash) throw new IOException("The motion from before this edit is damaged.");
         var fingerprint = await framework.RunOnFrameworkThread(() =>
             AnimationRuntime.InspectPap(motion).GetValueOrDefault(loaded.Clip.BindingIndex, string.Empty));
-        return WithSavedLayers(loaded, edit, motion, fingerprint);
+        return WithSavedEdit(loaded, edit, motion, fingerprint);
     }
 
     /// <summary>
@@ -436,11 +436,11 @@ internal sealed partial class AnimationEditService
                 document.MotionChanged ? document.Motion : [], Cuts: SavedCuts(document)));
 
     /// <summary>
-    /// The cut list a save records: the document's when it cuts, and for a stretch of a motion whose
-    /// length the cuts already recorded (one opened again) a whole one, so its length isn't lost.
+    /// The cut list a save records: the document's when it cuts, and for a stretch a whole one of the
+    /// motion it stretched, so Edit again knows that motion's length.
     /// </summary>
     internal static MotionCuts? SavedCuts(TimelineDocument document) =>
-        document.Cut ? document.Cuts : document.Stretched && document.Cuts != null ? MotionCuts.WholeOf(document.MotionLength) : null;
+        document.Cut ? document.Cuts : document.Stretched ? MotionCuts.WholeOf(document.MotionLength) : null;
 
     /// <summary>
     /// Refuses bones left out or a repair the clip can't take: as the old rebakes refused them, before
@@ -474,12 +474,13 @@ internal sealed partial class AnimationEditService
     internal const string MotionBaseName = "motion-base.pap";
 
     /// <summary>
-    /// The file whose motion saving <paramref name="document"/> bakes its layers onto: the base the window
-    /// keeps, else <paramref name="file"/>, the clip's file as it is. Null when the save bakes no layers, or
-    /// a new length, bones left out or a repair too, which bake them in for good.
+    /// The file whose motion saving <paramref name="document"/> bakes its edits onto (layers, cuts, a new
+    /// length): the base the window keeps, else <paramref name="file"/>, the clip's file as it is. Null when
+    /// the save bakes none of them, or leaves out bones or repairs too, which bakes them in for good.
     /// </summary>
     internal static byte[]? MotionBase(AnimationTimelineSource source, TimelineDocument document, byte[] file, SkeletonStandard? repair = null) =>
-        source.Standalone || !document.MotionChanged || AnimationBakeRules.BakesLayersIn(document, repair) ? null : source.BaseMotion ?? file;
+        source.Standalone || !(document.MotionChanged || document.Cut || document.Stretched) || AnimationBakeRules.BakesLayersIn(document, repair)
+            ? null : source.BaseMotion ?? file;
 
     /// <summary>Keeps the motion beside the journal. Without it the edit still saves; it just can't be opened again.</summary>
     private void KeepMotionBase(Guid id, byte[] motion)
@@ -492,19 +493,18 @@ internal sealed partial class AnimationEditService
     }
 
     /// <summary>
-    /// Why <paramref name="journal"/>'s edit can't be opened again with its bone layers; null when it can:
-    /// a finished timeline edit that baked layers, kept the clip's length and kept the motion from before it.
+    /// Why <paramref name="journal"/>'s edit can't be opened again with its bone layers, cuts and length;
+    /// null when it can: a finished timeline edit that made some of them and kept the motion from before it.
     /// </summary>
     internal static string? EditAgainProblem(AnimationEditJournal journal) => journal switch
     {
-        { Request: not { Operation: AnimationOperation.EditTimeline, Timeline.Motion.IsEmpty: false } } =>
-            "Only edits with bone layers can be edited again.",
+        { Request: not { Operation: AnimationOperation.EditTimeline, Timeline: not null } } or { Request.Timeline: { Motion.IsEmpty: true, Cuts: null } } =>
+            "Only edits with bone layers, cuts or a new length can be edited again.",
         { State: "Undone" } => "This edit was undone.",
         { State: "FilesUndone" } => "This edit was not saved.",
         { State: not "Completed" } => "This edit did not finish.",
-        { Request.Timeline.DurationSeconds: not null } => "This edit changed the length, which baked its layers in for good.",
         { Request.ExcludedBones.IsEmpty: false } or { Request.RepairTarget: not null } =>
-            "This edit left out bones or repaired the skeleton, which baked its layers in for good.",
+            "This edit left out bones or repaired the skeleton, which can't be opened again.",
         { Request.Timeline.MotionBaseHash: null } => "This edit kept no copy of the motion from before it.",
         _ => null,
     };
@@ -535,12 +535,16 @@ internal sealed partial class AnimationEditService
             ? "The animation was changed after this edit."
             : null;
 
-    /// <summary><paramref name="loaded"/> with <paramref name="edit"/>'s layers back, on the motion from before it.</summary>
-    internal static AnimationTimelineSource WithSavedLayers(AnimationTimelineSource loaded, AnimationTimelineEdit edit, byte[] motion,
+    /// <summary>
+    /// <paramref name="loaded"/> with <paramref name="edit"/>'s layers and cuts back, on the motion from before
+    /// it. The saved timeline's events are already in the edit's output frames, and its length is the
+    /// output's, so a stretch comes back as one.
+    /// </summary>
+    internal static AnimationTimelineSource WithSavedEdit(AnimationTimelineSource loaded, AnimationTimelineEdit edit, byte[] motion,
         string fingerprint) =>
         loaded.Document is not { } document ? loaded : loaded with
         {
-            Document = document with { Motion = edit.Motion },
+            Document = document with { Motion = edit.Motion, Cuts = edit.Cuts },
             BaseMotion = motion,
             BaseFingerprint = fingerprint,
             BaseHash = edit.MotionBaseHash,

@@ -104,7 +104,7 @@ public sealed partial class TimelineWindow
         // Opening another clip waits for a running read, save or undo; with no clip open nothing does.
         var working = loadTask != null || saveTask != null || pendingSaveId != null || undoPending;
         var againProblem = AnimationEditService.EditAgainProblem(journal) ?? (working ? "Wait for the timeline to finish." : null);
-        if (Widgets.IconButton("##edit-again", FontAwesomeIcon.Edit, againProblem ?? "Edit again: bring back its bone layers", againProblem is null))
+        if (Widgets.IconButton("##edit-again", FontAwesomeIcon.Edit, againProblem ?? "Edit again: bring back its bone layers, cuts and length", againProblem is null))
             EditAgain(journal);
         ImGui.SameLine(0, Theme.Scaled(2));
         var canUndo = journal.State != "Undone";

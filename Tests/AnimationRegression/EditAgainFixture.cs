@@ -42,12 +42,13 @@ internal static class EditAgainFixture
 
     private static AnimationEditJournal Journal(AnimationCapture capture, bool startup = false, string state = "Completed",
         float? seconds = null, string? baseHash = "base", bool layers = true, AnimationOperation operation = AnimationOperation.EditTimeline,
-        string afterHash = "after")
+        string afterHash = "after", MotionCuts? cuts = null, ImmutableArray<string> excluded = default)
     {
         var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.InPlace, "", false,
             ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, operation,
+            ExcludedBones: excluded.IsDefault ? [] : excluded,
             Timeline: operation == AnimationOperation.EditTimeline
-                ? new AnimationTimelineEdit(startup, 0, seconds, layers ? [Layer()] : [], baseHash)
+                ? new AnimationTimelineEdit(startup, 0, seconds, layers ? [Layer()] : [], baseHash, cuts)
                 : null);
         var clip = startup ? capture.Startup! : capture.Clip;
         return new AnimationEditJournal
@@ -67,8 +68,16 @@ internal static class EditAgainFixture
         check(AnimationEditService.EditAgainProblem(Journal(capture, layers: false)) != null &&
               AnimationEditService.EditAgainProblem(Journal(capture, operation: AnimationOperation.BakeOffsets)) != null,
             "a timeline edit without bone layers can't, nor a LivePose bake");
-        check(AnimationEditService.EditAgainProblem(Journal(capture, seconds: 2)) != null,
-            "nor an edit that changed the length, which baked its layers in for good");
+        check(AnimationEditService.EditAgainProblem(Journal(capture, seconds: 2)) == null,
+            "an edit that changed the length can too: the motion from before it was kept");
+        var cuts = new MotionCuts(100, [new(0, 40), new(60, 100)], [MotionJoin.ForCut]);
+        check(AnimationEditService.EditAgainProblem(Journal(capture, seconds: 80 / 30f, layers: false, cuts: cuts)) == null &&
+              AnimationEditService.EditAgainProblem(Journal(capture, seconds: 80 / 30f, layers: false, cuts: cuts, baseHash: null)) ==
+              "This edit kept no copy of the motion from before it." &&
+              AnimationEditService.EditAgainProblem(Journal(capture, layers: false)) == "Only edits with bone layers, cuts or a new length can be edited again." &&
+              AnimationEditService.EditAgainProblem(Journal(capture, excluded: ["j_kubi"])) ==
+              "This edit left out bones or repaired the skeleton, which can't be opened again.",
+            "cuts open again without layers, as long as the motion from before them was kept");
         check(AnimationEditService.EditAgainProblem(Journal(capture, baseHash: null)) != null,
             "nor one that kept no motion from before it, as edits saved before Edit again");
         check(AnimationEditService.EditAgainProblem(Journal(capture, state: "Undone")) == "This edit was undone." &&
@@ -85,9 +94,14 @@ internal static class EditAgainFixture
             "a save with bone layers keeps the motion they apply to: the file as it is, or the base the window keeps");
         check(AnimationEditService.MotionBase(source, doc, file) == null &&
               AnimationEditService.MotionBase(source, doc with { Motion = [Layer(false)] }, file) == null &&
-              AnimationEditService.MotionBase(source, layered with { Length = 40 }, file) == null &&
-              AnimationEditService.MotionBase(source with { EntryIndex = -1 }, layered, file) == null,
-            "a save without working layers, with a new length, or of an expression's timeline keeps none");
+              AnimationEditService.MotionBase(source with { EntryIndex = -1 }, layered, file) == null &&
+              AnimationEditService.MotionBase(source, layered with { ExcludedBones = ["j_kubi"] }, file) == null,
+            "a save without working layers, of an expression's timeline, or leaving out bones keeps none");
+        check(AnimationEditService.MotionBase(source, doc with { Length = 40 }, file) == file &&
+              AnimationEditService.MotionBase(source, doc with { Cuts = new MotionCuts(30, [new(0, 20)], []), Length = 20 }, file) == file,
+            "a save with a new length or cuts keeps the motion from before them");
+        check(AnimationEditService.SavedCuts(doc with { Length = 40 }) is { Source: 30, Whole: true } && AnimationEditService.SavedCuts(doc) == null,
+            "a stretch records the length of the motion it stretched");
     }
 
     private static void Captures(Action<bool, string> check)
@@ -127,10 +141,18 @@ internal static class EditAgainFixture
               AnimationEditService.EditAgainFileProblem(journal, Loaded("saved", 1)) != null,
             "a file changed since, or another entry of it, doesn't");
         var edit = journal.Request.Timeline!;
-        var again = AnimationEditService.WithSavedLayers(Loaded("saved"), edit, [4, 5], "print");
+        var again = AnimationEditService.WithSavedEdit(Loaded("saved"), edit, [4, 5], "print");
         check(again.Document!.Motion.SequenceEqual(edit.Motion) && again.Document.Events.IsEmpty && again.BaseMotion is [4, 5] &&
               again.BaseHash == "base" && again.MotionSource is [4, 5] && again.MotionClip.BindingFingerprint == "print" && again.Pap is [1],
             "edited again, the layers apply to the motion from before the edit, while the events and the file stay as saved");
+        AnimationTimelineSource Saved(int length) =>
+            new(capture, false, capture.Clip, new AnimationResource(Pap, "dance.pap", "saved"), [1], 0, [], new TimelineDocument(length, length, null, [], 1), null);
+        var cuts = new MotionCuts(100, [new(0, 40), new(60, 100)], [MotionJoin.ForCut]);
+        var cut = AnimationEditService.WithSavedEdit(Saved(80), new AnimationTimelineEdit(false, 0, 80 / 30f, [], "base", cuts), [4], "print").Document!;
+        check(cut is { MotionLength: 100, KeptFrames: 80, Stretched: false, Cut: true }, "a cut edit opens again on the whole motion with its cuts");
+        var stretch = AnimationEditService.WithSavedEdit(Saved(150), new AnimationTimelineEdit(false, 0, 5, [], "base", MotionCuts.WholeOf(100)), [4], "print").Document!;
+        check(stretch is { Stretched: true, Cut: false } && AnimationEditService.RetimeSeconds(stretch) == 5,
+            "a stretched edit opens again on the motion it stretched, still stretched");
     }
 
     // Undo last save: the edit whose layers the file holds again becomes the window's saved state.
@@ -155,7 +177,7 @@ internal static class EditAgainFixture
         check(AnimationEditService.SavedLayersJournal([a3, .. undone], Loaded("A3")) == a3 &&
               AnimationEditService.SavedLayersJournal([With(a3, "Undone"), .. undone], Loaded("A1")) == a,
             "A3 saved after that undo holds its own layers, and undoing it goes back to A again");
-        var again = AnimationEditService.WithSavedLayers(Loaded("A1"), a.Request.Timeline!, [4], "print");
+        var again = AnimationEditService.WithSavedEdit(Loaded("A1"), a.Request.Timeline!, [4], "print");
         check(again.Document!.Motion.SequenceEqual(a.Request.Timeline!.Motion) && again.BaseHash == "B0" && again.BaseMotion is [4],
             "the brought back state is A's layers on the motion from before A, as Edit again opens it");
         check(AnimationEditService.SavedLayersJournal(undone, Loaded("B0")) == null &&
