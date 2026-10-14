@@ -26,6 +26,11 @@ public sealed partial class TimelineWindow
     {
         EndLookEdit(current);
         EndSoundEdit(current);
+        if (current.SelectedCut != null)
+        {
+            DrawCutPanel(current);
+            return;
+        }
         var readOnly = ReadOnly;
         if (current.SelectedLayerValue is { } layer && source != null)
         {

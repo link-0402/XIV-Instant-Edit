@@ -512,6 +512,56 @@ internal static partial class TimelineWindowViews
     /// <summary>The ruler's mark where frames were cut out: how many.</summary>
     public static string RemovedMarker(int frames) => $"-{frames}";
 
+    /// <summary>What a cut took with it, for the status line; null when it took nothing.</summary>
+    public static string? RemovalStatus(CutRemoval removed)
+    {
+        var events = removed.Events == 1 ? "1 event" : $"{removed.Events} events";
+        var keys = removed.Keys == 1 ? "1 key" : $"{removed.Keys} keys";
+        return (removed.Events, removed.Keys) switch
+        {
+            (0, 0) => null,
+            (_, 0) => $"Removed {events} with the cut.",
+            (0, _) => $"Removed {keys} with the cut.",
+            _ => $"Removed {events} and {keys} with the cut.",
+        };
+    }
+
+    /// <summary>The loop seam's badge at the end of the clip band.</summary>
+    public static string SeamBadge(SeamState state) => state switch
+    {
+        SeamState.Pops => "Pops",
+        SeamState.Stalls => "Stalls",
+        _ => "Loops cleanly",
+    };
+
+    /// <summary>The jump a join or the seam blends away: the pose gap and the speeds on both sides.</summary>
+    public static string GapText(JoinGap gap) => string.Create(CultureInfo.InvariantCulture,
+        $"Pose gap {gap.MeanAngle:0.0} deg, worst {gap.WorstBone} {gap.WorstAngle:0.0} deg. Speed in {gap.SpeedIn:0.00}, out {gap.SpeedOut:0.00} deg per frame.");
+
+    /// <summary>A loop that slows to a stop at its end: over how many frames.</summary>
+    public static string StallText(int frames) => $"The motion slows to a stop before the loop starts again (last {frames} frames).";
+
+    /// <summary>Which side of a join its blend changes.</summary>
+    public static string PlacementName(JoinPlacement placement) => placement switch
+    {
+        JoinPlacement.Before => "Before",
+        JoinPlacement.After => "After",
+        _ => "Centered",
+    };
+
+    /// <summary>Under the seam's place when it isn't Before: the loop's own start changes.</summary>
+    public const string SeamPlacementNote = "This changes the loop's first frames, which the startup leads into.";
+
+    /// <summary>The Fix loop button's tooltip.</summary>
+    public const string FixLoopTip = "Trims a stall at the end and blends the end into the start.";
+
+    /// <summary>A part's frames: the motion's own it keeps, and where it plays now.</summary>
+    public static string PartRange(MotionPart part, double start, double end) => string.Create(CultureInfo.InvariantCulture,
+        $"Source frames {part.From} to {part.To}. Plays at {start:0} to {end:0}.");
+
+    /// <summary>A blend longer than the parts around it can take: the frames it really uses.</summary>
+    public static string ShortenedText(double used) => string.Create(CultureInfo.InvariantCulture, $"Uses {used:0} frames: the parts around it are shorter.");
+
     /// <summary>Where a sound's or effect's game path comes from, under its field.</summary>
     public static string PathOriginText(TimelinePathOrigin origin, string? modName) => origin switch
     {

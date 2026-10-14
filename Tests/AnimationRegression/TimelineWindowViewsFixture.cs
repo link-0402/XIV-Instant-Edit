@@ -257,6 +257,22 @@ internal static class TimelineWindowViewsFixture
         texts.AddRange([TimelineWindowViews.ClipLegend, .. TimelineWindowViews.ClipMenu]);
         check(TimelineWindowViews.ClipMenu.SequenceEqual(["Cut here", "Remove from here to the end", "Remove from the start to here", "Remove part"]),
             "the clip band's menu");
+        check(TimelineWindowViews.RemovalStatus(new(3, 2)) == "Removed 3 events and 2 keys with the cut." &&
+              TimelineWindowViews.RemovalStatus(new(1, 0)) == "Removed 1 event with the cut." &&
+              TimelineWindowViews.RemovalStatus(new(0, 2)) == "Removed 2 keys with the cut." && TimelineWindowViews.RemovalStatus(new(0, 0)) == null,
+            "removal status");
+        check(TimelineWindowViews.SeamBadge(SeamState.Stalls) == "Stalls" &&
+              TimelineWindowViews.StallText(12) == "The motion slows to a stop before the loop starts again (last 12 frames)." &&
+              TimelineWindowViews.GapText(new JoinGap(10.6f, 31.2f, "j_ude_b_l", .19f, 1.61f)) ==
+              "Pose gap 10.6 deg, worst j_ude_b_l 31.2 deg. Speed in 0.19, out 1.61 deg per frame.", "seam texts");
+        check(TimelineWindowViews.PartRange(new MotionPart(230, 425), 200, 395) == "Source frames 230 to 425. Plays at 200 to 395." &&
+              TimelineWindowViews.ShortenedText(10) == "Uses 10 frames: the parts around it are shorter.", "part range and shortened blends");
+        check(Enum.GetValues<SeamState>().Select(TimelineWindowViews.SeamBadge).SequenceEqual(["Loops cleanly", "Pops", "Stalls"]) &&
+              Enum.GetValues<JoinPlacement>().Select(TimelineWindowViews.PlacementName).SequenceEqual(["Before", "Centered", "After"]),
+            "seam badges and blend places");
+        texts.AddRange([TimelineWindowViews.RemovalStatus(new(3, 2))!, TimelineWindowViews.StallText(12), TimelineWindowViews.SeamPlacementNote,
+            TimelineWindowViews.FixLoopTip, TimelineWindowViews.ShortenedText(10), TimelineWindowViews.PartRange(new MotionPart(1, 2), 1, 2),
+            TimelineWindowViews.GapText(new JoinGap(1, 2, "b", 1, 2))]);
     }
 
     private static void Packs(Action<bool, string> check, List<string> texts)

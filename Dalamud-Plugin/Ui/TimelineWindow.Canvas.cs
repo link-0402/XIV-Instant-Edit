@@ -200,6 +200,12 @@ public sealed partial class TimelineWindow
     private void PressLeft(TimelineEditor current, TimelineHit hit, bool readOnly)
     {
         var io = ImGui.GetIO();
+        // The seam's badge at the clip band's end selects the seam, set or not.
+        if (OnSeamBadge(io.MousePos))
+        {
+            current.SelectCut(new TimelineCutSelection(TimelineCutTarget.Seam, -1));
+            return;
+        }
         if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) && !readOnly &&
             hit.Part is TimelinePart.Lane or TimelinePart.Legend && hit.Lane is { } lane && TimelineWindowViews.AddKind(lane) is { } kind)
         {
