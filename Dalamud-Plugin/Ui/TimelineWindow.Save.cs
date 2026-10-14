@@ -326,7 +326,7 @@ public sealed partial class TimelineWindow
         if (source is not { } current || SavedLayers(current) is not { } saved)
             return;
         ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Muted, "Saved with bone layers.");
+        ImGui.TextColored(Theme.Muted, "Saved with edits you can open again.");
         ImGui.SameLine(0, Theme.Gap);
         using (ImRaii.Disabled(ReadOnly))
         {
@@ -334,7 +334,7 @@ public sealed partial class TimelineWindow
                 EditAgain(saved, current.Capture);
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("Bring back the bone layers it was saved with, to change them.\nOtherwise they stay baked in, and new layers go on top.");
+            ImGui.SetTooltip("Bring back the bone layers, cuts and length it was saved with, to change them.\nOtherwise they stay baked in, and new edits go on top.");
     }
 
     /// <summary> Reverts this window's last save through its journal, then reads the timeline again. </summary>

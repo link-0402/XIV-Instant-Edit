@@ -256,7 +256,7 @@ internal static class TimelineToolsFixture
             Request = request with { Timeline = new AnimationTimelineEdit(false, 0, null, [Layer("j_kosi")], "base") },
             State = "Completed",
         };
-        check(AnimationEditService.EditAgainProblem(journal) is { } refused && refused.Contains("baked its layers in for good") &&
+        check(AnimationEditService.EditAgainProblem(journal) is { } refused && refused.Contains("can't be opened again") &&
               AnimationEditService.EditAgainProblem(new AnimationEditJournal
               {
                   Request = journal.Request with { ExcludedBones = [], RepairTarget = null }, State = "Completed",
