@@ -39,7 +39,8 @@ internal sealed partial class ModCheck
         LeftoverFindings();
 
         foreach (var repair in _repairs)
-            _findings.FirstOrDefault(finding => finding.Key == repair.FindingKey)?.RepairIds.Add(repair.Id);
+            if (_findings.FirstOrDefault(finding => finding.Key == repair.FindingKey) is { } owner && !owner.RepairIds.Contains(repair.Id))
+                owner.RepairIds.Add(repair.Id);
 
         var findings = _findings.OrderByDescending(finding => finding.Severity).ThenBy(finding => finding.Category).ToArray();
         return new ModCheckReport(_input.Folder, fingerprint, DateTime.UtcNow, findings, _repairs, BuildVariantTables(),
@@ -142,13 +143,32 @@ internal sealed partial class ModCheck
 
     private void RequestFindings()
     {
-        foreach (var group in _requests.Where(r => !_coveredByVariantFix.Contains(r)).GroupBy(r => (r.Kind, r.Path, r.Target.Option)))
+        // One unit per asking option and model option, judged by its worst request: a model's option can redirect what its
+        // material asks for, so the same material can be fine with one model and broken with another.
+        var units = _requests.Where(r => !_coveredByVariantFix.Contains(r))
+            .GroupBy(r => (r.Kind, r.Path, Target: r.Target.Option, Via: r.Via?.Option))
+            .Select(group => new RequestUnit(group.MinBy(r => Badness(r.Resolution.Source))!, group.ToArray()))
+            .ToList();
+        var byTarget = units.ToLookup(unit => (unit.Worst.Kind, unit.Worst.Path, unit.Worst.Target.Option));
+
+        // Units that fare alike and ask from the same file share a finding: options shipping one material, or one material under several models.
+        foreach (var group in units.Where(unit => Badness(unit.Worst.Resolution.Source) < 3)
+                     .GroupBy(unit => (unit.Worst.Kind, unit.Worst.Path, From: unit.Worst.From?.ToLowerInvariant(), Signature(unit.Worst.Resolution))))
         {
-            var request = group.First();
+            var members = group.ToArray();
+            var request = members[0].Worst;
             var resolution = request.Resolution;
             var what = request.Kind switch { RequestKind.Material => "Material", RequestKind.Texture => "Texture", _ => "Shader" };
-            var requesters = string.Join("; ", group.Select(r => r.Requester).Distinct().Take(3));
-            var key = $"{request.Kind}:{request.Target.Option.Serialize()}:{request.Path}";
+            // Name the model's option only when the same material fares differently with another model.
+            var split = members.Any(member => byTarget[(member.Worst.Kind, member.Worst.Path, member.Worst.Target.Option)].Any(unit => !members.Contains(unit)));
+            var vias = members.Select(member => member.Worst.Via).OfType<CheckContainer>().Select(via => via.DisplayName).Distinct().ToArray();
+            var requesters = Requesters(members.SelectMany(member => member.All))
+                + (split && vias.Length > 0 ? $", with the model from {string.Join(", ", vias)}," : string.Empty);
+            var key = split
+                ? $"{request.Kind}:{request.Target.Option.Serialize()}:{request.Via?.Option.Serialize() ?? "-"}:{request.Path}"
+                : $"{request.Kind}:{request.Target.Option.Serialize()}:{request.Path}";
+            var askers = members.Select(member => member.Worst).DistinctBy(r => r.Target.Option).ToArray();
+            var roots = string.Join(" or ", members.Select(member => member.Worst.Root.DisplayName).Distinct());
             var providers = resolution.Providers ?? Array.Empty<string>();
             switch (resolution.Source)
             {
@@ -160,42 +180,50 @@ internal sealed partial class ModCheck
                 case ResolutionSource.Unresolved or ResolutionSource.Exclusive:
                 {
                     var exclusive = resolution.Source == ResolutionSource.Exclusive;
-                    AddFinding(key, request.Kind == RequestKind.Material ? "C001" : "C002", CheckCategory.Materials, Severity.Error,
+                    var details = members.Select(member => member.Worst.Resolution.Detail).Distinct().ToArray();
+                    var detail = details.Length == 1
+                        ? details[0]
+                        : $"not redirected by {string.Join(" or ", members.SelectMany(m => Active(m.Worst.Root, m.Worst.Via)).Distinct().Select(c => c.DisplayName))}, and not a game file";
+                    var finding = AddFinding(key, request.Kind == RequestKind.Material ? "C001" : "C002", CheckCategory.Materials, Severity.Error,
                         exclusive ? $"{what} only exists in an option that can't be on" : $"{what} is missing",
                         exclusive
-                            ? $"{requesters} needs {request.Path}, but only {string.Join(", ", providers)} provide{(providers.Count == 1 ? "s" : string.Empty)} it, and those options are never active together with {request.Root.DisplayName}."
-                            : $"{requesters} needs {request.Path}, which is {resolution.Detail}{(_input.Collection is null ? string.Empty : " and no mod in your collection provides it")}. The {(request.Kind == RequestKind.Material ? "model" : "material")} fails to load, so the item is invisible.",
+                            ? $"{requesters} needs {request.Path}, but only {string.Join(", ", providers)} provide{(providers.Count == 1 ? "s" : string.Empty)} it, and those options are never active together with {roots}."
+                            : $"{requesters} needs {request.Path}, which is {detail}{(_input.Collection is null ? string.Empty : " and no mod in your collection provides it")}. The {(request.Kind == RequestKind.Material ? "model" : "material")} fails to load, so the item is invisible.",
                         request.Path, request.Root,
                         request.Kind == RequestKind.Texture
                             ? "Add the texture to the mod, or change the path in Penumbra's material editor."
                             : "Add the material to the mod, or change the material name in the model.");
-                    var candidates = Candidates(request);
-                    if (candidates.Count > 0)
-                        AddRepair($"fix:{request.Target.Option.Serialize()}:{request.Path}", key, CheckCategory.Materials, $"Provide {ShortName(request.Path)}",
-                            $"Redirect {request.Path} in {request.Target.DisplayName}.", candidates);
+                    foreach (var asker in askers)
+                    {
+                        var into = Into(asker);
+                        OfferRepair(finding, $"fix:{into.Option.Serialize()}:{asker.Path}",
+                            askers.Length > 1 || !ReferenceEquals(into, asker.Target) ? $"Provide {ShortName(asker.Path)} in {into.DisplayName}" : $"Provide {ShortName(asker.Path)}",
+                            $"Redirect {asker.Path} in {into.DisplayName}.", Candidates(asker, into));
+                    }
                     break;
                 }
                 case ResolutionSource.Conditional:
                 {
-                    var others = OtherProviders(request);
-                    var asker = request.Kind == RequestKind.Material ? "model" : "material";
-                    var (gapGroup, missing) = GroupGap(others);
-                    AddFinding(key, "C006", CheckCategory.Materials, Severity.Warning, $"{what} depends on another option",
+                    var asking = request.Kind == RequestKind.Material ? "model" : "material";
+                    var (gapGroup, missing) = GroupGap(OtherProviders(request));
+                    var finding = AddFinding(key, "C006", CheckCategory.Materials, Severity.Warning, $"{what} depends on another option",
                         missing is null
-                            ? $"{requesters} needs {request.Path}, which only {string.Join(", ", providers)} provide{(providers.Count == 1 ? "s" : string.Empty)}. Without {(providers.Count == 1 ? "that option" : "one of those options")} the {asker} fails to load and the item is invisible."
-                            : $"{requesters} needs {request.Path}, which every {gapGroup} option provides except {string.Join(", ", missing.Select(m => $"\"{m}\""))}. With {(missing.Count == 1 ? "that one" : "one of those")} picked the {asker} fails to load and the item is invisible.",
+                            ? $"{requesters} needs {request.Path}, which only {string.Join(", ", providers)} provide{(providers.Count == 1 ? "s" : string.Empty)}. Without {(providers.Count == 1 ? "that option" : "one of those options")} the {asking} fails to load and the item is invisible."
+                            : $"{requesters} needs {request.Path}, which every {gapGroup} option provides except {string.Join(", ", missing.Select(m => $"\"{m}\""))}. With {(missing.Count == 1 ? "that one" : "one of those")} picked the {asking} fails to load and the item is invisible.",
                         request.Path, request.Root);
-                    // The copy is a fallback: the options that provide it now must still win over it when they are on.
-                    var into = others.Any(p => Outranks(request.Target, p.Container)) ? _default : request.Target;
-                    var copies = Candidates(request, into).Select(c => c with { Confidence = RepairConfidence.Medium }).ToList();
-                    if (copies.Count > 0)
-                        AddRepair($"fix:{request.Target.Option.Serialize()}:{request.Path}", key, CheckCategory.Materials,
-                            $"Also provide {ShortName(request.Path)} in {into.DisplayName}",
+                    foreach (var asker in askers)
+                    {
+                        var into = Into(asker);
+                        var shown = asker.Resolution.Providers ?? Array.Empty<string>();
+                        var (askerGap, askerMissing) = GroupGap(OtherProviders(asker));
+                        OfferRepair(finding, $"fix:{into.Option.Serialize()}:{asker.Path}",
+                            $"Also provide {ShortName(asker.Path)} in {into.DisplayName}",
                             "Copy the redirection so it no longer depends on the other option. "
-                            + (missing is null
-                                ? $"{string.Join(", ", providers)} still win{(providers.Count == 1 ? "s" : string.Empty)} when on."
-                                : $"The {gapGroup} options that provide it still win when picked."),
-                            copies, forceOptIn: true);
+                            + (askerMissing is null
+                                ? $"{string.Join(", ", shown)} still win{(shown.Count == 1 ? "s" : string.Empty)} when on."
+                                : $"The {askerGap} options that provide it still win when picked."),
+                            Candidates(asker, into).Select(c => c with { Confidence = RepairConfidence.Medium }).ToList(), forceOptIn: true);
+                    }
                     break;
                 }
                 case ResolutionSource.External:
@@ -205,6 +233,56 @@ internal sealed partial class ModCheck
                     break;
             }
         }
+    }
+
+    /// <summary>The requests of one asking option and model option, and the one that fares worst.</summary>
+    private sealed record RequestUnit(Request Worst, Request[] All);
+
+    private static int Badness(ResolutionSource source) => source switch
+    {
+        ResolutionSource.Unresolved or ResolutionSource.Exclusive => 0,
+        ResolutionSource.Conditional => 1,
+        ResolutionSource.External => 2,
+        _ => 3,
+    };
+
+    /// <summary>What makes two units' findings the same: how the path resolves, and who provides it.</summary>
+    private static string Signature(PathResolution resolution) => resolution.Source switch
+    {
+        ResolutionSource.Unresolved => "unresolved",
+        ResolutionSource.External => $"external|{resolution.Detail}",
+        _ => $"{resolution.Source}|{string.Join("|", resolution.Providers ?? Array.Empty<string>())}",
+    };
+
+    /// <summary>Who asks, with the options that ship the same material named together: "x.mtrl in A, B (mask)".</summary>
+    private static string Requesters(IEnumerable<Request> requests)
+        => string.Join("; ", requests
+            .GroupBy(r => r.Material is null ? r.Requester : $"{r.Material}|{r.SlotLabel}")
+            .Select(g => g.First() is { Material: { } material } first
+                ? material + (g.Any(r => r.NamesTarget) ? $" in {string.Join(", ", g.Select(r => r.Target.DisplayName).Distinct())}" : string.Empty)
+                  + (first.SlotLabel is { } slot ? $" ({slot})" : string.Empty)
+                : g.Key)
+            .Take(3));
+
+    /// <summary>
+    /// Where a repair adds the missing redirection: the asking option, or the default files when that option would win over
+    /// another option that provides the path (also one only a different model's option brings), which must still win when on.
+    /// </summary>
+    private CheckContainer Into(Request request)
+        => _providers.TryGetValue(request.Path, out var providers)
+        && providers.Any(p => !ReferenceEquals(p.Container, request.Target) && !p.Container.IsExclusiveWith(request.Root) && Outranks(request.Target, p.Container))
+            ? _default
+            : request.Target;
+
+    /// <summary>Adds a repair, or offers the one another finding already has when it makes the same edit, so two never write one redirection.</summary>
+    private void OfferRepair(CheckFinding finding, string id, string title, string explanation, IReadOnlyList<RepairCandidate> candidates, bool forceOptIn = false)
+    {
+        if (candidates.Count == 0)
+            return;
+        if (_repairs.All(repair => repair.Id != id))
+            AddRepair(id, finding.Key, CheckCategory.Materials, title, explanation, candidates, forceOptIn);
+        if (!finding.RepairIds.Contains(id))
+            finding.RepairIds.Add(id);
     }
 
     /// <summary>The mod's other redirections of a request's path: those that can be on together with it, or all when none can.</summary>
@@ -301,7 +379,7 @@ internal sealed partial class ModCheck
                 new RepairEdit[] { new AddFileEdit(into.Option, path, candidate.RelPath) }));
             if (candidate.Supersedes is { } dead && candidate.Confidence == RepairConfidence.High
              && request.Resolution.Source is ResolutionSource.Unresolved or ResolutionSource.Exclusive)
-                _supersededBy.TryAdd(dead, $"fix:{request.Target.Option.Serialize()}:{path}");
+                _supersededBy.TryAdd(dead, $"fix:{into.Option.Serialize()}:{path}");
         }
         return result;
     }

@@ -134,10 +134,25 @@ internal static partial class TimelineWindowViews
         return (SoundFrames((float)seconds.Min()), SoundFrames((float)seconds.Max()));
     }
 
-    /// <summary>What the save question says about one sound file other animations of the mod also play.</summary>
-    public static string SoundAsk(string file, int users, bool several) =>
-        $"{file} is also played by {users} other {(users == 1 ? "animation" : "animations")} in this mod." +
+    /// <summary>
+    /// What the save question says about one sound file other animations also play: <paramref name="users"/>
+    /// of the mod, and the game's own when the mod's file replaces a game sound (<paramref name="game"/>).
+    /// </summary>
+    public static string SoundAsk(string file, int users, bool several, bool game = false) =>
+        (users > 0
+            ? $"{file} is also played by {users} other {(users == 1 ? "animation" : "animations")} in this mod" + (game ? " and by the game's own." : ".")
+            : $"{file} replaces a game sound, so the game's own animations play it too.") +
         (several ? " Only the file your collection uses changes." : "");
+
+    /// <summary>Why an event's pin can't be used: it names a sound the file doesn't have (any more); null when it can.</summary>
+    public static string? PinGone(string? pin, ImmutableArray<string> ids, string file) =>
+        pin != null && (ids.IsDefault || !ids.Contains(pin)) ? $"{file}: an event always plays a sound that is gone. Pick another in Which sound." : null;
+
+    /// <summary>Why an imported sound can't take the place of <paramref name="replaceId"/>: it was removed meanwhile. Null when it can, or when it is added.</summary>
+    public static string? ReplaceGone(TimelineSoundEdit edit, string? replaceId, string name) =>
+        replaceId != null && (edit.Alternatives.IsDefault || !edit.Alternatives.Any(a => a.Id == replaceId))
+            ? $"{name} was imported, but the sound it was to replace is gone. Add it again."
+            : null;
 
     /// <summary><see cref="FileLoops(byte[], int)"/> for a file already read.</summary>
     public static bool FileLoops(ScdModel model, int sound) =>

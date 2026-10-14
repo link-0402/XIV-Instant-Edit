@@ -98,15 +98,27 @@ internal sealed class ModLibrary : IDisposable
         return _playerCollection;
     }
 
-    private IReadOnlyList<(string, ChangeKind)> ChangedItemKinds(string folderName)
+    private static readonly TimeSpan KindsRetry = TimeSpan.FromSeconds(5);
+    private DateTime _kindsRetry;
+
+    /// <summary>A mod's changed items; null when Penumbra said nothing, which the scans tell apart from a mod with none.</summary>
+    private IReadOnlyList<(string, ChangeKind)>? ChangedItemKinds(string folderName)
     {
         IReadOnlyDictionary<string, IReadOnlyList<(string Name, ChangeKind Kind)>>? kinds;
         lock (_kindsGate)
         {
-            _kinds ??= _host.PenumbraIpc.ChangedItemKinds();
+            // A failed ask is tried again after a few seconds, not once for every mod of the scan.
+            if (_kinds == null && DateTime.UtcNow >= _kindsRetry)
+            {
+                _kinds = _host.PenumbraIpc.ChangedItemKinds();
+                if (_kinds == null)
+                    _kindsRetry = DateTime.UtcNow + KindsRetry;
+            }
             kinds = _kinds;
         }
-        return kinds is not null && kinds.TryGetValue(folderName, out var items) ? items : Array.Empty<(string, ChangeKind)>();
+        if (kinds == null)
+            return null;
+        return kinds.TryGetValue(folderName, out var items) ? items : Array.Empty<(string, ChangeKind)>();
     }
 
     public void Dispose()

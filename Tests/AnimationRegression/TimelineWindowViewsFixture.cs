@@ -310,8 +310,18 @@ internal static class TimelineWindowViewsFixture
         check(TimelineWindowViews.SoundAsk("moan.scd", 3, false) == "moan.scd is also played by 3 other animations in this mod." &&
               TimelineWindowViews.SoundAsk("moan.scd", 1, true) == "moan.scd is also played by 1 other animation in this mod. Only the file your collection uses changes.",
             "the save question names the file and how many others play it");
+        check(TimelineWindowViews.SoundAsk("moan.scd", 0, false, true) == "moan.scd replaces a game sound, so the game's own animations play it too." &&
+              TimelineWindowViews.SoundAsk("moan.scd", 2, false, true) == "moan.scd is also played by 2 other animations in this mod and by the game's own.",
+            "the save question also asks about a game sound the mod replaces");
+        check(TimelineWindowViews.PinGone("o2", ["o0", "o1"], "moan.scd") == "moan.scd: an event always plays a sound that is gone. Pick another in Which sound." &&
+              TimelineWindowViews.PinGone("o1", ["o0", "o1"], "moan.scd") == null && TimelineWindowViews.PinGone(null, [], "moan.scd") == null,
+            "a pin naming a sound the file no longer has holds back save and preview");
+        check(TimelineWindowViews.ReplaceGone(own, "o3", "new.wav") == "new.wav was imported, but the sound it was to replace is gone. Add it again." &&
+              TimelineWindowViews.ReplaceGone(own, "o1", "new.wav") == null && TimelineWindowViews.ReplaceGone(own, null, "new.wav") == null,
+            "an import for a sound removed meanwhile says so instead of blaming a drag");
         texts.AddRange(["Change the sound everywhere?", "Everywhere", "Only here", "Reading the sound files.", "Checking the mod.",
-            TimelineWindowViews.SoundAsk("a.scd", 2, true)]);
+            TimelineWindowViews.SoundAsk("a.scd", 2, true), TimelineWindowViews.SoundAsk("a.scd", 0, true, true),
+            TimelineWindowViews.PinGone("x", [], "a.scd")!, TimelineWindowViews.ReplaceGone(own, "x", "a.wav")!, "a.wav is already in place."]);
         texts.AddRange(["Above 100% may clip.", "These chances follow the file's own rule. Even chances rewrites them.", "Turns this into a random set.",
             "Replace with audio file", "Match length", "Remove", "Add sound", "Even chances", "Match lengths", "Full volume within", "Silent past", "Channel", "Loop",
             TimelineWindowViews.ChanceFooter(80), TimelineWindowViews.ChanceFooter(120), TimelineWindowViews.EndsEarlyTip(1, 2)]);

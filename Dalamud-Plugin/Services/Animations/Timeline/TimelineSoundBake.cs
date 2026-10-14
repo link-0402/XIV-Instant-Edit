@@ -16,7 +16,14 @@ internal sealed record TimelineSoundReplacement(string BaseHash, byte[] Bytes);
 /// overwrite, by game path.
 /// </summary>
 internal sealed record TimelineSoundBake(TimelineDocument Document, ImmutableArray<TimelineImport> Copies,
-    ImmutableDictionary<string, TimelineSoundReplacement> InPlace);
+    ImmutableDictionary<string, TimelineSoundReplacement> InPlace)
+{
+    /// <summary>
+    /// The files <see cref="Copies"/> were made from, by game path, with the hash of the bytes they were
+    /// made from: a save checks they are still what the collection gives, as it does for <see cref="InPlace"/>.
+    /// </summary>
+    public ImmutableDictionary<string, string> Bases { get; init; } = ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
+}
 
 internal static partial class TimelineSoundEdits
 {
@@ -41,6 +48,7 @@ internal static partial class TimelineSoundEdits
             return new TimelineSoundBake(doc, [], none);
         var copies = new Dictionary<string, TimelineImport>(StringComparer.OrdinalIgnoreCase);
         var inPlace = none.ToBuilder();
+        var bases = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
         var updated = events.ToBuilder();
         var touched = Enumerable.Range(0, events.Length)
             .Where(i => TimelineSoundKey.Of(events[i]) is { } key && (doc.SoundEdits.ContainsKey(key) || events[i].Pin != null))
@@ -85,8 +93,14 @@ internal static partial class TimelineSoundEdits
                     : Copy(pinPath, only, path, other => ScdEdits.KeepOnly(ScdModel.Read(Rewritten(other, edits, import)), index, entry).Write()));
                 updated[i] = ev with { Path = pinPath, Pin = null, Values = (ev.Values ?? ImmutableDictionary<string, double>.Empty).SetItem(TimelineSoundKey.SoundIndexField, 0) };
             }
+            // A file written over in place carries its own hash; one copied from must not have changed either.
+            if (!rewritten && (copyPath != null || group.Any(i => events[i].Pin != null)))
+                bases[path] = AnimationPap.Hash(original);
         }
-        return new TimelineSoundBake(doc with { Events = updated.ToImmutable(), SoundEdits = doc.SoundEdits.Clear() }, [.. copies.Values], inPlace.ToImmutable());
+        return new TimelineSoundBake(doc with { Events = updated.ToImmutable(), SoundEdits = doc.SoundEdits.Clear() }, [.. copies.Values], inPlace.ToImmutable())
+        {
+            Bases = bases.ToImmutable(),
+        };
     }
 
     /// <summary>

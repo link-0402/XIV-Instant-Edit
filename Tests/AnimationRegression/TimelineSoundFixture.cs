@@ -34,6 +34,17 @@ internal static class TimelineSoundFixture
               ScdModel.Read(TimelineListen.Row(scd, 0, 2)) is { Sounds: [{ Entries: [{ Limit: 100 }] }], Audio.Count: 1 } &&
               ScdModel.Read(TimelineListen.Row(scd, 0, 2)).Audio[0].Seconds == ScdModel.Read(scd).Audio[3].Seconds,
             "the header plays the whole sound as sound 0, a row only its alternative");
+        // Nothing stops a sound the game was asked to play: a listen plays one pass, even of a looping sound.
+        var looping = ScdModel.Read(scd);
+        ScdEdits.SetLoop(looping, 0, true);
+        var loopBytes = looping.Write();
+        var whole = ScdModel.Read(TimelineListen.Whole(loopBytes, 0));
+        var row = ScdModel.Read(TimelineListen.Row(loopBytes, 0, 1));
+        check((ScdModel.Read(loopBytes).Sounds[0].Attributes & ScdSound.LoopAttribute) != 0 &&
+              (whole.Sounds[0].Attributes & ScdSound.LoopAttribute) == 0 && (row.Sounds[0].Attributes & ScdSound.LoopAttribute) == 0 &&
+              whole.Audio.Concat(row.Audio).Where(a => !a.Null).All(a => a.LoopStart == 0 && a.LoopEnd == 0) &&
+              !InstantEdit.Ui.TimelineWindowViews.FileLoops(TimelineListen.Whole(loopBytes, 0), 0),
+            "listening to a looping sound plays it once: no loop mark, no loop points");
     }
 
     private static void Usage(Action<bool, string> check, Action<Action, string> reject)
@@ -52,8 +63,23 @@ internal static class TimelineSoundFixture
             File.WriteAllBytes(Path.Combine(root, "g.pap"), Naming("sound/moan.scd2"[..13]));
             check(TimelineSoundUsage.OtherUsers(root, Moan, Path.Combine(root, "d.pap")).Order().SequenceEqual(["a.pap", "b.tmb", "sub/e.avfx"]),
                 "other users are the mod's other animations and effects that name the sound, in any case");
+            // The clip's own PAP: its other entries' timelines that play the sound are other users too.
+            var own = Path.Combine(root, "own.pap");
+            File.WriteAllBytes(own, TwoEntryPap("sound/moan.scd", "SOUND/Moan.scd"));
+            List<string> OwnUsers(int entry) => [.. TimelineSoundUsage.OtherUsers(root, Moan, own, entry).Where(u => u.StartsWith("own.pap", StringComparison.Ordinal))];
+            check(OwnUsers(0).SequenceEqual(["own.pap entry 1"]) && OwnUsers(1).SequenceEqual(["own.pap entry 0"]) && OwnUsers(-1).Count == 0,
+                "another entry of the edited PAP that plays the sound is another user");
+            File.WriteAllBytes(own, TwoEntryPap("sound/moan.scd", "sound/other.scd"));
+            check(OwnUsers(0).Count == 0, "the edited entry itself isn't another user");
         }
         finally { Directory.Delete(root, true); }
+        check(TimelineSoundUsage.SharedFiles([("sound/a.scd", @"C:\mods\M\x.scd"), ("sound/b.scd", "C:/mods/M/x.scd"), ("sound/c.scd", @"C:\mods\M\c.scd")])
+                  is { Count: 2 } shared && shared.Contains("SOUND/A.scd") && shared.Contains("sound/b.scd") &&
+              TimelineSoundUsage.SharedFiles([("sound/a.scd", @"C:\mods\M\x.scd"), ("sound/c.scd", @"C:\mods\M\c.scd")]).Count == 0,
+            "game paths the mod maps to one file are found, so they go into copies");
+        TimelineSoundUsage.CheckCopied(Moan, "ABC", "abc");
+        check(Refuses(() => TimelineSoundUsage.CheckCopied(Moan, "ABC", "DEF"), "moan.scd changed while saving. Open the timeline again."),
+            "a sound copied from bytes the collection no longer gives is refused");
         var edited = new InstantEdit.Models.AnimationResource("chara/a.pap", @"C:\mods\M\a.pap", "papHash", "M", @"C:\mods\M", "a.pap");
         var moan = new InstantEdit.Models.AnimationResource(Moan, @"C:\mods\M\sound\moan.scd", "MOANHASH", "M", @"C:\mods\M", "sound/moan.scd");
         var outputs = ImmutableDictionary<string, byte[]>.Empty.Add("chara/a.pap", [1]);
@@ -74,6 +100,31 @@ internal static class TimelineSoundFixture
         };
         var inPlace = TimelineSoundEdits.Bake(both, p => p == Moan ? scd : null, _ => null, _ => TimelineSoundRoute.InPlace);
         check(inPlace.InPlace.Count == 1 && inPlace.Copies is [{ Beside: null, Rebuild: null }], "a pin copy of a file saved in place is mapped with the animation");
+    }
+
+    /// <summary>A PAP with two entries whose timelines (bare TMLBs) name the given paths.</summary>
+    private static byte[] TwoEntryPap(string first, string second)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        var havok = 26 + 40 * 2;
+        writer.Write("pap "u8); writer.Write(0x20001); writer.Write((short)2);
+        writer.Write((short)801); writer.Write((byte)0); writer.Write((byte)0);
+        writer.Write(26); writer.Write(havok); writer.Write(havok + 8);
+        for (var i = 0; i < 2; i++)
+        {
+            writer.Write((byte)('a' + i)); writer.Write(new byte[31]);
+            writer.Write((short)0); writer.Write((short)i); writer.Write(0);
+        }
+        writer.Write(new byte[8]);
+        foreach (var path in new[] { first, second })
+        {
+            var name = System.Text.Encoding.ASCII.GetBytes(path);
+            var length = 12 + (name.Length + 3) / 4 * 4;
+            writer.Write("TMLB"u8); writer.Write(length); writer.Write(0);
+            writer.Write(name); writer.Write(new byte[length - 12 - name.Length]);
+        }
+        return stream.ToArray();
     }
 
     private static bool Refuses(Action action, string message)
@@ -99,7 +150,10 @@ internal static class TimelineSoundFixture
               copy.StartsWith("sound/instant_edit/moan_") && beside![copy] == Moan && baked.Document.Events.All(e => e.Path == copy) &&
               ScdModel.Read(baked.Copies[0].Files[copy]).Sounds[0].Volume == 0.5f && baked.InPlace.IsEmpty,
             "a copied edit points every unpinned event at one copy, mapped beside the original");
+        check(baked.Bases.Count == 1 && baked.Bases["SOUND/Moan.scd"] == InstantEdit.Services.Animations.AnimationPap.Hash(scd),
+            "a copy carries the hash of the original it was made from, for the save to check");
         var inPlace = TimelineSoundEdits.Bake(docWithEdit, Bytes, NoImport, _ => TimelineSoundRoute.InPlace);
+        check(inPlace.Bases.IsEmpty, "a file written over in place is checked by its own hash only");
         check(inPlace.Copies.IsEmpty && inPlace.InPlace["SOUND/moan.scd"].BaseHash == InstantEdit.Services.Animations.AnimationPap.Hash(scd) &&
               inPlace.Document.Events.All(e => e.Path == Moan) && ScdModel.Read(inPlace.InPlace[Moan].Bytes).Sounds[0].Volume == 0.5f,
             "an in-place edit keeps the path and carries the original's hash");
@@ -117,6 +171,7 @@ internal static class TimelineSoundFixture
         check(pinOnly.Copies.Length == 1 && pinOnly.InPlace.IsEmpty && TimelineEdits.Find(pinOnly.Document, "n2")!.Path == Moan &&
               ScdModel.Read(pinOnly.Copies[0].Files[pinOnly.Copies[0].GamePath]).Sounds[0].Entries.Count == 1,
             "a pin without edits copies one alternative and leaves the file alone");
+        check(pinOnly.Bases.ContainsKey(Moan), "a pin copy carries its original's hash too");
         reject(() => TimelineSoundEdits.Bake(Doc(Sound("n1", pin: "a7")), Bytes, NoImport, _ => TimelineSoundRoute.Copy), "a pin naming a sound the file lacks is refused");
         // Review focus 1: sound index 1 of a two-sound file.
         var twoBytes = ScdModelFixture.TwoSoundsSharingAudio().Write();

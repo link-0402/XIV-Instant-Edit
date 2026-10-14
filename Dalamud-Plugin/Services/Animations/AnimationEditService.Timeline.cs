@@ -323,14 +323,16 @@ internal sealed partial class AnimationEditService
     /// retargeted onto that standard skeleton, as the old rebakes did, in the same bake.
     /// In place, <paramref name="replaced"/> are the mod's own sound files the edit writes over (see
     /// <see cref="TimelineSoundEdits.Bake"/>): they are read, checked and journaled with the animation,
-    /// so Undo restores them too.
+    /// so Undo restores them too. <paramref name="copied"/> are the sounds copies were made from, by
+    /// game path, with the hash of the bytes they were made from (see <see cref="TimelineSoundBake.Bases"/>):
+    /// each must still be what the collection gives.
     /// </summary>
     /// <returns>The job's id, which <see cref="LastResult"/> carries once it ends; null when another job is running.</returns>
     public Guid? EditTimeline(AnimationTimelineSource source, TimelineDocument document, AnimationDestination destination,
         string modName, IReadOnlyDictionary<string, byte[]> added, IReadOnlyDictionary<string, string>? beside = null,
         IReadOnlyDictionary<string, int>? motionFrames = null, SkeletonStandard? repair = null,
         IReadOnlyDictionary<string, Func<byte[], byte[]>>? rebuild = null,
-        IReadOnlyDictionary<string, TimelineSoundReplacement>? replaced = null)
+        IReadOnlyDictionary<string, TimelineSoundReplacement>? replaced = null, IReadOnlyDictionary<string, string>? copied = null)
     {
         if (Busy) return null;
         var request = TimelineRequest(source, document, destination, modName.Trim(), repair);
@@ -351,6 +353,12 @@ internal sealed partial class AnimationEditService
             var manifest = await resources.ManifestAsync(capture, [edited, .. replaced?.Keys ?? []], destination, token);
             if (manifest.Resources.First(r => string.Equals(r.GamePath, edited, StringComparison.OrdinalIgnoreCase)).Hash != source.Resource.Hash)
                 throw new IOException("The animation file changed while saving. Open the timeline again.");
+            // A sound copy made from bytes the collection no longer gives would drop the newer sound.
+            foreach (var (path, hash) in copied ?? ImmutableDictionary<string, string>.Empty)
+            {
+                var (now, _) = await resources.ReadAsync(capture.CollectionId, path, token);
+                TimelineSoundUsage.CheckCopied(path, hash, now.Hash);
+            }
             var built = await BuildTimelineAsync(request, source, manifest.Files[edited], document, motionFrames,
                 journals.DirectoryFor(request.Id), token);
             var (files, reused, owners, copies) = await AddedFilesAsync(capture, destination, source.Resource, added, beside, rebuild, token);

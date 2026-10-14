@@ -28,6 +28,12 @@ internal sealed class ScdModelAudio
     public byte[] Trailing { get; set; } = [];
     public double Seconds { get; set; }
 
+    /// <summary>
+    /// The data size the file declared when it isn't the size of the data it holds (often a file cut
+    /// short), and that held size: written back as declared while <see cref="Data"/> keeps that length.
+    /// </summary>
+    public (int Declared, int Held)? CutShort { get; set; }
+
     public ScdCodec Codec => (ScdCodec)BinaryPrimitives.ReadInt32LittleEndian(Header.AsSpan(12));
     public int Channels => BinaryPrimitives.ReadInt32LittleEndian(Header.AsSpan(4));
     public int SampleRate => BinaryPrimitives.ReadInt32LittleEndian(Header.AsSpan(8));
@@ -37,6 +43,7 @@ internal sealed class ScdModelAudio
     public ScdModelAudio Clone() => new()
     {
         Null = Null, Header = Header.ToArray(), SubInfo = SubInfo.ToArray(), Data = Data.ToArray(), Trailing = Trailing.ToArray(), Seconds = Seconds,
+        CutShort = CutShort,
     };
 }
 
@@ -201,14 +208,17 @@ internal sealed partial class ScdModel
                 continue;
             }
             var entryHeader = bytes[audio.Offset..(audio.Offset + ScdAudio.HeaderSize)];
+            var declaredData = BinaryPrimitives.ReadInt32LittleEndian(entryHeader);
             BinaryPrimitives.WriteInt32LittleEndian(entryHeader, audio.DataLength);
+            var data = bytes[audio.DataOffset..audio.End];
             model.Audio.Add(new ScdModelAudio
             {
                 Header = entryHeader,
                 SubInfo = bytes[(audio.Offset + ScdAudio.HeaderSize)..audio.DataOffset],
-                Data = bytes[audio.DataOffset..audio.End],
+                Data = data,
                 Trailing = Rest(audio.End, audio.Offset),
                 Seconds = audio.Seconds,
+                CutShort = declaredData != data.Length ? (declaredData, data.Length) : null,
             });
         }
         foreach (var sound in file.Sounds)
