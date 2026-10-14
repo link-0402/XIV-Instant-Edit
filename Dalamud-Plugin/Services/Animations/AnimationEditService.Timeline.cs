@@ -262,6 +262,23 @@ internal sealed partial class AnimationEditService
         return await resources.ReadAsync(collection, gamePath, token);
     }
 
+    /// <summary>
+    /// Where the collection gets a sound's or effect's game path: a mod (by name), the game, or
+    /// nowhere, as a music library's sound/lolo.scd is for people without that mod. Nothing in game changes.
+    /// </summary>
+    public async Task<(TimelinePathOrigin Origin, string? ModName)> PathOriginAsync(Guid collection, string gamePath, CancellationToken token)
+    {
+        try
+        {
+            var (resource, _) = await resources.ReadAsync(collection, gamePath, token);
+            return (resource.ModName ?? resource.ModDirectory) is { } mod ? (TimelinePathOrigin.Mod, mod) : (TimelinePathOrigin.Game, null);
+        }
+        catch (FileNotFoundException)
+        {
+            return (TimelinePathOrigin.Missing, null);
+        }
+    }
+
     /// <summary>The native animation runtime, which the live motion display builds its uncompressed copies with.</summary>
     internal AnimationNative Native => native;
 

@@ -1370,3 +1370,26 @@ vanilla emotes with one-shot sounds.
 - [ ] 7 Listen on MS-ADPCM, Vorbis and HCA files: each row's button plays that alternative alone, the
   header button the whole set, and nothing stays served afterwards (the listen_… path no longer
   resolves a few seconds after the sound ends).
+
+## Timeline cuts and loop seams (pending)
+
+Cutting a clip's motion like a video editor (trim, remove ranges, blended joins), Fix loop for loops
+that stall or pop, cutting sounds with the motion, and the editable game path of sounds and effects.
+Spec: docs/superpowers/specs/2026-10-14-timeline-cuts-and-loop-seams-design.md. Candidate: the mod
+"Tiktok Challenge Edit on Moogle Dance" (emote/dance05_loop.pap), which plays sound/lolo.scd.
+
+- [ ] 1 Sound path: on a library dance that plays sound/lolo.scd, the sound's File row shows the path
+  in a text field with "From mod: ..." or "Not in your collection. ..." under it. Type another .scd
+  path and press Enter (one undo step), save, and hear the new sound. A path ending in .avfx is
+  refused under the field.
+- [ ] 2 Live with another length (Debug build, "Short test" in the Live controls): in GPose with a loop
+  playing under Live, turn it on. Expect the motion to loop after two thirds of the clip. Scrub,
+  pause, replay, Stop, leaving GPose and unloading the plugin still behave.
+- [ ] 3 Fix loop on the TikTok dance: the clip band's end badge says Stalls; the seam panel shows the
+  gap and the stall text. Fix loop, Preview, then save in place: the wrap shows no settle-then-jerk.
+- [ ] 4 Remove a range from a dance with C, Q, W and Delete: no pop at the join in Preview, and the
+  sounds, effects and faces after it moved with the motion.
+- [ ] 5 Cut a sound with the motion: remove a range from a dance with music, choose "Cut with the
+  motion", Preview and save. The song stays in step after the cut.
+- [ ] 6 Live with cuts: drag a cut point, a blend length and the seam with Live on.
+- [ ] 7 Edit again: reopen a cut dance with Edit again, move a cut, and save again.

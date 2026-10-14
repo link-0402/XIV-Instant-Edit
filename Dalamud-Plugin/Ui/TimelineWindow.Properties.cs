@@ -14,6 +14,14 @@ namespace InstantEdit.Ui;
 /// </summary>
 public sealed partial class TimelineWindow
 {
+    // The File field of a sound or effect: its text while typed in, its last refusal, and where
+    // the collection gets each path (by collection and path, forgotten with the sounds).
+    private string? pathFieldKey;
+    private string pathFieldText = string.Empty;
+    private bool pathFieldActive;
+    private string? pathFieldError;
+    private readonly Dictionary<(Guid Collection, string Path), Task<(TimelinePathOrigin Origin, string? ModName)>> pathOrigins = [];
+
     private void DrawProperties(TimelineEditor current)
     {
         EndLookEdit(current);
@@ -269,10 +277,72 @@ public sealed partial class TimelineWindow
             ImGui.TextUnformatted(LabelOf(current.Document, ev));
             return;
         }
+        if (editable && picker is TimelineAddKind.Sound or TimelineAddKind.Effect)
+        {
+            DrawPathField(current, ev);
+            return;
+        }
         if (ev.Path.Length == 0)
             ImGui.TextColored(Theme.Hint, "None");
         else
             Widgets.PathText(LabelOf(current.Document, ev), ev.Path);
+    }
+
+    /// <summary>
+    /// A sound's or effect's game path as a text field: Enter or leaving it applies the typed path as
+    /// one undo step. Under it, the friendly name and where the collection gets the file.
+    /// </summary>
+    private void DrawPathField(TimelineEditor current, TimelineEvent ev)
+    {
+        // The buffer follows the event until the field is being typed in.
+        if (pathFieldKey != ev.Key)
+        {
+            pathFieldKey = ev.Key;
+            pathFieldActive = false;
+            pathFieldError = null;
+        }
+        if (!pathFieldActive)
+            pathFieldText = ev.Path;
+        ImGui.SetNextItemWidth(Theme.Scaled(300));
+        bool entered;
+        using (ImRaii.PushFont(UiBuilder.MonoFont))
+            entered = ImGui.InputText("##path", ref pathFieldText, 256, ImGuiInputTextFlags.EnterReturnsTrue);
+        pathFieldActive = ImGui.IsItemActive();
+        if (ImGui.IsItemActivated())
+            pathFieldError = null;
+        if (entered || ImGui.IsItemDeactivatedAfterEdit())
+        {
+            var next = TimelineWindowViews.WithPath(ev, pathFieldText, out pathFieldError);
+            if (next != null && !ReferenceEquals(next, ev))
+            {
+                current.BeginFieldEdit();
+                current.Replace(next);
+                current.EndFieldEdit();
+            }
+            pathFieldText = next?.Path ?? pathFieldText;
+        }
+        if (pathFieldError != null)
+            ImGui.TextColored(Theme.Warning, pathFieldError);
+        ImGui.TextColored(Theme.Hint, LabelOf(current.Document, ev));
+        if (PathOrigin(ev.Path) is { } origin)
+            ImGui.TextColored(Theme.Muted, origin);
+    }
+
+    /// <summary> Where the collection gets <paramref name="gamePath"/>, read once on a task; null until read. </summary>
+    private string? PathOrigin(string gamePath)
+    {
+        if (source == null || gamePath.Length == 0 || animations is not { } service)
+            return null;
+        var key = (source.Capture.CollectionId, gamePath.ToLowerInvariant());
+        if (!pathOrigins.TryGetValue(key, out var read))
+        {
+            var collection = source.Capture.CollectionId;
+            read = Task.Run(() => service.PathOriginAsync(collection, gamePath, CancellationToken.None));
+            pathOrigins[key] = read;
+        }
+        if (!read.IsCompleted)
+            return null;
+        return read.IsCompletedSuccessfully ? TimelineWindowViews.PathOriginText(read.Result.Origin, read.Result.ModName) : ErrorText(read.Exception);
     }
 
     /// <summary> One field's control; its edits until it is left make one undo step. </summary>
