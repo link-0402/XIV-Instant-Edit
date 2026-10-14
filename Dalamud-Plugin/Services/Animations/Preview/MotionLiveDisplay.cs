@@ -66,10 +66,25 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     /// What the display shows over the clip: its bone layers and the bones left out. Two are the same
     /// when they hold the same arrays, as an unchanged document's are.
     /// </summary>
-    private readonly record struct Edits(ImmutableArray<MotionLayer> Layers, ImmutableArray<string> Excluded)
+    private readonly record struct Edits(ImmutableArray<MotionLayer> Layers, ImmutableArray<string> Excluded, bool Short = false)
     {
-        public bool Changes => MotionEvaluator.Changes(Layers) || !Excluded.IsDefaultOrEmpty;
+        public bool Changes => MotionEvaluator.Changes(Layers) || !Excluded.IsDefaultOrEmpty || Short;
     }
+
+#if DEBUG
+    /// <summary>
+    /// Test only: the copy shown is the clip's first two thirds with that shorter length, to see whether
+    /// the game loops a swapped copy at its own length. Set before <see cref="Show"/>.
+    /// </summary>
+    internal static bool ShortTest;
+#endif
+
+    private static bool ShortCopy =>
+#if DEBUG
+        ShortTest;
+#else
+        false;
+#endif
 
     /// <summary>What a swapped control held before: the clip's own binding and track weights.</summary>
     private struct Original
@@ -112,6 +127,8 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         /// <summary>How many bones a skeleton needs for every one of <see cref="Tracks"/>: one past the highest.</summary>
         public required int Bones { get; init; }
         public required int Frames { get; init; }
+        /// <summary>The copy's length in seconds, which its animation plays at.</summary>
+        public required float Duration { get; init; }
         public required int FloatTracks { get; init; }
         public required nint Transforms { get; init; }
         public required nint Floats { get; init; }
@@ -184,7 +201,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         RequireFrameworkThread();
         if (session == null || layers.IsDefault)
             return;
-        session.Requested = new Edits(layers, excluded.IsDefault ? [] : excluded);
+        session.Requested = new Edits(layers, excluded.IsDefault ? [] : excluded, ShortCopy);
         Evaluate();
     }
 
@@ -226,7 +243,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         var token = evaluationCancel.Token;
         var decoded = current.Base;
         evaluating = edits;
-        evaluation = Task.Run(() => (Built?)Build(decoded, edits.Layers, edits.Excluded, token), token);
+        evaluation = Task.Run(() => (Built?)Build(decoded, edits.Layers, edits.Excluded, edits.Short, token), token);
     }
 
     private void OnUpdate(IFramework _)
@@ -402,6 +419,8 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         var source = original->Animation.ptr;
         var animation = copy.Arena.Alloc<AnimationNative.Interleaved>();
         native.Initialize(animation, source);
+        // The copy plays at its own length, which a cut or a new length changes; the game loops it there.
+        animation->Animation.Duration = copy.Duration;
         animation->Animation.NumberOfTransformTracks = copy.Tracks.Length;
         var transforms = checked(copy.Frames * copy.Tracks.Length);
         var floats = checked(copy.Frames * copy.FloatTracks);
@@ -566,10 +585,13 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     /// moved that had none, encoded with the clip's blend hint. The <paramref name="excluded"/> bones get
     /// no track, as in a saved file that leaves them out. Runs off the framework thread.
     /// </summary>
-    private static Built Build(MotionClip decoded, ImmutableArray<MotionLayer> layers, ImmutableArray<string> excluded, CancellationToken token)
+    private static Built Build(MotionClip decoded, ImmutableArray<MotionLayer> layers, ImmutableArray<string> excluded, bool shortCopy,
+        CancellationToken token)
     {
         var edited = decoded.Clone();
         MotionEvaluator.Apply(edited, layers, token);
+        if (shortCopy)
+            edited = FirstTwoThirds(edited);
         var left = new HashSet<int>();
         if (!excluded.IsDefaultOrEmpty)
         {
@@ -618,7 +640,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
             return new Built
             {
                 Arena = arena, Tracks = [.. tracks], Sources = [.. sources], Bones = tracks.Count == 0 ? 0 : tracks.Max() + 1,
-                Frames = edited.Samples, FloatTracks = decoded.FloatTracks,
+                Frames = edited.Samples, Duration = edited.Duration, FloatTracks = decoded.FloatTracks,
                 Transforms = (nint)transforms, Floats = (nint)floats,
             };
         }
@@ -627,6 +649,21 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
             arena.Dispose();
             throw;
         }
+    }
+
+    /// <summary>The Short test's copy: the clip's first two thirds of samples, at that shorter length.</summary>
+    private static MotionClip FirstTwoThirds(MotionClip source)
+    {
+        var samples = (source.Samples - 1) * 2 / 3 + 1;
+        var floats = source.TrackFloats is { } values ? values.AsSpan(0, samples * source.FloatTracks).ToArray() : null;
+        var copy = new MotionClip(source.Skeleton, source.Duration * (samples - 1) / (source.Samples - 1), samples, floats, source.FloatTracks)
+        {
+            SourceTracks = source.SourceTracks, BlendHint = source.BlendHint, Loops = source.Loops,
+        };
+        for (var i = 0; i < samples; i++)
+            for (var b = 0; b < source.Bones; b++)
+                copy.Set(i, b, source.Get(i, b));
+        return copy;
     }
 
     private static bool Near(MotionTransform a, MotionTransform b) =>
