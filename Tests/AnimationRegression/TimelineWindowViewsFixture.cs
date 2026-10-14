@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Globalization;
 using InstantEdit.Models;
+using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui;
 
@@ -31,6 +32,7 @@ internal static class TimelineWindowViewsFixture
         AddedFiles(check);
         GamePaths(check, texts);
         PathField(check, texts);
+        Clips(check, texts);
         Packs(check, texts);
         Texts(check, texts);
         Sounds(check, texts);
@@ -246,6 +248,15 @@ internal static class TimelineWindowViewsFixture
         check(TimelineWindowViews.WithPath(lolo, "vfx/a.avfx", out var e2) == null && e2 == "A sound path ends in .scd.", "a sound keeps .scd");
         var vfx = lolo with { Magic = "C012", Lane = TimelineLane.Effect, Path = "vfx/a.avfx" };
         check(TimelineWindowViews.WithPath(vfx, "vfx/b.avfx", out _) is { Path: "vfx/b.avfx" }, "an effect takes another .avfx");
+    }
+
+    private static void Clips(Action<bool, string> check, List<string> texts)
+    {
+        check(TimelineWindowViews.PartLabel(new MotionPart(230, 425)) == "230 - 425" && TimelineWindowViews.RemovedMarker(30) == "-30" &&
+              TimelineWindowViews.ClipLegend == "Clip", "clip band texts");
+        texts.AddRange([TimelineWindowViews.ClipLegend, .. TimelineWindowViews.ClipMenu]);
+        check(TimelineWindowViews.ClipMenu.SequenceEqual(["Cut here", "Remove from here to the end", "Remove from the start to here", "Remove part"]),
+            "the clip band's menu");
     }
 
     private static void Packs(Action<bool, string> check, List<string> texts)

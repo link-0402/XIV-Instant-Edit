@@ -500,6 +500,18 @@ internal static partial class TimelineWindowViews
         return path;
     }
 
+    /// <summary>The clip band's legend.</summary>
+    public const string ClipLegend = "Clip";
+
+    /// <summary>The clip band's right-click menu: cut at the pointer, remove to the part's end or from its start, remove the part.</summary>
+    public static readonly ImmutableArray<string> ClipMenu = ["Cut here", "Remove from here to the end", "Remove from the start to here", "Remove part"];
+
+    /// <summary>A part's label on the clip band: the motion's own frames it keeps.</summary>
+    public static string PartLabel(MotionPart part) => $"{part.From} - {part.To}";
+
+    /// <summary>The ruler's mark where frames were cut out: how many.</summary>
+    public static string RemovedMarker(int frames) => $"-{frames}";
+
     /// <summary>Where a sound's or effect's game path comes from, under its field.</summary>
     public static string PathOriginText(TimelinePathOrigin origin, string? modName) => origin switch
     {

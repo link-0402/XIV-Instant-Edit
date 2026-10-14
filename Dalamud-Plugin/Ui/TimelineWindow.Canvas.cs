@@ -91,8 +91,11 @@ public sealed partial class TimelineWindow
         var legend = Math.Min(Theme.Scaled(118), area.X * .35f);
         current.SnapTolerance = Theme.Scaled(8);
         current.SetWidth(Math.Max(1, area.X - legend));
-        ClampScroll(current, row, ruler, area.Y);
-        var geometry = new TimelineGeometry(legend, ruler, row, Theme.Scaled(5), Theme.Scaled(9), scrollY, Theme.Scaled(18));
+        // Only a clip the game loops has a seam to blend or fix.
+        current.Loops = source is { } loaded && Fresh(loaded).Clip.IsLoop && !current.Document.Expression;
+        var clip = ClipBand(current.Document, row);
+        ClampScroll(current, row, ruler + clip, area.Y);
+        var geometry = new TimelineGeometry(legend, ruler, row, Theme.Scaled(5), Theme.Scaled(9), scrollY, Theme.Scaled(18), clip);
 
         ImGui.InvisibleButton("##canvas", area,
             ImGuiButtonFlags.MouseButtonLeft | ImGuiButtonFlags.MouseButtonRight | ImGuiButtonFlags.MouseButtonMiddle);
@@ -104,8 +107,9 @@ public sealed partial class TimelineWindow
 
         HandlePointer(current, hit, local.X - legend, hovered, active, activated, readOnly, row);
         // The input above may have changed the document, the view or the scroll.
-        ClampScroll(current, row, ruler, area.Y);
-        geometry = geometry with { ScrollY = scrollY };
+        clip = ClipBand(current.Document, row);
+        ClampScroll(current, row, ruler + clip, area.Y);
+        geometry = geometry with { ScrollY = scrollY, Clip = clip };
         if (hovered && !active)
             hit = current.HitTest(geometry, local);
 
@@ -181,10 +185,11 @@ public sealed partial class TimelineWindow
 
         var resizing = current.Gesture is TimelineGesture.ResizeLeft or TimelineGesture.ResizeRight or TimelineGesture.Length or
             TimelineGesture.LayerLeft or TimelineGesture.LayerRight or TimelineGesture.LayerFadeIn or TimelineGesture.LayerFadeOut or TimelineGesture.LayerKey or
-            TimelineGesture.BoneKey;
+            TimelineGesture.BoneKey or TimelineGesture.TrimLeft or TimelineGesture.TrimRight or TimelineGesture.BlendLength;
         if (!readOnly && (resizing || hovered && current.Gesture == TimelineGesture.None &&
                 hit.Part is TimelinePart.LeftEdge or TimelinePart.RightEdge or TimelinePart.LengthHandle or TimelinePart.LayerLeft or
-                    TimelinePart.LayerRight or TimelinePart.LayerFadeIn or TimelinePart.LayerFadeOut or TimelinePart.LayerKey or TimelinePart.BoneKey))
+                    TimelinePart.LayerRight or TimelinePart.LayerFadeIn or TimelinePart.LayerFadeOut or TimelinePart.LayerKey or TimelinePart.BoneKey or
+                    TimelinePart.ClipLeft or TimelinePart.ClipRight or TimelinePart.JoinEdge or TimelinePart.SeamEdge))
             ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeEw);
     }
 
@@ -225,6 +230,12 @@ public sealed partial class TimelineWindow
             current.SelectLayer(hit.Layer!, hit.OnKey ? hit.KeyFrame : null, hit.Part == TimelinePart.BoneKey ? hit.Bone : null);
         else if (hit.Part is TimelinePart.BoneLane or TimelinePart.Legend && hit.Layer != null)
             current.SelectLayer(hit.Layer);
+        else if (hit.Part is TimelinePart.ClipPart or TimelinePart.ClipLeft or TimelinePart.ClipRight && hit.Cut >= 0)
+            current.SelectCut(new TimelineCutSelection(TimelineCutTarget.Part, hit.Cut));
+        else if (hit.Part is TimelinePart.Join or TimelinePart.JoinEdge && hit.Cut >= 0)
+            current.SelectCut(new TimelineCutSelection(TimelineCutTarget.Join, hit.Cut));
+        else if (hit.Part is TimelinePart.Seam or TimelinePart.SeamEdge)
+            current.SelectCut(new TimelineCutSelection(TimelineCutTarget.Seam, -1));
         else if (!io.KeyCtrl && !io.KeyShift)
             current.ClearSelection();
     }
@@ -308,7 +319,7 @@ public sealed partial class TimelineWindow
         var min = origin;
         var max = origin + area;
         var trackLeft = min.X + geometry.Legend;
-        var rowsTop = min.Y + geometry.Ruler;
+        var rowsTop = min.Y + geometry.Header;
         var line = Math.Max(1, MathF.Floor(Theme.Scale));
         var fontSize = ImGui.GetFontSize();
         var major = view.MajorStep(Theme.Scaled(64));
@@ -359,7 +370,8 @@ public sealed partial class TimelineWindow
             U32(handleHot ? Theme.Accent : Theme.WithAlpha(Theme.Muted, .7f)), handleHot ? Theme.Scaled(2) : line);
         drawList.PopClipRect();
 
-        DrawRuler(drawList, current, doc, geometry, view, min, max, trackLeft, rowsTop, major, minor, handleHot);
+        DrawRuler(drawList, current, doc, geometry, view, min, max, trackLeft, min.Y + geometry.Ruler, major, minor, handleHot);
+        DrawClipBand(drawList, current, geometry, min, max, trackLeft, hovered ? hit : TimelineHit.None());
 
         // Lines that cross the ruler and the lanes.
         drawList.PushClipRect(new Vector2(trackLeft, min.Y), max, true);
@@ -819,6 +831,8 @@ public sealed partial class TimelineWindow
                 ImGui.TextColored(Theme.Hint, "Click to pick this bone. Ctrl+click adds it.");
             return;
         }
+        if (DrawClipTooltip(hit, readOnly))
+            return;
         if (hit.Part == TimelinePart.MotionLane && hit.Layer == null && !readOnly && Widgets.HoverDelay("timeline-bones-lane"))
         {
             ImGui.SetTooltip("Double-click to add a bone layer here.");
@@ -905,6 +919,12 @@ public sealed partial class TimelineWindow
         if (menuHit.OnLayer && MotionEdits.Find(current.Document, menuHit.Layer) is { } layer)
         {
             DrawLayerMenu(current, layer, readOnly);
+            return;
+        }
+        if (menuHit.Part is TimelinePart.ClipRow or TimelinePart.ClipPart or TimelinePart.ClipLeft or TimelinePart.ClipRight or
+            TimelinePart.Join or TimelinePart.JoinEdge or TimelinePart.Seam or TimelinePart.SeamEdge)
+        {
+            DrawClipMenu(current, readOnly);
             return;
         }
         if (menuHit.Part is TimelinePart.BoneLane or TimelinePart.Legend && menuHit.Bone is { } bone &&
@@ -1089,5 +1109,20 @@ public sealed partial class TimelineWindow
             current.Key(TimelineKey.End);
         else if (!ctrl && ImGui.IsKeyPressed(ImGuiKey.F))
             current.Key(TimelineKey.Fit);
+        else if (!ctrl && !alt && ImGui.IsKeyPressed(ImGuiKey.C))
+        {
+            if (!readOnly)
+                current.Key(TimelineKey.Cut);
+        }
+        else if (!ctrl && !alt && ImGui.IsKeyPressed(ImGuiKey.Q))
+        {
+            if (!readOnly)
+                current.Key(TimelineKey.RemoveBefore);
+        }
+        else if (!ctrl && !alt && ImGui.IsKeyPressed(ImGuiKey.W))
+        {
+            if (!readOnly)
+                current.Key(TimelineKey.RemoveAfter);
+        }
     }
 }
