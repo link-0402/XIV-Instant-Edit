@@ -241,26 +241,17 @@ public sealed partial class TimelineWindow : Window, IDisposable
 
     /// <summary>
     /// The listener's newest capture of the open clip when it heard a file other than the one read and
-    /// the one opened: the file changed in the mods since. Null when unknown, unchanged, or while a
-    /// load, save or preview runs (a preview's temporary mod changes the file the listener hears).
+    /// the one opened: the file changed in the mods since (<see cref="TimelineWindowViews.ChangedCapture"/>).
+    /// Null when unknown, unchanged, or while a load, save or preview runs (a preview's temporary mod
+    /// changes the file the listener hears).
     /// </summary>
     private AnimationCapture? ChangedCapture()
     {
         if (animations == null || source is not { } current || loadTask != null || saveTask != null || pendingSaveId != null ||
             undoPending || preview.Active || preview.Busy || previewJob)
             return null;
-        var newest = animations.Observer.History.FirstOrDefault(capture => capture.Id == current.Capture.Id);
-        return newest != null && SourceHash(current, newest) is { Length: > 0 } hash &&
-               hash != current.Resource.Hash && hash != SourceHash(current, current.Capture)
-            ? newest
-            : null;
+        return TimelineWindowViews.ChangedCapture(animations.Observer.History, current);
     }
-
-    /// <summary>The hash <paramref name="capture"/> has for the open clip's file: an expression's own timeline, else the clip's animation.</summary>
-    private static string? SourceHash(AnimationTimelineSource current, AnimationCapture capture) =>
-        current.Standalone
-            ? capture.ExpressionTimeline is { } timeline && timeline.GamePath == current.Resource.GamePath ? timeline.Hash : null
-            : capture.Sources.FirstOrDefault(resource => resource.GamePath == current.Clip.GamePath)?.Hash;
 
     /// <summary> A key for "the same clip", which survives a reload after a save. </summary>
     private static string ClipKey(AnimationTimelineSource current) => $"{current.Capture.Id}|{current.Startup}|{current.Clip.GamePath}";

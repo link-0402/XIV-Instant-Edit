@@ -4,6 +4,7 @@ using System.Numerics;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
+using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui.Timeline;
 
@@ -397,6 +398,28 @@ internal static partial class TimelineWindowViews
         try { return new TimelineCatalogKey(race, DefaultFace, SafeRoot(modRoot)); }
         catch (ArgumentException) { return null; }
     }
+
+    /// <summary>
+    /// The newest capture of <paramref name="current"/>'s clip in <paramref name="history"/> (newest first) when it heard a
+    /// file other than the one read and the one opened: the file changed in the mods since. Null when unknown or unchanged.
+    /// Captures that heard a preview's temporary file are skipped: after a preview stops, the character goes back to its
+    /// idle, so the capture heard during the preview stays the clip's newest (seen in game 2026-10-14).
+    /// </summary>
+    public static AnimationCapture? ChangedCapture(IEnumerable<AnimationCapture> history, AnimationTimelineSource current)
+    {
+        var newest = history.FirstOrDefault(capture => capture.Id == current.Capture.Id &&
+                                                       !AnimationPreviewRules.IsPreviewFile(SourceOf(current, capture)?.ResolvedPath));
+        return newest != null && SourceOf(current, newest)?.Hash is { Length: > 0 } hash &&
+               hash != current.Resource.Hash && hash != SourceOf(current, current.Capture)?.Hash
+            ? newest
+            : null;
+    }
+
+    /// <summary>The file <paramref name="capture"/> heard for the open clip: an expression's own timeline, else the clip's animation.</summary>
+    private static AnimationResource? SourceOf(AnimationTimelineSource current, AnimationCapture capture) =>
+        current.Standalone
+            ? capture.ExpressionTimeline is { } timeline && timeline.GamePath == current.Resource.GamePath ? timeline : null
+            : capture.Sources.FirstOrDefault(resource => resource.GamePath == current.Clip.GamePath);
 
     /// <summary>The race number in a chara/human/cXXXX/ path, or null.</summary>
     public static ushort? RaceOf(string gamePath)
