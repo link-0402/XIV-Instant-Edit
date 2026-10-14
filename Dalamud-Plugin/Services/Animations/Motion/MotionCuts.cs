@@ -33,11 +33,21 @@ internal sealed record MotionJoin(int Frames, JoinPlacement Placement)
 /// <summary>
 /// How a timeline's motion is cut: the kept <see cref="Parts"/> of a source motion
 /// <see cref="Source"/> frames long, in source order and played back to back, a blend per boundary
-/// between consecutive parts, and the loop seam's blend (null: none). The output plays the kept frames
-/// over the document's length, so a stretch scales the whole result.
+/// between consecutive parts, the loop seam's blend (null: none) and the loop start's
+/// <see cref="Ease"/>. The output plays the kept frames over the document's length, so a stretch
+/// scales the whole result.
 /// </summary>
-internal sealed record MotionCuts(int Source, ImmutableArray<MotionPart> Parts, ImmutableArray<MotionJoin> Joins, MotionJoin? Seam = null)
+/// <param name="Ease">
+/// Over how many output frames the loop's seam is eased (0: none): one side of it plays at the other's
+/// speed and catches up within those frames, so the length and everything outside stay (see <see cref="MotionCutter"/>).
+/// </param>
+/// <param name="EaseEnd">Whether the ease slows the loop's end into the start, rather than the start out of the end.</param>
+internal sealed record MotionCuts(int Source, ImmutableArray<MotionPart> Parts, ImmutableArray<MotionJoin> Joins, MotionJoin? Seam = null, int Ease = 0,
+    bool EaseEnd = false)
 {
+    /// <summary>Fix loop's ease, in frames: long enough that the catch-up stays under about 1.3 times normal speed.</summary>
+    public const int DefaultEase = 30;
+
     public ImmutableArray<MotionPart> Parts { get; init; } = Parts.IsDefault ? [] : Parts;
     public ImmutableArray<MotionJoin> Joins { get; init; } = Joins.IsDefault ? [] : Joins;
 
@@ -45,9 +55,9 @@ internal sealed record MotionCuts(int Source, ImmutableArray<MotionPart> Parts, 
     [JsonIgnore]
     public int Kept => Parts.Sum(p => p.Frames);
 
-    /// <summary>Whether this cuts nothing: one part over the whole source and no seam blend.</summary>
+    /// <summary>Whether this cuts nothing: one part over the whole source, no seam blend and no ease.</summary>
     [JsonIgnore]
-    public bool Whole => Parts.Length == 1 && Parts[0].From == 0 && Parts[0].To == Source && Seam == null;
+    public bool Whole => Parts.Length == 1 && Parts[0].From == 0 && Parts[0].To == Source && Seam == null && Ease == 0;
 
     /// <summary>No cuts on a motion <paramref name="source"/> frames long.</summary>
     public static MotionCuts WholeOf(int source) => new(source, [new MotionPart(0, source)], []);
@@ -55,7 +65,7 @@ internal sealed record MotionCuts(int Source, ImmutableArray<MotionPart> Parts, 
     public void Validate()
     {
         var fits = Source is >= 2 and <= TimelineDocument.MaxLength && Parts.Length > 0 && Joins.Length == Parts.Length - 1 &&
-                   Joins.All(Fits) && (Seam == null || Fits(Seam));
+                   Joins.All(Fits) && (Seam == null || Fits(Seam)) && Ease is >= 0 and <= MotionJoin.MaxFrames;
         for (var i = 0; fits && i < Parts.Length; i++)
         {
             var part = Parts[i];
@@ -105,4 +115,12 @@ internal sealed record MotionCuts(int Source, ImmutableArray<MotionPart> Parts, 
 
     /// <summary>The output frame <paramref name="part"/> ends at.</summary>
     public double PartEnd(int part, int length) => (double)Parts.Take(part + 1).Sum(p => p.Frames) * length / Kept;
+
+    /// <summary>The output frames the seam's ease covers: the start's first or the end's last <see cref="Ease"/>, within their part.</summary>
+    public (double From, double To) EaseSpan(int length)
+    {
+        var part = EaseEnd ? Parts.Length - 1 : 0;
+        var frames = Math.Min(Ease, PartEnd(part, length) - PartStart(part, length));
+        return EaseEnd ? (length - frames, length) : (0, frames);
+    }
 }

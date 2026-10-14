@@ -40,6 +40,7 @@ public sealed partial class TimelineWindow
 
         var cuts = CutEdits.CutsOf(doc);
         var speeds = source is { Standalone: false } loaded ? SpeedLine(loaded) : null;
+        var ease = cuts.Ease > 0 && decoded != null && speeds != null ? MotionCutter.EaseOf(decoded, cuts, doc.Length) : (Frames: 0d, Rate: 1d, AtEnd: false);
         var barTop = top + Theme.Scaled(3);
         var barBottom = bottom - Theme.Scaled(3);
         var middle = (barTop + barBottom) / 2;
@@ -59,7 +60,7 @@ public sealed partial class TimelineWindow
             if (current.SelectedCut is { Target: TimelineCutTarget.Part, Index: var selected } && selected == i)
                 drawList.AddRect(new Vector2(left - 1, barTop - 1), new Vector2(right + 1, barBottom + 1), U32(Theme.Accent), rounding, ImDrawFlags.None, Theme.Scaled(2));
             if (speeds != null && speedLineMax > 0)
-                DrawSpeedLine(drawList, cuts, doc.Length, view, trackLeft, start, end, speeds, middle, barBottom, line);
+                DrawSpeedLine(drawList, cuts, ease, doc.Length, view, trackLeft, start, end, speeds, middle, barBottom, line);
             drawList.PushClipRect(new Vector2(left, top), new Vector2(right, bottom), true);
             drawList.AddText(new Vector2(left + Theme.Scaled(4), barTop + Theme.Scaled(1)), U32(Theme.Label), TimelineWindowViews.PartLabel(cuts.Parts[i]));
             drawList.PopClipRect();
@@ -95,6 +96,16 @@ public sealed partial class TimelineWindow
                 drawList.AddTriangleFilled(new Vector2(trackLeft + view.X(0), barTop),
                     new Vector2(trackLeft + view.X((float)after), barBottom), new Vector2(trackLeft + view.X(0), barBottom), fill);
         }
+        // The seam's ease, on a loop: a ramp from slow at the seam up to normal speed, and its inner edge as a line to drag.
+        if (current.Loops && cuts.Ease > 0)
+        {
+            var chosen = current.SelectedCut is { Target: TimelineCutTarget.Seam } || hit.Part is TimelinePart.Seam or TimelinePart.EaseEdge;
+            var (from, to) = cuts.EaseSpan(doc.Length);
+            float slow = trackLeft + view.X((float)(cuts.EaseEnd ? to : from)), full = trackLeft + view.X((float)(cuts.EaseEnd ? from : to));
+            drawList.AddTriangleFilled(new Vector2(slow, barBottom), new Vector2(full, barTop), new Vector2(full, barBottom),
+                U32(Theme.WithAlpha(Theme.Accent, chosen ? .6f : .35f)));
+            drawList.AddLine(new Vector2(Crisp(full), barTop), new Vector2(Crisp(full), barBottom), U32(Theme.Accent), line);
+        }
         DrawDecodeState(drawList, max, top, bottom);
         DrawSeamBadge(drawList, current, max, trackLeft, top, bottom);
         drawList.PopClipRect();
@@ -102,9 +113,12 @@ public sealed partial class TimelineWindow
         drawList.AddLine(new Vector2(min.X, Crisp(top)), new Vector2(max.X, Crisp(top)), U32(Theme.WithAlpha(Theme.TreeLine, .5f)), line);
     }
 
-    /// <summary>The speed line inside one part: the motion's speed at the source frame each output frame plays, in the bar's lower half.</summary>
-    private void DrawSpeedLine(ImDrawListPtr drawList, MotionCuts cuts, int length, TimelineView view, float trackLeft, double start, double end,
-        float[] speeds, float middle, float barBottom, float line)
+    /// <summary>
+    /// The speed line inside one part: the motion's speed at the source frame each output frame plays, in the
+    /// bar's lower half; under the start's <paramref name="ease"/> slowed as much as the ease slows it.
+    /// </summary>
+    private void DrawSpeedLine(ImDrawListPtr drawList, MotionCuts cuts, (double Frames, double Rate, bool AtEnd) ease, int length, TimelineView view,
+        float trackLeft, double start, double end, float[] speeds, float middle, float barBottom, float line)
     {
         var first = Math.Max(start, view.First);
         var last = Math.Min(end, view.Last);
@@ -117,8 +131,13 @@ public sealed partial class TimelineWindow
         for (var o = first; o <= last + step / 2; o += step)
         {
             var at = Math.Min(o, last);
-            var frame = Math.Clamp((int)cuts.SourceAt(at, length), 0, speeds.Length - 1);
-            var point = new Vector2(trackLeft + view.X((float)at), barBottom - Math.Min(1, speeds[frame] / speedLineMax) * height);
+            var played = MotionCutter.EasedTime(at, ease, length);
+            // How fast the ease plays this frame, a step forward, or back at the very end.
+            var probe = at + .1 <= length ? .1 : -.1;
+            var pace = ease.Frames > 0 ? (MotionCutter.EasedTime(at + probe, ease, length) - played) / probe : 1;
+            var frame = Math.Clamp((int)cuts.SourceAt(played, length), 0, speeds.Length - 1);
+            var speed = (float)(speeds[frame] * pace);
+            var point = new Vector2(trackLeft + view.X((float)at), barBottom - Math.Min(1, speed / speedLineMax) * height);
             if (previous is { } from)
                 drawList.AddLine(from, point, colour, line);
             previous = point;
@@ -181,7 +200,7 @@ public sealed partial class TimelineWindow
     private static bool DrawClipTooltip(TimelineHit hit, bool readOnly)
     {
         if (hit.Part is not (TimelinePart.ClipRow or TimelinePart.ClipPart or TimelinePart.ClipLeft or TimelinePart.ClipRight or
-                TimelinePart.Join or TimelinePart.JoinEdge or TimelinePart.Seam or TimelinePart.SeamEdge))
+                TimelinePart.Join or TimelinePart.JoinEdge or TimelinePart.Seam or TimelinePart.SeamEdge or TimelinePart.EaseEdge))
             return false;
         if (!Widgets.HoverDelay($"clip:{hit.Part}:{hit.Cut}"))
             return true;
@@ -190,8 +209,9 @@ public sealed partial class TimelineWindow
             TimelinePart.ClipLeft when !readOnly => "Drag to trim the start of this part.",
             TimelinePart.ClipRight when !readOnly => "Drag to trim the end of this part.",
             TimelinePart.JoinEdge or TimelinePart.SeamEdge when !readOnly => "Drag to change how long the blend is.",
+            TimelinePart.EaseEdge when !readOnly => "Drag to change how long the start eases in.",
             TimelinePart.Join => "The blend where two parts meet. Click to set it.",
-            TimelinePart.Seam => "The blend from the loop's end into its start. Click to set it.",
+            TimelinePart.Seam => "Where the loop's end runs back into its start. Click to set it.",
             _ => "C cuts at the playhead. Q and W remove before or after it. Right-click to cut here.",
         });
         return true;

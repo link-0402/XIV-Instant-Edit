@@ -15,7 +15,7 @@ internal sealed record JoinGap(float MeanAngle, float WorstAngle, string WorstBo
 
 /// <summary>
 /// A loop's seam: its gap, the clip's typical speed (the median per-frame mean bone speed), the frame
-/// a stall into the start begins at when the loop slows to a stop before starting again, and its state.
+/// a hold of the start's pose begins at when the loop ends standing still on it, and its state.
 /// </summary>
 internal sealed record SeamReport(JoinGap Gap, float TypicalSpeed, int? StallFrom, SeamState State);
 
@@ -25,11 +25,17 @@ internal sealed record SeamReport(JoinGap Gap, float TypicalSpeed, int? StallFro
 /// </summary>
 internal static class LoopSeam
 {
-    /// <summary>A loop stalls when its last three frames move under this share of its typical speed.</summary>
-    public const float StallShare = .4f;
-
     /// <summary>A speed jump at the seam over this share of the typical speed counts as a stall.</summary>
     public const float JumpShare = .5f;
+
+    /// <summary>
+    /// An end holds the start's pose while every bone stays this close to it, in degrees: tight enough
+    /// that a motion only slowing into the pose, as most loops end, doesn't count.
+    /// </summary>
+    public const float HoldDegrees = .25f;
+
+    /// <summary>The shortest hold that stalls, in frames.</summary>
+    public const int HoldFrames = 3;
 
     /// <summary>A mean pose gap of this many degrees or more pops.</summary>
     public const float PopDegrees = 1f;
@@ -39,15 +45,6 @@ internal static class LoopSeam
     /// do: its seam can pop but never stalls, since a change of speed that small doesn't show.
     /// </summary>
     public const float MinSpeed = .3f;
-
-    /// <summary>
-    /// The longest stall, in frames: a loop closing in on its start for longer is its own motion
-    /// coming round, not a settle to trim.
-    /// </summary>
-    public const int StallFrames = 30;
-
-    // How much a walk back from the end may shrink the distance to the start and still go on, in degrees.
-    private const float WalkTolerance = .05f;
 
     /// <summary>For each frame f from 0 to the clip's last but one, the mean bone angle from frame f to f + 1.</summary>
     public static float[] Speeds(MotionClip clip)
@@ -93,27 +90,15 @@ internal static class LoopSeam
         var typical = span.Length % 2 == 1 ? span[span.Length / 2] : (span[span.Length / 2 - 1] + span[span.Length / 2]) / 2;
         var gap = Gap(clip, to, from);
 
-        // Walk back from the end while the distance to the start keeps growing: where the walk stops,
-        // the motion began closing in on the start's pose.
+        // Walk back from the end while every bone stays on the start's pose: those frames hold still on
+        // it. A motion slowing into the pose leaves it too soon to count, and is left to the ease.
         var bones = Tracked(clip);
         var start = Rotations(clip, from, bones);
-        var after = Mean(Rotations(clip, to, bones), start);
-        var f = to - 1;
-        var limit = Math.Max(from, to - StallFrames - 1);
-        while (f > limit)
-        {
-            var distance = Mean(Rotations(clip, f, bones), start);
-            if (distance <= after - WalkTolerance)
-                break;
-            after = distance;
+        var f = to + 1;
+        while (f - 1 > from && Worst(Rotations(clip, f - 1, bones), start) <= HoldDegrees)
             f--;
-        }
-        // A walk that never stopped found the motion's own way round, not a settle.
-        var candidate = f == limit ? to : f + 1;
-        var last = Math.Max(from, to - 3);
-        var ending = speeds.AsSpan(last, to - last).ToArray().DefaultIfEmpty(0).Average();
         var moves = typical >= MinSpeed;
-        int? stall = moves && ending < StallShare * typical && candidate < to - 1 ? candidate : null;
+        int? stall = moves && f <= to - HoldFrames ? f : null;
         var state = stall != null || moves && Math.Abs(gap.SpeedOut - gap.SpeedIn) > JumpShare * typical ? SeamState.Stalls
             : gap.MeanAngle >= PopDegrees ? SeamState.Pops : SeamState.Clean;
         return new SeamReport(gap, typical, stall, state);
@@ -139,6 +124,14 @@ internal static class LoopSeam
             rotations[i] = high == low || t <= 0 ? clip.Get(low, bones[i]).Rotation
                 : MotionEvaluator.Slerp(clip.Get(low, bones[i]).Rotation, clip.Get(high, bones[i]).Rotation, t);
         return rotations;
+    }
+
+    private static float Worst(Quaternion[] a, Quaternion[] b)
+    {
+        float worst = 0;
+        for (var i = 0; i < a.Length; i++)
+            worst = Math.Max(worst, Angle(a[i], b[i]));
+        return worst;
     }
 
     private static float Mean(Quaternion[] a, Quaternion[] b)

@@ -57,6 +57,8 @@ internal static class CutEditsFixture
               AnimationEditService.RetimeSeconds(CutEdits.SetSeam(doc, MotionJoin.ForSeam)) == 100 / 30f &&
               AnimationEditService.RetimeSeconds(doc) == null && !AnimationBakeRules.ChangesMotion(doc),
             "cuts bake and always carry the output length; an untouched document bakes nothing");
+        check(AnimationBakeRules.ChangesMotion(CutEdits.SetEase(doc, 30)) && AnimationEditService.RetimeSeconds(CutEdits.SetEase(doc, 30)) == 100 / 30f,
+            "an eased start bakes at the same length");
         var options = new JsonSerializerOptions { IncludeFields = true };
         var journalJson = JsonSerializer.Serialize(new AnimationTimelineEdit(false, 0, 80 / 30f, [], null, cutDoc.Cuts), options);
         check(JsonSerializer.Deserialize<AnimationTimelineEdit>(journalJson, options)!.Cuts!.Parts.Length == 2 &&
@@ -86,8 +88,8 @@ internal static class CutEditsFixture
         check(editor.Key(TimelineKey.Cut) && editor.Document.Cuts!.Parts.Length == 2, "C cuts at the playhead");
         editor.Playhead = 70;
         check(editor.Key(TimelineKey.RemoveAfter) && editor.Document.Length == 70, "W removes from the playhead to the part's end");
-        check(!editor.SetSeam(MotionJoin.ForSeam) && !editor.FixLoop(new SeamReport(new JoinGap(0, 0, "", 0, 0), 1, null, SeamState.Clean)),
-            "a clip that doesn't loop takes no seam");
+        check(!editor.SetSeam(MotionJoin.ForSeam) && !editor.FixLoop(new SeamReport(new JoinGap(0, 0, "", 0, 0), 1, null, SeamState.Clean)) &&
+              !editor.SetEase(30), "a clip that doesn't loop takes no seam");
         editor.SelectCut(new TimelineCutSelection(TimelineCutTarget.Part, 0));
         check(editor.Key(TimelineKey.Delete) && editor.Document.Length == 40 && editor.Undo() && editor.Document.Length == 70, "Delete removes a part; undo brings it back");
         // Q at 50, on the part playing 30 to 70, removes 30 to 50: the events starting at 30 and 45, and the key at 40.
@@ -108,6 +110,26 @@ internal static class CutEditsFixture
         dragging.Release();
         check(dragging.Document.Cuts!.Joins[0].Frames == 18 && dragging.SelectedCut == new TimelineCutSelection(TimelineCutTarget.Join, 0),
             "dragging a centred blend's edge 3 frames out makes it 6 frames longer");
+
+        var eased = CutEdits.SetEase(two, 20);                            // frames 0-20 = x 100-180
+        check(At(eased, 180, loops: true).Part == TimelinePart.EaseEdge && At(eased, 150, loops: true).Part == TimelinePart.Seam &&
+              At(eased, 180).Part == TimelinePart.ClipPart, "the ease's edge and body are hit only on a looping clip");
+        var easing = new TimelineEditor(eased) { Snap = false, Loops = true };
+        var steps = easing.History.UndoCount;
+        easing.Press(At(eased, 180, loops: true));
+        easing.Drag(26);
+        easing.Release();
+        check(easing.Document.Cuts!.Ease == 26 && easing.History.UndoCount == steps + 1 &&
+              easing.SelectedCut == new TimelineCutSelection(TimelineCutTarget.Seam, -1),
+            "dragging the ease's edge sets its length as one undo step and selects the seam");
+        var endEased = CutEdits.SetEase(two, 20, atEnd: true);            // output frames 60-80 = x 340-420
+        check(At(endEased, 340, loops: true).Part == TimelinePart.EaseEdge && At(endEased, 380, loops: true).Part == TimelinePart.Seam,
+            "an end's ease is hit at the end");
+        var easingEnd = new TimelineEditor(endEased) { Snap = false, Loops = true };
+        easingEnd.Press(At(endEased, 340, loops: true));
+        easingEnd.Drag(56);
+        easingEnd.Release();
+        check(easingEnd.Document.Cuts is { Ease: 24, EaseEnd: true }, "dragging an end's ease edge left makes it longer");
     }
 
     private static void Ripple(Action<bool, string> check)
@@ -129,10 +151,24 @@ internal static class CutEditsFixture
         check(half.Cuts!.Parts[1] == new MotionPart(50, 100) && half.Length == 90 && Find(half, "t5")!.Start == 60, "a partial trim back inserts frames");
         var stretched = CutEdits.RemoveRange(doc with { Length = 200 }, 80, 120, out _);
         check(stretched.Length == 160 && stretched.Cuts!.Parts[1].From == 60, "a stretch maps output frames to source frames");
-        var fixedLoop = CutEdits.FixLoop(doc, new SeamReport(new JoinGap(0, 0, "", .2f, 1.6f), 1.4f, 88, SeamState.Stalls));
-        check(fixedLoop.Length == 88 && fixedLoop.Cuts is { Parts: [{ To: 88 }], Seam: var s } && s == MotionJoin.ForSeam, "Fix loop trims the stall and sets the seam");
-        check(CutEdits.FixLoop(doc, new SeamReport(new JoinGap(20, 30, "x", 3, 3), 3, null, SeamState.Pops)) is { Length: 100, Cuts.Seam: not null },
-            "without a stall Fix loop keeps the length");
+        var slowEnd = CutEdits.FixLoop(doc, new SeamReport(new JoinGap(0, 0, "", .2f, 1.6f), 1.4f, null, SeamState.Stalls));
+        check(slowEnd is { Length: 100, Cuts: { Parts: [{ From: 0, To: 100 }], Seam: null, Ease: MotionCuts.DefaultEase } },
+            "Fix loop eases the start of a loop that arrives slower than it leaves, trimming nothing");
+        var held = CutEdits.FixLoop(doc, new SeamReport(new JoinGap(0, 0, "", 0, 1.6f), 1.4f, 88, SeamState.Stalls));
+        check(held is { Length: 88, Cuts: { Parts: [{ To: 88 }], Seam: null, Ease: MotionCuts.DefaultEase } },
+            "Fix loop trims an end that holds frame 0's pose, then eases the start");
+        check(CutEdits.FixLoop(doc, new SeamReport(new JoinGap(20, 30, "x", 3, 3), 3, null, SeamState.Pops)) is
+              { Length: 100, Cuts: { Seam: not null, Ease: 0 } },
+            "a pose jump gets a blend and keeps the length");
+        check(CutEdits.FixLoop(doc, new SeamReport(new JoinGap(20, 30, "x", .2f, 3), 3, null, SeamState.Stalls)) is
+              { Cuts: { Seam: not null, Ease: 0 } },
+            "a pose jump into a faster start gets only the blend, which matches the speeds too");
+        check(CutEdits.FixLoop(doc, new SeamReport(new JoinGap(0, 0, "", 3, .5f), 1.4f, null, SeamState.Stalls)) is
+              { Length: 100, Cuts: { Ease: MotionCuts.DefaultEase, EaseEnd: true, Seam: null } } &&
+              slowEnd.Cuts!.EaseEnd == false, "a loop that arrives faster than it leaves eases its end instead");
+        check(CutEdits.SetEase(doc, 90).Cuts!.Ease == 60 && CutEdits.SetEase(CutEdits.SetEase(doc, 20), 0).Cuts == null &&
+              CutEdits.SetEase(doc, 20, atEnd: true).Cuts is { Ease: 20, EaseEnd: true } && CutEdits.SetEase(slowEnd, 30, atEnd: true).Cuts!.EaseEnd,
+            "an ease clamps to 60, takes a side, and none leaves the motion whole");
         check(ReferenceEquals(CutEdits.RemoveRange(doc, 1, 100, out _), doc), "a cut leaving under 2 frames is refused");
         var expression = doc with { Expression = true };
         check(ReferenceEquals(CutEdits.RemoveRange(expression, 10, 20, out _), expression), "an expression's timeline is never cut");
