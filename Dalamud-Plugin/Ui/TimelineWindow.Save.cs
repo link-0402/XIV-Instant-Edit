@@ -131,7 +131,7 @@ public sealed partial class TimelineWindow
             return "Another edit is running. Wait for it to end.";
         if (destination == AnimationDestination.NewMod && !PenumbraService.IsSafeNewModName(modName.Trim()))
             return "Choose a valid mod name.";
-        return LookMissing(current.Document) ?? SoundMissing(current.Document);
+        return LookMissing(current.Document) ?? SoundMissing(current.Document) ?? SoundCutMissing(current.Document);
     }
 
     /// <summary>

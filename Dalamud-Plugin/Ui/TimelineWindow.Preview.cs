@@ -216,7 +216,7 @@ public sealed partial class TimelineWindow
         ImmutableDictionary<string, TimelineEffectEdit> looks;
         try
         {
-            if ((LookMissing(document) ?? SoundMissing(document)) is { } missing)
+            if ((LookMissing(document) ?? SoundMissing(document) ?? SoundCutMissing(document)) is { } missing)
                 throw new InvalidDataException(missing);
             // Effect looks point the effect's own path at an edited copy: the game may keep playing the clip's
             // loaded file, which names that path, and later look changes then show without building again.

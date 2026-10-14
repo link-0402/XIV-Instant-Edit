@@ -96,6 +96,19 @@ internal sealed record TimelineDocument(
     public bool Stretched => Length != KeptFrames;
 
     /// <summary>
+    /// For sounds that play across a cut (see <see cref="TimelineSoundCuts"/>), by event key: true cuts the
+    /// sound's audio with the motion, false leaves it whole. A crossing sound without a choice holds back
+    /// saving and previewing.
+    /// </summary>
+    public ImmutableDictionary<string, bool> SoundCuts
+    {
+        get => soundCuts;
+        init => soundCuts = value ?? ImmutableDictionary<string, bool>.Empty.WithComparers(StringComparer.Ordinal);
+    }
+
+    private readonly ImmutableDictionary<string, bool> soundCuts = ImmutableDictionary<string, bool>.Empty.WithComparers(StringComparer.Ordinal);
+
+    /// <summary>
     /// The bone layers that change the clip's motion, applied in this order (see
     /// <see cref="MotionEvaluator"/>). Saving bakes them into the motion; empty when the motion is not edited.
     /// </summary>

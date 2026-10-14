@@ -784,6 +784,19 @@ internal sealed class TimelineEditor
     /// <summary>Fixes the loop's seam by <paramref name="report"/> (see <see cref="CutEdits.FixLoop(TimelineDocument, SeamReport)"/>), as one undo step.</summary>
     public bool FixLoop(SeamReport report) => Loops && Cutting(CutEdits.FixLoop(Document, report, out var removed), removed);
 
+    /// <summary>
+    /// Whether the sound <paramref name="eventKey"/>, which plays across a cut, is cut with the motion
+    /// (true), left whole (false) or not decided (null), as one undo step.
+    /// </summary>
+    public bool SetSoundCut(string eventKey, bool? cut)
+    {
+        var doc = Document;
+        var cuts = doc.SoundCuts;
+        if (cuts.TryGetValue(eventKey, out var was) ? was == cut : cut == null)
+            return false;
+        return Commit(doc with { SoundCuts = cut is { } value ? cuts.SetItem(eventKey, value) : cuts.Remove(eventKey) });
+    }
+
     /// <summary>Selects a part, join or the seam of the cut motion; the event and layer selection clears.</summary>
     public void SelectCut(TimelineCutSelection? cut)
     {

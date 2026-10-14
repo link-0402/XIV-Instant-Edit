@@ -239,6 +239,7 @@ public sealed partial class TimelineWindow
                         current.Replace(With(ev, LoopField, option));
         }
         Tip("Once plays the sound once. Keep looping keeps it going while the animation loops.");
+        DrawSoundCutChoice(current, ev, editable);
         if (loop == -1 && shown is { Model: not null } && !TimelineWindowViews.FileLoops(shown.Bytes, sound))
         {
             Widgets.HintWrapped("The file has no loop points, so it plays once.");
