@@ -52,17 +52,21 @@ internal static class MotionCutter
             blends.Add(Gap(source, a, Speed(source, a, 0), b, Speed(source, b, 0), scale, cuts.PartEnd(i, length), before, after,
                 cuts.Joins[i].Placement, seam: false));
         }
+        var ease = EaseOf(source, cuts, length);
         if (cuts.Seam is { } seam)
         {
             var (before, after) = Window(cuts, -1, length);
             if (before > 0 || after > 0)
             {
                 int a = cuts.Parts[^1].To, b = cuts.Parts[0].From;
-                blends.Add(Gap(source, a, Speed(source, a, -1), b, Speed(source, b, 1), scale, length, before, after, seam.Placement, seam: true));
+                // An eased side plays at the ease's rate at the seam: the blend aims at that speed, not its own.
+                var (end, start) = (Speed(source, a, -1), Speed(source, b, 1));
+                if (ease.Frames > 0)
+                    (end, start) = ease.AtEnd ? (Scaled(end, ease.Rate), start) : (end, Scaled(start, ease.Rate));
+                blends.Add(Gap(source, a, end, b, start, scale, length, before, after, seam.Placement, seam: true));
             }
         }
 
-        var ease = EaseOf(source, cuts, length);
         var pose = new MotionTransform[source.Bones];
         var floats = new float[floatTracks];
         for (var k = 0; k < samples; k++)
@@ -239,6 +243,15 @@ internal static class MotionCutter
         for (var f = 0; f < floatCount; f++)
             floats[f] = (bf[f] - af[f]) / span;
         return (position, rotation, scale, floats);
+    }
+
+    /// <summary>Speeds <paramref name="factor"/> times as fast.</summary>
+    private static (Vector3[] Position, Vector3[] Rotation, Vector3[] Scale, float[] Floats) Scaled(
+        (Vector3[] Position, Vector3[] Rotation, Vector3[] Scale, float[] Floats) speed, double factor)
+    {
+        var k = (float)factor;
+        return ([.. speed.Position.Select(v => v * k)], [.. speed.Rotation.Select(v => v * k)], [.. speed.Scale.Select(v => v * k)],
+            [.. speed.Floats.Select(v => v * k)]);
     }
 
     private static (MotionTransform[] Pose, float[] Floats) PoseAt(MotionClip source, double frame, int floatCount)

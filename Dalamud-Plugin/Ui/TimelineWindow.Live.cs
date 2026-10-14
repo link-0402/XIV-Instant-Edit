@@ -174,7 +174,9 @@ public sealed partial class TimelineWindow
                 lastSeekFrame = -1;
                 // After a save the game plays either file until it reloads the clip: the one saved or the one before.
                 if (!motionDisplay.Start(actor, clip.BindingFingerprint, [fresh.FileFingerprint, fresh.BaseFingerprint ?? string.Empty],
-                        decoded, current.Document.Motion, current.Document.ExcludedBones, current.Document.Cuts, LiveLength(current.Document)))
+                        decoded, current.Document.Motion, current.Document.ExcludedBones, current.Document.Cuts, LiveLength(current.Document),
+                        // Edited again, the game plays the saved file, as long as the edit made it.
+                        fresh.BaseMotion != null ? fresh.Clip.Duration : null))
                 {
                     var error = motionDisplay.Error;
                     StopLive();

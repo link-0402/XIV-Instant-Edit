@@ -154,11 +154,13 @@ public sealed partial class TimelineWindow
         ImmutableDictionary<string, Func<byte[], byte[]>> rebuild;
         ImmutableDictionary<string, TimelineSoundReplacement> replaced;
         ImmutableDictionary<string, string> copied;
+        ImmutableDictionary<string, string> cutSounds;
         try
         {
             (saved, var used) = WithLooks(document);
             var sounds = WithSoundCuts(WithSounds(saved, SoundRoute(place)), saved, SoundBytes);
             saved = sounds.Document;
+            cutSounds = sounds.CutFrom;
             used.AddRange(sounds.Copies);
             replaced = sounds.InPlace;
             // The sounds copies were made from, as read from the collection (an import's own file isn't there yet).
@@ -194,7 +196,7 @@ public sealed partial class TimelineWindow
             {
                 playback.Stop();
                 return service.EditTimeline(target, saved, place, name, added, beside, motionFrames, repair, rebuild,
-                    replaced.IsEmpty ? null : replaced, copied.IsEmpty ? null : copied);
+                    replaced.IsEmpty ? null : replaced, copied.IsEmpty ? null : copied, cutSounds);
             });
         });
     }
@@ -267,13 +269,14 @@ public sealed partial class TimelineWindow
 
     /// <summary>
     /// Before a save: keeps the motion the layers apply to, and the layers themselves, so the clip read
-    /// back after the save goes on editing them rather than stacking them on the saved result. A new
-    /// length, bones left out or a repair bake them in for good.
+    /// back after the save goes on editing them rather than stacking them on the saved result. Cuts, a
+    /// new length, bones left out or a repair read the saved file back as it is instead (see
+    /// <see cref="AnimationBakeRules.KeepsLayersOverSave"/>); Edit again brings cuts and layers back.
     /// </summary>
     private void KeepMotionForSave(AnimationTimelineSource loaded, TimelineDocument document, SkeletonStandard? repair)
     {
         var clip = ClipKey(loaded);
-        if (AnimationBakeRules.BakesLayersIn(document, repair))
+        if (!AnimationBakeRules.KeepsLayersOverSave(document, repair))
         {
             motionBase = null;
             motionCarry = null;
@@ -358,8 +361,9 @@ public sealed partial class TimelineWindow
             if (ImGui.Button("Undo last save") && journal != null)
             {
                 jobClip = source is { } shown ? ClipKey(shown) : null;
-                // The layers stay, as unsaved edits on the motion they apply to.
-                if (source != null && !current.Document.Motion.IsEmpty)
+                // The layers stay, as unsaved edits on the motion they apply to; layers keyed in cut or
+                // stretched frames don't fit the file the undo brings back.
+                if (source != null && !current.Document.Motion.IsEmpty && AnimationBakeRules.KeepsLayersOverSave(current.Document, repairTarget))
                     motionCarry = (ClipKey(source), current.Document.Motion, current.Document.NextMotionKey, true);
                 StopPreview();
                 service.Undo(journal);

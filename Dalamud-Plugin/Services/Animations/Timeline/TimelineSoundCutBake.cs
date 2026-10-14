@@ -9,7 +9,8 @@ internal static partial class TimelineSoundEdits
     /// <see cref="TimelineDocument.SoundCuts"/>) cut: each such event plays a copy of the file it plays
     /// after <see cref="Bake"/>, without the spans the cuts take out of its audio
     /// (<see cref="TimelineSoundCuts.Spans"/>), at sound/instant_edit/name_cut_hash.scd. The copies go
-    /// with the animation. <paramref name="sound"/> gives a file the bake didn't write, by game path;
+    /// with the animation, and <see cref="TimelineSoundBake.CutFrom"/> says what each was cut from.
+    /// <paramref name="sound"/> gives a file the bake didn't write, by game path;
     /// <paramref name="template"/> is the SCD imports are built on; <paramref name="audioSeconds"/> how
     /// long an event's sound plays. The choices are cleared, as they are written now.
     /// </summary>
@@ -22,6 +23,7 @@ internal static partial class TimelineSoundEdits
         var updated = events.ToBuilder();
         var written = baked.Copies.ToDictionary(c => c.GamePath, StringComparer.OrdinalIgnoreCase);
         var added = new Dictionary<string, TimelineImport>(StringComparer.OrdinalIgnoreCase);
+        var cutFrom = baked.CutFrom.ToBuilder();
         for (var i = 0; i < events.Length; i++)
         {
             var ev = events[i];
@@ -41,12 +43,35 @@ internal static partial class TimelineSoundEdits
             var cutPath = CopyPath($"{BaseName(path)}_cut", cutBytes);
             if (!written.ContainsKey(cutPath))
                 added.TryAdd(cutPath, Copy(cutPath, cutBytes, null, null));
+            cutFrom[cutPath] = path;
             updated[i] = ev with { Path = cutPath };
         }
         return baked with
         {
             Document = doc with { Events = updated.ToImmutable(), SoundCuts = doc.SoundCuts.Clear() },
             Copies = [.. baked.Copies, .. added.Values],
+            CutFrom = cutFrom.ToImmutable(),
         };
+    }
+
+    /// <summary>
+    /// <paramref name="doc"/> with every event that plays a copy a save cut (<paramref name="cutFrom"/>, by
+    /// game path) playing the file it was cut from again, chosen to be cut with the motion: the next save
+    /// cuts that file once, by the cuts as they are then, instead of cutting the cut copy again.
+    /// </summary>
+    public static TimelineDocument Uncut(TimelineDocument doc, IReadOnlyDictionary<string, string>? cutFrom)
+    {
+        if (cutFrom is not { Count: > 0 } || doc.Events.IsDefaultOrEmpty)
+            return doc;
+        var sources = cutFrom.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+        var events = doc.Events.ToBuilder();
+        var choices = doc.SoundCuts;
+        for (var i = 0; i < events.Count; i++)
+            if (sources.TryGetValue(events[i].Path, out var whole))
+            {
+                choices = choices.SetItem(events[i].Key, true);
+                events[i] = events[i] with { Path = whole };
+            }
+        return ReferenceEquals(choices, doc.SoundCuts) ? doc : doc with { Events = events.ToImmutable(), SoundCuts = choices };
     }
 }

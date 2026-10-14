@@ -59,11 +59,22 @@ internal static class CutEditsFixture
             "cuts bake and always carry the output length; an untouched document bakes nothing");
         check(AnimationBakeRules.ChangesMotion(CutEdits.SetEase(doc, 30)) && AnimationEditService.RetimeSeconds(CutEdits.SetEase(doc, 30)) == 100 / 30f,
             "an eased start bakes at the same length");
+        // A save that cuts or stretches leaves a timeline in other frames than the motion from before it: the
+        // window reads the saved file back as it is, and Edit again brings the cuts and layers back.
+        check(AnimationBakeRules.KeepsLayersOverSave(doc) && !AnimationBakeRules.KeepsLayersOverSave(cutDoc) &&
+              !AnimationBakeRules.KeepsLayersOverSave(doc with { Length = 120 }) && !AnimationBakeRules.KeepsLayersOverSave(CutEdits.SetEase(doc, 30)) &&
+              !AnimationBakeRules.KeepsLayersOverSave(doc with { ExcludedBones = ["j_kosi"] }),
+            "only a save that keeps the motion's frames goes on editing its layers on the motion from before");
         var options = new JsonSerializerOptions { IncludeFields = true };
         var journalJson = JsonSerializer.Serialize(new AnimationTimelineEdit(false, 0, 80 / 30f, [], null, cutDoc.Cuts), options);
         check(JsonSerializer.Deserialize<AnimationTimelineEdit>(journalJson, options)!.Cuts!.Parts.Length == 2 &&
               JsonSerializer.Deserialize<AnimationTimelineEdit>("{\"Startup\":false,\"EntryIndex\":0,\"DurationSeconds\":null}", options)!.Cuts == null,
             "journals carry cuts, and older ones load without");
+        var cutSounds = ImmutableDictionary<string, string>.Empty.Add("sound/instant_edit/song_cut_ab.scd", "sound/test/song.scd");
+        var withSounds = JsonSerializer.Serialize(new AnimationTimelineEdit(false, 0, 80 / 30f, [], null, cutDoc.Cuts, cutSounds), options);
+        check(JsonSerializer.Deserialize<AnimationTimelineEdit>(withSounds, options)!.CutSounds!["sound/instant_edit/song_cut_ab.scd"] == "sound/test/song.scd" &&
+              JsonSerializer.Deserialize<AnimationTimelineEdit>(journalJson, options)!.CutSounds == null,
+            "journals carry the sounds a save cut and what they were cut from, and older ones load without");
     }
 
     private static void Editor(Action<bool, string> check)
@@ -166,6 +177,11 @@ internal static class CutEditsFixture
         check(CutEdits.FixLoop(doc, new SeamReport(new JoinGap(0, 0, "", 3, .5f), 1.4f, null, SeamState.Stalls)) is
               { Length: 100, Cuts: { Ease: MotionCuts.DefaultEase, EaseEnd: true, Seam: null } } &&
               slowEnd.Cuts!.EaseEnd == false, "a loop that arrives faster than it leaves eases its end instead");
+        // A blend and an ease fight over the speed at the seam: Fix loop keeps one of them.
+        check(CutEdits.FixLoop(slowEnd, new SeamReport(new JoinGap(20, 30, "x", 3, 3), 3, null, SeamState.Pops)).Cuts is { Seam: not null, Ease: 0 } &&
+              CutEdits.FixLoop(CutEdits.SetSeam(doc, MotionJoin.ForSeam), new SeamReport(new JoinGap(0, 0, "", .2f, 1.6f), 1.4f, null, SeamState.Stalls)).Cuts is
+                  { Seam: null, Ease: MotionCuts.DefaultEase },
+            "Fix loop sets a blend or an ease, never both");
         check(CutEdits.SetEase(doc, 90).Cuts!.Ease == 60 && CutEdits.SetEase(CutEdits.SetEase(doc, 20), 0).Cuts == null &&
               CutEdits.SetEase(doc, 20, atEnd: true).Cuts is { Ease: 20, EaseEnd: true } && CutEdits.SetEase(slowEnd, 30, atEnd: true).Cuts!.EaseEnd,
             "an ease clamps to 60, takes a side, and none leaves the motion whole");

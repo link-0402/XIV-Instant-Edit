@@ -28,4 +28,13 @@ internal static class AnimationBakeRules
     /// </summary>
     public static bool BakesLayersIn(TimelineDocument document, SkeletonStandard? repair = null) =>
         !document.ExcludedBones.IsEmpty || repair != null;
+
+    /// <summary>
+    /// Whether the Timeline window goes on editing <paramref name="document"/>'s bone layers on the motion
+    /// from before once it is saved or the save undone: not when the save bakes them in for good, and not
+    /// when it cuts or stretches the motion, whose saved timeline is then in other frames than that motion.
+    /// The saved file is read back as it is, and Edit again brings the cuts, length and layers back.
+    /// </summary>
+    public static bool KeepsLayersOverSave(TimelineDocument document, SkeletonStandard? repair = null) =>
+        !BakesLayersIn(document, repair) && !document.Cut && !document.Stretched;
 }

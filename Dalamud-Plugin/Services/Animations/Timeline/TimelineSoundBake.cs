@@ -23,6 +23,12 @@ internal sealed record TimelineSoundBake(TimelineDocument Document, ImmutableArr
     /// made from: a save checks they are still what the collection gives, as it does for <see cref="InPlace"/>.
     /// </summary>
     public ImmutableDictionary<string, string> Bases { get; init; } = ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The copies sounds were cut into with the motion (see <see cref="TimelineSoundEdits.BakeCuts"/>), by
+    /// game path, with the file each was cut from: Edit again plays that file again and cuts it afresh.
+    /// </summary>
+    public ImmutableDictionary<string, string> CutFrom { get; init; } = ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
 }
 
 internal static partial class TimelineSoundEdits
