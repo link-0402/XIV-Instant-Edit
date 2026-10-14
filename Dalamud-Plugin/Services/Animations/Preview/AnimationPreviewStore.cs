@@ -102,6 +102,17 @@ internal static class AnimationPreviewRules
                string.Equals(Path.GetFileName(Path.GetDirectoryName(full)), CacheFolder, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary> True for a file inside a preview session folder, such as one a preview redirects a game path to. </summary>
+    public static bool IsPreviewFile(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
+            return false;
+        for (var folder = Path.GetDirectoryName(Path.GetFullPath(path)); !string.IsNullOrEmpty(folder); folder = Path.GetDirectoryName(folder))
+            if (IsSessionFolder(folder))
+                return true;
+        return false;
+    }
+
     /// <summary>
     /// The file each game path is written to inside <paramref name="revisionFolder"/>. Game paths
     /// are normalized; duplicates, unsafe paths and paths too long for Penumbra are refused.

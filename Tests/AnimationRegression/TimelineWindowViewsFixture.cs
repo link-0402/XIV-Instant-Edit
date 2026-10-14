@@ -1,13 +1,16 @@
 ﻿using System.Collections.Immutable;
 using System.Globalization;
 using InstantEdit.Models;
+using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
+using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui;
 
 /// <summary>
 /// The Timeline window's pure texts and choices: lane names and colours, event labels, why a save
-/// is blocked, the catalog key, the files a save packages, typed game paths and expression packs.
+/// is blocked, the catalog key, the files a save packages, typed game paths, expression packs and
+/// when the open file changed in the mods.
 /// </summary>
 internal static class TimelineWindowViewsFixture
 {
@@ -36,6 +39,7 @@ internal static class TimelineWindowViewsFixture
         Packs(check, texts);
         Texts(check, texts);
         Sounds(check, texts);
+        ChangedFiles(check);
         check(texts.All(text => !text.Contains("...", StringComparison.Ordinal) && !text.Contains('\u2026')),
             "Timeline window texts never use an ellipsis");
     }
@@ -305,6 +309,48 @@ internal static class TimelineWindowViewsFixture
         check(TimelineWindowViews.PackFor([], "smile") == null && TimelineWindowViews.PackFor(["smile", "emot/laugh"], "EMOT/LAUGH") == "EMOT/LAUGH" &&
               TimelineWindowViews.PackFor(["smile", "emot/laugh"], "illusio_vitae") == "smile" && TimelineWindowViews.PackFor(["smile"], null) == "smile",
             "A face is placed from no library when always loaded, from the timeline's own when it has the face, else from its first");
+    }
+
+    /// <summary>
+    /// "This file changed in your mods.": the newest capture of the open clip heard a file other than the one read and
+    /// opened. A preview's temporary file is no change in the mods (seen in game 2026-10-14: after Preview and Stop the
+    /// character went back to its idle, the preview's capture stayed the newest and the banner offered to reload it).
+    /// </summary>
+    private static void ChangedFiles(Action<bool, string> check)
+    {
+        const string pap = "chara/human/c0801/animation/a0001/bt_common/emote/dance05_loop.pap";
+        var mod = Path.Combine(Path.GetTempPath(), "Penumbra", "Tiktok Challenge Edit on Moogle Dance", "dance05_loop.pap");
+        var session = AnimationPreviewRules.SessionFolder(AnimationPreviewRules.PreviewRoot(Path.Combine(Path.GetTempPath(), "XIV Instant Edit")),
+            "eaec0bf7bb474a29");
+        var previewed = AnimationPreviewRules.PlanFiles(AnimationPreviewRules.RevisionFolder(session, 1), [pap])[pap];
+        var clip = new AnimationClip(pap, "loop", 0, 0, 42, "chara/test.sklb");
+        var pose = new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, "");
+        AnimationCapture Heard(string file, string hash, string id = "dance") => new(id, 1, 1, Guid.Empty, "Test", "Moogle Dance", clip, null,
+            [pap], [new AnimationResource(pap, file, hash)], pose, DateTime.UtcNow, true);
+        var opened = Heard(mod, "A1");
+        var current = new AnimationTimelineSource(opened, false, clip, opened.Sources[0], [], 0, [], null, null);
+        var changed = Heard(mod, "B2");
+        var preview = Heard(previewed, "CD94A887");
+        check(TimelineWindowViews.ChangedCapture([opened], current) == null && TimelineWindowViews.ChangedCapture([Heard(mod, "A1"), opened], current) == null,
+            "The file read is no change");
+        check(ReferenceEquals(TimelineWindowViews.ChangedCapture([changed, opened], current), changed), "Another file heard in the mods is a change");
+        check(TimelineWindowViews.ChangedCapture([Heard(mod, "B2", "other"), opened], current) == null, "Other clips' captures don't count");
+        check(TimelineWindowViews.ChangedCapture([preview, opened], current) == null, "The preview's temporary file is no change in the mods");
+        check(ReferenceEquals(TimelineWindowViews.ChangedCapture([preview, changed, opened], current), changed),
+            "A change heard before a preview still shows after it");
+
+        const string tmb = "chara/action/facial/pose/comeon.tmb";
+        var face = new AnimationResource(tmb, Path.Combine(Path.GetTempPath(), "Penumbra", "Faces", "comeon.tmb"), "F1");
+        var expression = opened with { ExpressionTimeline = face };
+        var standalone = new AnimationTimelineSource(expression, false, clip, face, [], -1, [], null, null);
+        var faceChanged = expression with { ExpressionTimeline = face with { Hash = "F2" } };
+        var facePreview = expression with
+        {
+            ExpressionTimeline = face with { ResolvedPath = AnimationPreviewRules.PlanFiles(AnimationPreviewRules.RevisionFolder(session, 2), [tmb])[tmb], Hash = "F3" },
+        };
+        check(ReferenceEquals(TimelineWindowViews.ChangedCapture([faceChanged, expression], standalone), faceChanged) &&
+              TimelineWindowViews.ChangedCapture([facePreview, expression], standalone) == null,
+            "An expression's own timeline counts the same way, its preview included");
     }
 
     /// <summary>The sound inspector's words: what each option of a sound event does.</summary>

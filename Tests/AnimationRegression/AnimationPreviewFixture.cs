@@ -99,6 +99,13 @@ internal static class AnimationPreviewFixture
               !AnimationPreviewRules.IsSessionFolder(Path.Combine(previewRoot, "notes")) &&
               !AnimationPreviewRules.IsSessionFolder(null),
             "a record cannot point the cleanup at the preview root, another cache folder, a relative path or a foreign folder");
+        check(first.Values.All(AnimationPreviewRules.IsPreviewFile) && AnimationPreviewRules.IsPreviewFile(first[pap].Replace('\\', '/')),
+            "a file a preview revision redirects a game path to is a preview file, whichever slashes Penumbra reports");
+        check(!AnimationPreviewRules.IsPreviewFile(Path.Combine(cache, "texture-edits", session, "1", "joy.pap")) &&
+              !AnimationPreviewRules.IsPreviewFile(Path.Combine(previewRoot, "notes", "joy.pap")) &&
+              !AnimationPreviewRules.IsPreviewFile(Path.Combine("animation-preview", session, "1", "joy.pap")) &&
+              !AnimationPreviewRules.IsPreviewFile(pap) && !AnimationPreviewRules.IsPreviewFile(null),
+            "mod files, game paths, other cache folders and foreign folders are not preview files");
 
         var penumbra = Path.Combine(Path.GetTempPath(), "InstantEditAnimationPreviewRegression", "Penumbra");
         check(AnimationPreviewRules.Overlaps(Path.Combine(penumbra, "XIV Instant Edit", "animation-preview"), penumbra) &&
