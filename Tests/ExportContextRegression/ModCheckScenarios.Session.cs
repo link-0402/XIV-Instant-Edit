@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using InstantEdit.Studio.Models.Project;
+using InstantEdit.Studio.Models.Resources;
 using InstantEdit.Studio.Services;
 using InstantEdit.Studio.Services.Check;
 using InstantEdit.Studio.Services.Project;
@@ -15,6 +16,7 @@ internal static partial class ModCheckScenarios
         AFailedCheckKeepsTheLastReport();
         AReportGoesStaleWhenTheModChanges();
         MarkersPickTheWorstFindingPerNode();
+        SharedBodyMaterialsAreNotMissing();
         OperationsAskForACheckAfter();
     }
 
@@ -85,6 +87,22 @@ internal static partial class ModCheckScenarios
         var node = graph.Find(GearMaterial, OptionRef.Default)!;
         Require(markers.Count == 1 && markers[node.Id].Severity == Severity.Error && markers[node.Id].Title == "Material sampler has no texture",
             "a file with findings is marked with the worst one; findings about no file mark nothing");
+    }
+
+    private static void SharedBodyMaterialsAreNotMissing()
+    {
+        using var mod = GearMod(model: ModCheckFixtures.Mdl(["/mt_c0201e0005_top_a.mtrl", "/mt_c0201b0001_bibo.mtrl",
+            "/mt_c0201b0001_piercings.mtrl", "/mt_c0201b0001_bibopube.mtrl", "/mt_c0201e0005_top_b.mtrl"]));
+        var meta = PenumbraModMeta.Load(mod.Path);
+        var graph = ResourceGraphBuilder.Build(new GraphInput { Folder = mod.Path, Files = meta.AllFiles().ToList(), Swaps = meta.AllSwaps().ToList() },
+            new ModFileFactsCache(), GearGame(), CancellationToken.None);
+
+        var origins = graph.Nodes.Values.Where(n => n.Kind == ResourceKind.Material).ToDictionary(n => Path.GetFileName(n.GamePath), n => n.Origin);
+        Require(origins["mt_c0201b0001_bibo.mtrl"] == OriginKind.Shared && origins["mt_c0201b0001_piercings.mtrl"] == OriginKind.Shared
+                && origins["mt_c0201b0001_bibopube.mtrl"] == OriginKind.Shared && origins["mt_c0201e0005_top_b.mtrl"] == OriginKind.Missing,
+            "skin, pubes and piercings materials the body mod provides are shared; the item's own lacking material is missing");
+        Require(graph.Unresolved == 1 && graph.Roots.Sum(r => r.MissingCount) == 1,
+            "only the item's own material counts as missing");
     }
 
     private static void OperationsAskForACheckAfter()
