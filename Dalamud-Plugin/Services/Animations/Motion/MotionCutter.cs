@@ -17,7 +17,10 @@ internal static class MotionCutter
     /// How many samples a cut of <paramref name="source"/> <paramref name="length"/> frames long has: as
     /// many per frame as the source has, at least one.
     /// </summary>
-    public static int OutputSamples(MotionClip source, int length) => checked(length * Rate(source) + 1);
+    public static int OutputSamples(MotionClip source, int length) => OutputSamples(source.Samples, source.Duration, length);
+
+    /// <summary>How many samples a cut <paramref name="length"/> frames long has of a source with <paramref name="samples"/> over <paramref name="duration"/> seconds.</summary>
+    public static int OutputSamples(int samples, float duration, int length) => checked(length * Rate(samples, duration) + 1);
 
     /// <summary>
     /// <paramref name="source"/> cut by <paramref name="cuts"/> into a clip <paramref name="length"/> frames
@@ -127,10 +130,12 @@ internal static class MotionCutter
     internal static float FallSpeed(float s) => s + s * s * s * (-6 + s * (8 - s * 3));
 
     /// <summary>Samples per timeline frame: the source's, at least one.</summary>
-    private static int Rate(MotionClip source)
+    private static int Rate(MotionClip source) => Rate(source.Samples, source.Duration);
+
+    private static int Rate(int samples, float duration)
     {
-        var frames = source.Duration * TimelineDocument.Fps;
-        return frames <= 0 ? 1 : Math.Max(1, (int)Math.Ceiling((source.Samples - 1) / frames - 1e-4));
+        var frames = duration * TimelineDocument.Fps;
+        return frames <= 0 ? 1 : Math.Max(1, (int)Math.Ceiling((samples - 1) / frames - 1e-4));
     }
 
     /// <summary>

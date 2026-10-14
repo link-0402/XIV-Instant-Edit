@@ -140,7 +140,8 @@ internal static class TimelineConvert
             throw new InvalidDataException($"{Describe(e)} cannot be deleted.");
 
         var expected = new List<(TimelineEvent Event, short Id)>();
-        var scaled = edited.Length != source.Length;
+        // A new length or cuts move what the user can't (locked starts and lengths) by scaling or ripple.
+        var scaled = edited.Length != source.Length || edited.Cut;
         // Copies of loaded entries first, while every entry still holds the bytes it was loaded
         // with: a copy takes all of its source's bytes, then the fields the document changed.
         foreach (var e in edited.Events.Where(e => !e.Key.StartsWith('t') && e.CloneOf is { } from && before.ContainsKey(from)))

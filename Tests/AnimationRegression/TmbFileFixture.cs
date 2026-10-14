@@ -26,6 +26,7 @@ internal static partial class TmbFileFixture
         Refusals(check, reject, original);
         Pap(check, reject, original);
         ReviewFixes(check, original);
+        Cuts(check);
         EffectLoops(check);
         EffectCopies(check, reject);
         EffectLooks(check, reject);
@@ -488,6 +489,29 @@ internal static partial class TmbFileFixture
         var shorter = expressionDoc with { Events = [expressionDoc.Events[0] with { Duration = 20 }] };
         check(TmbFile.Parse(TimelineConvert.Apply(expression, shorter)).Entries.Single().Int32(12) == 20,
             "an expression played by a C009 keeps the length the user gave it");
+    }
+
+    /// <summary>
+    /// A cut moves what can't be moved by hand: the motion lasting the clip gets its new length, and
+    /// a locked gameplay entry inside the removed frames goes to the cut.
+    /// </summary>
+    private static void Cuts(Action<bool, string> check)
+    {
+        var bytes = new Tmb().Head(100, null, 2).Actor(2, 3, 4).Track(3, 5).Track(4, 6)
+            .Motion(5, 100).Item("C013", TmbEntrySchema.Get("C013").Size, 6, 50).Build();
+        var doc = TimelineConvert.Read(TmbFile.Parse(bytes));
+        var cut = CutEdits.RemoveRange(doc, 40, 60, out _);
+        var saved = TimelineConvert.Apply(bytes, cut);
+        var entries = TmbFile.Parse(saved).Entries;
+        var reread = TimelineConvert.Read(TmbFile.Parse(saved));
+        check(doc.Events.Single(e => e.Magic == "C013").Access == TimelineAccess.Locked &&
+              entries.Single(e => e.Magic == "C009").Int32(12) == 80 && entries.Single(e => e.Magic == "C013").Time == 40 &&
+              reread.Events.Single(e => e.Magic == "C009").Duration == 80 && reread.Events.Single(e => e.Magic == "C013").Start == 40,
+            "a cut writes the motion's new length and moves a locked entry inside it to the cut");
+        var restretched = TimelineEdits.SetLength(cut, 100, false, doc);
+        check(restretched is { Length: 100, Cut: true } &&
+              TmbFile.Parse(TimelineConvert.Apply(bytes, restretched)).Entries.Single(e => e.Magic == "C013").Time == 40,
+            "a cut stretched back to the loaded length still saves the locked entry where the cut moved it");
     }
 
     private static readonly byte[] Lua = Ints(8, 1, 0x10, 2, 0);

@@ -121,7 +121,8 @@ internal static class TimelineEdits
             return doc;
         var ratio = old > 0 ? (double)length / old : 1;
         var original = loaded == null ? null : Events(loaded).ToDictionary(ev => ev.Key, StringComparer.Ordinal);
-        var restore = loaded != null && length == loaded.Length;
+        // A cut moved what the user can't, with the motion: back at the loaded length it stays where the cut put it.
+        var restore = loaded != null && length == loaded.Length && !doc.Cut;
         var events = Events(doc).ToBuilder();
         for (var index = 0; index < events.Count; index++)
         {

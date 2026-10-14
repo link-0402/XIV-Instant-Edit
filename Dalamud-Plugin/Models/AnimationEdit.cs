@@ -112,9 +112,12 @@ internal sealed record AnimationBakeRequest(Guid Id, AnimationCapture Capture, A
 /// <paramref name="MotionBaseHash"/> is the hash of the file whose motion the layers were baked onto, kept beside
 /// the journal so the edit can be opened again with its layers (Edit again); null without layers,
 /// with a new length, and in journals written before Edit again.
+/// <paramref name="Cuts"/> is how the motion was cut (parts, joins, loop seam), applied before the
+/// layers; null keeps it whole, as in journals written before cuts. With cuts,
+/// <paramref name="DurationSeconds"/> always holds the output length.
 /// </summary>
 internal sealed record AnimationTimelineEdit(bool Startup, int EntryIndex, float? DurationSeconds,
-    ImmutableArray<MotionLayer> Motion = default, string? MotionBaseHash = null)
+    ImmutableArray<MotionLayer> Motion = default, string? MotionBaseHash = null, MotionCuts? Cuts = null)
 {
     public ImmutableArray<MotionLayer> Motion { get; init; } = Motion.IsDefault ? [] : Motion;
 }

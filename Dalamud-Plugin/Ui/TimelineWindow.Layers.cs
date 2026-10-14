@@ -483,10 +483,10 @@ public sealed partial class TimelineWindow
 
     /// <summary>
     /// The motion's length in frames, as the bake and Live sample it: the clip's own, which the timeline's may
-    /// be a frame off; with a new length, the new one.
+    /// be a frame off; when cut or stretched, the new one.
     /// </summary>
     private static float MotionEnd(AnimationTimelineSource loaded, TimelineDocument doc) =>
-        !doc.LengthChanged && loaded.Clip.Duration > 0 ? loaded.Clip.Duration * TimelineDocument.Fps : doc.Length;
+        !doc.Stretched && !doc.Cut && loaded.Clip.Duration > 0 ? loaded.Clip.Duration * TimelineDocument.Fps : doc.Length;
 
     /// <summary>The decoded motion when it is this clip's current one; null while it is read, which this starts.</summary>
     private MotionClip? DecodedPose(AnimationTimelineSource loaded)
