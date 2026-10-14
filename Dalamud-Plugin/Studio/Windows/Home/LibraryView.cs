@@ -266,7 +266,8 @@ internal sealed class LibraryView
         scans.Need(usage: _show == ShowUnused, duplicates: _show == ShowDuplicates, changes: needChanges, installed,
             sizes: needSizes, activeIn: collection?.Id);
         var usage = scans.Usage;
-        var active = scans.Active;
+        // No collection known: no Active set either, not the last one's.
+        var active = collection == null ? null : scans.Active;
         var duplicates = scans.DuplicatesOf;
         var changes = scans.Changes;
         var sizes = scans.Sizes;
@@ -298,6 +299,7 @@ internal sealed class LibraryView
                 Gui.Hint(scans.Error
                     ?? (_show == ShowUnused && usage == null ? "Penumbra did not say which mods are enabled."
                       : needActive && active == null && collection == null ? "Penumbra did not say which collection your character uses."
+                      : needActive && active == null && scans.ActiveUnknown ? $"Penumbra did not say which mods are enabled in {collection?.Name}."
                       : "Waiting for the scan."));
             }
             return;

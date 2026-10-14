@@ -11,8 +11,10 @@ internal static class TimelineSoundUsage
     /// The mod's animations and effects (.pap, .tmb, .avfx files up to <see cref="AnimationPap.MaxFileSize"/>)
     /// other than <paramref name="excludeResolved"/> whose bytes name <paramref name="gamePath"/>, in
     /// any case: changing that sound in place changes them too. Paths relative to the mod, with "/".
+    /// When <paramref name="excludeResolved"/> is a PAP and <paramref name="excludeEntry"/> its edited
+    /// entry, each other entry whose timeline names the sound counts too, as "file.pap entry n".
     /// </summary>
-    public static IReadOnlyList<string> OtherUsers(string modRoot, string gamePath, string? excludeResolved)
+    public static IReadOnlyList<string> OtherUsers(string modRoot, string gamePath, string? excludeResolved, int excludeEntry = -1)
     {
         var needle = Encoding.ASCII.GetBytes(gamePath.ToLowerInvariant());
         var options = new EnumerationOptions
@@ -22,17 +24,39 @@ internal static class TimelineSoundUsage
         var users = new List<string>();
         foreach (var file in Directory.EnumerateFiles(modRoot, "*", options))
         {
-            if (Path.GetExtension(file).ToLowerInvariant() is not (".pap" or ".tmb" or ".avfx") ||
-                excludeResolved != null && PathRules.SamePhysicalPath(file, excludeResolved))
+            var extension = Path.GetExtension(file).ToLowerInvariant();
+            if (extension is not (".pap" or ".tmb" or ".avfx"))
                 continue;
             var info = new FileInfo(file);
             if (info.Length > AnimationPap.MaxFileSize)
                 continue;
+            var relative = Path.GetRelativePath(modRoot, file).Replace('\\', '/');
+            if (excludeResolved != null && PathRules.SamePhysicalPath(file, excludeResolved))
+            {
+                // The edited clip's own PAP: its other timelines play the same file.
+                if (extension == ".pap" && excludeEntry >= 0)
+                    users.AddRange(OtherEntries(new AnimationPap(File.ReadAllBytes(file)), excludeEntry, needle).Select(i => $"{relative} entry {i}"));
+                continue;
+            }
             if (Names(File.ReadAllBytes(file), needle))
-                users.Add(Path.GetRelativePath(modRoot, file).Replace('\\', '/'));
+                users.Add(relative);
         }
         return users;
     }
+
+    /// <summary>The entries of <paramref name="pap"/> other than <paramref name="exclude"/> whose timeline names <paramref name="lower"/>.</summary>
+    private static IEnumerable<int> OtherEntries(AnimationPap pap, int exclude, byte[] lower) =>
+        Enumerable.Range(0, pap.Entries.Length).Where(i => i != exclude && Names(pap.TimelineBytes(i), lower)).ToList();
+
+    /// <summary>
+    /// Of <paramref name="sounds"/> (game path, the file it resolves to), the game paths whose file
+    /// another of them resolves to as well. Writing one physical file over twice in one save can't
+    /// work, so those go into copies.
+    /// </summary>
+    public static IReadOnlySet<string> SharedFiles(IReadOnlyList<(string GamePath, string Resolved)> sounds) =>
+        sounds.Where(s => sounds.Any(o => !string.Equals(o.GamePath, s.GamePath, StringComparison.OrdinalIgnoreCase) &&
+                                          PathRules.SamePhysicalPath(o.Resolved, s.Resolved)))
+            .Select(s => s.GamePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// <paramref name="outputs"/> with the mod's sound files a save writes over in place. Each must be
@@ -54,6 +78,17 @@ internal static class TimelineSoundUsage
             outputs = outputs.SetItem(resource.GamePath, replacement.Bytes);
         }
         return outputs;
+    }
+
+    /// <summary>
+    /// Refuses a save whose sound copy of <paramref name="gamePath"/> was made from bytes
+    /// (<paramref name="baseHash"/>) the collection no longer gives (<paramref name="nowHash"/>):
+    /// the copy would drop the newer sound.
+    /// </summary>
+    public static void CheckCopied(string gamePath, string baseHash, string nowHash)
+    {
+        if (!string.Equals(baseHash, nowHash, StringComparison.OrdinalIgnoreCase))
+            throw new IOException($"{Path.GetFileName(gamePath)} changed while saving. Open the timeline again.");
     }
 
     /// <summary>Whether <paramref name="bytes"/> contain <paramref name="lower"/> (lowercase ASCII) in any case.</summary>

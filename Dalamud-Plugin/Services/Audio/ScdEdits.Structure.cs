@@ -47,8 +47,10 @@ internal static partial class ScdEdits
     /// <summary>
     /// Adds an alternative to a random set: a copy of the set's first track (or the clip's own when
     /// the set has none) waiting the clip's length, and the clip's audio. Chances that follow the
-    /// convention make room for an even share: the new one gets 100/(n+1), the others shrink to fit,
-    /// rounded down, and the remainder goes to the new one ([50, 50] becomes [33, 33, 34]).
+    /// convention make room for an even share of the part that plays (100 less what plays nothing):
+    /// the new one gets playing/(n+1), the others shrink to fit, rounded down, and the remainder goes
+    /// to the new one ([50, 50] becomes [33, 33, 34]; [30] with 70 playing nothing becomes [15, 15]).
+    /// Everything is worked out before the model changes, so a refused Add leaves it as it was.
     /// </summary>
     public static void Add(ScdModel m, int sound, ScdClip clip)
     {
@@ -57,18 +59,24 @@ internal static partial class ScdEdits
         if (target.Entries.Count >= byte.MaxValue)
             throw new InvalidDataException("A random set can hold at most 255 sounds.");
         var shares = Shares(target);
+        int[]? next = null;
+        if (shares != null)
+        {
+            var playing = 100 - shares.Nothing;
+            var others = Scale(shares.Shares, playing - playing / (shares.Shares.Length + 1));
+            next = [.. others, playing - others.Sum()];
+            if (next.Any(s => s < 0) || next.Sum() > 100)
+                throw new InvalidDataException("The chances can't make room for another sound.");
+        }
         var first = target.Entries.FindIndex(e => e.Track >= 0 && e.Track < m.Tracks.Count);
         var track = first >= 0 ? Fresh(m.Tracks[target.Entries[first].Track])
             : clip.Track is { } own ? Fresh(own) : throw new InvalidDataException("The new sound has no track to play it.");
-        MatchWait(track.Commands, Milliseconds(clip.Audio));
+        MatchWait(track.Commands, clip.Audio);
         m.Tracks.Add(track);
         m.Audio.Add(Fresh(clip.Audio));
         target.Entries.Add(new ScdModelEntry(m.Tracks.Count - 1, m.Audio.Count - 1, 100, (short)target.Entries.Count));
-        if (shares == null)
-            return;
-        var added = 100 / (shares.Shares.Length + 1);
-        var others = Scale(shares.Shares, 100 - added - shares.Nothing);
-        SetShares(target, [.. others, 100 - shares.Nothing - others.Sum()]);
+        if (next != null)
+            SetShares(target, next);
     }
 
     /// <summary>Swaps one alternative's audio for the clip's, keeping its track, chance and volume, and matches the wait to the new audio.</summary>
@@ -81,7 +89,7 @@ internal static partial class ScdEdits
         m.Audio.Add(Fresh(clip.Audio));
         target.Entries[entry] = target.Entries[entry] with { Audio = m.Audio.Count - 1 };
         if (target.Entries[entry].Track >= 0 && target.Entries[entry].Track < m.Tracks.Count)
-            MatchWait(m.Tracks[OwnTrack(m, sound, entry)].Commands, Milliseconds(clip.Audio));
+            MatchWait(m.Tracks[OwnTrack(m, sound, entry)].Commands, clip.Audio);
     }
 
     /// <summary>A one-shot (a Normal sound with one entry) becomes a GroupRandom set of that one sound at 100%.</summary>
@@ -155,19 +163,25 @@ internal static partial class ScdEdits
         return [.. shares.Select(s => sum == 0 ? 0 : (int)((long)s * total / sum))];
     }
 
-    /// <summary>Sets the track's wait to the audio's length when the track can take it; a looping or jumping track keeps its own.</summary>
-    private static void MatchWait(List<ScdCommand> track, int milliseconds)
+    /// <summary>
+    /// Sets the track's wait to the audio's length when the track can take it; a looping or jumping
+    /// track, or audio of unknown length (Seconds 0), keeps the track's own.
+    /// </summary>
+    private static void MatchWait(List<ScdCommand> track, ScdModelAudio audio)
     {
+        if (!(audio.Seconds > 0))
+            return;
         try
         {
-            WriteWait(track, milliseconds);
+            WriteWait(track, Milliseconds(audio));
         }
         catch (Exception e) when (e is InvalidDataException or ArgumentOutOfRangeException)
         {
         }
     }
 
-    private static int Milliseconds(ScdModelAudio audio) => (int)Math.Ceiling(audio.Seconds * 1000);
+    /// <summary>The audio's length in whole milliseconds, rounded up; 0 when it is unknown.</summary>
+    private static int Milliseconds(ScdModelAudio audio) => audio.Seconds > 0 ? (int)Math.Ceiling(audio.Seconds * 1000) : 0;
 
     private static ScdModelAudio Fresh(ScdModelAudio audio)
     {

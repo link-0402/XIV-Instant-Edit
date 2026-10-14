@@ -67,6 +67,13 @@ internal sealed partial class ModCheck
         /// <summary>Where a repair adds the missing redirection: the container that provides the material or model asking for it.</summary>
         public required CheckContainer Target { get; init; }
         public string? SlotLabel { get; init; }
+
+        /// <summary>The mod file that asks (the model or material), so options shipping the same file share a finding.</summary>
+        public string? From { get; init; }
+
+        /// <summary>The asking material's file name, and whether findings name its option because the options ship different files.</summary>
+        public string? Material { get; init; }
+        public bool NamesTarget { get; init; }
     }
 
     private void WalkModels()
@@ -145,7 +152,7 @@ internal sealed partial class ModCheck
                 Request? resolved = null;
                 if (request.Kind == MaterialRequestKind.Path)
                 {
-                    resolved = AddRequest(RequestKind.Material, container, request.Path!, target, $"{ShortName(path)}: {name.TrimStart('/')}");
+                    resolved = AddRequest(RequestKind.Material, container, request.Path!, target, $"{ShortName(path)}: {name.TrimStart('/')}", from: source.RelPath);
                     ValidateMaterialSources(container, request.Path!, resolved.Resolution);
                 }
                 walk.Materials.Add(new MaterialUse { Name = name, MaterialSet = folder, Request = request, Resolved = resolved });
@@ -154,7 +161,7 @@ internal sealed partial class ModCheck
     }
 
     private Request AddRequest(RequestKind kind, CheckContainer root, string path, CheckContainer target, string requester, string? slot = null,
-        CheckContainer? via = null)
+        CheckContainer? via = null, string? from = null, string? material = null, bool namesTarget = false)
     {
         path = PathNormalizer.GamePath(path);
         if (via is not null && (ReferenceEquals(via, root) || via.IsDefault))
@@ -165,6 +172,7 @@ internal sealed partial class ModCheck
         var request = new Request
         {
             Kind = kind, Root = root, Via = via, Path = path, Resolution = Resolve(path, root, via), Requester = requester, Target = target, SlotLabel = slot,
+            From = from, Material = material, NamesTarget = namesTarget,
         };
         _requests.Add(request);
         _requested.Add(path);
@@ -290,10 +298,10 @@ internal sealed partial class ModCheck
         var target = source.Option is { } option ? _model.Find(option) ?? root : root;
         var mtrl = check.Mtrl;
         // Name the option when the material differs between options, so the finding says which copy is broken.
-        var name = _providers.TryGetValue(path, out var copies) && copies.Select(c => c.RelPath).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1 && !target.IsDefault
-            ? $"{ShortName(path)} in {target.DisplayName}"
-            : ShortName(path);
-        check.Shader = AddRequest(RequestKind.Shader, root, ModelNaming.ShaderPath(mtrl.ShaderPackageName), target, name, via: via);
+        var named = _providers.TryGetValue(path, out var copies) && copies.Select(c => c.RelPath).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1 && !target.IsDefault;
+        var name = named ? $"{ShortName(path)} in {target.DisplayName}" : ShortName(path);
+        check.Shader = AddRequest(RequestKind.Shader, root, ModelNaming.ShaderPath(mtrl.ShaderPackageName), target, name, via: via,
+            from: source.RelPath, material: ShortName(path), namesTarget: named);
         if (mtrl.LegacyColorTable)
             check.Problems.Add(("C009", Severity.Info, "Uses a colour table from before Dawntrail with character.shpk. It may look wrong until it is updated in Penumbra's material editor."));
         for (var index = 0; index < mtrl.TextureOffsets.Length; ++index)
@@ -306,7 +314,7 @@ internal sealed partial class ModCheck
                 continue;
             }
             check.Textures.Add(AddRequest(RequestKind.Texture, root, MaterialNaming.TexturePath(texture.Path, texture.Dx11), target,
-                $"{name} ({slot})", slot, via));
+                $"{name} ({slot})", slot, via, source.RelPath, ShortName(path), named));
         }
         if (mtrl.ShaderDataParsed)
             foreach (var sampler in mtrl.Samplers.Where(sampler => sampler.HasTexture && sampler.TextureIndex >= mtrl.TextureOffsets.Length))

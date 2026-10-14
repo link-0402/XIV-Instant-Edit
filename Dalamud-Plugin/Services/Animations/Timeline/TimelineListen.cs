@@ -36,9 +36,24 @@ internal static class TimelineListen
     public static bool Served(string? resolved, string file) =>
         !string.IsNullOrWhiteSpace(resolved) && Path.IsPathFullyQualified(resolved) && PathRules.SamePhysicalPath(resolved, file);
 
-    /// <summary>The header's listen button: the whole sound <paramref name="sound"/> of the edited file, as sound 0.</summary>
-    public static byte[] Whole(byte[] edited, int sound) => ScdEdits.KeepSound(ScdModel.Read(edited), sound).Write();
+    /// <summary>The header's listen button: the whole sound <paramref name="sound"/> of the edited file, as sound 0, playing once.</summary>
+    public static byte[] Whole(byte[] edited, int sound) => Once(ScdEdits.KeepSound(ScdModel.Read(edited), sound)).Write();
 
-    /// <summary>A row's listen button: only alternative <paramref name="entry"/> of sound <paramref name="sound"/>, as sound 0.</summary>
-    public static byte[] Row(byte[] edited, int sound, int entry) => ScdEdits.KeepOnly(ScdModel.Read(edited), sound, entry).Write();
+    /// <summary>A row's listen button: only alternative <paramref name="entry"/> of sound <paramref name="sound"/>, as sound 0, playing once.</summary>
+    public static byte[] Row(byte[] edited, int sound, int entry) => Once(ScdEdits.KeepOnly(ScdModel.Read(edited), sound, entry)).Write();
+
+    /// <summary>
+    /// <paramref name="m"/>'s sound 0 playing one pass: not marked to loop and its audio without loop
+    /// points. Nothing stops a sound the game was asked to play, so a looping one would never end.
+    /// </summary>
+    private static ScdModel Once(ScdModel m)
+    {
+        var target = m.Sounds[0];
+        if ((target.Attributes & ScdSound.LoopAttribute) != 0)
+            target.Attributes &= ~ScdSound.LoopAttribute;
+        foreach (var audio in target.Entries.Select(e => e.Audio).Where(a => a >= 0 && a < m.Audio.Count).Distinct().Select(a => m.Audio[a]))
+            if (!audio.Null)
+                (audio.LoopStart, audio.LoopEnd) = (0, 0);
+        return m;
+    }
 }

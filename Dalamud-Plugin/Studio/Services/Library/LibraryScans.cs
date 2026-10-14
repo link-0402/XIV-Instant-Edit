@@ -13,7 +13,7 @@ namespace InstantEdit.Studio.Services.Library;
 /// The library filters' data, scanned on a worker the first time a filter or sort needs it: which
 /// mods are enabled anywhere, which are on in the player's collection, which are installed twice,
 /// what each one changes and how big it is. What is read from a mod's files is kept per mod folder,
-/// meta.json last-write time and folder write time, in memory and in the cache folder
+/// meta.json last-write time and a stamp of its files (<see cref="Stamp"/>), in memory and in the cache folder
 /// (<see cref="LibraryScanCache"/>), so a later scan, also in a later session, reads only mods that
 /// are new or changed (or were <see cref="Invalidate"/>d). Dalamud-free; the Penumbra calls come in
 /// as delegates and run on the worker.
@@ -22,11 +22,14 @@ internal sealed class LibraryScans
 {
     private readonly Func<IReadOnlyDictionary<Guid, string>?> _collections;
     private readonly Func<Guid, IReadOnlyDictionary<string, bool>?> _enabledByMod;
-    private readonly Func<string, IReadOnlyList<(string, ChangeKind)>> _changedItems;
+    private readonly Func<string, IReadOnlyList<(string, ChangeKind)>?> _changedItems;
     private readonly Func<string, CancellationToken, ModFingerprint?> _fingerprint;
     private readonly Func<string?>? _cacheFile;
 
     private readonly object _gate = new();
+    // Held while the cache file is replaced or deleted; ForgetAll bumps _forgotten under it, so a save in flight drops its snapshot.
+    private readonly object _fileGate = new();
+    private long _forgotten;
     private readonly Dictionary<string, ModScanEntry> _entries = new(StringComparer.OrdinalIgnoreCase);
     // Mods dropped since the cache file was last written, so a session that never loads it still forgets them there.
     private readonly HashSet<string> _dropped = new(StringComparer.OrdinalIgnoreCase);
@@ -48,6 +51,7 @@ internal sealed class LibraryScans
 
     private volatile ModUsage? _usage;
     private volatile IReadOnlySet<string>? _active;
+    private volatile bool _activeUnknown;
     private volatile IReadOnlyDictionary<string, IReadOnlyList<string>>? _duplicatesOf;
     private volatile IReadOnlyDictionary<string, IReadOnlyList<ChangeTag>>? _changes;
     private volatile IReadOnlyDictionary<string, long>? _sizes;
@@ -56,11 +60,11 @@ internal sealed class LibraryScans
 
     /// <param name="collections">Penumbra's collections by id; null when Penumbra can't be asked.</param>
     /// <param name="enabledByMod">A collection's mods by folder name and whether each is enabled, inheritance on, temporary settings off.</param>
-    /// <param name="changedItems">Penumbra's changed items of a mod folder.</param>
+    /// <param name="changedItems">Penumbra's changed items of a mod folder; null when Penumbra said nothing (tags made without them aren't kept).</param>
     /// <param name="fingerprint">Reads a mod for the duplicate check (tests count the calls); <see cref="DuplicateModScan.Fingerprint(string, CancellationToken)"/> when null.</param>
     /// <param name="cacheFile">Where the results are kept between sessions, asked once on the calling thread; null (or a throw) keeps them in memory only.</param>
     public LibraryScans(Func<IReadOnlyDictionary<Guid, string>?> collections, Func<Guid, IReadOnlyDictionary<string, bool>?> enabledByMod,
-        Func<string, IReadOnlyList<(string, ChangeKind)>> changedItems, Func<string, ModFingerprint?>? fingerprint = null, Func<string?>? cacheFile = null)
+        Func<string, IReadOnlyList<(string, ChangeKind)>?> changedItems, Func<string, ModFingerprint?>? fingerprint = null, Func<string?>? cacheFile = null)
     {
         _collections  = collections;
         _enabledByMod = enabledByMod;
@@ -75,8 +79,17 @@ internal sealed class LibraryScans
     /// <summary>Folder names of the mods enabled in any collection; null until read.</summary>
     public ModUsage? Usage => _usage;
 
-    /// <summary>Folder names of the mods enabled in the collection last asked for (<c>activeIn</c>); null until read.</summary>
+    /// <summary>
+    /// Folder names of the mods enabled in the collection last asked for (<c>activeIn</c>); null until
+    /// read, while no collection is asked for, and when Penumbra didn't answer for it (<see cref="ActiveUnknown"/>).
+    /// </summary>
     public IReadOnlySet<string>? Active => _active;
+
+    /// <summary>The last read of the collection asked for got no answer from Penumbra.</summary>
+    public bool ActiveUnknown => _activeUnknown;
+
+    /// <summary>Tests: runs after a save wrote its snapshot, before the snapshot replaces the cache file.</summary>
+    internal Action? SavingForRegression { get; set; }
 
     /// <summary>For each mod installed more than once, the folder names of its other copies; null until scanned.</summary>
     public IReadOnlyDictionary<string, IReadOnlyList<string>>? DuplicatesOf => _duplicatesOf;
@@ -106,6 +119,19 @@ internal sealed class LibraryScans
     {
         if (!_running.IsCompleted)
             return;
+        if (activeIn is not { } asked)
+        {
+            // No collection to go by: no Active set, and the next one asked for is read.
+            _active = null;
+            _activeUnknown = false;
+            _activeReadFor = null;
+        }
+        else if (_activeReadFor?.Collection != asked)
+        {
+            // Another collection's set isn't shown while this one is read.
+            _active = null;
+            _activeUnknown = false;
+        }
         var stamp = (Signature(mods), Interlocked.Read(ref _generation));
         var usageGeneration = Interlocked.Read(ref _usageGeneration);
         var readUsage   = usage && _usageReadFor != usageGeneration;
@@ -149,12 +175,16 @@ internal sealed class LibraryScans
     public void ForgetAll()
     {
         var path = CachePath();
-        lock (_gate)
+        lock (_fileGate)
         {
-            _entries.Clear();
-            _dropped.Clear();
-            _loaded = true;   // what the file holds is not loaded back
-            _dirty = false;
+            lock (_gate)
+            {
+                _entries.Clear();
+                _dropped.Clear();
+                _loaded = true;   // what the file holds is not loaded back
+                _dirty = false;
+                _forgotten++;     // a save that took its snapshot before this doesn't write it
+            }
             if (path != null)
                 try { File.Delete(path); } catch (Exception) { /* overwritten by the next save */ }
         }
@@ -196,18 +226,24 @@ internal sealed class LibraryScans
             }
             if (readActive is { } active)
             {
-                if (_enabledByMod(active.Collection) is { } settings)
-                    _active = settings.Where(s => s.Value).Select(s => s.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                IReadOnlyDictionary<string, bool>? settings;
+                try { settings = _enabledByMod(active.Collection); }
+                catch (Exception ex) when (ex is not OperationCanceledException) { settings = null; }
+                // No answer drops the old set too: it may be another collection's, or out of date.
+                _active = settings?.Where(s => s.Value).Select(s => s.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                _activeUnknown = settings is null;
                 _activeReadFor = active;
                 Interlocked.Increment(ref _revision);
             }
             if (readFiles)
                 LoadOnce();
+            // Each mod's files are stamped once per scan, however many of the reads below need it.
+            var stamps = new Dictionary<string, (long Content, long Size)>(StringComparer.OrdinalIgnoreCase);
             if (readCopies)
             {
                 var byPath = mods.GroupBy(m => m.FullPath, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
                 var progress = new ProgressSink(this);
-                var sets = DuplicateModScan.Find(mods, path => Print(byPath[path], token), progress, token);
+                var sets = DuplicateModScan.Find(mods, path => Print(byPath[path], stamps, token), progress, token);
                 var others = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
                 foreach (var set in sets)
                     foreach (var folder in set)
@@ -223,7 +259,7 @@ internal sealed class LibraryScans
                 {
                     token.ThrowIfCancellationRequested();
                     _progress = new CheckProgress("Reading what mods change", i + 1, mods.Length);
-                    changes[mods[i].FolderName] = Tags(mods[i]);
+                    changes[mods[i].FolderName] = Tags(mods[i], stamps);
                 }
                 _changes = changes;
                 _changesFor = stamp;
@@ -236,7 +272,7 @@ internal sealed class LibraryScans
                 {
                     token.ThrowIfCancellationRequested();
                     _progress = new CheckProgress("Measuring mods", i + 1, mods.Length);
-                    sizes[mods[i].FolderName] = Size(mods[i]);
+                    sizes[mods[i].FolderName] = Entry(mods[i], stamps).Size;
                 }
                 _sizes = sizes;
                 _sizesFor = stamp;
@@ -268,26 +304,67 @@ internal sealed class LibraryScans
         }
     }
 
-    /// <summary>The mod's entry when its stamps still match, else a new empty one in its place.</summary>
-    private ModScanEntry Entry(InstalledMod mod)
+    /// <summary>The mod's entry when its stamps still match, else a new empty one in its place. The files are stamped once per scan (<paramref name="stamps"/>).</summary>
+    private ModScanEntry Entry(InstalledMod mod, Dictionary<string, (long Content, long Size)> stamps)
     {
-        DateTime dirWrite;
-        try { dirWrite = Directory.GetLastWriteTimeUtc(mod.FullPath); }
-        catch (Exception) { dirWrite = default; }
+        if (!stamps.TryGetValue(mod.FolderName, out var stamp))
+            stamps[mod.FolderName] = stamp = Stamp(mod.FullPath);
         lock (_gate)
         {
-            if (_entries.TryGetValue(mod.FolderName, out var entry) && entry.LastWrite == mod.LastWrite && entry.DirWrite == dirWrite)
+            if (_entries.TryGetValue(mod.FolderName, out var entry) && entry.LastWrite == mod.LastWrite
+                && entry.Content == stamp.Content && entry.Size == stamp.Size)
                 return entry;
-            entry = new ModScanEntry { LastWrite = mod.LastWrite, DirWrite = dirWrite };
+            entry = new ModScanEntry { LastWrite = mod.LastWrite, Content = stamp.Content, Size = stamp.Size };
             _entries[mod.FolderName] = entry;
             _dirty = true;
             return entry;
         }
     }
 
-    private ModFingerprint? Print(InstalledMod mod, CancellationToken token)
+    /// <summary>
+    /// A mod folder's files, cheaply: their total size, and one number from every file's path, size and
+    /// write time (no file is opened). A file rewritten in a subfolder changes it, which the folder's own
+    /// write time doesn't. What can't be listed counts as nothing.
+    /// </summary>
+    internal static (long Content, long Size) Stamp(string folder)
     {
-        var entry = Entry(mod);
+        long size = 0, content = 0, count = 0;
+        try
+        {
+            var root = new DirectoryInfo(folder);
+            var skip = root.FullName.Length;
+            foreach (var file in root.EnumerateFiles("*", SearchOption.AllDirectories))
+            {
+                var length = file.Length;
+                size += length;
+                count++;
+                // Added up, so the order the files are listed in doesn't matter.
+                content = unchecked(content + Mix(file.FullName.AsSpan(Math.Min(skip, file.FullName.Length)), length, file.LastWriteTimeUtc.Ticks));
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+        }
+        return (unchecked(content * 31 + count), size);
+    }
+
+    /// <summary>One file's path (ignoring case), size and write time as a number that is the same in every session.</summary>
+    private static long Mix(ReadOnlySpan<char> path, long length, long ticks)
+    {
+        unchecked
+        {
+            var hash = 14695981039346656037UL;
+            foreach (var c in path)
+                hash = (hash ^ char.ToLowerInvariant(c)) * 1099511628211UL;
+            hash = (hash ^ (ulong)length) * 0x9E3779B97F4A7C15UL;
+            hash = (hash ^ (ulong)ticks) * 0xBF58476D1CE4E5B9UL;
+            return (long)(hash ^ (hash >> 31));
+        }
+    }
+
+    private ModFingerprint? Print(InstalledMod mod, Dictionary<string, (long Content, long Size)> stamps, CancellationToken token)
+    {
+        var entry = Entry(mod, stamps);
         lock (_gate)
             if (entry.PrintRead)
                 return entry.Print;
@@ -309,9 +386,9 @@ internal sealed class LibraryScans
         return print;
     }
 
-    private IReadOnlyList<ChangeTag> Tags(InstalledMod mod)
+    private IReadOnlyList<ChangeTag> Tags(InstalledMod mod, Dictionary<string, (long Content, long Size)> stamps)
     {
-        var entry = Entry(mod);
+        var entry = Entry(mod, stamps);
         lock (_gate)
             if (entry.Tags is { } cached)
                 return cached;
@@ -325,47 +402,27 @@ internal sealed class LibraryScans
         {
             paths = Array.Empty<string>();
         }
-        IReadOnlyList<(string, ChangeKind)> items;
+        IReadOnlyList<(string, ChangeKind)>? items;
         try
         {
             items = _changedItems(mod.FolderName);
         }
         catch (Exception)
         {
-            // Penumbra went away or doesn't know the mod yet: the paths still tell faces, hair, idles and gear.
-            items = Array.Empty<(string, ChangeKind)>();
+            items = null;
         }
-        var tags = ChangesIndex.Classify(paths, items);
-        lock (_gate)
+        // Penumbra went away or said nothing: the paths still tell faces, hair, idles and gear, but
+        // these tags lack its items, so they aren't kept and the mod is read again next time.
+        var tags = ChangesIndex.Classify(paths, items ?? Array.Empty<(string, ChangeKind)>());
+        if (items != null)
         {
-            entry.Tags = tags;
-            _dirty = true;
+            lock (_gate)
+            {
+                entry.Tags = tags;
+                _dirty = true;
+            }
         }
         return tags;
-    }
-
-    /// <summary>Every file in the mod's folder, added up; what can't be listed counts as nothing.</summary>
-    private long Size(InstalledMod mod)
-    {
-        var entry = Entry(mod);
-        lock (_gate)
-            if (entry.Size is { } cached)
-                return cached;
-        long total = 0;
-        try
-        {
-            foreach (var file in new DirectoryInfo(mod.FullPath).EnumerateFiles("*", SearchOption.AllDirectories))
-                total += file.Length;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
-        {
-        }
-        lock (_gate)
-        {
-            entry.Size = total;
-            _dirty = true;
-        }
-        return total;
     }
 
     /// <summary>Brings back what an earlier session saved, once, for mods this session hasn't read yet.</summary>
@@ -398,14 +455,18 @@ internal sealed class LibraryScans
         LoadOnce();
         KeyValuePair<string, ModScanEntry>[] snapshot;
         string path;
+        long forgotten;
         lock (_gate)
         {
             path = _cachePath!;
             snapshot = _entries.ToArray();
+            forgotten = _forgotten;
             _dirty = false;
             _dropped.Clear();
         }
-        LibraryScanCache.Save(path, snapshot);
+        SavingForRegression?.Invoke();
+        // A ForgetAll after the snapshot wins: the file it deleted isn't put back.
+        LibraryScanCache.Save(path, snapshot, _fileGate, () => { lock (_gate) return _forgotten == forgotten; });
     }
 
     /// <summary>The cache file, asked of the host the first time it is needed (on the calling thread); null while it can't be had.</summary>

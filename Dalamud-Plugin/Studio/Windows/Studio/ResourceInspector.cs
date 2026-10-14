@@ -459,13 +459,13 @@ internal sealed class ResourceInspector
         var graph = _session.Graph;
         var found = new Dictionary<string, ResourceNode>(StringComparer.OrdinalIgnoreCase);
         foreach (var link in model.Children)
-            if (link.Node.Kind == ResourceKind.Material && link.Node.Origin != OriginKind.Missing)
+            if (link.Node.Kind == ResourceKind.Material && link.Node.Origin is not (OriginKind.Missing or OriginKind.Shared))
                 found.TryAdd(link.Node.GamePath, link.Node);
         foreach (var node in graph.Nodes.Values)
         {
             if (found.Count >= 200)
                 break;
-            if (node.Kind == ResourceKind.Material && node.Origin is not (OriginKind.Missing or OriginKind.Swap)
+            if (node.Kind == ResourceKind.Material && node.Origin is not (OriginKind.Missing or OriginKind.Shared or OriginKind.Swap)
                 && node.GamePath.StartsWith(stem, StringComparison.Ordinal))
                 found.TryAdd(node.GamePath, node);
         }

@@ -92,17 +92,22 @@ internal static partial class ModCheckScenarios
     private static void SharedBodyMaterialsAreNotMissing()
     {
         using var mod = GearMod(model: ModCheckFixtures.Mdl(["/mt_c0201e0005_top_a.mtrl", "/mt_c0201b0001_bibo.mtrl",
-            "/mt_c0201b0001_piercings.mtrl", "/mt_c0201b0001_bibopube.mtrl", "/mt_c0201e0005_top_b.mtrl"]));
+            "/mt_c0201b0001_piercings.mtrl", "/mt_c0201b0001_bibopube.mtrl", "/mt_c0201e0005_top_b.mtrl", "/mt_c0201e0005_top_bibo.mtrl"]));
         var meta = PenumbraModMeta.Load(mod.Path);
         var graph = ResourceGraphBuilder.Build(new GraphInput { Folder = mod.Path, Files = meta.AllFiles().ToList(), Swaps = meta.AllSwaps().ToList() },
             new ModFileFactsCache(), GearGame(), CancellationToken.None);
 
-        var origins = graph.Nodes.Values.Where(n => n.Kind == ResourceKind.Material).ToDictionary(n => Path.GetFileName(n.GamePath), n => n.Origin);
-        Require(origins["mt_c0201b0001_bibo.mtrl"] == OriginKind.Shared && origins["mt_c0201b0001_piercings.mtrl"] == OriginKind.Shared
-                && origins["mt_c0201b0001_bibopube.mtrl"] == OriginKind.Shared && origins["mt_c0201e0005_top_b.mtrl"] == OriginKind.Missing,
+        var materials = graph.Nodes.Values.Where(n => n.Kind == ResourceKind.Material).ToDictionary(n => Path.GetFileName(n.GamePath));
+        Require(materials["mt_c0201b0001_bibo.mtrl"].Origin == OriginKind.Shared && materials["mt_c0201b0001_piercings.mtrl"].Origin == OriginKind.Shared
+                && materials["mt_c0201b0001_bibopube.mtrl"].Origin == OriginKind.Shared && materials["mt_c0201e0005_top_b.mtrl"].Origin == OriginKind.Missing,
             "skin, pubes and piercings materials the body mod provides are shared; the item's own lacking material is missing");
-        Require(graph.Unresolved == 1 && graph.Roots.Sum(r => r.MissingCount) == 1,
-            "only the item's own material counts as missing");
+        Require(materials["mt_c0201b0001_piercings.mtrl"].Note!.StartsWith("piercings", StringComparison.Ordinal)
+                && materials["mt_c0201b0001_bibo.mtrl"].Note!.StartsWith("skin", StringComparison.Ordinal),
+            "the name picks the note inside the body folder");
+        Require(materials["mt_c0201e0005_top_bibo.mtrl"] is { Origin: OriginKind.Missing } gear && gear.GamePath.StartsWith("chara/equipment/", StringComparison.Ordinal),
+            "a gear material the mod forgot is missing, even with a body mod's word in its name");
+        Require(graph.Unresolved == 2 && graph.Roots.Sum(r => r.MissingCount) == 2,
+            "only the item's own materials count as missing");
     }
 
     private static void OperationsAskForACheckAfter()

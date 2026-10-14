@@ -153,6 +153,7 @@ public sealed partial class TimelineWindow
         ImmutableDictionary<string, string> beside;
         ImmutableDictionary<string, Func<byte[], byte[]>> rebuild;
         ImmutableDictionary<string, TimelineSoundReplacement> replaced;
+        ImmutableDictionary<string, string> copied;
         try
         {
             (saved, var used) = WithLooks(document);
@@ -160,6 +161,9 @@ public sealed partial class TimelineWindow
             saved = sounds.Document;
             used.AddRange(sounds.Copies);
             replaced = sounds.InPlace;
+            // The sounds copies were made from, as read from the collection (an import's own file isn't there yet).
+            copied = sounds.Bases.Where(b => soundReads.TryGetValue(b.Key, out var read) && read is { Resource: not null, Imported: false })
+                .ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
             added = TimelineWindowViews.AddedFiles(saved, used);
             beside = TimelineWindowViews.AddedBeside(saved, used);
             rebuild = TimelineWindowViews.AddedRebuild(saved, used);
@@ -190,7 +194,7 @@ public sealed partial class TimelineWindow
             {
                 playback.Stop();
                 return service.EditTimeline(target, saved, place, name, added, beside, motionFrames, repair, rebuild,
-                    replaced.IsEmpty ? null : replaced);
+                    replaced.IsEmpty ? null : replaced, copied.IsEmpty ? null : copied);
             });
         });
     }

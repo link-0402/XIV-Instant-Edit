@@ -82,17 +82,28 @@ internal sealed class GameSoundPlayer : IDisposable
                 return penumbra.AddTemporaryModAllOnFramework(Tag, new Dictionary<string, string> { [plan.GamePath] = file }, Priority);
             });
             ObjectDisposedException.ThrowIf(disposed, this);
-            if (added != PenumbraApiEc.Success)
-                throw new IOException($"Penumbra could not serve the sound ({added}).");
-            // Penumbra's collections take the new path on the frames after it was added.
-            await framework.DelayTicks(2, token);
-            await framework.RunOnFrameworkThread(() =>
+            try
             {
-                // Only a path Penumbra serves from the file just written is played, as VFXEditor only plays files that exist.
-                if (disposed || !TimelineListen.Served(penumbra.ResolveInterfacePathOnFramework(plan.GamePath), file))
-                    throw new IOException("Penumbra doesn't serve the sound yet, so it wasn't played. Try again.");
-                Play(plan.GamePath);
-            });
+                if (added != PenumbraApiEc.Success)
+                    throw new IOException($"Penumbra could not serve the sound ({added}).");
+                // Penumbra's collections take the new path on the frames after it was added.
+                await framework.DelayTicks(2, token);
+                await framework.RunOnFrameworkThread(() =>
+                {
+                    // Only a path Penumbra serves from the file just written is played, as VFXEditor only plays files that exist.
+                    if (disposed || !TimelineListen.Served(penumbra.ResolveInterfacePathOnFramework(plan.GamePath), file))
+                        throw new IOException("Penumbra doesn't serve the sound yet, so it wasn't played. Try again.");
+                    Play(plan.GamePath);
+                });
+            }
+            catch
+            {
+                // Nothing plays: the temporary mod goes now rather than on the next play. Dispose removes it itself.
+                if (!disposed)
+                    try { await StopServingAsync(); }
+                    catch (Exception e) { log.Warning(e, "Could not stop serving the sound played from the Timeline."); }
+                throw;
+            }
             var cancel = expiry = new CancellationTokenSource();
             _ = ExpireAsync(TimeSpan.FromSeconds(plan.Seconds), cancel.Token);
         }

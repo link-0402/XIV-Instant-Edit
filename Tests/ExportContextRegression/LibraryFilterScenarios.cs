@@ -25,6 +25,137 @@ internal static class LibraryFilterScenarios
         ActiveIsReadForTheCollectionAsked();
         ScansAreKeptAcrossRestarts(testRoot);
         ABrokenCacheFileMeansAFullScan(testRoot);
+        FilesRewrittenInSubfoldersAreReadAgain(testRoot);
+        TagsWithoutPenumbrasItemsArentKept(testRoot);
+        ForgetAllWinsOverASaveInFlight(testRoot);
+        ActiveIsDroppedWhenPenumbraDoesntAnswer();
+    }
+
+    private static void FilesRewrittenInSubfoldersAreReadAgain(string testRoot)
+    {
+        var cacheFile = Path.Combine(testRoot, $"library-scans-{Guid.NewGuid():N}.json");
+        using var copyA = CurrentMod("Copy", Guid.NewGuid().ToString(), "A");
+        using var copyB = CurrentMod("Copy", Guid.NewGuid().ToString(), "A");
+        var mods = new[] { Installed(copyA, "Copy"), Installed(copyB, "Copy") };
+
+        (LibraryScans Scans, List<string> Prints) Settle()
+        {
+            var prints = new List<string>();
+            var scans = new LibraryScans(() => new Dictionary<Guid, string>(), _ => null, _ => Array.Empty<(string, ChangeKind)>(),
+                folder => { lock (prints) prints.Add(folder); return DuplicateModScan.Fingerprint(folder); }, () => cacheFile);
+            scans.Need(usage: false, duplicates: true, changes: false, mods, sizes: true);
+            scans.Idle.Wait(TimeSpan.FromSeconds(30));
+            return (scans, prints);
+        }
+
+        // Rewritten in place under files/, meta.json untouched: the mod folder's own write time stays as it was.
+        void Rewrite(string content, int minutes)
+        {
+            var folderWrite = Directory.GetLastWriteTimeUtc(copyB.Path);
+            var file = Path.Combine(copyB.Path, "files", "a.bin");
+            File.WriteAllText(file, content);
+            File.SetLastWriteTimeUtc(file, DateTime.UtcNow.AddMinutes(minutes));
+            Directory.SetLastWriteTimeUtc(copyB.Path, folderWrite);
+        }
+
+        var first = Settle();
+        Require(first.Prints.Count == 2 && first.Scans.DuplicatesOf is { Count: 2 }, "the first session finds the two copies");
+        var size = first.Scans.Sizes![mods[1].FolderName];
+
+        Rewrite("B", 1);
+        var second = Settle();
+        Require(second.Prints.SequenceEqual([copyB.Path]) && second.Scans.DuplicatesOf is { Count: 0 },
+            "a mod whose file in a subfolder was rewritten is read again, and only it; it is no copy any more");
+
+        Rewrite("BBB", 2);
+        var third = Settle();
+        Require(third.Scans.Sizes is { } sizes && sizes[mods[1].FolderName] == size + 2, "and its size is measured again");
+    }
+
+    private static void TagsWithoutPenumbrasItemsArentKept(string testRoot)
+    {
+        var cacheFile = Path.Combine(testRoot, $"library-scans-{Guid.NewGuid():N}.json");
+        using var mod = CurrentMod("Items", Guid.NewGuid().ToString(), "A");
+        var mods = new[] { Installed(mod, "Items") };
+
+        (LibraryScans Scans, int Calls) Settle(Func<IReadOnlyList<(string, ChangeKind)>?> items)
+        {
+            var calls = 0;
+            var scans = new LibraryScans(() => new Dictionary<Guid, string>(), _ => null,
+                _ => { Interlocked.Increment(ref calls); return items(); }, null, () => cacheFile);
+            scans.Need(usage: false, duplicates: false, changes: true, mods);
+            scans.Idle.Wait(TimeSpan.FromSeconds(30));
+            return (scans, calls);
+        }
+
+        bool Dances(LibraryScans scans) => scans.Changes is { } changes && ChangesIndex.Matches(changes[mods[0].FolderName], SearchIn.Emote, "dance");
+
+        var silent = Settle(() => null);
+        Require(silent.Calls == 1 && silent.Scans.Changes is { Count: 1 } && silent.Scans.Error is null,
+            "when Penumbra says nothing the mod still gets its path tags");
+        var thrown = Settle(() => throw new InvalidOperationException("gone"));
+        Require(thrown.Calls == 1, "tags made without Penumbra's items aren't kept: the next session asks again");
+        var answered = Settle(() => new[] { ("Dance", ChangeKind.Emote) });
+        Require(answered.Calls == 1 && Dances(answered.Scans), "also after Penumbra failed outright");
+        var kept = Settle(() => null);
+        Require(kept.Calls == 0 && Dances(kept.Scans), "tags made with Penumbra's items are kept");
+    }
+
+    private static void ForgetAllWinsOverASaveInFlight(string testRoot)
+    {
+        var cacheFile = Path.Combine(testRoot, $"library-scans-{Guid.NewGuid():N}.json");
+        using var mod = CurrentMod("Forget", Guid.NewGuid().ToString(), "A");
+        var mods = new[] { Installed(mod, "Forget") };
+        var scans = new LibraryScans(() => new Dictionary<Guid, string>(), _ => null, _ => Array.Empty<(string, ChangeKind)>(), null, () => cacheFile);
+
+        // Ctrl+click Refresh lands after the save took its snapshot and before the file is replaced.
+        scans.SavingForRegression = () => scans.ForgetAll();
+        scans.Need(usage: false, duplicates: false, changes: true, mods);
+        scans.Idle.Wait(TimeSpan.FromSeconds(30));
+        Require(!File.Exists(cacheFile) && !File.Exists(cacheFile + ".tmp"), "a save in flight doesn't put back the file ForgetAll deleted");
+
+        scans.SavingForRegression = null;
+        scans.Need(usage: false, duplicates: false, changes: true, mods);
+        scans.Idle.Wait(TimeSpan.FromSeconds(30));
+        Require(File.Exists(cacheFile), "the next scan reads the mod again and saves");
+    }
+
+    private static void ActiveIsDroppedWhenPenumbraDoesntAnswer()
+    {
+        var mine = Guid.NewGuid();
+        var silent = Guid.NewGuid();
+        var slow = Guid.NewGuid();
+        using var release = new ManualResetEventSlim(false);
+        var scans = new LibraryScans(() => new Dictionary<Guid, string>(), id =>
+        {
+            if (id == slow)
+                release.Wait(TimeSpan.FromSeconds(30));
+            return id == silent ? null : new Dictionary<string, bool> { ["A"] = true };
+        }, _ => Array.Empty<(string, ChangeKind)>());
+        var mods = Array.Empty<InstalledMod>();
+
+        void Settle(Guid? collection)
+        {
+            scans.Need(usage: false, duplicates: false, changes: false, mods, activeIn: collection);
+            scans.Idle.Wait(TimeSpan.FromSeconds(30));
+        }
+
+        Settle(mine);
+        Require(scans.Active is { Count: 1 } && !scans.ActiveUnknown, "the collection's enabled mods are active");
+        Settle(silent);
+        Require(scans.Active is null && scans.ActiveUnknown, "a collection Penumbra doesn't answer for has no Active set, not the last one's");
+        Settle(mine);
+        Require(scans.Active is { Count: 1 } && !scans.ActiveUnknown, "an answer brings it back");
+        Settle(null);
+        Require(scans.Active is null && !scans.ActiveUnknown, "no collection known: no Active set");
+        Settle(mine);
+        Require(scans.Active is { Count: 1 }, "the collection is read again once Penumbra names it");
+
+        scans.Need(usage: false, duplicates: false, changes: false, mods, activeIn: slow);
+        Require(scans.Active is null, "while another collection is read, the last one's set isn't shown");
+        release.Set();
+        scans.Idle.Wait(TimeSpan.FromSeconds(30));
+        Require(scans.Active is { Count: 1 }, "the new collection's set comes in");
     }
 
     private static void HairIsHairAndNoFace()

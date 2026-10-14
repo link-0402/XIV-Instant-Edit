@@ -90,10 +90,14 @@ internal sealed partial class ModCheck
     private IReadOnlyList<CheckContainer> Active(CheckContainer root)
         => root.IsDefault ? new[] { root } : new[] { root, _default };
 
-    /// <summary>What is on for a material from <paramref name="root"/> that a model from <paramref name="via"/> loads: both options and the default files.</summary>
+    /// <summary>
+    /// What is on for a material from <paramref name="root"/> that a model from <paramref name="via"/> loads: both options,
+    /// the one Penumbra prefers first, and the default files.
+    /// </summary>
     private IReadOnlyList<CheckContainer> Active(CheckContainer root, CheckContainer? via)
         => via is null || ReferenceEquals(via, root) || via.IsDefault ? Active(root)
-            : root.IsDefault ? new[] { via, root } : new[] { root, via, _default };
+            : root.IsDefault ? new[] { via, root }
+            : Outranks(via, root) ? new[] { via, root, _default } : new[] { root, via, _default };
 
     private static bool ExclusiveWith(CheckContainer provider, CheckContainer root, CheckContainer? via)
         => provider.IsExclusiveWith(root) || via is not null && provider.IsExclusiveWith(via);

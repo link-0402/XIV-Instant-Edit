@@ -46,7 +46,53 @@ internal static class ScdModelFixture
         var withNothing = ScdModel.Read(RandomSet(2));
         ScdEdits.SetShares(withNothing.Sounds[0], [40, 40]);
         ScdEdits.Add(withNothing, 0, clip);
-        check(ScdEdits.Shares(withNothing.Sounds[0]) is { Shares: [23, 23, 34], Nothing: 20 }, "Add keeps the share that plays nothing");
+        check(ScdEdits.Shares(withNothing.Sounds[0]) is { Shares: [27, 27, 26], Nothing: 20 }, "Add keeps the share that plays nothing");
+        // Review scd-1: the new share comes out of the part that plays, never out of what plays nothing.
+        var mostlyNothing = ScdModel.Read(RandomSet(1));
+        ScdEdits.SetShares(mostlyNothing.Sounds[0], [30]);
+        ScdEdits.Add(mostlyNothing, 0, clip);
+        var lowShares = ScdModel.Read(RandomSet(2));
+        ScdEdits.SetShares(lowShares.Sounds[0], [20, 20]);
+        ScdEdits.Add(lowShares, 0, clip);
+        check(ScdEdits.Shares(mostlyNothing.Sounds[0]) is { Shares: [15, 15], Nothing: 70 } && ScdEdits.Shares(lowShares.Sounds[0]) is { Shares: [13, 13, 14], Nothing: 60 },
+            "Add shares the new sound out of the part that plays when most of the set plays nothing");
+        var trackless = ScdModel.Read(RandomSet(2));
+        trackless.Sounds[0].Entries = [.. trackless.Sounds[0].Entries.Select(e => e with { Track = -1 })];
+        var tracklessLimits = trackless.Sounds[0].Entries.Select(e => e.Limit).ToArray();
+        reject(() => ScdEdits.Add(trackless, 0, clip with { Track = null }), "a new sound with no track to play it is refused");
+        check(trackless.Tracks.Count == 2 && trackless.Audio.Count == 3 && trackless.Sounds[0].Entries.Select(e => e.Limit).SequenceEqual(tracklessLimits),
+            "a refused Add leaves the model as it was");
+        // Review scd-2: Seconds 0 is an unknown length, not a 0 ms clip.
+        var unknownClip = clip with { Audio = clip.Audio.Clone() };
+        unknownClip.Audio.Seconds = 0;
+        var unknown = ScdModel.Read(RandomSet(2));
+        var copiedWait = ScdEdits.Wait(unknown, unknown.Sounds[0].Entries[0].Track);
+        var replacedWait = ScdEdits.Wait(unknown, unknown.Sounds[0].Entries[1].Track);
+        ScdEdits.Add(unknown, 0, unknownClip);
+        ScdEdits.Replace(unknown, 0, 1, unknownClip);
+        unknown.Sounds[0].PlayLength = 99999;
+        ScdEdits.UpdatePlayLength(unknown, 0);
+        check(ScdEdits.Wait(unknown, unknown.Sounds[0].Entries[2].Track) == copiedWait && ScdEdits.Wait(unknown, unknown.Sounds[0].Entries[1].Track) == replacedWait &&
+              unknown.Sounds[0].PlayLength == 99999 && ScdEdits.AudioMilliseconds(unknown, unknown.Sounds[0].Entries[2].Audio) == 0,
+            "audio of unknown length keeps the track's wait and the sound's play length");
+        // Review scd-4: the wait runs from KeyOn to KeyOff; an Interval after KeyOff times the release.
+        var release = ScdModel.Read(RandomSet(2));
+        var releaseTrack = release.Tracks[0].Commands;
+        var keyWait = ScdEdits.Wait(release, 0);
+        var releasePayload = new byte[4];
+        BinaryPrimitives.WriteInt32LittleEndian(releasePayload, 300);
+        releaseTrack.Insert(releaseTrack.Count - 1, new ScdCommand(ScdTrack.Interval, releasePayload));
+        var releaseCounted = ScdEdits.Wait(release, 0) == keyWait;
+        ScdEdits.SetWait(release, 0, 0, 2000);
+        var keyOff = releaseTrack.FindIndex(c => c.Type == ScdTrack.KeyOff);
+        check(releaseCounted && ScdEdits.Wait(release, 0) == 2000 && BinaryPrimitives.ReadInt32LittleEndian(releaseTrack[keyOff - 1].Payload) == 2000 &&
+              BinaryPrimitives.ReadInt32LittleEndian(releaseTrack[^2].Payload) == 300, "the wait and Match length leave an Interval after KeyOff alone");
+        var noWait = ScdModel.Read(RandomSet(2));
+        var noWaitTrack = noWait.Tracks[0].Commands;
+        noWaitTrack.RemoveAll(c => c.Type == ScdTrack.Interval);
+        ScdEdits.SetWait(noWait, 0, 0, 700);
+        check(noWaitTrack[noWaitTrack.FindIndex(c => c.Type == ScdTrack.KeyOff) - 1] is { Type: ScdTrack.Interval } && ScdEdits.Wait(noWait, 0) == 700,
+            "a track without a wait gets one just before KeyOff");
         var replaced = ScdModel.Read(RandomSet(3));
         var before = replaced.Sounds[0].Entries[1];
         ScdEdits.Replace(replaced, 0, 1, clip);
@@ -172,14 +218,39 @@ internal static class ScdModelFixture
         unaligned = unaligned[..(ScdFile.Read(unaligned).Audio[^1].End)];
         BinaryPrimitives.WriteInt32LittleEndian(unaligned.AsSpan(ScdFile.FileSizeField), unaligned.Length);
         check(ScdModel.Read(unaligned).Write().AsSpan().SequenceEqual(unaligned), "a file that doesn't end on 16 bytes is written back byte for byte");
-        // Some tools state a data length that runs past the file: it is written as what the file holds.
+        // 783 library files declare more audio than they hold (cut short); the declared size stays while the data does.
+        var cutShort = unaligned.ToArray();
+        var lastAudio = ScdFile.Read(cutShort).Audio[^1].Offset;
+        BinaryPrimitives.WriteInt32LittleEndian(cutShort.AsSpan(lastAudio), BinaryPrimitives.ReadInt32LittleEndian(cutShort.AsSpan(lastAudio)) + 124);
+        var cutModel = ScdModel.Read(cutShort);
+        check(cutModel.Write().AsSpan().SequenceEqual(cutShort), "a file that declares more audio than it holds is written back byte for byte");
+        cutModel.Audio[^1].Data = cutModel.Audio[^1].Data[..^16];
+        check(BinaryPrimitives.ReadInt32LittleEndian(cutModel.Write().AsSpan(lastAudio)) == cutModel.Audio[^1].Data.Length,
+            "once that audio's data changes, its real size is written");
+        var cutThenAdded = ScdModel.Read(cutShort);
+        var cutIndex = cutThenAdded.Audio.Count - 1;
+        var heldBefore = cutThenAdded.Audio[cutIndex].Data.Length;
+        ScdEdits.Add(cutThenAdded, 0, ScdEdits.Clips(AudioFixture.Template())[0]);
+        var afterAdd = cutThenAdded.Write();
+        check(BinaryPrimitives.ReadInt32LittleEndian(afterAdd.AsSpan(ScdFile.Read(afterAdd).Audio[cutIndex].Offset)) == heldBefore
+              && ScdFile.Read(afterAdd).Audio.All(a => !a.Cut),
+            "a stated size that would run into audio added after it is written as what it holds");
+        // Review scd-3: an empty section is ordered after the audio, but the file still ends with the audio, unpadded.
+        foreach (var (name, strip) in new (string, Action<ScdModel>)[] { ("attributes", x => x.Attributes.Clear()), ("layouts", x => x.Layouts[0] = null) })
+        {
+            var stripped = ScdModel.Read(RandomSet(2));
+            strip(stripped);
+            var cut = stripped.Write();
+            cut = cut[..(ScdFile.Read(cut).Audio[^1].End)];
+            BinaryPrimitives.WriteInt32LittleEndian(cut.AsSpan(ScdFile.FileSizeField), cut.Length);
+            check(cut.Length % 16 != 0 && ScdModel.Read(cut).Write().AsSpan().SequenceEqual(cut), $"a file without {name} that doesn't end on 16 bytes is written back byte for byte");
+        }
+        // Some tools state a data length that runs past the file: it stays as stated while the data is unedited.
         var overstated = AudioFixture.Template();
         var audioAt = ScdFile.Read(overstated).Audio[0].Offset;
         BinaryPrimitives.WriteInt32LittleEndian(overstated.AsSpan(audioAt), ScdFile.Read(overstated).Audio[0].DataLength + 0x20 + 50);
-        var normalised = ScdModel.Read(overstated).Write();
-        check(ScdFile.Read(normalised).Audio[0] is { Cut: false } fixedAudio && fixedAudio.End == normalised.Length && normalised.Length == overstated.Length &&
-              Enumerable.Range(0, normalised.Length).Where(i => normalised[i] != overstated[i]).All(i => i >= audioAt && i < audioAt + 4),
-            "a data length that runs past the file is written as what the file holds, and nothing else changes");
+        check(ScdModel.Read(overstated).Write().AsSpan().SequenceEqual(overstated),
+            "a data length that runs past the file is written back as stated, byte for byte");
         var model = ScdModel.Read(RandomSet(3));
         check(model.Sounds[0] is { Type: 12, Entries.Count: 3 } s && s.Entries[2] == new ScdModelEntry(2, 3, 100, 2) && s.PlayLength != null,
             "a random set reads its entries, limits, order and play length");

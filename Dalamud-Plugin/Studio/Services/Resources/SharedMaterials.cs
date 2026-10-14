@@ -14,28 +14,31 @@ internal static class SharedMaterials
 
     private const RegexOptions Options = RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase;
 
-    /// <summary>What is never flagged as missing, tested against the material's game path.</summary>
-    private static readonly Exclusion[] Exclusions =
-    {
-        // A human body's materials ("/mt_c0201b0001_bibo.mtrl"). The game loads them from the wearer's
-        // own body folder, whatever race the name says, so whichever body mod is on provides them.
-        new(new Regex(@"^chara/human/c\d{4}/obj/body/b\d{4}/material/", Options), "skin material: the player's body mod provides it"),
+    /// <summary>
+    /// A human body's materials ("/mt_c0201b0001_bibo.mtrl"). The game loads them from the wearer's own body
+    /// folder, whatever race the name says, so whichever body mod is on provides them. Only these are shared:
+    /// a gear or accessory material the mod lacks is missing, whatever its name.
+    /// </summary>
+    private static readonly Regex BodyFolder = new(@"^chara/human/c\d{4}/obj/body/b\d{4}/material/", Options);
 
-        // Common body mod materials, wherever a path puts them.
-        new(new Regex(@"/[^/]*bibo[^/]*\.mtrl$", Options),  "skin material: the player's body mod provides it"),
+    /// <summary>Common body mod materials in that folder, for the note; anything else there is skin.</summary>
+    private static readonly Exclusion[] Notes =
+    {
         new(new Regex(@"/[^/]*pube[^/]*\.mtrl$", Options),  "pubes material: the player's body mod provides it"),
         new(new Regex(@"/[^/]*pierc[^/]*\.mtrl$", Options), "piercings material: the player's body mod provides it"),
         new(new Regex(@"/[^/]*_ya(?:finger|toe)[^/]*\.mtrl$", Options), "nails material: the player's body mod provides it"),
     };
 
+    private const string SkinNote = "skin material: the player's body mod provides it";
+
     /// <summary>Why a material the mod and the game both lack is still not missing, or null when it is.</summary>
     public static string? NoteFor(string gamePath)
     {
-        if (!gamePath.EndsWith(".mtrl", StringComparison.OrdinalIgnoreCase))
+        if (!gamePath.EndsWith(".mtrl", StringComparison.OrdinalIgnoreCase) || !BodyFolder.IsMatch(gamePath))
             return null;
-        foreach (var exclusion in Exclusions)
-            if (exclusion.Pattern.IsMatch(gamePath))
-                return exclusion.Note;
-        return null;
+        foreach (var note in Notes)
+            if (note.Pattern.IsMatch(gamePath))
+                return note.Note;
+        return SkinNote;
     }
 }

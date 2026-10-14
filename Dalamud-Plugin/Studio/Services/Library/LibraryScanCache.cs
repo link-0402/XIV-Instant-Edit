@@ -9,13 +9,14 @@ namespace InstantEdit.Studio.Services.Library;
 
 /// <summary>
 /// What the library scans found out about one mod, valid while its meta.json's LastWrite and its
-/// folder's write time stay the same. Each part is null (or not read) until a scan needs it.
+/// files' <see cref="Content"/> stamp and total <see cref="Size"/> stay the same. Tags and Print are
+/// null (or not read) until a scan needs them.
 /// </summary>
 internal sealed class ModScanEntry
 {
     public DateTime LastWrite;
-    public DateTime DirWrite;
-    public long? Size;
+    public long Content;
+    public long Size;
     public IReadOnlyList<ChangeTag>? Tags;
     public bool PrintRead;
     public ModFingerprint? Print;
@@ -33,7 +34,8 @@ internal static class LibraryScanCache
     public const string TempFileName = FileName + ".tmp";
 
     // Raised when what a scan finds changes (a new tag kind, a new rule), so old results are read again.
-    private const int Version = 1;
+    // 2: entries are stamped by their files (Content), not by the folder's write time.
+    private const int Version = 2;
 
     private static readonly JsonSerializerSettings Settings = new()
     {
@@ -63,8 +65,12 @@ internal static class LibraryScanCache
         return entries;
     }
 
-    /// <summary>Saves the entries; a cache that can't be written is skipped (the next session scans again).</summary>
-    public static void Save(string path, IEnumerable<KeyValuePair<string, ModScanEntry>> entries)
+    /// <summary>
+    /// Saves the entries; a cache that can't be written is skipped (the next session scans again).
+    /// <paramref name="wanted"/> is asked under <paramref name="gate"/> right before the file is
+    /// replaced: false drops what was written (the cache was forgotten meanwhile).
+    /// </summary>
+    public static void Save(string path, IEnumerable<KeyValuePair<string, ModScanEntry>> entries, object? gate = null, Func<bool>? wanted = null)
     {
         var file = new CacheFile { Version = Version };
         foreach (var (folder, entry) in entries)
@@ -73,7 +79,13 @@ internal static class LibraryScanCache
         try
         {
             File.WriteAllText(temp, JsonConvert.SerializeObject(file, Formatting.None, Settings));
-            File.Move(temp, path, overwrite: true);
+            lock (gate ?? new object())
+            {
+                if (wanted?.Invoke() == false)
+                    File.Delete(temp);
+                else
+                    File.Move(temp, path, overwrite: true);
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -90,8 +102,8 @@ internal static class LibraryScanCache
     private sealed class SavedEntry
     {
         public long LastWrite;
-        public long DirWrite;
-        public long? Size;
+        public long Content;
+        public long Size;
         public List<SavedTag>? Tags;
         public bool PrintRead;
         public SavedPrint? Print;
@@ -99,7 +111,7 @@ internal static class LibraryScanCache
         public static SavedEntry From(ModScanEntry entry) => new()
         {
             LastWrite = entry.LastWrite.Ticks,
-            DirWrite  = entry.DirWrite.Ticks,
+            Content   = entry.Content,
             Size      = entry.Size,
             Tags      = entry.Tags?.Select(tag => new SavedTag { Kind = tag.Kind, Label = tag.Label, Search = tag.Search }).ToList(),
             PrintRead = entry.PrintRead,
@@ -111,7 +123,7 @@ internal static class LibraryScanCache
         public ModScanEntry ToEntry() => new()
         {
             LastWrite = new DateTime(LastWrite),
-            DirWrite  = new DateTime(DirWrite),
+            Content   = Content,
             Size      = Size,
             Tags      = Tags?.Select(tag => new ChangeTag(tag.Kind, tag.Label ?? string.Empty, tag.Search ?? string.Empty)).ToArray(),
             PrintRead = PrintRead,

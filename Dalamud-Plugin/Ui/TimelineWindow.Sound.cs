@@ -81,6 +81,16 @@ public sealed partial class TimelineWindow
         soundCheckDocument = null;
         soundAsk = null;
         soundInPlace = null;
+        // So is a listen's error.
+        ForgetListen(null);
+    }
+
+    /// <summary> Drops the last listen's error and the play still running, which belong to another event or clip. </summary>
+    private void ForgetListen(string? eventKey)
+    {
+        listenEvent = eventKey;
+        listenError = null;
+        listening = null;
     }
 
     /// <summary> The sound at <paramref name="gamePath"/> for the inspector: an import's own bytes, else read from the collection on a task. </summary>
@@ -239,7 +249,9 @@ public sealed partial class TimelineWindow
             Tip("Marks the sound to loop and loops each of its audio files from start to end.");
         }
 
-        if (shown is { Model: { } model, Ids.Length: > 1 } && sound < model.Sounds.Count && model.Sounds[sound].Type == ScdSound.GroupRandom)
+        // A pin is always shown, so one left on a single sound (or a gone one) can be cleared.
+        if (shown is { Model: { } model } && sound < model.Sounds.Count &&
+            (ev.Pin != null || shown.Ids.Length > 1 && model.Sounds[sound].Type == ScdSound.GroupRandom))
         {
             Fact("Which sound");
             using (ImRaii.Disabled(!editable))
@@ -291,7 +303,11 @@ public sealed partial class TimelineWindow
             {
                 ImGui.SetNextItemWidth(Theme.Scaled(70));
                 var changed = ImGui.InputInt("##sound-index", ref index, 0, 0);
-                TrackField(current, changed, changed ? With(ev, TimelineSoundKey.SoundIndexField, Math.Clamp(index, 0, several.Sounds.Count - 1)) : null);
+                var picked = Math.Clamp(index, 0, several.Sounds.Count - 1);
+                // A pin names an alternative of the sound it was set on, never of another.
+                TrackField(current, changed, changed
+                    ? With(picked != sound ? ev with { Pin = null } : ev, TimelineSoundKey.SoundIndexField, picked)
+                    : null);
             }
             Tip($"The file has {several.Sounds.Count} sounds. This event plays the one with this number, from 0.");
         }
@@ -314,9 +330,10 @@ public sealed partial class TimelineWindow
 
     // A Sound file control's changes until no control is active make one undo step.
     private bool soundEditing;
-    // The sound playing in game for a listen button, and why the last one couldn't.
+    // The sound playing in game for a listen button, why the last one couldn't, and the event they are for.
     private Task? listening;
     private string? listenError;
+    private string? listenEvent;
 
     /// <summary> Ends the running sound edit once no control is active any more. </summary>
     private void EndSoundEdit(TimelineEditor current)
@@ -345,6 +362,8 @@ public sealed partial class TimelineWindow
     /// </summary>
     private void DrawSoundFile(TimelineEditor current, TimelineEvent ev, bool editable)
     {
+        if (listenEvent != ev.Key)
+            ForgetListen(ev.Key);
         PollListen();
         if (source is not { } loaded || TimelineSoundKey.Of(ev) is not { } key || !key.Path.EndsWith(".scd", StringComparison.OrdinalIgnoreCase) ||
             !AnimationDependencies.SafeGamePath(key.Path))
@@ -557,6 +576,7 @@ public sealed partial class TimelineWindow
                 OpenSoundImport(new TimelineSoundTarget(key, alternative.Id));
             if (ImGui.MenuItem("Match length", "", false, entry.Track >= 0))
                 SetSoundEdit(current, key, Changed(edit, alternative with { WaitMs = audioMs }));
+            // SetSound unpins the events that always played it, in the same undo step.
             if (ImGui.MenuItem("Remove", "", false, random && shown.Ids.Length > 1))
                 SetSoundEdit(current, key, edit with { Alternatives = [.. edit.Alternatives.Where(a => a.Id != alternative.Id)] });
         }
@@ -669,8 +689,16 @@ public sealed partial class TimelineWindow
             importError = $"{name} can't be added: only a random set or a one-shot takes more sounds.";
             return;
         }
+        // The sound may have been removed (or undone) while the file was converted.
+        if (TimelineWindowViews.ReplaceGone(edit, target.ReplaceId, name) is { } gone)
+        {
+            importError = gone;
+            return;
+        }
         var placed = TimelineWindowViews.Placed(edit, target.ReplaceId, import.GamePath, clips, target.ReplaceId == null && oneShot);
-        if (current.SetSound(target.Key, placed))
+        if (ReferenceEquals(TimelineEdits.SetSound(current.Document, target.Key, placed), current.Document))
+            importMessage = $"{name} is already in place.";
+        else if (current.SetSound(target.Key, placed))
             importMessage = target.ReplaceId == null ? $"{name} was added." : $"{name} took the sound's place.";
         else
             importError = $"{name} was imported but could not be placed. Finish the drag first.";

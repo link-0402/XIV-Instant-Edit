@@ -31,11 +31,15 @@ internal sealed partial class ScdModel
         var attributeTable = Attributes.Count > 0 ? Table(w, Attributes.Count) : 0;
         var offsets = new List<(int Table, int Index, int Offset)>();
         var padding = 0;
+        // Read orders empty sections last, so the file ends with the last section that holds anything.
+        var lastSection = Array.FindLastIndex(sectionOrder, HasContent);
         for (var s = 0; s < sectionOrder.Length; s++)
         {
+            if (!HasContent(sectionOrder[s]))
+                continue;
             // Every section starts on 16 bytes; the end is padded only when the original file was.
             Pad(w);
-            var last = s == sectionOrder.Length - 1;
+            var last = s == lastSection;
             switch (sectionOrder[s])
             {
                 case 0:
@@ -82,7 +86,7 @@ internal sealed partial class ScdModel
                                 padding += Pad(w);
                             first = false;
                             offsets.Add((audioTable, i, (int)stream.Position));
-                            padding += WriteAudio(w, Audio[i]);
+                            padding += WriteAudio(w, Audio[i], last && i == Audio.FindLastIndex(a => !a.Null));
                         }
                     if (!first && (!last || alignedEnd))
                         padding += Pad(w);
@@ -109,6 +113,16 @@ internal sealed partial class ScdModel
         return bytes;
     }
 
+    /// <summary>Whether a section (0 layouts, 1 sounds, 2 tracks, 3 attributes, 4 audio) writes any entry.</summary>
+    private bool HasContent(int section) => section switch
+    {
+        0 => Layouts.Any(l => l != null),
+        1 => Sounds.Count > 0,
+        2 => Tracks.Count > 0,
+        3 => Attributes.Count > 0,
+        _ => Audio.Any(a => !a.Null),
+    };
+
     private static void WriteSound(BinaryWriter w, ScdModelSound sound)
     {
         w.Write((byte)sound.Entries.Count);
@@ -128,11 +142,17 @@ internal sealed partial class ScdModel
         w.Write(sound.Trailing);
     }
 
-    /// <summary>Writes an audio entry and returns the bytes after its data, for the size field.</summary>
-    private static int WriteAudio(BinaryWriter w, ScdModelAudio audio)
+    /// <summary>
+    /// Writes an audio entry and returns the bytes after its data, for the size field. A stated size the
+    /// data doesn't fill stays while the data is unedited and the entry still ends the file
+    /// (<paramref name="endsFile"/>), so an unedited file is written back unchanged; it never runs into
+    /// another entry.
+    /// </summary>
+    private static int WriteAudio(BinaryWriter w, ScdModelAudio audio, bool endsFile)
     {
         var entryHeader = audio.Header.ToArray();
-        BinaryPrimitives.WriteInt32LittleEndian(entryHeader, audio.Data.Length);
+        BinaryPrimitives.WriteInt32LittleEndian(entryHeader,
+            endsFile && audio.CutShort is { } cut && cut.Held == audio.Data.Length ? cut.Declared : audio.Data.Length);
         BinaryPrimitives.WriteInt32LittleEndian(entryHeader.AsSpan(24), audio.SubInfo.Length);
         w.Write(entryHeader);
         w.Write(audio.SubInfo);
