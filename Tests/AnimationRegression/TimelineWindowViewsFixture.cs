@@ -283,6 +283,10 @@ internal static class TimelineWindowViewsFixture
         texts.AddRange([TimelineWindowViews.RemovalStatus(new(3, 2))!, TimelineWindowViews.StallText(12), TimelineWindowViews.SeamPlacementNote,
             TimelineWindowViews.FixLoopTip, TimelineWindowViews.ShortenedText(10), TimelineWindowViews.PartRange(new MotionPart(1, 2), 1, 2),
             TimelineWindowViews.GapText(new JoinGap(1, 2, "b", 1, 2))]);
+        // Live shows a cut or a new length too, but plays the clip's own sounds and effects at their old frames.
+        check(TimelineWindowViews.LiveHint(false) == "Live shows bone layers and effect looks. Preview shows sounds, effects and looks that differ per event too." &&
+              TimelineWindowViews.LiveHint(true) == "Live shows the motion. Sounds and effects keep their old timing until Preview.", "live hints");
+        texts.AddRange([TimelineWindowViews.LiveHint(false), TimelineWindowViews.LiveHint(true)]);
     }
 
     private static void Packs(Action<bool, string> check, List<string> texts)

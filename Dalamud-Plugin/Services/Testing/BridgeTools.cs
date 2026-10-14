@@ -50,7 +50,6 @@ internal sealed class BridgeTools : IDisposable
             ["contexts"] = Contexts,
             ["est_entries"] = EstEntries,
             ["physics"] = Physics,
-            ["live_short_test"] = LiveShortTest,
         };
 
         invoke = pi.GetIpcProvider<string, string, string>($"{Owner}.XivBridge.Invoke");
@@ -79,11 +78,7 @@ internal sealed class BridgeTools : IDisposable
           { "name": "physics",
             "description": "The Body Physics builder: window, character and loaded physics file, document, message line, automatic preview, the preview itself and the IE Physics mod.",
             "inputSchema": { "type": "object", "properties": {
-              "detail": { "type": "string", "enum": ["summary", "areas", "full"], "description": "summary (default); areas adds each simulator; full adds chains, connectors, springs and collision bits." } } } },
-          { "name": "live_short_test",
-            "description": "Timeline Live test: while on, Live shows the clip's first two thirds at that shorter length, to see whether the game loops a swapped copy at its own length. Returns the setting.",
-            "inputSchema": { "type": "object", "properties": {
-              "on": { "type": "boolean", "description": "Turn the short copy on or off. Omit to read the setting." } } } }
+              "detail": { "type": "string", "enum": ["summary", "areas", "full"], "description": "summary (default); areas adds each simulator; full adds chains, connectors, springs and collision bits." } } } }
         ]
         """;
 
@@ -228,13 +223,6 @@ internal sealed class BridgeTools : IDisposable
             ["count"] = entries.Length,
             ["entries"] = JsonSerializer.SerializeToNode(entries),
         };
-    }
-
-    private static JsonNode LiveShortTest(JsonObject arguments)
-    {
-        if (arguments["on"] is JsonValue on && on.TryGetValue<bool>(out var value))
-            Services.Animations.Preview.MotionLiveDisplay.ShortTest = value;
-        return new JsonObject { ["shortTest"] = Services.Animations.Preview.MotionLiveDisplay.ShortTest };
     }
 
     private JsonNode Physics(JsonObject arguments)

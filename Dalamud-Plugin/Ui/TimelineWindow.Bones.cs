@@ -771,8 +771,8 @@ public sealed partial class TimelineWindow
     }
 
     /// <summary>
-    /// The clip's own pose at <paramref name="frame"/>, local and in model space, from the decoded motion;
-    /// null while it is read, which this starts.
+    /// The clip's own pose at <paramref name="frame"/>, local and in model space, from the decoded motion
+    /// as the document cuts or stretches it; null while it is read, which this starts.
     /// </summary>
     private (MotionTransform[] Local, MotionTransform[] Model)? MotionPose(AnimationTimelineSource loaded, int frame)
     {
@@ -782,11 +782,12 @@ public sealed partial class TimelineWindow
             EnsureDecode(fresh);
             return null;
         }
-        if (motionPose is { } cached && ReferenceEquals(cached.Clip, decoded) && cached.Frame == frame)
+        var clip = editor is { } current ? OutputMotion(current, decoded) : decoded;
+        if (motionPose is { } cached && ReferenceEquals(cached.Clip, clip) && cached.Frame == frame)
             return (cached.Local, cached.Model);
-        var local = decoded.Pose(frame);
-        var model = MotionEvaluator.ModelSpace(decoded.Skeleton, local);
-        motionPose = (decoded, frame, local, model);
+        var local = clip.Pose(frame);
+        var model = MotionEvaluator.ModelSpace(clip.Skeleton, local);
+        motionPose = (clip, frame, local, model);
         return (local, model);
     }
 
