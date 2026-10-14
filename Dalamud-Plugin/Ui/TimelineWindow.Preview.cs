@@ -154,9 +154,6 @@ public sealed partial class TimelineWindow
                     StartLive(loaded);
             }
         }
-#if DEBUG
-        DrawShortTest(current, id);
-#endif
     }
 
     private static string? FirstText(params string?[] texts)

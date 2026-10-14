@@ -1382,7 +1382,7 @@ Spec: docs/superpowers/specs/2026-10-14-timeline-cuts-and-loop-seams-design.md. 
   in a text field with "From mod: ..." or "Not in your collection. ..." under it. Type another .scd
   path and press Enter (one undo step), save, and hear the new sound. A path ending in .avfx is
   refused under the field.
-- [ ] 2 Live with another length (Debug build, "Short test" in the Live controls): in GPose with a loop
+- [ ] 2 Live with another length (dev plugin, XIV Bridge tool live_short_test): in GPose with a loop
   playing under Live, turn it on. Expect the motion to loop after two thirds of the clip. Scrub,
   pause, replay, Stop, leaving GPose and unloading the plugin still behave.
 - [ ] 3 Fix loop on the TikTok dance: the clip band's end badge says Stalls; the seam panel shows the
