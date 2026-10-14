@@ -421,7 +421,7 @@ internal static class AudioFixture
     /// two-entry codebook, a floor 1 without partitions, an empty residue, one mapping and one short-block
     /// mode), then audio packets whose floors are all unused. Each packet after the first adds 128 frames.
     /// </summary>
-    private static byte[] SilentVorbis(int channels, int rate, int packets, long? granule = null)
+    internal static byte[] SilentVorbis(int channels, int rate, int packets, long? granule = null)
     {
         var identification = new byte[30];
         identification[0] = 1;

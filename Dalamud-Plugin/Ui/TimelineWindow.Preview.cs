@@ -226,7 +226,8 @@ public sealed partial class TimelineWindow
             (rest, soundFiles) = TimelineSoundEdits.Redirectable(rest, SoundBytes, ImportBytes);
             // Looks that differ between events of one effect play from copies, as a save writes them.
             (shown, var used) = WithLooks(rest);
-            var sounds = WithSounds(shown, _ => TimelineSoundRoute.Copy, path => soundFiles.GetValueOrDefault(path) ?? SoundBytes(path));
+            var sounds = WithSoundCuts(WithSounds(shown, _ => TimelineSoundRoute.Copy, path => soundFiles.GetValueOrDefault(path) ?? SoundBytes(path)),
+                shown, path => soundFiles.GetValueOrDefault(path) ?? SoundBytes(path));
             shown = sounds.Document;
             used.AddRange(sounds.Copies);
             added = TimelineWindowViews.AddedFiles(shown, used);

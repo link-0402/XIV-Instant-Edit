@@ -58,6 +58,18 @@ public sealed partial class TimelineWindow
         return undecided == 0 ? null : TimelineWindowViews.SoundCutsFooter(undecided);
     }
 
+    /// <summary>
+    /// <paramref name="sounds"/> with the sounds chosen to be cut with the motion cut into copies (see
+    /// <see cref="TimelineSoundEdits.BakeCuts"/>), their lengths as <paramref name="before"/> plays them.
+    /// </summary>
+    private TimelineSoundBake WithSoundCuts(TimelineSoundBake sounds, TimelineDocument before, Func<string, byte[]?> sound)
+    {
+        if (!sounds.Document.SoundCuts.ContainsValue(true))
+            return sounds;
+        return TimelineSoundEdits.BakeCuts(sounds, sound, ScdTemplate(),
+            ev => TimelineEdits.Find(before, ev.Key) is { } original ? AudioSeconds(before, original, true) ?? 0 : 0);
+    }
+
     /// <summary>In a sound's panel, when it plays across a cut: cut its audio with the motion, or leave it whole.</summary>
     private void DrawSoundCutChoice(TimelineEditor current, TimelineEvent ev, bool editable)
     {

@@ -298,7 +298,7 @@ internal sealed class ScdFile
         => at >= 0 && at < bytes.Length ? bytes[at] : throw new InvalidDataException("The SCD file is cut short.");
 
     /// <summary>The table Vorbis mode 0x2003 XORs with (VFXEditor ScdUtils.XORTABLE).</summary>
-    private static readonly byte[] VorbisXor = Convert.FromHexString(
+    internal static readonly byte[] VorbisXor = Convert.FromHexString(
         "3a323232037e12f7b2e2a267323222323252161b3ca1547b1b97a6931a4baaa67a7b1b97a6f702bbaaa6bbf72a51be03f42a51be03f42a51be1206562732323632" +
         "b21a3bbc91d47b58fc0b552a15bc40920b5b7c0a951235b863d20b3bf0c714515c948694595cfc1b173a3f6b3732323032727a13b726607a13b72650ba13b42a50" +
         "ba13b52e40fa1395ae4038189a92b03800fa12b17e00db96a17c08db9a91bc08d81a86e270391f86e0787e03e764519c8f346f4e41fc0bd5ae41fc0bd5ae41fc3b" +
