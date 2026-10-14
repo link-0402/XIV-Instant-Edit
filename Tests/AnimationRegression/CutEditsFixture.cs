@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
 using System.Numerics;
+using System.Text.Json;
 using InstantEdit.Models;
+using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui.Timeline;
@@ -44,6 +46,22 @@ internal static class CutEditsFixture
     {
         Ripple(check);
         Editor(check);
+        Bake(check);
+    }
+
+    private static void Bake(Action<bool, string> check)
+    {
+        var doc = Doc(100);
+        var cutDoc = CutEdits.RemoveRange(doc, 40, 60, out _);
+        check(AnimationBakeRules.ChangesMotion(cutDoc) && AnimationEditService.RetimeSeconds(cutDoc) == 80 / 30f &&
+              AnimationEditService.RetimeSeconds(CutEdits.SetSeam(doc, MotionJoin.ForSeam)) == 100 / 30f &&
+              AnimationEditService.RetimeSeconds(doc) == null && !AnimationBakeRules.ChangesMotion(doc),
+            "cuts bake and always carry the output length; an untouched document bakes nothing");
+        var options = new JsonSerializerOptions { IncludeFields = true };
+        var journalJson = JsonSerializer.Serialize(new AnimationTimelineEdit(false, 0, 80 / 30f, [], null, cutDoc.Cuts), options);
+        check(JsonSerializer.Deserialize<AnimationTimelineEdit>(journalJson, options)!.Cuts!.Parts.Length == 2 &&
+              JsonSerializer.Deserialize<AnimationTimelineEdit>("{\"Startup\":false,\"EntryIndex\":0,\"DurationSeconds\":null}", options)!.Cuts == null,
+            "journals carry cuts, and older ones load without");
     }
 
     private static void Editor(Action<bool, string> check)

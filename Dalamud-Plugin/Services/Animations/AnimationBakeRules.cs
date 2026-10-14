@@ -15,11 +15,11 @@ internal static class AnimationBakeRules
         request.Operation == AnimationOperation.EditTimeline && request.RepairTarget != null;
 
     /// <summary>
-    /// Whether saving <paramref name="document"/> bakes the motion: a new length, bone layers that change
-    /// it, bones left out, or a repair onto <paramref name="repair"/>.
+    /// Whether saving <paramref name="document"/> bakes the motion: a stretch, cuts, bone layers that
+    /// change it, bones left out, or a repair onto <paramref name="repair"/>.
     /// </summary>
     public static bool ChangesMotion(TimelineDocument document, SkeletonStandard? repair = null) =>
-        document.LengthChanged || document.MotionChanged || !document.ExcludedBones.IsEmpty || repair != null;
+        document.Stretched || document.Cut || document.MotionChanged || !document.ExcludedBones.IsEmpty || repair != null;
 
     /// <summary>
     /// Whether saving bakes the layers in for good: a new length, bones left out or a repair. The

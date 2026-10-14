@@ -9,6 +9,7 @@ using FFXIVClientStructs.Havok.Common.Base.Math.QsTransform;
 using FFXIVClientStructs.Havok.Common.Base.Types;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations.Motion;
+using InstantEdit.Services.Animations.Timeline;
 
 namespace InstantEdit.Services.Animations;
 
@@ -54,11 +55,15 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 status($"Baking {clip.Name}: {session.Progress:P0}");
             }
             token.ThrowIfCancellationRequested();
-            if (session.EditsMotion)
+            if (session.Cuts || session.EditsMotion)
             {
                 // Managed work over every sample: off the framework thread, so the game keeps its frame rate.
-                status($"Applying bone layers to {clip.Name}");
-                await Task.Run(() => session.ApplyMotion(token), token);
+                status(session.Cuts ? $"Cutting {clip.Name}" : $"Applying bone layers to {clip.Name}");
+                await Task.Run(() =>
+                {
+                    session.ApplyCuts(token);
+                    session.ApplyMotion(token);
+                }, token);
             }
             await framework.RunOnFrameworkThread(() => { Check(token); validateRuntime(); session.Build(); session.Save(path); });
             var baked = await File.ReadAllBytesAsync(path, token);
@@ -149,10 +154,14 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         private readonly short[] floatSlots = [];
         private readonly short[] sourceTracks = [];
         private readonly sbyte blendHint;
-        private readonly int frames;
-        // The output's length, and the source's: they differ only when a timeline edit
-        // changes the clip's length, which samples the source at the scaled time.
-        private readonly float duration, sourceDuration;
+        // How many samples there are: the source's grid while a cut edit samples, the output's after it cuts.
+        private int frames;
+        // The output's length, and the source's: they differ when a timeline edit changes the
+        // clip's length, which samples the source at the scaled time, or cuts it (see ApplyCuts).
+        private float duration;
+        private readonly float sourceDuration;
+        // A timeline edit's cuts: the source is sampled on its own grid, then cut to the output.
+        private readonly MotionCuts? cuts;
         private int frame, validationFrame;
         private bool replaced;
         public float Progress => (float)frame / frames;
@@ -223,17 +232,25 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 sourceDuration = originalAnimation->Duration;
                 duration = request.Operation == AnimationOperation.EditTimeline && request.Timeline?.DurationSeconds is { } length
                     ? length : sourceDuration;
-                if (duration != sourceDuration)
+                cuts = request.Operation == AnimationOperation.EditTimeline && request.Timeline?.Cuts is { Whole: false } cut ? cut : null;
+                if (cuts != null)
+                {
+                    cuts.Validate();
+                    // Cuts are made in the clip's own frames; a list made on another clip would cut the wrong motion.
+                    if (Math.Abs(cuts.Source - Math.Round(sourceDuration * TimelineDocument.Fps)) > 1)
+                        throw new InvalidDataException("The cuts don't fit the motion.");
+                }
+                if (duration != sourceDuration || cuts != null)
                 {
                     if (!AnimationPoseRules.ValidDuration(duration)) throw new InvalidDataException("The new length is outside 1 frame to 10 minutes.");
                     if (sourceDuration <= 0) throw new InvalidDataException("This animation has no length to change.");
                     // Root motion and annotations are timed in seconds and have no writer here,
-                    // so they would keep the old length while the motion changes.
+                    // so they would keep the old timing while the motion changes.
                     if (originalAnimation->ExtractedMotion.ptr != null)
-                        throw new InvalidDataException("This animation moves your character, so its length can't be changed yet.");
+                        throw new InvalidDataException("This animation moves your character, so it can't be cut or change its length yet.");
                     for (var i = 0; i < originalAnimation->AnnotationTracks.Length; i++)
                         if (originalAnimation->AnnotationTracks[i].Annotations.Length > 0)
-                            throw new InvalidDataException("This animation has Havok annotations, so its length can't be changed yet.");
+                            throw new InvalidDataException("This animation has Havok annotations, so it can't be cut or change its length yet.");
                     // Validation compares against this copy of the source's metadata, so it
                     // must carry the new length too.
                     var metadataAnimation = arena.Alloc<AnimationNative.Interleaved>();
@@ -242,9 +259,15 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                     outputMetadata->Animation = new hkRefPtr<hkaAnimation> { ptr = &metadataAnimation->Animation };
                 }
                 var sourceFrames = AnimationNative.SourceFrameCount(originalAnimation);
-                frames = AnimationPoseRules.SampleCount(duration, sourceFrames);
-                if ((long)frames * (skeleton->Bones.Length * sizeof(hkQsTransformf) + (skeleton->FloatSlots.Length + sourceSkeleton->FloatSlots.Length) * 4) > AnimationPap.MaxFileSize)
+                // A cut samples the source on its own grid; the cutter makes the output's samples from those.
+                frames = AnimationPoseRules.SampleCount(cuts != null ? sourceDuration : duration, sourceFrames);
+                var outputFrames = cuts != null
+                    ? MotionCutter.OutputSamples(frames, sourceDuration, (int)Math.Round(duration * TimelineDocument.Fps))
+                    : 0;
+                if ((long)(frames + outputFrames) * (skeleton->Bones.Length * sizeof(hkQsTransformf) + (skeleton->FloatSlots.Length + sourceSkeleton->FloatSlots.Length) * 4) > AnimationPap.MaxFileSize)
                     throw new InvalidDataException("This animation exceeds the bake memory limit.");
+                if (cuts != null && (long)(frames + outputFrames) * targetDescription.Bones.Length * MotionClip.Stride * sizeof(float) > MotionClip.MaxBytes)
+                    throw new InvalidDataException("This animation is too long to cut.");
                 floatSlots = new ReadOnlySpan<short>(originalBinding->FloatTrackToFloatSlotIndices.Data,
                     originalBinding->FloatTrackToFloatSlotIndices.Length).ToArray();
                 motion = request.Operation == AnimationOperation.EditTimeline && request.Timeline is { } edit ? edit.Motion : [];
@@ -326,6 +349,57 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         }
         /// <summary>Whether the edit's bone layers change the motion, so <see cref="ApplyMotion"/> must run before the build.</summary>
         public bool EditsMotion => MotionEvaluator.Changes(motion);
+
+        /// <summary>Whether the edit cuts the motion, so <see cref="ApplyCuts"/> must run before the layers and the build.</summary>
+        public bool Cuts => cuts != null;
+
+        /// <summary>
+        /// Cuts the motion sampled on the source's grid into the output's (see <see cref="MotionCutter"/>),
+        /// float tracks included, before the bone layers apply. From then on the samples are the
+        /// output's. Touches managed state only, so it may run off the framework thread.
+        /// </summary>
+        public void ApplyCuts(CancellationToken token)
+        {
+            if (cuts == null) return;
+            if (expected.Count != frames) throw new InvalidOperationException("The animation must be sampled before it is cut.");
+            // The source's float slots and the output skeleton's go through the cut side by side.
+            var sourceSlots = rawFloats.Count > 0 ? rawFloats[0].Length : 0;
+            var targetSlots = expectedFloats.Count > 0 ? expectedFloats[0].Length : 0;
+            var slots = sourceSlots + targetSlots;
+            float[]? floats = null;
+            if (slots > 0)
+            {
+                floats = new float[(long)frames * slots];
+                for (var f = 0; f < frames; f++)
+                {
+                    rawFloats[f].CopyTo(floats, f * slots);
+                    expectedFloats[f].CopyTo(floats, f * slots + sourceSlots);
+                }
+            }
+            var source = new MotionClip(targetDescription, sourceDuration, frames, floats, slots) { Loops = clip.IsLoop };
+            for (var f = 0; f < frames; f++)
+                for (var b = 0; b < expected[f].Length; b++)
+                    source.Set(f, b, FromHavok(expected[f][b]));
+            var cut = MotionCutter.Apply(source, cuts, (int)Math.Round(duration * TimelineDocument.Fps), token);
+            expected.Clear();
+            rawFloats.Clear();
+            expectedFloats.Clear();
+            for (var f = 0; f < cut.Samples; f++)
+            {
+                token.ThrowIfCancellationRequested();
+                var values = new hkQsTransformf[cut.Bones];
+                for (var b = 0; b < values.Length; b++)
+                {
+                    values[b] = ToHavok(cut.Get(f, b));
+                    AnimationNative.CheckTransform(values[b]);
+                }
+                expected.Add(values);
+                rawFloats.Add(slots > 0 ? cut.TrackFloats.AsSpan(f * slots, sourceSlots).ToArray() : []);
+                expectedFloats.Add(slots > 0 ? cut.TrackFloats.AsSpan(f * slots + sourceSlots, targetSlots).ToArray() : []);
+            }
+            frames = cut.Samples;
+            duration = cut.Duration;
+        }
 
         /// <summary>
         /// Applies the edit's bone layers to every sampled pose, between sampling and the build: the

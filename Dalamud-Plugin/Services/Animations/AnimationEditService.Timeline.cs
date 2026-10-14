@@ -433,7 +433,14 @@ internal sealed partial class AnimationEditService
             ExcludedBones: source.Standalone ? [] : document.ExcludedBones,
             RepairTarget: source.Standalone ? null : repair,
             Timeline: new AnimationTimelineEdit(source.Startup, source.EntryIndex, RetimeSeconds(document),
-                document.MotionChanged ? document.Motion : []));
+                document.MotionChanged ? document.Motion : [], Cuts: SavedCuts(document)));
+
+    /// <summary>
+    /// The cut list a save records: the document's when it cuts, and for a stretch of a motion whose
+    /// length the cuts already recorded (one opened again) a whole one, so its length isn't lost.
+    /// </summary>
+    internal static MotionCuts? SavedCuts(TimelineDocument document) =>
+        document.Cut ? document.Cuts : document.Stretched && document.Cuts != null ? MotionCuts.WholeOf(document.MotionLength) : null;
 
     /// <summary>
     /// Refuses bones left out or a repair the clip can't take: as the old rebakes refused them, before
@@ -453,11 +460,12 @@ internal sealed partial class AnimationEditService
     }
 
     /// <summary>
-    /// How long the motion becomes, in seconds; null when the length stays. The document's length is
-    /// the motion's own (see <see cref="TimelineConvert.Read"/>), not a mod's copied header length.
+    /// How long the motion becomes, in seconds; null when it stays as it is. Cuts always carry it, even
+    /// when the length stays (a seam blend alone). The document's length is the motion's own (see
+    /// <see cref="TimelineConvert.Read"/>), not a mod's copied header length.
     /// </summary>
     internal static float? RetimeSeconds(TimelineDocument document) =>
-        document.LengthChanged ? document.Length / (float)TimelineDocument.Fps : null;
+        document.Stretched || document.Cut ? document.Length / (float)TimelineDocument.Fps : null;
 
     /// <summary>Whether saving <paramref name="document"/> bakes the motion: a new length, bone layers that change it, or bones left out.</summary>
     internal static bool ChangesMotion(TimelineDocument document) => AnimationBakeRules.ChangesMotion(document);
