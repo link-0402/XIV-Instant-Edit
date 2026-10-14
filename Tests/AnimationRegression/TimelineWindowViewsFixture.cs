@@ -265,6 +265,9 @@ internal static class TimelineWindowViewsFixture
               TimelineWindowViews.StallText(12) == "The motion slows to a stop before the loop starts again (last 12 frames)." &&
               TimelineWindowViews.GapText(new JoinGap(10.6f, 31.2f, "j_ude_b_l", .19f, 1.61f)) ==
               "Pose gap 10.6 deg, worst j_ude_b_l 31.2 deg. Speed in 0.19, out 1.61 deg per frame.", "seam texts");
+        // The TikTok dance's seam pose matches exactly: no bone is worst, so none is named.
+        check(TimelineWindowViews.GapText(new JoinGap(0, 0, "", .19f, 1.61f)) == "Pose gap 0.0 deg. Speed in 0.19, out 1.61 deg per frame.",
+            "seam text without a worst bone");
         check(TimelineWindowViews.PartRange(new MotionPart(230, 425), 200, 395) == "Source frames 230 to 425. Plays at 200 to 395." &&
               TimelineWindowViews.ShortenedText(10) == "Uses 10 frames: the parts around it are shorter.", "part range and shortened blends");
         check(Enum.GetValues<SeamState>().Select(TimelineWindowViews.SeamBadge).SequenceEqual(["Loops cleanly", "Pops", "Stalls"]) &&

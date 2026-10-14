@@ -536,7 +536,8 @@ internal static partial class TimelineWindowViews
 
     /// <summary>The jump a join or the seam blends away: the pose gap and the speeds on both sides.</summary>
     public static string GapText(JoinGap gap) => string.Create(CultureInfo.InvariantCulture,
-        $"Pose gap {gap.MeanAngle:0.0} deg, worst {gap.WorstBone} {gap.WorstAngle:0.0} deg. Speed in {gap.SpeedIn:0.00}, out {gap.SpeedOut:0.00} deg per frame.");
+        $"Pose gap {gap.MeanAngle:0.0} deg{(gap.WorstBone.Length > 0 ? string.Create(CultureInfo.InvariantCulture, $", worst {gap.WorstBone} {gap.WorstAngle:0.0} deg") : "")}. " +
+        $"Speed in {gap.SpeedIn:0.00}, out {gap.SpeedOut:0.00} deg per frame.");
 
     /// <summary>A loop that slows to a stop at its end: over how many frames.</summary>
     public static string StallText(int frames) => $"The motion slows to a stop before the loop starts again (last {frames} frames).";
