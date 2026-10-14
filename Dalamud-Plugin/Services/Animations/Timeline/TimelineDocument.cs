@@ -78,6 +78,24 @@ internal sealed record TimelineDocument(
     public bool LengthChanged => Length != SourceLength;
 
     /// <summary>
+    /// How the clip's motion is cut (see <see cref="MotionCuts"/>): the kept parts of the motion in its
+    /// own frames, their joins and the loop seam's blend. Null keeps the motion whole.
+    /// </summary>
+    public MotionCuts? Cuts { get; init; }
+
+    /// <summary>The length of the motion the cuts are made in, in frames: the loaded length unless the cuts say otherwise.</summary>
+    public int MotionLength => Cuts?.Source ?? SourceLength;
+
+    /// <summary>How many of the motion's frames the cuts keep; they play over <see cref="Length"/>.</summary>
+    public int KeptFrames => Cuts?.Kept ?? MotionLength;
+
+    /// <summary>Whether the motion is cut: a part removed or trimmed, or a loop seam blend set.</summary>
+    public bool Cut => Cuts is { Whole: false };
+
+    /// <summary>Whether the kept motion plays faster or slower than it was made: <see cref="Length"/> isn't <see cref="KeptFrames"/>.</summary>
+    public bool Stretched => Length != KeptFrames;
+
+    /// <summary>
     /// The bone layers that change the clip's motion, applied in this order (see
     /// <see cref="MotionEvaluator"/>). Saving bakes them into the motion; empty when the motion is not edited.
     /// </summary>
