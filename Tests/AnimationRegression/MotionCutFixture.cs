@@ -13,7 +13,28 @@ internal static class MotionCutFixture
     {
         Model(check, reject);
         Cutter(check);
+        Seams(check);
     }
+
+    private static void Seams(Action<bool, string> check)
+    {
+        var clean = LoopSeam.Analyze(Spin(101, f => 3.6f * f), 0, 100);   // ends at 360 = start
+        check(clean is { State: SeamState.Clean, StallFrom: null } && clean.Gap.MeanAngle < .01f, "a loop that meets itself is clean");
+        var pops = LoopSeam.Analyze(Spin(101, f => 3f * f), 0, 100);       // ends at 300
+        check(pops.State == SeamState.Pops && Math.Abs(pops.Gap.MeanAngle - 30) < .5f, "a pose gap pops");   // mean over 2 bones: 60 and 0
+        // A swing that, from its turn at frame 88, eases into frame 0's pose and slows to a stop there.
+        var stall = LoopSeam.Analyze(Spin(101, f => 60 * MathF.Sin(2 * MathF.PI * f / 50) * (1 - Smooth(Math.Clamp((f - 88) / 12f, 0, 1)))), 0, 100);
+        check(stall is { State: SeamState.Stalls, StallFrom: >= 87 and <= 89 }, "a motion easing into frame 0 stalls from where the ease starts");
+        check(LoopSeam.Speeds(Spin(101, f => 3f * f))[10] is > 1.4f and < 1.6f, "speeds average the tracked bones");  // 3 and 0
+        // Idles and poses barely move: their noise is no stall, though a real gap still pops.
+        var still = LoopSeam.Analyze(Spin(101, f => f <= 90 ? .2f * f : 18), 0, 100);
+        check(still.State == SeamState.Pops && still.StallFrom == null, "a loop that barely moves never stalls");
+        // Out from frame 0 and back in, slowing at both ends: it wraps smoothly, and nothing is trimmed.
+        var swing = LoopSeam.Analyze(Spin(101, f => 90 * MathF.Pow(MathF.Sin(MathF.PI * f / 100), 2)), 0, 100);
+        check(swing is { State: SeamState.Clean, StallFrom: null }, "a loop easing out and back in is clean, not a stall to trim");
+    }
+
+    private static float Smooth(float t) => t * t * (3 - 2 * t);
 
     private static void Cutter(Action<bool, string> check)
     {
