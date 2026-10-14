@@ -39,6 +39,7 @@ PoseEditorFixture.Run(Check, Reject);
 PoseFileFixture.Run(Check, Reject);
 EditAgainFixture.Run(Check);
 TimelineToolsFixture.Run(Check, Reject);
+MotionCutFixture.Run(Check, Reject);
 // Writes the fixture take as the plugin sends it, for reading back in Blender.
 if (args is ["--write-sample-take", var takePath])
     File.WriteAllBytes(takePath, AnimationTakeFormat.Write(AnimationExportFixture.SampleTake(), "Skeleton", false, "1.2.4"));
