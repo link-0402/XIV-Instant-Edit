@@ -117,7 +117,8 @@ internal sealed record AnimationBakeRequest(Guid Id, AnimationCapture Capture, A
 /// <paramref name="DurationSeconds"/> always holds the output length.
 /// </summary>
 internal sealed record AnimationTimelineEdit(bool Startup, int EntryIndex, float? DurationSeconds,
-    ImmutableArray<MotionLayer> Motion = default, string? MotionBaseHash = null, MotionCuts? Cuts = null)
+    ImmutableArray<MotionLayer> Motion = default, string? MotionBaseHash = null, MotionCuts? Cuts = null,
+    ImmutableDictionary<string, string>? CutSounds = null)
 {
     public ImmutableArray<MotionLayer> Motion { get; init; } = Motion.IsDefault ? [] : Motion;
 }

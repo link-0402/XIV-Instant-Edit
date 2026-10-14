@@ -349,10 +349,11 @@ internal sealed partial class AnimationEditService
         string modName, IReadOnlyDictionary<string, byte[]> added, IReadOnlyDictionary<string, string>? beside = null,
         IReadOnlyDictionary<string, int>? motionFrames = null, SkeletonStandard? repair = null,
         IReadOnlyDictionary<string, Func<byte[], byte[]>>? rebuild = null,
-        IReadOnlyDictionary<string, TimelineSoundReplacement>? replaced = null, IReadOnlyDictionary<string, string>? copied = null)
+        IReadOnlyDictionary<string, TimelineSoundReplacement>? replaced = null, IReadOnlyDictionary<string, string>? copied = null,
+        IReadOnlyDictionary<string, string>? cutSounds = null)
     {
         if (Busy) return null;
-        var request = TimelineRequest(source, document, destination, modName.Trim(), repair);
+        var request = TimelineRequest(source, document, destination, modName.Trim(), repair, cutSounds);
         Launch(async token =>
         {
             if (destination == AnimationDestination.NewMod && !PenumbraService.IsSafeNewModName(request.ModName))
@@ -426,14 +427,19 @@ internal sealed partial class AnimationEditService
         return request.Id;
     }
 
+    /// <summary>
+    /// The request saving <paramref name="document"/> makes. <paramref name="cutSounds"/> are the copies its
+    /// sounds were cut into with the motion and what each was cut from, which Edit again plays again.
+    /// </summary>
     internal static AnimationBakeRequest TimelineRequest(AnimationTimelineSource source, TimelineDocument document,
-        AnimationDestination destination, string modName, SkeletonStandard? repair = null)
+        AnimationDestination destination, string modName, SkeletonStandard? repair = null, IReadOnlyDictionary<string, string>? cutSounds = null)
         => new(Guid.NewGuid(), source.Capture, destination, modName, false, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None,
             AnimationOperation.EditTimeline,
             ExcludedBones: source.Standalone ? [] : document.ExcludedBones,
             RepairTarget: source.Standalone ? null : repair,
             Timeline: new AnimationTimelineEdit(source.Startup, source.EntryIndex, RetimeSeconds(document),
-                document.MotionChanged ? document.Motion : [], Cuts: SavedCuts(document)));
+                document.MotionChanged ? document.Motion : [], Cuts: SavedCuts(document),
+                CutSounds: cutSounds is { Count: > 0 } ? cutSounds.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase) : null));
 
     /// <summary>
     /// The cut list a save records: the document's when it cuts, and for a stretch a whole one of the
@@ -538,13 +544,14 @@ internal sealed partial class AnimationEditService
     /// <summary>
     /// <paramref name="loaded"/> with <paramref name="edit"/>'s layers and cuts back, on the motion from before
     /// it. The saved timeline's events are already in the edit's output frames, and its length is the
-    /// output's, so a stretch comes back as one.
+    /// output's, so a stretch comes back as one. Sounds the edit cut with the motion play their whole
+    /// files again, chosen to be cut, so saving again cuts them once.
     /// </summary>
     internal static AnimationTimelineSource WithSavedEdit(AnimationTimelineSource loaded, AnimationTimelineEdit edit, byte[] motion,
         string fingerprint) =>
         loaded.Document is not { } document ? loaded : loaded with
         {
-            Document = document with { Motion = edit.Motion, Cuts = edit.Cuts },
+            Document = TimelineSoundEdits.Uncut(document with { Motion = edit.Motion, Cuts = edit.Cuts }, edit.CutSounds),
             BaseMotion = motion,
             BaseFingerprint = fingerprint,
             BaseHash = edit.MotionBaseHash,

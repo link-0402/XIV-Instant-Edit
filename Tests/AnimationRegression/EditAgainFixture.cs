@@ -153,6 +153,13 @@ internal static class EditAgainFixture
         var stretch = AnimationEditService.WithSavedEdit(Saved(150), new AnimationTimelineEdit(false, 0, 5, [], "base", MotionCuts.WholeOf(100)), [4], "print").Document!;
         check(stretch is { Stretched: true, Cut: false } && AnimationEditService.RetimeSeconds(stretch) == 5,
             "a stretched edit opens again on the motion it stretched, still stretched");
+        var song = new TimelineEvent("t2", "C063", TimelineLane.Sound, 0, 0, false, "sound/instant_edit/song_cut_ab.scd", TimelineAccess.Editable, null, false,
+            ImmutableDictionary<string, double>.Empty);
+        var withSong = Saved(80) with { Document = new TimelineDocument(80, 80, null, [song], 3) };
+        var sounds = ImmutableDictionary<string, string>.Empty.Add("sound/instant_edit/song_cut_ab.scd", "sound/test/song.scd");
+        var reopened = AnimationEditService.WithSavedEdit(withSong, new AnimationTimelineEdit(false, 0, 80 / 30f, [], "base", cuts, sounds), [4], "print").Document!;
+        check(InstantEdit.Ui.Timeline.TimelineEdits.Find(reopened, "t2")!.Path == "sound/test/song.scd" && reopened.SoundCuts["t2"],
+            "a sound the edit cut opens again playing its whole file, chosen to be cut, so saving cuts it once");
     }
 
     // Undo last save: the edit whose layers the file holds again becomes the window's saved state.

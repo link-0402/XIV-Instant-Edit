@@ -81,6 +81,11 @@ internal static class MotionCutFixture
         check(MotionCutter.Rise(1) == 1 && MotionCutter.RiseSpeed(1) == 0 && MotionCutter.Fall(0) == 1 && MotionCutter.FallSpeed(1) == 0,
             "the quintic bases end where they should");
         Ease(check);
+        // Edit again of a cut edit: the game plays the saved, shorter file while Live decoded the motion from before.
+        check(InstantEdit.Services.Animations.Preview.MotionLiveDisplay.LengthFits(100 / 30f, 100 / 30f, null) &&
+              InstantEdit.Services.Animations.Preview.MotionLiveDisplay.LengthFits(80 / 30f, 100 / 30f, 80 / 30f) &&
+              !InstantEdit.Services.Animations.Preview.MotionLiveDisplay.LengthFits(80 / 30f, 100 / 30f, null),
+            "Live takes a playing file of the decoded motion's length, or of the saved edit's");
     }
 
     private static void Ease(Action<bool, string> check)
@@ -113,6 +118,17 @@ internal static class MotionCutFixture
               Near(AngleS(slowed, 1000), AngleS(fastEnd, 1000)), "an eased end arrives at the start's speed, on frame 0's pose");
         check(Near(AngleS(slowed, 700), AngleS(fastEnd, 700)) && Near(AngleS(slowed, 300), AngleS(fastEnd, 300)),
             "before an end's ease the motion is the source's");
+
+        // Slowing into a 10-degree gap and leaving fast, with a seam blend and an eased start: the blend
+        // aims at the start's eased speed, so the wrap keeps its speed either way the blend is placed.
+        var gapped = SpinAt(1001, 100, f => 60 * MathF.Sin(2 * MathF.PI * f / 50) * (1 - Smooth(Math.Clamp((f - 88) / 12f, 0, 1))) +
+                                             10 * Smooth(Math.Clamp((f - 88) / 12f, 0, 1)));
+        foreach (var place in new[] { JoinPlacement.Before, JoinPlacement.After })
+        {
+            var both = MotionCutter.Apply(gapped, new MotionCuts(100, [new(0, 100)], [], new MotionJoin(12, place), 30), 100);
+            float into = AngleS(both, 1000) - AngleS(both, 999), outOf = AngleS(both, 1) - AngleS(both, 0);
+            check(Math.Abs(into - outOf) < .05f && outOf > -.01f, $"a seam blend placed {place} and an eased start keep the wrap's speed");
+        }
     }
 
     private static SkeletonDescription Rig() => new("cut-rig", "cut-rig-fingerprint",

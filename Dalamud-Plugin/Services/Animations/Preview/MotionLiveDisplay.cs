@@ -96,6 +96,8 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         public required IReadOnlySet<string> Accepted { get; init; }
         /// <summary>The clip's motion as decoded, which layers apply to.</summary>
         public required MotionClip Base { get; init; }
+        /// <summary>The length a saved edit gave the clip's file, which may play instead (see <see cref="LengthFits"/>).</summary>
+        public float? SavedDuration { get; init; }
         /// <summary>The edits to show; a new set is built as soon as the last build ends.</summary>
         public Edits Requested { get; set; } = new([], []);
         public Edits Shown { get; set; } = new([], []);
@@ -159,10 +161,11 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     /// or one of <paramref name="alsoAccepted"/>, whose tracks begin with the decoded ones. The
     /// <paramref name="excluded"/> bones lose their tracks, as a save leaves them out. The motion is
     /// cut by <paramref name="cuts"/> and played <paramref name="length"/> timeline frames long (0 for
-    /// the clip's own), before the layers, as a save cuts it.
+    /// the clip's own), before the layers, as a save cuts it. <paramref name="savedDuration"/> is the
+    /// length of the file the game plays when a saved edit gave it another than the decoded motion's.
     /// </summary>
     public bool Start(ushort actorIndex, string fingerprint, IEnumerable<string> alsoAccepted, MotionClip decoded, ImmutableArray<MotionLayer> layers,
-        ImmutableArray<string> excluded = default, MotionCuts? cuts = null, int length = 0)
+        ImmutableArray<string> excluded = default, MotionCuts? cuts = null, int length = 0, float? savedDuration = null)
     {
         RequireFrameworkThread();
         Stop();
@@ -175,7 +178,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         session = new Session
         {
             ObjectIndex = actor.ObjectIndex, Address = actor.Address, GameObjectId = actor.GameObjectId,
-            Fingerprint = fingerprint, Base = decoded,
+            Fingerprint = fingerprint, Base = decoded, SavedDuration = savedDuration,
             Accepted = alsoAccepted.Append(fingerprint).Where(print => print.Length > 0).ToHashSet(StringComparer.Ordinal),
         };
         Error = string.Empty;
@@ -360,7 +363,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
             string print;
             try { print = bindings.BindingFingerprint(binding, skeleton, resource); }
             catch (InvalidDataException) { return; }
-            if (!current.Accepted.Contains(print) || !Fits(binding, current.Base))
+            if (!current.Accepted.Contains(print) || !Fits(binding, current.Base, current.SavedDuration))
                 return;
             if (copy.Bones > skeleton->Bones.Length)
             {
@@ -446,15 +449,23 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     }
 
     /// <summary>
-    /// Whether a playing binding is the clip the decode read, or a save of it: the same blend hint,
-    /// float tracks and length, and tracks that begin with the decoded ones (a save keeps a clip's
-    /// tracks in order and adds the bones its layers moved after them).
+    /// Whether a playing clip <paramref name="playing"/> seconds long can be the decoded motion's: its length,
+    /// or <paramref name="saved"/>'s, the length a saved edit of it gave its file (Edit again decodes the motion
+    /// from before a cut or a new length while the game plays the saved file).
     /// </summary>
-    private static bool Fits(hkaAnimationBinding* binding, MotionClip decoded)
+    internal static bool LengthFits(float playing, float decoded, float? saved) =>
+        Math.Abs(playing - decoded) <= 1e-4f || saved is { } length && Math.Abs(playing - length) <= 1e-4f;
+
+    /// <summary>
+    /// Whether a playing binding is the clip the decode read, or a save of it: the same blend hint,
+    /// float tracks and length (or <paramref name="saved"/>, a saved edit's), and tracks that begin with
+    /// the decoded ones (a save keeps a clip's tracks in order and adds the bones its layers moved after them).
+    /// </summary>
+    private static bool Fits(hkaAnimationBinding* binding, MotionClip decoded, float? saved)
     {
         var animation = binding->Animation.ptr;
         if (animation == null || binding->BlendHint.Storage != decoded.BlendHint ||
-            animation->NumberOfFloatTracks != decoded.FloatTracks || Math.Abs(animation->Duration - decoded.Duration) > 1e-4f ||
+            animation->NumberOfFloatTracks != decoded.FloatTracks || !LengthFits(animation->Duration, decoded.Duration, saved) ||
             binding->TransformTrackToBoneIndices.Length < decoded.SourceTracks.Length)
             return false;
         for (var i = 0; i < decoded.SourceTracks.Length; i++)

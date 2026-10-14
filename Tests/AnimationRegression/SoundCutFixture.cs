@@ -33,6 +33,13 @@ internal static class SoundCutFixture
         var whole = cut with { SoundCuts = cut.SoundCuts.SetItem("t2", false) };
         var kept = TimelineSoundEdits.BakeCuts(TimelineSoundEdits.Bake(whole, Sound, _ => null, _ => TimelineSoundRoute.Copy), Sound, template, _ => 2);
         check(CutEditsFixture.Find(kept.Document, "t2")!.Path == "sound/test/song.scd" && kept.Copies.IsEmpty, "a sound left whole keeps its file");
+        // Edit again: the copy plays its whole file again, chosen to be cut, so the next save cuts it from the whole file once.
+        check(baked.CutFrom.Count == 1 && baked.CutFrom[copyPath] == "sound/test/song.scd" && kept.CutFrom.IsEmpty,
+            "a sound cut with the motion records the file it was cut from");
+        var uncut = TimelineSoundEdits.Uncut(baked.Document, baked.CutFrom);
+        check(CutEditsFixture.Find(uncut, "t2")!.Path == "sound/test/song.scd" && uncut.SoundCuts.TryGetValue("t2", out var again) && again &&
+              ReferenceEquals(TimelineSoundEdits.Uncut(kept.Document, kept.CutFrom), kept.Document),
+            "a cut copy goes back to its whole file with the choice to cut it");
     }
 
     private static void Audio(Action<bool, string> check, Action<Action, string> reject)
