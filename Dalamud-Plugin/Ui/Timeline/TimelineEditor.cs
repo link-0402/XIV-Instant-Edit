@@ -733,22 +733,31 @@ internal sealed class TimelineEditor
     // Cuts.
 
     /// <summary>Cuts the motion at the playhead, as one undo step.</summary>
-    public bool CutAtPlayhead() => Commit(CutEdits.CutAt(Document, playhead));
+    public bool CutAtPlayhead() => CutAt(playhead);
+
+    /// <summary>Cuts the motion at <paramref name="frame"/>, as one undo step.</summary>
+    public bool CutAt(int frame) => Commit(CutEdits.CutAt(Document, frame));
 
     /// <summary>Removes from the start of the part under the playhead to the playhead, as one undo step.</summary>
-    public bool RemoveBeforePlayhead()
-    {
-        var cuts = CutEdits.CutsOf(Document);
-        var part = cuts.PartAt(playhead, Document.Length);
-        return RemoveRange(TimelineSnap.Round(cuts.PartStart(part, Document.Length)), playhead);
-    }
+    public bool RemoveBeforePlayhead() => RemoveBefore(playhead);
 
     /// <summary>Removes from the playhead to the end of the part under it, as one undo step: "end the clip here" on the last part.</summary>
-    public bool RemoveAfterPlayhead()
+    public bool RemoveAfterPlayhead() => RemoveAfter(playhead);
+
+    /// <summary>Removes from the start of the part under <paramref name="frame"/> to it, as one undo step.</summary>
+    public bool RemoveBefore(int frame)
     {
         var cuts = CutEdits.CutsOf(Document);
-        var part = cuts.PartAt(playhead, Document.Length);
-        return RemoveRange(playhead, TimelineSnap.Round(cuts.PartEnd(part, Document.Length)));
+        var part = cuts.PartAt(frame, Document.Length);
+        return RemoveRange(TimelineSnap.Round(cuts.PartStart(part, Document.Length)), frame);
+    }
+
+    /// <summary>Removes from <paramref name="frame"/> to the end of the part under it, as one undo step.</summary>
+    public bool RemoveAfter(int frame)
+    {
+        var cuts = CutEdits.CutsOf(Document);
+        var part = cuts.PartAt(frame, Document.Length);
+        return RemoveRange(frame, TimelineSnap.Round(cuts.PartEnd(part, Document.Length)));
     }
 
     /// <summary>Removes the selected part, as one undo step.</summary>

@@ -18,6 +18,8 @@ public sealed partial class TimelineWindow
         "Click or drag the ruler to move the playhead.\n" +
         "Wheel scrolls. Ctrl+wheel zooms. Shift+wheel scrolls the lanes.\n" +
         "Hold Alt while dragging to place freely.\n" +
+        "C cuts the motion at the playhead. Q and W remove the part before or after it.\n" +
+        "Drag a part's edges on the clip row to trim it.\n" +
         "Right-click for more. Double-click a lane to add to it.";
 
     private bool lengthActive;
@@ -82,7 +84,7 @@ public sealed partial class TimelineWindow
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(current.FixedLength
                 ? "An expression's timeline keeps its length."
-                : "The clip's length in seconds. Press Enter to apply it.");
+                : "Stretches the motion to this length. Press Enter to apply it. Trim it on the clip row.");
         ImGui.SameLine(0, Theme.Scaled(3));
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Muted, "s");
