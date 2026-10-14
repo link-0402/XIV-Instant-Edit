@@ -270,6 +270,13 @@ internal static class TimelineWindowViewsFixture
         check(Enum.GetValues<SeamState>().Select(TimelineWindowViews.SeamBadge).SequenceEqual(["Loops cleanly", "Pops", "Stalls"]) &&
               Enum.GetValues<JoinPlacement>().Select(TimelineWindowViews.PlacementName).SequenceEqual(["Before", "Centered", "After"]),
             "seam badges and blend places");
+        check(TimelineWindowViews.SoundCutsFooter(1) == "1 sound plays across a cut. Choose before saving." &&
+              TimelineWindowViews.SoundCutsFooter(3) == "3 sounds play across a cut. Choose for each one before saving." &&
+              TimelineWindowViews.CrossesCutTip == "This sound plays across a cut." &&
+              TimelineWindowViews.SoundCutChoices.SequenceEqual(["Cut with the motion", "Leave whole"]) &&
+              TimelineWindowViews.LeaveWholeNote == "Plays whole. After the cut it is out of step with the motion.", "sounds across a cut");
+        texts.AddRange([TimelineWindowViews.SoundCutsFooter(1), TimelineWindowViews.SoundCutsFooter(3), TimelineWindowViews.CrossesCutTip,
+            .. TimelineWindowViews.SoundCutChoices, TimelineWindowViews.LeaveWholeNote]);
         texts.AddRange([TimelineWindowViews.RemovalStatus(new(3, 2))!, TimelineWindowViews.StallText(12), TimelineWindowViews.SeamPlacementNote,
             TimelineWindowViews.FixLoopTip, TimelineWindowViews.ShortenedText(10), TimelineWindowViews.PartRange(new MotionPart(1, 2), 1, 2),
             TimelineWindowViews.GapText(new JoinGap(1, 2, "b", 1, 2))]);

@@ -559,6 +559,20 @@ internal static partial class TimelineWindowViews
     public static string PartRange(MotionPart part, double start, double end) => string.Create(CultureInfo.InvariantCulture,
         $"Source frames {part.From} to {part.To}. Plays at {start:0} to {end:0}.");
 
+    /// <summary>The warning mark's tooltip on a sound that plays across a cut.</summary>
+    public const string CrossesCutTip = "This sound plays across a cut.";
+
+    /// <summary>What a sound across a cut does: its audio is cut with the motion, or it plays whole.</summary>
+    public static readonly ImmutableArray<string> SoundCutChoices = ["Cut with the motion", "Leave whole"];
+
+    /// <summary>Under a sound across a cut that plays whole.</summary>
+    public const string LeaveWholeNote = "Plays whole. After the cut it is out of step with the motion.";
+
+    /// <summary>Why saving waits: sounds across a cut without a choice.</summary>
+    public static string SoundCutsFooter(int sounds) => sounds == 1
+        ? "1 sound plays across a cut. Choose before saving."
+        : $"{sounds} sounds play across a cut. Choose for each one before saving.";
+
     /// <summary>A blend longer than the parts around it can take: the frames it really uses.</summary>
     public static string ShortenedText(double used) => string.Create(CultureInfo.InvariantCulture, $"Uses {used:0} frames: the parts around it are shorter.");
 

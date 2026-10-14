@@ -495,7 +495,8 @@ public sealed partial class TimelineWindow
             return pinned || changed ? new SoundMark(int.MaxValue, pinned, changed, false) : null;
         var span = TimelineWindowViews.SoundSpan(shown.Seconds, ev.Pin is { } pin && shown.Ids.IndexOf(pin) is >= 0 and var index ? index : null);
         var loop = ev.Values?.GetValueOrDefault("Loop", 1) ?? 1;
-        return new SoundMark(ev.Start + span.Solid, pinned, changed, shown.EndsEarly || loop == -1 && !shown.Loops);
+        var crosses = doc.Cut && TimelineSoundCuts.Crosses(doc, ev, shown.Seconds.Max());
+        return new SoundMark(ev.Start + span.Solid, pinned, changed, shown.EndsEarly || loop == -1 && !shown.Loops || crosses);
     }
 
     /// <summary> A dashed outline: what a random sound may still play after its shortest alternative ends. </summary>
@@ -870,6 +871,8 @@ public sealed partial class TimelineWindow
                 ImGui.TextColored(Theme.Info, "Plays only under a condition.");
             if (ev.Look != null)
                 ImGui.TextColored(Theme.Accent, "Look changed.");
+            if (CrossesCut(current.Document, ev, false))
+                ImGui.TextColored(Theme.Warning, TimelineWindowViews.CrossesCutTip);
             return;
         }
         if (hit.Part == TimelinePart.LengthHandle && Widgets.HoverDelay("timeline-length-handle"))
