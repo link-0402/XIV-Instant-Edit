@@ -571,7 +571,7 @@ internal static partial class TimelineWindowViews
         : "Live shows bone layers and effect looks. Preview shows sounds, effects and looks that differ per event too.";
 
     /// <summary>A loop that slows to a stop at its end: over how many frames.</summary>
-    public static string StallText(int frames) => $"The motion slows to a stop before the loop starts again (last {frames} frames).";
+    public static string StallText(int frames) => $"The motion holds still before the loop starts again (last {frames} frames).";
 
     /// <summary>Which side of a join its blend changes.</summary>
     public static string PlacementName(JoinPlacement placement) => placement switch
@@ -585,7 +585,22 @@ internal static partial class TimelineWindowViews
     public const string SeamPlacementNote = "This changes the loop's first frames, which the startup leads into.";
 
     /// <summary>The Fix loop button's tooltip.</summary>
-    public const string FixLoopTip = "Trims a stall at the end and blends the end into the start.";
+    public const string FixLoopTip = "Trims an end that holds still, blends a jump in pose and eases a jump in speed.";
+
+    /// <summary>A loop whose end and start move at different speeds: which way the speed jumps.</summary>
+    public static string JumpText(float speedIn, float speedOut) => speedIn < speedOut
+        ? "The loop starts again faster than it ends."
+        : "The loop starts again slower than it ends.";
+
+    /// <summary>The loop seam's ease field in the side panel, its sides and its tooltip.</summary>
+    public const string EaseLegend = "Ease";
+
+    public static readonly string[] EaseSides = ["Start", "End"];
+
+    public const string EaseTip = "The faster side plays at the slower side's speed and catches up within these frames. The length stays.";
+
+    /// <summary>Fix loop's tooltip while there is nothing to fix.</summary>
+    public const string LoopCleanTip = "The loop already runs cleanly.";
 
     /// <summary>A part's frames: the motion's own it keeps, and where it plays now.</summary>
     public static string PartRange(MotionPart part, double start, double end) => string.Create(CultureInfo.InvariantCulture,

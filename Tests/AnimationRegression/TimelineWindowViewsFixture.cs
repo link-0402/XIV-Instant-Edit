@@ -266,7 +266,7 @@ internal static class TimelineWindowViewsFixture
               TimelineWindowViews.RemovalStatus(new(0, 2)) == "Removed 2 keys with the cut." && TimelineWindowViews.RemovalStatus(new(0, 0)) == null,
             "removal status");
         check(TimelineWindowViews.SeamBadge(SeamState.Stalls) == "Stalls" &&
-              TimelineWindowViews.StallText(12) == "The motion slows to a stop before the loop starts again (last 12 frames)." &&
+              TimelineWindowViews.StallText(12) == "The motion holds still before the loop starts again (last 12 frames)." &&
               TimelineWindowViews.GapText(new JoinGap(10.6f, 31.2f, "j_ude_b_l", .19f, 1.61f)) ==
               "Pose gap 10.6 deg, worst j_ude_b_l 31.2 deg. Speed in 0.19, out 1.61 deg per frame.", "seam texts");
         // The TikTok dance's seam pose matches exactly: no bone is worst, so none is named.
@@ -291,6 +291,15 @@ internal static class TimelineWindowViewsFixture
         check(TimelineWindowViews.LiveHint(false) == "Live shows bone layers and effect looks. Preview shows sounds, effects and looks that differ per event too." &&
               TimelineWindowViews.LiveHint(true) == "Live shows the motion. Sounds and effects keep their old timing until Preview.", "live hints");
         texts.AddRange([TimelineWindowViews.LiveHint(false), TimelineWindowViews.LiveHint(true)]);
+        // A loop that arrives slow and leaves fast (the TikTok dance) gets its start eased in.
+        check(TimelineWindowViews.JumpText(.19f, 1.61f) == "The loop starts again faster than it ends." &&
+              TimelineWindowViews.JumpText(2, 1) == "The loop starts again slower than it ends." &&
+              TimelineWindowViews.FixLoopTip == "Trims an end that holds still, blends a jump in pose and eases a jump in speed." &&
+              TimelineWindowViews.EaseTip == "The faster side plays at the slower side's speed and catches up within these frames. The length stays." &&
+              TimelineWindowViews.EaseLegend == "Ease" && TimelineWindowViews.EaseSides.SequenceEqual(["Start", "End"]) &&
+              TimelineWindowViews.LoopCleanTip == "The loop already runs cleanly.", "loop ease texts");
+        texts.AddRange([TimelineWindowViews.JumpText(1, 2), TimelineWindowViews.JumpText(2, 1), TimelineWindowViews.EaseTip, TimelineWindowViews.EaseLegend,
+            .. TimelineWindowViews.EaseSides, TimelineWindowViews.LoopCleanTip]);
     }
 
     private static void Packs(Action<bool, string> check, List<string> texts)

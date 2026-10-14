@@ -51,6 +51,8 @@ internal enum TimelinePart : byte
     Seam,
     /// <summary>The outer edge of the loop seam's blend, which sets its length.</summary>
     SeamEdge,
+    /// <summary>Where the loop start's ease ends, which sets its length.</summary>
+    EaseEdge,
 }
 
 /// <param name="Frame">The fractional frame under the pointer; the editor rounds it.</param>
@@ -229,8 +231,8 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
     /// <summary>
     /// What of the clip band is at <paramref name="x"/>: a part's edge first (left of a boundary the part
     /// before ends, right of it the next one starts; the clip's start and end are edges too), then the
-    /// outer edge of a join's blend, then a join's blend, then on a loop the seam's edge and blend, then
-    /// the part, else the empty band.
+    /// outer edge of a join's blend, then a join's blend, then on a loop the seam blend's edge, the start
+    /// ease's edge and either's body, then the part, else the empty band.
     /// </summary>
     private TimelineHit HitClip(TimelineDocument doc, TimelineView view, float x, float frame, bool loops)
     {
@@ -259,13 +261,19 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
         for (var j = 0; j < windows.Length; j++)
             if ((windows[j].Before || windows[j].After) && x >= windows[j].Left && x <= windows[j].Right)
                 return new TimelineHit(TimelinePart.Join, frame, Cut: j);
-        if (loops && cuts.Seam != null)
+        if (loops)
         {
             var (before, after) = MotionCutter.Window(cuts, -1, length);
             float end = view.X(length), left = view.X((float)(length - before)), right = view.X((float)after), start = view.X(0);
             if (before > 0 && MathF.Abs(x - left) <= Edge || after > 0 && MathF.Abs(x - right) <= Edge)
                 return new TimelineHit(TimelinePart.SeamEdge, frame);
-            if (before > 0 && x >= left && x <= end || after > 0 && x >= start && x <= right)
+            // The ease is part of the seam: its body selects the seam, its inner edge sets its length.
+            var (from, to) = cuts.EaseSpan(length);
+            var edge = view.X((float)(cuts.EaseEnd ? from : to));
+            if (cuts.Ease > 0 && MathF.Abs(x - edge) <= Edge)
+                return new TimelineHit(TimelinePart.EaseEdge, frame);
+            if (before > 0 && x >= left && x <= end || after > 0 && x >= start && x <= right ||
+                cuts.Ease > 0 && x >= view.X((float)from) && x <= view.X((float)to))
                 return new TimelineHit(TimelinePart.Seam, frame);
         }
         return frame >= 0 && frame <= length

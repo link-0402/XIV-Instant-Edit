@@ -185,11 +185,11 @@ public sealed partial class TimelineWindow
 
         var resizing = current.Gesture is TimelineGesture.ResizeLeft or TimelineGesture.ResizeRight or TimelineGesture.Length or
             TimelineGesture.LayerLeft or TimelineGesture.LayerRight or TimelineGesture.LayerFadeIn or TimelineGesture.LayerFadeOut or TimelineGesture.LayerKey or
-            TimelineGesture.BoneKey or TimelineGesture.TrimLeft or TimelineGesture.TrimRight or TimelineGesture.BlendLength;
+            TimelineGesture.BoneKey or TimelineGesture.TrimLeft or TimelineGesture.TrimRight or TimelineGesture.BlendLength or TimelineGesture.EaseLength;
         if (!readOnly && (resizing || hovered && current.Gesture == TimelineGesture.None &&
                 hit.Part is TimelinePart.LeftEdge or TimelinePart.RightEdge or TimelinePart.LengthHandle or TimelinePart.LayerLeft or
                     TimelinePart.LayerRight or TimelinePart.LayerFadeIn or TimelinePart.LayerFadeOut or TimelinePart.LayerKey or TimelinePart.BoneKey or
-                    TimelinePart.ClipLeft or TimelinePart.ClipRight or TimelinePart.JoinEdge or TimelinePart.SeamEdge))
+                    TimelinePart.ClipLeft or TimelinePart.ClipRight or TimelinePart.JoinEdge or TimelinePart.SeamEdge or TimelinePart.EaseEdge))
             ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeEw);
     }
 

@@ -50,6 +50,8 @@ internal enum TimelineGesture : byte
     TrimRight,
     /// <summary>Sets a join's or the loop seam's blend length by its outer edge.</summary>
     BlendLength,
+    /// <summary>Sets how long the loop seam's ease is, by its inner edge.</summary>
+    EaseLength,
 }
 
 /// <summary>
@@ -388,7 +390,7 @@ internal sealed class TimelineEditor
                 ClearSelection();
                 break;
             case TimelinePart.ClipPart or TimelinePart.ClipLeft or TimelinePart.ClipRight or TimelinePart.Join or TimelinePart.JoinEdge or
-                TimelinePart.Seam or TimelinePart.SeamEdge when !doc.Expression:
+                TimelinePart.Seam or TimelinePart.SeamEdge or TimelinePart.EaseEdge when !doc.Expression:
                 PressClip(hit, doc);
                 break;
         }
@@ -433,6 +435,13 @@ internal sealed class TimelineEditor
                 BeginEdit(TimelineGesture.BlendLength, [], [TimelineSnap.Round(gestureSide < 0 ? doc.Length - before : after)], snap);
                 break;
             }
+            case TimelinePart.EaseEdge when Loops && cuts.Ease > 0:
+            {
+                SelectCut(new TimelineCutSelection(TimelineCutTarget.Seam, -1));
+                var (from, to) = cuts.EaseSpan(doc.Length);
+                BeginEdit(TimelineGesture.EaseLength, [], [TimelineSnap.Round(cuts.EaseEnd ? from : to)], snap);
+                break;
+            }
             case TimelinePart.ClipPart or TimelinePart.ClipLeft or TimelinePart.ClipRight when hit.Cut >= 0:
                 SelectCut(new TimelineCutSelection(TimelineCutTarget.Part, hit.Cut));
                 gesture = TimelineGesture.Select;
@@ -441,7 +450,7 @@ internal sealed class TimelineEditor
                 SelectCut(new TimelineCutSelection(TimelineCutTarget.Join, hit.Cut));
                 gesture = TimelineGesture.Select;
                 break;
-            case TimelinePart.Seam or TimelinePart.SeamEdge when Loops:
+            case TimelinePart.Seam or TimelinePart.SeamEdge or TimelinePart.EaseEdge when Loops:
                 SelectCut(new TimelineCutSelection(TimelineCutTarget.Seam, -1));
                 gesture = TimelineGesture.Select;
                 break;
@@ -549,6 +558,14 @@ internal sealed class TimelineEditor
                 var frames = blend.Frames + gestureSide * delta * (blend.Placement == JoinPlacement.Centered ? 2 : 1);
                 var changed = blend with { Frames = Math.Clamp(frames, 0, MotionJoin.MaxFrames) };
                 next = gesturePart < 0 ? CutEdits.SetSeam(start, changed) : CutEdits.SetJoin(start, gesturePart, changed);
+                landed = anchors[0] + delta;
+                break;
+            }
+            case TimelineGesture.EaseLength:
+            {
+                // The end's ease grows to the left, the start's to the right.
+                var cuts = CutEdits.CutsOf(start);
+                next = CutEdits.SetEase(start, cuts.Ease + (cuts.EaseEnd ? -delta : delta));
                 landed = anchors[0] + delta;
                 break;
             }
@@ -780,6 +797,12 @@ internal sealed class TimelineEditor
 
     /// <summary>Sets the loop seam's blend, or removes it with null, on a clip that loops: live during a field edit, else one undo step.</summary>
     public bool SetSeam(MotionJoin? seam) => Loops && Change(CutEdits.SetSeam(Document, seam));
+
+    /// <summary>
+    /// Sets over how many frames the loop's seam eases (0: none) and, unless null, whether at the end, on a clip
+    /// that loops: live during a field edit, else one undo step.
+    /// </summary>
+    public bool SetEase(int frames, bool? atEnd = null) => Loops && Change(CutEdits.SetEase(Document, frames, atEnd));
 
     /// <summary>Fixes the loop's seam by <paramref name="report"/> (see <see cref="CutEdits.FixLoop(TimelineDocument, SeamReport)"/>), as one undo step.</summary>
     public bool FixLoop(SeamReport report) => Loops && Cutting(CutEdits.FixLoop(Document, report, out var removed), removed);

@@ -144,8 +144,25 @@ internal static class CutEdits
     }
 
     /// <summary>
-    /// Fixes a loop's seam by <paramref name="report"/>: a stall is trimmed off the end (unless that
-    /// leaves the clip too short), then the seam gets the default blend, which keeps the length.
+    /// Sets over how many frames the loop's seam eases, clamped to 0 to <see cref="MotionJoin.MaxFrames"/>
+    /// (0 removes it), and on which side: the end when <paramref name="atEnd"/>, the start when not, the
+    /// side it has when null.
+    /// </summary>
+    public static TimelineDocument SetEase(TimelineDocument doc, int frames, bool? atEnd = null)
+    {
+        var cuts = CutsOf(doc);
+        if (doc.Expression)
+            return doc;
+        frames = Math.Clamp(frames, 0, MotionJoin.MaxFrames);
+        var end = atEnd ?? cuts.EaseEnd;
+        return frames == cuts.Ease && end == cuts.EaseEnd ? doc : With(doc, cuts with { Ease = frames, EaseEnd = end });
+    }
+
+    /// <summary>
+    /// Fixes a loop's seam by <paramref name="report"/>: an end that holds the start's pose is trimmed
+    /// off (unless that leaves the clip too short), a jump in pose gets the seam's default blend, which
+    /// matches the speeds too, and a jump in speed alone the default ease of the faster side. The blend
+    /// and the ease keep the length.
     /// </summary>
     public static TimelineDocument FixLoop(TimelineDocument doc, SeamReport report) => FixLoop(doc, report, out _);
 
@@ -159,7 +176,11 @@ internal static class CutEdits
         var cuts = CutsOf(doc);
         if (report.StallFrom is { } stall && cuts.Parts[^1] is var last && stall > last.From && stall < last.To)
             next = Remove(doc, cuts, cuts.Kept - (last.To - stall), cuts.Kept, out removed);
-        return SetSeam(next, MotionJoin.ForSeam);
+        if (report.Gap.MeanAngle >= LoopSeam.PopDegrees)
+            next = SetSeam(next, MotionJoin.ForSeam);
+        else if (report.State == SeamState.Stalls)
+            next = SetEase(next, MotionCuts.DefaultEase, atEnd: report.Gap.SpeedIn > report.Gap.SpeedOut);
+        return next;
     }
 
     /// <summary>

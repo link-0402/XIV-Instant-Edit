@@ -9,6 +9,8 @@ namespace InstantEdit.Services.Animations.Motion;
 /// seam. A blend adds a quintic correction to one side of the join (or half to each side) that
 /// starts at zero with zero speed and ends at the gap with the speed difference, so the output is
 /// continuous in pose and speed there and frames outside the blend stay as the time map made them.
+/// An eased loop seam changes the time map instead: the faster side's frames next to the seam play
+/// at the slower side's speed and catch up, so every bone passes the seam gently along its own path.
 /// Pure managed code: the bake and Live use it alike.
 /// </summary>
 internal static class MotionCutter
@@ -60,6 +62,7 @@ internal static class MotionCutter
             }
         }
 
+        var ease = EaseOf(source, cuts, length);
         var pose = new MotionTransform[source.Bones];
         var floats = new float[floatTracks];
         for (var k = 0; k < samples; k++)
@@ -67,7 +70,8 @@ internal static class MotionCutter
             if ((k & 63) == 0)
                 token.ThrowIfCancellationRequested();
             var o = (double)k / rate;
-            Sample(source, cuts.SourceAt(o, length), pose, floats);
+            // The ease changes when the start's frames play; the blends correct by output time.
+            Sample(source, cuts.SourceAt(EasedTime(o, ease, length), length), pose, floats);
             foreach (var blend in blends)
                 blend.Correct(o, length, pose, floats);
             for (var bone = 0; bone < pose.Length; bone++)
@@ -116,6 +120,51 @@ internal static class MotionCutter
             _ => (Math.Min(n / 2, leftFrames), Math.Min(n / 2, rightFrames)),
         };
     }
+
+    /// <summary>
+    /// The fastest an eased start may begin, as a share of normal speed: above 4 its time map would run
+    /// backwards before it catches up, and at 2.5 it still slows to half speed on the way.
+    /// </summary>
+    public const float MaxEaseRate = 2.5f;
+
+    /// <summary>
+    /// Output frame <paramref name="output"/> of a start eased over <paramref name="frames"/> frames, as
+    /// the time it plays: a cubic that leaves 0 at <paramref name="rate"/> times normal speed and reaches
+    /// <paramref name="frames"/> at normal speed, rising all the way for rates up to 4. Frames outside
+    /// the ease play as they are.
+    /// </summary>
+    public static double EaseTime(double output, double frames, double rate)
+    {
+        if (frames <= 0 || output <= 0 || output >= frames)
+            return output;
+        var s = output / frames;
+        return frames * (rate * s * (1 - s) * (1 - s) + s * s * (2 - s));
+    }
+
+    /// <summary>
+    /// The loop seam's ease for a cut <paramref name="length"/> frames long: its frames, clipped to the
+    /// part it lies on, the rate the eased side plays at the seam (the other side's mean bone speed over
+    /// its own, 1 when the eased side doesn't move, at most <see cref="MaxEaseRate"/>) and whether it is
+    /// the end.
+    /// </summary>
+    public static (double Frames, double Rate, bool AtEnd) EaseOf(MotionClip source, MotionCuts cuts, int length)
+    {
+        if (cuts.Ease <= 0)
+            return (0, 1, false);
+        var (from, to) = cuts.EaseSpan(length);
+        var frames = to - from;
+        var gap = LoopSeam.Gap(source, cuts.Parts[^1].To, cuts.Parts[0].From);
+        var (eased, other) = cuts.EaseEnd ? (gap.SpeedIn, gap.SpeedOut) : (gap.SpeedOut, gap.SpeedIn);
+        var rate = eased > 1e-3f ? Math.Clamp(other / eased, 0, MaxEaseRate) : 1;
+        return (frames, rate, cuts.EaseEnd);
+    }
+
+    /// <summary>
+    /// The output time output frame <paramref name="output"/> plays at under <paramref name="ease"/>: the
+    /// start's time map (see <see cref="EaseTime"/>), or the end's, its mirror, in a cut <paramref name="length"/> frames long.
+    /// </summary>
+    public static double EasedTime(double output, (double Frames, double Rate, bool AtEnd) ease, int length) =>
+        ease.AtEnd ? length - EaseTime(length - output, ease.Frames, ease.Rate) : EaseTime(output, ease.Frames, ease.Rate);
 
     /// <summary>Rises from 0 to 1 with zero speed and acceleration at both ends.</summary>
     internal static float Rise(float s) => s * s * s * (10 + s * (-15 + s * 6));
