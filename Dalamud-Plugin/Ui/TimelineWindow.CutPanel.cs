@@ -24,7 +24,7 @@ public sealed partial class TimelineWindow
     private MotionCuts? outputSeamCuts;
     private int outputSeamLength;
     private string? outputSeamDecode;
-    private SeamState? outputSeam;
+    private SeamReport? outputSeam;
     // Where the seam's badge was drawn last, in screen pixels: a click there selects the seam.
     private (Vector2 Min, Vector2 Max)? seamBadge;
 
@@ -125,8 +125,8 @@ public sealed partial class TimelineWindow
             return;
         }
         var (raw, shown) = SeamOf(current, decoded);
-        ImGui.TextColored(shown == SeamState.Clean ? Theme.Success : Theme.Warning, TimelineWindowViews.SeamBadge(shown));
-        Widgets.HintWrapped(TimelineWindowViews.GapText(raw.Gap));
+        ImGui.TextColored(shown.State == SeamState.Clean ? Theme.Success : Theme.Warning, TimelineWindowViews.SeamBadge(shown.State));
+        Widgets.HintWrapped(TimelineWindowViews.GapText(shown.Gap));
         if (raw.StallFrom is { } stall && stall < cuts.Parts[^1].To)
             Widgets.HintWrapped(TimelineWindowViews.StallText(cuts.Parts[^1].To - stall));
         if (cuts.Seam is { } seam)
@@ -213,10 +213,10 @@ public sealed partial class TimelineWindow
 
     /// <summary>
     /// The loop seam as the motion has it between the first part's start and the last part's end (what
-    /// a blend absorbs and Fix loop works from), and its state as the output plays it: with a seam blend,
-    /// the cut motion is measured, once per change and never during a drag.
+    /// a blend absorbs and Fix loop works from), and as the output plays it: with a seam blend, the cut
+    /// motion is measured, once per change and never during a drag.
     /// </summary>
-    private (SeamReport Raw, SeamState Shown) SeamOf(TimelineEditor current, MotionClip decoded)
+    private (SeamReport Raw, SeamReport Shown) SeamOf(TimelineEditor current, MotionClip decoded)
     {
         var doc = current.Document;
         var cuts = CutEdits.CutsOf(doc);
@@ -228,15 +228,15 @@ public sealed partial class TimelineWindow
             rawSeamKey = key;
         }
         if (cuts.Seam is not { Frames: > 0 })
-            return (rawSeam, rawSeam.State);
+            return (rawSeam, rawSeam);
         var stale = !ReferenceEquals(outputSeamCuts, doc.Cuts) || outputSeamLength != doc.Length || outputSeamDecode != decodedKey;
         if (stale && current.Gesture == TimelineGesture.None)
         {
-            outputSeam = LoopSeam.Analyze(MotionCutter.Apply(decoded, cuts, doc.Length), 0, doc.Length).State;
+            outputSeam = LoopSeam.Analyze(MotionCutter.Apply(decoded, cuts, doc.Length), 0, doc.Length);
             (outputSeamCuts, outputSeamLength, outputSeamDecode) = (doc.Cuts, doc.Length, decodedKey);
             stale = false;
         }
-        return (rawSeam, !stale && outputSeam is { } shown ? shown : rawSeam.State);
+        return (rawSeam, !stale && outputSeam is { } shown ? shown : rawSeam);
     }
 
     /// <summary>The seam's badge at the clip band's end, on a loop whose motion is read; a click on it selects the seam.</summary>
@@ -245,7 +245,7 @@ public sealed partial class TimelineWindow
         seamBadge = null;
         if (!current.Loops || source is not { Standalone: false } loaded || DecodedPose(loaded) is not { } decoded)
             return;
-        var (_, shown) = SeamOf(current, decoded);
+        var shown = SeamOf(current, decoded).Shown.State;
         var text = TimelineWindowViews.SeamBadge(shown);
         var size = ImGui.CalcTextSize(text);
         var pad = Theme.Scaled(4);

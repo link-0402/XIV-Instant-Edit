@@ -308,7 +308,7 @@ public sealed partial class TimelineWindow
         }
         if (!pathFieldActive)
             pathFieldText = ev.Path;
-        ImGui.SetNextItemWidth(Theme.Scaled(300));
+        ImGui.SetNextItemWidth(Math.Min(Theme.Scaled(300), ImGui.GetContentRegionAvail().X));
         bool entered;
         using (ImRaii.PushFont(UiBuilder.MonoFont))
             entered = ImGui.InputText("##path", ref pathFieldText, 256, ImGuiInputTextFlags.EnterReturnsTrue);
@@ -327,10 +327,13 @@ public sealed partial class TimelineWindow
             pathFieldText = next?.Path ?? pathFieldText;
         }
         if (pathFieldError != null)
+        {
+            using var wrap = ImRaii.TextWrapPos(0f);
             ImGui.TextColored(Theme.Warning, pathFieldError);
+        }
         ImGui.TextColored(Theme.Hint, LabelOf(current.Document, ev));
         if (PathOrigin(ev.Path) is { } origin)
-            ImGui.TextColored(Theme.Muted, origin);
+            Widgets.MutedWrapped(origin);
     }
 
     /// <summary> Where the collection gets <paramref name="gamePath"/>, read once on a task; null until read. </summary>
