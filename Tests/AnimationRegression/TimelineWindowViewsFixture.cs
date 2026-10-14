@@ -30,6 +30,7 @@ internal static class TimelineWindowViewsFixture
         CatalogKeys(check);
         AddedFiles(check);
         GamePaths(check, texts);
+        PathField(check, texts);
         Packs(check, texts);
         Texts(check, texts);
         Sounds(check, texts);
@@ -229,6 +230,22 @@ internal static class TimelineWindowViewsFixture
             "Paths the game can't load are refused");
         check(Path("   ", TimelineAddKind.Sound, out error) == null && error != null, "An empty path asks for one");
         check(Path("cfxf_smile", TimelineAddKind.Expression, out error) == null && error != null, "Only sounds and effects take a game path");
+    }
+
+    private static void PathField(Action<bool, string> check, List<string> texts)
+    {
+        check(TimelineWindowViews.PathOriginText(TimelinePathOrigin.Game, null) == "Game file" &&
+              TimelineWindowViews.PathOriginText(TimelinePathOrigin.Mod, "Music Library") == "From mod: Music Library" &&
+              TimelineWindowViews.PathOriginText(TimelinePathOrigin.Missing, null) ==
+              "Not in your collection. It plays only for people who have a mod with this file, such as a music library.",
+            "where a path comes from");
+        texts.AddRange(Enum.GetValues<TimelinePathOrigin>().Select(origin => TimelineWindowViews.PathOriginText(origin, "Mod")));
+        var lolo = Ev("t1", "C063", TimelineLane.Sound, 0, "sound/lolo.scd");
+        check(TimelineWindowViews.WithPath(lolo, @" Sound\Other.SCD ", out var e1) is { Path: "sound/other.scd" } && e1 == null, "a typed path is normalised");
+        check(ReferenceEquals(TimelineWindowViews.WithPath(lolo, "sound/lolo.scd", out _), lolo), "the same path changes nothing");
+        check(TimelineWindowViews.WithPath(lolo, "vfx/a.avfx", out var e2) == null && e2 == "A sound path ends in .scd.", "a sound keeps .scd");
+        var vfx = lolo with { Magic = "C012", Lane = TimelineLane.Effect, Path = "vfx/a.avfx" };
+        check(TimelineWindowViews.WithPath(vfx, "vfx/b.avfx", out _) is { Path: "vfx/b.avfx" }, "an effect takes another .avfx");
     }
 
     private static void Packs(Action<bool, string> check, List<string> texts)

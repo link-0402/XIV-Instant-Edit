@@ -500,6 +500,27 @@ internal static partial class TimelineWindowViews
         return path;
     }
 
+    /// <summary>Where a sound's or effect's game path comes from, under its field.</summary>
+    public static string PathOriginText(TimelinePathOrigin origin, string? modName) => origin switch
+    {
+        TimelinePathOrigin.Game => "Game file",
+        TimelinePathOrigin.Mod => $"From mod: {modName}",
+        _ => "Not in your collection. It plays only for people who have a mod with this file, such as a music library.",
+    };
+
+    /// <summary>
+    /// <paramref name="ev"/> playing the game path typed in its File field; the same event when the
+    /// path doesn't change, null with the reason <see cref="GamePath"/> gives when it isn't one.
+    /// </summary>
+    public static TimelineEvent? WithPath(TimelineEvent ev, string text, out string? error)
+    {
+        // A kind without a game path (an expression, a prop) gets GamePath's own refusal.
+        var path = GamePath(text, PickerFor(ev) ?? TimelineAddKind.Prop, out error);
+        if (path == null)
+            return null;
+        return string.Equals(path, ev.Path, StringComparison.Ordinal) ? ev : ev with { Path = path };
+    }
+
     /// <summary>
     /// The expression library the timeline uses after choosing an item that needs
     /// <paramref name="itemPack"/>; a timeline loads only one, so a different one is refused while

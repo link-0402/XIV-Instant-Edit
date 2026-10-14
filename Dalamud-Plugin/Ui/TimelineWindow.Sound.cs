@@ -75,6 +75,7 @@ public sealed partial class TimelineWindow
         soundsShown.Clear();
         originalModels.Clear();
         soundsCollection = null;
+        pathOrigins.Clear();
         previewRestCache = null;
         // A save's check of the mod, or its question, belongs to the clip it was for.
         soundCheck = null;
