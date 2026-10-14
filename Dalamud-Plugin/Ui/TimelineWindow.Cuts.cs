@@ -96,6 +96,7 @@ public sealed partial class TimelineWindow
                     new Vector2(trackLeft + view.X((float)after), barBottom), new Vector2(trackLeft + view.X(0), barBottom), fill);
         }
         DrawDecodeState(drawList, max, top, bottom);
+        DrawSeamBadge(drawList, current, max, trackLeft, top, bottom);
         drawList.PopClipRect();
         DrawRemovedMarkers(drawList, cuts, doc.Length, view, min, max, trackLeft, top);
         drawList.AddLine(new Vector2(min.X, Crisp(top)), new Vector2(max.X, Crisp(top)), U32(Theme.WithAlpha(Theme.TreeLine, .5f)), line);

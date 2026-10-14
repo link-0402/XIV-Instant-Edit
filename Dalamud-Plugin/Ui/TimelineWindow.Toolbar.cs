@@ -158,6 +158,8 @@ public sealed partial class TimelineWindow
         }
         if (current.LastError is { } error)
             Note(null, Theme.Warning, error);
+        if (current.LastRemoval is { } removal && TimelineWindowViews.RemovalStatus(removal) is { } removed)
+            Note(null, Theme.Muted, removed);
         DrawLoaderStatus();
         DrawLivePoseNote();
         DrawEffectProblems(current);
