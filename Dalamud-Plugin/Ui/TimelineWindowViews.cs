@@ -539,6 +539,14 @@ internal static partial class TimelineWindowViews
         $"Pose gap {gap.MeanAngle:0.0} deg{(gap.WorstBone.Length > 0 ? string.Create(CultureInfo.InvariantCulture, $", worst {gap.WorstBone} {gap.WorstAngle:0.0} deg") : "")}. " +
         $"Speed in {gap.SpeedIn:0.00}, out {gap.SpeedOut:0.00} deg per frame.");
 
+    /// <summary>
+    /// Under the preview bar while Live is on. Live plays the clip's own timeline, so with
+    /// <paramref name="retimed"/> motion (cut or stretched) its sounds and effects keep their old frames.
+    /// </summary>
+    public static string LiveHint(bool retimed) => retimed
+        ? "Live shows the motion. Sounds and effects keep their old timing until Preview."
+        : "Live shows bone layers and effect looks. Preview shows sounds, effects and looks that differ per event too.";
+
     /// <summary>A loop that slows to a stop at its end: over how many frames.</summary>
     public static string StallText(int frames) => $"The motion slows to a stop before the loop starts again (last {frames} frames).";
 

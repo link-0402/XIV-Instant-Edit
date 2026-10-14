@@ -123,7 +123,7 @@ public sealed partial class TimelineWindow
 
         if (liveWanted)
         {
-            ImGui.TextColored(Theme.Hint, "Live shows bone layers and effect looks. Preview shows sounds, effects, a new length and looks that differ per event too.");
+            ImGui.TextColored(Theme.Hint, TimelineWindowViews.LiveHint(current.Document.Cut || current.Document.Stretched));
             return;
         }
         if (!shown && !preview.Active)

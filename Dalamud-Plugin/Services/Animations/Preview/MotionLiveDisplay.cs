@@ -10,13 +10,16 @@ using FFXIVClientStructs.Havok.Common.Base.Container.Array;
 using FFXIVClientStructs.Havok.Common.Base.Math.QsTransform;
 using FFXIVClientStructs.Havok.Common.Base.Types;
 using InstantEdit.Services.Animations.Motion;
+using InstantEdit.Services.Animations.Timeline;
 
 namespace InstantEdit.Services.Animations.Preview;
 
 /// <summary>
 /// Shows bone layers on the GPose actor while it plays the clip: an uncompressed copy of the clip's
-/// motion with the layers applied, the same samples a bake compresses, takes the place of the clip's
-/// own binding in the actor's live Havok controls. No hooks: the game samples the edited motion
+/// motion, cut or stretched and with the layers applied, the same samples a bake compresses, takes
+/// the place of the clip's own binding in the actor's live Havok controls. The game plays and loops
+/// the copy at its own length; the clip's timeline still plays its sounds and effects at their old
+/// frames. No hooks: the game samples the edited motion
 /// itself, so physics follows it as it will follow the saved file, and pause, seek and speed work
 /// as for any clip (<see cref="LiveBindings"/>). Only GPose actors (index 200 and up)
 /// are touched. Every swapped control is put back on Stop, when the actor leaves or GPose ends,
@@ -63,20 +66,14 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     private bool disposed;
 
     /// <summary>
-    /// What the display shows over the clip: its bone layers and the bones left out. Two are the same
-    /// when they hold the same arrays, as an unchanged document's are.
+    /// What the display shows over the clip: its bone layers, the bones left out, its cuts and the length
+    /// it plays at in timeline frames (0 for the clip's own). Two are the same when they hold the same
+    /// arrays and cuts, as an unchanged document's do.
     /// </summary>
-    private readonly record struct Edits(ImmutableArray<MotionLayer> Layers, ImmutableArray<string> Excluded, bool Short = false)
+    private readonly record struct Edits(ImmutableArray<MotionLayer> Layers, ImmutableArray<string> Excluded, MotionCuts? Cuts = null, int Length = 0)
     {
-        public bool Changes => MotionEvaluator.Changes(Layers) || !Excluded.IsDefaultOrEmpty || Short;
+        public bool Changes => MotionEvaluator.Changes(Layers) || !Excluded.IsDefaultOrEmpty || Cuts is { Whole: false } || Length != 0;
     }
-
-    /// <summary>
-    /// Test only, set by the dev plugin's XIV Bridge tool live_short_test: the copy shown is the clip's
-    /// first two thirds at that shorter length, to see whether the game loops a swapped copy at its own
-    /// length. Live hands its edits over every update, so the next one builds the copy.
-    /// </summary>
-    internal static volatile bool ShortTest;
 
     /// <summary>What a swapped control held before: the clip's own binding and track weights.</summary>
     private struct Original
@@ -160,10 +157,12 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     /// Starts showing <paramref name="layers"/> over <paramref name="decoded"/> on the GPose actor at
     /// <paramref name="actorIndex"/>, wherever it plays the clip: a binding with <paramref name="fingerprint"/>
     /// or one of <paramref name="alsoAccepted"/>, whose tracks begin with the decoded ones. The
-    /// <paramref name="excluded"/> bones lose their tracks, as a save leaves them out.
+    /// <paramref name="excluded"/> bones lose their tracks, as a save leaves them out. The motion is
+    /// cut by <paramref name="cuts"/> and played <paramref name="length"/> timeline frames long (0 for
+    /// the clip's own), before the layers, as a save cuts it.
     /// </summary>
     public bool Start(ushort actorIndex, string fingerprint, IEnumerable<string> alsoAccepted, MotionClip decoded, ImmutableArray<MotionLayer> layers,
-        ImmutableArray<string> excluded = default)
+        ImmutableArray<string> excluded = default, MotionCuts? cuts = null, int length = 0)
     {
         RequireFrameworkThread();
         Stop();
@@ -180,22 +179,27 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
             Accepted = alsoAccepted.Append(fingerprint).Where(print => print.Length > 0).ToHashSet(StringComparer.Ordinal),
         };
         Error = string.Empty;
-        Show(layers, excluded);
+        Show(layers, excluded, cuts, length);
         return true;
     }
 
     /// <summary>
-    /// The layers to show, and the bones left out. A changed set is applied off the framework thread,
-    /// then swapped in.
+    /// The layers to show, the bones left out, the cuts and the length in timeline frames (0 for the
+    /// clip's own). A changed set is applied off the framework thread, then swapped in.
     /// </summary>
-    public void Show(ImmutableArray<MotionLayer> layers, ImmutableArray<string> excluded = default)
+    public void Show(ImmutableArray<MotionLayer> layers, ImmutableArray<string> excluded = default, MotionCuts? cuts = null, int length = 0)
     {
         RequireFrameworkThread();
         if (session == null || layers.IsDefault)
             return;
-        session.Requested = new Edits(layers, excluded.IsDefault ? [] : excluded, ShortTest);
+        if (length == Frames(session.Base))
+            length = 0;
+        session.Requested = new Edits(layers, excluded.IsDefault ? [] : excluded, cuts, length);
         Evaluate();
     }
+
+    /// <summary>The clip's own length in timeline frames.</summary>
+    private static int Frames(MotionClip clip) => (int)Math.Round(clip.Duration * TimelineDocument.Fps);
 
     /// <summary>Puts every swapped control back; the clip plays its own motion again.</summary>
     public void Stop()
@@ -235,7 +239,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         var token = evaluationCancel.Token;
         var decoded = current.Base;
         evaluating = edits;
-        evaluation = Task.Run(() => (Built?)Build(decoded, edits.Layers, edits.Excluded, edits.Short, token), token);
+        evaluation = Task.Run(() => (Built?)Build(decoded, edits.Layers, edits.Excluded, edits.Cuts, edits.Length, token), token);
     }
 
     private void OnUpdate(IFramework _)
@@ -572,18 +576,22 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     private delegate void ControlVisitor(hkaDefaultAnimationControl* control, hkaSkeleton* skeleton, string resource);
 
     /// <summary>
-    /// Applies <paramref name="layers"/> to a copy of <paramref name="decoded"/> and lays the result out as
-    /// an interleaved animation's samples: the clip's own tracks, then a track for every bone the layers
-    /// moved that had none, encoded with the clip's blend hint. The <paramref name="excluded"/> bones get
-    /// no track, as in a saved file that leaves them out. Runs off the framework thread.
+    /// Cuts a copy of <paramref name="decoded"/> by <paramref name="cuts"/> to <paramref name="length"/>
+    /// timeline frames when either changes it (0 keeps the clip's own length), applies
+    /// <paramref name="layers"/> to it and lays the result out as an interleaved animation's samples: the
+    /// clip's own tracks, then a track for every bone the layers moved that had none, encoded with the
+    /// clip's blend hint. The <paramref name="excluded"/> bones get no track, as in a saved file that
+    /// leaves them out. Runs off the framework thread.
     /// </summary>
-    private static Built Build(MotionClip decoded, ImmutableArray<MotionLayer> layers, ImmutableArray<string> excluded, bool shortCopy,
-        CancellationToken token)
+    private static Built Build(MotionClip decoded, ImmutableArray<MotionLayer> layers, ImmutableArray<string> excluded, MotionCuts? cuts,
+        int length, CancellationToken token)
     {
-        var edited = decoded.Clone();
+        // The motion the layers apply to, and which tells the bones they moved: the clip's own, or as cut.
+        var basis = cuts is { Whole: false } || length != 0
+            ? MotionCutter.Apply(decoded, cuts ?? MotionCuts.WholeOf(Frames(decoded)), length == 0 ? Frames(decoded) : length, token)
+            : decoded;
+        var edited = basis.Clone();
         MotionEvaluator.Apply(edited, layers, token);
-        if (shortCopy)
-            edited = FirstTwoThirds(edited);
         var left = new HashSet<int>();
         if (!excluded.IsDefaultOrEmpty)
         {
@@ -606,7 +614,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
             if (tracked.Contains((short)b) || left.Contains(b))
                 continue;
             for (var i = 0; i < edited.Samples; i++)
-                if (!Near(edited.Get(i, b), decoded.Get(i, b)))
+                if (!Near(edited.Get(i, b), basis.Get(i, b)))
                 {
                     tracks.Add(checked((short)b));
                     sources.Add(-1);
@@ -619,7 +627,8 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         try
         {
             var transforms = arena.Alloc<hkQsTransformf>(checked(edited.Samples * tracks.Count));
-            var floats = arena.Alloc<float>(checked(edited.Samples * Math.Max(1, decoded.FloatTracks)));
+            var floatCount = checked(edited.Samples * Math.Max(1, decoded.FloatTracks));
+            var floats = arena.Alloc<float>(floatCount);
             for (var f = 0; f < edited.Samples; f++)
             {
                 if ((f & 63) == 0)
@@ -627,8 +636,9 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
                 for (var t = 0; t < tracks.Count; t++)
                     transforms[f * tracks.Count + t] = Havok(AnimationRetarget.Encode(edited.Get(f, tracks[t]), references[tracks[t]], decoded.BlendHint));
             }
-            if (decoded.TrackFloats is { } values)
-                values.AsSpan().CopyTo(new Span<float>(floats, values.Length));
+            // The copy's own float samples: a cut copy has as many as its frames, not the clip's.
+            if (edited.TrackFloats is { } values)
+                values.AsSpan(0, Math.Min(values.Length, floatCount)).CopyTo(new Span<float>(floats, floatCount));
             return new Built
             {
                 Arena = arena, Tracks = [.. tracks], Sources = [.. sources], Bones = tracks.Count == 0 ? 0 : tracks.Max() + 1,
@@ -641,21 +651,6 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
             arena.Dispose();
             throw;
         }
-    }
-
-    /// <summary>The Short test's copy: the clip's first two thirds of samples, at that shorter length.</summary>
-    private static MotionClip FirstTwoThirds(MotionClip source)
-    {
-        var samples = (source.Samples - 1) * 2 / 3 + 1;
-        var floats = source.TrackFloats is { } values ? values.AsSpan(0, samples * source.FloatTracks).ToArray() : null;
-        var copy = new MotionClip(source.Skeleton, source.Duration * (samples - 1) / (source.Samples - 1), samples, floats, source.FloatTracks)
-        {
-            SourceTracks = source.SourceTracks, BlendHint = source.BlendHint, Loops = source.Loops,
-        };
-        for (var i = 0; i < samples; i++)
-            for (var b = 0; b < source.Bones; b++)
-                copy.Set(i, b, source.Get(i, b));
-        return copy;
     }
 
     private static bool Near(MotionTransform a, MotionTransform b) =>

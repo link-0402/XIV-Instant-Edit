@@ -28,6 +28,8 @@ public sealed partial class TimelineWindow
     // Why the last read of this version of the clip failed; it is not read again until Live asks or the clip changes.
     private string? decodeError;
     private string? failedDecodeKey;
+    // The decoded motion as the document last cut or stretched it (see OutputMotion).
+    private (MotionClip Decoded, MotionCuts? Cuts, int Length, MotionClip Output)? outputMotion;
     // Until when Live waits for the GPose character to be drawn again, as after the redraw that ends a preview.
     private DateTime? liveDrawWait;
     private static readonly TimeSpan LiveDrawWait = TimeSpan.FromSeconds(10);
@@ -43,11 +45,37 @@ public sealed partial class TimelineWindow
             return reason;
         if (ReadOnly)
             return "Wait for the save to finish.";
-        if (current.Document.LengthChanged)
-            return "Live can't show a new length. Use Preview.";
         if (loaded.Clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: not null })
             return loaded.Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for under Source first.";
         return null;
+    }
+
+    /// <summary>The length Live plays the motion at: the document's when cut or stretched, else 0 for the clip's own.</summary>
+    private static int LiveLength(TimelineDocument doc) => doc.Cut || doc.Stretched ? doc.Length : 0;
+
+    /// <summary>
+    /// <paramref name="clip"/> as the document's cuts and length play it, as Live and a save cut it before the
+    /// bone layers; the clip itself when neither changes it. During a drag the last cut stands until it ends.
+    /// </summary>
+    private MotionClip OutputMotion(TimelineEditor current, MotionClip clip)
+    {
+        var doc = current.Document;
+        if (!doc.Cut && !doc.Stretched)
+            return clip;
+        if (outputMotion is { } cached && ReferenceEquals(cached.Decoded, clip) &&
+            (ReferenceEquals(cached.Cuts, doc.Cuts) && cached.Length == doc.Length || current.Gesture != TimelineGesture.None))
+            return cached.Output;
+        try
+        {
+            var whole = (int)Math.Round(clip.Duration * TimelineDocument.Fps);
+            var output = MotionCutter.Apply(clip, doc.Cuts ?? MotionCuts.WholeOf(whole), doc.Length);
+            outputMotion = (clip, doc.Cuts, doc.Length, output);
+            return output;
+        }
+        catch (InvalidDataException)
+        {
+            return clip;
+        }
     }
 
     private void StartLive(AnimationTimelineSource loaded)
@@ -146,7 +174,7 @@ public sealed partial class TimelineWindow
                 lastSeekFrame = -1;
                 // After a save the game plays either file until it reloads the clip: the one saved or the one before.
                 if (!motionDisplay.Start(actor, clip.BindingFingerprint, [fresh.FileFingerprint, fresh.BaseFingerprint ?? string.Empty],
-                        decoded, current.Document.Motion, current.Document.ExcludedBones))
+                        decoded, current.Document.Motion, current.Document.ExcludedBones, current.Document.Cuts, LiveLength(current.Document)))
                 {
                     var error = motionDisplay.Error;
                     StopLive();
@@ -156,7 +184,7 @@ public sealed partial class TimelineWindow
                 liveStarted = true;
                 return;
             }
-            motionDisplay.Show(current.Document.Motion, current.Document.ExcludedBones);
+            motionDisplay.Show(current.Document.Motion, current.Document.ExcludedBones, current.Document.Cuts, LiveLength(current.Document));
         }
         catch (InvalidOperationException e)
         {
