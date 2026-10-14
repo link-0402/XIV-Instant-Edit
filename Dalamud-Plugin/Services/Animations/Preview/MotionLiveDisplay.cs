@@ -71,20 +71,12 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         public bool Changes => MotionEvaluator.Changes(Layers) || !Excluded.IsDefaultOrEmpty || Short;
     }
 
-#if DEBUG
     /// <summary>
-    /// Test only: the copy shown is the clip's first two thirds with that shorter length, to see whether
-    /// the game loops a swapped copy at its own length. Set before <see cref="Show"/>.
+    /// Test only, set by the dev plugin's XIV Bridge tool live_short_test: the copy shown is the clip's
+    /// first two thirds at that shorter length, to see whether the game loops a swapped copy at its own
+    /// length. Live hands its edits over every update, so the next one builds the copy.
     /// </summary>
-    internal static bool ShortTest;
-#endif
-
-    private static bool ShortCopy =>
-#if DEBUG
-        ShortTest;
-#else
-        false;
-#endif
+    internal static volatile bool ShortTest;
 
     /// <summary>What a swapped control held before: the clip's own binding and track weights.</summary>
     private struct Original
@@ -201,7 +193,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         RequireFrameworkThread();
         if (session == null || layers.IsDefault)
             return;
-        session.Requested = new Edits(layers, excluded.IsDefault ? [] : excluded, ShortCopy);
+        session.Requested = new Edits(layers, excluded.IsDefault ? [] : excluded, ShortTest);
         Evaluate();
     }
 
