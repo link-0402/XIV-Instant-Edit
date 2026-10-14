@@ -1382,14 +1382,22 @@ Spec: docs/superpowers/specs/2026-10-14-timeline-cuts-and-loop-seams-design.md. 
   in a text field with "From mod: ..." or "Not in your collection. ..." under it. Type another .scd
   path and press Enter (one undo step), save, and hear the new sound. A path ending in .avfx is
   refused under the field.
-- [ ] 2 Live with another length (dev plugin, XIV Bridge tool live_short_test): in GPose with a loop
-  playing under Live, turn it on. Expect the motion to loop after two thirds of the clip. Scrub,
-  pause, replay, Stop, leaving GPose and unloading the plugin still behave.
-- [ ] 3 Fix loop on the TikTok dance: the clip band's end badge says Stalls; the seam panel shows the
-  gap and the stall text. Fix loop, Preview, then save in place: the wrap shows no settle-then-jerk.
+- [x] 2 Live with another length: the game loops a swapped Live copy at its own length (XIV Bridge,
+  2026-10-14: a 9.7 s copy of the 14.57 s dance wrapped every 9.7 s; pause, seek, replay and Stop
+  behaved; the test tool is gone since). Still to see by hand: leaving GPose and unloading the plugin
+  with a cut showing under Live.
+- [ ] 3 Fix loop on the TikTok dance: the clip band's end badge says Stalls; the seam panel says "The
+  loop starts again faster than it ends." Fix loop eases the start over 30 frames and keeps the length
+  (no trim); the badge says Loops cleanly. With Live on, try Ease 20, 30 and 45 and Side Start and End;
+  then Preview and save in place: the dancer slows into the wrap and picks up again, no settle-then-jerk.
 - [ ] 4 Remove a range from a dance with C, Q, W and Delete: no pop at the join in Preview, and the
   sounds, effects and faces after it moved with the motion.
 - [ ] 5 Cut a sound with the motion: remove a range from a dance with music, choose "Cut with the
   motion", Preview and save. The song stays in step after the cut.
 - [ ] 6 Live with cuts: drag a cut point, a blend length and the seam with Live on.
-- [ ] 7 Edit again: reopen a cut dance with Edit again, move a cut, and save again.
+- [ ] 7 Edit again: reopen a cut dance with Edit again, move a cut, and save again. With Live on after
+  Edit again, the cut shows on the character.
+- [ ] 8 Save twice: cut a dance with a bone layer and a song cut with the motion, save, change the
+  layer, save again. After the first save the window shows the saved file with the "Saved with edits
+  you can open again" line; the second save keeps the cut and the song stays in step. Edit again then
+  shows the song's whole file chosen as "Cut with the motion", and saving cuts it once.
