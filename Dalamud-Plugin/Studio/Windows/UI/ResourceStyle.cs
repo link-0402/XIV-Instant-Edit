@@ -50,6 +50,7 @@ internal static class ResourceStyle
         OriginKind.Missing => Theme.Bad,
         OriginKind.Swap    => Theme.Accent,
         OriginKind.Vanilla => Theme.Faint,
+        OriginKind.Shared  => Theme.Faint,
         _                  => Theme.Muted,
     };
 
@@ -60,6 +61,7 @@ internal static class ResourceStyle
         OriginKind.Vanilla => "game file",
         OriginKind.Added   => "added",
         OriginKind.Missing => "missing",
+        OriginKind.Shared  => "shared",
         _                  => string.Empty,
     };
 
@@ -70,6 +72,7 @@ internal static class ResourceStyle
         OriginKind.Vanilla => "The game's own file — this mod references it and does not replace it. Drop a file here to replace it.",
         OriginKind.Added   => "Added to the mod: a file of your own, or something made or reassigned here.",
         OriginKind.Missing => "Referenced, but neither this mod nor the game has it. Drop a file here to provide it.",
+        OriginKind.Shared  => "A common material (skin, pubes, piercings) that the player's body mod provides, so it isn't missing. Drop a file here to put one in this mod.",
         _                  => string.Empty,
     };
 

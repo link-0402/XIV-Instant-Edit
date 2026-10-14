@@ -423,7 +423,8 @@ internal static class ResourceGraphBuilder
             if (!exists && !missingAllowed)
                 return null;
 
-            var id = exists ? $"vanilla|{path}" : $"missing|{path}";
+            var shared = exists ? null : SharedMaterials.NoteFor(path);
+            var id = exists ? $"vanilla|{path}" : shared != null ? $"shared|{path}" : $"missing|{path}";
             if (Nodes.TryGetValue(id, out var node))
                 return node;
 
@@ -432,8 +433,8 @@ internal static class ResourceGraphBuilder
                 Id       = id,
                 GamePath = path,
                 Kind     = ResourceKinds.FromGamePath(path),
-                Origin   = exists ? OriginKind.Vanilla : OriginKind.Missing,
-                Note     = exists ? null : "neither the mod nor the game has this file",
+                Origin   = exists ? OriginKind.Vanilla : shared != null ? OriginKind.Shared : OriginKind.Missing,
+                Note     = exists ? null : shared ?? "neither the mod nor the game has this file",
             };
             Nodes[id] = node;
             if (exists && node.Kind == ResourceKind.Material)
@@ -463,7 +464,8 @@ internal static class ResourceGraphBuilder
                 }
 
                 // Replacing a game file the mod only references: it becomes a file of the mod's default files.
-                if (option.IsDefault && (Nodes.TryGetValue($"vanilla|{path}", out node) || Nodes.TryGetValue($"missing|{path}", out node)))
+                if (option.IsDefault && (Nodes.TryGetValue($"vanilla|{path}", out node) || Nodes.TryGetValue($"missing|{path}", out node)
+                                         || Nodes.TryGetValue($"shared|{path}", out node)))
                     node.Replacement ??= replacement;
             }
         }
@@ -529,7 +531,7 @@ internal static class ResourceGraphBuilder
             var groups = new Dictionary<string, (ResourceSection Section, ResourceKind Kind, List<ResourceNode> Nodes)>(StringComparer.Ordinal);
             foreach (var node in Nodes.Values)
             {
-                if (node.IsReferenced || node.Origin is OriginKind.Vanilla or OriginKind.Missing && !node.Pinned)
+                if (node.IsReferenced || node.Origin is OriginKind.Vanilla or OriginKind.Missing or OriginKind.Shared && !node.Pinned)
                     continue;
 
                 string key;

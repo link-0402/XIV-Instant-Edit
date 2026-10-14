@@ -25,6 +25,9 @@ internal enum OriginKind
 
     /// <summary>Referenced, but neither the mod nor the game has it.</summary>
     Missing,
+
+    /// <summary>A common material (skin, pubes, piercings) neither the mod nor the game has: the player's body mod provides it.</summary>
+    Shared,
 }
 
 /// <summary>A reference from one file to another, with what the referencing file uses it for ("Normal", "VFX" …).</summary>
@@ -289,7 +292,7 @@ internal sealed class ResourceGraph
     {
         var all = FindAll(gamePath);
         return all.FirstOrDefault(n => n.IsModContent && n.Option == option)
-            ?? all.FirstOrDefault(n => n.Origin is OriginKind.Vanilla or OriginKind.Missing);
+            ?? all.FirstOrDefault(n => n.Origin is OriginKind.Vanilla or OriginKind.Missing or OriginKind.Shared);
     }
 
     /// <summary>The node a resource target names, if it still exists.</summary>

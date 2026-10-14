@@ -474,7 +474,7 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
                 GamePath    = PathNormalizer.GamePath(model.GamePath),
                 Option      = option.Serialize(),
                 Compression = _host.Configuration.DefaultCompression,
-                IsNew       = model.Origin is OriginKind.Vanilla or OriginKind.Missing,
+                IsNew       = model.Origin is OriginKind.Vanilla or OriginKind.Missing or OriginKind.Shared,
             };
             Project.Sidecar.Replacements.Add(replacement);
         }

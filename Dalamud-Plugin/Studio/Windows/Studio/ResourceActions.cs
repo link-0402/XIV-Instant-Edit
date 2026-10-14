@@ -121,7 +121,7 @@ internal sealed class ResourceActions
 
     /// <summary>Whether a node stands for a file the mod (or the game) has that a local file may replace.</summary>
     public static bool CanReplace(ResourceNode node)
-        => node.Origin is OriginKind.ModFile or OriginKind.Vanilla or OriginKind.Missing or OriginKind.Added
+        => node.Origin is OriginKind.ModFile or OriginKind.Vanilla or OriginKind.Missing or OriginKind.Shared or OriginKind.Added
         && ResourceKinds.AcceptedSources(node.GamePath).Count > 0;
 
     /// <summary>Puts <paramref name="source"/> where <paramref name="node"/> is.</summary>
@@ -136,7 +136,7 @@ internal sealed class ResourceActions
         // A game file the mod only references (or a missing one) is provided through the default files
         // — or the option of the item added from the game it belongs to.
         var option = _session.OptionFor(node);
-        bool adds = node.Origin is OriginKind.Vanilla or OriginKind.Missing
+        bool adds = node.Origin is OriginKind.Vanilla or OriginKind.Missing or OriginKind.Shared
                  || node.Origin == OriginKind.Added && node.Replacement?.IsNew == true;
         _session.SetReplacement(node.GamePath, option, source, adds);
         _session.Notify($"{node.FileName} ← {Path.GetFileName(source)}", Severity.Info);

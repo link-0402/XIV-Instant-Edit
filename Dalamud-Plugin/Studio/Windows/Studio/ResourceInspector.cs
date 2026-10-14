@@ -144,7 +144,7 @@ internal sealed class ResourceInspector
         }
         if (node.Kind == ResourceKind.Model && node.MaterialSlots.Count > 0)
             DrawModelMaterials(node);
-        if (node.Kind == ResourceKind.Material && node.Origin is OriginKind.ModFile or OriginKind.Vanilla or OriginKind.Missing or OriginKind.Added)
+        if (node.Kind == ResourceKind.Material && node.Origin is OriginKind.ModFile or OriginKind.Vanilla or OriginKind.Missing or OriginKind.Shared or OriginKind.Added)
             DrawAuthoring(node);
         if (node.Origin == OriginKind.ModFile && meta != null)
             DrawLinkedOptions(node, meta);
@@ -270,7 +270,7 @@ internal sealed class ResourceInspector
 
     private void DrawReplace(ResourceNode node, bool texture)
     {
-        bool provides = node.Origin is OriginKind.Vanilla or OriginKind.Missing;
+        bool provides = node.Origin is OriginKind.Vanilla or OriginKind.Missing or OriginKind.Shared;
         ImGui.Spacing();
         ImGui.Spacing();
         Gui.SectionHeader(node.Origin == OriginKind.Added ? "Added from" : provides ? "Provide it" : "Replace it",

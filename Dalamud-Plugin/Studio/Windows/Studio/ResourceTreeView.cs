@@ -604,7 +604,7 @@ internal sealed class ResourceTreeView
             badges.Add(new Badge(node.Origin == OriginKind.ModFile ? "edited here" : "made here", Theme.Good,
                 "Made here: its shader and texture slots are set up in the inspector, and it is written into the mod as you change them."));
         else if (fromFile && node.Origin != OriginKind.Added)
-            badges.Add(new Badge(node.Origin is OriginKind.Vanilla or OriginKind.Missing ? "provided" : "replaced", Theme.Good,
+            badges.Add(new Badge(node.Origin is OriginKind.Vanilla or OriginKind.Missing or OriginKind.Shared ? "provided" : "replaced", Theme.Good,
                 $"Made from {replacement!.SourcePath}."));
         if (replacement is { ReassignsMaterials: true })
             badges.Add(new Badge("materials reassigned", Theme.Good,
@@ -674,7 +674,7 @@ internal sealed class ResourceTreeView
             Badges      = badges,
             Actions     = actions,
             Selected    = _session.Selection == target,
-            Dimmed      = node.Origin == OriginKind.Vanilla && replacement == null,
+            Dimmed      = node.Origin is OriginKind.Vanilla or OriginKind.Shared && replacement == null,
             Issue       = worst,
             IssueText   = issueText,
             Drop        = drop,
