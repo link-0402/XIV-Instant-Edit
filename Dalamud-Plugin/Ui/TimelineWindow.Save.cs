@@ -157,7 +157,7 @@ public sealed partial class TimelineWindow
         try
         {
             (saved, var used) = WithLooks(document);
-            var sounds = WithSounds(saved, SoundRoute(place));
+            var sounds = WithSoundCuts(WithSounds(saved, SoundRoute(place)), saved, SoundBytes);
             saved = sounds.Document;
             used.AddRange(sounds.Copies);
             replaced = sounds.InPlace;
