@@ -35,6 +35,22 @@ internal enum TimelinePart : byte
     BoneLane,
     /// <summary>One bone's value in a layer's key, on that bone's row.</summary>
     BoneKey,
+    /// <summary>Empty space in the clip band, under the ruler.</summary>
+    ClipRow,
+    /// <summary>A part of the cut motion, on the clip band.</summary>
+    ClipPart,
+    /// <summary>A part's left edge, which trims its start.</summary>
+    ClipLeft,
+    /// <summary>A part's right edge, which trims its end.</summary>
+    ClipRight,
+    /// <summary>A join's blend, where two parts meet.</summary>
+    Join,
+    /// <summary>The outer edge of a join's blend, which sets its length.</summary>
+    JoinEdge,
+    /// <summary>The loop seam's blend, at the clip's end (or its start).</summary>
+    Seam,
+    /// <summary>The outer edge of the loop seam's blend, which sets its length.</summary>
+    SeamEdge,
 }
 
 /// <param name="Frame">The fractional frame under the pointer; the editor rounds it.</param>
@@ -44,8 +60,9 @@ internal enum TimelinePart : byte
 /// <param name="Layer">The bone layer of the row under the pointer, also on the legend and on its bone rows.</param>
 /// <param name="KeyFrame">The frame of the layer's key under the pointer for LayerKey and BoneKey, else -1.</param>
 /// <param name="Bone">The bone of a bone row under the pointer, also on the legend.</param>
+/// <param name="Cut">On the clip band, the part (ClipPart, ClipLeft, ClipRight) or join (Join, JoinEdge) under the pointer, else -1.</param>
 internal readonly record struct TimelineHit(TimelinePart Part, float Frame, TimelineLane? Lane = null, string? Key = null, int Row = -1,
-    string? Layer = null, int KeyFrame = -1, string? Bone = null)
+    string? Layer = null, int KeyFrame = -1, string? Bone = null, int Cut = -1)
 {
     public static TimelineHit None(float frame = 0) => new(TimelinePart.None, frame);
     public bool OnEvent => Key != null && Part is TimelinePart.Body or TimelinePart.LeftEdge or TimelinePart.RightEdge;
@@ -60,11 +77,15 @@ internal readonly record struct TimelineHit(TimelinePart Part, float Frame, Time
 /// the edge grab tolerance and the narrowest an event may be to still be grabbed. Rows scroll up by
 /// <paramref name="ScrollY"/> under a fixed ruler. Points are relative to the canvas' top left corner,
 /// legend included. <paramref name="Unfold"/> is the width of the arrow at the legend's right edge
-/// that folds a layer's bone rows; 0 leaves it out. No ImGui or Dalamud dependencies.
+/// that folds a layer's bone rows; 0 leaves it out. <paramref name="Clip"/> is the height of the clip
+/// band under the ruler, where the cut motion's parts are; 0 leaves it out. No ImGui or Dalamud dependencies.
 /// </summary>
 internal readonly record struct TimelineGeometry(float Legend, float Ruler, float Row, float Edge, float Marker, float ScrollY = 0,
-    float Unfold = 0)
+    float Unfold = 0, float Clip = 0)
 {
+    /// <summary>The fixed rows above the scrolling ones: the ruler and the clip band.</summary>
+    public float Header => Ruler + Clip;
+
     /// <summary>
     /// Where an event is drawn and grabbed, in track pixels. A marker (no duration) is centred on its
     /// frame and at least <see cref="Marker"/> wide; a clip starts at its frame and is never narrower.
@@ -90,23 +111,24 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
     }
 
     /// <summary>The top of a row in canvas pixels.</summary>
-    public float RowTop(int row) => TimelineLayout.RowTop(row, Row, Ruler, ScrollY);
+    public float RowTop(int row) => TimelineLayout.RowTop(row, Row, Header, ScrollY);
 
     /// <summary>
     /// What is at <paramref name="point"/>. Order: the length handle; then the events of the row, where
     /// one whose own frames lie under the pointer wins at once, from the last drawn to the first, its
     /// edges before its body; where only widened grab zones reach the pointer (a marker's minimum
     /// width, an edge's tolerance) the nearest event wins, so stacked markers all stay grabbable; then
-    /// the ruler; then empty lane space.
+    /// the ruler; then the clip band (see <see cref="HitClip"/>), where the seam is only hit on a clip
+    /// that <paramref name="loops"/>; then empty lane space.
     /// </summary>
-    public TimelineHit HitTest(TimelineDocument doc, TimelineLayout layout, TimelineView view, Vector2 point)
+    public TimelineHit HitTest(TimelineDocument doc, TimelineLayout layout, TimelineView view, Vector2 point, bool loops = false)
     {
         var x = point.X - Legend;
         var y = point.Y;
         var frame = view.FrameAt(x);
         if (!float.IsFinite(x) || !float.IsFinite(y) || point.X < 0 || y < 0 || x > view.Width)
             return TimelineHit.None(float.IsFinite(frame) ? frame : 0);
-        var row = layout.RowAt(y, Row, Ruler, ScrollY);
+        var row = layout.RowAt(y, Row, Header, ScrollY);
         TimelineLane? lane = row >= 0 ? layout.LaneAt(row)?.Lane : null;
         var layerIndex = row >= 0 ? layout.LayerIndexAt(row) : -1;
         if (x < 0)
@@ -124,6 +146,8 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
             return new TimelineHit(TimelinePart.LengthHandle, frame, lane, null, row);
         if (y < Ruler)
             return new TimelineHit(TimelinePart.Ruler, frame);
+        if (y < Header)
+            return doc.Expression ? TimelineHit.None(frame) : HitClip(doc, view, x, frame, loops);
         if (row < 0)
             return TimelineHit.None(frame);
         if (layout.BoneAt(row) is { } boneRow)
@@ -200,6 +224,53 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
         return x >= left && x <= right
             ? new TimelineHit(TimelinePart.LayerBody, frame, null, null, row, layer.Key)
             : new TimelineHit(TimelinePart.MotionLane, frame, null, null, row, layer.Key);
+    }
+
+    /// <summary>
+    /// What of the clip band is at <paramref name="x"/>: a part's edge first (left of a boundary the part
+    /// before ends, right of it the next one starts; the clip's start and end are edges too), then the
+    /// outer edge of a join's blend, then a join's blend, then on a loop the seam's edge and blend, then
+    /// the part, else the empty band.
+    /// </summary>
+    private TimelineHit HitClip(TimelineDocument doc, TimelineView view, float x, float frame, bool loops)
+    {
+        var cuts = CutEdits.CutsOf(doc);
+        var length = doc.Length;
+        var count = cuts.Parts.Length;
+        for (var i = 0; i <= count; i++)
+        {
+            var at = view.X((float)(i == count ? cuts.PartEnd(count - 1, length) : cuts.PartStart(i, length)));
+            if (MathF.Abs(x - at) > Edge)
+                continue;
+            return i == count || i > 0 && x < at
+                ? new TimelineHit(TimelinePart.ClipRight, frame, Cut: i - 1)
+                : new TimelineHit(TimelinePart.ClipLeft, frame, Cut: i);
+        }
+        var windows = new (float Left, float Right, bool Before, bool After)[cuts.Joins.Length];
+        for (var j = 0; j < windows.Length; j++)
+        {
+            var (before, after) = MotionCutter.Window(cuts, j, length);
+            var at = cuts.PartEnd(j, length);
+            windows[j] = (view.X((float)(at - before)), view.X((float)(at + after)), before > 0, after > 0);
+        }
+        for (var j = 0; j < windows.Length; j++)
+            if (windows[j].Before && MathF.Abs(x - windows[j].Left) <= Edge || windows[j].After && MathF.Abs(x - windows[j].Right) <= Edge)
+                return new TimelineHit(TimelinePart.JoinEdge, frame, Cut: j);
+        for (var j = 0; j < windows.Length; j++)
+            if ((windows[j].Before || windows[j].After) && x >= windows[j].Left && x <= windows[j].Right)
+                return new TimelineHit(TimelinePart.Join, frame, Cut: j);
+        if (loops && cuts.Seam != null)
+        {
+            var (before, after) = MotionCutter.Window(cuts, -1, length);
+            float end = view.X(length), left = view.X((float)(length - before)), right = view.X((float)after), start = view.X(0);
+            if (before > 0 && MathF.Abs(x - left) <= Edge || after > 0 && MathF.Abs(x - right) <= Edge)
+                return new TimelineHit(TimelinePart.SeamEdge, frame);
+            if (before > 0 && x >= left && x <= end || after > 0 && x >= start && x <= right)
+                return new TimelineHit(TimelinePart.Seam, frame);
+        }
+        return frame >= 0 && frame <= length
+            ? new TimelineHit(TimelinePart.ClipPart, frame, Cut: cuts.PartAt(frame, length))
+            : new TimelineHit(TimelinePart.ClipRow, frame);
     }
 
     /// <summary>One bone's row: the nearest of its keys within a marker's reach, else the empty row.</summary>

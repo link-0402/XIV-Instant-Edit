@@ -6,7 +6,22 @@ using InstantEdit.Services.Animations.Timeline;
 namespace InstantEdit.Ui.Timeline;
 
 /// <summary>Editor commands the widget maps its shortcuts to.</summary>
-internal enum TimelineKey : byte { Undo, Redo, Delete, Duplicate, Copy, Paste, SelectAll, Left, Right, Home, End, Escape, Fit, PlayPause }
+internal enum TimelineKey : byte
+{
+    Undo, Redo, Delete, Duplicate, Copy, Paste, SelectAll, Left, Right, Home, End, Escape, Fit, PlayPause,
+    /// <summary>Cuts the motion at the playhead (C).</summary>
+    Cut,
+    /// <summary>Removes from the start of the part under the playhead to the playhead (Q).</summary>
+    RemoveBefore,
+    /// <summary>Removes from the playhead to the end of the part under it (W).</summary>
+    RemoveAfter,
+}
+
+/// <summary>What on the clip band is selected: a part, a join or the loop seam.</summary>
+internal enum TimelineCutTarget : byte { Part, Join, Seam }
+
+/// <summary>A selected part or join of the cut motion by its index, or the loop seam.</summary>
+internal readonly record struct TimelineCutSelection(TimelineCutTarget Target, int Index);
 
 /// <summary>What the pointer is doing between a press and its release.</summary>
 internal enum TimelineGesture : byte
@@ -29,6 +44,12 @@ internal enum TimelineGesture : byte
     LayerKey,
     /// <summary>Moves one bone's value out of a key of a bone layer, on that bone's row.</summary>
     BoneKey,
+    /// <summary>Trims the start of a part of the cut motion.</summary>
+    TrimLeft,
+    /// <summary>Trims the end of a part of the cut motion.</summary>
+    TrimRight,
+    /// <summary>Sets a join's or the loop seam's blend length by its outer edge.</summary>
+    BlendLength,
 }
 
 /// <summary>
@@ -69,6 +90,9 @@ internal sealed class TimelineEditor
     private string? gestureLayer;
     private int gestureKeyFrame;
     private string? gestureBone;
+    // A trim's part or a blend drag's join (-1: the seam), and which way a blend edge lengthens it.
+    private int gesturePart;
+    private int gestureSide;
     // Layers showing a row per bone, and the skeleton's bone order for those rows; either changing rebuilds the layout.
     private readonly HashSet<string> unfolded = new(StringComparer.Ordinal);
     private IReadOnlyDictionary<string, int>? boneOrder;
@@ -224,6 +248,18 @@ internal sealed class TimelineEditor
 
     public MotionLayer? SelectedLayerValue => MotionEdits.Find(Document, SelectedLayer);
 
+    /// <summary>
+    /// The selected part, join or seam of the cut motion, which the properties panel shows. Selecting
+    /// one clears the event and layer selection, and the other way round.
+    /// </summary>
+    public TimelineCutSelection? SelectedCut { get; private set; }
+
+    /// <summary>Whether the game plays the clip as a loop: only then is there a seam to blend or fix.</summary>
+    public bool Loops { get; set; }
+
+    /// <summary>What the last cut command removed with it; cleared by the next click or shortcut.</summary>
+    public CutRemoval? LastRemoval { get; private set; }
+
     public TimelineEvent? PrimaryEvent => TimelineEdits.Find(Document, Primary);
 
     public bool IsSelected(string key) => selected.Contains(key);
@@ -247,7 +283,7 @@ internal sealed class TimelineEditor
 
     public bool CanPaste => !clipboard.IsEmpty;
 
-    public TimelineHit HitTest(TimelineGeometry geometry, Vector2 point) => geometry.HitTest(Document, Layout, View, point);
+    public TimelineHit HitTest(TimelineGeometry geometry, Vector2 point) => geometry.HitTest(Document, Layout, View, point, Loops);
 
     // Pointer gestures.
 
@@ -266,6 +302,7 @@ internal sealed class TimelineEditor
         // open: close it as its own step before this press starts another.
         History.End();
         LastError = null;
+        LastRemoval = null;
         SnapGuide = null;
         dragged = false;
         collapseOnClick = false;
@@ -346,6 +383,67 @@ internal sealed class TimelineEditor
             case TimelinePart.LayerBody or TimelinePart.LayerLeft or TimelinePart.LayerRight or TimelinePart.LayerFadeIn or
                 TimelinePart.LayerFadeOut or TimelinePart.LayerKey or TimelinePart.BoneKey when hit.Layer is { } key && MotionEdits.Find(doc, key) is { } layer:
                 PressLayer(hit, key, layer, doc);
+                break;
+            case TimelinePart.ClipRow:
+                ClearSelection();
+                break;
+            case TimelinePart.ClipPart or TimelinePart.ClipLeft or TimelinePart.ClipRight or TimelinePart.Join or TimelinePart.JoinEdge or
+                TimelinePart.Seam or TimelinePart.SeamEdge when !doc.Expression:
+                PressClip(hit, doc);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// A press on the clip band: a part, join or the seam becomes the selection; a part's edge starts a
+    /// trim and a blend's outer edge a change of its length.
+    /// </summary>
+    private void PressClip(TimelineHit hit, TimelineDocument doc)
+    {
+        var cuts = CutEdits.CutsOf(doc);
+        var snap = TimelineSnap.Targets(doc, playhead);
+        switch (hit.Part)
+        {
+            case TimelinePart.ClipLeft or TimelinePart.ClipRight when hit.Cut >= 0 && hit.Cut < cuts.Parts.Length:
+            {
+                var left = hit.Part == TimelinePart.ClipLeft;
+                SelectCut(new TimelineCutSelection(TimelineCutTarget.Part, hit.Cut));
+                gesturePart = hit.Cut;
+                var edge = left ? cuts.PartStart(hit.Cut, doc.Length) : cuts.PartEnd(hit.Cut, doc.Length);
+                BeginEdit(left ? TimelineGesture.TrimLeft : TimelineGesture.TrimRight, [], [TimelineSnap.Round(edge)], snap);
+                break;
+            }
+            case TimelinePart.JoinEdge when hit.Cut >= 0 && hit.Cut < cuts.Joins.Length:
+            {
+                SelectCut(new TimelineCutSelection(TimelineCutTarget.Join, hit.Cut));
+                var at = cuts.PartEnd(hit.Cut, doc.Length);
+                gesturePart = hit.Cut;
+                gestureSide = hit.Frame < at ? -1 : 1;
+                var (before, after) = MotionCutter.Window(cuts, hit.Cut, doc.Length);
+                BeginEdit(TimelineGesture.BlendLength, [], [TimelineSnap.Round(gestureSide < 0 ? at - before : at + after)], snap);
+                break;
+            }
+            case TimelinePart.SeamEdge when Loops && cuts.Seam != null:
+            {
+                SelectCut(new TimelineCutSelection(TimelineCutTarget.Seam, -1));
+                var (before, after) = MotionCutter.Window(cuts, -1, doc.Length);
+                gesturePart = -1;
+                // The before side ends the clip; the after side starts it.
+                gestureSide = before > 0 && Math.Abs(hit.Frame - (doc.Length - before)) <= Math.Abs(hit.Frame - after) || after <= 0 ? -1 : 1;
+                BeginEdit(TimelineGesture.BlendLength, [], [TimelineSnap.Round(gestureSide < 0 ? doc.Length - before : after)], snap);
+                break;
+            }
+            case TimelinePart.ClipPart or TimelinePart.ClipLeft or TimelinePart.ClipRight when hit.Cut >= 0:
+                SelectCut(new TimelineCutSelection(TimelineCutTarget.Part, hit.Cut));
+                gesture = TimelineGesture.Select;
+                break;
+            case TimelinePart.Join or TimelinePart.JoinEdge when hit.Cut >= 0:
+                SelectCut(new TimelineCutSelection(TimelineCutTarget.Join, hit.Cut));
+                gesture = TimelineGesture.Select;
+                break;
+            case TimelinePart.Seam or TimelinePart.SeamEdge when Loops:
+                SelectCut(new TimelineCutSelection(TimelineCutTarget.Seam, -1));
+                gesture = TimelineGesture.Select;
                 break;
         }
     }
@@ -436,6 +534,24 @@ internal sealed class TimelineEditor
                 when gestureLayer is { } layerKey:
                 (next, landed) = DragLayer(start, layerKey, delta);
                 break;
+            case TimelineGesture.TrimLeft or TimelineGesture.TrimRight:
+                next = CutEdits.TrimPart(start, gesturePart, gesture == TimelineGesture.TrimLeft, delta, out var trimmed);
+                LastRemoval = trimmed is { Events: 0, Keys: 0 } ? null : trimmed;
+                landed = ReferenceEquals(next, start) ? -1 : anchors[0] + delta;
+                break;
+            case TimelineGesture.BlendLength:
+            {
+                var cuts = CutEdits.CutsOf(start);
+                var blend = gesturePart < 0 ? cuts.Seam : gesturePart < cuts.Joins.Length ? cuts.Joins[gesturePart] : null;
+                if (blend == null)
+                    return;
+                // A centred blend spreads both ways, so its edge moves half as far as its length grows.
+                var frames = blend.Frames + gestureSide * delta * (blend.Placement == JoinPlacement.Centered ? 2 : 1);
+                var changed = blend with { Frames = Math.Clamp(frames, 0, MotionJoin.MaxFrames) };
+                next = gesturePart < 0 ? CutEdits.SetSeam(start, changed) : CutEdits.SetJoin(start, gesturePart, changed);
+                landed = anchors[0] + delta;
+                break;
+            }
             default:
                 return;
         }
@@ -524,11 +640,16 @@ internal sealed class TimelineEditor
             return true;
         }
         LastError = null;
+        LastRemoval = null;
         switch (key)
         {
             case TimelineKey.Undo: return Undo();
             case TimelineKey.Redo: return Redo();
+            case TimelineKey.Delete when SelectedCut is { Target: TimelineCutTarget.Part }: return RemoveSelectedPart();
             case TimelineKey.Delete: return SelectedLayer != null ? DeleteLayerSelection() : DeleteSelection();
+            case TimelineKey.Cut: return CutAtPlayhead();
+            case TimelineKey.RemoveBefore: return RemoveBeforePlayhead();
+            case TimelineKey.RemoveAfter: return RemoveAfterPlayhead();
             case TimelineKey.Duplicate: return SelectedLayer != null ? DuplicateLayer() : DuplicateSelection();
             case TimelineKey.Copy: return Copy();
             case TimelineKey.Paste: return Paste();
@@ -608,6 +729,69 @@ internal sealed class TimelineEditor
 
     /// <summary>Sets the length as one undo step, scaling the events when <see cref="ScaleEvents"/> is on.</summary>
     public bool SetLength(int frames) => !FixedLength && Commit(TimelineEdits.SetLength(Document, frames, ScaleEvents, loaded));
+
+    // Cuts.
+
+    /// <summary>Cuts the motion at the playhead, as one undo step.</summary>
+    public bool CutAtPlayhead() => Commit(CutEdits.CutAt(Document, playhead));
+
+    /// <summary>Removes from the start of the part under the playhead to the playhead, as one undo step.</summary>
+    public bool RemoveBeforePlayhead()
+    {
+        var cuts = CutEdits.CutsOf(Document);
+        var part = cuts.PartAt(playhead, Document.Length);
+        return RemoveRange(TimelineSnap.Round(cuts.PartStart(part, Document.Length)), playhead);
+    }
+
+    /// <summary>Removes from the playhead to the end of the part under it, as one undo step: "end the clip here" on the last part.</summary>
+    public bool RemoveAfterPlayhead()
+    {
+        var cuts = CutEdits.CutsOf(Document);
+        var part = cuts.PartAt(playhead, Document.Length);
+        return RemoveRange(playhead, TimelineSnap.Round(cuts.PartEnd(part, Document.Length)));
+    }
+
+    /// <summary>Removes the selected part, as one undo step.</summary>
+    public bool RemoveSelectedPart()
+    {
+        if (SelectedCut is not { Target: TimelineCutTarget.Part, Index: var part })
+            return false;
+        var next = CutEdits.RemovePart(Document, part, out var removed);
+        if (!Cutting(next, removed))
+            return false;
+        SelectedCut = null;
+        return true;
+    }
+
+    /// <summary>Removes output frames <paramref name="from"/> up to <paramref name="to"/>, as one undo step.</summary>
+    public bool RemoveRange(int from, int to) => Cutting(CutEdits.RemoveRange(Document, from, to, out var removed), removed);
+
+    /// <summary>Sets join <paramref name="index"/>'s blend: live during a field edit, else one undo step.</summary>
+    public bool SetJoin(int index, MotionJoin join) => Change(CutEdits.SetJoin(Document, index, join));
+
+    /// <summary>Sets the loop seam's blend, or removes it with null, on a clip that loops: live during a field edit, else one undo step.</summary>
+    public bool SetSeam(MotionJoin? seam) => Loops && Change(CutEdits.SetSeam(Document, seam));
+
+    /// <summary>Fixes the loop's seam by <paramref name="report"/> (see <see cref="CutEdits.FixLoop(TimelineDocument, SeamReport)"/>), as one undo step.</summary>
+    public bool FixLoop(SeamReport report) => Loops && Cutting(CutEdits.FixLoop(Document, report, out var removed), removed);
+
+    /// <summary>Selects a part, join or the seam of the cut motion; the event and layer selection clears.</summary>
+    public void SelectCut(TimelineCutSelection? cut)
+    {
+        selected.Clear();
+        Primary = null;
+        ClearLayerSelection();
+        SelectedCut = cut;
+    }
+
+    /// <summary>Commits a cut and remembers what it removed with it.</summary>
+    private bool Cutting(TimelineDocument next, CutRemoval removed)
+    {
+        if (!Commit(next))
+            return false;
+        LastRemoval = removed;
+        return true;
+    }
 
     /// <summary>Keeps the face <paramref name="key"/> on, or stops keeping it (see <see cref="TimelineEdits.Keep"/>).</summary>
     public bool Keep(string key, bool keep) => Commit(TimelineEdits.Keep(Document, key, keep, motionFrames));
@@ -753,6 +937,8 @@ internal sealed class TimelineEditor
             SelectLayer(hit.Layer!, hit.OnKey ? hit.KeyFrame : null, hit.Part == TimelinePart.BoneKey ? hit.Bone : null);
         else if (gesture == TimelineGesture.None && hit.Part is TimelinePart.BoneLane or TimelinePart.Legend && hit.Layer != null)
             SelectLayer(hit.Layer);
+        else if (gesture == TimelineGesture.None && hit.Part is TimelinePart.ClipPart or TimelinePart.ClipLeft or TimelinePart.ClipRight && hit.Cut >= 0)
+            SelectCut(new TimelineCutSelection(TimelineCutTarget.Part, hit.Cut));
         return SnappedFrame(hit.Frame, alt);
     }
 
@@ -823,6 +1009,7 @@ internal sealed class TimelineEditor
             return;
         selected.Clear();
         Primary = null;
+        SelectedCut = null;
         SelectedLayer = key;
         var at = keyFrame is { } frame ? MotionEdits.KeyIndex(layer, frame) : -1;
         SelectedKey = at >= 0 ? keyFrame : null;
@@ -886,11 +1073,13 @@ internal sealed class TimelineEditor
         ClearLayerSelection();
     }
 
+    /// <summary>Clears the bone layer selection, and the cut's: either gives way to an event selection.</summary>
     private void ClearLayerSelection()
     {
         SelectedLayer = null;
         SelectedKey = null;
         SelectedBone = null;
+        SelectedCut = null;
     }
 
     // View and playback.
@@ -1098,6 +1287,9 @@ internal sealed class TimelineEditor
                 SelectedBone = null;
             }
         }
+        if (SelectedCut is { Target: not TimelineCutTarget.Seam, Index: var cut } selectedCut &&
+            cut >= (selectedCut.Target == TimelineCutTarget.Part ? CutEdits.CutsOf(doc).Parts.Length : CutEdits.CutsOf(doc).Joins.Length))
+            SelectedCut = null;
         if (unfolded.RemoveWhere(key => MotionEdits.Find(doc, key) == null) > 0)
             layoutStamp++;
         if (selected.Count > 0)

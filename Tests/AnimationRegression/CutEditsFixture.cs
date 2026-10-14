@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Numerics;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
@@ -42,6 +43,53 @@ internal static class CutEditsFixture
     public static void Run(Action<bool, string> check, Action<Action, string> reject)
     {
         Ripple(check);
+        Editor(check);
+    }
+
+    private static void Editor(Action<bool, string> check)
+    {
+        var doc = Doc(100);
+        var g = new TimelineGeometry(100, 20, 20, 5, 9, 0, 0, 30);
+        var view = new TimelineView(0, 4, 400);                          // 4 px per frame
+        var two = CutEdits.RemoveRange(doc, 40, 60, out _);              // boundary at output 40 = x 260
+        TimelineHit At(TimelineDocument d, float x, float y = 35, bool loops = false) =>
+            g.HitTest(d, TimelineLayout.Build(d), view, new Vector2(x, y), loops);
+        check(At(two, 150) is { Part: TimelinePart.ClipPart, Cut: 0 } && At(two, 258) is { Part: TimelinePart.ClipRight, Cut: 0 } &&
+              At(two, 262) is { Part: TimelinePart.ClipLeft, Cut: 1 }, "parts and their edges");
+        check(At(two, 260 - 24) is { Part: TimelinePart.JoinEdge, Cut: 0 } && At(two, 245) is { Part: TimelinePart.Join, Cut: 0 },
+            "a centered 12-frame join: its edge 6 frames out, its body");
+        var looped = CutEdits.SetSeam(two, MotionJoin.ForSeam);         // Before, frames 68-80 = x 372-420
+        check(At(looped, 372, loops: true).Part == TimelinePart.SeamEdge && At(looped, 385, loops: true).Part == TimelinePart.Seam &&
+              At(looped, 385, loops: false).Part == TimelinePart.ClipPart && At(looped, 419, loops: true) is { Part: TimelinePart.ClipRight, Cut: 1 },
+            "the seam is hit only on a looping clip; the clip's end stays a trim edge");
+        check(g.RowTop(0) == 50 && At(two, 150, 55).Part != TimelinePart.ClipPart, "rows start under the clip band");
+        var editor = new TimelineEditor(doc) { Loops = false };
+        editor.Playhead = 30;
+        check(editor.Key(TimelineKey.Cut) && editor.Document.Cuts!.Parts.Length == 2, "C cuts at the playhead");
+        editor.Playhead = 70;
+        check(editor.Key(TimelineKey.RemoveAfter) && editor.Document.Length == 70, "W removes from the playhead to the part's end");
+        check(!editor.SetSeam(MotionJoin.ForSeam) && !editor.FixLoop(new SeamReport(new JoinGap(0, 0, "", 0, 0), 1, null, SeamState.Clean)),
+            "a clip that doesn't loop takes no seam");
+        editor.SelectCut(new TimelineCutSelection(TimelineCutTarget.Part, 0));
+        check(editor.Key(TimelineKey.Delete) && editor.Document.Length == 40 && editor.Undo() && editor.Document.Length == 70, "Delete removes a part; undo brings it back");
+        // Q at 50, on the part playing 30 to 70, removes 30 to 50: the events starting at 30 and 45, and the key at 40.
+        editor.Playhead = 50;
+        check(editor.Key(TimelineKey.RemoveBefore) && editor.Document.Length == 50 && editor.LastRemoval == new CutRemoval(2, 1),
+            "Q removes from the part's start to the playhead and says what went");
+        editor.Press(At(editor.Document, 150, 200));
+        check(editor.LastRemoval == null, "the next click forgets what the last cut removed");
+
+        var dragging = new TimelineEditor(two) { Snap = false };
+        dragging.Press(At(two, 419));                                     // the clip's end, frame 80
+        dragging.Drag(70);
+        dragging.Release();
+        check(dragging.Document is { Length: 70, Cuts.Parts: [_, { To: 90 }] } && dragging.Undo() && dragging.Document.Length == 80,
+            "dragging the clip's end trims it as one undo step");
+        dragging.Press(At(two, 236));                                     // the join's left edge, frame 34
+        dragging.Drag(31);
+        dragging.Release();
+        check(dragging.Document.Cuts!.Joins[0].Frames == 18 && dragging.SelectedCut == new TimelineCutSelection(TimelineCutTarget.Join, 0),
+            "dragging a centred blend's edge 3 frames out makes it 6 frames longer");
     }
 
     private static void Ripple(Action<bool, string> check)
