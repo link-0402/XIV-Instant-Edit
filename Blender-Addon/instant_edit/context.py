@@ -413,6 +413,14 @@ def mesh_ids_from_name(obj) -> tuple[int, int, int]:
     return info.mesh_group, info.mesh_part, info.lod
 
 
+def try_mesh_ids_from_name(obj) -> tuple[int, int, int] | None:
+    """mesh_ids_from_name, or None when the name isn't a mesh part name."""
+    try:
+        return mesh_ids_from_name(obj)
+    except ContextValidationError:
+        return None
+
+
 def validate_context(context_id: str, scene=None) -> ContextRef:
     """Validate one complete context and return its authoritative collection."""
     scene = scene or bpy.context.scene
