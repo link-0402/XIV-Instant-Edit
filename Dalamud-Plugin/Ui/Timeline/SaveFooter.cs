@@ -6,6 +6,7 @@ using InstantEdit.Services;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Ui.Timeline;
 
@@ -195,7 +196,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             return "Finish the drag first.";
         if (session.Animations!.Busy)
             return "Another edit is running. Wait for it to end.";
-        if (destination == AnimationDestination.NewMod && !PenumbraService.IsSafeNewModName(modName.Trim()))
+        if (destination == AnimationDestination.NewMod && !ModPaths.IsSafeNewModName(modName.Trim()))
             return "Choose a valid mod name.";
         return effectLooks.LookMissing(current.Document) ?? soundFiles.SoundMissing(current.Document) ?? soundFiles.SoundCutMissing(current.Document);
     }

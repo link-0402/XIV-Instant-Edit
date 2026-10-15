@@ -9,6 +9,7 @@ using FFXIVClientStructs.Havok.Animation.Rig;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.CharacterSend;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services.Skeletons;
 
@@ -22,7 +23,7 @@ internal sealed record ModelSkeletonResult(ModelSkeleton? Skeleton, string? Prob
 /// skeleton its EST table picks, each resolved through the character's Penumbra collection, so
 /// skeleton mods apply.
 /// </summary>
-internal sealed class ModelSkeletonResolver(PenumbraService penumbra, IDataManager data, IFramework framework,
+internal sealed class ModelSkeletonResolver(PenumbraIpc penumbra, AnimationModService animationMods, IDataManager data, IFramework framework,
     IObjectTable objects, IPluginLog log)
 {
     private const int MaximumPartials = 16;
@@ -299,7 +300,7 @@ internal sealed class ModelSkeletonResolver(PenumbraService penumbra, IDataManag
         var resolved = gamePath;
         if (collection is { } id && id != Guid.Empty)
         {
-            try { resolved = await penumbra.ResolveAnimationPathAsync(id, gamePath); }
+            try { resolved = await animationMods.ResolveAnimationPathAsync(id, gamePath); }
             catch (Exception e) when (e is not OperationCanceledException)
             {
                 log.Debug(e, $"Penumbra could not resolve {gamePath}; reading the game's file.");

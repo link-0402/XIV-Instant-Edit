@@ -10,7 +10,8 @@ internal sealed partial class AnimationEditService : IDisposable
 {
     private readonly IFramework framework;
     private readonly IObjectTable objects;
-    private readonly PenumbraService penumbra;
+    private readonly PenumbraIpc penumbra;
+    private readonly AnimationModService animationMods;
     private readonly LivePoseAdapter poses;
     private readonly AnimationNative native;
     private readonly AnimationBakeService baker;
@@ -43,14 +44,14 @@ internal sealed partial class AnimationEditService : IDisposable
     public void StopObservation() => Observer.Stop();
 
     public AnimationEditService(IDalamudPluginInterface pi, IFramework framework, IObjectTable objects, IClientState clientState,
-        ITargetManager targets, IDataManager data, ISigScanner scanner, PenumbraService penumbra, ModelBackupStore backups,
+        ITargetManager targets, IDataManager data, ISigScanner scanner, PenumbraIpc penumbra, AnimationModService animationMods, ModelBackupStore backups,
         Configuration configuration, IPluginLog log)
     {
-        this.framework = framework; this.objects = objects; this.penumbra = penumbra; this.log = log;
+        this.framework = framework; this.objects = objects; this.penumbra = penumbra; this.animationMods = animationMods; this.log = log;
         native = new AnimationNative(scanner);
         poses = new LivePoseAdapter(pi, objects);
         catalog = new AnimationCatalog(data);
-        resources = new AnimationResources(penumbra, data, framework, log);
+        resources = new AnimationResources(penumbra, animationMods, data, framework, log);
         // Journals, the LivePose offset backup and the pre-edit file backups are the only
         // copies Undo relies on, so they live in the config folder: temp cleaners empty
         // the default %TEMP% cache (issue #8). Records from older versions move over once.
@@ -60,9 +61,9 @@ internal sealed partial class AnimationEditService : IDisposable
         journals = new AnimationJournalStore(recoveryRoot, message => log.Warning("{Message}", message));
         recovery = journals.Load().ToImmutableArray();
         offsetBackup = journals.LoadOffsetBackup();
-        commits = new AnimationCommitService(penumbra, resources, new ModelBackupStore(recoveryRoot), journals, backups);
+        commits = new AnimationCommitService(animationMods, resources, new ModelBackupStore(recoveryRoot), journals, backups);
         baker = new AnimationBakeService(native, framework);
-        skeletons = new AnimationSkeletonIndex(penumbra, resources, framework, log, () => TextureFiles.EnsureCacheRoot(configuration.TextureCacheDirectory));
+        skeletons = new AnimationSkeletonIndex(animationMods, resources, framework, log, () => TextureFiles.EnsureCacheRoot(configuration.TextureCacheDirectory));
         Observer = new AnimationObserver(framework, objects, clientState, targets, penumbra, native, resources, poses, catalog, skeletons, log);
         Files = new AnimationFiles(framework, objects, penumbra, resources, skeletons);
         Observer.CharacterChanged += Cancel;
@@ -437,7 +438,7 @@ internal sealed partial class AnimationEditService : IDisposable
         var identity = AnimationRuntime.Identity(objects[capture.ActorIndex]);
         if (identity == null || identity.Value.ActorId != capture.ActorId || address && identity.Value.Address != capture.ActorAddress)
             throw new InvalidOperationException("The captured player changed. Live offsets were retained.");
-        penumbra.CheckAnimationCollectionOnFramework(identity.Value.Index, capture.CollectionId);
+        animationMods.CheckAnimationCollectionOnFramework(identity.Value.Index, capture.CollectionId);
     }
     public void Dispose()
     {

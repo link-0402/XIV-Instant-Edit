@@ -37,7 +37,7 @@ internal sealed class NeckSeamService
     /// <summary> The mod name used when a character's name can't name a folder. </summary>
     private const string FixModFallback = "Skin Seam Fix";
     private const string Recheck = "Measure the seams again";
-    private readonly PenumbraService _penumbra;
+    private readonly ITextureEditBackend _textureBackend;
     private readonly PreviewModService _previews;
     private readonly IDataManager _data;
     private readonly IPluginLog _log;
@@ -45,11 +45,11 @@ internal sealed class NeckSeamService
     private readonly PainterLiveReader? _live;
 
     /// <param name="live">Reads which parts and shape keys the game draws, so only drawn skin is compared.</param>
-    public NeckSeamService(PenumbraService penumbra, IDataManager data, IPluginLog log, string configDirectory, Func<bool> recompress,
+    public NeckSeamService(PreviewModWriter previewMods, ITextureEditBackend textureBackend, IDataManager data, IPluginLog log, string configDirectory, Func<bool> recompress,
         PainterLiveReader? live = null)
     {
-        _penumbra = penumbra;
-        _previews = new PreviewModService(penumbra);
+        _textureBackend = textureBackend;
+        _previews = new PreviewModService(previewMods);
         _data = data;
         _log = log;
         _recompress = recompress;
@@ -300,7 +300,7 @@ internal sealed class NeckSeamService
         var output = Path.Combine(work, label + ".tex");
         await File.WriteAllBytesAsync(tga, TgaImage.WriteBgra32(new RgbaImage(image.Width, image.Height, image.Rgba)), token)
             .ConfigureAwait(false);
-        await ((ITextureEditBackend)_penumbra).ConvertAsync(tga, output, type, mips).ConfigureAwait(false);
+        await _textureBackend.ConvertAsync(tga, output, type, mips).ConfigureAwait(false);
         var bytes = await File.ReadAllBytesAsync(output, token).ConfigureAwait(false);
         _ = TextureFiles.ReadTex(bytes);
         // Where the blend didn't reach, the original's own blocks go back in, so a fix never recompresses the rest of the texture.

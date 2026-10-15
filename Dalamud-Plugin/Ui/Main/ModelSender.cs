@@ -2,6 +2,7 @@ using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.CharacterSend;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Services.Skeletons;
 using Lumina.Data;
 
@@ -33,7 +34,8 @@ internal sealed record CharacterModelSend(
 internal sealed class ModelSender
 {
     private readonly Configuration _config;
-    private readonly PenumbraService _penumbra;
+    private readonly PenumbraIpc _penumbra;
+    private readonly SourceMods _sourceMods;
     private readonly BlenderClient _blender;
     private readonly BlenderConnection _blenderConnection;
     private readonly IDataManager _data;
@@ -44,11 +46,12 @@ internal sealed class ModelSender
     private readonly StatusFeed _feed;
     private readonly CancellationToken _lifetime;
 
-    public ModelSender(Configuration config, PenumbraService penumbra, BlenderClient blender, BlenderConnection blenderConnection,
+    public ModelSender(Configuration config, PenumbraIpc penumbra, SourceMods sourceMods, BlenderClient blender, BlenderConnection blenderConnection,
         IDataManager data, IChatGui chat, IPluginLog log, ResourceSourceAttributor resourceSources, StatusFeed feed, CancellationToken lifetime)
     {
         _config = config;
         _penumbra = penumbra;
+        _sourceMods = sourceMods;
         _blender = blender;
         _blenderConnection = blenderConnection;
         _data = data;
@@ -294,7 +297,7 @@ internal sealed class ModelSender
             {
                 var manipulations = collection is not null &&
                                     !string.IsNullOrWhiteSpace(source.SourceModRootPath)
-                    ? await _penumbra.CaptureEffectiveManipulationsAsync(
+                    ? await _sourceMods.CaptureEffectiveManipulationsAsync(
                         collection.Id,
                         source.SourceModDirectory,
                         source.SourceModRootPath).ConfigureAwait(false)
@@ -340,7 +343,7 @@ internal sealed class ModelSender
             }
             else
             {
-                var sourceOption = await _penumbra.CaptureSourceOptionAsync(
+                var sourceOption = await _sourceMods.CaptureSourceOptionAsync(
                     source.SourceModDirectory,
                     source.ActualPath,
                     source.SourceModRootPath,

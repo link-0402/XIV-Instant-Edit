@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using InstantEdit.Models;
 using InstantEdit.Services.GameFiles;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services;
 
@@ -117,7 +118,7 @@ public sealed partial class ExportServer
                     "the import has no original Penumbra mod destination");
             else
             {
-                var result = await _penumbra.ApplyRaceExportAsync(
+                var result = await _raceExports.ApplyRaceExportAsync(
                     target.SourceModDirectory!,
                     target.TargetFilePath!,
                     target.SourceModRootPath,
@@ -131,7 +132,7 @@ public sealed partial class ExportServer
                     export.AttributeTags,
                     export.AttributeMasks,
                     target.ResolvedGamePath,
-                    PenumbraService.KnownManipulations(target),
+                    AttributeGroupService.KnownManipulations(target),
                     export.EstEntries).ConfigureAwait(false);
                 receipt = new ExportReceipt(
                     result.Success, result.Code, result.Message, result.WarningList, result.TargetFilePath);
@@ -180,7 +181,7 @@ public sealed partial class ExportServer
         if (GamePathRace(context) == race)
             return new ExportReceipt(false, "race_model_unavailable",
                 $"The imported model already is a c{race:D4} model. Export it in place.");
-        if (PenumbraService.RaceModelGamePath(context.GamePath, race) is null)
+        if (RaceExportService.RaceModelGamePath(context.GamePath, race) is null)
             return new ExportReceipt(false, "race_model_unavailable",
                 "Only gear and accessory models can be saved for another race.");
         return null;
@@ -198,17 +199,17 @@ public sealed partial class ExportServer
             string.IsNullOrWhiteSpace(request.Sha256) ||
             string.IsNullOrWhiteSpace(request.Race))
             return "missing_field";
-        if (PenumbraService.PlayerRaceCode(request.Race) is null)
+        if (RaceExportService.PlayerRaceCode(request.Race) is null)
             return "invalid_race";
         if (request.Size <= 0 || request.Size > MaxExportBytes)
             return "invalid_size";
         if (request.Sha256.Length != 64 || request.Sha256.Any(c => !Uri.IsHexDigit(c)))
             return "invalid_sha256";
-        if (request.NewModName is not null && !PenumbraService.IsSafeNewModName(request.NewModName))
+        if (request.NewModName is not null && !ModPaths.IsSafeNewModName(request.NewModName))
             return "invalid_mod_name";
         return ValidateAttributeGroupEnvelope(
                    request.CreateAttributeGroups, request.AttributeTags, request.AttributeMasks) ??
-               PenumbraService.ValidateEstEntryRequests(request.EstEntries);
+               EstEntryService.ValidateEstEntryRequests(request.EstEntries);
     }
 
     internal static string RaceExportRequestFingerprint(RaceExportRequest request)

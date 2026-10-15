@@ -6,7 +6,7 @@ using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services.Animations;
 
-internal sealed class AnimationCommitService(PenumbraService penumbra, AnimationResources resources,
+internal sealed class AnimationCommitService(AnimationModService animationMods, AnimationResources resources,
     ModelBackupStore backups, AnimationJournalStore store, ModelBackupStore? legacyBackups = null)
 {
     /// <summary>
@@ -29,7 +29,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
         if (request.Destination == AnimationDestination.NewMod)
         {
             if (!ModPaths.IsSafeNewModName(request.ModName)) throw new InvalidDataException("Choose a valid, unused mod name.");
-            var root = await penumbra.AnimationModRootAsync();
+            var root = await animationMods.AnimationModRootAsync();
             TextureFiles.EnsureLocalPath(root);
             journal.ModDirectory = request.ModName;
             journal.ModRoot = Path.GetFullPath(Path.Combine(root, request.ModName));
@@ -192,21 +192,21 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
     private async Task CommitCoreAsync(AnimationEditJournal journal, AnimationDependencyManifest manifest,
         Func<Task> checkActor, Action<string> status, CancellationToken token)
     {
-        await penumbra.AnimationExportAsync(async () =>
+        await animationMods.AnimationExportAsync(async () =>
         {
             await checkActor();
             await resources.CheckAsync(journal.Request.Capture.CollectionId, manifest.Resources, token);
             if (journal.Request.Destination == AnimationDestination.NewMod)
             {
                 var metadata = AnimationMetadata.Applicable(
-                    AnimationMetadata.Decode(await penumbra.AnimationMetadataAsync(journal.Request.Capture.CollectionId)),
+                    AnimationMetadata.Decode(await animationMods.AnimationMetadataAsync(journal.Request.Capture.CollectionId)),
                     journal.Files.Where(file => file.AddedFor == null).Select(file => file.GamePath)).ToJsonString();
                 if (metadata != manifest.ManipulationsJson) throw new IOException("Applicable collection metadata changed during baking. Refresh and retry.");
             }
             foreach (var file in journal.Files) ValidateTarget(journal, file);
             if (journal.Request.Destination == AnimationDestination.InPlace)
                 foreach (var group in journal.Files.GroupBy(f => (f.ModDirectory, f.ModRoot)))
-                    await penumbra.CheckAnimationModRootAsync(group.Key.ModDirectory, group.Key.ModRoot);
+                    await animationMods.CheckAnimationModRootAsync(group.Key.ModDirectory, group.Key.ModRoot);
             // Dependency and metadata reads can span several ticks; recheck the live destination last.
             await checkActor();
             token.ThrowIfCancellationRequested();
@@ -234,7 +234,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                         var backup = backups.Create(preEditTarget, file.ModDirectory, renamed ? file.RenamedFromRelativePath! : file.RelativePath);
                         RequireHash(backup, file.BeforeHash);
                         journal.Files[i] = file = file with { Backup = backup }; store.Save(journal);
-                        var mapping = await penumbra.ResolveAnimationPathAsync(journal.Request.Capture.CollectionId, file.GamePath);
+                        var mapping = await animationMods.ResolveAnimationPathAsync(journal.Request.Capture.CollectionId, file.GamePath);
                         if (!PathRules.SamePhysicalPath(mapping, preEditTarget)) throw new IOException($"The mapping for {file.GamePath} changed during commit.");
                         RequireHash(preEditTarget, file.BeforeHash);
                         if (renamed && File.Exists(file.Target)) throw new IOException($"Another operation created {file.Target}.");
@@ -272,11 +272,11 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                 journal.State = "Committed"; store.Save(journal);
                 await checkActor();
                 status("Activating and verifying animation resources");
-                await penumbra.ActivateAnimationAsync(journal);
+                await animationMods.ActivateAnimationAsync(journal);
                 await VerifyActivationAsync(journal.Files,
-                    path => penumbra.ResolveAnimationPathAsync(journal.Request.Capture.CollectionId, path),
+                    path => animationMods.ResolveAnimationPathAsync(journal.Request.Capture.CollectionId, path),
                     file => RequireHash(file.Target, file.AfterHash),
-                    penumbra.RedrawAnimationAsync);
+                    animationMods.RedrawAnimationAsync);
                 if (journal.Request.Destination == AnimationDestination.NewMod) journal.ModFileHashes = ModHashes(journal.ModRoot);
                 journal.State = "Activated"; store.Save(journal);
             }
@@ -332,7 +332,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
             });
     }
 
-    public Task UndoFilesAsync(AnimationEditJournal journal) => penumbra.AnimationExportAsync(() => UndoFilesCoreAsync(journal), CancellationToken.None);
+    public Task UndoFilesAsync(AnimationEditJournal journal) => animationMods.AnimationExportAsync(() => UndoFilesCoreAsync(journal), CancellationToken.None);
     private async Task UndoFilesCoreAsync(AnimationEditJournal journal)
     {
         if (journal.State == "Prepared")
@@ -360,12 +360,12 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                     throw new IOException("The created mod was changed after activation. Undo will not disable newer work.");
             }
             journal.State = "Undoing"; store.Save(journal);
-            await penumbra.DisableAnimationModAsync(journal);
+            await animationMods.DisableAnimationModAsync(journal);
         }
         else
         {
             foreach (var group in journal.Files.GroupBy(f => (f.ModDirectory, f.ModRoot)))
-                await penumbra.CheckAnimationModRootAsync(group.Key.ModDirectory, group.Key.ModRoot);
+                await animationMods.CheckAnimationModRootAsync(group.Key.ModDirectory, group.Key.ModRoot);
             // Preflight every backup and target before restoring any file. Restart can resume a partly completed undo.
             foreach (var file in journal.Files)
             {
@@ -426,7 +426,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                 RequireHash(file.Target, file.AfterHash);
                 AnimationJournalStore.WriteAtomic(file.Target, File.ReadAllBytes(ResolveBackup(file)));
             }
-            await penumbra.ReloadAnimationSourcesAsync(journal.Files.Select(f => f.ModDirectory));
+            await animationMods.ReloadAnimationSourcesAsync(journal.Files.Select(f => f.ModDirectory));
         }
         journal.State = "FilesUndone"; store.Save(journal);
     }

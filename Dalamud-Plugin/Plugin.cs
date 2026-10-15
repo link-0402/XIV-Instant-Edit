@@ -134,10 +134,10 @@ public sealed class Plugin : IDalamudPlugin
         _penumbra  = new PenumbraService(pi, framework, log, objects, data, _backups, estEntries);
         // One attributor serves the On Screen snapshot and the Edit/material-preview flows,
         // so both share its mod index and cached stable identifiers.
-        var resourceSources = new ResourceSourceAttributor(_penumbra, log);
+        var resourceSources = new ResourceSourceAttributor(_penumbra.Ipc, log);
         // A new, deleted or renamed mod must show up in the next attribution, not up to 5 s later.
-        _penumbra.ModsChanged += resourceSources.Invalidate;
-        _onScreen  = new OnScreenService(objects, clientState, framework, _penumbra, resourceSources, log);
+        _penumbra.Ipc.ModsChanged += resourceSources.Invalidate;
+        _onScreen  = new OnScreenService(objects, clientState, framework, _penumbra.Ipc, resourceSources, log);
         _glamourer = new GlamourerService(pi, log);
         _contexts  = new ExportContextRegistry(
             pluginInstanceId,
@@ -161,10 +161,10 @@ public sealed class Plugin : IDalamudPlugin
             },
             _backups);
         _blender   = new BlenderClient(log, _contexts);
-        _textures = new TextureEditService(_penumbra, _config, storageRoot, _backups,
+        _textures = new TextureEditService(_penumbra.Textures, _config, storageRoot, _backups,
             (error, message) => log.Warning(error, message));
         string? animationError = null;
-        try { _animations = new AnimationEditService(pi, framework, objects, clientState, targets, data, sigScanner, _penumbra, _backups, _config, log); }
+        try { _animations = new AnimationEditService(pi, framework, objects, clientState, targets, data, sigScanner, _penumbra.Ipc, _penumbra.Animations, _backups, _config, log); }
         catch (Exception error)
         {
             animationError = "Animation integration is unavailable: " + error.Message;
@@ -176,18 +176,19 @@ public sealed class Plugin : IDalamudPlugin
         _timelineCatalog = new Services.Animations.Timeline.TimelineCatalog(data, log, bytes => Services.Audio.ScdFile.TrySeconds(bytes),
             _animations == null ? null : (bytes, token) => framework.RunOnTick(
                 () => Services.Animations.AnimationRuntime.InspectPapDurations(bytes), cancellationToken: token).GetAwaiter().GetResult());
-        _animationPreview = new Services.Animations.Preview.AnimationPreviewService(_penumbra, framework, log, configDirectory,
+        _animationPreview = new Services.Animations.Preview.AnimationPreviewService(_penumbra.Ipc, _penumbra.Animations, _penumbra.Previews, framework, log, configDirectory,
             () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory), clientState);
         _animationPlayback =new Services.Animations.Preview.AnimationPlayback(framework, objects, clientState, targets, log);
         // The Timeline's sound inspector plays sounds through the game, served by a temporary mod.
-        _soundPlayer = new Services.Audio.GameSoundPlayer(sigScanner, framework, _penumbra, log,
+        _soundPlayer = new Services.Audio.GameSoundPlayer(sigScanner, framework, _penumbra.Ipc, log,
             () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory));
         // Bone layers shown live on the GPose actor: an edited copy of the clip swapped into its controls.
         _motionDisplay = _animations == null ? null
             : new Services.Animations.Preview.MotionLiveDisplay(framework, objects, clientState, _animations.Native, log);
         _timelineWindow = new TimelineWindow(_animations, animationError, _timelineCatalog, _animationPreview, _animationPlayback,
             _motionDisplay, _recorder, data, framework, textureProvider, log, _soundPlayer);
-        _exportServer = new ExportServer(_config, _penumbra, _contexts, log);
+        _exportServer = new ExportServer(_config, _penumbra.ModelExports, _penumbra.RaceExports, _penumbra.SizesExports,
+            _penumbra.ModelBackups, _penumbra.Mashups, _penumbra.Scanner, _contexts, log);
         var painterStore = new Services.Painter.PainterJobStore(configDirectory);
         painterStore.Load();
         if (painterStore.LoadError.Length > 0)
@@ -200,15 +201,16 @@ public sealed class Plugin : IDalamudPlugin
             new Services.Painter.PainterClient(), painterStore, readGameFile, logPainter,
             new Services.Painter.PainterLiveReader(framework, objects),
             new Services.Painter.PainterSkinResolver(new Services.Painter.PainterSkinPenumbra(
-                async index => (await _penumbra.GetCollectionTargetAsync(index).ConfigureAwait(false))?.Id,
-                _penumbra.MetaManipulationsAsync, _penumbra.ResolveCollectionPathsAsync), readGameFile, logPainter));
+                async index => (await _penumbra.Ipc.GetCollectionTargetAsync(index).ConfigureAwait(false))?.Id,
+                _penumbra.Ipc.MetaManipulationsAsync, _penumbra.Ipc.ResolveCollectionPathsAsync), readGameFile, logPainter));
         _exportServer.AttachPainter(_painterJobs);
         _previews = new PreviewService(textureProvider, data, log, () => _config.RenderModelThumbnails);
         _textures.FileChanged += _previews.Invalidate;
         _changelogWindow = new ChangelogWindow(_config, BlenderClient.CurrentPluginVersion, SaveConfiguration);
         _window    = new MainWindow(
             _config,
-            _penumbra,
+            _penumbra.Ipc,
+            _penumbra.Sources,
             _onScreen,
             resourceSources,
             _blender,
@@ -231,7 +233,7 @@ public sealed class Plugin : IDalamudPlugin
         _timelineWindow.AttachTools(() => _settingsWindow!.Open(), _window.DrawRecorderPanel);
         _window.AttachPainter(_painterJobs);
         // Game skeletons for Blender's armatures: sent with imports, and asked for by the add-on.
-        var skeletons = new ModelSkeletonResolver(_penumbra, data, framework, objects, log);
+        var skeletons = new ModelSkeletonResolver(_penumbra.Ipc, _penumbra.Animations, data, framework, objects, log);
         _window.AttachSkeletons(skeletons);
         _exportServer.Skeletons = skeletons;
         // What your character draws right now, for Send my character.
@@ -241,15 +243,16 @@ public sealed class Plugin : IDalamudPlugin
         _gameExport = new GameFileExportService(_gameFiles, skeletons, log, BlenderClient.CurrentPluginVersion);
         _window.AttachGameFiles(_gameFiles, _gameExport);
         // Skin seam checks and preview mods; open previews are remembered in the config folder.
-        var neckSeam = new Services.NeckSeam.NeckSeamService(_penumbra, data, log, configDirectory, () => _config.RecompressTextures,
+        var neckSeam = new Services.NeckSeam.NeckSeamService(_penumbra.Previews, _penumbra.Textures, data, log, configDirectory, () => _config.RecompressTextures,
             new Services.Painter.PainterLiveReader(framework, objects));
         _window.AttachNeckSeam(neckSeam);
         // Automatic texture compression: the character's uncompressed mod textures, checked and backed up in the cache folder.
-        _compression = new Services.TextureCompression.TextureCompressionService(_config, SaveConfiguration, _penumbra, _onScreen, _textures,
+        _compression = new Services.TextureCompression.TextureCompressionService(_config, SaveConfiguration, _penumbra.Ipc, _penumbra.ModFiles, _penumbra.Textures,
+            _onScreen, _textures,
             framework, objects, clientState, condition, data, log, pi, configDirectory, [neckSeam.Store]);
         _window.AttachTextureCompression(_compression);
         // Simple Heels offsets, measured on the model your character's feet are in and written into it; preview mods' files are left alone.
-        _heels = new Services.Heels.HeelsOffsetService(pi, framework, objects, clientState, condition, data, skeletons, _penumbra, resourceSources,
+        _heels = new Services.Heels.HeelsOffsetService(pi, framework, objects, clientState, condition, data, skeletons, _penumbra.Ipc, _penumbra.Previews, resourceSources,
             [neckSeam.Store], () => _config.AutoFixHeels, log);
         _window.AttachHeelsOffset(_heels);
         // The physics builder: body physics for your skeleton, previewed through a temporary mod and saved into a mod of its own.
