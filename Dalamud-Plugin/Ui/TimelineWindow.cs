@@ -31,6 +31,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private readonly SoundFiles soundFiles;
     private readonly TimelinePickers pickers;
     private readonly SoundInspector soundInspector;
+    private readonly TimelinePreview timelinePreview;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
     private readonly GameSoundPlayer? soundPlayer;
@@ -75,6 +76,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         soundFiles = new SoundFiles(session);
         pickers = new TimelinePickers(session, soundFiles);
         soundInspector = new SoundInspector(session, soundFiles, pickers, soundPlayer);
+        timelinePreview = new TimelinePreview(session, decode, effectLooks, soundFiles, () => repairTarget);
         this.soundPlayer = soundPlayer;
         this.recorder = recorder;
         this.animationError = animationError;
@@ -104,6 +106,9 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private MotionLiveDisplay? motionDisplay => session.MotionDisplay;
     private AnimationTimelineSource? source { get => session.Source; set => session.Source = value; }
     private TimelineEditor? editor { get => session.Editor; set => session.Editor = value; }
+    private bool liveWanted => timelinePreview.LiveWanted;
+    private bool liveStarted => timelinePreview.LiveStarted;
+    private ushort? previewActor => timelinePreview.Actor;
     private bool ReadOnly => session.ReadOnly;
     private AnimationTimelineSource Fresh(AnimationTimelineSource current) => session.Fresh(current);
 
@@ -201,7 +206,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         // The Bones window poses this window's clip; it goes with it, and so do its bones on the character.
         bonesWindow.IsOpen = false;
         EndGizmo(true);
-        StopPreview();
+        timelinePreview.Stop();
         decode.Forget();
         DropPose();
         loadCancel?.Cancel();
@@ -253,7 +258,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private AnimationCapture? ChangedCapture()
     {
         if (animations == null || source is not { } current || loadTask != null || saveTask != null || pendingSaveId != null ||
-            undoPending || preview.Active || preview.Busy || previewJob)
+            undoPending || preview.Active || preview.Busy || timelinePreview.Building)
             return null;
         return TimelineWindowViews.ChangedCapture(animations.Observer.History, current);
     }
@@ -269,10 +274,10 @@ public sealed partial class TimelineWindow : Window, IDisposable
         if (animations is not { } service)
             return;
         // What the loader plays keeps playing while its timeline opens; a preview or Live ends.
-        if (playback.Active && previewFingerprint == null && !liveWanted && !preview.Active && !previewJob)
-            StopTemporaryMod();
+        if (playback.Active && timelinePreview.Fingerprint == null && !liveWanted && !preview.Active && !timelinePreview.Building)
+            timelinePreview.StopTemporaryMod();
         else
-            StopPreview();
+            timelinePreview.Stop();
         loadCancel?.Cancel();
         loadCancel?.Dispose();
         loadCancel = new CancellationTokenSource();
@@ -295,7 +300,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
             motionCarry = null;
         }
         // The preview's temporary mod must be gone first, or the read would get the previewed file.
-        var ending = previewStop ?? Task.CompletedTask;
+        var ending = timelinePreview.Stopping ?? Task.CompletedTask;
         loadTask = Task.Run(async () =>
         {
             await ending;
@@ -434,7 +439,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         PollLoad();
         PollSave();
         pickers.PollImport();
-        PollPreview();
+        timelinePreview.Poll();
         pickers.PollLengths();
         PollLibrary();
         PollLoader();
@@ -478,12 +483,10 @@ public sealed partial class TimelineWindow : Window, IDisposable
         editor.ResidentMotions = catalog.Data.ResidentMotions;
         editor.BoneOrder = source.Clip.Resolution?.Selected?.Skeleton is { } skeleton ? BoneTree(skeleton).Index : null;
 
-        SyncPlayback(editor, source);
-        UpdateLive(editor, source);
-        SyncLooks(editor);
+        timelinePreview.Update(editor, source);
         CheckGizmo();
         DrawToolbar(editor);
-        DrawPreviewBar(editor, source);
+        timelinePreview.DrawBar(editor, source);
         DrawMessages(editor);
 
         var avail = ImGui.GetContentRegionAvail();
