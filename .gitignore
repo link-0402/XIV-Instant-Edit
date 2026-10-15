@@ -41,6 +41,9 @@ coding-agent-release-workflow.txt
 # Local agent scripts.
 .scripts/
 
+# Agent specs, plans and handoffs (the XIV Bridge test docs among them): local and internal only.
+docs/superpowers/
+
 # Grill-me skill artifacts.
 **/CONTEXT.md
 **/CONTEXT-MAP.md
