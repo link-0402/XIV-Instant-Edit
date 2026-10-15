@@ -977,9 +977,9 @@ class XIVIE_OT_remove_hidden_vertices(Operator):
         return (
             f"Delete the vertices of {target} that other meshes cover, like skin under a top, with the faces "
             "that use them.\n"
-            "A vertex counts as covered when the cover hides it from every angle within 45 degrees of its "
-            "normal, in the rest pose and each shp_ shape key. See-through parts of a material cover nothing, "
-            "and neither does the back of a face whose material culls backfaces"
+            "A vertex counts as covered when the cover hides it from every angle within 70 degrees of its "
+            "normal, in the rest pose with the shape keys as set and in each shp_ shape key. See-through parts "
+            "of a material cover nothing, and neither does the back of a face whose material culls backfaces"
         )
 
     @classmethod
