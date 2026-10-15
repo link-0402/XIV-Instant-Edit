@@ -24,13 +24,13 @@ htmlcov/
 .vscode/
 .idea/
 
-# Local release archives are kept only when they are explicit distribution files.
+# Release archives are built into dist/ by scripts/prepare-release.ps1 and shipped as
+# GitHub release assets, never committed (docs/release-packaging.md). The two old
+# tracked copies stay tracked until they are removed with git rm.
 *.zip
-!Blender-Addon/blender_repo/XIV-Instant-Edit.zip
-!Dalamud-Plugin/InstantEdit/latest.zip
+/dist/
 
-# Generated Blender static-repository package; the listing is tracked, the ZIP
-# is rebuilt by the local script and GitHub Pages workflow.
+# Blender's server-generate listing page; only index.json is tracked.
 Blender-Addon/blender_repo/index.html
 
 ideas.txt

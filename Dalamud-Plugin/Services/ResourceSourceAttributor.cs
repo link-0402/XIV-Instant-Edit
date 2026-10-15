@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using InstantEdit.Models;
 using Dalamud.Plugin.Services;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services;
 
@@ -32,7 +33,7 @@ public sealed class ResourceSourceAttributor
     private long _generation;
 
     public ResourceSourceAttributor(PenumbraService penumbra, IPluginLog log)
-        : this(() => ReadModList(penumbra), PenumbraService.ReadModStableIdentifier, message => log.Debug(message))
+        : this(() => ReadModList(penumbra), ModMetadata.ReadModStableIdentifier, message => log.Debug(message))
     {
     }
 

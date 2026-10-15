@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using InstantEdit;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.TestSupport;
 using Lumina.Data.Files;
 using Penumbra.Api.Enums;
@@ -299,9 +300,9 @@ internal static partial class TextureEditScenarios
         File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 42));
         await f.Service.ProcessPendingAsync(true);
         Check(f.Backend.Commits == 2, "subsequent vanilla saves reuse the same mod");
-        var v4Fingerprint = PenumbraService.TextureMappingFingerprint(saved.ModRoot, saved.RelativePath);
+        var v4Fingerprint = TextureModBackend.TextureMappingFingerprint(saved.ModRoot, saved.RelativePath);
         File.WriteAllText(Path.Combine(saved.ModRoot, "default_mod.json"), "{\"ignored\":true}");
-        Check(PenumbraService.TextureMappingFingerprint(saved.ModRoot, saved.RelativePath) == v4Fingerprint,
+        Check(TextureModBackend.TextureMappingFingerprint(saved.ModRoot, saved.RelativePath) == v4Fingerprint,
             "texture mapping fingerprints ignore stray legacy JSON files");
         Check(await f.Service.StartAsync(f.Request, false) == id, "vanilla reopening reuses the session");
     }
@@ -527,7 +528,7 @@ internal static partial class TextureEditScenarios
             "rewrites of meta.json that keep the texture's mapping, with paths as Penumbra writes them, don't stop a save");
 
         var secondTarget = Path.Combine(f.Backend.ModRoot, "Files", "chara", "second.tex");
-        PenumbraService.AddGameTextureToMod(f.Backend.ModRoot, "chara/second.tex", f.Backend.Original);
+        TextureModBackend.AddGameTextureToMod(f.Backend.ModRoot, "chara/second.tex", f.Backend.Original);
         var second = await f.Service.StartAsync(f.Request with { GamePath = "chara/second.tex", ActualPath = secondTarget, RelativePath = "Files/chara/second.tex" }, false);
         File.WriteAllBytes(Path.Combine(f.Service.Sessions.Single(x => x.Id == second).Directory, "Red.tga"), Tga(8, 8, 61));
         await f.Service.ProcessPendingAsync(true);
@@ -931,22 +932,22 @@ internal static partial class TextureEditScenarios
         var modRoot = Path.Combine(root, "Painter Top");
         Directory.CreateDirectory(modRoot);
         var first = Tex((uint)TexFile.TextureFormat.BC7, 8, 8, 4, 5);
-        PenumbraService.StageGameTextureMod(modRoot, "Painter Top", "chara/equipment/e0001/texture/a_base.tex", first, job);
-        Check(PenumbraService.ReadModStableIdentifierForRegression(modRoot) == job, "the project's mod carries the job id as its identifier");
+        TextureModBackend.StageGameTextureMod(modRoot, "Painter Top", "chara/equipment/e0001/texture/a_base.tex", first, job);
+        Check(ModMetadata.ReadModStableIdentifierForRegression(modRoot) == job, "the project's mod carries the job id as its identifier");
         const string baseFile = "Files/chara/equipment/e0001/texture/a_base.tex", normFile = "Files/chara/equipment/e0001/texture/a_norm.tex";
-        var before = PenumbraService.TextureMappingFingerprint(modRoot, baseFile);
-        var unmapped = PenumbraService.TextureMappingFingerprint(modRoot, normFile);
-        PenumbraService.AddGameTextureToMod(modRoot, "chara/equipment/e0001/texture/a_norm.tex", Tex((uint)TexFile.TextureFormat.BC7, 8, 8, 4, 6));
+        var before = TextureModBackend.TextureMappingFingerprint(modRoot, baseFile);
+        var unmapped = TextureModBackend.TextureMappingFingerprint(modRoot, normFile);
+        TextureModBackend.AddGameTextureToMod(modRoot, "chara/equipment/e0001/texture/a_norm.tex", Tex((uint)TexFile.TextureFormat.BC7, 8, 8, 4, 6));
         var meta = JsonDocument.Parse(File.ReadAllText(Path.Combine(modRoot, "meta.json"))).RootElement;
         var files = meta.GetProperty("DefaultData").GetProperty("Files");
         Check(files.GetProperty("chara/equipment/e0001/texture/a_base.tex").GetString() == "Files/chara/equipment/e0001/texture/a_base.tex" &&
               files.GetProperty("chara/equipment/e0001/texture/a_norm.tex").GetString() == "Files/chara/equipment/e0001/texture/a_norm.tex",
             "a later vanilla texture joins the mod's default option");
         Check(File.Exists(Path.Combine(modRoot, "Files", "chara", "equipment", "e0001", "texture", "a_norm.tex")) &&
-              PenumbraService.TextureMappingFingerprint(modRoot, normFile) != unmapped &&
-              PenumbraService.TextureMappingFingerprint(modRoot, baseFile) == before,
+              TextureModBackend.TextureMappingFingerprint(modRoot, normFile) != unmapped &&
+              TextureModBackend.TextureMappingFingerprint(modRoot, baseFile) == before,
             "the file is written; the new file's mapping fingerprint changes and the first texture's stays");
-        Check(PenumbraService.ReadModStableIdentifierForRegression(modRoot) == job, "adding a file keeps the identifier");
+        Check(ModMetadata.ReadModStableIdentifierForRegression(modRoot) == job, "adding a file keeps the identifier");
     }
 
     /// <summary>
@@ -1160,7 +1161,7 @@ internal static partial class TextureEditScenarios
             {
                 // A registered v4 mod, which variant groups need.
                 Directory.CreateDirectory(ModRoot);
-                PenumbraService.StageGameTextureMod(ModRoot, "Mod", "chara/test.tex", Original);
+                TextureModBackend.StageGameTextureMod(ModRoot, "Mod", "chara/test.tex", Original);
                 return;
             }
             Directory.CreateDirectory(Path.GetDirectoryName(Target)!);
@@ -1183,7 +1184,7 @@ internal static partial class TextureEditScenarios
                 GamePath = request.GamePath, ModDirectory = "Mod", ModRoot = ModRoot, RelativePath = relative, JobId = request.JobId,
                 NewModName = request.NewModName, NeedsMod = _vanilla, CollectionId = Guid.NewGuid(),
                 Format = h.Format, Width = 8, Height = 8, MipMaps = true, LastCommittedHash = _vanilla ? "" : TextureFiles.Hash(Original),
-                MappingFingerprint = File.Exists(Meta) ? PenumbraService.TextureMappingFingerprint(ModRoot, relative) : "",
+                MappingFingerprint = File.Exists(Meta) ? TextureModBackend.TextureMappingFingerprint(ModRoot, relative) : "",
             }));
         }
         // As PenumbraService checks before encoding, minus Penumbra and the live actor.
@@ -1191,20 +1192,20 @@ internal static partial class TextureEditScenarios
         {
             Checks++;
             if (Wait is { } wait) throw new TextureWaitException(wait, ModUnlisted);
-            if (!s.NeedsMod && File.Exists(Meta)) PenumbraService.EnsureTextureMappingForRegression(s);
+            if (!s.NeedsMod && File.Exists(Meta)) TextureModBackend.EnsureTextureMappingForRegression(s);
             return Task.CompletedTask;
         }
         public Task<TextureRebase> RebaseAsync(TextureEditSession s, CancellationToken token)
         {
             if (Wait is { } wait) throw new TextureWaitException(wait);
-            if (File.Exists(Meta) && PenumbraService.TextureGamePaths(ModRoot, s.RelativePath).Count == 0)
+            if (File.Exists(Meta) && TextureModBackend.TextureGamePaths(ModRoot, s.RelativePath).Count == 0)
                 throw new IOException("The mod no longer uses this texture's file.");
             var bytes = File.ReadAllBytes(s.TargetFile);
             var h = TextureFiles.ReadOriginal(bytes).Header;
             var variants = s.Variants.Where(v => v.RelativePath.Length > 0 && File.Exists(s.VariantTargetFile(v)))
                 .ToDictionary(v => v.Name, v => TextureFiles.Hash(File.ReadAllBytes(s.VariantTargetFile(v))), StringComparer.OrdinalIgnoreCase);
             return Task.FromResult(new TextureRebase(TextureFiles.Hash(bytes),
-                File.Exists(Meta) ? PenumbraService.TextureMappingFingerprint(ModRoot, s.RelativePath) : "", h.Format, h.Width, h.Height, variants));
+                File.Exists(Meta) ? TextureModBackend.TextureMappingFingerprint(ModRoot, s.RelativePath) : "", h.Format, h.Width, h.Height, variants));
         }
         public Task ConvertAsync(string input, string output, TextureType format, bool mipMaps)
         {
@@ -1239,13 +1240,13 @@ internal static partial class TextureEditScenarios
             if (s.NeedsMod)
             {
                 Directory.CreateDirectory(ModRoot);
-                PenumbraService.StageGameTextureMod(ModRoot, "Mod", s.GamePath, tex);
+                TextureModBackend.StageGameTextureMod(ModRoot, "Mod", s.GamePath, tex);
                 s.NeedsMod = false;
-                s.MappingFingerprint = PenumbraService.TextureMappingFingerprint(ModRoot, s.RelativePath);
+                s.MappingFingerprint = TextureModBackend.TextureMappingFingerprint(ModRoot, s.RelativePath);
             }
             else
             {
-                if (File.Exists(Meta)) PenumbraService.EnsureTextureMappingForRegression(s);
+                if (File.Exists(Meta)) TextureModBackend.EnsureTextureMappingForRegression(s);
                 if (TextureFiles.Hash(File.ReadAllBytes(s.TargetFile)) != s.LastCommittedHash) throw new TextureConflictException("Destination changed");
                 backup = TextureFiles.Replace(s.TargetFile, ModRoot, s.RelativePath, "Mod", tex, s.LastCommittedHash, _backups, current, token);
             }
@@ -1254,7 +1255,7 @@ internal static partial class TextureEditScenarios
         }
         public Task<TextureVariantCommit> CommitVariantAsync(TextureEditSession s, TextureVariant variant, byte[] tex, Func<bool> current, CancellationToken token)
         {
-            var result = PenumbraService.CommitTextureVariantFiles(s, variant, tex, _backups, current, token);
+            var result = TextureModBackend.CommitTextureVariantFiles(s, variant, tex, _backups, current, token);
             Interlocked.Increment(ref VariantCommits);
             return Task.FromResult(result);
         }

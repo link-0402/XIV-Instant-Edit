@@ -1,6 +1,7 @@
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.NeckSeam;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Services.PreviewMods;
 using static InstantEdit.TestSupport.Assertions;
 
@@ -116,8 +117,8 @@ internal static class PreviewModScenarios
                 "Neck seam fix applied: wrote 2 files into Skin, Face (backups kept for 7 days); put 1 game file in the mod Neck Seam Fix - A." &&
                 new PreviewApplyResult([], 0, null, 0, []).Describe("Neck seam fix applied") == "Nothing needed writing; the preview is removed.",
             "preview mods: applying reports what it wrote the way the neck seam always has");
-        Require(PenumbraService.UniqueModName("", _ => false, "Skin Seam Fix") == "Skin Seam Fix" &&
-                PenumbraService.UniqueModName("Skin Seam Preview - A", name => name == "Skin Seam Preview - A") == "Skin Seam Preview - A (2)",
+        Require(PreviewModWriter.UniqueModName("", _ => false, "Skin Seam Fix") == "Skin Seam Fix" &&
+                PreviewModWriter.UniqueModName("Skin Seam Preview - A", name => name == "Skin Seam Preview - A") == "Skin Seam Preview - A (2)",
             "preview mods: new mod names fall back to the feature's name and are made unique");
     }
 }

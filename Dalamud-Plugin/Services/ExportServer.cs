@@ -487,13 +487,13 @@ public sealed partial class ExportServer : IDisposable
                 var (request, error) = ReadRequest(stream);
                 if (error is not null || request is null)
                 {
-                    var browser = error == BrowserRequestError;
+                    var browser = error == BrowserRequestRefused;
                     var failure = StructuredError(
                         browser ? 403 : 400,
                         "http_request",
                         "request_receipt",
-                        RequestReadCode(error),
-                        browser ? "The plugin only accepts requests from local applications." : error ?? "The plugin could not read the bridge request.",
+                        error?.Code ?? "malformed_http_request",
+                        browser ? "The plugin only accepts requests from local applications." : error?.Message ?? "The plugin could not read the bridge request.",
                         browser ? "Send requests from Blender or Substance Painter, not a web page." : "Update both XIV Instant Edit components and retry.");
                     WriteResponse(stream, failure.Status, failure.Body);
                     return;
@@ -1799,19 +1799,6 @@ public sealed partial class ExportServer : IDisposable
             RemedyForCode(code)).Body;
     }
 
-    private static string RequestReadCode(string? error)
-        => error switch
-        {
-            "request headers are missing or too large" => "request_headers_invalid",
-            "invalid request line" => "request_line_invalid",
-            "invalid content length" => "content_length_invalid",
-            "request body is too large" => "request_body_too_large",
-            "request is too large" => "request_too_large",
-            "request body ended early" => "request_body_incomplete",
-            BrowserRequestError => "request_forbidden",
-            _ => "malformed_http_request",
-        };
-
     private static string OperationForPath(string path)
         => path.TrimEnd('/') switch
         {
@@ -1927,7 +1914,10 @@ public sealed partial class ExportServer : IDisposable
             _ => 400,
         };
 
-    private static (HttpRequest? Request, string? Error) ReadRequest(NetworkStream stream)
+    /// <summary>Why the request reader gave up: the code clients match on, and the message shown to people.</summary>
+    private sealed record RequestReadError(string Code, string Message);
+
+    private static (HttpRequest? Request, RequestReadError? Error) ReadRequest(NetworkStream stream)
     {
         var bytes = new List<byte>(4096);
         var buffer = new byte[4096];
@@ -1944,7 +1934,7 @@ public sealed partial class ExportServer : IDisposable
         }
 
         if (headerEnd < 0)
-            return (null, "request headers are missing or too large");
+            return (null, new("request_headers_invalid", "request headers are missing or too large"));
 
         var header = Encoding.ASCII.GetString(bytes.ToArray(), 0, headerEnd);
         var lines = header.Split("\r\n");
@@ -1952,33 +1942,33 @@ public sealed partial class ExportServer : IDisposable
             ? lines[0].Split(' ', StringSplitOptions.RemoveEmptyEntries)
             : Array.Empty<string>();
         if (requestLine.Length < 2)
-            return (null, "invalid request line");
+            return (null, new("request_line_invalid", "invalid request line"));
 
         var contentLength = 0;
         foreach (var line in lines.Skip(1))
         {
             if (IsBrowserRequestHeader(line))
-                return (null, BrowserRequestError);
+                return (null, BrowserRequestRefused);
             if (!line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
                 continue;
 
             var value = line["Content-Length:".Length..].Trim();
             if (!int.TryParse(value, out contentLength) || contentLength < 0)
-                return (null, "invalid content length");
+                return (null, new("content_length_invalid", "invalid content length"));
             if (contentLength > MaxRequestBytes)
-                return (null, "request body is too large");
+                return (null, new("request_body_too_large", "request body is too large"));
         }
 
         var bodyStart = headerEnd + 4;
         var requiredBytes = bodyStart + contentLength;
         if (requiredBytes > MaxHeaderBytes + MaxRequestBytes)
-            return (null, "request is too large");
+            return (null, new("request_too_large", "request is too large"));
 
         while (bytes.Count < requiredBytes)
         {
             var read = stream.Read(buffer, 0, Math.Min(buffer.Length, requiredBytes - bytes.Count));
             if (read == 0)
-                return (null, "request body ended early");
+                return (null, new("request_body_incomplete", "request body ended early"));
             bytes.AddRange(buffer.AsSpan(0, read).ToArray());
         }
 
@@ -1988,7 +1978,7 @@ public sealed partial class ExportServer : IDisposable
             bytes.GetRange(bodyStart, contentLength).ToArray()), null);
     }
 
-    private const string BrowserRequestError = "browser requests are refused";
+    private static readonly RequestReadError BrowserRequestRefused = new("request_forbidden", "browser requests are refused");
 
     /// <summary>
     /// Whether a header line marks what a web page could send to loopback (CSRF, DNS rebinding):

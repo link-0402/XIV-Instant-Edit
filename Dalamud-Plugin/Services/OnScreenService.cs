@@ -3,6 +3,7 @@ using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using InstantEdit.Services.Painter;
+using InstantEdit.Services.PenumbraMods;
 using Penumbra.Api.Enums;
 using Penumbra.Api.Helpers;
 using NativeCharacter = FFXIVClientStructs.FFXIV.Client.Game.Character.Character;
@@ -376,7 +377,7 @@ public sealed class OnScreenService : IDisposable
             var safeModModel = source.State == ResourceSourceState.LoadedMod && Path.IsPathRooted(actualPath);
             var safeGameModel = source.State == ResourceSourceState.GameData &&
                                 !Path.IsPathRooted(normalizedActualPath) &&
-                                PenumbraService.IsSafeGamePath(normalizedActualPath);
+                                ModPaths.IsSafeGamePath(normalizedActualPath);
             if (!safeModModel && !safeGameModel)
                 continue;
             var hidden = hiddenFiles?.Contains(PainterVisibility.NormalizePath(actualPath)) == true;

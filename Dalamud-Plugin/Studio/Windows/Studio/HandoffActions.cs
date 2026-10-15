@@ -109,7 +109,7 @@ internal sealed class HandoffActions
         var project = _editor.Project;
         var meta = project.Meta;
         var mod = new ModHandoffMod(_editor.Name, project.FolderName, project.FolderPath,
-            global::InstantEdit.Services.PenumbraService.ReadModStableIdentifier(project.FolderPath));
+            global::InstantEdit.Services.PenumbraMods.ModMetadata.ReadModStableIdentifier(project.FolderPath));
 
         var nodes = graph.Nodes.Values.Where(n => n.Origin == OriginKind.ModFile && n.DiskPath.Length > 0).ToList();
         var files = nodes.Select(node => ModHandoffBridge.File(meta, node.GamePath, node.DiskPath, node.RelPath, node.Option)).ToList();

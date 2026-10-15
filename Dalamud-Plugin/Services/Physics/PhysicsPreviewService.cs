@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Dalamud.Plugin.Services;
+using InstantEdit.Services.PenumbraMods;
 using Penumbra.Api.Enums;
 
 namespace InstantEdit.Services.Physics;
@@ -111,7 +112,7 @@ internal sealed class PhysicsPreviewService : IDisposable
         try
         {
             gamePath = PathRules.NormalizeGamePath(gamePath).ToLowerInvariant();
-            if (!PenumbraService.IsSafeGameResourcePath(gamePath, ".phyb") || bytes.Length is 0 or > PhybFile.MaxFileBytes)
+            if (!ModPaths.IsSafeGameResourcePath(gamePath, ".phyb") || bytes.Length is 0 or > PhybFile.MaxFileBytes)
                 throw new InvalidDataException("The preview file is invalid.");
             if (!penumbra.Available)
                 throw new IOException("Penumbra is not available.");

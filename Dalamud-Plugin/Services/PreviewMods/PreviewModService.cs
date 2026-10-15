@@ -1,3 +1,5 @@
+using InstantEdit.Services.PenumbraMods;
+
 namespace InstantEdit.Services.PreviewMods;
 
 /// <summary> What applying a preview wrote, with follow-up warnings. </summary>
@@ -59,7 +61,7 @@ internal sealed class PreviewModService(PenumbraService penumbra)
             if (!string.Equals(PreviewSource.Hash(bytes), file.PreviewSha256, StringComparison.OrdinalIgnoreCase))
                 throw new IOException($"The preview mod's {file.Kind} was edited. Discard the preview and make a new one.");
             if (file.TextureRewrites.Count > 0)
-                bytes = PenumbraService.RewriteMaterialTexturePaths(bytes, file.TextureRewrites);
+                bytes = MashupPlanning.RewriteMaterialTexturePaths(bytes, file.TextureRewrites);
             if (file.NewFile && file.Source.IsModFile)
                 additions.Add((file.Source, PathRules.NormalizeGamePath(file.GamePath), bytes));
             else if (file.Source.IsModFile)
@@ -109,10 +111,10 @@ internal sealed class PreviewModService(PenumbraService penumbra)
     private async Task<string> PreviewFolderAsync(PreviewMod preview)
     {
         var root = await penumbra.PreviewModRootAsync().ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(root) || !PenumbraService.IsSafeModName(preview.ModDirectory))
+        if (string.IsNullOrWhiteSpace(root) || !ModPaths.IsSafeModName(preview.ModDirectory))
             throw new IOException("Penumbra's mod directory is unavailable.");
         var folder = Path.GetFullPath(Path.Combine(root, preview.ModDirectory));
-        if (!Directory.Exists(folder) || PenumbraService.ReadModStableIdentifier(folder) != preview.ModIdentifier)
+        if (!Directory.Exists(folder) || ModMetadata.ReadModStableIdentifier(folder) != preview.ModIdentifier)
             throw new IOException($"The preview mod {preview.ModDirectory} is gone or was replaced. Discard it and make a new preview.");
         return folder;
     }

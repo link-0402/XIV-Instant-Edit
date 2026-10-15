@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Globalization;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services;
 
@@ -27,9 +28,9 @@ public sealed partial class ModelBackupStore
     {
         // An expression's timeline (.tmb) is backed up when it is edited in place, and so is a mod's
         // sound (.scd) a timeline save writes over.
-        if (!PenumbraService.IsSafeModName(modDirectory) ||
-            !(PenumbraService.IsSafeRelativeModelPath(targetRelativePath) ||
-              PenumbraService.IsSafeGameResourcePath(targetRelativePath, ".tex", ".mtrl", ".pap", ".tmb", ".scd")))
+        if (!ModPaths.IsSafeModName(modDirectory) ||
+            !(ModPaths.IsSafeRelativeModelPath(targetRelativePath) ||
+              ModPaths.IsSafeGameResourcePath(targetRelativePath, ".tex", ".mtrl", ".pap", ".tmb", ".scd")))
             throw new ArgumentException("The backup target is invalid.");
         var key = $"{modDirectory.Trim().ToLowerInvariant()}\n{targetRelativePath.Replace('\\', '/').Trim().ToLowerInvariant()}";
         var id = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))).ToLowerInvariant();

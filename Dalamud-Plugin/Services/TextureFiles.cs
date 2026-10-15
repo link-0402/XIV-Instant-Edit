@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text.Json;
+using InstantEdit.Services.PenumbraMods;
 using Lumina.Data.Files;
 using Penumbra.Api.Enums;
 using InstantEdit.Models;
@@ -426,7 +427,7 @@ internal static class TextureFiles
         string expectedHash, ModelBackupStore backups, Func<bool> current, CancellationToken token)
     {
         EnsureLocalPath(target);
-        if (!PenumbraService.IsSafeGameResourcePath(relative, ".tex") || !PathRules.IsPathWithin(target, root) ||
+        if (!ModPaths.IsSafeGameResourcePath(relative, ".tex") || !PathRules.IsPathWithin(target, root) ||
             !string.Equals(Path.GetFullPath(target), Path.GetFullPath(Path.Combine(root, relative)), StringComparison.OrdinalIgnoreCase))
             throw new TextureConflictException("The replacement target is outside the captured texture mod.");
         _ = ReadTex(bytes);

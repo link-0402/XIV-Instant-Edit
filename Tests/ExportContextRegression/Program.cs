@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.TestSupport;
 using InstantEdit.Ui;
 using static InstantEdit.TestSupport.Assertions;
@@ -358,7 +359,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     var movedRoot = Path.Combine(testRoot, "MovedCustomRoot");
     var movedParent = Path.Combine(movedRoot, "Files", "models");
     Directory.CreateDirectory(movedParent);
-    var moved = PenumbraService.ResolveSourceModTargetFromRoots(
+    var moved = SourceMods.ResolveSourceModTargetFromRoots(
         "registered-mod", originalTarget, originalRoot, relative, movedRoot, null);
     Require(moved.Target?.FilePath == Path.Combine(movedParent, "item.mdl") && moved.Code == "accepted",
         "a custom or relocated registered root rebases the durable relative target");
@@ -366,26 +367,26 @@ static async Task CheckExportContextsAsync(string testRoot)
         "a missing model file is accepted when its authorized parent still exists");
 
     var staleRegisteredRoot = Path.Combine(testRoot, "StaleRegisteredRoot");
-    var recovered = PenumbraService.ResolveSourceModTargetFromRoots(
+    var recovered = SourceMods.ResolveSourceModTargetFromRoots(
         "registered-mod", originalTarget, originalRoot, relative, staleRegisteredRoot, null);
     Require(recovered.Target?.FilePath == originalTarget && recovered.Code == "accepted",
         "a disappeared registered root can recover through the captured authorized root");
 
     var missingRoot = Path.Combine(testRoot, "MissingParentRoot");
     Directory.CreateDirectory(missingRoot);
-    var missing = PenumbraService.ResolveSourceModTargetFromRoots(
+    var missing = SourceMods.ResolveSourceModTargetFromRoots(
         "registered-mod", originalTarget, originalRoot, relative, missingRoot, null);
     Require(missing.Target is null && missing.Code == "destination_missing",
         "a missing authorized parent directory is rejected");
 
     var fallbackRoot = Path.Combine(testRoot, "FallbackRoot");
     Directory.CreateDirectory(Path.Combine(fallbackRoot, "Files", "models"));
-    var ambiguous = PenumbraService.ResolveSourceModTargetFromRoots(
+    var ambiguous = SourceMods.ResolveSourceModTargetFromRoots(
         "registered-mod", originalTarget, originalRoot, relative, null, fallbackRoot);
     Require(ambiguous.Target is null && ambiguous.Code == "destination_ambiguous",
         "multiple non-authoritative roots are rejected as ambiguous");
 
-    var escaped = PenumbraService.ResolveSourceModTargetFromRoots(
+    var escaped = SourceMods.ResolveSourceModTargetFromRoots(
         "registered-mod", originalTarget, originalRoot, "../outside.mdl", movedRoot, null);
     Require(escaped.Target is null && escaped.Code == "destination_unsafe",
         "relative path escapes are rejected");
@@ -398,7 +399,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     try
     {
         Directory.CreateSymbolicLink(Path.Combine(reparseFiles, "models"), externalModels);
-        var reparse = PenumbraService.ResolveSourceModTargetFromRoots(
+        var reparse = SourceMods.ResolveSourceModTargetFromRoots(
             "registered-mod", originalTarget, originalRoot, relative, reparseRoot, null);
         Require(reparse.Target is null && reparse.Code == "destination_unsafe",
             "reparse-point destinations are rejected");
@@ -533,7 +534,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     Require(OnScreenService.NormalizeActualPath(
             @"chara\human\c0101\obj\hair\h0001\model\c0101h0001_hir.mdl",
             ResourceSourceState.GameData) == vanillaActualModel &&
-            PenumbraService.IsSafeGamePath(vanillaActualModel),
+            ModPaths.IsSafeGamePath(vanillaActualModel),
         "Penumbra tree game-data paths normalize from FullPath backslashes into editable game paths");
 
     // ---- On Screen source attribution: disk-free mod index and lazy stable identifiers ----
@@ -557,7 +558,7 @@ static async Task CheckExportContextsAsync(string testRoot)
 
     for (var modIndex = 0; modIndex < 40; modIndex++)
         AddAttributionMod($"Mod {modIndex:D2}");
-    var mod01Id = PenumbraService.ReadModStableIdentifierForRegression(Path.Combine(attributionRoot, "Mod 01"));
+    var mod01Id = ModMetadata.ReadModStableIdentifierForRegression(Path.Combine(attributionRoot, "Mod 01"));
     var prefixedModId = AddAttributionMod("Mod 01 Extra");
     attributionMods[@"..\Escaped"] = "Escaped";
     var stableIdReads = new List<string>();
@@ -566,7 +567,7 @@ static async Task CheckExportContextsAsync(string testRoot)
         modRoot =>
         {
             stableIdReads.Add(Path.GetFileName(modRoot));
-            return PenumbraService.ReadModStableIdentifierForRegression(modRoot);
+            return ModMetadata.ReadModStableIdentifierForRegression(modRoot);
         });
 
     var mod01Texture = attributor.AttributionFor(Path.Combine(attributionRoot, "Mod 01", "chara", "texture.tex"));
@@ -622,7 +623,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     var failModListRead = false;
     var flakyAttributor = ResourceSourceAttributor.CreateForRegression(
         () => failModListRead ? null : new ModListSnapshot(attributionRoot, attributionMods),
-        PenumbraService.ReadModStableIdentifierForRegression);
+        ModMetadata.ReadModStableIdentifierForRegression);
     var flakyPath = Path.Combine(attributionRoot, "Mod 02", "file.tex");
     var beforeFailedRead = flakyAttributor.AttributionFor(flakyPath);
     failModListRead = true;
@@ -1023,11 +1024,11 @@ static async Task CheckExportContextsAsync(string testRoot)
             manifestPersistence.Any(item => item.ContextId == modManifestContext.ContextId &&
                 item.TargetRelativePath == normalizedModelRelative),
         "in-place cleanup remaps context destinations, manifests and persisted locators");
-    var verifiedManifestSource = await PenumbraService.ReadVerifiedModManifestResourceAsync(
+    var verifiedManifestSource = await MashupService.ReadVerifiedModManifestResourceAsync(
         manifestLocator, [Path.Combine(testRoot, "WrongManifestRoot"), manifestSourceRoot]);
     Require(verifiedManifestSource?.SequenceEqual(manifestSourceBytes) == true,
         "mashup source verification tries every currently authorized Penumbra root");
-    Require(await PenumbraService.ReadVerifiedModManifestResourceAsync(
+    Require(await MashupService.ReadVerifiedModManifestResourceAsync(
             manifestLocator with { Sha256 = new string('0', 64) }, [manifestSourceRoot]) is null,
         "mashup source verification still rejects changed source bytes");
     static MaterialDependency CapturedMaterial(string modelMaterial, string gamePath, char hashCharacter) => new()
@@ -1074,7 +1075,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     var bucklerContext = manifestRegistry.CreateContext(
         "chara/human/c0801/obj/hair/h0179/model/c0801h0179_hir.mdl", 9,
         "buckler-mod", originalTarget, "Buckler", 42428, originalRoot, relative, bucklerManifest);
-    var canonicalPlan = PenumbraService.BuildMashupPlan(galianContext,
+    var canonicalPlan = MashupPlanning.BuildMashupPlan(galianContext,
     [
         new MashupContributor(galianContext, ["/mt_c0801h0154_hir_b_c0801.mtrl"]),
         new MashupContributor(bucklerContext,
@@ -1119,7 +1120,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     var incomingTopContext = manifestRegistry.CreateContext(
         "chara/equipment/e9999/model/c0201e9999_top.mdl", 11,
         "incoming-top", originalTarget, "Incoming Top", 42428, originalRoot, relative, incomingTopManifest);
-    var customPlan = PenumbraService.BuildMashupPlan(customTopContext,
+    var customPlan = MashupPlanning.BuildMashupPlan(customTopContext,
     [
         new MashupContributor(customTopContext, ["/bloodspiller.mtrl"]),
         new MashupContributor(incomingTopContext, ["/anything.mtrl"]),
@@ -1128,7 +1129,7 @@ static async Task CheckExportContextsAsync(string testRoot)
             customPlan.Assignments[0].GamePath.EndsWith("/bloodspiller.mtrl", StringComparison.Ordinal) &&
             customPlan.Assignments[1].Alias == "/mt_c0201e0118_top_b.mtrl",
         "custom active materials remain unchanged and incoming gear retains a zero-padded canonical id");
-    var singleContextPlan = PenumbraService.BuildMashupPlan(customTopContext,
+    var singleContextPlan = MashupPlanning.BuildMashupPlan(customTopContext,
     [
         new MashupContributor(customTopContext, ["/bloodspiller.mtrl"]),
     ]);
@@ -1148,7 +1149,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     var mappedAliasContext = manifestRegistry.CreateContext(
         "chara/equipment/e0118/model/c0201e0118_top.mdl", 21,
         "mapped-alias", originalTarget, "Mapped Alias", 42428, originalRoot, relative, mappedAliasManifest);
-    var mappedAliasPlan = PenumbraService.BuildMashupPlan(mappedAliasContext,
+    var mappedAliasPlan = MashupPlanning.BuildMashupPlan(mappedAliasContext,
     [
         new MashupContributor(mappedAliasContext, ["/model-alias.mtrl"]),
     ]);
@@ -1161,7 +1162,7 @@ static async Task CheckExportContextsAsync(string testRoot)
         SourceModDirectory = customTopContext.SourceModDirectory,
         SourceModName = customTopContext.SourceModName,
     };
-    var sameSourcePlan = PenumbraService.BuildMashupPlan(customTopContext,
+    var sameSourcePlan = MashupPlanning.BuildMashupPlan(customTopContext,
     [
         new MashupContributor(customTopContext, ["/bloodspiller.mtrl"]),
         new MashupContributor(sameSourceContext, ["/anything.mtrl"]),
@@ -1211,7 +1212,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     {
         ResourceManifest = sourceBoundaryManifest,
     };
-    var sourceBoundaryPlan = PenumbraService.BuildMashupPlan(sourceBoundaryContext,
+    var sourceBoundaryPlan = MashupPlanning.BuildMashupPlan(sourceBoundaryContext,
     [
         new MashupContributor(sourceBoundaryContext, ["/owned.mtrl", "/external.mtrl"]),
         new MashupContributor(incomingTopContext, ["/anything.mtrl"]),
@@ -1220,7 +1221,7 @@ static async Task CheckExportContextsAsync(string testRoot)
             sourceBoundaryPlan.Assignments.Count == 3 &&
             sourceBoundaryPlan.Assignments.Any(item => item.ModelMaterial == "/external.mtrl"),
         "mashup planning assigns pass-through materials attributed to a non-participating source mod");
-    var bundledSourceBoundaryPlan = PenumbraService.BuildMashupPlan(sourceBoundaryContext,
+    var bundledSourceBoundaryPlan = MashupPlanning.BuildMashupPlan(sourceBoundaryContext,
     [
         new MashupContributor(sourceBoundaryContext, ["/owned.mtrl", "/external.mtrl"]),
         new MashupContributor(incomingTopContext, ["/anything.mtrl"]),
@@ -1241,15 +1242,15 @@ static async Task CheckExportContextsAsync(string testRoot)
         SourceModDirectory = null,
         SourceRelativePath = null,
     };
-    Require(PenumbraService.ShouldBundleMashupDependency(
+    Require(MashupService.ShouldBundleMashupDependency(
                 participantDirectories, participantLocator, bundleExternalDependencies: false) &&
-            PenumbraService.ShouldBundleMashupDependency(
+            MashupService.ShouldBundleMashupDependency(
                 participantDirectories, participantLocator, bundleExternalDependencies: true) &&
-            !PenumbraService.ShouldBundleMashupDependency(
+            !MashupService.ShouldBundleMashupDependency(
                 participantDirectories, externalLocator, bundleExternalDependencies: false) &&
-            PenumbraService.ShouldBundleMashupDependency(
+            MashupService.ShouldBundleMashupDependency(
                 participantDirectories, externalLocator, bundleExternalDependencies: true) &&
-            !PenumbraService.ShouldBundleMashupDependency(
+            !MashupService.ShouldBundleMashupDependency(
                 participantDirectories, gameLocator, bundleExternalDependencies: true),
         "mashup dependency classification always bundles participants, optionally bundles external mods, and never bundles game data");
     Require(
@@ -1276,14 +1277,14 @@ static async Task CheckExportContextsAsync(string testRoot)
         "external-body",
         "Files/body.mtrl",
         '9');
-    Require(PenumbraService.CanBundleExternalMashupDependencies(
+    Require(MashupService.CanBundleExternalMashupDependencies(
                 externalGear, bundleExternalDependencies: true) &&
-            !PenumbraService.CanBundleExternalMashupDependencies(
+            !MashupService.CanBundleExternalMashupDependencies(
                 externalGear, bundleExternalDependencies: false) &&
-            !PenumbraService.CanBundleExternalMashupDependencies(
+            !MashupService.CanBundleExternalMashupDependencies(
                 externalBody, bundleExternalDependencies: true),
         "external gear dependencies are opt-in while shared body dependency sets remain pass-through");
-    var incompletePlan = PenumbraService.BuildMashupPlan(sourceBoundaryContext,
+    var incompletePlan = MashupPlanning.BuildMashupPlan(sourceBoundaryContext,
     [
         new MashupContributor(sourceBoundaryContext, ["/missing.mtrl"]),
     ]);
@@ -1324,7 +1325,7 @@ static async Task CheckExportContextsAsync(string testRoot)
         "chara/equipment/e6166/model/c0201e6166_dwn.mdl", 15,
         "microkini-mod", originalTarget, "Microkini Bottoms", 42428, originalRoot, relative,
         microkiniManifest);
-    var urgfActivePlan = PenumbraService.BuildMashupPlan(urgfContext,
+    var urgfActivePlan = MashupPlanning.BuildMashupPlan(urgfContext,
     [
         new MashupContributor(urgfContext, urgfManifest.Materials.Select(item => item.ModelMaterial).ToArray()),
         new MashupContributor(microkiniContext,
@@ -1342,7 +1343,7 @@ static async Task CheckExportContextsAsync(string testRoot)
             urgfActivePlan.Assignments.Skip(3).All(item =>
                 item.GamePath.StartsWith(urgfMaterialDirectory + "/", StringComparison.Ordinal)),
         "URGF preserves body and equipment material paths while Microkini uses the URGF local namespace");
-    var microkiniActivePlan = PenumbraService.BuildMashupPlan(microkiniContext,
+    var microkiniActivePlan = MashupPlanning.BuildMashupPlan(microkiniContext,
     [
         new MashupContributor(microkiniContext,
             microkiniManifest.Materials.Select(item => item.ModelMaterial).ToArray()),
@@ -1360,7 +1361,7 @@ static async Task CheckExportContextsAsync(string testRoot)
             microkiniActivePlan.Assignments.Skip(3).All(item =>
                 item.GamePath.StartsWith(microkiniMaterialDirectory + "/", StringComparison.Ordinal)),
         "Microkini preserves body and equipment material paths while URGF uses the Microkini local namespace");
-    var urgfSingleContextPlan = PenumbraService.BuildMashupPlan(urgfContext,
+    var urgfSingleContextPlan = MashupPlanning.BuildMashupPlan(urgfContext,
     [
         new MashupContributor(urgfContext, urgfManifest.Materials.Select(item => item.ModelMaterial).ToArray()),
     ]);
@@ -1386,7 +1387,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     var versionedContext = manifestRegistry.CreateContext(
         "chara/equipment/e7777/model/c0201e7777_top.mdl", 16,
         "versioned-mod", originalTarget, "Versioned", 42428, originalRoot, relative, versionedManifest);
-    var versionedPlan = PenumbraService.BuildMashupPlan(versionedContext,
+    var versionedPlan = MashupPlanning.BuildMashupPlan(versionedContext,
     [
         new MashupContributor(versionedContext,
             versionedManifest.Materials.Select(item => item.ModelMaterial).ToArray()),
@@ -1410,7 +1411,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     var tiedContext = manifestRegistry.CreateContext(
         "chara/equipment/e7778/model/c0201e7778_top.mdl", 17,
         "tied-mod", originalTarget, "Tied", 42428, originalRoot, relative, tiedManifest);
-    var tiedPlan = PenumbraService.BuildMashupPlan(tiedContext,
+    var tiedPlan = MashupPlanning.BuildMashupPlan(tiedContext,
     [
         new MashupContributor(tiedContext, tiedManifest.Materials.Select(item => item.ModelMaterial).ToArray()),
         new MashupContributor(incomingTopContext, ["/anything.mtrl"]),
@@ -1429,7 +1430,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     var bodyOnlyContext = manifestRegistry.CreateContext(
         "chara/equipment/e8888/model/c0201e8888_top.mdl", 18,
         "body-only-mod", originalTarget, "Body Only", 42428, originalRoot, relative, bodyOnlyManifest);
-    var bodyOnlyPlan = PenumbraService.BuildMashupPlan(bodyOnlyContext,
+    var bodyOnlyPlan = MashupPlanning.BuildMashupPlan(bodyOnlyContext,
     [
         new MashupContributor(bodyOnlyContext, ["/mt_c0201b0001_bibo.mtrl"]),
         new MashupContributor(incomingTopContext, ["/anything.mtrl"]),
@@ -1450,7 +1451,7 @@ static async Task CheckExportContextsAsync(string testRoot)
         "chara/equipment/e8889/model/c0201e8889_top.mdl", 19,
         "duplicate-alias-mod", originalTarget, "Duplicate Alias", 42428, originalRoot, relative,
         duplicateAliasManifest);
-    var sameBasenamePlan = PenumbraService.BuildMashupPlan(duplicateAliasContext,
+    var sameBasenamePlan = MashupPlanning.BuildMashupPlan(duplicateAliasContext,
     [
         new MashupContributor(duplicateAliasContext, ["/first.mtrl", "/second.mtrl"]),
     ]);
@@ -1458,7 +1459,7 @@ static async Task CheckExportContextsAsync(string testRoot)
             sameBasenamePlan.Assignments.Select(item => item.Alias).SequenceEqual(
                 ["/first.mtrl", "/second.mtrl"]),
         "same-basename active materials from different directories retain distinct model aliases");
-    var duplicateAliasPlan = PenumbraService.BuildMashupPlan(duplicateAliasContext,
+    var duplicateAliasPlan = MashupPlanning.BuildMashupPlan(duplicateAliasContext,
     [
         new MashupContributor(duplicateAliasContext, ["/first.mtrl"]),
         new MashupContributor(duplicateAliasContext, ["/first.mtrl"]),
@@ -1478,18 +1479,18 @@ static async Task CheckExportContextsAsync(string testRoot)
         "chara/equipment/e8890/model/c0201e8890_top.mdl", 20,
         "duplicate-path-mod", originalTarget, "Duplicate Path", 42428, originalRoot, relative,
         duplicatePathManifest);
-    var duplicatePathPlan = PenumbraService.BuildMashupPlan(duplicatePathContext,
+    var duplicatePathPlan = MashupPlanning.BuildMashupPlan(duplicatePathContext,
     [
         new MashupContributor(duplicatePathContext, ["/first.mtrl", "/second.mtrl"]),
     ]);
     Require(!duplicatePathPlan.Success && duplicatePathPlan.Code == "mashup_material_path_conflict",
         "duplicate active virtual material paths remain rejected");
 
-    var materialAddressA = PenumbraService.ContentAddressedMashupMaterialPath(
+    var materialAddressA = MashupService.ContentAddressedMashupMaterialPath(
         "0123456789abcdef", [1, 2, 3]);
-    var materialAddressARepeat = PenumbraService.ContentAddressedMashupMaterialPath(
+    var materialAddressARepeat = MashupService.ContentAddressedMashupMaterialPath(
         "0123456789abcdef", [1, 2, 3]);
-    var materialAddressB = PenumbraService.ContentAddressedMashupMaterialPath(
+    var materialAddressB = MashupService.ContentAddressedMashupMaterialPath(
         "0123456789abcdef", [3, 2, 1]);
     Require(materialAddressA == materialAddressARepeat && materialAddressA != materialAddressB &&
             materialAddressA.EndsWith(".mtrl", StringComparison.Ordinal),
@@ -1553,14 +1554,14 @@ static async Task CheckExportContextsAsync(string testRoot)
         coverageGamePath, coverageOutputPath, "Files/coverage.mtrl", "", []);
     var coverageTextureResource = new PenumbraModResource(
         coverageTextureGamePath, coverageTextureOutputPath, "Files/coverage.tex", "", []);
-    var matchingCoverage = await PenumbraService.EvaluateMaterialCoverageAsync(
+    var matchingCoverage = await ModResourceScanner.EvaluateMaterialCoverageAsync(
         customTopContext,
         [new MashupContributor(coverageContext, ["/mt_coverage.mtrl"])],
         [coverageResource, coverageTextureResource]);
     Require(matchingCoverage.Available && matchingCoverage.Covered && matchingCoverage.Missing.Count == 0,
         "material coverage accepts an effective game path with matching captured bytes");
     File.Delete(coverageOutputPath);
-    var missingCoverage = await PenumbraService.EvaluateMaterialCoverageAsync(
+    var missingCoverage = await ModResourceScanner.EvaluateMaterialCoverageAsync(
         customTopContext,
         [new MashupContributor(coverageContext, ["/mt_coverage.mtrl"])],
         []);
@@ -1568,7 +1569,7 @@ static async Task CheckExportContextsAsync(string testRoot)
             missingCoverage.Missing.Select(item => item.ResourceType).ToHashSet().SetEquals(["material", "texture"]),
         "material coverage reports required material and texture files absent from the output mod");
     File.WriteAllBytes(coverageOutputPath, Encoding.UTF8.GetBytes("different coverage material"));
-    var differingHashCoverage = await PenumbraService.EvaluateMaterialCoverageAsync(
+    var differingHashCoverage = await ModResourceScanner.EvaluateMaterialCoverageAsync(
         customTopContext,
         [new MashupContributor(coverageContext, ["/mt_coverage.mtrl"])],
         [coverageResource, coverageTextureResource]);
@@ -1577,7 +1578,7 @@ static async Task CheckExportContextsAsync(string testRoot)
         "material coverage rejects an output material with the same path but different bytes");
     File.WriteAllBytes(coverageOutputPath, coverageBytes);
     File.Delete(coverageTextureOutputPath);
-    var missingTextureCoverage = await PenumbraService.EvaluateMaterialCoverageAsync(
+    var missingTextureCoverage = await ModResourceScanner.EvaluateMaterialCoverageAsync(
         customTopContext,
         [new MashupContributor(coverageContext, ["/mt_coverage.mtrl"])],
         [coverageResource]);
@@ -1593,7 +1594,7 @@ static async Task CheckExportContextsAsync(string testRoot)
                 "Files/coverage.mtrl", new string('0', 64))],
         },
     };
-    var sameModCoverage = await PenumbraService.EvaluateMaterialCoverageAsync(
+    var sameModCoverage = await ModResourceScanner.EvaluateMaterialCoverageAsync(
         customTopContext,
         [new MashupContributor(sameModCoverageContext, ["/mt_coverage.mtrl"])],
         []);
@@ -1620,15 +1621,15 @@ static async Task CheckExportContextsAsync(string testRoot)
             ],
         },
     };
-    var gameDataCoverage = await PenumbraService.EvaluateMaterialCoverageAsync(
+    var gameDataCoverage = await ModResourceScanner.EvaluateMaterialCoverageAsync(
         customTopContext,
         [new MashupContributor(gameDataCoverageContext, ["/mt_game.mtrl"])],
         []);
     Require(gameDataCoverage.Available && gameDataCoverage.Covered,
         "material coverage ignores game-data material dependencies");
-    Require(PenumbraService.IsValidMashupContributorCount("new_mod", 1) &&
-            !PenumbraService.IsValidMashupContributorCount("active_mod", 1) &&
-            PenumbraService.IsValidMashupContributorCount("active_mod", 2),
+    Require(MashupPlanning.IsValidMashupContributorCount("new_mod", 1) &&
+            !MashupPlanning.IsValidMashupContributorCount("active_mod", 1) &&
+            MashupPlanning.IsValidMashupContributorCount("active_mod", 2),
         "active-mod mashup requests still require at least two contributors");
     var customHairManifest = new ResourceDependencyManifest
     {
@@ -1643,7 +1644,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     var customHairContext = manifestRegistry.CreateContext(
         "chara/human/c0801/obj/hair/h0154/model/c0801h0154_hir.mdl", 13,
         "custom-hair", originalTarget, "Custom Hair", 42428, originalRoot, relative, customHairManifest);
-    var customHairPlan = PenumbraService.BuildMashupPlan(customHairContext,
+    var customHairPlan = MashupPlanning.BuildMashupPlan(customHairContext,
     [
         new MashupContributor(customHairContext, ["/customhair.mtrl"]),
         new MashupContributor(incomingTopContext, ["/anything.mtrl"]),
@@ -1658,14 +1659,14 @@ static async Task CheckExportContextsAsync(string testRoot)
         "chara/human/c0801/obj/hair/h0154/texture/c0801h0154_hir_b_mask_3098977960_beb563fd.tex";
     const string targetMashupTexture =
         "chara/human/c0801/obj/hair/h0004/texture/c0801h0004_hir_b_mask_3098977960_beb563fd.tex";
-    var retargetedHairTexture = PenumbraService.RetargetMashupTexturePath(
+    var retargetedHairTexture = MashupPlanning.RetargetMashupTexturePath(
         activeMashupHair, sourceMashupHair, sourceMashupTexture);
     Require(retargetedHairTexture == targetMashupTexture,
         "mashup textures retain their suffix while retargeting h0154 to h0004");
 
     const string sourceGearModel = "chara/equipment/e9999/model/c0201e9999_top.mdl";
     const string targetGearModel = "chara/equipment/e0118/model/c0101e0118_top.mdl";
-    Require(PenumbraService.RetargetMashupTexturePath(
+    Require(MashupPlanning.RetargetMashupTexturePath(
             targetGearModel,
             sourceGearModel,
             "custom/source/c0201e9999_top_b_norm_hash.tex") ==
@@ -1674,7 +1675,7 @@ static async Task CheckExportContextsAsync(string testRoot)
 
     const string sourceWeaponModel = "chara/weapon/w1234/obj/body/b0001/model/c0101w1234b0001.mdl";
     const string targetWeaponModel = "chara/weapon/w5678/obj/body/b0002/model/c0101w5678b0002.mdl";
-    Require(PenumbraService.RetargetMashupTexturePath(
+    Require(MashupPlanning.RetargetMashupTexturePath(
             targetWeaponModel,
             sourceWeaponModel,
             "chara/weapon/w1234/obj/body/b0001/texture/c0101w1234b0001_d_hash.tex") ==
@@ -1682,7 +1683,7 @@ static async Task CheckExportContextsAsync(string testRoot)
         "weapon mashup textures retarget every model identity component");
 
     const string textureHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    var targetDx11Texture = PenumbraService.Dx11TexturePath(targetMashupTexture, 0x8000);
+    var targetDx11Texture = ModPaths.Dx11TexturePath(targetMashupTexture, 0x8000);
     var existingTargetHashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         [targetDx11Texture] = textureHash,
@@ -1691,7 +1692,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     {
         [targetDx11Texture] = "Files/existing.tex",
     };
-    var reusedTexturePath = PenumbraService.PlanMashupTexturePath(
+    var reusedTexturePath = MashupPlanning.PlanMashupTexturePath(
         activeMashupHair,
         sourceMashupHair,
         sourceMashupTexture,
@@ -1702,14 +1703,14 @@ static async Task CheckExportContextsAsync(string testRoot)
         existingTargetHashes,
         existingTargetMappings);
     Require(reusedTexturePath == targetMashupTexture &&
-            !PenumbraService.MashupTexturePathConflicts(
+            !MashupPlanning.MashupTexturePathConflicts(
                 reusedTexturePath, [((ushort)0x8000, textureHash)], existingTargetHashes) &&
             targetDx11Texture.Contains("h0004", StringComparison.Ordinal) &&
             !targetDx11Texture.Contains("h0154", StringComparison.Ordinal),
         "identical DX11 textures reuse the retargeted effective path");
 
     existingTargetHashes[targetDx11Texture] = new string('b', 64);
-    var collisionTexturePath = PenumbraService.PlanMashupTexturePath(
+    var collisionTexturePath = MashupPlanning.PlanMashupTexturePath(
         activeMashupHair,
         sourceMashupHair,
         sourceMashupTexture,
@@ -1723,7 +1724,7 @@ static async Task CheckExportContextsAsync(string testRoot)
             "chara/human/c0801/obj/hair/h0004/texture/c0801h0004_hir_c_n.tex",
         "different texture bytes colliding after retargeting receive a target-family alias");
 
-    var slotlessCollisionPath = PenumbraService.PlanMashupTexturePath(
+    var slotlessCollisionPath = MashupPlanning.PlanMashupTexturePath(
         activeMashupHair,
         sourceMashupHair,
         sourceMashupTexture,
@@ -1737,7 +1738,7 @@ static async Task CheckExportContextsAsync(string testRoot)
             "chara/human/c0801/obj/hair/h0004/texture/c0801h0004_hir_a_s.tex",
         "custom preserved materials use slot a for generated texture collision names");
 
-    var retargetedMaterial = PenumbraService.RewriteMaterialTexturePaths(
+    var retargetedMaterial = MashupPlanning.RewriteMaterialTexturePaths(
         MinimalMaterial(sourceMashupTexture, 0x8000, 2176),
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -1749,7 +1750,7 @@ static async Task CheckExportContextsAsync(string testRoot)
             BitConverter.ToUInt16(retargetedMaterial, 18) == 0x8000,
         "MTRL rewriting retains DX11 flags and removes the contributor model identity");
 
-    Require(PenumbraService.AllocateMashupTexturePath(
+    Require(MashupPlanning.AllocateMashupTexturePath(
             galianContext.GamePath, 'c', "normal", 0,
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)) ==
             "chara/human/c0801/obj/hair/h0154/texture/c0801h0154_hir_c_n.tex",
@@ -1764,7 +1765,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     var overflowContext = manifestRegistry.CreateContext(
         "chara/equipment/e9998/model/c0201e9998_top.mdl", 12,
         "overflow-top", originalTarget, "Overflow Top", 42428, originalRoot, relative, overflowManifest);
-    var overflowPlan = PenumbraService.BuildMashupPlan(customTopContext,
+    var overflowPlan = MashupPlanning.BuildMashupPlan(customTopContext,
     [
         new MashupContributor(customTopContext, ["/bloodspiller.mtrl"]),
         new MashupContributor(overflowContext, overflowMaterials.Select(item => item.ModelMaterial).ToArray()),
@@ -1773,7 +1774,7 @@ static async Task CheckExportContextsAsync(string testRoot)
         "mashup planning rejects more incoming materials than canonical b through z can hold");
 
     const string rewrittenTexture = "chara/equipment/e0001/texture/c0101e0001_top_b_n.tex";
-    var rewrittenMaterial = PenumbraService.RewriteMaterialTexturePaths(
+    var rewrittenMaterial = MashupPlanning.RewriteMaterialTexturePaths(
         MinimalMaterial("a.tex", 0x8000, 2176),
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -1782,7 +1783,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     Require(Encoding.UTF8.GetString(rewrittenMaterial).Contains(rewrittenTexture, StringComparison.Ordinal) &&
             BitConverter.ToUInt16(rewrittenMaterial, 18) == 0x8000,
         "Dawntrail MTRL rewriting grows short string tables and preserves DX11 texture flags");
-    var rewrittenLegacyMaterial = PenumbraService.RewriteMaterialTexturePaths(
+    var rewrittenLegacyMaterial = MashupPlanning.RewriteMaterialTexturePaths(
         MinimalMaterial("legacy.tex", 0, 512),
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -1813,7 +1814,7 @@ static async Task CheckExportContextsAsync(string testRoot)
         Path.Combine(markerlessMashupRoot, "Files", "xiv-instant-edit", "mashups", "test", "model.mdl"),
         [1, 2, 3]);
     File.WriteAllText(Path.Combine(markerlessMashupRoot, "meta.json"),
-        PenumbraService.CreateV4ModMetadata(
+        ModMetadata.CreateV4ModMetadata(
             "Markerless Mashup", "XIV Instant Edit", "", "",
             new JsonObject
             {
@@ -1825,7 +1826,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     var markerlessValidation = true;
     try
     {
-        PenumbraService.ValidateStagedMashupMod(
+        MashupPlanning.ValidateStagedMashupMod(
             markerlessMashupRoot, "Markerless Mashup", markerlessMapping,
             expectedFileSwaps: mashupFileSwaps);
     }
@@ -1840,7 +1841,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     // ---- Vanilla game-model staging ----
     var vanillaStageRoot = Path.Combine(testRoot, "VanillaStage");
     Directory.CreateDirectory(vanillaStageRoot);
-    var stagedVanillaRelative = PenumbraService.StageGameModelMod(
+    var stagedVanillaRelative = MashupPlanning.StageGameModelMod(
         vanillaStageRoot, "Vanilla Model Edit", vanillaConsumer, [10, 11, 12]);
     var stagedVanillaMeta = JsonNode.Parse(
         File.ReadAllText(Path.Combine(vanillaStageRoot, "meta.json")))!.AsObject();
@@ -1848,7 +1849,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     Require(stagedVanillaRelative == "Files/" + vanillaConsumer &&
             stagedVanillaMeta["FileVersion"]!.GetValue<int>() == 4 &&
             Guid.TryParse(stagedVanillaMeta["Identifier"]!.GetValue<string>(), out _) &&
-            PenumbraService.ReadModStableIdentifierForRegression(vanillaStageRoot) ==
+            ModMetadata.ReadModStableIdentifierForRegression(vanillaStageRoot) ==
                 Guid.Parse(stagedVanillaMeta["Identifier"]!.GetValue<string>()) &&
             DateTimeOffset.TryParse(stagedVanillaMeta["LastWrite"]!.GetValue<string>(), out _) &&
             stagedVanillaMeta["Author"]!.GetValue<string>() == "XIV Instant Edit" &&
@@ -1868,7 +1869,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     var unsafeVanillaStageRejected = false;
     try
     {
-        PenumbraService.StageGameModelMod(vanillaStageRoot, "Unsafe Edit", "../outside.mdl", [1]);
+        MashupPlanning.StageGameModelMod(vanillaStageRoot, "Unsafe Edit", "../outside.mdl", [1]);
     }
     catch (InvalidDataException)
     {
@@ -1967,7 +1968,7 @@ static async Task CheckExportContextsAsync(string testRoot)
             },
         },
     }.ToJsonString());
-    var v4Manipulations = PenumbraService.CaptureEffectiveManipulations(
+    var v4Manipulations = ModOptionGroups.CaptureEffectiveManipulations(
         manipulationV4Root,
         new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
         {
@@ -1981,7 +1982,7 @@ static async Task CheckExportContextsAsync(string testRoot)
             v4Manipulations[0]!["Manipulation"]!["Entry"]!.GetValue<int>() == 11 &&
             v4Manipulations[2]!["Entry"]!.GetValue<string>() == "combined",
         "v4 manipulation capture applies Single, Multi, and Combining selections before DefaultData");
-    var copiedDefault = PenumbraService.CreateMashupDefaultData(
+    var copiedDefault = MashupPlanning.CreateMashupDefaultData(
         mashupMappings, v4Manipulations, mashupFileSwaps);
     Require(JsonNode.DeepEquals(copiedDefault["Manipulations"], v4Manipulations) &&
             copiedDefault["FileSwaps"]!.AsObject().Count == mashupFileSwaps.Count,
@@ -2021,7 +2022,7 @@ static async Task CheckExportContextsAsync(string testRoot)
             }),
         }),
     }.ToJsonString());
-    Require(PenumbraService.WriteMashupGroup(
+    Require(MashupPlanning.WriteMashupGroup(
             v4Root, "Mashup", mashupMappings, manipulations: v4Manipulations,
             fileSwaps: mashupFileSwaps) is null,
         "v4 mashup group creation succeeds");
@@ -2098,7 +2099,7 @@ static async Task CheckExportContextsAsync(string testRoot)
             },
         },
     }.ToJsonString());
-    var cleanupV4 = PenumbraService.NormalizeAndDeduplicateModForRegression(cleanupV4Root, "cleanup-v4");
+    var cleanupV4 = ModCleanup.NormalizeAndDeduplicateModForRegression(cleanupV4Root, "cleanup-v4");
     var cleanupV4Meta = JsonNode.Parse(File.ReadAllText(Path.Combine(cleanupV4Root, "meta.json")))!.AsObject();
     Require(cleanupV4.Warnings.Count == 0 && cleanupV4.PathRemap is not null &&
             cleanupV4Meta["Identifier"]!.GetValue<string>() == cleanupModId.ToString() &&
@@ -2140,19 +2141,19 @@ static async Task CheckExportContextsAsync(string testRoot)
         ["Groups"] = new JsonArray(),
     }.ToJsonString());
     var cleanupFailureBefore = File.ReadAllText(cleanupFailurePath);
-    var cleanupFailure = PenumbraService.NormalizeAndDeduplicateModForRegression(cleanupFailureRoot, "cleanup-failure");
+    var cleanupFailure = ModCleanup.NormalizeAndDeduplicateModForRegression(cleanupFailureRoot, "cleanup-failure");
     Require(cleanupFailure.Warnings.Count == 1 && cleanupFailure.PathRemap is null &&
             File.ReadAllText(cleanupFailurePath) == cleanupFailureBefore,
         "cleanup failures warn and retain the committed mashup unchanged");
 
-    var sourceDescription = PenumbraService.FormatMashupDescription(
+    var sourceDescription = MashupPlanning.FormatMashupDescription(
     [
         new MashupContributor(galianContext with { SourceModName = "Galian Hair" }, []),
         new MashupContributor(bucklerContext with { SourceModName = "[178] Buckler (Swapped)" }, []),
     ]);
     Require(sourceDescription == "Mashup created by XIV Instant Edit from \"Galian Hair\" and \"[178] Buckler (Swapped)\".",
         "mashup descriptions list source mods in contributor order");
-    var externalDescription = PenumbraService.FormatMashupDescription(
+    var externalDescription = MashupPlanning.FormatMashupDescription(
         [new MashupContributor(galianContext with { SourceModName = "Galian Hair" }, [])],
         ["External Skin", "External Hair"]);
     Require(externalDescription.EndsWith(
@@ -2162,8 +2163,8 @@ static async Task CheckExportContextsAsync(string testRoot)
     var describedGroupRoot = Path.Combine(testRoot, "DescribedGroup");
     Directory.CreateDirectory(describedGroupRoot);
     File.WriteAllText(Path.Combine(describedGroupRoot, "meta.json"),
-        PenumbraService.CreateV4ModMetadata("Described", "Author", "Parent", "1.0", new JsonObject()).ToJsonString());
-    Require(PenumbraService.WriteMashupGroup(describedGroupRoot, "Mashup", mashupMappings, sourceDescription) is null &&
+        ModMetadata.CreateV4ModMetadata("Described", "Author", "Parent", "1.0", new JsonObject()).ToJsonString());
+    Require(MashupPlanning.WriteMashupGroup(describedGroupRoot, "Mashup", mashupMappings, sourceDescription) is null &&
             JsonNode.Parse(File.ReadAllText(Path.Combine(describedGroupRoot, "meta.json")))!["Groups"]![0]!["Description"]!.GetValue<string>() ==
                 sourceDescription &&
             JsonNode.Parse(File.ReadAllText(Path.Combine(describedGroupRoot, "meta.json")))!["Name"]!.GetValue<string>() ==
@@ -2171,10 +2172,10 @@ static async Task CheckExportContextsAsync(string testRoot)
             Directory.GetFiles(describedGroupRoot, "group_*.json").Length == 0,
         "in-place mashups put the source description on their new group without rewriting parent metadata");
 
-    Require(PenumbraService.IsSafeNewModName("My Mashup") &&
-            !PenumbraService.IsSafeNewModName("My Mashup.") &&
-            !PenumbraService.IsSafeNewModName("CON") &&
-            !PenumbraService.IsSafeNewModName("../My Mashup"),
+    Require(ModPaths.IsSafeNewModName("My Mashup") &&
+            !ModPaths.IsSafeNewModName("My Mashup.") &&
+            !ModPaths.IsSafeNewModName("CON") &&
+            !ModPaths.IsSafeNewModName("../My Mashup"),
         "new mashup mod names reject unsafe Windows destinations");
 
     Require(manifestRegistry.TryBeginExport(
