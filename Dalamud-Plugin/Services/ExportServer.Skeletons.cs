@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using InstantEdit.Models;
 using InstantEdit.Services.Skeletons;
 
 namespace InstantEdit.Services;
@@ -32,12 +33,12 @@ public sealed partial class ExportServer
         if (parseError is not null)
             return parseError.Value;
         if (parsed!.Schema != "instant-edit.skeleton-request" || parsed.Version != 1)
-            return Error(400, "unsupported_schema", "unsupported skeleton request schema or version");
+            return Error(400, ResultCode.UnsupportedSchema, "unsupported skeleton request schema or version");
         if (ModelSkeletonPaths.Parse(parsed.ModelPath) is null)
-            return Error(400, "invalid_model_path", "the file isn't named like a game model");
+            return Error(400, ResultCode.InvalidModelPath, "the file isn't named like a game model");
         var resolver = Skeletons;
         if (resolver is null)
-            return Error(503, "skeletons_unavailable", "the plugin cannot read game skeletons");
+            return Error(503, ResultCode.SkeletonsUnavailable, "the plugin cannot read game skeletons");
 
         // Blender stops waiting after 8 seconds.
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(7));
@@ -48,10 +49,10 @@ public sealed partial class ExportServer
         }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested)
         {
-            return Error(503, "skeleton_timeout", "the game did not read the skeleton in time");
+            return Error(503, ResultCode.SkeletonTimeout, "the game did not read the skeleton in time");
         }
         if (result.Skeleton is null)
-            return Error(404, "skeleton_not_found", result.Problem ?? "no game skeleton was found for this model");
+            return Error(404, ResultCode.SkeletonNotFound, result.Problem ?? "no game skeleton was found for this model");
         return (200, Json(new { ok = true, skeleton = result.Skeleton.ToPayload() }));
     }
 }

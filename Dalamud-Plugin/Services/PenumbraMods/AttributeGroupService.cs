@@ -922,12 +922,12 @@ internal sealed class AttributeGroupService
         }
     }
 
-    internal static string AttributeGroupErrorCode(string error)
+    internal static ResultCode AttributeGroupErrorCode(string error)
         => error.StartsWith("attribute_group_conflict:", StringComparison.Ordinal)
-            ? "attribute_group_conflict"
+            ? ResultCode.AttributeGroupConflict
             : error.StartsWith("attribute_group_write_failed:", StringComparison.Ordinal)
-                ? "attribute_group_write_failed"
-                : "invalid_attribute_groups";
+                ? ResultCode.AttributeGroupWriteFailed
+                : ResultCode.InvalidAttributeGroups;
 
     internal static string AttributeGroupErrorMessage(string error)
     {

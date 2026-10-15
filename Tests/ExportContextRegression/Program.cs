@@ -254,7 +254,7 @@ static async Task CheckExportContextsAsync(string testRoot)
         saved.ContextId, saved.ImportId, saved.Capability, 42428,
         out var reattached, out var reattachCode),
         "legacy persisted contexts remain authorized during migration");
-    Require(reattachCode == "context_reattached" && reattached is not null,
+    Require(reattachCode == ResultCode.ContextReattached && reattached is not null,
         "reattach returns the authoritative context");
     Require(reattached?.TargetRelativePath == relative,
         "persisted contexts retain their durable target-relative path");
@@ -275,33 +275,33 @@ static async Task CheckExportContextsAsync(string testRoot)
     Require(first is { IsOwner: true }, "the first request owns the write");
     Require(registry.TryGetExportStatus(
         "current-plugin", saved.ContextId, "same-export", capability,
-        out var pending, out var pendingCode) && pending is { IsCompleted: false } && pendingCode == "export_pending",
+        out var pending, out var pendingCode) && pending is { IsCompleted: false } && pendingCode == ResultCode.ExportPending,
         "status lookup reports an in-flight export without repeating it");
 
-    var receipt = new ExportReceipt(true, "export_applied_with_warnings", "written", ["Player-owned redraw warning"], originalTarget);
+    var receipt = new ExportReceipt(true, ResultCode.ExportAppliedWithWarnings, "written", ["Player-owned redraw warning"], originalTarget);
     registry.CompleteExport(saved.ContextId, "same-export", receipt);
     Require(registry.TryGetExportStatus(
         "current-plugin", saved.ContextId, "same-export", capability,
-        out var completed, out var completedCode) && completedCode == "export_complete" &&
+        out var completed, out var completedCode) && completedCode == ResultCode.ExportComplete &&
         ReferenceEquals(completed!.GetAwaiter().GetResult(), receipt),
         "status lookup recovers the completed receipt");
     Require(registry.TryBeginExport(
         "current-plugin", saved.ContextId, "same-export", capability,
         exportFile, 3, hash, out var duplicate, out var duplicateCode) &&
-        duplicate is { IsOwner: false } && duplicateCode == "duplicate_export",
+        duplicate is { IsOwner: false } && duplicateCode == ResultCode.DuplicateExport,
         "a duplicate export id reuses its receipt and cannot perform a second write");
     Require(!registry.TryBeginExport(
         "current-plugin", saved.ContextId, "same-export", capability,
-        exportFile, 3, "0" + hash[1..], out _, out var collisionCode) && collisionCode == "duplicate_export_id",
+        exportFile, 3, "0" + hash[1..], out _, out var collisionCode) && collisionCode == ResultCode.DuplicateExportId,
         "an export id cannot be reused for different bytes");
 
     Require(registry.TryRevoke(saved.ContextId, saved.ImportId, capability, out var revokeCode) &&
-        revokeCode == "context_revoked",
+        revokeCode == ResultCode.ContextRevoked,
         "authenticated context revocation succeeds");
     Require(registry.TryRevoke(saved.ContextId, saved.ImportId, capability, out _),
         "context revocation is idempotent for an already absent context");
     Require(!registry.TryAuthorizeOperation(
-        "current-plugin", saved.ContextId, capability, out _, out var revokedCode) && revokedCode == "stale_context",
+        "current-plugin", saved.ContextId, capability, out _, out var revokedCode) && revokedCode == ResultCode.StaleContext,
         "a revoked context cannot authorize another write");
     Require(persisted.Count == 0, "revocation is persisted");
 
@@ -351,7 +351,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     {
         Require(!malformedRegistry.TryReattach(
                 malformedGame.ContextId, malformedGame.ImportId, malformedGame.Capability, 42428,
-                out _, out var malformedCode) && malformedCode == "stale_context",
+                out _, out var malformedCode) && malformedCode == ResultCode.StaleContext,
             "malformed v2 game contexts with rooted resolved paths are rejected on restore");
     }
 
@@ -361,7 +361,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     Directory.CreateDirectory(movedParent);
     var moved = SourceMods.ResolveSourceModTargetFromRoots(
         "registered-mod", originalTarget, originalRoot, relative, movedRoot, null);
-    Require(moved.Target?.FilePath == Path.Combine(movedParent, "item.mdl") && moved.Code == "accepted",
+    Require(moved.Target?.FilePath == Path.Combine(movedParent, "item.mdl") && moved.Code == ResultCode.Accepted,
         "a custom or relocated registered root rebases the durable relative target");
     Require(!File.Exists(moved.Target!.FilePath),
         "a missing model file is accepted when its authorized parent still exists");
@@ -369,26 +369,26 @@ static async Task CheckExportContextsAsync(string testRoot)
     var staleRegisteredRoot = Path.Combine(testRoot, "StaleRegisteredRoot");
     var recovered = SourceMods.ResolveSourceModTargetFromRoots(
         "registered-mod", originalTarget, originalRoot, relative, staleRegisteredRoot, null);
-    Require(recovered.Target?.FilePath == originalTarget && recovered.Code == "accepted",
+    Require(recovered.Target?.FilePath == originalTarget && recovered.Code == ResultCode.Accepted,
         "a disappeared registered root can recover through the captured authorized root");
 
     var missingRoot = Path.Combine(testRoot, "MissingParentRoot");
     Directory.CreateDirectory(missingRoot);
     var missing = SourceMods.ResolveSourceModTargetFromRoots(
         "registered-mod", originalTarget, originalRoot, relative, missingRoot, null);
-    Require(missing.Target is null && missing.Code == "destination_missing",
+    Require(missing.Target is null && missing.Code == ResultCode.DestinationMissing,
         "a missing authorized parent directory is rejected");
 
     var fallbackRoot = Path.Combine(testRoot, "FallbackRoot");
     Directory.CreateDirectory(Path.Combine(fallbackRoot, "Files", "models"));
     var ambiguous = SourceMods.ResolveSourceModTargetFromRoots(
         "registered-mod", originalTarget, originalRoot, relative, null, fallbackRoot);
-    Require(ambiguous.Target is null && ambiguous.Code == "destination_ambiguous",
+    Require(ambiguous.Target is null && ambiguous.Code == ResultCode.DestinationAmbiguous,
         "multiple non-authoritative roots are rejected as ambiguous");
 
     var escaped = SourceMods.ResolveSourceModTargetFromRoots(
         "registered-mod", originalTarget, originalRoot, "../outside.mdl", movedRoot, null);
-    Require(escaped.Target is null && escaped.Code == "destination_unsafe",
+    Require(escaped.Target is null && escaped.Code == ResultCode.DestinationUnsafe,
         "relative path escapes are rejected");
 
     var reparseRoot = Path.Combine(testRoot, "ReparseRoot");
@@ -401,7 +401,7 @@ static async Task CheckExportContextsAsync(string testRoot)
         Directory.CreateSymbolicLink(Path.Combine(reparseFiles, "models"), externalModels);
         var reparse = SourceMods.ResolveSourceModTargetFromRoots(
             "registered-mod", originalTarget, originalRoot, relative, reparseRoot, null);
-        Require(reparse.Target is null && reparse.Code == "destination_unsafe",
+        Require(reparse.Target is null && reparse.Code == ResultCode.DestinationUnsafe,
             "reparse-point destinations are rejected");
     }
     catch (UnauthorizedAccessException)
@@ -1288,7 +1288,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     [
         new MashupContributor(sourceBoundaryContext, ["/missing.mtrl"]),
     ]);
-    Require(!incompletePlan.Success && incompletePlan.Code == "mashup_reimport_required",
+    Require(!incompletePlan.Success && incompletePlan.Code == ResultCode.MashupReimportRequired,
         "mashup planning rejects incomplete manifests instead of silently omitting requested materials");
 
     const string bodyMaterialDirectory = "chara/human/c0201/obj/body/b0001/material/v0001";
@@ -1416,7 +1416,7 @@ static async Task CheckExportContextsAsync(string testRoot)
         new MashupContributor(tiedContext, tiedManifest.Materials.Select(item => item.ModelMaterial).ToArray()),
         new MashupContributor(incomingTopContext, ["/anything.mtrl"]),
     ]);
-    Require(!tiedPlan.Success && tiedPlan.Code == "mashup_target_material_directory_ambiguous",
+    Require(!tiedPlan.Success && tiedPlan.Code == ResultCode.MashupTargetMaterialDirectoryAmbiguous,
         "equally represented model-local material versions remain an explicit ambiguity");
 
     var bodyOnlyManifest = new ResourceDependencyManifest
@@ -1464,7 +1464,7 @@ static async Task CheckExportContextsAsync(string testRoot)
         new MashupContributor(duplicateAliasContext, ["/first.mtrl"]),
         new MashupContributor(duplicateAliasContext, ["/first.mtrl"]),
     ]);
-    Require(!duplicateAliasPlan.Success && duplicateAliasPlan.Code == "mashup_material_alias_conflict",
+    Require(!duplicateAliasPlan.Success && duplicateAliasPlan.Code == ResultCode.MashupMaterialAliasConflict,
         "duplicate active model aliases remain rejected");
 
     var duplicatePathManifest = new ResourceDependencyManifest
@@ -1483,7 +1483,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     [
         new MashupContributor(duplicatePathContext, ["/first.mtrl", "/second.mtrl"]),
     ]);
-    Require(!duplicatePathPlan.Success && duplicatePathPlan.Code == "mashup_material_path_conflict",
+    Require(!duplicatePathPlan.Success && duplicatePathPlan.Code == ResultCode.MashupMaterialPathConflict,
         "duplicate active virtual material paths remain rejected");
 
     var materialAddressA = MashupService.ContentAddressedMashupMaterialPath(
@@ -1770,7 +1770,7 @@ static async Task CheckExportContextsAsync(string testRoot)
         new MashupContributor(customTopContext, ["/bloodspiller.mtrl"]),
         new MashupContributor(overflowContext, overflowMaterials.Select(item => item.ModelMaterial).ToArray()),
     ]);
-    Require(!overflowPlan.Success && overflowPlan.Code == "mashup_material_slots_exhausted",
+    Require(!overflowPlan.Success && overflowPlan.Code == ResultCode.MashupMaterialSlotsExhausted,
         "mashup planning rejects more incoming materials than canonical b through z can hold");
 
     const string rewrittenTexture = "chara/equipment/e0001/texture/c0101e0001_top_b_n.tex";
@@ -2191,8 +2191,8 @@ static async Task CheckExportContextsAsync(string testRoot)
     Require(!manifestRegistry.TryBeginExport(
             "manifest-plugin", manifestContext.ContextId, "fingerprint-export", manifestContext.Capability,
             exportFile, 3, hash, out _, out var fingerprintCollision, "fingerprint-b") &&
-            fingerprintCollision == "duplicate_export_id",
+            fingerprintCollision == ResultCode.DuplicateExportId,
         "changed mashup metadata cannot reuse an export id");
     manifestRegistry.CompleteExport(manifestContext.ContextId, "fingerprint-export",
-        new ExportReceipt(true, "complete", "complete"));
+        new ExportReceipt(true, ResultCode.ExportApplied, "complete"));
 }

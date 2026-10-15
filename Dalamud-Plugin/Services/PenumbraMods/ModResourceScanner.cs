@@ -214,14 +214,14 @@ internal sealed class ModResourceScanner
         }
 
         return missing.Count == 0
-            ? new MaterialCoverageResult(true, true, "material_coverage_complete",
+            ? new MaterialCoverageResult(true, true, ResultCode.MaterialCoverageComplete,
                 "The output mod contains all captured non-active material and texture dependencies.", missing)
-            : new MaterialCoverageResult(true, false, "material_coverage_missing",
+            : new MaterialCoverageResult(true, false, ResultCode.MaterialCoverageMissing,
                 "The output mod is missing one or more captured non-active material or texture dependencies.", missing);
     }
 
     private static MaterialCoverageResult MaterialCoverageUnavailable()
-        => new(false, false, "material_coverage_unavailable",
+        => new(false, false, ResultCode.MaterialCoverageUnavailable,
             "Material coverage could not be verified.", Array.Empty<MaterialCoverageMissing>());
 
     private PenumbraModSnapshot? ScanModResources(ModScanRequest request, CancellationToken cancellationToken)

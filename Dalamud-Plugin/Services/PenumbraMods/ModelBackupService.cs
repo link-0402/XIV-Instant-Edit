@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Dalamud.Plugin.Services;
+using InstantEdit.Models;
 using static InstantEdit.Services.PenumbraMods.FrameworkThread;
 using static InstantEdit.Services.PenumbraMods.ModelFileWriter;
 using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
@@ -50,7 +51,7 @@ internal sealed class ModelBackupService
     {
         if (!IsSafeModName(sourceModDirectory) || !IsSafeGamePath(sourceGamePath) ||
             !IsSafeLocalModelPath(sourceFilePath) || !TryGetBackupOriginal(backupName, out var originalName))
-            return new ExportResult(false, "invalid_restore", "The backup restore request is invalid.");
+            return new ExportResult(false, ResultCode.InvalidRestore, "The backup restore request is invalid.");
 
         await _exportGate.WaitAsync().ConfigureAwait(false);
         string? committedTarget = null;
@@ -71,9 +72,9 @@ internal sealed class ModelBackupService
 
             await LeaveFrameworkThread();
             if (!string.Equals(Path.GetExtension(originalName), ".mdl", StringComparison.OrdinalIgnoreCase))
-                return new ExportResult(false, "invalid_restore", "The backup target is invalid.");
+                return new ExportResult(false, ResultCode.InvalidRestore, "The backup target is invalid.");
             if (targetRelativePath is null)
-                return new ExportResult(false, "backup_unavailable", "Managed backup storage is unavailable.");
+                return new ExportResult(false, ResultCode.BackupUnavailable, "Managed backup storage is unavailable.");
             var effectiveRelativePath = targetRelativePath;
             var targetPath = resolved.Target.FilePath;
             var expectedTarget = _backups.Describe(sourceModDirectory, effectiveRelativePath);
@@ -84,7 +85,7 @@ internal sealed class ModelBackupService
                     // Options that share one model file share its backups, so any of them will do.
                     .FirstOrDefault(candidate => string.Equals(candidate.BackupTargetId, backupTargetId, StringComparison.Ordinal));
                 if (option is null)
-                    return new ExportResult(false, "invalid_backup_target", "The backup does not belong to this export context.");
+                    return new ExportResult(false, ResultCode.InvalidBackupTarget, "The backup does not belong to this export context.");
                 effectiveRelativePath = option.ModelPath;
                 targetPath = Path.GetFullPath(Path.Combine(resolved.Target.Folder,
                     effectiveRelativePath.Replace('/', Path.DirectorySeparatorChar)));
@@ -94,11 +95,11 @@ internal sealed class ModelBackupService
             var backupPath = _backups.Resolve(backupTargetId, backupName);
             if (!string.Equals(Path.GetFileName(targetPath), originalName, StringComparison.OrdinalIgnoreCase) ||
                 new FileInfo(backupPath).Length == 0)
-                return new ExportResult(false, "backup_missing", "The managed backup does not match the authorized model.");
+                return new ExportResult(false, ResultCode.BackupMissing, "The managed backup does not match the authorized model.");
             if (HasReparsePointInPath(resolved.Target.Folder, parent) ||
                 (File.Exists(backupPath) && (File.GetAttributes(backupPath) & FileAttributes.ReparsePoint) != 0) ||
                 (File.Exists(targetPath) && (File.GetAttributes(targetPath) & FileAttributes.ReparsePoint) != 0))
-                return new ExportResult(false, "destination_unsafe", "The backup target contains an unsupported reparse point.");
+                return new ExportResult(false, ResultCode.DestinationUnsafe, "The backup target contains an unsupported reparse point.");
 
             // The hair's EST entries go with the model both ways: the backup taken of the
             // current file keeps today's, and the restored backup's own are put back.
@@ -116,7 +117,7 @@ internal sealed class ModelBackupService
             var raceState = _backups.ReadRaceState(backupPath);
             var writeError = _writer.RestoreModelBackup(targetPath, backupPath, sourceModDirectory, effectiveRelativePath, currentEst);
             if (writeError is not null)
-                return new ExportResult(false, "restore_write_failed", writeError);
+                return new ExportResult(false, ResultCode.RestoreWriteFailed, writeError);
             committedTarget = targetPath;
 
             var warnings = new List<string>();
@@ -157,7 +158,7 @@ internal sealed class ModelBackupService
                     warnings.Add(redrawWarning);
             }
 
-            var code = warnings.Count == 0 ? "backup_restored" : "backup_restored_with_warnings";
+            var code = warnings.Count == 0 ? ResultCode.BackupRestored : ResultCode.BackupRestoredWithWarnings;
             var message = warnings.Count == 0
                 ? $"Restored {originalName} and reloaded {resolved.Target.Directory}."
                 : $"Restored {originalName}; {warnings.Count} follow-up warning(s).";
@@ -169,11 +170,11 @@ internal sealed class ModelBackupService
             if (committedTarget is not null)
                 return new ExportResult(
                     true,
-                    "backup_restored_with_warnings",
+                    ResultCode.BackupRestoredWithWarnings,
                     $"Restored {originalName}; follow-up processing failed.",
                     [$"Follow-up processing failed: {e.Message}"],
                     committedTarget);
-            return new ExportResult(false, "restore_failed", $"Failed to restore the model backup: {e.Message}");
+            return new ExportResult(false, ResultCode.RestoreFailed, $"Failed to restore the model backup: {e.Message}");
         }
         finally
         {
@@ -187,7 +188,7 @@ internal sealed class ModelBackupService
         Guid? sourceModStableId = null)
     {
         if (targetRelativePath is null)
-            return new ExportResult(false, "backup_unavailable", "Managed backup storage is unavailable.");
+            return new ExportResult(false, ResultCode.BackupUnavailable, "Managed backup storage is unavailable.");
         await _exportGate.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -202,13 +203,13 @@ internal sealed class ModelBackupService
                 .Where(id => id is not null)
                 .Append(_backups.Describe(sourceModDirectory, targetRelativePath).Id);
             if (!validIds.Contains(backupTargetId, StringComparer.Ordinal))
-                return new ExportResult(false, "invalid_backup_target", "The backup target does not belong to this context.");
+                return new ExportResult(false, ResultCode.InvalidBackupTarget, "The backup target does not belong to this context.");
             _backups.Clear(backupTargetId);
-            return new ExportResult(true, "backups_cleared", "Managed backups cleared.");
+            return new ExportResult(true, ResultCode.BackupsCleared, "Managed backups cleared.");
         }
         catch (Exception error)
         {
-            return new ExportResult(false, "backup_clear_failed", error.Message);
+            return new ExportResult(false, ResultCode.BackupClearFailed, error.Message);
         }
         finally
         {

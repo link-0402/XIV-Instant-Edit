@@ -1,3 +1,4 @@
+using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.PenumbraMods;
 using Penumbra.Api.Enums;
@@ -20,7 +21,7 @@ internal static class CollectionActivationScenarios
             () => { prioritized++; return PenumbraApiEc.Success; },
             redraw: null);
         Require(withoutRedraw.Success && enabled == 1 && prioritized == 1 && redrawn == 0 &&
-                withoutRedraw.Code == "export_applied",
+                withoutRedraw.Code == ResultCode.ExportApplied,
             "skipping the redraw still enables and prioritizes the mod");
 
         var withoutPriority = ModActivation.ApplyModToCollection("Mod", "Collection",
@@ -58,7 +59,7 @@ internal static class CollectionActivationScenarios
             () => PenumbraApiEc.Success,
             null,
             () => { redrawn++; return "redraw skipped"; });
-        Require(warned.Success && redrawn == 1 && warned.Code == "export_applied_with_warnings" &&
+        Require(warned.Success && redrawn == 1 && warned.Code == ResultCode.ExportAppliedWithWarnings &&
                 warned.WarningList.Count == 1 && warned.WarningList[0] == "redraw skipped",
             "a redraw warning is reported without failing the activation");
 
@@ -66,7 +67,7 @@ internal static class CollectionActivationScenarios
             () => PenumbraApiEc.Success,
             null,
             () => { redrawn++; return null; });
-        Require(clean.Success && redrawn == 2 && clean.Code == "export_applied" &&
+        Require(clean.Success && redrawn == 2 && clean.Code == ResultCode.ExportApplied &&
                 clean.Message == "Applied Mod to Collection.",
             "a clean redraw reports plain success");
     }

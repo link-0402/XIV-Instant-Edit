@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.PenumbraMods;
 using static InstantEdit.TestSupport.Assertions;
@@ -303,18 +304,18 @@ internal static class RaceExportScenarios
     private static void RequestsAreValidated()
     {
         Require(ExportServer.ValidateRaceEnvelope(Request()) is null, "race request: a valid request passes");
-        var cases = new Dictionary<string, (Action<ExportServer.RaceExportRequest> Change, string Code)>
+        var cases = new Dictionary<string, (Action<ExportServer.RaceExportRequest> Change, ResultCode Code)>
         {
-            ["schema"] = (request => request.Schema = "instant-edit.export", "unsupported_schema"),
-            ["version"] = (request => request.Version = 2, "unsupported_version"),
-            ["no race"] = (request => request.Race = null, "missing_field"),
-            ["an NPC race"] = (request => request.Race = "c0804", "invalid_race"),
-            ["a bare number"] = (request => request.Race = "0801", "invalid_race"),
-            ["no file"] = (request => request.FilePath = "", "missing_field"),
-            ["an empty file"] = (request => request.Size = 0, "invalid_size"),
-            ["a bad hash"] = (request => request.Sha256 = new string('g', 64), "invalid_sha256"),
-            ["a bad mod name"] = (request => request.NewModName = "a/b", "invalid_mod_name"),
-            ["attribute tags without groups"] = (request => request.AttributeTags = ["atr_tv_a"], "unsupported_field"),
+            ["schema"] = (request => request.Schema = "instant-edit.export", ResultCode.UnsupportedSchema),
+            ["version"] = (request => request.Version = 2, ResultCode.UnsupportedVersion),
+            ["no race"] = (request => request.Race = null, ResultCode.MissingField),
+            ["an NPC race"] = (request => request.Race = "c0804", ResultCode.InvalidRace),
+            ["a bare number"] = (request => request.Race = "0801", ResultCode.InvalidRace),
+            ["no file"] = (request => request.FilePath = "", ResultCode.MissingField),
+            ["an empty file"] = (request => request.Size = 0, ResultCode.InvalidSize),
+            ["a bad hash"] = (request => request.Sha256 = new string('g', 64), ResultCode.InvalidSha256),
+            ["a bad mod name"] = (request => request.NewModName = "a/b", ResultCode.InvalidModName),
+            ["attribute tags without groups"] = (request => request.AttributeTags = ["atr_tv_a"], ResultCode.UnsupportedField),
         };
         foreach (var (name, (change, code)) in cases)
         {

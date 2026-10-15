@@ -14,7 +14,7 @@ namespace InstantEdit.Services;
 /// <summary> Result of applying an export to Penumbra. </summary>
 public sealed record ExportResult(
     bool Success,
-    string Code,
+    ResultCode Code,
     string Message,
     IReadOnlyList<string>? Warnings = null,
     string? TargetFilePath = null,
@@ -28,7 +28,7 @@ public sealed record ExportResult(
     Guid? OutputModStableId = null)
 {
     public ExportResult(bool success, string message)
-        : this(success, success ? "export_applied" : "apply_failed", message)
+        : this(success, success ? ResultCode.ExportApplied : ResultCode.ApplyFailed, message)
     {
     }
 
@@ -44,7 +44,7 @@ public sealed record ModPathRemap(
 public sealed record VariantOptionTarget(
     string Id, string Name, string ModelPath, string? BackupTargetId = null, string? BackupDirectory = null);
 public sealed record VariantGroupTarget(string Id, string Name, IReadOnlyList<VariantOptionTarget> Options);
-public sealed record VariantTargetsResult(bool Success, string Code, string Message, IReadOnlyList<VariantGroupTarget> Groups);
+public sealed record VariantTargetsResult(bool Success, ResultCode Code, string Message, IReadOnlyList<VariantGroupTarget> Groups);
 public sealed record PenumbraCollectionTarget(Guid Id, string Name);
 public sealed record NewModelModResult(
     ExportResult Result,
@@ -60,7 +60,7 @@ public sealed record MashupMaterialAssignment(
     string? Slot);
 public sealed record MashupPlanResult(
     bool Success,
-    string Code,
+    ResultCode Code,
     string Message,
     IReadOnlyList<MashupMaterialAssignment> Assignments,
     string? Fingerprint = null);
@@ -73,7 +73,7 @@ public sealed record MaterialCoverageMissing(
 public sealed record MaterialCoverageResult(
     bool Available,
     bool Covered,
-    string Code,
+    ResultCode Code,
     string Message,
     IReadOnlyList<MaterialCoverageMissing> Missing);
 public sealed record SourceOptionCapture(SourceOptionLocator? Locator, string Status, string? Warning = null);
@@ -551,7 +551,7 @@ public sealed partial class PenumbraService : IDisposable, ITextureEditBackend
         => ModMetadata.AnimationMappedFiles(modRoot, gamePath);
     internal static JsonArray? KnownManipulations(InstantEditImportContext context)
         => AttributeGroupService.KnownManipulations(context);
-    internal static string? ValidateEstEntryRequests(IReadOnlyList<EstEntryRequest>? entries)
+    internal static ResultCode? ValidateEstEntryRequests(IReadOnlyList<EstEntryRequest>? entries)
         => EstEntryService.ValidateEstEntryRequests(entries);
     internal static int? PlayerRaceCode(string? race) => RaceExportService.PlayerRaceCode(race);
     internal static string? RaceModelGamePath(string gamePath, int race) => RaceExportService.RaceModelGamePath(gamePath, race);

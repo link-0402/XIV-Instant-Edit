@@ -109,7 +109,7 @@ public sealed record BridgeFailure
                         "blender_addon",
                         operation,
                         "response_handling",
-                        code ?? "legacy_http_error",
+                        code ?? ResultCode.LegacyHttpError.Wire(),
                         cause,
                         "Update and restart the XIV Instant Edit Blender add-on, then retry.",
                         (int)status,
@@ -125,7 +125,7 @@ public sealed record BridgeFailure
             "blender_addon",
             operation,
             "response_handling",
-            "legacy_http_error",
+            ResultCode.LegacyHttpError.Wire(),
             "Blender rejected the request without providing diagnostic details.",
             "Update and restart the XIV Instant Edit Blender add-on, then retry.",
             (int)status);

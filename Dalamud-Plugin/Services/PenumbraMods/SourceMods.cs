@@ -13,7 +13,7 @@ namespace InstantEdit.Services.PenumbraMods;
 /// <summary> An imported model's file in its registered source mod. </summary>
 internal sealed record SourceModTarget(string Directory, string Folder, string FilePath, string RelativePath);
 
-internal sealed record SourceTargetResolution(SourceModTarget? Target, string Code, string? Error);
+internal sealed record SourceTargetResolution(SourceModTarget? Target, ResultCode Code, string? Error);
 
 /// <summary> A registered mod and the folders that may hold its files. </summary>
 internal sealed record ModScanRequest(PenumbraMod Mod, string[] CandidateRoots);
@@ -82,7 +82,7 @@ internal sealed class SourceMods
         Guid? sourceModStableId = null)
     {
         if (!_ipc.TryGetModList(out var modList))
-            return new SourceTargetResolution(null, "penumbra_unavailable", "Could not retrieve the Penumbra mod list.");
+            return new SourceTargetResolution(null, ResultCode.PenumbraUnavailable, "Could not retrieve the Penumbra mod list.");
 
         if (!TryResolveRegisteredModIdentity(
                 modList,
@@ -110,7 +110,7 @@ internal sealed class SourceMods
         {
             return new SourceTargetResolution(
                 null,
-                "destination_unavailable",
+                ResultCode.DestinationUnavailable,
                 $"Could not validate the original model destination: {e.Message}");
         }
     }
@@ -134,7 +134,7 @@ internal sealed class SourceMods
             if (!string.IsNullOrWhiteSpace(targetRelativePath) && relative is null)
                 return new SourceTargetResolution(
                     null,
-                    "destination_unsafe",
+                    ResultCode.DestinationUnsafe,
                     "The authorized target-relative model path is unsafe.");
             if (relative is null && !string.IsNullOrWhiteSpace(sourceModRootPath) &&
                 TryRelativeModelPath(sourceFilePath, sourceModRootPath, out var storedRelative))
@@ -153,7 +153,7 @@ internal sealed class SourceMods
             if (relative is null)
                 return new SourceTargetResolution(
                     null,
-                    "destination_unresolvable",
+                    ResultCode.DestinationUnresolvable,
                     "The saved context has no safe model path relative to the registered mod.");
 
             var valid = new List<(SourceModTarget Target, bool Preferred)>();
@@ -199,26 +199,26 @@ internal sealed class SourceMods
 
             var preferred = valid.Where(item => item.Preferred).Select(item => item.Target).FirstOrDefault();
             if (preferred is not null)
-                return new SourceTargetResolution(preferred, "accepted", null);
+                return new SourceTargetResolution(preferred, ResultCode.Accepted, null);
             var distinct = valid
                 .Select(item => item.Target)
                 .DistinctBy(item => item.FilePath, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
             if (distinct.Length == 1)
-                return new SourceTargetResolution(distinct[0], "accepted", null);
+                return new SourceTargetResolution(distinct[0], ResultCode.Accepted, null);
             if (distinct.Length > 1)
                 return new SourceTargetResolution(
                     null,
-                    "destination_ambiguous",
+                    ResultCode.DestinationAmbiguous,
                     "Multiple registered mod roots contain the authorized destination.");
             if (sawUnsafe)
                 return new SourceTargetResolution(
                     null,
-                    "destination_unsafe",
+                    ResultCode.DestinationUnsafe,
                     "The original model path contains an unsupported reparse point or escapes the mod root.");
             return new SourceTargetResolution(
                 null,
-                "destination_missing",
+                ResultCode.DestinationMissing,
                 sawMissingFolder
                     ? "The original Penumbra destination folder is no longer available."
                     : "The registered Penumbra mod root is no longer available.");
@@ -227,7 +227,7 @@ internal sealed class SourceMods
         {
             return new SourceTargetResolution(
                 null,
-                "destination_unavailable",
+                ResultCode.DestinationUnavailable,
                 $"Could not validate the original model destination: {e.Message}");
         }
     }
@@ -390,13 +390,13 @@ internal sealed class SourceMods
         Guid? expectedStableId,
         string? capturedRootPath,
         out string registeredDirectory,
-        out (string Code, string Message) error)
+        out (ResultCode Code, string Message) error)
     {
         registeredDirectory = string.Empty;
-        error = ("source_mod_missing", "The source mod is no longer registered in Penumbra.");
+        error = (ResultCode.SourceModMissing, "The source mod is no longer registered in Penumbra.");
         if (!IsSafeModName(requestedDirectory))
         {
-            error = ("destination_unsafe", "The original Penumbra mod directory is invalid.");
+            error = (ResultCode.DestinationUnsafe, "The original Penumbra mod directory is invalid.");
             return false;
         }
 
@@ -412,7 +412,7 @@ internal sealed class SourceMods
 
         if (expectedStableId == Guid.Empty)
         {
-            error = ("source_mod_identity_unavailable", "The saved Penumbra mod identity is invalid. Re-import the model.");
+            error = (ResultCode.SourceModIdentityUnavailable, "The saved Penumbra mod identity is invalid. Re-import the model.");
             return false;
         }
 
@@ -452,7 +452,7 @@ internal sealed class SourceMods
 
         if (requested is not null && requestedObserved is not null && requestedObserved != expectedStableId)
         {
-            error = ("source_mod_changed", "The registered Penumbra mod no longer matches the mod used for this import.");
+            error = (ResultCode.SourceModChanged, "The registered Penumbra mod no longer matches the mod used for this import.");
             return false;
         }
         if (matches.Count == 1)
@@ -462,10 +462,10 @@ internal sealed class SourceMods
         }
         if (matches.Count > 1)
         {
-            error = ("source_mod_ambiguous", "More than one Penumbra mod has the saved stable identity.");
+            error = (ResultCode.SourceModAmbiguous, "More than one Penumbra mod has the saved stable identity.");
             return false;
         }
-        error = (requested is null ? "source_mod_missing" : "source_mod_identity_unavailable",
+        error = (requested is null ? ResultCode.SourceModMissing : ResultCode.SourceModIdentityUnavailable,
             requested is null
                 ? "The source mod is no longer registered in Penumbra."
                 : "The saved Penumbra mod identity could not be verified. Reload the mod in Penumbra, then re-import the model.");

@@ -492,7 +492,7 @@ public sealed partial class ExportServer : IDisposable
                         browser ? 403 : 400,
                         "http_request",
                         "request_receipt",
-                        error?.Code ?? "malformed_http_request",
+                        error?.Code ?? ResultCode.MalformedHttpRequest,
                         browser ? "The plugin only accepts requests from local applications." : error?.Message ?? "The plugin could not read the bridge request.",
                         browser ? "Send requests from Blender or Substance Painter, not a web page." : "Update both XIV Instant Edit components and retry.");
                     WriteResponse(stream, failure.Status, failure.Body);
@@ -518,7 +518,7 @@ public sealed partial class ExportServer : IDisposable
                         500,
                         "http_request",
                         "processing",
-                        "internal_error",
+                        ResultCode.InternalError,
                         "The Dalamud bridge encountered an unexpected server error.",
                         "Retry the operation and review the Dalamud plugin log if it fails again.",
                         exception: e);
@@ -588,7 +588,7 @@ public sealed partial class ExportServer : IDisposable
         if (method == "POST" && path.TrimEnd('/') == "/racial-deformer")
             return await HandleRacialDeformerAsync(request).ConfigureAwait(false);
 
-        return Error(404, "endpoint_not_found", "the requested bridge endpoint was not found");
+        return Error(404, ResultCode.EndpointNotFound, "the requested bridge endpoint was not found");
     }
 
     private (int Status, string Body) HandleStatus()
@@ -620,8 +620,7 @@ public sealed partial class ExportServer : IDisposable
         if (parseError is not null)
             return parseError.Value;
         var status = parsed!;
-        var envelopeError = ValidateImportStatusEnvelope(status);
-        if (envelopeError is not null)
+        if (ValidateImportStatusEnvelope(status) is { } envelopeError)
             return Error(400, envelopeError, "unsupported or malformed import status envelope");
 
         if (!_contexts.TryAuthorizeOperation(
@@ -629,7 +628,7 @@ public sealed partial class ExportServer : IDisposable
                 out var context, out var registryCode) || context is null)
             return Error(StatusForCode(registryCode), registryCode, "import status context was rejected");
         if (!string.Equals(context.ImportId, status.ImportId, StringComparison.Ordinal))
-            return Error(401, "import_id_mismatch", "import status identifier was rejected");
+            return Error(401, ResultCode.ImportIdMismatch, "import status identifier was rejected");
 
         var failure = BridgeFailure.Create(
             "blender_addon",
@@ -650,7 +649,7 @@ public sealed partial class ExportServer : IDisposable
         {
             _log.Error(e, $"Import failure notification handler failed for {failure.DiagnosticId}.");
         }
-        return (200, Json(new { ok = true, code = "import_failure_recorded" }));
+        return (200, Json(new { ok = true, code = ResultCode.ImportFailureRecorded }));
     }
 
     private (int Status, string Body) HandleContextReattach(HttpRequest request)
@@ -660,8 +659,7 @@ public sealed partial class ExportServer : IDisposable
             return parseError.Value;
         var reattach = parsed!;
 
-        var reattachError = ValidateReattachEnvelope(reattach);
-        if (reattachError is not null)
+        if (ValidateReattachEnvelope(reattach) is { } reattachError)
             return Error(StatusForCode(reattachError), reattachError, "unsupported or malformed reattach envelope");
 
         if (!_contexts.TryReattach(
@@ -682,8 +680,7 @@ public sealed partial class ExportServer : IDisposable
         if (parseError is not null)
             return parseError.Value;
         var revoke = parsed!;
-        var envelopeError = ValidateRevokeEnvelope(revoke);
-        if (envelopeError is not null)
+        if (ValidateRevokeEnvelope(revoke) is { } envelopeError)
             return Error(400, envelopeError, "unsupported or malformed context revoke envelope");
         if (!_contexts.TryRevoke(revoke.ContextId!, revoke.ImportId!, revoke.Capability!, out var registryCode))
             return Error(StatusForCode(registryCode), registryCode, "export context revocation was rejected");
@@ -696,8 +693,7 @@ public sealed partial class ExportServer : IDisposable
         if (parseError is not null)
             return parseError.Value;
         var status = parsed!;
-        var envelopeError = ValidateExportStatusEnvelope(status);
-        if (envelopeError is not null)
+        if (ValidateExportStatusEnvelope(status) is { } envelopeError)
             return Error(400, envelopeError, "unsupported or malformed export status envelope");
         if (!_contexts.TryGetExportStatus(
                 status.PluginInstanceId!,
@@ -708,7 +704,7 @@ public sealed partial class ExportServer : IDisposable
                 out var registryCode) || completion is null)
             return Error(StatusForCode(registryCode), registryCode, "export receipt was not found");
         if (!completion.IsCompleted)
-            return (202, Json(new { ok = true, code = "export_pending", complete = false }));
+            return (202, Json(new { ok = true, code = ResultCode.ExportPending, complete = false }));
         return ResultResponse(await completion.ConfigureAwait(false));
     }
 
@@ -718,15 +714,14 @@ public sealed partial class ExportServer : IDisposable
         if (parseError is not null)
             return parseError.Value;
         var targetsRequest = parsed!;
-        var envelopeError = ValidateVariantTargetsEnvelope(targetsRequest);
-        if (envelopeError is not null)
+        if (ValidateVariantTargetsEnvelope(targetsRequest) is { } envelopeError)
             return Error(400, envelopeError, "unsupported or malformed variant-targets envelope");
         if (!_contexts.TryAuthorizeOperation(
                 targetsRequest.PluginInstanceId!, targetsRequest.ContextId!, targetsRequest.Capability!,
                 out var target, out var registryCode) || target is null)
             return Error(StatusForCode(registryCode), registryCode, "export context was rejected");
         if (target.DestinationState != InstantEditImportContext.ReadyDestination)
-            return Error(409, "destination_not_ready", "create the Penumbra mod before loading variant targets");
+            return Error(409, ResultCode.DestinationNotReady, "create the Penumbra mod before loading variant targets");
 
         var result = await _penumbra.GetVariantTargetsAsync(
             target.SourceModDirectory!, target.TargetFilePath!, target.SourceModRootPath,
@@ -758,28 +753,27 @@ public sealed partial class ExportServer : IDisposable
         if (parseError is not null)
             return parseError.Value;
         var coverageRequest = parsed!;
-        var envelopeError = ValidateMaterialCoverageEnvelope(coverageRequest);
-        if (envelopeError is not null)
+        if (ValidateMaterialCoverageEnvelope(coverageRequest) is { } envelopeError)
             return Error(StatusForCode(envelopeError), envelopeError, "unsupported or malformed material-coverage envelope");
         if (!_contexts.TryAuthorizeOperation(
                 coverageRequest.PluginInstanceId!, coverageRequest.ContextId!, coverageRequest.Capability!,
                 out var activeContext, out var activeCode) || activeContext is null)
             return Error(StatusForCode(activeCode), activeCode, "active export context was rejected");
         if (activeContext.DestinationState != InstantEditImportContext.ReadyDestination)
-            return Error(409, "destination_not_ready", "create the Penumbra mod before checking material coverage");
+            return Error(409, ResultCode.DestinationNotReady, "create the Penumbra mod before checking material coverage");
 
         var contributors = new List<MashupContributor>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var contributor in coverageRequest.Contributors!)
         {
             if (!seen.Add(contributor.ContextId!))
-                return Error(400, "duplicate_context", "a material-coverage context was supplied more than once");
+                return Error(400, ResultCode.DuplicateContext, "a material-coverage context was supplied more than once");
             if (!_contexts.TryAuthorizeOperation(
                     coverageRequest.PluginInstanceId!, contributor.ContextId!, contributor.Capability!,
                     out var contributorContext, out var contributorCode) || contributorContext is null)
                 return Error(StatusForCode(contributorCode), contributorCode, "a material-coverage context was rejected");
             if (!IsMashupContributorState(contributorContext))
-                return Error(409, "destination_not_ready", "a contributing Context is not ready for material coverage");
+                return Error(409, ResultCode.DestinationNotReady, "a contributing Context is not ready for material coverage");
             contributors.Add(new MashupContributor(contributorContext, contributor.Materials!));
         }
 
@@ -808,15 +802,14 @@ public sealed partial class ExportServer : IDisposable
         if (parseError is not null)
             return parseError.Value;
         var restore = parsed!;
-        var restoreError = ValidateBackupRestoreEnvelope(restore);
-        if (restoreError is not null)
+        if (ValidateBackupRestoreEnvelope(restore) is { } restoreError)
             return Error(StatusForCode(restoreError), restoreError, "unsupported or malformed backup restore envelope");
         if (!_contexts.TryAuthorizeOperation(
                 restore.PluginInstanceId!, restore.ContextId!, restore.Capability!,
                 out var target, out var registryCode) || target is null)
             return Error(StatusForCode(registryCode), registryCode, "export context was rejected");
         if (target.DestinationState != InstantEditImportContext.ReadyDestination)
-            return Error(409, "destination_not_ready", "the import has no Penumbra mod backup destination yet");
+            return Error(409, ResultCode.DestinationNotReady, "the import has no Penumbra mod backup destination yet");
 
         var result = await _penumbra.RestoreSourceBackupAsync(
             target.SourceModDirectory!,
@@ -843,12 +836,12 @@ public sealed partial class ExportServer : IDisposable
         var clear = parsed!;
         if (!string.Equals(clear.Schema, "instant-edit.backup-clear", StringComparison.Ordinal) || clear.Version != 1 ||
             string.IsNullOrWhiteSpace(clear.BackupTargetId))
-            return Error(400, "invalid_backup_clear", "unsupported or malformed backup clear envelope");
+            return Error(400, ResultCode.InvalidBackupClear, "unsupported or malformed backup clear envelope");
         if (!_contexts.TryAuthorizeOperation(clear.PluginInstanceId!, clear.ContextId!, clear.Capability!,
                 out var target, out var registryCode) || target is null)
             return Error(StatusForCode(registryCode), registryCode, "export context was rejected");
         if (target.DestinationState != InstantEditImportContext.ReadyDestination)
-            return Error(409, "destination_not_ready", "the import has no Penumbra mod backup destination yet");
+            return Error(409, ResultCode.DestinationNotReady, "the import has no Penumbra mod backup destination yet");
         var result = await _penumbra.ClearManagedBackupsAsync(
             target.SourceModDirectory!, target.TargetFilePath!, target.SourceModRootPath,
             target.TargetRelativePath, target.GamePath, clear.BackupTargetId!, target.SourceModStableId).ConfigureAwait(false);
@@ -861,8 +854,7 @@ public sealed partial class ExportServer : IDisposable
         if (parseError is not null)
             return parseError.Value;
         var requestPlan = parsed!;
-        var envelopeError = ValidateMashupPlanEnvelope(requestPlan);
-        if (envelopeError is not null)
+        if (ValidateMashupPlanEnvelope(requestPlan) is { } envelopeError)
             return Error(StatusForCode(envelopeError), envelopeError, "unsupported or malformed mashup plan envelope");
         if (!_contexts.TryAuthorizeOperation(
                 requestPlan.PluginInstanceId!, requestPlan.ContextId!, requestPlan.Capability!,
@@ -870,20 +862,20 @@ public sealed partial class ExportServer : IDisposable
             return Error(StatusForCode(activeCode), activeCode, "active export context was rejected");
         var planDestination = requestPlan.Destination ?? "active_mod";
         if (!IsMashupActiveState(activeContext, planDestination))
-            return Error(409, "destination_not_ready", "the active Context is not ready for this mashup destination");
+            return Error(409, ResultCode.DestinationNotReady, "the active Context is not ready for this mashup destination");
 
         var contributors = new List<MashupContributor>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var contributor in requestPlan.Contributors!)
         {
             if (!seen.Add(contributor.ContextId!))
-                return Error(400, "duplicate_context", "a mashup context was supplied more than once");
+                return Error(400, ResultCode.DuplicateContext, "a mashup context was supplied more than once");
             if (!_contexts.TryAuthorizeOperation(
                     requestPlan.PluginInstanceId!, contributor.ContextId!, contributor.Capability!,
                     out var contributorContext, out var contributorCode) || contributorContext is null)
                 return Error(StatusForCode(contributorCode), contributorCode, "a contributor context was rejected");
             if (!IsMashupContributorState(contributorContext))
-                return Error(409, "destination_not_ready", "a contributor Context is not ready for mashup export");
+                return Error(409, ResultCode.DestinationNotReady, "a contributor Context is not ready for mashup export");
             contributors.Add(new MashupContributor(contributorContext, contributor.Materials!));
         }
         if (RacialScalingRefusal(contributors.Select(item => item.Context).Prepend(activeContext), GamePathRace(activeContext)) is { } planScaling)
@@ -916,8 +908,7 @@ public sealed partial class ExportServer : IDisposable
         if (parseError is not null)
             return parseError.Value;
         var mashup = parsed!;
-        var envelopeError = ValidateMashupEnvelope(mashup);
-        if (envelopeError is not null)
+        if (ValidateMashupEnvelope(mashup) is { } envelopeError)
             return Error(StatusForCode(envelopeError), envelopeError, "unsupported or malformed mashup envelope");
 
         if (!_contexts.TryAuthorizeOperation(
@@ -925,20 +916,20 @@ public sealed partial class ExportServer : IDisposable
                 out var activeContext, out var activeCode) || activeContext is null)
             return Error(StatusForCode(activeCode), activeCode, "active export context was rejected");
         if (!IsMashupActiveState(activeContext, mashup.Destination!))
-            return Error(409, "destination_not_ready", "the active Context is not ready for this mashup destination");
+            return Error(409, ResultCode.DestinationNotReady, "the active Context is not ready for this mashup destination");
 
         var contributors = new List<MashupContributor>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var contributor in mashup.Contributors!)
         {
             if (!seen.Add(contributor.ContextId!))
-                return Error(400, "duplicate_context", "a mashup context was supplied more than once");
+                return Error(400, ResultCode.DuplicateContext, "a mashup context was supplied more than once");
             if (!_contexts.TryAuthorizeOperation(
                     mashup.PluginInstanceId!, contributor.ContextId!, contributor.Capability!,
                     out var contributorContext, out var contributorCode) || contributorContext is null)
                 return Error(StatusForCode(contributorCode), contributorCode, "a contributor context was rejected");
             if (!IsMashupContributorState(contributorContext))
-                return Error(409, "destination_not_ready", "a contributor Context is not ready for mashup export");
+                return Error(409, ResultCode.DestinationNotReady, "a contributor Context is not ready for mashup export");
             contributors.Add(new MashupContributor(contributorContext, contributor.Materials!));
         }
         if (RacialScalingRefusal(contributors.Select(item => item.Context).Prepend(activeContext), GamePathRace(activeContext)) is { } exportScaling)
@@ -949,7 +940,7 @@ public sealed partial class ExportServer : IDisposable
         if (!plan.Success)
             return Error(StatusForCode(plan.Code), plan.Code, plan.Message);
         if (!string.Equals(plan.Fingerprint, mashup.PlanFingerprint, StringComparison.OrdinalIgnoreCase))
-            return Error(409, "mashup_plan_mismatch", "The mashup material plan changed; retry the export.");
+            return Error(409, ResultCode.MashupPlanMismatch, "The mashup material plan changed; retry the export.");
 
         var fingerprintSource = JsonSerializer.Serialize(new
         {
@@ -974,7 +965,7 @@ public sealed partial class ExportServer : IDisposable
                 fingerprint))
             return Error(StatusForCode(registryCode), registryCode, "mashup export was rejected");
         if (reservation is null)
-            return Error(500, "internal_error", "mashup reservation was not created");
+            return Error(500, ResultCode.InternalError, "mashup reservation was not created");
         if (!reservation.IsOwner)
             return ResultResponse(await reservation.Completion.ConfigureAwait(false));
 
@@ -1062,7 +1053,7 @@ public sealed partial class ExportServer : IDisposable
         catch (Exception e)
         {
             _log.Error(e, "Mashup processing failed.");
-            receipt = new ExportReceipt(false, "internal_error", "mashup processing failed");
+            receipt = new ExportReceipt(false, ResultCode.InternalError, "mashup processing failed");
         }
         finally
         {
@@ -1080,8 +1071,7 @@ public sealed partial class ExportServer : IDisposable
                 return parseError.Value;
             var export = parsed!;
 
-            var envelopeError = ValidateEnvelope(export);
-            if (envelopeError is not null)
+            if (ValidateEnvelope(export) is { } envelopeError)
                 return Error(StatusForCode(envelopeError), envelopeError, "unsupported or malformed export envelope");
 
             var requestFingerprint = ExportRequestFingerprint(export);
@@ -1099,7 +1089,7 @@ public sealed partial class ExportServer : IDisposable
                 return Error(StatusForCode(registryCode), registryCode, "export context was rejected");
 
             if (reservation is null)
-                return Error(500, "internal_error", "export reservation was not created");
+                return Error(500, ResultCode.InternalError, "export reservation was not created");
 
             if (!reservation.IsOwner)
             {
@@ -1149,7 +1139,7 @@ public sealed partial class ExportServer : IDisposable
             catch (Exception e)
             {
                 _log.Error(e, "Export processing failed.");
-                receipt = new ExportReceipt(false, "internal_error", "export processing failed");
+                receipt = new ExportReceipt(false, ResultCode.InternalError, "export processing failed");
             }
             finally
             {
@@ -1157,7 +1147,7 @@ public sealed partial class ExportServer : IDisposable
             }
 
             _contexts.CompleteExport(export.ContextId!, export.ExportId!, receipt);
-            _log.Information($"Export {receipt.Code}: {receipt.Message}");
+            _log.Information($"Export {receipt.Code.Wire()}: {receipt.Message}");
             return ResultResponse(receipt);
 
         async Task<ExportReceipt> ApplyExport(
@@ -1178,18 +1168,18 @@ public sealed partial class ExportServer : IDisposable
             if (target.DestinationState == InstantEditImportContext.NewModRequiredDestination)
             {
                 if (string.IsNullOrWhiteSpace(newModName))
-                    return new ExportReceipt(false, "missing_new_mod_name", "enter a name for the new Penumbra mod");
+                    return new ExportReceipt(false, ResultCode.MissingNewModName, "enter a name for the new Penumbra mod");
                 if (setupVariantInPenumbra || variantName is not null || variantTarget is not null || backupExisting)
-                    return new ExportReceipt(false, "invalid_pending_export", "a first vanilla export cannot target variants or backups");
+                    return new ExportReceipt(false, ResultCode.InvalidPendingExport, "a first vanilla export cannot target variants or backups");
                 return await CreateGameModelModAsync(
                     target, filePath, newModName, createAttributeGroups, attributeTags, attributeMasks, estEntries)
                     .ConfigureAwait(false);
             }
             if (newModName is not null)
-                return new ExportReceipt(false, "unexpected_new_mod_name", "this import already has a Penumbra destination");
+                return new ExportReceipt(false, ResultCode.UnexpectedNewModName, "this import already has a Penumbra destination");
             if (string.IsNullOrWhiteSpace(target.TargetFilePath) ||
                 string.IsNullOrWhiteSpace(target.SourceModDirectory))
-                return new ExportReceipt(false, "missing_source_target", "the import has no original Penumbra mod destination");
+                return new ExportReceipt(false, ResultCode.MissingSourceTarget, "the import has no original Penumbra mod destination");
 
             var result = await _penumbra.ApplySourceExportAsync(
                 target.SourceModDirectory!,
@@ -1252,7 +1242,7 @@ public sealed partial class ExportServer : IDisposable
                 created.ModStableId) || promoted is null)
             return new ExportReceipt(
                 true,
-                "vanilla_mod_created_with_warnings",
+                ResultCode.VanillaModCreatedWithWarnings,
                 created.Result.Message,
                 created.Result.WarningList.Concat(["The mod was created, but the Blender export context could not be promoted."]).ToArray(),
                 created.Result.TargetFilePath,
@@ -1299,7 +1289,7 @@ public sealed partial class ExportServer : IDisposable
         }
         catch (DecoderFallbackException)
         {
-            error = Error(400, "invalid_utf8", "request body is not valid UTF-8");
+            error = Error(400, ResultCode.InvalidUtf8, "request body is not valid UTF-8");
             return null;
         }
 
@@ -1308,124 +1298,124 @@ public sealed partial class ExportServer : IDisposable
             using var document = JsonDocument.Parse(body);
             if (document.RootElement.ValueKind != JsonValueKind.Object)
             {
-                error = Error(400, "request_not_object", "request body must be a JSON object");
+                error = Error(400, ResultCode.RequestNotObject, "request body must be a JSON object");
                 return null;
             }
             var value = JsonSerializer.Deserialize<T>(body, JsonOpts);
             if (value is null)
-                error = Error(400, "request_not_object", "request body must be a JSON object");
+                error = Error(400, ResultCode.RequestNotObject, "request body must be a JSON object");
             return value;
         }
         catch (Exception e)
         {
             _log.Error(e, $"Failed to parse {operation} request.");
-            error = Error(400, "invalid_json", "request body is not valid JSON");
+            error = Error(400, ResultCode.InvalidJson, "request body is not valid JSON");
             return null;
         }
     }
 
-    internal static string? ValidateEnvelope(ExportRequest request)
+    internal static ResultCode? ValidateEnvelope(ExportRequest request)
     {
         if (!string.Equals(request.Schema, "instant-edit.export", StringComparison.Ordinal))
-            return request.Version is 1 or 2 or 3 ? "unsupported_schema" : "unsupported_version";
+            return request.Version is 1 or 2 or 3 ? ResultCode.UnsupportedSchema : ResultCode.UnsupportedVersion;
         if (request.Version is not (1 or 2 or 3))
-            return "unsupported_version";
+            return ResultCode.UnsupportedVersion;
         if (string.IsNullOrWhiteSpace(request.PluginInstanceId) ||
             string.IsNullOrWhiteSpace(request.ContextId) ||
             string.IsNullOrWhiteSpace(request.ExportId) ||
             string.IsNullOrWhiteSpace(request.Capability) ||
             string.IsNullOrWhiteSpace(request.FilePath) ||
             string.IsNullOrWhiteSpace(request.Sha256))
-            return "missing_field";
+            return ResultCode.MissingField;
         if (request.Size <= 0 || request.Size > MaxExportBytes)
-            return "invalid_size";
+            return ResultCode.InvalidSize;
         if (request.Sha256.Length != 64 || request.Sha256.Any(c => !Uri.IsHexDigit(c)))
-            return "invalid_sha256";
+            return ResultCode.InvalidSha256;
         if (request.Version == 1 && request.NewModName is not null)
-            return "unsupported_field";
+            return ResultCode.UnsupportedField;
         if (request.NewModName is not null && !PenumbraService.IsSafeNewModName(request.NewModName))
-            return "invalid_mod_name";
+            return ResultCode.InvalidModName;
         if (request.VariantName is not null && !IsSafeVariantName(request.VariantName))
-            return "invalid_variant_name";
+            return ResultCode.InvalidVariantName;
         if (request.SetupInPenumbra && request.VariantName is null)
             if (!string.Equals(request.VariantTarget, "option", StringComparison.Ordinal))
-                return "penumbra_setup_requires_variant";
+                return ResultCode.PenumbraSetupRequiresVariant;
         if (request.SetupInPenumbra && !string.Equals(request.VariantTarget, "option", StringComparison.Ordinal) &&
             !PenumbraService.IsSafeVariantGroupName(request.VariantGroupName))
-            return "penumbra_setup_requires_group_name";
+            return ResultCode.PenumbraSetupRequiresGroupName;
         if (request.SetupInPenumbra && request.VariantTarget is not ("new_group" or "group" or "option"))
-            return "invalid_variant_target";
+            return ResultCode.InvalidVariantTarget;
         if (request.SetupInPenumbra && request.VariantTarget is not "new_group" &&
             string.IsNullOrWhiteSpace(request.VariantTargetId))
-            return "missing_variant_target";
+            return ResultCode.MissingVariantTarget;
         return ValidateAttributeGroupEnvelope(
                    request.CreateAttributeGroups, request.AttributeTags, request.AttributeMasks) ??
                PenumbraService.ValidateEstEntryRequests(request.EstEntries);
     }
 
     /// <summary>Shared preamble for envelopes with exactly one supported schema/version pair.</summary>
-    private static string? ValidateSchemaVersion(string? schema, string expectedSchema, int version, int expectedVersion)
+    private static ResultCode? ValidateSchemaVersion(string? schema, string expectedSchema, int version, int expectedVersion)
     {
         if (!string.Equals(schema, expectedSchema, StringComparison.Ordinal))
-            return version == expectedVersion ? "unsupported_schema" : "unsupported_version";
-        return version != expectedVersion ? "unsupported_version" : null;
+            return version == expectedVersion ? ResultCode.UnsupportedSchema : ResultCode.UnsupportedVersion;
+        return version != expectedVersion ? ResultCode.UnsupportedVersion : null;
     }
 
-    private static string? ValidateImportStatusEnvelope(ImportStatusRequest request)
+    private static ResultCode? ValidateImportStatusEnvelope(ImportStatusRequest request)
     {
         if (ValidateSchemaVersion(request.Schema, "instant-edit.import-status", request.Version, 1) is { } schemaError)
             return schemaError;
         if (!string.Equals(request.Status, "failed", StringComparison.Ordinal))
-            return "invalid_status";
+            return ResultCode.InvalidStatus;
         if (!string.Equals(request.Component, "blender_addon", StringComparison.Ordinal))
-            return "invalid_component";
+            return ResultCode.InvalidComponent;
         if (!string.Equals(request.Operation, "import", StringComparison.Ordinal))
-            return "invalid_operation";
+            return ResultCode.InvalidOperation;
         if (string.IsNullOrWhiteSpace(request.PluginInstanceId) || !IsSafeId(request.ContextId) ||
             !IsSafeId(request.ImportId) || string.IsNullOrWhiteSpace(request.Capability))
-            return "missing_field";
+            return ResultCode.MissingField;
         if (!IsSafeDiagnosticValue(request.Stage, 64))
-            return "invalid_stage";
+            return ResultCode.InvalidStage;
         if (!IsSafeDiagnosticValue(request.Code, 128))
-            return "invalid_error_code";
+            return ResultCode.InvalidErrorCode;
         if (string.IsNullOrWhiteSpace(request.Cause) || request.Cause.Length > 2048)
-            return "invalid_cause";
+            return ResultCode.InvalidCause;
         if (string.IsNullOrWhiteSpace(request.Remedy) || request.Remedy.Length > 2048)
-            return "invalid_remedy";
-        return BridgeFailure.IsDiagnosticId(request.DiagnosticId) ? null : "invalid_diagnostic_id";
+            return ResultCode.InvalidRemedy;
+        return BridgeFailure.IsDiagnosticId(request.DiagnosticId) ? null : ResultCode.InvalidDiagnosticId;
     }
 
-    private static string? ValidateRevokeEnvelope(RevokeRequest request)
+    private static ResultCode? ValidateRevokeEnvelope(RevokeRequest request)
     {
         if (ValidateSchemaVersion(request.Schema, "instant-edit.context-revoke", request.Version, 1) is { } schemaError)
             return schemaError;
         return !IsSafeId(request.ContextId) || !IsSafeId(request.ImportId) ||
                string.IsNullOrWhiteSpace(request.Capability)
-            ? "missing_field"
+            ? ResultCode.MissingField
             : null;
     }
 
-    private static string? ValidateExportStatusEnvelope(ExportStatusRequest request)
+    private static ResultCode? ValidateExportStatusEnvelope(ExportStatusRequest request)
     {
         if (ValidateSchemaVersion(request.Schema, "instant-edit.export-status", request.Version, 1) is { } schemaError)
             return schemaError;
         return string.IsNullOrWhiteSpace(request.PluginInstanceId) || !IsSafeId(request.ContextId) ||
                !IsSafeId(request.ExportId) || string.IsNullOrWhiteSpace(request.Capability)
-            ? "missing_field"
+            ? ResultCode.MissingField
             : null;
     }
 
-    private static string? ValidateVariantTargetsEnvelope(VariantTargetsRequest request)
+    private static ResultCode? ValidateVariantTargetsEnvelope(VariantTargetsRequest request)
     {
         if (ValidateSchemaVersion(request.Schema, "instant-edit.variant-targets", request.Version, 1) is { } schemaError)
             return schemaError;
         return string.IsNullOrWhiteSpace(request.PluginInstanceId) || !IsSafeId(request.ContextId) ||
                string.IsNullOrWhiteSpace(request.Capability)
-            ? "missing_field"
+            ? ResultCode.MissingField
             : null;
     }
 
-    private static string? ValidateMashupEnvelope(MashupExportRequest request)
+    private static ResultCode? ValidateMashupEnvelope(MashupExportRequest request)
     {
         if (ValidateSchemaVersion(request.Schema, "instant-edit.mashup-export", request.Version, 2) is { } schemaError)
             return schemaError;
@@ -1435,40 +1425,40 @@ public sealed partial class ExportServer : IDisposable
             string.IsNullOrWhiteSpace(request.PlanFingerprint) ||
             (request.Destination is not null && request.Destination is not ("active_mod" or "new_mod")) ||
             !PenumbraService.IsSafeVariantGroupName(request.Name))
-            return "missing_field";
+            return ResultCode.MissingField;
         if (request.Size <= 0 || request.Size > MaxExportBytes || request.Sha256.Length != 64 ||
             request.Sha256.Any(c => !Uri.IsHexDigit(c)) || request.PlanFingerprint.Length != 64 ||
             request.PlanFingerprint.Any(c => !Uri.IsHexDigit(c)))
-            return "invalid_export_file";
+            return ResultCode.InvalidExportFile;
         if (request.Contributors is not { Count: >= 1 and <= 16 })
-            return "invalid_contributors";
+            return ResultCode.InvalidContributors;
         foreach (var contributor in request.Contributors)
         {
             if (!IsSafeId(contributor.ContextId) || string.IsNullOrWhiteSpace(contributor.Capability) ||
                 contributor.Materials is not { Count: >= 1 and <= 256 } ||
                 contributor.Materials.Any(material => string.IsNullOrWhiteSpace(material) || material.Length > 512))
-                return "invalid_contributors";
+                return ResultCode.InvalidContributors;
         }
         return ValidateAttributeGroupEnvelope(
                    request.CreateAttributeGroups, request.AttributeTags, request.AttributeMasks) ??
                PenumbraService.ValidateEstEntryRequests(request.EstEntries);
     }
 
-    private static string? ValidateAttributeGroupEnvelope(
+    private static ResultCode? ValidateAttributeGroupEnvelope(
         bool createAttributeGroups,
         IReadOnlyList<string>? tags,
         IReadOnlyDictionary<string, int>? masks)
     {
         if (!createAttributeGroups && (tags is not null || masks is not null))
-            return "unsupported_field";
+            return ResultCode.UnsupportedField;
         if (tags is { Count: > 512 } || masks is { Count: > 512 } ||
             (tags is not null && tags.Any(tag => string.IsNullOrWhiteSpace(tag) || tag.Length > 128)) ||
             (masks is not null && masks.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || pair.Key.Length > 128)))
-            return "invalid_attribute_groups";
+            return ResultCode.InvalidAttributeGroups;
         return null;
     }
 
-    private static string? ValidateMashupPlanEnvelope(MashupPlanRequest request)
+    private static ResultCode? ValidateMashupPlanEnvelope(MashupPlanRequest request)
     {
         if (ValidateSchemaVersion(request.Schema, "instant-edit.mashup-plan", request.Version, 1) is { } schemaError)
             return schemaError;
@@ -1476,13 +1466,13 @@ public sealed partial class ExportServer : IDisposable
             string.IsNullOrWhiteSpace(request.Capability) ||
             request.Destination is not ("active_mod" or "new_mod") ||
             request.Contributors is not { Count: >= 1 and <= 16 })
-            return "invalid_contributors";
+            return ResultCode.InvalidContributors;
         foreach (var contributor in request.Contributors)
         {
             if (!IsSafeId(contributor.ContextId) || string.IsNullOrWhiteSpace(contributor.Capability) ||
                 contributor.Materials is not { Count: >= 1 and <= 256 } ||
                 contributor.Materials.Any(material => string.IsNullOrWhiteSpace(material) || material.Length > 512))
-                return "invalid_contributors";
+                return ResultCode.InvalidContributors;
         }
         return null;
     }
@@ -1496,7 +1486,7 @@ public sealed partial class ExportServer : IDisposable
         => context.DestinationState is InstantEditImportContext.ReadyDestination or
             InstantEditImportContext.NewModRequiredDestination;
 
-    private static string? ValidateMaterialCoverageEnvelope(MaterialCoverageRequest request)
+    private static ResultCode? ValidateMaterialCoverageEnvelope(MaterialCoverageRequest request)
     {
         if (ValidateSchemaVersion(request.Schema, "instant-edit.material-coverage", request.Version, 1) is { } schemaError)
             return schemaError;
@@ -1504,7 +1494,7 @@ public sealed partial class ExportServer : IDisposable
             !IsSafeId(request.ContextId) || string.IsNullOrWhiteSpace(request.Capability) ||
             request.Capability.Length > 512 ||
             request.Contributors is not { Count: >= 1 and <= 16 })
-            return "invalid_contributors";
+            return ResultCode.InvalidContributors;
         var materialCount = 0;
         foreach (var contributor in request.Contributors)
         {
@@ -1512,40 +1502,40 @@ public sealed partial class ExportServer : IDisposable
                 contributor.Capability.Length > 512 ||
                 contributor.Materials is not { Count: >= 1 and <= 256 } ||
                 contributor.Materials.Any(material => string.IsNullOrWhiteSpace(material) || material.Length > 512))
-                return "invalid_contributors";
+                return ResultCode.InvalidContributors;
             materialCount += contributor.Materials.Count;
         }
-        return materialCount <= 4096 ? null : "invalid_contributors";
+        return materialCount <= 4096 ? null : ResultCode.InvalidContributors;
     }
 
-    private static string? ValidateBackupRestoreEnvelope(BackupRestoreRequest request)
+    private static ResultCode? ValidateBackupRestoreEnvelope(BackupRestoreRequest request)
     {
         if (!string.Equals(request.Schema, "instant-edit.backup-restore", StringComparison.Ordinal))
-            return request.Version == 1 ? "unsupported_schema" : "unsupported_version";
+            return request.Version == 1 ? ResultCode.UnsupportedSchema : ResultCode.UnsupportedVersion;
         if (request.Version != 2)
-            return "unsupported_version";
+            return ResultCode.UnsupportedVersion;
         if (string.IsNullOrWhiteSpace(request.PluginInstanceId) ||
             string.IsNullOrWhiteSpace(request.ContextId) ||
             string.IsNullOrWhiteSpace(request.Capability) ||
             string.IsNullOrWhiteSpace(request.BackupName) ||
             string.IsNullOrWhiteSpace(request.BackupTargetId))
-            return "missing_field";
+            return ResultCode.MissingField;
         if (request.BackupName.Length > 512 ||
             request.BackupName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
             request.BackupName.Contains('/') || request.BackupName.Contains('\\'))
-            return "invalid_backup_name";
+            return ResultCode.InvalidBackupName;
         return null;
     }
 
-    private static string? ValidateReattachEnvelope(ReattachRequest request)
+    private static ResultCode? ValidateReattachEnvelope(ReattachRequest request)
     {
         if (!string.Equals(request.Schema, "instant-edit.reattach", StringComparison.Ordinal))
-            return request.Version == 1 ? "unsupported_schema" : "unsupported_version";
+            return request.Version == 1 ? ResultCode.UnsupportedSchema : ResultCode.UnsupportedVersion;
         if (request.Version != 1)
-            return "unsupported_version";
+            return ResultCode.UnsupportedVersion;
         if (!IsSafeId(request.ContextId) || !IsSafeId(request.ImportId) ||
             string.IsNullOrWhiteSpace(request.Capability))
-            return "missing_field";
+            return ResultCode.MissingField;
         return null;
     }
 
@@ -1556,7 +1546,7 @@ public sealed partial class ExportServer : IDisposable
         => !string.IsNullOrWhiteSpace(value) && value.Length <= 128 &&
            value.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.');
 
-    internal static async Task<(StagedExport? Export, (string Code, string Message)? Error)> StageExportFileAsync(
+    internal static async Task<(StagedExport? Export, (ResultCode Code, string Message)? Error)> StageExportFileAsync(
         string filePath,
         long expectedSize,
         string expectedSha256)
@@ -1570,27 +1560,27 @@ public sealed partial class ExportServer : IDisposable
                 !Path.IsPathRooted(filePath) || filePath.StartsWith("\\\\", StringComparison.Ordinal) ||
                 !string.Equals(Path.GetExtension(filePath), ".mdl", StringComparison.OrdinalIgnoreCase) ||
                 filePath.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries).Any(segment => segment is "." or ".."))
-                return (null, ("unsafe_file_path", "filePath must be a local absolute .mdl path"));
+                return (null, (ResultCode.UnsafeFilePath, "filePath must be a local absolute .mdl path"));
 
             fullPath = Path.GetFullPath(filePath);
             var parent = Path.GetDirectoryName(fullPath);
             if (!File.Exists(fullPath))
-                return (null, ("file_not_found", "export file was not found"));
+                return (null, (ResultCode.FileNotFound, "export file was not found"));
             if ((File.GetAttributes(fullPath) & FileAttributes.ReparsePoint) != 0 ||
                 (parent is not null && HasReparsePointInPath(parent)))
-                return (null, ("unsafe_file_path", "filePath must not be a reparse point"));
+                return (null, (ResultCode.UnsafeFilePath, "filePath must not be a reparse point"));
 
             var info = new FileInfo(fullPath);
             if (info.Length != expectedSize)
-                return (null, ("size_mismatch", "export file size did not match the request"));
+                return (null, (ResultCode.SizeMismatch, "export file size did not match the request"));
             if (info.Length > MaxExportBytes)
-                return (null, ("invalid_size", "export file is too large"));
+                return (null, (ResultCode.InvalidSize, "export file is too large"));
 
             var stagingRoot = Path.Combine(Path.GetTempPath(), "InstantEdit", "plugin-exports");
             Directory.CreateDirectory(stagingRoot);
             if ((File.GetAttributes(stagingRoot) & FileAttributes.ReparsePoint) != 0 ||
                 HasReparsePointInPath(Path.GetDirectoryName(stagingRoot)!))
-                return (null, ("internal_error", "plugin export staging directory is unsafe"));
+                return (null, (ResultCode.InternalError, "plugin export staging directory is unsafe"));
             var stagingDirectory = Path.Combine(stagingRoot, Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(stagingDirectory);
             staged = new StagedExport(Path.Combine(stagingDirectory, "model.mdl"), stagingDirectory);
@@ -1620,7 +1610,7 @@ public sealed partial class ExportServer : IDisposable
                 copied += read;
                 if (copied > MaxExportBytes)
                 {
-                    return (null, ("invalid_size", "export file is too large"));
+                    return (null, (ResultCode.InvalidSize, "export file is too large"));
                 }
                 sha.AppendData(buffer, 0, read);
                 await destination.WriteAsync(buffer.AsMemory(0, read)).ConfigureAwait(false);
@@ -1629,27 +1619,27 @@ public sealed partial class ExportServer : IDisposable
 
             if (copied != expectedSize)
             {
-                return (null, ("size_mismatch", "export file size changed during staging"));
+                return (null, (ResultCode.SizeMismatch, "export file size changed during staging"));
             }
             var actual = Convert.ToHexString(sha.GetHashAndReset());
             if (!string.Equals(actual, expectedSha256, StringComparison.OrdinalIgnoreCase))
             {
-                return (null, ("hash_mismatch", "export file hash did not match the request"));
+                return (null, (ResultCode.HashMismatch, "export file hash did not match the request"));
             }
             retainStaged = true;
             return (staged, null);
         }
         catch (UnauthorizedAccessException)
         {
-            return (null, ("unsafe_file_path", "export file is not readable"));
+            return (null, (ResultCode.UnsafeFilePath, "export file is not readable"));
         }
         catch (IOException)
         {
-            return (null, ("file_not_readable", "export file could not be staged"));
+            return (null, (ResultCode.FileNotReadable, "export file could not be staged"));
         }
         catch (ArgumentException)
         {
-            return (null, ("unsafe_file_path", "filePath is invalid"));
+            return (null, (ResultCode.UnsafeFilePath, "filePath is invalid"));
         }
         finally
         {
@@ -1670,7 +1660,7 @@ public sealed partial class ExportServer : IDisposable
                 .FirstOrDefault(scaling => scaling is not null && scaling.CharacterRace != targetRace) is not { } record)
             return null;
         var target = targetRace is { } race ? $"a c{race:D4} model" : "this model";
-        return new ExportReceipt(false, "racial_scaling_mismatch",
+        return new ExportReceipt(false, ResultCode.RacialScalingMismatch,
             $"This model was sent to Blender racially scaled (c{record.ModelRace:D4} to {GameRaces.Label(record.CharacterRace)}), " +
             $"so it can't go into {target}. Pick Save as c{record.CharacterRace:D4} Model as the target.");
     }
@@ -1736,14 +1726,14 @@ public sealed partial class ExportServer : IDisposable
         int status,
         string operation,
         string stage,
-        string code,
+        ResultCode code,
         string cause,
         string remedy,
         string? diagnosticId = null,
         Exception? exception = null)
     {
         var failure = BridgeFailure.Create(
-            "dalamud_plugin", operation, stage, code, cause, remedy, status, diagnosticId);
+            "dalamud_plugin", operation, stage, code.Wire(), cause, remedy, status, diagnosticId);
         var message =
             $"Bridge failure {failure.DiagnosticId}: HTTP {status}; " +
             $"{failure.Operation}/{failure.Stage}/{failure.Code}: {failure.Cause} Remedy: {failure.Remedy}";
@@ -1768,16 +1758,17 @@ public sealed partial class ExportServer : IDisposable
 
     private string EnrichErrorResponse(string path, int status, string body)
     {
-        var code = "request_rejected";
+        var code = ResultCode.RequestRejected;
         var cause = "The Dalamud plugin rejected the bridge request.";
         try
         {
             using var document = JsonDocument.Parse(body);
             if (document.RootElement.ValueKind == JsonValueKind.Object)
             {
+                // Every error body comes from Error(), so its code is always one of ours.
                 if (document.RootElement.TryGetProperty("code", out var codeValue) &&
-                    codeValue.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(codeValue.GetString()))
-                    code = codeValue.GetString()!;
+                    codeValue.ValueKind == JsonValueKind.String && ResultCodes.TryParse(codeValue.GetString(), out var parsed))
+                    code = parsed;
                 if (document.RootElement.TryGetProperty("error", out var errorValue) &&
                     errorValue.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(errorValue.GetString()))
                     cause = errorValue.GetString()!;
@@ -1786,7 +1777,7 @@ public sealed partial class ExportServer : IDisposable
 
         catch (JsonException)
         {
-            code = "invalid_error_response";
+            code = ResultCode.InvalidErrorResponse;
             cause = "The Dalamud plugin produced an invalid error response.";
         }
 
@@ -1820,69 +1811,168 @@ public sealed partial class ExportServer : IDisposable
             _ => "http_request",
         };
 
-    private static string StageForCode(string code)
+    // Stage and remedy say where a failed request stopped and what to do about it. Both switches list
+    // every code, so a new code warns (CS8509) until it has one. Success codes never reach the error
+    // path; they sit in the last arm with the other codes that have no specific stage or remedy.
+#pragma warning disable CS8524 // Only the named codes exist; no other value reaches these switches.
+    private static string StageForCode(ResultCode code) => code switch
     {
-        if (code == "endpoint_not_found")
-            return "routing";
-        if (code is "invalid_utf8" or "invalid_json")
-            return "request_parsing";
-        if (code.Contains("schema", StringComparison.Ordinal) ||
-            code.Contains("version", StringComparison.Ordinal) ||
-            code.Contains("field", StringComparison.Ordinal) ||
-            code == "request_not_object" ||
-            code.StartsWith("invalid_", StringComparison.Ordinal) ||
-            code.StartsWith("malformed_", StringComparison.Ordinal))
-            return "request_validation";
-        if (code is "stale_context" or "invalid_capability" or "plugin_instance_mismatch" or
-            "import_id_mismatch")
-            return "authorization";
-        if (code is "unsafe_file_path" or "file_not_found" or "file_not_readable" or
-            "size_mismatch" or "hash_mismatch")
-            return "file_staging";
-        if (code is "duplicate_export_id")
-            return "reservation";
-        if (code is "export_not_found")
-            return "receipt_lookup";
-        if (code is "destination_not_ready" or "vanilla_mod_exists" or "mashup_plan_mismatch" or "sizes_need_mod")
-            return "destination_validation";
-        if (code is "racial_scaling_mismatch" or "race_model_unavailable")
-            return "racial_scaling";
-        return code == "internal_error" ? "processing" : "external_service";
-    }
+        ResultCode.EndpointNotFound => "routing",
+        ResultCode.InvalidUtf8 or ResultCode.InvalidJson => "request_parsing",
+        ResultCode.MalformedHttpRequest or ResultCode.InvalidErrorResponse or ResultCode.RequestNotObject or
+            ResultCode.UnsupportedSchema or ResultCode.UnsupportedVersion or ResultCode.UnsupportedField or
+            ResultCode.MissingField or ResultCode.InvalidSize or ResultCode.InvalidSha256 or
+            ResultCode.InvalidModName or ResultCode.InvalidVariantName or ResultCode.InvalidVariantTarget or
+            ResultCode.InvalidStatus or ResultCode.InvalidComponent or ResultCode.InvalidOperation or
+            ResultCode.InvalidStage or ResultCode.InvalidErrorCode or ResultCode.InvalidCause or
+            ResultCode.InvalidRemedy or ResultCode.InvalidDiagnosticId or ResultCode.InvalidExportFile or
+            ResultCode.InvalidContributors or ResultCode.InvalidAttributeGroups or ResultCode.InvalidEstEntries or
+            ResultCode.InvalidBackupName or ResultCode.InvalidBackupClear or ResultCode.InvalidRace or
+            ResultCode.InvalidSizes or ResultCode.InvalidSizeName or ResultCode.InvalidDefaultSize or
+            ResultCode.InvalidModelPath or ResultCode.InvalidContext or ResultCode.InvalidCapability or
+            ResultCode.InvalidCallbackPort or ResultCode.InvalidExportId or ResultCode.InvalidPendingExport or
+            ResultCode.InvalidDestinationState or ResultCode.InvalidVariant or ResultCode.InvalidVariantGroup or
+            ResultCode.InvalidRestore or ResultCode.InvalidBackupTarget or ResultCode.InvalidMashup or
+            ResultCode.InvalidRequest or ResultCode.InvalidSend or ResultCode.InvalidSuccessResponse => "request_validation",
+        ResultCode.StaleContext or ResultCode.PluginInstanceMismatch or ResultCode.ImportIdMismatch => "authorization",
+        ResultCode.UnsafeFilePath or ResultCode.FileNotFound or ResultCode.FileNotReadable or
+            ResultCode.SizeMismatch or ResultCode.HashMismatch => "file_staging",
+        ResultCode.DuplicateExportId => "reservation",
+        ResultCode.ExportNotFound => "receipt_lookup",
+        ResultCode.DestinationNotReady or ResultCode.VanillaModExists or ResultCode.SizesNeedMod or
+            ResultCode.MashupPlanMismatch => "destination_validation",
+        ResultCode.RacialScalingMismatch or ResultCode.RaceModelUnavailable => "racial_scaling",
+        ResultCode.InternalError => "processing",
+        ResultCode.RequestHeadersInvalid or ResultCode.RequestLineInvalid or ResultCode.ContentLengthInvalid or
+            ResultCode.RequestBodyTooLarge or ResultCode.RequestTooLarge or ResultCode.RequestBodyIncomplete or
+            ResultCode.RequestForbidden or ResultCode.RequestRejected or ResultCode.MissingVariantTarget or
+            ResultCode.PenumbraSetupRequiresVariant or ResultCode.PenumbraSetupRequiresGroupName or
+            ResultCode.DuplicateContext or ResultCode.Accepted or ResultCode.ServerStopped or
+            ResultCode.ContextReattached or ResultCode.ContextRevoked or ResultCode.ContextRemoved or
+            ResultCode.DuplicateExport or ResultCode.ExportPending or ResultCode.ExportComplete or
+            ResultCode.ImportFailureRecorded or ResultCode.ExportApplied or ResultCode.ExportAppliedWithWarnings or
+            ResultCode.ApplyFailed or ResultCode.DestinationUnsafe or ResultCode.MissingNewModName or
+            ResultCode.UnexpectedNewModName or ResultCode.MissingSourceTarget or ResultCode.StaleVariantTarget or
+            ResultCode.AmbiguousSourceOption or ResultCode.SourceOptionUnavailable or ResultCode.WriteFailed or
+            ResultCode.PenumbraRootMissing or ResultCode.PenumbraRootUnsafe or ResultCode.PenumbraUnavailable or
+            ResultCode.VanillaModCreated or ResultCode.VanillaModCreatedWithWarnings or
+            ResultCode.VanillaModCreateFailed or ResultCode.RaceModelExported or
+            ResultCode.RaceModelExportedWithWarnings or ResultCode.SizesExported or
+            ResultCode.SizesExportedWithWarnings or ResultCode.AttributeGroupConflict or
+            ResultCode.AttributeGroupWriteFailed or ResultCode.DestinationUnavailable or
+            ResultCode.DestinationUnresolvable or ResultCode.DestinationAmbiguous or ResultCode.DestinationMissing or
+            ResultCode.SourceModMissing or ResultCode.SourceModIdentityUnavailable or ResultCode.SourceModChanged or
+            ResultCode.SourceModAmbiguous or ResultCode.VariantTargetUnavailable or ResultCode.VariantTargetsLoaded or
+            ResultCode.VariantTargetsUnavailable or ResultCode.BackupUnavailable or ResultCode.BackupMissing or
+            ResultCode.RestoreWriteFailed or ResultCode.RestoreFailed or ResultCode.BackupRestored or
+            ResultCode.BackupRestoredWithWarnings or ResultCode.BackupsCleared or ResultCode.BackupClearFailed or
+            ResultCode.MashupReimportRequired or ResultCode.MashupMaterialMissing or
+            ResultCode.MashupMaterialPathUnsafe or ResultCode.MashupMaterialAliasUnsafe or
+            ResultCode.MashupMaterialAliasConflict or ResultCode.MashupMaterialPathConflict or
+            ResultCode.MashupTargetMaterialDirectoryAmbiguous or ResultCode.MashupTargetMaterialDirectoryInvalid or
+            ResultCode.MashupTargetMaterialFamilyAmbiguous or ResultCode.MashupMaterialSlotsExhausted or
+            ResultCode.MashupPlanReady or ResultCode.MashupModelMismatch or ResultCode.MashupTextureConflict or
+            ResultCode.MashupSourceChanged or ResultCode.MashupMaterialRewriteFailed or
+            ResultCode.MashupMaterialHashConflict or ResultCode.MashupMappingConflict or ResultCode.MashupFailed or
+            ResultCode.MashupDestinationExists or ResultCode.MashupApplied or ResultCode.MashupAppliedWithWarnings or
+            ResultCode.MashupWriteFailed or ResultCode.MashupModExists or ResultCode.MashupModCreated or
+            ResultCode.MashupModCreatedWithWarnings or ResultCode.MashupModCreateFailed or
+            ResultCode.MaterialCoverageComplete or ResultCode.MaterialCoverageMissing or
+            ResultCode.MaterialCoverageUnavailable or ResultCode.SkeletonsUnavailable or ResultCode.SkeletonTimeout or
+            ResultCode.SkeletonNotFound or ResultCode.RacialScalingUnavailable or ResultCode.RacialDeformerTimeout or
+            ResultCode.UnknownProject or ResultCode.RequestFailed or ResultCode.DuplicateSend or
+            ResultCode.UnknownSend or ResultCode.BlenderConnectionFailed or ResultCode.BlenderRequestTimeout or
+            ResultCode.LegacyHttpError => "external_service",
+    };
 
-    private static string RemedyForCode(string code)
+    private const string RemedyEndpoint = "Update both XIV Instant Edit components and verify the configured plugin port.";
+    private const string RemedyUpdate = "Update and restart both XIV Instant Edit components, then retry.";
+    private const string RemedyReimport = "Re-import the model from the current plugin session and retry.";
+    private const string RemedyCache = "Retry the export and verify the Blender cache directory is accessible.";
+    private const string RemedyExportAgain = "Export the model again; the staged file changed before the plugin could read it.";
+    private const string RemedyDestination = "Select or create a valid Penumbra destination, then retry.";
+    private const string RemedyMashupPlan = "Refresh the mashup plan and retry the export.";
+    private const string RemedySizesNeedMod = "Export once with Magic Fit Sizes off to create the mod, then export the sizes.";
+    private const string RemedyRacialScaling = "Export it as a model of the race it was scaled for, or re-import it with racial scaling off.";
+    private const string RemedyInternal = "Retry the operation and review the Dalamud plugin log if it fails again.";
+    private const string RemedyReview = "Review the reported Penumbra or request details, correct them, and retry.";
+
+    private static string RemedyForCode(ResultCode code) => code switch
     {
-        if (code == "endpoint_not_found")
-            return "Update both XIV Instant Edit components and verify the configured plugin port.";
-        if (code.Contains("schema", StringComparison.Ordinal) || code.Contains("version", StringComparison.Ordinal) ||
-            code.Contains("field", StringComparison.Ordinal) || code == "request_not_object" ||
-            code.StartsWith("malformed_", StringComparison.Ordinal))
-            return "Update and restart both XIV Instant Edit components, then retry.";
-        if (code is "stale_context" or "invalid_capability" or "plugin_instance_mismatch" or
-            "import_id_mismatch")
-            return "Re-import the model from the current plugin session and retry.";
-        if (code is "unsafe_file_path" or "file_not_found" or "file_not_readable")
-            return "Retry the export and verify the Blender cache directory is accessible.";
-        if (code is "size_mismatch" or "hash_mismatch")
-            return "Export the model again; the staged file changed before the plugin could read it.";
-        if (code is "destination_not_ready" or "vanilla_mod_exists")
-            return "Select or create a valid Penumbra destination, then retry.";
-        if (code is "mashup_plan_mismatch")
-            return "Refresh the mashup plan and retry the export.";
-        if (code is "sizes_need_mod")
-            return "Export once with Magic Fit Sizes off to create the mod, then export the sizes.";
-        if (code is "racial_scaling_mismatch")
-            return "Export it as a model of the race it was scaled for, or re-import it with racial scaling off.";
-        if (code == "internal_error")
-            return "Retry the operation and review the Dalamud plugin log if it fails again.";
-        return "Review the reported Penumbra or request details, correct them, and retry.";
-    }
+        ResultCode.EndpointNotFound => RemedyEndpoint,
+        ResultCode.MalformedHttpRequest or ResultCode.RequestNotObject or ResultCode.UnsupportedSchema or
+            ResultCode.UnsupportedVersion or ResultCode.UnsupportedField or ResultCode.MissingField => RemedyUpdate,
+        ResultCode.StaleContext or ResultCode.InvalidCapability or ResultCode.PluginInstanceMismatch or
+            ResultCode.ImportIdMismatch => RemedyReimport,
+        ResultCode.UnsafeFilePath or ResultCode.FileNotFound or ResultCode.FileNotReadable => RemedyCache,
+        ResultCode.SizeMismatch or ResultCode.HashMismatch => RemedyExportAgain,
+        ResultCode.DestinationNotReady or ResultCode.VanillaModExists => RemedyDestination,
+        ResultCode.MashupPlanMismatch => RemedyMashupPlan,
+        ResultCode.SizesNeedMod => RemedySizesNeedMod,
+        ResultCode.RacialScalingMismatch => RemedyRacialScaling,
+        ResultCode.InternalError => RemedyInternal,
+        ResultCode.RequestHeadersInvalid or ResultCode.RequestLineInvalid or ResultCode.ContentLengthInvalid or
+            ResultCode.RequestBodyTooLarge or ResultCode.RequestTooLarge or ResultCode.RequestBodyIncomplete or
+            ResultCode.RequestForbidden or ResultCode.RequestRejected or ResultCode.InvalidErrorResponse or
+            ResultCode.InvalidUtf8 or ResultCode.InvalidJson or ResultCode.InvalidSize or ResultCode.InvalidSha256 or
+            ResultCode.InvalidModName or ResultCode.InvalidVariantName or ResultCode.InvalidVariantTarget or
+            ResultCode.MissingVariantTarget or ResultCode.PenumbraSetupRequiresVariant or
+            ResultCode.PenumbraSetupRequiresGroupName or ResultCode.InvalidStatus or ResultCode.InvalidComponent or
+            ResultCode.InvalidOperation or ResultCode.InvalidStage or ResultCode.InvalidErrorCode or
+            ResultCode.InvalidCause or ResultCode.InvalidRemedy or ResultCode.InvalidDiagnosticId or
+            ResultCode.InvalidExportFile or ResultCode.InvalidContributors or ResultCode.InvalidAttributeGroups or
+            ResultCode.InvalidEstEntries or ResultCode.InvalidBackupName or ResultCode.InvalidBackupClear or
+            ResultCode.DuplicateContext or ResultCode.InvalidRace or ResultCode.InvalidSizes or
+            ResultCode.InvalidSizeName or ResultCode.InvalidDefaultSize or ResultCode.InvalidModelPath or
+            ResultCode.Accepted or ResultCode.InvalidContext or ResultCode.InvalidCallbackPort or
+            ResultCode.ServerStopped or ResultCode.ContextReattached or ResultCode.ContextRevoked or
+            ResultCode.ContextRemoved or ResultCode.InvalidExportId or ResultCode.DuplicateExport or
+            ResultCode.DuplicateExportId or ResultCode.ExportNotFound or ResultCode.ExportPending or
+            ResultCode.ExportComplete or ResultCode.ImportFailureRecorded or ResultCode.ExportApplied or
+            ResultCode.ExportAppliedWithWarnings or ResultCode.ApplyFailed or ResultCode.DestinationUnsafe or
+            ResultCode.MissingNewModName or ResultCode.UnexpectedNewModName or ResultCode.InvalidPendingExport or
+            ResultCode.InvalidDestinationState or ResultCode.MissingSourceTarget or ResultCode.InvalidVariant or
+            ResultCode.InvalidVariantGroup or ResultCode.StaleVariantTarget or ResultCode.AmbiguousSourceOption or
+            ResultCode.SourceOptionUnavailable or ResultCode.WriteFailed or ResultCode.PenumbraRootMissing or
+            ResultCode.PenumbraRootUnsafe or ResultCode.PenumbraUnavailable or ResultCode.VanillaModCreated or
+            ResultCode.VanillaModCreatedWithWarnings or ResultCode.VanillaModCreateFailed or
+            ResultCode.RaceModelUnavailable or ResultCode.RaceModelExported or
+            ResultCode.RaceModelExportedWithWarnings or ResultCode.SizesExported or
+            ResultCode.SizesExportedWithWarnings or ResultCode.AttributeGroupConflict or
+            ResultCode.AttributeGroupWriteFailed or ResultCode.DestinationUnavailable or
+            ResultCode.DestinationUnresolvable or ResultCode.DestinationAmbiguous or ResultCode.DestinationMissing or
+            ResultCode.SourceModMissing or ResultCode.SourceModIdentityUnavailable or ResultCode.SourceModChanged or
+            ResultCode.SourceModAmbiguous or ResultCode.VariantTargetUnavailable or ResultCode.VariantTargetsLoaded or
+            ResultCode.VariantTargetsUnavailable or ResultCode.InvalidRestore or ResultCode.InvalidBackupTarget or
+            ResultCode.BackupUnavailable or ResultCode.BackupMissing or ResultCode.RestoreWriteFailed or
+            ResultCode.RestoreFailed or ResultCode.BackupRestored or ResultCode.BackupRestoredWithWarnings or
+            ResultCode.BackupsCleared or ResultCode.BackupClearFailed or ResultCode.InvalidMashup or
+            ResultCode.MashupReimportRequired or ResultCode.MashupMaterialMissing or
+            ResultCode.MashupMaterialPathUnsafe or ResultCode.MashupMaterialAliasUnsafe or
+            ResultCode.MashupMaterialAliasConflict or ResultCode.MashupMaterialPathConflict or
+            ResultCode.MashupTargetMaterialDirectoryAmbiguous or ResultCode.MashupTargetMaterialDirectoryInvalid or
+            ResultCode.MashupTargetMaterialFamilyAmbiguous or ResultCode.MashupMaterialSlotsExhausted or
+            ResultCode.MashupPlanReady or ResultCode.MashupModelMismatch or ResultCode.MashupTextureConflict or
+            ResultCode.MashupSourceChanged or ResultCode.MashupMaterialRewriteFailed or
+            ResultCode.MashupMaterialHashConflict or ResultCode.MashupMappingConflict or ResultCode.MashupFailed or
+            ResultCode.MashupDestinationExists or ResultCode.MashupApplied or ResultCode.MashupAppliedWithWarnings or
+            ResultCode.MashupWriteFailed or ResultCode.MashupModExists or ResultCode.MashupModCreated or
+            ResultCode.MashupModCreatedWithWarnings or ResultCode.MashupModCreateFailed or
+            ResultCode.MaterialCoverageComplete or ResultCode.MaterialCoverageMissing or
+            ResultCode.MaterialCoverageUnavailable or ResultCode.SkeletonsUnavailable or ResultCode.SkeletonTimeout or
+            ResultCode.SkeletonNotFound or ResultCode.RacialScalingUnavailable or ResultCode.RacialDeformerTimeout or
+            ResultCode.InvalidRequest or ResultCode.UnknownProject or ResultCode.RequestFailed or
+            ResultCode.InvalidSend or ResultCode.DuplicateSend or ResultCode.UnknownSend or
+            ResultCode.BlenderConnectionFailed or ResultCode.BlenderRequestTimeout or
+            ResultCode.InvalidSuccessResponse or ResultCode.LegacyHttpError => RemedyReview,
+    };
+#pragma warning restore CS8524
 
     private static bool IsSafeDiagnosticValue(string? value, int maxLength)
         => !string.IsNullOrWhiteSpace(value) && value.Length <= maxLength &&
            value.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.');
 
-    private static (int Status, string Body) Error(int status, string code, string message)
+    private static (int Status, string Body) Error(int status, ResultCode code, string message)
         => (status, Json(new { ok = false, code, error = message }));
 
     private static (int Status, string Body) ResultResponse(ExportReceipt receipt)
@@ -1900,22 +1990,22 @@ public sealed partial class ExportServer : IDisposable
             }))
             : Error(StatusForCode(receipt.Code), receipt.Code, receipt.Message);
 
-    private static int StatusForCode(string code)
+    private static int StatusForCode(ResultCode code)
         => code switch
         {
-            "stale_context" => 410,
-            "invalid_capability" or "plugin_instance_mismatch" => 401,
-            "duplicate_export_id" => 409,
-            "mashup_plan_mismatch" => 409,
-            "racial_scaling_mismatch" => 409,
-            "vanilla_mod_exists" or "destination_not_ready" or "sizes_need_mod" => 409,
-            "export_not_found" => 404,
-            "server_stopped" or "internal_error" => 500,
+            ResultCode.StaleContext => 410,
+            ResultCode.InvalidCapability or ResultCode.PluginInstanceMismatch => 401,
+            ResultCode.DuplicateExportId => 409,
+            ResultCode.MashupPlanMismatch => 409,
+            ResultCode.RacialScalingMismatch => 409,
+            ResultCode.VanillaModExists or ResultCode.DestinationNotReady or ResultCode.SizesNeedMod => 409,
+            ResultCode.ExportNotFound => 404,
+            ResultCode.ServerStopped or ResultCode.InternalError => 500,
             _ => 400,
         };
 
     /// <summary>Why the request reader gave up: the code clients match on, and the message shown to people.</summary>
-    private sealed record RequestReadError(string Code, string Message);
+    private sealed record RequestReadError(ResultCode Code, string Message);
 
     private static (HttpRequest? Request, RequestReadError? Error) ReadRequest(NetworkStream stream)
     {
@@ -1934,7 +2024,7 @@ public sealed partial class ExportServer : IDisposable
         }
 
         if (headerEnd < 0)
-            return (null, new("request_headers_invalid", "request headers are missing or too large"));
+            return (null, new(ResultCode.RequestHeadersInvalid, "request headers are missing or too large"));
 
         var header = Encoding.ASCII.GetString(bytes.ToArray(), 0, headerEnd);
         var lines = header.Split("\r\n");
@@ -1942,7 +2032,7 @@ public sealed partial class ExportServer : IDisposable
             ? lines[0].Split(' ', StringSplitOptions.RemoveEmptyEntries)
             : Array.Empty<string>();
         if (requestLine.Length < 2)
-            return (null, new("request_line_invalid", "invalid request line"));
+            return (null, new(ResultCode.RequestLineInvalid, "invalid request line"));
 
         var contentLength = 0;
         foreach (var line in lines.Skip(1))
@@ -1954,21 +2044,21 @@ public sealed partial class ExportServer : IDisposable
 
             var value = line["Content-Length:".Length..].Trim();
             if (!int.TryParse(value, out contentLength) || contentLength < 0)
-                return (null, new("content_length_invalid", "invalid content length"));
+                return (null, new(ResultCode.ContentLengthInvalid, "invalid content length"));
             if (contentLength > MaxRequestBytes)
-                return (null, new("request_body_too_large", "request body is too large"));
+                return (null, new(ResultCode.RequestBodyTooLarge, "request body is too large"));
         }
 
         var bodyStart = headerEnd + 4;
         var requiredBytes = bodyStart + contentLength;
         if (requiredBytes > MaxHeaderBytes + MaxRequestBytes)
-            return (null, new("request_too_large", "request is too large"));
+            return (null, new(ResultCode.RequestTooLarge, "request is too large"));
 
         while (bytes.Count < requiredBytes)
         {
             var read = stream.Read(buffer, 0, Math.Min(buffer.Length, requiredBytes - bytes.Count));
             if (read == 0)
-                return (null, new("request_body_incomplete", "request body ended early"));
+                return (null, new(ResultCode.RequestBodyIncomplete, "request body ended early"));
             bytes.AddRange(buffer.AsSpan(0, read).ToArray());
         }
 
@@ -1978,7 +2068,7 @@ public sealed partial class ExportServer : IDisposable
             bytes.GetRange(bodyStart, contentLength).ToArray()), null);
     }
 
-    private static readonly RequestReadError BrowserRequestRefused = new("request_forbidden", "browser requests are refused");
+    private static readonly RequestReadError BrowserRequestRefused = new(ResultCode.RequestForbidden, "browser requests are refused");
 
     /// <summary>
     /// Whether a header line marks what a web page could send to loopback (CSRF, DNS rebinding):

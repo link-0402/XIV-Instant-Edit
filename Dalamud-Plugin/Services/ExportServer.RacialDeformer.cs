@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using InstantEdit.Models;
 using InstantEdit.Services.GameFiles;
 using InstantEdit.Services.Skeletons;
 
@@ -37,14 +38,14 @@ public sealed partial class ExportServer
         if (parseError is not null)
             return parseError.Value;
         if (parsed!.Schema != "instant-edit.racial-deformer-request" || parsed.Version != 1)
-            return Error(400, "unsupported_schema", "unsupported racial deformer request schema or version");
+            return Error(400, ResultCode.UnsupportedSchema, "unsupported racial deformer request schema or version");
         if (parsed.ModelRace is < 1 or > ushort.MaxValue || GameRaces.Find((ushort)parsed.ModelRace) is null)
-            return Error(400, "invalid_race", "the model's race is not a known race");
+            return Error(400, ResultCode.InvalidRace, "the model's race is not a known race");
         if (parsed.Race != 0 && (parsed.Race is < 1 or > ushort.MaxValue || GameRaces.Find((ushort)parsed.Race) is null))
-            return Error(400, "invalid_race", "the target race is not a known race");
+            return Error(400, ResultCode.InvalidRace, "the target race is not a known race");
         var resolver = Skeletons;
         if (resolver is null)
-            return Error(503, "skeletons_unavailable", "the plugin cannot read game files");
+            return Error(503, ResultCode.SkeletonsUnavailable, "the plugin cannot read game files");
 
         // Blender stops waiting after 8 seconds.
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(7));
@@ -53,12 +54,12 @@ public sealed partial class ExportServer
             var (deformer, race, problem) = await resolver.RacialDeformerForPlayerAsync(
                 (ushort)parsed.ModelRace, parsed.Race == 0 ? null : (ushort)parsed.Race, timeout.Token).ConfigureAwait(false);
             if (deformer is null)
-                return Error(422, "racial_scaling_unavailable", problem ?? "the racial deformer could not be read");
+                return Error(422, ResultCode.RacialScalingUnavailable, problem ?? "the racial deformer could not be read");
             return (200, RacialDeformerJson(parsed.ModelRace, race, deformer));
         }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested)
         {
-            return Error(503, "racial_deformer_timeout", "the game did not read the racial deformer in time");
+            return Error(503, ResultCode.RacialDeformerTimeout, "the game did not read the racial deformer in time");
         }
     }
 
