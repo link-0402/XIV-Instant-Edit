@@ -3,38 +3,32 @@ using System.Globalization;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
-using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Services.Audio;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The sound inspector: a sound event's options in plain words, and under them the Sound file
-/// section with the file's alternatives. A sound file is read on a task the first time its event is
-/// shown. Changes to the file stay on the document (<see cref="TimelineDocument.SoundEdits"/>, pins
-/// on the events) until a save, preview or listen writes them into a file (<see cref="TimelineSoundEdits"/>).
+/// section with the file's alternatives and listen buttons. Changes to the file stay on the document
+/// (<see cref="TimelineDocument.SoundEdits"/>, pins on the events) until a save, preview or listen
+/// writes them into a file (see <see cref="SoundFiles"/>).
 /// </summary>
-public sealed partial class TimelineWindow
+internal sealed class SoundInspector(TimelineSession session, SoundFiles soundFiles, TimelinePickers pickers, GameSoundPlayer? soundPlayer)
 {
     private const string LoopField = "Loop", PositionField = "PositionFlags", BindField = "BindId";
     private const long FadesBit = 1, StopsBit = 2, BindBit = 4;
 
-    /// <summary> Forgets the sounds read for another clip. </summary>
-    private void ForgetSounds()
-    {
-        soundFiles.Forget();
-        pathOrigins.Clear();
-        // A save's check of the mod, or its question, belongs to the clip it was for.
-        soundCheck = null;
-        soundCheckDocument = null;
-        soundAsk = null;
-        soundInPlace = null;
-        // So is a listen's error.
-        ForgetListen(null);
-    }
+    // A Sound file control's changes until no control is active make one undo step.
+    private bool soundEditing;
+    // The sound playing in game for a listen button, why the last one couldn't, and the event they are for.
+    private Task? listening;
+    private string? listenError;
+    private string? listenEvent;
+
+    /// <summary> Drops a listen's error and the play still running, which belong to the clip before. </summary>
+    public void Forget() => ForgetListen(null);
 
     /// <summary> Drops the last listen's error and the play still running, which belong to another event or clip. </summary>
     private void ForgetListen(string? eventKey)
@@ -49,11 +43,11 @@ public sealed partial class TimelineWindow
     /// whether it fades with distance, stops with the animation and where it comes from, and the
     /// sound entry for a file with several.
     /// </summary>
-    private void DrawSoundEvent(TimelineEditor current, TimelineEvent ev, bool editable)
+    public void DrawEvent(TimelineEditor current, TimelineEvent ev, bool editable)
     {
         var values = ev.Values ?? ImmutableDictionary<string, double>.Empty;
         var key = TimelineSoundKey.Of(ev);
-        var shown = key is { } k && source is { } loaded ? soundFiles.ShownSound(current.Document, k, loaded) : null;
+        var shown = key is { } k && session.Source is { } loaded ? soundFiles.ShownSound(current.Document, k, loaded) : null;
         var sound = key?.Sound ?? 0;
 
         TimelineUi.Fact("Plays");
@@ -156,21 +150,17 @@ public sealed partial class TimelineWindow
         TimelineUi.Tip(tooltip);
     }
 
-    // A Sound file control's changes until no control is active make one undo step.
-    private bool soundEditing;
-    // The sound playing in game for a listen button, why the last one couldn't, and the event they are for.
-    private Task? listening;
-    private string? listenError;
-    private string? listenEvent;
-
     /// <summary> Ends the running sound edit once no control is active any more. </summary>
-    private void EndSoundEdit(TimelineEditor current)
+    public void EndEdit(TimelineEditor current)
     {
         if (!soundEditing || ImGui.IsAnyItemActive())
             return;
         soundEditing = false;
         current.EndFieldEdit();
     }
+
+    /// <summary> Drops the running sound edit when the editor starts over with another document. </summary>
+    public void ForgetEdit() => soundEditing = false;
 
     private void SetSoundEdit(TimelineEditor current, TimelineSoundKey key, TimelineSoundEdit edit)
     {
@@ -188,12 +178,12 @@ public sealed partial class TimelineWindow
     /// More with the hearing range, channel and loop. A file whose sound isn't a one-shot or a random
     /// set, a locked event and a read-only timeline show it without controls.
     /// </summary>
-    private void DrawSoundFile(TimelineEditor current, TimelineEvent ev, bool editable)
+    public void DrawFile(TimelineEditor current, TimelineEvent ev, bool editable)
     {
         if (listenEvent != ev.Key)
             ForgetListen(ev.Key);
         PollListen();
-        if (source is not { } loaded || TimelineSoundKey.Of(ev) is not { } key || !key.Path.EndsWith(".scd", StringComparison.OrdinalIgnoreCase) ||
+        if (session.Source is not { } loaded || TimelineSoundKey.Of(ev) is not { } key || !key.Path.EndsWith(".scd", StringComparison.OrdinalIgnoreCase) ||
             !AnimationDependencies.SafeGamePath(key.Path))
             return;
         ImGui.Spacing();
@@ -487,5 +477,30 @@ public sealed partial class TimelineWindow
     {
         using var wrap = ImRaii.TextWrapPos(0);
         ImGui.TextColored(colour, text);
+    }
+
+    /// <summary>In a sound's panel, when it plays across a cut: cut its audio with the motion, or leave it whole.</summary>
+    private void DrawSoundCutChoice(TimelineEditor current, TimelineEvent ev, bool editable)
+    {
+        var doc = current.Document;
+        if (!soundFiles.CrossesCut(doc, ev, true))
+            return;
+        TimelineUi.Fact("Across a cut");
+        bool? choice = doc.SoundCuts.TryGetValue(ev.Key, out var cut) ? cut : null;
+        var choices = TimelineWindowViews.SoundCutChoices;
+        using (ImRaii.Disabled(!editable))
+        {
+            if (ImGui.RadioButton(choices[0], choice == true))
+                current.SetSoundCut(ev.Key, true);
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip("Saving cuts the same stretch out of the sound, so it stays in step with the motion.");
+            ImGui.SameLine(0, Theme.Gap);
+            if (ImGui.RadioButton(choices[1], choice == false))
+                current.SetSoundCut(ev.Key, false);
+        }
+        if (choice == false)
+            Widgets.HintWrapped(TimelineWindowViews.LeaveWholeNote);
+        else if (choice == null)
+            ImGui.TextColored(Theme.Warning, TimelineWindowViews.CrossesCutTip);
     }
 }
