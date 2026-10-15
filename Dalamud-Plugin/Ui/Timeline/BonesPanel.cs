@@ -4,23 +4,22 @@ using Dalamud.Interface;
 using Dalamud.Interface.Components;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Plugin.Services;
-using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui.Pose;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// The Bones window's content, drawn for <see cref="BonesWindow"/> from this window's state: the
-/// body's bone map (Brio's artwork) and a list of every bone to select bones on, and the panel with
-/// the rotation ball that turns, moves and scales them in the selected bone layer at the playhead.
-/// The selection is shared with the properties panel's bone picker.
+/// The Bones window's content, drawn for <see cref="BonesWindow"/>: the body's bone map (Brio's artwork)
+/// and a list of every bone to select bones on, and the panel with the rotation ball that turns, moves
+/// and scales them in the Timeline window's selected bone layer at the playhead. The selection is
+/// shared with the properties panel's bone picker and the bones on the character.
 /// </summary>
-public sealed partial class TimelineWindow
+internal sealed class BonesPanel(TimelineSession session, string? animationError, BonePosing posing, BoneEditor boneEditor,
+    PoseSourcePanel poseSources, TimelinePreview timelinePreview, IBonesOverlay overlay, ITextureProvider textures)
 {
     private enum BonesPage : byte { Map, List }
 
@@ -34,22 +33,19 @@ public sealed partial class TimelineWindow
         "In GPose the bones show on the character too. Click a dot there to select it.\n" +
         "With Live on and paused, drag the gizmo on the character to turn or move the bones.";
 
-    private readonly BonesWindow bonesWindow;
-    private readonly ITextureProvider textures;
     private BonesPage bonesPage = BonesPage.Map;
     private bool swapSides;
     private string boneSearch = string.Empty;
-    internal BonesWindow Bones => bonesWindow;
 
     /// <summary>The Bones window's whole content; called from its draw.</summary>
-    internal void DrawBones()
+    public void Draw()
     {
-        if (animations == null)
+        if (session.Animations == null)
         {
             Widgets.Banner("##bones-unavailable", FeedbackSeverity.Warning, animationError ?? "Animation editing is unavailable.");
             return;
         }
-        if (source is not { Document: not null } loaded || editor is not { } current)
+        if (session.Source is not { Document: not null } loaded || session.Editor is not { } current)
         {
             Widgets.EmptyState(FontAwesomeIcon.Child, "No timeline open",
                 "Open or load an animation in the Timeline window. This window poses its bones.");
@@ -60,7 +56,7 @@ public sealed partial class TimelineWindow
             Widgets.EmptyState(FontAwesomeIcon.Smile, "An expression", "An expression's face takes no bone layers.");
             return;
         }
-        var fresh = Fresh(loaded);
+        var fresh = session.Fresh(loaded);
         if (fresh.Clip.Resolution?.Selected?.Skeleton is not { } skeleton)
         {
             if (fresh.Clip.Resolution is { State: SkeletonResolutionState.Ambiguous, Candidates.Length: > 0 } open)
@@ -112,7 +108,7 @@ public sealed partial class TimelineWindow
         var width = Math.Min(Theme.Scaled(480), ImGui.GetContentRegionAvail().X);
         ImGui.SetCursorPosX(ImGui.GetCursorPosX() + Math.Max(0, (ImGui.GetContentRegionAvail().X - width) / 2));
         ImGui.SetNextItemWidth(width);
-        using (ImRaii.Disabled(animations!.Busy))
+        using (ImRaii.Disabled(session.Animations!.Busy))
         using (var combo = ImRaii.Combo("##bones-skeleton", "Choose the skeleton it was made for"))
         {
             if (combo.Success)
@@ -134,9 +130,9 @@ public sealed partial class TimelineWindow
         timelinePreview.DrawLiveToggle(current, loaded, "##bones-live");
         ImGui.SameLine(0, Theme.Scaled(2));
         var shown = timelinePreview.Fingerprint != null;
-        var playing = playback.Active && !playback.Paused;
+        var playing = session.Playback.Active && !session.Playback.Paused;
         if (Widgets.IconButton("##bones-play", playing ? FontAwesomeIcon.Pause : FontAwesomeIcon.Play,
-                !shown ? "Turn on Live first." : playing ? "Pause" : playback.Active ? "Resume" : "Play",
+                !shown ? "Turn on Live first." : playing ? "Pause" : session.Playback.Active ? "Resume" : "Play",
                 shown && timelinePreview.PlaybackAvailable(out _)))
             timelinePreview.TogglePlay();
         ImGui.SameLine(0, Theme.Scaled(8));
@@ -210,10 +206,10 @@ public sealed partial class TimelineWindow
                 swapSides = !swapSides;
             ImGui.SameLine(0, Theme.Scaled(2));
         }
-        if (TimelineUi.Toggle("##bones-overlay", FontAwesomeIcon.Crosshairs, showOnCharacter, showOnCharacter
+        if (TimelineUi.Toggle("##bones-overlay", FontAwesomeIcon.Crosshairs, overlay.OnCharacter, overlay.OnCharacter
                 ? "In GPose the bones show on the character, to select them there and pose them with the gizmo. Click to hide them."
                 : "Show the bones on the character in GPose, to select them there and pose them with the gizmo."))
-            showOnCharacter = !showOnCharacter;
+            overlay.OnCharacter = !overlay.OnCharacter;
         ImGui.SameLine(0, Theme.Scaled(2));
         if (Widgets.IconButton("##bones-clear", FontAwesomeIcon.Times, "Clear the selection", posing.Selection.Count > 0))
             posing.Selection.Clear();
@@ -223,7 +219,7 @@ public sealed partial class TimelineWindow
         {
             0 => "Nothing selected",
             1 => AnimationPresentation.BoneName(posing.Selection.Primary!),
-            _ => $"{selection.Count} bones selected",
+            _ => $"{posing.Selection.Count} bones selected",
         });
     }
 
@@ -355,7 +351,7 @@ public sealed partial class TimelineWindow
 
         if (hover != null)
         {
-            ImGui.SetTooltip($"{AnimationPresentation.BoneName(hover)}\n{StateText(StateOf(hover, layer, frame, animated), layer)}");
+            ImGui.SetTooltip($"{AnimationPresentation.BoneName(hover)}\n{BonePosing.StateText(BonePosing.StateOf(hover, layer, frame, animated), layer)}");
             if (clicked)
                 posing.ClickBone(hover, skeleton);
         }
@@ -425,7 +421,7 @@ public sealed partial class TimelineWindow
     /// <summary> The panel beside the map: the bone editor with the ball, an amplitude's bones, or how to start. </summary>
     private void DrawBonesPanel(TimelineEditor current, AnimationTimelineSource loaded, MotionLayer? layer, SkeletonDescription skeleton)
     {
-        var readOnly = ReadOnly;
+        var readOnly = session.ReadOnly;
         if (layer == null)
         {
             Widgets.MutedWrapped("Select a bone layer in the timeline to pose its bones, or add one over the whole clip:");
@@ -472,7 +468,7 @@ public sealed partial class TimelineWindow
         ImGui.SetNextFrameWantCaptureKeyboard(true);
         if (ImGui.IsAnyItemActive() || ImGui.IsPopupOpen("", ImGuiPopupFlags.AnyPopupId | ImGuiPopupFlags.AnyPopupLevel))
             return;
-        var readOnly = ReadOnly;
+        var readOnly = session.ReadOnly;
         if (io.KeyCtrl && ImGui.IsKeyPressed(ImGuiKey.Z))
         {
             if (!readOnly)
