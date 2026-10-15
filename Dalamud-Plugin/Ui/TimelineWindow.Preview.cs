@@ -100,13 +100,13 @@ public sealed partial class TimelineWindow
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Muted, service.Status);
         }
-        else if (liveWanted && (decodeTask != null || motionDisplay?.Building == true || liveDrawWait != null))
+        else if (liveWanted && (decode.Reading || motionDisplay?.Building == true || liveDrawWait != null))
         {
             ImGui.SameLine(0, Theme.Scaled(12));
             Widgets.Spinner();
             ImGui.SameLine(0, Theme.Gap);
             ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, decodeTask != null ? decodeStatus : liveDrawWait != null ? "Waiting for your character" : "Applying the bone layers");
+            ImGui.TextColored(Theme.Muted, decode.Reading ? decode.Status : liveDrawWait != null ? "Waiting for your character" : "Applying the bone layers");
         }
         else if (FirstText(liveError, liveWanted ? motionDisplay?.Error : null, previewError, preview.Error, playback.Error) is { } error)
         {

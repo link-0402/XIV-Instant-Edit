@@ -327,7 +327,7 @@ public sealed partial class TimelineWindow
         var pose = layer.Kind == MotionLayerKind.Pose;
         if (Targets(layer, frame, skeleton, loaded, current.Document) is not { Count: > 0 } targets)
         {
-            DrawMotionWait();
+            decode.DrawWait();
             return;
         }
         var primary = targets[0];
@@ -337,7 +337,7 @@ public sealed partial class TimelineWindow
         var frames = ball || turned.Count > 1 ? FramesAt(loaded, current.Document, layer, frame) : null;
         if (turned.Count > 1 && frames == null)
         {
-            DrawMotionWait();
+            decode.DrawWait();
             return;
         }
         Func<string, Quaternion> space = frames != null ? frames.Space : _ => Quaternion.Identity;
@@ -425,17 +425,17 @@ public sealed partial class TimelineWindow
 
         var pairs = PoseEdits.MirrorPairs(selection.Bones, selection.Primary, index.ContainsKey)
             .Where(pair => layer.Keys.Any(key => key.Bones.ContainsKey(pair.From))).ToList();
-        var mirrorReady = pairs.Count == 0 || DecodedPose(loaded) != null;
+        var mirrorReady = pairs.Count == 0 || decode.DecodedPose(loaded) != null;
         FlowLine("Mirror");
         using (ImRaii.Disabled(readOnly || pairs.Count == 0 || !mirrorReady))
         {
-            if (ImGui.Button("Mirror") && decoded is { } clip &&
+            if (ImGui.Button("Mirror") && decode.Decoded is { } clip &&
                 PoseEdits.Mirror(current.Document, layer.Key, pairs, skeleton, at => clip.Pose(at)) is { } mirrored)
                 current.Commit(mirrored);
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(pairs.Count == 0 ? "Select a bone with keys in this layer and a twin on the other side."
-                : !mirrorReady ? decodeStatus
+                : !mirrorReady ? decode.Status
                 : "Give the other side the same edits, mirrored. Replaces what the other side has in this layer.");
 
         FlowLine("Clear");
@@ -487,16 +487,6 @@ public sealed partial class TimelineWindow
     /// </summary>
     private static float MotionEnd(AnimationTimelineSource loaded, TimelineDocument doc) =>
         !doc.Stretched && !doc.Cut && loaded.Clip.Duration > 0 ? loaded.Clip.Duration * TimelineDocument.Fps : doc.Length;
-
-    /// <summary>The decoded motion when it is this clip's current one; null while it is read, which this starts.</summary>
-    private MotionClip? DecodedPose(AnimationTimelineSource loaded)
-    {
-        var fresh = Fresh(loaded);
-        if (decoded != null && decodedKey == DecodeKey(fresh))
-            return decoded;
-        EnsureDecode(fresh);
-        return null;
-    }
 
     /// <summary>
     /// Turn: an offset's extra rotation about the bone's own axes, or a pose's whole local rotation, in

@@ -169,7 +169,7 @@ public sealed partial class TimelineWindow
     private void ReadClipPose(AnimationCapture capture, bool startup, bool atEnd)
     {
         var staged = new PoseSource { Kind = PoseSourceKind.Clip, Name = AnimationPresentation.AnimationName(capture, startup), AtEnd = atEnd };
-        if (source is { } current && TimelineSession.ClipKey(current) == TimelineSession.ClipKey(capture, startup) && DecodedPose(current) is { } own)
+        if (source is { } current && TimelineSession.ClipKey(current) == TimelineSession.ClipKey(capture, startup) && decode.DecodedPose(current) is { } own)
         {
             staged.Clip = own;
             Stage(staged, null);
@@ -305,7 +305,7 @@ public sealed partial class TimelineWindow
         }
         if (import == null)
         {
-            DrawMotionWait();
+            decode.DrawWait();
             return;
         }
 
@@ -366,7 +366,7 @@ public sealed partial class TimelineWindow
         var blocked = readOnly ? "Wait for the save to finish."
             : !inside ? staged.AtEnd ? "The layer must reach the clip's end." : "Move the playhead into the layer."
             : bones.Count == 0 ? selectedOnly ? "The pose has none of the selected bones." : "The pose has none of this skeleton's bones."
-            : own == null ? decodeStatus
+            : own == null ? decode.Status
             : null;
         using (ImRaii.Disabled(blocked != null))
         {

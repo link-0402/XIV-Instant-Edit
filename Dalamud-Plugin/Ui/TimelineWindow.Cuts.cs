@@ -40,7 +40,7 @@ public sealed partial class TimelineWindow
 
         var cuts = CutEdits.CutsOf(doc);
         var speeds = source is { Standalone: false } loaded ? SpeedLine(loaded) : null;
-        var ease = cuts.Ease > 0 && decoded != null && speeds != null ? MotionCutter.EaseOf(decoded, cuts, doc.Length) : (Frames: 0d, Rate: 1d, AtEnd: false);
+        var ease = cuts.Ease > 0 && decode.Decoded is { } decoded && speeds != null ? MotionCutter.EaseOf(decoded, cuts, doc.Length) : (Frames: 0d, Rate: 1d, AtEnd: false);
         var barTop = top + Theme.Scaled(3);
         var barBottom = bottom - Theme.Scaled(3);
         var middle = (barTop + barBottom) / 2;
@@ -149,10 +149,10 @@ public sealed partial class TimelineWindow
     {
         string? text = null;
         var colour = Theme.Muted;
-        if (decodeTask != null)
-            text = decodeStatus;
-        else if (decodeError != null && source != null && failedDecodeKey == DecodeKey(Fresh(source)))
-            (text, colour) = ("The motion could not be read: " + decodeError, Theme.Warning);
+        if (decode.Reading)
+            text = decode.Status;
+        else if (source != null && decode.FailedFor(source))
+            (text, colour) = ("The motion could not be read: " + decode.Error, Theme.Warning);
         if (text == null)
             return;
         var size = ImGui.CalcTextSize(text);
@@ -185,13 +185,13 @@ public sealed partial class TimelineWindow
     /// <summary>The motion's speed per frame for the speed line, read once per decode; null until the motion is decoded, which this starts.</summary>
     private float[]? SpeedLine(AnimationTimelineSource loaded)
     {
-        if (DecodedPose(loaded) is not { } clip)
+        if (decode.DecodedPose(loaded) is not { } clip)
             return null;
-        if (speedLineKey != decodedKey || speedLine == null)
+        if (speedLineKey != decode.DecodedKey || speedLine == null)
         {
             speedLine = LoopSeam.Speeds(clip);
             speedLineMax = speedLine.Length == 0 ? 0 : speedLine.Max();
-            speedLineKey = decodedKey;
+            speedLineKey = decode.DecodedKey;
         }
         return speedLine;
     }

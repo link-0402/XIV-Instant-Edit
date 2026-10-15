@@ -634,7 +634,7 @@ public sealed partial class TimelineWindow
             ballEditing = false;
         }
         if (frames == null)
-            DrawMotionWait();
+            decode.DrawWait();
         using (ImRaii.Disabled(several))
         {
             if (ImGui.RadioButton("Bone axes", !character))
@@ -709,7 +709,7 @@ public sealed partial class TimelineWindow
     /// </summary>
     private BoneFrames? FramesAt(AnimationTimelineSource loaded, TimelineDocument doc, MotionLayer layer, int frame)
     {
-        if (MotionPose(loaded, frame) is not { } own || decoded is not { } clip)
+        if (MotionPose(loaded, frame) is not { } own || decode.Decoded is not { } clip)
             return null;
         if (boneFrames is { } cached && ReferenceEquals(cached.Doc, doc) && cached.Layer == layer.Key && cached.Frame == frame &&
             ReferenceEquals(cached.Clip, clip))
@@ -733,21 +733,6 @@ public sealed partial class TimelineWindow
             layer.Kind == MotionLayerKind.Offset);
         boneFrames = (doc, layer.Key, frame, clip, frames);
         return frames;
-    }
-
-    /// <summary> In place of what needs the clip's motion: the reading's progress, or why it failed. </summary>
-    private void DrawMotionWait()
-    {
-        if (decodeError is { } error)
-        {
-            using var wrap = ImRaii.TextWrapPos(0f);
-            ImGui.TextColored(Theme.Warning, "The motion could not be read: " + error);
-            return;
-        }
-        Widgets.Spinner();
-        ImGui.SameLine(0, Theme.Gap);
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Muted, decodeStatus);
     }
 
     /// <summary>The rotation of the game camera's view, for the ball; null without a camera.</summary>
@@ -777,12 +762,12 @@ public sealed partial class TimelineWindow
     private (MotionTransform[] Local, MotionTransform[] Model)? MotionPose(AnimationTimelineSource loaded, int frame)
     {
         var fresh = Fresh(loaded);
-        if (decoded == null || decodedKey != DecodeKey(fresh))
+        if (decode.Decoded is not { } decoded || decode.DecodedKey != MotionDecode.KeyOf(fresh))
         {
-            EnsureDecode(fresh);
+            decode.Ensure(fresh);
             return null;
         }
-        var clip = editor is { } current ? OutputMotion(current, decoded) : decoded;
+        var clip = editor is { } current ? decode.OutputMotion(current, decoded) : decoded;
         if (motionPose is { } cached && ReferenceEquals(cached.Clip, clip) && cached.Frame == frame)
             return (cached.Local, cached.Model);
         var local = clip.Pose(frame);

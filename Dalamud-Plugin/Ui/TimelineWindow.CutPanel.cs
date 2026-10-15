@@ -34,7 +34,7 @@ public sealed partial class TimelineWindow
             return;
         var doc = current.Document;
         var cuts = CutEdits.CutsOf(doc);
-        var decoded = source is { Standalone: false } loaded ? DecodedPose(loaded) : null;
+        var decoded = source is { Standalone: false } loaded ? decode.DecodedPose(loaded) : null;
         switch (cut.Target)
         {
             case TimelineCutTarget.Part when cut.Index >= 0 && cut.Index < cuts.Parts.Length:
@@ -110,7 +110,7 @@ public sealed partial class TimelineWindow
         if (decoded != null)
             Widgets.HintWrapped(TimelineWindowViews.GapText(LoopSeam.Gap(decoded, cuts.Parts[index].To, cuts.Parts[index + 1].From)));
         else
-            DrawDecodeNote();
+            decode.DrawNote();
     }
 
     private void DrawSeamPanel(TimelineEditor current, MotionCuts cuts, MotionClip? decoded)
@@ -121,7 +121,7 @@ public sealed partial class TimelineWindow
         ImGui.Spacing();
         if (decoded == null)
         {
-            DrawDecodeNote();
+            decode.DrawNote();
             return;
         }
         var (raw, shown) = SeamOf(current, decoded);
@@ -238,15 +238,6 @@ public sealed partial class TimelineWindow
                     current.SetEase(cuts.Ease, atEnd: i == 1);
     }
 
-    /// <summary>While the motion is read, how far along; why it failed when it did.</summary>
-    private void DrawDecodeNote()
-    {
-        if (decodeError != null && source != null && failedDecodeKey == DecodeKey(Fresh(source)))
-            ImGui.TextColored(Theme.Warning, "The motion could not be read: " + decodeError);
-        else
-            ImGui.TextColored(Theme.Muted, decodeStatus);
-    }
-
     private static void Title(FontAwesomeIcon icon, string text)
     {
         Widgets.Icon(icon, TimelineWindowViews.LaneColour(TimelineLane.Motion));
@@ -265,7 +256,7 @@ public sealed partial class TimelineWindow
         var doc = current.Document;
         var cuts = CutEdits.CutsOf(doc);
         int from = cuts.Parts[0].From, to = cuts.Parts[^1].To;
-        var key = $"{decodedKey}|{from}|{to}";
+        var key = $"{decode.DecodedKey}|{from}|{to}";
         if (rawSeam == null || rawSeamKey != key)
         {
             rawSeam = LoopSeam.Analyze(decoded, from, to);
@@ -273,11 +264,11 @@ public sealed partial class TimelineWindow
         }
         if (cuts.Seam is not { Frames: > 0 } && cuts.Ease <= 0)
             return (rawSeam, rawSeam);
-        var stale = !ReferenceEquals(outputSeamCuts, doc.Cuts) || outputSeamLength != doc.Length || outputSeamDecode != decodedKey;
+        var stale = !ReferenceEquals(outputSeamCuts, doc.Cuts) || outputSeamLength != doc.Length || outputSeamDecode != decode.DecodedKey;
         if (stale && current.Gesture == TimelineGesture.None)
         {
             outputSeam = LoopSeam.Analyze(MotionCutter.Apply(decoded, cuts, doc.Length), 0, doc.Length);
-            (outputSeamCuts, outputSeamLength, outputSeamDecode) = (doc.Cuts, doc.Length, decodedKey);
+            (outputSeamCuts, outputSeamLength, outputSeamDecode) = (doc.Cuts, doc.Length, decode.DecodedKey);
             stale = false;
         }
         return (rawSeam, !stale && outputSeam is { } shown ? shown : rawSeam);
@@ -287,7 +278,7 @@ public sealed partial class TimelineWindow
     private void DrawSeamBadge(ImDrawListPtr drawList, TimelineEditor current, Vector2 max, float trackLeft, float top, float bottom)
     {
         seamBadge = null;
-        if (!current.Loops || source is not { Standalone: false } loaded || DecodedPose(loaded) is not { } decoded)
+        if (!current.Loops || source is not { Standalone: false } loaded || decode.DecodedPose(loaded) is not { } decoded)
             return;
         var shown = SeamOf(current, decoded).Shown.State;
         var text = TimelineWindowViews.SeamBadge(shown);
