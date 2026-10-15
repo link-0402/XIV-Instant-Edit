@@ -150,7 +150,7 @@ public sealed partial class ExportServer
                     target.SourceModRootPath,
                     target.TargetRelativePath,
                     target.GamePath,
-                    sizes.Select((size, index) => new PenumbraService.SizeExportFile(size.Name!, staged[index].FilePath))
+                    sizes.Select((size, index) => new SizeExportFile(size.Name!, staged[index].FilePath))
                         .ToArray(),
                     export.DefaultSize ?? sizes[0].Name!,
                     export.VariantTarget!,

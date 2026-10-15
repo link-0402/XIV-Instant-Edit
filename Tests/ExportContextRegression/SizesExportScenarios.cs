@@ -34,9 +34,9 @@ internal static class SizesExportScenarios
     private static string ModelFile(string root) => Path.Combine(root, "Files", "top.mdl");
 
     private static JsonNode Plan(string root, string[] sizes, string groupName, string defaultSize,
-        out PenumbraService.SizeGroupPlan plan, string? targetId = null, JsonObject? sourceOption = null)
+        out SizesExportService.SizeGroupPlan plan, string? targetId = null, JsonObject? sourceOption = null)
     {
-        var error = PenumbraService.PlanSizeGroup(root, GamePath, ModelFile(root), sizes, groupName, targetId,
+        var error = SizesExportService.PlanSizeGroup(root, GamePath, ModelFile(root), sizes, groupName, targetId,
             defaultSize, sourceOption, out var planned);
         Require(error is null && planned is not null, $"sizes: {string.Join(", ", sizes)} planned ({error})");
         Require(ModOptionGroups.CommitVariantGroup(planned!.Group) is null, "sizes: the group commits");
@@ -206,12 +206,12 @@ internal static class SizesExportScenarios
                      ([], "Other", "Large", null, "no sizes"),
                  })
         {
-            var error = PenumbraService.PlanSizeGroup(root, GamePath, ModelFile(root), sizes, groupName, targetId,
+            var error = SizesExportService.PlanSizeGroup(root, GamePath, ModelFile(root), sizes, groupName, targetId,
                 defaultSize, null, out var plan);
             Require(error is not null && plan is null && File.ReadAllText(metaPath) == before,
                 $"sizes: {name} is refused before anything changes");
         }
-        Require(PenumbraService.PlanSizeGroup(root, GamePath, Path.Combine(Path.GetTempPath(), "elsewhere.mdl"),
+        Require(SizesExportService.PlanSizeGroup(root, GamePath, Path.Combine(Path.GetTempPath(), "elsewhere.mdl"),
                 ["Large"], "Other", null, "Large", null, out _) is not null,
             "sizes: a model outside its mod is refused");
     }

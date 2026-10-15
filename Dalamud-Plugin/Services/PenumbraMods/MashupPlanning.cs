@@ -1,33 +1,23 @@
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using System.Security.Cryptography;
 using System.Text;
-using Dalamud.Game.ClientState.Objects.Enums;
-using Dalamud.Game.ClientState.Objects.Types;
-using Dalamud.Plugin;
-using Dalamud.Plugin.Services;
+using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using InstantEdit.Models;
-using Penumbra.Api.Enums;
-using Penumbra.Api.Helpers;
-using Penumbra.Api.IpcSubscribers;
-using Lumina.Data;
-using Lumina.Data.Files;
-using InstantEdit.Services.PenumbraMods;
-using static InstantEdit.Services.PenumbraMods.FrameworkThread;
-using static InstantEdit.Services.PenumbraMods.ModCleanup;
+using static InstantEdit.Services.PenumbraMods.ModFiles;
 using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
 using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
-using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
-using static InstantEdit.Services.PenumbraMods.EstEntryService;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary>
+/// The file layout of a mashup: which material each contributor's model gets, where its textures go,
+/// the group or new mod that maps them, and the checks of a staged mashup mod.
+/// </summary>
+internal static class MashupPlanning
 {
-    private static string UniqueMashupGroupName(string modFolder, string requested)
+    internal static string UniqueMashupGroupName(string modFolder, string requested)
     {
         var names = ReadAllVariantGroups(modFolder)
             .Select(group => JsonString(group["Name"]))
@@ -101,47 +91,6 @@ public sealed partial class PenumbraService
         }
     }
 
-    private static void WriteBytesAtomic(string root, string relativePath, byte[] bytes)
-    {
-        if (!IsSafeRelativeResourcePath(relativePath))
-            throw new InvalidDataException("A generated mashup path is unsafe.");
-        var target = Path.GetFullPath(Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar)));
-        var parent = Path.GetDirectoryName(target) ?? throw new InvalidDataException("Mashup file has no parent.");
-        if (!IsPathWithin(target, root) || HasReparsePointInPath(root, parent) ||
-            (File.Exists(target) && (File.GetAttributes(target) & FileAttributes.ReparsePoint) != 0))
-            throw new InvalidDataException("A generated mashup destination is unsafe.");
-        Directory.CreateDirectory(parent);
-        var temporary = Path.Combine(parent, $".instant-edit-{Guid.NewGuid():N}.tmp");
-        try
-        {
-            File.WriteAllBytes(temporary, bytes);
-            File.Move(temporary, target, false);
-        }
-        finally
-        {
-            if (File.Exists(temporary))
-                File.Delete(temporary);
-        }
-    }
-
-    private static void TryDeleteMashupNamespace(string root, string folder)
-    {
-        try
-        {
-            var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var fullFolder = Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            if (!Directory.Exists(fullFolder) || !IsPathWithin(fullFolder, fullRoot) ||
-                string.Equals(fullFolder, fullRoot, StringComparison.OrdinalIgnoreCase) ||
-                (File.GetAttributes(fullFolder) & FileAttributes.ReparsePoint) != 0)
-                return;
-            Directory.Delete(fullFolder, true);
-        }
-        catch
-        {
-            // Cleanup is best-effort; the error returned to Blender remains authoritative.
-        }
-    }
-
     internal static void ValidateStagedMashupMod(
         string staging,
         string modName,
@@ -201,7 +150,7 @@ public sealed partial class PenumbraService
         };
     }
 
-    private static void ValidateMashupMappingsAndSwaps(
+    internal static void ValidateMashupMappingsAndSwaps(
         IReadOnlyDictionary<string, string> mappings,
         IReadOnlyDictionary<string, string> fileSwaps)
     {
@@ -391,14 +340,14 @@ public sealed partial class PenumbraService
         return new MashupPlanResult(true, "mashup_plan_ready", "Mashup material plan is ready.", assignments, fingerprint);
     }
 
-    private static MashupPlanResult MashupPlanFailure(string code, string message)
+    internal static MashupPlanResult MashupPlanFailure(string code, string message)
         => new(false, code, message, Array.Empty<MashupMaterialAssignment>());
 
     internal static bool IsValidMashupContributorCount(string destination, int count)
         => count is >= 1 and <= 16 &&
            (!string.Equals(destination, "active_mod", StringComparison.Ordinal) || count >= 2);
 
-    private static (string Prefix, string Suffix, char Slot)? ParseCanonicalMaterialFamily(string fileName)
+    internal static (string Prefix, string Suffix, char Slot)? ParseCanonicalMaterialFamily(string fileName)
     {
         var match = Regex.Match(fileName,
             @"^(?<prefix>mt_.+)_(?<slot>[a-z])(?<suffix>_c\d{4})?\.mtrl$",
@@ -409,14 +358,14 @@ public sealed partial class PenumbraService
             : null;
     }
 
-    private static string GamePathDirectory(string value)
+    internal static string GamePathDirectory(string value)
     {
         var normalized = NormalizeGamePath(value);
         var separator = normalized.LastIndexOf('/');
         return separator > 0 ? normalized[..separator] : string.Empty;
     }
 
-    private static (string? Directory, bool Ambiguous) SelectIncomingMashupMaterialDirectory(
+    internal static (string? Directory, bool Ambiguous) SelectIncomingMashupMaterialDirectory(
         string modelGamePath,
         IEnumerable<MaterialDependency> activeMaterials)
     {
@@ -450,14 +399,14 @@ public sealed partial class PenumbraService
             : (null, false);
     }
 
-    private static string? ModelAssetDirectory(string modelGamePath)
+    internal static string? ModelAssetDirectory(string modelGamePath)
     {
         var normalized = NormalizeGamePath(modelGamePath);
         var marker = normalized.LastIndexOf("/model/", StringComparison.OrdinalIgnoreCase);
         return marker > 0 ? normalized[..marker] : null;
     }
 
-    private static string? MaterialAssetDirectory(string materialDirectory)
+    internal static string? MaterialAssetDirectory(string materialDirectory)
     {
         var normalized = NormalizeGamePath(materialDirectory);
         var marker = normalized.LastIndexOf("/material", StringComparison.OrdinalIgnoreCase);
@@ -470,7 +419,7 @@ public sealed partial class PenumbraService
         return normalized[..marker];
     }
 
-    private static string? AssetFamilyKey(string? assetDirectory)
+    internal static string? AssetFamilyKey(string? assetDirectory)
     {
         if (string.IsNullOrWhiteSpace(assetDirectory))
             return null;
@@ -480,7 +429,7 @@ public sealed partial class PenumbraService
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)));
     }
 
-    private static bool IsSafeModelMaterialAlias(string alias)
+    internal static bool IsSafeModelMaterialAlias(string alias)
         => alias.Length is > 1 and <= 260 &&
            alias[0] == '/' &&
            alias.IndexOf('/', 1) < 0 &&
@@ -489,7 +438,7 @@ public sealed partial class PenumbraService
            alias.EndsWith(".mtrl", StringComparison.OrdinalIgnoreCase) &&
            alias.AsSpan(1) is not "." and not "..";
 
-    private static string CanonicalTargetModelStem(string modelGamePath, string targetMaterialDirectory)
+    internal static string CanonicalTargetModelStem(string modelGamePath, string targetMaterialDirectory)
     {
         var stem = Path.GetFileNameWithoutExtension(NormalizeGamePath(modelGamePath));
         var componentMatches = Regex.Matches(
@@ -509,7 +458,7 @@ public sealed partial class PenumbraService
         return stem;
     }
 
-    private static string CanonicalTargetRaceSuffix(string modelGamePath, string targetMaterialDirectory)
+    internal static string CanonicalTargetRaceSuffix(string modelGamePath, string targetMaterialDirectory)
     {
         var modelStem = Path.GetFileNameWithoutExtension(NormalizeGamePath(modelGamePath));
         var modelRace = Regex.Match(modelStem, @"^c(?<id>\d{4})",
@@ -659,7 +608,7 @@ public sealed partial class PenumbraService
         return false;
     }
 
-    private static IReadOnlyList<(char Kind, string Value)> ModelPathIdentities(string modelGamePath)
+    internal static IReadOnlyList<(char Kind, string Value)> ModelPathIdentities(string modelGamePath)
     {
         var marker = modelGamePath.LastIndexOf("/model/", StringComparison.OrdinalIgnoreCase);
         if (marker <= 0)
@@ -674,7 +623,7 @@ public sealed partial class PenumbraService
             .ToArray();
     }
 
-    private static Dictionary<char, string> MatchModelIdentities(
+    internal static Dictionary<char, string> MatchModelIdentities(
         IReadOnlyList<(char Kind, string Value)> source,
         IReadOnlyList<(char Kind, string Value)> target)
     {
@@ -697,7 +646,7 @@ public sealed partial class PenumbraService
         return result;
     }
 
-    private static string ReplaceBoundedModelIdentity(string value, string source, string target)
+    internal static string ReplaceBoundedModelIdentity(string value, string source, string target)
         => Regex.Replace(
             value,
             $@"(?<![a-z]){Regex.Escape(source)}(?!\d)",
@@ -705,7 +654,7 @@ public sealed partial class PenumbraService
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             TimeSpan.FromMilliseconds(100));
 
-    private static string NormalizeModelMaterial(string value)
+    internal static string NormalizeModelMaterial(string value)
     {
         var normalized = Regex.Replace((value ?? string.Empty).Trim(), @"\.\d{3}$", string.Empty);
         if (!normalized.EndsWith(".mtrl", StringComparison.OrdinalIgnoreCase))
@@ -714,4 +663,32 @@ public sealed partial class PenumbraService
             normalized = "/" + normalized;
         return normalized;
     }
+
+    internal static string FormatMashupDescription(
+        IReadOnlyList<MashupContributor> contributors,
+        IReadOnlyList<string>? requiredExternalMods = null)
+    {
+        var names = contributors
+            .Select(item => item.Context.SourceModName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(name => name!.Replace("\"", "'", StringComparison.Ordinal))
+            .ToArray();
+        var description = $"Mashup created by XIV Instant Edit from {string.Join(" and ", names.Select(name => $"\"{name}\""))}.";
+        return requiredExternalMods is { Count: > 0 }
+            ? $"{description}\n\nRequires external mods: {string.Join(", ", requiredExternalMods)}."
+            : description;
+    }
+
+    internal static IReadOnlyList<string> ExternalMashupWarnings(IReadOnlyList<string> requiredExternalMods)
+        => requiredExternalMods.Count == 0
+            ? Array.Empty<string>()
+            : [$"Keep these external mods enabled in the active collection: {string.Join(", ", requiredExternalMods)}."];
+
+    internal static bool IsValidMashupLocator(SourceResourceLocator locator, string extension)
+        => IsSafeGameResourcePath(locator.GamePath, extension) &&
+           locator.Sha256.Length == 64 && locator.Sha256.All(Uri.IsHexDigit) &&
+           (string.Equals(locator.Kind, InstantEditImportContext.GameSource, StringComparison.OrdinalIgnoreCase) ||
+            (string.Equals(locator.Kind, InstantEditImportContext.ModSource, StringComparison.OrdinalIgnoreCase) &&
+             IsSafeModName(locator.SourceModDirectory) &&
+             IsSafeRelativeResourcePath(locator.SourceRelativePath)));
 }

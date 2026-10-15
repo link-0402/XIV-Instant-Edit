@@ -1,25 +1,55 @@
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
+using Dalamud.Plugin.Services;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Painter;
 using InstantEdit.Services.Skeletons;
-using InstantEdit.Services.PenumbraMods;
-using static InstantEdit.Services.PenumbraMods.FrameworkThread;
-using static InstantEdit.Services.PenumbraMods.ModCleanup;
-using static InstantEdit.Services.PenumbraMods.ModJson;
-using static InstantEdit.Services.PenumbraMods.ModMetadata;
-using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
-using static InstantEdit.Services.PenumbraMods.ModPaths;
 using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
 using static InstantEdit.Services.PenumbraMods.EstEntryService;
+using static InstantEdit.Services.PenumbraMods.FrameworkThread;
+using static InstantEdit.Services.PenumbraMods.ModJson;
+using static InstantEdit.Services.PenumbraMods.ModMetadata;
+using static InstantEdit.Services.PenumbraMods.ModPaths;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary>
+/// Saves an export as another race's own copy of a gear or accessory model: the model next to the
+/// imported one, mapped at the race's game path in the options that use it, with the race's EQDP
+/// model flag, and a restore point that undoes all of it.
+/// </summary>
+internal sealed class RaceExportService
 {
+    private readonly IFramework _framework;
+    private readonly IPluginLog _log;
+    private readonly SemaphoreSlim _exportGate;
+    private readonly IDataManager _data;
+    private readonly ModelBackupStore _backups;
+    private readonly SourceMods _sources;
+    private readonly ModActivation _activation;
+    private readonly ModelFileWriter _writer;
+    private readonly AttributeGroupService _attributes;
+    private readonly EstEntryService _est;
+
+    public RaceExportService(IFramework framework, IPluginLog log, SemaphoreSlim exportGate, IDataManager data,
+        ModelBackupStore backups, SourceMods sources, ModActivation activation, ModelFileWriter writer,
+        AttributeGroupService attributes, EstEntryService est)
+    {
+        _framework = framework;
+        _log = log;
+        _exportGate = exportGate;
+        _data = data;
+        _backups = backups;
+        _sources = sources;
+        _activation = activation;
+        _writer = writer;
+        _attributes = attributes;
+        _est = est;
+    }
+
     // EQDP files keep two bits per slot, in this order: the material flag, then the model flag.
-    private static readonly string[] EquipmentEqdpSlots = ["Head", "Body", "Hands", "Legs", "Feet"];
-    private static readonly string[] AccessoryEqdpSlots = ["Ears", "Neck", "Wrists", "RFinger", "LFinger"];
+    internal static readonly string[] EquipmentEqdpSlots = ["Head", "Body", "Hands", "Legs", "Feet"];
+    internal static readonly string[] AccessoryEqdpSlots = ["Ears", "Neck", "Wrists", "RFinger", "LFinger"];
 
     /// <summary>
     /// Where a race export writes: the race's game path, the file the mod maps there (new or the one it
@@ -29,7 +59,7 @@ public sealed partial class PenumbraService
     internal sealed record RaceModelPlan(string GamePath, string RelativePath, JsonObject Meta, IReadOnlyList<string> Containers,
         JsonArray Undo);
 
-    private const string RaceStateSchema = "instant-edit.race-export";
+    internal const string RaceStateSchema = "instant-edit.race-export";
 
     /// <summary>The gender-race code of a player race such as <c>c0801</c> (801), or null.</summary>
     internal static int? PlayerRaceCode(string? race) => EstRaceCode(race);
@@ -48,10 +78,10 @@ public sealed partial class PenumbraService
         return ModelSkeletonPaths.WithRace(NormalizeGamePath(gamePath), (ushort)race);
     }
 
-    private static int EqdpSlotIndex(AttributeModelIdentity identity)
+    internal static int EqdpSlotIndex(AttributeModelIdentity identity)
         => Array.IndexOf(identity.ObjectType == "Accessory" ? AccessoryEqdpSlots : EquipmentEqdpSlots, identity.EquipSlot);
 
-    private static bool MatchesEqdp(JsonObject item, AttributeModelIdentity identity, int genderRace)
+    internal static bool MatchesEqdp(JsonObject item, AttributeModelIdentity identity, int genderRace)
     {
         if (!string.Equals(JsonString(item["Type"]), "Eqdp", StringComparison.OrdinalIgnoreCase) ||
             item["Manipulation"] is not JsonObject manipulation)
@@ -71,7 +101,7 @@ public sealed partial class PenumbraService
     /// its own model; duplicates collapse into one. The material flag stays as the container had it, else
     /// as the game's file has it (<paramref name="gameBits"/>, the slot's two bits), else on.
     /// </summary>
-    private static void SetEqdpModel(JsonObject container, AttributeModelIdentity identity, int genderRace, int? gameBits)
+    internal static void SetEqdpModel(JsonObject container, AttributeModelIdentity identity, int genderRace, int? gameBits)
     {
         var index = EqdpSlotIndex(identity);
         var manipulations = container["Manipulations"] as JsonArray;
@@ -256,7 +286,7 @@ public sealed partial class PenumbraService
     /// Whether every mapping of <paramref name="file"/> in the mod (default data, options and combining
     /// containers) is <paramref name="gamePath"/> in one of <paramref name="containers"/>.
     /// </summary>
-    private static bool OnlyMappedAt(JsonObject meta, string file, string gamePath, IEnumerable<JsonObject> containers)
+    internal static bool OnlyMappedAt(JsonObject meta, string file, string gamePath, IEnumerable<JsonObject> containers)
     {
         var allowed = containers.ToHashSet(ReferenceEqualityComparer.Instance);
         bool MapsElsewhere(JsonNode? node) => node is JsonObject container && container["Files"] is JsonObject files &&
@@ -273,7 +303,7 @@ public sealed partial class PenumbraService
     }
 
     /// <summary>The model's slot bits in the game's EQDP file for the race, or null when it can't be read.</summary>
-    private int? GameEqdpBits(string racePath, int race)
+    internal int? GameEqdpBits(string racePath, int race)
     {
         if (_data is null || ParseAttributeModelIdentity(racePath) is not { } identity)
             return null;
@@ -438,7 +468,7 @@ public sealed partial class PenumbraService
     /// imported model, the one its import lists, carrying what the export changes (the race's file, and
     /// each option's mapping and EQDP entries before it). Restoring that backup undoes the whole export.
     /// </summary>
-    private string? CreateRaceRestorePoint(string modFolder, string modDirectory, string importedFile, RaceModelPlan plan,
+    internal string? CreateRaceRestorePoint(string modFolder, string modDirectory, string importedFile, RaceModelPlan plan,
         string raceFile, string exportedFile, JsonObject? estState)
     {
         if (_backups is null)
@@ -483,7 +513,7 @@ public sealed partial class PenumbraService
     /// model is back: the options as they were, then the race's file from its backup, or, when the export
     /// made it, gone, unless the mod maps it again or it changed since. Returns the warnings.
     /// </summary>
-    private List<string> UndoRaceExport(string modFolder, string modDirectory, JsonObject state)
+    internal List<string> UndoRaceExport(string modFolder, string modDirectory, JsonObject state)
     {
         var warnings = RestoreRaceExportMeta(modFolder, state);
         if (JsonString(state["raceFile"]) is not { } relative || !IsSafeRelativeModPath(relative))
@@ -519,7 +549,7 @@ public sealed partial class PenumbraService
     }
 
     /// <summary>A game model's first race export: the race's model in a new mod's default data, with the EQDP entry.</summary>
-    private void AddRaceModelEqdp(string staging, string racePath, int race)
+    internal void AddRaceModelEqdp(string staging, string racePath, int race)
     {
         var meta = LoadV4ModMetadata(staging);
         if (ParseAttributeModelIdentity(racePath) is not { } identity || meta["DefaultData"] is not JsonObject defaultData)

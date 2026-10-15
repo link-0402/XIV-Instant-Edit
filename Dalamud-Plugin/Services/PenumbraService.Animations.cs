@@ -11,6 +11,8 @@ using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
 using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
 using static InstantEdit.Services.PenumbraMods.EstEntryService;
+using static InstantEdit.Services.PenumbraMods.ModFiles;
+using static InstantEdit.Services.PenumbraMods.MashupPlanning;
 
 namespace InstantEdit.Services;
 

@@ -1069,7 +1069,7 @@ try
     var bucklerContext = manifestRegistry.CreateContext(
         "chara/human/c0801/obj/hair/h0179/model/c0801h0179_hir.mdl", 9,
         "buckler-mod", originalTarget, "Buckler", 42428, originalRoot, relative, bucklerManifest);
-    var canonicalPlan = PenumbraService.BuildMashupPlan(galianContext,
+    var canonicalPlan = MashupPlanning.BuildMashupPlan(galianContext,
     [
         new MashupContributor(galianContext, ["/mt_c0801h0154_hir_b_c0801.mtrl"]),
         new MashupContributor(bucklerContext,
@@ -1114,7 +1114,7 @@ try
     var incomingTopContext = manifestRegistry.CreateContext(
         "chara/equipment/e9999/model/c0201e9999_top.mdl", 11,
         "incoming-top", originalTarget, "Incoming Top", 42428, originalRoot, relative, incomingTopManifest);
-    var customPlan = PenumbraService.BuildMashupPlan(customTopContext,
+    var customPlan = MashupPlanning.BuildMashupPlan(customTopContext,
     [
         new MashupContributor(customTopContext, ["/bloodspiller.mtrl"]),
         new MashupContributor(incomingTopContext, ["/anything.mtrl"]),
@@ -1123,7 +1123,7 @@ try
             customPlan.Assignments[0].GamePath.EndsWith("/bloodspiller.mtrl", StringComparison.Ordinal) &&
             customPlan.Assignments[1].Alias == "/mt_c0201e0118_top_b.mtrl",
         "custom active materials remain unchanged and incoming gear retains a zero-padded canonical id");
-    var singleContextPlan = PenumbraService.BuildMashupPlan(customTopContext,
+    var singleContextPlan = MashupPlanning.BuildMashupPlan(customTopContext,
     [
         new MashupContributor(customTopContext, ["/bloodspiller.mtrl"]),
     ]);
@@ -1143,7 +1143,7 @@ try
     var mappedAliasContext = manifestRegistry.CreateContext(
         "chara/equipment/e0118/model/c0201e0118_top.mdl", 21,
         "mapped-alias", originalTarget, "Mapped Alias", 42428, originalRoot, relative, mappedAliasManifest);
-    var mappedAliasPlan = PenumbraService.BuildMashupPlan(mappedAliasContext,
+    var mappedAliasPlan = MashupPlanning.BuildMashupPlan(mappedAliasContext,
     [
         new MashupContributor(mappedAliasContext, ["/model-alias.mtrl"]),
     ]);
@@ -1156,7 +1156,7 @@ try
         SourceModDirectory = customTopContext.SourceModDirectory,
         SourceModName = customTopContext.SourceModName,
     };
-    var sameSourcePlan = PenumbraService.BuildMashupPlan(customTopContext,
+    var sameSourcePlan = MashupPlanning.BuildMashupPlan(customTopContext,
     [
         new MashupContributor(customTopContext, ["/bloodspiller.mtrl"]),
         new MashupContributor(sameSourceContext, ["/anything.mtrl"]),
@@ -1206,7 +1206,7 @@ try
     {
         ResourceManifest = sourceBoundaryManifest,
     };
-    var sourceBoundaryPlan = PenumbraService.BuildMashupPlan(sourceBoundaryContext,
+    var sourceBoundaryPlan = MashupPlanning.BuildMashupPlan(sourceBoundaryContext,
     [
         new MashupContributor(sourceBoundaryContext, ["/owned.mtrl", "/external.mtrl"]),
         new MashupContributor(incomingTopContext, ["/anything.mtrl"]),
@@ -1215,7 +1215,7 @@ try
             sourceBoundaryPlan.Assignments.Count == 3 &&
             sourceBoundaryPlan.Assignments.Any(item => item.ModelMaterial == "/external.mtrl"),
         "mashup planning assigns pass-through materials attributed to a non-participating source mod");
-    var bundledSourceBoundaryPlan = PenumbraService.BuildMashupPlan(sourceBoundaryContext,
+    var bundledSourceBoundaryPlan = MashupPlanning.BuildMashupPlan(sourceBoundaryContext,
     [
         new MashupContributor(sourceBoundaryContext, ["/owned.mtrl", "/external.mtrl"]),
         new MashupContributor(incomingTopContext, ["/anything.mtrl"]),
@@ -1278,7 +1278,7 @@ try
             !PenumbraService.CanBundleExternalMashupDependencies(
                 externalBody, bundleExternalDependencies: true),
         "external gear dependencies are opt-in while shared body dependency sets remain pass-through");
-    var incompletePlan = PenumbraService.BuildMashupPlan(sourceBoundaryContext,
+    var incompletePlan = MashupPlanning.BuildMashupPlan(sourceBoundaryContext,
     [
         new MashupContributor(sourceBoundaryContext, ["/missing.mtrl"]),
     ]);
@@ -1319,7 +1319,7 @@ try
         "chara/equipment/e6166/model/c0201e6166_dwn.mdl", 15,
         "microkini-mod", originalTarget, "Microkini Bottoms", 42428, originalRoot, relative,
         microkiniManifest);
-    var urgfActivePlan = PenumbraService.BuildMashupPlan(urgfContext,
+    var urgfActivePlan = MashupPlanning.BuildMashupPlan(urgfContext,
     [
         new MashupContributor(urgfContext, urgfManifest.Materials.Select(item => item.ModelMaterial).ToArray()),
         new MashupContributor(microkiniContext,
@@ -1337,7 +1337,7 @@ try
             urgfActivePlan.Assignments.Skip(3).All(item =>
                 item.GamePath.StartsWith(urgfMaterialDirectory + "/", StringComparison.Ordinal)),
         "URGF preserves body and equipment material paths while Microkini uses the URGF local namespace");
-    var microkiniActivePlan = PenumbraService.BuildMashupPlan(microkiniContext,
+    var microkiniActivePlan = MashupPlanning.BuildMashupPlan(microkiniContext,
     [
         new MashupContributor(microkiniContext,
             microkiniManifest.Materials.Select(item => item.ModelMaterial).ToArray()),
@@ -1355,7 +1355,7 @@ try
             microkiniActivePlan.Assignments.Skip(3).All(item =>
                 item.GamePath.StartsWith(microkiniMaterialDirectory + "/", StringComparison.Ordinal)),
         "Microkini preserves body and equipment material paths while URGF uses the Microkini local namespace");
-    var urgfSingleContextPlan = PenumbraService.BuildMashupPlan(urgfContext,
+    var urgfSingleContextPlan = MashupPlanning.BuildMashupPlan(urgfContext,
     [
         new MashupContributor(urgfContext, urgfManifest.Materials.Select(item => item.ModelMaterial).ToArray()),
     ]);
@@ -1381,7 +1381,7 @@ try
     var versionedContext = manifestRegistry.CreateContext(
         "chara/equipment/e7777/model/c0201e7777_top.mdl", 16,
         "versioned-mod", originalTarget, "Versioned", 42428, originalRoot, relative, versionedManifest);
-    var versionedPlan = PenumbraService.BuildMashupPlan(versionedContext,
+    var versionedPlan = MashupPlanning.BuildMashupPlan(versionedContext,
     [
         new MashupContributor(versionedContext,
             versionedManifest.Materials.Select(item => item.ModelMaterial).ToArray()),
@@ -1405,7 +1405,7 @@ try
     var tiedContext = manifestRegistry.CreateContext(
         "chara/equipment/e7778/model/c0201e7778_top.mdl", 17,
         "tied-mod", originalTarget, "Tied", 42428, originalRoot, relative, tiedManifest);
-    var tiedPlan = PenumbraService.BuildMashupPlan(tiedContext,
+    var tiedPlan = MashupPlanning.BuildMashupPlan(tiedContext,
     [
         new MashupContributor(tiedContext, tiedManifest.Materials.Select(item => item.ModelMaterial).ToArray()),
         new MashupContributor(incomingTopContext, ["/anything.mtrl"]),
@@ -1424,7 +1424,7 @@ try
     var bodyOnlyContext = manifestRegistry.CreateContext(
         "chara/equipment/e8888/model/c0201e8888_top.mdl", 18,
         "body-only-mod", originalTarget, "Body Only", 42428, originalRoot, relative, bodyOnlyManifest);
-    var bodyOnlyPlan = PenumbraService.BuildMashupPlan(bodyOnlyContext,
+    var bodyOnlyPlan = MashupPlanning.BuildMashupPlan(bodyOnlyContext,
     [
         new MashupContributor(bodyOnlyContext, ["/mt_c0201b0001_bibo.mtrl"]),
         new MashupContributor(incomingTopContext, ["/anything.mtrl"]),
@@ -1445,7 +1445,7 @@ try
         "chara/equipment/e8889/model/c0201e8889_top.mdl", 19,
         "duplicate-alias-mod", originalTarget, "Duplicate Alias", 42428, originalRoot, relative,
         duplicateAliasManifest);
-    var sameBasenamePlan = PenumbraService.BuildMashupPlan(duplicateAliasContext,
+    var sameBasenamePlan = MashupPlanning.BuildMashupPlan(duplicateAliasContext,
     [
         new MashupContributor(duplicateAliasContext, ["/first.mtrl", "/second.mtrl"]),
     ]);
@@ -1453,7 +1453,7 @@ try
             sameBasenamePlan.Assignments.Select(item => item.Alias).SequenceEqual(
                 ["/first.mtrl", "/second.mtrl"]),
         "same-basename active materials from different directories retain distinct model aliases");
-    var duplicateAliasPlan = PenumbraService.BuildMashupPlan(duplicateAliasContext,
+    var duplicateAliasPlan = MashupPlanning.BuildMashupPlan(duplicateAliasContext,
     [
         new MashupContributor(duplicateAliasContext, ["/first.mtrl"]),
         new MashupContributor(duplicateAliasContext, ["/first.mtrl"]),
@@ -1473,7 +1473,7 @@ try
         "chara/equipment/e8890/model/c0201e8890_top.mdl", 20,
         "duplicate-path-mod", originalTarget, "Duplicate Path", 42428, originalRoot, relative,
         duplicatePathManifest);
-    var duplicatePathPlan = PenumbraService.BuildMashupPlan(duplicatePathContext,
+    var duplicatePathPlan = MashupPlanning.BuildMashupPlan(duplicatePathContext,
     [
         new MashupContributor(duplicatePathContext, ["/first.mtrl", "/second.mtrl"]),
     ]);
@@ -1621,9 +1621,9 @@ try
         []);
     Require(gameDataCoverage.Available && gameDataCoverage.Covered,
         "material coverage ignores game-data material dependencies");
-    Require(PenumbraService.IsValidMashupContributorCount("new_mod", 1) &&
-            !PenumbraService.IsValidMashupContributorCount("active_mod", 1) &&
-            PenumbraService.IsValidMashupContributorCount("active_mod", 2),
+    Require(MashupPlanning.IsValidMashupContributorCount("new_mod", 1) &&
+            !MashupPlanning.IsValidMashupContributorCount("active_mod", 1) &&
+            MashupPlanning.IsValidMashupContributorCount("active_mod", 2),
         "active-mod mashup requests still require at least two contributors");
     var customHairManifest = new ResourceDependencyManifest
     {
@@ -1638,7 +1638,7 @@ try
     var customHairContext = manifestRegistry.CreateContext(
         "chara/human/c0801/obj/hair/h0154/model/c0801h0154_hir.mdl", 13,
         "custom-hair", originalTarget, "Custom Hair", 42428, originalRoot, relative, customHairManifest);
-    var customHairPlan = PenumbraService.BuildMashupPlan(customHairContext,
+    var customHairPlan = MashupPlanning.BuildMashupPlan(customHairContext,
     [
         new MashupContributor(customHairContext, ["/customhair.mtrl"]),
         new MashupContributor(incomingTopContext, ["/anything.mtrl"]),
@@ -1653,14 +1653,14 @@ try
         "chara/human/c0801/obj/hair/h0154/texture/c0801h0154_hir_b_mask_3098977960_beb563fd.tex";
     const string targetMashupTexture =
         "chara/human/c0801/obj/hair/h0004/texture/c0801h0004_hir_b_mask_3098977960_beb563fd.tex";
-    var retargetedHairTexture = PenumbraService.RetargetMashupTexturePath(
+    var retargetedHairTexture = MashupPlanning.RetargetMashupTexturePath(
         activeMashupHair, sourceMashupHair, sourceMashupTexture);
     Require(retargetedHairTexture == targetMashupTexture,
         "mashup textures retain their suffix while retargeting h0154 to h0004");
 
     const string sourceGearModel = "chara/equipment/e9999/model/c0201e9999_top.mdl";
     const string targetGearModel = "chara/equipment/e0118/model/c0101e0118_top.mdl";
-    Require(PenumbraService.RetargetMashupTexturePath(
+    Require(MashupPlanning.RetargetMashupTexturePath(
             targetGearModel,
             sourceGearModel,
             "custom/source/c0201e9999_top_b_norm_hash.tex") ==
@@ -1669,7 +1669,7 @@ try
 
     const string sourceWeaponModel = "chara/weapon/w1234/obj/body/b0001/model/c0101w1234b0001.mdl";
     const string targetWeaponModel = "chara/weapon/w5678/obj/body/b0002/model/c0101w5678b0002.mdl";
-    Require(PenumbraService.RetargetMashupTexturePath(
+    Require(MashupPlanning.RetargetMashupTexturePath(
             targetWeaponModel,
             sourceWeaponModel,
             "chara/weapon/w1234/obj/body/b0001/texture/c0101w1234b0001_d_hash.tex") ==
@@ -1686,7 +1686,7 @@ try
     {
         [targetDx11Texture] = "Files/existing.tex",
     };
-    var reusedTexturePath = PenumbraService.PlanMashupTexturePath(
+    var reusedTexturePath = MashupPlanning.PlanMashupTexturePath(
         activeMashupHair,
         sourceMashupHair,
         sourceMashupTexture,
@@ -1697,14 +1697,14 @@ try
         existingTargetHashes,
         existingTargetMappings);
     Require(reusedTexturePath == targetMashupTexture &&
-            !PenumbraService.MashupTexturePathConflicts(
+            !MashupPlanning.MashupTexturePathConflicts(
                 reusedTexturePath, [((ushort)0x8000, textureHash)], existingTargetHashes) &&
             targetDx11Texture.Contains("h0004", StringComparison.Ordinal) &&
             !targetDx11Texture.Contains("h0154", StringComparison.Ordinal),
         "identical DX11 textures reuse the retargeted effective path");
 
     existingTargetHashes[targetDx11Texture] = new string('b', 64);
-    var collisionTexturePath = PenumbraService.PlanMashupTexturePath(
+    var collisionTexturePath = MashupPlanning.PlanMashupTexturePath(
         activeMashupHair,
         sourceMashupHair,
         sourceMashupTexture,
@@ -1718,7 +1718,7 @@ try
             "chara/human/c0801/obj/hair/h0004/texture/c0801h0004_hir_c_n.tex",
         "different texture bytes colliding after retargeting receive a target-family alias");
 
-    var slotlessCollisionPath = PenumbraService.PlanMashupTexturePath(
+    var slotlessCollisionPath = MashupPlanning.PlanMashupTexturePath(
         activeMashupHair,
         sourceMashupHair,
         sourceMashupTexture,
@@ -1744,7 +1744,7 @@ try
             BitConverter.ToUInt16(retargetedMaterial, 18) == 0x8000,
         "MTRL rewriting retains DX11 flags and removes the contributor model identity");
 
-    Require(PenumbraService.AllocateMashupTexturePath(
+    Require(MashupPlanning.AllocateMashupTexturePath(
             galianContext.GamePath, 'c', "normal", 0,
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)) ==
             "chara/human/c0801/obj/hair/h0154/texture/c0801h0154_hir_c_n.tex",
@@ -1759,7 +1759,7 @@ try
     var overflowContext = manifestRegistry.CreateContext(
         "chara/equipment/e9998/model/c0201e9998_top.mdl", 12,
         "overflow-top", originalTarget, "Overflow Top", 42428, originalRoot, relative, overflowManifest);
-    var overflowPlan = PenumbraService.BuildMashupPlan(customTopContext,
+    var overflowPlan = MashupPlanning.BuildMashupPlan(customTopContext,
     [
         new MashupContributor(customTopContext, ["/bloodspiller.mtrl"]),
         new MashupContributor(overflowContext, overflowMaterials.Select(item => item.ModelMaterial).ToArray()),
@@ -1820,7 +1820,7 @@ try
     var markerlessValidation = true;
     try
     {
-        PenumbraService.ValidateStagedMashupMod(
+        MashupPlanning.ValidateStagedMashupMod(
             markerlessMashupRoot, "Markerless Mashup", markerlessMapping,
             expectedFileSwaps: mashupFileSwaps);
     }
@@ -1835,7 +1835,7 @@ try
     // ---- Vanilla game-model staging ----
     var vanillaStageRoot = Path.Combine(testRoot, "VanillaStage");
     Directory.CreateDirectory(vanillaStageRoot);
-    var stagedVanillaRelative = PenumbraService.StageGameModelMod(
+    var stagedVanillaRelative = MashupPlanning.StageGameModelMod(
         vanillaStageRoot, "Vanilla Model Edit", vanillaConsumer, [10, 11, 12]);
     var stagedVanillaMeta = JsonNode.Parse(
         File.ReadAllText(Path.Combine(vanillaStageRoot, "meta.json")))!.AsObject();
@@ -1863,7 +1863,7 @@ try
     var unsafeVanillaStageRejected = false;
     try
     {
-        PenumbraService.StageGameModelMod(vanillaStageRoot, "Unsafe Edit", "../outside.mdl", [1]);
+        MashupPlanning.StageGameModelMod(vanillaStageRoot, "Unsafe Edit", "../outside.mdl", [1]);
     }
     catch (InvalidDataException)
     {
@@ -1976,7 +1976,7 @@ try
             v4Manipulations[0]!["Manipulation"]!["Entry"]!.GetValue<int>() == 11 &&
             v4Manipulations[2]!["Entry"]!.GetValue<string>() == "combined",
         "v4 manipulation capture applies Single, Multi, and Combining selections before DefaultData");
-    var copiedDefault = PenumbraService.CreateMashupDefaultData(
+    var copiedDefault = MashupPlanning.CreateMashupDefaultData(
         mashupMappings, v4Manipulations, mashupFileSwaps);
     Require(JsonNode.DeepEquals(copiedDefault["Manipulations"], v4Manipulations) &&
             copiedDefault["FileSwaps"]!.AsObject().Count == mashupFileSwaps.Count,
@@ -2016,7 +2016,7 @@ try
             }),
         }),
     }.ToJsonString());
-    Require(PenumbraService.WriteMashupGroup(
+    Require(MashupPlanning.WriteMashupGroup(
             v4Root, "Mashup", mashupMappings, manipulations: v4Manipulations,
             fileSwaps: mashupFileSwaps) is null,
         "v4 mashup group creation succeeds");
@@ -2140,14 +2140,14 @@ try
             File.ReadAllText(cleanupFailurePath) == cleanupFailureBefore,
         "cleanup failures warn and retain the committed mashup unchanged");
 
-    var sourceDescription = PenumbraService.FormatMashupDescription(
+    var sourceDescription = MashupPlanning.FormatMashupDescription(
     [
         new MashupContributor(galianContext with { SourceModName = "Galian Hair" }, []),
         new MashupContributor(bucklerContext with { SourceModName = "[178] Buckler (Swapped)" }, []),
     ]);
     Require(sourceDescription == "Mashup created by XIV Instant Edit from \"Galian Hair\" and \"[178] Buckler (Swapped)\".",
         "mashup descriptions list source mods in contributor order");
-    var externalDescription = PenumbraService.FormatMashupDescription(
+    var externalDescription = MashupPlanning.FormatMashupDescription(
         [new MashupContributor(galianContext with { SourceModName = "Galian Hair" }, [])],
         ["External Skin", "External Hair"]);
     Require(externalDescription.EndsWith(
@@ -2158,7 +2158,7 @@ try
     Directory.CreateDirectory(describedGroupRoot);
     File.WriteAllText(Path.Combine(describedGroupRoot, "meta.json"),
         ModMetadata.CreateV4ModMetadata("Described", "Author", "Parent", "1.0", new JsonObject()).ToJsonString());
-    Require(PenumbraService.WriteMashupGroup(describedGroupRoot, "Mashup", mashupMappings, sourceDescription) is null &&
+    Require(MashupPlanning.WriteMashupGroup(describedGroupRoot, "Mashup", mashupMappings, sourceDescription) is null &&
             JsonNode.Parse(File.ReadAllText(Path.Combine(describedGroupRoot, "meta.json")))!["Groups"]![0]!["Description"]!.GetValue<string>() ==
                 sourceDescription &&
             JsonNode.Parse(File.ReadAllText(Path.Combine(describedGroupRoot, "meta.json")))!["Name"]!.GetValue<string>() ==

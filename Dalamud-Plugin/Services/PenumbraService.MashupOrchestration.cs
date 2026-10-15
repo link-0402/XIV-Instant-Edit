@@ -22,6 +22,8 @@ using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
 using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
 using static InstantEdit.Services.PenumbraMods.EstEntryService;
+using static InstantEdit.Services.PenumbraMods.ModFiles;
+using static InstantEdit.Services.PenumbraMods.MashupPlanning;
 
 namespace InstantEdit.Services;
 
@@ -588,14 +590,6 @@ public sealed partial class PenumbraService
            !MaterialPreviewBundleBuilder.IsBodyOrGeneralMaterial(material.ModelMaterial) &&
            !MaterialPreviewBundleBuilder.IsBodyOrGeneralMaterial(material.GamePath) &&
            !MaterialPreviewBundleBuilder.IsBodyOrGeneralMaterial(material.Resource.GamePath);
-
-    private static bool IsValidMashupLocator(SourceResourceLocator locator, string extension)
-        => IsSafeGameResourcePath(locator.GamePath, extension) &&
-           locator.Sha256.Length == 64 && locator.Sha256.All(Uri.IsHexDigit) &&
-           (string.Equals(locator.Kind, InstantEditImportContext.GameSource, StringComparison.OrdinalIgnoreCase) ||
-            (string.Equals(locator.Kind, InstantEditImportContext.ModSource, StringComparison.OrdinalIgnoreCase) &&
-             IsSafeModName(locator.SourceModDirectory) &&
-             IsSafeRelativeResourcePath(locator.SourceRelativePath)));
 
     internal static string ContentAddressedMashupMaterialPath(string exportId, byte[] materialBytes)
     {
