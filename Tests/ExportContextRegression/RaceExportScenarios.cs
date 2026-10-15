@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using InstantEdit.Services;
+using InstantEdit.Services.PenumbraMods;
 using static InstantEdit.TestSupport.Assertions;
 
 /// <summary>
@@ -60,10 +61,10 @@ internal static class RaceExportScenarios
         File.WriteAllText(Path.Combine(root, "meta.json"), meta.ToJsonString());
     }
 
-    private static PenumbraService.RaceModelPlan Plan(string root, string model, int race, int? gameBits, string what,
+    private static RaceExportService.RaceModelPlan Plan(string root, string model, int race, int? gameBits, string what,
         string gamePath = TopPath)
     {
-        var error = PenumbraService.PlanRaceModel(root, gamePath, model, race, gameBits, out var plan);
+        var error = RaceExportService.PlanRaceModel(root, gamePath, model, race, gameBits, out var plan);
         Require(error is null && plan is not null, $"race export: {what} is planned ({error})");
         File.WriteAllText(Path.Combine(root, "meta.json"), plan!.Meta.ToJsonString());
         return plan;
@@ -79,18 +80,18 @@ internal static class RaceExportScenarios
 
     private static void GamePaths()
     {
-        Require(PenumbraService.RaceModelGamePath(TopPath, 801) == RacePath &&
-                PenumbraService.RaceModelGamePath("chara/accessory/a0001/model/c0201a0001_ear.mdl", 1401) ==
+        Require(RaceExportService.RaceModelGamePath(TopPath, 801) == RacePath &&
+                RaceExportService.RaceModelGamePath("chara/accessory/a0001/model/c0201a0001_ear.mdl", 1401) ==
                 "chara/accessory/a0001/model/c1401a0001_ear.mdl",
             "race export: a race's gear and accessory models sit at the same path with its race code");
-        Require(PenumbraService.RaceModelGamePath(TopPath, 201) is null &&
-                PenumbraService.RaceModelGamePath(TopPath, 804) is null &&
-                PenumbraService.RaceModelGamePath(TopPath, 1901) is null &&
-                PenumbraService.RaceModelGamePath("chara/human/c0201/obj/hair/h0101/model/c0201h0101_hir.mdl", 801) is null &&
-                PenumbraService.RaceModelGamePath("chara/human/c0101/obj/body/b0001/model/c0101b0001_top.mdl", 801) is null,
+        Require(RaceExportService.RaceModelGamePath(TopPath, 201) is null &&
+                RaceExportService.RaceModelGamePath(TopPath, 804) is null &&
+                RaceExportService.RaceModelGamePath(TopPath, 1901) is null &&
+                RaceExportService.RaceModelGamePath("chara/human/c0201/obj/hair/h0101/model/c0201h0101_hir.mdl", 801) is null &&
+                RaceExportService.RaceModelGamePath("chara/human/c0101/obj/body/b0001/model/c0101b0001_top.mdl", 801) is null,
             "race export: no race model for the model's own race, NPC races, hair or bodies");
-        Require(PenumbraService.PlayerRaceCode("c0801") == 801 && PenumbraService.PlayerRaceCode("c0804") is null &&
-                PenumbraService.PlayerRaceCode("0801") is null && PenumbraService.PlayerRaceCode(null) is null,
+        Require(RaceExportService.PlayerRaceCode("c0801") == 801 && RaceExportService.PlayerRaceCode("c0804") is null &&
+                RaceExportService.PlayerRaceCode("0801") is null && RaceExportService.PlayerRaceCode(null) is null,
             "race export: requests name a player race such as c0801");
     }
 
@@ -226,7 +227,7 @@ internal static class RaceExportScenarios
             ["raceFile"] = plan.RelativePath, ["containers"] = plan.Undo.DeepClone(),
         };
         Require(plan.RelativePath == "Files/miqo.mdl", "race export restore: the race's own file is reused");
-        var warnings = PenumbraService.RestoreRaceExportMeta(root, state);
+        var warnings = RaceExportService.RestoreRaceExportMeta(root, state);
         var after = JsonNode.Parse(File.ReadAllText(metaPath))!;
         Require(warnings.Count == 0 &&
                 JsonNode.DeepEquals(after["DefaultData"], before["DefaultData"]) &&
@@ -234,8 +235,8 @@ internal static class RaceExportScenarios
             "race export restore: every option's race mapping and EQDP entries are back as they were, the new ones gone");
 
         state["containers"]![1]!["container"] = "option:gone";
-        Require(PenumbraService.RestoreRaceExportMeta(root, state).Single().Contains("no longer exists") &&
-                PenumbraService.RestoreRaceExportMeta(root, new JsonObject { ["schema"] = "other" }).Single().Contains("unreadable"),
+        Require(RaceExportService.RestoreRaceExportMeta(root, state).Single().Contains("no longer exists") &&
+                RaceExportService.RestoreRaceExportMeta(root, new JsonObject { ["schema"] = "other" }).Single().Contains("unreadable"),
             "race export restore: an option that's gone or an unreadable record is a warning");
 
         // The record rides beside the imported model's backup and goes with it.
@@ -279,7 +280,7 @@ internal static class RaceExportScenarios
                      ("a path outside the mod", "../top.mdl", 801, TopPath),
                  })
         {
-            var error = PenumbraService.PlanRaceModel(root, gamePath, model, race, 1, out var plan);
+            var error = RaceExportService.PlanRaceModel(root, gamePath, model, race, 1, out var plan);
             Require(error is not null && plan is null && File.ReadAllText(metaPath) == before,
                 $"race export: {name} is refused before anything changes ({error})");
         }

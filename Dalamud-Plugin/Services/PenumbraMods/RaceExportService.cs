@@ -1,13 +1,52 @@
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
+using Dalamud.Plugin.Services;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Painter;
 using InstantEdit.Services.Skeletons;
+using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
+using static InstantEdit.Services.PenumbraMods.EstEntryService;
+using static InstantEdit.Services.PenumbraMods.FrameworkThread;
+using static InstantEdit.Services.PenumbraMods.ModJson;
+using static InstantEdit.Services.PenumbraMods.ModMetadata;
+using static InstantEdit.Services.PenumbraMods.ModPaths;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary>
+/// Saves an export as another race's own copy of a gear or accessory model: the model next to the
+/// imported one, mapped at the race's game path in the options that use it, with the race's EQDP
+/// model flag, and a restore point that undoes all of it.
+/// </summary>
+internal sealed class RaceExportService
 {
+    private readonly IFramework _framework;
+    private readonly IPluginLog _log;
+    private readonly SemaphoreSlim _exportGate;
+    private readonly IDataManager _data;
+    private readonly ModelBackupStore _backups;
+    private readonly SourceMods _sources;
+    private readonly ModActivation _activation;
+    private readonly ModelFileWriter _writer;
+    private readonly AttributeGroupService _attributes;
+    private readonly EstEntryService _est;
+
+    public RaceExportService(IFramework framework, IPluginLog log, SemaphoreSlim exportGate, IDataManager data,
+        ModelBackupStore backups, SourceMods sources, ModActivation activation, ModelFileWriter writer,
+        AttributeGroupService attributes, EstEntryService est)
+    {
+        _framework = framework;
+        _log = log;
+        _exportGate = exportGate;
+        _data = data;
+        _backups = backups;
+        _sources = sources;
+        _activation = activation;
+        _writer = writer;
+        _attributes = attributes;
+        _est = est;
+    }
+
     // EQDP files keep two bits per slot, in this order: the material flag, then the model flag.
     private static readonly string[] EquipmentEqdpSlots = ["Head", "Body", "Hands", "Legs", "Feet"];
     private static readonly string[] AccessoryEqdpSlots = ["Ears", "Neck", "Wrists", "RFinger", "LFinger"];
@@ -266,7 +305,7 @@ public sealed partial class PenumbraService
     /// <summary>The model's slot bits in the game's EQDP file for the race, or null when it can't be read.</summary>
     private int? GameEqdpBits(string racePath, int race)
     {
-        if (_data is null || ParseAttributeModelIdentity(racePath) is not { } identity)
+        if (ParseAttributeModelIdentity(racePath) is not { } identity)
             return null;
         var index = EqdpSlotIndex(identity);
         if (index < 0)
@@ -320,7 +359,7 @@ public sealed partial class PenumbraService
         try
         {
             var resolved = await _framework.RunOnFrameworkThread(
-                () => ResolveSourceModTargetOnFramework(
+                () => _sources.ResolveSourceModTargetOnFramework(
                     sourceModDirectory,
                     sourceFilePath,
                     sourceModRootPath,
@@ -349,7 +388,7 @@ public sealed partial class PenumbraService
             var targetFile = Path.Combine(resolved.Target.Folder, plan!.RelativePath.Replace('/', Path.DirectorySeparatorChar));
             // The backup keeps the model's EST entries too, so restoring it undoes this export's EST change.
             var estState = backupExisting && File.Exists(targetFile)
-                ? CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, plan.RelativePath, _estEntries)
+                ? _est.CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, plan.RelativePath)
                 : null;
             if (backupExisting)
             {
@@ -359,7 +398,7 @@ public sealed partial class PenumbraService
                     return new ExportResult(false, "write_failed", backupError);
             }
             // The restore point already backed up the race's file.
-            var writeError = WriteModelToOriginalLocation(
+            var writeError = _writer.WriteModelToOriginalLocation(
                 resolved.Target.Folder, targetFile, exportedFile, false,
                 resolved.Target.Directory, plan.RelativePath);
             if (writeError is not null)
@@ -378,24 +417,24 @@ public sealed partial class PenumbraService
 
             if (createAttributeGroups && attributeTags is { Count: > 0 })
             {
-                var attributeError = WriteAttributeGroups(
+                var attributeError = _attributes.WriteAttributeGroups(
                     resolved.Target.Folder, resolvedGamePath, attributeTags, attributeMasks,
                     sourceManipulations);
                 if (attributeError is not null)
                     warnings.Add($"Penumbra attribute group setup failed: {AttributeGroupErrorMessage(attributeError)}");
             }
 
-            warnings.AddRange(TryUpdateEstEntries(
+            warnings.AddRange(_est.TryUpdateEstEntries(
                 resolved.Target.Folder, resolved.Target.Directory, plan.RelativePath, estEntries));
 
             var reloadError = await _framework.RunOnFrameworkThread(
-                () => ReloadModOnFramework(resolved.Target.Directory)).ConfigureAwait(false);
+                () => _activation.ReloadModOnFramework(resolved.Target.Directory)).ConfigureAwait(false);
             if (reloadError is not null)
                 warnings.Add(reloadError.Message);
             else
             {
                 var redrawWarning = await _framework.RunOnFrameworkThread(
-                    RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
+                    _activation.RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
                 if (redrawWarning is not null)
                     warnings.Add(redrawWarning);
             }
@@ -432,8 +471,6 @@ public sealed partial class PenumbraService
     private string? CreateRaceRestorePoint(string modFolder, string modDirectory, string importedFile, RaceModelPlan plan,
         string raceFile, string exportedFile, JsonObject? estState)
     {
-        if (_backups is null)
-            return "Managed backup storage is unavailable.";
         if (!File.Exists(importedFile))
             return "The imported model is missing, so no backup could be made.";
         try
@@ -474,7 +511,7 @@ public sealed partial class PenumbraService
     /// model is back: the options as they were, then the race's file from its backup, or, when the export
     /// made it, gone, unless the mod maps it again or it changed since. Returns the warnings.
     /// </summary>
-    private List<string> UndoRaceExport(string modFolder, string modDirectory, JsonObject state)
+    internal List<string> UndoRaceExport(string modFolder, string modDirectory, JsonObject state)
     {
         var warnings = RestoreRaceExportMeta(modFolder, state);
         if (JsonString(state["raceFile"]) is not { } relative || !IsSafeRelativeModPath(relative))
@@ -487,14 +524,14 @@ public sealed partial class PenumbraService
             string backup;
             try
             {
-                backup = _backups!.Resolve(_backups.Describe(modDirectory, relative).Id, backupName);
+                backup = _backups.Resolve(_backups.Describe(modDirectory, relative).Id, backupName);
             }
             catch (Exception e) when (e is FileNotFoundException or ArgumentException)
             {
                 warnings.Add($"The backup of {relative} is gone, so it wasn't restored.");
                 return warnings;
             }
-            if (RestoreModelBackup(raceFile, backup, modDirectory, relative) is { } error)
+            if (_writer.RestoreModelBackup(raceFile, backup, modDirectory, relative) is { } error)
                 warnings.Add(error);
         }
         else if (state["created"] is JsonValue created && created.TryGetValue<bool>(out var made) && made && File.Exists(raceFile) &&
@@ -510,7 +547,7 @@ public sealed partial class PenumbraService
     }
 
     /// <summary>A game model's first race export: the race's model in a new mod's default data, with the EQDP entry.</summary>
-    private void AddRaceModelEqdp(string staging, string racePath, int race)
+    internal void AddRaceModelEqdp(string staging, string racePath, int race)
     {
         var meta = LoadV4ModMetadata(staging);
         if (ParseAttributeModelIdentity(racePath) is not { } identity || meta["DefaultData"] is not JsonObject defaultData)

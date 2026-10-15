@@ -1,24 +1,24 @@
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using System.Security.Cryptography;
 using System.Text;
-using Dalamud.Game.ClientState.Objects.Enums;
-using Dalamud.Game.ClientState.Objects.Types;
-using Dalamud.Plugin;
-using Dalamud.Plugin.Services;
+using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using InstantEdit.Models;
-using Penumbra.Api.Enums;
-using Penumbra.Api.Helpers;
-using Penumbra.Api.IpcSubscribers;
-using Lumina.Data;
+using static InstantEdit.Services.PenumbraMods.ModFiles;
+using static InstantEdit.Services.PenumbraMods.ModJson;
+using static InstantEdit.Services.PenumbraMods.ModMetadata;
+using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
+using static InstantEdit.Services.PenumbraMods.ModPaths;
 using Lumina.Data.Files;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary>
+/// The file layout of a mashup: which material each contributor's model gets, where its textures go,
+/// the group or new mod that maps them, and the checks of a staged mashup mod.
+/// </summary>
+internal static class MashupPlanning
 {
-    private static string UniqueMashupGroupName(string modFolder, string requested)
+    internal static string UniqueMashupGroupName(string modFolder, string requested)
     {
         var names = ReadAllVariantGroups(modFolder)
             .Select(group => JsonString(group["Name"]))
@@ -89,47 +89,6 @@ public sealed partial class PenumbraService
         catch (Exception e)
         {
             return $"penumbra_group_write_failed: {e.Message}";
-        }
-    }
-
-    private static void WriteBytesAtomic(string root, string relativePath, byte[] bytes)
-    {
-        if (!IsSafeRelativeResourcePath(relativePath))
-            throw new InvalidDataException("A generated mashup path is unsafe.");
-        var target = Path.GetFullPath(Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar)));
-        var parent = Path.GetDirectoryName(target) ?? throw new InvalidDataException("Mashup file has no parent.");
-        if (!IsPathWithin(target, root) || HasReparsePointInPath(root, parent) ||
-            (File.Exists(target) && (File.GetAttributes(target) & FileAttributes.ReparsePoint) != 0))
-            throw new InvalidDataException("A generated mashup destination is unsafe.");
-        Directory.CreateDirectory(parent);
-        var temporary = Path.Combine(parent, $".instant-edit-{Guid.NewGuid():N}.tmp");
-        try
-        {
-            File.WriteAllBytes(temporary, bytes);
-            File.Move(temporary, target, false);
-        }
-        finally
-        {
-            if (File.Exists(temporary))
-                File.Delete(temporary);
-        }
-    }
-
-    private static void TryDeleteMashupNamespace(string root, string folder)
-    {
-        try
-        {
-            var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var fullFolder = Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            if (!Directory.Exists(fullFolder) || !IsPathWithin(fullFolder, fullRoot) ||
-                string.Equals(fullFolder, fullRoot, StringComparison.OrdinalIgnoreCase) ||
-                (File.GetAttributes(fullFolder) & FileAttributes.ReparsePoint) != 0)
-                return;
-            Directory.Delete(fullFolder, true);
-        }
-        catch
-        {
-            // Cleanup is best-effort; the error returned to Blender remains authoritative.
         }
     }
 
@@ -206,9 +165,6 @@ public sealed partial class PenumbraService
                 mappings.ContainsKey(swap.Key))
                 throw new InvalidDataException("A generated mashup FileSwap is unsafe or conflicts with a file mapping.");
     }
-
-    private static JsonArray CloneManipulations(JsonArray? manipulations)
-        => manipulations?.DeepClone() as JsonArray ?? new JsonArray();
 
     internal static string StageGameModelMod(
         string staging,
@@ -699,7 +655,7 @@ public sealed partial class PenumbraService
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             TimeSpan.FromMilliseconds(100));
 
-    private static string NormalizeModelMaterial(string value)
+    internal static string NormalizeModelMaterial(string value)
     {
         var normalized = Regex.Replace((value ?? string.Empty).Trim(), @"\.\d{3}$", string.Empty);
         if (!normalized.EndsWith(".mtrl", StringComparison.OrdinalIgnoreCase))
@@ -707,5 +663,99 @@ public sealed partial class PenumbraService
         if (!normalized.StartsWith('/'))
             normalized = "/" + normalized;
         return normalized;
+    }
+
+    internal static string FormatMashupDescription(
+        IReadOnlyList<MashupContributor> contributors,
+        IReadOnlyList<string>? requiredExternalMods = null)
+    {
+        var names = contributors
+            .Select(item => item.Context.SourceModName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(name => name!.Replace("\"", "'", StringComparison.Ordinal))
+            .ToArray();
+        var description = $"Mashup created by XIV Instant Edit from {string.Join(" and ", names.Select(name => $"\"{name}\""))}.";
+        return requiredExternalMods is { Count: > 0 }
+            ? $"{description}\n\nRequires external mods: {string.Join(", ", requiredExternalMods)}."
+            : description;
+    }
+
+    internal static IReadOnlyList<string> ExternalMashupWarnings(IReadOnlyList<string> requiredExternalMods)
+        => requiredExternalMods.Count == 0
+            ? Array.Empty<string>()
+            : [$"Keep these external mods enabled in the active collection: {string.Join(", ", requiredExternalMods)}."];
+
+    internal static bool IsValidMashupLocator(SourceResourceLocator locator, string extension)
+        => IsSafeGameResourcePath(locator.GamePath, extension) &&
+           locator.Sha256.Length == 64 && locator.Sha256.All(Uri.IsHexDigit) &&
+           (string.Equals(locator.Kind, InstantEditImportContext.GameSource, StringComparison.OrdinalIgnoreCase) ||
+            (string.Equals(locator.Kind, InstantEditImportContext.ModSource, StringComparison.OrdinalIgnoreCase) &&
+             IsSafeModName(locator.SourceModDirectory) &&
+             IsSafeRelativeResourcePath(locator.SourceRelativePath)));
+
+    internal static byte[] RewriteMaterialTexturePaths(
+        byte[] materialBytes,
+        IReadOnlyDictionary<string, string> rewrites)
+    {
+        if (rewrites.Count == 0)
+            return materialBytes.ToArray();
+        var mtrl = MaterialPreviewBundleBuilder.LooseLuminaFile.Load<MtrlFile>(materialBytes);
+        var stringTableStart = checked(16 + 4 * (
+            mtrl.FileHeader.TextureCount + mtrl.FileHeader.UvSetCount + mtrl.FileHeader.ColorSetCount));
+        var oldStringTableEnd = checked(stringTableStart + mtrl.FileHeader.StringTableSize);
+        if (oldStringTableEnd > materialBytes.Length)
+            throw new InvalidDataException("the MTRL string table is truncated");
+
+        var offsetMap = new Dictionary<int, int>();
+        using var stringStream = new MemoryStream();
+        for (var cursor = 0; cursor < mtrl.Strings.Length;)
+        {
+            var end = Array.IndexOf(mtrl.Strings, (byte)0, cursor);
+            if (end < 0)
+                end = mtrl.Strings.Length;
+            var oldValue = Encoding.UTF8.GetString(mtrl.Strings, cursor, end - cursor);
+            var value = rewrites.TryGetValue(NormalizeGamePath(oldValue), out var replacement)
+                ? replacement
+                : oldValue;
+            offsetMap[cursor] = checked((int)stringStream.Position);
+            stringStream.Write(Encoding.UTF8.GetBytes(value));
+            if (end < mtrl.Strings.Length)
+                stringStream.WriteByte(0);
+            cursor = end < mtrl.Strings.Length ? end + 1 : end;
+        }
+
+        var newStrings = stringStream.ToArray();
+        if (newStrings.Length > ushort.MaxValue)
+            throw new InvalidDataException("rewritten MTRL string table is too large");
+        var newLength = checked(materialBytes.Length - mtrl.Strings.Length + newStrings.Length);
+        if (newLength > ushort.MaxValue)
+            throw new InvalidDataException("rewritten MTRL is too large");
+        var rewritten = new byte[newLength];
+        materialBytes.AsSpan(0, stringTableStart).CopyTo(rewritten);
+        newStrings.CopyTo(rewritten, stringTableStart);
+        materialBytes.AsSpan(oldStringTableEnd).CopyTo(rewritten.AsSpan(stringTableStart + newStrings.Length));
+
+        static void RewriteOffset(byte[] bytes, int position, IReadOnlyDictionary<int, int> offsets)
+        {
+            var oldOffset = BitConverter.ToUInt16(bytes, position);
+            if (!offsets.TryGetValue(oldOffset, out var newOffset) || newOffset > ushort.MaxValue)
+                throw new InvalidDataException("an MTRL string offset is invalid");
+            BitConverter.TryWriteBytes(bytes.AsSpan(position, sizeof(ushort)), (ushort)newOffset);
+        }
+
+        BitConverter.TryWriteBytes(rewritten.AsSpan(4, sizeof(ushort)), (ushort)newLength);
+        BitConverter.TryWriteBytes(rewritten.AsSpan(8, sizeof(ushort)), (ushort)newStrings.Length);
+        RewriteOffset(rewritten, 10, offsetMap);
+        var entryCount = mtrl.FileHeader.TextureCount + mtrl.FileHeader.UvSetCount + mtrl.FileHeader.ColorSetCount;
+        for (var index = 0; index < entryCount; ++index)
+            RewriteOffset(rewritten, 16 + index * 4, offsetMap);
+
+        var validated = MaterialPreviewBundleBuilder.LooseLuminaFile.Load<MtrlFile>(rewritten);
+        foreach (var replacement in rewrites.Values)
+            if (!validated.TextureOffsets.Any(offset =>
+                    string.Equals(ReadNullTerminated(validated.Strings, offset.Offset), replacement,
+                        StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidDataException("rewritten MTRL did not retain every texture alias");
+        return rewritten;
     }
 }

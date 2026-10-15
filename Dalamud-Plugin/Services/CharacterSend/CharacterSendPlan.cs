@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using InstantEdit.Models;
 using InstantEdit.Services.Painter;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Services.Skeletons;
 
 namespace InstantEdit.Services.CharacterSend;
@@ -150,13 +151,13 @@ internal static class CharacterSendPlan
     /// <summary> The rule the On Screen edit action uses: a rooted file of a loaded mod, or a safe game path of game data. </summary>
     public static bool IsSendable(ResourceNode node)
     {
-        if (!PenumbraService.IsSafeGamePath(node.GamePath) || !node.GamePath.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase) ||
+        if (!ModPaths.IsSafeGamePath(node.GamePath) || !node.GamePath.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase) ||
             !node.ActualPath.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase))
             return false;
         return node.SourceState switch
         {
             ResourceSourceState.LoadedMod => Path.IsPathRooted(node.ActualPath) && !string.IsNullOrWhiteSpace(node.SourceModDirectory),
-            ResourceSourceState.GameData => !Path.IsPathRooted(node.ActualPath) && PenumbraService.IsSafeGamePath(node.ActualPath),
+            ResourceSourceState.GameData => !Path.IsPathRooted(node.ActualPath) && ModPaths.IsSafeGamePath(node.ActualPath),
             _ => false,
         };
     }

@@ -1,23 +1,49 @@
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using System.Security.Cryptography;
-using System.Text;
-using Dalamud.Game.ClientState.Objects.Enums;
-using Dalamud.Game.ClientState.Objects.Types;
-using Dalamud.Plugin;
+using System.Text.Json.Nodes;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
-using Penumbra.Api.Enums;
-using Penumbra.Api.Helpers;
-using Penumbra.Api.IpcSubscribers;
 using Lumina.Data;
-using Lumina.Data.Files;
+using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
+using static InstantEdit.Services.PenumbraMods.FrameworkThread;
+using static InstantEdit.Services.PenumbraMods.MashupPlanning;
+using static InstantEdit.Services.PenumbraMods.ModCleanup;
+using static InstantEdit.Services.PenumbraMods.ModFiles;
+using static InstantEdit.Services.PenumbraMods.ModJson;
+using static InstantEdit.Services.PenumbraMods.ModMetadata;
+using static InstantEdit.Services.PenumbraMods.ModPaths;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary>
+/// Builds a mashup: the exported model with the materials and textures each contributor's import
+/// captured, as a group in the active mod or as a new mod.
+/// </summary>
+internal sealed class MashupService
 {
+    private readonly PenumbraIpc _ipc;
+    private readonly IFramework _framework;
+    private readonly IPluginLog _log;
+    private readonly SemaphoreSlim _exportGate;
+    private readonly IDataManager _data;
+    private readonly SourceMods _sources;
+    private readonly ModActivation _activation;
+    private readonly AttributeGroupService _attributes;
+    private readonly EstEntryService _est;
+
+    public MashupService(PenumbraIpc ipc, IFramework framework, IPluginLog log, SemaphoreSlim exportGate, IDataManager data,
+        SourceMods sources, ModActivation activation, AttributeGroupService attributes, EstEntryService est)
+    {
+        _ipc = ipc;
+        _framework = framework;
+        _log = log;
+        _exportGate = exportGate;
+        _data = data;
+        _sources = sources;
+        _activation = activation;
+        _attributes = attributes;
+        _est = est;
+    }
+
     public async Task<ExportResult> ApplyMashupAsync(
         InstantEditImportContext activeContext,
         IReadOnlyList<MashupContributor> contributors,
@@ -32,8 +58,6 @@ public sealed partial class PenumbraService
         IReadOnlyDictionary<string, int>? attributeMasks = null,
         IReadOnlyList<EstEntryRequest>? estEntries = null)
     {
-        if (_data is null)
-            return new ExportResult(false, "mashup_unavailable", "Game data access is unavailable.");
         if (!plan.Success || string.IsNullOrWhiteSpace(plan.Fingerprint) ||
             !IsSafeVariantGroupName(name) || exportId.Length is < 8 or > 128 ||
             destination is not ("active_mod" or "new_mod") ||
@@ -62,7 +86,7 @@ public sealed partial class PenumbraService
             SourceModTarget? activeTarget = null;
             if (destination == "active_mod")
             {
-                var resolution = await _framework.RunOnFrameworkThread(() => ResolveSourceModTargetOnFramework(
+                var resolution = await _framework.RunOnFrameworkThread(() => _sources.ResolveSourceModTargetOnFramework(
                     activeContext.SourceModDirectory!,
                     activeContext.TargetFilePath!,
                     activeContext.SourceModRootPath,
@@ -538,7 +562,7 @@ public sealed partial class PenumbraService
     {
         if (directories.Count == 0)
             return Array.Empty<string>();
-        var mods = await _framework.RunOnFrameworkThread(GetMods).ConfigureAwait(false);
+        var mods = await _framework.RunOnFrameworkThread(_ipc.GetMods).ConfigureAwait(false);
         var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var directory in directories)
         {
@@ -580,14 +604,6 @@ public sealed partial class PenumbraService
            !MaterialPreviewBundleBuilder.IsBodyOrGeneralMaterial(material.GamePath) &&
            !MaterialPreviewBundleBuilder.IsBodyOrGeneralMaterial(material.Resource.GamePath);
 
-    private static bool IsValidMashupLocator(SourceResourceLocator locator, string extension)
-        => IsSafeGameResourcePath(locator.GamePath, extension) &&
-           locator.Sha256.Length == 64 && locator.Sha256.All(Uri.IsHexDigit) &&
-           (string.Equals(locator.Kind, InstantEditImportContext.GameSource, StringComparison.OrdinalIgnoreCase) ||
-            (string.Equals(locator.Kind, InstantEditImportContext.ModSource, StringComparison.OrdinalIgnoreCase) &&
-             IsSafeModName(locator.SourceModDirectory) &&
-             IsSafeRelativeResourcePath(locator.SourceRelativePath)));
-
     internal static string ContentAddressedMashupMaterialPath(string exportId, byte[] materialBytes)
     {
         if (exportId.Length < 12 || materialBytes.Length == 0)
@@ -603,7 +619,7 @@ public sealed partial class PenumbraService
         {
             try
             {
-                bytes = (await _data!.GetFileAsync<FileResource>(locator.GamePath, CancellationToken.None)
+                bytes = (await _data.GetFileAsync<FileResource>(locator.GamePath, CancellationToken.None)
                     .ConfigureAwait(false))?.Data;
             }
             catch (Exception e)
@@ -615,7 +631,7 @@ public sealed partial class PenumbraService
                  IsSafeRelativeResourcePath(locator.SourceRelativePath))
         {
             var roots = await _framework.RunOnFrameworkThread(
-                () => GetRegisteredManifestRoots(locator.SourceModDirectory!, locator.SourceModStableId)).ConfigureAwait(false);
+                () => _sources.GetRegisteredManifestRoots(locator.SourceModDirectory!, locator.SourceModStableId)).ConfigureAwait(false);
             if (roots.Length == 0)
                 return null;
             await LeaveFrameworkThread();
@@ -626,20 +642,6 @@ public sealed partial class PenumbraService
             return null;
         var actualHash = Convert.ToHexString(SHA256.HashData(bytes));
         return string.Equals(actualHash, locator.Sha256, StringComparison.OrdinalIgnoreCase) ? bytes : null;
-    }
-
-    private string[] GetRegisteredManifestRoots(string modDirectory, Guid? stableId = null)
-    {
-        var modList = GetModList();
-        if (!TryResolveRegisteredModIdentity(modList, modDirectory, stableId, null, out var registeredDirectory, out _))
-            return [];
-
-        var roots = new List<string>();
-        AddCandidateRoot(roots, GetRegisteredModPath(registeredDirectory));
-        var configuredRoot = GetModDirectory();
-        if (!string.IsNullOrWhiteSpace(configuredRoot))
-            AddCandidateRoot(roots, Path.Combine(configuredRoot, registeredDirectory));
-        return roots.ToArray();
     }
 
     internal static async Task<byte[]?> ReadVerifiedModManifestResourceAsync(
@@ -672,72 +674,6 @@ public sealed partial class PenumbraService
         }
 
         return null;
-    }
-
-    internal static byte[] RewriteMaterialTexturePaths(
-        byte[] materialBytes,
-        IReadOnlyDictionary<string, string> rewrites)
-    {
-        if (rewrites.Count == 0)
-            return materialBytes.ToArray();
-        var mtrl = MaterialPreviewBundleBuilder.LooseLuminaFile.Load<MtrlFile>(materialBytes);
-        var stringTableStart = checked(16 + 4 * (
-            mtrl.FileHeader.TextureCount + mtrl.FileHeader.UvSetCount + mtrl.FileHeader.ColorSetCount));
-        var oldStringTableEnd = checked(stringTableStart + mtrl.FileHeader.StringTableSize);
-        if (oldStringTableEnd > materialBytes.Length)
-            throw new InvalidDataException("the MTRL string table is truncated");
-
-        var offsetMap = new Dictionary<int, int>();
-        using var stringStream = new MemoryStream();
-        for (var cursor = 0; cursor < mtrl.Strings.Length;)
-        {
-            var end = Array.IndexOf(mtrl.Strings, (byte)0, cursor);
-            if (end < 0)
-                end = mtrl.Strings.Length;
-            var oldValue = Encoding.UTF8.GetString(mtrl.Strings, cursor, end - cursor);
-            var value = rewrites.TryGetValue(NormalizeGamePath(oldValue), out var replacement)
-                ? replacement
-                : oldValue;
-            offsetMap[cursor] = checked((int)stringStream.Position);
-            stringStream.Write(Encoding.UTF8.GetBytes(value));
-            if (end < mtrl.Strings.Length)
-                stringStream.WriteByte(0);
-            cursor = end < mtrl.Strings.Length ? end + 1 : end;
-        }
-
-        var newStrings = stringStream.ToArray();
-        if (newStrings.Length > ushort.MaxValue)
-            throw new InvalidDataException("rewritten MTRL string table is too large");
-        var newLength = checked(materialBytes.Length - mtrl.Strings.Length + newStrings.Length);
-        if (newLength > ushort.MaxValue)
-            throw new InvalidDataException("rewritten MTRL is too large");
-        var rewritten = new byte[newLength];
-        materialBytes.AsSpan(0, stringTableStart).CopyTo(rewritten);
-        newStrings.CopyTo(rewritten, stringTableStart);
-        materialBytes.AsSpan(oldStringTableEnd).CopyTo(rewritten.AsSpan(stringTableStart + newStrings.Length));
-
-        static void RewriteOffset(byte[] bytes, int position, IReadOnlyDictionary<int, int> offsets)
-        {
-            var oldOffset = BitConverter.ToUInt16(bytes, position);
-            if (!offsets.TryGetValue(oldOffset, out var newOffset) || newOffset > ushort.MaxValue)
-                throw new InvalidDataException("an MTRL string offset is invalid");
-            BitConverter.TryWriteBytes(bytes.AsSpan(position, sizeof(ushort)), (ushort)newOffset);
-        }
-
-        BitConverter.TryWriteBytes(rewritten.AsSpan(4, sizeof(ushort)), (ushort)newLength);
-        BitConverter.TryWriteBytes(rewritten.AsSpan(8, sizeof(ushort)), (ushort)newStrings.Length);
-        RewriteOffset(rewritten, 10, offsetMap);
-        var entryCount = mtrl.FileHeader.TextureCount + mtrl.FileHeader.UvSetCount + mtrl.FileHeader.ColorSetCount;
-        for (var index = 0; index < entryCount; ++index)
-            RewriteOffset(rewritten, 16 + index * 4, offsetMap);
-
-        var validated = MaterialPreviewBundleBuilder.LooseLuminaFile.Load<MtrlFile>(rewritten);
-        foreach (var replacement in rewrites.Values)
-            if (!validated.TextureOffsets.Any(offset =>
-                    string.Equals(ReadNullTerminated(validated.Strings, offset.Offset), replacement,
-                        StringComparison.OrdinalIgnoreCase)))
-                throw new InvalidDataException("rewritten MTRL did not retain every texture alias");
-        return rewritten;
     }
 
     private async Task<ExportResult> CommitMashupToActiveModAsync(
@@ -782,7 +718,7 @@ public sealed partial class PenumbraService
             committed = true;
 
             var attributeWarnings = createAttributeGroups && attributeTags is { Count: > 0 }
-                ? WriteAttributeGroups(target.Folder, activeContext.ResolvedGamePath, attributeTags,
+                ? _attributes.WriteAttributeGroups(target.Folder, activeContext.ResolvedGamePath, attributeTags,
                     attributeMasks, KnownManipulations(activeContext))
                 : null;
 
@@ -794,17 +730,17 @@ public sealed partial class PenumbraService
             var mashupModel = prepared.Mappings[NormalizeGamePath(activeContext.GamePath)];
             if (cleanup.PathRemap?.RelativePaths.TryGetValue(mashupModel, out var remappedMashupModel) == true)
                 mashupModel = remappedMashupModel;
-            warnings.AddRange(TryUpdateEstEntries(target.Folder, target.Directory, mashupModel, estEntries));
+            warnings.AddRange(_est.TryUpdateEstEntries(target.Folder, target.Directory, mashupModel, estEntries));
             try
             {
                 var reloadError = await _framework.RunOnFrameworkThread(
-                    () => ReloadModOnFramework(target.Directory)).ConfigureAwait(false);
+                    () => _activation.ReloadModOnFramework(target.Directory)).ConfigureAwait(false);
                 if (reloadError is not null)
                     warnings.Add(reloadError.Message);
                 else
                 {
                     var redraw = await _framework.RunOnFrameworkThread(
-                        RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
+                        _activation.RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
                     if (redraw is not null)
                         warnings.Add(redraw);
                 }
@@ -865,11 +801,11 @@ public sealed partial class PenumbraService
     {
         if (!IsSafeNewModName(modName))
             return new ExportResult(false, "invalid_mod_name", "The Penumbra mod name is invalid.");
-        var root = await _framework.RunOnFrameworkThread(GetModDirectory).ConfigureAwait(false);
+        var root = await _framework.RunOnFrameworkThread(_ipc.GetModDirectory).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
             return new ExportResult(false, "penumbra_root_missing", "The Penumbra mod root is unavailable.");
         var modList = await _framework.RunOnFrameworkThread(() =>
-            TryGetModList(out var mods) ? mods : null).ConfigureAwait(false);
+            _ipc.TryGetModList(out var mods) ? mods : null).ConfigureAwait(false);
         if (modList is null)
             return new ExportResult(false, "penumbra_unavailable", "Could not retrieve the Penumbra mod list.");
         await LeaveFrameworkThread();
@@ -903,7 +839,7 @@ public sealed partial class PenumbraService
                     prepared.FileSwaps)));
             if (createAttributeGroups && attributeTags is { Count: > 0 })
             {
-                var attributeError = WriteAttributeGroups(
+                var attributeError = _attributes.WriteAttributeGroups(
                     staging, activeContext.ResolvedGamePath, attributeTags, attributeMasks,
                     KnownManipulations(activeContext));
                 if (attributeError is not null)
@@ -924,10 +860,10 @@ public sealed partial class PenumbraService
             var mashupModel = prepared.Mappings[NormalizeGamePath(activeContext.GamePath)];
             if (cleanup.PathRemap?.RelativePaths.TryGetValue(mashupModel, out var remappedMashupModel) == true)
                 mashupModel = remappedMashupModel;
-            warnings.AddRange(TryUpdateEstEntries(finalFolder, modName, mashupModel, estEntries));
+            warnings.AddRange(_est.TryUpdateEstEntries(finalFolder, modName, mashupModel, estEntries));
             try
             {
-                var addError = await AddNewModAsync(modName).ConfigureAwait(false);
+                var addError = await _activation.AddNewModAsync(modName).ConfigureAwait(false);
                 if (addError is not null)
                     warnings.Add(addError.Message);
                 else
@@ -935,14 +871,14 @@ public sealed partial class PenumbraService
                     // Enable it in the collection captured with the Context, like a new-mod export:
                     // the object index may belong to another actor, or none, by now.
                     var configure = activeContext.TargetCollectionId is { } collectionId && collectionId != Guid.Empty
-                        ? await _framework.RunOnFrameworkThread(() => ConfigureModForCollectionOnFramework(
+                        ? await _framework.RunOnFrameworkThread(() => _activation.ConfigureModForCollectionOnFramework(
                             modName,
                             collectionId,
                             activeContext.TargetCollectionName ?? "captured collection",
                             setPriority: true,
                             priority: 0)).ConfigureAwait(false)
                         : await _framework.RunOnFrameworkThread(
-                            () => ConfigureModOnFramework(
+                            () => _activation.ConfigureModOnFramework(
                                 modName,
                                 activeContext.ObjectIndex,
                                 setPriority: true,

@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using InstantEdit.Services;
+using InstantEdit.Services.PenumbraMods;
 using static InstantEdit.TestSupport.Assertions;
 
 /// <summary>Hair EST entries set from Magic Fit's hair skeleton tags on export, taken back, and restored with backups.</summary>
@@ -92,10 +93,10 @@ internal static class EstEntryScenarios
 
     private static void EnvelopeRejectsUnsupportedEntries()
     {
-        Require(PenumbraService.ValidateEstEntryRequests(null) is null &&
-                PenumbraService.ValidateEstEntryRequests([]) is null &&
-                PenumbraService.ValidateEstEntryRequests([Hair(160)]) is null &&
-                PenumbraService.ValidateEstEntryRequests([Hair(9999, "c1801")]) is null,
+        Require(EstEntryService.ValidateEstEntryRequests(null) is null &&
+                EstEntryService.ValidateEstEntryRequests([]) is null &&
+                EstEntryService.ValidateEstEntryRequests([Hair(160)]) is null &&
+                EstEntryService.ValidateEstEntryRequests([Hair(9999, "c1801")]) is null,
             "EST envelope: absent, empty and a player race's hair entry are accepted");
         var rejected = new (string Name, List<EstEntryRequest> Entries)[]
         {
@@ -108,7 +109,7 @@ internal static class EstEntryScenarios
             ("two hair entries", [Hair(160), Hair(161)]),
         };
         foreach (var (name, entries) in rejected)
-            Require(PenumbraService.ValidateEstEntryRequests(entries) == "invalid_est_entries",
+            Require(EstEntryService.ValidateEstEntryRequests(entries) == "invalid_est_entries",
                 $"EST envelope: {name} is refused");
         var request = new ExportServer.ExportRequest
         {
@@ -129,7 +130,7 @@ internal static class EstEntryScenarios
         // The modder set Miqo'te's entry in option A by hand, twice (Penumbra keeps the first).
         WriteMod(modFolder, HairMod(new JsonArray(Est("Female", "Miqote", 108, 150), Est("Female", "Miqote", 108, 151))));
 
-        var warnings = PenumbraService.UpdateEstEntriesForRegression(modFolder, "Hair mod", HairFile, [Hair(160)], store);
+        var warnings = EstEntryService.UpdateEstEntriesForRegression(modFolder, "Hair mod", HairFile, [Hair(160)], store);
         var meta = ReadMod(modFolder);
         Require(Entries(meta, null).SequenceEqual(["Female Miqote 108 Hair=160"]),
             "EST: Default, which maps the hair, gets the tagged entry for the tag's race");
@@ -146,17 +147,17 @@ internal static class EstEntryScenarios
             "EST: the plugin records what it wrote and the value it replaced");
 
         var unchanged = File.ReadAllText(Path.Combine(modFolder, "meta.json"));
-        PenumbraService.UpdateEstEntriesForRegression(modFolder, "Hair mod", HairFile, [Hair(160)], store);
+        EstEntryService.UpdateEstEntriesForRegression(modFolder, "Hair mod", HairFile, [Hair(160)], store);
         Require(File.ReadAllText(Path.Combine(modFolder, "meta.json")) == unchanged && store.Load().Count == 2,
             "EST: exporting the same tag again changes nothing");
 
-        PenumbraService.UpdateEstEntriesForRegression(modFolder, "Hair mod", HairFile, [Hair(170)], store);
+        EstEntryService.UpdateEstEntriesForRegression(modFolder, "Hair mod", HairFile, [Hair(170)], store);
         meta = ReadMod(modFolder);
         Require(Entries(meta, OptionA).SequenceEqual(["Female Miqote 108 Hair=170"]) &&
                 store.Load().Single(record => record.Container.StartsWith("option:", StringComparison.Ordinal)).Previous == 150,
             "EST: a new tag value updates the entry and keeps the modder's original value");
 
-        PenumbraService.UpdateEstEntriesForRegression(modFolder, "Hair mod", HairFile, null, store);
+        EstEntryService.UpdateEstEntriesForRegression(modFolder, "Hair mod", HairFile, null, store);
         Require(Entries(ReadMod(modFolder), OptionA).SequenceEqual(["Female Miqote 108 Hair=170"]) && store.Load().Count == 2,
             "EST: without tag information (older add-on, disagreeing meshes) nothing changes");
 
@@ -164,7 +165,7 @@ internal static class EstEntryScenarios
         meta = ReadMod(modFolder);
         Container(meta, null)["Manipulations"] = new JsonArray(Est("Female", "Miqote", 108, 175));
         WriteMod(modFolder, meta);
-        warnings = PenumbraService.UpdateEstEntriesForRegression(modFolder, "Hair mod", HairFile, [], store);
+        warnings = EstEntryService.UpdateEstEntriesForRegression(modFolder, "Hair mod", HairFile, [], store);
         meta = ReadMod(modFolder);
         Require(Entries(meta, null).SequenceEqual(["Female Miqote 108 Hair=175"]),
             "EST: an untagged export never removes an entry the modder changed");
@@ -180,10 +181,10 @@ internal static class EstEntryScenarios
             ["Manipulation"] = new JsonObject { ["Entry"] = 90, ["Gender"] = 2, ["Race"] = 5, ["SetId"] = "108", ["Slot"] = 73 },
         });
         WriteMod(modFolder, meta);
-        PenumbraService.UpdateEstEntriesForRegression(modFolder, "Hair mod", HairFile, [], store);
+        EstEntryService.UpdateEstEntriesForRegression(modFolder, "Hair mod", HairFile, [], store);
         Require(Entries(ReadMod(modFolder), null).SequenceEqual(["2 5 108 73=90"]),
             "EST: an untagged export leaves entries it did not write");
-        PenumbraService.UpdateEstEntriesForRegression(modFolder, "Hair mod", HairFile, [Hair(160)], store);
+        EstEntryService.UpdateEstEntriesForRegression(modFolder, "Hair mod", HairFile, [Hair(160)], store);
         Require(Entries(ReadMod(modFolder), null).SequenceEqual(["Female Miqote 108 Hair=160"]) &&
                 store.Load().Single(record => record.Container == "default").Previous == 90,
             "EST: Penumbra's numeric gender, race and slot values match the same lookup");
@@ -196,11 +197,11 @@ internal static class EstEntryScenarios
         WriteMod(modFolder, HairMod());
         var before = File.ReadAllText(Path.Combine(modFolder, "meta.json"));
 
-        var otherRace = PenumbraService.UpdateEstEntriesForRegression(modFolder, "Hair mod", OtherFile, [Hair(160, "c1401")], store);
+        var otherRace = EstEntryService.UpdateEstEntriesForRegression(modFolder, "Hair mod", OtherFile, [Hair(160, "c1401")], store);
         Require(otherRace.Count == 1 && otherRace[0].Contains("c1401", StringComparison.Ordinal) &&
                 otherRace[0].Contains("c0801", StringComparison.Ordinal),
             "EST: a tag for another race than the model's path is refused with a warning");
-        var unused = PenumbraService.UpdateEstEntriesForRegression(modFolder, "Hair mod", "Files/unused.mdl", [Hair(160)], store);
+        var unused = EstEntryService.UpdateEstEntriesForRegression(modFolder, "Hair mod", "Files/unused.mdl", [Hair(160)], store);
         Require(unused.Count == 1 && unused[0].Contains("No Penumbra option", StringComparison.Ordinal),
             "EST: a model no option uses gets a warning");
         Require(File.ReadAllText(Path.Combine(modFolder, "meta.json")) == before && store.Load().Count == 0,
@@ -210,13 +211,13 @@ internal static class EstEntryScenarios
         var body = HairMod();
         Container(body, null)["Files"] = new JsonObject { ["chara/equipment/e0001/model/c0801e0001_top.mdl"] = "Files/top.mdl" };
         WriteMod(bodyFolder, body);
-        var notHair = PenumbraService.UpdateEstEntriesForRegression(bodyFolder, "Body mod", "Files/top.mdl", [Hair(160)], store);
+        var notHair = EstEntryService.UpdateEstEntriesForRegression(bodyFolder, "Body mod", "Files/top.mdl", [Hair(160)], store);
         Require(notHair.Count == 1 && notHair[0].Contains("not used as a hair model", StringComparison.Ordinal) &&
                 Entries(ReadMod(bodyFolder), null).Length == 0,
             "EST: a hair tag on a model that is not hair is refused with a warning");
-        Require(PenumbraService.UpdateEstEntriesForRegression(bodyFolder, "Body mod", "Files/top.mdl", [], store).Count == 0,
+        Require(EstEntryService.UpdateEstEntriesForRegression(bodyFolder, "Body mod", "Files/top.mdl", [], store).Count == 0,
             "EST: untagged non-hair exports stay silent");
-        Require(PenumbraService.UpdateEstEntriesForRegression(bodyFolder, "Body mod", "Files/top.mdl", [Hair(160)], null)
+        Require(EstEntryService.UpdateEstEntriesForRegression(bodyFolder, "Body mod", "Files/top.mdl", [Hair(160)], null)
                     .Single().Contains("by hand", StringComparison.Ordinal),
             "EST: without the record store the entry is not written and the modder is told to set it");
     }
@@ -226,8 +227,8 @@ internal static class EstEntryScenarios
         var store = new EstEntryStore(Path.Combine(root, "config"));
         var staging = Path.Combine(root, "staging");
         Directory.CreateDirectory(staging);
-        PenumbraService.StageGameModelMod(staging, "Vanilla Maeve", MiqoteHair, [1, 2, 3]);
-        var warnings = PenumbraService.UpdateEstEntriesForRegression(
+        MashupPlanning.StageGameModelMod(staging, "Vanilla Maeve", MiqoteHair, [1, 2, 3]);
+        var warnings = EstEntryService.UpdateEstEntriesForRegression(
             staging, "Vanilla Maeve", "Files/" + MiqoteHair, [Hair(160)], store);
         var meta = ReadMod(staging);
         Require(warnings.Count == 0 && Entries(meta, null).SequenceEqual(["Female Miqote 108 Hair=160"]) &&
@@ -247,34 +248,34 @@ internal static class EstEntryScenarios
         File.WriteAllBytes(model, [1, 2, 3]);
 
         // Export: the backup keeps the state before the export changed it.
-        var before = PenumbraService.CaptureEstStateForRegression(modFolder, "Hair mod", HairFile, store)!;
+        var before = EstEntryService.CaptureEstStateForRegression(modFolder, "Hair mod", HairFile, store)!;
         var backup = backups.Create(model, "Hair mod", HairFile);
         backups.WriteEstState(backup, before);
-        PenumbraService.UpdateEstEntriesForRegression(modFolder, "Hair mod", HairFile, [Hair(160)], store);
+        EstEntryService.UpdateEstEntriesForRegression(modFolder, "Hair mod", HairFile, [Hair(160)], store);
         Require(before["entries"]!.AsArray().Count == 3,
             "EST backups: every option using the model keeps its entry for every hair race it maps");
 
         // Restore: first a backup of today's state, then the backup's own.
-        var current = PenumbraService.CaptureEstStateForRegression(modFolder, "Hair mod", HairFile, store)!;
+        var current = EstEntryService.CaptureEstStateForRegression(modFolder, "Hair mod", HairFile, store)!;
         var restored = backups.ReadEstState(backup)!;
-        var warnings = PenumbraService.RestoreEstStateForRegression(modFolder, "Hair mod", restored, store);
+        var warnings = EstEntryService.RestoreEstStateForRegression(modFolder, "Hair mod", restored, store);
         var meta = ReadMod(modFolder);
         Require(warnings.Count == 0 && Entries(meta, null).Length == 0 &&
                 Entries(meta, OptionA).SequenceEqual(["Female Miqote 108 Hair=150"]) && store.Load().Count == 0,
             "EST backups: restoring puts back the entries and the plugin's ownership from before the export");
-        PenumbraService.RestoreEstStateForRegression(modFolder, "Hair mod", current, store);
+        EstEntryService.RestoreEstStateForRegression(modFolder, "Hair mod", current, store);
         meta = ReadMod(modFolder);
         Require(Entries(meta, null).SequenceEqual(["Female Miqote 108 Hair=160"]) &&
                 Entries(meta, OptionA).SequenceEqual(["Female Miqote 108 Hair=160"]) &&
                 store.Load().Count == 2 && store.Load().Single(record => record.Container != "default").Previous == 150,
             "EST backups: restoring the pre-restore backup redoes the export's entries");
 
-        Require(PenumbraService.CaptureEstStateForRegression(modFolder, "Hair mod", "Files/unused.mdl", store) is null,
+        Require(EstEntryService.CaptureEstStateForRegression(modFolder, "Hair mod", "Files/unused.mdl", store) is null,
             "EST backups: a model used as no hair keeps no EST state");
         meta = ReadMod(modFolder);
         meta["Groups"]![0]!["Options"]!.AsArray().RemoveAt(0);
         WriteMod(modFolder, meta);
-        warnings = PenumbraService.RestoreEstStateForRegression(modFolder, "Hair mod", restored, store);
+        warnings = EstEntryService.RestoreEstStateForRegression(modFolder, "Hair mod", restored, store);
         Require(warnings.Count == 1 && warnings[0].Contains("Both races", StringComparison.Ordinal),
             "EST backups: an option deleted since is reported, not recreated");
 

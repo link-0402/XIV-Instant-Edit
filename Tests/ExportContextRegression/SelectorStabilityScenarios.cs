@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Services.PenumbraMods;
 using static InstantEdit.TestSupport.Assertions;
 
 internal static class SelectorStabilityScenarios
@@ -21,7 +22,7 @@ internal static class SelectorStabilityScenarios
             ["Manipulations"] = new JsonArray(new JsonObject { ["Type"] = "Eqp", ["Entry"] = 1 }),
         };
         var originalOptionJson = sourceOption.ToJsonString();
-        var clonedOption = PenumbraService.BuildVariantOptionForRegression(
+        var clonedOption = ModOptionGroups.BuildVariantOptionForRegression(
             sourceOption, clonedGamePath, "Files/models/variant.mdl");
         Require(clonedOption["Files"]?[clonedGamePath]?.GetValue<string>() == "Files/models/variant.mdl" &&
                 clonedOption["Files"]?["chara/equipment/e0001/material/v0001/mt_c0101e0001_top_a.mtrl"] is not null &&
@@ -54,14 +55,14 @@ internal static class SelectorStabilityScenarios
                 }),
             }),
         }.ToJsonString());
-        var stableTargets = PenumbraService.ReadVariantTargetsForRegression(selectorRoot, clonedGamePath);
+        var stableTargets = ModOptionGroups.ReadVariantTargetsForRegression(selectorRoot, clonedGamePath);
         Require(stableTargets.Single().Id == $"group:{selectorGroupId:D}" &&
                 stableTargets.Single().Options.Single().Id == $"option:{selectorGroupId:D}:{selectorOptionId:D}",
             "v4 groups expose stable GUID selectors");
         var stableSelector = stableTargets.Single().Options.Single().Id;
-        var firstResolvedOption = PenumbraService.ResolveVariantOptionPathForRegression(
+        var firstResolvedOption = ModOptionGroups.ResolveVariantOptionPathForRegression(
             selectorRoot, clonedGamePath, stableSelector);
-        var secondResolvedOption = PenumbraService.ResolveVariantOptionPathForRegression(
+        var secondResolvedOption = ModOptionGroups.ResolveVariantOptionPathForRegression(
             selectorRoot, clonedGamePath, stableSelector);
         Require(firstResolvedOption is not null && firstResolvedOption == secondResolvedOption,
             "the refreshed v4 option selector resolves for two consecutive saves");
@@ -70,7 +71,7 @@ internal static class SelectorStabilityScenarios
         selectorMeta["Groups"]![0]!["Name"] = "Renamed Group";
         selectorMeta["Groups"]![0]!["Options"]![0]!["Name"] = "Renamed Option";
         File.WriteAllText(selectorMetaPath, selectorMeta.ToJsonString());
-        var stableSource = PenumbraService.ResolveSourceOptionForRegression(
+        var stableSource = ModOptionGroups.ResolveSourceOptionForRegression(
             selectorRoot, clonedGamePath, "Files/models/variant.mdl", new SourceOptionLocator
             {
                 Membership = stableSelector,
@@ -79,7 +80,7 @@ internal static class SelectorStabilityScenarios
             });
         Require(stableSource.Error is null && stableSource.Membership == stableSelector,
             "persisted v4 source identity follows GUIDs across renames");
-        var legacySource = PenumbraService.ResolveSourceOptionForRegression(
+        var legacySource = ModOptionGroups.ResolveSourceOptionForRegression(
             selectorRoot, clonedGamePath, "Files/models/variant.mdl", new SourceOptionLocator
             {
                 Membership = "meta:group:0:option:0",
@@ -88,7 +89,7 @@ internal static class SelectorStabilityScenarios
             });
         Require(legacySource.Error is null && legacySource.Membership == stableSelector,
             "a legacy index locator upgrades through a unique group and option name match");
-        var staleStableSource = PenumbraService.ResolveSourceOptionForRegression(
+        var staleStableSource = ModOptionGroups.ResolveSourceOptionForRegression(
             selectorRoot, clonedGamePath, "Files/models/variant.mdl", new SourceOptionLocator
             {
                 Membership = $"option:{selectorGroupId:D}:{Guid.NewGuid():D}",
@@ -104,7 +105,7 @@ internal static class SelectorStabilityScenarios
             ["Files"] = new JsonObject { [clonedGamePath] = "Files/models/variant.mdl" },
         });
         File.WriteAllText(selectorMetaPath, selectorMeta.ToJsonString());
-        var ambiguousLegacySource = PenumbraService.ResolveSourceOptionForRegression(
+        var ambiguousLegacySource = ModOptionGroups.ResolveSourceOptionForRegression(
             selectorRoot, clonedGamePath, "Files/models/variant.mdl", new SourceOptionLocator
             {
                 Membership = "meta:group:0:option:0",
@@ -139,7 +140,7 @@ internal static class SelectorStabilityScenarios
                     new JsonObject { ["Files"] = new JsonObject { [clonedGamePath] = combiningRelative } }),
             }),
         }.ToJsonString());
-        var combiningMemberships = PenumbraService.ReadOptionMembershipsForRegression(combiningRoot, combiningRelative);
+        var combiningMemberships = ModOptionGroups.ReadOptionMembershipsForRegression(combiningRoot, combiningRelative);
         Require(combiningMemberships.Order().SequenceEqual(new[]
             {
                 $"option:{combiningGroupId:D}:{combiningFirstId:D}",
