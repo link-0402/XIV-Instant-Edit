@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using InstantEdit.Studio;
 using InstantEdit.Studio.Models.Project;
 using InstantEdit.Studio.Models.Resources;
 using InstantEdit.Studio.Services;
@@ -18,6 +19,8 @@ internal static partial class ModCheckScenarios
         MarkersPickTheWorstFindingPerNode();
         SharedBodyMaterialsAreNotMissing();
         OperationsAskForACheckAfter();
+        OperationsReportProgressAndCanBeCancelled();
+        TheReportsFingerprintIsTakenWithTheInput();
     }
 
     private static void WaitFor(CheckSession session)
@@ -118,5 +121,42 @@ internal static partial class ModCheckScenarios
         WaitFor(session);
         Require(session.LastOperation is { Ok: true, Message: "Applied 2 fixes." } && session.TakeCheckRequest() && !session.TakeCheckRequest(),
             "a finished operation says how it went and asks once for a new check");
+    }
+
+    private static void OperationsReportProgressAndCanBeCancelled()
+    {
+        var session = new CheckSession();
+        var progress = session.OperationProgress;
+        session.StartOperation("Changing textures", async token =>
+        {
+            progress.Report(new CheckProgress("Encoding", 1, 3));
+            await Task.Delay(Timeout.Infinite, token);
+            return (true, "done");
+        }, checkAfter: false);
+
+        var waited = System.Diagnostics.Stopwatch.StartNew();
+        while (session.Progress is null && waited.Elapsed < TimeSpan.FromSeconds(10))
+            Thread.Sleep(10);
+        Require(session.Progress is { Phase: "Encoding", Current: 1, Total: 3 }, "an operation's progress shows");
+
+        session.Cancel();
+        while (session.Busy && waited.Elapsed < TimeSpan.FromSeconds(20))
+        {
+            Thread.Sleep(10);
+            session.Update();
+        }
+        Require(!session.Busy && session.LastOperation is (false, "Cancelled.") && session.Progress is null, "Cancel stops it");
+    }
+
+    private static void TheReportsFingerprintIsTakenWithTheInput()
+    {
+        using var mod = GearMod();
+        var input = CheckInput.From(ModProject.Load(mod.Path), GearGame(), null, 201, null);
+        var changed = Newtonsoft.Json.Linq.JObject.Parse(mod.ReadMeta());
+        changed["Author"] = "Someone else";
+        mod.Meta(changed.ToString());
+        var report = ModCheck.Run(input, null, default);
+        Require(report.Fingerprint != MetaFingerprint.Of(mod.Path),
+            "a meta.json changed after the mod was copied for the check makes the report stale, not fresh");
     }
 }

@@ -8,12 +8,12 @@ using InstantEdit.Studio.Services.Project;
 using static InstantEdit.TestSupport.Assertions;
 
 /// <summary>
-/// Review fixes, Low findings that run the writer, the builder or the folder watcher (they log
-/// through Dalamud's log): writers-4 (two options whose folders come out the same), writers-6 (a
-/// meta.json merge that fails after the files were written), writers-7 (a build names the mod as
-/// typed) and glue-6 (a stopped folder watcher is noticed and started again).
+/// The Mod Browser's writer, builder and folder watcher, which log through Dalamud's log: a replacement
+/// whose game path leads outside the mod folder, two options whose folders come out the same, a
+/// meta.json merge that fails after the files were written, a build names the mod as typed, and a
+/// stopped folder watcher is noticed and started again. Each runs against a temp mod.
 /// </summary>
-internal static class ReviewFixLowsScenarios
+internal static class ModWriterScenarios
 {
     private const string GroupId = "8d0c4b52-31a5-4a52-8f8e-2a7d1e0f0001";
     private const string UpperId = "8d0c4b52-31a5-4a52-8f8e-2a7d1e0f0002";
@@ -23,14 +23,15 @@ internal static class ReviewFixLowsScenarios
     public static async Task RunAsync()
     {
         EnsureLog();
-        var root = Path.Combine(Path.GetTempPath(), "instant-edit-review-lows-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(Path.GetTempPath(), "instant-edit-mod-writer-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
-            await OptionsWhoseFoldersCollideGetPlacesOfTheirOwn(root);
-            await AFailedMergeStillRecordsTheWrittenFiles(root);
-            await ABuildNamesTheModAsTyped(root);
-            AStoppedWatcherIsNoticed(root);
+            await AnUnsafeReplacementPathFailsOnItsOwn(root);         // writers-5
+            await OptionsWhoseFoldersCollideGetPlacesOfTheirOwn(root);  // writers-4
+            await AFailedMergeStillRecordsTheWrittenFiles(root);        // writers-6
+            await ABuildNamesTheModAsTyped(root);                       // writers-7
+            AStoppedWatcherIsNoticed(root);                             // glue-6
         }
         finally
         {
@@ -38,7 +39,52 @@ internal static class ReviewFixLowsScenarios
         }
     }
 
-    // ── writers-4 ───────────────────────────────────────────────────────────
+    /// <summary>A replacement whose game path leads outside the mod folder fails on its own; the rest of the update is still written.</summary>
+    private static async Task AnUnsafeReplacementPathFailsOnItsOwn(string root)
+    {
+        root = Path.Combine(root, "unsafe-path");
+        var mod = Path.Combine(root, "Mods", "Writer Mod");
+        Directory.CreateDirectory(mod);
+        File.WriteAllText(Path.Combine(mod, "meta.json"), new JsonObject
+        {
+            ["FileVersion"] = 4,
+            ["Identifier"] = Guid.NewGuid(),
+            ["Name"] = "Writer Mod",
+            ["DefaultData"] = new JsonObject { ["Files"] = new JsonObject() },
+        }.ToJsonString());
+        var source = Path.Combine(root, "top.mdl");
+        File.WriteAllBytes(source, new byte[] { 1, 2, 3, 4 });
+
+        const string good = "chara/equipment/e0001/model/c0101e0001_top.mdl";
+        const string bad  = "chara/../../../escape.mdl";
+        var request = new WriteRequest
+        {
+            ModPath         = mod,
+            ModFolderName   = "Writer Mod",
+            Meta            = PenumbraModMeta.Load(mod),
+            PreviousLedger  = new WriteLedger(),
+            Sidecar         = new StudioProject(),
+            CreatedHere     = true,
+            PluginDirectory = root,
+            Replacements    =
+            {
+                new ResourceReplacement { GamePath = bad,  SourcePath = source, IsNew = true },
+                new ResourceReplacement { GamePath = good, SourcePath = source, IsNew = true },
+            },
+        };
+
+        var report = await new WriteJob(request).Task;
+        Require(report.FatalError == null, "an unsafe replacement path does not stop the whole update");
+        Require(report.Entries.Any(e => e.Outcome == WriteOutcome.Failed && e.GamePath == bad),
+            "the replacement with the unsafe path is reported as failed");
+        Require(File.Exists(Path.Combine(mod, "chara", "equipment", "e0001", "model", "c0101e0001_top.mdl")),
+            "the other replacement is still written");
+        Require(!File.Exists(Path.Combine(root, "escape.mdl")) && !File.Exists(Path.Combine(Path.GetDirectoryName(root)!, "escape.mdl")),
+            "nothing is written outside the mod folder");
+        var meta = JsonNode.Parse(File.ReadAllText(Path.Combine(mod, "meta.json")))!;
+        Require(meta["DefaultData"]?["Files"]?[good] != null && meta["DefaultData"]?["Files"]?[bad] == null,
+            "meta.json points at the written file only");
+    }
 
     private static async Task OptionsWhoseFoldersCollideGetPlacesOfTheirOwn(string root)
     {
@@ -77,8 +123,6 @@ internal static class ReviewFixLowsScenarios
             "and each file holds that option's model");
     }
 
-    // ── writers-6 ───────────────────────────────────────────────────────────
-
     private static async Task AFailedMergeStillRecordsTheWrittenFiles(string root)
     {
         var mod = Path.Combine(root, "Mods", "Locked Meta");
@@ -111,8 +155,6 @@ internal static class ReviewFixLowsScenarios
         Require(!Directory.Exists(Path.Combine(mod, "instant_edit")), "no second copy was written beside it");
     }
 
-    // ── writers-7 ───────────────────────────────────────────────────────────
-
     private static async Task ABuildNamesTheModAsTyped(string root)
     {
         var modRoot = Path.Combine(root, "BuildRoot");
@@ -132,8 +174,6 @@ internal static class ReviewFixLowsScenarios
         Require(report.FatalError == null && File.Exists(meta), $"the build makes the mod's folder from the safe name ({report.FatalError})");
         Require((string?)JsonNode.Parse(File.ReadAllText(meta))?["Name"] == typed, "and names the mod as typed in meta.json");
     }
-
-    // ── glue-6 ──────────────────────────────────────────────────────────────
 
     private static void AStoppedWatcherIsNoticed(string root)
     {
@@ -155,8 +195,6 @@ internal static class ReviewFixLowsScenarios
         watcher.Watch(Path.Combine(root, "missing"));
         Require(watcher.Failed, "a folder that can't be watched stays on the timer");
     }
-
-    // ── Fixtures ────────────────────────────────────────────────────────────
 
     private static void WriteMeta(string mod, JsonArray groups)
         => File.WriteAllText(Path.Combine(mod, "meta.json"), new JsonObject
@@ -199,6 +237,13 @@ internal static class ReviewFixLowsScenarios
     {
         if (typeof(StudioServices).GetProperty(nameof(StudioServices.Log))!.GetValue(null) != null)
             return;
-        StudioServices.Initialize(null!, DispatchProxy.Create<IPluginLog, ReviewFixQuietLog>(), null!, null!, null!, null!);
+        StudioServices.Initialize(null!, DispatchProxy.Create<IPluginLog, QuietLog>(), null!, null!, null!, null!);
     }
+}
+
+/// <summary>An <see cref="IPluginLog"/> that drops everything.</summary>
+public class QuietLog : DispatchProxy
+{
+    protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        => targetMethod?.ReturnType is { IsValueType: true } type && type != typeof(void) ? Activator.CreateInstance(type) : null;
 }

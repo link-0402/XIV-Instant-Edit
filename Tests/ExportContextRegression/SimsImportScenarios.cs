@@ -6,29 +6,28 @@ using static InstantEdit.TestSupport.Assertions;
 /// <summary>
 /// The Sims 4 importer against hostile .package input: forged sizes, oversized textures,
 /// zero-stride meshes, RefPack header flags, bad face indices, names from the package,
-/// and re-extracting into the same folder. Every byte buffer here is built by hand.
+/// re-extracting into the same folder, and cancelling. Every byte buffer here is built by hand.
 /// </summary>
-internal static class ReviewFixSimsScenarios
+internal static class SimsImportScenarios
 {
-    private const long Megabyte = 1024 * 1024;
-
     public static void Run(string testRoot)
     {
-        var root = Path.Combine(testRoot, "SimsReviewFix");
+        var root = Path.Combine(testRoot, "SimsImport");
         Directory.CreateDirectory(root);
 
-        ForgedUnpackedSizesAreRefusedBeforeAllocating(root);
+        ForgedUnpackedSizesAreRefusedBeforeAllocating(root);   // sims-1
         ZlibOutputStopsAtTheCap();
-        RefPackFlagsReadTheRightWayRound();
+        RefPackFlagsReadTheRightWayRound();                    // sims-5
         TruncatedRefPackIsAnError();
-        TextureDimensionsAreCappedAndCheckedAgainstTheData();
-        GeomLayoutIsCheckedBeforeAllocating();
-        BadFaceIndexDropsOnlyThatFace(root);
-        NamesFromThePackageStayInsideTheOutputFolder(root);
-        ReExtractingReplacesOnlyItsOwnFiles(root);
+        TextureDimensionsAreCappedAndCheckedAgainstTheData();  // sims-2
+        GeomLayoutIsCheckedBeforeAllocating();                 // sims-3
+        BadFaceIndexDropsOnlyThatFace(root);                   // sims-7
+        NamesFromThePackageStayInsideTheOutputFolder(root);    // sims-6
+        ReExtractingReplacesOnlyItsOwnFiles(root);             // sims-4
+        SimsWorkStopsWhenCancelled(root);                      // sims-8
     }
 
-    // ── sims-1 ──────────────────────────────────────────────────────────────
+    private const long Megabyte = 1024 * 1024;
 
     private static void ForgedUnpackedSizesAreRefusedBeforeAllocating(string root)
     {
@@ -79,10 +78,8 @@ internal static class ReviewFixSimsScenarios
             "zlib with no stated size under the cap still inflates");
     }
 
-    // ── sims-5 ──────────────────────────────────────────────────────────────
-
-    // "ABCD" as four literals, then 8 bytes copied from 4 back, then stop: ABCDABCDABCD.
     private static readonly byte[] RefPackBody = { 0xE0, (byte)'A', (byte)'B', (byte)'C', (byte)'D', 0x14, 0x03, 0xFC };
+
     private const string RefPackText = "ABCDABCDABCD";
 
     private static void RefPackFlagsReadTheRightWayRound()
@@ -124,8 +121,6 @@ internal static class ReviewFixSimsScenarios
         Require(allocated < Megabyte, "a 2 GB RefPack header size from 14 bytes is refused without allocating");
     }
 
-    // ── sims-2 ──────────────────────────────────────────────────────────────
-
     private static void TextureDimensionsAreCappedAndCheckedAgainstTheData()
     {
         RequireCheapRejection(() => SimsTextureDecoder.Decode(SimsResourceType.Rle2, Rle2(16384, 16384)),
@@ -150,10 +145,10 @@ internal static class ReviewFixSimsScenarios
         Require(small.Width == 2 && small.Rgba[0] == 0x30 && small.Rgba[3] == 0x40, "a complete uncompressed DDS still decodes");
     }
 
-    // ── sims-3 ──────────────────────────────────────────────────────────────
-
     private static readonly (uint, uint, byte) Position = (1, 1, 12);
+
     private static readonly (uint, uint, byte) Normal   = (2, 1, 12);
+
     private static readonly (uint, uint, byte) Uv       = (3, 1, 8);
 
     private static void GeomLayoutIsCheckedBeforeAllocating()
@@ -173,8 +168,6 @@ internal static class ReviewFixSimsScenarios
         var mesh = SimsGeom.Parse(Geom(3, new[] { Position, Uv }, new byte[60], 2, new uint[] { 0, 1, 2 }));
         Require(mesh.VertexCount == 3 && mesh.FaceCount == 1 && mesh.UvChannels.Count == 1, "a well-formed GEOM still parses");
     }
-
-    // ── sims-7 ──────────────────────────────────────────────────────────────
 
     private static void BadFaceIndexDropsOnlyThatFace(string root)
     {
@@ -200,8 +193,6 @@ internal static class ReviewFixSimsScenarios
             "a mesh whose every face is bad fails cleanly");
     }
 
-    // ── sims-6 ──────────────────────────────────────────────────────────────
-
     private static void NamesFromThePackageStayInsideTheOutputFolder(string root)
     {
         Require(SimsPackageInspector.MakeSafeName("..") == "sims_part", "'..' is never used as a name");
@@ -224,8 +215,6 @@ internal static class ReviewFixSimsScenarios
                 && Path.GetFileName(result.RootFolder) == "sims_package" && result.Extracted == 1,
             $"a package named '...package' extracts inside the output folder ({result.RootFolder})");
     }
-
-    // ── sims-4 ──────────────────────────────────────────────────────────────
 
     private static void ReExtractingReplacesOnlyItsOwnFiles(string root)
     {
@@ -274,7 +263,39 @@ internal static class ReviewFixSimsScenarios
             "output from before manifests existed is left alone");
     }
 
-    // ── Fixtures ────────────────────────────────────────────────────────────
+    private static void SimsWorkStopsWhenCancelled(string root)
+    {
+        var source = Path.Combine(root, "sims");
+        Directory.CreateDirectory(source);
+        var package = Path.Combine(source, "swatches.package");
+        WritePackage(package,
+            new Res(SimsResourceType.ImgOverlay, 1, UncompressedDds(4, 4, pixels: 16)),
+            new Res(SimsResourceType.ImgOverlay, 2, UncompressedDds(4, 4, pixels: 16)),
+            new Res(SimsResourceType.ImgOverlay, 3, UncompressedDds(4, 4, pixels: 16)));
+
+        using (var cts = new CancellationTokenSource())
+        {
+            Exception? error = null;
+            try { SimsPackageInspector.Scan(package, line => { if (line.StartsWith("Decoding", StringComparison.Ordinal)) cts.Cancel(); }, cts.Token); }
+            catch (Exception ex) { error = ex; }
+            Require(error is OperationCanceledException, $"a scan stops when cancelled ({error?.GetType().Name})");
+        }
+
+        var scan = SimsPackageInspector.Scan(package);
+        var output = Path.Combine(root, "sims-out");
+        using (var cts = new CancellationTokenSource())
+        {
+            int calls = 0;
+            Exception? error = null;
+            try { SimsPackageInspector.Extract(scan, output, progress: _ => { if (++calls == 1) cts.Cancel(); }, cancel: cts.Token); }
+            catch (Exception ex) { error = ex; }
+            var diffuse = Directory.GetFiles(output, "*.png", SearchOption.AllDirectories);
+            Require(error is OperationCanceledException && diffuse.Length < 3,
+                $"an extraction stops between files when cancelled ({error?.GetType().Name}, {diffuse.Length} written)");
+            Require(Directory.GetFiles(output, "*", SearchOption.AllDirectories).Any(f => !f.EndsWith(".png", StringComparison.OrdinalIgnoreCase)),
+                "what it wrote is still recorded as its own");
+        }
+    }
 
     internal sealed record Res(uint Type, ulong Instance, byte[] Data, uint? MemSize = null, ushort Compression = 0);
 
