@@ -1,14 +1,26 @@
 using InstantEdit.Studio;
-using InstantEdit.Ui.Main;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Main;
 
 /// <summary>
 /// The hand-offs of the files of a mod open in a mod window: the same Edit in Blender, Edit
-/// texture and Send animation as the rows here, reported in this window's status feed.
+/// texture and Send animation as the main window's rows, reported in its status feed.
 /// </summary>
-public sealed partial class MainWindow : IModHandoff
+internal sealed class MainModHandoff : IModHandoff
 {
+    private readonly ModelSender _models;
+    private readonly TextureSessionsTab _textureTab;
+    private readonly AnimationSendDialog _animationSend;
+    private readonly StatusFeed _feed;
+
+    public MainModHandoff(ModelSender models, TextureSessionsTab textureTab, AnimationSendDialog animationSend, StatusFeed feed)
+    {
+        _models = models;
+        _textureTab = textureTab;
+        _animationSend = animationSend;
+        _feed = feed;
+    }
+
     string? IModHandoff.ModelBlock(ResourceView row)
     {
         if (!row.IsModel || !ResourceViews.IsSafeModel(row))

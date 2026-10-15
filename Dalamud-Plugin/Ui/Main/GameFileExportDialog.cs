@@ -2,16 +2,26 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Utility.Raii;
+using Dalamud.Plugin.Services;
 using InstantEdit.Services;
 using InstantEdit.Services.GameFiles;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Main;
 
-public sealed partial class MainWindow
+/// <summary> Game Files' export: the dialog that picks the folder and what goes in, the running export's progress, and its result. </summary>
+internal sealed class GameFileExportDialog
 {
     private const string GameExportDialog = "Export game files";
     private const int ManyTextureModels = 500;
+    private readonly Configuration _config;
+    private readonly Action _saveConfig;
+    private readonly PenumbraService _penumbra;
+    private readonly IPluginLog _log;
+    private readonly StatusFeed _feed;
+    private readonly ResourceRows _rows;
     private readonly FileDialogManager _gameExportFolderDialog = new();
+    private GameFileBrowserService? _gameFiles;
+    private GameFileExportService? _gameExport;
     private IReadOnlyList<GameModelEntry> _gameExportModels = [];
     private (string Path, string Label)[] _gameExportForbidden = [];
     private string _gameExportCacheRoot = string.Empty;
@@ -20,10 +30,36 @@ public sealed partial class MainWindow
     private bool _openGameExportDialog;
     private GameExportResult? _dismissedGameExport;
 
+    public GameFileExportDialog(Configuration config, Action saveConfig, PenumbraService penumbra, IPluginLog log, StatusFeed feed, ResourceRows rows)
+    {
+        _config = config;
+        _saveConfig = saveConfig;
+        _penumbra = penumbra;
+        _log = log;
+        _feed = feed;
+        _rows = rows;
+    }
+
+    /// <summary> The export service, once the plugin has started it. </summary>
+    public GameFileExportService? Export => _gameExport;
+
+    public void Attach(GameFileBrowserService browser, GameFileExportService export)
+    {
+        _gameFiles = browser;
+        _gameExport = export;
+        export.Finished += OnGameExportFinished;
+    }
+
+    public void Detach()
+    {
+        if (_gameExport is not null)
+            _gameExport.Finished -= OnGameExportFinished;
+    }
+
     /// <summary> Draws the export folder picker; the plugin hooks it to the UI builder like the setup window's. </summary>
     public void DrawFileDialog() => _gameExportFolderDialog.Draw();
 
-    private void OpenGameExport(IReadOnlyList<GameModelEntry> models)
+    public void Open(IReadOnlyList<GameModelEntry> models)
     {
         if (models.Count == 0 || _gameExport is null)
             return;
@@ -73,7 +109,7 @@ public sealed partial class MainWindow
         return [.. folders];
     }
 
-    private void DrawGameFileExportDialog()
+    public void Draw()
     {
         if (_openGameExportDialog)
         {
@@ -221,7 +257,7 @@ public sealed partial class MainWindow
             try { TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory); }
             catch (Exception e)
             {
-                SetStatus($"The export can't go into Instant Edit's cache folder: {e.Message}", FeedbackSeverity.Error);
+                _feed.SetStatus($"The export can't go into Instant Edit's cache folder: {e.Message}", FeedbackSeverity.Error);
                 return;
             }
         }
@@ -231,16 +267,16 @@ public sealed partial class MainWindow
             _config.GameExportSkeletonFiles, _config.GameExportSkeletonJson && export.CanDecodeSkeletons);
         var count = _gameExportModels.Count;
         if (export.Start(_gameExportModels, root, options))
-            SetStatus(count == 1 ? $"Exporting 1 model to {root}" : $"Exporting {count:N0} models to {root}", FeedbackSeverity.Info);
+            _feed.SetStatus(count == 1 ? $"Exporting 1 model to {root}" : $"Exporting {count:N0} models to {root}", FeedbackSeverity.Info);
         else
-            SetStatus("Another export is still running.", FeedbackSeverity.Warning);
+            _feed.SetStatus("Another export is still running.", FeedbackSeverity.Warning);
     }
 
     // Raised on the export's background thread; the status feed is thread-safe.
     private void OnGameExportFinished(GameExportResult result)
     {
         var (text, severity) = GameExportSummary(result);
-        SetStatus(text, severity);
+        _feed.SetStatus(text, severity);
     }
 
     private static (string Text, FeedbackSeverity Severity) GameExportSummary(GameExportResult result)
@@ -261,7 +297,7 @@ public sealed partial class MainWindow
     }
 
     /// <summary> The running export's progress bar, or the last export's result until it is dismissed. </summary>
-    private void DrawGameExportStatus()
+    public void DrawStatus()
     {
         if (_gameExport is not { } export)
             return;
@@ -291,13 +327,13 @@ public sealed partial class MainWindow
         using (ImRaii.Disabled(!Directory.Exists(result.Root)))
         {
             if (ImGui.SmallButton("Open folder"))
-                OpenFolder(result.Root);
+                _rows.OpenFolder(result.Root);
         }
         if (result.ManifestPath is { } manifest && File.Exists(manifest))
         {
             ImGui.SameLine();
             if (ImGui.SmallButton("Open manifest"))
-                OpenFolder(manifest);
+                _rows.OpenFolder(manifest);
         }
         ImGui.SameLine();
         if (ImGui.SmallButton("Dismiss##game-export"))

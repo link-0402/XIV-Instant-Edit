@@ -150,7 +150,7 @@ public sealed partial class MainWindow
         }
 
         using var align = ImRaii.PushStyle(ImGuiStyleVar.SelectableTextAlign, new Vector2(0, .5f));
-        using var table = ImRaii.Table("##animation-table", 4, ResourceTableFlags | ImGuiTableFlags.ScrollY,
+        using var table = ImRaii.Table("##animation-table", 4, ResourceRows.ResourceTableFlags | ImGuiTableFlags.ScrollY,
             new Vector2(0, Math.Max(1, ImGui.GetContentRegionAvail().Y)));
         if (!table.Success)
             return;
@@ -167,7 +167,7 @@ public sealed partial class MainWindow
     /// <summary> The character the animations belong to, headed as On Screen heads its actors, and what the listener is doing. </summary>
     private void DrawAnimationListHeader(string status)
     {
-        DrawOpaqueRow();
+        ResourceRows.DrawOpaqueRow();
         Widgets.Icon(FontAwesomeIcon.User, Theme.Label);
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
@@ -215,7 +215,7 @@ public sealed partial class MainWindow
         // A startup hangs under the animation it leads into.
         if (row.Startup)
             DrawStartupGuide();
-        ImGui.SetCursorPosX(start + (row.Startup ? TreeStep : 0));
+        ImGui.SetCursorPosX(start + (row.Startup ? ResourceRows.TreeStep : 0));
         Widgets.Icon(AnimationIcon(row.Capture), Theme.AnimationKind);
         ImGui.SameLine(0, Theme.Gap);
         var problem = SkeletonBlock(row.Clip);
@@ -226,7 +226,7 @@ public sealed partial class MainWindow
                 new Vector2(Math.Max(1, ImGui.GetContentRegionAvail().X - tags), ImGui.GetFrameHeight())))
             SelectAnimation(row.Capture, row.Startup);
         var hovered = ImGui.IsItemHovered();
-        ImGui.OpenPopupOnItemClick(RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
+        ImGui.OpenPopupOnItemClick(ResourceRows.RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
         if (hovered)
             DrawAnimationRowTooltip(row, problem);
         if (row.Playing)
@@ -243,7 +243,7 @@ public sealed partial class MainWindow
         }
 
         ImGui.TableSetColumnIndex(1);
-        DrawSourceBadge(view);
+        ResourceRows.DrawSourceBadge(view);
         ImGui.TableSetColumnIndex(2);
         Widgets.PathText(Safe(view.SourceRelativePath, view.GamePath), Safe(view.ActualPath));
         ImGui.TableSetColumnIndex(3);
@@ -251,8 +251,8 @@ public sealed partial class MainWindow
             _animationSend.OpenAnimationSend(view);
         ImGui.SameLine(0, Theme.Scaled(2));
         if (Widgets.GhostIconButton("##more", FontAwesomeIcon.EllipsisH, "More actions"))
-            ImGui.OpenPopup(RowMenuPopup);
-        DrawRowMenu(animationActor, view);
+            ImGui.OpenPopup(ResourceRows.RowMenuPopup);
+        _rows.DrawRowMenu(animationActor, view);
     }
 
     /// <summary> The line joining a startup row to the animation above it, hanging from that row's glyph. </summary>
@@ -262,7 +262,7 @@ public sealed partial class MainWindow
         var frame = ImGui.GetFrameHeight();
         var x = MathF.Floor(origin.X + Theme.TreeIndent + IconWidth(FontAwesomeIcon.Running) / 2) + .5f;
         var middle = MathF.Floor(origin.Y + frame / 2) + .5f;
-        var end = origin.X + Theme.TreeIndent + TreeStep - Theme.Scaled(3);
+        var end = origin.X + Theme.TreeIndent + ResourceRows.TreeStep - Theme.Scaled(3);
         var drawList = ImGui.GetWindowDrawList();
         var colour = ImGui.GetColorU32(Theme.TreeLine);
         var thickness = Math.Max(1, MathF.Floor(Theme.Scale));

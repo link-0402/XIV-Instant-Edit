@@ -10,9 +10,11 @@ using Dalamud.Utility;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.GameFiles;
 using InstantEdit.Services.Painter;
 using InstantEdit.Services.Previews;
 using InstantEdit.Services.Skeletons;
+using InstantEdit.Studio;
 using InstantEdit.Ui.Main;
 
 namespace InstantEdit.Ui;
@@ -37,6 +39,14 @@ public sealed partial class MainWindow : Window, IDisposable
     private readonly AnimationDelivery _animationDelivery;
     private readonly RecorderPanel _recorder;
     private readonly AnimationSendDialog _animationSend;
+    private readonly ModBrowserTab _modBrowser;
+    private readonly MainModHandoff _handoff;
+    private readonly ResourceRows _rows;
+    private readonly SlotIcons _slotIcons;
+    private readonly ExpansionState _expansion = new();
+    private readonly OnScreenTab _onScreenTab;
+    private readonly GameFileExportDialog _gameExportDialog;
+    private readonly GameFilesTab _gameFilesTab;
     private readonly PreviewService _previews;
     private readonly string _pluginVersion;
     private readonly ResourceSourceAttributor _resourceSources;
@@ -46,8 +56,6 @@ public sealed partial class MainWindow : Window, IDisposable
     private readonly IUiBuilder _uiBuilder;
     private readonly object _stateLock = new();
     private readonly CancellationTokenSource _lifetimeCts = new();
-    private IReadOnlyDictionary<string, IDalamudTextureWrap> _slotIcons = new Dictionary<string, IDalamudTextureWrap>();
-    private string _filter = string.Empty;
     private MainTab _activeTab = MainTab.OnScreen;
     private MainTab? _pendingTab;
     private long _resourcesChangedTicks;
@@ -75,7 +83,13 @@ public sealed partial class MainWindow : Window, IDisposable
         _animationDelivery = new AnimationDelivery(config, blender, _blenderConnection);
         _recorder = new RecorderPanel(config, saveConfig, log, _feed, _animationDelivery, _lifetimeCts.Token);
         _animationSend = new AnimationSendDialog(_animationHub, _animationDelivery, _feed, _lifetimeCts.Token);
-        _kinds = _screenKinds;
+        _modBrowser = new ModBrowserTab(penumbra, _feed);
+        _handoff = new MainModHandoff(_models, _textureTab, _animationSend, _feed);
+        _rows = new ResourceRows(_models, _painter, _textureTab, _animationSend, _modBrowser, penumbra, log, _feed);
+        _slotIcons = new SlotIcons(uiBuilder, textureProvider, data, log);
+        _onScreenTab = new OnScreenTab(config, saveConfig, onScreen, _rows, _hoverCards, _textureTab, _slotIcons, _expansion);
+        _gameExportDialog = new GameFileExportDialog(config, saveConfig, penumbra, log, _feed, _rows);
+        _gameFilesTab = new GameFilesTab(onScreen, _rows, _hoverCards, _gameExportDialog);
         _saveConfig = saveConfig;
         _openChangelog = openChangelog;
         _openSettings = openSettings;
@@ -110,7 +124,6 @@ public sealed partial class MainWindow : Window, IDisposable
             Click = _ => _openSettings(),
             ShowTooltip = () => ImGui.SetTooltip("Settings"),
         });
-        _ = uiBuilder.RunWhenUiPrepared(() => LoadSlotIcons(uiBuilder, textureProvider), true);
     }
 
     public void Dispose()
@@ -120,17 +133,9 @@ public sealed partial class MainWindow : Window, IDisposable
         if (_compression is not null)
             _compression.Optimized -= NotifyOptimized;
         _painter.Detach();
-        DetachGameFiles();
+        _gameExportDialog.Detach();
         _lifetimeCts.Cancel();
-        IReadOnlyDictionary<string, IDalamudTextureWrap> icons;
-        lock (_stateLock)
-        {
-            icons = _slotIcons;
-            _slotIcons = new Dictionary<string, IDalamudTextureWrap>();
-        }
-
-        foreach (var icon in icons.Values.Distinct())
-            icon.Dispose();
+        _slotIcons.Dispose();
         _lifetimeCts.Dispose();
     }
 
@@ -144,6 +149,18 @@ public sealed partial class MainWindow : Window, IDisposable
 
     /// <summary>The recorder, drawn in the Timeline window's Record page; it sends to Blender through this window.</summary>
     internal void DrawRecorderPanel() => _recorder.Draw();
+
+    /// <summary> The Mod Browser: Penumbra's mods as tiles, a window per open mod, and the modpack builder. </summary>
+    internal void AttachStudio(StudioHost studio) => _modBrowser.Attach(studio, _handoff);
+
+    internal void AttachGameFiles(GameFileBrowserService browser, GameFileExportService export)
+    {
+        _gameFilesTab.Attach(browser);
+        _gameExportDialog.Attach(browser, export);
+    }
+
+    /// <summary> Draws the Game Files export folder picker; the plugin hooks it to the UI builder like the setup window's. </summary>
+    public void DrawFileDialog() => _gameExportDialog.DrawFileDialog();
 
     internal void AttachSkeletons(ModelSkeletonResolver? value) => _models.Skeletons = value;
 
@@ -234,10 +251,10 @@ public sealed partial class MainWindow : Window, IDisposable
                 switch (activeTab)
                 {
                     case MainTab.ModBrowser:
-                        DrawModsTab();
+                        _modBrowser.Draw();
                         break;
                     case MainTab.GameFiles:
-                        DrawGameFilesTab();
+                        _gameFilesTab.Draw();
                         break;
                     case MainTab.TextureEdits:
                         _textureTab.Draw();
@@ -250,7 +267,7 @@ public sealed partial class MainWindow : Window, IDisposable
                         DrawQuickActionsTab();
                         break;
                     default:
-                        DrawOnScreenTab();
+                        _onScreenTab.Draw();
                         break;
                 }
             }
@@ -265,7 +282,7 @@ public sealed partial class MainWindow : Window, IDisposable
         _textureTab.DrawDialogs();
         _animationSend.Draw(AnimationSendDialog.MainOwner);
         _painter.DrawDialogs();
-        DrawGameFileExportDialog();
+        _gameExportDialog.Draw();
         DrawNeckSeamDialog();
         DrawStatusStrip(GetFeedback(activeTab));
         DrawWindowOptionsExtension();
@@ -374,13 +391,13 @@ public sealed partial class MainWindow : Window, IDisposable
     /// <summary> The bottom row's inputs: whether anything runs, and what its Cancel button stops. </summary>
     private void DrawStatusStrip(FeedbackState feedback)
     {
-        var exporting = _gameExport?.Busy ?? false;
+        var exporting = _gameExportDialog.Export?.Busy ?? false;
         var busy = _models.Busy.IsBusy || _textureTab.Busy.IsBusy || Volatile.Read(ref _neckSeamBusy) != 0 ||
                    _onScreen.IsRefreshing || (animations?.Busy ?? false) || exporting;
         var animationCancel = animations is { Busy: true, CanCancel: true };
         // Cancel stops the Game Files export on its own tab, or when no animation work can be cancelled.
         var cancelExport = exporting && (_activeTab == MainTab.GameFiles || !animationCancel);
-        Action? cancel = cancelExport ? () => _gameExport!.Cancel() : animationCancel ? () => animations!.Cancel() : null;
+        Action? cancel = cancelExport ? () => _gameExportDialog.Export!.Cancel() : animationCancel ? () => animations!.Cancel() : null;
         _statusStrip.Draw(feedback, busy, cancel);
     }
 }
