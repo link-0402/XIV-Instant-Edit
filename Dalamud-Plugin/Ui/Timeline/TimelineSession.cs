@@ -14,12 +14,12 @@ namespace InstantEdit.Ui.Timeline;
 /// </summary>
 internal sealed class TimelineSession
 {
-    private readonly Func<bool> busy;
+    private Func<bool> busy = () => false;
     private readonly object templateLock = new();
     private byte[]? scdTemplate;
 
     internal TimelineSession(AnimationEditService? animations, TimelineCatalog catalog, AnimationPreviewService preview,
-        AnimationPlayback playback, MotionLiveDisplay? motionDisplay, IDataManager data, IFramework framework, IPluginLog log, Func<bool> busy)
+        AnimationPlayback playback, MotionLiveDisplay? motionDisplay, IDataManager data, IFramework framework, IPluginLog log)
     {
         Animations = animations;
         Catalog = catalog;
@@ -29,7 +29,6 @@ internal sealed class TimelineSession
         Data = data;
         Framework = framework;
         Log = log;
-        this.busy = busy;
     }
 
     public AnimationEditService? Animations { get; }
@@ -55,6 +54,9 @@ internal sealed class TimelineSession
 
     /// <summary> Whether the document must not change now: nothing to edit, or a save, undo or reload is running. </summary>
     public bool ReadOnly => Source?.Document == null || busy();
+
+    /// <summary> What else keeps the document read-only: a read, save or undo running, set once the window has built its parts. </summary>
+    public void KeepReadOnlyWhile(Func<bool> running) => busy = running;
 
     /// <summary> An imported file's own bytes by its game path, such as a sound added to a set. </summary>
     public byte[]? ImportBytes(string gamePath) =>
