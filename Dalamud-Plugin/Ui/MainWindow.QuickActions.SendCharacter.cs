@@ -8,6 +8,7 @@ using InstantEdit.Services.Animations;
 using InstantEdit.Services.CharacterSend;
 using InstantEdit.Services.Painter;
 using InstantEdit.Services.Skeletons;
+using InstantEdit.Ui.Main;
 
 namespace InstantEdit.Ui;
 
@@ -151,7 +152,7 @@ public sealed partial class MainWindow
     /// <summary> Why the character can't be sent now, or null when it can. </summary>
     private string? CharacterSendBlock(AnimationCapture? capture)
     {
-        if (Volatile.Read(ref _characterSendRunning) == 0 && Volatile.Read(ref _editing) != 0)
+        if (Volatile.Read(ref _characterSendRunning) == 0 && _models.Busy.IsBusy)
             return "Another model is being sent to Blender.";
         if (_config.CharacterSendPose == CharacterPose.Current)
         {
@@ -188,7 +189,7 @@ public sealed partial class MainWindow
 
     private void StartCharacterSend(OnScreenObject character, AnimationCapture? capture)
     {
-        if (Interlocked.CompareExchange(ref _editing, 1, 0) != 0)
+        if (!_models.Busy.TryEnter())
         {
             ReportCharacterSend("Another model is already being sent.", FeedbackSeverity.Warning);
             return;
@@ -216,7 +217,7 @@ public sealed partial class MainWindow
             var models = CharacterSendPlan.Models(character.ResourceRoots, request.Weapons);
             if (models.Count == 0)
                 throw new InvalidOperationException("Your character shows no model that can be sent. Refresh the On Screen list and try again.");
-            if (_skeletons is not { } resolver)
+            if (_models.Skeletons is not { } resolver)
                 throw new InvalidOperationException("The game skeleton reader did not start.");
             await _blenderConnection.EnsureReadyForImportAsync(port, importOptions,
                 models.Any(model => model.Node.SourceState == ResourceSourceState.GameData), token).ConfigureAwait(false);
@@ -246,7 +247,7 @@ public sealed partial class MainWindow
             var take = await CaptureCharacterPoseAsync(request, token).ConfigureAwait(false);
 
             var actor = CharacterActor(character);
-            var previewResources = await ResolvePreviewResourcesAsync(actor).ConfigureAwait(false);
+            var previewResources = await _models.ResolvePreviewResourcesAsync(actor).ConfigureAwait(false);
             var collection = await _penumbra.GetCollectionTargetAsync(character.ObjectIndex).ConfigureAwait(false);
             var sendId = Guid.NewGuid().ToString("N");
             var key = CharacterSendPlan.Key(snapshot.Name, snapshot.HomeWorld);
@@ -267,7 +268,7 @@ public sealed partial class MainWindow
                 var model = new MdlFile { GamePath = view.GamePath, LocalPath = view.ActualPath };
                 try
                 {
-                    var bytes = await ReadModelBytesAsync(model, token).ConfigureAwait(false);
+                    var bytes = await _models.ReadModelBytesAsync(model, token).ConfigureAwait(false);
                     var hidden = 0;
                     if (plan.Known && CharacterDrawState.PartMasks(bytes) is { } parts)
                     {
@@ -284,7 +285,7 @@ public sealed partial class MainWindow
                         weapon ? CharacterImportEntry.WeaponRole : CharacterImportEntry.BodyRole, armatureName,
                         weapon ? WeaponAttach(item, snapshot.Weapons, weaponNotes) : null,
                         drawn.AttributeMasks.Count > 0 ? drawn.AttributeMasks : null, drawn.Shapes);
-                    var result = await SendModelToBlenderAsync(actor, model, view, port, _config.ListenPort, importOptions,
+                    var result = await _models.SendModelToBlenderAsync(actor, model, view, port, _config.ListenPort, importOptions,
                         new CharacterModelSend(entry, skeletonPayload, scaling, scalingProblem, previewResources, collection, bytes),
                         token).ConfigureAwait(false);
                     sent.Add(new CharacterSentModel(result.FileName, result.Notes, result.Scaled));
@@ -342,7 +343,7 @@ public sealed partial class MainWindow
         }
         finally
         {
-            Volatile.Write(ref _editing, 0);
+            _models.Busy.Exit();
             Volatile.Write(ref _characterSendRunning, 0);
         }
     }

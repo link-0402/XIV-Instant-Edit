@@ -7,8 +7,10 @@ using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
+using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.Previews;
+using InstantEdit.Services.Skeletons;
 using InstantEdit.Ui.Main;
 
 namespace InstantEdit.Ui;
@@ -25,8 +27,8 @@ public sealed partial class MainWindow : Window, IDisposable
     private readonly OptionsPopup _options;
     private readonly StatusStrip _statusStrip;
     private readonly BlenderConnection _blenderConnection;
+    private readonly ModelSender _models;
     private readonly string _pluginVersion;
-    private readonly MaterialPreviewBundleBuilder _materialPreviews;
     private readonly ResourceSourceAttributor _resourceSources;
     private readonly Action _saveConfig;
     private readonly Action _openChangelog;
@@ -35,7 +37,6 @@ public sealed partial class MainWindow : Window, IDisposable
     private readonly object _stateLock = new();
     private readonly CancellationTokenSource _lifetimeCts = new();
     private IReadOnlyDictionary<string, IDalamudTextureWrap> _slotIcons = new Dictionary<string, IDalamudTextureWrap>();
-    private int _editing;
     private string _filter = string.Empty;
     private MainTab _activeTab = MainTab.OnScreen;
     private MainTab? _pendingTab;
@@ -60,7 +61,7 @@ public sealed partial class MainWindow : Window, IDisposable
         _previews = previews;
         _pluginVersion = _blenderConnection.PluginVersion;
         _resourceSources = resourceSources;
-        _materialPreviews = new MaterialPreviewBundleBuilder(data, log, _resourceSources);
+        _models = new ModelSender(config, penumbra, blender, _blenderConnection, data, chat, log, resourceSources, _feed, _lifetimeCts.Token);
         _kinds = _screenKinds;
         _saveConfig = saveConfig;
         _openChangelog = openChangelog;
@@ -122,6 +123,10 @@ public sealed partial class MainWindow : Window, IDisposable
 
     public void RequestCacheSynchronization() => _blenderConnection.RequestCacheSynchronization();
 
+    public void ReportImportFailure(BridgeFailure failure) => _models.ReportImportFailure(failure);
+
+    internal void AttachSkeletons(ModelSkeletonResolver? value) => _models.Skeletons = value;
+
     public void Open() => IsOpen = true;
     public void Close() => IsOpen = false;
 
@@ -179,6 +184,8 @@ public sealed partial class MainWindow : Window, IDisposable
             _log.Debug($"Automatic refresh failed: {e.Message}");
         }
     }
+
+    private void RequestRefresh() { try { SetStatus(string.Empty, FeedbackSeverity.Success); _onScreen.RequestRefresh(); } catch (Exception e) { _log.Debug(e.Message); SetStatus("Refresh unavailable. Is Penumbra running?", FeedbackSeverity.Warning); } }
 
     private void OpenKofiPage()
     {
@@ -359,7 +366,7 @@ public sealed partial class MainWindow : Window, IDisposable
     private void DrawStatusStrip(FeedbackState feedback)
     {
         var exporting = _gameExport?.Busy ?? false;
-        var busy = Volatile.Read(ref _editing) != 0 || Volatile.Read(ref _textureBusy) != 0 || Volatile.Read(ref _neckSeamBusy) != 0 ||
+        var busy = _models.Busy.IsBusy || Volatile.Read(ref _textureBusy) != 0 || Volatile.Read(ref _neckSeamBusy) != 0 ||
                    _onScreen.IsRefreshing || (animations?.Busy ?? false) || exporting;
         var animationCancel = animations is { Busy: true, CanCancel: true };
         // Cancel stops the Game Files export on its own tab, or when no animation work can be cancelled.

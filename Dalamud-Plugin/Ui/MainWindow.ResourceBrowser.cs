@@ -471,7 +471,7 @@ public sealed partial class MainWindow
         if (node.IsModel && ResourceViews.IsSafeModel(node))
         {
             if (Widgets.IconButton("##edit-model", FontAwesomeIcon.Pen, "Edit this model in Blender"))
-                TryEditNode(node, actor);
+                _models.TryEditNode(node, actor);
             ImGui.SameLine(0, Theme.Scaled(2));
             if (CanPaint(actor, node))
             {
@@ -518,7 +518,7 @@ public sealed partial class MainWindow
         var safeModel = node.IsModel && ResourceViews.IsSafeModel(node);
         var texture = IsTextureRow(node);
         if (safeModel && ImGui.MenuItem("Edit model in Blender"))
-            TryEditNode(node, actor);
+            _models.TryEditNode(node, actor);
         if (CanPaint(actor, node))
         {
             using var disabled = ImRaii.Disabled(Volatile.Read(ref _painterBusy) != 0);
