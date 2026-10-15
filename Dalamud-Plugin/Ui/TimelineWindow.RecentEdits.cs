@@ -103,7 +103,7 @@ public sealed partial class TimelineWindow
         var buttons = Theme.Scaled(84);
         ImGui.SameLine(Math.Max(ImGui.GetCursorPosX() + Theme.Gap, ImGui.GetContentRegionMax().X - buttons));
         // Opening another clip waits for a running read, save or undo; with no clip open nothing does.
-        var working = loadTask != null || saveTask != null || pendingSaveId != null || undoPending;
+        var working = loadTask != null || saveFooter.Working;
         var againProblem = AnimationEditService.EditAgainProblem(journal) ?? (working ? "Wait for the timeline to finish." : null);
         if (Widgets.IconButton("##edit-again", FontAwesomeIcon.Edit, againProblem ?? "Edit again: bring back its bone layers, cuts and length", againProblem is null))
             EditAgain(journal);
@@ -121,11 +121,8 @@ public sealed partial class TimelineWindow
             {
                 if (open)
                 {
-                    jobClip = TimelineSession.ClipKey(source!);
                     timelinePreview.Stop();
-                    undoPending = true;
-                    saveError = null;
-                    saveMessage = null;
+                    saveFooter.UndoingOpenClip();
                 }
                 service.Undo(journal);
             }

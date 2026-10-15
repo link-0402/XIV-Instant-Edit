@@ -26,8 +26,6 @@ public sealed partial class TimelineWindow
     // What was selected when the panel last looked: a new selection brings the properties back.
     private string? sideSelection;
     private string animatedBoneFilter = string.Empty;
-    // The standard skeleton the next save repairs onto; null keeps the clip's own.
-    private SkeletonStandard? repairTarget;
     private Action? openSettings;
     private Action? drawRecorder;
 
@@ -326,57 +324,4 @@ public sealed partial class TimelineWindow
         SkeletonStandard.IvcsYas => "the game's, IVCS's iv_ and YAS's ya_ bones",
         _ => "the game's own bones",
     };
-
-    /// <summary>
-    /// The save footer's skeleton choice: keep the clip's own, or repair it onto a standard skeleton so
-    /// every bone sits at the index other players' skeletons and sync plugins expect.
-    /// </summary>
-    private void DrawRepairChoice(AnimationTimelineSource loaded)
-    {
-        var clip = Fresh(loaded).Clip;
-        if (repairTarget is { } chosen && AnimationBones.Standard(clip, chosen) is null)
-            repairTarget = null;
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Muted, "Skeleton");
-        ImGui.SameLine(0, Theme.Gap);
-        ImGui.SetNextItemWidth(Theme.Scaled(170));
-        using (ImRaii.Disabled(ReadOnly))
-        using (var combo = ImRaii.Combo("##repair", repairTarget is { } target ? "Repair onto " + AnimationBones.StandardName(target) : "Keep its own"))
-        {
-            if (combo.Success)
-            {
-                if (ImGui.Selectable("Keep its own", repairTarget == null))
-                    repairTarget = null;
-                foreach (var standard in Enum.GetValues<SkeletonStandard>())
-                {
-                    var found = AnimationBones.Standard(clip, standard);
-                    if (ImGui.Selectable("Repair onto " + AnimationBones.StandardName(standard), repairTarget == standard,
-                            found is null ? ImGuiSelectableFlags.Disabled : ImGuiSelectableFlags.None))
-                        repairTarget = standard;
-                    if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-                        ImGui.SetTooltip(found is not null
-                            ? $"{found.Skeleton.Bones.Length} bones, from {found.Origin}"
-                            : standard == SkeletonStandard.Vanilla
-                                ? "The game's own skeleton for this model was not found."
-                                : $"No {AnimationBones.StandardName(standard)} skeleton for this model is in the skeleton library.");
-                }
-            }
-        }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("Repair moves every bone to the index other players' skeletons use, whatever your skeleton mod adds.\n" +
-                             "Only bones the animation moves are written.");
-        if (repairTarget is { } repair && AnimationBones.Plan(clip, repair, editor?.Document.ExcludedBones ?? []) is { } plan)
-        {
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, plan.Dropped.IsEmpty
-                ? $"Highest index {plan.HighestIndex}"
-                : $"Highest index {plan.HighestIndex} · {plan.Dropped.Length} bones left out");
-            if (!plan.Dropped.IsEmpty && ImGui.IsItemHovered())
-                ImGui.SetTooltip($"The {AnimationBones.StandardName(repair)} skeleton lacks " +
-                                 string.Join(", ", plan.Dropped.Take(8).Select(AnimationPresentation.BoneName)) +
-                                 (plan.Dropped.Length > 8 ? $" and {plan.Dropped.Length - 8} more." : "."));
-        }
-    }
-
 }
