@@ -3330,9 +3330,9 @@ def sizes_export_steps(context: Context, ref):
         files = []
         exports = None
 
-        def session():
+        def session(objects):
             nonlocal exports
-            exports = ShapeExports(export_objects, "MDL")
+            exports = ShapeExports(objects, "MDL")
             return exports
 
         def export(_sized, index, name):

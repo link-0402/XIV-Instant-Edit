@@ -56,13 +56,14 @@ def _positions(obj, key=None) -> np.ndarray:
     return co.reshape(-1, 3)
 
 
-def _rig(name: str = "SizesSkeleton"):
+def _rig(name: str = "SizesSkeleton", bones=("root",)):
     armature = bpy.data.objects.new(name, bpy.data.armatures.new(name + "Data"))
     bpy.context.scene.collection.objects.link(armature)
     bpy.context.view_layer.objects.active = armature
     bpy.ops.object.mode_set(mode="EDIT")
-    bone = armature.data.edit_bones.new("root")
-    bone.head, bone.tail = (0, 0, 0), (0, 0, 1)
+    for index, bone_name in enumerate(bones):
+        bone = armature.data.edit_bones.new(bone_name)
+        bone.head, bone.tail = (0, 0, index), (0, 0, index + 1)
     bpy.ops.object.mode_set(mode="OBJECT")
     return armature
 
@@ -274,6 +275,24 @@ def fake_api(version: int = 1):
 
     api.picked_sizes = picked_sizes
     api.resize_collection = resize_collection
+    # VERSION 3: a size at a time, the meshes in ``api.substitutes`` exported as the parts they map to.
+    api.substitutes = {}
+    api.resizers = []
+
+    class Resizer:
+        def __init__(self, target, sizes=None, *, scene=None, body=None, substitute=False):
+            if api.failure:
+                raise ResizeError(api.failure)
+            self.target, self.sizes, self.substitute = list(target), list(sizes), substitute
+            self.substitutes = dict(api.substitutes) if substitute else {}
+            api.resizers.append(self)
+
+        def resize(self, size, progress=None):
+            keys = {obj: None if size.now else "Medium" for obj in self.target if obj not in self.substitutes}
+            return FakeSized(size.name, size, keys, ["Resized in 0.1 s"] if size is self.sizes[0] else [])
+
+    if version >= 3:
+        api.Resizer = Resizer
     return api
 
 
@@ -506,6 +525,93 @@ def _run_stand_in(addon, plugin) -> None:
     props.export_sizes = False
 
 
+SKIN_MATERIAL = "/mt_c0201b0001_bibo.mtrl"
+
+
+def _grid(armature, name: str, offset) -> bpy.types.Object:
+    """A small exportable grid of quads, moved by ``offset``."""
+    mesh = bpy.data.meshes.new(name)
+    mesh.from_pydata([(x * 0.1 + offset[0], offset[1], z * 0.1 + offset[2]) for x in range(4) for z in range(4)], [],
+                     [(x * 4 + z, (x + 1) * 4 + z, (x + 1) * 4 + z + 1, x * 4 + z + 1)
+                      for x in range(3) for z in range(3)])
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    _make_exportable(obj, armature, name)
+    return obj
+
+
+def run_substitutes(addon) -> None:
+    """Magic Fit's api.VERSION 3: a model's copy of a devkit part is exported as the part, shown for the
+    export from an excluded collection, with the copy's material; an older Magic Fit exports the copy."""
+    sizes = importlib.import_module(f"{addon.__name__}.instant_edit.sizes")
+    export = importlib.import_module(f"{addon.__name__}.mesh.export")
+    model_module = importlib.import_module(f"{addon.__name__}.xivpy.model")
+    bpy.context.scene.xiv_ie_settings.model_format = "MDL"
+    armature = _rig("SubstituteSkeleton")
+    top = _grid(armature, "0.0 Top", (0.0, 0.0, 0.0))
+    top.shape_key_add(name="Basis", from_mix=False)
+    medium = top.shape_key_add(name="Medium", from_mix=False)
+    medium.value = 0.0
+    medium.data.foreach_set("co", (_positions(top) + (0.0, -0.02, 0.0)).astype(np.float32).ravel())
+    skin = _grid(armature, "1.0 Skin", (0.0, 0.05, 0.0))
+    skin["xiv_material"] = SKIN_MATERIAL
+    # Resized as clothing by an older Magic Fit.
+    skin.shape_key_add(name="Basis", from_mix=False)
+    skin.shape_key_add(name="Medium", from_mix=False).value = 0.0
+    devkit = bpy.data.collections.new("Devkit")
+    bpy.context.scene.collection.children.link(devkit)
+    part = _grid(armature, "1.0 Torso", (0.0, 0.3, 0.0))
+    del part["xiv_material"]
+    bpy.context.scene.collection.objects.unlink(part)
+    devkit.objects.link(part)
+    layer = next(layer for layer in bpy.context.view_layer.layer_collection.children if layer.collection == devkit)
+    layer.exclude = True
+    part_co, skin_co = _positions(part), _positions(skin)
+
+    def run(api, folder: Path) -> dict:
+        seen = {"shown": []}
+        exports = None
+
+        def session(objects):
+            nonlocal exports
+            seen["objects"] = list(objects)
+            exports = export.ShapeExports(objects, "MDL")
+            return exports
+
+        def write(_sized, _index, name):
+            seen["shown"].append(part.visible_get() and part.get("xiv_material") == SKIN_MATERIAL)
+            exports.write(folder / name)
+
+        sizes.export_each([top, skin], write, session)
+        return seen
+
+    with tempfile.TemporaryDirectory(prefix="xiv-ie-substitutes-") as folder, installed(fake_api(version=3)) as api:
+        folder = Path(folder)
+        api.substitutes = {skin: part}
+        seen = run(api, folder)
+        resizer = api.resizers[-1]
+        _require(resizer.substitute and resizer.target == [top, skin] and
+                 [size.name for size in resizer.sizes] == ["Large", "Medium"] and not api.calls,
+                 "with Magic Fit's api.VERSION 3, one Resizer resizes every size, finding the devkit's parts")
+        _require(seen["objects"] == [top, part] and seen["shown"] == [True, True],
+                 "the devkit part is exported in place of the model's copy, shown and with the copy's material",
+                 str(seen))
+        _require(layer.exclude and "xiv_material" not in part and not part.hide_viewport,
+                 "afterwards the devkit part is as it was")
+        found = _model_positions(addon, folder / "Medium.mdl")
+        materials = model_module.XIVModel.from_file(str(folder / "Medium.mdl")).materials
+        _require(_distance(found, part_co) < 1e-4 and _distance(found, skin_co) > 0.01 and
+                 any("c0201b0001_bibo" in material for material in materials) and
+                 not any("SizesMaterial" in material for material in materials),
+                 "the model has the devkit part's shape with the copy's material", str(materials))
+
+    with tempfile.TemporaryDirectory(prefix="xiv-ie-substitutes-old-") as folder, installed(fake_api(version=2)) as api:
+        api.substitutes = {skin: part}
+        seen = run(api, Path(folder))
+        _require(seen["objects"] == [top, skin] and len(api.calls) == 2 and not api.resizers,
+                 "an older Magic Fit resizes a size at a time as before, the copy exported as it is")
+
+
 # ---- Magic Fit itself ---------------------------------------------------------------------------
 
 
@@ -693,6 +799,38 @@ def run_shape_exports(addon) -> None:
                  all(value == 0.0 for field, value in worst.items()
                      if field not in ("position", "normal", "tangent")),
                  "with custom normals, only normals and tangents differ, and barely", str(worst))
+
+        # Weights a modifier switches between writes (a devkit's Rue weights, per size) are read
+        # again for each write.
+        rig = _rig("WeightsSkeleton", ("root", "spine"))
+        weighted = _sphere(rig, "0.0 Weighted")
+        weighted.vertex_groups.new(name="spine")
+        source = _sphere(rig, "Weight Source")
+        source.vertex_groups["root"].add(list(range(len(source.data.vertices))), 0.3, "REPLACE")
+        source.vertex_groups.new(name="spine").add(list(range(len(source.data.vertices))), 0.7, "REPLACE")
+        source.hide_set(True)
+        transfer = weighted.modifiers.new(name="Other Weights", type="DATA_TRANSFER")
+        weighted.modifiers.move(len(weighted.modifiers) - 1, 0)
+        transfer.object = source
+        transfer.use_vert_data = True
+        transfer.data_types_verts = {"VGROUP_WEIGHTS"}
+        transfer.vert_mapping = "TOPOLOGY"
+        transfer.layers_vgroup_select_src = "ALL"
+        transfer.layers_vgroup_select_dst = "NAME"
+        # The shape stays: the models differ by their weights alone.
+        with export.ShapeExports([weighted], "MDL") as exports:
+            copied = exports.copies is not None
+            for index, on in enumerate((False, True, False)):
+                transfer.show_viewport = on
+                exports.write(folder / f"fast weights {index}")
+        for on in (False, True):
+            transfer.show_viewport = on
+            export.export_result(folder / f"full weights {on}", "MDL", export_objects=[weighted])
+        fast = [(folder / f"fast weights {index}.mdl").read_bytes() for index in range(3)]
+        full = {on: (folder / f"full weights {on}.mdl").read_bytes() for on in (False, True)}
+        _require(copied and full[False] != full[True] and
+                 fast == [full[False], full[True], full[False]],
+                 "weights a modifier changes between writes are written as a fresh export has them")
     settings.keep_shapekeys = False
 
 
@@ -702,6 +840,8 @@ def run() -> None:
             run_shape_exports(addon)
         with temporary_scene_data():
             run_stand_in(addon)
+        with temporary_scene_data():
+            run_substitutes(addon)
         root = _magic_fit_root()
         if root is None:
             print("[SKIP] Magic Fit's repository wasn't found: set MAGIC_FIT_ROOT to test with it")

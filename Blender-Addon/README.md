@@ -136,7 +136,9 @@ Everything is in the **IE - Instant Edit** tab of the 3D Viewport's sidebar (pre
 - Sizes from Magic Fit: with Magic Fit installed, **Export Magic Fit Sizes** in the Quick Export
   options exports the model at every size picked in the **Sizes** of Magic Fit's **Resize** panel.
   Magic Fit resizes the clothing to each size first, as shape keys it keeps for the next time.
-  Quick Export makes each size an option of one group, **New Group** or the group picked as the
+  The devkit's body parts go out with each size's own weights (the Rue weights at Rue sizes), and
+  with a Magic Fit newer than 1.1.1 the model's copies of them (the skin under a top, a navel
+  piercing) are exported as the devkit's parts at each size. Quick Export makes each size an option of one group, **New Group** or the group picked as the
   target, named after the size (`Medium Rue`), with the size the body shows on. Exporting again
   replaces those options' models. Each model goes next to the imported one, named after it and the
   size; **Simple Export** writes a file per size. The clothing's `shp_` keys keep the offsets they

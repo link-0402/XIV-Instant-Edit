@@ -1,8 +1,10 @@
 """Exports at every size picked in Magic Fit's Resize panel, through Magic Fit's API (its api.py).
 
 Magic Fit resizes the clothing to each size as a shape key and shows one size at a time; an export
-reads the meshes at rest pose, so it writes the size shown. Magic Fit is optional: it is looked up
-when needed, never imported when this module loads, and without it exports work as before.
+reads the meshes at rest pose, so it writes the size shown. A model's copies of the devkit's body
+parts (the skin under a top, a navel piercing) are exported as the devkit's own parts, which take
+each size with their own weights (Magic Fit's api.VERSION 3 on). Magic Fit is optional: it is looked
+up when needed, never imported when this module loads, and without it exports work as before.
 """
 
 import importlib
@@ -18,6 +20,9 @@ from .props import get_instant_edit_props
 
 # The api.VERSION of Magic Fit this module was written for.
 API_VERSION = 1
+# The api.VERSION from which Magic Fit resizes a size at a time (api.Resizer) and finds the devkit
+# parts a model's meshes stand for (substitute=True).
+SUBSTITUTE_VERSION = 3
 NO_SIZES = "Pick sizes in Magic Fit's Resize panel."
 # The most sizes Instant Edit takes in one export (its ExportServer.Sizes MaxSizes).
 MAX_SIZES = 64
@@ -202,11 +207,104 @@ class Step(steps.Step):
 _RESIZE_TIME_NOTE = re.compile(r"Resized \d+ mesh\(es\) to \d+ size\(s\) in [\d.]+ s")
 
 
+def _resizing(api, objects, picked):
+    """How Magic Fit resizes ``objects`` to the sizes ``picked``: (resize(size, name) returning its
+    SizedMeshes, the meshes to export, {devkit part: the mesh it's exported in place of}). From
+    SUBSTITUTE_VERSION on, through an api.Resizer that reads the meshes once and swaps the model's
+    copies of the devkit's parts for the parts; before it, with a resize_collection per size."""
+    objects = list(objects)
+    if getattr(api, "VERSION", 0) < SUBSTITUTE_VERSION:
+        def resize(size, name):
+            try:
+                resized = api.resize_collection(objects, [size])
+            except api.ResizeError as error:
+                raise ValueError(str(error)) from error
+            sized = next((item for item in resized if item.name == size.name), None)
+            if sized is None:
+                raise ValueError(f"Magic Fit didn't resize to {name}.")
+            return sized
+        return resize, objects, {}
+    try:
+        resizer = api.Resizer(objects, picked, substitute=True)
+    except api.ResizeError as error:
+        raise ValueError(str(error)) from error
+
+    def resize(size, _name):
+        try:
+            return resizer.resize(size)
+        except api.ResizeError as error:
+            raise ValueError(str(error)) from error
+    substitutes = dict(resizer.substitutes)
+    return (resize, [substitutes.get(obj, obj) for obj in objects],
+            {part: obj for obj, part in substitutes.items()})
+
+
+def _material(obj):
+    """The material path the MDL writer gives mesh ``obj``: its xiv_material, else its first material's name."""
+    if "xiv_material" in obj:
+        return obj["xiv_material"]
+    return obj.material_slots[0].name if len(obj.material_slots) else None
+
+
+def _layer_path(layer, collection) -> list:
+    """The layer collections from ``layer`` down to the one of ``collection``, or [] when it's not under it."""
+    if layer.collection == collection:
+        return [layer]
+    for child in layer.children:
+        path = _layer_path(child, collection)
+        if path:
+            return [layer] + path
+    return []
+
+
+@contextmanager
+def _standing_in(stand_ins):
+    """For the block, export each devkit part of ``stand_ins`` ({part: the model's mesh it's exported in
+    place of}) as that mesh: shown in the viewport, so the export can copy it with its modifiers (a
+    devkit hides its parts in excluded collections), and with that mesh's material. Everything is put
+    back afterwards."""
+    undo = []
+    view_layer = bpy.context.view_layer
+
+    def turn(owner, attribute, value):
+        old = getattr(owner, attribute)
+        if old != value:
+            setattr(owner, attribute, value)
+            undo.append(lambda: setattr(owner, attribute, old))
+    try:
+        for part, obj in stand_ins.items():
+            for collection in part.users_collection:
+                for layer in _layer_path(view_layer.layer_collection, collection):
+                    turn(layer, "exclude", False)
+                    turn(layer, "hide_viewport", False)
+                    if layer.collection != view_layer.layer_collection.collection:
+                        turn(layer.collection, "hide_viewport", False)
+            turn(part, "hide_viewport", False)
+            if part.name in view_layer.objects and part.hide_get(view_layer=view_layer):
+                part.hide_set(False, view_layer=view_layer)
+                undo.append(lambda part=part: part.hide_set(True, view_layer=view_layer)
+                            if part.name in view_layer.objects else None)
+            material = _material(obj)
+            if material is not None and part.get("xiv_material") != material:
+                had, old = "xiv_material" in part, part.get("xiv_material")
+                part["xiv_material"] = material
+                undo.append(lambda part=part, had=had, old=old: part.__setitem__("xiv_material", old)
+                            if had else part.pop("xiv_material", None))
+        yield
+    finally:
+        for restore in reversed(undo):
+            try:
+                restore()
+            except (ReferenceError, RuntimeError) as error:
+                print(f"XIV Instant Edit: could not put a devkit part back as it was: {error}")
+
+
 def export_steps(objects, export, session=None):
     """Resize ``objects``, the meshes an export writes, to each size picked in Magic Fit, and call
     ``export(sized, index, name)`` (``name`` from option_names) while each size shows, a size at a time: a generator yielding a Step
     before each resize and export, so Blender can draw between them (see steps.start). ``session``, when
-    given, makes a context manager the exports run in, entered once out of Edit Mode before the
+    given, makes a context manager the exports run in from the meshes to export (``objects``, the
+    devkit's parts in place of the model's copies of them), entered once out of Edit Mode before the
     first size (mesh.export.ShapeExports). Returns Magic Fit's SizedMeshes, in order.
 
     Raises ValueError with a message for the user.
@@ -224,22 +322,22 @@ def export_steps(objects, export, session=None):
     total = len(picked)
     results = []
     resizing = 0.0
-    with _object_mode(), (session() if session is not None else nullcontext()):
-        for index, (size, name) in enumerate(zip(picked, names)):
-            yield Step(index, total, name, "Resizing to")
-            started = time.perf_counter()
-            try:
-                resized = api.resize_collection(list(objects), [size])
-            except api.ResizeError as error:
-                raise ValueError(str(error)) from error
-            resizing += time.perf_counter() - started
-            sized = next((item for item in resized if item.name == size.name), None)
-            if sized is None:
-                raise ValueError(f"Magic Fit didn't resize to {name}.")
-            yield Step(index, total, name, "Exporting")
-            with sized.shown():
-                export(sized, index, name)
-            results.append(sized)
+    with _object_mode():
+        yield Step(0, total, names[0], "Resizing to")
+        started = time.perf_counter()
+        resize, exported, stand_ins = _resizing(api, objects, picked)
+        resizing += time.perf_counter() - started
+        with _standing_in(stand_ins), (session(exported) if session is not None else nullcontext()):
+            for index, (size, name) in enumerate(zip(picked, names)):
+                if index:
+                    yield Step(index, total, name, "Resizing to")
+                started = time.perf_counter()
+                sized = resize(size, name)
+                resizing += time.perf_counter() - started
+                yield Step(index, total, name, "Exporting")
+                with sized.shown():
+                    export(sized, index, name)
+                results.append(sized)
     for sized in results:
         sized.notes = [note for note in sized.notes if not _RESIZE_TIME_NOTE.fullmatch(note)]
     results[0].notes.append(
