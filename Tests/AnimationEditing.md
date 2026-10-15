@@ -37,7 +37,7 @@ and its existing LivePose submodule were checked as references for player state.
 These checks do not establish native binding matches in the running game.
 
 XIV Bridge rerun on 2026-10-15, after the TimelineWindow and PenumbraService splits (build
-6297dbaa, main 9294771): the whole `tests/instant-edit/animations` suite, each failure run again on
+6297dbaa, main 7b74c4f): the whole `tests/instant-edit/animations` suite, each failure run again on
 its own. The notes below dated 2026-10-10 still hold, except for two failures: 244 (no "barely
 applies" tooltip) and 141 (a "Not saved" row offers an Undo that fails). The face tests (05, 162,
 201, 243, 249 to 251) failed until the test sandbox waited for its redraw: a face played before the
@@ -1348,7 +1348,7 @@ Timeline editor:
 ## Sound inspector (2026-10-12)
 
 The Timeline's sound options in plain words and the Sound file section (alternatives, chances,
-volumes, add, replace, remove, pins, Listen), commits 46f54da..a846ebf. Automated suites pass, and
+volumes, add, replace, remove, pins, Listen), commits 2ff872b..a3e168f. Automated suites pass, and
 every vanilla timeline SCD and the whole mod library round-trip through the SCD model; none of this
 has been tried in game. Candidates: Self Spank with Moan (sound/moan.scd, a random set of 10) and
 vanilla emotes with one-shot sounds.
@@ -1381,7 +1381,7 @@ vanilla emotes with one-shot sounds.
   header button the whole set, and nothing stays served afterwards (the listen_… path no longer
   resolves a few seconds after the sound ends).
 
-Review fixes 2026-10-14 (92f245e):
+Review fixes 2026-10-14 (8441df6):
 - [x] Listen on a looping sound plays one pass. (XIV Bridge exec, 2026-10-14: a looping copy of the
   clap went to the game with no loop flag or loop points, and stopped being served after its length
   plus 2 s. Not heard: whether it audibly stops still needs an ear.)
