@@ -11,8 +11,12 @@ internal sealed partial class PhysicsWindow
     /// <summary> The fit scales breasts by the game's own racial ranges, read from its data, which a mod changing them doesn't reach. </summary>
     private const string BustScalingNote = "The fit uses the game's own racial bust scaling, so remove any mod that changes it.";
 
-    private Task<(PhysicsFitResult Fit, IReadOnlyList<string> Warnings, string Note)>? fitting;
+    private Task<(PhysicsFitResult Fit, IReadOnlyList<string> Warnings, string Note, PhysicsBodyMeasure Measure, PhybFile File)>? fitting;
+    private Task<PhysicsFitResult>? refitting;
     private PhysicsFitResult? fit;
+    // The body and file the fit measured, kept so a new tip place is measured on the same ones.
+    private PhysicsBodyMeasure? fitMeasure;
+    private PhybFile? fitFile;
     private IReadOnlyList<string> fitWarnings = [];
     private string fitNote = string.Empty;
     private readonly HashSet<int> fitChosen = [];
@@ -48,18 +52,38 @@ internal sealed partial class PhysicsWindow
         if (Busy)
             return;
         var file = current.File.Clone();
+        var tipAt = TipAt;
         fitDocument = current;
         fitRevision = current.Revision;
         Say(FeedbackSeverity.Info, "Measuring your body.");
         fitting = Task.Run(async () =>
         {
             var measured = await service.MeasureBodyAsync(life.Token).ConfigureAwait(false);
-            return (PhysicsFit.Measure(file, measured.Body, measured.Skeleton), measured.Warnings, measured.Note);
+            return (PhysicsFit.Measure(file, measured.Body, measured.Skeleton, tipAt), measured.Warnings, measured.Note, measured, file);
         });
     }
 
+    private PhysicsTipAt TipAt => config.PhysicsFitTipMiddle ? PhysicsTipAt.Middle : PhysicsTipAt.Nipple;
+
     private void PollFit()
     {
+        if (refitting is { IsCompleted: true } refitted)
+        {
+            refitting = null;
+            if (!refitted.IsCompletedSuccessfully)
+                Say(FeedbackSeverity.Error, Unwrap(refitted.Exception));
+            else if (fit is { } before)
+            {
+                // Settings you unticked stay unticked; the new tip places start ticked.
+                var unticked = Enumerable.Range(0, before.Items.Count).Where(i => before.Items[i].Changes && !fitChosen.Contains(i))
+                    .Select(i => FitKey(before.Items[i])).ToHashSet();
+                fit = refitted.Result;
+                fitChosen.Clear();
+                for (var i = 0; i < fit.Items.Count; i++)
+                    if (fit.Items[i].Changes && !unticked.Contains(FitKey(fit.Items[i])))
+                        fitChosen.Add(i);
+            }
+        }
         if (fitting is not { IsCompleted: true } done)
             return;
         fitting = null;
@@ -68,12 +92,13 @@ internal sealed partial class PhysicsWindow
             Say(FeedbackSeverity.Error, Unwrap(done.Exception));
             return;
         }
-        (fit, fitWarnings, fitNote) = done.Result;
+        (fit, fitWarnings, fitNote, fitMeasure, fitFile) = done.Result;
         fitChosen.Clear();
         for (var i = 0; i < fit.Items.Count; i++)
             if (fit.Items[i].Changes)
                 fitChosen.Add(i);
-        if (fitChosen.Count == 0 && fit.Notes.Count == 0 && fitWarnings.Count == 0)
+        // With breast tips, the review also offers where they go, even when everything fits already.
+        if (fitChosen.Count == 0 && fit.Notes.Count == 0 && fitWarnings.Count == 0 && !fit.BreastTips)
         {
             Say(FeedbackSeverity.Success, fit.Items.Count == 0
                 ? "Nothing in this file fits to a body, so there is nothing to change."
@@ -105,6 +130,8 @@ internal sealed partial class PhysicsWindow
             ImGui.TextWrapped(warning);
         }
         ImGui.Spacing();
+        if (result.BreastTips)
+            DrawTipChoice();
 
         var changing = Enumerable.Range(0, result.Items.Count).Where(i => result.Items[i].Changes).ToList();
         if (changing.Count > 0)
@@ -134,7 +161,9 @@ internal sealed partial class PhysicsWindow
                     ImGui.TableNextColumn();
                     ImGui.TextColored(Theme.Muted, FitValue(item, item.Current));
                     ImGui.TableNextColumn();
-                    ImGui.TextColored(item.Fitted > item.Current ? Theme.Accent : Theme.Info, FitValue(item, item.Fitted));
+                    // A tip's size follows its tip place while that's ticked.
+                    var fitted = item.FittedWith(PhysicsFit.MovesPlace(fitChosen.Select(chosen => result.Items[chosen]), item));
+                    ImGui.TextColored(fitted > item.Current ? Theme.Accent : Theme.Info, FitValue(item, fitted));
                 }
             }
         }
@@ -150,7 +179,7 @@ internal sealed partial class PhysicsWindow
         }
 
         ImGui.Spacing();
-        using (ImRaii.Disabled(fitChosen.Count == 0))
+        using (ImRaii.Disabled(fitChosen.Count == 0 || refitting != null))
         {
             if (ImGui.Button($"Apply {fitChosen.Count} change{(fitChosen.Count == 1 ? "" : "s")}##physics-fit-apply"))
             {
@@ -162,13 +191,55 @@ internal sealed partial class PhysicsWindow
         if (ImGui.Button("Cancel##physics-fit-cancel"))
         {
             fit = null;
+            fitMeasure = null;
+            fitFile = null;
             ImGui.CloseCurrentPopup();
         }
     }
 
+    /// <summary> Where breast tips go: on the nipple or in the middle of the breast. Changing it measures the tips again. </summary>
+    private void DrawTipChoice()
+    {
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Label, "Breast tip");
+        ImGui.SameLine(0, Theme.Gap * 2);
+        using (ImRaii.Disabled(refitting != null))
+        {
+            if (ImGui.RadioButton("On the nipple##fit-tip-nipple", !config.PhysicsFitTipMiddle))
+                SetTipAt(false);
+            Tip("Tip accuracy. The tip moves exactly as your nipple does, and settings work like a preset's. " +
+                "Its size covers the front, so arms coming from the side can sink into the breast.");
+            ImGui.SameLine();
+            if (ImGui.RadioButton("Middle of the breast##fit-tip-middle", config.PhysicsFitTipMiddle))
+                SetTipAt(true);
+            Tip("Collision accuracy. Its size fills the whole breast, so arms bump into it from any side. " +
+                "The tip gets shorter, so the same settings swing the breast more.");
+        }
+        if (refitting != null)
+        {
+            ImGui.SameLine();
+            Widgets.Spinner();
+        }
+        ImGui.Spacing();
+    }
+
+    private void SetTipAt(bool middle)
+    {
+        if (config.PhysicsFitTipMiddle == middle || fitMeasure is not { } measured || fitFile is not { } file || refitting != null)
+            return;
+        config.PhysicsFitTipMiddle = middle;
+        saveConfig();
+        var tipAt = TipAt;
+        refitting = Task.Run(() => PhysicsFit.Measure(file, measured.Body, measured.Skeleton, tipAt));
+    }
+
+    private static (PhysicsFitTarget, int, int, string) FitKey(PhysicsFitItem item) => (item.Target, item.Simulator, item.Chain, item.Name);
+
     private void ApplyFit(PhysicsDocument current, PhysicsFitResult result)
     {
         fit = null;
+        fitMeasure = null;
+        fitFile = null;
         // The sizes name shapes by name and chains by place, measured on the file as it was.
         if (!ReferenceEquals(current, fitDocument) || current.Revision != fitRevision)
         {

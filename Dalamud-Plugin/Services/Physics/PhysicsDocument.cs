@@ -7,14 +7,17 @@ internal enum PhysicsSourceKind
     Vanilla,
     /// <summary> The file the character's collection loads now. </summary>
     Loaded,
-    /// <summary> The builder's own mod. </summary>
+    /// <summary> One of the builder's own mods, loaded now or saved into. </summary>
     Mine,
     /// <summary> A file picked from disk. </summary>
     File,
 }
 
-/// <summary> The starting file of a document: its kind, a label to show and where it was read from. </summary>
-internal sealed record PhysicsSource(PhysicsSourceKind Kind, string Label, string Path);
+/// <summary>
+/// The starting file of a document: its kind, a label to show and where it was read from. <paramref name="Mod"/>
+/// is the folder of the builder's mod it came from or was saved into, which saving suggests again.
+/// </summary>
+internal sealed record PhysicsSource(PhysicsSourceKind Kind, string Label, string Path, string Mod = "");
 
 /// <summary> A state undo or redo goes to, and the name of the change between, like "Fit to my body", when it has one. </summary>
 internal sealed record PhysicsStep(PhybFile File, string? Name);

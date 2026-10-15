@@ -5,8 +5,21 @@ using InstantEdit.Services.Skeletons;
 
 namespace InstantEdit.Services.Physics;
 
-/// <summary> What a file the character's collection loads is, for display. </summary>
-internal sealed record PhysicsLoadedFile(string GamePath, string ResolvedPath, string Label, bool Mine, bool Preview);
+/// <summary>
+/// What a file the character's collection loads is, for display. <paramref name="Mod"/> is the folder of
+/// the builder's mod it comes from, when <paramref name="Mine"/>.
+/// </summary>
+internal sealed record PhysicsLoadedFile(string GamePath, string ResolvedPath, string Label, bool Mine, bool Preview, string Mod = "");
+
+/// <summary> A mod the physics builder saved: its folder in Penumbra and its identifier. </summary>
+public sealed class PhysicsSavedMod
+{
+    public string Directory { get; set; } = "";
+    public Guid Identifier { get; set; }
+}
+
+/// <summary> A finished save: the mod it went into, anything to report and your other builder mods it turned off. </summary>
+internal sealed record PhysicsSaveResult(string Directory, IReadOnlyList<string> Warnings, IReadOnlyList<string> TurnedOff);
 
 /// <summary> The character the builder works for, and the files its collection loads for it. </summary>
 internal sealed record PhysicsTarget(PhysicsCharacter Character, Guid CollectionId, string CollectionName, PhysicsLoadedFile Physics,
@@ -20,15 +33,17 @@ internal sealed record PhysicsBodyMeasure(PhysicsBody Body, PhysicsSkeleton Skel
 
 /// <summary>
 /// The physics builder's game side: finds your character, its skeleton and the body physics its
-/// collection loads; reads a starting file (the game's, the loaded one, your physics mod's or one
-/// you pick); previews a document through a temporary mod; and saves it into your physics mod, a
-/// mod of its own enabled above every other in your collection, so it can be changed again any time.
+/// collection loads; reads a starting file (the game's, the loaded one or one you pick); previews a
+/// document through a temporary mod; and saves it into a mod named as you like, enabled above every
+/// other in your collection, so it can be changed again any time. Each name is a mod of its own, so
+/// you can keep several and switch between them in Penumbra.
 /// In GPose it reads and measures your posed copy, the character you see; previews and saves still
 /// redraw your own character, which Penumbra turns into a redraw of the posed copy (and of your
 /// character once GPose ends).
 /// </summary>
 internal sealed class PhysicsBuilderService : IDisposable
 {
+    /// <summary> The name a save suggests first; later ones get a number. </summary>
     public const string ModName = "IE Physics";
     private const string ModDescription =
         "Body physics made with XIV Instant Edit's physics builder (Quick Actions > Body physics builder). Open the builder to change it.";
@@ -61,14 +76,38 @@ internal sealed class PhysicsBuilderService : IDisposable
         this.config = config;
         this.saveConfig = saveConfig;
         Preview = new PhysicsPreviewService(penumbra, framework, log, configDirectory, cacheRoot);
+        if (config.PhysicsModDirectory.Length > 0 && config.PhysicsModIdentifier != Guid.Empty)
+        {
+            // The one mod from before saves were named.
+            if (!config.PhysicsMods.Any(mod => mod.Identifier == config.PhysicsModIdentifier))
+                config.PhysicsMods = [..config.PhysicsMods, new PhysicsSavedMod { Directory = config.PhysicsModDirectory, Identifier = config.PhysicsModIdentifier }];
+            config.PhysicsModDirectory = string.Empty;
+            config.PhysicsModIdentifier = Guid.Empty;
+            saveConfig();
+        }
     }
 
     public PhysicsPreviewService Preview { get; }
 
-    /// <summary> The physics mod was saved before (it may since have been deleted in Penumbra). </summary>
-    public bool HasMod => config.PhysicsModDirectory.Length > 0 && config.PhysicsModIdentifier != Guid.Empty;
+    /// <summary> A physics mod was saved before (it may since have been deleted in Penumbra). </summary>
+    public bool HasMod => config.PhysicsMods.Count > 0;
 
-    public string ModDirectory => config.PhysicsModDirectory;
+    /// <summary> The folders of the mods the builder saved. </summary>
+    public IReadOnlyList<string> ModDirectories => config.PhysicsMods.Select(mod => mod.Directory).ToList();
+
+    /// <summary> The builder saved a mod in this folder. </summary>
+    public bool IsMine(string directory) => config.PhysicsMods.Any(mod => string.Equals(mod.Directory, directory, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary> "IE Physics", or with the first number none of your mods has yet: a name for a new mod. </summary>
+    public string FreeModName()
+    {
+        for (var number = 1; ; number++)
+        {
+            var name = number == 1 ? ModName : $"{ModName} ({number})";
+            if (!IsMine(name))
+                return name;
+        }
+    }
 
     /// <summary> You're in GPose, where only posed characters can be made to walk or run. </summary>
     public bool Posing => clientState.IsGPosing;
@@ -80,6 +119,18 @@ internal sealed class PhysicsBuilderService : IDisposable
             return null;
         var shown = PhysicsLiveReader.Shown(objects, player, posing: true);
         return shown.ObjectIndex >= PhysicsLiveReader.FirstPosed ? shown.ObjectIndex : null;
+    }
+
+    /// <summary>
+    /// Reads the pose of the character the builder shows (your posed copy in GPose, else your
+    /// character) into <paramref name="pose"/>; false when it can't be read. Framework thread only.
+    /// </summary>
+    public bool ReadShownPose(Animations.Preview.ActorPose pose)
+    {
+        if (objects.LocalPlayer is not ICharacter player || player.Address == 0)
+            return false;
+        var shown = PhysicsLiveReader.Shown(objects, player, clientState.IsGPosing);
+        return shown.Address != 0 && pose.Read(shown.Address);
     }
 
     /// <summary> Reads your character, its skeleton and what its collection loads for its body. </summary>
@@ -94,7 +145,7 @@ internal sealed class PhysicsBuilderService : IDisposable
         var physicsPath = PhysicsPaths.BodyPhysics(character.Race);
         var skeletonPath = PhysicsPaths.BodySkeleton(character.Race);
         var resolved = await penumbra.ResolveCollectionPathsAsync(collection.Id, [physicsPath, skeletonPath]).ConfigureAwait(false);
-        await FollowModAsync(lookAgain: false).ConfigureAwait(false);
+        await FollowModsAsync(lookAgain: false).ConfigureAwait(false);
         return new PhysicsTarget(character, collection.Id, collection.Name,
             await DescribeAsync(physicsPath, resolved[0], PhysicsPaths.BodyPhysics).ConfigureAwait(false),
             await DescribeAsync(skeletonPath, resolved[1], PhysicsPaths.BodySkeleton).ConfigureAwait(false));
@@ -108,8 +159,8 @@ internal sealed class PhysicsBuilderService : IDisposable
         if (IsPreviewFile(resolved))
             return new PhysicsLoadedFile(gamePath, resolved, "the preview", false, true);
         var mod = await penumbra.ModOfFileAsync(resolved).ConfigureAwait(false);
-        if (mod is { } found && HasMod && string.Equals(found.Directory, config.PhysicsModDirectory, StringComparison.OrdinalIgnoreCase))
-            return new PhysicsLoadedFile(gamePath, resolved, "your physics mod", true, false);
+        if (mod is { } found && IsMine(found.Directory))
+            return new PhysicsLoadedFile(gamePath, resolved, found.Name, true, false, found.Directory);
         return new PhysicsLoadedFile(gamePath, resolved, mod?.Name ?? Path.GetFileName(resolved), false, false);
     }
 
@@ -143,18 +194,9 @@ internal sealed class PhysicsBuilderService : IDisposable
                     var label = PhysicsPaths.GameFileLabel(gamePath, swapped, PhysicsPaths.BodyPhysics);
                     return new PhysicsDocument(PhybFile.Parse(bytes), new PhysicsSource(kind, char.ToUpperInvariant(label[0]) + label[1..], swapped), race);
                 }
+                // One of your own mods: saving suggests its name, so the changes go back into it.
                 return new PhysicsDocument(await ReadFileAsync(loaded.ResolvedPath).ConfigureAwait(false),
-                    new PhysicsSource(loaded.Mine ? PhysicsSourceKind.Mine : kind, loaded.Mine ? "Your physics mod" : loaded.Label, loaded.ResolvedPath), race);
-            }
-            case PhysicsSourceKind.Mine:
-            {
-                if (!HasMod)
-                    throw new InvalidOperationException("You haven't saved a physics mod yet.");
-                await FollowModAsync(lookAgain: true).ConfigureAwait(false);
-                var (bytes, path) = await penumbra.ReadPhysicsModAsync(config.PhysicsModDirectory, config.PhysicsModIdentifier, gamePath).ConfigureAwait(false);
-                if (bytes is null)
-                    throw new FileNotFoundException($"Your physics mod has no body physics for c{race:D4}, or it was deleted.");
-                return new PhysicsDocument(PhybFile.Parse(bytes), new PhysicsSource(kind, "Your physics mod", path), race);
+                    new PhysicsSource(loaded.Mine ? PhysicsSourceKind.Mine : kind, loaded.Label, loaded.ResolvedPath, loaded.Mod), race);
             }
             default:
             {
@@ -199,21 +241,33 @@ internal sealed class PhysicsBuilderService : IDisposable
     public Task StopPreviewAsync(PhysicsTarget? target) => Preview.StopAsync(target?.Character.ObjectIndex);
 
     /// <summary>
-    /// Saves a prepared file into your physics mod, making the mod the first time, ends the preview
-    /// and redraws your character. Returns the warnings to show.
+    /// Saves a prepared file into the mod called <paramref name="name"/>: one the builder saved before
+    /// gets the new file, any other name makes a new mod (a name another mod has is refused). Turns
+    /// your other builder mods off in your collection, since they replace the same file at the same
+    /// priority, ends the preview and redraws your character.
     /// </summary>
-    public async Task<IReadOnlyList<string>> SaveAsync(PhysicsTarget target, byte[] bytes, CancellationToken token)
+    public async Task<PhysicsSaveResult> SaveAsync(PhysicsTarget target, byte[] bytes, string name, CancellationToken token)
     {
+        name = name.Trim();
+        if (!PenumbraService.IsSafeNewModName(name))
+            throw new InvalidDataException($"\"{name}\" can't be a mod name.");
+        await FollowModsAsync(lookAgain: true).ConfigureAwait(false);
         var race = target.Character.Race;
-        var saved = await penumbra.SavePhysicsModAsync(config.PhysicsModDirectory.Length > 0 ? config.PhysicsModDirectory : null,
-            config.PhysicsModIdentifier, ModName, ModDescription, PhysicsPaths.BodyPhysics(race), bytes, target.Character.ObjectIndex, token).ConfigureAwait(false);
-        await framework.RunOnFrameworkThread(() =>
+        var known = config.PhysicsMods.FirstOrDefault(mod => string.Equals(mod.Directory, name, StringComparison.OrdinalIgnoreCase));
+        var saved = await penumbra.SavePhysicsModAsync(known?.Directory, known?.Identifier ?? Guid.Empty, name, ModDescription,
+            PhysicsPaths.BodyPhysics(race), bytes, target.Character.ObjectIndex, token).ConfigureAwait(false);
+        var others = await framework.RunOnFrameworkThread(() =>
         {
-            config.PhysicsModDirectory = saved.Directory;
-            config.PhysicsModIdentifier = saved.Identifier;
+            var mods = config.PhysicsMods.Where(mod => !string.Equals(mod.Directory, saved.Directory, StringComparison.OrdinalIgnoreCase) &&
+                                                       mod.Identifier != saved.Identifier).ToList();
+            var rest = mods.Select(mod => mod.Directory).ToList();
+            mods.Add(new PhysicsSavedMod { Directory = saved.Directory, Identifier = saved.Identifier });
+            config.PhysicsMods = mods;
             saveConfig();
+            return rest;
         }).ConfigureAwait(false);
         var warnings = saved.Warnings.ToList();
+        var turnedOff = await penumbra.TurnOffPhysicsModsAsync(others, target.Character.ObjectIndex).ConfigureAwait(false);
         try { await Preview.StopAsync(redrawObject: null).ConfigureAwait(false); }
         catch (Exception e) when (e is IOException or InvalidOperationException)
         {
@@ -222,7 +276,7 @@ internal sealed class PhysicsBuilderService : IDisposable
         if (await penumbra.RedrawObjectAsync(target.Character.ObjectIndex).ConfigureAwait(false) is { } redraw)
             warnings.Add(redraw);
         log.Information($"Saved body physics for c{race:D4} into {saved.Directory} ({saved.RelativePath}).");
-        return warnings;
+        return new PhysicsSaveResult(saved.Directory, warnings, turnedOff);
     }
 
     /// <summary>
@@ -316,57 +370,63 @@ internal sealed class PhysicsBuilderService : IDisposable
     }
 
     /// <summary>
-    /// Turns your physics mod on or off in your collection and redraws your character. Turning it off
-    /// stops the preview first, which sits above every mod and would still show.
+    /// Turns every mod the builder saved off in your collection, so your other physics mods apply
+    /// again, and redraws your character. Stops the preview first, which sits above every mod and
+    /// would still show. Returns the folders turned off and a warning, or null.
     /// </summary>
-    public async Task<string?> SetModEnabledAsync(PhysicsTarget target, bool enabled)
+    public async Task<(IReadOnlyList<string> TurnedOff, string? Warning)> TurnOffModsAsync(PhysicsTarget target)
     {
-        if (!HasMod)
-            return "You haven't saved a physics mod yet.";
-        await FollowModAsync(lookAgain: true).ConfigureAwait(false);
+        await FollowModsAsync(lookAgain: true).ConfigureAwait(false);
         string? stopProblem = null;
-        if (!enabled)
-        {
-            try { await Preview.StopAsync(redrawObject: null).ConfigureAwait(false); }
-            catch (Exception e) when (e is IOException or InvalidOperationException) { stopProblem = e.Message; }
-        }
-        if (await penumbra.SetPhysicsModEnabledAsync(config.PhysicsModDirectory, target.Character.ObjectIndex, enabled).ConfigureAwait(false) is { } error)
-            return stopProblem is null ? error : $"{error} The preview is still on: {stopProblem}";
+        try { await Preview.StopAsync(redrawObject: null).ConfigureAwait(false); }
+        catch (Exception e) when (e is IOException or InvalidOperationException) { stopProblem = e.Message; }
+        var turnedOff = await penumbra.TurnOffPhysicsModsAsync(ModDirectories, target.Character.ObjectIndex).ConfigureAwait(false);
         var redraw = await penumbra.RedrawObjectAsync(target.Character.ObjectIndex).ConfigureAwait(false);
         if (stopProblem is null)
-            return redraw;
-        var still = $"{config.PhysicsModDirectory} is off, but the preview is still on: {stopProblem}";
-        return redraw is null ? still : $"{still} {redraw}";
+            return (turnedOff, redraw);
+        var still = $"The preview is still on: {stopProblem}";
+        return (turnedOff, redraw is null ? still : $"{still} {redraw}");
     }
 
-    // The folder and identifier a look for your renamed mod last found nothing for.
-    private (string Directory, Guid Identifier)? lostMod;
+    // The mods a look for their renamed folder last found nothing for.
+    private readonly HashSet<(string Directory, Guid Identifier)> lostMods = [];
 
     /// <summary>
-    /// Follows your physics mod when it was renamed in Penumbra: finds the folder with its identifier and
-    /// remembers it, so saves keep going into it. Unless <paramref name="lookAgain"/>, a mod that's gone
-    /// is only looked for once, so reading your character again stays quick.
+    /// Follows your physics mods when they were renamed in Penumbra: finds the folder with each one's
+    /// identifier and remembers it, so saves keep going into it. Unless <paramref name="lookAgain"/>, a
+    /// mod that's gone is only looked for once, so reading your character again stays quick.
     /// </summary>
-    private async Task FollowModAsync(bool lookAgain)
+    private async Task FollowModsAsync(bool lookAgain)
     {
-        if (!HasMod)
-            return;
-        var known = (Directory: config.PhysicsModDirectory, Identifier: config.PhysicsModIdentifier);
-        if (!lookAgain && lostMod == known)
-            return;
-        var found = await penumbra.FindPhysicsModAsync(known.Directory, known.Identifier).ConfigureAwait(false);
-        lostMod = found is null ? known : null;
-        if (found is null || found == known.Directory)
+        var moved = new List<(PhysicsSavedMod Mod, string Folder)>();
+        foreach (var mod in config.PhysicsMods)
+        {
+            var known = (mod.Directory, mod.Identifier);
+            lock (lostMods)
+                if (!lookAgain && lostMods.Contains(known))
+                    continue;
+            var found = await penumbra.FindPhysicsModAsync(known.Directory, known.Identifier).ConfigureAwait(false);
+            lock (lostMods)
+                if (found is null)
+                    lostMods.Add(known);
+                else
+                    lostMods.Remove(known);
+            if (found is not null && found != known.Directory)
+                moved.Add((mod, found));
+        }
+        if (moved.Count == 0)
             return;
         await framework.RunOnFrameworkThread(() =>
         {
-            // A save in the meantime already chose the folder.
-            if (config.PhysicsModDirectory != known.Directory)
-                return;
-            config.PhysicsModDirectory = found;
+            // A save in the meantime may have replaced the list; only mods still in it move.
+            var mods = config.PhysicsMods.Select(mod => moved.FirstOrDefault(pair => ReferenceEquals(pair.Mod, mod)) is { Mod: not null } pair
+                ? new PhysicsSavedMod { Directory = pair.Folder, Identifier = mod.Identifier }
+                : mod).ToList();
+            config.PhysicsMods = mods;
             saveConfig();
         }).ConfigureAwait(false);
-        log.Information($"Your physics mod was renamed from {known.Directory} to {found}.");
+        foreach (var (mod, folder) in moved)
+            log.Information($"Your physics mod was renamed from {mod.Directory} to {folder}.");
     }
 
     public void Dispose() => Preview.Dispose();
