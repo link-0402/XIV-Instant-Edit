@@ -1346,10 +1346,13 @@ every vanilla timeline SCD and the whole mod library round-trip through the SCD 
 has been tried in game. Candidates: Self Spank with Moan (sound/moan.scd, a random set of 10) and
 vanilla emotes with one-shot sounds.
 
-- [ ] Listen, first: an XIV Bridge script finds the play-sound function (E8 ?? ?? ?? ?? E9 ?? ?? ??
+- [x] Listen, first: an XIV Bridge script finds the play-sound function (E8 ?? ?? ?? ?? E9 ?? ?? ??
   ?? FE C2), plays sound/battle/etc/SE_Bt_Etc_Clap.scd, then a temporary-mod path made from a keep-only
   copy of it. Expect no crash and the resource handle seen both times; note which collection resolved
   the temporary path. Nothing else here should be tried in game before this passes.
+  (XIV Bridge exec, 2026-10-14: one match, the same function VFXEditor's PlaySoundPath holds; the clap
+  and the path served by a temporary mod in all collections both loaded a handle, no crash or log
+  error; Interface, Base and the player's collection all resolved the temporary path to the file.)
 - [ ] 1 Chances: make a two-sound test file at 90/10, play it about 20 times (Listen on the header
   button), then 10/90. Expect the 90% sound about 18 of 20 times. This confirms or refutes reading the
   limits as running totals; if not, every set should show raw limits until the real rule is known.
@@ -1370,6 +1373,15 @@ vanilla emotes with one-shot sounds.
 - [ ] 7 Listen on MS-ADPCM, Vorbis and HCA files: each row's button plays that alternative alone, the
   header button the whole set, and nothing stays served afterwards (the listen_… path no longer
   resolves a few seconds after the sound ends).
+
+Review fixes 2026-10-14 (92f245e):
+- [x] Listen on a looping sound plays one pass. (XIV Bridge exec, 2026-10-14: a looping copy of the
+  clap went to the game with no loop flag or loop points, and stopped being served after its length
+  plus 2 s. Not heard: whether it audibly stops still needs an ear.)
+- [x] A Listen that fails after its temporary mod is added removes it. (XIV Bridge exec, 2026-10-14:
+  cancelled between the add and the play; the path no longer resolved and the file was gone.)
+- [x] Save in place over a mod's sound at a path the game has asks "Change the sound everywhere?",
+  with no other user in the mod. (XIV Bridge tests/instant-edit/animations-pending/257, 2026-10-14.)
 
 ## Timeline cuts and loop seams (pending)
 
