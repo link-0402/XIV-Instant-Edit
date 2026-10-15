@@ -1,3 +1,5 @@
+using InstantEdit.Services.PenumbraMods;
+
 namespace InstantEdit.Services.PreviewMods;
 
 /// <summary> What applying a preview wrote, with follow-up warnings. </summary>
@@ -109,10 +111,10 @@ internal sealed class PreviewModService(PenumbraService penumbra)
     private async Task<string> PreviewFolderAsync(PreviewMod preview)
     {
         var root = await penumbra.PreviewModRootAsync().ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(root) || !PenumbraService.IsSafeModName(preview.ModDirectory))
+        if (string.IsNullOrWhiteSpace(root) || !ModPaths.IsSafeModName(preview.ModDirectory))
             throw new IOException("Penumbra's mod directory is unavailable.");
         var folder = Path.GetFullPath(Path.Combine(root, preview.ModDirectory));
-        if (!Directory.Exists(folder) || PenumbraService.ReadModStableIdentifier(folder) != preview.ModIdentifier)
+        if (!Directory.Exists(folder) || ModMetadata.ReadModStableIdentifier(folder) != preview.ModIdentifier)
             throw new IOException($"The preview mod {preview.ModDirectory} is gone or was replaced. Discard it and make a new preview.");
         return folder;
     }

@@ -6,6 +6,7 @@ using InstantEdit.Services.NeckSeam;
 using InstantEdit.Services.PreviewMods;
 using InstantEdit.Ui;
 using static InstantEdit.TestSupport.Assertions;
+using InstantEdit.Services.PenumbraMods;
 
 /// <summary>
 /// The skin tone match on synthetic parts: a Viera face tube and an ears tube that overlaps its top,
@@ -232,7 +233,7 @@ internal static class SkinToneScenarios
             ["Id"] = Guid.NewGuid().ToString("D"), ["Name"] = name,
             ["Files"] = new JsonObject { [EarMaterialPath] = folder + "\\" + EarMaterialPath.Replace('/', '\\') },
         };
-        var meta = PenumbraService.CreateV4ModMetadata("Ears Mod", "A", "", "", new JsonObject { ["Files"] = new JsonObject { ["chara/other.tex"] = "chara\\other.tex" } });
+        var meta = ModMetadata.CreateV4ModMetadata("Ears Mod", "A", "", "", new JsonObject { ["Files"] = new JsonObject { ["chara/other.tex"] = "chara\\other.tex" } });
         meta["Groups"] = new JsonArray
         {
             new JsonObject
@@ -272,7 +273,7 @@ internal static class SkinToneScenarios
         var filesMaterial = Path.Combine(files, "Files", EarMaterialPath.Replace('/', '\\'));
         Directory.CreateDirectory(Path.GetDirectoryName(filesMaterial)!);
         File.WriteAllBytes(filesMaterial, [1]);
-        File.WriteAllText(Path.Combine(files, "meta.json"), PenumbraService.CreateV4ModMetadata("Files Mod", "A", "", "",
+        File.WriteAllText(Path.Combine(files, "meta.json"), ModMetadata.CreateV4ModMetadata("Files Mod", "A", "", "",
             new JsonObject { ["Files"] = new JsonObject { [EarMaterialPath] = "Files\\" + EarMaterialPath.Replace('/', '\\') } }).ToJsonString());
         Require(PenumbraService.PlanFileAdditions(files, "Files Mod", filesMaterial, EarMaterialPath, [(copy, [1])], "Measure again").Files.Single().RelativePath == "Files/" + copy,
             "skin tone: a mod that keeps its files under Files gets the new texture there too");

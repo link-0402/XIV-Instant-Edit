@@ -6,6 +6,7 @@ using InstantEdit.Models;
 using InstantEdit.Services;
 using Lumina.Data.Files;
 using Penumbra.Api.Enums;
+using InstantEdit.Services.PenumbraMods;
 
 internal static partial class TextureEditScenarios
 {
@@ -933,7 +934,7 @@ internal static partial class TextureEditScenarios
         Directory.CreateDirectory(modRoot);
         var first = Tex((uint)TexFile.TextureFormat.BC7, 8, 8, 4, 5);
         PenumbraService.StageGameTextureMod(modRoot, "Painter Top", "chara/equipment/e0001/texture/a_base.tex", first, job);
-        Check(PenumbraService.ReadModStableIdentifierForRegression(modRoot) == job, "the project's mod carries the job id as its identifier");
+        Check(ModMetadata.ReadModStableIdentifierForRegression(modRoot) == job, "the project's mod carries the job id as its identifier");
         const string baseFile = "Files/chara/equipment/e0001/texture/a_base.tex", normFile = "Files/chara/equipment/e0001/texture/a_norm.tex";
         var before = PenumbraService.TextureMappingFingerprint(modRoot, baseFile);
         var unmapped = PenumbraService.TextureMappingFingerprint(modRoot, normFile);
@@ -947,7 +948,7 @@ internal static partial class TextureEditScenarios
               PenumbraService.TextureMappingFingerprint(modRoot, normFile) != unmapped &&
               PenumbraService.TextureMappingFingerprint(modRoot, baseFile) == before,
             "the file is written; the new file's mapping fingerprint changes and the first texture's stays");
-        Check(PenumbraService.ReadModStableIdentifierForRegression(modRoot) == job, "adding a file keeps the identifier");
+        Check(ModMetadata.ReadModStableIdentifierForRegression(modRoot) == job, "adding a file keeps the identifier");
     }
 
     /// <summary>

@@ -10,6 +10,7 @@ using Lumina.Data;
 using Lumina.Data.Files;
 using Lumina.Data.Structs;
 using InstantEdit.Models;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services;
 
@@ -1076,7 +1077,7 @@ public sealed partial class MaterialPreviewBundleBuilder
     }
 
     private static bool IsSafeGameResourcePath(string path, params string[] extensions)
-        => PenumbraService.IsSafeGameResourcePath(NormaliseGamePath(path), extensions);
+        => ModPaths.IsSafeGameResourcePath(NormaliseGamePath(path), extensions);
 
     internal static class LooseLuminaFile
     {

@@ -7,6 +7,7 @@ using InstantEdit.Services;
 using InstantEdit.TestSupport;
 using InstantEdit.Ui;
 using static InstantEdit.TestSupport.Assertions;
+using InstantEdit.Services.PenumbraMods;
 
 static byte[] MinimalMaterial(string texturePath, ushort flags, ushort dataSetSize = 0)
 {
@@ -527,7 +528,7 @@ try
     Require(OnScreenService.NormalizeActualPath(
             @"chara\human\c0101\obj\hair\h0001\model\c0101h0001_hir.mdl",
             ResourceSourceState.GameData) == vanillaActualModel &&
-            PenumbraService.IsSafeGamePath(vanillaActualModel),
+            ModPaths.IsSafeGamePath(vanillaActualModel),
         "Penumbra tree game-data paths normalize from FullPath backslashes into editable game paths");
 
     // ---- On Screen source attribution: disk-free mod index and lazy stable identifiers ----
@@ -551,7 +552,7 @@ try
 
     for (var modIndex = 0; modIndex < 40; modIndex++)
         AddAttributionMod($"Mod {modIndex:D2}");
-    var mod01Id = PenumbraService.ReadModStableIdentifierForRegression(Path.Combine(attributionRoot, "Mod 01"));
+    var mod01Id = ModMetadata.ReadModStableIdentifierForRegression(Path.Combine(attributionRoot, "Mod 01"));
     var prefixedModId = AddAttributionMod("Mod 01 Extra");
     attributionMods[@"..\Escaped"] = "Escaped";
     var stableIdReads = new List<string>();
@@ -560,7 +561,7 @@ try
         modRoot =>
         {
             stableIdReads.Add(Path.GetFileName(modRoot));
-            return PenumbraService.ReadModStableIdentifierForRegression(modRoot);
+            return ModMetadata.ReadModStableIdentifierForRegression(modRoot);
         });
 
     var mod01Texture = attributor.AttributionFor(Path.Combine(attributionRoot, "Mod 01", "chara", "texture.tex"));
@@ -616,7 +617,7 @@ try
     var failModListRead = false;
     var flakyAttributor = ResourceSourceAttributor.CreateForRegression(
         () => failModListRead ? null : new ModListSnapshot(attributionRoot, attributionMods),
-        PenumbraService.ReadModStableIdentifierForRegression);
+        ModMetadata.ReadModStableIdentifierForRegression);
     var flakyPath = Path.Combine(attributionRoot, "Mod 02", "file.tex");
     var beforeFailedRead = flakyAttributor.AttributionFor(flakyPath);
     failModListRead = true;
@@ -1676,7 +1677,7 @@ try
         "weapon mashup textures retarget every model identity component");
 
     const string textureHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    var targetDx11Texture = PenumbraService.Dx11TexturePath(targetMashupTexture, 0x8000);
+    var targetDx11Texture = ModPaths.Dx11TexturePath(targetMashupTexture, 0x8000);
     var existingTargetHashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         [targetDx11Texture] = textureHash,
@@ -1807,7 +1808,7 @@ try
         Path.Combine(markerlessMashupRoot, "Files", "xiv-instant-edit", "mashups", "test", "model.mdl"),
         [1, 2, 3]);
     File.WriteAllText(Path.Combine(markerlessMashupRoot, "meta.json"),
-        PenumbraService.CreateV4ModMetadata(
+        ModMetadata.CreateV4ModMetadata(
             "Markerless Mashup", "XIV Instant Edit", "", "",
             new JsonObject
             {
@@ -1842,7 +1843,7 @@ try
     Require(stagedVanillaRelative == "Files/" + vanillaConsumer &&
             stagedVanillaMeta["FileVersion"]!.GetValue<int>() == 4 &&
             Guid.TryParse(stagedVanillaMeta["Identifier"]!.GetValue<string>(), out _) &&
-            PenumbraService.ReadModStableIdentifierForRegression(vanillaStageRoot) ==
+            ModMetadata.ReadModStableIdentifierForRegression(vanillaStageRoot) ==
                 Guid.Parse(stagedVanillaMeta["Identifier"]!.GetValue<string>()) &&
             DateTimeOffset.TryParse(stagedVanillaMeta["LastWrite"]!.GetValue<string>(), out _) &&
             stagedVanillaMeta["Author"]!.GetValue<string>() == "XIV Instant Edit" &&
@@ -1961,7 +1962,7 @@ try
             },
         },
     }.ToJsonString());
-    var v4Manipulations = PenumbraService.CaptureEffectiveManipulations(
+    var v4Manipulations = ModOptionGroups.CaptureEffectiveManipulations(
         manipulationV4Root,
         new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
         {
@@ -2092,7 +2093,7 @@ try
             },
         },
     }.ToJsonString());
-    var cleanupV4 = PenumbraService.NormalizeAndDeduplicateModForRegression(cleanupV4Root, "cleanup-v4");
+    var cleanupV4 = ModCleanup.NormalizeAndDeduplicateModForRegression(cleanupV4Root, "cleanup-v4");
     var cleanupV4Meta = JsonNode.Parse(File.ReadAllText(Path.Combine(cleanupV4Root, "meta.json")))!.AsObject();
     Require(cleanupV4.Warnings.Count == 0 && cleanupV4.PathRemap is not null &&
             cleanupV4Meta["Identifier"]!.GetValue<string>() == cleanupModId.ToString() &&
@@ -2134,7 +2135,7 @@ try
         ["Groups"] = new JsonArray(),
     }.ToJsonString());
     var cleanupFailureBefore = File.ReadAllText(cleanupFailurePath);
-    var cleanupFailure = PenumbraService.NormalizeAndDeduplicateModForRegression(cleanupFailureRoot, "cleanup-failure");
+    var cleanupFailure = ModCleanup.NormalizeAndDeduplicateModForRegression(cleanupFailureRoot, "cleanup-failure");
     Require(cleanupFailure.Warnings.Count == 1 && cleanupFailure.PathRemap is null &&
             File.ReadAllText(cleanupFailurePath) == cleanupFailureBefore,
         "cleanup failures warn and retain the committed mashup unchanged");
@@ -2156,7 +2157,7 @@ try
     var describedGroupRoot = Path.Combine(testRoot, "DescribedGroup");
     Directory.CreateDirectory(describedGroupRoot);
     File.WriteAllText(Path.Combine(describedGroupRoot, "meta.json"),
-        PenumbraService.CreateV4ModMetadata("Described", "Author", "Parent", "1.0", new JsonObject()).ToJsonString());
+        ModMetadata.CreateV4ModMetadata("Described", "Author", "Parent", "1.0", new JsonObject()).ToJsonString());
     Require(PenumbraService.WriteMashupGroup(describedGroupRoot, "Mashup", mashupMappings, sourceDescription) is null &&
             JsonNode.Parse(File.ReadAllText(Path.Combine(describedGroupRoot, "meta.json")))!["Groups"]![0]!["Description"]!.GetValue<string>() ==
                 sourceDescription &&
@@ -2165,10 +2166,10 @@ try
             Directory.GetFiles(describedGroupRoot, "group_*.json").Length == 0,
         "in-place mashups put the source description on their new group without rewriting parent metadata");
 
-    Require(PenumbraService.IsSafeNewModName("My Mashup") &&
-            !PenumbraService.IsSafeNewModName("My Mashup.") &&
-            !PenumbraService.IsSafeNewModName("CON") &&
-            !PenumbraService.IsSafeNewModName("../My Mashup"),
+    Require(ModPaths.IsSafeNewModName("My Mashup") &&
+            !ModPaths.IsSafeNewModName("My Mashup.") &&
+            !ModPaths.IsSafeNewModName("CON") &&
+            !ModPaths.IsSafeNewModName("../My Mashup"),
         "new mashup mod names reject unsafe Windows destinations");
 
     Require(manifestRegistry.TryBeginExport(

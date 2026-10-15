@@ -1,5 +1,12 @@
 using System.Text.Json.Nodes;
 using InstantEdit.Models;
+using InstantEdit.Services.PenumbraMods;
+using static InstantEdit.Services.PenumbraMods.FrameworkThread;
+using static InstantEdit.Services.PenumbraMods.ModCleanup;
+using static InstantEdit.Services.PenumbraMods.ModJson;
+using static InstantEdit.Services.PenumbraMods.ModMetadata;
+using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
+using static InstantEdit.Services.PenumbraMods.ModPaths;
 
 namespace InstantEdit.Services;
 
@@ -108,27 +115,6 @@ public sealed partial class PenumbraService
         {
             return $"penumbra_group_write_failed: {e.Message}";
         }
-    }
-
-    /// <summary>The mod-relative files the default data and every option of the mod map.</summary>
-    private static HashSet<string> MappedModFiles(JsonObject meta)
-    {
-        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        void Add(JsonNode? container)
-        {
-            if (container is JsonObject value && value["Files"] is JsonObject files)
-                foreach (var pair in files)
-                    if (JsonString(pair.Value) is { } path)
-                        used.Add(path.Replace('\\', '/').TrimStart('/'));
-        }
-        Add(meta["DefaultData"]);
-        if (meta["Groups"] is JsonArray groups)
-            foreach (var group in groups.OfType<JsonObject>())
-                foreach (var key in new[] { "Options", "Containers" })
-                    if (group[key] is JsonArray options)
-                        foreach (var option in options)
-                            Add(option);
-        return used;
     }
 
     /// <summary>

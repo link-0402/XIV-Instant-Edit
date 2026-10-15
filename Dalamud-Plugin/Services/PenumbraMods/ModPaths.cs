@@ -1,22 +1,9 @@
-﻿using System.Text.Json;
-using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
-using System.Security.Cryptography;
-using System.Text;
-using Dalamud.Game.ClientState.Objects.Enums;
-using Dalamud.Game.ClientState.Objects.Types;
-using Dalamud.Plugin;
-using Dalamud.Plugin.Services;
-using InstantEdit.Models;
-using Penumbra.Api.Enums;
-using Penumbra.Api.Helpers;
-using Penumbra.Api.IpcSubscribers;
-using Lumina.Data;
-using Lumina.Data.Files;
+﻿using System.Text.RegularExpressions;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary> Checks for the paths and names an export request and a Penumbra mod carry. </summary>
+internal static class ModPaths
 {
     internal static string? ValidateExportRequest(string? modName, string? gamePath, string? exportedFile)
     {
@@ -104,7 +91,7 @@ public sealed partial class PenumbraService
         return value.All(c => !char.IsControl(c));
     }
 
-    private static bool IsSafeRelativeModPath(string path)
+    internal static bool IsSafeRelativeModPath(string path)
     {
         if (string.IsNullOrWhiteSpace(path) || path.Length > 4096 || path.Contains('\0') ||
             Path.IsPathRooted(path) || path.Contains('\\') ||
@@ -115,10 +102,10 @@ public sealed partial class PenumbraService
     internal static string Dx11TexturePath(string path, ushort flags)
         => PathRules.Dx11TexturePath(path, flags);
 
-    private static string ReadNullTerminated(byte[] strings, int offset)
+    internal static string ReadNullTerminated(byte[] strings, int offset)
         => PathRules.ReadNullTerminated(strings, offset);
 
-    private static string NormalizeGamePath(string value)
+    internal static string NormalizeGamePath(string value)
         => PathRules.NormalizeGamePath(value);
 
     internal static bool IsSafeRelativeModelPath(string? path)
@@ -138,7 +125,7 @@ public sealed partial class PenumbraService
         return path.Split('/').All(segment => segment.Length > 0 && segment is not ("." or ".."));
     }
 
-    private static bool IsSafeModResourceFile(string root, string file)
+    internal static bool IsSafeModResourceFile(string root, string file)
     {
         try
         {
@@ -153,7 +140,7 @@ public sealed partial class PenumbraService
         }
     }
 
-    private static string? NormalizePhysicalPath(string? path)
+    internal static string? NormalizePhysicalPath(string? path)
     {
         if (string.IsNullOrWhiteSpace(path))
             return null;
@@ -169,14 +156,14 @@ public sealed partial class PenumbraService
         }
     }
 
-    private static void AddCandidateRoot(List<string> roots, string? path)
+    internal static void AddCandidateRoot(List<string> roots, string? path)
     {
         var normalized = NormalizePhysicalPath(path);
         if (normalized is not null && !roots.Contains(normalized, StringComparer.OrdinalIgnoreCase))
             roots.Add(normalized);
     }
 
-    private static bool IsPathWithin(string path, string root)
+    internal static bool IsPathWithin(string path, string root)
         => PathRules.IsPathWithin(path, root);
 
     internal static bool IsSafeModName(string? modName)
@@ -203,11 +190,31 @@ public sealed partial class PenumbraService
                !Regex.IsMatch(device, @"^(?:COM|LPT)[1-9]$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
-    private static Dictionary<string, HashSet<string>>?[] EmptyResourceResults(int count)
-        => Enumerable.Repeat<Dictionary<string, HashSet<string>>?>(null, count).ToArray();
-
-    private static readonly JsonSerializerOptions JsonOpts = new()
+    internal static bool TryNormalizeRelativeModPath(string? value, out string path)
     {
-        WriteIndented = true,
-    };
+        path = (value ?? "").Replace('\\', '/');
+        return IsSafeRelativeModPath(path);
+    }
+
+    internal static bool SameGamePath(string left, string right)
+        => string.Equals(left.Replace('\\', '/'), right.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase);
+
+    internal static bool HasReparsePointInPath(string root, string path)
+    {
+        var current = Path.GetFullPath(path);
+        var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        while (current.Length >= fullRoot.Length)
+        {
+            if (Directory.Exists(current) && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                return true;
+            if (string.Equals(current, fullRoot, StringComparison.OrdinalIgnoreCase))
+                break;
+            var parent = Path.GetDirectoryName(current);
+            if (string.IsNullOrEmpty(parent) || string.Equals(parent, current, StringComparison.Ordinal))
+                break;
+            current = parent;
+        }
+
+        return false;
+    }
 }

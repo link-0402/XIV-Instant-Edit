@@ -4,6 +4,7 @@ using System.Text.Json;
 using InstantEdit.Models;
 using InstantEdit.Services.Painter;
 using Penumbra.Api.Enums;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services;
 
@@ -133,11 +134,11 @@ public sealed class TextureEditService : IDisposable
                         : restoredSession;
                     s.Variants ??= [];
                     if (s.Variants.Any(v => !PathRules.IsSafeVariantName(v.Name) ||
-                            (v.RelativePath.Length > 0 && !PenumbraService.IsSafeGameResourcePath(v.RelativePath, ".tex"))))
+                            (v.RelativePath.Length > 0 && !ModPaths.IsSafeGameResourcePath(v.RelativePath, ".tex"))))
                         throw new IOException("Invalid texture variant.");
-                    if (s.Id == Guid.Empty || !PenumbraService.IsSafeGameResourcePath(s.GamePath, ".tex") ||
-                        !PenumbraService.IsSafeGameResourcePath(s.RelativePath, ".tex") ||
-                        (s.NeedsMod && !PenumbraService.IsSafeGameResourcePath(s.ResolvedGamePath, ".tex")))
+                    if (s.Id == Guid.Empty || !ModPaths.IsSafeGameResourcePath(s.GamePath, ".tex") ||
+                        !ModPaths.IsSafeGameResourcePath(s.RelativePath, ".tex") ||
+                        (s.NeedsMod && !ModPaths.IsSafeGameResourcePath(s.ResolvedGamePath, ".tex")))
                         throw new IOException("Invalid texture session identity.");
                     TextureFiles.EnsureLocalPath(s.Directory);
                     MigrateLegacyWorkingFile(s);
