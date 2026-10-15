@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
+using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
@@ -9,7 +10,7 @@ using InstantEdit.Services.CharacterSend;
 using InstantEdit.Services.Painter;
 using InstantEdit.Services.Skeletons;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Main;
 
 /// <summary>
 /// Quick Actions' Send my character to Blender: your character as the game draws it now goes to
@@ -20,7 +21,7 @@ namespace InstantEdit.Ui;
 /// Models of another race always go over racially scaled for the character, so Quick Export saves those
 /// only as the character's race's own model (Save as c0801 Model), never back into the other race's file.
 /// </summary>
-public sealed partial class MainWindow
+internal sealed class SendCharacterCard
 {
     private sealed record CharacterSendRequest(OnScreenObject Character, CharacterPose Pose, bool Weapons, AnimationCapture? Animation);
 
@@ -36,15 +37,54 @@ public sealed partial class MainWindow
     private volatile CharacterSendMessage? _characterSendMessage;
     private CancellationTokenSource? _characterSendCancellation;
     private PainterLiveReader? _characterDrawState;
+    private readonly Configuration _config;
+    private readonly Action _saveConfig;
+    private readonly OnScreenService _onScreen;
+    private readonly PenumbraService _penumbra;
+    private readonly BlenderClient _blender;
+    private readonly BlenderConnection _blenderConnection;
+    private readonly ModelSender _models;
+    private readonly AnimationIntegration _animationHub;
+    private readonly AnimationDelivery _animationDelivery;
+    private readonly RecorderPanel _recorder;
+    private readonly ResourceSourceAttributor _resourceSources;
+    private readonly IChatGui _chat;
+    private readonly IPluginLog _log;
+    private readonly StatusFeed _feed;
+    private readonly CancellationToken _lifetime;
 
-    internal void AttachCharacterDrawState(PainterLiveReader? reader) => _characterDrawState = reader;
+    public SendCharacterCard(Configuration config, Action saveConfig, OnScreenService onScreen, PenumbraService penumbra, BlenderClient blender,
+        BlenderConnection blenderConnection, ModelSender models, AnimationIntegration animationHub, AnimationDelivery animationDelivery,
+        RecorderPanel recorder, ResourceSourceAttributor resourceSources, IChatGui chat, IPluginLog log, StatusFeed feed, CancellationToken lifetime)
+    {
+        _config = config;
+        _saveConfig = saveConfig;
+        _onScreen = onScreen;
+        _penumbra = penumbra;
+        _blender = blender;
+        _blenderConnection = blenderConnection;
+        _models = models;
+        _animationHub = animationHub;
+        _animationDelivery = animationDelivery;
+        _recorder = recorder;
+        _resourceSources = resourceSources;
+        _chat = chat;
+        _log = log;
+        _feed = feed;
+        _lifetime = lifetime;
+        Card = BuildCard();
+    }
+
+    public QuickAction Card { get; }
+
+    public void AttachDrawState(PainterLiveReader? reader) => _characterDrawState = reader;
 
     private const string SendCharacterKey = "send-character";
 
     /// <summary> Whether the card keeps the Animations tab's listener running, to see the animation your character plays. </summary>
-    private bool CharacterSendListens => _config.CharacterSendPose == CharacterPose.Animation && QuickActionShown(SendCharacterKey);
+    public bool Listens => _config.CharacterSendPose == CharacterPose.Animation && QuickActionsTab.Shown(_config, SendCharacterKey);
 
-    private QuickAction SendCharacterCard => new(SendCharacterKey, FontAwesomeIcon.Cubes, "Send my character to Blender",
+    private QuickAction BuildCard() => new(SendCharacterKey, FontAwesomeIcon.Cubes, "Send my character to Blender",
         "Sends your character to Blender as the game shows it now. " +
         "Each model keeps its own context, so Quick Export still writes it back whole. " +
         "Models made for another race, such as the c0201 gear most female races wear, are reshaped for yours as the game " +
@@ -122,7 +162,7 @@ public sealed partial class MainWindow
     /// <summary> With Playing animation chosen, the animation your character plays, named below the choice; otherwise null. </summary>
     private AnimationCapture? DrawCharacterAnimation()
     {
-        if (!CharacterSendListens || animations is not { } service)
+        if (!Listens || _animationHub.Service is not { } service)
             return null;
         // The Draw loop keeps the listener running while this card needs it.
         service.StartObservation();
@@ -151,19 +191,19 @@ public sealed partial class MainWindow
     /// <summary> Why the character can't be sent now, or null when it can. </summary>
     private string? CharacterSendBlock(AnimationCapture? capture)
     {
-        if (Volatile.Read(ref _characterSendRunning) == 0 && Volatile.Read(ref _editing) != 0)
+        if (Volatile.Read(ref _characterSendRunning) == 0 && _models.Busy.IsBusy)
             return "Another model is being sent to Blender.";
         if (_config.CharacterSendPose == CharacterPose.Current)
         {
-            if (recorder is null)
+            if (_recorder.Recorder is null)
                 return "The live pose recorder is unavailable.";
-            if (recorder.Active)
+            if (_recorder.Recorder.Active)
                 return "A recording is running. Send your character once it is done.";
         }
         if (_config.CharacterSendPose == CharacterPose.Animation)
         {
-            if (animations is null)
-                return animationError ?? "Animation integration is unavailable.";
+            if (_animationHub.Service is null)
+                return _animationHub.Unavailable;
             if (capture is null)
                 return "No animation is playing.";
             if (!AnimationPresentation.Ready(capture))
@@ -188,14 +228,14 @@ public sealed partial class MainWindow
 
     private void StartCharacterSend(OnScreenObject character, AnimationCapture? capture)
     {
-        if (Interlocked.CompareExchange(ref _editing, 1, 0) != 0)
+        if (!_models.Busy.TryEnter())
         {
             ReportCharacterSend("Another model is already being sent.", FeedbackSeverity.Warning);
             return;
         }
         Volatile.Write(ref _characterSendRunning, 1);
         _characterSendCancellation?.Dispose();
-        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime);
         _characterSendCancellation = cancellation;
         _characterSendMessage = null;
         _characterSendProgress = "Checking Blender";
@@ -216,9 +256,9 @@ public sealed partial class MainWindow
             var models = CharacterSendPlan.Models(character.ResourceRoots, request.Weapons);
             if (models.Count == 0)
                 throw new InvalidOperationException("Your character shows no model that can be sent. Refresh the On Screen list and try again.");
-            if (_skeletons is not { } resolver)
+            if (_models.Skeletons is not { } resolver)
                 throw new InvalidOperationException("The game skeleton reader did not start.");
-            await EnsureBlenderReadyForImportAsync(port, importOptions,
+            await _blenderConnection.EnsureReadyForImportAsync(port, importOptions,
                 models.Any(model => model.Node.SourceState == ResourceSourceState.GameData), token).ConfigureAwait(false);
             if (!await _blender.SupportsImportSkeletonAsync(port, token).ConfigureAwait(false) ||
                 !await _blender.SupportsCharacterImportAsync(port, token).ConfigureAwait(false))
@@ -246,7 +286,7 @@ public sealed partial class MainWindow
             var take = await CaptureCharacterPoseAsync(request, token).ConfigureAwait(false);
 
             var actor = CharacterActor(character);
-            var previewResources = await ResolvePreviewResourcesAsync(actor).ConfigureAwait(false);
+            var previewResources = await _models.ResolvePreviewResourcesAsync(actor).ConfigureAwait(false);
             var collection = await _penumbra.GetCollectionTargetAsync(character.ObjectIndex).ConfigureAwait(false);
             var sendId = Guid.NewGuid().ToString("N");
             var key = CharacterSendPlan.Key(snapshot.Name, snapshot.HomeWorld);
@@ -267,7 +307,7 @@ public sealed partial class MainWindow
                 var model = new MdlFile { GamePath = view.GamePath, LocalPath = view.ActualPath };
                 try
                 {
-                    var bytes = await ReadModelBytesAsync(model, token).ConfigureAwait(false);
+                    var bytes = await _models.ReadModelBytesAsync(model, token).ConfigureAwait(false);
                     var hidden = 0;
                     if (plan.Known && CharacterDrawState.PartMasks(bytes) is { } parts)
                     {
@@ -284,7 +324,7 @@ public sealed partial class MainWindow
                         weapon ? CharacterImportEntry.WeaponRole : CharacterImportEntry.BodyRole, armatureName,
                         weapon ? WeaponAttach(item, snapshot.Weapons, weaponNotes) : null,
                         drawn.AttributeMasks.Count > 0 ? drawn.AttributeMasks : null, drawn.Shapes);
-                    var result = await SendModelToBlenderAsync(actor, model, view, port, _config.ListenPort, importOptions,
+                    var result = await _models.SendModelToBlenderAsync(actor, model, view, port, _config.ListenPort, importOptions,
                         new CharacterModelSend(entry, skeletonPayload, scaling, scalingProblem, previewResources, collection, bytes),
                         token).ConfigureAwait(false);
                     sent.Add(new CharacterSentModel(result.FileName, result.Notes, result.Scaled));
@@ -310,7 +350,7 @@ public sealed partial class MainWindow
                 _characterSendProgress = "Sending the pose to Blender";
                 try
                 {
-                    poseResult = await DeliverTakeAsync(take, sendId, token).ConfigureAwait(false);
+                    poseResult = await _animationDelivery.DeliverTakeAsync(take, sendId, token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)
                 {
@@ -322,7 +362,7 @@ public sealed partial class MainWindow
                 }
             }
             var summary = CharacterSendPlan.Summary(new CharacterSendOutcome(snapshot.Name, request.Pose, sent, failed,
-                poseResult, poseError, request.Pose == CharacterPose.Current && take is not null ? RecordingWarning(take) : null,
+                poseResult, poseError, request.Pose == CharacterPose.Current && take is not null ? _recorder.RecordingWarning(take) : null,
                 weaponNotes, skeleton.Warnings)
             {
                 LeftOut = leftOut, HiddenParts = hiddenParts, Missing = plan.Missing, External = plan.External, DrawStateKnown = plan.Known,
@@ -332,7 +372,7 @@ public sealed partial class MainWindow
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            if (!_lifetimeCts.IsCancellationRequested)
+            if (!_lifetime.IsCancellationRequested)
                 ReportCharacterSend("Sending your character was cancelled. Models that reached Blender stay there.", FeedbackSeverity.Warning);
         }
         catch (Exception e)
@@ -342,7 +382,7 @@ public sealed partial class MainWindow
         }
         finally
         {
-            Volatile.Write(ref _editing, 0);
+            _models.Busy.Exit();
             Volatile.Write(ref _characterSendRunning, 0);
         }
     }
@@ -370,10 +410,10 @@ public sealed partial class MainWindow
         {
             case CharacterPose.Current:
                 _characterSendProgress = "Capturing your pose";
-                var active = recorder ?? throw new InvalidOperationException("The live pose recorder is unavailable.");
+                var active = _recorder.Recorder ?? throw new InvalidOperationException("The live pose recorder is unavailable.");
                 return await active.CapturePoseAsync(RecordingSubject.Self, token).ConfigureAwait(false);
             case CharacterPose.Animation:
-                if (animations is not { } service || request.Animation is not { } capture)
+                if (_animationHub.Service is not { } service || request.Animation is not { } capture)
                     throw new InvalidOperationException("No animation is playing. Play an emote, idle or walk, then send again.");
                 _characterSendProgress = "Reading the animation";
                 return await service.SampleForCharacterAsync(capture, message => _characterSendProgress = message, token)
@@ -433,12 +473,12 @@ public sealed partial class MainWindow
 
     /// <summary> The character as the model sends see it: its On Screen entry and every resource it shows. </summary>
     private static ActorView CharacterActor(OnScreenObject character)
-        => new(character, character.PresentationCategory.ToString(), Safe(character.Name),
+        => new(character, character.PresentationCategory.ToString(), UiText.Safe(character.Name),
             character.ResourceRoots.Select(ResourceViews.FromNode).ToList(), character.ObjectIndex);
 
     private void ReportCharacterSend(string text, FeedbackSeverity severity)
     {
         _characterSendMessage = new CharacterSendMessage(text, severity);
-        SetStatus(text, severity);
+        _feed.SetStatus(text, severity);
     }
 }

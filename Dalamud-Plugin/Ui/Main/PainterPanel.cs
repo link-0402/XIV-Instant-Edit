@@ -1,56 +1,85 @@
 using System.Diagnostics;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
-using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
+using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.Painter;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Main;
 
-public sealed partial class MainWindow
+/// <summary>
+/// Substance Painter in the main window: the paint roller's dialog that builds a project, the projects
+/// listed on the Sessions tab, and the toolbar's Painter connection state.
+/// </summary>
+internal sealed class PainterPanel
 {
     private const string PainterDialog = "Paint in Substance Painter";
     private const string PainterDiscardDialog = "Discard Painter project";
+    private readonly Configuration _config;
+    private readonly IPluginLog _log;
+    private readonly TextureEditService _textures;
+    private readonly ModelSender _models;
+    private readonly StatusFeed _feed;
+    private readonly string _pluginVersion;
+    private readonly CancellationToken _lifetime;
+    private readonly object _statusLock = new();
     private PainterJobService? _painter;
     private PainterDraft? _painterDraft;
     private string _painterDraftError = "";
     private string _painterLoadingText = "";
-    private int _painterBusy;
     private bool _openPainterDialog;
     private Guid? _discardPainterJob;
     private PainterStatus _painterStatus = PainterStatus.Offline;
     private DateTime _lastPainterCheck = DateTime.MinValue;
     private bool _painterChecking;
 
-    internal void AttachPainter(PainterJobService painter)
+    public PainterPanel(Configuration config, IPluginLog log, TextureEditService textures, ModelSender models, StatusFeed feed,
+        string pluginVersion, CancellationToken lifetime)
+    {
+        _config = config;
+        _log = log;
+        _textures = textures;
+        _models = models;
+        _feed = feed;
+        _pluginVersion = pluginVersion;
+        _lifetime = lifetime;
+    }
+
+    /// <summary> The Painter service, once the plugin has started it. </summary>
+    public PainterJobService? Service => _painter;
+
+    /// <summary> Set while a project is prepared, created, reopened, or discarded with the texture sessions. </summary>
+    public BusyFlag Busy { get; } = new();
+
+    public void Attach(PainterJobService painter)
     {
         _painter = painter;
         painter.Message += ReportPainterMessage;
     }
 
-    private void DetachPainter()
+    public void Detach()
     {
         if (_painter is not null)
             _painter.Message -= ReportPainterMessage;
     }
 
     private void ReportPainterMessage(string text, bool problem)
-        => SetTextureStatus(text, problem ? FeedbackSeverity.Warning : FeedbackSeverity.Success);
+        => _feed.SetTextureStatus(text, problem ? FeedbackSeverity.Warning : FeedbackSeverity.Success);
 
-    private bool PainterEnabled => _painter is not null && _config.PainterIntegrationEnabled;
+    public bool Enabled => _painter is not null && _config.PainterIntegrationEnabled;
 
     /// <summary> Painter only opens On Screen models: their textures are the ones the actor actually renders. </summary>
-    private bool CanPaint(ActorView actor, ResourceView node)
-        => PainterEnabled && actor.Entity is not null && node.IsModel && ResourceViews.IsSafeModel(node);
+    public bool CanPaint(ActorView actor, ResourceView node)
+        => Enabled && actor.Entity is not null && node.IsModel && ResourceViews.IsSafeModel(node);
 
-    private PainterConnectionState PainterState
+    public PainterConnectionState State
     {
         get
         {
             StartPainterCheckIfNeeded();
-            lock (_stateLock) return _painterStatus.Classify(_pluginVersion);
+            lock (_statusLock) return _painterStatus.Classify(_pluginVersion);
         }
     }
 
@@ -58,7 +87,7 @@ public sealed partial class MainWindow
     {
         if (_painter is not { } painter)
             return;
-        lock (_stateLock)
+        lock (_statusLock)
         {
             if (_painterChecking || (DateTime.UtcNow - _lastPainterCheck).TotalSeconds <= 5)
                 return;
@@ -67,11 +96,11 @@ public sealed partial class MainWindow
         _ = Task.Run(async () =>
         {
             var status = PainterStatus.Offline;
-            try { status = await painter.GetStatusAsync(_lifetimeCts.Token).ConfigureAwait(false); }
+            try { status = await painter.GetStatusAsync(_lifetime).ConfigureAwait(false); }
             catch (Exception e) { _log.Debug($"Painter status check failed: {e.Message}"); }
             finally
             {
-                lock (_stateLock)
+                lock (_statusLock)
                 {
                     _painterStatus = status;
                     _painterChecking = false;
@@ -81,7 +110,7 @@ public sealed partial class MainWindow
         });
     }
 
-    private static (string Value, string Detail, Vector4 Colour) PainterDot(PainterConnectionState state, string pluginVersion) => state switch
+    public static (string Value, string Detail, Vector4 Colour) Dot(PainterConnectionState state, string pluginVersion) => state switch
     {
         PainterConnectionState.Online => ("Online", "Substance Painter's XIV Instant Edit plugin is reachable and matches this version.", Theme.Online),
         PainterConnectionState.VersionMismatch => ("Mismatch", $"Update the Painter plugin from Settings; it doesn't match plugin version {pluginVersion}.", Theme.Mismatch),
@@ -90,7 +119,7 @@ public sealed partial class MainWindow
 
     // ---- Opening the dialog ------------------------------------------------------------------
 
-    private void StartPainter(ActorView actor, ResourceView node)
+    public void StartPainter(ActorView actor, ResourceView node)
     {
         var others = actor.Roots.SelectMany(ResourceViews.Flatten)
             .Where(other => other.IsModel && ResourceViews.IsSafeModel(other) && !ReferenceEquals(other, node))
@@ -101,10 +130,10 @@ public sealed partial class MainWindow
 
     /// <summary> Opens the dialog and prepares its draft in the background. </summary>
     /// <param name="scale">Whether models of another race are reshaped for the actor, as the game shows them on it.</param>
-    private void PreparePainter(ActorView actor, PainterModelRef model, IReadOnlyList<PainterModelRef> others, PainterScope scope, bool scale,
+    public void PreparePainter(ActorView actor, PainterModelRef model, IReadOnlyList<PainterModelRef> others, PainterScope scope, bool scale,
         string loadingText)
     {
-        if (_painter is not { } painter || actor.Entity is not { } entity || Interlocked.CompareExchange(ref _painterBusy, 1, 0) != 0)
+        if (_painter is not { } painter || actor.Entity is not { } entity || !Busy.TryEnter())
             return;
         _painterDraft = null;
         _painterDraftError = "";
@@ -114,9 +143,9 @@ public sealed partial class MainWindow
         {
             try
             {
-                var resources = await ResolvePreviewResourcesAsync(actor).ConfigureAwait(false);
-                var (scaling, scalingProblem) = scale && _skeletons is { } skeletons
-                    ? await skeletons.RacialScalingAsync(entity.ObjectIndex, entity.Address, _lifetimeCts.Token).ConfigureAwait(false)
+                var resources = await _models.ResolvePreviewResourcesAsync(actor).ConfigureAwait(false);
+                var (scaling, scalingProblem) = scale && _models.Skeletons is { } skeletons
+                    ? await skeletons.RacialScalingAsync(entity.ObjectIndex, entity.Address, _lifetime).ConfigureAwait(false)
                     : (null, null);
                 var request = new PainterRequest(entity.ObjectIndex, entity.Address.ToInt64(), actor.Name, model, others, resources.ToList())
                 {
@@ -124,24 +153,24 @@ public sealed partial class MainWindow
                     RacialScaling = scaling,
                     RacialScalingProblem = scalingProblem,
                 };
-                _painterDraft = await painter.PrepareAsync(request, _lifetimeCts.Token).ConfigureAwait(false);
+                _painterDraft = await painter.PrepareAsync(request, _lifetime).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
+            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
             catch (Exception error)
             {
                 _log.Warning(error, "Could not prepare the Substance Painter project.");
                 _painterDraftError = error.Message;
             }
-            finally { Interlocked.Exchange(ref _painterBusy, 0); }
+            finally { Busy.Exit(); }
         });
     }
 
-    private static PainterModelRef ModelRef(ResourceView node)
+    public static PainterModelRef ModelRef(ResourceView node)
         => new(node.GamePath, node.ActualPath, node.SourceState == ResourceSourceState.GameData);
 
     // ---- The dialog --------------------------------------------------------------------------
 
-    private void DrawPainterDialogs()
+    public void DrawDialogs()
     {
         DrawPainterDiscardDialog();
         if (_openPainterDialog)
@@ -152,7 +181,7 @@ public sealed partial class MainWindow
         ImGui.SetNextWindowSizeConstraints(Theme.Scaled(560, 200), Theme.Scaled(820, 720));
         if (!ImGui.BeginPopupModal(PainterDialog, ImGuiWindowFlags.AlwaysAutoResize))
             return;
-        var busy = Volatile.Read(ref _painterBusy) != 0;
+        var busy = Busy.IsBusy;
         var draft = _painterDraft;
         if (draft is null)
         {
@@ -228,8 +257,8 @@ public sealed partial class MainWindow
         }
 
         ImGui.Spacing();
-        var state = PainterState;
-        var (value, detail, colour) = PainterDot(state, _pluginVersion);
+        var state = State;
+        var (value, detail, colour) = Dot(state, _pluginVersion);
         ImGui.AlignTextToFramePadding();
         Widgets.StatusDot("Painter", colour, value, detail);
         if (state == PainterConnectionState.Offline)
@@ -340,33 +369,33 @@ public sealed partial class MainWindow
 
     private void SendToPainter(PainterDraft draft)
     {
-        if (_painter is not { } painter || Interlocked.CompareExchange(ref _painterBusy, 1, 0) != 0)
+        if (_painter is not { } painter || !Busy.TryEnter())
             return;
-        SetTextureStatus("Preparing the Painter project", FeedbackSeverity.Info);
+        _feed.SetTextureStatus("Preparing the Painter project", FeedbackSeverity.Info);
         _ = Task.Run(async () =>
         {
             try
             {
-                var result = await painter.CreateAsync(draft, _lifetimeCts.Token).ConfigureAwait(false);
+                var result = await painter.CreateAsync(draft, _lifetime).ConfigureAwait(false);
                 var severity = result.JobId is null ? FeedbackSeverity.Error : result.Warnings.Count > 0 ? FeedbackSeverity.Warning : FeedbackSeverity.Success;
                 var text = result.Warnings.Count == 0 ? result.Message : $"{result.Message} {string.Join(" ", result.Warnings.Take(3))}";
-                SetTextureStatus(text, severity);
+                _feed.SetTextureStatus(text, severity);
                 if (result.JobId is not null)
                     _painterDraft = null;
             }
-            catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
+            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
             catch (Exception error)
             {
                 _log.Warning(error, "Could not open the model in Substance Painter.");
-                SetTextureStatus("Substance Painter: " + error.Message, FeedbackSeverity.Error);
+                _feed.SetTextureStatus("Substance Painter: " + error.Message, FeedbackSeverity.Error);
             }
-            finally { Interlocked.Exchange(ref _painterBusy, 0); }
+            finally { Busy.Exit(); }
         });
     }
 
     // ---- Sessions tab ------------------------------------------------------------------------
 
-    private void DrawPainterJobs()
+    public void DrawJobs()
     {
         if (_painter is not { } painter || !_config.PainterIntegrationEnabled)
             return;
@@ -379,7 +408,7 @@ public sealed partial class MainWindow
         if (jobs.Count == 0)
             return;
         Widgets.SectionHeader("Substance Painter projects", jobs.Count == 1 ? "1 project" : $"{jobs.Count} projects");
-        var busy = Volatile.Read(ref _painterBusy) != 0;
+        var busy = Busy.IsBusy;
         var sessions = _textures.Sessions.ToDictionary(session => session.Id);
         foreach (var job in jobs)
         {
@@ -441,7 +470,7 @@ public sealed partial class MainWindow
 
     private void ReopenPainterJob(PainterJob job)
     {
-        if (_painter is not { } painter || Interlocked.CompareExchange(ref _painterBusy, 1, 0) != 0)
+        if (_painter is not { } painter || !Busy.TryEnter())
             return;
         _ = Task.Run(async () =>
         {
@@ -449,34 +478,34 @@ public sealed partial class MainWindow
             {
                 if (job.ProjectPath.Length > 0 && File.Exists(job.ProjectPath))
                 {
-                    var status = await painter.GetStatusAsync(_lifetimeCts.Token).ConfigureAwait(false);
+                    var status = await painter.GetStatusAsync(_lifetime).ConfigureAwait(false);
                     if (status.Reachable)
                     {
-                        SetTextureStatus($"Painter is running: open {job.ProjectPath} there (File > Open).", FeedbackSeverity.Info);
+                        _feed.SetTextureStatus($"Painter is running: open {job.ProjectPath} there (File > Open).", FeedbackSeverity.Info);
                         return;
                     }
                     var exe = string.IsNullOrWhiteSpace(_config.PainterExecutablePath) ? PainterInstallation.DetectExecutable() : _config.PainterExecutablePath;
                     if (exe.Length == 0 || !File.Exists(exe))
                     {
-                        SetTextureStatus("Set Substance Painter's executable in Settings, or open the project in Painter yourself.", FeedbackSeverity.Warning);
+                        _feed.SetTextureStatus("Set Substance Painter's executable in Settings, or open the project in Painter yourself.", FeedbackSeverity.Warning);
                         return;
                     }
                     var start = new ProcessStartInfo(exe) { UseShellExecute = false };
                     start.ArgumentList.Add(job.ProjectPath);
                     Process.Start(start)?.Dispose();
-                    SetTextureStatus("Opening the project in Substance Painter", FeedbackSeverity.Info);
+                    _feed.SetTextureStatus("Opening the project in Substance Painter", FeedbackSeverity.Info);
                     return;
                 }
-                var error = await painter.OpenInPainterAsync(job, _lifetimeCts.Token).ConfigureAwait(false);
-                SetTextureStatus(error.Length == 0 ? "Opening the project in Substance Painter" : error,
+                var error = await painter.OpenInPainterAsync(job, _lifetime).ConfigureAwait(false);
+                _feed.SetTextureStatus(error.Length == 0 ? "Opening the project in Substance Painter" : error,
                     error.Length == 0 ? FeedbackSeverity.Info : FeedbackSeverity.Warning);
             }
-            catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
+            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
             catch (Exception error)
             {
-                SetTextureStatus("Substance Painter: " + error.Message, FeedbackSeverity.Error);
+                _feed.SetTextureStatus("Substance Painter: " + error.Message, FeedbackSeverity.Error);
             }
-            finally { Interlocked.Exchange(ref _painterBusy, 0); }
+            finally { Busy.Exit(); }
         });
     }
 
@@ -500,9 +529,9 @@ public sealed partial class MainWindow
                 try
                 {
                     await painter.DiscardAsync(id).ConfigureAwait(false);
-                    SetTextureStatus("Painter project discarded.", FeedbackSeverity.Success);
+                    _feed.SetTextureStatus("Painter project discarded.", FeedbackSeverity.Success);
                 }
-                catch (Exception error) { SetTextureStatus(error.Message, FeedbackSeverity.Error); }
+                catch (Exception error) { _feed.SetTextureStatus(error.Message, FeedbackSeverity.Error); }
             });
         }
         ImGui.SameLine();

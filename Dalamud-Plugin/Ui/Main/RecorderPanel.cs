@@ -1,44 +1,52 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
-using InstantEdit.Models;
-using InstantEdit.Services;
+using Dalamud.Plugin.Services;
 using InstantEdit.Services.Animations;
-using InstantEdit.Services.CharacterSend;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Main;
 
 /// <summary>
-/// Sends animations to Blender, keyed onto a scene armature as an action: a clip's animation
-/// file from the Animations list, or a recording of a character's live skeleton.
+/// Record live pose: records a character's live skeleton and sends it to Blender. Drawn in the Timeline
+/// window's Record page, and on the Animations tab while the animation services are missing.
 /// </summary>
-public sealed partial class MainWindow
+internal sealed class RecorderPanel
 {
     private sealed record RecorderMessage(string Text, FeedbackSeverity Severity);
 
-    private AnimationRecorder? recorder;
+    private readonly Configuration _config;
+    private readonly Action _saveConfig;
+    private readonly IPluginLog _log;
+    private readonly StatusFeed _feed;
+    private readonly AnimationDelivery _delivery;
+    private readonly CancellationToken _lifetime;
     private RecordingSubject recordingSubject = RecordingSubject.Self;
     private CancellationTokenSource? recordingCancellation;
     private volatile AnimationTake? lastRecording;
     private volatile RecorderMessage? recorderMessage;
     private int recorderSending;
 
-    internal void AttachRecorder(AnimationRecorder? value) => recorder = value;
+    public RecorderPanel(Configuration config, Action saveConfig, IPluginLog log, StatusFeed feed, AnimationDelivery delivery, CancellationToken lifetime)
+    {
+        _config = config;
+        _saveConfig = saveConfig;
+        _log = log;
+        _feed = feed;
+        _delivery = delivery;
+        _lifetime = lifetime;
+    }
 
-    /// <summary>The recorder, drawn in the Timeline window's Record page; it sends to Blender through this window.</summary>
-    internal void DrawRecorderPanel() => DrawRecorder();
-
-    // As a character send names its armature, so animations find the armature it built.
-    private string AnimationArmature => CharacterSendPlan.ArmatureName(_config.AnimationArmatureName);
+    /// <summary> The live pose recorder, once the plugin has started it. </summary>
+    public AnimationRecorder? Recorder { get; set; }
 
     /// <summary> The Record live pose tab: records a character's live skeleton and sends it to Blender. </summary>
-    private void DrawRecorder()
+    public void Draw()
     {
-        var active = recorder;
+        var active = Recorder;
         if (active == null)
             return;
         Widgets.HintWrapped($"Records a character's live skeleton, including the game's bone physics and LivePose, " +
-                            $"and keys it onto \"{AnimationArmature}\" in Blender to test clothing against it. " +
+                            $"and keys it onto \"{_delivery.AnimationArmature}\" in Blender to test clothing against it. " +
                             "Customize+ is paused on the character while it records; MagicFit adds it in Blender.");
         ImGui.Spacing();
         var progress = active.Progress;
@@ -99,7 +107,7 @@ public sealed partial class MainWindow
                 using (ImRaii.Disabled(sending))
                 {
                     if (ImGui.Button("Send last recording again"))
-                        _ = Task.Run(() => SendRecordingAsync(previous, _lifetimeCts.Token));
+                        _ = Task.Run(() => SendRecordingAsync(previous, _lifetime));
                 }
                 if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
                     ImGui.SetTooltip($"{previous.Name}: {previous.FrameCount} frames of {previous.Bones.Length} bones.");
@@ -120,7 +128,7 @@ public sealed partial class MainWindow
     {
         if (active.Active) return;
         recordingCancellation?.Dispose();
-        recordingCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
+        recordingCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime);
         var token = recordingCancellation.Token;
         var subject = recordingSubject;
         var seconds = _config.RecordingSeconds;
@@ -155,7 +163,7 @@ public sealed partial class MainWindow
         try
         {
             recorderMessage = new RecorderMessage($"Sending {take.FrameCount} frames of {take.Bones.Length} bones to Blender", FeedbackSeverity.Info);
-            var result = await DeliverAnimationAsync(take, token).ConfigureAwait(false);
+            var result = await _delivery.DeliverAnimationAsync(take, token).ConfigureAwait(false);
             var warning = RecordingWarning(take);
             ReportRecorder(warning == null ? result : $"{result} {warning}",
                 warning == null ? FeedbackSeverity.Success : FeedbackSeverity.Warning);
@@ -184,7 +192,7 @@ public sealed partial class MainWindow
     /// What a recording carries that the user should know: Customize+ could not be paused, or
     /// something else scaled the body while it recorded. Null when neither.
     /// </summary>
-    private string? RecordingWarning(AnimationTake take)
+    public string? RecordingWarning(AnimationTake take)
     {
         if (take.Source.TryGetValue(AnimationRecorder.CustomizePlusSource, out var customizePlus) &&
             customizePlus != AnimationRecorder.CustomizePlusPaused)
@@ -192,60 +200,5 @@ public sealed partial class MainWindow
         return take.Source.TryGetValue(AnimationRecorder.ScaledBonesSource, out var scaled)
             ? RecordingScale.Warning(scaled, _config.AnimationKeyScale)
             : null;
-    }
-
-    /// <summary>Encodes a take and sends it to Blender. Returns what Blender did with it, or throws with a user-facing message.</summary>
-    private Task<string> DeliverAnimationAsync(AnimationTake take, CancellationToken token)
-        => DeliverTakeAsync(take, null, token);
-
-    /// <summary>
-    /// Encodes a take and sends it to Blender, onto the armature of the character send
-    /// <paramref name="targetCharacter"/> names, else the configured armature. Returns what Blender
-    /// did with it, or throws with a user-facing message.
-    /// </summary>
-    private async Task<string> DeliverTakeAsync(AnimationTake take, string? targetCharacter, CancellationToken token)
-    {
-        var port = _config.BlenderPort;
-        var status = await CheckBlenderStatusAsync(port, token).ConfigureAwait(false);
-        if (!status.Reachable)
-            throw new InvalidOperationException("Blender is offline. Start Blender with the XIV Instant Edit add-on, then send the animation again.");
-        if (status.Classify(_pluginVersion) != BlenderConnectionState.Online)
-            throw new InvalidOperationException(BlenderClient.VersionMismatchMessage(_pluginVersion));
-        if (!await _blender.SupportsAnimationImportAsync(port, token).ConfigureAwait(false))
-            throw new InvalidOperationException("The XIV Instant Edit add-on is too old to receive animations. Update the add-on and restart Blender.");
-        var armature = AnimationArmature;
-        var keyScale = _config.AnimationKeyScale;
-        var body = await Task.Run(() => AnimationTakeFormat.Write(take, armature, keyScale, _pluginVersion, targetCharacter), token)
-            .ConfigureAwait(false);
-        try
-        {
-            return (await _blender.SendAnimationAsync(port, body, token).ConfigureAwait(false)).Describe();
-        }
-        catch (BlenderBridgeException e)
-        {
-            throw new InvalidOperationException(e.Failure.UserMessage);
-        }
-    }
-
-    private void DrawAnimationExportOptions()
-    {
-        var armature = _config.AnimationArmatureName;
-        ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(180), ImGui.GetContentRegionAvail().X * 0.45f));
-        if (ImGui.InputText("Blender armature", ref armature, 128))
-        {
-            _config.AnimationArmatureName = armature;
-            _saveConfig();
-        }
-        Widgets.HintWrapped("Animations become a new action on this armature. Without an object of this name, " +
-                            "Blender uses the active armature, or the scene's only one.");
-        var keyScale = _config.AnimationKeyScale;
-        if (ImGui.Checkbox("Key bone scale", ref keyScale))
-        {
-            _config.AnimationKeyScale = keyScale;
-            _saveConfig();
-        }
-        Widgets.HintWrapped("On keys bone scale too, and sets bones under an unevenly scaled bone to inherit scale " +
-                            "Aligned, the way the game scales them. Recordings leave Customize+ out, since MagicFit " +
-                            "adds it. Off leaves bone scaling applied in Blender in place.");
     }
 }

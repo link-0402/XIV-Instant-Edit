@@ -4,11 +4,14 @@ using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services.Previews;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Main;
 
-public sealed partial class MainWindow
+/// <summary> What hovering a resource row shows: a texture's image, a material's textures, a model's thumbnail and facts. </summary>
+internal sealed class ResourceHoverCards
 {
     private readonly PreviewService _previews;
+
+    public ResourceHoverCards(PreviewService previews) => _previews = previews;
 
     private static bool PreviewReadable(ResourceView node)
         => node.ActualPath.Length > 0 && node.SourceState is ResourceSourceState.GameData or ResourceSourceState.LoadedMod;
@@ -17,7 +20,7 @@ public sealed partial class MainWindow
     /// The hover behaviour of a resource row: textures show an image after a short delay,
     /// materials list their textures, everything else keeps the plain text tooltip.
     /// </summary>
-    private void DrawRowHover(ResourceView node, string presentation, string hoverId)
+    public void DrawRowHover(ResourceView node, string presentation, string hoverId)
     {
         var texture = (node.Kinds & ResourceKinds.Texture) != 0;
         var material = (node.Kinds & ResourceKinds.Material) != 0;
@@ -42,7 +45,7 @@ public sealed partial class MainWindow
         using var tooltip = ImRaii.Tooltip();
         ImGui.TextColored(Theme.Label, presentation);
         ImGui.SameLine(0, Theme.Gap);
-        ImGui.TextColored(Theme.Hint, Safe(node.GamePath, "(no game path)"));
+        ImGui.TextColored(Theme.Hint, UiText.Safe(node.GamePath, "(no game path)"));
         ImGui.Separator();
         switch (entry.State)
         {
@@ -135,7 +138,7 @@ public sealed partial class MainWindow
         using var tooltip = ImRaii.Tooltip();
         ImGui.TextColored(Theme.Label, presentation);
         ImGui.SameLine(0, Theme.Gap);
-        ImGui.TextColored(Theme.Hint, Safe(node.GamePath, "(no game path)"));
+        ImGui.TextColored(Theme.Hint, UiText.Safe(node.GamePath, "(no game path)"));
         Widgets.PreviewImage(entry, box, large ? PreviewLayer.WithAlpha : PreviewLayer.Colour);
         if (large)
         {
@@ -160,7 +163,7 @@ public sealed partial class MainWindow
         using var tooltip = ImRaii.Tooltip();
         ImGui.TextColored(Theme.Label, presentation);
         ImGui.SameLine(0, Theme.Gap);
-        ImGui.TextColored(Theme.Hint, Safe(node.GamePath, "(no game path)"));
+        ImGui.TextColored(Theme.Hint, UiText.Safe(node.GamePath, "(no game path)"));
         ImGui.Separator();
         switch (entry.State)
         {
@@ -231,21 +234,4 @@ public sealed partial class MainWindow
             "decal" => "Decal",
             _ => "Texture",
         };
-
-    /// <summary> A session's committed texture (or the vanilla source before its first save). </summary>
-    private void DrawSessionThumbnail(TextureEditSession session)
-    {
-        PreviewKey key;
-        if (!session.NeedsMod && session.TargetFile.Length > 0 && Path.IsPathRooted(session.TargetFile))
-            key = _previews.KeyFor(session.TargetFile, false);
-        else
-            key = _previews.KeyFor(Safe(session.ResolvedGamePath, session.GamePath), true);
-        var entry = _previews.GetTexture(key);
-        Widgets.PreviewImage(entry, new Vector2(Theme.ThumbSize));
-        if (!ImGui.IsItemHovered())
-            return;
-        using var tooltip = ImRaii.Tooltip();
-        Widgets.PreviewImage(entry, new Vector2(Theme.Scaled(256)));
-        Widgets.PreviewCaption(entry);
-    }
 }

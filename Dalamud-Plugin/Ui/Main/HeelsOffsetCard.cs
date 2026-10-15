@@ -1,17 +1,35 @@
-using System.Globalization;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Services.Heels;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Main;
 
-public sealed partial class MainWindow
+/// <summary> Quick Actions' Heels offset: measures the gear that sets your height and writes the Simple Heels offset into it. </summary>
+internal sealed class HeelsOffsetCard
 {
+    private readonly Configuration _config;
+    private readonly Action _saveConfig;
+    private readonly StatusFeed _feed;
     private HeelsOffsetService? _heels;
 
-    internal void AttachHeelsOffset(HeelsOffsetService service)
+    public HeelsOffsetCard(Configuration config, Action saveConfig, StatusFeed feed)
+    {
+        _config = config;
+        _saveConfig = saveConfig;
+        _feed = feed;
+        Card = new QuickAction("heels-offset", FontAwesomeIcon.ShoePrints, "Heels offset",
+            "Measures the necessary offset for the gear piece currently determining your height. This is typically your shoes, but can also be on the legs or body model if foot gear is hidden." +
+            "Writes the Simple Heels offset into that model, so you stand on the ground instead of sinking in or floating.",
+            DrawHeelsOffsetAction,
+            () => _config.AutoFixHeels = false,
+            () => _config.AutoFixHeels);
+    }
+
+    public QuickAction Card { get; }
+
+    public void Attach(HeelsOffsetService service)
     {
         _heels = service;
         // The automatic fix also runs with this window closed, so what it writes goes to the status line and notifications.
@@ -19,13 +37,6 @@ public sealed partial class MainWindow
             $"Heels offset: wrote {result.Plan.Attribute} into the {result.Model.Slot.Name()} model of {result.Source}.");
         service.AutomaticFixFailed += error => _feed.Report(StatusChannel.Models, FeedbackSeverity.Warning, $"Heels offset: {error}");
     }
-
-    private QuickAction HeelsOffsetCard => new("heels-offset", FontAwesomeIcon.ShoePrints, "Heels offset",
-        "Measures the necessary offset for the gear piece currently determining your height. This is typically your shoes, but can also be on the legs or body model if foot gear is hidden." +
-        "Writes the Simple Heels offset into that model, so you stand on the ground instead of sinking in or floating.",
-        DrawHeelsOffsetAction,
-        () => _config.AutoFixHeels = false,
-        () => _config.AutoFixHeels);
 
     private void DrawHeelsOffsetAction()
     {

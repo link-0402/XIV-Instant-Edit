@@ -3,11 +3,13 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
+using InstantEdit.Services;
 using InstantEdit.Services.GameFiles;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Main;
 
-public sealed partial class MainWindow
+/// <summary> The Game Files tab: the game's vanilla models by category, with their materials, textures and skeletons, ticked for export. </summary>
+internal sealed class GameFilesTab
 {
     private const string GameSelectionMenu = "##game-selection-menu";
 
@@ -18,8 +20,11 @@ public sealed partial class MainWindow
         ("Weapons", [GameFileCategory.Weapon]),
     ];
 
+    private readonly OnScreenService _onScreen;
+    private readonly ResourceRows _rows;
+    private readonly ResourceHoverCards _hoverCards;
+    private readonly GameFileExportDialog _export;
     private GameFileBrowserService? _gameFiles;
-    private GameFileExportService? _gameExport;
     private readonly GameFileFilter _gameFilter = new();
     private readonly GameFileSelection _gameSelection = new();
     private readonly GameFileRowList _gameRows = new();
@@ -31,21 +36,18 @@ public sealed partial class MainWindow
     private ImmutableArray<GameModelEntry> _gameSlotCountSource;
     private Dictionary<string, int> _gameSlotCounts = [];
 
-    internal void AttachGameFiles(GameFileBrowserService browser, GameFileExportService export)
+    public GameFilesTab(OnScreenService onScreen, ResourceRows rows, ResourceHoverCards hoverCards, GameFileExportDialog export)
     {
-        _gameFiles = browser;
-        _gameExport = export;
-        export.Finished += OnGameExportFinished;
+        _onScreen = onScreen;
+        _rows = rows;
+        _hoverCards = hoverCards;
+        _export = export;
     }
 
-    private void DetachGameFiles()
-    {
-        if (_gameExport is not null)
-            _gameExport.Finished -= OnGameExportFinished;
-    }
+    public void Attach(GameFileBrowserService browser) => _gameFiles = browser;
 
     /// <summary> Master/detail: the categories on the left, a category's vanilla models on the right. </summary>
-    private void DrawGameFilesTab()
+    public void Draw()
     {
         ImGui.Spacing();
         if (_gameFiles is not { } browser)
@@ -109,7 +111,7 @@ public sealed partial class MainWindow
         var visible = _gameFilter.Apply(state.Entries, names);
         DrawGameHeader(browser, state, visible);
         DrawGameFilterBar(state, names);
-        DrawGameExportStatus();
+        _export.DrawStatus();
         ImGui.Spacing();
 
         if (state.Entries.IsEmpty)
@@ -155,10 +157,10 @@ public sealed partial class MainWindow
             ImGui.OpenPopup(GameSelectionMenu);
         DrawGameSelectionMenu(visible);
         ImGui.SameLine();
-        using (ImRaii.Disabled(ticked == 0 || _gameExport is not { Busy: false }))
+        using (ImRaii.Disabled(ticked == 0 || _export.Export is not { Busy: false }))
         {
             if (ImGui.Button(exportLabel))
-                OpenGameExport(_gameSelection.Entries);
+                _export.Open(_gameSelection.Entries);
         }
         if (ticked == 0 && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip("Tick models to export their files to a folder. Shift-click ticks a range.");
@@ -300,7 +302,7 @@ public sealed partial class MainWindow
     private void DrawGameTable(GameFileNames names, IReadOnlyList<GameModelEntry> visible, IReadOnlyList<GameFileRow> rows)
     {
         var actor = GameFilesActor();
-        using var table = ImRaii.Table("##game-files", 6, ResourceTableFlags | ImGuiTableFlags.ScrollY,
+        using var table = ImRaii.Table("##game-files", 6, ResourceRows.ResourceTableFlags | ImGuiTableFlags.ScrollY,
             new Vector2(0, Math.Max(1, ImGui.GetContentRegionAvail().Y)));
         if (!table.Success)
             return;
@@ -332,7 +334,7 @@ public sealed partial class MainWindow
 
     private void DrawGameRow(ActorView actor, GameFileNames names, IReadOnlyList<GameModelEntry> visible, GameFileRow row)
     {
-        using var id = ImRaii.PushId(SafeId($"{row.Entry.GamePath}|{row.Kind}|{row.GamePath}|{row.Label}"));
+        using var id = ImRaii.PushId(UiText.SafeId($"{row.Entry.GamePath}|{row.Kind}|{row.GamePath}|{row.Label}"));
         ImGui.TableNextRow();
         if (row.Kind == GameFileRowKind.Model)
             DrawGameModelRow(actor, names, visible, row.Entry);
@@ -344,7 +346,7 @@ public sealed partial class MainWindow
     {
         var view = GameFileView(entry.GamePath);
         var frame = ImGui.GetFrameHeight();
-        TintRow(view);
+        ResourceRows.TintRow(view);
         ImGui.TableSetColumnIndex(0);
         var ticked = _gameSelection.Contains(entry);
         if (ImGui.Checkbox("##tick", ref ticked))
@@ -361,7 +363,7 @@ public sealed partial class MainWindow
                 open ? "Hide its materials, textures and skeleton" : "Show its materials, textures and skeleton", new Vector2(frame)))
             _gameRows.Toggle(entry);
         ImGui.SameLine(0, Theme.Gap);
-        DrawRowGlyph(view);
+        ResourceRows.DrawRowGlyph(view);
         ImGui.SameLine(0, Theme.Gap);
         var itemNames = names.For(entry.Id);
         var title = GameModelTitle(entry.Id, itemNames);
@@ -369,9 +371,9 @@ public sealed partial class MainWindow
         if (ImGui.Selectable($"{title}##label", false, ImGuiSelectableFlags.None, new Vector2(labelWidth, frame)))
             _gameRows.Toggle(entry);
         var hovered = ImGui.IsItemHovered();
-        ImGui.OpenPopupOnItemClick(RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
+        ImGui.OpenPopupOnItemClick(ResourceRows.RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
         if (hovered)
-            DrawRowHover(view, title, "game:" + entry.GamePath);
+            _hoverCards.DrawRowHover(view, title, "game:" + entry.GamePath);
         if (itemNames.Length > 1)
         {
             ImGui.SameLine(0, Theme.Gap);
@@ -399,13 +401,13 @@ public sealed partial class MainWindow
         ImGui.TableSetColumnIndex(4);
         Widgets.PathText(entry.GamePath, entry.GamePath);
         ImGui.TableSetColumnIndex(5);
-        DrawRowActions(actor, view);
-        DrawRowMenu(actor, view, () =>
+        _rows.DrawRowActions(actor, view);
+        _rows.DrawRowMenu(actor, view, () =>
         {
-            using (ImRaii.Disabled(_gameExport is not { Busy: false }))
+            using (ImRaii.Disabled(_export.Export is not { Busy: false }))
             {
                 if (ImGui.MenuItem("Export this model's files"))
-                    OpenGameExport([entry]);
+                    _export.Open([entry]);
             }
             if (ImGui.MenuItem(ticked ? "Untick for export" : "Tick for export"))
                 _gameSelection.Set(entry, !ticked);
@@ -426,22 +428,22 @@ public sealed partial class MainWindow
         if (file)
         {
             var view = GameFileView(row.GamePath);
-            TintRow(view);
-            DrawRowGlyph(view);
+            ResourceRows.TintRow(view);
+            ResourceRows.DrawRowGlyph(view);
             ImGui.SameLine(0, Theme.Gap);
             ImGui.Selectable($"{row.Label}##label", false, ImGuiSelectableFlags.None, new Vector2(0, frame));
             var hovered = ImGui.IsItemHovered();
-            ImGui.OpenPopupOnItemClick(RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
+            ImGui.OpenPopupOnItemClick(ResourceRows.RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
             if (hovered)
-                DrawRowHover(view, row.Kind == GameFileRowKind.Texture ? GameTextureLabel(row.Detail) : "Material", "game:" + row.GamePath);
+                _hoverCards.DrawRowHover(view, row.Kind == GameFileRowKind.Texture ? GameTextureLabel(row.Detail) : "Material", "game:" + row.GamePath);
             ImGui.TableSetColumnIndex(3);
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Hint, row.Kind == GameFileRowKind.Texture ? GameTextureLabel(row.Detail) : row.Detail);
             ImGui.TableSetColumnIndex(4);
             Widgets.PathText(row.GamePath, row.GamePath);
             ImGui.TableSetColumnIndex(5);
-            DrawRowActions(actor, view);
-            DrawRowMenu(actor, view);
+            _rows.DrawRowActions(actor, view);
+            _rows.DrawRowMenu(actor, view);
             return;
         }
 
