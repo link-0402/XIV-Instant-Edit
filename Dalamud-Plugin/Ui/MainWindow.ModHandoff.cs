@@ -1,4 +1,5 @@
 using InstantEdit.Studio;
+using InstantEdit.Ui.Main;
 
 namespace InstantEdit.Ui;
 
@@ -19,16 +20,16 @@ public sealed partial class MainWindow : IModHandoff
 
     string? IModHandoff.TextureBlock(ResourceView row)
     {
-        if (!IsTextureRow(row))
+        if (!TextureSessionsTab.IsTextureRow(row))
             return "Only .tex files can be edited.";
-        if (TextureEditBlock(row) is { Length: > 0 } blocked)
+        if (TextureSessionsTab.TextureEditBlock(row) is { Length: > 0 } blocked)
             return blocked;
-        if (!TextureEditAvailable(row))
+        if (!TextureSessionsTab.TextureEditAvailable(row))
             return "This texture has no verified writable mod source.";
-        return Volatile.Read(ref _textureBusy) != 0 ? "Another texture is being opened." : null;
+        return _textureTab.Busy.IsBusy ? "Another texture is being opened." : null;
     }
 
-    void IModHandoff.EditTexture(ResourceView row, ActorView mod) => StartTextureEdit(row, mod);
+    void IModHandoff.EditTexture(ResourceView row, ActorView mod) => _textureTab.StartTextureEdit(row, mod);
 
     string? IModHandoff.AnimationBlock(ResourceView row) => AnimationSendBlock(row);
 

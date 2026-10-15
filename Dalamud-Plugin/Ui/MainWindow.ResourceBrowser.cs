@@ -9,6 +9,7 @@ using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Ui.Main;
 using FileDrop = InstantEdit.Studio.Windows.UI.FileDrop;
 
 namespace InstantEdit.Ui;
@@ -234,7 +235,7 @@ public sealed partial class MainWindow
         using var font = ImRaii.PushFont(UiBuilder.IconFont);
         float Button(FontAwesomeIcon icon) => ImGui.CalcTextSize(icon.ToIconString()).X + padding;
         var width = Button(FontAwesomeIcon.Pen) + Theme.Scaled(2) + Button(FontAwesomeIcon.EllipsisH);
-        if (PainterEnabled)
+        if (_painter.Enabled)
             width += Button(FontAwesomeIcon.PaintRoller) + Theme.Scaled(2);
         return MathF.Max(width, Theme.Scaled(58));
     }
@@ -298,7 +299,7 @@ public sealed partial class MainWindow
         var hovered = ImGui.IsItemHovered();
         ImGui.OpenPopupOnItemClick(RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
         if (hovered)
-            DrawRowHover(resource, Safe(item.Slot, item.Type), scope);
+            _hoverCards.DrawRowHover(resource, Safe(item.Slot, item.Type), scope);
         if (context.Length > 0)
         {
             ImGui.SameLine(0, Theme.Gap);
@@ -401,7 +402,7 @@ public sealed partial class MainWindow
         var hovered = ImGui.IsItemHovered();
         ImGui.OpenPopupOnItemClick(RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
         if (hovered)
-            DrawRowHover(node, presentation, key);
+            _hoverCards.DrawRowHover(node, presentation, key);
         DrawRowCells(actor, node, rowLeft);
         DrawRowMenu(actor, node);
 
@@ -435,8 +436,8 @@ public sealed partial class MainWindow
         Widgets.PathText(Safe(node.SourceRelativePath, Safe(node.GamePath, node.ActualPath)), Safe(node.ActualPath));
 
         ImGui.TableSetColumnIndex(3);
-        if (IsTextureRow(node))
-            DrawTextureDrop(actor, node, rowLeft);
+        if (TextureSessionsTab.IsTextureRow(node))
+            _textureTab.DrawTextureDrop(actor, node, rowLeft);
         DrawRowActions(actor, node);
     }
 
@@ -473,24 +474,24 @@ public sealed partial class MainWindow
             if (Widgets.IconButton("##edit-model", FontAwesomeIcon.Pen, "Edit this model in Blender"))
                 _models.TryEditNode(node, actor);
             ImGui.SameLine(0, Theme.Scaled(2));
-            if (CanPaint(actor, node))
+            if (_painter.CanPaint(actor, node))
             {
                 if (Widgets.IconButton("##paint-model", FontAwesomeIcon.PaintRoller, "Paint this model's textures in Substance Painter",
-                        Volatile.Read(ref _painterBusy) == 0))
-                    StartPainter(actor, node);
+                        !_painter.Busy.IsBusy))
+                    _painter.StartPainter(actor, node);
                 ImGui.SameLine(0, Theme.Scaled(2));
             }
         }
-        else if (IsTextureRow(node))
+        else if (TextureSessionsTab.IsTextureRow(node))
         {
-            var available = TextureEditAvailable(node);
+            var available = TextureSessionsTab.TextureEditAvailable(node);
             if (Widgets.IconButton("##edit-texture", FontAwesomeIcon.PaintBrush,
                     available
                         ? "Open as a 32-bit TGA in your configured editor. Shared references to this texture will also change.\nOr drop an image on the row to replace the texture."
-                        : TextureEditBlock(node) is { Length: > 0 } blocked ? blocked
+                        : TextureSessionsTab.TextureEditBlock(node) is { Length: > 0 } blocked ? blocked
                         : "This texture has no verified writable mod source.",
-                    available && Volatile.Read(ref _textureBusy) == 0))
-                StartTextureEdit(node, actor);
+                    available && !_textureTab.Busy.IsBusy))
+                _textureTab.StartTextureEdit(node, actor);
             ImGui.SameLine(0, Theme.Scaled(2));
         }
         else if (ResourceViews.IsAnimation(node))
@@ -516,27 +517,27 @@ public sealed partial class MainWindow
             return;
 
         var safeModel = node.IsModel && ResourceViews.IsSafeModel(node);
-        var texture = IsTextureRow(node);
+        var texture = TextureSessionsTab.IsTextureRow(node);
         if (safeModel && ImGui.MenuItem("Edit model in Blender"))
             _models.TryEditNode(node, actor);
-        if (CanPaint(actor, node))
+        if (_painter.CanPaint(actor, node))
         {
-            using var disabled = ImRaii.Disabled(Volatile.Read(ref _painterBusy) != 0);
+            using var disabled = ImRaii.Disabled(_painter.Busy.IsBusy);
             if (ImGui.MenuItem("Paint textures in Substance Painter"))
-                StartPainter(actor, node);
+                _painter.StartPainter(actor, node);
         }
         if (texture)
         {
-            using var disabled = ImRaii.Disabled(!TextureEditAvailable(node) || Volatile.Read(ref _textureBusy) != 0);
+            using var disabled = ImRaii.Disabled(!TextureSessionsTab.TextureEditAvailable(node) || _textureTab.Busy.IsBusy);
             if (ImGui.MenuItem("Edit texture"))
-                StartTextureEdit(node, actor);
+                _textureTab.StartTextureEdit(node, actor);
         }
         // Shown while the texture still holds an image dropped on it.
-        if (texture && UndoableReplace(node, actor) is { Replacement: { } drop } replaced)
+        if (texture && _textureTab.UndoableReplace(node, actor) is { Replacement: { } drop } replaced)
         {
-            using (ImRaii.Disabled(Volatile.Read(ref _textureBusy) != 0))
+            using (ImRaii.Disabled(_textureTab.Busy.IsBusy))
                 if (ImGui.MenuItem("Undo replace"))
-                    UndoTextureReplace(replaced);
+                    _textureTab.UndoTextureReplace(replaced);
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
                 ImGui.SetTooltip($"Put back the texture from before {drop.File} was dropped on it.");
         }

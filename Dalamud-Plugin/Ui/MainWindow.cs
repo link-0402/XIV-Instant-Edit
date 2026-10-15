@@ -9,6 +9,7 @@ using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Services.Painter;
 using InstantEdit.Services.Previews;
 using InstantEdit.Services.Skeletons;
 using InstantEdit.Ui.Main;
@@ -28,6 +29,10 @@ public sealed partial class MainWindow : Window, IDisposable
     private readonly StatusStrip _statusStrip;
     private readonly BlenderConnection _blenderConnection;
     private readonly ModelSender _models;
+    private readonly PainterPanel _painter;
+    private readonly TextureSessionsTab _textureTab;
+    private readonly ResourceHoverCards _hoverCards;
+    private readonly PreviewService _previews;
     private readonly string _pluginVersion;
     private readonly ResourceSourceAttributor _resourceSources;
     private readonly Action _saveConfig;
@@ -41,8 +46,6 @@ public sealed partial class MainWindow : Window, IDisposable
     private MainTab _activeTab = MainTab.OnScreen;
     private MainTab? _pendingTab;
     private long _resourcesChangedTicks;
-    private string _sessionsTabLabel = "Sessions";
-    private int _sessionsTabCount = -1;
     private const bool ShowAnimationsTab = true;
 
     public MainWindow(Configuration config, PenumbraService penumbra, OnScreenService onScreen,
@@ -53,7 +56,6 @@ public sealed partial class MainWindow : Window, IDisposable
         : base("XIV Instant Edit##Main")
     {
         _config = config; _penumbra = penumbra; _onScreen = onScreen; _blender = blender; _data = data; _chat = chat; _log = log;
-        _textures = textures;
         _notifications = new UiNotifications(config, notifications, log);
         _options = new OptionsPopup(config, saveConfig);
         _statusStrip = new StatusStrip(_feed);
@@ -62,6 +64,9 @@ public sealed partial class MainWindow : Window, IDisposable
         _pluginVersion = _blenderConnection.PluginVersion;
         _resourceSources = resourceSources;
         _models = new ModelSender(config, penumbra, blender, _blenderConnection, data, chat, log, resourceSources, _feed, _lifetimeCts.Token);
+        _painter = new PainterPanel(config, log, textures, _models, _feed, _blenderConnection.PluginVersion, _lifetimeCts.Token);
+        _textureTab = new TextureSessionsTab(config, textures, previews, _painter, _feed, log, _lifetimeCts.Token);
+        _hoverCards = new ResourceHoverCards(previews);
         _kinds = _screenKinds;
         _saveConfig = saveConfig;
         _openChangelog = openChangelog;
@@ -106,7 +111,7 @@ public sealed partial class MainWindow : Window, IDisposable
         _feed.Reported -= _notifications.Notify;
         if (_compression is not null)
             _compression.Optimized -= NotifyOptimized;
-        DetachPainter();
+        _painter.Detach();
         DetachGameFiles();
         _lifetimeCts.Cancel();
         IReadOnlyDictionary<string, IDalamudTextureWrap> icons;
@@ -124,6 +129,8 @@ public sealed partial class MainWindow : Window, IDisposable
     public void RequestCacheSynchronization() => _blenderConnection.RequestCacheSynchronization();
 
     public void ReportImportFailure(BridgeFailure failure) => _models.ReportImportFailure(failure);
+
+    internal void AttachPainter(PainterJobService painter) => _painter.Attach(painter);
 
     internal void AttachSkeletons(ModelSkeletonResolver? value) => _models.Skeletons = value;
 
@@ -220,7 +227,7 @@ public sealed partial class MainWindow : Window, IDisposable
                         DrawGameFilesTab();
                         break;
                     case MainTab.TextureEdits:
-                        DrawTextureSessions();
+                        _textureTab.Draw();
                         break;
                     case MainTab.Animations:
                         animationsTabActive = true;
@@ -242,9 +249,9 @@ public sealed partial class MainWindow : Window, IDisposable
         // saved, its first match builds one.
         if (!animationsTabActive && !(activeTab == MainTab.QuickActions && CharacterSendListens) && timelineListens?.Invoke() != true)
             animations?.StopObservation();
-        DrawTextureDialogs();
+        _textureTab.DrawDialogs();
         DrawAnimationSendDialog(MainOwner);
-        DrawPainterDialogs();
+        _painter.DrawDialogs();
         DrawGameFileExportDialog();
         DrawNeckSeamDialog();
         DrawStatusStrip(GetFeedback(activeTab));
@@ -289,7 +296,7 @@ public sealed partial class MainWindow : Window, IDisposable
         ImGui.SameLine(0, Theme.Gap);
         if (Widgets.TabButton(FontAwesomeIcon.Database, "Game Files", active == MainTab.GameFiles)) active = MainTab.GameFiles;
         ImGui.SameLine(0, Theme.Gap);
-        if (Widgets.TabButton(FontAwesomeIcon.Images, SessionsTabLabel(), active == MainTab.TextureEdits)) active = MainTab.TextureEdits;
+        if (Widgets.TabButton(FontAwesomeIcon.Images, _textureTab.SessionsTabLabel(), active == MainTab.TextureEdits)) active = MainTab.TextureEdits;
         if (ShowAnimationsTab)
         {
             ImGui.SameLine(0, Theme.Gap);
@@ -310,10 +317,10 @@ public sealed partial class MainWindow : Window, IDisposable
             _ => ("Offline", "Start Blender and enable the XIV Instant Edit add-on to edit models."),
         };
 
-        var painterDot = PainterEnabled ? PainterDot(PainterState, _pluginVersion) : default;
+        var painterDot = _painter.Enabled ? PainterPanel.Dot(_painter.State, _pluginVersion) : default;
         var rightWidth = Widgets.StatusDotWidth("Penumbra", penumbraValue) + Theme.Scaled(10)
                          + Widgets.StatusDotWidth("Blender", blenderValue) + Theme.Scaled(10)
-                         + (PainterEnabled ? Widgets.StatusDotWidth("Painter", painterDot.Value) + Theme.Scaled(10) : 0)
+                         + (_painter.Enabled ? Widgets.StatusDotWidth("Painter", painterDot.Value) + Theme.Scaled(10) : 0)
                          + frame + style.ItemSpacing.X + frame;
         ImGui.SameLine();
         var rightStart = ImGui.GetWindowContentRegionMax().X - rightWidth;
@@ -326,7 +333,7 @@ public sealed partial class MainWindow : Window, IDisposable
         ImGui.AlignTextToFramePadding();
         Widgets.StatusDot("Blender", ConnectionColour(blender), blenderValue, blenderDetail);
         ImGui.SameLine(0, Theme.Scaled(10));
-        if (PainterEnabled)
+        if (_painter.Enabled)
         {
             ImGui.AlignTextToFramePadding();
             Widgets.StatusDot("Painter", painterDot.Colour, painterDot.Value, painterDot.Detail);
@@ -343,17 +350,6 @@ public sealed partial class MainWindow : Window, IDisposable
         return active;
     }
 
-    private string SessionsTabLabel()
-    {
-        var count = _textures.Sessions.Count;
-        if (count != _sessionsTabCount)
-        {
-            _sessionsTabCount = count;
-            _sessionsTabLabel = count == 0 ? "Sessions" : $"Sessions ({count})";
-        }
-        return _sessionsTabLabel;
-    }
-
     private static Vector4 ConnectionColour(BlenderConnectionState state)
         => state switch
         {
@@ -366,7 +362,7 @@ public sealed partial class MainWindow : Window, IDisposable
     private void DrawStatusStrip(FeedbackState feedback)
     {
         var exporting = _gameExport?.Busy ?? false;
-        var busy = _models.Busy.IsBusy || Volatile.Read(ref _textureBusy) != 0 || Volatile.Read(ref _neckSeamBusy) != 0 ||
+        var busy = _models.Busy.IsBusy || _textureTab.Busy.IsBusy || Volatile.Read(ref _neckSeamBusy) != 0 ||
                    _onScreen.IsRefreshing || (animations?.Busy ?? false) || exporting;
         var animationCancel = animations is { Busy: true, CanCancel: true };
         // Cancel stops the Game Files export on its own tab, or when no animation work can be cancelled.

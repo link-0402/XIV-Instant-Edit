@@ -371,7 +371,7 @@ public sealed partial class MainWindow
         var hovered = ImGui.IsItemHovered();
         ImGui.OpenPopupOnItemClick(RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
         if (hovered)
-            DrawRowHover(view, title, "game:" + entry.GamePath);
+            _hoverCards.DrawRowHover(view, title, "game:" + entry.GamePath);
         if (itemNames.Length > 1)
         {
             ImGui.SameLine(0, Theme.Gap);
@@ -433,7 +433,7 @@ public sealed partial class MainWindow
             var hovered = ImGui.IsItemHovered();
             ImGui.OpenPopupOnItemClick(RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
             if (hovered)
-                DrawRowHover(view, row.Kind == GameFileRowKind.Texture ? GameTextureLabel(row.Detail) : "Material", "game:" + row.GamePath);
+                _hoverCards.DrawRowHover(view, row.Kind == GameFileRowKind.Texture ? GameTextureLabel(row.Detail) : "Material", "game:" + row.GamePath);
             ImGui.TableSetColumnIndex(3);
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Hint, row.Kind == GameFileRowKind.Texture ? GameTextureLabel(row.Detail) : row.Detail);
