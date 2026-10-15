@@ -272,7 +272,7 @@ public sealed partial class TimelineWindow
         if (editable && picker is { } choose)
         {
             if (ImGui.SmallButton("Choose"))
-                RequestPicker(choose, current.Playhead, ev.Key);
+                pickers.Request(choose, current.Playhead, ev.Key);
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(choose == TimelineAddKind.Prop ? "Pick another prop model." : $"Pick another {TimelineWindowViews.AddKindName(choose).ToLowerInvariant()}.");
             ImGui.SameLine(0, Theme.Gap);

@@ -47,6 +47,8 @@ internal sealed class TimelineSession
     public AnimationTimelineSource? Source { get; set; }
     /// <summary>The editor of the clip's document; kept from clip to clip.</summary>
     public TimelineEditor? Editor { get; set; }
+    /// <summary>The catalog's lists for the clip's race; null for a clip not made for a player race.</summary>
+    public TimelineCatalogKey? CatalogKey { get; set; }
 
     /// <summary>Files imported for the document, by game path: sounds, effects and the copies a fix or a look makes.</summary>
     public Dictionary<string, TimelineImport> Imports { get; } = new(StringComparer.OrdinalIgnoreCase);

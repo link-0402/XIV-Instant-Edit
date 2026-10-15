@@ -272,7 +272,7 @@ public sealed partial class TimelineWindow
             using (ImRaii.Disabled(!random && !oneShot || target.Entries.Count >= byte.MaxValue))
             {
                 if (ImGui.Button("Add sound"))
-                    OpenSoundImport(new TimelineSoundTarget(key, null));
+                    pickers.OpenSoundImport(new TimelineSoundTarget(key, null));
             }
             TimelineUi.Tip(oneShot ? "Turns this into a random set." : "Adds a .wav, .ogg or .scd file as another sound.");
             if (random)
@@ -401,7 +401,7 @@ public sealed partial class TimelineWindow
             if (!popup.Success)
                 continue;
             if (ImGui.MenuItem("Replace with audio file"))
-                OpenSoundImport(new TimelineSoundTarget(key, alternative.Id));
+                pickers.OpenSoundImport(new TimelineSoundTarget(key, alternative.Id));
             if (ImGui.MenuItem("Match length", "", false, entry.Track >= 0))
                 SetSoundEdit(current, key, Changed(edit, alternative with { WaitMs = audioMs }));
             // SetSound unpins the events that always played it, in the same undo step.
@@ -481,55 +481,6 @@ public sealed partial class TimelineWindow
         listening = null;
         if (task.IsFaulted)
             listenError = "The sound could not be played. " + TimelineSession.ErrorText(task.Exception);
-    }
-
-    /// <summary> Opens the file dialog for a sound to add to <paramref name="target"/>'s set, or to put in place of one of its sounds. </summary>
-    private void OpenSoundImport(TimelineSoundTarget target)
-    {
-        var job = new ImportJob(TimelineAddKind.Sound, 0, null, string.Empty, source is { } current ? TimelineSession.ClipKey(current) : null, loadGeneration, null, target);
-        fileDialog.OpenFileDialog(target.ReplaceId == null ? "Choose a sound to add" : "Choose a sound to put in its place", TimelineWindowViews.SoundFilter,
-            (success, files) =>
-            {
-                if (success && files.Count > 0)
-                    StartImport(job with { Name = Path.GetFileName(files[0]) }, files[0], 1f);
-            }, 1, lastImportFolder, false);
-    }
-
-    /// <summary> An imported file for the Sound file section, placed into its set (see <see cref="TimelineWindowViews.Placed"/>). </summary>
-    private void PlaceSound(TimelineEditor current, TimelineSoundTarget target, TimelineImport import, string name)
-    {
-        if (source is not { } loaded || soundFiles.ShownSound(current.Document, target.Key, loaded) is not { Model: { } model } shown || SoundFiles.EditOf(shown) is not { } edit)
-        {
-            importError = $"{name} was imported, but its sound file isn't read.";
-            return;
-        }
-        int clips;
-        try { clips = ScdEdits.Clips(import.Files[import.GamePath]).Length; }
-        catch (InvalidDataException e)
-        {
-            importError = $"{name} can't be used. {e.Message}";
-            return;
-        }
-        var sound = model.Sounds[target.Key.Sound];
-        var oneShot = sound.Type == ScdSound.Normal && sound.Entries.Count == 1;
-        if (target.ReplaceId == null && !oneShot && sound.Type != ScdSound.GroupRandom)
-        {
-            importError = $"{name} can't be added: only a random set or a one-shot takes more sounds.";
-            return;
-        }
-        // The sound may have been removed (or undone) while the file was converted.
-        if (TimelineWindowViews.ReplaceGone(edit, target.ReplaceId, name) is { } gone)
-        {
-            importError = gone;
-            return;
-        }
-        var placed = TimelineWindowViews.Placed(edit, target.ReplaceId, import.GamePath, clips, target.ReplaceId == null && oneShot);
-        if (ReferenceEquals(TimelineEdits.SetSound(current.Document, target.Key, placed), current.Document))
-            importMessage = $"{name} is already in place.";
-        else if (current.SetSound(target.Key, placed))
-            importMessage = target.ReplaceId == null ? $"{name} was added." : $"{name} took the sound's place.";
-        else
-            importError = $"{name} was imported but could not be placed. Finish the drag first.";
     }
 
     private static void Wrapped(System.Numerics.Vector4 colour, string text)

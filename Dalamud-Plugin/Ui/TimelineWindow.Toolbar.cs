@@ -108,7 +108,7 @@ public sealed partial class TimelineWindow
             return;
         foreach (var kind in TimelineWindowViews.AddKinds)
             if (ImGui.MenuItem(TimelineWindowViews.AddKindName(kind)))
-                RequestPicker(kind, current.Playhead, null);
+                pickers.Request(kind, current.Playhead, null);
         // An expression's face takes no bone layers.
         if (current.Document.Expression)
             return;
@@ -130,28 +130,12 @@ public sealed partial class TimelineWindow
     private void DrawMessages(TimelineEditor current)
     {
         if (headerNote != null)
-            Note(null, Theme.Muted, headerNote);
-        if (importTask != null && importing is { } work)
-        {
-            Widgets.Spinner();
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, $"Importing {work.Name}");
-        }
-        else if (importError != null)
-        {
-            if (Note("##import-error-dismiss", Theme.Warning, importError))
-                importError = null;
-        }
-        else if (importMessage != null)
-        {
-            if (Note("##import-message-dismiss", Theme.Success, importMessage))
-                importMessage = null;
-        }
+            TimelineUi.Note(null, Theme.Muted, headerNote);
+        pickers.DrawImportStatus();
         if (current.LastError is { } error)
-            Note(null, Theme.Warning, error);
+            TimelineUi.Note(null, Theme.Warning, error);
         if (current.LastRemoval is { } removal && TimelineWindowViews.RemovalStatus(removal) is { } removed)
-            Note(null, Theme.Muted, removed);
+            TimelineUi.Note(null, Theme.Muted, removed);
         DrawLoaderStatus();
         DrawLivePoseNote();
         DrawEffectProblems(current);
@@ -183,20 +167,5 @@ public sealed partial class TimelineWindow
                 ? "Sets Loop/wait to -1, which loops an effect until the animation ends. Save to keep the change."
                 : "Sets Loop/wait to -1 and uses copies of the effects that keep going: no kill of their own, sounds that loop. " +
                   "Save to keep the change.");
-    }
-
-    /// <summary> A short coloured message with an optional dismiss button; true when dismissed. </summary>
-    private static bool Note(string? dismissId, Vector4 colour, string text)
-    {
-        var dismissed = false;
-        if (dismissId != null)
-        {
-            dismissed = Widgets.GhostIconButton(dismissId, FontAwesomeIcon.Times, "Dismiss");
-            ImGui.SameLine(0, Theme.Gap);
-        }
-        ImGui.AlignTextToFramePadding();
-        using var wrap = ImRaii.TextWrapPos(0f);
-        ImGui.TextColored(colour, text);
-        return dismissed;
     }
 }
