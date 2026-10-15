@@ -1,18 +1,18 @@
-﻿using System.Collections.Immutable;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Services.Animations.Timeline;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The properties panel: the selected event's start, length, file and fields. Each field edit is
 /// one undo step (BeginFieldEdit when it activates, a live Replace per change, EndFieldEdit when it
-/// is left). Locked and move-only events show their reason and read-only values.
+/// is left). Locked and move-only events show their reason and read-only values. A bone layer, a
+/// part of the clip band, an effect's look and a sound's file have panels of their own, drawn here.
 /// </summary>
-public sealed partial class TimelineWindow
+internal sealed class PropertiesPanel(TimelineSession session, EffectLookEditor effectLooks, SoundInspector soundInspector, CutPanel cutPanel,
+    LayerPanel layerPanel, TimelineTexts texts, TimelinePickers pickers)
 {
     // The File field of a sound or effect: its text while typed in, its last refusal, and where
     // the collection gets each path (by collection and path, forgotten with the sounds).
@@ -22,7 +22,10 @@ public sealed partial class TimelineWindow
     private string? pathFieldError;
     private readonly Dictionary<(Guid Collection, string Path), Task<(TimelinePathOrigin Origin, string? ModName)>> pathOrigins = [];
 
-    private void DrawProperties(TimelineEditor current)
+    /// <summary> Forgets where the collection got each path, with the sounds read for another clip. </summary>
+    public void ForgetPathOrigins() => pathOrigins.Clear();
+
+    public void Draw(TimelineEditor current)
     {
         effectLooks.EndEdit(current);
         soundInspector.EndEdit(current);
@@ -31,10 +34,10 @@ public sealed partial class TimelineWindow
             cutPanel.Draw(current);
             return;
         }
-        var readOnly = ReadOnly;
-        if (current.SelectedLayerValue is { } layer && source != null)
+        var readOnly = session.ReadOnly;
+        if (current.SelectedLayerValue is { } layer && session.Source != null)
         {
-            layerPanel.Draw(current, layer, source);
+            layerPanel.Draw(current, layer, session.Source);
             return;
         }
         var primary = current.PrimaryEvent;
@@ -332,12 +335,12 @@ public sealed partial class TimelineWindow
     /// <summary> Where the collection gets <paramref name="gamePath"/>, read once on a task; null until read. </summary>
     private string? PathOrigin(string gamePath)
     {
-        if (source == null || gamePath.Length == 0 || animations is not { } service)
+        if (session.Source == null || gamePath.Length == 0 || session.Animations is not { } service)
             return null;
-        var key = (source.Capture.CollectionId, gamePath.ToLowerInvariant());
+        var key = (session.Source.Capture.CollectionId, gamePath.ToLowerInvariant());
         if (!pathOrigins.TryGetValue(key, out var read))
         {
-            var collection = source.Capture.CollectionId;
+            var collection = session.Source.Capture.CollectionId;
             read = Task.Run(() => service.PathOriginAsync(collection, gamePath, CancellationToken.None));
             pathOrigins[key] = read;
         }

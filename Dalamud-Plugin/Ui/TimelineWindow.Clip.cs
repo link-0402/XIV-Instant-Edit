@@ -57,7 +57,7 @@ public sealed partial class TimelineWindow
         using var tabs = ImRaii.TabBar("##timeline-side", ImGuiTabBarFlags.FittingPolicyScroll);
         if (!tabs.Success)
             return;
-        SideTab(SidePage.Properties, "Properties", "The selected event or bone layer.", () => DrawProperties(current));
+        SideTab(SidePage.Properties, "Properties", "The selected event or bone layer.", () => properties.Draw(current));
         SideTab(SidePage.Source, "Source", "Where the animation comes from, and the skeleton it was made for.", () => DrawClipSource(loaded));
         if (!loaded.Standalone)
             SideTab(SidePage.Bones, "Bones", "The bones it animates. Untick one to leave it out of the save.", () => DrawAnimatedBones(current, loaded));
