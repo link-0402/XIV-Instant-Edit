@@ -1,9 +1,10 @@
 using InstantEdit.Services;
 using Penumbra.Api.Enums;
 using static InstantEdit.TestSupport.Assertions;
+using InstantEdit.Services.PenumbraMods;
 
 /// <summary>
-/// New vanilla mods are activated through <see cref="PenumbraService.ApplyModToCollection"/> with
+/// New vanilla mods are activated through <see cref="ModActivation.ApplyModToCollection"/> with
 /// the redraw skipped; skipping the redraw must never skip enabling the mod.
 /// </summary>
 internal static class CollectionActivationScenarios
@@ -14,7 +15,7 @@ internal static class CollectionActivationScenarios
         var prioritized = 0;
         var redrawn = 0;
 
-        var withoutRedraw = PenumbraService.ApplyModToCollection("Mod", "Collection",
+        var withoutRedraw = ModActivation.ApplyModToCollection("Mod", "Collection",
             () => { enabled++; return PenumbraApiEc.Success; },
             () => { prioritized++; return PenumbraApiEc.Success; },
             redraw: null);
@@ -22,14 +23,14 @@ internal static class CollectionActivationScenarios
                 withoutRedraw.Code == "export_applied",
             "skipping the redraw still enables and prioritizes the mod");
 
-        var withoutPriority = PenumbraService.ApplyModToCollection("Mod", "Collection",
+        var withoutPriority = ModActivation.ApplyModToCollection("Mod", "Collection",
             () => { enabled++; return PenumbraApiEc.NothingChanged; },
             setPriority: null,
             redraw: null);
         Require(withoutPriority.Success && enabled == 2 && prioritized == 1,
             "an already enabled mod counts as enabled and priority is skipped when not requested");
 
-        var rejected = PenumbraService.ApplyModToCollection("Mod", "Collection",
+        var rejected = ModActivation.ApplyModToCollection("Mod", "Collection",
             () => PenumbraApiEc.ModMissing,
             () => { prioritized++; return PenumbraApiEc.Success; },
             () => { redrawn++; return null; });
@@ -37,7 +38,7 @@ internal static class CollectionActivationScenarios
                 rejected.Message.Contains("ModMissing", StringComparison.Ordinal),
             "a rejected enable stops before priority and redraw");
 
-        var priorityRejected = PenumbraService.ApplyModToCollection("Mod", "Collection",
+        var priorityRejected = ModActivation.ApplyModToCollection("Mod", "Collection",
             () => PenumbraApiEc.Success,
             () => PenumbraApiEc.CollectionMissing,
             () => { redrawn++; return null; });
@@ -45,7 +46,7 @@ internal static class CollectionActivationScenarios
             "a rejected priority stops before the redraw");
 
         var logged = 0;
-        var thrown = PenumbraService.ApplyModToCollection("Mod", "Collection",
+        var thrown = ModActivation.ApplyModToCollection("Mod", "Collection",
             () => throw new InvalidOperationException("ipc down"),
             null,
             null,
@@ -53,7 +54,7 @@ internal static class CollectionActivationScenarios
         Require(!thrown.Success && logged == 1 && thrown.Message.Contains("ipc down", StringComparison.Ordinal),
             "an enable exception is logged and becomes a failed result");
 
-        var warned = PenumbraService.ApplyModToCollection("Mod", "Collection",
+        var warned = ModActivation.ApplyModToCollection("Mod", "Collection",
             () => PenumbraApiEc.Success,
             null,
             () => { redrawn++; return "redraw skipped"; });
@@ -61,7 +62,7 @@ internal static class CollectionActivationScenarios
                 warned.WarningList.Count == 1 && warned.WarningList[0] == "redraw skipped",
             "a redraw warning is reported without failing the activation");
 
-        var clean = PenumbraService.ApplyModToCollection("Mod", "Collection",
+        var clean = ModActivation.ApplyModToCollection("Mod", "Collection",
             () => PenumbraApiEc.Success,
             null,
             () => { redrawn++; return null; });

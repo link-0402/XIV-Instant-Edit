@@ -20,6 +20,8 @@ using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
 using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
+using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
+using static InstantEdit.Services.PenumbraMods.EstEntryService;
 
 namespace InstantEdit.Services;
 
@@ -69,7 +71,7 @@ public sealed partial class PenumbraService
             SourceModTarget? activeTarget = null;
             if (destination == "active_mod")
             {
-                var resolution = await _framework.RunOnFrameworkThread(() => ResolveSourceModTargetOnFramework(
+                var resolution = await _framework.RunOnFrameworkThread(() => _sources.ResolveSourceModTargetOnFramework(
                     activeContext.SourceModDirectory!,
                     activeContext.TargetFilePath!,
                     activeContext.SourceModRootPath,
@@ -622,7 +624,7 @@ public sealed partial class PenumbraService
                  IsSafeRelativeResourcePath(locator.SourceRelativePath))
         {
             var roots = await _framework.RunOnFrameworkThread(
-                () => GetRegisteredManifestRoots(locator.SourceModDirectory!, locator.SourceModStableId)).ConfigureAwait(false);
+                () => _sources.GetRegisteredManifestRoots(locator.SourceModDirectory!, locator.SourceModStableId)).ConfigureAwait(false);
             if (roots.Length == 0)
                 return null;
             await LeaveFrameworkThread();
@@ -633,20 +635,6 @@ public sealed partial class PenumbraService
             return null;
         var actualHash = Convert.ToHexString(SHA256.HashData(bytes));
         return string.Equals(actualHash, locator.Sha256, StringComparison.OrdinalIgnoreCase) ? bytes : null;
-    }
-
-    private string[] GetRegisteredManifestRoots(string modDirectory, Guid? stableId = null)
-    {
-        var modList = GetModList();
-        if (!TryResolveRegisteredModIdentity(modList, modDirectory, stableId, null, out var registeredDirectory, out _))
-            return [];
-
-        var roots = new List<string>();
-        AddCandidateRoot(roots, GetRegisteredModPath(registeredDirectory));
-        var configuredRoot = GetModDirectory();
-        if (!string.IsNullOrWhiteSpace(configuredRoot))
-            AddCandidateRoot(roots, Path.Combine(configuredRoot, registeredDirectory));
-        return roots.ToArray();
     }
 
     internal static async Task<byte[]?> ReadVerifiedModManifestResourceAsync(
@@ -789,7 +777,7 @@ public sealed partial class PenumbraService
             committed = true;
 
             var attributeWarnings = createAttributeGroups && attributeTags is { Count: > 0 }
-                ? WriteAttributeGroups(target.Folder, activeContext.ResolvedGamePath, attributeTags,
+                ? _attributes.WriteAttributeGroups(target.Folder, activeContext.ResolvedGamePath, attributeTags,
                     attributeMasks, KnownManipulations(activeContext))
                 : null;
 
@@ -801,17 +789,17 @@ public sealed partial class PenumbraService
             var mashupModel = prepared.Mappings[NormalizeGamePath(activeContext.GamePath)];
             if (cleanup.PathRemap?.RelativePaths.TryGetValue(mashupModel, out var remappedMashupModel) == true)
                 mashupModel = remappedMashupModel;
-            warnings.AddRange(TryUpdateEstEntries(target.Folder, target.Directory, mashupModel, estEntries));
+            warnings.AddRange(_est.TryUpdateEstEntries(target.Folder, target.Directory, mashupModel, estEntries));
             try
             {
                 var reloadError = await _framework.RunOnFrameworkThread(
-                    () => ReloadModOnFramework(target.Directory)).ConfigureAwait(false);
+                    () => _activation.ReloadModOnFramework(target.Directory)).ConfigureAwait(false);
                 if (reloadError is not null)
                     warnings.Add(reloadError.Message);
                 else
                 {
                     var redraw = await _framework.RunOnFrameworkThread(
-                        RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
+                        _activation.RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
                     if (redraw is not null)
                         warnings.Add(redraw);
                 }
@@ -910,7 +898,7 @@ public sealed partial class PenumbraService
                     prepared.FileSwaps)));
             if (createAttributeGroups && attributeTags is { Count: > 0 })
             {
-                var attributeError = WriteAttributeGroups(
+                var attributeError = _attributes.WriteAttributeGroups(
                     staging, activeContext.ResolvedGamePath, attributeTags, attributeMasks,
                     KnownManipulations(activeContext));
                 if (attributeError is not null)
@@ -931,10 +919,10 @@ public sealed partial class PenumbraService
             var mashupModel = prepared.Mappings[NormalizeGamePath(activeContext.GamePath)];
             if (cleanup.PathRemap?.RelativePaths.TryGetValue(mashupModel, out var remappedMashupModel) == true)
                 mashupModel = remappedMashupModel;
-            warnings.AddRange(TryUpdateEstEntries(finalFolder, modName, mashupModel, estEntries));
+            warnings.AddRange(_est.TryUpdateEstEntries(finalFolder, modName, mashupModel, estEntries));
             try
             {
-                var addError = await AddNewModAsync(modName).ConfigureAwait(false);
+                var addError = await _activation.AddNewModAsync(modName).ConfigureAwait(false);
                 if (addError is not null)
                     warnings.Add(addError.Message);
                 else
@@ -942,14 +930,14 @@ public sealed partial class PenumbraService
                     // Enable it in the collection captured with the Context, like a new-mod export:
                     // the object index may belong to another actor, or none, by now.
                     var configure = activeContext.TargetCollectionId is { } collectionId && collectionId != Guid.Empty
-                        ? await _framework.RunOnFrameworkThread(() => ConfigureModForCollectionOnFramework(
+                        ? await _framework.RunOnFrameworkThread(() => _activation.ConfigureModForCollectionOnFramework(
                             modName,
                             collectionId,
                             activeContext.TargetCollectionName ?? "captured collection",
                             setPriority: true,
                             priority: 0)).ConfigureAwait(false)
                         : await _framework.RunOnFrameworkThread(
-                            () => ConfigureModOnFramework(
+                            () => _activation.ConfigureModOnFramework(
                                 modName,
                                 activeContext.ObjectIndex,
                                 setPriority: true,

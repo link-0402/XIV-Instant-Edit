@@ -20,6 +20,7 @@ using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
 using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
+using System.Text.Json.Serialization;
 
 namespace InstantEdit.Services;
 
@@ -91,57 +92,51 @@ public sealed record MaterialCoverageResult(
 public sealed record SourceOptionCapture(SourceOptionLocator? Locator, string Status, string? Warning = null);
 
 /// <summary>
+/// An EST entry the exported meshes need, from the <c>xiv_est_hair</c>/<c>xiv_est_race</c> tags
+/// Magic Fit's Hair Weights puts on hair it weights: the hair skeleton (<paramref name="Entry"/>,
+/// <c>skl_c0801h0160.sklb</c> for 160) of race <see cref="Race"/> (<c>c0801</c>).
+/// </summary>
+public sealed class EstEntryRequest
+{
+    [JsonPropertyName("slot")]
+    public string? Slot { get; set; }
+
+    [JsonPropertyName("entry")]
+    public int Entry { get; set; }
+
+    [JsonPropertyName("race")]
+    public string? Race { get; set; }
+}
+
+/// <summary>
 /// Wraps all Penumbra IPC used by XIV Instant Edit:
 /// reading the resolved model files of on-screen game objects and
 /// writing/updating a persistent mod so the edited model applies in-game.
 /// </summary>
 public sealed partial class PenumbraService : IDisposable
 {
-    internal sealed record SourceModTarget(string Directory, string Folder, string FilePath, string RelativePath);
-    internal sealed record SourceTargetResolution(SourceModTarget? Target, string Code, string? Error);
-    private sealed record AttributeModelIdentity(
-        int Id, int RaceCode, string AtrSlot, string ObjectType, string EquipSlot, string BodySlot);
-    private sealed record AttributeGroupWrite(string Path, JsonObject Document);
-
-    private const string AttributeGroupDescriptionPrefix = "Managed by XIV Instant Edit attribute group v1: ";
-    private static readonly string[] AttributeGroupFamilies =
-        ["mv", "tv", "gv", "dv", "sv", "ev", "nv", "wv", "rv"];
-    // Every other attribute the game's own gear, accessory, body, hair, face, tail
-    // and ear models use, typos included (surveyed from the game data 2026-09-28).
-    // The game drives them itself, so they never get a generated group. Keep in
-    // sync with GAME_ATTRIBUTE_NAMES in the Blender add-on's materials.py.
-    private static readonly HashSet<string> GameAttributeNames = new(StringComparer.Ordinal)
-    {
-        "atr_ar", "atr_arm", "atr_arm1", "atr_arm2", "atr_arm3", "atr_armc", "atr_armhh",
-        "atr_bak", "atr_bak1", "atr_bak3", "atr_bak4", "atr_bakh", "atr_blt", "atr_bv_a",
-        "atr_cn_ankle", "atr_cn_neck", "atr_cn_waist", "atr_cn_wrist", "atr_del",
-        "atr_hair", "atr_head", "atr_hig", "atr_hij", "atr_hij1", "atr_hiz", "atr_hiz1", "atr_hrn",
-        "atr_inr", "atr_kam", "atr_kam1", "atr_kam4", "atr_kam23", "atr_kam24",
-        "atr_kao", "atr_kao1", "atr_kao2", "atr_kao3", "atr_kod", "atr_kod1", "atr_kod2",
-        "atr_leg", "atr_leg1", "atr_lod", "atr_lod1", "atr_lod2", "atr_lod12",
-        "atr_lod117", "atr_lod118", "atr_lod119", "atr_lod120", "atr_lpd", "atr_mim", "atr_mv_a1",
-        "atr_nek", "atr_nek2", "atr_sne", "atr_sne1", "atr_st", "atr_sta", "atr_star",
-        "atr_tlh", "atr_tls", "atr_top", "atr_top1", "atr_top3", "atr_tv_h1", "atr_ude", "atr_ude1", "atr_vsr",
-    };
-
     private readonly IDalamudPluginInterface  _pi;
     private readonly PenumbraIpc                _ipc;
     private readonly IFramework                  _framework;
     private readonly IPluginLog                 _log;
-    private readonly IObjectTable?              _objects;
-    private readonly IDataManager?              _data;
-    private readonly ModelBackupStore?          _backups;
-    private readonly EstEntryStore?             _estEntries;
+    private readonly IObjectTable               _objects;
+    private readonly IDataManager               _data;
+    private readonly ModelBackupStore           _backups;
     private readonly SemaphoreSlim              _exportGate = new(1, 1);
+    private readonly ModActivation              _activation;
+    private readonly SourceMods                 _sources;
+    private readonly ModelFileWriter            _writer;
+    private readonly AttributeGroupService      _attributes;
+    private readonly EstEntryService            _est;
 
     public PenumbraService(
         IDalamudPluginInterface pi,
         IFramework framework,
         IPluginLog log,
-        IObjectTable? objects = null,
-        IDataManager? data = null,
-        ModelBackupStore? backups = null,
-        EstEntryStore? estEntries = null)
+        IObjectTable objects,
+        IDataManager data,
+        ModelBackupStore backups,
+        EstEntryStore estEntries)
     {
         _pi               = pi;
         _log             = log;
@@ -149,8 +144,12 @@ public sealed partial class PenumbraService : IDisposable
         _objects         = objects;
         _data            = data;
         _backups         = backups;
-        _estEntries      = estEntries;
         _ipc             = new PenumbraIpc(pi, framework, log);
+        _activation      = new ModActivation(_ipc, framework, log, objects);
+        _sources         = new SourceMods(_ipc, framework, log);
+        _writer          = new ModelFileWriter(backups);
+        _attributes      = new AttributeGroupService(data, log);
+        _est             = new EstEntryService(estEntries, log);
     }
 
     private GetModDirectory _getModDirectory => _ipc.ModDirectorySubscriber;
@@ -272,39 +271,19 @@ public sealed partial class PenumbraService : IDisposable
     /// <inheritdoc cref="PenumbraIpc.MetaManipulationsAsync"/>
     internal Task<string?> MetaManipulationsAsync(int objectIndex) => _ipc.MetaManipulationsAsync(objectIndex);
 
-    /// <summary>Capture the effective source-mod manipulations for one collection.</summary>
-    public async Task<JsonArray?> CaptureEffectiveManipulationsAsync(
-        Guid collectionId,
-        string modDirectory,
-        string modRoot)
-    {
-        if (collectionId == Guid.Empty || !IsSafeModName(modDirectory) ||
-            string.IsNullOrWhiteSpace(modRoot) || !Directory.Exists(modRoot))
-            return null;
-        try
-        {
-            var selections = await _framework.RunOnFrameworkThread(() =>
-            {
-                var result = _getCurrentModSettings.Invoke(
-                    collectionId, modDirectory, string.Empty, false);
-                if (result.Item1 is not PenumbraApiEc.Success || result.Item2 is null)
-                    return null;
-                return result.Item2.Value.Item3.ToDictionary(
-                    pair => pair.Key,
-                    pair => (IReadOnlyList<string>)pair.Value.ToArray(),
-                    StringComparer.OrdinalIgnoreCase);
-            }).ConfigureAwait(false);
-            await LeaveFrameworkThread();
-            return selections is null
-                ? null
-                : CaptureEffectiveManipulations(modRoot, selections);
-        }
-        catch (Exception e)
-        {
-            _log.Warning(e, "Could not snapshot Meta Manipulations for source mod {ModDirectory}.", modDirectory);
-            return null;
-        }
-    }
+    /// <inheritdoc cref="SourceMods.CaptureEffectiveManipulationsAsync"/>
+    public Task<JsonArray?> CaptureEffectiveManipulationsAsync(Guid collectionId, string modDirectory, string modRoot)
+        => _sources.CaptureEffectiveManipulationsAsync(collectionId, modDirectory, modRoot);
+
+    /// <inheritdoc cref="SourceMods.CaptureSourceOptionAsync"/>
+    public Task<SourceOptionCapture> CaptureSourceOptionAsync(
+        string sourceModDirectory, string sourceFilePath, string? sourceModRootPath,
+        string? targetRelativePath, string sourceGamePath,
+        IReadOnlyCollection<string>? preferredMemberships = null,
+        Guid? collectionId = null,
+        Guid? sourceModStableId = null)
+        => _sources.CaptureSourceOptionAsync(sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath,
+            sourceGamePath, preferredMemberships, collectionId, sourceModStableId);
 
     // The export server and the windows still call these helpers here.
     internal static bool IsSafeGamePath(string? gamePath) => ModPaths.IsSafeGamePath(gamePath);
@@ -312,8 +291,17 @@ public sealed partial class PenumbraService : IDisposable
     internal static bool IsSafeVariantGroupName(string? value) => ModPaths.IsSafeVariantGroupName(value);
     internal static IReadOnlyList<string> AnimationMappedFiles(string modRoot, string gamePath)
         => ModMetadata.AnimationMappedFiles(modRoot, gamePath);
+    internal static JsonArray? KnownManipulations(InstantEditImportContext context)
+        => AttributeGroupService.KnownManipulations(context);
+    internal static string? ValidateEstEntryRequests(IReadOnlyList<EstEntryRequest>? entries)
+        => EstEntryService.ValidateEstEntryRequests(entries);
 
-    // PenumbraService.Physics.cs still calls these helpers by their old names.
+    // PenumbraService.Physics.cs still calls these by their old names.
+    private Task<ExportResult?> AddNewModAsync(string modName) => _activation.AddNewModAsync(modName);
+    private ExportResult? ReloadModOnFramework(string modName) => _activation.ReloadModOnFramework(modName);
+    private ExportResult ConfigureModForCollectionOnFramework(string modName, Guid collectionId, string collectionName,
+        bool setPriority = true, int priority = int.MaxValue, bool redraw = true)
+        => _activation.ConfigureModForCollectionOnFramework(modName, collectionId, collectionName, setPriority, priority, redraw);
     private static string NormalizeGamePath(string value) => ModPaths.NormalizeGamePath(value);
     private static bool IsSafeGameResourcePath(string? gamePath, params string[] extensions)
         => ModPaths.IsSafeGameResourcePath(gamePath, extensions);

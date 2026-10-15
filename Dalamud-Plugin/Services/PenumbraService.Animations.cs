@@ -9,6 +9,8 @@ using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
 using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
+using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
+using static InstantEdit.Services.PenumbraMods.EstEntryService;
 
 namespace InstantEdit.Services;
 
@@ -71,14 +73,14 @@ public sealed partial class PenumbraService
     {
         if (journal.Request.Destination == AnimationDestination.NewMod)
         {
-            var add = await AddNewModAsync(journal.ModDirectory);
+            var add = await _activation.AddNewModAsync(journal.ModDirectory);
             if (add is { Success: false }) throw new IOException(add.Message);
         }
         await _framework.RunOnFrameworkThread(() =>
         {
             foreach (var mod in journal.Files.Select(f => f.ModDirectory).Distinct())
             {
-                var reload = ReloadModOnFramework(mod);
+                var reload = _activation.ReloadModOnFramework(mod);
                 if (reload is { Success: false }) throw new IOException(reload.Message);
             }
             if (journal.Request.Destination == AnimationDestination.NewMod)
@@ -116,7 +118,7 @@ public sealed partial class PenumbraService
 
     internal Task RedrawAnimationAsync() => _framework.RunOnFrameworkThread(() =>
     {
-        if (RedrawPlayerOwnedEntitiesOnFramework() is { } error) throw new IOException(error);
+        if (_activation.RedrawPlayerOwnedEntitiesOnFramework() is { } error) throw new IOException(error);
     });
 
     /// <summary>
@@ -155,13 +157,13 @@ public sealed partial class PenumbraService
         var result = _trySetMod.Invoke(journal.Request.Capture.CollectionId, journal.ModDirectory, false, journal.ModDirectory);
         if (result is not (PenumbraApiEc.Success or PenumbraApiEc.NothingChanged))
             throw new IOException($"Penumbra could not disable the edited mod ({result}).");
-        if (RedrawPlayerOwnedEntitiesOnFramework() is { } error) throw new IOException(error);
+        if (_activation.RedrawPlayerOwnedEntitiesOnFramework() is { } error) throw new IOException(error);
     });
 
     internal Task ReloadAnimationSourcesAsync(IEnumerable<string> mods) => _framework.RunOnFrameworkThread(() =>
     {
         foreach (var mod in mods.Distinct())
-            if (ReloadModOnFramework(mod) is { Success: false } error) throw new IOException(error.Message);
-        if (RedrawPlayerOwnedEntitiesOnFramework() is { } warning) throw new IOException(warning);
+            if (_activation.ReloadModOnFramework(mod) is { Success: false } error) throw new IOException(error.Message);
+        if (_activation.RedrawPlayerOwnedEntitiesOnFramework() is { } warning) throw new IOException(warning);
     });
 }

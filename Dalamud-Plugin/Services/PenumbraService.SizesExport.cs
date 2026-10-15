@@ -7,6 +7,8 @@ using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
 using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
+using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
+using static InstantEdit.Services.PenumbraMods.EstEntryService;
 
 namespace InstantEdit.Services;
 
@@ -166,7 +168,7 @@ public sealed partial class PenumbraService
         try
         {
             var resolved = await _framework.RunOnFrameworkThread(
-                () => ResolveSourceModTargetOnFramework(
+                () => _sources.ResolveSourceModTargetOnFramework(
                     sourceModDirectory,
                     sourceFilePath,
                     sourceModRootPath,
@@ -219,9 +221,9 @@ public sealed partial class PenumbraService
                 var (relative, targetFile) = targets[index];
                 // The backup keeps the model's EST entries too, so restoring it undoes this export's EST change.
                 var estState = backupExisting && File.Exists(targetFile)
-                    ? CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, relative, _estEntries)
+                    ? _est.CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, relative)
                     : null;
-                var writeError = WriteModelToOriginalLocation(
+                var writeError = _writer.WriteModelToOriginalLocation(
                     resolved.Target.Folder, targetFile, sizes[index].ExportedFile, backupExisting,
                     resolved.Target.Directory, relative, estState);
                 if (writeError is null)
@@ -245,7 +247,7 @@ public sealed partial class PenumbraService
 
             if (createAttributeGroups && attributeTags is { Count: > 0 })
             {
-                var attributeError = WriteAttributeGroups(
+                var attributeError = _attributes.WriteAttributeGroups(
                     resolved.Target.Folder, resolvedGamePath, attributeTags, attributeMasks,
                     sourceManipulations);
                 if (attributeError is not null)
@@ -253,19 +255,19 @@ public sealed partial class PenumbraService
             }
 
             foreach (var (relative, _) in targets)
-                foreach (var warning in TryUpdateEstEntries(
+                foreach (var warning in _est.TryUpdateEstEntries(
                              resolved.Target.Folder, resolved.Target.Directory, relative, estEntries))
                     if (!warnings.Contains(warning))
                         warnings.Add(warning);
 
             var reloadError = await _framework.RunOnFrameworkThread(
-                () => ReloadModOnFramework(resolved.Target.Directory)).ConfigureAwait(false);
+                () => _activation.ReloadModOnFramework(resolved.Target.Directory)).ConfigureAwait(false);
             if (reloadError is not null)
                 warnings.Add(reloadError.Message);
             else
             {
                 var redrawWarning = await _framework.RunOnFrameworkThread(
-                    RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
+                    _activation.RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
                 if (redrawWarning is not null)
                     warnings.Add(redrawWarning);
             }

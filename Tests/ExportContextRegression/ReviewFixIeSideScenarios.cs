@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using static InstantEdit.TestSupport.Assertions;
+using InstantEdit.Services.PenumbraMods;
 
 /// <summary>Review fixes (IeSide group): attribute groups of game-model exports whose resource capture failed.</summary>
 internal static class ReviewFixIeSideScenarios
@@ -21,11 +22,11 @@ internal static class ReviewFixIeSideScenarios
 
         // fixes-1: a game model's context with a failed capture has no mod entries to keep.
         var gameContext = Context(InstantEditImportContext.GameSource, necklace);
-        var gameEntries = PenumbraService.KnownManipulations(gameContext);
+        var gameEntries = AttributeGroupService.KnownManipulations(gameContext);
         Require(gameContext.ResourceManifest is null && gameEntries is { Count: 0 },
             "review fix ieside: a game model's context without a capture has no unknown IMC entries");
         var gameMod = Folder(root, "GameNecklace");
-        Require(PenumbraService.WriteAttributeGroupsForRegression(gameMod, necklace, tags, masks, gameEntries, game) is null &&
+        Require(AttributeGroupService.WriteAttributeGroupsForRegression(gameMod, necklace, tags, masks, gameEntries, game) is null &&
                 ImcGroup(gameMod) is { } group && group["OnlyAttributes"]!.GetValue<bool>(),
             "review fix ieside: so its part toggles get their IMC group on every export path, as the vanilla Quick Export does");
 
@@ -34,22 +35,22 @@ internal static class ReviewFixIeSideScenarios
         {
             DestinationState = InstantEditImportContext.ReadyDestination, SourceModDirectory = "GameNecklace",
         };
-        Require(PenumbraService.KnownManipulations(promoted) is { Count: 0 },
+        Require(AttributeGroupService.KnownManipulations(promoted) is { Count: 0 },
             "review fix ieside: the same holds for Sizes and Race exports into the mod the first export made");
 
         // A mod's context whose capture failed keeps the refusal: its own entries are unknown.
         var modContext = Context(InstantEditImportContext.ModSource, necklace);
-        Require(PenumbraService.KnownManipulations(modContext) is null &&
-                PenumbraService.WriteAttributeGroupsForRegression(Folder(root, "ModNecklace"), necklace, tags, masks,
-                        PenumbraService.KnownManipulations(modContext), game)?
+        Require(AttributeGroupService.KnownManipulations(modContext) is null &&
+                AttributeGroupService.WriteAttributeGroupsForRegression(Folder(root, "ModNecklace"), necklace, tags, masks,
+                        AttributeGroupService.KnownManipulations(modContext), game)?
                     .StartsWith("attribute_group_imc_unknown:", StringComparison.Ordinal) == true,
             "review fix ieside: a mod whose import didn't read its IMC entries still gets no IMC group");
 
         // A capture that worked is used as it is, for either kind.
         var captured = new JsonArray(new JsonObject { ["Type"] = "Atr" });
         var manifest = new ResourceDependencyManifest { Materials = [], Manipulations = captured };
-        Require(ReferenceEquals(PenumbraService.KnownManipulations(modContext with { ResourceManifest = manifest }), captured) &&
-                ReferenceEquals(PenumbraService.KnownManipulations(gameContext with { ResourceManifest = manifest }), captured),
+        Require(ReferenceEquals(AttributeGroupService.KnownManipulations(modContext with { ResourceManifest = manifest }), captured) &&
+                ReferenceEquals(AttributeGroupService.KnownManipulations(gameContext with { ResourceManifest = manifest }), captured),
             "review fix ieside: a captured manifest's entries are used as captured");
     }
 

@@ -10,6 +10,8 @@ using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
 using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
+using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
+using static InstantEdit.Services.PenumbraMods.EstEntryService;
 
 namespace InstantEdit.Services;
 
@@ -327,7 +329,7 @@ public sealed partial class PenumbraService
         try
         {
             var resolved = await _framework.RunOnFrameworkThread(
-                () => ResolveSourceModTargetOnFramework(
+                () => _sources.ResolveSourceModTargetOnFramework(
                     sourceModDirectory,
                     sourceFilePath,
                     sourceModRootPath,
@@ -356,7 +358,7 @@ public sealed partial class PenumbraService
             var targetFile = Path.Combine(resolved.Target.Folder, plan!.RelativePath.Replace('/', Path.DirectorySeparatorChar));
             // The backup keeps the model's EST entries too, so restoring it undoes this export's EST change.
             var estState = backupExisting && File.Exists(targetFile)
-                ? CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, plan.RelativePath, _estEntries)
+                ? _est.CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, plan.RelativePath)
                 : null;
             if (backupExisting)
             {
@@ -366,7 +368,7 @@ public sealed partial class PenumbraService
                     return new ExportResult(false, "write_failed", backupError);
             }
             // The restore point already backed up the race's file.
-            var writeError = WriteModelToOriginalLocation(
+            var writeError = _writer.WriteModelToOriginalLocation(
                 resolved.Target.Folder, targetFile, exportedFile, false,
                 resolved.Target.Directory, plan.RelativePath);
             if (writeError is not null)
@@ -385,24 +387,24 @@ public sealed partial class PenumbraService
 
             if (createAttributeGroups && attributeTags is { Count: > 0 })
             {
-                var attributeError = WriteAttributeGroups(
+                var attributeError = _attributes.WriteAttributeGroups(
                     resolved.Target.Folder, resolvedGamePath, attributeTags, attributeMasks,
                     sourceManipulations);
                 if (attributeError is not null)
                     warnings.Add($"Penumbra attribute group setup failed: {AttributeGroupErrorMessage(attributeError)}");
             }
 
-            warnings.AddRange(TryUpdateEstEntries(
+            warnings.AddRange(_est.TryUpdateEstEntries(
                 resolved.Target.Folder, resolved.Target.Directory, plan.RelativePath, estEntries));
 
             var reloadError = await _framework.RunOnFrameworkThread(
-                () => ReloadModOnFramework(resolved.Target.Directory)).ConfigureAwait(false);
+                () => _activation.ReloadModOnFramework(resolved.Target.Directory)).ConfigureAwait(false);
             if (reloadError is not null)
                 warnings.Add(reloadError.Message);
             else
             {
                 var redrawWarning = await _framework.RunOnFrameworkThread(
-                    RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
+                    _activation.RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
                 if (redrawWarning is not null)
                     warnings.Add(redrawWarning);
             }
@@ -501,7 +503,7 @@ public sealed partial class PenumbraService
                 warnings.Add($"The backup of {relative} is gone, so it wasn't restored.");
                 return warnings;
             }
-            if (RestoreModelBackup(raceFile, backup, modDirectory, relative) is { } error)
+            if (_writer.RestoreModelBackup(raceFile, backup, modDirectory, relative) is { } error)
                 warnings.Add(error);
         }
         else if (state["created"] is JsonValue created && created.TryGetValue<bool>(out var made) && made && File.Exists(raceFile) &&

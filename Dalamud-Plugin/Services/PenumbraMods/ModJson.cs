@@ -24,4 +24,7 @@ internal static class ModJson
             return number;
         return value.TryGetValue<string>(out var text) && int.TryParse(text, out number) ? number : 0;
     }
+
+    internal static JsonArray CloneManipulations(JsonArray? manipulations)
+        => manipulations?.DeepClone() as JsonArray ?? new JsonArray();
 }
