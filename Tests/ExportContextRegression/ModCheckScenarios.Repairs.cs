@@ -16,6 +16,7 @@ internal static partial class ModCheckScenarios
         TextureAndSkinPacksAreNeverTreatedAsLeftovers();
         JunkKeysAreRemovedWhenTheRealPathExists();
         DisabledModsAndOverriddenFilesAreReported();
+        ATicksSnapshotIsntChangedByLaterTicks();
     }
 
     private static void MissingFilesCanBeRetargeted()
@@ -131,5 +132,18 @@ internal static partial class ModCheckScenarios
         var overridden = new FakeCollectionView(new Dictionary<string, string> { [GearTexture] = @"X:\Penumbra\Better Textures\base.tex" });
         Require(Check(mod, collection: overridden).Findings.Single(f => f.Code == "X004").Detail.Contains("Better Textures", StringComparison.Ordinal),
             "a file another mod replaces in the collection names that mod");
+    }
+
+    private static void ATicksSnapshotIsntChangedByLaterTicks()
+    {
+        using var mod = StellarBladeMod();
+        var report = CheckStellarBlade(mod);
+        var selection = new RepairSelection(report) { DeleteReleasedFiles = true };
+        var snapshot = selection.Snapshot();
+        foreach (var repair in report.Repairs)
+            selection.Set(repair.Id, false);
+        selection.DeleteReleasedFiles = false;
+        Require(snapshot.Count > 0 && snapshot.Count == new RepairSelection(report).Count && snapshot.DeleteReleasedFiles,
+            "ticks changed while a repair is applied don't reach the apply under way");
     }
 }

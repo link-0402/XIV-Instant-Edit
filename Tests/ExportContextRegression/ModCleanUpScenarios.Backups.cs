@@ -1,4 +1,9 @@
+using InstantEdit.Studio;
+using InstantEdit.Studio.Models.Project;
 using InstantEdit.Studio.Services.Backups;
+using InstantEdit.Studio.Services.CleanUp;
+using InstantEdit.Studio.Services.Project;
+using Newtonsoft.Json.Linq;
 using static InstantEdit.TestSupport.Assertions;
 
 /// <summary>Backups of the files an operation changes: kept by content, restored only where nothing changed since, forgotten after a week.</summary>
@@ -10,6 +15,9 @@ internal static partial class ModCleanUpScenarios
         RestorePutsBackOnlyUnchangedFiles(testRoot);
         BackupsExpireAfterAWeek(testRoot);
         AnUnreadableJournalIsSetAside(testRoot);
+        SplitLayoutModsRestoreWhole(testRoot);
+        SplitLayoutRollbackPutsTheFilesBack(testRoot);
+        BackupsFollowAModRenamedInPenumbra(testRoot);
     }
 
     private static void ModPathsStayInsideTheMod(string testRoot)
@@ -91,5 +99,86 @@ internal static partial class ModCleanUpScenarios
         Require(store.LoadError.Length > 0 && File.Exists(copy) &&
                 Directory.EnumerateFiles(config, ModBackupStore.JournalName + ".unreadable-*").Any(),
             "an unreadable journal is kept aside, and no backup is swept while it can't be read");
+    }
+
+    /// <summary>A mod in Penumbra's old layout: meta.json for its name, default_mod.json for its files.</summary>
+    private static TestModFolder SplitLayoutMod()
+    {
+        var mod = new TestModFolder();
+        mod.File("files/a.bin", "same"u8.ToArray());
+        mod.File("files/b.bin", "same"u8.ToArray());
+        mod.Meta(new JObject { ["FileVersion"] = 3, ["Name"] = "Old layout", ["Author"] = "Someone" }.ToString());
+        mod.File(LegacyMetaReader.DefaultModFile, System.Text.Encoding.UTF8.GetBytes(new JObject
+        {
+            ["Name"] = "", ["Priority"] = 0,
+            ["Files"] = new JObject { ["chara/a.bin"] = "files/a.bin", ["chara/b.bin"] = "files/b.bin" },
+            ["FileSwaps"] = new JObject(), ["Manipulations"] = new JArray(),
+        }.ToString()));
+        return mod;
+    }
+
+    private static string Text(TestModFolder mod, string relPath) => File.ReadAllText(Path.Combine(mod.Path, relPath));
+
+    private static void SplitLayoutModsRestoreWhole(string testRoot)
+    {
+        using var mod = SplitLayoutMod();
+        var meta = mod.ReadMeta();
+        var defaults = Text(mod, LegacyMetaReader.DefaultModFile);
+        var (store, cache) = TextureBackups(testRoot);
+        var sets = DuplicateFiles.Scan(PenumbraModMeta.Load(mod.Path), mod.Path, new HashSet<string>(), CancellationToken.None);
+        var result = DuplicateFiles.ApplyAsync(ModProject.Load(mod.Path), sets, store, cache, new FakeReloader(), new StudioSettings(), CancellationToken.None)
+            .GetAwaiter().GetResult();
+        Require(result.Changed == 1 && !mod.Exists(LegacyMetaReader.DefaultModFile), "the old layout is merged into meta.json when it is written");
+
+        var restored = store.Restore(store.For(mod.Path).Single().Id, mod.Path, cache, new FakeReloader());
+        Require(restored.Skipped.Count == 0 && mod.ReadMeta() == meta && mod.Exists(LegacyMetaReader.DefaultModFile)
+                && Text(mod, LegacyMetaReader.DefaultModFile) == defaults && !mod.Exists(LegacyMetaReader.DefaultModFile + PenumbraModMeta.BackupSuffix)
+                && mod.Exists("files/b.bin"),
+            "restoring puts the old layout back as it was, without the set-aside copy");
+    }
+
+    private static void SplitLayoutRollbackPutsTheFilesBack(string testRoot)
+    {
+        using var mod = SplitLayoutMod();
+        var meta = mod.ReadMeta();
+        var defaults = Text(mod, LegacyMetaReader.DefaultModFile);
+        var (store, cache) = TextureBackups(testRoot);
+        var sets = DuplicateFiles.Scan(PenumbraModMeta.Load(mod.Path), mod.Path, new HashSet<string>(), CancellationToken.None);
+        DuplicateFiles.ApplyAsync(ModProject.Load(mod.Path), sets, store, cache, new FakeReloader { ReloadSucceeds = false }, new StudioSettings(), CancellationToken.None)
+            .GetAwaiter().GetResult();
+        Require(mod.ReadMeta() == meta && mod.Exists(LegacyMetaReader.DefaultModFile) && Text(mod, LegacyMetaReader.DefaultModFile) == defaults
+                && !mod.Exists(LegacyMetaReader.DefaultModFile + PenumbraModMeta.BackupSuffix),
+            "a rejected reload puts the old layout back too");
+    }
+
+    private static void BackupsFollowAModRenamedInPenumbra(string testRoot)
+    {
+        var id = Guid.NewGuid();
+        var mod = new TestModFolder();
+        mod.File("files/a.bin", "same"u8.ToArray()).File("files/b.bin", "same"u8.ToArray());
+        mod.Meta(new JObject
+        {
+            ["FileVersion"] = 4, ["Identifier"] = id.ToString(), ["Name"] = "Renamed",
+            ["DefaultData"] = new JObject { ["Files"] = new JObject { ["chara/a.bin"] = "files/a.bin", ["chara/b.bin"] = "files/b.bin" } },
+        }.ToString());
+        var before = mod.ReadMeta();
+        var (store, cache) = TextureBackups(testRoot);
+        var sets = DuplicateFiles.Scan(PenumbraModMeta.Load(mod.Path), mod.Path, new HashSet<string>(), CancellationToken.None);
+        DuplicateFiles.ApplyAsync(ModProject.Load(mod.Path), sets, store, cache, new FakeReloader(), new StudioSettings(), CancellationToken.None).GetAwaiter().GetResult();
+
+        var renamed = mod.Path + " renamed";
+        Directory.Move(mod.Path, renamed);
+        try
+        {
+            var entries = store.For(renamed, id);
+            Require(entries.Count == 1, "a mod renamed in Penumbra keeps its backups, found by its id");
+            var restored = store.Restore(entries[0].Id, renamed, cache, new FakeReloader());
+            Require(restored.Skipped.Count == 0 && File.ReadAllText(Path.Combine(renamed, "meta.json")) == before && File.Exists(Path.Combine(renamed, "files", "b.bin")),
+                "and they restore into its new folder");
+        }
+        finally
+        {
+            Directory.Delete(renamed, recursive: true);
+        }
     }
 }

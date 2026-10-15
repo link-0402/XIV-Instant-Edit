@@ -25,6 +25,8 @@ internal static partial class ModCleanUpScenarios
         ResizingHalvesAndChecksAgainstTheHalvedOriginal(testRoot);
         ACancelledCleanUpKeepsWhatItFinished(testRoot);
         TextureCleanUpStopsWhenTheBackupCantBeStored(testRoot);
+        ATextureChangedSinceTheListIsLeftAlone(testRoot);
+        KeepFormatIsRefusedForFormatsThatCantBeWritten();
     }
 
     // ── Fixtures ─────────────────────────────────────────────────────────────
@@ -269,5 +271,24 @@ internal static partial class ModCleanUpScenarios
         var result = Clean(mod, [new TextureJob(Candidate(mod, "t/base.tex", [BaseUse]), TextureFormatChoice.Bc7, 4096)], new FakeConverter(), testRoot, store, blocked);
         Require(result.Changed == 0 && result.Problems.Count == 1 && File.ReadAllBytes(Path.Combine(mod.Path, "t", "base.tex")).SequenceEqual(before),
             "a texture whose original can't be backed up is not touched");
+    }
+
+    private static void ATextureChangedSinceTheListIsLeftAlone(string testRoot)
+    {
+        using var mod = TextureMod("t/base.tex");
+        var candidate = Candidate(mod, "t/base.tex", [BaseUse]);
+        mod.File("t/base.tex", Pattern(128, 128, 5));
+        var result = Clean(mod, [new TextureJob(candidate, TextureFormatChoice.Bc7, 4096)], new FakeConverter(), testRoot);
+        Require(result.Changed == 0 && result.Problems.Count == 1 && result.Problems[0].Contains("changed since") && FormatOf(mod, "t/base.tex") == TextureCost.Bgra8,
+            "a texture that changed since the list was made is left alone, with the reason");
+    }
+
+    private static void KeepFormatIsRefusedForFormatsThatCantBeWritten()
+    {
+        var bc2 = TextureCost.Read(Header(TextureCost.Bc2, 256, 256))!.Value;
+        var bc7 = TextureCost.Read(Header(TextureCost.Bc7, 256, 256))!.Value;
+        Require(TextureCleanUp.WhyNotFormat(bc2, TextureFormatChoice.Keep) is { Length: > 0 }, "a format the encoder can't write can't be kept");
+        Require(TextureCleanUp.WhyNotFormat(bc2, TextureFormatChoice.Bc7) is null && TextureCleanUp.WhyNotFormat(bc7, TextureFormatChoice.Keep) is null,
+            "it can be encoded into another format, and a writable format can be kept");
     }
 }

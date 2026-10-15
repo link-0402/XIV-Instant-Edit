@@ -156,49 +156,55 @@ var testRoot = Path.Combine(Path.GetTempPath(), "InstantEditExportContextRegress
 Directory.CreateDirectory(testRoot);
 try
 {
-    VariantExportScenarios.Run(testRoot);
-    SizesExportScenarios.Run(testRoot);
-    RaceExportScenarios.Run(testRoot);
-    ReviewFixIeSideScenarios.Run(testRoot);
-    EstEntryScenarios.Run(testRoot);
-    CheckSessionStore(testRoot);
-    SelectorStabilityScenarios.Run(testRoot);
-    ModHandoffScenarios.Run(testRoot);
-    ModCheckScenarios.RunReaders(testRoot);
-    ModCheckScenarios.RunAnalysis(testRoot);
-    ModCheckScenarios.RunApply(testRoot);
-    ModCheckScenarios.RunSession(testRoot);
-    ModCleanUpScenarios.RunBackups(testRoot);
-    ModCleanUpScenarios.RunTextures(testRoot);
-    ModCleanUpScenarios.RunLocations(testRoot);
-    ModCleanUpScenarios.RunDuplicates(testRoot);
-    LibraryFilterScenarios.Run(testRoot);
-    ReviewFixLibraryScenarios.Run(testRoot);
-    ReviewFixBuildScenarios.Run(testRoot);
-    ReviewFixSimsScenarios.Run(testRoot);
-    ReviewFixEditingScenarios.Run(testRoot);
-    ReviewFixLowsScenarios.Run(testRoot);
-    ModCheckScenarios.RunReviewFixes(testRoot);
-    ModCleanUpScenarios.RunReviewFixes(testRoot);
-    ModCheckScenarios.RunMinors(testRoot);
-    ModCleanUpScenarios.RunMinors(testRoot);
-    CollectionActivationScenarios.Run();
-    UiViewModelScenarios.Run();
-    AnimationRowScenarios.Run();
-    PainterScenarios.Run(testRoot);
-    GameFileScenarios.Run(testRoot);
-    ToolSetupScenarios.Run(testRoot);
-    NeckSeamScenarios.Run(testRoot);
-    PreviewModScenarios.Run(testRoot);
-    TextureCompressionScenarios.Run(testRoot);
-    HairRefitScenarios.Run(testRoot);
-    BodySeamScenarios.Run(testRoot);
-    SkinToneScenarios.Run(testRoot);
-    RacialScalingScenarios.Run(testRoot);
-    HeelsOffsetScenarios.Run();
-    CharacterSendScenarios.Run();
-    PhysicsScenarios.Run(testRoot);
+    Scenarios.Run(() => VariantExportScenarios.Run(testRoot));
+    Scenarios.Run(() => SizesExportScenarios.Run(testRoot));
+    Scenarios.Run(() => RaceExportScenarios.Run(testRoot));
+    Scenarios.Run(() => EstEntryScenarios.Run(testRoot));
+    Scenarios.Run(() => CheckSessionStore(testRoot));
+    Scenarios.Run(() => SelectorStabilityScenarios.Run(testRoot));
+    Scenarios.Run(() => ModHandoffScenarios.Run(testRoot));
+    Scenarios.Run(() => ModCheckScenarios.RunReaders(testRoot));
+    Scenarios.Run(() => ModCheckScenarios.RunAnalysis(testRoot));
+    Scenarios.Run(() => ModCheckScenarios.RunApply(testRoot));
+    Scenarios.Run(() => ModCheckScenarios.RunSession(testRoot));
+    Scenarios.Run(() => ModCleanUpScenarios.RunBackups(testRoot));
+    Scenarios.Run(() => ModCleanUpScenarios.RunTextures(testRoot));
+    Scenarios.Run(() => ModCleanUpScenarios.RunLocations(testRoot));
+    Scenarios.Run(() => ModCleanUpScenarios.RunDuplicates(testRoot));
+    Scenarios.Run(() => LibraryFilterScenarios.Run(testRoot));
+    Scenarios.Run(() => ModLibraryScenarios.Run(testRoot));
+    Scenarios.Run(() => ModBuildScenarios.Run(testRoot));
+    Scenarios.Run(() => SimsImportScenarios.Run(testRoot));
+    Scenarios.Run(() => ModEditingScenarios.Run(testRoot));
+    Scenarios.Run(() => ModResourceScenarios.Run(testRoot));
+    Scenarios.Run(CollectionActivationScenarios.Run);
+    Scenarios.Run(UiViewModelScenarios.Run);
+    Scenarios.Run(AnimationRowScenarios.Run);
+    Scenarios.Run(() => PainterScenarios.Run(testRoot));
+    Scenarios.Run(() => GameFileScenarios.Run(testRoot));
+    Scenarios.Run(() => ToolSetupScenarios.Run(testRoot));
+    Scenarios.Run(() => NeckSeamScenarios.Run(testRoot));
+    Scenarios.Run(() => PreviewModScenarios.Run(testRoot));
+    Scenarios.Run(() => TextureCompressionScenarios.Run(testRoot));
+    Scenarios.Run(() => HairRefitScenarios.Run(testRoot));
+    Scenarios.Run(() => BodySeamScenarios.Run(testRoot));
+    Scenarios.Run(() => SkinToneScenarios.Run(testRoot));
+    Scenarios.Run(() => RacialScalingScenarios.Run(testRoot));
+    Scenarios.Run(HeelsOffsetScenarios.Run);
+    Scenarios.Run(CharacterSendScenarios.Run);
+    Scenarios.Run(() => PhysicsScenarios.Run(testRoot));
+    await Scenarios.RunAsync(() => CheckExportContextsAsync(testRoot));
+}
+finally
+{
+    if (Directory.Exists(testRoot))
+        Directory.Delete(testRoot, true);
+}
 
+return Scenarios.Finish("Export-context regressions");
+
+static async Task CheckExportContextsAsync(string testRoot)
+{
     // ---- Backup safety, export-context authorization, and revocation ----
     var originalRoot = Path.Combine(testRoot, "OriginalMod");
     var originalParent = Path.Combine(originalRoot, "Files", "models");
@@ -2188,11 +2194,4 @@ try
         "changed mashup metadata cannot reuse an export id");
     manifestRegistry.CompleteExport(manifestContext.ContextId, "fingerprint-export",
         new ExportReceipt(true, "complete", "complete"));
-
-    Console.WriteLine("All export-context regressions passed.");
-}
-finally
-{
-    if (Directory.Exists(testRoot))
-        Directory.Delete(testRoot, true);
 }

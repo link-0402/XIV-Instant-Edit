@@ -19,6 +19,13 @@ dotnet build Dalamud-Plugin/InstantEdit.csproj -c Release -p:SkipDistributionPac
 
 PowerShell users should check `$LASTEXITCODE` after each command.
 
+The C# suites print `[PASS]` or `[FAIL]` for every check. A failed check doesn't
+stop the suite, and a scenario that throws is reported with its stack trace
+before the next one runs. Each suite ends with a summary of the failures and
+exits non-zero if there was one. `.github/workflows/csharp-regression.yml` runs
+the four C# suites in Debug on Windows with Dalamud's downloaded assemblies. It
+has no game install, so the physics checks against vanilla files are skipped.
+
 `run_blender_suites.py` runs `bridge_regression`, `smoke_export`,
 `correctness_regression`, `animation_regression`, `skeleton_regression`,
 `character_regression`, `vertex_tools_regression`, `racial_scaling_regression`
@@ -100,7 +107,8 @@ updates the distribution archives or extension repository index.
   real Blender install (`install_blender_addon.py`) is checked by hand against a
   throwaway profile: create the folder first and point `BLENDER_USER_RESOURCES`
   at it, since Blender falls back to your real preferences when that folder
-  doesn't exist yet.
+  doesn't exist yet. The Mod Browser's scenarios are named by feature: `ModLibrary`,
+  `ModBuild`, `ModEditing`, `ModResource`, `SimsImport`, `ModCheck` and `ModCleanUp`.
 - `BlenderStatusRegression`: grouped connection states and bridge response,
   import handoff, diagnostic behavior, cache synchronization, and texture-session
   regressions in `TextureEditScenarios.cs`. Texture tests exercise the production
@@ -109,7 +117,8 @@ updates the distribution archives or extension repository index.
   `PreviewScenarios.cs` covers the hover-preview cache policy (LRU, byte budget,
   invalidation, failure caching, disposal with loads in flight) and the CPU
   texture decoder, without a GPU. Animation sends cover Blender's keyed, queued
-  and refused responses and the transport failure.
+  and refused responses and the transport failure. `ModWriterScenarios.cs` runs
+  the Mod Browser's writer, builder and folder watcher against temp mods.
 - Standalone Python suites: cache ownership and cleanup, diagnostic sanitation
   and limits, import validation, asynchronous failure reporting, cache-job
   release after failed imports, rejection of browser-originated listener
