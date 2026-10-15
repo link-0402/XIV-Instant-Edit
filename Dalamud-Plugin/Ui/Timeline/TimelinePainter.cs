@@ -16,6 +16,7 @@ internal static class TimelinePainter
     // A face from the timeline's expression library.
     private static readonly string PackGlyph = FontAwesomeIcon.Book.ToIconString();
     private static readonly string PinGlyph = FontAwesomeIcon.Thumbtack.ToIconString();
+
     /// <summary>
     /// What a sound clip shows besides its bar: the frame its solid part ends at (int.MaxValue while
     /// its file is read), a pin, its file's changes, and something to check (a sound that ends before
@@ -274,5 +275,4 @@ internal static class TimelinePainter
             }
         }
     }
-
 }

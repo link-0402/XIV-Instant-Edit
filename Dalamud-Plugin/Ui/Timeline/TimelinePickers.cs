@@ -626,5 +626,4 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         else
             importError = $"{name} was imported but could not be placed. Finish the drag first.";
     }
-
 }
