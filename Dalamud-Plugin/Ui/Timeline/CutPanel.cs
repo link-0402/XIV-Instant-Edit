@@ -1,40 +1,29 @@
-using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The properties panel for the clip band: a part (its frames, removing frames, removing it), a join
 /// (its blend's length and place, the jump it blends away) and the loop seam (its state, the jump,
-/// a stall, its blend and Fix loop). Also the seam's badge at the end of the clip band.
+/// a stall, its blend, its ease and Fix loop).
 /// </summary>
-public sealed partial class TimelineWindow
+internal sealed class CutPanel(TimelineSession session, MotionDecode decode, TimelineClipBand clipBand)
 {
     // The Remove frames fields of the selected part, and which part and range they were filled for.
     private int removeFrom, removeTo;
     private string? removeFor;
-    // The loop seam as the motion has it (cached per decode and range), and as the cut output plays it.
-    private string? rawSeamKey;
-    private SeamReport? rawSeam;
-    private MotionCuts? outputSeamCuts;
-    private int outputSeamLength;
-    private string? outputSeamDecode;
-    private SeamReport? outputSeam;
-    // Where the seam's badge was drawn last, in screen pixels: a click there selects the seam.
-    private (Vector2 Min, Vector2 Max)? seamBadge;
 
-    private void DrawCutPanel(TimelineEditor current)
+    public void Draw(TimelineEditor current)
     {
         if (current.SelectedCut is not { } cut)
             return;
         var doc = current.Document;
         var cuts = CutEdits.CutsOf(doc);
-        var decoded = source is { Standalone: false } loaded ? DecodedPose(loaded) : null;
+        var decoded = session.Source is { Standalone: false } loaded ? decode.DecodedPose(loaded) : null;
         switch (cut.Target)
         {
             case TimelineCutTarget.Part when cut.Index >= 0 && cut.Index < cuts.Parts.Length:
@@ -56,7 +45,7 @@ public sealed partial class TimelineWindow
     private void DrawPartPanel(TimelineEditor current, MotionCuts cuts, int index)
     {
         var doc = current.Document;
-        var readOnly = ReadOnly;
+        var readOnly = session.ReadOnly;
         var part = cuts.Parts[index];
         var start = cuts.PartStart(index, doc.Length);
         var end = cuts.PartEnd(index, doc.Length);
@@ -110,21 +99,21 @@ public sealed partial class TimelineWindow
         if (decoded != null)
             Widgets.HintWrapped(TimelineWindowViews.GapText(LoopSeam.Gap(decoded, cuts.Parts[index].To, cuts.Parts[index + 1].From)));
         else
-            DrawDecodeNote();
+            decode.DrawNote();
     }
 
     private void DrawSeamPanel(TimelineEditor current, MotionCuts cuts, MotionClip? decoded)
     {
-        var readOnly = ReadOnly;
+        var readOnly = session.ReadOnly;
         Title(FontAwesomeIcon.SyncAlt, "Loop seam");
         Widgets.HintWrapped("Where the loop's end runs back into its start.");
         ImGui.Spacing();
         if (decoded == null)
         {
-            DrawDecodeNote();
+            decode.DrawNote();
             return;
         }
-        var (raw, shown) = SeamOf(current, decoded);
+        var (raw, shown) = clipBand.SeamOf(current, decoded);
         ImGui.TextColored(shown.State == SeamState.Clean ? Theme.Success : Theme.Warning, TimelineWindowViews.SeamBadge(shown.State));
         Widgets.HintWrapped(TimelineWindowViews.GapText(shown.Gap));
         // The hold is the source's, in its frames; what still jumps is the output's.
@@ -171,7 +160,7 @@ public sealed partial class TimelineWindow
             {
                 ImGui.TableSetupColumn("##fact", ImGuiTableColumnFlags.WidthFixed);
                 ImGui.TableSetupColumn("##value", ImGuiTableColumnFlags.WidthStretch);
-                Fact("Blend");
+                TimelineUi.Fact("Blend");
                 var frames = blend.Frames;
                 ImGui.SetNextItemWidth(Theme.Scaled(90));
                 using (ImRaii.Disabled(readOnly))
@@ -186,7 +175,7 @@ public sealed partial class TimelineWindow
                 }
                 ImGui.SameLine(0, Theme.Gap);
                 ImGui.TextColored(Theme.Muted, "frames");
-                Fact("Place");
+                TimelineUi.Fact("Place");
                 ImGui.SetNextItemWidth(Theme.Scaled(120));
                 using var combo = ImRaii.Combo("##place", TimelineWindowViews.PlacementName(blend.Placement));
                 if (combo.Success)
@@ -209,7 +198,7 @@ public sealed partial class TimelineWindow
             return;
         ImGui.TableSetupColumn("##fact", ImGuiTableColumnFlags.WidthFixed);
         ImGui.TableSetupColumn("##value", ImGuiTableColumnFlags.WidthStretch);
-        Fact(TimelineWindowViews.EaseLegend);
+        TimelineUi.Fact(TimelineWindowViews.EaseLegend);
         var frames = cuts.Ease;
         ImGui.SetNextItemWidth(Theme.Scaled(90));
         using (ImRaii.Disabled(readOnly))
@@ -228,7 +217,7 @@ public sealed partial class TimelineWindow
         ImGui.TextColored(Theme.Muted, "frames");
         if (cuts.Ease <= 0)
             return;
-        Fact("Side");
+        TimelineUi.Fact("Side");
         var sides = TimelineWindowViews.EaseSides;
         ImGui.SetNextItemWidth(Theme.Scaled(120));
         using var combo = ImRaii.Combo("##ease-side", sides[cuts.EaseEnd ? 1 : 0]);
@@ -238,15 +227,6 @@ public sealed partial class TimelineWindow
                     current.SetEase(cuts.Ease, atEnd: i == 1);
     }
 
-    /// <summary>While the motion is read, how far along; why it failed when it did.</summary>
-    private void DrawDecodeNote()
-    {
-        if (decodeError != null && source != null && failedDecodeKey == DecodeKey(Fresh(source)))
-            ImGui.TextColored(Theme.Warning, "The motion could not be read: " + decodeError);
-        else
-            ImGui.TextColored(Theme.Muted, decodeStatus);
-    }
-
     private static void Title(FontAwesomeIcon icon, string text)
     {
         Widgets.Icon(icon, TimelineWindowViews.LaneColour(TimelineLane.Motion));
@@ -254,56 +234,4 @@ public sealed partial class TimelineWindow
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Label, text);
     }
-
-    /// <summary>
-    /// The loop seam as the motion has it between the first part's start and the last part's end (what
-    /// a blend absorbs and Fix loop works from), and as the output plays it: with a seam blend or an
-    /// eased start, the cut motion is measured, once per change and never during a drag.
-    /// </summary>
-    private (SeamReport Raw, SeamReport Shown) SeamOf(TimelineEditor current, MotionClip decoded)
-    {
-        var doc = current.Document;
-        var cuts = CutEdits.CutsOf(doc);
-        int from = cuts.Parts[0].From, to = cuts.Parts[^1].To;
-        var key = $"{decodedKey}|{from}|{to}";
-        if (rawSeam == null || rawSeamKey != key)
-        {
-            rawSeam = LoopSeam.Analyze(decoded, from, to);
-            rawSeamKey = key;
-        }
-        if (cuts.Seam is not { Frames: > 0 } && cuts.Ease <= 0)
-            return (rawSeam, rawSeam);
-        var stale = !ReferenceEquals(outputSeamCuts, doc.Cuts) || outputSeamLength != doc.Length || outputSeamDecode != decodedKey;
-        if (stale && current.Gesture == TimelineGesture.None)
-        {
-            outputSeam = LoopSeam.Analyze(MotionCutter.Apply(decoded, cuts, doc.Length), 0, doc.Length);
-            (outputSeamCuts, outputSeamLength, outputSeamDecode) = (doc.Cuts, doc.Length, decodedKey);
-            stale = false;
-        }
-        return (rawSeam, !stale && outputSeam is { } shown ? shown : rawSeam);
-    }
-
-    /// <summary>The seam's badge at the clip band's end, on a loop whose motion is read; a click on it selects the seam.</summary>
-    private void DrawSeamBadge(ImDrawListPtr drawList, TimelineEditor current, Vector2 max, float trackLeft, float top, float bottom)
-    {
-        seamBadge = null;
-        if (!current.Loops || source is not { Standalone: false } loaded || DecodedPose(loaded) is not { } decoded)
-            return;
-        var shown = SeamOf(current, decoded).Shown.State;
-        var text = TimelineWindowViews.SeamBadge(shown);
-        var size = ImGui.CalcTextSize(text);
-        var pad = Theme.Scaled(4);
-        var end = trackLeft + current.View.X(current.Document.Length);
-        var left = Math.Min(end + Theme.Scaled(6), max.X - size.X - pad * 2 - Theme.Scaled(4));
-        var rect = (new Vector2(left, top + Theme.Scaled(3)), new Vector2(left + size.X + pad * 2, bottom - Theme.Scaled(3)));
-        var colour = shown == SeamState.Clean ? Theme.Muted : Theme.Warning;
-        drawList.AddRectFilled(rect.Item1, rect.Item2, U32(Theme.WithAlpha(colour, .18f)), Theme.Scaled(3));
-        drawList.AddRect(rect.Item1, rect.Item2, U32(Theme.WithAlpha(colour, .7f)), Theme.Scaled(3));
-        drawList.AddText(new Vector2(left + pad, (top + bottom - size.Y) / 2), U32(colour), text);
-        seamBadge = rect;
-    }
-
-    /// <summary>Whether a click at <paramref name="mouse"/> (screen pixels) is on the seam's badge.</summary>
-    private bool OnSeamBadge(Vector2 mouse) =>
-        seamBadge is { } badge && mouse.X >= badge.Min.X && mouse.X <= badge.Max.X && mouse.Y >= badge.Min.Y && mouse.Y <= badge.Max.Y;
 }

@@ -1,15 +1,14 @@
-﻿using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
-using InstantEdit.Services.Animations.Motion;
+using Dalamud.Interface.Windowing;
 using InstantEdit.Services.Animations.Timeline;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
-/// <summary> The row above the lanes: undo, redo, add, snapping, fit, the length and the playhead, then short messages. </summary>
-public sealed partial class TimelineWindow
+/// <summary> The row above the lanes: undo, redo, add, snapping, fit, the Bones window, load, the length and the playhead, then short messages. </summary>
+internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers pickers, TimelineLoader loader, LivePosePanel livePose,
+    TimelineTexts texts, SaveFooter saveFooter, Window bonesWindow)
 {
     private const string AddMenu = "##timeline-add-menu";
     private const string ControlsHelp =
@@ -27,9 +26,9 @@ public sealed partial class TimelineWindow
     private int readoutFrame = -1;
     private string readout = string.Empty;
 
-    private void DrawToolbar(TimelineEditor current)
+    public void Draw(TimelineEditor current)
     {
-        var readOnly = ReadOnly;
+        var readOnly = session.ReadOnly;
         var history = current.History;
         if (Widgets.IconButton("##timeline-undo", FontAwesomeIcon.Undo, "Undo the last change (Ctrl+Z)", !readOnly && history.CanUndo))
             current.Undo();
@@ -42,11 +41,11 @@ public sealed partial class TimelineWindow
             ImGui.OpenPopup(AddMenu);
         DrawAddMenu(current);
         ImGui.SameLine(0, Theme.Scaled(2));
-        if (Toggle("##timeline-snap", FontAwesomeIcon.Magnet, current.Snap,
+        if (TimelineUi.Toggle("##timeline-snap", FontAwesomeIcon.Magnet, current.Snap,
                 current.Snap ? "Snapping is on. Drags stick to starts, ends and the playhead. Hold Alt to place freely." : "Snapping is off."))
             current.Snap = !current.Snap;
         ImGui.SameLine(0, Theme.Scaled(2));
-        if (Toggle("##timeline-scale", FontAwesomeIcon.ArrowsAltH, current.ScaleEvents,
+        if (TimelineUi.Toggle("##timeline-scale", FontAwesomeIcon.ArrowsAltH, current.ScaleEvents,
                 current.ScaleEvents ? "Scale events with length is on. A new length moves and stretches the events too." : "Scale events with length is off. A new length keeps the events where they are."))
             current.ScaleEvents = !current.ScaleEvents;
         ImGui.SameLine(0, Theme.Scaled(2));
@@ -56,13 +55,13 @@ public sealed partial class TimelineWindow
         if (!current.Document.Expression)
         {
             ImGui.SameLine(0, Theme.Scaled(2));
-            if (Toggle("##timeline-bones", FontAwesomeIcon.Child, bonesWindow.IsOpen, bonesWindow.IsOpen
+            if (TimelineUi.Toggle("##timeline-bones", FontAwesomeIcon.Child, bonesWindow.IsOpen, bonesWindow.IsOpen
                     ? "Close the Bones window."
                     : "Open the Bones window: pick bones on a body map and pose them in the selected bone layer."))
-                ToggleBones();
+                TimelineUi.Toggle(bonesWindow);
         }
         ImGui.SameLine(0, Theme.Scaled(2));
-        DrawLoadButton();
+        loader.DrawButton();
 
         ImGui.SameLine(0, Theme.Scaled(12));
         ImGui.AlignTextToFramePadding();
@@ -101,14 +100,6 @@ public sealed partial class TimelineWindow
         Widgets.HelpTip(ControlsHelp);
     }
 
-    /// <summary> An icon button that stays filled while its setting is on. </summary>
-    private static bool Toggle(string id, FontAwesomeIcon icon, bool on, string tooltip)
-    {
-        using var colour = ImRaii.PushColor(ImGuiCol.Button, Theme.Selection, on)
-            .Push(ImGuiCol.ButtonHovered, Theme.WithAlpha(Theme.Selection, .85f), on);
-        return Widgets.IconButton(id, icon, tooltip);
-    }
-
     private void DrawAddMenu(TimelineEditor current)
     {
         using var popup = ImRaii.Popup(AddMenu);
@@ -116,7 +107,7 @@ public sealed partial class TimelineWindow
             return;
         foreach (var kind in TimelineWindowViews.AddKinds)
             if (ImGui.MenuItem(TimelineWindowViews.AddKindName(kind)))
-                RequestPicker(kind, current.Playhead, null);
+                pickers.Request(kind, current.Playhead, null);
         // An expression's face takes no bone layers.
         if (current.Document.Expression)
             return;
@@ -128,83 +119,52 @@ public sealed partial class TimelineWindow
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(TimelineWindowViews.LayerKindHint(kind) + " Covers the whole clip; drag its ends to narrow it.");
         }
-        if (source == null)
+        if (session.Source == null)
             return;
         ImGui.Separator();
-        DrawLivePoseItems(source);
+        livePose.DrawItems(session.Source);
     }
 
     /// <summary> One line each for an import running or done, an edit the editor refused and a header length the motion disagrees with. </summary>
-    private void DrawMessages(TimelineEditor current)
+    public void DrawMessages(TimelineEditor current)
     {
-        if (headerNote != null)
-            Note(null, Theme.Muted, headerNote);
-        if (importTask != null && importing is { } work)
-        {
-            Widgets.Spinner();
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, $"Importing {work.Name}");
-        }
-        else if (importError != null)
-        {
-            if (Note("##import-error-dismiss", Theme.Warning, importError))
-                importError = null;
-        }
-        else if (importMessage != null)
-        {
-            if (Note("##import-message-dismiss", Theme.Success, importMessage))
-                importMessage = null;
-        }
+        if (texts.HeaderNote != null)
+            TimelineUi.Note(null, Theme.Muted, texts.HeaderNote);
+        pickers.DrawImportStatus();
         if (current.LastError is { } error)
-            Note(null, Theme.Warning, error);
+            TimelineUi.Note(null, Theme.Warning, error);
         if (current.LastRemoval is { } removal && TimelineWindowViews.RemovalStatus(removal) is { } removed)
-            Note(null, Theme.Muted, removed);
-        DrawLoaderStatus();
-        DrawLivePoseNote();
+            TimelineUi.Note(null, Theme.Muted, removed);
+        loader.DrawStatus();
+        livePose.DrawNote();
         DrawEffectProblems(current);
-        DrawSavedLayers();
+        saveFooter.DrawSavedLayers();
     }
 
     /// <summary> Effects that stop although the animation goes on, and the button that keeps them going. </summary>
     private void DrawEffectProblems(TimelineEditor current)
     {
-        if (effectWarning is not { } warning || effectProblems.IsEmpty)
+        if (texts.EffectWarning is not { } warning || texts.EffectProblems.IsEmpty)
             return;
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Warning, "⚠ " + warning);
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(string.Join("\n", effectProblems.Select(p => p.Text)));
+            ImGui.SetTooltip(string.Join("\n", texts.EffectProblems.Select(p => p.Text)));
         ImGui.SameLine(0, Theme.Gap);
-        using (ImRaii.Disabled(ReadOnly))
+        using (ImRaii.Disabled(session.ReadOnly))
         {
-            if (ImGui.SmallButton(effectEvents == 1 ? "Keep it looping" : "Keep them looping"))
+            if (ImGui.SmallButton(texts.EffectEvents == 1 ? "Keep it looping" : "Keep them looping"))
             {
                 // The copies are packaged like imports; the edit's own undo puts the original effects back.
-                foreach (var copy in effectCopies)
-                    imports[copy.GamePath] = copy;
-                current.Commit(TimelineEffectCheck.Fix(current.Document, effectProblems));
+                foreach (var copy in texts.EffectCopies)
+                    session.Imports[copy.GamePath] = copy;
+                current.Commit(TimelineEffectCheck.Fix(current.Document, texts.EffectProblems));
             }
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(effectCopies.IsEmpty
+            ImGui.SetTooltip(texts.EffectCopies.IsEmpty
                 ? "Sets Loop/wait to -1, which loops an effect until the animation ends. Save to keep the change."
                 : "Sets Loop/wait to -1 and uses copies of the effects that keep going: no kill of their own, sounds that loop. " +
                   "Save to keep the change.");
-    }
-
-    /// <summary> A short coloured message with an optional dismiss button; true when dismissed. </summary>
-    private static bool Note(string? dismissId, Vector4 colour, string text)
-    {
-        var dismissed = false;
-        if (dismissId != null)
-        {
-            dismissed = Widgets.GhostIconButton(dismissId, FontAwesomeIcon.Times, "Dismiss");
-            ImGui.SameLine(0, Theme.Gap);
-        }
-        ImGui.AlignTextToFramePadding();
-        using var wrap = ImRaii.TextWrapPos(0f);
-        ImGui.TextColored(colour, text);
-        return dismissed;
     }
 }

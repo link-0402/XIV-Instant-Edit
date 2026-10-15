@@ -1,4 +1,3 @@
-﻿using System.Collections.Immutable;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
@@ -6,32 +5,22 @@ using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The lanes: one child with one invisible button over it. Input goes to the editor model (hits,
 /// drags, keys); drawing uses the window draw list, clipped per region and culled to the frames in
 /// view. Labels, prop groups and tick texts are cached per document.
 /// </summary>
-public sealed partial class TimelineWindow
+internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing, TimelineClipBand clipBand, TimelinePickers pickers,
+    SoundFiles soundFiles, TimelineTexts texts)
 {
     private const string CanvasMenu = "##timeline-canvas-menu";
 
-    private static readonly FontAwesomeIcon[] LaneIcons =
-    [
-        FontAwesomeIcon.Running, FontAwesomeIcon.Smile, FontAwesomeIcon.CommentDots, FontAwesomeIcon.VolumeUp,
-        FontAwesomeIcon.Magic, FontAwesomeIcon.Toolbox, FontAwesomeIcon.EllipsisH,
-    ];
-    private static readonly string[] LaneGlyphs = [.. LaneIcons.Select(icon => icon.ToIconString())];
-    private static readonly string LockGlyph = FontAwesomeIcon.Lock.ToIconString();
-    // A face from the timeline's expression library.
-    private static readonly string PackGlyph = FontAwesomeIcon.Book.ToIconString();
-    private static readonly string PinGlyph = FontAwesomeIcon.Thumbtack.ToIconString();
+    private static readonly string[] LaneGlyphs = [.. TimelineUi.LaneIcons.Select(icon => icon.ToIconString())];
     // Offset, amplitude and pose layers.
-    private static readonly FontAwesomeIcon[] LayerIcons = [FontAwesomeIcon.Bone, FontAwesomeIcon.WaveSquare, FontAwesomeIcon.StreetView];
-    private static readonly string[] LayerGlyphs = [.. LayerIcons.Select(icon => icon.ToIconString())];
+    private static readonly string[] LayerGlyphs = [.. TimelineUi.LayerIcons.Select(icon => icon.ToIconString())];
     // A layer's bone rows, folded and unfolded.
     private static readonly string FoldedGlyph = FontAwesomeIcon.CaretRight.ToIconString();
     private static readonly string UnfoldedGlyph = FontAwesomeIcon.CaretDown.ToIconString();
@@ -44,37 +33,20 @@ public sealed partial class TimelineWindow
     private bool rightPressed;
     private TimelineHit menuHit;
     private int menuFrame;
-    private TimelineDocument? labelDocument;
-    private string[] labels = [];
-    private string lengthText = string.Empty;
-    private string? headerNote;
-    private string? pastEndWarning;
-    private string? layerBonesWarning;
-    private ImmutableArray<TimelineEffectCheck.Problem> effectProblems = [];
-    private string? effectWarning;
-    // The copies keeping them going swaps in, and how many events it changes.
-    private ImmutableArray<TimelineImport> effectCopies = [];
-    private int effectEvents;
     private TimelineLayout? groupLayout;
     private readonly List<GroupSpan> groupSpans = [];
     private readonly Dictionary<long, string> tickLabels = [];
 
-    private static FontAwesomeIcon LaneIcon(TimelineLane lane) => LaneIcons[Math.Min((int)lane, LaneIcons.Length - 1)];
+    /// <summary> Scrolls the lanes back to the top, for another clip. </summary>
+    public void ResetScroll() => scrollY = 0;
 
     private static string LaneGlyph(TimelineLane lane) => LaneGlyphs[Math.Min((int)lane, LaneGlyphs.Length - 1)];
 
-    private static FontAwesomeIcon LayerIcon(MotionLayerKind kind) => LayerIcons[Math.Min((int)kind, LayerIcons.Length - 1)];
-
     private static string LayerGlyph(MotionLayerKind kind) => LayerGlyphs[Math.Min((int)kind, LayerGlyphs.Length - 1)];
 
-    private static uint U32(Vector4 colour) => ImGui.GetColorU32(colour);
-
-    /// <summary> A pixel-snapped x for crisp one-pixel lines. </summary>
-    private static float Crisp(float x) => MathF.Floor(x) + .5f;
-
-    private void DrawCanvas(TimelineEditor current, Vector2 size)
+    public void Draw(TimelineEditor current, Vector2 size)
     {
-        var readOnly = ReadOnly;
+        var readOnly = session.ReadOnly;
         var padding = ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, Vector2.Zero);
         var background = ImRaii.PushColor(ImGuiCol.ChildBg, Theme.PanelBg);
         using var child = ImRaii.Child("##timeline-canvas", size, true, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
@@ -92,8 +64,8 @@ public sealed partial class TimelineWindow
         current.SnapTolerance = Theme.Scaled(8);
         current.SetWidth(Math.Max(1, area.X - legend));
         // Only a clip the game loops has a seam to blend or fix.
-        current.Loops = source is { } loaded && Fresh(loaded).Clip.IsLoop && !current.Document.Expression;
-        var clip = ClipBand(current.Document, row);
+        current.Loops = session.Source is { } loaded && session.Fresh(loaded).Clip.IsLoop && !current.Document.Expression;
+        var clip = TimelineClipBand.Height(current.Document, row);
         ClampScroll(current, row, ruler + clip, area.Y);
         var geometry = new TimelineGeometry(legend, ruler, row, Theme.Scaled(5), Theme.Scaled(9), scrollY, Theme.Scaled(18), clip);
 
@@ -107,7 +79,7 @@ public sealed partial class TimelineWindow
 
         HandlePointer(current, hit, local.X - legend, hovered, active, activated, readOnly, row);
         // The input above may have changed the document, the view or the scroll.
-        clip = ClipBand(current.Document, row);
+        clip = TimelineClipBand.Height(current.Document, row);
         ClampScroll(current, row, ruler + clip, area.Y);
         geometry = geometry with { ScrollY = scrollY, Clip = clip };
         if (hovered && !active)
@@ -201,7 +173,7 @@ public sealed partial class TimelineWindow
     {
         var io = ImGui.GetIO();
         // The seam's badge at the clip band's end selects the seam, set or not.
-        if (OnSeamBadge(io.MousePos))
+        if (clipBand.OnSeamBadge(io.MousePos))
         {
             current.SelectCut(new TimelineCutSelection(TimelineCutTarget.Seam, -1));
             return;
@@ -209,7 +181,7 @@ public sealed partial class TimelineWindow
         if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) && !readOnly &&
             hit.Part is TimelinePart.Lane or TimelinePart.Legend && hit.Lane is { } lane && TimelineWindowViews.AddKind(lane) is { } kind)
         {
-            RequestPicker(kind, hit.Part == TimelinePart.Legend ? current.Playhead : current.SnappedFrame(hit.Frame, io.KeyAlt), null);
+            pickers.Request(kind, hit.Part == TimelinePart.Legend ? current.Playhead : current.SnappedFrame(hit.Frame, io.KeyAlt), null);
             return;
         }
         // A double click on the empty bone row adds an offset section there.
@@ -220,7 +192,7 @@ public sealed partial class TimelineWindow
         }
         // A bone's row picks that bone for the panel and the Bones window; Ctrl adds it.
         if (hit.Bone is { } bone && hit.Layer != null && hit.Part is TimelinePart.BoneKey or TimelinePart.BoneLane or TimelinePart.Legend)
-            selection.Click(bone, io.KeyCtrl && hit.Part != TimelinePart.BoneKey);
+            posing.Selection.Click(bone, io.KeyCtrl && hit.Part != TimelinePart.BoneKey);
         if (!readOnly)
         {
             current.Press(hit, io.KeyCtrl, io.KeyShift, io.KeyAlt);
@@ -258,26 +230,6 @@ public sealed partial class TimelineWindow
         if (end - start < MotionEdits.SectionLength)
             start = Math.Max(0, end - MotionEdits.SectionLength);
         current.AddLayer(kind, start, end);
-    }
-
-    /// <summary> Labels, the past-end warning, the length texts and prop groups, rebuilt only when the document or layout changes. </summary>
-    private void RefreshDocumentTexts(TimelineDocument doc)
-    {
-        if (ReferenceEquals(labelDocument, doc))
-            return;
-        var events = doc.Events.IsDefault ? [] : doc.Events;
-        labels = new string[events.Length];
-        for (var index = 0; index < events.Length; index++)
-            labels[index] = TimelineWindowViews.EventLabel(events[index]);
-        lengthText = TimelineWindowViews.LengthText(doc);
-        headerNote = TimelineWindowViews.HeaderNote(doc);
-        pastEndWarning = TimelineWindowViews.PastEndWarning(doc);
-        layerBonesWarning = source == null ? null : TimelineWindowViews.LayerBonesWarning(doc, Fresh(source).Clip);
-        effectProblems = source?.EffectProblems(doc) ?? [];
-        effectWarning = TimelineWindowViews.EffectLoopWarning(effectProblems);
-        effectCopies = TimelineEffectCheck.Copies(effectProblems);
-        effectEvents = effectProblems.Select(p => p.Key).Distinct(StringComparer.Ordinal).Count();
-        labelDocument = doc;
     }
 
     private void RefreshGroups(TimelineDocument doc, TimelineLayout layout)
@@ -320,7 +272,7 @@ public sealed partial class TimelineWindow
         var doc = current.Document;
         var layout = current.Layout;
         var view = current.View;
-        RefreshDocumentTexts(doc);
+        texts.Refresh(doc);
         RefreshGroups(doc, layout);
         var min = origin;
         var max = origin + area;
@@ -342,12 +294,12 @@ public sealed partial class TimelineWindow
             if (bottom < rowsTop || top > max.Y)
                 continue;
             var colour = TimelineWindowViews.LaneColour(lane.Lane);
-            drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(max.X, bottom), U32(index % 2 == 0 ? Theme.PanelBg : Theme.RowAlt));
-            drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(min.X + Theme.Scaled(3), bottom), U32(colour));
+            drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(max.X, bottom), TimelineUi.U32(index % 2 == 0 ? Theme.PanelBg : Theme.RowAlt));
+            drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(min.X + Theme.Scaled(3), bottom), TimelineUi.U32(colour));
             var textY = top + (geometry.Row - fontSize) / 2;
             drawList.PushClipRect(new Vector2(min.X, top), new Vector2(trackLeft - Theme.Scaled(3), bottom), true);
-            drawList.AddText(UiBuilder.IconFont, fontSize, new Vector2(min.X + Theme.Scaled(9), textY), U32(colour), LaneGlyph(lane.Lane));
-            drawList.AddText(new Vector2(min.X + Theme.Scaled(30), textY), U32(Theme.Label), TimelineWindowViews.LaneName(lane.Lane));
+            drawList.AddText(UiBuilder.IconFont, fontSize, new Vector2(min.X + Theme.Scaled(9), textY), TimelineUi.U32(colour), LaneGlyph(lane.Lane));
+            drawList.AddText(new Vector2(min.X + Theme.Scaled(30), textY), TimelineUi.U32(Theme.Label), TimelineWindowViews.LaneName(lane.Lane));
             drawList.PopClipRect();
         }
         DrawLayerLegend(drawList, current, doc, layout, geometry, min, max, trackLeft, rowsTop, hovered ? hit : TimelineHit.None());
@@ -355,41 +307,41 @@ public sealed partial class TimelineWindow
 
         // The track: grid, the shade past the end, prop groups, events, then the lines on top.
         drawList.PushClipRect(new Vector2(trackLeft, rowsTop), max, true);
-        var grid = U32(Theme.WithAlpha(Theme.TreeLine, .28f));
+        var grid = TimelineUi.U32(Theme.WithAlpha(Theme.TreeLine, .28f));
         for (var frame = view.FirstTick(major); frame <= view.Last; frame += major)
         {
-            var x = Crisp(trackLeft + view.X(frame));
+            var x = TimelineUi.Crisp(trackLeft + view.X(frame));
             drawList.AddLine(new Vector2(x, rowsTop), new Vector2(x, max.Y), grid, line);
         }
         var endX = trackLeft + view.X(doc.Length);
         if (endX < max.X)
-            drawList.AddRectFilled(new Vector2(Math.Max(endX, trackLeft), rowsTop), max, U32(Theme.PastEnd));
+            drawList.AddRectFilled(new Vector2(Math.Max(endX, trackLeft), rowsTop), max, TimelineUi.U32(Theme.PastEnd));
         DrawGroups(drawList, geometry, view, min, max, trackLeft);
         DrawEvents(drawList, current, doc, layout, geometry, view, min, max, trackLeft, rowsTop, hovered && hit.OnEvent ? hit.Key : null);
-        DrawLayers(drawList, current, doc, layout, geometry, view, min, max, trackLeft, rowsTop, hovered ? hit : TimelineHit.None());
+        TimelinePainter.DrawLayers(drawList, current, doc, layout, geometry, view, min, max, trackLeft, rowsTop, hovered ? hit : TimelineHit.None());
         if (doc.LengthChanged)
         {
-            var ghost = Crisp(trackLeft + view.X(doc.SourceLength));
-            drawList.AddLine(new Vector2(ghost, rowsTop), new Vector2(ghost, max.Y), U32(Theme.WithAlpha(Theme.Muted, .45f)), line);
+            var ghost = TimelineUi.Crisp(trackLeft + view.X(doc.SourceLength));
+            drawList.AddLine(new Vector2(ghost, rowsTop), new Vector2(ghost, max.Y), TimelineUi.U32(Theme.WithAlpha(Theme.Muted, .45f)), line);
         }
-        drawList.AddLine(new Vector2(Crisp(endX), rowsTop), new Vector2(Crisp(endX), max.Y),
-            U32(handleHot ? Theme.Accent : Theme.WithAlpha(Theme.Muted, .7f)), handleHot ? Theme.Scaled(2) : line);
+        drawList.AddLine(new Vector2(TimelineUi.Crisp(endX), rowsTop), new Vector2(TimelineUi.Crisp(endX), max.Y),
+            TimelineUi.U32(handleHot ? Theme.Accent : Theme.WithAlpha(Theme.Muted, .7f)), handleHot ? Theme.Scaled(2) : line);
         drawList.PopClipRect();
 
         DrawRuler(drawList, current, doc, geometry, view, min, max, trackLeft, min.Y + geometry.Ruler, major, minor, handleHot);
-        DrawClipBand(drawList, current, geometry, min, max, trackLeft, hovered ? hit : TimelineHit.None());
+        clipBand.Draw(drawList, current, geometry, min, max, trackLeft, hovered ? hit : TimelineHit.None());
 
         // Lines that cross the ruler and the lanes.
         drawList.PushClipRect(new Vector2(trackLeft, min.Y), max, true);
         if (current.SnapGuide is { } guide)
         {
-            var x = Crisp(trackLeft + view.X(guide));
-            drawList.AddLine(new Vector2(x, min.Y), new Vector2(x, max.Y), U32(Theme.SnapGuide), line);
+            var x = TimelineUi.Crisp(trackLeft + view.X(guide));
+            drawList.AddLine(new Vector2(x, min.Y), new Vector2(x, max.Y), TimelineUi.U32(Theme.SnapGuide), line);
         }
-        var playheadX = Crisp(trackLeft + view.X(current.Playhead));
+        var playheadX = TimelineUi.Crisp(trackLeft + view.X(current.Playhead));
         if (playheadX >= trackLeft - 1 && playheadX <= max.X + 1)
         {
-            var playhead = U32(Theme.Playhead);
+            var playhead = TimelineUi.U32(Theme.Playhead);
             var size = Theme.Scaled(6);
             drawList.AddLine(new Vector2(playheadX, min.Y), new Vector2(playheadX, max.Y), playhead, line);
             drawList.AddTriangleFilled(new Vector2(playheadX - size, min.Y), new Vector2(playheadX + size, min.Y),
@@ -397,9 +349,9 @@ public sealed partial class TimelineWindow
         }
         drawList.PopClipRect();
 
-        var border = U32(Theme.WithAlpha(Theme.TreeLine, .7f));
-        drawList.AddLine(new Vector2(min.X, Crisp(rowsTop)), new Vector2(max.X, Crisp(rowsTop)), border, line);
-        drawList.AddLine(new Vector2(Crisp(trackLeft), min.Y), new Vector2(Crisp(trackLeft), max.Y), border, line);
+        var border = TimelineUi.U32(Theme.WithAlpha(Theme.TreeLine, .7f));
+        drawList.AddLine(new Vector2(min.X, TimelineUi.Crisp(rowsTop)), new Vector2(max.X, TimelineUi.Crisp(rowsTop)), border, line);
+        drawList.AddLine(new Vector2(TimelineUi.Crisp(trackLeft), min.Y), new Vector2(TimelineUi.Crisp(trackLeft), max.Y), border, line);
     }
 
     private void DrawRuler(ImDrawListPtr drawList, TimelineEditor current, TimelineDocument doc, TimelineGeometry geometry, TimelineView view,
@@ -407,13 +359,13 @@ public sealed partial class TimelineWindow
     {
         var line = Math.Max(1, MathF.Floor(Theme.Scale));
         drawList.PushClipRect(new Vector2(trackLeft, min.Y), new Vector2(max.X, rowsTop), true);
-        drawList.AddRectFilled(new Vector2(trackLeft, min.Y), new Vector2(max.X, rowsTop), U32(Theme.RowAlt));
-        var tick = U32(Theme.Muted);
-        var faint = U32(Theme.WithAlpha(Theme.Muted, .4f));
-        var text = U32(Theme.Hint);
+        drawList.AddRectFilled(new Vector2(trackLeft, min.Y), new Vector2(max.X, rowsTop), TimelineUi.U32(Theme.RowAlt));
+        var tick = TimelineUi.U32(Theme.Muted);
+        var faint = TimelineUi.U32(Theme.WithAlpha(Theme.Muted, .4f));
+        var text = TimelineUi.U32(Theme.Hint);
         for (var frame = view.FirstTick(minor); frame <= view.Last; frame += minor)
         {
-            var x = Crisp(trackLeft + view.X(frame));
+            var x = TimelineUi.Crisp(trackLeft + view.X(frame));
             var isMajor = frame % major == 0;
             drawList.AddLine(new Vector2(x, min.Y + geometry.Ruler * (isMajor ? .45f : .72f)), new Vector2(x, rowsTop), isMajor ? tick : faint, line);
             if (isMajor)
@@ -421,16 +373,16 @@ public sealed partial class TimelineWindow
         }
         var endX = trackLeft + view.X(doc.Length);
         if (endX < max.X)
-            drawList.AddRectFilled(new Vector2(Math.Max(endX, trackLeft), min.Y), new Vector2(max.X, rowsTop), U32(Theme.PastEnd));
+            drawList.AddRectFilled(new Vector2(Math.Max(endX, trackLeft), min.Y), new Vector2(max.X, rowsTop), TimelineUi.U32(Theme.PastEnd));
         if (doc.LengthChanged)
         {
-            var ghost = Crisp(trackLeft + view.X(doc.SourceLength));
-            drawList.AddLine(new Vector2(ghost, min.Y), new Vector2(ghost, rowsTop), U32(Theme.WithAlpha(Theme.Muted, .6f)), line);
+            var ghost = TimelineUi.Crisp(trackLeft + view.X(doc.SourceLength));
+            drawList.AddLine(new Vector2(ghost, min.Y), new Vector2(ghost, rowsTop), TimelineUi.U32(Theme.WithAlpha(Theme.Muted, .6f)), line);
         }
         // The length handle: a grip at the end, dragged to change the length.
         var grip = Theme.Scaled(3);
         drawList.AddRectFilled(new Vector2(endX - grip, min.Y + geometry.Ruler * .15f), new Vector2(endX + grip, rowsTop),
-            U32(handleHot ? Theme.Accent : Theme.Muted), Theme.Scaled(2));
+            TimelineUi.U32(handleHot ? Theme.Accent : Theme.Muted), Theme.Scaled(2));
         drawList.PopClipRect();
     }
 
@@ -438,8 +390,8 @@ public sealed partial class TimelineWindow
     {
         if (groupSpans.Count == 0)
             return;
-        var fill = U32(Theme.WithAlpha(Theme.TrackProp, .07f));
-        var outline = U32(Theme.WithAlpha(Theme.TrackProp, .4f));
+        var fill = TimelineUi.U32(Theme.WithAlpha(Theme.TrackProp, .07f));
+        var outline = TimelineUi.U32(Theme.WithAlpha(Theme.TrackProp, .4f));
         var rounding = Theme.Scaled(4);
         var margin = Theme.Scaled(3);
         foreach (var span in groupSpans)
@@ -464,7 +416,7 @@ public sealed partial class TimelineWindow
         var first = view.First - margin;
         var last = view.Last + margin;
         var pad = Theme.Scaled(2);
-        for (var index = 0; index < events.Length && index < labels.Length; index++)
+        for (var index = 0; index < events.Length && index < texts.Labels.Length; index++)
         {
             var ev = layout.Shown(index);
             var top = min.Y + geometry.RowTop(layout.RowOf(index));
@@ -473,146 +425,23 @@ public sealed partial class TimelineWindow
             var end = layout.EndOf(index);
             if (end < first || ev.Start > last)
                 continue;
-            DrawEvent(drawList, current, ev, labels[index], end, geometry, view, trackLeft, top + pad, top + geometry.Row - pad,
+            TimelinePainter.DrawEvent(drawList, current, ev, texts.Labels[index], end, geometry, view, trackLeft, top + pad, top + geometry.Row - pad,
                 hotKey != null && string.Equals(ev.Key, hotKey, StringComparison.Ordinal), SoundMarkOf(doc, ev));
         }
     }
 
-    /// <summary>
-    /// What a sound clip shows besides its bar: the frame its solid part ends at (int.MaxValue while
-    /// its file is read), a pin, its file's changes, and something to check (a sound that ends before
-    /// its audio, or Keep looping on a file that plays once).
-    /// </summary>
-    private readonly record struct SoundMark(int SolidEnd, bool Pinned, bool Changed, bool Check);
-
-    private SoundMark? SoundMarkOf(TimelineDocument doc, TimelineEvent ev)
+    private TimelinePainter.SoundMark? SoundMarkOf(TimelineDocument doc, TimelineEvent ev)
     {
         if (ev.Magic != "C063" || TimelineSoundKey.Of(ev) is not { } key)
             return null;
         var pinned = ev.Pin != null;
         var changed = doc.SoundEdits.ContainsKey(key);
-        if (ShownIfRead(doc, key) is not { Seconds.IsEmpty: false } shown)
-            return pinned || changed ? new SoundMark(int.MaxValue, pinned, changed, false) : null;
+        if (soundFiles.ShownIfRead(doc, key) is not { Seconds.IsEmpty: false } shown)
+            return pinned || changed ? new TimelinePainter.SoundMark(int.MaxValue, pinned, changed, false) : null;
         var span = TimelineWindowViews.SoundSpan(shown.Seconds, ev.Pin is { } pin && shown.Ids.IndexOf(pin) is >= 0 and var index ? index : null);
         var loop = ev.Values?.GetValueOrDefault("Loop", 1) ?? 1;
         var crosses = doc.Cut && TimelineSoundCuts.Crosses(doc, ev, shown.Seconds.Max());
-        return new SoundMark(ev.Start + span.Solid, pinned, changed, shown.EndsEarly || loop == -1 && !shown.Loops || crosses);
-    }
-
-    /// <summary> A dashed outline: what a random sound may still play after its shortest alternative ends. </summary>
-    private static void DashedOutline(ImDrawListPtr drawList, float x0, float y0, float x1, float y1, uint colour, float thickness)
-    {
-        var dash = Theme.Scaled(4);
-        var gap = Theme.Scaled(3);
-        for (var x = x0; x < x1; x += dash + gap)
-        {
-            var end = Math.Min(x + dash, x1);
-            drawList.AddLine(new Vector2(x, y0), new Vector2(end, y0), colour, thickness);
-            drawList.AddLine(new Vector2(x, y1), new Vector2(end, y1), colour, thickness);
-        }
-        drawList.AddLine(new Vector2(x1, y0), new Vector2(x1, y1), colour, thickness);
-    }
-
-    /// <summary>
-    /// Whether <paramref name="ev"/> is a face from the timeline's expression library, marked with a
-    /// book; unmarked until the catalog knows which faces are always loaded.
-    /// </summary>
-    private static bool FromPack(TimelineEditor current, TimelineEvent ev) =>
-        current.ResidentMotions is { } resident && TimelineEdits.FromPack(current.Document, ev, resident);
-
-    /// <summary>
-    /// One event: a clip is a filled bar over its duration, a marker a diamond on its frame, and a
-    /// sound also shows how long its file plays: solid to its shortest alternative, dashed to its
-    /// longest. Selected events get an accent outline, locked ones are dimmed with a lock, pinned
-    /// sounds get a pin, conditional ones a small dot, a changed look or sound an accent dot and a
-    /// sound with something to check an amber one.
-    /// </summary>
-    private static void DrawEvent(ImDrawListPtr drawList, TimelineEditor current, TimelineEvent ev, string label, int end,
-        TimelineGeometry geometry, TimelineView view, float trackLeft, float y0, float y1, bool hot, SoundMark? sound = null)
-    {
-        var (left, right) = geometry.EventSpan(ev, end, view);
-        var x0 = trackLeft + left;
-        var x1 = trackLeft + right;
-        var colour = TimelineWindowViews.LaneColour(ev.Lane);
-        var locked = ev.Access == TimelineAccess.Locked;
-        var selected = current.IsSelected(ev.Key);
-        var rounding = Theme.Scaled(3);
-        var line = Math.Max(1, MathF.Floor(Theme.Scale));
-        var middle = (y0 + y1) / 2;
-        var fontSize = ImGui.GetFontSize();
-        float labelLeft, labelRight, badgeX;
-        if (ev.Duration > 0)
-        {
-            var edge = Math.Max(trackLeft + geometry.RightEdgeX(ev, view), x0 + 1);
-            var inset = (y1 - y0) * .25f;
-            if (x1 > edge + 1)
-                drawList.AddRectFilled(new Vector2(edge, y0 + inset), new Vector2(x1, y1 - inset), U32(Theme.WithAlpha(colour, .2f)), rounding);
-            drawList.AddRectFilled(new Vector2(x0, y0), new Vector2(edge, y1), U32(Theme.WithAlpha(colour, locked ? .24f : hot ? .8f : .6f)), rounding);
-            drawList.AddRect(new Vector2(x0, y0), new Vector2(edge, y1), U32(Theme.WithAlpha(colour, locked ? .45f : .95f)), rounding, ImDrawFlags.None, line);
-            if (selected)
-                drawList.AddRect(new Vector2(x0 - 1, y0 - 1), new Vector2(edge + 1, y1 + 1), U32(Theme.Accent), rounding, ImDrawFlags.None, Theme.Scaled(2));
-            labelLeft = x0 + Theme.Scaled(4);
-            labelRight = edge - Theme.Scaled(4);
-            badgeX = edge - Theme.Scaled(5);
-        }
-        else
-        {
-            var centre = trackLeft + view.X(ev.Start);
-            var half = Math.Min((y1 - y0) / 2, Theme.Scaled(7));
-            // A random sound is solid while every alternative plays, dashed while only the longer ones do.
-            var solid = sound is { SolidEnd: var solidEnd and < int.MaxValue } ? Math.Clamp(trackLeft + view.X(solidEnd), centre, x1) : x1;
-            if (solid > centre + half + 1)
-                drawList.AddRectFilled(new Vector2(centre, middle - half * .6f), new Vector2(solid, middle + half * .6f),
-                    U32(Theme.WithAlpha(colour, hot ? .32f : .22f)), rounding);
-            if (x1 > solid + 1)
-                DashedOutline(drawList, Math.Max(solid, centre + half), middle - half * .6f, x1, middle + half * .6f,
-                    U32(Theme.WithAlpha(colour, hot ? .7f : .5f)), line);
-            if (selected)
-            {
-                var ring = half + Theme.Scaled(2);
-                drawList.AddQuadFilled(new Vector2(centre, middle - ring), new Vector2(centre + ring, middle), new Vector2(centre, middle + ring),
-                    new Vector2(centre - ring, middle), U32(Theme.Accent));
-            }
-            drawList.AddQuadFilled(new Vector2(centre, middle - half), new Vector2(centre + half, middle), new Vector2(centre, middle + half),
-                new Vector2(centre - half, middle), U32(Theme.WithAlpha(colour, locked ? .5f : hot ? 1 : .9f)));
-            labelLeft = centre + half + Theme.Scaled(4);
-            labelRight = x1 - Theme.Scaled(3);
-            badgeX = centre + half;
-        }
-        if (locked && labelRight - labelLeft > Theme.Scaled(14))
-        {
-            drawList.AddText(UiBuilder.IconFont, fontSize * .8f, new Vector2(labelLeft, middle - fontSize * .4f), U32(Theme.Muted), LockGlyph);
-            labelLeft += fontSize;
-        }
-        if (FromPack(current, ev) && labelRight - labelLeft > Theme.Scaled(14))
-        {
-            drawList.AddText(UiBuilder.IconFont, fontSize * .8f, new Vector2(labelLeft, middle - fontSize * .4f), U32(Theme.Text), PackGlyph);
-            labelLeft += fontSize;
-        }
-        if (sound is { Pinned: true } && labelRight - labelLeft > Theme.Scaled(14))
-        {
-            drawList.AddText(UiBuilder.IconFont, fontSize * .8f, new Vector2(labelLeft, middle - fontSize * .4f), U32(Theme.Text), PinGlyph);
-            labelLeft += fontSize;
-        }
-        if (labelRight - labelLeft > Theme.Scaled(18))
-        {
-            drawList.PushClipRect(new Vector2(labelLeft, y0), new Vector2(labelRight, y1), true);
-            drawList.AddText(new Vector2(labelLeft, middle - fontSize / 2), U32(locked ? Theme.Muted : Theme.Text), label);
-            drawList.PopClipRect();
-        }
-        var dot = badgeX;
-        if (ev.Conditional)
-        {
-            drawList.AddCircleFilled(new Vector2(dot, y0 + Theme.Scaled(3)), Theme.Scaled(2.5f), U32(Theme.Info));
-            dot -= Theme.Scaled(7);
-        }
-        if (ev.Look != null || sound is { Changed: true })
-        {
-            drawList.AddCircleFilled(new Vector2(dot, y0 + Theme.Scaled(3)), Theme.Scaled(2.5f), U32(Theme.Accent));
-            dot -= Theme.Scaled(7);
-        }
-        if (sound is { Check: true })
-            drawList.AddCircleFilled(new Vector2(dot, y0 + Theme.Scaled(3)), Theme.Scaled(2.5f), U32(Theme.Warning));
+        return new TimelinePainter.SoundMark(ev.Start + span.Solid, pinned, changed, shown.EndsEarly || loop == -1 && !shown.Loops || crosses);
     }
 
     /// <summary>
@@ -638,178 +467,42 @@ public sealed partial class TimelineWindow
                 continue;
             var layer = entry.Layer >= 0 ? doc.Motion[entry.Layer] : null;
             var colour = layer == null ? Theme.Muted : TimelineWindowViews.LayerColour(layer.Kind);
-            var band = U32(layerBand % 2 == 1 ? Theme.RowAlt : Theme.PanelBg);
+            var band = TimelineUi.U32(layerBand % 2 == 1 ? Theme.RowAlt : Theme.PanelBg);
             var textY = top + (geometry.Row - fontSize) / 2;
             if (entry.Bone is { } bone && layer != null)
             {
                 drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(max.X, bottom), band);
-                drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(max.X, bottom), U32(Theme.WithAlpha(colour, .05f)));
-                drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(min.X + Theme.Scaled(3), bottom), U32(Theme.WithAlpha(colour, .45f)));
-                var picked = current.SelectedLayer == layer.Key && selection.Contains(bone);
+                drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(max.X, bottom), TimelineUi.U32(Theme.WithAlpha(colour, .05f)));
+                drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(min.X + Theme.Scaled(3), bottom), TimelineUi.U32(Theme.WithAlpha(colour, .45f)));
+                var picked = current.SelectedLayer == layer.Key && posing.Selection.Contains(bone);
                 var hot = hit.Part == TimelinePart.Legend && hit.Row == row;
                 drawList.PushClipRect(new Vector2(min.X, top), new Vector2(trackLeft - Theme.Scaled(3), bottom), true);
                 drawList.AddText(new Vector2(min.X + Theme.Scaled(22), textY),
-                    U32(picked ? Theme.Accent : hot ? Theme.Text : !layer.Enabled ? Theme.Muted : Theme.Label), AnimationPresentation.BoneName(bone));
+                    TimelineUi.U32(picked ? Theme.Accent : hot ? Theme.Text : !layer.Enabled ? Theme.Muted : Theme.Label), AnimationPresentation.BoneName(bone));
                 drawList.PopClipRect();
                 continue;
             }
             drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(max.X, bottom), band);
-            drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(min.X + Theme.Scaled(3), bottom), U32(colour));
+            drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(min.X + Theme.Scaled(3), bottom), TimelineUi.U32(colour));
             var unfolds = layer != null && TimelineLayout.Unfolds(layer);
             var nameRight = trackLeft - Theme.Scaled(3) - (unfolds ? geometry.Unfold : 0);
             drawList.PushClipRect(new Vector2(min.X, top), new Vector2(nameRight, bottom), true);
-            drawList.AddText(UiBuilder.IconFont, fontSize, new Vector2(min.X + Theme.Scaled(9), textY), U32(Theme.WithAlpha(colour, layer?.Enabled == false ? .5f : 1)),
+            drawList.AddText(UiBuilder.IconFont, fontSize, new Vector2(min.X + Theme.Scaled(9), textY), TimelineUi.U32(Theme.WithAlpha(colour, layer?.Enabled == false ? .5f : 1)),
                 LayerGlyph(layer?.Kind ?? MotionLayerKind.Offset));
             var name = layer == null ? Theme.Hint : !layer.Enabled ? Theme.Muted : current.SelectedLayer == layer.Key ? Theme.Accent : Theme.Label;
-            drawList.AddText(new Vector2(min.X + Theme.Scaled(30), textY), U32(name), layer?.Name ?? TimelineWindowViews.BonesLaneName);
+            drawList.AddText(new Vector2(min.X + Theme.Scaled(30), textY), TimelineUi.U32(name), layer?.Name ?? TimelineWindowViews.BonesLaneName);
             drawList.PopClipRect();
             if (unfolds)
             {
                 var hot = hit.Part == TimelinePart.LayerUnfold && hit.Row == row;
                 var glyph = current.IsUnfolded(layer!.Key) ? UnfoldedGlyph : FoldedGlyph;
                 drawList.AddText(UiBuilder.IconFont, fontSize, new Vector2(trackLeft - geometry.Unfold + Theme.Scaled(3), textY),
-                    U32(hot ? Theme.Accent : Theme.Muted), glyph);
+                    TimelineUi.U32(hot ? Theme.Accent : Theme.Muted), glyph);
             }
         }
-        var y = Crisp(min.Y + geometry.RowTop(layout.MotionFirstRow));
+        var y = TimelineUi.Crisp(min.Y + geometry.RowTop(layout.MotionFirstRow));
         if (y > rowsTop && y < max.Y)
-            drawList.AddLine(new Vector2(min.X, y), new Vector2(max.X, y), U32(Theme.WithAlpha(Theme.TreeLine, .8f)), Math.Max(1, MathF.Floor(Theme.Scale)));
-    }
-
-    /// <summary>
-    /// Each bone layer: a faint bar over its frames with its weight drawn on it, rising over the fade in
-    /// and falling over the fade out; its keys as diamonds; and, when it is selected or under the
-    /// pointer, handles where the fades end. A layer turned off is dimmed.
-    /// </summary>
-    private static void DrawLayers(ImDrawListPtr drawList, TimelineEditor current, TimelineDocument doc, TimelineLayout layout,
-        TimelineGeometry geometry, TimelineView view, Vector2 min, Vector2 max, float trackLeft, float rowsTop, TimelineHit hit)
-    {
-        var pad = Theme.Scaled(2);
-        var rounding = Theme.Scaled(3);
-        var line = Math.Max(1, MathF.Floor(Theme.Scale));
-        var fontSize = ImGui.GetFontSize();
-        for (var index = 0; index < layout.LayerCount; index++)
-        {
-            var layer = doc.Motion[index];
-            var top = min.Y + geometry.RowTop(layout.LayerRow(index));
-            if (top + geometry.Row < rowsTop || top > max.Y || layer.End < view.First || layer.Start > view.Last)
-                continue;
-            var y0 = top + pad;
-            var y1 = top + geometry.Row - pad;
-            var x0 = trackLeft + view.X(layer.Start);
-            var x1 = Math.Max(trackLeft + view.X(layer.End), x0 + 1);
-            var fadeInX = Math.Clamp(trackLeft + view.X(layer.Start + layer.FadeIn), x0, x1);
-            var fadeOutX = Math.Clamp(trackLeft + view.X(layer.End - layer.FadeOut), fadeInX, x1);
-            var colour = TimelineWindowViews.LayerColour(layer.Kind);
-            var selected = current.SelectedLayer == layer.Key;
-            var hot = hit.OnLayer && hit.Layer == layer.Key;
-            var alpha = layer.Enabled ? 1f : .4f;
-            drawList.AddRectFilled(new Vector2(x0, y0), new Vector2(x1, y1), U32(Theme.WithAlpha(colour, .14f * alpha)), rounding);
-            drawList.AddQuadFilled(new Vector2(x0, y1), new Vector2(fadeInX, y0), new Vector2(fadeOutX, y0), new Vector2(x1, y1),
-                U32(Theme.WithAlpha(colour, (hot ? .62f : .46f) * alpha)));
-            drawList.AddRect(new Vector2(x0, y0), new Vector2(x1, y1), U32(Theme.WithAlpha(colour, .9f * alpha)), rounding, ImDrawFlags.None, line);
-            if (selected)
-                drawList.AddRect(new Vector2(x0 - 1, y0 - 1), new Vector2(x1 + 1, y1 + 1), U32(Theme.Accent), rounding, ImDrawFlags.None, Theme.Scaled(2));
-            var labelLeft = Math.Max(x0, trackLeft) + Theme.Scaled(4);
-            var labelRight = x1 - Theme.Scaled(4);
-            if (labelRight - labelLeft > Theme.Scaled(18))
-            {
-                drawList.PushClipRect(new Vector2(labelLeft, y0), new Vector2(labelRight, y1), true);
-                drawList.AddText(new Vector2(labelLeft, top + (geometry.Row - fontSize) / 2), U32(layer.Enabled ? Theme.Text : Theme.Muted),
-                    TimelineWindowViews.LayerLabel(layer));
-                drawList.PopClipRect();
-            }
-            var middle = (y0 + y1) / 2;
-            var half = Math.Min((y1 - y0) / 2, Theme.Scaled(5));
-            foreach (var key in layer.Keys)
-            {
-                var x = trackLeft + view.X(key.Frame);
-                if (x < trackLeft - half || x > max.X + half)
-                    continue;
-                var shape = KeyShapeOf(layer, key);
-                if (selected && current.SelectedKey == key.Frame)
-                    DrawKeyMark(drawList, shape, x, middle, half + Theme.Scaled(2),
-                        U32(current.SelectedBone == null ? Theme.Accent : Theme.WithAlpha(Theme.Accent, .45f)));
-                // A key outside the layer still shapes the curve but never applies on its own.
-                var inside = key.Frame >= layer.Start && key.Frame <= layer.End;
-                var hotKey = hot && hit.Part == TimelinePart.LayerKey && hit.KeyFrame == key.Frame;
-                DrawKeyMark(drawList, shape, x, middle, half, U32(Theme.WithAlpha(Theme.Text, (inside ? hotKey ? 1 : .88f : .4f) * alpha)));
-            }
-            if (selected || hot)
-            {
-                var radius = Theme.Scaled(3);
-                drawList.AddCircleFilled(new Vector2(fadeInX, y0), radius,
-                    U32(hot && hit.Part == TimelinePart.LayerFadeIn ? Theme.Accent : Theme.WithAlpha(Theme.Text, .8f)));
-                drawList.AddCircleFilled(new Vector2(fadeOutX, y0), radius,
-                    U32(hot && hit.Part == TimelinePart.LayerFadeOut ? Theme.Accent : Theme.WithAlpha(Theme.Text, .8f)));
-            }
-        }
-        DrawBoneRows(drawList, current, doc, layout, geometry, view, min, max, trackLeft, rowsTop, hit);
-    }
-
-    private enum KeyShape : byte { Diamond, Circle, Square }
-
-    /// <summary>A hold is a square, a key with its own ease a circle, a key going the layer's way a diamond.</summary>
-    private static KeyShape KeyShapeOf(MotionLayer layer, MotionKey key) =>
-        MotionEvaluator.KeyEase(layer, key) == MotionInterpolation.Step ? KeyShape.Square : key.Ease != null ? KeyShape.Circle : KeyShape.Diamond;
-
-    private static void DrawKeyMark(ImDrawListPtr drawList, KeyShape shape, float x, float y, float half, uint colour)
-    {
-        switch (shape)
-        {
-            case KeyShape.Square:
-                var side = half * .8f;
-                drawList.AddRectFilled(new Vector2(x - side, y - side), new Vector2(x + side, y + side), colour);
-                break;
-            case KeyShape.Circle:
-                drawList.AddCircleFilled(new Vector2(x, y), half * .9f, colour);
-                break;
-            default:
-                drawList.AddQuadFilled(new Vector2(x, y - half), new Vector2(x + half, y), new Vector2(x, y + half), new Vector2(x - half, y), colour);
-                break;
-        }
-    }
-
-    /// <summary>
-    /// An unfolded layer's bone rows: a thin line over the layer's frames and the bone's own keys, smaller
-    /// than the layer's. The selected one gets a ring, and so does each bone's part of a selected whole key.
-    /// </summary>
-    private static void DrawBoneRows(ImDrawListPtr drawList, TimelineEditor current, TimelineDocument doc, TimelineLayout layout,
-        TimelineGeometry geometry, TimelineView view, Vector2 min, Vector2 max, float trackLeft, float rowsTop, TimelineHit hit)
-    {
-        var line = Math.Max(1, MathF.Floor(Theme.Scale));
-        for (var row = layout.MotionFirstRow; row < layout.MotionFirstRow + layout.MotionRows; row++)
-        {
-            if (layout.BoneAt(row) is not { } entry)
-                continue;
-            var top = min.Y + geometry.RowTop(row);
-            if (top + geometry.Row < rowsTop || top > max.Y)
-                continue;
-            var layer = doc.Motion[entry.Layer];
-            var colour = TimelineWindowViews.LayerColour(layer.Kind);
-            var alpha = layer.Enabled ? 1f : .4f;
-            var middle = top + geometry.Row / 2;
-            var x0 = trackLeft + view.X(layer.Start);
-            var x1 = Math.Max(trackLeft + view.X(layer.End), x0 + 1);
-            drawList.AddLine(new Vector2(x0, middle), new Vector2(x1, middle), U32(Theme.WithAlpha(colour, .45f * alpha)), line);
-            var half = Math.Min(geometry.Row / 2 - Theme.Scaled(2), Theme.Scaled(4));
-            var selectedLayer = current.SelectedLayer == layer.Key;
-            foreach (var key in layer.Keys)
-            {
-                if (!key.Bones.ContainsKey(entry.Bone))
-                    continue;
-                var x = trackLeft + view.X(key.Frame);
-                if (x < trackLeft - half || x > max.X + half)
-                    continue;
-                var shape = KeyShapeOf(layer, key);
-                if (selectedLayer && current.SelectedKey == key.Frame && (current.SelectedBone == null || current.SelectedBone == entry.Bone))
-                    DrawKeyMark(drawList, shape, x, middle, half + Theme.Scaled(2),
-                        U32(current.SelectedBone == entry.Bone ? Theme.Accent : Theme.WithAlpha(Theme.Accent, .45f)));
-                var inside = key.Frame >= layer.Start && key.Frame <= layer.End;
-                var hotKey = hit.Part == TimelinePart.BoneKey && hit.Row == row && hit.KeyFrame == key.Frame;
-                DrawKeyMark(drawList, shape, x, middle, half, U32(Theme.WithAlpha(hotKey ? Theme.Text : colour, (inside ? hotKey ? 1 : .95f : .4f) * alpha)));
-            }
-        }
+            drawList.AddLine(new Vector2(min.X, y), new Vector2(max.X, y), TimelineUi.U32(Theme.WithAlpha(Theme.TreeLine, .8f)), Math.Max(1, MathF.Floor(Theme.Scale)));
     }
 
     private void DrawTooltip(TimelineEditor current, TimelineHit hit, bool hovering, bool readOnly)
@@ -838,7 +531,7 @@ public sealed partial class TimelineWindow
                 ImGui.TextColored(Theme.Hint, "Click to pick this bone. Ctrl+click adds it.");
             return;
         }
-        if (DrawClipTooltip(hit, readOnly))
+        if (TimelineClipBand.DrawTooltip(hit, readOnly))
             return;
         if (hit.Part == TimelinePart.MotionLane && hit.Layer == null && !readOnly && Widgets.HoverDelay("timeline-bones-lane"))
         {
@@ -863,7 +556,7 @@ public sealed partial class TimelineWindow
                 ImGui.TextUnformatted("Lasts " + TimelineWindowViews.DurationText(played));
             if (ev.Path.Length > 0)
                 ImGui.TextColored(Theme.Hint, ev.Path);
-            if (FromPack(current, ev))
+            if (TimelinePainter.FromPack(current, ev))
                 ImGui.TextUnformatted($"From the {current.Document.FacePack} expressions.");
             if (ev.LockReason is { Length: > 0 } reason)
                 ImGui.TextColored(Theme.Warning, (ev.Access == TimelineAccess.Locked ? "Locked: " : "Move only: ") + reason);
@@ -871,7 +564,7 @@ public sealed partial class TimelineWindow
                 ImGui.TextColored(Theme.Info, "Plays only under a condition.");
             if (ev.Look != null)
                 ImGui.TextColored(Theme.Accent, "Look changed.");
-            if (CrossesCut(current.Document, ev, false))
+            if (soundFiles.CrossesCut(current.Document, ev, false))
                 ImGui.TextColored(Theme.Warning, TimelineWindowViews.CrossesCutTip);
             return;
         }
@@ -933,7 +626,7 @@ public sealed partial class TimelineWindow
         if (menuHit.Part is TimelinePart.ClipRow or TimelinePart.ClipPart or TimelinePart.ClipLeft or TimelinePart.ClipRight or
             TimelinePart.Join or TimelinePart.JoinEdge or TimelinePart.Seam or TimelinePart.SeamEdge)
         {
-            DrawClipMenu(current, readOnly);
+            clipBand.DrawMenu(current, readOnly, menuFrame);
             return;
         }
         if (menuHit.Part is TimelinePart.BoneLane or TimelinePart.Legend && menuHit.Bone is { } bone &&
@@ -980,7 +673,7 @@ public sealed partial class TimelineWindow
         }
         for (var index = 0; index < TimelineWindowViews.AddKinds.Length; index++)
             if (ImGui.MenuItem(AddHereLabels[index], "", false, !readOnly))
-                RequestPicker(TimelineWindowViews.AddKinds[index], menuFrame, null);
+                pickers.Request(TimelineWindowViews.AddKinds[index], menuFrame, null);
         ImGui.Separator();
         if (ImGui.MenuItem("Paste here", "Ctrl+V", false, !readOnly && current.CanPaste))
         {
@@ -1041,7 +734,7 @@ public sealed partial class TimelineWindow
     }
 
     /// <summary> Whether the selection holds an event that can be duplicated, and one that can be moved or deleted. </summary>
-    private static (bool Editable, bool Movable) SelectionAccess(TimelineEditor current)
+    public static (bool Editable, bool Movable) SelectionAccess(TimelineEditor current)
     {
         bool editable = false, movable = false;
         var events = current.Document.Events.IsDefault ? [] : current.Document.Events;
@@ -1059,7 +752,7 @@ public sealed partial class TimelineWindow
     /// Shortcuts, only while this window is focused, no text is being typed, no control is active
     /// and no menu is open. Space is left to the game (it jumps), so it never plays.
     /// </summary>
-    private void HandleKeys(TimelineEditor current)
+    public void HandleKeys(TimelineEditor current)
     {
         if (!ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows))
             return;
@@ -1069,7 +762,7 @@ public sealed partial class TimelineWindow
         ImGui.SetNextFrameWantCaptureKeyboard(true);
         if (ImGui.IsAnyItemActive() || ImGui.IsPopupOpen("", ImGuiPopupFlags.AnyPopupId | ImGuiPopupFlags.AnyPopupLevel))
             return;
-        var readOnly = ReadOnly;
+        var readOnly = session.ReadOnly;
         var ctrl = io.KeyCtrl;
         var shift = io.KeyShift;
         var alt = io.KeyAlt;

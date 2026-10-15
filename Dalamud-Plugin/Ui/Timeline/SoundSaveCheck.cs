@@ -1,18 +1,16 @@
-using System.Collections.Immutable;
 using Dalamud.Bindings.ImGui;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Timeline;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// Sound changes in a save and a preview: what must be read first, which mod files a save writes
-/// over in place, and the question when other animations of the mod play one of them too.
+/// Sound changes in a save: which mod files a save in place writes over, and the question when other
+/// animations of the mod play one of them too. The answer holds for that save.
 /// </summary>
-public sealed partial class TimelineWindow
+internal sealed class SoundSaveCheck(TimelineSession session, SoundFiles soundFiles)
 {
     private const string SoundAskPopup = "Change the sound everywhere?###timeline-sound-ask";
 
@@ -31,45 +29,30 @@ public sealed partial class TimelineWindow
     private List<SharedSound>? soundAsk;
     private HashSet<string>? soundInPlace;
 
-    /// <summary>
-    /// Why the sound changes can't be saved or previewed yet: a file with changes or a pin still being
-    /// read, one that couldn't be, or changes that can't be written.
-    /// </summary>
-    private string? SoundMissing(TimelineDocument document)
+    /// <summary>The mod is being checked for other animations playing the sounds.</summary>
+    public bool Checking => soundCheck != null;
+
+    /// <summary>The question about the sounds waits for an answer.</summary>
+    public bool Asking => soundAsk != null;
+
+    /// <summary> Forgets a check or a question, which belongs to the clip it was for. </summary>
+    public void Forget()
     {
-        if (source is not { } loaded || document.Events.IsDefault)
-            return null;
-        foreach (var ev in document.Events)
-        {
-            if (TimelineSoundKey.Of(ev) is not { } key || !document.SoundEdits.ContainsKey(key) && ev.Pin == null)
-                continue;
-            var file = Path.GetFileName(key.Path);
-            var read = SoundFor(key.Path, loaded);
-            if (read.Bytes == null)
-                return read.Error != null ? $"{file} could not be read, so its changes can't be used." : "Reading the sound files.";
-            if (ShownSound(document, key, loaded) is not { } shown)
-                continue;
-            if (shown.Error is { } error)
-                return $"{file}: {error}";
-            if (TimelineWindowViews.PinGone(ev.Pin, shown.Ids, file) is { } gone)
-                return gone;
-        }
-        return null;
+        soundCheck = null;
+        soundCheckDocument = null;
+        soundAsk = null;
+        soundInPlace = null;
     }
 
-    /// <summary>
-    /// <paramref name="document"/> with its sound changes and pins written into files (see
-    /// <see cref="TimelineSoundEdits.Bake"/>): the copies to package and the mod files written over in place.
-    /// </summary>
-    private TimelineSoundBake WithSounds(TimelineDocument document, Func<TimelineSoundKey, TimelineSoundRoute> route, Func<string, byte[]?>? sound = null) =>
-        TimelineSoundEdits.Bake(document, sound ?? SoundBytes, ImportBytes, route);
+    /// <summary> The save started: the sound files it writes over in place are its own now. </summary>
+    public void SaveStarted() => soundInPlace = null;
 
     /// <summary>
     /// Save: in place, edited sounds of the clip's own mod are written over unless other animations of
     /// the mod (or of the game, for a game sound the mod replaces) play them too, which asks first;
-    /// everything else saves at once.
+    /// everything else saves at once (<paramref name="startSave"/>).
     /// </summary>
-    private void BeginSave(TimelineEditor current, AnimationTimelineSource loaded)
+    public void Begin(TimelineEditor current, AnimationTimelineSource loaded, AnimationDestination destination, Action startSave)
     {
         soundAsk = null;
         var candidates = destination == AnimationDestination.InPlace ? InPlaceSounds(current.Document, loaded) : [];
@@ -77,12 +60,13 @@ public sealed partial class TimelineWindow
         if (candidates.Count == 0 || loaded.Resource.ModRoot is not { } root)
         {
             soundInPlace.Clear();
-            StartSave(current, loaded);
+            startSave();
             return;
         }
         var exclude = loaded.Resource.ResolvedPath;
         var entry = loaded.EntryIndex;
         soundCheckDocument = current.Document;
+        var data = session.Data;
         // The clip's own PAP counts with its other entries; a game sound the mod replaces is played by the game's own animations too.
         soundCheck = Task.Run(() => candidates.Select(path => new SharedSound(path,
             TimelineSoundUsage.OtherUsers(root, path, exclude, entry).Count, PenumbraService.AnimationMappedFiles(root, path).Count > 1,
@@ -100,9 +84,9 @@ public sealed partial class TimelineWindow
         foreach (var key in document.SoundEdits.Keys)
         {
             if (paths.Any(p => string.Equals(p.GamePath, key.Path, StringComparison.OrdinalIgnoreCase)) || !events.Any(ev => TimelineSoundKey.Of(ev) == key) ||
-                !soundReads.TryGetValue(key.Path, out var read) || read.Resource is not { ModDirectory: { } mod } resource ||
+                soundFiles.Resource(key.Path) is not { ModDirectory: { } mod } resource ||
                 mod != loaded.Resource.ModDirectory || !AnimationResources.CanReplace(resource) ||
-                ShownSound(document, key, loaded) is not { } shown || ReferenceEquals(shown.Bytes, shown.Original))
+                soundFiles.ShownSound(document, key, loaded) is not { } shown || ReferenceEquals(shown.Bytes, shown.Original))
                 continue;
             paths.Add((key.Path, resource.ResolvedPath));
         }
@@ -110,8 +94,8 @@ public sealed partial class TimelineWindow
         return [.. paths.Where(p => !shared.Contains(p.GamePath)).Select(p => p.GamePath)];
     }
 
-    /// <summary> Where a save puts each edited sound: over the mod's file when <see cref="BeginSave"/> found it can, else a copy. </summary>
-    private Func<TimelineSoundKey, TimelineSoundRoute> SoundRoute(AnimationDestination place)
+    /// <summary> Where a save puts each edited sound: over the mod's file when <see cref="Begin"/> found it can, else a copy. </summary>
+    public Func<TimelineSoundKey, TimelineSoundRoute> Route(AnimationDestination place)
     {
         var inPlace = place == AnimationDestination.InPlace && soundInPlace is { } paths
             ? new HashSet<string>(paths, StringComparer.OrdinalIgnoreCase)
@@ -121,9 +105,10 @@ public sealed partial class TimelineWindow
 
     /// <summary>
     /// After Save's check of the mod: saves when no other animation plays the sounds, else asks whether
-    /// to change each one everywhere (the mod's file) or only here (a copy). The answer holds for that save.
+    /// to change each one everywhere (the mod's file) or only here (a copy). <paramref name="fail"/> says
+    /// why the save can't go on.
     /// </summary>
-    private void DrawSoundAsk(TimelineEditor current, AnimationTimelineSource loaded)
+    public void Draw(TimelineEditor current, Action startSave, Action<string> fail)
     {
         if (soundCheck is { IsCompleted: true } task)
         {
@@ -132,19 +117,19 @@ public sealed partial class TimelineWindow
             soundCheckDocument = null;
             if (!task.IsCompletedSuccessfully)
             {
-                saveError = "The mod could not be checked for other animations playing its sounds. " + ErrorText(task.Exception);
+                fail("The mod could not be checked for other animations playing its sounds. " + TimelineSession.ErrorText(task.Exception));
                 soundInPlace = null;
                 return;
             }
             if (!ReferenceEquals(checkedDocument, current.Document))
             {
-                saveError = "The timeline changed while the mod was checked. Save again.";
+                fail("The timeline changed while the mod was checked. Save again.");
                 soundInPlace = null;
                 return;
             }
             var shared = task.Result.Where(s => s.Users > 0 || s.Game).ToList();
             if (shared.Count == 0)
-                StartSave(current, loaded);
+                startSave();
             else
                 soundAsk = shared;
         }
@@ -163,9 +148,9 @@ public sealed partial class TimelineWindow
             {
                 soundAsk = null;
                 ImGui.CloseCurrentPopup();
-                StartSave(current, loaded);
+                startSave();
             }
-            Tip("Change the mod's own file, for every animation that plays it.");
+            TimelineUi.Tip("Change the mod's own file, for every animation that plays it.");
             ImGui.SameLine();
             if (ImGui.Button("Only here"))
             {
@@ -173,9 +158,9 @@ public sealed partial class TimelineWindow
                     soundInPlace?.Remove(sound.Path);
                 soundAsk = null;
                 ImGui.CloseCurrentPopup();
-                StartSave(current, loaded);
+                startSave();
             }
-            Tip("Save a copy that only this animation plays.");
+            TimelineUi.Tip("Save a copy that only this animation plays.");
             ImGui.SameLine();
             if (ImGui.Button("Cancel"))
             {
@@ -189,20 +174,4 @@ public sealed partial class TimelineWindow
             ImGui.EndPopup();
         }
     }
-
-    /// <summary>
-    /// The document a preview builds once looks and sound changes it shows by redirecting are taken
-    /// off, with the sound files that redirect (see <see cref="TimelineSoundEdits.Redirectable"/>).
-    /// </summary>
-    private (TimelineDocument Document, ImmutableDictionary<string, byte[]> Sounds) PreviewRest(TimelineDocument document)
-    {
-        if (previewRestCache is { } cached && ReferenceEquals(cached.For, document))
-            return cached.Result;
-        var rest = TimelineSoundEdits.Redirectable(TimelineEffectLooks.Redirectable(document).Document, SoundBytes, ImportBytes, AppliedSound);
-        previewRestCache = (document, rest);
-        return rest;
-    }
-
-    // The last document PreviewRest was worked out for: the stale check and the sync ask for the same one.
-    private (TimelineDocument For, (TimelineDocument Document, ImmutableDictionary<string, byte[]> Sounds) Result)? previewRestCache;
 }

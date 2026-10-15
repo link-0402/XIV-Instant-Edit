@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
@@ -6,16 +6,20 @@ using InstantEdit.Services;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// The save footer, like the rebakes': a new mod or in place, a problem banner, Save with the reason
-/// it is unavailable, the running job's status with Cancel, and Undo last save. A save first ends
-/// the preview, then reloads the timeline from the game once it is committed.
+/// The save footer, like the rebakes': a new mod or in place, the skeleton repair choice, a problem
+/// banner, Save with the reason it is unavailable, the running job's status with Cancel, and Undo last
+/// save. A save first ends the preview, then reads the timeline again (<paramref name="reload"/>) once it
+/// is committed. Bone layers saved into the clip are carried over the save, so they stay editable.
 /// </summary>
-public sealed partial class TimelineWindow
+/// <param name="loading">Whether the timeline is being read.</param>
+/// <param name="reload">Reads the open clip again after a save or an undo: true after an undo.</param>
+/// <param name="editAgain">Opens a saved edit again with its layers (Edit again).</param>
+internal sealed class SaveFooter(TimelineSession session, TimelinePreview timelinePreview, EffectLookEditor effectLooks, SoundFiles soundFiles,
+    SoundSaveCheck soundSave, TimelineTexts texts, Func<bool> loading, Action<bool> reload, Action<AnimationEditJournal, AnimationCapture> editAgain)
 {
     private AnimationDestination destination = AnimationDestination.NewMod;
     private string modName = string.Empty;
@@ -32,8 +36,70 @@ public sealed partial class TimelineWindow
     private (string Clip, byte[] Bytes, string Fingerprint, string Hash)? motionBase;
     // Layers to put back once the clip is read again: after a save as saved, after an undo as unsaved edits.
     private (string Clip, ImmutableArray<MotionLayer> Layers, int NextKey, bool Unsaved)? motionCarry;
+    // The standard skeleton the next save repairs onto; null keeps the clip's own.
+    private SkeletonStandard? repairTarget;
+    // Whether the clip's file can be written over in place.
+    private bool canReplace;
 
-    private void DrawSaveFooter(TimelineEditor current, AnimationTimelineSource loaded)
+    /// <summary>Where the next save goes, as the footer's choice says.</summary>
+    public AnimationDestination Destination => destination;
+    /// <summary>The new mod's name, as typed.</summary>
+    public string ModName => modName;
+    /// <summary>The standard skeleton the next save repairs onto; null keeps the clip's own.</summary>
+    public SkeletonStandard? RepairTarget => repairTarget;
+    /// <summary>A save or an undo runs, or waits for the service's result.</summary>
+    public bool Working => saveTask != null || pendingSaveId != null || undoPending;
+    /// <summary>The document must not change: a save with its sound check or question, or an undo, runs.</summary>
+    public bool Busy => Working || soundSave.Checking || soundSave.Asking;
+
+    /// <summary>
+    /// A clip was read: another clip starts over with a new mod of its own name; one opened again with a
+    /// saved edit's layers (Edit again) saves over that edit's file when it can.
+    /// </summary>
+    public void Loaded(AnimationTimelineSource loaded, bool sameClip, bool editAgain)
+    {
+        canReplace = AnimationResources.CanReplace(loaded.Resource);
+        if (!sameClip)
+        {
+            modName = TimelineWindowViews.DefaultModName(AnimationPresentation.DefaultModName(loaded.Capture));
+            destination = AnimationDestination.NewMod;
+            saveError = null;
+            saveMessage = null;
+            lastSaveId = null;
+            repairTarget = null;
+        }
+        if (editAgain && loaded.BaseMotion != null)
+        {
+            // Saving again writes over the edit's file; the new save's journal keeps it for Undo.
+            destination = canReplace ? AnimationDestination.InPlace : AnimationDestination.NewMod;
+            saveMessage = "The saved layers are back.";
+        }
+    }
+
+    /// <summary> Edit again, or an undo back to a layered edit: the saved layers apply to the motion from before their edit while this clip stays open. </summary>
+    public void KeepBaseOf(AnimationTimelineSource loaded)
+    {
+        if (loaded.BaseMotion is { } kept && loaded.BaseHash is { } keptHash)
+            motionBase = (TimelineSession.ClipKey(loaded), kept, loaded.BaseFingerprint ?? string.Empty, keptHash);
+    }
+
+    /// <summary> Another clip, or this one opened afresh: its own file is the motion to edit. </summary>
+    public void ForgetMotion()
+    {
+        motionBase = null;
+        motionCarry = null;
+    }
+
+    /// <summary> An edit of the open clip is being undone from the Edits page; the clip is read again once it ends. </summary>
+    public void UndoingOpenClip()
+    {
+        jobClip = TimelineSession.ClipKey(session.Source!);
+        undoPending = true;
+        saveError = null;
+        saveMessage = null;
+    }
+
+    public void Draw(TimelineEditor current, AnimationTimelineSource loaded)
     {
         ImGui.Separator();
         if (ImGui.RadioButton("Create new mod", destination == AnimationDestination.NewMod))
@@ -52,8 +118,8 @@ public sealed partial class TimelineWindow
             DrawRepairChoice(loaded);
 
         var doc = current.Document;
-        RefreshDocumentTexts(doc);
-        var clip = Fresh(loaded).Clip;
+        texts.Refresh(doc);
+        var clip = session.Fresh(loaded).Clip;
         var repair = loaded.Standalone ? null : repairTarget;
         var problem = TimelineWindowViews.SaveProblem(loaded.Document != null, loaded.ReadOnlyReason,
                           destination == AnimationDestination.InPlace, canReplace, doc.LengthChanged, clip.Resolution,
@@ -63,21 +129,21 @@ public sealed partial class TimelineWindow
             Widgets.Banner("##timeline-save-problem", FeedbackSeverity.Warning, problem);
         else if (saveError != null)
             Widgets.Banner("##timeline-save-error", FeedbackSeverity.Error, saveError);
-        else if (pastEndWarning != null)
-            ImGui.TextColored(Theme.Warning, "⚠ " + pastEndWarning);
-        else if (layerBonesWarning != null)
+        else if (texts.PastEndWarning != null)
+            ImGui.TextColored(Theme.Warning, "⚠ " + texts.PastEndWarning);
+        else if (texts.LayerBonesWarning != null)
         {
             using var wrap = ImRaii.TextWrapPos(0f);
-            ImGui.TextColored(Theme.Warning, "⚠ " + layerBonesWarning);
+            ImGui.TextColored(Theme.Warning, "⚠ " + texts.LayerBonesWarning);
         }
 
         var missing = SaveMissing(current, problem);
         using (ImRaii.Disabled(missing != null))
         {
             if (ImGui.Button("Save"))
-                BeginSave(current, loaded);
+                soundSave.Begin(current, loaded, destination, () => StartSave(current, loaded));
         }
-        DrawSoundAsk(current, loaded);
+        soundSave.Draw(current, () => StartSave(current, loaded), error => saveError = error);
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(missing ?? (destination == AnimationDestination.NewMod
                 ? "Save the timeline into a new mod."
@@ -85,8 +151,8 @@ public sealed partial class TimelineWindow
         ImGui.SameLine(0, Theme.Scaled(16));
         DrawUndoLastSave(current);
 
-        var service = animations!;
-        if (saveTask != null || pendingSaveId != null || undoPending || service.Busy && !previewJob)
+        var service = session.Animations!;
+        if (saveTask != null || pendingSaveId != null || undoPending || service.Busy && !timelinePreview.Building)
         {
             ImGui.SameLine(0, Theme.Scaled(16));
             Widgets.Spinner();
@@ -115,23 +181,23 @@ public sealed partial class TimelineWindow
             return problem;
         if (saveTask != null || pendingSaveId != null)
             return "Saving.";
-        if (soundCheck != null)
+        if (soundSave.Checking)
             return "Checking the mod.";
-        if (soundAsk != null)
+        if (soundSave.Asking)
             return "Answer the question about the sound first.";
         if (undoPending)
             return "Undoing the last save.";
-        if (loadTask != null)
+        if (loading())
             return "Reading the timeline.";
         if (!current.Dirty && repairTarget == null)
             return "Nothing changed since the last save.";
         if (current.Gesture != TimelineGesture.None)
             return "Finish the drag first.";
-        if (animations!.Busy)
+        if (session.Animations!.Busy)
             return "Another edit is running. Wait for it to end.";
         if (destination == AnimationDestination.NewMod && !PenumbraService.IsSafeNewModName(modName.Trim()))
             return "Choose a valid mod name.";
-        return LookMissing(current.Document) ?? SoundMissing(current.Document) ?? SoundCutMissing(current.Document);
+        return effectLooks.LookMissing(current.Document) ?? soundFiles.SoundMissing(current.Document) ?? soundFiles.SoundCutMissing(current.Document);
     }
 
     /// <summary>
@@ -142,7 +208,7 @@ public sealed partial class TimelineWindow
     {
         var document = current.Document;
         var motionFrames = current.MotionFrames;
-        var target = Fresh(loaded);
+        var target = session.Fresh(loaded);
         var place = destination;
         var name = modName.Trim();
         var repair = target.Standalone ? null : repairTarget;
@@ -157,14 +223,14 @@ public sealed partial class TimelineWindow
         ImmutableDictionary<string, string> cutSounds;
         try
         {
-            (saved, var used) = WithLooks(document);
-            var sounds = WithSoundCuts(WithSounds(saved, SoundRoute(place)), saved, SoundBytes);
+            (saved, var used) = effectLooks.WithLooks(document);
+            var sounds = soundFiles.WithSoundCuts(soundFiles.WithSounds(saved, soundSave.Route(place)), saved, soundFiles.SoundBytes);
             saved = sounds.Document;
             cutSounds = sounds.CutFrom;
             used.AddRange(sounds.Copies);
             replaced = sounds.InPlace;
             // The sounds copies were made from, as read from the collection (an import's own file isn't there yet).
-            copied = sounds.Bases.Where(b => soundReads.TryGetValue(b.Key, out var read) && read is { Resource: not null, Imported: false })
+            copied = sounds.Bases.Where(b => soundFiles.Resource(b.Key) != null)
                 .ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
             added = TimelineWindowViews.AddedFiles(saved, used);
             beside = TimelineWindowViews.AddedBeside(saved, used);
@@ -177,40 +243,39 @@ public sealed partial class TimelineWindow
         }
         finally
         {
-            soundInPlace = null;
+            soundSave.SaveStarted();
         }
-        var service = animations!;
+        var service = session.Animations!;
         saveError = null;
         saveMessage = null;
-        jobClip = ClipKey(loaded);
+        jobClip = TimelineSession.ClipKey(loaded);
         KeepMotionForSave(target, document, repair);
-        StopPreview();
-        var ending = previewStop ?? Task.CompletedTask;
-        previewStop = null;
+        timelinePreview.Stop();
+        var ending = timelinePreview.TakeStopping();
         saveTask = Task.Run(async () =>
         {
             await ending;
-            await preview.StopAsync();
+            await session.Preview.StopAsync();
             // The edit service starts jobs from the framework thread, where the observer it updates lives.
-            return await framework.RunOnFrameworkThread(() =>
+            return await session.Framework.RunOnFrameworkThread(() =>
             {
-                playback.Stop();
+                session.Playback.Stop();
                 return service.EditTimeline(target, saved, place, name, added, beside, motionFrames, repair, rebuild,
                     replaced.IsEmpty ? null : replaced, copied.IsEmpty ? null : copied, cutSounds);
             });
         });
     }
 
-    private void PollSave()
+    public void Poll()
     {
-        if (animations is not { } service)
+        if (session.Animations is not { } service)
             return;
         if (saveTask is { IsCompleted: true } task)
         {
             saveTask = null;
             if (task.IsFaulted || task.IsCanceled)
             {
-                saveError = "The preview could not be ended, so nothing was saved. " + ErrorText(task.Exception);
+                saveError = "The preview could not be ended, so nothing was saved. " + TimelineSession.ErrorText(task.Exception);
                 motionCarry = null;
             }
             else if (task.Result is { } id)
@@ -228,7 +293,7 @@ public sealed partial class TimelineWindow
             saveError = "The save's result is unknown. Check Edits in the side panel.";
             motionCarry = null;
         }
-        var sameClip = source != null && ClipKey(source) == jobClip;
+        var sameClip = session.Source != null && TimelineSession.ClipKey(session.Source) == jobClip;
         if (pendingSaveId is { } job && service.LastResult is { } result && result.Id == job)
         {
             pendingSaveId = null;
@@ -236,14 +301,13 @@ public sealed partial class TimelineWindow
                 return;
             if (result.Success)
             {
-                editor?.MarkSaved();
+                session.Editor?.MarkSaved();
                 lastSaveId = job;
                 // The saved file is on the standard skeleton now; another repair would change nothing.
                 repairTarget = null;
                 saveMessage = destination == AnimationDestination.NewMod ? "Saved into a new mod." : "Saved.";
                 // A sound saved in place is another file now; read it again.
-                ForgetSounds();
-                Load(source!.Capture, source.Startup, true);
+                reload(false);
             }
             else
             {
@@ -260,10 +324,9 @@ public sealed partial class TimelineWindow
                 saveError = service.Status;
             else
                 saveMessage = "The last save was undone.";
-            ForgetSounds();
             // While this window edits layers on a motion of its own, a file that is again what an earlier
             // layered edit saved brings that edit's layers back as the saved state, so it matches the file.
-            Load(source!.Capture, source.Startup, true, afterUndo: motionBase?.Clip == ClipKey(source));
+            reload(motionBase?.Clip == TimelineSession.ClipKey(session.Source!));
         }
     }
 
@@ -275,7 +338,7 @@ public sealed partial class TimelineWindow
     /// </summary>
     private void KeepMotionForSave(AnimationTimelineSource loaded, TimelineDocument document, SkeletonStandard? repair)
     {
-        var clip = ClipKey(loaded);
+        var clip = TimelineSession.ClipKey(loaded);
         if (!AnimationBakeRules.KeepsLayersOverSave(document, repair))
         {
             motionBase = null;
@@ -292,9 +355,9 @@ public sealed partial class TimelineWindow
     }
 
     /// <summary> The clip as read, with the base its layers apply to while this window has saved layers into it. </summary>
-    private AnimationTimelineSource WithMotionBase(AnimationTimelineSource loaded)
+    public AnimationTimelineSource WithMotionBase(AnimationTimelineSource loaded)
     {
-        if (motionBase is not { } kept || kept.Clip != ClipKey(loaded) || loaded.Document == null)
+        if (motionBase is not { } kept || kept.Clip != TimelineSession.ClipKey(loaded) || loaded.Document == null)
             return loaded;
         // Back to the base, as after undoing the first save, the file's own motion is the base again.
         return kept.Hash == loaded.Resource.Hash
@@ -303,9 +366,9 @@ public sealed partial class TimelineWindow
     }
 
     /// <summary> The read document with the layers carried over a save or an undo, once; null when none are carried. </summary>
-    private (TimelineDocument Document, bool Unsaved)? TakeCarriedLayers(AnimationTimelineSource loaded)
+    public (TimelineDocument Document, bool Unsaved)? TakeCarriedLayers(AnimationTimelineSource loaded)
     {
-        if (motionCarry is not { } carry || carry.Clip != ClipKey(loaded) || loaded.Document is not { } doc)
+        if (motionCarry is not { } carry || carry.Clip != TimelineSession.ClipKey(loaded) || loaded.Document is not { } doc)
             return null;
         motionCarry = null;
         return carry.Layers.IsEmpty ? null
@@ -318,23 +381,23 @@ public sealed partial class TimelineWindow
     /// </summary>
     private AnimationEditJournal? SavedLayers(AnimationTimelineSource current)
     {
-        if (animations is not { } service || current.BaseMotion != null)
+        if (session.Animations is not { } service || current.BaseMotion != null)
             return null;
         return AnimationEditService.SavedLayersJournal(service.Recovery, current);
     }
 
     /// <summary> Offers to bring back the layers the open clip was saved with, which new layers would otherwise go on top of. </summary>
-    private void DrawSavedLayers()
+    public void DrawSavedLayers()
     {
-        if (source is not { } current || SavedLayers(current) is not { } saved)
+        if (session.Source is not { } current || SavedLayers(current) is not { } saved)
             return;
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Muted, "Saved with edits you can open again.");
         ImGui.SameLine(0, Theme.Gap);
-        using (ImRaii.Disabled(ReadOnly))
+        using (ImRaii.Disabled(session.ReadOnly))
         {
             if (ImGui.SmallButton("Edit again"))
-                EditAgain(saved, current.Capture);
+                editAgain(saved, current.Capture);
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip("Bring back the bone layers, cuts and length it was saved with, to change them.\nOtherwise they stay baked in, and new edits go on top.");
@@ -343,7 +406,7 @@ public sealed partial class TimelineWindow
     /// <summary> Reverts this window's last save through its journal, then reads the timeline again. </summary>
     private void DrawUndoLastSave(TimelineEditor current)
     {
-        var service = animations!;
+        var service = session.Animations!;
         AnimationEditJournal? journal = null;
         if (lastSaveId is { } id)
             foreach (var entry in service.Recovery)
@@ -354,18 +417,18 @@ public sealed partial class TimelineWindow
                 }
         var blocked = journal == null ? "There is no save of this timeline to undo."
             : current.Dirty ? "Save or undo your changes first."
-            : service.Busy || ReadOnly ? "Another edit is running. Wait for it to end."
+            : service.Busy || session.ReadOnly ? "Another edit is running. Wait for it to end."
             : null;
         using (ImRaii.Disabled(blocked != null))
         {
             if (ImGui.Button("Undo last save") && journal != null)
             {
-                jobClip = source is { } shown ? ClipKey(shown) : null;
+                jobClip = session.Source is { } shown ? TimelineSession.ClipKey(shown) : null;
                 // The layers stay, as unsaved edits on the motion they apply to; layers keyed in cut or
                 // stretched frames don't fit the file the undo brings back.
-                if (source != null && !current.Document.Motion.IsEmpty && AnimationBakeRules.KeepsLayersOverSave(current.Document, repairTarget))
-                    motionCarry = (ClipKey(source), current.Document.Motion, current.Document.NextMotionKey, true);
-                StopPreview();
+                if (session.Source != null && !current.Document.Motion.IsEmpty && AnimationBakeRules.KeepsLayersOverSave(current.Document, repairTarget))
+                    motionCarry = (TimelineSession.ClipKey(session.Source), current.Document.Motion, current.Document.NextMotionKey, true);
+                timelinePreview.Stop();
                 service.Undo(journal);
                 undoPending = true;
                 saveError = null;
@@ -374,5 +437,57 @@ public sealed partial class TimelineWindow
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(blocked ?? "Put the files back as they were before the last save.");
+    }
+
+    /// <summary>
+    /// The save footer's skeleton choice: keep the clip's own, or repair it onto a standard skeleton so
+    /// every bone sits at the index other players' skeletons and sync plugins expect.
+    /// </summary>
+    private void DrawRepairChoice(AnimationTimelineSource loaded)
+    {
+        var clip = session.Fresh(loaded).Clip;
+        if (repairTarget is { } chosen && AnimationBones.Standard(clip, chosen) is null)
+            repairTarget = null;
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Skeleton");
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.SetNextItemWidth(Theme.Scaled(170));
+        using (ImRaii.Disabled(session.ReadOnly))
+        using (var combo = ImRaii.Combo("##repair", repairTarget is { } target ? "Repair onto " + AnimationBones.StandardName(target) : "Keep its own"))
+        {
+            if (combo.Success)
+            {
+                if (ImGui.Selectable("Keep its own", repairTarget == null))
+                    repairTarget = null;
+                foreach (var standard in Enum.GetValues<SkeletonStandard>())
+                {
+                    var found = AnimationBones.Standard(clip, standard);
+                    if (ImGui.Selectable("Repair onto " + AnimationBones.StandardName(standard), repairTarget == standard,
+                            found is null ? ImGuiSelectableFlags.Disabled : ImGuiSelectableFlags.None))
+                        repairTarget = standard;
+                    if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                        ImGui.SetTooltip(found is not null
+                            ? $"{found.Skeleton.Bones.Length} bones, from {found.Origin}"
+                            : standard == SkeletonStandard.Vanilla
+                                ? "The game's own skeleton for this model was not found."
+                                : $"No {AnimationBones.StandardName(standard)} skeleton for this model is in the skeleton library.");
+                }
+            }
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Repair moves every bone to the index other players' skeletons use, whatever your skeleton mod adds.\n" +
+                             "Only bones the animation moves are written.");
+        if (repairTarget is { } repair && AnimationBones.Plan(clip, repair, session.Editor?.Document.ExcludedBones ?? []) is { } plan)
+        {
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Muted, plan.Dropped.IsEmpty
+                ? $"Highest index {plan.HighestIndex}"
+                : $"Highest index {plan.HighestIndex} · {plan.Dropped.Length} bones left out");
+            if (!plan.Dropped.IsEmpty && ImGui.IsItemHovered())
+                ImGui.SetTooltip($"The {AnimationBones.StandardName(repair)} skeleton lacks " +
+                                 string.Join(", ", plan.Dropped.Take(8).Select(AnimationPresentation.BoneName)) +
+                                 (plan.Dropped.Length > 8 ? $" and {plan.Dropped.Length - 8} more." : "."));
+        }
     }
 }
