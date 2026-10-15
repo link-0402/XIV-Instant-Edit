@@ -183,30 +183,6 @@ public sealed partial class PenumbraService
         }
     }
 
-    /// <summary>Resolve the root currently registered for a Penumbra directory key.</summary>
-    public string? GetRegisteredModPath(string modDirectory)
-    {
-        if (!IsSafeModName(modDirectory))
-            return null;
-        try
-        {
-            var result = _getModPath.Invoke(modDirectory, string.Empty);
-            if (result.Item1 is not PenumbraApiEc.Success)
-                return null;
-            var path = NormalizePhysicalPath(result.Item2);
-            if (path is null)
-                return null;
-            return string.Equals(Path.GetFileName(path), "Files", StringComparison.OrdinalIgnoreCase)
-                ? Directory.GetParent(path)?.FullName ?? path
-                : path;
-        }
-        catch (Exception e)
-        {
-            _log.Debug($"Could not retrieve the registered path for {modDirectory}: {e.Message}");
-            return null;
-        }
-    }
-
     private static void AddExportRoot(
         List<(string Root, bool Preferred)> roots,
         string? value,

@@ -407,27 +407,4 @@ public sealed partial class PenumbraService
         }
     }
 
-    /// <summary>
-    /// Get resource trees for explicit object-table indices. Penumbra looks these indices
-    /// up in Dalamud's object table, which asserts the main thread.
-    /// </summary>
-    public ResourceTreeDto?[] GetResourceTrees(ushort[] gameObjectIndices)
-    {
-        if (gameObjectIndices.Length == 0)
-            return Array.Empty<ResourceTreeDto?>();
-
-        try
-        {
-            if (!Available)
-                return Array.Empty<ResourceTreeDto?>();
-
-            return _getObjectTrees.Invoke(withUiData: true, gameObjectIndices) ?? Array.Empty<ResourceTreeDto?>();
-        }
-        catch (Exception e)
-        {
-            _log.Debug($"Could not retrieve explicit resource trees: {e.Message}");
-            return Array.Empty<ResourceTreeDto?>();
-        }
-    }
-
 }
