@@ -7,6 +7,7 @@ using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.FFXIV.Client.Graphics.Scene;
 using InstantEdit.Models;
 using InstantEdit.Services.Painter;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Services.PreviewMods;
 using InstantEdit.Services.Skeletons;
 using Lumina.Data;
@@ -86,7 +87,8 @@ internal sealed class HeelsOffsetService : IDisposable
     private readonly ICondition _condition;
     private readonly IDataManager _data;
     private readonly ModelSkeletonResolver _skeletons;
-    private readonly PenumbraService _penumbra;
+    private readonly PenumbraIpc _penumbra;
+    private readonly PreviewModWriter _previewMods;
     private readonly ResourceSourceAttributor _sources;
     private readonly IReadOnlyList<IPreviewModRegistry> _previews;
     private readonly Func<bool> _automatic;
@@ -111,7 +113,7 @@ internal sealed class HeelsOffsetService : IDisposable
     /// <param name="previews">The preview-mod stores whose files belong to their previews until those are applied.</param>
     /// <param name="automatic">Whether the automatic fix is on.</param>
     public HeelsOffsetService(IDalamudPluginInterface pi, IFramework framework, IObjectTable objects, IClientState clientState, ICondition condition,
-        IDataManager data, ModelSkeletonResolver skeletons, PenumbraService penumbra, ResourceSourceAttributor sources,
+        IDataManager data, ModelSkeletonResolver skeletons, PenumbraIpc penumbra, PreviewModWriter previewMods, ResourceSourceAttributor sources,
         IReadOnlyList<IPreviewModRegistry> previews, Func<bool> automatic, IPluginLog log)
     {
         _framework = framework;
@@ -121,6 +123,7 @@ internal sealed class HeelsOffsetService : IDisposable
         _data = data;
         _skeletons = skeletons;
         _penumbra = penumbra;
+        _previewMods = previewMods;
         _sources = sources;
         _previews = previews;
         _automatic = automatic;
@@ -187,7 +190,7 @@ internal sealed class HeelsOffsetService : IDisposable
                 _lifetime.Token.ThrowIfCancellationRequested();
                 lock (_lock)
                     added = _undone.Add(result.Model.ModelFile);
-                var warnings = await _penumbra.WritePreviewSourcesAsync([(undo.Source, undo.Original)], undo.ObjectIndex, "Nothing was undone")
+                var warnings = await _previewMods.WritePreviewSourcesAsync([(undo.Source, undo.Original)], undo.ObjectIndex, "Nothing was undone")
                     .ConfigureAwait(false);
                 var stamp = FileStamp.Of(undo.Source.ActualPath);
                 lock (_lock)
@@ -357,7 +360,7 @@ internal sealed class HeelsOffsetService : IDisposable
         };
         // The measuring took a while; an unloading plugin writes nothing more.
         token.ThrowIfCancellationRequested();
-        warnings.AddRange(await _penumbra.WritePreviewSourcesAsync([(file, patched)], live.ObjectIndex, "Fix the offset again").ConfigureAwait(false));
+        warnings.AddRange(await _previewMods.WritePreviewSourcesAsync([(file, patched)], live.ObjectIndex, "Fix the offset again").ConfigureAwait(false));
         return result with { Written = true, Undo = new HeelsUndo(file with { Sha256 = PreviewSource.Hash(patched) }, bytes, live.ObjectIndex) };
     }
 

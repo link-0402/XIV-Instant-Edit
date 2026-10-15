@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using Dalamud.Plugin.Services;
+using InstantEdit.Services.PenumbraMods;
 using Penumbra.Api.Enums;
 
 namespace InstantEdit.Services.Animations.Preview;
@@ -23,7 +24,9 @@ internal sealed class AnimationPreviewService : IDisposable
     private static readonly TimeSpan VerifyDelay = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan DisposeWait = TimeSpan.FromSeconds(2);
 
-    private readonly PenumbraService _penumbra;
+    private readonly PenumbraIpc _penumbra;
+    private readonly AnimationModService _animationMods;
+    private readonly PreviewModWriter _previewMods;
     private readonly IFramework _framework;
     private readonly IPluginLog _log;
     private readonly Func<string> _cacheRoot;
@@ -49,10 +52,12 @@ internal sealed class AnimationPreviewService : IDisposable
 
     /// <param name="cacheRoot">The managed cache root (TextureFiles.EnsureCacheRoot); may throw while the cache is broken.</param>
     /// <param name="clientState">When given, leaving GPose ends the preview.</param>
-    public AnimationPreviewService(PenumbraService penumbra, IFramework framework, IPluginLog log, string configDirectory, Func<string> cacheRoot,
+    public AnimationPreviewService(PenumbraIpc penumbra, AnimationModService animationMods, PreviewModWriter previewMods, IFramework framework, IPluginLog log, string configDirectory, Func<string> cacheRoot,
         IClientState? clientState = null)
     {
         _penumbra = penumbra;
+        _animationMods = animationMods;
+        _previewMods = previewMods;
         _framework = framework;
         _log = log;
         _cacheRoot = cacheRoot;
@@ -162,7 +167,7 @@ internal sealed class AnimationPreviewService : IDisposable
     /// Null when it was redrawn, else why not.
     /// </summary>
     public Task<string?> RedrawAsync(ushort objectIndex, CancellationToken token) =>
-        _disposed ? Task.FromResult<string?>(null) : _penumbra.RedrawObjectAndWaitAsync(objectIndex, RedrawWait, token);
+        _disposed ? Task.FromResult<string?>(null) : _animationMods.RedrawObjectAndWaitAsync(objectIndex, RedrawWait, token);
 
     private static readonly TimeSpan RedrawWait = TimeSpan.FromSeconds(3);
 
@@ -209,7 +214,7 @@ internal sealed class AnimationPreviewService : IDisposable
         var collection = await _penumbra.TemporaryModCollectionAsync(objectIndex).ConfigureAwait(false)
             ?? throw new IOException("The character's Penumbra collection is unavailable.");
         var previewRoot = AnimationPreviewRules.PreviewRoot(_cacheRoot());
-        var modRoot = await _penumbra.PreviewModRootAsync().ConfigureAwait(false);
+        var modRoot = await _previewMods.PreviewModRootAsync().ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(modRoot))
             throw new IOException("Penumbra's mod folder is unavailable.");
         if (AnimationPreviewRules.Overlaps(previewRoot, modRoot))

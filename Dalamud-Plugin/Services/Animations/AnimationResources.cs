@@ -47,7 +47,7 @@ internal sealed class AnimationResourceCache
     }
 }
 
-internal sealed class AnimationResources(PenumbraService penumbra, IDataManager data, IFramework framework, IPluginLog log)
+internal sealed class AnimationResources(PenumbraIpc penumbra, AnimationModService animationMods, IDataManager data, IFramework framework, IPluginLog log)
 {
     private readonly ResourceSourceAttributor sources = Attributor(penumbra, log);
 
@@ -55,7 +55,7 @@ internal sealed class AnimationResources(PenumbraService penumbra, IDataManager 
     /// The mod index, read again whenever Penumbra adds, deletes or moves a mod: a clip read right
     /// after a save into a new mod must name that mod, or in place would refuse it as the game's files.
     /// </summary>
-    private static ResourceSourceAttributor Attributor(PenumbraService penumbra, IPluginLog log)
+    private static ResourceSourceAttributor Attributor(PenumbraIpc penumbra, IPluginLog log)
     {
         var attributor = new ResourceSourceAttributor(penumbra, log);
         penumbra.ModsChanged += attributor.Invalidate;
@@ -96,7 +96,7 @@ internal sealed class AnimationResources(PenumbraService penumbra, IDataManager 
         {
             if (source.Kind == SkeletonSourceKind.Mod)
             {
-                var roots = await penumbra.AnimationSkeletonRootsAsync();
+                var roots = await animationMods.AnimationSkeletonRootsAsync();
                 if (!roots.Any(r => r.Directory == source.Resource.ModDirectory && string.Equals(r.Root, source.Resource.ModRoot, StringComparison.OrdinalIgnoreCase)))
                     throw new IOException("The source skeleton mod moved or was removed. Rebuild the skeleton library in Settings.");
             }
@@ -113,7 +113,7 @@ internal sealed class AnimationResources(PenumbraService penumbra, IDataManager 
     {
         token.ThrowIfCancellationRequested();
         if (cache?.TryGet(gamePath, out var cached) == true) return cached;
-        var resolved = await penumbra.ResolveAnimationPathAsync(collection, gamePath);
+        var resolved = await animationMods.ResolveAnimationPathAsync(collection, gamePath);
         byte[] bytes;
         if (Path.IsPathRooted(resolved))
         {
@@ -188,7 +188,7 @@ internal sealed class AnimationResources(PenumbraService penumbra, IDataManager 
             reads.ToImmutableDictionary(r => r.Resource.GamePath, r => r.Bytes, StringComparer.OrdinalIgnoreCase));
         if (destination != AnimationDestination.NewMod) return manifest;
         // A new mod carries the collection's metadata that applies to its clips.
-        var metadata = AnimationMetadata.Decode(await penumbra.AnimationMetadataAsync(capture.CollectionId));
+        var metadata = AnimationMetadata.Decode(await animationMods.AnimationMetadataAsync(capture.CollectionId));
         return manifest with { ManipulationsJson = AnimationMetadata.Applicable(metadata, manifest.Files.Keys).ToJsonString() };
     }
 }

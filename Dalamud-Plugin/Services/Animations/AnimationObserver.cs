@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services.Animations;
 
@@ -21,7 +22,7 @@ internal sealed class AnimationObserver : IDisposable
     private readonly IObjectTable objects;
     private readonly IClientState clientState;
     private readonly ITargetManager targets;
-    private readonly PenumbraService penumbra;
+    private readonly PenumbraIpc penumbra;
     private readonly AnimationNative native;
     private readonly AnimationResources resources;
     private readonly LivePoseAdapter poses;
@@ -57,7 +58,7 @@ internal sealed class AnimationObserver : IDisposable
     public string Status { get; private set; } = "Waiting for the local player";
     public event Action? CharacterChanged;
 
-    public AnimationObserver(IFramework framework, IObjectTable objects, IClientState clientState, ITargetManager targets, PenumbraService penumbra,
+    public AnimationObserver(IFramework framework, IObjectTable objects, IClientState clientState, ITargetManager targets, PenumbraIpc penumbra,
         AnimationNative native, AnimationResources resources, LivePoseAdapter poses, AnimationCatalog catalog, AnimationSkeletonIndex skeletons, IPluginLog log)
     {
         this.framework = framework; this.objects = objects; this.clientState = clientState; this.targets = targets; this.penumbra = penumbra;
