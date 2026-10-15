@@ -1,6 +1,7 @@
 using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
+using InstantEdit.Models;
 using Penumbra.Api.Enums;
 using Penumbra.Api.Helpers;
 using Penumbra.Api.IpcSubscribers;
@@ -221,7 +222,7 @@ internal sealed class ModActivation
             var redrawWarning = redraw();
             return redrawWarning is null
                 ? new ExportResult(true, applied)
-                : new ExportResult(true, "export_applied_with_warnings", applied, [redrawWarning]);
+                : new ExportResult(true, ResultCode.ExportAppliedWithWarnings, applied, [redrawWarning]);
         }
         catch (Exception e)
         {

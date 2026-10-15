@@ -306,11 +306,11 @@ internal sealed class PainterJobService : IDisposable
         }
         catch (Exception error) when (error is JsonException or DecoderFallbackException or ArgumentException)
         {
-            return Error(400, "invalid_request", error.Message);
+            return Error(400, ResultCode.InvalidRequest, error.Message);
         }
         var job = _store.Authorize(Text(request, "jobId"), Text(request, "capability"));
         if (job is null)
-            return Error(404, "unknown_project", "Instant Edit doesn't know this Painter project. Open it from On Screen or Quick Actions again.");
+            return Error(404, ResultCode.UnknownProject, "Instant Edit doesn't know this Painter project. Open it from On Screen or Quick Actions again.");
         try
         {
             return path switch
@@ -319,12 +319,12 @@ internal sealed class PainterJobService : IDisposable
                 "/painter/baseline" => Baseline(job, request),
                 "/painter/send" => Send(job, request),
                 "/painter/send/status" => SendStatus(job, request),
-                _ => Error(404, "endpoint_not_found", "Unknown Painter endpoint."),
+                _ => Error(404, ResultCode.EndpointNotFound, "Unknown Painter endpoint."),
             };
         }
         catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException)
         {
-            return Error(400, "request_failed", error.Message);
+            return Error(400, ResultCode.RequestFailed, error.Message);
         }
     }
 
@@ -382,13 +382,13 @@ internal sealed class PainterJobService : IDisposable
     {
         var sendId = Text(request, "sendId");
         if (sendId.Length != 32 || !sendId.All(Uri.IsHexDigit))
-            return Error(400, "invalid_send", "The send id is invalid.");
+            return Error(400, ResultCode.InvalidSend, "The send id is invalid.");
         var jobDir = JobDirectory(_textures.EnsureConfiguredCache(), job.Id);
         var folder = Path.Combine(jobDir, "export", sendId);
         var files = ReadFiles(request, folder, job);
         var state = new SendState(job.Id);
         if (!_sends.TryAdd(sendId, state))
-            return Error(409, "duplicate_send", "This send is already being applied.");
+            return Error(409, ResultCode.DuplicateSend, "This send is already being applied.");
         foreach (var stale in _sends.Where(pair => pair.Value.Work?.IsCompleted == true && DateTimeOffset.UtcNow - pair.Value.Started > TimeSpan.FromHours(1)).ToList())
             _sends.TryRemove(stale.Key, out _);
         state.Work = Task.Run(() => ApplySendAsync(job, files, folder, state));
@@ -398,7 +398,7 @@ internal sealed class PainterJobService : IDisposable
     private (int, string) SendStatus(PainterJob job, JsonObject request)
     {
         if (!_sends.TryGetValue(Text(request, "sendId"), out var state) || state.JobId != job.Id)
-            return Error(404, "unknown_send", "Instant Edit has no record of this send.");
+            return Error(404, ResultCode.UnknownSend, "Instant Edit has no record of this send.");
         if (state.Work is { IsCompleted: false })
             return (200, Json(new { ok = true, state = "pending" }));
         return (200, Json(new
@@ -567,7 +567,7 @@ internal sealed class PainterJobService : IDisposable
 
     private static string Json(object value) => JsonSerializer.Serialize(value);
 
-    private static (int, string) Error(int status, string code, string message)
+    private static (int, string) Error(int status, ResultCode code, string message)
         => (status, Json(new { ok = false, code, message }));
 
     public void Dispose()

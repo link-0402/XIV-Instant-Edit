@@ -333,7 +333,7 @@ public sealed record PersistedExportContext
 /// <summary> A completed export operation retained for idempotent retries. </summary>
 public sealed record ExportReceipt(
     bool Success,
-    string Code,
+    ResultCode Code,
     string Message,
     IReadOnlyList<string>? Warnings = null,
     string? TargetFilePath = null,

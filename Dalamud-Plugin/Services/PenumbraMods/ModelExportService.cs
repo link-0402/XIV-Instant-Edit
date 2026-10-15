@@ -78,25 +78,25 @@ internal sealed class ModelExportService
     {
         resolvedGamePath ??= sourceGamePath;
         if (!IsSafeLocalModelPath(sourceFilePath))
-            return new ExportResult(false, "destination_unsafe", "The original Penumbra model destination is invalid.");
+            return new ExportResult(false, ResultCode.DestinationUnsafe, "The original Penumbra model destination is invalid.");
         // ValidateExportRequest also covers sourceModDirectory/sourceGamePath, so they aren't re-checked here.
         var validationError = ValidateExportRequest(sourceModDirectory, sourceGamePath, exportedFile);
         if (validationError is not null)
-            return new ExportResult(false, "invalid_export_file", validationError);
+            return new ExportResult(false, ResultCode.InvalidExportFile, validationError);
         if (variantName is not null && !IsSafeVariantName(variantName))
-            return new ExportResult(false, "invalid_variant_name", "Invalid variant name.");
+            return new ExportResult(false, ResultCode.InvalidVariantName, "Invalid variant name.");
         if (variantName is not null && string.Equals(
                 variantName,
                 Path.GetFileNameWithoutExtension(sourceGamePath),
                 StringComparison.OrdinalIgnoreCase))
-            return new ExportResult(false, "invalid_variant_name", "Variant name must differ from the originally imported model name.");
+            return new ExportResult(false, ResultCode.InvalidVariantName, "Variant name must differ from the originally imported model name.");
         if (setupVariantInPenumbra && variantName is null && !string.Equals(variantTarget, "option", StringComparison.Ordinal))
-            return new ExportResult(false, "invalid_variant", "Penumbra variant setup requires Save as Variant.");
+            return new ExportResult(false, ResultCode.InvalidVariant, "Penumbra variant setup requires Save as Variant.");
         if (setupVariantInPenumbra && !string.Equals(variantTarget, "option", StringComparison.Ordinal) &&
             !string.Equals(variantTarget, "group", StringComparison.Ordinal) && !IsSafeVariantGroupName(variantGroupName))
-            return new ExportResult(false, "invalid_variant_group", "Penumbra variant setup requires an option group name.");
+            return new ExportResult(false, ResultCode.InvalidVariantGroup, "Penumbra variant setup requires an option group name.");
         if (setupVariantInPenumbra && variantTarget == "group" && string.IsNullOrWhiteSpace(variantTargetId))
-            return new ExportResult(false, "stale_variant_target", "The selected Penumbra group is invalid.");
+            return new ExportResult(false, ResultCode.StaleVariantTarget, "The selected Penumbra group is invalid.");
 
         await _exportGate.WaitAsync().ConfigureAwait(false);
         string? committedTarget = null;
@@ -140,20 +140,20 @@ internal sealed class ModelExportService
             else if (variantName is not null && File.Exists(targetFile) &&
                      (PathRules.SamePhysicalPath(targetFile, resolved.Target.FilePath) ||
                       IsMappedOutsideOption(meta, resolved.Target.Folder, targetFile, variantName)))
-                return new ExportResult(false, "invalid_variant_name",
+                return new ExportResult(false, ResultCode.InvalidVariantName,
                     $"The mod already uses {variantName}.mdl. Choose a different variant name.");
             JsonObject? sourceOptionTemplate = null;
             if (setupVariantInPenumbra && !string.Equals(variantTarget, "option", StringComparison.Ordinal))
             {
                 if (sourceOptionStatus == "ambiguous")
-                    return new ExportResult(false, "ambiguous_source_option",
+                    return new ExportResult(false, ResultCode.AmbiguousSourceOption,
                         "Multiple Penumbra options provide the imported model. Re-import it from the intended option, then export again.");
                 if (sourceOptionStatus != "default")
                 {
                     var source = ResolveSourceOption(resolved.Target.Folder, sourceGamePath,
                         resolved.Target.RelativePath, sourceOption);
                     if (source.Error is not null)
-                        return new ExportResult(false, "source_option_unavailable", source.Error);
+                        return new ExportResult(false, ResultCode.SourceOptionUnavailable, source.Error);
                     sourceOptionTemplate = source.Option;
                 }
             }
@@ -167,7 +167,7 @@ internal sealed class ModelExportService
                     string.Equals(variantTarget, "group", StringComparison.Ordinal) ? variantTargetId : null);
                 if (groupError is not null)
                     return new ExportResult(false,
-                        variantTarget == "group" ? "stale_variant_target" : "invalid_variant_group", groupError);
+                        variantTarget == "group" ? ResultCode.StaleVariantTarget : ResultCode.InvalidVariantGroup, groupError);
             }
             var targetRelative = Path.GetRelativePath(resolved.Target.Folder, targetFile).Replace('\\', '/');
             // The backup keeps the model's EST entries too, so restoring it undoes this export's EST change.
@@ -183,7 +183,7 @@ internal sealed class ModelExportService
                 targetRelative,
                 estState);
             if (writeError is not null)
-                return new ExportResult(false, "write_failed", writeError);
+                return new ExportResult(false, ResultCode.WriteFailed, writeError);
             committedTarget = targetFile;
 
             var warnings = new List<string>();
@@ -219,7 +219,7 @@ internal sealed class ModelExportService
                     warnings.Add(redrawWarning);
             }
 
-            var code = warnings.Count == 0 ? "export_applied" : "export_applied_with_warnings";
+            var code = warnings.Count == 0 ? ResultCode.ExportApplied : ResultCode.ExportAppliedWithWarnings;
             var message = warnings.Count == 0
                 ? $"Exported to {targetFile} and reloaded {resolved.Target.Directory}."
                 : $"Exported to {targetFile}; {warnings.Count} follow-up warning(s).";
@@ -231,11 +231,11 @@ internal sealed class ModelExportService
             if (committedTarget is not null)
                 return new ExportResult(
                     true,
-                    "export_applied_with_warnings",
+                    ResultCode.ExportAppliedWithWarnings,
                     $"Exported to {committedTarget}; follow-up processing failed.",
                     [$"Follow-up processing failed: {e.Message}"],
                     committedTarget);
-            return new ExportResult(false, "write_failed", $"Failed before the model write could be committed: {e.Message}");
+            return new ExportResult(false, ResultCode.WriteFailed, $"Failed before the model write could be committed: {e.Message}");
         }
         finally
         {
@@ -253,7 +253,7 @@ internal sealed class ModelExportService
         Guid? sourceModStableId = null)
     {
         if (!IsSafeModName(sourceModDirectory) || !IsSafeLocalModelPath(sourceFilePath) || !IsSafeGamePath(sourceGamePath))
-            return new VariantTargetsResult(false, "destination_unsafe", "The original Penumbra model destination is invalid.", []);
+            return new VariantTargetsResult(false, ResultCode.DestinationUnsafe, "The original Penumbra model destination is invalid.", []);
 
         await _exportGate.WaitAsync().ConfigureAwait(false);
         try
@@ -265,13 +265,13 @@ internal sealed class ModelExportService
                 return new VariantTargetsResult(false, resolved.Code,
                     resolved.Error ?? "The original Penumbra mod is no longer available.", []);
             await LeaveFrameworkThread();
-            return new VariantTargetsResult(true, "variant_targets_loaded", "Compatible Penumbra targets loaded.",
+            return new VariantTargetsResult(true, ResultCode.VariantTargetsLoaded, "Compatible Penumbra targets loaded.",
                 ReadVariantTargets(resolved.Target.Folder, sourceGamePath, resolved.Target.Directory, _backups));
         }
         catch (Exception e)
         {
             _log.Error(e, "Failed to read Penumbra variant targets.");
-            return new VariantTargetsResult(false, "variant_targets_unavailable", "Could not read Penumbra option groups.", []);
+            return new VariantTargetsResult(false, ResultCode.VariantTargetsUnavailable, "Could not read Penumbra option groups.", []);
         }
         finally
         {
@@ -295,17 +295,17 @@ internal sealed class ModelExportService
     {
         if (context.SourceKind != InstantEditImportContext.GameSource ||
             context.DestinationState != InstantEditImportContext.NewModRequiredDestination)
-            return new NewModelModResult(new ExportResult(false, "invalid_destination_state", "This import no longer requires a new Penumbra mod."));
+            return new NewModelModResult(new ExportResult(false, ResultCode.InvalidDestinationState, "This import no longer requires a new Penumbra mod."));
         if (!IsSafeNewModName(modName))
-            return new NewModelModResult(new ExportResult(false, "invalid_mod_name", "The Penumbra mod name is invalid."));
+            return new NewModelModResult(new ExportResult(false, ResultCode.InvalidModName, "The Penumbra mod name is invalid."));
         var validationError = ValidateExportRequest(modName, context.GamePath, exportedFile);
         if (validationError is not null)
-            return new NewModelModResult(new ExportResult(false, "invalid_export_file", validationError));
+            return new NewModelModResult(new ExportResult(false, ResultCode.InvalidExportFile, validationError));
         var modelGamePath = context.GamePath;
         if (race is { } raceCode)
         {
             if (RaceModelGamePath(context.GamePath, raceCode) is not { } racePath)
-                return new NewModelModResult(new ExportResult(false, "race_model_unavailable",
+                return new NewModelModResult(new ExportResult(false, ResultCode.RaceModelUnavailable,
                     "Only gear and accessory models can be saved for another race."));
             modelGamePath = racePath;
         }
@@ -315,22 +315,22 @@ internal sealed class ModelExportService
         {
             var root = await _framework.RunOnFrameworkThread(_ipc.GetModDirectory).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
-                return new NewModelModResult(new ExportResult(false, "penumbra_root_missing", "The Penumbra mod root is unavailable."));
+                return new NewModelModResult(new ExportResult(false, ResultCode.PenumbraRootMissing, "The Penumbra mod root is unavailable."));
             root = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
-                return new NewModelModResult(new ExportResult(false, "penumbra_root_unsafe", "The Penumbra mod root is an unsupported linked directory."));
+                return new NewModelModResult(new ExportResult(false, ResultCode.PenumbraRootUnsafe, "The Penumbra mod root is an unsupported linked directory."));
 
             var modList = await _framework.RunOnFrameworkThread(() =>
                 _ipc.TryGetModList(out var mods) ? mods : null).ConfigureAwait(false);
             if (modList is null)
-                return new NewModelModResult(new ExportResult(false, "penumbra_unavailable", "Could not retrieve the Penumbra mod list."));
+                return new NewModelModResult(new ExportResult(false, ResultCode.PenumbraUnavailable, "Could not retrieve the Penumbra mod list."));
             await LeaveFrameworkThread();
             var finalFolder = Path.GetFullPath(Path.Combine(root, modName));
             if (!IsPathWithin(finalFolder, root) || modList.Keys.Any(key =>
                     string.Equals(key, modName, StringComparison.OrdinalIgnoreCase)) ||
                 modList.Values.Any(name => string.Equals(name, modName, StringComparison.OrdinalIgnoreCase)) ||
                 Directory.Exists(finalFolder) || File.Exists(finalFolder))
-                return new NewModelModResult(new ExportResult(false, "vanilla_mod_exists", "A Penumbra mod or folder with this name already exists."));
+                return new NewModelModResult(new ExportResult(false, ResultCode.VanillaModExists, "A Penumbra mod or folder with this name already exists."));
 
             var relativeModel = "Files/" + NormalizeGamePath(modelGamePath);
             var staging = Path.Combine(root, $".instant-edit-vanilla-{Guid.NewGuid():N}.tmp");
@@ -398,7 +398,7 @@ internal sealed class ModelExportService
                 var stableId = ReadModStableIdentifier(finalFolder);
                 return new NewModelModResult(new ExportResult(
                     true,
-                    warnings.Count == 0 ? "vanilla_mod_created" : "vanilla_mod_created_with_warnings",
+                    warnings.Count == 0 ? ResultCode.VanillaModCreated : ResultCode.VanillaModCreatedWithWarnings,
                     $"Created Penumbra model mod {modName}.",
                     warnings,
                     targetFile,
@@ -414,13 +414,13 @@ internal sealed class ModelExportService
                     var stableId = ReadModStableIdentifier(finalFolder);
                     return new NewModelModResult(new ExportResult(
                         true,
-                        "vanilla_mod_created_with_warnings",
+                        ResultCode.VanillaModCreatedWithWarnings,
                         $"Created Penumbra model mod {modName}.",
                         [$"The model mod was committed, but follow-up processing failed: {e.Message}"],
                         targetFile,
                         modName), finalFolder, relativeModel, stableId);
                 }
-                return new NewModelModResult(new ExportResult(false, "vanilla_mod_create_failed", e.Message));
+                return new NewModelModResult(new ExportResult(false, ResultCode.VanillaModCreateFailed, e.Message));
             }
         }
         finally

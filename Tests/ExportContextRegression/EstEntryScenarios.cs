@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.PenumbraMods;
 using static InstantEdit.TestSupport.Assertions;
@@ -109,7 +110,7 @@ internal static class EstEntryScenarios
             ("two hair entries", [Hair(160), Hair(161)]),
         };
         foreach (var (name, entries) in rejected)
-            Require(EstEntryService.ValidateEstEntryRequests(entries) == "invalid_est_entries",
+            Require(EstEntryService.ValidateEstEntryRequests(entries) == ResultCode.InvalidEstEntries,
                 $"EST envelope: {name} is refused");
         var request = new ExportServer.ExportRequest
         {
@@ -117,7 +118,7 @@ internal static class EstEntryScenarios
             Capability = "k", FilePath = "C:/Temp/export.mdl", Size = 1, Sha256 = new string('a', 64),
             EstEntries = [Hair(160, "c0101x")],
         };
-        Require(ExportServer.ValidateEnvelope(request) == "invalid_est_entries",
+        Require(ExportServer.ValidateEnvelope(request) == ResultCode.InvalidEstEntries,
             "EST envelope: the export envelope refuses an invalid entry");
         request.EstEntries = [Hair(160)];
         Require(ExportServer.ValidateEnvelope(request) is null, "EST envelope: the export envelope takes a valid entry");

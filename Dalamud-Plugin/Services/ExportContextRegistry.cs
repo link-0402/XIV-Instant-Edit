@@ -296,14 +296,14 @@ public sealed class ExportContextRegistry : IDisposable
         string capability,
         int callbackPort,
         out InstantEditImportContext? context,
-        out string code)
+        out ResultCode code)
     {
         context = null;
-        code = "stale_context";
+        code = ResultCode.StaleContext;
 
         if (callbackPort is < 1 or > 65535)
         {
-            code = "invalid_callback_port";
+            code = ResultCode.InvalidCallbackPort;
             return false;
         }
 
@@ -311,25 +311,25 @@ public sealed class ExportContextRegistry : IDisposable
         {
             if (_disposed)
             {
-                code = "server_stopped";
+                code = ResultCode.ServerStopped;
                 return false;
             }
 
             if (!IsSafeId(contextId) || !_contexts.TryGetValue(contextId, out var entry))
             {
-                code = "stale_context";
+                code = ResultCode.StaleContext;
                 return false;
             }
 
             if (!string.Equals(entry.Context.ImportId, importId, StringComparison.Ordinal))
             {
-                code = "stale_context";
+                code = ResultCode.StaleContext;
                 return false;
             }
 
             if (!CapabilityMatches(entry.Context.Capability, capability))
             {
-                code = "invalid_capability";
+                code = ResultCode.InvalidCapability;
                 return false;
             }
 
@@ -347,7 +347,7 @@ public sealed class ExportContextRegistry : IDisposable
         }
 
         Persist();
-        code = "context_reattached";
+        code = ResultCode.ContextReattached;
         return true;
     }
 
@@ -505,17 +505,17 @@ public sealed class ExportContextRegistry : IDisposable
         long size,
         string sha256,
         out ExportReservation? reservation,
-        out string code,
+        out ResultCode code,
         string? requestFingerprint = null)
     {
         reservation = null;
-        code = "invalid_context";
+        code = ResultCode.InvalidContext;
 
         lock (_lock)
         {
             if (_disposed)
             {
-                code = "server_stopped";
+                code = ResultCode.ServerStopped;
                 return false;
             }
 
@@ -523,25 +523,25 @@ public sealed class ExportContextRegistry : IDisposable
 
             if (!string.Equals(pluginInstanceId, PluginInstanceId, StringComparison.Ordinal))
             {
-                code = "plugin_instance_mismatch";
+                code = ResultCode.PluginInstanceMismatch;
                 return false;
             }
 
             if (!IsSafeId(contextId) || !_contexts.TryGetValue(contextId, out var entry))
             {
-                code = "stale_context";
+                code = ResultCode.StaleContext;
                 return false;
             }
 
             if (!CapabilityMatches(entry.Context.Capability, capability))
             {
-                code = "invalid_capability";
+                code = ResultCode.InvalidCapability;
                 return false;
             }
 
             if (!IsSafeId(exportId))
             {
-                code = "invalid_export_id";
+                code = ResultCode.InvalidExportId;
                 return false;
             }
 
@@ -554,11 +554,11 @@ public sealed class ExportContextRegistry : IDisposable
                     string.Equals(previous.RequestFingerprint, requestFingerprint, StringComparison.Ordinal))
                 {
                     reservation = new ExportReservation(entry.Context, previous.Completion.Task, false);
-                    code = "duplicate_export";
+                    code = ResultCode.DuplicateExport;
                     return true;
                 }
 
-                code = "duplicate_export_id";
+                code = ResultCode.DuplicateExportId;
                 return false;
             }
 
@@ -573,7 +573,7 @@ public sealed class ExportContextRegistry : IDisposable
                 CreatedAt = now,
             };
             reservation = new ExportReservation(entry.Context, completion.Task, true);
-            code = "accepted";
+            code = ResultCode.Accepted;
             return true;
         }
     }
@@ -583,34 +583,34 @@ public sealed class ExportContextRegistry : IDisposable
         string contextId,
         string capability,
         out InstantEditImportContext? context,
-        out string code)
+        out ResultCode code)
     {
         context = null;
-        code = "invalid_context";
+        code = ResultCode.InvalidContext;
         lock (_lock)
         {
             if (_disposed)
             {
-                code = "server_stopped";
+                code = ResultCode.ServerStopped;
                 return false;
             }
             if (!string.Equals(pluginInstanceId, PluginInstanceId, StringComparison.Ordinal))
             {
-                code = "plugin_instance_mismatch";
+                code = ResultCode.PluginInstanceMismatch;
                 return false;
             }
             if (!IsSafeId(contextId) || !_contexts.TryGetValue(contextId, out var entry))
             {
-                code = "stale_context";
+                code = ResultCode.StaleContext;
                 return false;
             }
             if (!CapabilityMatches(entry.Context.Capability, capability))
             {
-                code = "invalid_capability";
+                code = ResultCode.InvalidCapability;
                 return false;
             }
             context = entry.Context;
-            code = "accepted";
+            code = ResultCode.Accepted;
             return true;
         }
     }
@@ -639,7 +639,7 @@ public sealed class ExportContextRegistry : IDisposable
         string exportId,
         string capability,
         out Task<ExportReceipt>? completion,
-        out string code)
+        out ResultCode code)
     {
         completion = null;
         if (!TryAuthorizeOperation(pluginInstanceId, contextId, capability, out _, out code))
@@ -649,19 +649,19 @@ public sealed class ExportContextRegistry : IDisposable
         {
             if (!_contexts.TryGetValue(contextId, out var entry) || !IsSafeId(exportId))
             {
-                code = "export_not_found";
+                code = ResultCode.ExportNotFound;
                 return false;
             }
 
             PruneExportsLocked(entry, DateTimeOffset.UtcNow);
             if (!entry.Exports.TryGetValue(exportId, out var export))
             {
-                code = "export_not_found";
+                code = ResultCode.ExportNotFound;
                 return false;
             }
 
             completion = export.Completion.Task;
-            code = completion.IsCompleted ? "export_complete" : "export_pending";
+            code = completion.IsCompleted ? ResultCode.ExportComplete : ResultCode.ExportPending;
             return true;
         }
     }
@@ -670,40 +670,40 @@ public sealed class ExportContextRegistry : IDisposable
         string contextId,
         string importId,
         string capability,
-        out string code)
+        out ResultCode code)
     {
         var removed = false;
         lock (_lock)
         {
             if (_disposed)
             {
-                code = "server_stopped";
+                code = ResultCode.ServerStopped;
                 return false;
             }
             if (!IsSafeId(contextId) || !_contexts.TryGetValue(contextId, out var entry))
             {
-                code = "context_revoked";
+                code = ResultCode.ContextRevoked;
                 return true;
             }
             if (!string.Equals(entry.Context.ImportId, importId, StringComparison.Ordinal))
             {
-                code = "stale_context";
+                code = ResultCode.StaleContext;
                 return false;
             }
             if (!CapabilityMatches(entry.Context.Capability, capability))
             {
-                code = "invalid_capability";
+                code = ResultCode.InvalidCapability;
                 return false;
             }
 
             _contexts.Remove(contextId);
-            CompletePendingLocked(entry, "context_removed");
+            CompletePendingLocked(entry, ResultCode.ContextRemoved);
             removed = true;
         }
 
         if (removed)
             Persist();
-        code = "context_revoked";
+        code = ResultCode.ContextRevoked;
         return true;
     }
 
@@ -714,7 +714,7 @@ public sealed class ExportContextRegistry : IDisposable
         {
             if (_contexts.Remove(contextId, out var context))
             {
-                CompletePendingLocked(context, "context_removed");
+                CompletePendingLocked(context, ResultCode.ContextRemoved);
                 removed = true;
             }
         }
@@ -740,7 +740,7 @@ public sealed class ExportContextRegistry : IDisposable
             context.Exports.Remove(exportId);
     }
 
-    private static void CompletePendingLocked(ContextEntry context, string code)
+    private static void CompletePendingLocked(ContextEntry context, ResultCode code)
     {
         foreach (var export in context.Exports.Values)
             export.Completion.TrySetResult(new ExportReceipt(false, code, "the export context is no longer available"));
@@ -944,7 +944,21 @@ public sealed class ExportContextRegistry : IDisposable
     public sealed record ContextSummary(
         PersistedExportContext Context,
         int PendingExports,
-        IReadOnlyList<(string ExportId, string FilePath, DateTimeOffset CreatedAt, DateTimeOffset? CompletedAt, ExportReceipt? Receipt)> Exports);
+        IReadOnlyList<(string ExportId, string FilePath, DateTimeOffset CreatedAt, DateTimeOffset? CompletedAt, ReceiptSummary? Receipt)> Exports);
+
+    /// <summary> An export receipt as the test tools report it, with the code as its wire string. </summary>
+    public sealed record ReceiptSummary(
+        bool Success,
+        string Code,
+        string Message,
+        IReadOnlyList<string>? Warnings,
+        string? TargetFilePath,
+        string? DestinationName)
+    {
+        public static ReceiptSummary From(ExportReceipt receipt)
+            => new(receipt.Success, receipt.Code.Wire(), receipt.Message, receipt.Warnings, receipt.TargetFilePath,
+                receipt.DestinationName);
+    }
 
     /// <summary> The contexts this instance holds, newest first, with their export receipts. </summary>
     public IReadOnlyList<ContextSummary> Summaries()
@@ -959,7 +973,7 @@ public sealed class ExportContextRegistry : IDisposable
                     entry.Exports
                         .OrderByDescending(pair => pair.Value.CreatedAt)
                         .Select(pair => (pair.Key, pair.Value.FilePath, pair.Value.CreatedAt, pair.Value.CompletedAt,
-                            pair.Value.Completion.Task.IsCompletedSuccessfully ? pair.Value.Completion.Task.Result : null))
+                            pair.Value.Completion.Task.IsCompletedSuccessfully ? ReceiptSummary.From(pair.Value.Completion.Task.Result) : null))
                         .ToArray()))
                 .ToArray();
         }
@@ -983,7 +997,7 @@ public sealed class ExportContextRegistry : IDisposable
                              .Where(pair => pair.Value.Context.LastTouchedAtUtc < cutoff)
                              .Select(pair => pair.Key).ToArray())
                 {
-                    CompletePendingLocked(_contexts[expired], "stale_context");
+                    CompletePendingLocked(_contexts[expired], ResultCode.StaleContext);
                     _contexts.Remove(expired);
                 }
                 snapshot = _contexts.Values
@@ -1010,7 +1024,7 @@ public sealed class ExportContextRegistry : IDisposable
                 return;
             _disposed = true;
             foreach (var context in _contexts.Values)
-                CompletePendingLocked(context, "server_stopped");
+                CompletePendingLocked(context, ResultCode.ServerStopped);
             _contexts.Clear();
         }
     }
