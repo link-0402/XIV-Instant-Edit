@@ -561,7 +561,7 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
             ImGui.SetKeyboardFocusHere();
         var enter = ImGui.InputText("##physics-save-name", ref saveName, 100, ImGuiInputTextFlags.EnterReturnsTrue);
         var name = saveName.Trim();
-        var valid = Services.PenumbraService.IsSafeNewModName(name);
+        var valid = Services.PenumbraMods.ModPaths.IsSafeNewModName(name);
         ImGui.TextColored(valid ? Theme.Muted : Theme.Warning, name.Length == 0 ? "Type a name."
             : !valid ? "Use a name without \\ / : * ? \" < > |."
             : service.IsMine(name) ? $"Replaces what you saved in {name}."
