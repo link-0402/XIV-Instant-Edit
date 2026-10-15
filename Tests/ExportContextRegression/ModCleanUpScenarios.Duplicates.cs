@@ -14,6 +14,8 @@ internal static partial class ModCleanUpScenarios
         DuplicateRemovalStopsIfAFileBecomesUiReferencedAfterTheScan(testRoot);
         ALedgerFileIsAlwaysTheCopyKept(testRoot);
         RestoringAfterRemovalBringsTheCopiesBack(testRoot);
+        RestoreAfterAPendingDeleteBringsTheFileBack(testRoot);
+        AFailedReloadAfterDeduplicatingStillLeavesABackup(testRoot);
     }
 
     private static TestModFolder DuplicateMod(JObject files, params (string Rel, string Text)[] contents)
@@ -84,5 +86,38 @@ internal static partial class ModCleanUpScenarios
         var restored = store.Restore(store.For(mod.Path).Single().Id, mod.Path, cache, new FakeReloader());
         Require(restored.Skipped.Count == 0 && mod.ReadMeta() == before && mod.Exists("files/b.bin"),
             "restoring brings the removed copy and the old mapping back");
+    }
+
+    private static void RestoreAfterAPendingDeleteBringsTheFileBack(string testRoot)
+    {
+        using var mod = DuplicateMod(new JObject { ["chara/a.bin"] = "files/a.bin", ["chara/b.bin"] = "files/b.bin" }, ("files/a.bin", "same"), ("files/b.bin", "same"));
+        var before = mod.ReadMeta();
+        var settings = new StudioSettings();
+        var (store, cache) = TextureBackups(testRoot);
+        var sets = DuplicateFiles.Scan(PenumbraModMeta.Load(mod.Path), mod.Path, new HashSet<string>(), CancellationToken.None);
+        CleanUpResult result;
+        using (new FileStream(Path.Combine(mod.Path, "files", "b.bin"), FileMode.Open, FileAccess.Read, FileShare.Read))
+            result = DuplicateFiles.ApplyAsync(ModProject.Load(mod.Path), sets, store, cache, new FakeReloader(), settings, CancellationToken.None).GetAwaiter().GetResult();
+        Require(result.Pending == 1, "the held copy waits");
+        PendingCleanup.RetryAsync(settings, _ => false, CancellationToken.None).GetAwaiter().GetResult();
+        Require(!mod.Exists("files/b.bin"), "and goes once it is free");
+
+        var restored = store.Restore(store.For(mod.Path).Single().Id, mod.Path, cache, new FakeReloader());
+        Require(restored.Skipped.Count == 0 && mod.Exists("files/b.bin") && mod.ReadMeta() == before,
+            "restoring brings back the copy pending clean-up deleted, with its mapping");
+    }
+
+    private static void AFailedReloadAfterDeduplicatingStillLeavesABackup(string testRoot)
+    {
+        using var mod = DuplicateMod(new JObject { ["chara/a.bin"] = "files/a.bin", ["chara/b.bin"] = "files/b.bin" }, ("files/a.bin", "same"), ("files/b.bin", "same"));
+        var (store, cache) = TextureBackups(testRoot);
+        var sets = DuplicateFiles.Scan(PenumbraModMeta.Load(mod.Path), mod.Path, new HashSet<string>(), CancellationToken.None);
+        try
+        {
+            DuplicateFiles.ApplyAsync(ModProject.Load(mod.Path), sets, store, cache, new FakeReloader { Throws = new InvalidOperationException("gone") },
+                new StudioSettings(), CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (InvalidOperationException) { }
+        Require(store.For(mod.Path).Count == 1, "deduplicated mappings whose reload failed are still in the backups");
     }
 }

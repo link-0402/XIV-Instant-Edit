@@ -25,7 +25,7 @@ internal static partial class TmbFileFixture
         Templates(check, reject, original);
         Refusals(check, reject, original);
         Pap(check, reject, original);
-        ReviewFixes(check, original);
+        CopiesAndLengths(check, original);
         Cuts(check);
         EffectLoops(check);
         EffectCopies(check, reject);
@@ -449,11 +449,11 @@ internal static partial class TmbFileFixture
     }
 
     /// <summary>
-    /// Fixes from the 2026-10-03 review: a copy keeps every byte of the entry it copies, going back
+    /// Copies and lengths (fixed in the 2026-10-03 review): a copy keeps every byte of the entry it copies, going back
     /// to the loaded length puts what only scaling moves back, only motions that lasted the loaded
     /// length follow it, and an expression played by a C009 keeps the length the user gave it.
     /// </summary>
-    private static void ReviewFixes(Action<bool, string> check, byte[] original)
+    private static void CopiesAndLengths(Action<bool, string> check, byte[] original)
     {
         var doc = TimelineConvert.Read(TmbFile.Parse(original));
         var copied = TimelineEdits.Duplicate(doc, ["t12"], 3, out var made);

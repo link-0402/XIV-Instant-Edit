@@ -1,29 +1,39 @@
 using InstantEdit.Studio.Models;
 using InstantEdit.Studio.Models.Project;
 using InstantEdit.Studio.Services.Project;
+using Newtonsoft.Json.Linq;
 using static InstantEdit.TestSupport.Assertions;
 
 /// <summary>
-/// Edit mode after the review (group Editing): deleting a removed option's files keeps what the
-/// ledger still needs, removed options' ledger entries go, a meta.json that can't be written changes
-/// nothing, typed game paths, and local source paths kept out of the mod folder.
+/// The Mod Browser's Edit mode: deleting a removed option's files keeps what the ledger still needs,
+/// removed options' ledger entries go, a meta.json that can't be written changes nothing, typed game
+/// paths, local source paths kept out of the mod folder, Combining defaults, option ids with '/', and
+/// removing only the file the user confirmed.
 /// </summary>
-internal static class ReviewFixEditingScenarios
+internal static class ModEditingScenarios
 {
     private const string Tex = "chara/equipment/e0001/texture/v01_c0201e0001_top_d.tex";
+    private const string GroupId = "5b1e7d0a-6a43-4c6e-9f39-0c7f4f9e0a01";
+    private const string ComboId = "5b1e7d0a-6a43-4c6e-9f39-0c7f4f9e0a02";
+    private const string RedId   = "5b1e7d0a-6a43-4c6e-9f39-0c7f4f9e0a03";
+    private const string BlueId  = "5b1e7d0a-6a43-4c6e-9f39-0c7f4f9e0a04";
+    private const string Texture = "chara/equipment/e0001/texture/v01_c0101e0001_top_d.tex";
 
     public static void Run(string testRoot)
     {
-        RemovingAnOptionKeepsAFileTheLedgerGoesBackTo();
+        var root = Path.Combine(testRoot, "ModEditing");
+        Directory.CreateDirectory(root);
+        RemovingAnOptionKeepsAFileTheLedgerGoesBackTo();        // resui-1
         RemovingOneEntryKeepsAFileTheLedgerGoesBackTo();
-        RemovingAnOptionDropsItsLedgerEntries();
-        AMetaJsonThatCantBeWrittenChangesNothing();
+        RemovingAnOptionDropsItsLedgerEntries();                // resui-2
+        AMetaJsonThatCantBeWrittenChangesNothing();             // models-2, resui-4
         AnEditThatThrowsChangesNothing();
-        TypedGamePathsRejectDotFoldersAndBadCharacters();
-        LocalSourcePathsStayOutOfTheModFolder(testRoot);
+        TypedGamePathsRejectDotFoldersAndBadCharacters();       // resui-6
+        LocalSourcePathsStayOutOfTheModFolder(testRoot);        // models-5
+        CombiningGroupsDefaultToTheFirstContainer(root);        // glue-5
+        GroupIdsWithSlashesRoundTrip();                         // resources-8
+        RemoveTakesOnlyTheConfirmedFile(root);                  // resui-5
     }
-
-    // ── resui-1 ─────────────────────────────────────────────────────────────
 
     /// <summary>Red was repointed here at its own copy (its original is textures\shared_d.tex); Blue still uses that original.</summary>
     private static TestModFolder SharedOriginalMod()
@@ -83,8 +93,6 @@ internal static class ReviewFixEditingScenarios
             "a file nothing needs is still deleted");
     }
 
-    // ── resui-2 ─────────────────────────────────────────────────────────────
-
     private static void RemovingAnOptionDropsItsLedgerEntries()
     {
         using var mod = new TestModFolder()
@@ -129,8 +137,6 @@ internal static class ReviewFixEditingScenarios
         Require(!mod.Exists("Looks/G/tex_d.tex") && mod.Exists("Looks/H/tex_d.tex") && mod.Exists("textures/h_orig.tex"),
             "the removed option's written file is deleted, the moved option's files stay");
     }
-
-    // ── models-2 / resui-4 ─────────────────────────────────────────────────
 
     private static void AMetaJsonThatCantBeWrittenChangesNothing()
     {
@@ -179,8 +185,6 @@ internal static class ReviewFixEditingScenarios
         Require(project.Meta.OptionName(red) == "Red", "an edit that fails halfway leaves the open mod's meta.json as it was");
     }
 
-    // ── resui-6 ─────────────────────────────────────────────────────────────
-
     private static void TypedGamePathsRejectDotFoldersAndBadCharacters()
     {
         Require(PathNormalizer.HasStorableSegments(Tex), "an ordinary game path can be stored");
@@ -194,10 +198,10 @@ internal static class ReviewFixEditingScenarios
             "a game path with characters Windows can't store is refused");
     }
 
-    // ── models-5 ────────────────────────────────────────────────────────────
-
     private const string RedSource = @"C:\Users\SomeoneElse\Desktop\My mods\red_d.png";
+
     private const string NormSource = @"C:\Users\SomeoneElse\Desktop\My mods\norm.png";
+
     private const string Mtrl = "chara/equipment/e0001/material/v0001/mt_c0201e0001_top_a.mtrl";
 
     private static void LocalSourcePathsStayOutOfTheModFolder(string testRoot)
@@ -281,5 +285,88 @@ internal static class ReviewFixEditingScenarios
         project.Flush();
         Require(!SidecarText(mod).Contains("SomeoneElse"), "the next save takes the local paths out of the mod folder");
         Require(Restored(ModProject.Load(mod.Path)), "and they come back from the config folder");
+    }
+
+    private static void CombiningGroupsDefaultToTheFirstContainer(string root)
+    {
+        var mod = WriteMod(Path.Combine(root, "combining"));
+        var meta = PenumbraModMeta.Load(mod);
+        var none = ActiveSettings.Map(meta, new Dictionary<string, List<string>>());
+        Require(none.Contains(new OptionRef(ComboId, "c#0")) && !none.Any(o => o.Group == GroupId),
+            "a Combining group missing from the settings applies its first container; a Single group with nothing picked applies nothing");
+        var empty = ActiveSettings.Map(meta, new Dictionary<string, List<string>> { ["Combo"] = new() });
+        Require(empty.Contains(new OptionRef(ComboId, "c#0")), "a Combining group with nothing picked applies its first container");
+        var picked = ActiveSettings.Map(meta, new Dictionary<string, List<string>> { ["Combo"] = new() { "B" }, ["Look"] = new() { "Blue" } });
+        Require(picked.Contains(new OptionRef(ComboId, "c#2")) && !picked.Contains(new OptionRef(ComboId, "c#0")) && picked.Contains(new OptionRef(GroupId, BlueId)),
+            "picked options still map to their container and option");
+    }
+
+    private static void GroupIdsWithSlashesRoundTrip()
+    {
+        var slashed = new OptionRef("Top/Bottom", "Red");
+        var parsed = OptionRef.Parse(slashed.Serialize());
+        Require(parsed.Group == "Top/Bottom" && parsed.Option == "Red", $"a group id with '/' reads back as written ({slashed.Serialize()})");
+        var other = new OptionRef("Top", "Bottom/Red");
+        Require(slashed.Serialize() != other.Serialize() && OptionRef.Parse(other.Serialize()) == other,
+            "it no longer collides with another group's option");
+        var percent = new OptionRef("50%2F", "x");
+        Require(OptionRef.Parse(percent.Serialize()).Group == "50%2F", "a '%' in a group id survives too");
+
+        Require(OptionRef.Parse($"{GroupId}/{RedId}") == new OptionRef(GroupId, RedId) && OptionRef.Parse("#2/#0") == new OptionRef("#2", "#0")
+                && OptionRef.Parse("#1/c#3") == new OptionRef("#1", "c#3"),
+            "refs saved before (GUIDs, positions, containers) read back the same");
+        Require(new OptionRef(GroupId, RedId).Serialize() == $"{GroupId}/{RedId}", "and are written the same as before");
+    }
+
+    private static void RemoveTakesOnlyTheConfirmedFile(string root)
+    {
+        var mod = WriteMod(Path.Combine(root, "remove"));
+        var meta = PenumbraModMeta.Load(mod);
+        var red = new OptionRef(GroupId, RedId);
+        Require(meta.TryGetFile(red, Texture, out var current), "the fixture's option has the texture");
+
+        var gone = ModSession.RemoveFileIfStill(meta, red, Texture, @"textures\elsewhere.tex", out bool changed);
+        Require(gone == null && changed && meta.TryGetFile(red, Texture, out _),
+            "an entry that points at another file than the one confirmed is left in place");
+
+        var removed = ModSession.RemoveFileIfStill(meta, red, Texture, current.Replace('\\', '/'), out changed);
+        Require(removed == current && !changed && !meta.TryGetFile(red, Texture, out _), "the confirmed file is taken out");
+    }
+
+    /// <summary>A v4 mod: a Single group "Look" (Red, Blue) and a Combining group "Combo" (A, B).</summary>
+    private static string WriteMod(string mod)
+    {
+        Directory.CreateDirectory(mod);
+        File.WriteAllText(Path.Combine(mod, "meta.json"), new JObject
+        {
+            ["FileVersion"] = 4,
+            ["Name"] = "Lows",
+            ["DefaultData"] = new JObject { ["Files"] = new JObject() },
+            ["Groups"] = new JArray
+            {
+                new JObject
+                {
+                    ["Id"] = GroupId, ["Name"] = "Look", ["Type"] = "Single", ["DefaultSettings"] = 0,
+                    ["Options"] = new JArray
+                    {
+                        new JObject { ["Id"] = RedId, ["Name"] = "Red", ["Files"] = new JObject { [Texture] = @"Look\Red\top_d.tex" } },
+                        new JObject { ["Id"] = BlueId, ["Name"] = "Blue", ["Files"] = new JObject { [Texture] = @"Look\Blue\top_d.tex" } },
+                    },
+                },
+                new JObject
+                {
+                    ["Id"] = ComboId, ["Name"] = "Combo", ["Type"] = "Combining", ["DefaultSettings"] = 0,
+                    ["Options"] = new JArray { new JObject { ["Name"] = "A" }, new JObject { ["Name"] = "B" } },
+                    ["Containers"] = new JArray
+                    {
+                        new JObject { ["Files"] = new JObject { [Texture] = @"Combo\none.tex" } },
+                        new JObject { ["Files"] = new JObject() },
+                        new JObject { ["Files"] = new JObject() },
+                        new JObject { ["Files"] = new JObject() },
+                    },
+                },
+            },
+        }.ToString());
+        return mod;
     }
 }

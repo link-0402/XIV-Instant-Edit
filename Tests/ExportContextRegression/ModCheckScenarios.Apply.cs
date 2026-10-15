@@ -22,6 +22,11 @@ internal static partial class ModCheckScenarios
         RepairsKeepPenumbrasPathStyle(testRoot);
         AModMovedAfterItsCheckIsNotRepaired(testRoot);
         RepairsAndRestoreWorkInNonAsciiFolders(testRoot);
+        ACancelBeforeApplyingChangesNothing(testRoot);
+        AFailureAfterMetaChangedStillLeavesABackup(testRoot);
+        ABackupFolderThatCantBeUsedSaysWhy();
+        WhyNotTrustsTheSessionsStaleness(testRoot);
+        FilesChangedAfterTheCheckAreNeverDeleted(testRoot);
     }
 
     private static void RepairsKeepPenumbrasPathStyle(string testRoot)
@@ -240,5 +245,75 @@ internal static partial class ModCheckScenarios
                 RepairApplier.WhyNot(project, report, false, false, stale: false) == "Penumbra is not available." &&
                 RepairApplier.WhyNot(project, report, false, true, stale: false) is null,
             "repairs say why they can't run: closed, still writing, no Penumbra");
+    }
+
+    private static void ACancelBeforeApplyingChangesNothing(string testRoot)
+    {
+        using var mod = StellarBladeMod();
+        var before = mod.ReadMeta();
+        var report = CheckStellarBlade(mod);
+        var (store, cache) = NewBackups(testRoot);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        ApplyResult? result = null;
+        try
+        {
+            result = RepairApplier.ApplyAsync(ModProject.Load(mod.Path), report, new RepairSelection(report), store, cache, new FakeReloader(),
+                new StudioSettings(), cancelled.Token).GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException) { }
+        Require(mod.ReadMeta() == before && SbHairFiles.All(mod.Exists) && store.For(mod.Path).Count == 0 && result is not { Ok: true },
+            "a cancel before the repairs start changes nothing");
+    }
+
+    private static void AFailureAfterMetaChangedStillLeavesABackup(string testRoot)
+    {
+        using var mod = StellarBladeMod();
+        var before = mod.ReadMeta();
+        var report = CheckStellarBlade(mod);
+        var (store, cache) = NewBackups(testRoot);
+        try
+        {
+            RepairApplier.ApplyAsync(ModProject.Load(mod.Path), report, new RepairSelection(report) { DeleteReleasedFiles = true }, store, cache,
+                new FakeReloader { Throws = new InvalidOperationException("the plugin went away") }, new StudioSettings(), CancellationToken.None)
+                .GetAwaiter().GetResult();
+        }
+        catch (InvalidOperationException) { }
+        Require(mod.ReadMeta() != before && store.For(mod.Path).Count == 1, "meta.json changed before the failure, so the change is in the backups");
+        store.Restore(store.For(mod.Path).Single().Id, mod.Path, cache, new FakeReloader());
+        Require(mod.ReadMeta() == before, "and Restore puts it back");
+    }
+
+    private static void ABackupFolderThatCantBeUsedSaysWhy()
+    {
+        var root = BackupFolder.TryResolve(() => throw new IOException("the drive is gone"), out var problem);
+        Require(root is null && problem == "Nothing was changed: the backup folder couldn't be used (the drive is gone).",
+            "a cache folder that can't be used stops the operation with the reason");
+        Require(BackupFolder.TryResolve(() => @"C:\cache", out var none) == @"C:\cache" && none.Length == 0, "a usable one is passed on");
+    }
+
+    private static void WhyNotTrustsTheSessionsStaleness(string testRoot)
+    {
+        using var mod = StellarBladeMod();
+        var report = CheckStellarBlade(mod);
+        var project = ModProject.Load(mod.Path);
+        mod.Meta(mod.ReadMeta().Replace("\"Author\": \"Luci\"", "\"Author\": \"Someone else\""));
+        Require(RepairApplier.WhyNot(project, report, false, true, stale: false) is null,
+            "the Apply button doesn't read meta.json itself; the session's watch says whether the report is stale");
+        Require(RepairApplier.WhyNot(project, report, false, true, stale: true) == RepairApplier.ChangedReason, "a stale report can't be applied");
+    }
+
+    private static void FilesChangedAfterTheCheckAreNeverDeleted(string testRoot)
+    {
+        using var mod = StellarBladeMod();
+        var report = CheckStellarBlade(mod);
+        var files = Directory.EnumerateFiles(mod.Path, "*", SearchOption.AllDirectories).Where(f => Path.GetFileName(f) != "meta.json").ToList();
+        var later = DateTime.UtcNow.AddMinutes(5);
+        foreach (var file in files)
+            File.SetLastWriteTimeUtc(file, later);
+
+        var result = ApplyRecommended(mod, report, new FakeReloader(), testRoot, deleteReleased: true);
+        Require(result.Ok && files.All(File.Exists), $"files changed after the check are never deleted ({result.Message})");
     }
 }
