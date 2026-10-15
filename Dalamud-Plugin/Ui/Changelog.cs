@@ -80,7 +80,7 @@ internal static class ChangelogCatalog
             Entry("Heels offset: when your gear hides your feet, the legs or body model now gets the offset instead of the hidden shoes."),
             Entry("Optimize textures: a notification now says what each run compressed, resized or cropped."),
             Entry("Part toggles: exports now refuse another slot's tags, like body tags on a necklace, which could never hide, and say which names to use. Toggle groups also keep a mod's own variant materials instead of switching them back to the game's."),
-            Entry("Blender add-on: Remove Hidden Vertices now removes skin under gear with sheer or cut-out parts, keeping only the skin those parts show."),
+            Entry("Blender add-on: Remove Hidden Vertices now removes skin under gear with sheer or cut-out parts, keeping only the skin those parts show. It tests the body in the shape its sliders show, applies shp_ keys the way Blender mixes them, and keeps skin that a ruffle or lapel standing off the body would show from the side."),
             Entry("It also removes much more of the skin your gear covers, and leaves skin folds alone.", 1),
             Entry("Blender add-on: fixed opaque gear showing up as see-through in some cases."),
             Entry("Blender add-on: the new Untangle Mesh Groups button fixes parts that share a number or a mesh group with another material. It replaces Fill Mesh Part Gaps."),

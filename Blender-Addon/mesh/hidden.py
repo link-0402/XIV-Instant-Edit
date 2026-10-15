@@ -1,10 +1,13 @@
 """Find the vertices that other meshes cover, like skin under a top, and delete them.
 
-A vertex counts as covered when rays leaving it within 45 degrees of its
+A vertex counts as covered when rays leaving it within 70 degrees of its
 normal all hit a surface that hides what lies behind it. Looking at a covered
 vertex from anywhere in that cone shows the cover instead; from further to the
 side, a viewer sees at most a sliver through the gap between skin and gear.
-The rules follow how the game draws a model:
+The wide cone matters for gear that stands off the body: a ruffle or lapel a
+few centimetres above the skin hides it from the front but not from the side,
+and a ray at 70 degrees only hits a cover that reaches almost three times its
+height past the vertex. The rules follow how the game draws a model:
 
 - Faces with the vertex's own material never cover it, so skin parts don't
   hide each other's folds. Only Itself instead tests a mesh against its own
@@ -23,9 +26,11 @@ The rules follow how the game draws a model:
   follow covers nothing.
 - Surfaces closer to a vertex than a small tolerance do not cover it, so a
   mesh lying on a copy of itself (a mannequin, a Backfaces duplicate) survives.
-- The test uses each mesh's own vertices in the rest pose, without modifiers.
-  Each shp_ shape key is another state of the scene, with the key applied to
-  every mesh that has it; a vertex must be covered in every state.
+- The test uses each mesh in the rest pose, without modifiers, with its shape
+  keys mixed at their current values: a devkit body is tested in the shape it
+  shows, not its basis. Each shp_ shape key is another state of the scene,
+  with the key blended in fully on every mesh that has it; a vertex must be
+  covered in every state.
 
 A covered vertex is deleted with the faces that use it, unless one of those
 faces has an uncovered corner: that face stays whole, so the edge of a covered
@@ -47,9 +52,10 @@ from mathutils.geometry import barycentric_transform
 
 from ..instant_edit.context import try_mesh_ids_from_name
 from ..instant_edit.material_preview import drawn_solid
+from .shapes import get_shape_mix
 
 
-CONE_DEGREES = 45.0
+CONE_DEGREES = 70.0
 # The rays of the cone: one along the normal and rings of 6 and 12 around it.
 _RINGS = 2
 # A ray that passes through this many culled backfaces counts as escaped.
@@ -96,20 +102,26 @@ def _cone(degrees: float, rings: int) -> np.ndarray:
     return np.array(vectors)
 
 
-def shape_key_states(obj) -> dict[str, np.ndarray]:
-    """The object's shp_ shape keys, which the game applies, as local vertex positions."""
+def shape_positions(obj, extra_key: str = "") -> np.ndarray:
+    """The object's local vertex positions with its shape keys mixed at their
+    current values, and ``extra_key`` blended in fully."""
     keys = obj.data.shape_keys
-    if keys is None:
-        return {}
-    count = len(obj.data.vertices)
-    states = {}
-    for key in keys.key_blocks[1:]:
-        if not key.name.startswith("shp"):
-            continue
+    if keys is None or not keys.use_relative:
+        count = len(obj.data.vertices)
         co = np.empty(count * 3, dtype=np.float64)
-        key.data.foreach_get("co", co)
-        states[key.name] = co.reshape(-1, 3)
-    return states
+        obj.data.vertices.foreach_get("co", co)
+        return co.reshape(-1, 3)
+    return get_shape_mix(obj, extra_key).astype(np.float64).reshape(-1, 3)
+
+
+def shape_key_states(obj) -> dict[str, np.ndarray]:
+    """The object's shp_ shape keys, which the game applies, as local vertex
+    positions: the current mix with that key blended in fully."""
+    keys = obj.data.shape_keys
+    if keys is None or not keys.use_relative:
+        return {}
+    return {key.name: shape_positions(obj, key.name)
+            for key in keys.key_blocks[1:] if key.name.startswith("shp")}
 
 
 @dataclass
@@ -284,8 +296,7 @@ class _Mesh:
         mesh = obj.data
         mesh.calc_loop_triangles()
         count = len(mesh.vertices)
-        basis = np.empty(count * 3, dtype=np.float64)
-        mesh.vertices.foreach_get("co", basis)
+        basis = shape_positions(obj)
         triangles = np.empty(len(mesh.loop_triangles) * 3, dtype=np.int64)
         mesh.loop_triangles.foreach_get("vertices", triangles)
         triangles = triangles.reshape(-1, 3)
@@ -358,7 +369,7 @@ class _Mesh:
         slot_culled = np.array([material is not None and material.use_backface_culling for material in slots])
         two_sided = np.zeros(count, dtype=bool)
         two_sided[loop_vertices[~slot_culled[np.repeat(polygon_material, polygon_sizes)]]] = True
-        return cls(obj, matrix, basis.reshape(-1, 3), shape_key_states(obj), normals, two_sided, triangles,
+        return cls(obj, matrix, basis, shape_key_states(obj), normals, two_sided, triangles,
                    loop_vertices, polygon_starts, polygon_sizes, edges.reshape(-1, 2),
                    slot_blocks[material_index], [slot_keys[index] for index in material_index.tolist()],
                    np.array(slot_opacity, dtype=np.int64)[material_index], opacities)

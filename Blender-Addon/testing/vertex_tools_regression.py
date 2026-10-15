@@ -336,14 +336,39 @@ def check_remove_hidden_vertices() -> None:
                     "faces with the vertex's own material, a second import of it included, never cover it")
 
         with temporary_scene_data():
-            # A slit over the middle column: the next columns see it only from
-            # more than 45 degrees off their normal.
+            # A slit over the middle column through thin slabs: the next
+            # columns see it from about 52 degrees off their normal, the
+            # columns after those only from more than 70.
             plane = mesh_object("0.1 Plane", grid(0.0), surface=opaque)
-            mesh_object("0.0 Slabs", box((-1.04, 0.0, 0.15), (0.96, 1.5, 0.05)),
-                        box((1.04, 0.0, 0.15), (0.96, 1.5, 0.05)), surface=gear)
+            mesh_object("0.0 Slabs", box((-1.1, 0.0, 0.1), (1.0, 1.5, 0.001)),
+                        box((1.1, 0.0, 0.1), (1.0, 1.5, 0.001)), surface=gear)
             remove_hidden(plane)
-            require(len(plane.data.vertices) == 33 and max(abs(vertex.co.x) for vertex in plane.data.vertices) < 0.21,
-                    "a vertex seen only from more than 45 degrees off its normal counts as covered")
+            require(len(plane.data.vertices) == 55 and max(abs(vertex.co.x) for vertex in plane.data.vertices) < 0.41,
+                    "a vertex seen only from more than 70 degrees off its normal counts as covered")
+
+        with temporary_scene_data():
+            # A plane under a slab, with shape keys that lift it above the slab.
+            plane = mesh_object("0.1 Plane", grid(0.0), surface=opaque)
+            mesh_object("0.0 Slab", box((0.0, 0.0, 0.1), (1.5, 1.5, 0.001)), surface=gear)
+            plane.shape_key_add(name="Basis")
+            medium = plane.shape_key_add(name="Medium", from_mix=False)
+            for point in medium.data:
+                point.co.z += 0.2
+            medium.value = 1.0
+            remove_hidden(plane)
+            require(len(plane.data.vertices) == 121, "the test sees the shape keys at their current values")
+            medium.value = 0.0
+            state = plane.shape_key_add(name="shp_lift", from_mix=False)
+            for point in state.data:
+                point.co.z += 0.2
+            remove_hidden(plane)
+            require(len(plane.data.vertices) == 121, "a shp_ key at zero is still a state the game can show")
+            # A shp_ key relative to another key: its state is the current mix
+            # plus what the key changes, not the key's stored positions.
+            state.relative_key = medium
+            remove_hidden(plane)
+            require(len(plane.data.vertices) == 0,
+                    "a shp_ key that changes nothing against its relative key adds no state")
 
         with temporary_scene_data():
             shell = mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=gear)
@@ -467,8 +492,9 @@ def check_remove_hidden_vertices() -> None:
             remove_hidden(inner)
             require(len(inner.data.vertices) == 8, "a shp_ shape key that brings vertices into view keeps them")
             outside.name = "Sculpt Helper"
+            outside.value = 0.0
             remove_hidden(inner)
-            require(len(inner.data.vertices) == 0, "shape keys the game never applies do not count")
+            require(len(inner.data.vertices) == 0, "other shape keys count only at their current value")
 
         with temporary_scene_data():
             shell = mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=gear)
