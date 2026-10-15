@@ -5,6 +5,7 @@ using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
+using InstantEdit.Ui.Main;
 
 namespace InstantEdit.Ui;
 
@@ -15,8 +16,8 @@ namespace InstantEdit.Ui;
 /// </summary>
 public sealed partial class MainWindow
 {
-    private AnimationEditService? animations;
-    private string? animationError;
+    private AnimationEditService? animations => _animationHub.Service;
+    private string? animationError => _animationHub.Error;
     private AnimationCapture? animationSelection;
     private bool animationStartupSelected;
     private string animationFilter = "";
@@ -29,8 +30,7 @@ public sealed partial class MainWindow
 
     internal void AttachAnimations(AnimationEditService? service, string? error)
     {
-        animations = service;
-        animationError = error;
+        _animationHub.Attach(service, error);
     }
 
     private void SelectAnimation(AnimationCapture capture, bool startup = false)
@@ -49,7 +49,7 @@ public sealed partial class MainWindow
             Widgets.Banner("##animations-unavailable", FeedbackSeverity.Warning, animationError ?? "Animation integration is unavailable.");
             ImGui.Spacing();
             // Recording reads the live skeleton directly and needs none of the editing services.
-            DrawRecorder();
+            _recorder.Draw();
             return;
         }
         animations.StartObservation();
@@ -106,9 +106,7 @@ public sealed partial class MainWindow
             return animationRows;
 
         var rows = AnimationRows.Build(history);
-        _animationRows.Clear();
-        foreach (var row in rows)
-            _animationRows[row.View] = (row.Capture.Id, row.Startup);
+        _animationSend.SetDetectedRows(rows);
         // The listener follows your character: its On Screen entry names the list and gives the
         // row menu its mod actions.
         var address = rows.IsEmpty ? 0 : rows[0].Capture.ActorAddress;
@@ -250,7 +248,7 @@ public sealed partial class MainWindow
         Widgets.PathText(Safe(view.SourceRelativePath, view.GamePath), Safe(view.ActualPath));
         ImGui.TableSetColumnIndex(3);
         if (Widgets.IconButton("##send-animation", FontAwesomeIcon.Pen, "Send this animation to Blender"))
-            OpenAnimationSend(view);
+            _animationSend.OpenAnimationSend(view);
         ImGui.SameLine(0, Theme.Scaled(2));
         if (Widgets.GhostIconButton("##more", FontAwesomeIcon.EllipsisH, "More actions"))
             ImGui.OpenPopup(RowMenuPopup);
@@ -282,7 +280,7 @@ public sealed partial class MainWindow
         if (problem is not null)
             ImGui.TextColored(Theme.Warning, problem);
         else if (row.Clip.Resolution?.Selected is { } source)
-            ImGui.TextUnformatted("Made for " + SkeletonLabel(source));
+            ImGui.TextUnformatted("Made for " + AnimationSendDialog.SkeletonLabel(source));
     }
 
     private static float BadgeWidth(string text) => ImGui.CalcTextSize(text).X + Theme.Scaled(12);

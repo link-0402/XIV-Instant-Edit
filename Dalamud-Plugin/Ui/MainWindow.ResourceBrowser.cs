@@ -496,9 +496,9 @@ public sealed partial class MainWindow
         }
         else if (ResourceViews.IsAnimation(node))
         {
-            var blocked = AnimationSendBlock(node);
+            var blocked = _animationSend.AnimationSendBlock(node);
             if (Widgets.IconButton("##send-animation", FontAwesomeIcon.Pen, blocked ?? "Send this animation to Blender", blocked is null))
-                OpenAnimationSend(node);
+                _animationSend.OpenAnimationSend(node);
             ImGui.SameLine(0, Theme.Scaled(2));
         }
 
@@ -544,9 +544,9 @@ public sealed partial class MainWindow
         var animation = ResourceViews.IsAnimation(node);
         if (animation)
         {
-            using var disabled = ImRaii.Disabled(AnimationSendBlock(node) is not null);
+            using var disabled = ImRaii.Disabled(_animationSend.AnimationSendBlock(node) is not null);
             if (ImGui.MenuItem("Send animation to Blender"))
-                OpenAnimationSend(node);
+                _animationSend.OpenAnimationSend(node);
         }
         extraItems?.Invoke();
         if (safeModel || texture || animation || extraItems is not null)

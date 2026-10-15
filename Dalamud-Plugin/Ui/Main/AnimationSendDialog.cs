@@ -1,11 +1,9 @@
-using System.Numerics;
 using Dalamud.Bindings.ImGui;
-using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Main;
 
 /// <summary>
 /// The "Send animation to Blender" dialog behind the pen of an animation row: a PAP file of a mod
@@ -13,12 +11,12 @@ namespace InstantEdit.Ui;
 /// Animations tab, which the listener detected on your character and whose skeleton it already matched.
 /// The dialog shows in the window whose row opened it (see <see cref="AnimationSendState.Owner"/>).
 /// </summary>
-public sealed partial class MainWindow
+internal sealed class AnimationSendDialog
 {
     private const string AnimationSendPopup = "Send animation to Blender";
 
     /// <summary> The main window, as the owner of the dialogs its own rows open. </summary>
-    private const string MainOwner = "main";
+    public const string MainOwner = "main";
 
     private sealed class AnimationSendState(CancellationToken lifetime) : IDisposable
     {
@@ -44,15 +42,35 @@ public sealed partial class MainWindow
         }
     }
 
+    private readonly AnimationIntegration _animations;
+    private readonly AnimationDelivery _delivery;
+    private readonly StatusFeed _feed;
+    private readonly CancellationToken _lifetime;
     private AnimationSendState? animationSend;
     // Rows of the Animations tab and the detected animation each stands for.
     private readonly Dictionary<ResourceView, (string CaptureId, bool Startup)> _animationRows = new(ReferenceEqualityComparer.Instance);
 
-    /// <summary> Why an animation row cannot be sent, or null when it can. </summary>
-    private string? AnimationSendBlock(ResourceView node)
+    public AnimationSendDialog(AnimationIntegration animations, AnimationDelivery delivery, StatusFeed feed, CancellationToken lifetime)
     {
-        if (animations is null)
-            return animationError ?? "Animation integration is unavailable.";
+        _animations = animations;
+        _delivery = delivery;
+        _feed = feed;
+        _lifetime = lifetime;
+    }
+
+    /// <summary> The Animations tab's rows, each standing for the detected animation it lists. Replaces the previous rows. </summary>
+    public void SetDetectedRows(IEnumerable<AnimationRow> rows)
+    {
+        _animationRows.Clear();
+        foreach (var row in rows)
+            _animationRows[row.View] = (row.Capture.Id, row.Startup);
+    }
+
+    /// <summary> Why an animation row cannot be sent, or null when it can. </summary>
+    public string? AnimationSendBlock(ResourceView node)
+    {
+        if (_animations.Service is null)
+            return _animations.Unavailable;
         if (_animationRows.ContainsKey(node))
             return null;
         return node.SourceState == ResourceSourceState.LoadedMod && Path.IsPathRooted(node.ActualPath) &&
@@ -61,23 +79,23 @@ public sealed partial class MainWindow
             : "Only animation files inside a mod folder can be sent from here.";
     }
 
-    private void OpenAnimationSend(ResourceView node, string owner = MainOwner)
+    public void OpenAnimationSend(ResourceView node, string owner = MainOwner)
     {
         if (AnimationSendBlock(node) is { } blocked)
         {
-            SetStatus(blocked, FeedbackSeverity.Warning);
+            _feed.SetStatus(blocked, FeedbackSeverity.Warning);
             return;
         }
         animationSend?.Dispose();
         if (_animationRows.TryGetValue(node, out var detected))
         {
-            animationSend = new AnimationSendState(_lifetimeCts.Token) { CaptureId = detected.CaptureId, Startup = detected.Startup, Owner = owner };
+            animationSend = new AnimationSendState(_lifetime) { CaptureId = detected.CaptureId, Startup = detected.Startup, Owner = owner };
             return;
         }
-        var source = new AnimationFileSource(node.GamePath, node.ActualPath, Safe(node.DisplayName, Path.GetFileName(node.ActualPath)),
+        var source = new AnimationFileSource(node.GamePath, node.ActualPath, UiText.Safe(node.DisplayName, Path.GetFileName(node.ActualPath)),
             node.SourceModName.Length > 0 ? node.SourceModName : null, node.SourceModDirectory.Length > 0 ? node.SourceModDirectory : null);
-        var state = new AnimationSendState(_lifetimeCts.Token) { File = source, Owner = owner };
-        state.Inspection = animations!.Files.InspectAsync(source, state.Token);
+        var state = new AnimationSendState(_lifetime) { File = source, Owner = owner };
+        state.Inspection = _animations.Service!.Files.InspectAsync(source, state.Token);
         animationSend = state;
     }
 
@@ -88,7 +106,7 @@ public sealed partial class MainWindow
         ImGui.CloseCurrentPopup();
     }
 
-    private void DrawAnimationSendDialog(string owner)
+    public void Draw(string owner)
     {
         var state = animationSend;
         if (state is null || state.Owner != owner)
@@ -100,10 +118,10 @@ public sealed partial class MainWindow
             return;
         try
         {
-            var service = animations;
+            var service = _animations.Service;
             if (service is null)
             {
-                Widgets.Banner("##animation-send-unavailable", FeedbackSeverity.Error, animationError ?? "Animation integration is unavailable.");
+                Widgets.Banner("##animation-send-unavailable", FeedbackSeverity.Error, _animations.Unavailable);
                 if (ImGui.Button("Close")) CloseAnimationSend();
                 return;
             }
@@ -172,9 +190,9 @@ public sealed partial class MainWindow
             skeleton = DrawSkeletonChoice(resolution.Result, state.Chosen, candidate => state.Chosen = candidate, state.Sent && service.Busy);
 
         ImGui.Spacing();
-        Widgets.HintWrapped($"Blender keys the clip onto \"{AnimationArmature}\" at its own frame rate. " +
+        Widgets.HintWrapped($"Blender keys the clip onto \"{_delivery.AnimationArmature}\" at its own frame rate. " +
                             "Physics bones keep their rest pose; use Record in the Timeline window to include them.");
-        DrawSendButtons(state, service, skeleton is null ? null : () => service.SendFileToBlender(clip, skeleton, DeliverAnimationAsync));
+        DrawSendButtons(state, service, skeleton is null ? null : () => service.SendFileToBlender(clip, skeleton, _delivery.DeliverAnimationAsync));
     }
 
     private void DrawDetectedSend(AnimationSendState state, AnimationEditService service)
@@ -209,14 +227,14 @@ public sealed partial class MainWindow
                 skeleton = DrawSkeletonChoice(resolution, null, candidate =>
                 {
                     try { service.Observer.ChooseSkeleton(clip, candidate); }
-                    catch (InvalidOperationException e) { SetStatus(e.Message, FeedbackSeverity.Warning); }
+                    catch (InvalidOperationException e) { _feed.SetStatus(e.Message, FeedbackSeverity.Warning); }
                 }, state.Sent && service.Busy);
                 break;
         }
         ImGui.Spacing();
-        Widgets.HintWrapped($"Blender keys the animation onto \"{AnimationArmature}\" at its own frame rate. " +
+        Widgets.HintWrapped($"Blender keys the animation onto \"{_delivery.AnimationArmature}\" at its own frame rate. " +
                             "Physics bones keep their rest pose; use Record live pose to include them.");
-        DrawSendButtons(state, service, skeleton is null ? null : () => service.SendToBlender(capture, state.Startup, DeliverAnimationAsync));
+        DrawSendButtons(state, service, skeleton is null ? null : () => service.SendToBlender(capture, state.Startup, _delivery.DeliverAnimationAsync));
     }
 
     /// <summary>
@@ -261,7 +279,7 @@ public sealed partial class MainWindow
         return selected;
     }
 
-    private static string SkeletonLabel(SkeletonCandidate candidate) => AnimationPresentation.SkeletonLabel(candidate);
+    public static string SkeletonLabel(SkeletonCandidate candidate) => AnimationPresentation.SkeletonLabel(candidate);
 
     private static string ClipLabel(AnimationFileClip clip)
         => $"{clip.Name} · {clip.Duration:0.##} s{(clip.Face ? " · face" : "")}";
