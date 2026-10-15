@@ -43,6 +43,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly TimelineClipBand clipBand;
     private readonly CutPanel cutPanel;
     private readonly TimelineCanvas canvas;
+    private readonly PropertiesPanel properties;
     private readonly BonesWindow bonesWindow;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
@@ -101,6 +102,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         poseSources = new PoseSourcePanel(session, decode, posing, recorder);
         layerPanel = new LayerPanel(session, posing, boneEditor, poseSources, bonesWindow);
         canvas = new TimelineCanvas(session, posing, clipBand, pickers, soundFiles, texts);
+        properties = new PropertiesPanel(session, effectLooks, soundInspector, cutPanel, layerPanel, texts, pickers);
         bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, this, textures);
 
         Size = new Vector2(1000, 560);
@@ -676,7 +678,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private void ForgetSounds()
     {
         soundFiles.Forget();
-        pathOrigins.Clear();
+        properties.ForgetPathOrigins();
         // A save's check of the mod, or its question, belongs to the clip it was for.
         soundCheck = null;
         soundCheckDocument = null;
