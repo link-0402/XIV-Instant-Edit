@@ -2,49 +2,42 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
-using InstantEdit.Models;
-using InstantEdit.Services.NeckSeam;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Main;
 
-public sealed partial class MainWindow
+/// <summary>
+/// A Quick Actions card. The key is what the configuration stores when the card is removed from the tab or moved,
+/// so it never changes once released. Removing the card calls TurnOff, which stops whatever the card runs on its own.
+/// A card with IsOn runs on its own while it is on: it joins the automatic group and turns green while on.
+/// </summary>
+internal sealed record QuickAction(string Key, FontAwesomeIcon Icon, string Title, string Description, Action Body,
+    Action? TurnOff = null, Func<bool>? IsOn = null)
+{
+    public bool Automatic => IsOn is not null;
+}
+
+/// <summary> The Quick Actions tab: one card per task that works on your whole character rather than on a single file. </summary>
+internal sealed class QuickActionsTab
 {
     private const string AddQuickActionPopup = "##quick-add";
-
-    private IReadOnlyList<OnScreenObject>? _quickSnapshot;
-    private OnScreenObject? _neckSeamCharacter;
-    private QuickAction[]? _quickActions;
-
-    /// <summary>
-    /// A Quick Actions card. The key is what the configuration stores when the card is removed from the tab or moved,
-    /// so it never changes once released. Removing the card calls TurnOff, which stops whatever the card runs on its own.
-    /// A card with IsOn runs on its own while it is on: it joins the automatic group and turns green while on.
-    /// </summary>
-    private sealed record QuickAction(string Key, FontAwesomeIcon Icon, string Title, string Description, Action Body,
-        Action? TurnOff = null, Func<bool>? IsOn = null)
-    {
-        public bool Automatic => IsOn is not null;
-    }
+    private readonly Configuration _config;
+    private readonly Action _saveConfig;
 
     /// <summary> Every card in its built-in order. The tab sorts them with <see cref="OrderedQuickActions"/>. </summary>
-    private QuickAction[] QuickActions => _quickActions ??=
-    [
-        TextureCompressionCard,
-        HeelsOffsetCard,
-        NeckSeamCard,
-        PhysicsCard,
-        PaintSkinCard,
-        SendCharacterCard,
-    ];
+    private readonly QuickAction[] _quickActions;
 
-    private QuickAction NeckSeamCard => new("skin-seams", FontAwesomeIcon.UserCheck, "Fix skin seams",
-        "Automatically fix skin seams between model parts, such as on the neck, wrists, ankles and belly. The neck fix is safe, but use the other options carefully. " +
-        "Builds a preview mod from the fixed files. Open the check window again to put the contents of the preview mod into the original mods. " +
-        "It can also match one skin part's tone to another, such as a face mod's ears to the face.",
-        DrawNeckSeamAction);
+    public QuickActionsTab(Configuration config, Action saveConfig, QuickAction[] quickActions)
+    {
+        _config = config;
+        _saveConfig = saveConfig;
+        _quickActions = quickActions;
+    }
+
+    /// <summary> Whether the user keeps the card with this key on the tab. </summary>
+    public static bool Shown(Configuration config, string key) => !config.HiddenQuickActions.Contains(key);
 
     /// <summary> One card per task that works on your whole character rather than on a single file, minus the ones the user removed. </summary>
-    private void DrawQuickActionsTab()
+    public void Draw()
     {
         ImGui.Spacing();
         DrawQuickActionsHeader();
@@ -79,7 +72,7 @@ public sealed partial class MainWindow
     private List<QuickAction> OrderedQuickActions()
     {
         var order = _config.QuickActionOrder;
-        return QuickActions
+        return _quickActions
             .Select((action, builtIn) => (action, builtIn, moved: order.IndexOf(action.Key)))
             .OrderBy(card => card.action.Automatic ? 0 : 1)
             .ThenBy(card => card.moved < 0 ? int.MaxValue : card.moved)
@@ -107,7 +100,7 @@ public sealed partial class MainWindow
     {
         var button = ImGui.GetFrameHeight();
         ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetContentRegionMax().X - button - Theme.Scaled(10)));
-        var hidden = QuickActions.Count(action => !QuickActionShown(action.Key));
+        var hidden = _quickActions.Count(action => !QuickActionShown(action.Key));
         if (Widgets.IconButton("##quick-add-button", FontAwesomeIcon.Plus,
                 hidden == 0 ? "Every Quick Actions card is on the tab. Remove one with its trash button." : "Add a removed card back",
                 hidden > 0))
@@ -125,12 +118,12 @@ public sealed partial class MainWindow
         {
             ImGui.Separator();
             if (ImGui.MenuItem("Add all"))
-                foreach (var action in QuickActions)
+                foreach (var action in _quickActions)
                     SetQuickActionShown(action, true);
         }
     }
 
-    private bool QuickActionShown(string key) => !_config.HiddenQuickActions.Contains(key);
+    private bool QuickActionShown(string key) => Shown(_config, key);
 
     /// <summary> Adds a card back, or removes it and turns off what it automates. Adding it back leaves those off. </summary>
     private void SetQuickActionShown(QuickAction action, bool shown)
@@ -144,43 +137,6 @@ public sealed partial class MainWindow
             action.TurnOff?.Invoke();
         }
         _saveConfig();
-    }
-
-    private void DrawNeckSeamAction()
-    {
-        if (_neckSeam is null)
-        {
-            Widgets.Hint("Unavailable: the skin seam tools did not start.");
-            return;
-        }
-        if (NeckSeamCharacter() is not { } character)
-        {
-            Widgets.HintWrapped(_onScreen.IsRefreshing
-                ? "Looking for your character"
-                : "Your character has no face or body models loaded. Refresh the list once your character is drawn.");
-            return;
-        }
-
-        using (ImRaii.Disabled(Volatile.Read(ref _neckSeamBusy) != 0))
-        {
-            if (ImGui.Button("Check and fix##quick-neck-seam"))
-                OpenNeckSeam(character);
-        }
-        if (_neckSeam.PreviewFor(character.Name) is not null)
-            Widgets.HintWrapped("A preview mod is active. Open the check to apply it to your mods or discard it.");
-    }
-
-    /// <summary> Your character when it has a face or body part model, looked up again only when the snapshot changes. </summary>
-    private OnScreenObject? NeckSeamCharacter()
-    {
-        var items = _onScreen.Items;
-        if (!ReferenceEquals(items, _quickSnapshot))
-        {
-            _quickSnapshot = items;
-            _neckSeamCharacter = items.FirstOrDefault(item => item.PresentationCategory == ActorPresentationCategory.Player
-                                                              && NeckSeamCapture.HasSkinModels(item.ResourceRoots));
-        }
-        return _neckSeamCharacter;
     }
 
     /// <summary>

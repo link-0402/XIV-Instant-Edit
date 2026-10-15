@@ -2,47 +2,80 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.ImGuiNotification;
-using Dalamud.Interface.Textures.TextureWraps;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
+using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Services.Animations;
+using InstantEdit.Services.GameFiles;
+using InstantEdit.Services.Heels;
+using InstantEdit.Services.NeckSeam;
+using InstantEdit.Services.Painter;
 using InstantEdit.Services.Previews;
+using InstantEdit.Services.Skeletons;
+using InstantEdit.Services.TextureCompression;
+using InstantEdit.Studio;
+using InstantEdit.Ui.Main;
 
 namespace InstantEdit.Ui;
 
-/// <summary>Compact resource browser for the authoritative Penumbra resource snapshot.</summary>
-public sealed partial class MainWindow : Window, IDisposable
+/// <summary>
+/// The main window: the tab row with the connection dots, the active tab and the status strip. Each tab, card
+/// and dialog is a class of its own in Ui/Main; this window builds them, routes drawing, and passes on what the
+/// plugin attaches once its services have started.
+/// </summary>
+public sealed class MainWindow : Window, IDisposable
 {
     private const string WindowOptionsPopupName = "WindowSystemContextActions";
-    private const string OptionsPopupName = "##instant-edit-options";
-    private const string HistoryPopupName = "##instant-edit-status-history";
     private const string KofiUrl = "https://ko-fi.com/luci_xiv";
     private const int AutoRefreshDelayMs = 1000;
-    private readonly Configuration _config; private readonly PenumbraService _penumbra; private readonly OnScreenService _onScreen;
-    private readonly BlenderClient _blender; private readonly IDataManager _data; private readonly IChatGui _chat; private readonly IPluginLog _log;
-    private readonly INotificationManager _notifications;
+    private const bool ShowAnimationsTab = true;
+    private readonly Configuration _config;
+    private readonly PenumbraService _penumbra;
+    private readonly OnScreenService _onScreen;
+    private readonly IPluginLog _log;
+    private readonly PreviewService _previews;
     private readonly string _pluginVersion;
-    private readonly MaterialPreviewBundleBuilder _materialPreviews;
-    private readonly ResourceSourceAttributor _resourceSources;
     private readonly Action _saveConfig;
     private readonly Action _openChangelog;
     private readonly Action _openSettings;
     private readonly IUiBuilder _uiBuilder;
-    private readonly object _stateLock = new();
     private readonly CancellationTokenSource _lifetimeCts = new();
-    private IReadOnlyDictionary<string, IDalamudTextureWrap> _slotIcons = new Dictionary<string, IDalamudTextureWrap>();
-    private BlenderConnectionState _blenderState = BlenderConnectionState.Offline;
-    private bool _blenderChecking; private int _editing;
-    private DateTime _lastBlenderCheck = DateTime.MinValue;
-    private string _filter = string.Empty;
+    private readonly StatusFeed _feed = new();
+    private readonly UiNotifications _notifications;
+    private readonly OptionsPopup _options;
+    private readonly StatusStrip _statusStrip;
+    private readonly BlenderConnection _blenderConnection;
+    private readonly ModelSender _models;
+    private readonly PainterPanel _painter;
+    private readonly TextureSessionsTab _textureTab;
+    private readonly ResourceHoverCards _hoverCards;
+    private readonly AnimationIntegration _animationHub = new();
+    private readonly AnimationDelivery _animationDelivery;
+    private readonly RecorderPanel _recorder;
+    private readonly AnimationSendDialog _animationSend;
+    private readonly ModBrowserTab _modBrowser;
+    private readonly MainModHandoff _handoff;
+    private readonly ResourceRows _rows;
+    private readonly SlotIcons _slotIcons;
+    private readonly ExpansionState _expansion = new();
+    private readonly OnScreenTab _onScreenTab;
+    private readonly GameFileExportDialog _gameExportDialog;
+    private readonly GameFilesTab _gameFilesTab;
+    private readonly AnimationsTab _animationsTab;
+    private readonly SkinSeamDialog _skinSeams;
+    private readonly TextureCompressionCard _compressionCard;
+    private readonly HeelsOffsetCard _heelsCard;
+    private readonly PhysicsCard _physicsCard;
+    private readonly SendCharacterCard _sendCharacterCard;
+    private readonly QuickActionsTab _quickActions;
+    // Whether the Timeline window keeps the listener running.
+    private Func<bool>? _timelineListens;
     private MainTab _activeTab = MainTab.OnScreen;
     private MainTab? _pendingTab;
     private long _resourcesChangedTicks;
-    private string _sessionsTabLabel = "Sessions";
-    private int _sessionsTabCount = -1;
-    private const bool ShowAnimationsTab = true;
 
     public MainWindow(Configuration config, PenumbraService penumbra, OnScreenService onScreen,
         ResourceSourceAttributor resourceSources, BlenderClient blender,
@@ -51,19 +84,52 @@ public sealed partial class MainWindow : Window, IDisposable
         PreviewService previews, Action openChangelog, Action openSettings)
         : base("XIV Instant Edit##Main")
     {
-        _config = config; _penumbra = penumbra; _onScreen = onScreen; _blender = blender; _data = data; _chat = chat; _log = log;
-        _textures = textures;
-        _notifications = notifications;
+        _config = config; _penumbra = penumbra; _onScreen = onScreen; _log = log;
         _previews = previews;
-        _pluginVersion = BlenderClient.CurrentPluginVersion;
-        _resourceSources = resourceSources;
-        _materialPreviews = new MaterialPreviewBundleBuilder(data, log, _resourceSources);
-        _kinds = _screenKinds;
         _saveConfig = saveConfig;
         _openChangelog = openChangelog;
         _openSettings = openSettings;
         _uiBuilder = uiBuilder;
-        _feed.Reported += Notify;
+        var lifetime = _lifetimeCts.Token;
+
+        _notifications = new UiNotifications(config, notifications, log);
+        _options = new OptionsPopup(config, saveConfig);
+        _statusStrip = new StatusStrip(_feed);
+        _blenderConnection = new BlenderConnection(blender, config, textures, log);
+        _pluginVersion = _blenderConnection.PluginVersion;
+        _models = new ModelSender(config, penumbra, blender, _blenderConnection, data, chat, log, resourceSources, _feed, lifetime);
+        _painter = new PainterPanel(config, log, textures, _models, _feed, _pluginVersion, lifetime);
+        _textureTab = new TextureSessionsTab(config, textures, previews, _painter, _feed, log, lifetime);
+        _hoverCards = new ResourceHoverCards(previews);
+        _animationDelivery = new AnimationDelivery(config, blender, _blenderConnection);
+        _recorder = new RecorderPanel(config, saveConfig, log, _feed, _animationDelivery, lifetime);
+        _animationSend = new AnimationSendDialog(_animationHub, _animationDelivery, _feed, lifetime);
+        _modBrowser = new ModBrowserTab(penumbra, _feed);
+        _handoff = new MainModHandoff(_models, _textureTab, _animationSend, _feed);
+        _rows = new ResourceRows(_models, _painter, _textureTab, _animationSend, _modBrowser, penumbra, log, _feed);
+        _slotIcons = new SlotIcons(uiBuilder, textureProvider, data, log);
+        _onScreenTab = new OnScreenTab(config, saveConfig, onScreen, _rows, _hoverCards, _textureTab, _slotIcons, _expansion);
+        _gameExportDialog = new GameFileExportDialog(config, saveConfig, penumbra, log, _feed, _rows);
+        _gameFilesTab = new GameFilesTab(onScreen, _rows, _hoverCards, _gameExportDialog);
+        _animationsTab = new AnimationsTab(onScreen, _animationHub, _animationSend, _recorder, _rows, _expansion, lifetime);
+        _skinSeams = new SkinSeamDialog(onScreen, log, _feed, lifetime);
+        _compressionCard = new TextureCompressionCard(config, log, _notifications, lifetime);
+        _heelsCard = new HeelsOffsetCard(config, saveConfig, _feed);
+        _physicsCard = new PhysicsCard();
+        _sendCharacterCard = new SendCharacterCard(config, saveConfig, onScreen, penumbra, blender, _blenderConnection, _models, _animationHub,
+            _animationDelivery, _recorder, resourceSources, chat, log, _feed, lifetime);
+        // The cards in their built-in order; the user's order and removed cards are applied by the tab.
+        _quickActions = new QuickActionsTab(config, saveConfig,
+        [
+            _compressionCard.Card,
+            _heelsCard.Card,
+            new SkinSeamCard(onScreen, _skinSeams).Card,
+            _physicsCard.Card,
+            new PaintSkinCard(config, onScreen, _painter, openSettings).Card,
+            _sendCharacterCard.Card,
+        ]);
+
+        _feed.Reported += _notifications.Notify;
         _penumbra.ResourcesChanged += OnResourcesChanged;
         Size = new Vector2(880, 640);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -93,29 +159,69 @@ public sealed partial class MainWindow : Window, IDisposable
             Click = _ => _openSettings(),
             ShowTooltip = () => ImGui.SetTooltip("Settings"),
         });
-        _ = uiBuilder.RunWhenUiPrepared(() => LoadSlotIcons(uiBuilder, textureProvider), true);
     }
 
     public void Dispose()
     {
         _penumbra.ResourcesChanged -= OnResourcesChanged;
-        _feed.Reported -= Notify;
-        if (_compression is not null)
-            _compression.Optimized -= NotifyOptimized;
-        DetachPainter();
-        DetachGameFiles();
+        _feed.Reported -= _notifications.Notify;
+        _compressionCard.Detach();
+        _painter.Detach();
+        _gameExportDialog.Detach();
         _lifetimeCts.Cancel();
-        IReadOnlyDictionary<string, IDalamudTextureWrap> icons;
-        lock (_stateLock)
-        {
-            icons = _slotIcons;
-            _slotIcons = new Dictionary<string, IDalamudTextureWrap>();
-        }
-
-        foreach (var icon in icons.Values.Distinct())
-            icon.Dispose();
+        _slotIcons.Dispose();
         _lifetimeCts.Dispose();
     }
+
+    // ---- What the plugin attaches once its services have started ---------------------------------
+
+    public void RequestCacheSynchronization() => _blenderConnection.RequestCacheSynchronization();
+
+    public void ReportImportFailure(BridgeFailure failure) => _models.ReportImportFailure(failure);
+
+    internal void AttachSkeletons(ModelSkeletonResolver? value) => _models.Skeletons = value;
+
+    internal void AttachPainter(PainterJobService painter) => _painter.Attach(painter);
+
+    internal void AttachAnimations(AnimationEditService? service, string? error) => _animationHub.Attach(service, error);
+
+    internal void AttachRecorder(AnimationRecorder? value) => _recorder.Recorder = value;
+
+    /// <summary>The recorder, drawn in the Timeline window's Record page; it sends to Blender through this window.</summary>
+    internal void DrawRecorderPanel() => _recorder.Draw();
+
+    internal void AttachTimeline(Action<AnimationCapture, bool>? open, Action? show = null, Func<bool>? listens = null)
+    {
+        _animationsTab.AttachTimeline(open, show);
+        _timelineListens = listens;
+    }
+
+    /// <summary>Whether this window keeps the listener running: its Animations tab is shown, or Send my character waits for it.</summary>
+    internal bool ListensForAnimations => IsOpen && (_activeTab == MainTab.Animations || _activeTab == MainTab.QuickActions && _sendCharacterCard.Listens);
+
+    /// <summary> The Mod Browser: Penumbra's mods as tiles, a window per open mod, and the modpack builder. </summary>
+    internal void AttachStudio(StudioHost studio) => _modBrowser.Attach(studio, _handoff);
+
+    internal void AttachGameFiles(GameFileBrowserService browser, GameFileExportService export)
+    {
+        _gameFilesTab.Attach(browser);
+        _gameExportDialog.Attach(browser, export);
+    }
+
+    /// <summary> Draws the Game Files export folder picker; the plugin hooks it to the UI builder like the setup window's. </summary>
+    public void DrawFileDialog() => _gameExportDialog.DrawFileDialog();
+
+    internal void AttachNeckSeam(NeckSeamService service) => _skinSeams.Attach(service);
+
+    internal void AttachTextureCompression(TextureCompressionService service) => _compressionCard.Attach(service);
+
+    internal void AttachHeelsOffset(HeelsOffsetService service) => _heelsCard.Attach(service);
+
+    internal void AttachPhysics(Action open) => _physicsCard.Attach(open);
+
+    internal void AttachCharacterDrawState(PainterLiveReader? reader) => _sendCharacterCard.AttachDrawState(reader);
+
+    // ---- The window ------------------------------------------------------------------------------
 
     public void Open() => IsOpen = true;
     public void Close() => IsOpen = false;
@@ -129,8 +235,8 @@ public sealed partial class MainWindow : Window, IDisposable
     public override void OnClose()
     {
         // The Timeline window keeps the listener running while it is open.
-        if (timelineListens?.Invoke() != true)
-            animations?.StopObservation();
+        if (_timelineListens?.Invoke() != true)
+            _animationHub.Service?.StopObservation();
     }
 
     /// <summary> Penumbra reported a mod-setting change or a redraw; refresh once things settle. </summary>
@@ -175,6 +281,8 @@ public sealed partial class MainWindow : Window, IDisposable
         }
     }
 
+    private void RequestRefresh() { try { _feed.SetStatus(string.Empty, FeedbackSeverity.Success); _onScreen.RequestRefresh(); } catch (Exception e) { _log.Debug(e.Message); _feed.SetStatus("Refresh unavailable. Is Penumbra running?", FeedbackSeverity.Warning); } }
+
     private void OpenKofiPage()
     {
         try
@@ -202,23 +310,23 @@ public sealed partial class MainWindow : Window, IDisposable
                 switch (activeTab)
                 {
                     case MainTab.ModBrowser:
-                        DrawModsTab();
+                        _modBrowser.Draw();
                         break;
                     case MainTab.GameFiles:
-                        DrawGameFilesTab();
+                        _gameFilesTab.Draw();
                         break;
                     case MainTab.TextureEdits:
-                        DrawTextureSessions();
+                        _textureTab.Draw();
                         break;
                     case MainTab.Animations:
                         animationsTabActive = true;
-                        DrawAnimations();
+                        _animationsTab.Draw();
                         break;
                     case MainTab.QuickActions:
-                        DrawQuickActionsTab();
+                        _quickActions.Draw();
                         break;
                     default:
-                        DrawOnScreenTab();
+                        _onScreenTab.Draw();
                         break;
                 }
             }
@@ -228,13 +336,13 @@ public sealed partial class MainWindow : Window, IDisposable
         // The listener runs only while the Animations tab or the Timeline window is open, or Quick
         // Actions waits to send your character in the animation it plays: until a skeleton library is
         // saved, its first match builds one.
-        if (!animationsTabActive && !(activeTab == MainTab.QuickActions && CharacterSendListens) && timelineListens?.Invoke() != true)
-            animations?.StopObservation();
-        DrawTextureDialogs();
-        DrawAnimationSendDialog(MainOwner);
-        DrawPainterDialogs();
-        DrawGameFileExportDialog();
-        DrawNeckSeamDialog();
+        if (!animationsTabActive && !(activeTab == MainTab.QuickActions && _sendCharacterCard.Listens) && _timelineListens?.Invoke() != true)
+            _animationHub.Service?.StopObservation();
+        _textureTab.DrawDialogs();
+        _animationSend.Draw(AnimationSendDialog.MainOwner);
+        _painter.DrawDialogs();
+        _gameExportDialog.Draw();
+        _skinSeams.Draw();
         DrawStatusStrip(GetFeedback(activeTab));
         DrawWindowOptionsExtension();
     }
@@ -277,7 +385,7 @@ public sealed partial class MainWindow : Window, IDisposable
         ImGui.SameLine(0, Theme.Gap);
         if (Widgets.TabButton(FontAwesomeIcon.Database, "Game Files", active == MainTab.GameFiles)) active = MainTab.GameFiles;
         ImGui.SameLine(0, Theme.Gap);
-        if (Widgets.TabButton(FontAwesomeIcon.Images, SessionsTabLabel(), active == MainTab.TextureEdits)) active = MainTab.TextureEdits;
+        if (Widgets.TabButton(FontAwesomeIcon.Images, _textureTab.SessionsTabLabel(), active == MainTab.TextureEdits)) active = MainTab.TextureEdits;
         if (ShowAnimationsTab)
         {
             ImGui.SameLine(0, Theme.Gap);
@@ -288,9 +396,8 @@ public sealed partial class MainWindow : Window, IDisposable
 
         var penumbra = false;
         try { penumbra = _penumbra.Available; } catch (Exception e) { _log.Debug(e.Message); }
-        StartBlenderCheckIfNeeded();
-        BlenderConnectionState blender;
-        lock (_stateLock) blender = _blenderState;
+        _blenderConnection.StartCheckIfNeeded();
+        var blender = _blenderConnection.State;
         var penumbraValue = penumbra ? "OK" : "Unavailable";
         var (blenderValue, blenderDetail) = blender switch
         {
@@ -299,10 +406,10 @@ public sealed partial class MainWindow : Window, IDisposable
             _ => ("Offline", "Start Blender and enable the XIV Instant Edit add-on to edit models."),
         };
 
-        var painterDot = PainterEnabled ? PainterDot(PainterState, _pluginVersion) : default;
+        var painterDot = _painter.Enabled ? PainterPanel.Dot(_painter.State, _pluginVersion) : default;
         var rightWidth = Widgets.StatusDotWidth("Penumbra", penumbraValue) + Theme.Scaled(10)
                          + Widgets.StatusDotWidth("Blender", blenderValue) + Theme.Scaled(10)
-                         + (PainterEnabled ? Widgets.StatusDotWidth("Painter", painterDot.Value) + Theme.Scaled(10) : 0)
+                         + (_painter.Enabled ? Widgets.StatusDotWidth("Painter", painterDot.Value) + Theme.Scaled(10) : 0)
                          + frame + style.ItemSpacing.X + frame;
         ImGui.SameLine();
         var rightStart = ImGui.GetWindowContentRegionMax().X - rightWidth;
@@ -315,7 +422,7 @@ public sealed partial class MainWindow : Window, IDisposable
         ImGui.AlignTextToFramePadding();
         Widgets.StatusDot("Blender", ConnectionColour(blender), blenderValue, blenderDetail);
         ImGui.SameLine(0, Theme.Scaled(10));
-        if (PainterEnabled)
+        if (_painter.Enabled)
         {
             ImGui.AlignTextToFramePadding();
             Widgets.StatusDot("Painter", painterDot.Colour, painterDot.Value, painterDot.Detail);
@@ -326,21 +433,10 @@ public sealed partial class MainWindow : Window, IDisposable
             RequestRefresh();
         ImGui.SameLine();
         if (Widgets.IconButton("##options", FontAwesomeIcon.SlidersH, "Model import, texture and animation export options"))
-            ImGui.OpenPopup(OptionsPopupName);
-        DrawOptionsPopup();
+            _options.Open();
+        _options.Draw();
         ImGui.Separator();
         return active;
-    }
-
-    private string SessionsTabLabel()
-    {
-        var count = _textures.Sessions.Count;
-        if (count != _sessionsTabCount)
-        {
-            _sessionsTabCount = count;
-            _sessionsTabLabel = count == 0 ? "Sessions" : $"Sessions ({count})";
-        }
-        return _sessionsTabLabel;
     }
 
     private static Vector4 ConnectionColour(BlenderConnectionState state)
@@ -351,237 +447,54 @@ public sealed partial class MainWindow : Window, IDisposable
             _ => Theme.Offline,
         };
 
-    private void DrawOptionsPopup()
+    // ---- The status strip ------------------------------------------------------------------------
+
+    private static StatusChannel ChannelOf(MainTab tab)
+        => tab switch
+        {
+            MainTab.TextureEdits => StatusChannel.Textures,
+            MainTab.Animations => StatusChannel.Animations,
+            _ => StatusChannel.Models,
+        };
+
+    private FeedbackState GetFeedback(MainTab tab)
     {
-        ImGui.SetNextWindowSizeConstraints(Theme.Scaled(440, 0), Theme.Scaled(600, 640));
-        using var popup = ImRaii.Popup(OptionsPopupName);
-        if (!popup.Success)
-            return;
-        Widgets.SectionHeader("Model import");
-        DrawModelOptions();
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        Widgets.SectionHeader("Texture editing");
-        DrawTextureOptions();
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        Widgets.SectionHeader("Animation export");
-        DrawAnimationExportOptions();
+        if (tab == MainTab.Animations)
+        {
+            var service = _animationHub.Service;
+            if (service is null)
+                return new FeedbackState(string.Empty, FeedbackSeverity.Error);
+            return new FeedbackState(service.Status, service.LastFailed && !service.Busy
+                ? FeedbackSeverity.Error
+                : FeedbackSeverity.Success);
+        }
+
+        var latest = _feed.Latest(ChannelOf(tab));
+        return latest is null
+            ? new FeedbackState(string.Empty, FeedbackSeverity.Success)
+            : new FeedbackState(latest.Text, latest.Severity);
     }
 
-    /// <summary> The bottom row: latest message for the active tab, busy indicator, and the history popover. </summary>
+    /// <summary> The bottom row's inputs: whether anything runs, and what its Cancel button stops. </summary>
     private void DrawStatusStrip(FeedbackState feedback)
     {
-        var exporting = _gameExport?.Busy ?? false;
-        var busy = Volatile.Read(ref _editing) != 0 || Volatile.Read(ref _textureBusy) != 0 || Volatile.Read(ref _neckSeamBusy) != 0 ||
-                   _onScreen.IsRefreshing || (animations?.Busy ?? false) || exporting;
-        var animationCancel = animations is { Busy: true, CanCancel: true };
+        var exporting = _gameExportDialog.Export?.Busy ?? false;
+        var busy = _models.Busy.IsBusy || _textureTab.Busy.IsBusy || _skinSeams.Busy.IsBusy ||
+                   _onScreen.IsRefreshing || (_animationHub.Service?.Busy ?? false) || exporting;
+        var animationCancel = _animationHub.Service is { Busy: true, CanCancel: true };
         // Cancel stops the Game Files export on its own tab, or when no animation work can be cancelled.
         var cancelExport = exporting && (_activeTab == MainTab.GameFiles || !animationCancel);
-        var canCancel = animationCancel || cancelExport;
-        var style = ImGui.GetStyle();
-        var frame = ImGui.GetFrameHeight();
-        using var strip = ImRaii.Child("##instant-edit-status-strip", new Vector2(0, frame), false,
-            ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
-        if (!strip.Success)
-            return;
-
-        var rightWidth = frame;
-        if (busy)
-            rightWidth += frame + style.ItemSpacing.X + ImGui.CalcTextSize("Working").X + style.ItemSpacing.X;
-        if (canCancel)
-            rightWidth += ImGui.CalcTextSize("Cancel").X + style.FramePadding.X * 2 + style.ItemSpacing.X;
-        var messageWidth = Math.Max(1, ImGui.GetContentRegionAvail().X - rightWidth - style.ItemSpacing.X);
-        using (var message = ImRaii.Child("##instant-edit-status-message", new Vector2(messageWidth, frame), false,
-                   ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
-        {
-            if (message.Success)
-            {
-                ImGui.AlignTextToFramePadding();
-                if (feedback.Text.Length == 0)
-                    ImGui.TextColored(Theme.Hint, "Ready");
-                else
-                {
-                    var (accent, _, icon) = Theme.Severity(feedback.Severity);
-                    ImGui.TextColored(accent, icon);
-                    ImGui.SameLine(0, Theme.Gap);
-                    ImGui.TextUnformatted(FirstLine(feedback.Text));
-                    if (ImGui.IsItemHovered())
-                    {
-                        using var tooltip = ImRaii.Tooltip();
-                        using var wrap = ImRaii.TextWrapPos(Theme.Scaled(480));
-                        ImGui.TextUnformatted(feedback.Text);
-                    }
-                }
-            }
-        }
-
-        ImGui.SameLine();
-        if (busy)
-        {
-            Widgets.Spinner();
-            ImGui.SameLine();
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, "Working");
-            ImGui.SameLine();
-            if (canCancel && ImGui.SmallButton("Cancel"))
-            {
-                if (cancelExport)
-                    _gameExport!.Cancel();
-                else
-                    animations!.Cancel();
-            }
-            if (canCancel)
-                ImGui.SameLine();
-        }
-        if (Widgets.IconButton("##history", FontAwesomeIcon.History, "Recent messages"))
-            ImGui.OpenPopup(HistoryPopupName);
-        DrawStatusHistory();
+        Action? cancel = cancelExport ? () => _gameExportDialog.Export!.Cancel() : animationCancel ? () => _animationHub.Service!.Cancel() : null;
+        _statusStrip.Draw(feedback, busy, cancel);
     }
 
-    private void DrawStatusHistory()
+    private enum MainTab
     {
-        ImGui.SetNextWindowSizeConstraints(Theme.Scaled(380, 0), Theme.Scaled(680, 440));
-        using var popup = ImRaii.Popup(HistoryPopupName);
-        if (!popup.Success)
-            return;
-        var entries = _feed.History(20);
-        if (entries.Count == 0)
-        {
-            ImGui.TextColored(Theme.Hint, "No messages yet.");
-            return;
-        }
-
-        foreach (var entry in entries)
-        {
-            var (accent, _, icon) = Theme.Severity(entry.Severity);
-            ImGui.TextColored(Theme.Muted, entry.Time.ToLocalTime().ToString("HH:mm:ss"));
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.TextColored(accent, icon);
-            ImGui.SameLine(0, Theme.Gap);
-            using var wrap = ImRaii.TextWrapPos(0f);
-            ImGui.TextUnformatted(entry.Text);
-        }
-    }
-
-    private static string FirstLine(string text)
-    {
-        var end = text.IndexOf('\n');
-        return end < 0 ? text : text[..end];
-    }
-
-    /// <summary> Mirrors warnings, errors and model handoff results as Dalamud notifications. </summary>
-    private void Notify(StatusEntry entry)
-    {
-        if (!_config.ShowNotifications)
-            return;
-        if (entry.Severity == FeedbackSeverity.Success && entry.Channel != StatusChannel.Models)
-            return;
-        ShowNotification(entry.Text, entry.Severity switch
-        {
-            FeedbackSeverity.Warning => NotificationType.Warning,
-            FeedbackSeverity.Error => NotificationType.Error,
-            FeedbackSeverity.Info => NotificationType.Info,
-            _ => NotificationType.Success,
-        });
-    }
-
-    private void ShowNotification(string content, NotificationType type)
-    {
-        try
-        {
-            _notifications.AddNotification(new Notification
-            {
-                Title = "XIV Instant Edit",
-                Content = content,
-                Type = type,
-            });
-        }
-        catch (Exception e)
-        {
-            _log.Debug($"Could not show a notification: {e.Message}");
-        }
-    }
-
-    private void DrawTextureOptions()
-    {
-        var recompress = _config.RecompressTextures;
-        if (ImGui.Checkbox("Recompress saved textures", ref recompress))
-        {
-            _config.RecompressTextures = recompress;
-            _saveConfig();
-        }
-        Widgets.HintWrapped("Texture edits keep their original compression (BC1–BC7). When off, saves are written uncompressed: larger files without compression artifacts.");
-    }
-
-    private void DrawModelOptions()
-    {
-        var useExistingSkeleton = _config.UseExistingSkeleton;
-        if (ImGui.Checkbox("Remove imported armature and use existing skeleton", ref useExistingSkeleton))
-        {
-            _config.UseExistingSkeleton = useExistingSkeleton;
-            SaveModelOptions();
-        }
-
-        if (_config.UseExistingSkeleton)
-        {
-            Widgets.HintWrapped("Imported meshes receive an Armature modifier targeting this Blender object:");
-            var skeletonName = _config.SkeletonObjectName;
-            ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(180), ImGui.GetContentRegionAvail().X * 0.45f));
-            if (ImGui.InputText("Skeleton object", ref skeletonName, 128))
-            {
-                _config.SkeletonObjectName = skeletonName;
-                SaveModelOptions();
-            }
-            ImGui.SameLine();
-            Widgets.Hint("must be an existing Blender Armature");
-        }
-        else
-        {
-            Widgets.HintWrapped("Each import creates its own InstantEditArmature.");
-        }
-
-        var racialScaling = _config.ApplyRacialScaling;
-        if (ImGui.Checkbox("Apply racial scaling for model import", ref racialScaling))
-        {
-            _config.ApplyRacialScaling = racialScaling;
-            SaveModelOptions();
-        }
-        Widgets.HintWrapped("Models made for another race, like the c0201 gear most female races wear, go to Blender and Substance Painter " +
-                            "shaped for the character's race, with its skeleton, as the game shows them on it. Browsed mods and game files use " +
-                            "the first on-screen character. Quick Export can save scaled models only as that race's own model, and Simple Export warns first. " +
-                            "Send my character to Blender always scales them, whether this is on or off.");
-
-        var applyTexturesAndMaterials = _config.ApplyTexturesAndMaterials;
-        if (ImGui.Checkbox("Apply textures and materials", ref applyTexturesAndMaterials))
-        {
-            _config.ApplyTexturesAndMaterials = applyTexturesAndMaterials;
-            SaveModelOptions();
-        }
-        Widgets.HintWrapped("Creates display-only Blender materials. Quick Export still writes model data only.");
-
-        using var indent = ImRaii.PushIndent();
-        using (ImRaii.Disabled(!applyTexturesAndMaterials))
-        {
-            var excludeBodyAndGeneralMaterials = _config.ExcludeBodyAndGeneralMaterials;
-            if (ImGui.Checkbox("Exclude body and general materials", ref excludeBodyAndGeneralMaterials))
-            {
-                _config.ExcludeBodyAndGeneralMaterials = excludeBodyAndGeneralMaterials;
-                SaveModelOptions();
-            }
-        }
-        Widgets.HintWrapped("Leaves body skin, body-piercing, and pube materials as colored placeholders.");
-    }
-
-    private void SaveModelOptions()
-    {
-        _config.SkeletonObjectName = string.IsNullOrWhiteSpace(_config.SkeletonObjectName)
-            ? "Skeleton"
-            : _config.SkeletonObjectName.Trim();
-        if (_config.SkeletonObjectName.Length > 128)
-            _config.SkeletonObjectName = _config.SkeletonObjectName[..128];
-        _saveConfig();
+        OnScreen,
+        ModBrowser,
+        TextureEdits,
+        Animations,
+        GameFiles,
+        QuickActions,
     }
 }

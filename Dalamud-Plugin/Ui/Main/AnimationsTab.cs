@@ -1,22 +1,33 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
+using Dalamud.Interface.Components;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
+using InstantEdit.Services;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.Animations.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Main;
 
 /// <summary>
 /// The Animations tab: what your character plays, listed like On Screen with the mod each animation
-/// comes from and a pen that sends it to Blender, and below it the selected animation's timeline:
-/// every tool works in the Timeline window.
+/// comes from and a pen that sends it to Blender, and below it the selected animation's timeline
+/// section: the clip, a few facts about it and the button that opens it in the Timeline window, where
+/// every tool works. With nothing selected it opens the window's loader, which plays any animation on
+/// the GPose character.
 /// </summary>
-public sealed partial class MainWindow
+internal sealed class AnimationsTab
 {
-    private AnimationEditService? animations;
-    private string? animationError;
+    private readonly OnScreenService _onScreen;
+    private readonly AnimationIntegration _animations;
+    private readonly AnimationSendDialog _animationSend;
+    private readonly RecorderPanel _recorder;
+    private readonly ResourceRows _rows;
+    private readonly ExpansionState _expansion;
+    private readonly CancellationToken _lifetime;
     private AnimationCapture? animationSelection;
     private bool animationStartupSelected;
     private string animationFilter = "";
@@ -26,11 +37,29 @@ public sealed partial class MainWindow
     private IReadOnlyList<OnScreenObject>? animationRowActors;
     private ImmutableArray<AnimationRow> animationRows = [];
     private ActorView animationActor = new(null, "Your character", string.Empty, [], 0);
+    private Action<AnimationCapture, bool>? openTimeline;
+    // Opens the Timeline window as it is, with its loader when no clip is open.
+    private Action? showTimeline;
+    private Task<ImmutableArray<TimelineEffectCheck.Problem>>? effectCheck;
+    private CancellationTokenSource? effectCheckCancel;
+    private string? effectCheckKey;
 
-    internal void AttachAnimations(AnimationEditService? service, string? error)
+    public AnimationsTab(OnScreenService onScreen, AnimationIntegration animations, AnimationSendDialog animationSend, RecorderPanel recorder,
+        ResourceRows rows, ExpansionState expansion, CancellationToken lifetime)
     {
-        animations = service;
-        animationError = error;
+        _onScreen = onScreen;
+        _animations = animations;
+        _animationSend = animationSend;
+        _recorder = recorder;
+        _rows = rows;
+        _expansion = expansion;
+        _lifetime = lifetime;
+    }
+
+    public void AttachTimeline(Action<AnimationCapture, bool>? open, Action? show)
+    {
+        openTimeline = open;
+        showTimeline = show;
     }
 
     private void SelectAnimation(AnimationCapture capture, bool startup = false)
@@ -41,15 +70,16 @@ public sealed partial class MainWindow
 
     private void ClearAnimationSelection() => animationSelection = null;
 
-    private void DrawAnimations()
+    public void Draw()
     {
         ImGui.Spacing();
+        var animations = _animations.Service;
         if (animations == null)
         {
-            Widgets.Banner("##animations-unavailable", FeedbackSeverity.Warning, animationError ?? "Animation integration is unavailable.");
+            Widgets.Banner("##animations-unavailable", FeedbackSeverity.Warning, _animations.Unavailable);
             ImGui.Spacing();
             // Recording reads the live skeleton directly and needs none of the editing services.
-            DrawRecorder();
+            _recorder.Draw();
             return;
         }
         animations.StartObservation();
@@ -106,9 +136,7 @@ public sealed partial class MainWindow
             return animationRows;
 
         var rows = AnimationRows.Build(history);
-        _animationRows.Clear();
-        foreach (var row in rows)
-            _animationRows[row.View] = (row.Capture.Id, row.Startup);
+        _animationSend.SetDetectedRows(rows);
         // The listener follows your character: its On Screen entry names the list and gives the
         // row menu its mod actions.
         var address = rows.IsEmpty ? 0 : rows[0].Capture.ActorAddress;
@@ -117,7 +145,7 @@ public sealed partial class MainWindow
         List<ResourceView> views = [.. rows.Select(row => row.View)];
         animationActor = entity is null
             ? new ActorView(null, "Your character", string.Empty, views, 0)
-            : new ActorView(entity, entity.PresentationCategory.ToString(), Safe(entity.Name), views, entity.ObjectIndex);
+            : new ActorView(entity, entity.PresentationCategory.ToString(), UiText.Safe(entity.Name), views, entity.ObjectIndex);
 
         animationRowSource = history;
         animationRowActors = actors;
@@ -152,7 +180,7 @@ public sealed partial class MainWindow
         }
 
         using var align = ImRaii.PushStyle(ImGuiStyleVar.SelectableTextAlign, new Vector2(0, .5f));
-        using var table = ImRaii.Table("##animation-table", 4, ResourceTableFlags | ImGuiTableFlags.ScrollY,
+        using var table = ImRaii.Table("##animation-table", 4, ResourceRows.ResourceTableFlags | ImGuiTableFlags.ScrollY,
             new Vector2(0, Math.Max(1, ImGui.GetContentRegionAvail().Y)));
         if (!table.Success)
             return;
@@ -169,7 +197,7 @@ public sealed partial class MainWindow
     /// <summary> The character the animations belong to, headed as On Screen heads its actors, and what the listener is doing. </summary>
     private void DrawAnimationListHeader(string status)
     {
-        DrawOpaqueRow();
+        ResourceRows.DrawOpaqueRow();
         Widgets.Icon(FontAwesomeIcon.User, Theme.Label);
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
@@ -206,7 +234,7 @@ public sealed partial class MainWindow
     private void DrawAnimationRow(AnimationRow row)
     {
         var view = row.View;
-        using var id = ImRaii.PushId(SafeId(row.Key));
+        using var id = ImRaii.PushId(UiText.SafeId(row.Key));
         ImGui.TableNextRow();
         ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ImGui.GetColorU32(Theme.WithAlpha(Theme.AnimationKind, Theme.KindTintAlpha)));
         if (animationSelection?.Id == row.Capture.Id && animationStartupSelected == row.Startup)
@@ -217,18 +245,18 @@ public sealed partial class MainWindow
         // A startup hangs under the animation it leads into.
         if (row.Startup)
             DrawStartupGuide();
-        ImGui.SetCursorPosX(start + (row.Startup ? TreeStep : 0));
+        ImGui.SetCursorPosX(start + (row.Startup ? ResourceRows.TreeStep : 0));
         Widgets.Icon(AnimationIcon(row.Capture), Theme.AnimationKind);
         ImGui.SameLine(0, Theme.Gap);
         var problem = SkeletonBlock(row.Clip);
         var searching = row.Clip.Resolution?.State == SkeletonResolutionState.Searching;
         var problemIcon = searching ? FontAwesomeIcon.HourglassHalf : FontAwesomeIcon.ExclamationTriangle;
         var tags = (row.Playing ? BadgeWidth("playing") + Theme.Gap : 0) + (problem is null ? 0 : IconWidth(problemIcon) + Theme.Gap);
-        if (ImGui.Selectable($"{Safe(view.Name, "Animation")}##label", false, ImGuiSelectableFlags.None,
+        if (ImGui.Selectable($"{UiText.Safe(view.Name, "Animation")}##label", false, ImGuiSelectableFlags.None,
                 new Vector2(Math.Max(1, ImGui.GetContentRegionAvail().X - tags), ImGui.GetFrameHeight())))
             SelectAnimation(row.Capture, row.Startup);
         var hovered = ImGui.IsItemHovered();
-        ImGui.OpenPopupOnItemClick(RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
+        ImGui.OpenPopupOnItemClick(ResourceRows.RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
         if (hovered)
             DrawAnimationRowTooltip(row, problem);
         if (row.Playing)
@@ -245,16 +273,16 @@ public sealed partial class MainWindow
         }
 
         ImGui.TableSetColumnIndex(1);
-        DrawSourceBadge(view);
+        ResourceRows.DrawSourceBadge(view);
         ImGui.TableSetColumnIndex(2);
-        Widgets.PathText(Safe(view.SourceRelativePath, view.GamePath), Safe(view.ActualPath));
+        Widgets.PathText(UiText.Safe(view.SourceRelativePath, view.GamePath), UiText.Safe(view.ActualPath));
         ImGui.TableSetColumnIndex(3);
         if (Widgets.IconButton("##send-animation", FontAwesomeIcon.Pen, "Send this animation to Blender"))
-            OpenAnimationSend(view);
+            _animationSend.OpenAnimationSend(view);
         ImGui.SameLine(0, Theme.Scaled(2));
         if (Widgets.GhostIconButton("##more", FontAwesomeIcon.EllipsisH, "More actions"))
-            ImGui.OpenPopup(RowMenuPopup);
-        DrawRowMenu(animationActor, view);
+            ImGui.OpenPopup(ResourceRows.RowMenuPopup);
+        _rows.DrawRowMenu(animationActor, view);
     }
 
     /// <summary> The line joining a startup row to the animation above it, hanging from that row's glyph. </summary>
@@ -264,7 +292,7 @@ public sealed partial class MainWindow
         var frame = ImGui.GetFrameHeight();
         var x = MathF.Floor(origin.X + Theme.TreeIndent + IconWidth(FontAwesomeIcon.Running) / 2) + .5f;
         var middle = MathF.Floor(origin.Y + frame / 2) + .5f;
-        var end = origin.X + Theme.TreeIndent + TreeStep - Theme.Scaled(3);
+        var end = origin.X + Theme.TreeIndent + ResourceRows.TreeStep - Theme.Scaled(3);
         var drawList = ImGui.GetWindowDrawList();
         var colour = ImGui.GetColorU32(Theme.TreeLine);
         var thickness = Math.Max(1, MathF.Floor(Theme.Scale));
@@ -282,7 +310,7 @@ public sealed partial class MainWindow
         if (problem is not null)
             ImGui.TextColored(Theme.Warning, problem);
         else if (row.Clip.Resolution?.Selected is { } source)
-            ImGui.TextUnformatted("Made for " + SkeletonLabel(source));
+            ImGui.TextUnformatted("Made for " + AnimationSendDialog.SkeletonLabel(source));
     }
 
     private static float BadgeWidth(string text) => ImGui.CalcTextSize(text).X + Theme.Scaled(12);
@@ -299,4 +327,118 @@ public sealed partial class MainWindow
 
     private static string? SkeletonBlock(AnimationClip clip) => clip.Resolution is { State: not SkeletonResolutionState.Matched } resolution
         ? resolution.Reason ?? "A compatible animation source is still being identified." : null;
+
+    // ---- The timeline section ----------------------------------------------------------------
+
+    /// <summary>
+    /// Checks the selected clip's effects on a task, once per clip and file version, so the section can
+    /// say when a looping effect stops after its first loop before the timeline is opened.
+    /// </summary>
+    private ImmutableArray<TimelineEffectCheck.Problem>? EffectProblems(AnimationCapture capture, bool startup, AnimationClip clip,
+        AnimationResource? file)
+    {
+        if (_animations.Service is not { } service)
+            return [];
+        var key = $"{capture.Id}|{startup}|{clip.GamePath}|{file?.Hash}|{capture.ExpressionTimeline?.Hash}";
+        if (key != effectCheckKey)
+        {
+            effectCheckCancel?.Cancel();
+            effectCheckCancel?.Dispose();
+            effectCheckCancel = CancellationTokenSource.CreateLinkedTokenSource(_lifetime);
+            var token = effectCheckCancel.Token;
+            effectCheckKey = key;
+            effectCheck = Task.Run(async () =>
+            {
+                var source = await service.LoadTimelineAsync(capture, startup, token);
+                return source.Document is { } doc ? source.EffectProblems(doc) : [];
+            }, token);
+        }
+        return effectCheck is { IsCompletedSuccessfully: true } done ? done.Result : null;
+    }
+
+    /// <summary>How tall the section below the list is drawn, so the list leaves it its room.</summary>
+    private static float TimelineSectionHeight() => ImGui.GetFrameHeightWithSpacing() * 6 + ImGui.GetTextLineHeightWithSpacing() * 2;
+
+    private void DrawAnimationTimeline()
+    {
+        if (_animations.Service is { } service && TimelineWindow.RecoveryAttention(service) is var attention and > 0)
+        {
+            Widgets.Banner("##animation-recovery", FeedbackSeverity.Warning, attention == 1
+                ? "An animation edit did not finish. Undo it under Edits in the Timeline window."
+                : $"{attention} animation edits did not finish. Undo them under Edits in the Timeline window.");
+            ImGui.Spacing();
+        }
+        if (animationSelection is not { } capture)
+        {
+            Widgets.EmptyState(FontAwesomeIcon.Film, "Select an animation",
+                "Choose one above to edit it in the timeline, or open the timeline to load any animation in GPose.");
+            ImGui.Spacing();
+            DrawOpenTimeline(null, false);
+            return;
+        }
+        var startup = animationStartupSelected && capture.Startup is not null;
+        var clip = startup ? capture.Startup! : capture.Clip;
+        var file = capture.Sources.FirstOrDefault(s => s.GamePath == clip.GamePath);
+        var expression = !startup ? capture.ExpressionTimeline : null;
+        DrawSelectedAnimationTitle(capture);
+        // An expression's timeline is a file of its own, often from another mod than its face.
+        var timelineFile = expression ?? file;
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, (expression != null ? "Face length " : "Length ") +
+                                       (clip.Duration > 0 ? clip.Duration.ToString("0.##", CultureInfo.InvariantCulture) + "s" : "unknown") +
+                                       " · " + (timelineFile?.ModName ?? timelineFile?.ModDirectory ?? "Game Data"));
+        if (SkeletonBlock(clip) is { } problem)
+        {
+            using var wrap = ImRaii.TextWrapPos(0f);
+            ImGui.TextColored(Theme.Hint, clip.Resolution?.State == SkeletonResolutionState.Ambiguous
+                ? "Several skeletons fit. Choose the one it was made for under Source in the timeline."
+                : problem);
+        }
+        if (EffectProblems(capture, startup, clip, file) is { IsEmpty: false } found && TimelineWindowViews.EffectLoopWarning(found) is { } warning)
+        {
+            using var wrap = ImRaii.TextWrapPos(0f);
+            var one = found.Select(p => p.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1;
+            ImGui.TextColored(Theme.Warning, $"⚠ {warning} Open the timeline to keep {(one ? "it" : "them")} looping.");
+        }
+        ImGui.Spacing();
+        DrawOpenTimeline(capture, startup);
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Hint, expression != null
+            ? "Sounds, effects and faces, a kept face, and a preview in GPose."
+            : "Events, length, bone layers, LivePose, animated bones, skeleton repair and a preview in GPose.");
+    }
+
+    /// <summary>Names the animation the section is about.</summary>
+    private void DrawSelectedAnimationTitle(AnimationCapture capture)
+    {
+        var playing = capture.Playing && !animationStartupSelected ? " · playing" : "";
+        Widgets.Icon(AnimationIcon(capture), Theme.AnimationKind);
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Label, AnimationPresentation.AnimationName(capture, animationStartupSelected));
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, AnimationPresentation.AnimationState(capture, animationStartupSelected) + playing);
+    }
+
+    /// <summary>Open timeline: the selected clip's, or with none the Timeline window and its loader.</summary>
+    private void DrawOpenTimeline(AnimationCapture? capture, bool startup)
+    {
+        var available = capture is null ? showTimeline is not null : openTimeline is not null;
+        using (ImRaii.Disabled(!available))
+        {
+            if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Film, "Open timeline", null, null, null, null))
+            {
+                if (capture is null)
+                    showTimeline?.Invoke();
+                else
+                    openTimeline?.Invoke(capture, startup);
+            }
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(!available ? "The timeline editor is unavailable."
+                : capture is null ? "Open the Timeline window to load an animation."
+                : "Open this animation in the Timeline window.");
+    }
 }

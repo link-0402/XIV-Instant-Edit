@@ -2,36 +2,80 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
+using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Services.Previews;
 using DroppedPaths = InstantEdit.Studio.Windows.UI.DroppedPaths;
 using FileDrop = InstantEdit.Studio.Windows.UI.FileDrop;
 using HeldDrop = InstantEdit.Studio.Windows.UI.HeldDrop;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Main;
 
-public sealed partial class MainWindow
+/// <summary>
+/// Texture editing: the Sessions tab with its session cards, the brush of a texture row, an image
+/// dropped on a texture row, and the dialogs they open. One texture change runs at a time (<see cref="Busy"/>).
+/// </summary>
+internal sealed class TextureSessionsTab
 {
+    private const string CleanUpTexturesDialog = "Clean up texture sessions";
+
+    /// <summary> How long a dragged image has to rest on a texture row before it can be dropped there. </summary>
+    private static readonly TimeSpan TextureDropHold = TimeSpan.FromSeconds(1);
+
+    private readonly Configuration _config;
     private readonly TextureEditService _textures;
+    private readonly PreviewService _previews;
+    private readonly PainterPanel _painter;
+    private readonly StatusFeed _feed;
+    private readonly IPluginLog _log;
+    private readonly CancellationToken _lifetime;
     private TextureEditRequest? _newTexture;
     /// <summary> The image dropped on a vanilla texture while its new mod is named, or null for an edit. </summary>
     private string? _newTextureImage;
     private string _textureModName = "";
-    private const string CleanUpTexturesDialog = "Clean up texture sessions";
     private Guid? _discardTexture;
     private bool _cleanUpTextures;
-    private int _textureBusy;
     private readonly Dictionary<Guid, float> _sessionCardHeights = new();
+    private string _sessionsTabLabel = "Sessions";
+    private int _sessionsTabCount = -1;
 
-    private static bool IsTextureRow(ResourceView resource)
+    public TextureSessionsTab(Configuration config, TextureEditService textures, PreviewService previews, PainterPanel painter,
+        StatusFeed feed, IPluginLog log, CancellationToken lifetime)
+    {
+        _config = config;
+        _textures = textures;
+        _previews = previews;
+        _painter = painter;
+        _feed = feed;
+        _log = log;
+        _lifetime = lifetime;
+    }
+
+    /// <summary> Set while a texture session action, replace or undo runs. </summary>
+    public BusyFlag Busy { get; } = new();
+
+    public static bool IsTextureRow(ResourceView resource)
         => resource.GamePath.EndsWith(".tex", StringComparison.OrdinalIgnoreCase);
 
-    private static bool TextureEditAvailable(ResourceView resource)
+    public static bool TextureEditAvailable(ResourceView resource)
         => resource.SourceState is ResourceSourceState.GameData or ResourceSourceState.LoadedMod && TextureEditBlock(resource).Length == 0;
 
     /// <summary> Why a shared game texture such as white.tex can't be edited; empty for every other texture. </summary>
-    private static string TextureEditBlock(ResourceView resource)
+    public static string TextureEditBlock(ResourceView resource)
         => SharedTextures.EditBlock(resource.GamePath, resource.SourceState == ResourceSourceState.GameData);
+
+    /// <summary> The tab's label, with the number of open sessions. </summary>
+    public string SessionsTabLabel()
+    {
+        var count = _textures.Sessions.Count;
+        if (count != _sessionsTabCount)
+        {
+            _sessionsTabCount = count;
+            _sessionsTabLabel = count == 0 ? "Sessions" : $"Sessions ({count})";
+        }
+        return _sessionsTabLabel;
+    }
 
     /// <summary> The texture session request for the row's texture, as the actor shows it. </summary>
     private static TextureEditRequest TextureRequest(ResourceView resource, ActorView actor)
@@ -43,9 +87,9 @@ public sealed partial class MainWindow
             CollectionObjectIndex: actor.Entity is null && resource.SourceState == ResourceSourceState.GameData ? actor.ImportObjectIndex : null);
 
     /// <summary> Opens (or resumes) a texture edit session for the row's texture. </summary>
-    private void StartTextureEdit(ResourceView resource, ActorView actor)
+    public void StartTextureEdit(ResourceView resource, ActorView actor)
     {
-        if (!IsTextureRow(resource) || !TextureEditAvailable(resource) || Volatile.Read(ref _textureBusy) != 0)
+        if (!IsTextureRow(resource) || !TextureEditAvailable(resource) || Busy.IsBusy)
             return;
         var request = TextureRequest(resource, actor);
         if (resource.SourceState == ResourceSourceState.GameData)
@@ -56,7 +100,7 @@ public sealed partial class MainWindow
             else
             {
                 _newTexture = request;
-                _textureModName = Sanitize("Texture Edit " + Path.GetFileNameWithoutExtension(resource.GamePath));
+                _textureModName = UiText.Sanitize("Texture Edit " + Path.GetFileNameWithoutExtension(resource.GamePath));
             }
         }
         else TextureAction(async () => { await _textures.StartAsync(request).ConfigureAwait(false); });
@@ -81,7 +125,7 @@ public sealed partial class MainWindow
             _ => "Watching",
         };
 
-    private void DrawTextureSessions()
+    public void Draw()
     {
         ImGui.Spacing();
         Widgets.HintWrapped("Save the TGA file to update the texture in game. You can also change its resolution. " + (_config.RecompressTextures
@@ -94,17 +138,17 @@ public sealed partial class MainWindow
             Widgets.Banner("##texture-startup-error", FeedbackSeverity.Error, _textures.StartupError);
         }
         var sessions = _textures.Sessions;
-        if (sessions.Count > 0 || _painter?.Jobs.Count > 0)
+        if (sessions.Count > 0 || _painter.Service?.Jobs.Count > 0)
         {
             ImGui.Spacing();
-            using (ImRaii.Disabled(Volatile.Read(ref _textureBusy) != 0 || Volatile.Read(ref _painterBusy) != 0))
+            using (ImRaii.Disabled(Busy.IsBusy || _painter.Busy.IsBusy))
                 if (ImGui.Button("Clean up all sessions"))
                     _cleanUpTextures = true;
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
                 ImGui.SetTooltip("Discard every texture session and Substance Painter project, deleting their working files. Mods and backups are kept.");
         }
         ImGui.Spacing();
-        DrawPainterJobs();
+        _painter.DrawJobs();
 
         if (sessions.Count == 0)
         {
@@ -113,7 +157,7 @@ public sealed partial class MainWindow
             return;
         }
 
-        var busy = Volatile.Read(ref _textureBusy) != 0;
+        var busy = Busy.IsBusy;
         using var scroll = ImRaii.Child("##texture-sessions", new Vector2(0, 0), false);
         if (!scroll.Success)
             return;
@@ -151,7 +195,7 @@ public sealed partial class MainWindow
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Muted, SessionViews.Caption(s));
 
-        ImGui.TextColored(SessionColour(state), FirstLine(s.Status));
+        ImGui.TextColored(SessionColour(state), StatusStrip.FirstLine(s.Status));
         if (ImGui.IsItemHovered() && s.Status.Length > 0)
             ImGui.SetTooltip(s.Status);
         if (s.NeedsMod)
@@ -226,7 +270,24 @@ public sealed partial class MainWindow
         return Math.Max(Theme.ThumbSize, content) + ImGui.GetStyle().WindowPadding.Y * 2;
     }
 
-    private void DrawTextureDialogs()
+    /// <summary> A session's committed texture (or the vanilla source before its first save). </summary>
+    private void DrawSessionThumbnail(TextureEditSession session)
+    {
+        PreviewKey key;
+        if (!session.NeedsMod && session.TargetFile.Length > 0 && Path.IsPathRooted(session.TargetFile))
+            key = _previews.KeyFor(session.TargetFile, false);
+        else
+            key = _previews.KeyFor(UiText.Safe(session.ResolvedGamePath, session.GamePath), true);
+        var entry = _previews.GetTexture(key);
+        Widgets.PreviewImage(entry, new Vector2(Theme.ThumbSize));
+        if (!ImGui.IsItemHovered())
+            return;
+        using var tooltip = ImRaii.Tooltip();
+        Widgets.PreviewImage(entry, new Vector2(Theme.Scaled(256)));
+        Widgets.PreviewCaption(entry);
+    }
+
+    public void DrawDialogs()
     {
         if (_newTexture is not null && !ImGui.IsPopupOpen("New texture mod")) ImGui.OpenPopup("New texture mod");
         ImGui.SetNextWindowSizeConstraints(Theme.Scaled(440, 0), Theme.Scaled(640, 400));
@@ -266,7 +327,7 @@ public sealed partial class MainWindow
         {
             Widgets.SectionHeader("Discard working files?");
             Widgets.HintWrapped("This deletes the session's working directory, including its TGA and any editing documents saved there. The committed mod and managed backups are retained.");
-            if (_discardTexture is { } linked && _painter?.Jobs.FirstOrDefault(job => job.Targets.Any(target => target.SessionId == linked)) is { } project)
+            if (_discardTexture is { } linked && _painter.Service?.Jobs.FirstOrDefault(job => job.Targets.Any(target => target.SessionId == linked)) is { } project)
             {
                 using var wrap = ImRaii.TextWrapPos(0f);
                 ImGui.TextColored(Theme.Paused, $"The Substance Painter project {project.DisplayName} sends this texture through this session. Afterwards it can't send it anymore.");
@@ -293,7 +354,7 @@ public sealed partial class MainWindow
         if (!ImGui.BeginPopupModal(CleanUpTexturesDialog, ImGuiWindowFlags.AlwaysAutoResize))
             return;
         var sessions = _textures.Sessions.Count;
-        var projects = _painter?.Jobs.Count ?? 0;
+        var projects = _painter.Service?.Jobs.Count ?? 0;
         Widgets.SectionHeader("Discard all texture sessions?");
         var sessionText = sessions switch
         {
@@ -323,11 +384,11 @@ public sealed partial class MainWindow
     /// <summary> Discards every Painter project, then every texture session left, and reports any that stay. </summary>
     private void CleanUpTextureSessions()
     {
-        if (Interlocked.CompareExchange(ref _textureBusy, 1, 0) != 0) return;
+        if (!Busy.TryEnter()) return;
         // A Painter project being created would link sessions this is about to remove.
-        if (Interlocked.CompareExchange(ref _painterBusy, 1, 0) != 0)
+        if (!_painter.Busy.TryEnter())
         {
-            Interlocked.Exchange(ref _textureBusy, 0);
+            Busy.Exit();
             return;
         }
         _ = Task.Run(async () =>
@@ -336,7 +397,7 @@ public sealed partial class MainWindow
             {
                 var before = _textures.Sessions.Select(s => s.Id).ToList();
                 var projects = 0;
-                if (_painter is { } painter)
+                if (_painter.Service is { } painter)
                     foreach (var job in painter.Jobs.ToList())
                     {
                         try
@@ -358,30 +419,27 @@ public sealed partial class MainWindow
                     parts.Add(projects == 1 ? "1 Painter project" : $"{projects} Painter projects");
                 var text = $"Discarded {string.Join(" and ", parts)}.";
                 if (kept.Count == 0)
-                    SetTextureStatus(text, FeedbackSeverity.Success);
+                    _feed.SetTextureStatus(text, FeedbackSeverity.Success);
                 else
-                    SetTextureStatus($"{text} {kept.Count} could not be removed; close their files and try again. {string.Join(" ", kept.Take(3))}",
+                    _feed.SetTextureStatus($"{text} {kept.Count} could not be removed; close their files and try again. {string.Join(" ", kept.Take(3))}",
                         FeedbackSeverity.Warning);
             }
-            catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
-            catch (Exception error) { _log.Warning(error, "Could not clean up texture sessions."); SetTextureStatus(error.Message, FeedbackSeverity.Error); }
+            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+            catch (Exception error) { _log.Warning(error, "Could not clean up texture sessions."); _feed.SetTextureStatus(error.Message, FeedbackSeverity.Error); }
             finally
             {
-                Interlocked.Exchange(ref _painterBusy, 0);
-                Interlocked.Exchange(ref _textureBusy, 0);
+                _painter.Busy.Exit();
+                Busy.Exit();
             }
         });
     }
-
-    /// <summary> How long a dragged image has to rest on a texture row before it can be dropped there. </summary>
-    private static readonly TimeSpan TextureDropHold = TimeSpan.FromSeconds(1);
 
     /// <summary>
     /// Makes the row a drop target for an image that replaces its texture. The drag has to rest on the
     /// row for <see cref="TextureDropHold"/> first, so an image carried across the list can't land on
     /// the wrong texture. Called in the actions cell before its buttons; the cursor is left where it was.
     /// </summary>
-    private void DrawTextureDrop(ActorView actor, ResourceView node, float rowLeft)
+    public void DrawTextureDrop(ActorView actor, ResourceView node, float rowLeft)
     {
         if (!FileDrop.IsDragging)
             return;
@@ -405,7 +463,7 @@ public sealed partial class MainWindow
         if (outcome == HeldDrop.Dropped)
             ReplaceTexture(node, actor, dropped.Files[0]);
         else if (outcome == HeldDrop.TooSoon)
-            SetStatus("Hold the image on the texture until its row lights up, then let go.", FeedbackSeverity.Warning);
+            _feed.SetStatus("Hold the image on the texture until its row lights up, then let go.", FeedbackSeverity.Warning);
     }
 
     /// <summary> Why the dragged files can't replace the row's texture, or null when they can. </summary>
@@ -417,7 +475,7 @@ public sealed partial class MainWindow
             return $"{Path.GetFileName(paths.Files[0])} is not a png, jpeg, tga, dds or .tex image.";
         if (!TextureEditAvailable(node))
             return TextureEditBlock(node) is { Length: > 0 } blocked ? blocked : "This texture has no verified writable mod source.";
-        return Volatile.Read(ref _textureBusy) != 0 ? "Another texture change is still running." : null;
+        return Busy.IsBusy ? "Another texture change is still running." : null;
     }
 
     /// <summary> Replaces the row's texture with a dropped image. A vanilla texture first asks for the new mod's name, as editing it does. </summary>
@@ -428,7 +486,7 @@ public sealed partial class MainWindow
         {
             _newTexture = request;
             _newTextureImage = image;
-            _textureModName = Sanitize("Texture Edit " + Path.GetFileNameWithoutExtension(resource.GamePath));
+            _textureModName = UiText.Sanitize("Texture Edit " + Path.GetFileNameWithoutExtension(resource.GamePath));
             return;
         }
         RunTextureReplace(request, image);
@@ -436,10 +494,10 @@ public sealed partial class MainWindow
 
     private void RunTextureReplace(TextureEditRequest request, string image)
     {
-        if (Interlocked.CompareExchange(ref _textureBusy, 1, 0) != 0) return;
+        if (!Busy.TryEnter()) return;
         var texture = Path.GetFileName(request.GamePath);
         var file = Path.GetFileName(image);
-        SetStatus($"Replacing {texture} with {file}", FeedbackSeverity.Info);
+        _feed.SetStatus($"Replacing {texture} with {file}", FeedbackSeverity.Info);
         _ = Task.Run(async () =>
         {
             try
@@ -448,32 +506,32 @@ public sealed partial class MainWindow
                 // The session's status after the drop says whether the reload and redraw went through.
                 var refresh = _textures.Sessions.FirstOrDefault(s => s.Id == result.SessionId)?.Status ?? "";
                 if (result.Outcome == ExternalTextureOutcome.Applied && refresh.Contains("attention", StringComparison.Ordinal))
-                    SetStatus($"Replaced {texture} with {file}, but {refresh}", FeedbackSeverity.Warning);
+                    _feed.SetStatus($"Replaced {texture} with {file}, but {refresh}", FeedbackSeverity.Warning);
                 else if (result.Outcome == ExternalTextureOutcome.Applied)
-                    SetStatus($"Replaced {texture} with {file}. Undo is in the row's menu.", FeedbackSeverity.Success);
+                    _feed.SetStatus($"Replaced {texture} with {file}. Undo is in the row's menu.", FeedbackSeverity.Success);
                 else if (result.Outcome == ExternalTextureOutcome.Unchanged)
-                    SetStatus($"{file} is the same as {texture}, so nothing changed.", FeedbackSeverity.Info);
+                    _feed.SetStatus($"{file} is the same as {texture}, so nothing changed.", FeedbackSeverity.Info);
                 else
-                    SetStatus($"Could not replace {texture}: {result.Message}", FeedbackSeverity.Error);
+                    _feed.SetStatus($"Could not replace {texture}: {result.Message}", FeedbackSeverity.Error);
             }
-            catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
+            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
             catch (Exception error)
             {
                 _log.Warning(error, "Could not replace a texture with a dropped image.");
-                SetStatus($"Could not replace {texture}: {error.Message}", FeedbackSeverity.Error);
+                _feed.SetStatus($"Could not replace {texture}: {error.Message}", FeedbackSeverity.Error);
             }
-            finally { Interlocked.Exchange(ref _textureBusy, 0); }
+            finally { Busy.Exit(); }
         });
     }
 
     /// <summary> The session holding an image dropped on the row's texture, while the drop can still be undone. </summary>
-    private TextureEditSession? UndoableReplace(ResourceView resource, ActorView actor)
+    public TextureEditSession? UndoableReplace(ResourceView resource, ActorView actor)
         => IsTextureRow(resource) ? _textures.FindUndoableReplace(TextureRequest(resource, actor)) : null;
 
     /// <summary> Puts back the texture an image was dropped on. </summary>
-    private void UndoTextureReplace(TextureEditSession session)
+    public void UndoTextureReplace(TextureEditSession session)
     {
-        if (Interlocked.CompareExchange(ref _textureBusy, 1, 0) != 0) return;
+        if (!Busy.TryEnter()) return;
         var texture = Path.GetFileName(session.GamePath);
         _ = Task.Run(async () =>
         {
@@ -481,30 +539,30 @@ public sealed partial class MainWindow
             {
                 await _textures.UndoReplaceAsync(session.Id).ConfigureAwait(false);
                 var status = _textures.Sessions.FirstOrDefault(s => s.Id == session.Id)?.Status ?? "";
-                SetStatus(status.Contains("attention", StringComparison.Ordinal)
+                _feed.SetStatus(status.Contains("attention", StringComparison.Ordinal)
                     ? $"{texture} is back, but {status}"
                     : $"{texture} is back to how it was before {session.Replacement?.File}.",
                     status.Contains("attention", StringComparison.Ordinal) ? FeedbackSeverity.Warning : FeedbackSeverity.Success);
             }
-            catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
+            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
             catch (Exception error)
             {
                 _log.Warning(error, "Could not undo a texture replacement.");
-                SetStatus($"Could not undo the replace of {texture}: {error.Message}", FeedbackSeverity.Error);
+                _feed.SetStatus($"Could not undo the replace of {texture}: {error.Message}", FeedbackSeverity.Error);
             }
-            finally { Interlocked.Exchange(ref _textureBusy, 0); }
+            finally { Busy.Exit(); }
         });
     }
 
     private void TextureAction(Func<Task> action)
     {
-        if (Interlocked.CompareExchange(ref _textureBusy, 1, 0) != 0) return;
+        if (!Busy.TryEnter()) return;
         _ = Task.Run(async () =>
         {
-            try { await action().ConfigureAwait(false); SetTextureStatus("Texture session updated.", FeedbackSeverity.Success); }
-            catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
-            catch (Exception error) { _log.Warning(error, "Texture session action failed."); SetTextureStatus(error.Message, FeedbackSeverity.Error); }
-            finally { Interlocked.Exchange(ref _textureBusy, 0); }
+            try { await action().ConfigureAwait(false); _feed.SetTextureStatus("Texture session updated.", FeedbackSeverity.Success); }
+            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+            catch (Exception error) { _log.Warning(error, "Texture session action failed."); _feed.SetTextureStatus(error.Message, FeedbackSeverity.Error); }
+            finally { Busy.Exit(); }
         });
     }
 }
