@@ -2,15 +2,25 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
+using Dalamud.Plugin.Services;
 using InstantEdit.Models;
+using InstantEdit.Services;
 using InstantEdit.Services.NeckSeam;
 using InstantEdit.Services.PreviewMods;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Main;
 
-public sealed partial class MainWindow
+/// <summary>
+/// The skin seam check opened from Quick Actions: measures where your character's skin parts meet, builds a
+/// preview mod with the ticked fixes, and applies, discards or restores it. One task runs at a time (<see cref="Busy"/>).
+/// </summary>
+internal sealed class SkinSeamDialog
 {
     private const string NeckSeamDialog = "Skin seams##neck-seam";
+    private readonly OnScreenService _onScreen;
+    private readonly IPluginLog _log;
+    private readonly StatusFeed _feed;
+    private readonly CancellationToken _lifetime;
     private NeckSeamService? _neckSeam;
     private bool _openNeckSeamDialog;
     private OnScreenObject? _neckSeamActor;
@@ -18,7 +28,6 @@ public sealed partial class MainWindow
     private SkinSeamFix? _neckSeamFix;
     private string _neckSeamError = string.Empty;
     private string _neckSeamBusyText = string.Empty;
-    private int _neckSeamBusy;
     private bool _neckSeamMorph = true, _neckSeamMaterial = true, _neckSeamTextures = true;
     private float _neckSeamBandCm = NeckSeamFixer.DefaultBand * 100;
     /// <summary> Where the skin settings meet: 0 keeps the face's (only the body changes), 1 takes the body's (only the face changes). </summary>
@@ -53,9 +62,23 @@ public sealed partial class MainWindow
         public float BandCm = NeckSeamFixer.DefaultBand * 100;
     }
 
-    internal void AttachNeckSeam(NeckSeamService service) => _neckSeam = service;
+    public SkinSeamDialog(OnScreenService onScreen, IPluginLog log, StatusFeed feed, CancellationToken lifetime)
+    {
+        _onScreen = onScreen;
+        _log = log;
+        _feed = feed;
+        _lifetime = lifetime;
+    }
 
-    private void OpenNeckSeam(OnScreenObject actor)
+    /// <summary> The skin seam tools, once the plugin has started them. </summary>
+    public NeckSeamService? Service => _neckSeam;
+
+    /// <summary> Set while a measurement, preview, apply, discard or restore runs. </summary>
+    public BusyFlag Busy { get; } = new();
+
+    public void Attach(NeckSeamService service) => _neckSeam = service;
+
+    public void Open(OnScreenObject actor)
     {
         _neckSeamActor = actor;
         _neckSeamConfirmApply = false;
@@ -68,7 +91,7 @@ public sealed partial class MainWindow
 
     private void MeasureNeckSeam()
     {
-        if (_neckSeam is not { } service || _neckSeamActor is not { } actor || Interlocked.CompareExchange(ref _neckSeamBusy, 1, 0) != 0)
+        if (_neckSeam is not { } service || _neckSeamActor is not { } actor || !Busy.TryEnter())
             return;
         _neckSeamBusyText = "Measuring the skin seams";
         _neckSeamError = string.Empty;
@@ -81,7 +104,7 @@ public sealed partial class MainWindow
         {
             try
             {
-                var analysis = await service.AnalyzeAsync(current, _lifetimeCts.Token).ConfigureAwait(false);
+                var analysis = await service.AnalyzeAsync(current, _lifetime).ConfigureAwait(false);
                 if (analysis.Report is { } report)
                 {
                     _neckSeamMorph = report.NeckMorphs.Count > 0;
@@ -110,13 +133,13 @@ public sealed partial class MainWindow
                 _skinSeamRestore = null;
                 _neckSeamAnalysis = analysis;
             }
-            catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
+            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
             catch (Exception error)
             {
                 _log.Warning(error, "Could not measure the skin seams.");
                 _neckSeamError = error.Message;
             }
-            finally { Interlocked.Exchange(ref _neckSeamBusy, 0); }
+            finally { Busy.Exit(); }
         });
     }
 
@@ -190,7 +213,7 @@ public sealed partial class MainWindow
 
     private void CreateNeckSeamPreview()
     {
-        if (_neckSeam is not { } service || _neckSeamAnalysis is not { } analysis || Interlocked.CompareExchange(ref _neckSeamBusy, 1, 0) != 0)
+        if (_neckSeam is not { } service || _neckSeamAnalysis is not { } analysis || !Busy.TryEnter())
             return;
         _neckSeamBusyText = "Building the fixed files";
         _neckSeamError = string.Empty;
@@ -204,25 +227,25 @@ public sealed partial class MainWindow
         {
             try
             {
-                var fix = await NeckSeamService.BuildFixAsync(analysis, neck, body, tone, _lifetimeCts.Token).ConfigureAwait(false);
+                var fix = await NeckSeamService.BuildFixAsync(analysis, neck, body, tone, _lifetime).ConfigureAwait(false);
                 _neckSeamFix = fix;
                 _neckSeamBusyText = "Creating the preview mod";
-                var (_, outcome) = await service.CreatePreviewAsync(analysis, fix, _lifetimeCts.Token).ConfigureAwait(false);
+                var (_, outcome) = await service.CreatePreviewAsync(analysis, fix, _lifetime).ConfigureAwait(false);
                 ReportNeckSeam(outcome);
             }
-            catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
+            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
             catch (Exception error)
             {
                 _log.Warning(error, "Could not create the skin seam preview.");
                 _neckSeamError = error.Message;
             }
-            finally { Interlocked.Exchange(ref _neckSeamBusy, 0); }
+            finally { Busy.Exit(); }
         });
     }
 
     private void FinishNeckSeamPreview(NeckSeamPreview preview, bool apply)
     {
-        if (_neckSeam is not { } service || Interlocked.CompareExchange(ref _neckSeamBusy, 1, 0) != 0)
+        if (_neckSeam is not { } service || !Busy.TryEnter())
             return;
         _neckSeamBusyText = apply ? "Writing the fix into your mods" : "Removing the preview mod";
         _neckSeamError = string.Empty;
@@ -240,13 +263,13 @@ public sealed partial class MainWindow
                 _log.Warning(error, apply ? "Could not apply the skin seam fix." : "Could not discard the skin seam preview.");
                 _neckSeamError = error.Message;
             }
-            finally { Interlocked.Exchange(ref _neckSeamBusy, 0); }
+            finally { Busy.Exit(); }
         });
     }
 
     private void RestoreSkinSeamBackup(PreviewBackupGroup group)
     {
-        if (_neckSeam is not { } service || _neckSeamActor is not { } actor || Interlocked.CompareExchange(ref _neckSeamBusy, 1, 0) != 0)
+        if (_neckSeam is not { } service || _neckSeamActor is not { } actor || !Busy.TryEnter())
             return;
         _neckSeamBusyText = "Restoring the backups";
         _neckSeamError = string.Empty;
@@ -267,17 +290,17 @@ public sealed partial class MainWindow
                 _log.Warning(error, "Could not restore the skin seam backups.");
                 _neckSeamError = error.Message;
             }
-            finally { Interlocked.Exchange(ref _neckSeamBusy, 0); }
+            finally { Busy.Exit(); }
             // Measured again from the draw loop, with the restored files.
             _skinSeamRemeasure = restored;
         });
     }
 
     private void ReportNeckSeam(NeckSeamOutcome outcome)
-        => SetStatus(outcome.Warnings.Count == 0 ? outcome.Message : outcome.Message + " " + string.Join(" ", outcome.Warnings),
+        => _feed.SetStatus(outcome.Warnings.Count == 0 ? outcome.Message : outcome.Message + " " + string.Join(" ", outcome.Warnings),
             outcome.Warnings.Count == 0 ? FeedbackSeverity.Success : FeedbackSeverity.Warning);
 
-    private void DrawNeckSeamDialog()
+    public void Draw()
     {
         if (_openNeckSeamDialog)
         {
@@ -306,12 +329,12 @@ public sealed partial class MainWindow
 
     private void DrawNeckSeamContent()
     {
-        if (_skinSeamRemeasure && Volatile.Read(ref _neckSeamBusy) == 0)
+        if (_skinSeamRemeasure && !Busy.IsBusy)
         {
             _skinSeamRemeasure = false;
             MeasureNeckSeam();
         }
-        var busy = Volatile.Read(ref _neckSeamBusy) != 0;
+        var busy = Busy.IsBusy;
         var actor = _neckSeamActor;
         var analysis = _neckSeamAnalysis;
         var preview = actor is null ? null : _neckSeam?.PreviewFor(actor.Name);
