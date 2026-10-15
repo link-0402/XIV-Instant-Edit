@@ -32,11 +32,11 @@ internal sealed record PreviewDiscardResult(bool Removed, string Message, IReadO
 /// managed backups, after checking each source still hashes as it did) and puts changed game files
 /// in a new mod; discarding deletes the preview mod.
 /// </summary>
-internal sealed class PreviewModService(PenumbraService penumbra)
+internal sealed class PreviewModService(PreviewModWriter writer)
 {
     public Task<PreviewModResult> CreateAsync(string name, string description, IReadOnlyList<PreviewModEntry> files, int objectIndex,
         string fallbackName, CancellationToken token)
-        => penumbra.CreatePreviewModAsync(name, description, files, objectIndex, fallbackName, token);
+        => writer.CreatePreviewModAsync(name, description, files, objectIndex, fallbackName, token);
 
     /// <summary>
     /// Writes the preview's files over their sources: mod files in place (backed up first), game data
@@ -75,16 +75,16 @@ internal sealed class PreviewModService(PenumbraService penumbra)
 
         var warnings = new List<string>();
         if (modWrites.Count > 0 || additions.Count > 0)
-            warnings.AddRange(await penumbra.WritePreviewSourcesAsync(modWrites, preview.ObjectIndex, recheck, additions).ConfigureAwait(false));
+            warnings.AddRange(await writer.WritePreviewSourcesAsync(modWrites, preview.ObjectIndex, recheck, additions).ConfigureAwait(false));
         string? fixMod = null;
         if (gameFiles.Count > 0)
         {
-            var created = await penumbra.CreatePreviewModAsync(fixModName, fixModDescription, gameFiles, preview.ObjectIndex, fallbackName,
+            var created = await writer.CreatePreviewModAsync(fixModName, fixModDescription, gameFiles, preview.ObjectIndex, fallbackName,
                 CancellationToken.None).ConfigureAwait(false);
             fixMod = created.ModDirectory;
             warnings.AddRange(created.Warnings);
         }
-        var (_, delete) = await penumbra.DeletePreviewModAsync(preview.ModDirectory, preview.ModIdentifier, preview.ObjectIndex).ConfigureAwait(false);
+        var (_, delete) = await writer.DeletePreviewModAsync(preview.ModDirectory, preview.ModIdentifier, preview.ObjectIndex).ConfigureAwait(false);
         if (delete is not null)
             warnings.Add(delete);
         return new PreviewApplyResult(modWrites.Select(w => w.Source.ModName).Concat(additions.Select(a => a.Material.ModName)).Distinct().ToList(),
@@ -95,22 +95,22 @@ internal sealed class PreviewModService(PenumbraService penumbra)
     public IReadOnlyList<PreviewBackupGroup> Backups(IEnumerable<PreviewSource> sources)
         => PreviewBackups.Group(sources.Where(s => s.IsModFile)
             .DistinctBy(s => (s.ModDirectory.ToLowerInvariant(), s.RelativePath.Replace('\\', '/').ToLowerInvariant()))
-            .SelectMany(s => penumbra.ManagedBackupsFor(s).Select(b => new PreviewBackupFile(s, b))));
+            .SelectMany(s => writer.ManagedBackupsFor(s).Select(b => new PreviewBackupFile(s, b))));
 
     /// <summary> Puts a group's backups back over their files (backing up the current files first), then reloads the mods and redraws the character. </summary>
     public Task<IReadOnlyList<string>> RestoreAsync(PreviewBackupGroup group, int objectIndex, string recheck)
-        => penumbra.RestorePreviewSourcesAsync(group.Files.Select(f => (f.Source, f.Backup)).ToList(), objectIndex, recheck);
+        => writer.RestorePreviewSourcesAsync(group.Files.Select(f => (f.Source, f.Backup)).ToList(), objectIndex, recheck);
 
     public async Task<PreviewDiscardResult> DiscardAsync(PreviewMod preview)
     {
-        var (removed, warning) = await penumbra.DeletePreviewModAsync(preview.ModDirectory, preview.ModIdentifier, preview.ObjectIndex).ConfigureAwait(false);
+        var (removed, warning) = await writer.DeletePreviewModAsync(preview.ModDirectory, preview.ModIdentifier, preview.ObjectIndex).ConfigureAwait(false);
         return new PreviewDiscardResult(removed, removed ? $"Discarded the preview mod {preview.ModDirectory}." : "The preview mod could not be deleted.",
             warning is null ? [] : [warning]);
     }
 
     private async Task<string> PreviewFolderAsync(PreviewMod preview)
     {
-        var root = await penumbra.PreviewModRootAsync().ConfigureAwait(false);
+        var root = await writer.PreviewModRootAsync().ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(root) || !ModPaths.IsSafeModName(preview.ModDirectory))
             throw new IOException("Penumbra's mod directory is unavailable.");
         var folder = Path.GetFullPath(Path.Combine(root, preview.ModDirectory));

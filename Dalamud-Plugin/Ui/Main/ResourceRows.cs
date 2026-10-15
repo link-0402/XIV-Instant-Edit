@@ -6,6 +6,7 @@ using Dalamud.Interface.Utility.Raii;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Ui.Main;
 
@@ -26,12 +27,12 @@ internal sealed class ResourceRows
     private readonly TextureSessionsTab _textureTab;
     private readonly AnimationSendDialog _animationSend;
     private readonly ModBrowserTab _modBrowser;
-    private readonly PenumbraService _penumbra;
+    private readonly PenumbraIpc _penumbra;
     private readonly IPluginLog _log;
     private readonly StatusFeed _feed;
 
     public ResourceRows(ModelSender models, PainterPanel painter, TextureSessionsTab textureTab, AnimationSendDialog animationSend,
-        ModBrowserTab modBrowser, PenumbraService penumbra, IPluginLog log, StatusFeed feed)
+        ModBrowserTab modBrowser, PenumbraIpc penumbra, IPluginLog log, StatusFeed feed)
     {
         _models = models;
         _painter = painter;

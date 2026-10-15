@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services.Animations;
 
@@ -18,7 +19,7 @@ internal sealed record AnimationFileInfo(AnimationFileSource Source, string Hash
 /// Sends PAP files that no character is playing: reads the file, resolves the skeleton each clip
 /// was made for against the local player's collection and skeleton library, and samples it.
 /// </summary>
-internal sealed class AnimationFiles(IFramework framework, IObjectTable objects, PenumbraService penumbra,
+internal sealed class AnimationFiles(IFramework framework, IObjectTable objects, PenumbraIpc penumbra,
     AnimationResources resources, AnimationSkeletonIndex skeletons)
 {
     private sealed record PlayerContext(Guid Collection, string[] Loaded, Dictionary<string, HashSet<string>>? PathMap);

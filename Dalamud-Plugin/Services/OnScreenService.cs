@@ -27,7 +27,7 @@ public sealed class OnScreenService : IDisposable
     private readonly IObjectTable _objects;
     private readonly IClientState _clientState;
     private readonly IFramework _framework;
-    private readonly PenumbraService _penumbra;
+    private readonly PenumbraIpc _penumbra;
     private readonly ResourceSourceAttributor _sourceAttributor;
     private readonly IPluginLog _log;
     private readonly Lock _lock = new();
@@ -37,11 +37,11 @@ public sealed class OnScreenService : IDisposable
     private IReadOnlyList<OnScreenObject> _items = Array.Empty<OnScreenObject>();
     private bool _refreshing;
 
-    public OnScreenService(
+    internal OnScreenService(
         IObjectTable objects,
         IClientState clientState,
         IFramework framework,
-        PenumbraService penumbra,
+        PenumbraIpc penumbra,
         ResourceSourceAttributor sourceAttributor,
         IPluginLog log)
     {

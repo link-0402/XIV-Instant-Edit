@@ -64,7 +64,7 @@ internal sealed record ModHandoffFile(
 /// </summary>
 internal static class ModHandoffBridge
 {
-    /// <summary>The membership of the default files, as <c>PenumbraService</c> reads meta.json.</summary>
+    /// <summary>The membership of the default files, as <c>ModMetadata</c> reads meta.json.</summary>
     public const string DefaultMembership = "default";
 
     /// <summary>

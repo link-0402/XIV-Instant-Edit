@@ -3,6 +3,7 @@ using System.Text;
 using Dalamud.Plugin.Services;
 using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
+using InstantEdit.Services.PenumbraMods;
 using Penumbra.Api.Enums;
 
 namespace InstantEdit.Services.Audio;
@@ -22,7 +23,7 @@ internal sealed class GameSoundPlayer : IDisposable
     private const int Priority = int.MaxValue;
 
     private readonly IFramework framework;
-    private readonly PenumbraService penumbra;
+    private readonly PenumbraIpc penumbra;
     private readonly IPluginLog log;
     private readonly Func<string> cacheRoot;
     /// <summary>The play-sound function, <c>nint (nint path, byte play)</c>; 0 when not found.</summary>
@@ -34,7 +35,7 @@ internal sealed class GameSoundPlayer : IDisposable
     private volatile bool served;
     private volatile bool disposed;
 
-    public GameSoundPlayer(ISigScanner scanner, IFramework framework, PenumbraService penumbra, IPluginLog log, Func<string> cacheRoot)
+    public GameSoundPlayer(ISigScanner scanner, IFramework framework, PenumbraIpc penumbra, IPluginLog log, Func<string> cacheRoot)
     {
         this.framework = framework;
         this.penumbra = penumbra;
