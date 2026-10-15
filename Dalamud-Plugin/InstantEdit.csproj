@@ -144,17 +144,21 @@
     <RemoveDir Directories="$(OutputPath)net10.0;$(OutputPath)net10.0-windows" />
   </Target>
 
-  <!-- Keep the published package outside build output so it can be served by the raw repository URL. -->
+  <!--
+    Copy the published package to the ignored dist folder, where scripts/prepare-release.ps1
+    picks it up for the GitHub release (docs/release-packaging.md). It is not committed.
+  -->
   <Target Name="CopyReleasePackageToDistribution"
           AfterTargets="DefaultDalamudPackagerRelease"
           Condition="'$(Configuration)' == 'Release' and '$(SkipDistributionPackage)' != 'true'">
     <PropertyGroup>
       <ReleasePackagePath>$(OutputPath)$(AssemblyName)\latest.zip</ReleasePackagePath>
-      <DistributionPackagePath>$(MSBuildProjectDirectory)\InstantEdit\latest.zip</DistributionPackagePath>
+      <DistributionDirectory>$(MSBuildProjectDirectory)\..\dist\InstantEdit</DistributionDirectory>
+      <DistributionPackagePath>$(DistributionDirectory)\latest.zip</DistributionPackagePath>
     </PropertyGroup>
     <Error Condition="!Exists('$(ReleasePackagePath)')"
            Text="DalamudPackager did not produce the expected release package: $(ReleasePackagePath)" />
-    <MakeDir Directories="$(MSBuildProjectDirectory)\InstantEdit" />
+    <MakeDir Directories="$(DistributionDirectory)" />
     <Copy SourceFiles="$(ReleasePackagePath)" DestinationFiles="$(DistributionPackagePath)" />
   </Target>
 

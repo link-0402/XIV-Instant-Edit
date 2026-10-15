@@ -89,21 +89,18 @@ jobs:
       - name: Set up GitHub Pages
         uses: actions/configure-pages@v5
 
-      - name: Install Blender
-        env:
-          BLENDER_VERSION: 4.5.0
-        run: |
-          curl --fail --location --retry 3 \
-            "https://download.blender.org/release/Blender4.5/blender-${BLENDER_VERSION}-linux-x64.tar.xz" \
-            --output /tmp/blender.tar.xz
-          tar -xJf /tmp/blender.tar.xz --directory /tmp
-          echo "/tmp/blender-${BLENDER_VERSION}-linux-x64" >> "$GITHUB_PATH"
-          "/tmp/blender-${BLENDER_VERSION}-linux-x64/blender" --version
-
-      - name: Build package and repository index
+      # Pages serves the released index (docs/release-packaging.md), so it offers the same
+      # package as the raw GitHub URL instead of an unreleased build of main.
+      - name: Stage the released repository index
         shell: pwsh
         run: |
-          ./scripts/generate-blender-repository.ps1 -RepositoryPath ./site
+          New-Item -ItemType Directory -Path ./site -Force | Out-Null
+          Copy-Item -LiteralPath ./Blender-Addon/blender_repo/index.json -Destination ./site/index.json
+          $archiveUrl = [string]((Get-Content -LiteralPath ./site/index.json -Raw | ConvertFrom-Json).data |
+              Where-Object { $_.id -eq 'xiv_instant_edit' } | Select-Object -First 1).archive_url
+          if ($archiveUrl.StartsWith('./')) {
+              Copy-Item -LiteralPath (Join-Path ./Blender-Addon/blender_repo $archiveUrl.Substring(2)) -Destination ./site/
+          }
 
       - name: Verify repository metadata
         shell: pwsh
