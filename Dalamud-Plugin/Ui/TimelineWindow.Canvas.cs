@@ -38,17 +38,6 @@ public sealed partial class TimelineWindow
     private bool rightPressed;
     private TimelineHit menuHit;
     private int menuFrame;
-    private TimelineDocument? labelDocument;
-    private string[] labels = [];
-    private string lengthText = string.Empty;
-    private string? headerNote;
-    private string? pastEndWarning;
-    private string? layerBonesWarning;
-    private ImmutableArray<TimelineEffectCheck.Problem> effectProblems = [];
-    private string? effectWarning;
-    // The copies keeping them going swaps in, and how many events it changes.
-    private ImmutableArray<TimelineImport> effectCopies = [];
-    private int effectEvents;
     private TimelineLayout? groupLayout;
     private readonly List<GroupSpan> groupSpans = [];
     private readonly Dictionary<long, string> tickLabels = [];
@@ -245,26 +234,6 @@ public sealed partial class TimelineWindow
         current.AddLayer(kind, start, end);
     }
 
-    /// <summary> Labels, the past-end warning, the length texts and prop groups, rebuilt only when the document or layout changes. </summary>
-    private void RefreshDocumentTexts(TimelineDocument doc)
-    {
-        if (ReferenceEquals(labelDocument, doc))
-            return;
-        var events = doc.Events.IsDefault ? [] : doc.Events;
-        labels = new string[events.Length];
-        for (var index = 0; index < events.Length; index++)
-            labels[index] = TimelineWindowViews.EventLabel(events[index]);
-        lengthText = TimelineWindowViews.LengthText(doc);
-        headerNote = TimelineWindowViews.HeaderNote(doc);
-        pastEndWarning = TimelineWindowViews.PastEndWarning(doc);
-        layerBonesWarning = source == null ? null : TimelineWindowViews.LayerBonesWarning(doc, Fresh(source).Clip);
-        effectProblems = source?.EffectProblems(doc) ?? [];
-        effectWarning = TimelineWindowViews.EffectLoopWarning(effectProblems);
-        effectCopies = TimelineEffectCheck.Copies(effectProblems);
-        effectEvents = effectProblems.Select(p => p.Key).Distinct(StringComparer.Ordinal).Count();
-        labelDocument = doc;
-    }
-
     private void RefreshGroups(TimelineDocument doc, TimelineLayout layout)
     {
         if (ReferenceEquals(groupLayout, layout))
@@ -305,7 +274,7 @@ public sealed partial class TimelineWindow
         var doc = current.Document;
         var layout = current.Layout;
         var view = current.View;
-        RefreshDocumentTexts(doc);
+        texts.Refresh(doc);
         RefreshGroups(doc, layout);
         var min = origin;
         var max = origin + area;
@@ -449,7 +418,7 @@ public sealed partial class TimelineWindow
         var first = view.First - margin;
         var last = view.Last + margin;
         var pad = Theme.Scaled(2);
-        for (var index = 0; index < events.Length && index < labels.Length; index++)
+        for (var index = 0; index < events.Length && index < texts.Labels.Length; index++)
         {
             var ev = layout.Shown(index);
             var top = min.Y + geometry.RowTop(layout.RowOf(index));
@@ -458,7 +427,7 @@ public sealed partial class TimelineWindow
             var end = layout.EndOf(index);
             if (end < first || ev.Start > last)
                 continue;
-            DrawEvent(drawList, current, ev, labels[index], end, geometry, view, trackLeft, top + pad, top + geometry.Row - pad,
+            DrawEvent(drawList, current, ev, texts.Labels[index], end, geometry, view, trackLeft, top + pad, top + geometry.Row - pad,
                 hotKey != null && string.Equals(ev.Key, hotKey, StringComparison.Ordinal), SoundMarkOf(doc, ev));
         }
     }

@@ -52,7 +52,7 @@ public sealed partial class TimelineWindow
             DrawRepairChoice(loaded);
 
         var doc = current.Document;
-        RefreshDocumentTexts(doc);
+        texts.Refresh(doc);
         var clip = Fresh(loaded).Clip;
         var repair = loaded.Standalone ? null : repairTarget;
         var problem = TimelineWindowViews.SaveProblem(loaded.Document != null, loaded.ReadOnlyReason,
@@ -63,12 +63,12 @@ public sealed partial class TimelineWindow
             Widgets.Banner("##timeline-save-problem", FeedbackSeverity.Warning, problem);
         else if (saveError != null)
             Widgets.Banner("##timeline-save-error", FeedbackSeverity.Error, saveError);
-        else if (pastEndWarning != null)
-            ImGui.TextColored(Theme.Warning, "⚠ " + pastEndWarning);
-        else if (layerBonesWarning != null)
+        else if (texts.PastEndWarning != null)
+            ImGui.TextColored(Theme.Warning, "⚠ " + texts.PastEndWarning);
+        else if (texts.LayerBonesWarning != null)
         {
             using var wrap = ImRaii.TextWrapPos(0f);
-            ImGui.TextColored(Theme.Warning, "⚠ " + layerBonesWarning);
+            ImGui.TextColored(Theme.Warning, "⚠ " + texts.LayerBonesWarning);
         }
 
         var missing = SaveMissing(current, problem);
