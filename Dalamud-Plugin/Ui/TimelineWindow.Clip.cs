@@ -45,7 +45,7 @@ public sealed partial class TimelineWindow
     private void DrawSidePanel(TimelineEditor current, AnimationTimelineSource loaded)
     {
         // A look or sound edit ends once its control lets go, even when another page is shown by then.
-        EndLookEdit(current);
+        effectLooks.EndEdit(current);
         EndSoundEdit(current);
         var selection = $"{current.Primary}|{current.SelectedLayer}|{current.SelectedKey}";
         if (selection != sideSelection)

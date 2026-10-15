@@ -34,9 +34,9 @@ public sealed partial class TimelineWindow
         var line = Math.Max(1, MathF.Floor(Theme.Scale));
         var fontSize = ImGui.GetFontSize();
         var motion = TimelineWindowViews.LaneColour(TimelineLane.Motion);
-        drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(max.X, bottom), U32(Theme.PanelBg));
-        drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(min.X + Theme.Scaled(3), bottom), U32(motion));
-        drawList.AddText(new Vector2(min.X + Theme.Scaled(30), top + (geometry.Clip - fontSize) / 2), U32(Theme.Label), TimelineWindowViews.ClipLegend);
+        drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(max.X, bottom), TimelineUi.U32(Theme.PanelBg));
+        drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(min.X + Theme.Scaled(3), bottom), TimelineUi.U32(motion));
+        drawList.AddText(new Vector2(min.X + Theme.Scaled(30), top + (geometry.Clip - fontSize) / 2), TimelineUi.U32(Theme.Label), TimelineWindowViews.ClipLegend);
 
         var cuts = CutEdits.CutsOf(doc);
         var speeds = source is { Standalone: false } loaded ? SpeedLine(loaded) : null;
@@ -55,14 +55,14 @@ public sealed partial class TimelineWindow
                 continue;
             var hot = hit.Part is TimelinePart.ClipPart or TimelinePart.ClipLeft or TimelinePart.ClipRight && hit.Cut == i;
             var rounding = Theme.Scaled(3);
-            drawList.AddRectFilled(new Vector2(left, barTop), new Vector2(right, barBottom), U32(Theme.WithAlpha(motion, hot ? .5f : .35f)), rounding);
-            drawList.AddRect(new Vector2(left, barTop), new Vector2(right, barBottom), U32(Theme.WithAlpha(motion, .9f)), rounding, ImDrawFlags.None, line);
+            drawList.AddRectFilled(new Vector2(left, barTop), new Vector2(right, barBottom), TimelineUi.U32(Theme.WithAlpha(motion, hot ? .5f : .35f)), rounding);
+            drawList.AddRect(new Vector2(left, barTop), new Vector2(right, barBottom), TimelineUi.U32(Theme.WithAlpha(motion, .9f)), rounding, ImDrawFlags.None, line);
             if (current.SelectedCut is { Target: TimelineCutTarget.Part, Index: var selected } && selected == i)
-                drawList.AddRect(new Vector2(left - 1, barTop - 1), new Vector2(right + 1, barBottom + 1), U32(Theme.Accent), rounding, ImDrawFlags.None, Theme.Scaled(2));
+                drawList.AddRect(new Vector2(left - 1, barTop - 1), new Vector2(right + 1, barBottom + 1), TimelineUi.U32(Theme.Accent), rounding, ImDrawFlags.None, Theme.Scaled(2));
             if (speeds != null && speedLineMax > 0)
                 DrawSpeedLine(drawList, cuts, ease, doc.Length, view, trackLeft, start, end, speeds, middle, barBottom, line);
             drawList.PushClipRect(new Vector2(left, top), new Vector2(right, bottom), true);
-            drawList.AddText(new Vector2(left + Theme.Scaled(4), barTop + Theme.Scaled(1)), U32(Theme.Label), TimelineWindowViews.PartLabel(cuts.Parts[i]));
+            drawList.AddText(new Vector2(left + Theme.Scaled(4), barTop + Theme.Scaled(1)), TimelineUi.U32(Theme.Label), TimelineWindowViews.PartLabel(cuts.Parts[i]));
             drawList.PopClipRect();
         }
         // Joins: a bow-tie as wide as the frames each blend really uses.
@@ -73,21 +73,21 @@ public sealed partial class TimelineWindow
             var x = trackLeft + view.X((float)at);
             var chosen = current.SelectedCut is { Target: TimelineCutTarget.Join, Index: var index } && index == j ||
                          hit.Part is TimelinePart.Join or TimelinePart.JoinEdge && hit.Cut == j;
-            var fill = U32(Theme.WithAlpha(Theme.Accent, chosen ? .85f : .55f));
+            var fill = TimelineUi.U32(Theme.WithAlpha(Theme.Accent, chosen ? .85f : .55f));
             if (before > 0)
                 drawList.AddTriangleFilled(new Vector2(trackLeft + view.X((float)(at - before)), barTop),
                     new Vector2(trackLeft + view.X((float)(at - before)), barBottom), new Vector2(x, middle), fill);
             if (after > 0)
                 drawList.AddTriangleFilled(new Vector2(trackLeft + view.X((float)(at + after)), barTop),
                     new Vector2(x, middle), new Vector2(trackLeft + view.X((float)(at + after)), barBottom), fill);
-            drawList.AddLine(new Vector2(Crisp(x), barTop), new Vector2(Crisp(x), barBottom), U32(Theme.Accent), line);
+            drawList.AddLine(new Vector2(TimelineUi.Crisp(x), barTop), new Vector2(TimelineUi.Crisp(x), barBottom), TimelineUi.U32(Theme.Accent), line);
         }
         // The seam, on a loop: a wedge rising into the end, or out of the start for a blend placed after.
         if (current.Loops && cuts.Seam != null)
         {
             var (before, after) = MotionCutter.Window(cuts, -1, doc.Length);
             var chosen = current.SelectedCut is { Target: TimelineCutTarget.Seam } || hit.Part is TimelinePart.Seam or TimelinePart.SeamEdge;
-            var fill = U32(Theme.WithAlpha(Theme.Accent, chosen ? .85f : .55f));
+            var fill = TimelineUi.U32(Theme.WithAlpha(Theme.Accent, chosen ? .85f : .55f));
             var end = trackLeft + view.X(doc.Length);
             if (before > 0)
                 drawList.AddTriangleFilled(new Vector2(trackLeft + view.X((float)(doc.Length - before)), barBottom),
@@ -103,14 +103,14 @@ public sealed partial class TimelineWindow
             var (from, to) = cuts.EaseSpan(doc.Length);
             float slow = trackLeft + view.X((float)(cuts.EaseEnd ? to : from)), full = trackLeft + view.X((float)(cuts.EaseEnd ? from : to));
             drawList.AddTriangleFilled(new Vector2(slow, barBottom), new Vector2(full, barTop), new Vector2(full, barBottom),
-                U32(Theme.WithAlpha(Theme.Accent, chosen ? .6f : .35f)));
-            drawList.AddLine(new Vector2(Crisp(full), barTop), new Vector2(Crisp(full), barBottom), U32(Theme.Accent), line);
+                TimelineUi.U32(Theme.WithAlpha(Theme.Accent, chosen ? .6f : .35f)));
+            drawList.AddLine(new Vector2(TimelineUi.Crisp(full), barTop), new Vector2(TimelineUi.Crisp(full), barBottom), TimelineUi.U32(Theme.Accent), line);
         }
         DrawDecodeState(drawList, max, top, bottom);
         DrawSeamBadge(drawList, current, max, trackLeft, top, bottom);
         drawList.PopClipRect();
         DrawRemovedMarkers(drawList, cuts, doc.Length, view, min, max, trackLeft, top);
-        drawList.AddLine(new Vector2(min.X, Crisp(top)), new Vector2(max.X, Crisp(top)), U32(Theme.WithAlpha(Theme.TreeLine, .5f)), line);
+        drawList.AddLine(new Vector2(min.X, TimelineUi.Crisp(top)), new Vector2(max.X, TimelineUi.Crisp(top)), TimelineUi.U32(Theme.WithAlpha(Theme.TreeLine, .5f)), line);
     }
 
     /// <summary>
@@ -125,7 +125,7 @@ public sealed partial class TimelineWindow
         if (last <= first)
             return;
         var step = Math.Max(1, 2 / view.Scale);
-        var colour = U32(Theme.WithAlpha(Theme.Label, .55f));
+        var colour = TimelineUi.U32(Theme.WithAlpha(Theme.Label, .55f));
         var height = (barBottom - middle) * .9f;
         Vector2? previous = null;
         for (var o = first; o <= last + step / 2; o += step)
@@ -156,7 +156,7 @@ public sealed partial class TimelineWindow
         if (text == null)
             return;
         var size = ImGui.CalcTextSize(text);
-        drawList.AddText(new Vector2(max.X - size.X - Theme.Scaled(6), top + (bottom - top - size.Y) / 2), U32(colour), text);
+        drawList.AddText(new Vector2(max.X - size.X - Theme.Scaled(6), top + (bottom - top - size.Y) / 2), TimelineUi.U32(colour), text);
     }
 
     /// <summary>On the ruler, where frames were cut out and how many: at each join, and at a trimmed start or end.</summary>
@@ -164,12 +164,12 @@ public sealed partial class TimelineWindow
         float trackLeft, float rulerBottom)
     {
         drawList.PushClipRect(new Vector2(trackLeft, min.Y), new Vector2(max.X, rulerBottom), true);
-        var colour = U32(Theme.Warning);
+        var colour = TimelineUi.U32(Theme.Warning);
         void Mark(double at, int frames)
         {
             if (frames <= 0)
                 return;
-            var x = Crisp(trackLeft + view.X((float)at));
+            var x = TimelineUi.Crisp(trackLeft + view.X((float)at));
             var text = TimelineWindowViews.RemovedMarker(frames);
             var size = ImGui.CalcTextSize(text);
             drawList.AddLine(new Vector2(x, rulerBottom - Theme.Scaled(6)), new Vector2(x, rulerBottom), colour, Math.Max(1, MathF.Floor(Theme.Scale)));

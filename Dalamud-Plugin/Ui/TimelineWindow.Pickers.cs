@@ -13,7 +13,7 @@ namespace InstantEdit.Ui;
 
 /// <summary>
 /// What can be placed: one picker popup per kind listing the catalog (thousands of rows, so a
-/// filter and a list clipper), session.Imports of sound and effect files on a task, and typed game paths.
+/// filter and a list clipper), imports of sound and effect files on a task, and typed game paths.
 /// A picker either adds at a frame or chooses a new path or model for an existing event.
 /// </summary>
 public sealed partial class TimelineWindow
@@ -40,7 +40,7 @@ public sealed partial class TimelineWindow
     private float importVolume = 100;
     private string gamePathText = string.Empty;
 
-    // The filtered rows, rebuilt when the list, the filter or the session.Imports change.
+    // The filtered rows, rebuilt when the list, the filter or the imports change.
     private readonly List<TimelineCatalogItem> pickerRows = [];
     private ImmutableArray<TimelineCatalogItem> pickerRowsSource;
     private TimelineAddKind pickerRowsKind;
@@ -125,7 +125,7 @@ public sealed partial class TimelineWindow
     {
         if (catalogKey == null)
         {
-            Widgets.HintWrapped("This animation is not for a player race, so only session.Imports and typed game paths can be placed.");
+            Widgets.HintWrapped("This animation is not for a player race, so only imports and typed game paths can be placed.");
             return;
         }
         switch (catalog.State)
@@ -250,7 +250,7 @@ public sealed partial class TimelineWindow
         var id => (ushort)id,
     };
 
-    /// <summary> The picker's rows: this kind's session.Imports first, then the catalog's list, filtered. </summary>
+    /// <summary> The picker's rows: this kind's imports first, then the catalog's list, filtered. </summary>
     private List<TimelineCatalogItem> PickerRows()
     {
         var data = catalog.Data;

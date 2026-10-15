@@ -165,7 +165,7 @@ public sealed partial class TimelineWindow
                 ImGui.CloseCurrentPopup();
                 StartSave(current, loaded);
             }
-            Tip("Change the mod's own file, for every animation that plays it.");
+            TimelineUi.Tip("Change the mod's own file, for every animation that plays it.");
             ImGui.SameLine();
             if (ImGui.Button("Only here"))
             {
@@ -175,7 +175,7 @@ public sealed partial class TimelineWindow
                 ImGui.CloseCurrentPopup();
                 StartSave(current, loaded);
             }
-            Tip("Save a copy that only this animation plays.");
+            TimelineUi.Tip("Save a copy that only this animation plays.");
             ImGui.SameLine();
             if (ImGui.Button("Cancel"))
             {

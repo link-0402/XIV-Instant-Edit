@@ -131,7 +131,7 @@ public sealed partial class TimelineWindow
             return "Another edit is running. Wait for it to end.";
         if (destination == AnimationDestination.NewMod && !PenumbraService.IsSafeNewModName(modName.Trim()))
             return "Choose a valid mod name.";
-        return LookMissing(current.Document) ?? SoundMissing(current.Document) ?? SoundCutMissing(current.Document);
+        return effectLooks.LookMissing(current.Document) ?? SoundMissing(current.Document) ?? SoundCutMissing(current.Document);
     }
 
     /// <summary>
@@ -146,7 +146,7 @@ public sealed partial class TimelineWindow
         var place = destination;
         var name = modName.Trim();
         var repair = target.Standalone ? null : repairTarget;
-        // Effect looks are saved as copies of their effects, packaged like session.Imports. Sound changes and
+        // Effect looks are saved as copies of their effects, packaged like imports. Sound changes and
         // pins go into copies too, or over the mod's own sound files where BeginSave allowed it.
         TimelineDocument saved;
         ImmutableDictionary<string, byte[]> added;
@@ -157,7 +157,7 @@ public sealed partial class TimelineWindow
         ImmutableDictionary<string, string> cutSounds;
         try
         {
-            (saved, var used) = WithLooks(document);
+            (saved, var used) = effectLooks.WithLooks(document);
             var sounds = WithSoundCuts(WithSounds(saved, SoundRoute(place)), saved, SoundBytes);
             saved = sounds.Document;
             cutSounds = sounds.CutFrom;

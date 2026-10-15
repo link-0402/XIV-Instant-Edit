@@ -42,11 +42,11 @@ public sealed partial class TimelineWindow
             ImGui.OpenPopup(AddMenu);
         DrawAddMenu(current);
         ImGui.SameLine(0, Theme.Scaled(2));
-        if (Toggle("##timeline-snap", FontAwesomeIcon.Magnet, current.Snap,
+        if (TimelineUi.Toggle("##timeline-snap", FontAwesomeIcon.Magnet, current.Snap,
                 current.Snap ? "Snapping is on. Drags stick to starts, ends and the playhead. Hold Alt to place freely." : "Snapping is off."))
             current.Snap = !current.Snap;
         ImGui.SameLine(0, Theme.Scaled(2));
-        if (Toggle("##timeline-scale", FontAwesomeIcon.ArrowsAltH, current.ScaleEvents,
+        if (TimelineUi.Toggle("##timeline-scale", FontAwesomeIcon.ArrowsAltH, current.ScaleEvents,
                 current.ScaleEvents ? "Scale events with length is on. A new length moves and stretches the events too." : "Scale events with length is off. A new length keeps the events where they are."))
             current.ScaleEvents = !current.ScaleEvents;
         ImGui.SameLine(0, Theme.Scaled(2));
@@ -56,10 +56,10 @@ public sealed partial class TimelineWindow
         if (!current.Document.Expression)
         {
             ImGui.SameLine(0, Theme.Scaled(2));
-            if (Toggle("##timeline-bones", FontAwesomeIcon.Child, bonesWindow.IsOpen, bonesWindow.IsOpen
+            if (TimelineUi.Toggle("##timeline-bones", FontAwesomeIcon.Child, bonesWindow.IsOpen, bonesWindow.IsOpen
                     ? "Close the Bones window."
                     : "Open the Bones window: pick bones on a body map and pose them in the selected bone layer."))
-                ToggleBones();
+                TimelineUi.Toggle(bonesWindow);
         }
         ImGui.SameLine(0, Theme.Scaled(2));
         DrawLoadButton();
@@ -99,14 +99,6 @@ public sealed partial class TimelineWindow
         ImGui.TextColored(Theme.Label, readout);
         ImGui.SameLine(0, Theme.Gap);
         Widgets.HelpTip(ControlsHelp);
-    }
-
-    /// <summary> An icon button that stays filled while its setting is on. </summary>
-    private static bool Toggle(string id, FontAwesomeIcon icon, bool on, string tooltip)
-    {
-        using var colour = ImRaii.PushColor(ImGuiCol.Button, Theme.Selection, on)
-            .Push(ImGuiCol.ButtonHovered, Theme.WithAlpha(Theme.Selection, .85f), on);
-        return Widgets.IconButton(id, icon, tooltip);
     }
 
     private void DrawAddMenu(TimelineEditor current)
@@ -180,7 +172,7 @@ public sealed partial class TimelineWindow
         {
             if (ImGui.SmallButton(effectEvents == 1 ? "Keep it looping" : "Keep them looping"))
             {
-                // The copies are packaged like session.Imports; the edit's own undo puts the original effects back.
+                // The copies are packaged like imports; the edit's own undo puts the original effects back.
                 foreach (var copy in effectCopies)
                     session.Imports[copy.GamePath] = copy;
                 current.Commit(TimelineEffectCheck.Fix(current.Document, effectProblems));
