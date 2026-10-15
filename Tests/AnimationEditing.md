@@ -36,6 +36,13 @@ enumerates material PAPs but does not enumerate skeletal animation packs.
 and its existing LivePose submodule were checked as references for player state.
 These checks do not establish native binding matches in the running game.
 
+XIV Bridge rerun on 2026-10-15, after the TimelineWindow and PenumbraService splits (build
+6297dbaa, main 9294771): the whole `tests/instant-edit/animations` suite, each failure run again on
+its own. The notes below dated 2026-10-10 still hold, except for two failures: 244 (no "barely
+applies" tooltip) and 141 (a "Not saved" row offers an Undo that fails). The face tests (05, 162,
+201, 243, 249 to 251) failed until the test sandbox waited for its redraw: a face played before the
+character's redraw lands is ended by the game, which then sets the face overlays back to default.
+
 ## Automated checks
 
 Embedded-source repair follow-up on 2026-09-14: 200 standard animation checks
