@@ -38,6 +38,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly BoneEditor boneEditor;
     private readonly PoseSourcePanel poseSources;
     private readonly LayerPanel layerPanel;
+    private readonly BonesPanel bonesPanel;
+    private readonly BonesWindow bonesWindow;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
     private readonly GameSoundPlayer? soundPlayer;
@@ -79,7 +81,6 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             () => loadTask != null || saveTask != null || pendingSaveId != null || undoPending || soundCheck != null || soundAsk != null);
         this.soundPlayer = soundPlayer;
         this.animationError = animationError;
-        this.textures = textures;
         bonesWindow = new BonesWindow(this);
         overlayWindow = new BonesOverlay(this);
         decode = new MotionDecode(session);
@@ -92,6 +93,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         boneEditor = new BoneEditor(session, decode, posing, this);
         poseSources = new PoseSourcePanel(session, decode, posing, recorder);
         layerPanel = new LayerPanel(session, posing, boneEditor, poseSources, bonesWindow);
+        bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, this, textures);
 
         Size = new Vector2(1000, 560);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -107,6 +109,11 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     }
 
     public void DrawFileDialog() => session.FileDialog.Draw();
+
+    internal BonesWindow Bones => bonesWindow;
+
+    /// <summary>The Bones window's whole content; called from its draw.</summary>
+    internal void DrawBones() => bonesPanel.Draw();
 
     // The shared state under the names TimelineWindow.Overlay.cs reads. It stays a partial of this
     // window until the Body Physics work in it is committed; then it can take a TimelineSession too.
