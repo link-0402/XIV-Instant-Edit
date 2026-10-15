@@ -4,15 +4,17 @@ using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The Edits page: every animation edit of the last week, newest first, with Undo, Edit again for a
 /// save with bone layers, and putting back the LivePose offsets an old LivePose bake cleared.
 /// </summary>
-public sealed partial class TimelineWindow
+/// <param name="loading">Whether the timeline is being read.</param>
+/// <param name="editAgain">Opens a saved edit again with its layers (Edit again).</param>
+internal sealed class RecentEditsPage(TimelineSession session, SaveFooter saveFooter, TimelinePreview timelinePreview, Func<bool> loading,
+    Action<AnimationEditJournal> editAgain)
 {
     private const int RecoveryRows = 20;
 
@@ -20,7 +22,7 @@ public sealed partial class TimelineWindow
     private static bool NeedsAttention(AnimationEditJournal journal) => journal.State is not ("Completed" or "Undone" or "FilesUndone");
 
     /// <summary>How many recorded edits did not finish and need an undo; none while an edit is still running.</summary>
-    internal static int RecoveryAttention(AnimationEditService service)
+    public static int RecoveryAttention(AnimationEditService service)
     {
         if (service.Busy)
             return 0;
@@ -60,9 +62,9 @@ public sealed partial class TimelineWindow
         journal.Request.Capture.CollectionId == open.Capture.CollectionId &&
         journal.Files.Any(f => f.AddedFor == null && string.Equals(f.GamePath, open.Resource.GamePath, StringComparison.Ordinal));
 
-    private void DrawRecentEdits()
+    public void Draw()
     {
-        if (animations is not { } service)
+        if (session.Animations is not { } service)
             return;
         var journals = service.Recovery;
         var attention = RecoveryAttention(service);
@@ -103,17 +105,17 @@ public sealed partial class TimelineWindow
         var buttons = Theme.Scaled(84);
         ImGui.SameLine(Math.Max(ImGui.GetCursorPosX() + Theme.Gap, ImGui.GetContentRegionMax().X - buttons));
         // Opening another clip waits for a running read, save or undo; with no clip open nothing does.
-        var working = loadTask != null || saveFooter.Working;
+        var working = loading() || saveFooter.Working;
         var againProblem = AnimationEditService.EditAgainProblem(journal) ?? (working ? "Wait for the timeline to finish." : null);
         if (Widgets.IconButton("##edit-again", FontAwesomeIcon.Edit, againProblem ?? "Edit again: bring back its bone layers, cuts and length", againProblem is null))
-            EditAgain(journal);
+            editAgain(journal);
         ImGui.SameLine(0, Theme.Scaled(2));
         var canUndo = journal.State != "Undone";
         // Undoing the open clip's edit reads it again, which unsaved changes would not survive.
-        var open = source is { } shown && EditsFile(journal, shown);
+        var open = session.Source is { } shown && EditsFile(journal, shown);
         var blocked = !canUndo ? "Already undone"
-            : open && editor is { Dirty: true } ? "Save or undo your changes to this timeline first."
-            : open && ReadOnly ? "Wait for the save to finish."
+            : open && session.Editor is { Dirty: true } ? "Save or undo your changes to this timeline first."
+            : open && session.ReadOnly ? "Wait for the save to finish."
             : null;
         using (ImRaii.Disabled(service.Busy || blocked != null))
         {
