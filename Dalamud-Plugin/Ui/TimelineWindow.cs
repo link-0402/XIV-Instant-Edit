@@ -23,7 +23,7 @@ namespace InstantEdit.Ui;
 /// actor, a save footer and a GPose preview. Slow work runs on tasks polled every frame, so the draw
 /// path never reads files. Split by concern: each part lives in its own partial file.
 /// </summary>
-public sealed partial class TimelineWindow : Window, IDisposable
+public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
 {
     private enum PendingAction : byte { None, Close, Switch }
 
@@ -35,6 +35,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private readonly SoundInspector soundInspector;
     private readonly TimelinePreview timelinePreview;
     private readonly BonePosing posing;
+    private readonly BoneEditor boneEditor;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
     private readonly GameSoundPlayer? soundPlayer;
@@ -81,6 +82,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         soundInspector = new SoundInspector(session, soundFiles, pickers, soundPlayer);
         timelinePreview = new TimelinePreview(session, decode, effectLooks, soundFiles, () => repairTarget);
         posing = new BonePosing(session, decode);
+        boneEditor = new BoneEditor(session, decode, posing, this);
         this.soundPlayer = soundPlayer;
         this.recorder = recorder;
         this.animationError = animationError;
@@ -128,6 +130,12 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private static Vector4 StateColour(BoneState state, MotionLayer? layer) => BonePosing.StateColour(state, layer);
     private static bool IsBelow(SkeletonDescription skeleton, int bone, int ancestor) => BonePosing.IsBelow(skeleton, bone, ancestor);
     private static float MotionEnd(AnimationTimelineSource loaded, TimelineDocument doc) => BonePosing.MotionEnd(loaded, doc);
+    private bool characterAxes => boneEditor.CharacterAxes;
+
+    bool IBonesOverlay.Shown => OverlayWanted;
+    bool IBonesOverlay.OnCharacter { get => showOnCharacter; set => showOnCharacter = value; }
+    bool IBonesOverlay.GizmoMoves { get => gizmoMove; set => gizmoMove = value; }
+    string? IBonesOverlay.GizmoWaits(MotionLayer layer, int frame) => GizmoOperation(layer, frame, out var reason) == null ? reason : null;
     private bool ReadOnly => session.ReadOnly;
     private AnimationTimelineSource Fresh(AnimationTimelineSource current) => session.Fresh(current);
 
