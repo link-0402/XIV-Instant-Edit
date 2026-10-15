@@ -216,7 +216,7 @@ public sealed partial class TimelineWindow
 
     /// <summary>Identifies a decode: the clip, its file version, the skeleton it is read on and the motion layers apply to.</summary>
     private static string DecodeKey(AnimationTimelineSource loaded) =>
-        $"{ClipKey(loaded)}|{loaded.Resource.Hash}|{loaded.Clip.BindingFingerprint}|{loaded.Clip.Resolution?.Selected?.Skeleton.Fingerprint}|{loaded.BaseHash}";
+        $"{TimelineSession.ClipKey(loaded)}|{loaded.Resource.Hash}|{loaded.Clip.BindingFingerprint}|{loaded.Clip.Resolution?.Selected?.Skeleton.Fingerprint}|{loaded.BaseHash}";
 
     /// <summary>Starts decoding the clip's motion unless this version of it is decoded or being decoded.</summary>
     private void EnsureDecode(AnimationTimelineSource loaded)
@@ -245,7 +245,7 @@ public sealed partial class TimelineWindow
         {
             // Remembered so the panels that need the motion say why instead of reading it again every frame.
             failedDecodeKey = decodedKey;
-            decodeError = ErrorText(task.Exception);
+            decodeError = TimelineSession.ErrorText(task.Exception);
             decodedKey = null;
             if (liveWanted)
             {

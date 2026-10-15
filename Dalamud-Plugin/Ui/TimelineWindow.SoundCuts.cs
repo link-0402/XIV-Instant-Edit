@@ -66,7 +66,7 @@ public sealed partial class TimelineWindow
     {
         if (!sounds.Document.SoundCuts.ContainsValue(true))
             return sounds;
-        return TimelineSoundEdits.BakeCuts(sounds, sound, ScdTemplate(),
+        return TimelineSoundEdits.BakeCuts(sounds, sound, session.ScdTemplate(),
             ev => TimelineEdits.Find(before, ev.Key) is { } original ? AudioSeconds(before, original, true) ?? 0 : 0);
     }
 

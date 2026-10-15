@@ -4,6 +4,7 @@ using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
+using InstantEdit.Ui.Timeline;
 
 namespace InstantEdit.Ui;
 
@@ -120,7 +121,7 @@ public sealed partial class TimelineWindow
             {
                 if (open)
                 {
-                    jobClip = ClipKey(source!);
+                    jobClip = TimelineSession.ClipKey(source!);
                     StopPreview();
                     undoPending = true;
                     saveError = null;

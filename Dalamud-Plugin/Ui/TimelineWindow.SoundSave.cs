@@ -62,7 +62,7 @@ public sealed partial class TimelineWindow
     /// <see cref="TimelineSoundEdits.Bake"/>): the copies to package and the mod files written over in place.
     /// </summary>
     private TimelineSoundBake WithSounds(TimelineDocument document, Func<TimelineSoundKey, TimelineSoundRoute> route, Func<string, byte[]?>? sound = null) =>
-        TimelineSoundEdits.Bake(document, sound ?? SoundBytes, ImportBytes, route);
+        TimelineSoundEdits.Bake(document, sound ?? SoundBytes, session.ImportBytes, route);
 
     /// <summary>
     /// Save: in place, edited sounds of the clip's own mod are written over unless other animations of
@@ -132,7 +132,7 @@ public sealed partial class TimelineWindow
             soundCheckDocument = null;
             if (!task.IsCompletedSuccessfully)
             {
-                saveError = "The mod could not be checked for other animations playing its sounds. " + ErrorText(task.Exception);
+                saveError = "The mod could not be checked for other animations playing its sounds. " + TimelineSession.ErrorText(task.Exception);
                 soundInPlace = null;
                 return;
             }
@@ -198,7 +198,7 @@ public sealed partial class TimelineWindow
     {
         if (previewRestCache is { } cached && ReferenceEquals(cached.For, document))
             return cached.Result;
-        var rest = TimelineSoundEdits.Redirectable(TimelineEffectLooks.Redirectable(document).Document, SoundBytes, ImportBytes, AppliedSound);
+        var rest = TimelineSoundEdits.Redirectable(TimelineEffectLooks.Redirectable(document).Document, SoundBytes, session.ImportBytes, AppliedSound);
         previewRestCache = (document, rest);
         return rest;
     }

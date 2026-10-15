@@ -93,7 +93,7 @@ public sealed partial class TimelineWindow
             if (task.IsCompletedSuccessfully)
                 AddLivePoseLayer(current, loaded, task.Result.Name, task.Result.Bones, null);
             else
-                LivePoseMessage("The file could not be read: " + ErrorText(task.Exception), true);
+                LivePoseMessage("The file could not be read: " + TimelineSession.ErrorText(task.Exception), true);
         }
     }
 

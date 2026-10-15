@@ -101,7 +101,7 @@ public sealed partial class TimelineWindow
                     liveLooks = done.Live && (done.Looks.Count > 0 || done.Sounds.Count > 0);
                 }
                 else if (!task.IsCanceled)
-                    previewError = "The effect looks and sound changes could not be shown. " + ErrorText(task.Exception);
+                    previewError = "The effect looks and sound changes could not be shown. " + TimelineSession.ErrorText(task.Exception);
             }
             lookSyncing = null;
             lookChecked = null;
@@ -173,7 +173,7 @@ public sealed partial class TimelineWindow
         {
             read = new EffectRead();
             effectReads[gamePath] = read;
-            if (imports.TryGetValue(gamePath, out var import) && import.Files.TryGetValue(gamePath, out var bytes))
+            if (session.Imports.TryGetValue(gamePath, out var import) && import.Files.TryGetValue(gamePath, out var bytes))
             {
                 try { (read.Bytes, read.Look) = (bytes, TimelineEffectLooks.Read(bytes)); }
                 catch (InvalidDataException e) { read.Error = e.Message; }
@@ -196,7 +196,7 @@ public sealed partial class TimelineWindow
             if (task.IsCompletedSuccessfully)
                 (read.Bytes, read.Look) = task.Result;
             else
-                read.Error = ErrorText(task.Exception);
+                read.Error = TimelineSession.ErrorText(task.Exception);
         }
         return read;
     }
@@ -204,17 +204,17 @@ public sealed partial class TimelineWindow
     /// <summary> The bytes of an effect the editor read, or an import's; null when it wasn't read. </summary>
     private byte[]? EffectBytes(string gamePath) =>
         effectReads.TryGetValue(gamePath, out var read) && read.Bytes != null ? read.Bytes
-        : imports.TryGetValue(gamePath, out var import) && import.Files.TryGetValue(gamePath, out var bytes) ? bytes
+        : session.Imports.TryGetValue(gamePath, out var import) && import.Files.TryGetValue(gamePath, out var bytes) ? bytes
         : null;
 
     /// <summary>
-    /// <paramref name="document"/> with its effects' looks written into copies, and the imports a save
+    /// <paramref name="document"/> with its effects' looks written into copies, and the session.Imports a save
     /// or preview packages with those copies among them.
     /// </summary>
     private (TimelineDocument Document, List<TimelineImport> Imports) WithLooks(TimelineDocument document)
     {
-        var (baked, copies) = TimelineEffectLooks.Bake(document, EffectBytes, imports);
-        return (baked, [.. imports.Values, .. copies]);
+        var (baked, copies) = TimelineEffectLooks.Bake(document, EffectBytes, session.Imports);
+        return (baked, [.. session.Imports.Values, .. copies]);
     }
 
     /// <summary> Why the looks can't be saved yet: an effect with a look still being read, or one that couldn't be. </summary>
