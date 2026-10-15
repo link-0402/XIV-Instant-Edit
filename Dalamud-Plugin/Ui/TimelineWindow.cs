@@ -40,6 +40,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly LayerPanel layerPanel;
     private readonly BonesPanel bonesPanel;
     private readonly TimelineTexts texts;
+    private readonly TimelineClipBand clipBand;
+    private readonly CutPanel cutPanel;
     private readonly BonesWindow bonesWindow;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
@@ -86,6 +88,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         overlayWindow = new BonesOverlay(this);
         decode = new MotionDecode(session);
         texts = new TimelineTexts(session);
+        clipBand = new TimelineClipBand(session, decode);
+        cutPanel = new CutPanel(session, decode, clipBand);
         effectLooks = new EffectLookEditor(session);
         soundFiles = new SoundFiles(session);
         pickers = new TimelinePickers(session, soundFiles);

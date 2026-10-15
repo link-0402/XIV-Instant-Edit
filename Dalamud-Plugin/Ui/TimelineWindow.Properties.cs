@@ -28,7 +28,7 @@ public sealed partial class TimelineWindow
         soundInspector.EndEdit(current);
         if (current.SelectedCut != null)
         {
-            DrawCutPanel(current);
+            cutPanel.Draw(current);
             return;
         }
         var readOnly = ReadOnly;
