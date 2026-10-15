@@ -15,7 +15,7 @@ from .imp.weights    import create_weight_matrix, set_weights
 from ...xivpy.model  import XIVModel, Submesh, VertexDeclaration, VertexUsage
 from .com.exceptions import XIVMeshError
 from ...instant_edit.material_preview import create_preview_material
-from ...instant_edit.context import mesh_ids_from_name
+from ...instant_edit.context import try_mesh_ids_from_name
 
 
 def mesh_group_conflict_offset(incoming_groups, visible_groups) -> int:
@@ -34,10 +34,9 @@ def visible_mesh_group_ids(objects=None) -> set[int]:
     for obj in objects if objects is not None else getattr(bpy.context, "visible_objects", ()):
         if obj.type != "MESH":
             continue
-        try:
-            groups.add(mesh_ids_from_name(obj)[0])
-        except (ValueError, AttributeError):
-            continue
+        ids = try_mesh_ids_from_name(obj)
+        if ids is not None:
+            groups.add(ids[0])
     return groups
 
 

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using InstantEdit.Models;
 using InstantEdit.Services.Painter;
+using InstantEdit.Services.PenumbraMods;
 using Penumbra.Api.Enums;
 
 namespace InstantEdit.Services;
@@ -133,11 +134,11 @@ public sealed class TextureEditService : IDisposable
                         : restoredSession;
                     s.Variants ??= [];
                     if (s.Variants.Any(v => !PathRules.IsSafeVariantName(v.Name) ||
-                            (v.RelativePath.Length > 0 && !PenumbraService.IsSafeGameResourcePath(v.RelativePath, ".tex"))))
+                            (v.RelativePath.Length > 0 && !ModPaths.IsSafeGameResourcePath(v.RelativePath, ".tex"))))
                         throw new IOException("Invalid texture variant.");
-                    if (s.Id == Guid.Empty || !PenumbraService.IsSafeGameResourcePath(s.GamePath, ".tex") ||
-                        !PenumbraService.IsSafeGameResourcePath(s.RelativePath, ".tex") ||
-                        (s.NeedsMod && !PenumbraService.IsSafeGameResourcePath(s.ResolvedGamePath, ".tex")))
+                    if (s.Id == Guid.Empty || !ModPaths.IsSafeGameResourcePath(s.GamePath, ".tex") ||
+                        !ModPaths.IsSafeGameResourcePath(s.RelativePath, ".tex") ||
+                        (s.NeedsMod && !ModPaths.IsSafeGameResourcePath(s.ResolvedGamePath, ".tex")))
                         throw new IOException("Invalid texture session identity.");
                     TextureFiles.EnsureLocalPath(s.Directory);
                     MigrateLegacyWorkingFile(s);
@@ -911,7 +912,7 @@ public sealed class TextureEditService : IDisposable
         if (Environment.TickCount64 < state.RetryAt) return;
         if (!PathRules.IsSafeVariantName(name))
             throw new IOException($"\"{name}\" cannot be used as a Penumbra option name. Rename the TGA.");
-        if (string.Equals(name, PenumbraService.OriginalTextureOptionName, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(name, TextureModBackend.OriginalTextureOptionName, StringComparison.OrdinalIgnoreCase))
             throw new IOException($"\"{name}\" is reserved for the edited texture. Rename the TGA.");
         var (width, height) = TextureFiles.ValidateTga(tga);
         var format = TextureFiles.SaveFormat(s, _config.RecompressTextures);
@@ -1254,7 +1255,7 @@ public sealed class TextureEditService : IDisposable
         // The drop would land on the texture under the variant, where nobody sees it.
         if (VariantShowing(session, request) is { } variant)
             throw new IOException($"Your character shows this texture's variant \"{variant.Name}\". " +
-                $"Select \"{PenumbraService.OriginalTextureOptionName}\" in its Penumbra group to replace the texture itself.");
+                $"Select \"{TextureModBackend.OriginalTextureOptionName}\" in its Penumbra group to replace the texture itself.");
         var tga = await ReadImageAsTgaAsync(session, image).ConfigureAwait(false);
         var results = await ApplyExternalAsync([new ExternalTextureSave(id, tga, Path.GetFileName(image))], _life.Token).ConfigureAwait(false);
         return results.Single();

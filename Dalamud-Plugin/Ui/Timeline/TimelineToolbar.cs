@@ -1,0 +1,170 @@
+using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
+using Dalamud.Interface.Utility.Raii;
+using Dalamud.Interface.Windowing;
+using InstantEdit.Services.Animations.Timeline;
+
+namespace InstantEdit.Ui.Timeline;
+
+/// <summary> The row above the lanes: undo, redo, add, snapping, fit, the Bones window, load, the length and the playhead, then short messages. </summary>
+internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers pickers, TimelineLoader loader, LivePosePanel livePose,
+    TimelineTexts texts, SaveFooter saveFooter, Window bonesWindow)
+{
+    private const string AddMenu = "##timeline-add-menu";
+    private const string ControlsHelp =
+        "Drag an event to move it. Drag its edges to resize it.\n" +
+        "Drag the grip at the end of the ruler to change the length.\n" +
+        "Click or drag the ruler to move the playhead.\n" +
+        "Wheel scrolls. Ctrl+wheel zooms. Shift+wheel scrolls the lanes.\n" +
+        "Hold Alt while dragging to place freely.\n" +
+        "C cuts the motion at the playhead. Q and W remove the part before or after it.\n" +
+        "Drag a part's edges on the clip row to trim it.\n" +
+        "Right-click for more. Double-click a lane to add to it.";
+
+    private bool lengthActive;
+    private float lengthEdit;
+    private int readoutFrame = -1;
+    private string readout = string.Empty;
+
+    public void Draw(TimelineEditor current)
+    {
+        var readOnly = session.ReadOnly;
+        var history = current.History;
+        if (Widgets.IconButton("##timeline-undo", FontAwesomeIcon.Undo, "Undo the last change (Ctrl+Z)", !readOnly && history.CanUndo))
+            current.Undo();
+        ImGui.SameLine(0, Theme.Scaled(2));
+        if (Widgets.IconButton("##timeline-redo", FontAwesomeIcon.Redo, "Redo the change (Ctrl+Y)", !readOnly && history.CanRedo))
+            current.Redo();
+
+        ImGui.SameLine(0, Theme.Scaled(12));
+        if (Widgets.IconButton("##timeline-add", FontAwesomeIcon.Plus, "Add an expression, lip sync, sound, effect or prop at the playhead, a bone layer, or your LivePose adjustments", !readOnly))
+            ImGui.OpenPopup(AddMenu);
+        DrawAddMenu(current);
+        ImGui.SameLine(0, Theme.Scaled(2));
+        if (TimelineUi.Toggle("##timeline-snap", FontAwesomeIcon.Magnet, current.Snap,
+                current.Snap ? "Snapping is on. Drags stick to starts, ends and the playhead. Hold Alt to place freely." : "Snapping is off."))
+            current.Snap = !current.Snap;
+        ImGui.SameLine(0, Theme.Scaled(2));
+        if (TimelineUi.Toggle("##timeline-scale", FontAwesomeIcon.ArrowsAltH, current.ScaleEvents,
+                current.ScaleEvents ? "Scale events with length is on. A new length moves and stretches the events too." : "Scale events with length is off. A new length keeps the events where they are."))
+            current.ScaleEvents = !current.ScaleEvents;
+        ImGui.SameLine(0, Theme.Scaled(2));
+        if (Widgets.IconButton("##timeline-fit", FontAwesomeIcon.Expand, "Show the whole timeline (F)"))
+            current.Fit();
+        // An expression's face takes no bone layers, so it has no bones to pose.
+        if (!current.Document.Expression)
+        {
+            ImGui.SameLine(0, Theme.Scaled(2));
+            if (TimelineUi.Toggle("##timeline-bones", FontAwesomeIcon.Child, bonesWindow.IsOpen, bonesWindow.IsOpen
+                    ? "Close the Bones window."
+                    : "Open the Bones window: pick bones on a body map and pose them in the selected bone layer."))
+                TimelineUi.Toggle(bonesWindow);
+        }
+        ImGui.SameLine(0, Theme.Scaled(2));
+        loader.DrawButton();
+
+        ImGui.SameLine(0, Theme.Scaled(12));
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Length");
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.SetNextItemWidth(Theme.Scaled(72));
+        // While typing, the field shows what was typed; Enter or leaving it applies the length once.
+        var seconds = lengthActive ? lengthEdit : current.Document.Length / (float)TimelineDocument.Fps;
+        using (ImRaii.Disabled(readOnly || current.FixedLength))
+        {
+            if (ImGui.InputFloat("##timeline-length", ref seconds, 0, 0, "%.2f"))
+                lengthEdit = seconds;
+            if (ImGui.IsItemActivated())
+                lengthEdit = seconds;
+            lengthActive = ImGui.IsItemActive();
+            if (ImGui.IsItemDeactivatedAfterEdit() && float.IsFinite(lengthEdit))
+                current.SetLength(TimelineWindowViews.Frames(lengthEdit));
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(current.FixedLength
+                ? "An expression's timeline keeps its length."
+                : "Stretches the motion to this length. Press Enter to apply it. Trim it on the clip row.");
+        ImGui.SameLine(0, Theme.Scaled(3));
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "s");
+
+        ImGui.SameLine(0, Theme.Scaled(16));
+        if (current.Playhead != readoutFrame)
+        {
+            readoutFrame = current.Playhead;
+            readout = "Playhead " + TimelineWindowViews.FrameText(readoutFrame);
+        }
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Label, readout);
+        ImGui.SameLine(0, Theme.Gap);
+        Widgets.HelpTip(ControlsHelp);
+    }
+
+    private void DrawAddMenu(TimelineEditor current)
+    {
+        using var popup = ImRaii.Popup(AddMenu);
+        if (!popup.Success)
+            return;
+        foreach (var kind in TimelineWindowViews.AddKinds)
+            if (ImGui.MenuItem(TimelineWindowViews.AddKindName(kind)))
+                pickers.Request(kind, current.Playhead, null);
+        // An expression's face takes no bone layers.
+        if (current.Document.Expression)
+            return;
+        ImGui.Separator();
+        foreach (var kind in TimelineWindowViews.LayerKinds)
+        {
+            if (ImGui.MenuItem($"{MotionEdits.KindName(kind)} layer"))
+                current.AddLayer(kind, 0, Math.Max(TimelineDocument.MinLength, current.Document.Length));
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(TimelineWindowViews.LayerKindHint(kind) + " Covers the whole clip; drag its ends to narrow it.");
+        }
+        if (session.Source == null)
+            return;
+        ImGui.Separator();
+        livePose.DrawItems(session.Source);
+    }
+
+    /// <summary> One line each for an import running or done, an edit the editor refused and a header length the motion disagrees with. </summary>
+    public void DrawMessages(TimelineEditor current)
+    {
+        if (texts.HeaderNote != null)
+            TimelineUi.Note(null, Theme.Muted, texts.HeaderNote);
+        pickers.DrawImportStatus();
+        if (current.LastError is { } error)
+            TimelineUi.Note(null, Theme.Warning, error);
+        if (current.LastRemoval is { } removal && TimelineWindowViews.RemovalStatus(removal) is { } removed)
+            TimelineUi.Note(null, Theme.Muted, removed);
+        loader.DrawStatus();
+        livePose.DrawNote();
+        DrawEffectProblems(current);
+        saveFooter.DrawSavedLayers();
+    }
+
+    /// <summary> Effects that stop although the animation goes on, and the button that keeps them going. </summary>
+    private void DrawEffectProblems(TimelineEditor current)
+    {
+        if (texts.EffectWarning is not { } warning || texts.EffectProblems.IsEmpty)
+            return;
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Warning, "⚠ " + warning);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(string.Join("\n", texts.EffectProblems.Select(p => p.Text)));
+        ImGui.SameLine(0, Theme.Gap);
+        using (ImRaii.Disabled(session.ReadOnly))
+        {
+            if (ImGui.SmallButton(texts.EffectEvents == 1 ? "Keep it looping" : "Keep them looping"))
+            {
+                // The copies are packaged like imports; the edit's own undo puts the original effects back.
+                foreach (var copy in texts.EffectCopies)
+                    session.Imports[copy.GamePath] = copy;
+                current.Commit(TimelineEffectCheck.Fix(current.Document, texts.EffectProblems));
+            }
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(texts.EffectCopies.IsEmpty
+                ? "Sets Loop/wait to -1, which loops an effect until the animation ends. Save to keep the change."
+                : "Sets Loop/wait to -1 and uses copies of the effects that keep going: no kill of their own, sounds that loop. " +
+                  "Save to keep the change.");
+    }
+}

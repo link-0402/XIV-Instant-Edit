@@ -17,6 +17,7 @@ from .instant_edit.context import (
     context_id_for_object,
     mesh_ids_from_name,
     mesh_name_info,
+    try_mesh_ids_from_name,
 )
 from .mesh.heels import is_heels_offset_attribute, normalize_heels_offset
 from .mesh.objects import visible_meshobj
@@ -167,10 +168,10 @@ def mesh_part_objects(objects, mesh_index: int, part_index: int) -> tuple:
     """Return all visible objects representing one part, including its LODs."""
     result = []
     for obj in objects:
-        try:
-            group, part, _lod = mesh_ids_from_name(obj)
-        except Exception:
+        ids = try_mesh_ids_from_name(obj)
+        if ids is None:
             continue
+        group, part, _lod = ids
         if group == mesh_index and part == part_index:
             result.append(obj)
     return tuple(sorted(result, key=lambda obj: obj.name))
@@ -217,10 +218,10 @@ def mesh_part_instances(
     for obj in objects:
         if getattr(obj, "type", None) != "MESH":
             continue
-        try:
-            group, part, _lod = mesh_ids_from_name(obj)
-        except Exception:
+        ids = try_mesh_ids_from_name(obj)
+        if ids is None:
             continue
+        group, part, _lod = ids
         if group != mesh_index or (part_index is not None and part != part_index):
             continue
         grouped[(part, mesh_part_instance_key(obj))].append(obj)
@@ -382,11 +383,8 @@ def attribute_group_data(
             data = getattr(obj, "data", None)
             if data is not None and hasattr(data, "vertices") and len(data.vertices) == 0:
                 continue
-            try:
-                object_lod = mesh_ids_from_name(obj)[2]
-            except Exception:
-                continue
-            if object_lod != lod_level:
+            ids = try_mesh_ids_from_name(obj)
+            if ids is None or ids[2] != lod_level:
                 continue
             for key in obj.keys():
                 attribute = str(key).strip()

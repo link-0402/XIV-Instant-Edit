@@ -1,3 +1,4 @@
+using InstantEdit.Services.PenumbraMods;
 ﻿using System.Collections.Immutable;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations.Motion;
@@ -356,7 +357,7 @@ internal sealed partial class AnimationEditService
         var request = TimelineRequest(source, document, destination, modName.Trim(), repair, cutSounds);
         Launch(async token =>
         {
-            if (destination == AnimationDestination.NewMod && !PenumbraService.IsSafeNewModName(request.ModName))
+            if (destination == AnimationDestination.NewMod && !ModPaths.IsSafeNewModName(request.ModName))
                 throw new InvalidDataException("Choose a valid mod name before saving.");
             if (source.Document == null) throw new InvalidOperationException(source.ReadOnlyReason ?? "This timeline can't be edited.");
             if (replaced is { Count: > 0 } && destination != AnimationDestination.InPlace)
@@ -667,7 +668,7 @@ internal sealed partial class AnimationEditService
                 catch (FileNotFoundException) { }
                 // A copy follows its original's options (a toggle that turns the original off turns it off too).
                 if (beside?.GetValueOrDefault(gamePath) is { } original && AnimationDependencies.SafeGamePath(original) &&
-                    edited.ModRoot is { } root && PenumbraService.ModMapsGamePath(root, original))
+                    edited.ModRoot is { } root && ModMetadata.ModMapsGamePath(root, original))
                 {
                     try
                     {
@@ -703,7 +704,7 @@ internal sealed partial class AnimationEditService
     internal static AnimationCommitService.AddedCopies? OwnCopies(string root, string original, string resolved,
         Func<byte[], byte[]>? rebuild, Action<string> skipped)
     {
-        var mapped = PenumbraService.AnimationMappedFiles(root, original);
+        var mapped = ModMetadata.AnimationMappedFiles(root, original);
         if (mapped.Count < 2 || mapped.FirstOrDefault(file => PathRules.SamePhysicalPath(Path.Combine(root, file), resolved)) is not { } from)
             return null;
         var others = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);

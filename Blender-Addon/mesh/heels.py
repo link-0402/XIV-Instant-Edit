@@ -11,7 +11,7 @@ import numpy as np
 
 from bpy.types import Object
 
-from ..instant_edit.context import mesh_ids_from_name
+from ..instant_edit.context import try_mesh_ids_from_name
 
 
 HEELS_OFFSET_ATTRIBUTE = "heels_offset"
@@ -52,12 +52,9 @@ def _lod0_mesh_objects(objects) -> list[tuple[tuple[int, int], Object]]:
     for obj in objects:
         if getattr(obj, "type", None) != "MESH" or len(obj.data.vertices) == 0:
             continue
-        try:
-            group, part, lod = mesh_ids_from_name(obj)
-        except Exception:
-            continue
-        if lod == 0:
-            result.append(((group, part), obj))
+        ids = try_mesh_ids_from_name(obj)
+        if ids is not None and ids[2] == 0:
+            result.append((ids[:2], obj))
     return result
 
 

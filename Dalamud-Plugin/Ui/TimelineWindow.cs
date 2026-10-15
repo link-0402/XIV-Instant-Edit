@@ -1,15 +1,16 @@
 ﻿using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
-using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Services.Audio;
+using InstantEdit.Ui.Pose;
 using InstantEdit.Ui.Timeline;
 
 namespace InstantEdit.Ui;
@@ -19,43 +20,48 @@ namespace InstantEdit.Ui;
 /// and props on lanes like a video editor, its length, a side panel (properties, source, animated
 /// bones, saved edits, recorder), pickers and imports, a loader that plays any animation on the GPose
 /// actor, a save footer and a GPose preview. Slow work runs on tasks polled every frame, so the draw
-/// path never reads files. Split by concern: each part lives in its own partial file.
+/// path never reads files. Each part is a class of its own in Ui/Timeline, sharing a
+/// <see cref="TimelineSession"/>; this window builds them, reads clips in and lays the parts out.
+/// The bones on the character (TimelineWindow.Overlay.cs) are still a part of the window itself.
 /// </summary>
-public sealed partial class TimelineWindow : Window, IDisposable
+public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
 {
     private enum PendingAction : byte { None, Close, Switch }
 
-    private readonly AnimationEditService? animations;
+    private readonly TimelineSession session;
+    private readonly TimelineReader reader;
+    private readonly MotionDecode decode;
+    private readonly EffectLookEditor effectLooks;
+    private readonly SoundFiles soundFiles;
+    private readonly TimelinePickers pickers;
+    private readonly SoundInspector soundInspector;
+    private readonly TimelinePreview timelinePreview;
+    private readonly BonePosing posing;
+    private readonly BoneEditor boneEditor;
+    private readonly PoseSourcePanel poseSources;
+    private readonly LayerPanel layerPanel;
+    private readonly BonesPanel bonesPanel;
+    private readonly TimelineTexts texts;
+    private readonly TimelineClipBand clipBand;
+    private readonly CutPanel cutPanel;
+    private readonly TimelineCanvas canvas;
+    private readonly PropertiesPanel properties;
+    private readonly SoundSaveCheck soundSave;
+    private readonly SaveFooter saveFooter;
+    private readonly FacePage facePage;
+    private readonly RecentEditsPage recentEdits;
+    private readonly TimelineLoader loader;
+    private readonly LivePosePanel livePose;
+    private readonly SidePanel sidePanel;
+    private readonly TimelineToolbar toolbar;
+    private readonly BonesWindow bonesWindow;
     private readonly string? animationError;
-    private readonly TimelineCatalog catalog;
-    private readonly AnimationPreviewService preview;
-    private readonly AnimationPlayback playback;
-    // Shows bone layers live on the GPose actor; null when animation editing is unavailable.
-    private readonly MotionLiveDisplay? motionDisplay;
-    private readonly IDataManager data;
-    private readonly IFramework framework;
-    private readonly IPluginLog log;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
     private readonly GameSoundPlayer? soundPlayer;
-    private readonly FileDialogManager fileDialog = new();
+    private Func<bool>? mainListens;
 
-    private AnimationTimelineSource? source;
-    private TimelineEditor? editor;
-    private TimelineCatalogKey? catalogKey;
-    private Task<AnimationTimelineSource>? loadTask;
-    private CancellationTokenSource? loadCancel;
-    private (AnimationCapture Capture, bool Startup)? loading;
-    private bool loadKeepsView;
-    // The saved edit a load brings back with its bone layers (Edit again), until it ends.
-    private AnimationEditJournal? loadingAgain;
-    // The load follows an undo and may bring back the layers of the edit it went back to.
-    private bool loadingAfterUndo;
-    private string? loadError;
-    // The failed load was an Edit again.
-    private bool loadErrorAgain;
     private string title = string.Empty;
     private string subtitle = string.Empty;
-    private bool canReplace;
 
     private PendingAction pending;
     private (AnimationCapture Capture, bool Startup)? pendingOpen;
@@ -75,20 +81,43 @@ public sealed partial class TimelineWindow : Window, IDisposable
         IFramework framework, ITextureProvider textures, IPluginLog log, GameSoundPlayer? soundPlayer = null)
         : base("Timeline###XIVInstantEditTimeline")
     {
-        this.animations = animations;
+        session = new TimelineSession(animations, catalog, preview, playback, motionDisplay, data, framework, log);
+        reader = new TimelineReader(session);
         this.soundPlayer = soundPlayer;
-        this.recorder = recorder;
         this.animationError = animationError;
-        this.catalog = catalog;
-        this.preview = preview;
-        this.playback = playback;
-        this.motionDisplay = motionDisplay;
-        this.data = data;
-        this.framework = framework;
-        this.textures = textures;
-        this.log = log;
         bonesWindow = new BonesWindow(this);
         overlayWindow = new BonesOverlay(this);
+        decode = new MotionDecode(session);
+        texts = new TimelineTexts(session);
+        clipBand = new TimelineClipBand(session, decode);
+        cutPanel = new CutPanel(session, decode, clipBand);
+        effectLooks = new EffectLookEditor(session);
+        soundFiles = new SoundFiles(session);
+        pickers = new TimelinePickers(session, soundFiles);
+        soundInspector = new SoundInspector(session, soundFiles, pickers, soundPlayer);
+        timelinePreview = new TimelinePreview(session, decode, effectLooks, soundFiles);
+        posing = new BonePosing(session, decode);
+        boneEditor = new BoneEditor(session, decode, posing, this);
+        poseSources = new PoseSourcePanel(session, decode, posing, recorder);
+        layerPanel = new LayerPanel(session, posing, boneEditor, poseSources, bonesWindow);
+        canvas = new TimelineCanvas(session, posing, clipBand, pickers, soundFiles, texts);
+        properties = new PropertiesPanel(session, effectLooks, soundInspector, cutPanel, layerPanel, texts, pickers);
+        soundSave = new SoundSaveCheck(session, soundFiles);
+        saveFooter = new SaveFooter(session, timelinePreview, effectLooks, soundFiles, soundSave, texts, () => reader.Busy,
+            afterUndo =>
+            {
+                ForgetSounds();
+                Load(source!.Capture, source.Startup, true, afterUndo: afterUndo);
+            },
+            EditAgain);
+        facePage = new FacePage(session, saveFooter, timelinePreview);
+        recentEdits = new RecentEditsPage(session, saveFooter, timelinePreview, () => reader.Busy, EditAgain);
+        loader = new TimelineLoader(session, timelinePreview, Open);
+        sidePanel = new SidePanel(session, properties, facePage, recentEdits, effectLooks, soundInspector, posing, timelinePreview, Open);
+        livePose = new LivePosePanel(session, sidePanel.ShowProperties);
+        toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow);
+        bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, this, textures);
+        session.KeepReadOnlyWhile(() => reader.Busy || saveFooter.Busy);
 
         Size = new Vector2(1000, 560);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -103,14 +132,66 @@ public sealed partial class TimelineWindow : Window, IDisposable
         RespectCloseHotkey = true;
     }
 
-    public void DrawFileDialog() => fileDialog.Draw();
+    public void DrawFileDialog() => session.FileDialog.Draw();
+
+    /// <summary>
+    /// What the Timeline window borrows from the main window: Settings, where the skeleton library is
+    /// rebuilt, and the live pose recorder, which sends to Blender through it.
+    /// </summary>
+    internal void AttachTools(Action? settings, Action? recorderPanel) => sidePanel.AttachTools(settings, recorderPanel);
+
+    /// <summary>How many recorded edits did not finish and need an undo; none while an edit is still running.</summary>
+    internal static int RecoveryAttention(AnimationEditService service) => RecentEditsPage.RecoveryAttention(service);
+
+    internal BonesWindow Bones => bonesWindow;
+
+    /// <summary>The Bones window's whole content; called from its draw.</summary>
+    internal void DrawBones() => bonesPanel.Draw();
+
+    /// <summary>Whether the main window keeps the listener running too; the Timeline window leaves it on then.</summary>
+    internal void AttachListening(Func<bool> mainWindowListens) => mainListens = mainWindowListens;
+
+    /// <summary>The Timeline window listens while it is open: the loader and the clip's skeleton choice need it.</summary>
+    internal bool Listens => IsOpen;
+
+    // The shared state and the bone helpers under the names TimelineWindow.Overlay.cs reads. It stays a
+    // partial of this window until the Body Physics work in it is committed; then it can become a class
+    // of its own that takes the session, BonePosing and BoneEditor, and these go.
+    private AnimationEditService? animations => session.Animations;
+    private AnimationPlayback playback => session.Playback;
+    private MotionLiveDisplay? motionDisplay => session.MotionDisplay;
+    private AnimationTimelineSource? source { get => session.Source; set => session.Source = value; }
+    private TimelineEditor? editor { get => session.Editor; set => session.Editor = value; }
+    private bool ReadOnly => session.ReadOnly;
+    private AnimationTimelineSource Fresh(AnimationTimelineSource current) => session.Fresh(current);
+    private bool liveWanted => timelinePreview.LiveWanted;
+    private bool liveStarted => timelinePreview.LiveStarted;
+    private ushort? previewActor => timelinePreview.Actor;
+    private PoseSelection selection => posing.Selection;
+    private void KeepSelection(SkeletonDescription skeleton) => posing.KeepSelection(skeleton);
+    private (Dictionary<string, int> Index, int[][] Children) BoneTree(SkeletonDescription skeleton) => posing.BoneTree(skeleton);
+    private HashSet<string>? AnimatedBones(AnimationClip clip) => posing.AnimatedBones(clip);
+    private void ClickBone(string bone, SkeletonDescription skeleton) => posing.ClickBone(bone, skeleton);
+    private BonePosing.BoneFrames? FramesAt(AnimationTimelineSource loaded, TimelineDocument doc, MotionLayer layer, int frame) =>
+        posing.FramesAt(loaded, doc, layer, frame);
+    private (MotionTransform[] Local, MotionTransform[] Model)? MotionPose(AnimationTimelineSource loaded, int frame) => posing.MotionPose(loaded, frame);
+    private List<PoseTarget>? Targets(MotionLayer layer, int frame, SkeletonDescription skeleton, AnimationTimelineSource loaded, TimelineDocument doc) =>
+        posing.Targets(layer, frame, skeleton, loaded, doc);
+    private static BoneState StateOf(string bone, MotionLayer? layer, int frame, HashSet<string>? animated) => BonePosing.StateOf(bone, layer, frame, animated);
+    private static string StateText(BoneState state, MotionLayer? layer) => BonePosing.StateText(state, layer);
+    private static Vector4 StateColour(BoneState state, MotionLayer? layer) => BonePosing.StateColour(state, layer);
+    private static bool IsBelow(SkeletonDescription skeleton, int bone, int ancestor) => BonePosing.IsBelow(skeleton, bone, ancestor);
+    private static float MotionEnd(AnimationTimelineSource loaded, TimelineDocument doc) => BonePosing.MotionEnd(loaded, doc);
+    private bool characterAxes => boneEditor.CharacterAxes;
+
+    // The overlay's state as the bone editor and the Bones window see it.
+    bool IBonesOverlay.Shown => OverlayWanted;
+    bool IBonesOverlay.OnCharacter { get => showOnCharacter; set => showOnCharacter = value; }
+    bool IBonesOverlay.GizmoMoves { get => gizmoMove; set => gizmoMove = value; }
+    string? IBonesOverlay.GizmoWaits(MotionLayer layer, int frame) => GizmoOperation(layer, frame, out var reason) == null ? reason : null;
 
     /// <summary> Unsaved edits of an editable timeline. </summary>
     private bool HasUnsavedChanges => editor is { Dirty: true } && source?.Document != null;
-
-    /// <summary> Whether the document must not change now: nothing to edit, or a save, undo or reload is running. </summary>
-    private bool ReadOnly => source?.Document == null || loadTask != null || saveTask != null || pendingSaveId != null || undoPending ||
-                             soundCheck != null || soundAsk != null;
 
     /// <summary>Opens the window as it is: its clip, or with none the loader.</summary>
     internal void Show()
@@ -185,31 +266,22 @@ public sealed partial class TimelineWindow : Window, IDisposable
         pending = PendingAction.None;
         pendingOpen = null;
         pendingAgain = null;
-        loaderWaiting = null;
-        loaderMessage = null;
-        livePoseReading = false;
-        livePoseNote = null;
-        livePoseClearable = null;
+        loader.Reset();
+        livePose.Reset();
         // The listener stays on while the Animations tab still shows it.
         if (mainListens?.Invoke() != true)
             animations?.StopObservation();
         // The Bones window poses this window's clip; it goes with it, and so do its bones on the character.
         bonesWindow.IsOpen = false;
         EndGizmo(true);
-        StopPreview();
-        ForgetDecode();
-        DropPose();
-        loadCancel?.Cancel();
-        loadTask = null;
-        loading = null;
-        loadingAgain = null;
-        loadingAfterUndo = false;
-        loadError = null;
+        timelinePreview.Stop();
+        decode.Forget();
+        poseSources.Drop();
+        reader.Stop();
         source = null;
-        catalogKey = null;
-        motionBase = null;
-        motionCarry = null;
-        ForgetEffects();
+        session.CatalogKey = null;
+        saveFooter.ForgetMotion();
+        effectLooks.Forget();
         ForgetSounds();
         // A sound played to listen to stops being served with the window.
         _ = soundPlayer?.StopAsync();
@@ -220,16 +292,14 @@ public sealed partial class TimelineWindow : Window, IDisposable
         if (disposed)
             return;
         disposed = true;
-        loadCancel?.Cancel();
-        loadCancel?.Dispose();
-        loadCancel = null;
-        ForgetDecode();
-        DropPose();
+        reader.Dispose();
+        decode.Forget();
+        poseSources.Drop();
     }
 
     private bool Showing(AnimationCapture capture, bool startup)
     {
-        var shown = loading ?? (source is { } current ? (current.Capture, current.Startup) : null);
+        var shown = reader.Reading ?? (source is { } current ? (current.Capture, current.Startup) : null);
         if (shown is not { } open || open.Capture.Id != capture.Id || open.Startup != startup)
             return false;
         var before = ClipOf(open.Capture, open.Startup);
@@ -247,14 +317,11 @@ public sealed partial class TimelineWindow : Window, IDisposable
     /// </summary>
     private AnimationCapture? ChangedCapture()
     {
-        if (animations == null || source is not { } current || loadTask != null || saveTask != null || pendingSaveId != null ||
-            undoPending || preview.Active || preview.Busy || previewJob)
+        if (animations == null || source is not { } current || reader.Busy || saveFooter.Working ||
+            session.Preview.Active || session.Preview.Busy || timelinePreview.Building)
             return null;
         return TimelineWindowViews.ChangedCapture(animations.Observer.History, current);
     }
-
-    /// <summary> A key for "the same clip", which survives a reload after a save. </summary>
-    private static string ClipKey(AnimationTimelineSource current) => $"{current.Capture.Id}|{current.Startup}|{current.Clip.GamePath}";
 
     /// <summary>
     /// Reads the clip's timeline on a task. <paramref name="keepView"/> reloads the clip already
@@ -267,115 +334,68 @@ public sealed partial class TimelineWindow : Window, IDisposable
         if (animations is not { } service)
             return;
         // What the loader plays keeps playing while its timeline opens; a preview or Live ends.
-        if (playback.Active && previewFingerprint == null && !liveWanted && !preview.Active && !previewJob)
-            StopTemporaryMod();
+        if (playback.Active && timelinePreview.Fingerprint == null && !liveWanted && !session.Preview.Active && !timelinePreview.Building)
+            timelinePreview.StopTemporaryMod();
         else
-            StopPreview();
-        loadCancel?.Cancel();
-        loadCancel?.Dispose();
-        loadCancel = new CancellationTokenSource();
-        var token = loadCancel.Token;
-        loading = (capture, startup);
-        loadingAgain = again;
-        loadingAfterUndo = afterUndo;
-        loadKeepsView = keepView;
-        loadError = null;
+            timelinePreview.Stop();
         pending = PendingAction.None;
         pendingOpen = null;
         pendingAgain = null;
         if (!keepView)
         {
             source = null;
-            catalogKey = null;
+            session.CatalogKey = null;
             title = AnimationPresentation.AnimationName(capture, startup);
             // Another clip, or this one opened afresh: its own file is the motion to edit.
-            motionBase = null;
-            motionCarry = null;
+            saveFooter.ForgetMotion();
         }
         // The preview's temporary mod must be gone first, or the read would get the previewed file.
-        var ending = previewStop ?? Task.CompletedTask;
-        loadTask = Task.Run(async () =>
-        {
-            await ending;
-            await preview.StopAsync();
-            return again != null ? await service.LoadTimelineAgainAsync(again, capture, token)
-                : afterUndo ? await service.LoadTimelineAfterUndoAsync(capture, startup, token)
-                : await service.LoadTimelineAsync(capture, startup, token);
-        }, token);
+        reader.Start(service, capture, startup, keepView, again, afterUndo, timelinePreview.Stopping ?? Task.CompletedTask);
     }
 
     private void PollLoad()
     {
-        if (loadTask is not { IsCompleted: true } task)
-            return;
-        loadTask = null;
-        loading = null;
-        var again = loadingAgain;
-        loadingAgain = null;
-        var afterUndo = loadingAfterUndo;
-        loadingAfterUndo = false;
-        if (task.IsCanceled)
-            return;
-        if (task.IsFaulted)
-        {
-            loadError = ErrorText(task.Exception);
-            loadErrorAgain = again != null;
-            return;
-        }
-        Apply(task.Result, loadKeepsView, again, afterUndo);
+        if (reader.Poll() is { } read)
+            Apply(read.Loaded, read.KeepView, read.Again, read.AfterUndo);
     }
 
     private void Apply(AnimationTimelineSource loaded, bool keepView, AnimationEditJournal? again = null, bool afterUndo = false)
     {
-        var sameClip = source != null && ClipKey(source) == ClipKey(loaded);
+        var sameClip = source != null && TimelineSession.ClipKey(source) == TimelineSession.ClipKey(loaded);
         // Edit again, or an undo back to a layered edit: the saved layers apply to the motion from before
         // their edit while this clip stays open.
-        if ((again != null || afterUndo) && loaded.BaseMotion is { } kept && loaded.BaseHash is { } keptHash)
-            motionBase = (ClipKey(loaded), kept, loaded.BaseFingerprint ?? string.Empty, keptHash);
+        if (again != null || afterUndo)
+            saveFooter.KeepBaseOf(loaded);
         // A clip read again after this window saved bone layers into it keeps editing them on the motion
         // from before: the carried layers come back, and the base stays the motion they apply to.
-        loaded = WithMotionBase(loaded);
+        loaded = saveFooter.WithMotionBase(loaded);
         source = loaded;
-        loadGeneration++;
-        canReplace = AnimationResources.CanReplace(loaded.Resource);
-        catalogKey = TimelineWindowViews.CatalogKey(loaded.Capture.LoadedResourcePaths, loaded.Clip.GamePath, loaded.Resource.ModRoot);
+        pickers.ClipLoaded();
+        session.CatalogKey = TimelineWindowViews.CatalogKey(loaded.Capture.LoadedResourcePaths, loaded.Clip.GamePath, loaded.Resource.ModRoot);
         title = AnimationPresentation.AnimationName(loaded.Capture, loaded.Startup);
         subtitle = $"{AnimationPresentation.AnimationState(loaded.Capture, loaded.Startup)} · " +
                    (loaded.Resource.ModName ?? loaded.Resource.ModDirectory ?? "Game Data");
-        labelDocument = null;
-        pendingLengths.Clear();
-        lookEditing = false;
-        soundEditing = false;
+        texts.Forget();
+        effectLooks.ForgetEdit();
+        soundInspector.ForgetEdit();
         if (!sameClip)
         {
-            ForgetEffects();
+            effectLooks.Forget();
             ForgetSounds();
-            modName = TimelineWindowViews.DefaultModName(AnimationPresentation.DefaultModName(loaded.Capture));
-            destination = AnimationDestination.NewMod;
-            saveError = null;
-            saveMessage = null;
-            lastSaveId = null;
-            scrollY = 0;
-            repairTarget = null;
-            animatedBoneFilter = string.Empty;
-            livePoseNote = null;
-            livePoseClearable = null;
+            canvas.ResetScroll();
+            sidePanel.ClearFilter();
+            livePose.ForgetNote();
         }
-        if (again != null && loaded.BaseMotion != null)
-        {
-            // Saving again writes over the edit's file; the new save's journal keeps it for Undo.
-            destination = canReplace ? AnimationDestination.InPlace : AnimationDestination.NewMod;
-            saveMessage = "The saved layers are back.";
-        }
+        saveFooter.Loaded(loaded, sameClip, again != null);
         if (loaded.Document is not { } doc)
             return;
-        var carried = TakeCarriedLayers(loaded);
+        var carried = saveFooter.TakeCarriedLayers(loaded);
         if (carried is { Unsaved: false } saved)
             doc = saved.Document;
         if (editor == null)
         {
             editor = new TimelineEditor(doc);
-            editor.VisibleLength = VisibleFrames;
+            editor.VisibleLength = pickers.VisibleFrames;
         }
         else if (keepView && sameClip)
         {
@@ -403,7 +423,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
     /// </summary>
     private IReadOnlyDictionary<string, int> MotionFrames(AnimationTimelineSource current)
     {
-        var known = catalog.Data.MotionFrames;
+        var known = session.Catalog.Data.MotionFrames;
         if (!current.Standalone)
             return known;
         if (!ReferenceEquals(known, framesKnown) || !ReferenceEquals(current, framesSource) || framesMerged == null)
@@ -415,62 +435,28 @@ public sealed partial class TimelineWindow : Window, IDisposable
         return framesMerged;
     }
 
-    /// <summary>
-    /// The source with the clip's latest skeleton match: choosing a skeleton under Source after
-    /// opening the timeline must still allow a length change. Only a capture of the same file counts:
-    /// the Live preview plays a copy under the same capture, and its match knows no choice. The
-    /// capture gets the match too, since saves, face edits and reloads send it.
-    /// </summary>
-    private AnimationTimelineSource Fresh(AnimationTimelineSource current)
-    {
-        if (animations == null)
-            return current;
-        foreach (var capture in animations.Observer.History)
-        {
-            if (capture.Id != current.Capture.Id)
-                continue;
-            var clip = current.Startup ? capture.Startup : capture.Clip;
-            if (clip != null && clip.GamePath == current.Clip.GamePath && clip.BindingFingerprint == current.Clip.BindingFingerprint &&
-                clip.SourceContext == current.Clip.SourceContext)
-                return ReferenceEquals(clip.Resolution, current.Clip.Resolution) ? current : WithResolution(current, clip.Resolution);
-            break;
-        }
-        // The capture shows another file now (the preview copy), so a choice made under Source
-        // reaches the timeline through the match kept for its own file.
-        return animations.Observer.LatestResolution(current.Clip) is { } latest && !ReferenceEquals(latest, current.Clip.Resolution)
-            ? WithResolution(current, latest)
-            : current;
-    }
-
-    /// <summary><paramref name="current"/> with its clip matched to <paramref name="resolution"/>, in its capture too.</summary>
-    private static AnimationTimelineSource WithResolution(AnimationTimelineSource current, SkeletonResolution? resolution)
-    {
-        var clip = current.Clip with { Resolution = resolution };
-        return current with { Clip = clip, Capture = current.Startup ? current.Capture with { Startup = clip } : current.Capture with { Clip = clip } };
-    }
-
     public override void Draw()
     {
         RespectCloseHotkey = true;
         if (animations == null)
         {
             Widgets.Banner("##timeline-unavailable", FeedbackSeverity.Warning, animationError ?? "Animation editing is unavailable.");
-            if (drawRecorder != null)
+            if (sidePanel.Recorder is { } recorder)
             {
                 ImGui.Spacing();
-                drawRecorder();
+                recorder();
             }
             return;
         }
         // The listener runs while this window is open: the loader and the clip's skeleton choice read it.
         animations.StartObservation();
         PollLoad();
-        PollSave();
-        PollImport();
-        PollPreview();
-        PollLengths();
-        PollLibrary();
-        PollLoader();
+        saveFooter.Poll();
+        pickers.PollImport();
+        timelinePreview.Poll();
+        pickers.PollLengths();
+        loader.PollLibrary();
+        loader.Poll();
         // Every frame: the bone rows' order, Live and the save all read the clip's match.
         if (source != null)
             source = Fresh(source);
@@ -488,16 +474,16 @@ public sealed partial class TimelineWindow : Window, IDisposable
             Widgets.Banner("##timeline-read-only", FeedbackSeverity.Warning,
                 "This timeline can't be edited. " + (source.ReadOnlyReason ?? "Its file could not be read."));
             ImGui.Spacing();
-            DrawLoadButton();
+            loader.DrawButton();
             ImGui.SameLine(0, Theme.Gap);
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Hint, "Load another animation");
-            DrawLoaderStatus();
+            loader.DrawStatus();
             return;
         }
-        PollLivePose(editor, source);
-        if (loadError != null)
-            Widgets.Banner("##timeline-reload-error", FeedbackSeverity.Error, "Reading the timeline again failed: " + loadError);
+        livePose.Poll(editor, source);
+        if (reader.Error is { } readError)
+            Widgets.Banner("##timeline-reload-error", FeedbackSeverity.Error, "Reading the timeline again failed: " + readError);
         if (pending == PendingAction.None && ChangedCapture() is { } changed)
         {
             Widgets.Banner("##timeline-file-changed", FeedbackSeverity.Info, "This file changed in your mods.");
@@ -505,19 +491,17 @@ public sealed partial class TimelineWindow : Window, IDisposable
                 Open(changed, source.Startup);
             ImGui.Spacing();
         }
-        if (catalogKey != null)
-            catalog.Request(catalogKey);
+        if (session.CatalogKey != null)
+            session.Catalog.Request(session.CatalogKey);
         editor.MotionFrames = MotionFrames(source);
-        editor.ResidentMotions = catalog.Data.ResidentMotions;
+        editor.ResidentMotions = session.Catalog.Data.ResidentMotions;
         editor.BoneOrder = source.Clip.Resolution?.Selected?.Skeleton is { } skeleton ? BoneTree(skeleton).Index : null;
 
-        SyncPlayback(editor, source);
-        UpdateLive(editor, source);
-        SyncLooks(editor);
+        timelinePreview.Update(editor, source);
         CheckGizmo();
-        DrawToolbar(editor);
-        DrawPreviewBar(editor, source);
-        DrawMessages(editor);
+        toolbar.Draw(editor);
+        timelinePreview.DrawBar(editor, source, saveFooter.RepairTarget);
+        toolbar.DrawMessages(editor);
 
         var avail = ImGui.GetContentRegionAvail();
         if (footerHeight <= 0)
@@ -529,11 +513,11 @@ public sealed partial class TimelineWindow : Window, IDisposable
             return;
 
         var footerStart = ImGui.GetCursorPosY();
-        DrawSaveFooter(editor, source);
+        saveFooter.Draw(editor, source);
         footerHeight = Math.Max(1, ImGui.GetCursorPosY() - footerStart);
 
-        DrawPicker(editor);
-        HandleKeys(editor);
+        pickers.Draw(editor);
+        canvas.HandleKeys(editor);
         // Escape cancels a drag; it must not also close the window.
         RespectCloseHotkey = editor.Gesture == TimelineGesture.None;
     }
@@ -544,7 +528,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
     /// </summary>
     private void DrawNothingOpen()
     {
-        if (loadTask != null)
+        if (reader.Busy)
         {
             Widgets.Spinner();
             ImGui.SameLine(0, Theme.Gap);
@@ -552,13 +536,13 @@ public sealed partial class TimelineWindow : Window, IDisposable
             ImGui.TextColored(Theme.Muted, title.Length > 0 ? $"Reading the timeline of {title}" : "Reading the timeline");
             return;
         }
-        if (loadError != null)
+        if (reader.Error is { } readError)
         {
             Widgets.Banner("##timeline-load-error", FeedbackSeverity.Error,
-                (loadErrorAgain ? "The edit could not be opened again. " : "The timeline could not be read: ") + loadError);
+                (reader.ErrorAgain ? "The edit could not be opened again. " : "The timeline could not be read: ") + readError);
             ImGui.Spacing();
         }
-        DrawLoaderStatus();
+        loader.DrawStatus();
         using var tabs = ImRaii.TabBar("##timeline-start");
         if (!tabs.Success)
             return;
@@ -567,13 +551,13 @@ public sealed partial class TimelineWindow : Window, IDisposable
             Widgets.HintWrapped("Pick an animation to play on your GPose character and edit it here, " +
                                 "or open one from the Animations tab.");
             ImGui.Spacing();
-            DrawLoader(ImGui.GetContentRegionAvail().Y);
+            loader.Draw(ImGui.GetContentRegionAvail().Y);
             ImGui.EndTabItem();
         }
-        DrawEditsTab();
-        if (drawRecorder != null && ImGui.BeginTabItem("Record live pose"))
+        sidePanel.DrawEditsTab();
+        if (sidePanel.Recorder is { } recorder && ImGui.BeginTabItem("Record live pose"))
         {
-            DrawPage(drawRecorder);
+            SidePanel.DrawPage(recorder);
             ImGui.EndTabItem();
         }
     }
@@ -590,12 +574,12 @@ public sealed partial class TimelineWindow : Window, IDisposable
         ImGui.TextColored(Theme.Muted, subtitle);
         if (current.Document == null || editor == null)
             return;
-        RefreshDocumentTexts(editor.Document);
+        texts.Refresh(editor.Document);
         var after = ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X + Theme.Scaled(16);
-        var right = ImGui.GetContentRegionMax().X - ImGui.CalcTextSize(lengthText).X;
+        var right = ImGui.GetContentRegionMax().X - ImGui.CalcTextSize(texts.LengthText).X;
         ImGui.SameLine(Math.Max(after, right));
         ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(editor.Document.LengthChanged ? Theme.Warning : Theme.Muted, lengthText);
+        ImGui.TextColored(editor.Document.LengthChanged ? Theme.Warning : Theme.Muted, texts.LengthText);
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(editor.Document.LengthChanged ? "The new length. Saving resamples the motion to it."
                 : current.Standalone ? "The expression's timeline length." : "The clip's length.");
@@ -646,7 +630,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         var minimumProperties = Theme.Scaled(220);
         propertiesWidth = Math.Clamp(propertiesWidth, minimumProperties, Math.Max(minimumProperties, width - minimumCanvas - splitter));
         var canvasWidth = Math.Max(Theme.Scaled(120), width - propertiesWidth - splitter);
-        DrawCanvas(current, new Vector2(canvasWidth, height));
+        canvas.Draw(current, new Vector2(canvasWidth, height));
         ImGui.SameLine(0, 0);
         var dragged = canvasWidth;
         Widgets.Splitter("##timeline-splitter", ref dragged, minimumCanvas, Math.Max(minimumCanvas, width - minimumProperties - splitter), height);
@@ -654,12 +638,17 @@ public sealed partial class TimelineWindow : Window, IDisposable
         ImGui.SameLine(0, 0);
         using var panel = ImRaii.Child("##timeline-properties", new Vector2(0, height), true);
         if (panel.Success && source != null)
-            DrawSidePanel(current, source);
+            sidePanel.Draw(current, source);
     }
 
-    private static string ErrorText(Exception? error)
+    /// <summary> Forgets the sounds read for another clip. </summary>
+    private void ForgetSounds()
     {
-        var inner = error is AggregateException aggregate ? aggregate.InnerException ?? aggregate : error;
-        return inner?.Message is { Length: > 0 } message ? message : "Something went wrong.";
+        soundFiles.Forget();
+        properties.ForgetPathOrigins();
+        // A save's check of the mod, or its question, belongs to the clip it was for.
+        soundSave.Forget();
+        // So is a listen's error.
+        soundInspector.Forget();
     }
 }

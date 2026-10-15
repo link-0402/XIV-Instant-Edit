@@ -4,6 +4,7 @@ using System.Text;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.NeckSeam;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Services.Skeletons;
 using InstantEdit.Ui;
 using static InstantEdit.TestSupport.Assertions;
@@ -134,7 +135,7 @@ internal static class NeckSeamScenarios
             "neck seam: constants are overwritten in place or appended, and the others keep their values");
         Require(BinaryPrimitives.ReadUInt16LittleEndian(changed.AsSpan(4)) == changed.Length && reread.Textures.SequenceEqual(FaceTextures),
             "neck seam: the material's size field and texture table stay consistent after a constant change");
-        var rewritten = PenumbraService.RewriteMaterialTexturePaths(changed,
+        var rewritten = MashupPlanning.RewriteMaterialTexturePaths(changed,
             new Dictionary<string, string> { [FaceTextures[2]] = NeckSeamService.PreviewTexturePath(FaceTextures[2], "1a2b3c4d") });
         Require(SkinMaterial.Read(rewritten).TextureFor(SkinMaterial.MaskSampler) == "chara/human/c0801/obj/face/f0001/texture/c0801f0001_fac_mask_ns1a2b3c4d.tex" &&
                 SkinMaterial.Read(rewritten).Constant(SkinMaterial.TileScale).SequenceEqual([25.5f, 25.5f]),
@@ -459,8 +460,8 @@ internal static class NeckSeamScenarios
 
     private static void CheckNames(string testRoot)
     {
-        Require(PenumbraService.UniqueModName("Neck Seam Preview - Luci Xiv", name => name == "Neck Seam Preview - Luci Xiv") == "Neck Seam Preview - Luci Xiv (2)" &&
-                PenumbraService.UniqueModName("a/b:c", _ => false) == "abc",
+        Require(PreviewModWriter.UniqueModName("Neck Seam Preview - Luci Xiv", name => name == "Neck Seam Preview - Luci Xiv") == "Neck Seam Preview - Luci Xiv (2)" &&
+                PreviewModWriter.UniqueModName("a/b:c", _ => false) == "abc",
             "neck seam: mod names are made unique and stripped of characters a folder can't hold");
         Require(NeckSeamService.PreviewTexturePath("chara/x/--y.tex", "0011aabb") == "chara/x/--y_ns0011aabb.tex",
             "neck seam: preview textures sit next to the original with the preview's tag");

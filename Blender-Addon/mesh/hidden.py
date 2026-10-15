@@ -45,7 +45,7 @@ from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 from mathutils.geometry import barycentric_transform
 
-from ..instant_edit.context import mesh_ids_from_name
+from ..instant_edit.context import try_mesh_ids_from_name
 from ..instant_edit.material_preview import drawn_solid
 
 
@@ -248,10 +248,8 @@ def material_key(material) -> str | None:
 
 def mesh_lod(obj) -> int | None:
     """The LOD an Instant Edit part name gives, or None for other meshes."""
-    try:
-        return mesh_ids_from_name(obj)[2]
-    except Exception:
-        return None
+    ids = try_mesh_ids_from_name(obj)
+    return None if ids is None else ids[2]
 
 
 @dataclass
