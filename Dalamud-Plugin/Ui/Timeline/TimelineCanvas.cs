@@ -1,4 +1,3 @@
-﻿using System.Collections.Immutable;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
@@ -6,16 +5,16 @@ using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The lanes: one child with one invisible button over it. Input goes to the editor model (hits,
 /// drags, keys); drawing uses the window draw list, clipped per region and culled to the frames in
 /// view. Labels, prop groups and tick texts are cached per document.
 /// </summary>
-public sealed partial class TimelineWindow
+internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing, TimelineClipBand clipBand, TimelinePickers pickers,
+    SoundFiles soundFiles, TimelineTexts texts)
 {
     private const string CanvasMenu = "##timeline-canvas-menu";
 
@@ -42,13 +41,16 @@ public sealed partial class TimelineWindow
     private readonly List<GroupSpan> groupSpans = [];
     private readonly Dictionary<long, string> tickLabels = [];
 
+    /// <summary> Scrolls the lanes back to the top, for another clip. </summary>
+    public void ResetScroll() => scrollY = 0;
+
     private static string LaneGlyph(TimelineLane lane) => LaneGlyphs[Math.Min((int)lane, LaneGlyphs.Length - 1)];
 
     private static string LayerGlyph(MotionLayerKind kind) => LayerGlyphs[Math.Min((int)kind, LayerGlyphs.Length - 1)];
 
-    private void DrawCanvas(TimelineEditor current, Vector2 size)
+    public void Draw(TimelineEditor current, Vector2 size)
     {
-        var readOnly = ReadOnly;
+        var readOnly = session.ReadOnly;
         var padding = ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, Vector2.Zero);
         var background = ImRaii.PushColor(ImGuiCol.ChildBg, Theme.PanelBg);
         using var child = ImRaii.Child("##timeline-canvas", size, true, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
@@ -66,7 +68,7 @@ public sealed partial class TimelineWindow
         current.SnapTolerance = Theme.Scaled(8);
         current.SetWidth(Math.Max(1, area.X - legend));
         // Only a clip the game loops has a seam to blend or fix.
-        current.Loops = source is { } loaded && Fresh(loaded).Clip.IsLoop && !current.Document.Expression;
+        current.Loops = session.Source is { } loaded && session.Fresh(loaded).Clip.IsLoop && !current.Document.Expression;
         var clip = TimelineClipBand.Height(current.Document, row);
         ClampScroll(current, row, ruler + clip, area.Y);
         var geometry = new TimelineGeometry(legend, ruler, row, Theme.Scaled(5), Theme.Scaled(9), scrollY, Theme.Scaled(18), clip);
@@ -471,7 +473,7 @@ public sealed partial class TimelineWindow
     /// Whether <paramref name="ev"/> is a face from the timeline's expression library, marked with a
     /// book; unmarked until the catalog knows which faces are always loaded.
     /// </summary>
-    private static bool FromPack(TimelineEditor current, TimelineEvent ev) =>
+    public static bool FromPack(TimelineEditor current, TimelineEvent ev) =>
         current.ResidentMotions is { } resident && TimelineEdits.FromPack(current.Document, ev, resident);
 
     /// <summary>
@@ -995,7 +997,7 @@ public sealed partial class TimelineWindow
     }
 
     /// <summary> Whether the selection holds an event that can be duplicated, and one that can be moved or deleted. </summary>
-    private static (bool Editable, bool Movable) SelectionAccess(TimelineEditor current)
+    public static (bool Editable, bool Movable) SelectionAccess(TimelineEditor current)
     {
         bool editable = false, movable = false;
         var events = current.Document.Events.IsDefault ? [] : current.Document.Events;
@@ -1013,7 +1015,7 @@ public sealed partial class TimelineWindow
     /// Shortcuts, only while this window is focused, no text is being typed, no control is active
     /// and no menu is open. Space is left to the game (it jumps), so it never plays.
     /// </summary>
-    private void HandleKeys(TimelineEditor current)
+    public void HandleKeys(TimelineEditor current)
     {
         if (!ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows))
             return;
@@ -1023,7 +1025,7 @@ public sealed partial class TimelineWindow
         ImGui.SetNextFrameWantCaptureKeyboard(true);
         if (ImGui.IsAnyItemActive() || ImGui.IsPopupOpen("", ImGuiPopupFlags.AnyPopupId | ImGuiPopupFlags.AnyPopupLevel))
             return;
-        var readOnly = ReadOnly;
+        var readOnly = session.ReadOnly;
         var ctrl = io.KeyCtrl;
         var shift = io.KeyShift;
         var alt = io.KeyAlt;

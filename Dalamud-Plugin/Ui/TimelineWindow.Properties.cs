@@ -69,7 +69,7 @@ public sealed partial class TimelineWindow
     {
         Widgets.EmptyState(FontAwesomeIcon.LayerGroup, $"{count} selected", "Drag one of them to move them all.");
         ImGui.Spacing();
-        var (editable, movable) = SelectionAccess(current);
+        var (editable, movable) = TimelineCanvas.SelectionAccess(current);
         using (ImRaii.Disabled(readOnly || !editable))
         {
             if (ImGui.Button("Duplicate"))
@@ -117,7 +117,7 @@ public sealed partial class TimelineWindow
                 ImGui.TextUnformatted(TimelineWindowViews.KindName(ev.Magic));
                 TimelineUi.Fact("Lane");
                 ImGui.TextUnformatted(TimelineWindowViews.LaneName(ev.Lane));
-                if (FromPack(current, ev))
+                if (TimelineCanvas.FromPack(current, ev))
                 {
                     TimelineUi.Fact("Set");
                     ImGui.TextUnformatted(current.Document.FacePack);

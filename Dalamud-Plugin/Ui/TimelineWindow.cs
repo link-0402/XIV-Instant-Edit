@@ -42,6 +42,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly TimelineTexts texts;
     private readonly TimelineClipBand clipBand;
     private readonly CutPanel cutPanel;
+    private readonly TimelineCanvas canvas;
     private readonly BonesWindow bonesWindow;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
@@ -99,6 +100,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         boneEditor = new BoneEditor(session, decode, posing, this);
         poseSources = new PoseSourcePanel(session, decode, posing, recorder);
         layerPanel = new LayerPanel(session, posing, boneEditor, poseSources, bonesWindow);
+        canvas = new TimelineCanvas(session, posing, clipBand, pickers, soundFiles, texts);
         bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, this, textures);
 
         Size = new Vector2(1000, 560);
@@ -404,7 +406,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             saveError = null;
             saveMessage = null;
             lastSaveId = null;
-            scrollY = 0;
+            canvas.ResetScroll();
             repairTarget = null;
             animatedBoneFilter = string.Empty;
             livePoseNote = null;
@@ -546,7 +548,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         footerHeight = Math.Max(1, ImGui.GetCursorPosY() - footerStart);
 
         pickers.Draw(editor);
-        HandleKeys(editor);
+        canvas.HandleKeys(editor);
         // Escape cancels a drag; it must not also close the window.
         RespectCloseHotkey = editor.Gesture == TimelineGesture.None;
     }
@@ -659,7 +661,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         var minimumProperties = Theme.Scaled(220);
         propertiesWidth = Math.Clamp(propertiesWidth, minimumProperties, Math.Max(minimumProperties, width - minimumCanvas - splitter));
         var canvasWidth = Math.Max(Theme.Scaled(120), width - propertiesWidth - splitter);
-        DrawCanvas(current, new Vector2(canvasWidth, height));
+        canvas.Draw(current, new Vector2(canvasWidth, height));
         ImGui.SameLine(0, 0);
         var dragged = canvasWidth;
         Widgets.Splitter("##timeline-splitter", ref dragged, minimumCanvas, Math.Max(minimumCanvas, width - minimumProperties - splitter), height);
