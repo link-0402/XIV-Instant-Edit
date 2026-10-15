@@ -218,7 +218,7 @@ public sealed partial class MainWindow
                 throw new InvalidOperationException("Your character shows no model that can be sent. Refresh the On Screen list and try again.");
             if (_skeletons is not { } resolver)
                 throw new InvalidOperationException("The game skeleton reader did not start.");
-            await EnsureBlenderReadyForImportAsync(port, importOptions,
+            await _blenderConnection.EnsureReadyForImportAsync(port, importOptions,
                 models.Any(model => model.Node.SourceState == ResourceSourceState.GameData), token).ConfigureAwait(false);
             if (!await _blender.SupportsImportSkeletonAsync(port, token).ConfigureAwait(false) ||
                 !await _blender.SupportsCharacterImportAsync(port, token).ConfigureAwait(false))

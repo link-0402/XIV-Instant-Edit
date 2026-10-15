@@ -1,3 +1,5 @@
+using InstantEdit.Ui.Main;
+
 namespace InstantEdit.Ui;
 
 public sealed partial class MainWindow
@@ -45,6 +47,4 @@ public sealed partial class MainWindow
         GameFiles,
         QuickActions,
     }
-
-    private readonly record struct FeedbackState(string Text, FeedbackSeverity Severity);
 }

@@ -9,6 +9,7 @@ using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using InstantEdit.Services;
 using InstantEdit.Services.Previews;
+using InstantEdit.Ui.Main;
 
 namespace InstantEdit.Ui;
 
@@ -16,13 +17,14 @@ namespace InstantEdit.Ui;
 public sealed partial class MainWindow : Window, IDisposable
 {
     private const string WindowOptionsPopupName = "WindowSystemContextActions";
-    private const string OptionsPopupName = "##instant-edit-options";
-    private const string HistoryPopupName = "##instant-edit-status-history";
     private const string KofiUrl = "https://ko-fi.com/luci_xiv";
     private const int AutoRefreshDelayMs = 1000;
     private readonly Configuration _config; private readonly PenumbraService _penumbra; private readonly OnScreenService _onScreen;
     private readonly BlenderClient _blender; private readonly IDataManager _data; private readonly IChatGui _chat; private readonly IPluginLog _log;
-    private readonly INotificationManager _notifications;
+    private readonly UiNotifications _notifications;
+    private readonly OptionsPopup _options;
+    private readonly StatusStrip _statusStrip;
+    private readonly BlenderConnection _blenderConnection;
     private readonly string _pluginVersion;
     private readonly MaterialPreviewBundleBuilder _materialPreviews;
     private readonly ResourceSourceAttributor _resourceSources;
@@ -33,9 +35,7 @@ public sealed partial class MainWindow : Window, IDisposable
     private readonly object _stateLock = new();
     private readonly CancellationTokenSource _lifetimeCts = new();
     private IReadOnlyDictionary<string, IDalamudTextureWrap> _slotIcons = new Dictionary<string, IDalamudTextureWrap>();
-    private BlenderConnectionState _blenderState = BlenderConnectionState.Offline;
-    private bool _blenderChecking; private int _editing;
-    private DateTime _lastBlenderCheck = DateTime.MinValue;
+    private int _editing;
     private string _filter = string.Empty;
     private MainTab _activeTab = MainTab.OnScreen;
     private MainTab? _pendingTab;
@@ -53,9 +53,12 @@ public sealed partial class MainWindow : Window, IDisposable
     {
         _config = config; _penumbra = penumbra; _onScreen = onScreen; _blender = blender; _data = data; _chat = chat; _log = log;
         _textures = textures;
-        _notifications = notifications;
+        _notifications = new UiNotifications(config, notifications, log);
+        _options = new OptionsPopup(config, saveConfig);
+        _statusStrip = new StatusStrip(_feed);
+        _blenderConnection = new BlenderConnection(blender, config, textures, log);
         _previews = previews;
-        _pluginVersion = BlenderClient.CurrentPluginVersion;
+        _pluginVersion = _blenderConnection.PluginVersion;
         _resourceSources = resourceSources;
         _materialPreviews = new MaterialPreviewBundleBuilder(data, log, _resourceSources);
         _kinds = _screenKinds;
@@ -63,7 +66,7 @@ public sealed partial class MainWindow : Window, IDisposable
         _openChangelog = openChangelog;
         _openSettings = openSettings;
         _uiBuilder = uiBuilder;
-        _feed.Reported += Notify;
+        _feed.Reported += _notifications.Notify;
         _penumbra.ResourcesChanged += OnResourcesChanged;
         Size = new Vector2(880, 640);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -99,7 +102,7 @@ public sealed partial class MainWindow : Window, IDisposable
     public void Dispose()
     {
         _penumbra.ResourcesChanged -= OnResourcesChanged;
-        _feed.Reported -= Notify;
+        _feed.Reported -= _notifications.Notify;
         if (_compression is not null)
             _compression.Optimized -= NotifyOptimized;
         DetachPainter();
@@ -116,6 +119,8 @@ public sealed partial class MainWindow : Window, IDisposable
             icon.Dispose();
         _lifetimeCts.Dispose();
     }
+
+    public void RequestCacheSynchronization() => _blenderConnection.RequestCacheSynchronization();
 
     public void Open() => IsOpen = true;
     public void Close() => IsOpen = false;
@@ -288,9 +293,8 @@ public sealed partial class MainWindow : Window, IDisposable
 
         var penumbra = false;
         try { penumbra = _penumbra.Available; } catch (Exception e) { _log.Debug(e.Message); }
-        StartBlenderCheckIfNeeded();
-        BlenderConnectionState blender;
-        lock (_stateLock) blender = _blenderState;
+        _blenderConnection.StartCheckIfNeeded();
+        var blender = _blenderConnection.State;
         var penumbraValue = penumbra ? "OK" : "Unavailable";
         var (blenderValue, blenderDetail) = blender switch
         {
@@ -326,8 +330,8 @@ public sealed partial class MainWindow : Window, IDisposable
             RequestRefresh();
         ImGui.SameLine();
         if (Widgets.IconButton("##options", FontAwesomeIcon.SlidersH, "Model import, texture and animation export options"))
-            ImGui.OpenPopup(OptionsPopupName);
-        DrawOptionsPopup();
+            _options.Open();
+        _options.Draw();
         ImGui.Separator();
         return active;
     }
@@ -351,27 +355,7 @@ public sealed partial class MainWindow : Window, IDisposable
             _ => Theme.Offline,
         };
 
-    private void DrawOptionsPopup()
-    {
-        ImGui.SetNextWindowSizeConstraints(Theme.Scaled(440, 0), Theme.Scaled(600, 640));
-        using var popup = ImRaii.Popup(OptionsPopupName);
-        if (!popup.Success)
-            return;
-        Widgets.SectionHeader("Model import");
-        DrawModelOptions();
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        Widgets.SectionHeader("Texture editing");
-        DrawTextureOptions();
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        Widgets.SectionHeader("Animation export");
-        DrawAnimationExportOptions();
-    }
-
-    /// <summary> The bottom row: latest message for the active tab, busy indicator, and the history popover. </summary>
+    /// <summary> The bottom row's inputs: whether anything runs, and what its Cancel button stops. </summary>
     private void DrawStatusStrip(FeedbackState feedback)
     {
         var exporting = _gameExport?.Busy ?? false;
@@ -380,208 +364,7 @@ public sealed partial class MainWindow : Window, IDisposable
         var animationCancel = animations is { Busy: true, CanCancel: true };
         // Cancel stops the Game Files export on its own tab, or when no animation work can be cancelled.
         var cancelExport = exporting && (_activeTab == MainTab.GameFiles || !animationCancel);
-        var canCancel = animationCancel || cancelExport;
-        var style = ImGui.GetStyle();
-        var frame = ImGui.GetFrameHeight();
-        using var strip = ImRaii.Child("##instant-edit-status-strip", new Vector2(0, frame), false,
-            ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
-        if (!strip.Success)
-            return;
-
-        var rightWidth = frame;
-        if (busy)
-            rightWidth += frame + style.ItemSpacing.X + ImGui.CalcTextSize("Working").X + style.ItemSpacing.X;
-        if (canCancel)
-            rightWidth += ImGui.CalcTextSize("Cancel").X + style.FramePadding.X * 2 + style.ItemSpacing.X;
-        var messageWidth = Math.Max(1, ImGui.GetContentRegionAvail().X - rightWidth - style.ItemSpacing.X);
-        using (var message = ImRaii.Child("##instant-edit-status-message", new Vector2(messageWidth, frame), false,
-                   ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
-        {
-            if (message.Success)
-            {
-                ImGui.AlignTextToFramePadding();
-                if (feedback.Text.Length == 0)
-                    ImGui.TextColored(Theme.Hint, "Ready");
-                else
-                {
-                    var (accent, _, icon) = Theme.Severity(feedback.Severity);
-                    ImGui.TextColored(accent, icon);
-                    ImGui.SameLine(0, Theme.Gap);
-                    ImGui.TextUnformatted(FirstLine(feedback.Text));
-                    if (ImGui.IsItemHovered())
-                    {
-                        using var tooltip = ImRaii.Tooltip();
-                        using var wrap = ImRaii.TextWrapPos(Theme.Scaled(480));
-                        ImGui.TextUnformatted(feedback.Text);
-                    }
-                }
-            }
-        }
-
-        ImGui.SameLine();
-        if (busy)
-        {
-            Widgets.Spinner();
-            ImGui.SameLine();
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, "Working");
-            ImGui.SameLine();
-            if (canCancel && ImGui.SmallButton("Cancel"))
-            {
-                if (cancelExport)
-                    _gameExport!.Cancel();
-                else
-                    animations!.Cancel();
-            }
-            if (canCancel)
-                ImGui.SameLine();
-        }
-        if (Widgets.IconButton("##history", FontAwesomeIcon.History, "Recent messages"))
-            ImGui.OpenPopup(HistoryPopupName);
-        DrawStatusHistory();
-    }
-
-    private void DrawStatusHistory()
-    {
-        ImGui.SetNextWindowSizeConstraints(Theme.Scaled(380, 0), Theme.Scaled(680, 440));
-        using var popup = ImRaii.Popup(HistoryPopupName);
-        if (!popup.Success)
-            return;
-        var entries = _feed.History(20);
-        if (entries.Count == 0)
-        {
-            ImGui.TextColored(Theme.Hint, "No messages yet.");
-            return;
-        }
-
-        foreach (var entry in entries)
-        {
-            var (accent, _, icon) = Theme.Severity(entry.Severity);
-            ImGui.TextColored(Theme.Muted, entry.Time.ToLocalTime().ToString("HH:mm:ss"));
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.TextColored(accent, icon);
-            ImGui.SameLine(0, Theme.Gap);
-            using var wrap = ImRaii.TextWrapPos(0f);
-            ImGui.TextUnformatted(entry.Text);
-        }
-    }
-
-    private static string FirstLine(string text)
-    {
-        var end = text.IndexOf('\n');
-        return end < 0 ? text : text[..end];
-    }
-
-    /// <summary> Mirrors warnings, errors and model handoff results as Dalamud notifications. </summary>
-    private void Notify(StatusEntry entry)
-    {
-        if (!_config.ShowNotifications)
-            return;
-        if (entry.Severity == FeedbackSeverity.Success && entry.Channel != StatusChannel.Models)
-            return;
-        ShowNotification(entry.Text, entry.Severity switch
-        {
-            FeedbackSeverity.Warning => NotificationType.Warning,
-            FeedbackSeverity.Error => NotificationType.Error,
-            FeedbackSeverity.Info => NotificationType.Info,
-            _ => NotificationType.Success,
-        });
-    }
-
-    private void ShowNotification(string content, NotificationType type)
-    {
-        try
-        {
-            _notifications.AddNotification(new Notification
-            {
-                Title = "XIV Instant Edit",
-                Content = content,
-                Type = type,
-            });
-        }
-        catch (Exception e)
-        {
-            _log.Debug($"Could not show a notification: {e.Message}");
-        }
-    }
-
-    private void DrawTextureOptions()
-    {
-        var recompress = _config.RecompressTextures;
-        if (ImGui.Checkbox("Recompress saved textures", ref recompress))
-        {
-            _config.RecompressTextures = recompress;
-            _saveConfig();
-        }
-        Widgets.HintWrapped("Texture edits keep their original compression (BC1–BC7). When off, saves are written uncompressed: larger files without compression artifacts.");
-    }
-
-    private void DrawModelOptions()
-    {
-        var useExistingSkeleton = _config.UseExistingSkeleton;
-        if (ImGui.Checkbox("Remove imported armature and use existing skeleton", ref useExistingSkeleton))
-        {
-            _config.UseExistingSkeleton = useExistingSkeleton;
-            SaveModelOptions();
-        }
-
-        if (_config.UseExistingSkeleton)
-        {
-            Widgets.HintWrapped("Imported meshes receive an Armature modifier targeting this Blender object:");
-            var skeletonName = _config.SkeletonObjectName;
-            ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(180), ImGui.GetContentRegionAvail().X * 0.45f));
-            if (ImGui.InputText("Skeleton object", ref skeletonName, 128))
-            {
-                _config.SkeletonObjectName = skeletonName;
-                SaveModelOptions();
-            }
-            ImGui.SameLine();
-            Widgets.Hint("must be an existing Blender Armature");
-        }
-        else
-        {
-            Widgets.HintWrapped("Each import creates its own InstantEditArmature.");
-        }
-
-        var racialScaling = _config.ApplyRacialScaling;
-        if (ImGui.Checkbox("Apply racial scaling for model import", ref racialScaling))
-        {
-            _config.ApplyRacialScaling = racialScaling;
-            SaveModelOptions();
-        }
-        Widgets.HintWrapped("Models made for another race, like the c0201 gear most female races wear, go to Blender and Substance Painter " +
-                            "shaped for the character's race, with its skeleton, as the game shows them on it. Browsed mods and game files use " +
-                            "the first on-screen character. Quick Export can save scaled models only as that race's own model, and Simple Export warns first. " +
-                            "Send my character to Blender always scales them, whether this is on or off.");
-
-        var applyTexturesAndMaterials = _config.ApplyTexturesAndMaterials;
-        if (ImGui.Checkbox("Apply textures and materials", ref applyTexturesAndMaterials))
-        {
-            _config.ApplyTexturesAndMaterials = applyTexturesAndMaterials;
-            SaveModelOptions();
-        }
-        Widgets.HintWrapped("Creates display-only Blender materials. Quick Export still writes model data only.");
-
-        using var indent = ImRaii.PushIndent();
-        using (ImRaii.Disabled(!applyTexturesAndMaterials))
-        {
-            var excludeBodyAndGeneralMaterials = _config.ExcludeBodyAndGeneralMaterials;
-            if (ImGui.Checkbox("Exclude body and general materials", ref excludeBodyAndGeneralMaterials))
-            {
-                _config.ExcludeBodyAndGeneralMaterials = excludeBodyAndGeneralMaterials;
-                SaveModelOptions();
-            }
-        }
-        Widgets.HintWrapped("Leaves body skin, body-piercing, and pube materials as colored placeholders.");
-    }
-
-    private void SaveModelOptions()
-    {
-        _config.SkeletonObjectName = string.IsNullOrWhiteSpace(_config.SkeletonObjectName)
-            ? "Skeleton"
-            : _config.SkeletonObjectName.Trim();
-        if (_config.SkeletonObjectName.Length > 128)
-            _config.SkeletonObjectName = _config.SkeletonObjectName[..128];
-        _saveConfig();
+        Action? cancel = cancelExport ? () => _gameExport!.Cancel() : animationCancel ? () => animations!.Cancel() : null;
+        _statusStrip.Draw(feedback, busy, cancel);
     }
 }

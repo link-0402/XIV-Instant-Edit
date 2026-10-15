@@ -154,7 +154,7 @@ public sealed partial class MainWindow
     {
         try
         {
-            await EnsureBlenderReadyForImportAsync(
+            await _blenderConnection.EnsureReadyForImportAsync(
                 blenderPort, importOptions, source.SourceState == ResourceSourceState.GameData, cancellationToken).ConfigureAwait(false);
             var sent = await SendModelToBlenderAsync(
                 actor, model, source, blenderPort, listenPort, importOptions, null, cancellationToken).ConfigureAwait(false);
@@ -175,30 +175,6 @@ public sealed partial class MainWindow
         {
             Volatile.Write(ref _editing, 0);
         }
-    }
-
-    /// <summary>
-    /// Throws with a user-facing message unless Blender runs this version of the add-on, shares the
-    /// plugin's cache, and takes imports with these options (and of game data, with <paramref name="gameData"/>).
-    /// </summary>
-    private async Task EnsureBlenderReadyForImportAsync(int blenderPort, BlenderImportOptions importOptions, bool gameData,
-        CancellationToken cancellationToken)
-    {
-        var blenderStatus = await CheckBlenderStatusAsync(blenderPort, cancellationToken).ConfigureAwait(false);
-        if (!blenderStatus.Reachable)
-            throw new InvalidOperationException("Blender is offline. Start Blender and enable the XIV Instant Edit add-on before editing.");
-        if (blenderStatus.Classify(_pluginVersion) != BlenderConnectionState.Online)
-            throw new InvalidOperationException(BlenderClient.VersionMismatchMessage(_pluginVersion));
-        if (!await SynchronizeBlenderCacheAsync(blenderStatus, blenderPort, cancellationToken).ConfigureAwait(false))
-            throw new InvalidOperationException("Blender's cache could not be synchronized. Update and restart the XIV Instant Edit add-on, then retry.");
-        if (importOptions.ArmatureMode == BlenderImportOptions.ExistingMode &&
-            !await _blender.SupportsImportOptionsAsync(blenderPort, cancellationToken).ConfigureAwait(false))
-            throw new InvalidOperationException("The XIV Instant Edit add-on is too old for custom import options. Update the add-on and restart Blender.");
-        if (importOptions.ApplyTexturesAndMaterials &&
-            !await _blender.SupportsMaterialPreviewAsync(blenderPort, cancellationToken).ConfigureAwait(false))
-            throw new InvalidOperationException("The XIV Instant Edit add-on is too old for texture and material previews. Update the add-on and restart Blender.");
-        if (gameData && !await _blender.SupportsVanillaContextAsync(blenderPort, cancellationToken).ConfigureAwait(false))
-            throw new InvalidOperationException("The XIV Instant Edit add-on is too old for vanilla model contexts. Update the add-on and restart Blender.");
     }
 
     /// <summary> What sending one model to Blender produced. </summary>

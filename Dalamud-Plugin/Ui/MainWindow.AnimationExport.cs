@@ -206,7 +206,7 @@ public sealed partial class MainWindow
     private async Task<string> DeliverTakeAsync(AnimationTake take, string? targetCharacter, CancellationToken token)
     {
         var port = _config.BlenderPort;
-        var status = await CheckBlenderStatusAsync(port, token).ConfigureAwait(false);
+        var status = await _blenderConnection.CheckStatusAsync(port, token).ConfigureAwait(false);
         if (!status.Reachable)
             throw new InvalidOperationException("Blender is offline. Start Blender with the XIV Instant Edit add-on, then send the animation again.");
         if (status.Classify(_pluginVersion) != BlenderConnectionState.Online)
@@ -225,27 +225,5 @@ public sealed partial class MainWindow
         {
             throw new InvalidOperationException(e.Failure.UserMessage);
         }
-    }
-
-    private void DrawAnimationExportOptions()
-    {
-        var armature = _config.AnimationArmatureName;
-        ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(180), ImGui.GetContentRegionAvail().X * 0.45f));
-        if (ImGui.InputText("Blender armature", ref armature, 128))
-        {
-            _config.AnimationArmatureName = armature;
-            _saveConfig();
-        }
-        Widgets.HintWrapped("Animations become a new action on this armature. Without an object of this name, " +
-                            "Blender uses the active armature, or the scene's only one.");
-        var keyScale = _config.AnimationKeyScale;
-        if (ImGui.Checkbox("Key bone scale", ref keyScale))
-        {
-            _config.AnimationKeyScale = keyScale;
-            _saveConfig();
-        }
-        Widgets.HintWrapped("On keys bone scale too, and sets bones under an unevenly scaled bone to inherit scale " +
-                            "Aligned, the way the game scales them. Recordings leave Customize+ out, since MagicFit " +
-                            "adds it. Off leaves bone scaling applied in Blender in place.");
     }
 }
