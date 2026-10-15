@@ -316,9 +316,9 @@ class XIVIE_OT_simple_export(Operator):
                 written = []
                 exports = None
 
-                def session():
+                def session(exported):
                     nonlocal exports
-                    exports = ShapeExports(objects, settings.model_format)
+                    exports = ShapeExports(exported, settings.model_format)
                     return exports
 
                 def export(_sized, _index, size_name):

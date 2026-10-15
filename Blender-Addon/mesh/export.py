@@ -21,6 +21,10 @@ from ..instant_edit.context import SIZE_COPY_NAME
 
 _export_stats: dict[str, list[str]] = {}
 
+# Modifiers that may change a mesh's bone weights: ShapeExports reads them again for each write.
+_WEIGHT_MODIFIERS = frozenset({"DATA_TRANSFER", "VERTEX_WEIGHT_EDIT", "VERTEX_WEIGHT_MIX",
+                               "VERTEX_WEIGHT_PROXIMITY", "NODES"})
+
 
 @contextmanager
 def _clean_export_state(export_objects, reset_scaling=False):
@@ -246,7 +250,9 @@ class ShapeExports:
 
     For an MDL, the export copies are made and prepared once (split along UV seams and sharp edges,
     the slow part of an export), and each write only moves their vertices, shape keys and custom
-    normals to the shape the meshes show then. That writes what a fresh export of the shape would,
+    normals to the shape the meshes show then, and gives meshes whose modifiers may change their
+    weights (a devkit's Data Transfer switched per size) the weights they evaluate to then. That
+    writes what a fresh export of the shape would,
     but for custom normals: set again on the split copy, they come out up to about 0.0005 off
     (0.03 degrees), and a tangent byte may round the other way. Other formats, meshes with
     transparency (their faces are reordered) and meshes whose copies can't be followed back to
@@ -334,6 +340,7 @@ class ShapeExports:
                 "off_keys": [name for name, _value in stats["shape_values"]],
                 "kept_keys": [key.name for key in stats["shape"]],
                 "transparency": stats["transparency"],
+                "weights": any(modifier.type in _WEIGHT_MODIFIERS for modifier in original.modifiers),
             })
         if any(source["transparency"] for source in sources) or any(
                 source["kept_keys"] and len(source["copy"].data.vertices) != len(source["original"].data.vertices)
@@ -439,8 +446,9 @@ class ShapeExports:
     def _move_copy(self, source: dict, depsgraph) -> None:
         original = source["original"]
         evaluated = original.evaluated_get(depsgraph)
-        # Only the positions and normals are read.
-        mesh = bpy.data.meshes.new_from_object(evaluated, depsgraph=depsgraph)
+        # Only the positions and normals are read, and the weights where modifiers may change them.
+        mesh = bpy.data.meshes.new_from_object(
+            evaluated, preserve_all_data_layers=source["weights"], depsgraph=depsgraph)
         try:
             if len(mesh.vertices) != source["vertex_count"] or len(mesh.loops) != source["corner_count"]:
                 raise ValueError(f"{source['name']}: its vertex count changed between exports.")
@@ -450,6 +458,7 @@ class ShapeExports:
             if mesh.has_custom_normals:
                 normals = np.empty(len(mesh.loops) * 3, dtype=np.float32)
                 mesh.corner_normals.foreach_get("vector", normals)
+            weights = self._read_weights(mesh) if source["weights"] else None
         finally:
             bpy.data.meshes.remove(mesh)
 
@@ -466,8 +475,40 @@ class ShapeExports:
                 block.data.foreach_set("co", mix.astype(np.float32).ravel())
         if normals is not None:
             data.normals_split_custom_set(normals.reshape(-1, 3)[source["corners"]])
+        if weights is not None:
+            self._write_weights(copy, weights, source["vertices"])
         self._transform(data, source["matrix"])
         data.update()
+
+    def _read_weights(self, mesh) -> list[list[tuple[str, float]]]:
+        """Each vertex's (group name, weight) of an evaluated ``mesh``, in its order."""
+        # A mesh keeps its group names, but only an object lists them.
+        holder = bpy.data.objects.new(self._COPY_NAME, mesh)
+        try:
+            names = [group.name for group in holder.vertex_groups]
+        finally:
+            bpy.data.objects.remove(holder)
+        return [[(names[element.group], element.weight) for element in vertex.groups]
+                for vertex in mesh.vertices]
+
+    @staticmethod
+    def _write_weights(copy, weights: list, vertices) -> None:
+        """Give ``copy`` the ``weights`` of the vertices it was split from (``vertices``), in their
+        order, as a fresh copy would have them: in the groups of its skeleton's bones."""
+        groups = copy.vertex_groups
+        armature = copy.parent if copy.parent is not None and copy.parent.type == 'ARMATURE' else None
+        bones = armature.data.bones if armature is not None else {}
+        everything = list(range(len(copy.data.vertices)))
+        for group in groups:
+            group.remove(everything)
+        for index, vertex in enumerate(vertices.tolist()):
+            for name, weight in weights[vertex]:
+                group = groups.get(name)
+                if group is None:
+                    if bones.get(name) is None:
+                        continue
+                    group = groups.new(name=name)
+                group.add([index], weight, 'REPLACE')
 
     @staticmethod
     def _transform(data, matrix: Matrix) -> None:

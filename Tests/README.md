@@ -87,8 +87,10 @@ updates the distribution archives or extension repository index.
   port, and that every sidebar icon exists.
 - `sizes_regression.py`: exports at Magic Fit's sizes. Against a stand-in for
   Magic Fit's API: finding it by add-on name, the `/export/sizes` request, each
-  exported model's shape, the targets that can't take sizes, Edit Mode, and Simple
-  Export's file per size. Then against Magic Fit itself, when `MAGIC_FIT_ROOT` (or
+  exported model's shape, the targets that can't take sizes, Edit Mode, Simple
+  Export's file per size, and a model's copy of a devkit part exported as the part
+  (Magic Fit's API version 3). Weights a modifier switches between sizes are written
+  as a fresh export has them. Then against Magic Fit itself, when `MAGIC_FIT_ROOT` (or
   a `Magic Fit` folder beside the repository) holds its repository; otherwise that
   part is skipped.
 - `ExportContextRegression`: named session-store and variant-export scenarios,
