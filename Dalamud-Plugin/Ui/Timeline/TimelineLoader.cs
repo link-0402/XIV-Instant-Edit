@@ -5,16 +5,16 @@ using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The loader: any emote, idle, sitting or lying pose, movement track, expression or other timeline,
-/// played on the GPose actor. Once the listener hears it, its timeline opens. Only GPose actors are
-/// touched, and Stop or leaving GPose puts them back as the preview does.
+/// played on the GPose actor. Once the listener hears it, its timeline opens (<paramref name="open"/>).
+/// Only GPose actors are touched, and Stop or leaving GPose puts them back as the preview does.
 /// </summary>
-public sealed partial class TimelineWindow
+/// <param name="open">Opens the timeline of a capture's clip, or of its startup.</param>
+internal sealed class TimelineLoader(TimelineSession session, TimelinePreview timelinePreview, Action<AnimationCapture, bool> open)
 {
     private const string LoaderPopup = "##timeline-loader";
     // How long the loader waits before it says the listener hasn't heard the animation.
@@ -30,23 +30,22 @@ public sealed partial class TimelineWindow
     // What the loader played and waits for the listener to hear, on which actor and since when.
     private (AnimationLibraryItem Item, ushort Actor, DateTime Since)? loaderWaiting;
     private string? loaderMessage;
-    private Func<bool>? mainListens;
 
-    /// <summary>Whether the main window keeps the listener running too; the Timeline window leaves it on then.</summary>
-    internal void AttachListening(Func<bool> mainWindowListens) => mainListens = mainWindowListens;
-
-    /// <summary>The Timeline window listens while it is open: the loader and the clip's skeleton choice need it.</summary>
-    internal bool Listens => IsOpen;
-
+    /// <summary> Stops waiting for what the loader played, and drops its message, when the window closes. </summary>
+    public void Reset()
+    {
+        loaderWaiting = null;
+        loaderMessage = null;
+    }
     private void EnsureLibrary()
     {
         // A failed read is not started again every frame; its error stays shown.
         if (libraryTask != null || !library.IsEmpty || libraryError != null)
             return;
-        libraryTask = Task.Run(() => AnimationLibrary.Read(data));
+        libraryTask = Task.Run(() => AnimationLibrary.Read(session.Data));
     }
 
-    private void PollLibrary()
+    public void PollLibrary()
     {
         if (libraryTask is not { IsCompleted: true } task)
             return;
@@ -56,12 +55,12 @@ public sealed partial class TimelineWindow
         else
         {
             libraryError = TimelineSession.ErrorText(task.Exception);
-            log.Warning(task.Exception!, "Could not read the animation list.");
+            session.Log.Warning(task.Exception!, "Could not read the animation list.");
         }
     }
 
     /// <summary>The toolbar's Load button and its popup.</summary>
-    private void DrawLoadButton()
+    public void DrawButton()
     {
         if (Widgets.IconButton("##timeline-load", FontAwesomeIcon.FolderOpen, "Load an animation onto your GPose character and open it here"))
         {
@@ -76,7 +75,7 @@ public sealed partial class TimelineWindow
         using (var body = ImRaii.Child("##loader-body", new Vector2(Theme.Scaled(560), Theme.Scaled(420)), false))
         {
             if (body.Success)
-                played = DrawLoader(ImGui.GetContentRegionAvail().Y);
+                played = Draw(ImGui.GetContentRegionAvail().Y);
         }
         if (played)
             ImGui.CloseCurrentPopup();
@@ -86,7 +85,7 @@ public sealed partial class TimelineWindow
     /// The loader's search, group tabs and list, <paramref name="height"/> tall. True when an animation
     /// was played, so a popup around it can close.
     /// </summary>
-    private bool DrawLoader(float height)
+    public bool Draw(float height)
     {
         EnsureLibrary();
         PollLibrary();
@@ -216,7 +215,7 @@ public sealed partial class TimelineWindow
     {
         timelinePreview.Stop();
         ushort? actor;
-        try { actor = playback.ActorIndex(); }
+        try { actor = session.Playback.ActorIndex(); }
         catch (InvalidOperationException e)
         {
             loaderMessage = e.Message;
@@ -228,7 +227,7 @@ public sealed partial class TimelineWindow
             return false;
         }
         bool played;
-        try { played = playback.Play(item.Timeline, null, null, item.Face, index); }
+        try { played = session.Playback.Play(item.Timeline, null, null, item.Face, index); }
         catch (InvalidOperationException e)
         {
             loaderMessage = e.Message;
@@ -236,20 +235,20 @@ public sealed partial class TimelineWindow
         }
         if (!played)
         {
-            loaderMessage = playback.Error;
+            loaderMessage = session.Playback.Error;
             return false;
         }
-        animations?.StartObservation();
-        animations?.Observer.Hear(item.Timeline);
+        session.Animations?.StartObservation();
+        session.Animations?.Observer.Hear(item.Timeline);
         loaderWaiting = (item, index, DateTime.UtcNow);
         loaderMessage = null;
         return true;
     }
 
     /// <summary>Every frame: opens what the loader played once the listener has heard it.</summary>
-    private void PollLoader()
+    public void Poll()
     {
-        if (loaderWaiting is not { } waiting || animations is not { } service)
+        if (loaderWaiting is not { } waiting || session.Animations is not { } service)
             return;
         // Another clip may have opened meanwhile, or the actor went back to its own animation.
         AnimationClip? Played(AnimationCapture capture) => capture.Clip.Timeline == waiting.Item.Timeline ? capture.Clip
@@ -265,11 +264,11 @@ public sealed partial class TimelineWindow
         var chosen = playing.MaxBy(capture => Played(capture)!.Resolution?.TrackBones.Length ?? 0)!;
         loaderWaiting = null;
         loaderMessage = null;
-        Open(chosen, chosen.Clip.Timeline != waiting.Item.Timeline);
+        open(chosen, chosen.Clip.Timeline != waiting.Item.Timeline);
     }
 
     /// <summary>The loader's line while it waits, or why it couldn't play.</summary>
-    private void DrawLoaderStatus()
+    public void DrawStatus()
     {
         if (loaderWaiting is { } waiting)
         {
