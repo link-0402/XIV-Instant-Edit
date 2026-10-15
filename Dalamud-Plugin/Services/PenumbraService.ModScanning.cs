@@ -25,14 +25,6 @@ namespace InstantEdit.Services;
 
 public sealed partial class PenumbraService
 {
-    public IReadOnlyList<PenumbraMod> GetMods()
-        => GetModList()
-            .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
-            .Select(pair => new PenumbraMod(pair.Key, pair.Value))
-            .OrderBy(mod => mod.Name, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(mod => mod.Directory, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
     private sealed record ModScanRequest(PenumbraMod Mod, string[] CandidateRoots);
 
     /// <summary>Resolve Penumbra state on the framework thread, then scan files on a worker.</summary>

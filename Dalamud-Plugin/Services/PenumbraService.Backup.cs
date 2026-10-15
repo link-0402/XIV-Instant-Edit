@@ -409,22 +409,6 @@ public sealed partial class PenumbraService
         }
     }
 
-    /// <summary> Reads the mod list, distinguishing an IPC failure from an empty list. </summary>
-    internal bool TryGetModList(out Dictionary<string, string> modList)
-    {
-        try
-        {
-            modList = _getModList.Invoke() ?? new Dictionary<string, string>();
-            return true;
-        }
-        catch (Exception e)
-        {
-            _log.Error(e, "Could not retrieve the Penumbra mod list.");
-            modList = new Dictionary<string, string>();
-            return false;
-        }
-    }
-
     public async Task<ExportResult> ClearManagedBackupsAsync(
         string sourceModDirectory, string sourceFilePath, string? sourceModRootPath,
         string? targetRelativePath, string sourceGamePath, string backupTargetId,

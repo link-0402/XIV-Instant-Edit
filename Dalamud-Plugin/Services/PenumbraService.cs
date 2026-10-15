@@ -95,7 +95,7 @@ public sealed record SourceOptionCapture(SourceOptionLocator? Locator, string St
 /// reading the resolved model files of on-screen game objects and
 /// writing/updating a persistent mod so the edited model applies in-game.
 /// </summary>
-public sealed partial class PenumbraService
+public sealed partial class PenumbraService : IDisposable
 {
     internal sealed record SourceModTarget(string Directory, string Folder, string FilePath, string RelativePath);
     internal sealed record SourceTargetResolution(SourceModTarget? Target, string Code, string? Error);
@@ -125,21 +125,7 @@ public sealed partial class PenumbraService
     };
 
     private readonly IDalamudPluginInterface  _pi;
-    private readonly GetGameObjectResourcePaths _getPaths;
-    private readonly GetGameObjectResourceTrees _getObjectTrees;
-    private readonly GetPlayerResourceTrees _getPlayerTrees;
-    private readonly GetPlayerResourcePaths _getPlayerPaths;
-    private readonly GetModDirectory           _getModDirectory;
-    private readonly GetModList                 _getModList;
-    private readonly GetModPath                 _getModPath;
-    private readonly AddMod                     _addMod;
-    private readonly ReloadMod                  _reloadMod;
-    private readonly GetCollectionForObject      _getCollectionForObject;
-    private readonly GetCurrentModSettings       _getCurrentModSettings;
-    private readonly TrySetMod                   _trySetMod;
-    private readonly TrySetModPriority            _trySetModPriority;
-    private readonly TrySetModSetting             _trySetModSetting;
-    private readonly RedrawObject               _redrawObject;
+    private readonly PenumbraIpc                _ipc;
     private readonly IFramework                  _framework;
     private readonly IPluginLog                 _log;
     private readonly IObjectTable?              _objects;
@@ -164,84 +150,127 @@ public sealed partial class PenumbraService
         _data            = data;
         _backups         = backups;
         _estEntries      = estEntries;
-        _getPaths        = new GetGameObjectResourcePaths(pi);
-        _getObjectTrees  = new GetGameObjectResourceTrees(pi);
-        _getPlayerTrees  = new GetPlayerResourceTrees(pi);
-        _getPlayerPaths  = new GetPlayerResourcePaths(pi);
-        _getModDirectory = new GetModDirectory(pi);
-        _getModList      = new GetModList(pi);
-        _getModPath      = new GetModPath(pi);
-        _addMod          = new AddMod(pi);
-        _reloadMod       = new ReloadMod(pi);
-        _getCollectionForObject = new GetCollectionForObject(pi);
-        _getCurrentModSettings = new GetCurrentModSettings(pi);
-        _trySetMod       = new TrySetMod(pi);
-        _trySetModPriority = new TrySetModPriority(pi);
-        _trySetModSetting = new TrySetModSetting(pi);
-        _redrawObject    = new RedrawObject(pi);
-        SubscribeToResourceChanges(pi);
+        _ipc             = new PenumbraIpc(pi, framework, log);
     }
 
-    /// <summary> Whether Penumbra is loaded and the resource tree IPC is available. </summary>
-    public bool Available
+    private GetModDirectory _getModDirectory => _ipc.ModDirectorySubscriber;
+    private GetModList _getModList => _ipc.ModListSubscriber;
+    private GetModPath _getModPath => _ipc.GetModPath;
+    private AddMod _addMod => _ipc.AddMod;
+    private ReloadMod _reloadMod => _ipc.ReloadMod;
+    private GetCollectionForObject _getCollectionForObject => _ipc.GetCollectionForObject;
+    private GetCurrentModSettings _getCurrentModSettings => _ipc.GetCurrentModSettings;
+    private TrySetMod _trySetMod => _ipc.TrySetMod;
+    private TrySetModPriority _trySetModPriority => _ipc.TrySetModPriority;
+    private TrySetModSetting _trySetModSetting => _ipc.TrySetModSetting;
+    private RedrawObject _redrawObject => _ipc.RedrawObject;
+
+    /// <inheritdoc cref="PenumbraIpc.Available"/>
+    public bool Available => _ipc.Available;
+
+    /// <inheritdoc cref="PenumbraIpc.GetResourcePaths(ushort)"/>
+    public Dictionary<string, HashSet<string>>? GetResourcePaths(ushort gameObjectIndex) => _ipc.GetResourcePaths(gameObjectIndex);
+
+    /// <inheritdoc cref="PenumbraIpc.GetResourcePaths(ushort[])"/>
+    public Dictionary<string, HashSet<string>>?[] GetResourcePaths(ushort[] gameObjectIndices) => _ipc.GetResourcePaths(gameObjectIndices);
+
+    /// <inheritdoc cref="PenumbraIpc.GetResourcePathsAsync"/>
+    public Task<Dictionary<string, HashSet<string>>?> GetResourcePathsAsync(ushort gameObjectIndex)
+        => _ipc.GetResourcePathsAsync(gameObjectIndex);
+
+    public Task<PenumbraCollectionTarget?> GetCollectionTargetAsync(int gameObjectIndex) => _ipc.GetCollectionTargetAsync(gameObjectIndex);
+
+    /// <inheritdoc cref="PenumbraIpc.GetPlayerResourceTrees"/>
+    public IReadOnlyDictionary<ushort, ResourceTreeDto> GetPlayerResourceTrees() => _ipc.GetPlayerResourceTrees();
+
+    /// <inheritdoc cref="PenumbraIpc.GetPlayerResourcePaths"/>
+    public IReadOnlyDictionary<ushort, Dictionary<string, HashSet<string>>> GetPlayerResourcePaths() => _ipc.GetPlayerResourcePaths();
+
+    /// <inheritdoc cref="PenumbraIpc.GetResourceTrees"/>
+    public ResourceTreeDto?[] GetResourceTrees(ushort[] gameObjectIndices) => _ipc.GetResourceTrees(gameObjectIndices);
+
+    public string? GetModDirectory() => _ipc.GetModDirectory();
+
+    public Dictionary<string, string> GetModList() => _ipc.GetModList();
+
+    /// <inheritdoc cref="PenumbraIpc.TryGetModList"/>
+    internal bool TryGetModList(out Dictionary<string, string> modList) => _ipc.TryGetModList(out modList);
+
+    /// <inheritdoc cref="PenumbraIpc.GetRegisteredModPath"/>
+    public string? GetRegisteredModPath(string modDirectory) => _ipc.GetRegisteredModPath(modDirectory);
+
+    public IReadOnlyList<PenumbraMod> GetMods() => _ipc.GetMods();
+
+    /// <inheritdoc cref="PenumbraIpc.ResourcesChanged"/>
+    public event Action? ResourcesChanged
     {
-        get
-        {
-            try
-            {
-                return _getPlayerTrees.Valid;
-            }
-            catch (Exception e)
-            {
-                _log.Debug($"Could not query Penumbra availability: {e.Message}");
-                return false;
-            }
-        }
+        add => _ipc.ResourcesChanged += value;
+        remove => _ipc.ResourcesChanged -= value;
     }
 
-    /// <summary>
-    /// Get the resolved resource paths for one game object.
-    /// The dictionary maps the resolved local path (mod file on disk, or the game path if unmodded)
-    /// to the set of game paths it serves.
-    /// </summary>
-    public Dictionary<string, HashSet<string>>? GetResourcePaths(ushort gameObjectIndex)
+    /// <inheritdoc cref="PenumbraIpc.ModsChanged"/>
+    public event Action? ModsChanged
     {
-        try
-        {
-            if (!Available)
-                return null;
-
-            var result = _getPaths.Invoke(gameObjectIndex);
-            return result is { Length: > 0 } ? result[0] : null;
-        }
-        catch (Exception e)
-        {
-            _log.Debug($"Could not retrieve Penumbra resource paths: {e.Message}");
-            return null;
-        }
+        add => _ipc.ModsChanged += value;
+        remove => _ipc.ModsChanged -= value;
     }
 
-    /// <summary>Resolve one object's effective resources on Dalamud's framework thread.</summary>
-    public async Task<Dictionary<string, HashSet<string>>?> GetResourcePathsAsync(ushort gameObjectIndex)
-        => await _framework.RunOnFrameworkThread(() => GetResourcePaths(gameObjectIndex)).ConfigureAwait(false);
+    /// <inheritdoc cref="PenumbraIpc.ObjectRedrawn"/>
+    internal event Action<int>? ObjectRedrawn
+    {
+        add => _ipc.ObjectRedrawn += value;
+        remove => _ipc.ObjectRedrawn -= value;
+    }
 
-    public async Task<PenumbraCollectionTarget?> GetCollectionTargetAsync(int gameObjectIndex)
-        => await _framework.RunOnFrameworkThread(() =>
-        {
-            try
-            {
-                var collection = _getCollectionForObject.Invoke(gameObjectIndex);
-                return collection.ObjectValid && collection.EffectiveCollection.Id != Guid.Empty &&
-                       !string.IsNullOrWhiteSpace(collection.EffectiveCollection.Name)
-                    ? new PenumbraCollectionTarget(collection.EffectiveCollection.Id, collection.EffectiveCollection.Name)
-                    : null;
-            }
-            catch (Exception e)
-            {
-                _log.Debug(e, "Could not capture the Penumbra collection for object {ObjectIndex}.", gameObjectIndex);
-                return null;
-            }
-        }).ConfigureAwait(false);
+    /// <inheritdoc cref="PenumbraIpc.OpenModInPenumbra"/>
+    public void OpenModInPenumbra(string modDirectory, string modName) => _ipc.OpenModInPenumbra(modDirectory, modName);
+
+    public void Dispose() => _ipc.Dispose();
+
+    /// <inheritdoc cref="PenumbraIpc.TemporaryModCollectionOnFramework"/>
+    internal TemporaryModCollection? TemporaryModCollectionOnFramework(int objectIndex)
+        => _ipc.TemporaryModCollectionOnFramework(objectIndex);
+
+    internal Task<TemporaryModCollection?> TemporaryModCollectionAsync(int objectIndex) => _ipc.TemporaryModCollectionAsync(objectIndex);
+
+    /// <inheritdoc cref="PenumbraIpc.AddTemporaryModOnFramework"/>
+    internal PenumbraApiEc AddTemporaryModOnFramework(string tag, Guid collection, IReadOnlyDictionary<string, string> paths, int priority)
+        => _ipc.AddTemporaryModOnFramework(tag, collection, paths, priority);
+
+    /// <inheritdoc cref="PenumbraIpc.AddTemporaryModAllOnFramework"/>
+    internal PenumbraApiEc AddTemporaryModAllOnFramework(string tag, IReadOnlyDictionary<string, string> paths, int priority)
+        => _ipc.AddTemporaryModAllOnFramework(tag, paths, priority);
+
+    /// <inheritdoc cref="PenumbraIpc.ResolveInterfacePathOnFramework"/>
+    internal string ResolveInterfacePathOnFramework(string gamePath) => _ipc.ResolveInterfacePathOnFramework(gamePath);
+
+    /// <inheritdoc cref="PenumbraIpc.RemoveTemporaryModAllOnFramework"/>
+    internal (bool Gone, string? Error) RemoveTemporaryModAllOnFramework(string tag, int priority)
+        => _ipc.RemoveTemporaryModAllOnFramework(tag, priority);
+
+    /// <inheritdoc cref="PenumbraIpc.RemoveTemporaryModOnFramework"/>
+    internal (bool Gone, string? Error) RemoveTemporaryModOnFramework(string tag, Guid collection, int priority)
+        => _ipc.RemoveTemporaryModOnFramework(tag, collection, priority);
+
+    internal Task<(bool Gone, string? Error)> RemoveTemporaryModAsync(string tag, Guid collection, int priority)
+        => _ipc.RemoveTemporaryModAsync(tag, collection, priority);
+
+    /// <inheritdoc cref="PenumbraIpc.RemoveTemporaryModEverywhereOnFramework"/>
+    internal (bool Gone, string? Error) RemoveTemporaryModEverywhereOnFramework(string tag, int priority)
+        => _ipc.RemoveTemporaryModEverywhereOnFramework(tag, priority);
+
+    internal Task<(bool Gone, string? Error)> RemoveTemporaryModEverywhereAsync(string tag, int priority)
+        => _ipc.RemoveTemporaryModEverywhereAsync(tag, priority);
+
+    /// <inheritdoc cref="PenumbraIpc.SubscribePenumbraLifecycle"/>
+    internal IDisposable SubscribePenumbraLifecycle(Action restarted) => _ipc.SubscribePenumbraLifecycle(restarted);
+
+    /// <inheritdoc cref="PenumbraIpc.ResolveCollectionPathsAsync"/>
+    internal Task<string?[]> ResolveCollectionPathsAsync(Guid collection, IReadOnlyList<string> gamePaths)
+        => _ipc.ResolveCollectionPathsAsync(collection, gamePaths);
+
+    /// <inheritdoc cref="PenumbraIpc.MetaManipulationsAsync"/>
+    internal Task<string?> MetaManipulationsAsync(int objectIndex) => _ipc.MetaManipulationsAsync(objectIndex);
 
     /// <summary>Capture the effective source-mod manipulations for one collection.</summary>
     public async Task<JsonArray?> CaptureEffectiveManipulationsAsync(
@@ -276,105 +305,6 @@ public sealed partial class PenumbraService
             return null;
         }
     }
-
-    /// <summary>
-    /// Get the resolved resource paths for several game objects in one IPC call. Penumbra
-    /// looks these indices up in Dalamud's object table, which asserts the main thread.
-    /// </summary>
-    public Dictionary<string, HashSet<string>>?[] GetResourcePaths(ushort[] gameObjectIndices)
-    {
-        if (gameObjectIndices.Length == 0)
-            return Array.Empty<Dictionary<string, HashSet<string>>?>();
-
-        try
-        {
-            if (!Available)
-                return EmptyResourceResults(gameObjectIndices.Length);
-
-            var result = _getPaths.Invoke(gameObjectIndices);
-            if (result is null || result.Length != gameObjectIndices.Length)
-                return EmptyResourceResults(gameObjectIndices.Length);
-            return result;
-        }
-        catch (Exception e)
-        {
-            _log.Debug($"Could not retrieve Penumbra resource paths: {e.Message}");
-            return EmptyResourceResults(gameObjectIndices.Length);
-        }
-    }
-
-    /// <summary>
-    /// Gets Penumbra's local-player-owned resource trees, including the public UI
-    /// labels and icons. The returned index is the current object-table index.
-    /// Call it on the framework thread: Penumbra builds the trees on the calling thread and
-    /// reads each character's ObjectIndex there, which Dalamud rejects on other threads.
-    /// </summary>
-    public IReadOnlyDictionary<ushort, ResourceTreeDto> GetPlayerResourceTrees()
-    {
-        try
-        {
-            if (!Available)
-                return new Dictionary<ushort, ResourceTreeDto>();
-
-            return _getPlayerTrees.Invoke(withUiData: true);
-        }
-        catch (Exception e)
-        {
-            _log.Warning($"Could not retrieve Penumbra player resource trees: {e.Message}");
-            return new Dictionary<ushort, ResourceTreeDto>();
-        }
-    }
-
-    /// <summary>
-    /// Gets the resolved resource paths of the local player and their owned objects, keyed
-    /// by object-table index. Like <see cref="GetPlayerResourceTrees"/>, call it on the
-    /// framework thread.
-    /// </summary>
-    public IReadOnlyDictionary<ushort, Dictionary<string, HashSet<string>>> GetPlayerResourcePaths()
-    {
-        try
-        {
-            if (!Available)
-                return new Dictionary<ushort, Dictionary<string, HashSet<string>>>();
-
-            return _getPlayerPaths.Invoke() ?? new Dictionary<ushort, Dictionary<string, HashSet<string>>>();
-        }
-        catch (Exception e)
-        {
-            _log.Warning($"Could not retrieve Penumbra player resource paths: {e.Message}");
-            return new Dictionary<ushort, Dictionary<string, HashSet<string>>>();
-        }
-    }
-
-    public string? GetModDirectory()
-    {
-        try
-        {
-            var dir = _getModDirectory.Invoke();
-            return string.IsNullOrWhiteSpace(dir) ? null : dir;
-        }
-        catch (Exception e)
-        {
-            _log.Debug($"Could not retrieve Penumbra mod directory: {e.Message}");
-            return null;
-        }
-    }
-
-    public Dictionary<string, string> GetModList()
-    {
-        try
-        {
-            return _getModList.Invoke() ?? new Dictionary<string, string>();
-        }
-        catch (Exception e)
-        {
-            _log.Debug($"Could not retrieve Penumbra mod list: {e.Message}");
-            return new Dictionary<string, string>();
-        }
-    }
-
-    private static Dictionary<string, HashSet<string>>?[] EmptyResourceResults(int count)
-        => Enumerable.Repeat<Dictionary<string, HashSet<string>>?>(null, count).ToArray();
 
     // The export server and the windows still call these helpers here.
     internal static bool IsSafeGamePath(string? gamePath) => ModPaths.IsSafeGamePath(gamePath);
