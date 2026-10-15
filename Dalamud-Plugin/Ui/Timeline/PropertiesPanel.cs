@@ -402,5 +402,4 @@ internal sealed class PropertiesPanel(TimelineSession session, EffectLookEditor 
             }
         }
     }
-
 }

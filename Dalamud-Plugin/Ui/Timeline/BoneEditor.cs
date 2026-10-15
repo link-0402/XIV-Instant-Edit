@@ -466,5 +466,4 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         try { return session.Playback.ActorRotation(); }
         catch (InvalidOperationException) { return null; }
     }
-
 }

@@ -16,6 +16,7 @@ internal sealed class CutPanel(TimelineSession session, MotionDecode decode, Tim
     // The Remove frames fields of the selected part, and which part and range they were filled for.
     private int removeFrom, removeTo;
     private string? removeFor;
+
     public void Draw(TimelineEditor current)
     {
         if (current.SelectedCut is not { } cut)
