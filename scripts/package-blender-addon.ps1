@@ -11,7 +11,7 @@ $scriptRoot = if ($PSScriptRoot) {
     Split-Path -Parent $MyInvocation.MyCommand.Definition
 }
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-    $OutputPath = Join-Path $scriptRoot '..\Blender-Addon\blender_repo\XIV-Instant-Edit.zip'
+    $OutputPath = Join-Path $scriptRoot '..\dist\blender_repo\XIV-Instant-Edit-Blender.zip'
 }
 
 $repoRoot = (Resolve-Path (Join-Path $scriptRoot '..')).Path
@@ -33,6 +33,10 @@ Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archive = $null
 
+# Entries get one fixed timestamp and a fixed order, so the same checkout packs to the same
+# bytes (on the same PowerShell runtime) and the index hash only changes with the files.
+$entryTimestamp = [System.DateTimeOffset]::new(2000, 1, 1, 0, 0, 0, [System.TimeSpan]::Zero)
+
 try {
     $archive = [System.IO.Compression.ZipFile]::Open(
         $resolvedOutput,
@@ -51,14 +55,35 @@ try {
         throw "No add-on files were found under: $addonRoot"
     }
 
-    foreach ($file in $files) {
+    $entries = foreach ($file in $files) {
         $relativePath = $file.FullName.Substring($addonRoot.Length).TrimStart('\', '/')
-        $relativePath = $relativePath.Replace('\', '/')
-        [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
-            $archive,
-            $file.FullName,
-            $relativePath,
-            [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+        [pscustomobject]@{
+            Name = $relativePath.Replace('\', '/')
+            Path = $file.FullName
+        }
+    }
+    $sortedEntries = @($entries)
+    [System.Array]::Sort(
+        $sortedEntries,
+        [System.Comparison[object]] { param($a, $b) [string]::CompareOrdinal($a.Name, $b.Name) })
+
+    foreach ($entry in $sortedEntries) {
+        $bytes = [System.IO.File]::ReadAllBytes($entry.Path)
+        # Text files go in with LF endings, as git stores them, so a Windows checkout's CRLF
+        # copies pack the same as a Linux one. Files with a NUL byte are binary and left alone.
+        if ([System.Array]::IndexOf($bytes, [byte]0) -lt 0) {
+            $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+            $bytes = $latin1.GetBytes($latin1.GetString($bytes).Replace("`r`n", "`n"))
+        }
+        $zipEntry = $archive.CreateEntry($entry.Name, [System.IO.Compression.CompressionLevel]::Optimal)
+        $zipEntry.LastWriteTime = $entryTimestamp
+        $target = $zipEntry.Open()
+        try {
+            $target.Write($bytes, 0, $bytes.Length)
+        }
+        finally {
+            $target.Dispose()
+        }
     }
 }
 finally {
