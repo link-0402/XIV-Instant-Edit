@@ -81,8 +81,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         IFramework framework, ITextureProvider textures, IPluginLog log, GameSoundPlayer? soundPlayer = null)
         : base("Timeline###XIVInstantEditTimeline")
     {
-        session = new TimelineSession(animations, catalog, preview, playback, motionDisplay, data, framework, log,
-            () => reader.Busy || saveFooter.Busy);
+        session = new TimelineSession(animations, catalog, preview, playback, motionDisplay, data, framework, log);
         reader = new TimelineReader(session);
         this.soundPlayer = soundPlayer;
         this.animationError = animationError;
@@ -96,7 +95,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         soundFiles = new SoundFiles(session);
         pickers = new TimelinePickers(session, soundFiles);
         soundInspector = new SoundInspector(session, soundFiles, pickers, soundPlayer);
-        timelinePreview = new TimelinePreview(session, decode, effectLooks, soundFiles, () => saveFooter.RepairTarget);
+        timelinePreview = new TimelinePreview(session, decode, effectLooks, soundFiles);
         posing = new BonePosing(session, decode);
         boneEditor = new BoneEditor(session, decode, posing, this);
         poseSources = new PoseSourcePanel(session, decode, posing, recorder);
@@ -118,6 +117,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         livePose = new LivePosePanel(session, sidePanel.ShowProperties);
         toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow);
         bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, this, textures);
+        session.KeepReadOnlyWhile(() => reader.Busy || saveFooter.Busy);
 
         Size = new Vector2(1000, 560);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -500,7 +500,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         timelinePreview.Update(editor, source);
         CheckGizmo();
         toolbar.Draw(editor);
-        timelinePreview.DrawBar(editor, source);
+        timelinePreview.DrawBar(editor, source, saveFooter.RepairTarget);
         toolbar.DrawMessages(editor);
 
         var avail = ImGui.GetContentRegionAvail();

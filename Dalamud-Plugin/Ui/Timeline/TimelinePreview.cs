@@ -19,8 +19,7 @@ namespace InstantEdit.Ui.Timeline;
 /// without building again. Outside GPose the playhead may follow the clip your character plays. Every
 /// playback call runs here, on the framework thread.
 /// </summary>
-internal sealed class TimelinePreview(TimelineSession session, MotionDecode decode, EffectLookEditor effectLooks, SoundFiles soundFiles,
-    Func<SkeletonStandard?> repairTarget)
+internal sealed class TimelinePreview(TimelineSession session, MotionDecode decode, EffectLookEditor effectLooks, SoundFiles soundFiles)
 {
     private float speedPercent = 100;
     private bool follow = true;
@@ -97,7 +96,8 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         SyncLooks(current);
     }
 
-    public void DrawBar(TimelineEditor current, AnimationTimelineSource loaded)
+    /// <summary> The preview bar; <paramref name="repair"/> is the standard skeleton a preview repairs the clip onto, as a save would. </summary>
+    public void DrawBar(TimelineEditor current, AnimationTimelineSource loaded, SkeletonStandard? repair)
     {
         var service = session.Animations!;
         var available = PlaybackAvailable(out var reason);
@@ -113,7 +113,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         using (ImRaii.Disabled(blocked != null))
         {
             if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Eye, "Preview", null, null, null, null))
-                StartPreview(current, loaded);
+                StartPreview(current, loaded, repair);
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(blocked ?? "Build the edited clip, redraw your GPose character with it and play it. Nothing is saved.");
@@ -252,7 +252,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     /// Builds the edited clip in the service, writes it with the imports it uses into a temporary
     /// mod on the GPose actor's collection, then plays the clip's timeline on that actor.
     /// </summary>
-    private void StartPreview(TimelineEditor current, AnimationTimelineSource loaded)
+    private void StartPreview(TimelineEditor current, AnimationTimelineSource loaded, SkeletonStandard? repair)
     {
         // The preview plays the built file through a temporary mod; Live's swapped motion must go first.
         StopLive();
@@ -338,7 +338,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 return true;
             });
             return played ? redraw == null ? "Preview playing." : "Preview playing. " + redraw : "Preview on. " + session.Playback.Error;
-        }, current.MotionFrames, target.Standalone ? null : repairTarget());
+        }, current.MotionFrames, target.Standalone ? null : repair);
     }
 
     /// <summary>
