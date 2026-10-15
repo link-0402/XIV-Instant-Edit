@@ -12,10 +12,10 @@ public sealed partial class MainWindow : IModHandoff
     {
         if (!row.IsModel || !ResourceViews.IsSafeModel(row))
             return "Only .mdl files of the mod can be sent to Blender.";
-        return Volatile.Read(ref _editing) != 0 ? "Another model is being sent." : null;
+        return _models.Busy.IsBusy ? "Another model is being sent." : null;
     }
 
-    void IModHandoff.EditModel(ResourceView row, ActorView mod) => TryEditNode(row, mod);
+    void IModHandoff.EditModel(ResourceView row, ActorView mod) => _models.TryEditNode(row, mod);
 
     string? IModHandoff.TextureBlock(ResourceView row)
     {

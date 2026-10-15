@@ -1,25 +1,70 @@
-using System.Numerics;
-using Dalamud.Bindings.ImGui;
-using Dalamud.Interface;
-using Dalamud.Interface.Components;
-using Dalamud.Interface.Textures;
-using Dalamud.Interface.Textures.TextureWraps;
-using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
-using Dalamud.Utility;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.CharacterSend;
 using InstantEdit.Services.Skeletons;
 using Lumina.Data;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Main;
 
-public sealed partial class MainWindow
+/// <summary> What sending one model to Blender produced. </summary>
+/// <param name="Status">The status line a send of this model alone reports.</param>
+/// <param name="Notes">Its warnings, each on its own, for the summary of a send of several models.</param>
+internal sealed record ModelSendResult(string FileName, string Status, bool HasWarning, IReadOnlyList<string> Notes, bool Scaled);
+
+/// <summary>
+/// A model of a whole-character send: its entry, the character's skeleton for body models
+/// (a weapon's own is looked up), what the send resolved once for all of its models, and the
+/// model file the send already read.
+/// </summary>
+internal sealed record CharacterModelSend(
+    CharacterImportEntry Entry,
+    ModelSkeletonPayload? Skeleton,
+    RacialScalingSource? Scaling,
+    string? ScalingProblem,
+    IReadOnlyCollection<MaterialResourceCandidate> PreviewResources,
+    PenumbraCollectionTarget? Collection,
+    byte[]? Bytes = null);
+
+/// <summary>
+/// Sends models to Blender as imports with their own context: the pen of a model row, and each
+/// model of a whole-character send. One send runs at a time (<see cref="Busy"/>).
+/// </summary>
+internal sealed class ModelSender
 {
-    private ModelSkeletonResolver? _skeletons;
+    private readonly Configuration _config;
+    private readonly PenumbraService _penumbra;
+    private readonly BlenderClient _blender;
+    private readonly BlenderConnection _blenderConnection;
+    private readonly IDataManager _data;
+    private readonly IChatGui _chat;
+    private readonly IPluginLog _log;
+    private readonly MaterialPreviewBundleBuilder _materialPreviews;
+    private readonly ResourceSourceAttributor _resourceSources;
+    private readonly StatusFeed _feed;
+    private readonly CancellationToken _lifetime;
 
-    internal void AttachSkeletons(ModelSkeletonResolver? value) => _skeletons = value;
+    public ModelSender(Configuration config, PenumbraService penumbra, BlenderClient blender, BlenderConnection blenderConnection,
+        IDataManager data, IChatGui chat, IPluginLog log, ResourceSourceAttributor resourceSources, StatusFeed feed, CancellationToken lifetime)
+    {
+        _config = config;
+        _penumbra = penumbra;
+        _blender = blender;
+        _blenderConnection = blenderConnection;
+        _data = data;
+        _chat = chat;
+        _log = log;
+        _resourceSources = resourceSources;
+        _materialPreviews = new MaterialPreviewBundleBuilder(data, log, resourceSources);
+        _feed = feed;
+        _lifetime = lifetime;
+    }
+
+    /// <summary> Set while a model, or a whole character, is being sent. </summary>
+    public BusyFlag Busy { get; } = new();
+
+    /// <summary> The game skeleton reader, once the plugin has started it. </summary>
+    public ModelSkeletonResolver? Skeletons { get; set; }
 
     /// <summary>
     /// The model's game skeleton for Blender's generated armature, and a warning for the status
@@ -31,7 +76,7 @@ public sealed partial class MainWindow
         ActorView actor, MdlFile model, int blenderPort, BlenderImportOptions importOptions,
         RacialScaling? scaling, CancellationToken cancellationToken)
     {
-        var resolver = _skeletons;
+        var resolver = Skeletons;
         var modelPath = scaling is null ? model.GamePath : ModelSkeletonPaths.WithRace(model.GamePath, scaling.CharacterRace);
         if (resolver is null || importOptions.ArmatureMode == BlenderImportOptions.ExistingMode ||
             ModelSkeletonPaths.Parse(modelPath) is null ||
@@ -64,7 +109,7 @@ public sealed partial class MainWindow
     private async Task<(RacialScaling? Scaling, string? Warning)> ResolveRacialScalingAsync(
         ActorView actor, string modelPath, CancellationToken cancellationToken)
     {
-        if (!_config.ApplyRacialScaling || _skeletons is not { } resolver || ModelSkeletonPaths.Parse(modelPath) is not { Human: true })
+        if (!_config.ApplyRacialScaling || Skeletons is not { } resolver || ModelSkeletonPaths.Parse(modelPath) is not { Human: true })
             return (null, null);
         var (source, problem) = actor.Entity is { } entity
             ? await resolver.RacialScalingAsync(entity.ObjectIndex, entity.Address, cancellationToken).ConfigureAwait(false)
@@ -93,11 +138,11 @@ public sealed partial class MainWindow
         }
     }
 
-    private void TryEditNode(ResourceView node, ActorView actor)
+    public void TryEditNode(ResourceView node, ActorView actor)
     {
         if (!node.IsModel || !ResourceViews.IsSafeModel(node))
         {
-            SetStatus("Only safe .mdl resources can be imported.", FeedbackSeverity.Warning);
+            _feed.SetStatus("Only safe .mdl resources can be imported.", FeedbackSeverity.Warning);
             return;
         }
 
@@ -105,17 +150,16 @@ public sealed partial class MainWindow
         EditModel(actor, model, node);
     }
 
-    private void RequestRefresh() { try { SetStatus(string.Empty, FeedbackSeverity.Success); _onScreen.RequestRefresh(); } catch (Exception e) { _log.Debug(e.Message); SetStatus("Refresh unavailable. Is Penumbra running?", FeedbackSeverity.Warning); } }
     private void EditModel(ActorView actor, MdlFile model, ResourceView source)
     {
-        if (Interlocked.CompareExchange(ref _editing, 1, 0) != 0)
+        if (!Busy.TryEnter())
         {
-            SetStatus("Another model is already being sent.", FeedbackSeverity.Warning);
+            _feed.SetStatus("Another model is already being sent.", FeedbackSeverity.Warning);
             return;
         }
 
         var importOptions = CurrentImportOptions();
-        var cancellationToken = _lifetimeCts.Token;
+        var cancellationToken = _lifetime;
         _ = Task.Run(() => EditModelAsync(
             actor,
             model,
@@ -129,7 +173,7 @@ public sealed partial class MainWindow
     public void ReportImportFailure(BridgeFailure failure)
     {
         var message = failure.UserMessage;
-        SetStatus($"Failed: {message}", FeedbackSeverity.Error);
+        _feed.SetStatus($"Failed: {message}", FeedbackSeverity.Error);
         _chat.PrintError($"XIV Instant Edit: {message}");
     }
 
@@ -158,7 +202,7 @@ public sealed partial class MainWindow
                 blenderPort, importOptions, source.SourceState == ResourceSourceState.GameData, cancellationToken).ConfigureAwait(false);
             var sent = await SendModelToBlenderAsync(
                 actor, model, source, blenderPort, listenPort, importOptions, null, cancellationToken).ConfigureAwait(false);
-            SetStatus(sent.Status, sent.HasWarning ? FeedbackSeverity.Warning : FeedbackSeverity.Success);
+            _feed.SetStatus(sent.Status, sent.HasWarning ? FeedbackSeverity.Warning : FeedbackSeverity.Success);
             _chat.Print($"XIV Instant Edit: {model.FileName} sent to Blender.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -168,39 +212,20 @@ public sealed partial class MainWindow
         catch (Exception e)
         {
             _log.Error(e, "Failed to send model to Blender.");
-            SetStatus($"Failed: {e.Message}", FeedbackSeverity.Error);
+            _feed.SetStatus($"Failed: {e.Message}", FeedbackSeverity.Error);
             _chat.PrintError($"XIV Instant Edit: could not send model to Blender: {e.Message}");
         }
         finally
         {
-            Volatile.Write(ref _editing, 0);
+            Busy.Exit();
         }
     }
-
-    /// <summary> What sending one model to Blender produced. </summary>
-    /// <param name="Status">The status line a send of this model alone reports.</param>
-    /// <param name="Notes">Its warnings, each on its own, for the summary of a send of several models.</param>
-    private sealed record ModelSendResult(string FileName, string Status, bool HasWarning, IReadOnlyList<string> Notes, bool Scaled);
-
-    /// <summary>
-    /// A model of a whole-character send: its entry, the character's skeleton for body models
-    /// (a weapon's own is looked up), what the send resolved once for all of its models, and the
-    /// model file the send already read.
-    /// </summary>
-    private sealed record CharacterModelSend(
-        CharacterImportEntry Entry,
-        ModelSkeletonPayload? Skeleton,
-        RacialScalingSource? Scaling,
-        string? ScalingProblem,
-        IReadOnlyCollection<MaterialResourceCandidate> PreviewResources,
-        PenumbraCollectionTarget? Collection,
-        byte[]? Bytes = null);
 
     /// <summary>
     /// Sends one model to Blender as an import with its own context. Throws with a user-facing
     /// message when it can't be sent. Blender's readiness is checked by the caller.
     /// </summary>
-    private async Task<ModelSendResult> SendModelToBlenderAsync(
+    public async Task<ModelSendResult> SendModelToBlenderAsync(
         ActorView actor,
         MdlFile model,
         ResourceView source,
@@ -374,7 +399,7 @@ public sealed partial class MainWindow
     }
 
     /// <summary> The model's file: a mod file from disk, or a game file from the game's data. </summary>
-    private async Task<byte[]> ReadModelBytesAsync(MdlFile model, CancellationToken cancellationToken)
+    public async Task<byte[]> ReadModelBytesAsync(MdlFile model, CancellationToken cancellationToken)
         => model.IsFilePath
             ? await File.ReadAllBytesAsync(model.LocalPath, cancellationToken).ConfigureAwait(false)
             : (await _data.GetFileAsync<FileResource>(model.LocalPath, cancellationToken).ConfigureAwait(false))?.Data
@@ -423,7 +448,7 @@ public sealed partial class MainWindow
         }
     }
 
-    private async Task<IReadOnlyCollection<MaterialResourceCandidate>> ResolvePreviewResourcesAsync(ActorView actor)
+    public async Task<IReadOnlyCollection<MaterialResourceCandidate>> ResolvePreviewResourcesAsync(ActorView actor)
     {
         if (actor.Entity is not null && actor.ImportObjectIndex is >= 0 and <= ushort.MaxValue)
         {

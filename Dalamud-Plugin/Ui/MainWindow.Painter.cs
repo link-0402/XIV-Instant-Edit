@@ -114,8 +114,8 @@ public sealed partial class MainWindow
         {
             try
             {
-                var resources = await ResolvePreviewResourcesAsync(actor).ConfigureAwait(false);
-                var (scaling, scalingProblem) = scale && _skeletons is { } skeletons
+                var resources = await _models.ResolvePreviewResourcesAsync(actor).ConfigureAwait(false);
+                var (scaling, scalingProblem) = scale && _models.Skeletons is { } skeletons
                     ? await skeletons.RacialScalingAsync(entity.ObjectIndex, entity.Address, _lifetimeCts.Token).ConfigureAwait(false)
                     : (null, null);
                 var request = new PainterRequest(entity.ObjectIndex, entity.Address.ToInt64(), actor.Name, model, others, resources.ToList())
