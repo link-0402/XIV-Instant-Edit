@@ -99,7 +99,7 @@ public sealed partial class TimelineWindow
             if (layer.Kind == MotionLayerKind.Pose)
             {
                 ImGui.Spacing();
-                DrawPoseSources(current, layer, skeleton, loaded, readOnly);
+                poseSources.Draw(current, layer, skeleton, loaded, readOnly);
             }
         }
 
