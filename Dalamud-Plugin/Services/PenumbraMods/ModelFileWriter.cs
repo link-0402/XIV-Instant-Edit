@@ -39,7 +39,7 @@ internal sealed class ModelFileWriter
             Directory.CreateDirectory(parent);
             if (backupExisting && File.Exists(fullTarget))
             {
-                if (_backups is null || modDirectory is null || targetRelativePath is null)
+                if (modDirectory is null || targetRelativePath is null)
                     return "Managed backup storage is unavailable.";
                 var backup = _backups.Create(fullTarget, modDirectory, targetRelativePath);
                 if (estState is not null)
@@ -70,7 +70,7 @@ internal sealed class ModelFileWriter
     {
         try
         {
-            if (File.Exists(targetFile) && _backups is not null)
+            if (File.Exists(targetFile))
             {
                 var backup = _backups.Create(targetFile, modDirectory, targetRelativePath);
                 if (estState is not null)

@@ -77,7 +77,7 @@ internal sealed class AnimationModService
 
     internal Task<string> AnimationMetadataAsync(Guid collection) => _framework.RunOnFrameworkThread(() =>
     {
-        var player = _objects?.LocalPlayer ?? throw new IOException("The player is unavailable.");
+        var player = _objects.LocalPlayer ?? throw new IOException("The player is unavailable.");
         var target = _getCollectionForObject.Invoke(player.ObjectIndex);
         if (!target.ObjectValid || target.EffectiveCollection.Id != collection) throw new IOException("The player collection changed.");
         return _ipc.GetMetaManipulations(player.ObjectIndex);
@@ -131,7 +131,7 @@ internal sealed class AnimationModService
         });
     }
 
-    internal string? RegisteredAnimationModRootOnFramework(string directory)
+    private string? RegisteredAnimationModRootOnFramework(string directory)
     {
         // GetModPath is Penumbra's virtual UI folder/sort path. ModPath from the
         // synchronized mod adapter is the actual registered directory on disk.

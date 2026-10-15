@@ -1,8 +1,8 @@
+using InstantEdit.Services.PenumbraMods;
 ﻿using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
-using InstantEdit.Services.PenumbraMods;
 
 /// <summary>
 /// A timeline edit can add files, such as an imported sound, next to the animation it edits.

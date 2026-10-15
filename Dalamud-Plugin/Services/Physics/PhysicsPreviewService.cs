@@ -2,8 +2,8 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Dalamud.Plugin.Services;
-using Penumbra.Api.Enums;
 using InstantEdit.Services.PenumbraMods;
+using Penumbra.Api.Enums;
 
 namespace InstantEdit.Services.Physics;
 

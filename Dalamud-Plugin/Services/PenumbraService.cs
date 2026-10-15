@@ -3,7 +3,6 @@ using System.Text.Json.Serialization;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
-using InstantEdit.Services.Animations;
 using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Services.PreviewMods;
 using Penumbra.Api.Enums;
@@ -583,6 +582,7 @@ public sealed partial class PenumbraService : IDisposable, ITextureEditBackend
     private static void TouchV4ModMetadata(JsonObject meta) => ModMetadata.TouchV4ModMetadata(meta);
     private static void WriteJsonAtomic(string path, JsonObject value) => ModMetadata.WriteJsonAtomic(path, value);
     private static Guid? ReadModStableIdentifier(string modRoot) => ModMetadata.ReadModStableIdentifier(modRoot);
+    internal static Guid? ReadModStableIdentifierForRegression(string modRoot) => ModMetadata.ReadModStableIdentifier(modRoot);
     private static JsonObject CreateV4ModMetadata(string name, string author, string description, string version,
         JsonObject defaultData)
         => ModMetadata.CreateV4ModMetadata(name, author, description, version, defaultData);

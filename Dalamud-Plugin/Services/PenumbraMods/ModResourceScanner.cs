@@ -220,11 +220,11 @@ internal sealed class ModResourceScanner
                 "The output mod is missing one or more captured non-active material or texture dependencies.", missing);
     }
 
-    internal static MaterialCoverageResult MaterialCoverageUnavailable()
+    private static MaterialCoverageResult MaterialCoverageUnavailable()
         => new(false, false, "material_coverage_unavailable",
             "Material coverage could not be verified.", Array.Empty<MaterialCoverageMissing>());
 
-    internal PenumbraModSnapshot? ScanModResources(ModScanRequest request, CancellationToken cancellationToken)
+    private PenumbraModSnapshot? ScanModResources(ModScanRequest request, CancellationToken cancellationToken)
     {
         var mod = request.Mod;
         var scannedRoot = false;

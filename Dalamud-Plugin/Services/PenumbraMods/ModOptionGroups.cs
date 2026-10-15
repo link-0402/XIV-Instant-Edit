@@ -78,7 +78,7 @@ internal static class ModOptionGroups
         };
     }
 
-    internal static void AddSourceOptionCandidates(
+    private static void AddSourceOptionCandidates(
         JsonObject? group, string gamePath, string relativePath,
         ICollection<(JsonObject Option, SourceOptionLocator Locator)> candidates)
     {
@@ -103,7 +103,7 @@ internal static class ModOptionGroups
         }
     }
 
-    internal static bool IsV4OptionMembership(string? membership)
+    private static bool IsV4OptionMembership(string? membership)
     {
         var parts = membership?.Split(':');
         return parts is ["option", var group, var option] &&
@@ -187,7 +187,7 @@ internal static class ModOptionGroups
         return (meta["Groups"] as JsonArray ?? []).OfType<JsonObject>().ToArray();
     }
 
-    internal static bool TryParseOptionTargetId(string? value, out Guid groupId, out Guid optionId)
+    private static bool TryParseOptionTargetId(string? value, out Guid groupId, out Guid optionId)
     {
         groupId = Guid.Empty;
         optionId = Guid.Empty;
@@ -196,7 +196,7 @@ internal static class ModOptionGroups
                Guid.TryParse(group, out groupId) && Guid.TryParse(option, out optionId);
     }
 
-    internal static bool TryParseGroupTargetId(string? value, out Guid groupId)
+    private static bool TryParseGroupTargetId(string? value, out Guid groupId)
     {
         groupId = Guid.Empty;
         var parts = value?.Split(':');
@@ -449,11 +449,11 @@ internal static class ModOptionGroups
         => options.OfType<JsonObject>().FirstOrDefault(option =>
             string.Equals(JsonString(option["Name"]), name, StringComparison.OrdinalIgnoreCase));
 
-    internal static bool IsReusableVariantGroup(JsonObject group, string sourceGamePath)
+    private static bool IsReusableVariantGroup(JsonObject group, string sourceGamePath)
         => string.Equals(JsonString(group["Type"]), "Single", StringComparison.OrdinalIgnoreCase) &&
            GroupHasGamePath(group, sourceGamePath);
 
-    internal static bool GroupHasGamePath(JsonObject group, string sourceGamePath)
+    private static bool GroupHasGamePath(JsonObject group, string sourceGamePath)
     {
         if (group["Options"] is not JsonArray options)
             return false;

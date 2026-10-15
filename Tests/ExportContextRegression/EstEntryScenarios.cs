@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
 using InstantEdit.Services;
-using static InstantEdit.TestSupport.Assertions;
 using InstantEdit.Services.PenumbraMods;
+using static InstantEdit.TestSupport.Assertions;
 
 /// <summary>Hair EST entries set from Magic Fit's hair skeleton tags on export, taken back, and restored with backups.</summary>
 internal static class EstEntryScenarios

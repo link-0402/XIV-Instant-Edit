@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
 using InstantEdit.Services;
-using static InstantEdit.TestSupport.Assertions;
 using InstantEdit.Services.PenumbraMods;
+using static InstantEdit.TestSupport.Assertions;
 
 /// <summary>
 /// Quick Export as another race's model: the race's game path, the file it goes into next to the

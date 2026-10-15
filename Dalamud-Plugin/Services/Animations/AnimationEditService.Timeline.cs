@@ -1,8 +1,8 @@
+using InstantEdit.Services.PenumbraMods;
 ﻿using System.Collections.Immutable;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
-using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services.Animations;
 

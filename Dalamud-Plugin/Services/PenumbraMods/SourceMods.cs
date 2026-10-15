@@ -232,7 +232,7 @@ internal sealed class SourceMods
         }
     }
 
-    internal static void AddExportRoot(
+    private static void AddExportRoot(
         List<(string Root, bool Preferred)> roots,
         string? value,
         bool preferred,
@@ -259,7 +259,7 @@ internal sealed class SourceMods
         roots.Add((normalized, preferred));
     }
 
-    internal static bool TryRelativeModelPath(string filePath, string root, out string relative)
+    private static bool TryRelativeModelPath(string filePath, string root, out string relative)
     {
         relative = string.Empty;
         try
@@ -281,7 +281,7 @@ internal sealed class SourceMods
         }
     }
 
-    internal static string? NormalizeRelativeModelPath(string? value)
+    private static string? NormalizeRelativeModelPath(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
             return null;
@@ -384,7 +384,7 @@ internal sealed class SourceMods
         }
     }
 
-    internal bool TryResolveRegisteredModIdentity(
+    private bool TryResolveRegisteredModIdentity(
         IReadOnlyDictionary<string, string> modList,
         string requestedDirectory,
         Guid? expectedStableId,
@@ -472,7 +472,7 @@ internal sealed class SourceMods
         return false;
     }
 
-    internal IEnumerable<string> RegisteredModRootCandidates(string directory, string? capturedRootPath = null)
+    private IEnumerable<string> RegisteredModRootCandidates(string directory, string? capturedRootPath = null)
     {
         var registered = _ipc.GetRegisteredModPath(directory);
         if (!string.IsNullOrWhiteSpace(registered))

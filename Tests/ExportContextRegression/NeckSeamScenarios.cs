@@ -4,10 +4,10 @@ using System.Text;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.NeckSeam;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Services.Skeletons;
 using InstantEdit.Ui;
 using static InstantEdit.TestSupport.Assertions;
-using InstantEdit.Services.PenumbraMods;
 
 /// <summary>
 /// The neck seam fix's pure parts on synthetic data: a face and a body built as two open tubes that

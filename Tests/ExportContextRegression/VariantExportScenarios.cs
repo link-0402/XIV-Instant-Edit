@@ -2,8 +2,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services;
-using static InstantEdit.TestSupport.Assertions;
 using InstantEdit.Services.PenumbraMods;
+using static InstantEdit.TestSupport.Assertions;
 
 internal static class VariantExportScenarios
 {

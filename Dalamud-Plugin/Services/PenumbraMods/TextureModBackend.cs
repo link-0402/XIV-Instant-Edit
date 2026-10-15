@@ -48,7 +48,7 @@ internal sealed class TextureModBackend : ITextureEditBackend
     }
 
     /// <summary>Starts a mapping fingerprint of the game paths mapped to one file; older ones hashed all of meta.json.</summary>
-    internal const string MappingFingerprintVersion = "paths:";
+    private const string MappingFingerprintVersion = "paths:";
 
     async Task ITextureEditBackend.ConvertAsync(string input, string output, TextureType format, bool mipMaps)
     {
@@ -74,7 +74,7 @@ internal sealed class TextureModBackend : ITextureEditBackend
             : null;
         var actor = await _framework.RunOnFrameworkThread(() =>
         {
-            var obj = request.ObjectIndex is { } i ? _objects?[i] : null;
+            var obj = request.ObjectIndex is { } i ? _objects[i] : null;
             if (request.ObjectIndex.HasValue && (obj is null || obj.Address.ToInt64() != request.ActorAddress))
                 throw new IOException("The selected actor changed. Refresh the character list.");
             return (Id: obj?.GameObjectId ?? 0UL, Name: obj?.Name.ToString() ?? "");
@@ -96,7 +96,7 @@ internal sealed class TextureModBackend : ITextureEditBackend
             relative = "Files/" + request.GamePath;
             TextureFiles.EnsureLocalPath(modRoot);
             await EnsureNewTextureModNameAsync(modDirectory, modRoot).ConfigureAwait(false);
-            bytes = await _framework.RunOnFrameworkThread(() => _data?.GetFile(resolvedGamePath)?.Data.ToArray()
+            bytes = await _framework.RunOnFrameworkThread(() => _data.GetFile(resolvedGamePath)?.Data.ToArray()
                 ?? throw new IOException("The resolved vanilla texture could not be read.")).ConfigureAwait(false);
         }
         else
@@ -120,14 +120,14 @@ internal sealed class TextureModBackend : ITextureEditBackend
         return new TextureSource(bytes, session);
     }
 
-    internal async Task EnsureNewTextureModNameAsync(string name, string path)
+    private async Task EnsureNewTextureModNameAsync(string name, string path)
     {
         var exists = await _framework.RunOnFrameworkThread(() => _ipc.GetMods().Any(m =>
             string.Equals(m.Directory, name, StringComparison.OrdinalIgnoreCase) || string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase))).ConfigureAwait(false);
         if (exists || Directory.Exists(path) || File.Exists(path)) throw new TextureConflictException("That mod name is already in use. Start a session with a different name.");
     }
 
-    internal async Task ValidateTextureDestinationAsync(string mod, string root, string relative, string file, CancellationToken token)
+    private async Task ValidateTextureDestinationAsync(string mod, string root, string relative, string file, CancellationToken token)
     {
         if (!IsSafeModName(mod) || !IsSafeGameResourcePath(relative, ".tex")) throw new IOException("Invalid texture destination.");
         TextureFiles.EnsureLocalPath(root);
@@ -149,18 +149,18 @@ internal sealed class TextureModBackend : ITextureEditBackend
             throw new TextureConflictException("The texture's mod moved, was removed, or is no longer available. Reopen the texture from On Screen or its mod window.");
     }
 
-    internal bool MatchesTextureActor(TextureEditSession session)
+    private bool MatchesTextureActor(TextureEditSession session)
     {
-        var obj = session.ObjectIndex is { } i ? _objects?[i] : null;
+        var obj = session.ObjectIndex is { } i ? _objects[i] : null;
         return obj is not null && obj.Address.ToInt64() == session.ActorAddress && obj.GameObjectId == session.ActorId &&
             obj.Name.ToString() == session.ActorName;
     }
 
-    internal Task ValidateLiveTextureMappingAsync(TextureEditSession session, string expected, bool requireActor)
+    private Task ValidateLiveTextureMappingAsync(TextureEditSession session, string expected, bool requireActor)
         => ValidateLiveTextureMappingAsync(session, [expected], requireActor);
 
     /// <summary>The files the session may show: its destination, or one of its variants when that option is selected.</summary>
-    internal static string[] SessionTextureFiles(TextureEditSession session)
+    private static string[] SessionTextureFiles(TextureEditSession session)
         => [session.TargetFile, .. session.Variants.Where(v => v.RelativePath.Length > 0).Select(session.VariantTargetFile)];
 
     /// <summary>
@@ -169,7 +169,7 @@ internal sealed class TextureModBackend : ITextureEditBackend
     /// redrawn or between areas, or wears other gear; one drawn from another file waits, since a redraw
     /// or an option switched back can end that.
     /// </summary>
-    internal async Task ValidateLiveTextureMappingAsync(TextureEditSession session, IReadOnlyCollection<string> expected, bool requireActor)
+    private async Task ValidateLiveTextureMappingAsync(TextureEditSession session, IReadOnlyCollection<string> expected, bool requireActor)
     {
         if (!session.ObjectIndex.HasValue) return;
         await _framework.RunOnFrameworkThread(() =>
@@ -194,7 +194,7 @@ internal sealed class TextureModBackend : ITextureEditBackend
     }
 
     /// <summary>A resolved path from Penumbra against a session file: game paths by text, files on disk by location.</summary>
-    internal static bool SameTextureFile(string resolved, string file)
+    private static bool SameTextureFile(string resolved, string file)
         => string.Equals(resolved, file, StringComparison.OrdinalIgnoreCase) || PathRules.SamePhysicalPath(resolved, file);
 
     /// <summary>The game paths a mod maps to one of its files, lower case, from its default data and every option.</summary>
@@ -231,7 +231,7 @@ internal sealed class TextureModBackend : ITextureEditBackend
         => MappingFingerprintVersion + TextureFiles.Hash(Encoding.UTF8.GetBytes(string.Join('\n', gamePaths)));
 
     /// <summary>Penumbra writes a mod's relative paths with backslashes and in lower case; sessions keep them as found on disk.</summary>
-    internal static string ModRelativeKey(string path)
+    private static string ModRelativeKey(string path)
     {
         var normalized = path.Replace('\\', '/').Trim();
         while (normalized.StartsWith("./", StringComparison.Ordinal))
@@ -244,7 +244,7 @@ internal sealed class TextureModBackend : ITextureEditBackend
     /// opened. A session from an earlier version kept a hash of all of meta.json; it takes the current
     /// mapping on its next save, as long as the mod still uses the file.
     /// </summary>
-    internal static void EnsureTextureMapping(TextureEditSession session)
+    private static void EnsureTextureMapping(TextureEditSession session)
     {
         var gamePaths = TextureGamePaths(session.ModRoot, session.RelativePath);
         var fingerprint = MappingFingerprint(gamePaths);
@@ -313,7 +313,6 @@ internal sealed class TextureModBackend : ITextureEditBackend
                 await ValidateTextureDestinationAsync(session.ModDirectory, session.ModRoot, session.RelativePath, session.TargetFile, token).ConfigureAwait(false);
                 EnsureTextureMapping(session);
                 await ValidateLiveTextureMappingAsync(session, SessionTextureFiles(session), false).ConfigureAwait(false);
-                if (_backups is null) throw new IOException("Texture backup storage is unavailable.");
                 backup = TextureFiles.Replace(session.TargetFile, session.ModRoot, session.RelativePath,
                     session.ModDirectory, tex, session.LastCommittedHash, _backups, () =>
                     {
@@ -420,7 +419,7 @@ internal sealed class TextureModBackend : ITextureEditBackend
                     {
                         if (MatchesTextureActor(session))
                         {
-                            if (session.ObjectIndex != _objects?.LocalPlayer?.ObjectIndex && redrawn.Add(session.ObjectIndex!.Value))
+                            if (session.ObjectIndex != _objects.LocalPlayer?.ObjectIndex && redrawn.Add(session.ObjectIndex!.Value))
                                 _redrawObject.Invoke(session.ObjectIndex!.Value);
                         }
                         else if (session.ObjectIndex.HasValue) warnings.Add("Selected actor is no longer present; its redraw was skipped.");
@@ -477,7 +476,7 @@ internal sealed class TextureModBackend : ITextureEditBackend
         WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
     }
 
-    internal static void DeleteTextureStaging(string path, string expected)
+    private static void DeleteTextureStaging(string path, string expected)
     {
         if (!string.Equals(Path.GetFullPath(path), Path.GetFullPath(expected), StringComparison.OrdinalIgnoreCase)) throw new IOException("Invalid staging path.");
         TextureFiles.EnsureLocalPath(path);
@@ -490,7 +489,6 @@ internal sealed class TextureModBackend : ITextureEditBackend
     {
         TextureFiles.ValidateCommit(tex, session);
         if (session.NeedsMod) throw new IOException("The texture mod has not been created yet.");
-        if (_backups is null) throw new IOException("Texture backup storage is unavailable.");
         await _exportGate.WaitAsync(token).ConfigureAwait(false);
         try
         {
@@ -548,7 +546,7 @@ internal sealed class TextureModBackend : ITextureEditBackend
     /// A path beside the session's TEX: <c>&lt;texture&gt;_&lt;variant&gt;.tex</c>, numbered when that file
     /// already exists, since it then belongs to the mod rather than to this variant.
     /// </summary>
-    internal static string ChooseTextureVariantPath(TextureEditSession session, string name)
+    private static string ChooseTextureVariantPath(TextureEditSession session, string name)
     {
         var separator = session.RelativePath.LastIndexOf('/');
         var folder = separator < 0 ? "" : session.RelativePath[..(separator + 1)];
@@ -571,7 +569,7 @@ internal sealed class TextureModBackend : ITextureEditBackend
     /// creating the group, its Original option and the variant option as needed. The group and
     /// options are found by identity first, so renaming them in Penumbra keeps them in use.
     /// </summary>
-    internal static (Guid GroupId, Guid OriginalId, Guid OptionId) WriteTextureVariantGroup(
+    private static (Guid GroupId, Guid OriginalId, Guid OptionId) WriteTextureVariantGroup(
         TextureEditSession session, TextureVariant variant, string relative)
     {
         var meta = LoadV4ModMetadata(session.ModRoot);
@@ -635,10 +633,10 @@ internal sealed class TextureModBackend : ITextureEditBackend
             => ReadGuid(option["Id"]) ?? throw new InvalidDataException("A Penumbra option has no identifier.");
     }
 
-    internal static bool MapsGamePath(JsonObject option, string gamePath)
+    private static bool MapsGamePath(JsonObject option, string gamePath)
         => option["Files"] is JsonObject files && files.Any(pair => SameGamePath(pair.Key, gamePath));
 
-    internal static string UniqueGroupName(JsonArray groups, string name)
+    private static string UniqueGroupName(JsonArray groups, string name)
     {
         var used = groups.OfType<JsonObject>().Select(group => JsonString(group["Name"]) ?? "")
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -649,7 +647,7 @@ internal sealed class TextureModBackend : ITextureEditBackend
     }
 
     /// <summary>The current group and option names for a variant-group option, or null when either is gone.</summary>
-    internal static (string Group, string Option)? ReadTextureVariantSelection(string modRoot, Guid groupId, Guid optionId)
+    private static (string Group, string Option)? ReadTextureVariantSelection(string modRoot, Guid groupId, Guid optionId)
     {
         try
         {

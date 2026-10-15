@@ -4,9 +4,9 @@ using System.Text.Json.Nodes;
 using InstantEdit;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Services.PenumbraMods;
 using Lumina.Data.Files;
 using Penumbra.Api.Enums;
-using InstantEdit.Services.PenumbraMods;
 
 internal static partial class TextureEditScenarios
 {

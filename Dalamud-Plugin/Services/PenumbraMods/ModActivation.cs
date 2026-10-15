@@ -120,7 +120,7 @@ internal sealed class ModActivation
         }
     }
 
-    internal PenumbraApiEc AddModOnFramework(string modName)
+    private PenumbraApiEc AddModOnFramework(string modName)
         => _addMod.Invoke(modName);
 
     internal ExportResult ConfigureModOnFramework(
@@ -233,7 +233,7 @@ internal sealed class ModActivation
     /// <summary>Redraw the local player and the currently spawned entities they own.</summary>
     internal string? RedrawPlayerOwnedEntitiesOnFramework()
     {
-        if (_objects is null || _objects.LocalPlayer is not { Address: not 0 } localPlayer)
+        if (_objects.LocalPlayer is not { Address: not 0 } localPlayer)
             return "The local player could not be found; player-owned redraw was skipped.";
 
         var targets = new HashSet<ushort> { localPlayer.ObjectIndex };

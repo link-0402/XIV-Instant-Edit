@@ -344,7 +344,7 @@ internal static class ModMetadata
         return result;
     }
 
-    internal static string? NormalizedModFile(string? value) => value?.Replace('\\', '/').Trim().TrimStart('/');
+    private static string? NormalizedModFile(string? value) => value?.Replace('\\', '/').Trim().TrimStart('/');
 
     /// <summary>
     /// Map <paramref name="gamePath"/> to <paramref name="relativePath"/> in every DefaultData,
@@ -397,7 +397,7 @@ internal static class ModMetadata
     }
 
     /// <summary>The Files objects of a mod's DefaultData, groups, options and containers.</summary>
-    internal static IEnumerable<JsonObject> AnimationMappingContainers(JsonObject meta)
+    private static IEnumerable<JsonObject> AnimationMappingContainers(JsonObject meta)
     {
         if (meta["DefaultData"] is JsonObject { } defaults && defaults["Files"] is JsonObject defaultFiles) yield return defaultFiles;
         if (meta["Groups"] is not JsonArray groups) yield break;

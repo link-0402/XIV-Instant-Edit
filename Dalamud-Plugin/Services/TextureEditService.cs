@@ -3,8 +3,8 @@ using System.Diagnostics;
 using System.Text.Json;
 using InstantEdit.Models;
 using InstantEdit.Services.Painter;
-using Penumbra.Api.Enums;
 using InstantEdit.Services.PenumbraMods;
+using Penumbra.Api.Enums;
 
 namespace InstantEdit.Services;
 

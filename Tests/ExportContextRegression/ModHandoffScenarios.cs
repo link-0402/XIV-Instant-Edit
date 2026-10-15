@@ -1,11 +1,11 @@
 using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Studio;
 using InstantEdit.Studio.Services.Project;
 using InstantEdit.Ui;
 using static InstantEdit.TestSupport.Assertions;
-using InstantEdit.Services.PenumbraMods;
 
 /// <summary>
 /// The Mod Browser's hand-offs: a file of a mod open in a mod window becomes a row of the one

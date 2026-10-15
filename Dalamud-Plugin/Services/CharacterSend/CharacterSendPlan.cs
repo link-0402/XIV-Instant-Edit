@@ -1,8 +1,8 @@
 using System.Text.Json.Serialization;
 using InstantEdit.Models;
 using InstantEdit.Services.Painter;
-using InstantEdit.Services.Skeletons;
 using InstantEdit.Services.PenumbraMods;
+using InstantEdit.Services.Skeletons;
 
 namespace InstantEdit.Services.CharacterSend;
 

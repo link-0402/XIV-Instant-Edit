@@ -6,11 +6,11 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
+using InstantEdit.Services.PenumbraMods;
 using Lumina.Data;
 using Lumina.Data.Files;
 using Lumina.Data.Structs;
 using InstantEdit.Models;
-using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services;
 
