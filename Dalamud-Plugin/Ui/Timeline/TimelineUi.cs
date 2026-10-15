@@ -46,6 +46,21 @@ internal static class TimelineUi
             ImGui.SetTooltip(text);
     }
 
+    /// <summary> A short coloured message with an optional dismiss button; true when dismissed. </summary>
+    public static bool Note(string? dismissId, Vector4 colour, string text)
+    {
+        var dismissed = false;
+        if (dismissId != null)
+        {
+            dismissed = Widgets.GhostIconButton(dismissId, FontAwesomeIcon.Times, "Dismiss");
+            ImGui.SameLine(0, Theme.Gap);
+        }
+        ImGui.AlignTextToFramePadding();
+        using var wrap = ImRaii.TextWrapPos(0f);
+        ImGui.TextColored(colour, text);
+        return dismissed;
+    }
+
     /// <summary> An icon button that stays filled while its setting is on. </summary>
     public static bool Toggle(string id, FontAwesomeIcon icon, bool on, string tooltip)
     {

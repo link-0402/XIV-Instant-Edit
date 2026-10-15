@@ -29,11 +29,11 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private readonly MotionDecode decode;
     private readonly EffectLookEditor effectLooks;
     private readonly SoundFiles soundFiles;
+    private readonly TimelinePickers pickers;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
     private readonly GameSoundPlayer? soundPlayer;
 
-    private TimelineCatalogKey? catalogKey;
     private Task<AnimationTimelineSource>? loadTask;
     private CancellationTokenSource? loadCancel;
     private (AnimationCapture Capture, bool Startup)? loading;
@@ -72,6 +72,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         decode = new MotionDecode(session);
         effectLooks = new EffectLookEditor(session);
         soundFiles = new SoundFiles(session);
+        pickers = new TimelinePickers(session, soundFiles);
         this.soundPlayer = soundPlayer;
         this.recorder = recorder;
         this.animationError = animationError;
@@ -208,7 +209,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         loadingAfterUndo = false;
         loadError = null;
         source = null;
-        catalogKey = null;
+        session.CatalogKey = null;
         motionBase = null;
         motionCarry = null;
         effectLooks.Forget();
@@ -285,7 +286,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         if (!keepView)
         {
             source = null;
-            catalogKey = null;
+            session.CatalogKey = null;
             title = AnimationPresentation.AnimationName(capture, startup);
             // Another clip, or this one opened afresh: its own file is the motion to edit.
             motionBase = null;
@@ -335,14 +336,13 @@ public sealed partial class TimelineWindow : Window, IDisposable
         // from before: the carried layers come back, and the base stays the motion they apply to.
         loaded = WithMotionBase(loaded);
         source = loaded;
-        loadGeneration++;
+        pickers.ClipLoaded();
         canReplace = AnimationResources.CanReplace(loaded.Resource);
-        catalogKey = TimelineWindowViews.CatalogKey(loaded.Capture.LoadedResourcePaths, loaded.Clip.GamePath, loaded.Resource.ModRoot);
+        session.CatalogKey = TimelineWindowViews.CatalogKey(loaded.Capture.LoadedResourcePaths, loaded.Clip.GamePath, loaded.Resource.ModRoot);
         title = AnimationPresentation.AnimationName(loaded.Capture, loaded.Startup);
         subtitle = $"{AnimationPresentation.AnimationState(loaded.Capture, loaded.Startup)} · " +
                    (loaded.Resource.ModName ?? loaded.Resource.ModDirectory ?? "Game Data");
         labelDocument = null;
-        pendingLengths.Clear();
         effectLooks.ForgetEdit();
         soundEditing = false;
         if (!sameClip)
@@ -374,7 +374,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         if (editor == null)
         {
             editor = new TimelineEditor(doc);
-            editor.VisibleLength = VisibleFrames;
+            editor.VisibleLength = pickers.VisibleFrames;
         }
         else if (keepView && sameClip)
         {
@@ -431,9 +431,9 @@ public sealed partial class TimelineWindow : Window, IDisposable
         animations.StartObservation();
         PollLoad();
         PollSave();
-        PollImport();
+        pickers.PollImport();
         PollPreview();
-        PollLengths();
+        pickers.PollLengths();
         PollLibrary();
         PollLoader();
         // Every frame: the bone rows' order, Live and the save all read the clip's match.
@@ -470,8 +470,8 @@ public sealed partial class TimelineWindow : Window, IDisposable
                 Open(changed, source.Startup);
             ImGui.Spacing();
         }
-        if (catalogKey != null)
-            catalog.Request(catalogKey);
+        if (session.CatalogKey != null)
+            catalog.Request(session.CatalogKey);
         editor.MotionFrames = MotionFrames(source);
         editor.ResidentMotions = catalog.Data.ResidentMotions;
         editor.BoneOrder = source.Clip.Resolution?.Selected?.Skeleton is { } skeleton ? BoneTree(skeleton).Index : null;
@@ -497,7 +497,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         DrawSaveFooter(editor, source);
         footerHeight = Math.Max(1, ImGui.GetCursorPosY() - footerStart);
 
-        DrawPicker(editor);
+        pickers.Draw(editor);
         HandleKeys(editor);
         // Escape cancels a drag; it must not also close the window.
         RespectCloseHotkey = editor.Gesture == TimelineGesture.None;

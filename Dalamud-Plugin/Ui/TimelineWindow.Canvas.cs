@@ -194,7 +194,7 @@ public sealed partial class TimelineWindow
         if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) && !readOnly &&
             hit.Part is TimelinePart.Lane or TimelinePart.Legend && hit.Lane is { } lane && TimelineWindowViews.AddKind(lane) is { } kind)
         {
-            RequestPicker(kind, hit.Part == TimelinePart.Legend ? current.Playhead : current.SnappedFrame(hit.Frame, io.KeyAlt), null);
+            pickers.Request(kind, hit.Part == TimelinePart.Legend ? current.Playhead : current.SnappedFrame(hit.Frame, io.KeyAlt), null);
             return;
         }
         // A double click on the empty bone row adds an offset section there.
@@ -965,7 +965,7 @@ public sealed partial class TimelineWindow
         }
         for (var index = 0; index < TimelineWindowViews.AddKinds.Length; index++)
             if (ImGui.MenuItem(AddHereLabels[index], "", false, !readOnly))
-                RequestPicker(TimelineWindowViews.AddKinds[index], menuFrame, null);
+                pickers.Request(TimelineWindowViews.AddKinds[index], menuFrame, null);
         ImGui.Separator();
         if (ImGui.MenuItem("Paste here", "Ctrl+V", false, !readOnly && current.CanPaste))
         {
