@@ -47,6 +47,9 @@ public sealed partial class MainWindow : Window, IDisposable
     private readonly OnScreenTab _onScreenTab;
     private readonly GameFileExportDialog _gameExportDialog;
     private readonly GameFilesTab _gameFilesTab;
+    private readonly AnimationsTab _animationsTab;
+    // Whether the Timeline window keeps the listener running.
+    private Func<bool>? timelineListens;
     private readonly PreviewService _previews;
     private readonly string _pluginVersion;
     private readonly ResourceSourceAttributor _resourceSources;
@@ -90,6 +93,7 @@ public sealed partial class MainWindow : Window, IDisposable
         _onScreenTab = new OnScreenTab(config, saveConfig, onScreen, _rows, _hoverCards, _textureTab, _slotIcons, _expansion);
         _gameExportDialog = new GameFileExportDialog(config, saveConfig, penumbra, log, _feed, _rows);
         _gameFilesTab = new GameFilesTab(onScreen, _rows, _hoverCards, _gameExportDialog);
+        _animationsTab = new AnimationsTab(onScreen, _animationHub, _animationSend, _recorder, _rows, _expansion, _lifetimeCts.Token);
         _saveConfig = saveConfig;
         _openChangelog = openChangelog;
         _openSettings = openSettings;
@@ -145,6 +149,17 @@ public sealed partial class MainWindow : Window, IDisposable
 
     internal void AttachPainter(PainterJobService painter) => _painter.Attach(painter);
 
+    internal void AttachAnimations(AnimationEditService? service, string? error) => _animationHub.Attach(service, error);
+
+    internal void AttachTimeline(Action<AnimationCapture, bool>? open, Action? show = null, Func<bool>? listens = null)
+    {
+        _animationsTab.AttachTimeline(open, show);
+        timelineListens = listens;
+    }
+
+    /// <summary>Whether this window keeps the listener running: its Animations tab is shown, or Send my character waits for it.</summary>
+    internal bool ListensForAnimations => IsOpen && (_activeTab == MainTab.Animations || _activeTab == MainTab.QuickActions && CharacterSendListens);
+
     internal void AttachRecorder(AnimationRecorder? value) => _recorder.Recorder = value;
 
     /// <summary>The recorder, drawn in the Timeline window's Record page; it sends to Blender through this window.</summary>
@@ -177,7 +192,7 @@ public sealed partial class MainWindow : Window, IDisposable
     {
         // The Timeline window keeps the listener running while it is open.
         if (timelineListens?.Invoke() != true)
-            animations?.StopObservation();
+            _animationHub.Service?.StopObservation();
     }
 
     /// <summary> Penumbra reported a mod-setting change or a redraw; refresh once things settle. </summary>
@@ -261,7 +276,7 @@ public sealed partial class MainWindow : Window, IDisposable
                         break;
                     case MainTab.Animations:
                         animationsTabActive = true;
-                        DrawAnimations();
+                        _animationsTab.Draw();
                         break;
                     case MainTab.QuickActions:
                         DrawQuickActionsTab();
@@ -278,7 +293,7 @@ public sealed partial class MainWindow : Window, IDisposable
         // Actions waits to send your character in the animation it plays: until a skeleton library is
         // saved, its first match builds one.
         if (!animationsTabActive && !(activeTab == MainTab.QuickActions && CharacterSendListens) && timelineListens?.Invoke() != true)
-            animations?.StopObservation();
+            _animationHub.Service?.StopObservation();
         _textureTab.DrawDialogs();
         _animationSend.Draw(AnimationSendDialog.MainOwner);
         _painter.DrawDialogs();
@@ -393,11 +408,11 @@ public sealed partial class MainWindow : Window, IDisposable
     {
         var exporting = _gameExportDialog.Export?.Busy ?? false;
         var busy = _models.Busy.IsBusy || _textureTab.Busy.IsBusy || Volatile.Read(ref _neckSeamBusy) != 0 ||
-                   _onScreen.IsRefreshing || (animations?.Busy ?? false) || exporting;
-        var animationCancel = animations is { Busy: true, CanCancel: true };
+                   _onScreen.IsRefreshing || (_animationHub.Service?.Busy ?? false) || exporting;
+        var animationCancel = _animationHub.Service is { Busy: true, CanCancel: true };
         // Cancel stops the Game Files export on its own tab, or when no animation work can be cancelled.
         var cancelExport = exporting && (_activeTab == MainTab.GameFiles || !animationCancel);
-        Action? cancel = cancelExport ? () => _gameExportDialog.Export!.Cancel() : animationCancel ? () => animations!.Cancel() : null;
+        Action? cancel = cancelExport ? () => _gameExportDialog.Export!.Cancel() : animationCancel ? () => _animationHub.Service!.Cancel() : null;
         _statusStrip.Draw(feedback, busy, cancel);
     }
 }

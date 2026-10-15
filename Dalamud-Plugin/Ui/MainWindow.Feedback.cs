@@ -18,7 +18,7 @@ public sealed partial class MainWindow
     {
         if (tab == MainTab.Animations)
         {
-            var service = animations;
+            var service = _animationHub.Service;
             if (service is null)
                 return new FeedbackState(string.Empty, FeedbackSeverity.Error);
             return new FeedbackState(service.Status, service.LastFailed && !service.Busy
