@@ -146,7 +146,7 @@ public sealed partial class TimelineWindow
         var place = destination;
         var name = modName.Trim();
         var repair = target.Standalone ? null : repairTarget;
-        // Effect looks are saved as copies of their effects, packaged like imports. Sound changes and
+        // Effect looks are saved as copies of their effects, packaged like session.Imports. Sound changes and
         // pins go into copies too, or over the mod's own sound files where BeginSave allowed it.
         TimelineDocument saved;
         ImmutableDictionary<string, byte[]> added;
@@ -182,7 +182,7 @@ public sealed partial class TimelineWindow
         var service = animations!;
         saveError = null;
         saveMessage = null;
-        jobClip = ClipKey(loaded);
+        jobClip = TimelineSession.ClipKey(loaded);
         KeepMotionForSave(target, document, repair);
         StopPreview();
         var ending = previewStop ?? Task.CompletedTask;
@@ -210,7 +210,7 @@ public sealed partial class TimelineWindow
             saveTask = null;
             if (task.IsFaulted || task.IsCanceled)
             {
-                saveError = "The preview could not be ended, so nothing was saved. " + ErrorText(task.Exception);
+                saveError = "The preview could not be ended, so nothing was saved. " + TimelineSession.ErrorText(task.Exception);
                 motionCarry = null;
             }
             else if (task.Result is { } id)
@@ -228,7 +228,7 @@ public sealed partial class TimelineWindow
             saveError = "The save's result is unknown. Check Edits in the side panel.";
             motionCarry = null;
         }
-        var sameClip = source != null && ClipKey(source) == jobClip;
+        var sameClip = source != null && TimelineSession.ClipKey(source) == jobClip;
         if (pendingSaveId is { } job && service.LastResult is { } result && result.Id == job)
         {
             pendingSaveId = null;
@@ -263,7 +263,7 @@ public sealed partial class TimelineWindow
             ForgetSounds();
             // While this window edits layers on a motion of its own, a file that is again what an earlier
             // layered edit saved brings that edit's layers back as the saved state, so it matches the file.
-            Load(source!.Capture, source.Startup, true, afterUndo: motionBase?.Clip == ClipKey(source));
+            Load(source!.Capture, source.Startup, true, afterUndo: motionBase?.Clip == TimelineSession.ClipKey(source));
         }
     }
 
@@ -275,7 +275,7 @@ public sealed partial class TimelineWindow
     /// </summary>
     private void KeepMotionForSave(AnimationTimelineSource loaded, TimelineDocument document, SkeletonStandard? repair)
     {
-        var clip = ClipKey(loaded);
+        var clip = TimelineSession.ClipKey(loaded);
         if (!AnimationBakeRules.KeepsLayersOverSave(document, repair))
         {
             motionBase = null;
@@ -294,7 +294,7 @@ public sealed partial class TimelineWindow
     /// <summary> The clip as read, with the base its layers apply to while this window has saved layers into it. </summary>
     private AnimationTimelineSource WithMotionBase(AnimationTimelineSource loaded)
     {
-        if (motionBase is not { } kept || kept.Clip != ClipKey(loaded) || loaded.Document == null)
+        if (motionBase is not { } kept || kept.Clip != TimelineSession.ClipKey(loaded) || loaded.Document == null)
             return loaded;
         // Back to the base, as after undoing the first save, the file's own motion is the base again.
         return kept.Hash == loaded.Resource.Hash
@@ -305,7 +305,7 @@ public sealed partial class TimelineWindow
     /// <summary> The read document with the layers carried over a save or an undo, once; null when none are carried. </summary>
     private (TimelineDocument Document, bool Unsaved)? TakeCarriedLayers(AnimationTimelineSource loaded)
     {
-        if (motionCarry is not { } carry || carry.Clip != ClipKey(loaded) || loaded.Document is not { } doc)
+        if (motionCarry is not { } carry || carry.Clip != TimelineSession.ClipKey(loaded) || loaded.Document is not { } doc)
             return null;
         motionCarry = null;
         return carry.Layers.IsEmpty ? null
@@ -360,11 +360,11 @@ public sealed partial class TimelineWindow
         {
             if (ImGui.Button("Undo last save") && journal != null)
             {
-                jobClip = source is { } shown ? ClipKey(shown) : null;
+                jobClip = source is { } shown ? TimelineSession.ClipKey(shown) : null;
                 // The layers stay, as unsaved edits on the motion they apply to; layers keyed in cut or
                 // stretched frames don't fit the file the undo brings back.
                 if (source != null && !current.Document.Motion.IsEmpty && AnimationBakeRules.KeepsLayersOverSave(current.Document, repairTarget))
-                    motionCarry = (ClipKey(source), current.Document.Motion, current.Document.NextMotionKey, true);
+                    motionCarry = (TimelineSession.ClipKey(source), current.Document.Motion, current.Document.NextMotionKey, true);
                 StopPreview();
                 service.Undo(journal);
                 undoPending = true;

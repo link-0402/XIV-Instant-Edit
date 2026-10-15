@@ -4,6 +4,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
+using InstantEdit.Ui.Timeline;
 
 namespace InstantEdit.Ui;
 
@@ -27,9 +28,9 @@ public sealed partial class TimelineWindow
         var fresh = Fresh(loaded);
         var capture = fresh.Capture;
         var clip = fresh.Clip;
-        if (faceClip != ClipKey(fresh))
+        if (faceClip != TimelineSession.ClipKey(fresh))
         {
-            faceClip = ClipKey(fresh);
+            faceClip = TimelineSession.ClipKey(fresh);
             faceExcluded.Clear();
             faceJob = null;
         }

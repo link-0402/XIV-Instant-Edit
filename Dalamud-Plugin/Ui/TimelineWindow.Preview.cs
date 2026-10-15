@@ -189,7 +189,7 @@ public sealed partial class TimelineWindow
     }
 
     /// <summary>
-    /// Builds the edited clip in the service, writes it with the imports it uses into a temporary
+    /// Builds the edited clip in the service, writes it with the session.Imports it uses into a temporary
     /// mod on the GPose actor's collection, then plays the clip's timeline on that actor.
     /// </summary>
     private void StartPreview(TimelineEditor current, AnimationTimelineSource loaded)
@@ -223,7 +223,7 @@ public sealed partial class TimelineWindow
             (rest, looks) = TimelineEffectLooks.Redirectable(document);
             lookFiles = TimelineEffectLooks.Redirected(looks, EffectBytes);
             // So do changes to a sound file with one sound; pins and other sound changes play from copies.
-            (rest, soundFiles) = TimelineSoundEdits.Redirectable(rest, SoundBytes, ImportBytes);
+            (rest, soundFiles) = TimelineSoundEdits.Redirectable(rest, SoundBytes, session.ImportBytes);
             // Looks that differ between events of one effect play from copies, as a save writes them.
             (shown, var used) = WithLooks(rest);
             var sounds = WithSoundCuts(WithSounds(shown, _ => TimelineSoundRoute.Copy, path => soundFiles.GetValueOrDefault(path) ?? SoundBytes(path)),
@@ -375,7 +375,7 @@ public sealed partial class TimelineWindow
         {
             previewStop = null;
             if (stop.IsFaulted)
-                previewError = "The preview could not be removed. " + ErrorText(stop.Exception);
+                previewError = "The preview could not be removed. " + TimelineSession.ErrorText(stop.Exception);
         }
         // The service ends the preview on its own when GPose ends or Penumbra restarts. Live plays the
         // clip's own file and needs no temporary mod.

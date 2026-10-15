@@ -180,9 +180,9 @@ public sealed partial class TimelineWindow
         {
             if (ImGui.SmallButton(effectEvents == 1 ? "Keep it looping" : "Keep them looping"))
             {
-                // The copies are packaged like imports; the edit's own undo puts the original effects back.
+                // The copies are packaged like session.Imports; the edit's own undo puts the original effects back.
                 foreach (var copy in effectCopies)
-                    imports[copy.GamePath] = copy;
+                    session.Imports[copy.GamePath] = copy;
                 current.Commit(TimelineEffectCheck.Fix(current.Document, effectProblems));
             }
         }

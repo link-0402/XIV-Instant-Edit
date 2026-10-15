@@ -350,7 +350,7 @@ public sealed partial class TimelineWindow
         }
         if (!read.IsCompleted)
             return null;
-        return read.IsCompletedSuccessfully ? TimelineWindowViews.PathOriginText(read.Result.Origin, read.Result.ModName) : ErrorText(read.Exception);
+        return read.IsCompletedSuccessfully ? TimelineWindowViews.PathOriginText(read.Result.Origin, read.Result.ModName) : TimelineSession.ErrorText(read.Exception);
     }
 
     /// <summary> One field's control; its edits until it is left make one undo step. </summary>

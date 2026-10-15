@@ -97,7 +97,7 @@ public sealed partial class TimelineWindow
                 foreach (var (capture, startup) in PoseClips())
                 {
                     any = true;
-                    var mine = ClipKey(loaded) == ClipKey(capture, startup);
+                    var mine = TimelineSession.ClipKey(loaded) == TimelineSession.ClipKey(capture, startup);
                     if (ImGui.MenuItem($"{AnimationPresentation.AnimationName(capture, startup)}{(mine ? " (this one)" : "")}##{capture.Id}-{startup}"))
                         ReadClipPose(capture, startup, false);
                 }
@@ -124,15 +124,12 @@ public sealed partial class TimelineWindow
         {
             if (capture.ExpressionTimeline != null)
                 continue;
-            if (seen.Add(ClipKey(capture, false)))
+            if (seen.Add(TimelineSession.ClipKey(capture, false)))
                 yield return (capture, false);
-            if (capture.Startup != null && seen.Add(ClipKey(capture, true)))
+            if (capture.Startup != null && seen.Add(TimelineSession.ClipKey(capture, true)))
                 yield return (capture, true);
         }
     }
-
-    private static string ClipKey(AnimationCapture capture, bool startup) =>
-        $"{capture.Id}|{startup}|{(startup ? capture.Startup : capture.Clip)?.GamePath}";
 
     private void OpenPoseFile()
     {
@@ -172,7 +169,7 @@ public sealed partial class TimelineWindow
     private void ReadClipPose(AnimationCapture capture, bool startup, bool atEnd)
     {
         var staged = new PoseSource { Kind = PoseSourceKind.Clip, Name = AnimationPresentation.AnimationName(capture, startup), AtEnd = atEnd };
-        if (source is { } current && ClipKey(current) == ClipKey(capture, startup) && DecodedPose(current) is { } own)
+        if (source is { } current && TimelineSession.ClipKey(current) == TimelineSession.ClipKey(capture, startup) && DecodedPose(current) is { } own)
         {
             staged.Clip = own;
             Stage(staged, null);
@@ -221,7 +218,7 @@ public sealed partial class TimelineWindow
         }
         if (task.IsFaulted)
         {
-            staged.Error = ErrorText(task.Exception);
+            staged.Error = TimelineSession.ErrorText(task.Exception);
             return;
         }
         switch (task.Result)

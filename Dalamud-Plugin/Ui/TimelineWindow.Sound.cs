@@ -108,7 +108,7 @@ public sealed partial class TimelineWindow
         {
             read = new SoundRead();
             soundReads[gamePath] = read;
-            if (ImportBytes(gamePath) is { } bytes)
+            if (session.ImportBytes(gamePath) is { } bytes)
                 (read.Bytes, read.Imported) = (bytes, true);
             else if (animations is { } service)
             {
@@ -124,18 +124,14 @@ public sealed partial class TimelineWindow
             if (task.IsCompletedSuccessfully)
                 (read.Resource, read.Bytes) = task.Result;
             else
-                read.Error = ErrorText(task.Exception);
+                read.Error = TimelineSession.ErrorText(task.Exception);
         }
         return read;
     }
 
     /// <summary> The bytes of a sound the inspector read, or an import's; null when it wasn't read. </summary>
     private byte[]? SoundBytes(string gamePath) =>
-        soundReads.TryGetValue(gamePath, out var read) && read.Bytes != null ? read.Bytes : ImportBytes(gamePath);
-
-    /// <summary> An imported file's own bytes by its game path, such as a sound added to a set. </summary>
-    private byte[]? ImportBytes(string gamePath) =>
-        imports.TryGetValue(gamePath, out var import) && import.Files.TryGetValue(gamePath, out var bytes) ? bytes : null;
+        soundReads.TryGetValue(gamePath, out var read) && read.Bytes != null ? read.Bytes : session.ImportBytes(gamePath);
 
     /// <summary> <paramref name="key"/>'s sound as the document's edit leaves it; null while its file is read. </summary>
     private SoundShown? ShownSound(TimelineDocument doc, TimelineSoundKey key, AnimationTimelineSource loaded)
@@ -154,7 +150,7 @@ public sealed partial class TimelineWindow
                 throw new InvalidDataException("The file has no sound at this sound entry.");
             initial = TimelineSoundEdits.Initial(model, key.Sound);
             // A control held down changes the edit every frame: read the file once, and keep the model the edit wrote.
-            var (bytes, ids, written) = TimelineSoundEdits.ApplyModel(original, key.Sound, edit ?? initial, ImportBytes);
+            var (bytes, ids, written) = TimelineSoundEdits.ApplyModel(original, key.Sound, edit ?? initial, session.ImportBytes);
             shown = new SoundShown(edit, original, initial, bytes, ids, written, null);
         }
         catch (Exception e) when (e is InvalidDataException or ArgumentException or InvalidOperationException)
@@ -184,7 +180,7 @@ public sealed partial class TimelineWindow
         foreach (var (key, shown) in soundsShown)
             if (key.Sound == sound && shown.Error == null && ReferenceEquals(shown.Original, original) && ReferenceEquals(shown.Edit, edit))
                 return (shown.Bytes, shown.Ids);
-        return TimelineSoundEdits.Apply(original, sound, edit, ImportBytes);
+        return TimelineSoundEdits.Apply(original, sound, edit, session.ImportBytes);
     }
 
     /// <summary> <paramref name="key"/>'s sound as edited once its file is read; null before, without starting a read. </summary>
@@ -203,7 +199,7 @@ public sealed partial class TimelineWindow
             try
             {
                 var (bytes, ids, written) = TimelineSoundEdits.ApplyModel(original, key.Sound,
-                    edit with { Alternatives = [.. edit.Alternatives.Select(a => a with { Share = 0 })] }, ImportBytes);
+                    edit with { Alternatives = [.. edit.Alternatives.Select(a => a with { Share = 0 })] }, session.ImportBytes);
                 return new SoundShown(edit, original, initial, bytes, ids, written, error);
             }
             catch (Exception e) when (e is InvalidDataException or ArgumentException or InvalidOperationException)
@@ -654,13 +650,13 @@ public sealed partial class TimelineWindow
             return;
         listening = null;
         if (task.IsFaulted)
-            listenError = "The sound could not be played. " + ErrorText(task.Exception);
+            listenError = "The sound could not be played. " + TimelineSession.ErrorText(task.Exception);
     }
 
     /// <summary> Opens the file dialog for a sound to add to <paramref name="target"/>'s set, or to put in place of one of its sounds. </summary>
     private void OpenSoundImport(TimelineSoundTarget target)
     {
-        var job = new ImportJob(TimelineAddKind.Sound, 0, null, string.Empty, source is { } current ? ClipKey(current) : null, loadGeneration, null, target);
+        var job = new ImportJob(TimelineAddKind.Sound, 0, null, string.Empty, source is { } current ? TimelineSession.ClipKey(current) : null, loadGeneration, null, target);
         fileDialog.OpenFileDialog(target.ReplaceId == null ? "Choose a sound to add" : "Choose a sound to put in its place", TimelineWindowViews.SoundFilter,
             (success, files) =>
             {

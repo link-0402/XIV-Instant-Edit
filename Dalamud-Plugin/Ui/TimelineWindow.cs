@@ -17,7 +17,7 @@ namespace InstantEdit.Ui;
 /// <summary>
 /// The timeline editor for one animation clip: its motion, expressions, lip sync, sounds, effects
 /// and props on lanes like a video editor, its length, a side panel (properties, source, animated
-/// bones, saved edits, recorder), pickers and imports, a loader that plays any animation on the GPose
+/// bones, saved edits, recorder), pickers and session.Imports, a loader that plays any animation on the GPose
 /// actor, a save footer and a GPose preview. Slow work runs on tasks polled every frame, so the draw
 /// path never reads files. Split by concern: each part lives in its own partial file.
 /// </summary>
@@ -25,22 +25,11 @@ public sealed partial class TimelineWindow : Window, IDisposable
 {
     private enum PendingAction : byte { None, Close, Switch }
 
-    private readonly AnimationEditService? animations;
+    private readonly TimelineSession session;
     private readonly string? animationError;
-    private readonly TimelineCatalog catalog;
-    private readonly AnimationPreviewService preview;
-    private readonly AnimationPlayback playback;
-    // Shows bone layers live on the GPose actor; null when animation editing is unavailable.
-    private readonly MotionLiveDisplay? motionDisplay;
-    private readonly IDataManager data;
-    private readonly IFramework framework;
-    private readonly IPluginLog log;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
     private readonly GameSoundPlayer? soundPlayer;
-    private readonly FileDialogManager fileDialog = new();
 
-    private AnimationTimelineSource? source;
-    private TimelineEditor? editor;
     private TimelineCatalogKey? catalogKey;
     private Task<AnimationTimelineSource>? loadTask;
     private CancellationTokenSource? loadCancel;
@@ -75,18 +64,12 @@ public sealed partial class TimelineWindow : Window, IDisposable
         IFramework framework, ITextureProvider textures, IPluginLog log, GameSoundPlayer? soundPlayer = null)
         : base("Timeline###XIVInstantEditTimeline")
     {
-        this.animations = animations;
+        session = new TimelineSession(animations, catalog, preview, playback, motionDisplay, data, framework, log,
+            () => loadTask != null || saveTask != null || pendingSaveId != null || undoPending || soundCheck != null || soundAsk != null);
         this.soundPlayer = soundPlayer;
         this.recorder = recorder;
         this.animationError = animationError;
-        this.catalog = catalog;
-        this.preview = preview;
-        this.playback = playback;
-        this.motionDisplay = motionDisplay;
-        this.data = data;
-        this.framework = framework;
         this.textures = textures;
-        this.log = log;
         bonesWindow = new BonesWindow(this);
         overlayWindow = new BonesOverlay(this);
 
@@ -103,14 +86,27 @@ public sealed partial class TimelineWindow : Window, IDisposable
         RespectCloseHotkey = true;
     }
 
-    public void DrawFileDialog() => fileDialog.Draw();
+    public void DrawFileDialog() => session.FileDialog.Draw();
+
+    // The shared state under the names TimelineWindow.Overlay.cs reads. It stays a partial of this
+    // window until the Body Physics work in it is committed; then it can take a TimelineSession too.
+    private AnimationEditService? animations => session.Animations;
+    private AnimationPlayback playback => session.Playback;
+    private MotionLiveDisplay? motionDisplay => session.MotionDisplay;
+    private AnimationTimelineSource? source { get => session.Source; set => session.Source = value; }
+    private TimelineEditor? editor { get => session.Editor; set => session.Editor = value; }
+    private bool ReadOnly => session.ReadOnly;
+    private AnimationTimelineSource Fresh(AnimationTimelineSource current) => session.Fresh(current);
+
+    private TimelineCatalog catalog => session.Catalog;
+    private AnimationPreviewService preview => session.Preview;
+    private IDataManager data => session.Data;
+    private IFramework framework => session.Framework;
+    private IPluginLog log => session.Log;
+    private FileDialogManager fileDialog => session.FileDialog;
 
     /// <summary> Unsaved edits of an editable timeline. </summary>
     private bool HasUnsavedChanges => editor is { Dirty: true } && source?.Document != null;
-
-    /// <summary> Whether the document must not change now: nothing to edit, or a save, undo or reload is running. </summary>
-    private bool ReadOnly => source?.Document == null || loadTask != null || saveTask != null || pendingSaveId != null || undoPending ||
-                             soundCheck != null || soundAsk != null;
 
     /// <summary>Opens the window as it is: its clip, or with none the loader.</summary>
     internal void Show()
@@ -253,9 +249,6 @@ public sealed partial class TimelineWindow : Window, IDisposable
         return TimelineWindowViews.ChangedCapture(animations.Observer.History, current);
     }
 
-    /// <summary> A key for "the same clip", which survives a reload after a save. </summary>
-    private static string ClipKey(AnimationTimelineSource current) => $"{current.Capture.Id}|{current.Startup}|{current.Clip.GamePath}";
-
     /// <summary>
     /// Reads the clip's timeline on a task. <paramref name="keepView"/> reloads the clip already
     /// shown after a save or undo, keeping its view and playhead. With <paramref name="again"/> the
@@ -318,7 +311,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
             return;
         if (task.IsFaulted)
         {
-            loadError = ErrorText(task.Exception);
+            loadError = TimelineSession.ErrorText(task.Exception);
             loadErrorAgain = again != null;
             return;
         }
@@ -327,11 +320,11 @@ public sealed partial class TimelineWindow : Window, IDisposable
 
     private void Apply(AnimationTimelineSource loaded, bool keepView, AnimationEditJournal? again = null, bool afterUndo = false)
     {
-        var sameClip = source != null && ClipKey(source) == ClipKey(loaded);
+        var sameClip = source != null && TimelineSession.ClipKey(source) == TimelineSession.ClipKey(loaded);
         // Edit again, or an undo back to a layered edit: the saved layers apply to the motion from before
         // their edit while this clip stays open.
         if ((again != null || afterUndo) && loaded.BaseMotion is { } kept && loaded.BaseHash is { } keptHash)
-            motionBase = (ClipKey(loaded), kept, loaded.BaseFingerprint ?? string.Empty, keptHash);
+            motionBase = (TimelineSession.ClipKey(loaded), kept, loaded.BaseFingerprint ?? string.Empty, keptHash);
         // A clip read again after this window saved bone layers into it keeps editing them on the motion
         // from before: the carried layers come back, and the base stays the motion they apply to.
         loaded = WithMotionBase(loaded);
@@ -413,40 +406,6 @@ public sealed partial class TimelineWindow : Window, IDisposable
             framesMerged = known.SetItems(current.OwnFrames);
         }
         return framesMerged;
-    }
-
-    /// <summary>
-    /// The source with the clip's latest skeleton match: choosing a skeleton under Source after
-    /// opening the timeline must still allow a length change. Only a capture of the same file counts:
-    /// the Live preview plays a copy under the same capture, and its match knows no choice. The
-    /// capture gets the match too, since saves, face edits and reloads send it.
-    /// </summary>
-    private AnimationTimelineSource Fresh(AnimationTimelineSource current)
-    {
-        if (animations == null)
-            return current;
-        foreach (var capture in animations.Observer.History)
-        {
-            if (capture.Id != current.Capture.Id)
-                continue;
-            var clip = current.Startup ? capture.Startup : capture.Clip;
-            if (clip != null && clip.GamePath == current.Clip.GamePath && clip.BindingFingerprint == current.Clip.BindingFingerprint &&
-                clip.SourceContext == current.Clip.SourceContext)
-                return ReferenceEquals(clip.Resolution, current.Clip.Resolution) ? current : WithResolution(current, clip.Resolution);
-            break;
-        }
-        // The capture shows another file now (the preview copy), so a choice made under Source
-        // reaches the timeline through the match kept for its own file.
-        return animations.Observer.LatestResolution(current.Clip) is { } latest && !ReferenceEquals(latest, current.Clip.Resolution)
-            ? WithResolution(current, latest)
-            : current;
-    }
-
-    /// <summary><paramref name="current"/> with its clip matched to <paramref name="resolution"/>, in its capture too.</summary>
-    private static AnimationTimelineSource WithResolution(AnimationTimelineSource current, SkeletonResolution? resolution)
-    {
-        var clip = current.Clip with { Resolution = resolution };
-        return current with { Clip = clip, Capture = current.Startup ? current.Capture with { Startup = clip } : current.Capture with { Clip = clip } };
     }
 
     public override void Draw()
@@ -655,11 +614,5 @@ public sealed partial class TimelineWindow : Window, IDisposable
         using var panel = ImRaii.Child("##timeline-properties", new Vector2(0, height), true);
         if (panel.Success && source != null)
             DrawSidePanel(current, source);
-    }
-
-    private static string ErrorText(Exception? error)
-    {
-        var inner = error is AggregateException aggregate ? aggregate.InnerException ?? aggregate : error;
-        return inner?.Message is { Length: > 0 } message ? message : "Something went wrong.";
     }
 }

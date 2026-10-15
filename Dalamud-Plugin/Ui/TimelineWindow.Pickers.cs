@@ -13,7 +13,7 @@ namespace InstantEdit.Ui;
 
 /// <summary>
 /// What can be placed: one picker popup per kind listing the catalog (thousands of rows, so a
-/// filter and a list clipper), imports of sound and effect files on a task, and typed game paths.
+/// filter and a list clipper), session.Imports of sound and effect files on a task, and typed game paths.
 /// A picker either adds at a frame or chooses a new path or model for an existing event.
 /// </summary>
 public sealed partial class TimelineWindow
@@ -40,14 +40,13 @@ public sealed partial class TimelineWindow
     private float importVolume = 100;
     private string gamePathText = string.Empty;
 
-    // The filtered rows, rebuilt when the list, the filter or the imports change.
+    // The filtered rows, rebuilt when the list, the filter or the session.Imports change.
     private readonly List<TimelineCatalogItem> pickerRows = [];
     private ImmutableArray<TimelineCatalogItem> pickerRowsSource;
     private TimelineAddKind pickerRowsKind;
     private string pickerRowsFilter = string.Empty;
     private int pickerRowsImports = -1;
 
-    private readonly Dictionary<string, TimelineImport> imports = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<ImportedItem> importedItems = [];
     private int importsVersion;
     // Counts document loads (see ImportJob).
@@ -57,8 +56,6 @@ public sealed partial class TimelineWindow
     private string? importError;
     private string? importMessage;
     private string? lastImportFolder;
-    private readonly object templateLock = new();
-    private byte[]? scdTemplate;
 
     // Sounds draw as long as their file plays; lengths arrive in the background.
     private readonly HashSet<string> pendingLengths = new(StringComparer.OrdinalIgnoreCase);
@@ -128,7 +125,7 @@ public sealed partial class TimelineWindow
     {
         if (catalogKey == null)
         {
-            Widgets.HintWrapped("This animation is not for a player race, so only imports and typed game paths can be placed.");
+            Widgets.HintWrapped("This animation is not for a player race, so only session.Imports and typed game paths can be placed.");
             return;
         }
         switch (catalog.State)
@@ -253,7 +250,7 @@ public sealed partial class TimelineWindow
         var id => (ushort)id,
     };
 
-    /// <summary> The picker's rows: this kind's imports first, then the catalog's list, filtered. </summary>
+    /// <summary> The picker's rows: this kind's session.Imports first, then the catalog's list, filtered. </summary>
     private List<TimelineCatalogItem> PickerRows()
     {
         var data = catalog.Data;
@@ -416,7 +413,7 @@ public sealed partial class TimelineWindow
     private void OpenImportDialog(TimelineAddKind kind)
     {
         var target = editor != null ? TimelineEdits.Find(editor.Document, pickerTarget) : null;
-        var job = new ImportJob(kind, pickerFrame, pickerTarget, string.Empty, source is { } current ? ClipKey(current) : null,
+        var job = new ImportJob(kind, pickerFrame, pickerTarget, string.Empty, source is { } current ? TimelineSession.ClipKey(current) : null,
             loadGeneration, target?.Path);
         var volume = importVolume / 100f;
         var sound = kind == TimelineAddKind.Sound;
@@ -441,14 +438,14 @@ public sealed partial class TimelineWindow
         importing = job;
         lastImportFolder = Path.GetDirectoryName(file);
         importTask = job.Kind == TimelineAddKind.Sound
-            ? Task.Run(() => TimelineImports.Sound(file, volume, (path, level) => AudioImport.FromFile(path, ScdTemplate(), level),
+            ? Task.Run(() => TimelineImports.Sound(file, volume, (path, level) => AudioImport.FromFile(path, session.ScdTemplate(), level),
                 bytes => ScdFile.TrySeconds(bytes), bytes =>
                 {
                     // Throws for tables that don't parse.
                     if (ScdFile.Info(bytes).SoundCount == 0)
                         throw new InvalidDataException("This SCD file has no sounds.");
                 }))
-            : Task.Run(() => TimelineImports.Effect(file, GameFileExists));
+            : Task.Run(() => TimelineImports.Effect(file, session.GameFileExists));
     }
 
     private void PollImport()
@@ -460,13 +457,13 @@ public sealed partial class TimelineWindow
         importing = null;
         if (task.IsFaulted || task.IsCanceled)
         {
-            importError = $"{job?.Name ?? "The file"} could not be imported. {ErrorText(task.Exception)}";
+            importError = $"{job?.Name ?? "The file"} could not be imported. {TimelineSession.ErrorText(task.Exception)}";
             return;
         }
         var import = task.Result;
         // The game path holds the content's hash, so the same path is the same file.
-        var known = imports.ContainsKey(import.GamePath);
-        imports[import.GamePath] = import;
+        var known = session.Imports.ContainsKey(import.GamePath);
+        session.Imports[import.GamePath] = import;
         if (!known && job != null)
         {
             importedItems.Insert(0, new ImportedItem(job.Kind, new TimelineCatalogItem(
@@ -478,13 +475,13 @@ public sealed partial class TimelineWindow
         var name = job?.Name ?? import.GamePath;
         if (job?.Sound is { } sound)
         {
-            if (editor == null || source == null || job.Clip != ClipKey(source) || ReadOnly || job.Generation != loadGeneration)
+            if (editor == null || source == null || job.Clip != TimelineSession.ClipKey(source) || ReadOnly || job.Generation != loadGeneration)
                 importMessage = $"{name} was imported, but the timeline changed. Add it again.";
             else
                 PlaceSound(editor, sound, import, name);
             return;
         }
-        if (job == null || editor == null || source == null || job.Clip != ClipKey(source) || ReadOnly ||
+        if (job == null || editor == null || source == null || job.Clip != TimelineSession.ClipKey(source) || ReadOnly ||
             job.Target != null && (job.Generation != loadGeneration || TimelineEdits.Find(editor.Document, job.Target) is not { } target ||
                                    TimelineWindowViews.PickerFor(target) != job.Kind || target.Path != job.TargetPath))
         {
@@ -495,34 +492,6 @@ public sealed partial class TimelineWindow
             importMessage = $"{name} was imported.";
         else
             importError = $"{name} was imported but could not be placed. {pickerError}";
-    }
-
-    /// <summary> The vanilla sound .wav and .ogg imports are built on, read once from game data off the draw path. </summary>
-    private byte[] ScdTemplate()
-    {
-        lock (templateLock)
-        {
-            if (scdTemplate != null)
-                return scdTemplate;
-            byte[]? bytes = null;
-            try { bytes = data.GetFile(ScdBuilder.TemplatePath)?.Data; }
-            catch (Exception e) when (e is not OutOfMemoryException) { log.Warning(e, "Could not read the template sound for imports."); }
-            if (bytes == null)
-                throw new InvalidDataException("The game's template sound could not be read, so .wav and .ogg files can't be imported. An .scd still works.");
-            try { ScdBuilder.CheckTemplate(bytes); }
-            catch (Exception e) when (e is not OutOfMemoryException)
-            {
-                log.Warning(e, "The template sound for imports changed.");
-                throw new InvalidDataException("The game's template sound changed, so .wav and .ogg files can't be imported. An .scd still works.");
-            }
-            return scdTemplate = bytes;
-        }
-    }
-
-    private bool GameFileExists(string gamePath)
-    {
-        try { return data.FileExists(gamePath); }
-        catch (Exception e) when (e is not OutOfMemoryException) { return false; }
     }
 
     /// <summary>
