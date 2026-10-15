@@ -160,36 +160,10 @@ public sealed partial class ExportServer
             return new ExportReceipt(false, "missing_new_mod_name", "enter a name for the new Penumbra mod");
         if (export.BackupExisting)
             return new ExportReceipt(false, "invalid_pending_export", "a first vanilla export cannot target backups");
-        var created = await _penumbra.CreateGameModelModAsync(
+        return await CreateGameModelModAsync(
                 target, filePath, export.NewModName, export.CreateAttributeGroups, export.AttributeTags,
                 export.AttributeMasks, export.EstEntries, race)
             .ConfigureAwait(false);
-        if (!created.Result.Success)
-            return new ExportReceipt(false, created.Result.Code, created.Result.Message, created.Result.WarningList);
-        if (created.ModRoot is null || created.TargetRelativePath is null ||
-            !_contexts.PromoteGameContext(
-                target.ContextId,
-                export.NewModName,
-                export.NewModName,
-                created.ModRoot,
-                created.TargetRelativePath,
-                out var promoted,
-                created.ModStableId) || promoted is null)
-            return new ExportReceipt(
-                true,
-                "vanilla_mod_created_with_warnings",
-                created.Result.Message,
-                created.Result.WarningList.Concat(["The mod was created, but the Blender export context could not be promoted."]).ToArray(),
-                created.Result.TargetFilePath,
-                created.Result.DestinationName);
-        return new ExportReceipt(
-            true,
-            created.Result.Code,
-            created.Result.Message,
-            created.Result.WarningList,
-            created.Result.TargetFilePath,
-            created.Result.DestinationName,
-            promoted);
     }
 
     /// <summary>

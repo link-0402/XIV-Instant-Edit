@@ -1181,35 +1181,9 @@ public sealed partial class ExportServer : IDisposable
                     return new ExportReceipt(false, "missing_new_mod_name", "enter a name for the new Penumbra mod");
                 if (setupVariantInPenumbra || variantName is not null || variantTarget is not null || backupExisting)
                     return new ExportReceipt(false, "invalid_pending_export", "a first vanilla export cannot target variants or backups");
-                var created = await _penumbra.CreateGameModelModAsync(
+                return await CreateGameModelModAsync(
                     target, filePath, newModName, createAttributeGroups, attributeTags, attributeMasks, estEntries)
                     .ConfigureAwait(false);
-                if (!created.Result.Success)
-                    return new ExportReceipt(false, created.Result.Code, created.Result.Message, created.Result.WarningList);
-                if (created.ModRoot is null || created.TargetRelativePath is null ||
-                    !_contexts.PromoteGameContext(
-                        target.ContextId,
-                        newModName,
-                        newModName,
-                        created.ModRoot,
-                        created.TargetRelativePath,
-                        out var promoted,
-                        created.ModStableId) || promoted is null)
-                    return new ExportReceipt(
-                        true,
-                        "vanilla_mod_created_with_warnings",
-                        created.Result.Message,
-                        created.Result.WarningList.Concat(["The mod was created, but the Blender export context could not be promoted."]).ToArray(),
-                        created.Result.TargetFilePath,
-                        created.Result.DestinationName);
-                return new ExportReceipt(
-                    true,
-                    created.Result.Code,
-                    created.Result.Message,
-                    created.Result.WarningList,
-                    created.Result.TargetFilePath,
-                    created.Result.DestinationName,
-                    promoted);
             }
             if (newModName is not null)
                 return new ExportReceipt(false, "unexpected_new_mod_name", "this import already has a Penumbra destination");
@@ -1246,6 +1220,51 @@ public sealed partial class ExportServer : IDisposable
                 result.WarningList,
                 result.TargetFilePath);
         }
+    }
+
+    /// <summary>
+    /// A game model's first export: a new mod holding the exported model (as <paramref name="race"/>'s own
+    /// model when given), with the import's context promoted to it.
+    /// </summary>
+    private async Task<ExportReceipt> CreateGameModelModAsync(
+        InstantEditImportContext target,
+        string filePath,
+        string newModName,
+        bool createAttributeGroups,
+        IReadOnlyList<string>? attributeTags,
+        IReadOnlyDictionary<string, int>? attributeMasks,
+        IReadOnlyList<EstEntryRequest>? estEntries,
+        int? race = null)
+    {
+        var created = await _penumbra.CreateGameModelModAsync(
+                target, filePath, newModName, createAttributeGroups, attributeTags, attributeMasks, estEntries, race)
+            .ConfigureAwait(false);
+        if (!created.Result.Success)
+            return new ExportReceipt(false, created.Result.Code, created.Result.Message, created.Result.WarningList);
+        if (created.ModRoot is null || created.TargetRelativePath is null ||
+            !_contexts.PromoteGameContext(
+                target.ContextId,
+                newModName,
+                newModName,
+                created.ModRoot,
+                created.TargetRelativePath,
+                out var promoted,
+                created.ModStableId) || promoted is null)
+            return new ExportReceipt(
+                true,
+                "vanilla_mod_created_with_warnings",
+                created.Result.Message,
+                created.Result.WarningList.Concat(["The mod was created, but the Blender export context could not be promoted."]).ToArray(),
+                created.Result.TargetFilePath,
+                created.Result.DestinationName);
+        return new ExportReceipt(
+            true,
+            created.Result.Code,
+            created.Result.Message,
+            created.Result.WarningList,
+            created.Result.TargetFilePath,
+            created.Result.DestinationName,
+            promoted);
     }
 
     internal static string ExportRequestFingerprint(ExportRequest request)
