@@ -151,7 +151,7 @@ internal static class MashupPlanning
         };
     }
 
-    internal static void ValidateMashupMappingsAndSwaps(
+    private static void ValidateMashupMappingsAndSwaps(
         IReadOnlyDictionary<string, string> mappings,
         IReadOnlyDictionary<string, string> fileSwaps)
     {
@@ -341,14 +341,14 @@ internal static class MashupPlanning
         return new MashupPlanResult(true, "mashup_plan_ready", "Mashup material plan is ready.", assignments, fingerprint);
     }
 
-    internal static MashupPlanResult MashupPlanFailure(string code, string message)
+    private static MashupPlanResult MashupPlanFailure(string code, string message)
         => new(false, code, message, Array.Empty<MashupMaterialAssignment>());
 
     internal static bool IsValidMashupContributorCount(string destination, int count)
         => count is >= 1 and <= 16 &&
            (!string.Equals(destination, "active_mod", StringComparison.Ordinal) || count >= 2);
 
-    internal static (string Prefix, string Suffix, char Slot)? ParseCanonicalMaterialFamily(string fileName)
+    private static (string Prefix, string Suffix, char Slot)? ParseCanonicalMaterialFamily(string fileName)
     {
         var match = Regex.Match(fileName,
             @"^(?<prefix>mt_.+)_(?<slot>[a-z])(?<suffix>_c\d{4})?\.mtrl$",
@@ -359,14 +359,14 @@ internal static class MashupPlanning
             : null;
     }
 
-    internal static string GamePathDirectory(string value)
+    private static string GamePathDirectory(string value)
     {
         var normalized = NormalizeGamePath(value);
         var separator = normalized.LastIndexOf('/');
         return separator > 0 ? normalized[..separator] : string.Empty;
     }
 
-    internal static (string? Directory, bool Ambiguous) SelectIncomingMashupMaterialDirectory(
+    private static (string? Directory, bool Ambiguous) SelectIncomingMashupMaterialDirectory(
         string modelGamePath,
         IEnumerable<MaterialDependency> activeMaterials)
     {
@@ -400,14 +400,14 @@ internal static class MashupPlanning
             : (null, false);
     }
 
-    internal static string? ModelAssetDirectory(string modelGamePath)
+    private static string? ModelAssetDirectory(string modelGamePath)
     {
         var normalized = NormalizeGamePath(modelGamePath);
         var marker = normalized.LastIndexOf("/model/", StringComparison.OrdinalIgnoreCase);
         return marker > 0 ? normalized[..marker] : null;
     }
 
-    internal static string? MaterialAssetDirectory(string materialDirectory)
+    private static string? MaterialAssetDirectory(string materialDirectory)
     {
         var normalized = NormalizeGamePath(materialDirectory);
         var marker = normalized.LastIndexOf("/material", StringComparison.OrdinalIgnoreCase);
@@ -420,7 +420,7 @@ internal static class MashupPlanning
         return normalized[..marker];
     }
 
-    internal static string? AssetFamilyKey(string? assetDirectory)
+    private static string? AssetFamilyKey(string? assetDirectory)
     {
         if (string.IsNullOrWhiteSpace(assetDirectory))
             return null;
@@ -430,7 +430,7 @@ internal static class MashupPlanning
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)));
     }
 
-    internal static bool IsSafeModelMaterialAlias(string alias)
+    private static bool IsSafeModelMaterialAlias(string alias)
         => alias.Length is > 1 and <= 260 &&
            alias[0] == '/' &&
            alias.IndexOf('/', 1) < 0 &&
@@ -439,7 +439,7 @@ internal static class MashupPlanning
            alias.EndsWith(".mtrl", StringComparison.OrdinalIgnoreCase) &&
            alias.AsSpan(1) is not "." and not "..";
 
-    internal static string CanonicalTargetModelStem(string modelGamePath, string targetMaterialDirectory)
+    private static string CanonicalTargetModelStem(string modelGamePath, string targetMaterialDirectory)
     {
         var stem = Path.GetFileNameWithoutExtension(NormalizeGamePath(modelGamePath));
         var componentMatches = Regex.Matches(
@@ -459,7 +459,7 @@ internal static class MashupPlanning
         return stem;
     }
 
-    internal static string CanonicalTargetRaceSuffix(string modelGamePath, string targetMaterialDirectory)
+    private static string CanonicalTargetRaceSuffix(string modelGamePath, string targetMaterialDirectory)
     {
         var modelStem = Path.GetFileNameWithoutExtension(NormalizeGamePath(modelGamePath));
         var modelRace = Regex.Match(modelStem, @"^c(?<id>\d{4})",
@@ -609,7 +609,7 @@ internal static class MashupPlanning
         return false;
     }
 
-    internal static IReadOnlyList<(char Kind, string Value)> ModelPathIdentities(string modelGamePath)
+    private static IReadOnlyList<(char Kind, string Value)> ModelPathIdentities(string modelGamePath)
     {
         var marker = modelGamePath.LastIndexOf("/model/", StringComparison.OrdinalIgnoreCase);
         if (marker <= 0)
@@ -624,7 +624,7 @@ internal static class MashupPlanning
             .ToArray();
     }
 
-    internal static Dictionary<char, string> MatchModelIdentities(
+    private static Dictionary<char, string> MatchModelIdentities(
         IReadOnlyList<(char Kind, string Value)> source,
         IReadOnlyList<(char Kind, string Value)> target)
     {
@@ -647,7 +647,7 @@ internal static class MashupPlanning
         return result;
     }
 
-    internal static string ReplaceBoundedModelIdentity(string value, string source, string target)
+    private static string ReplaceBoundedModelIdentity(string value, string source, string target)
         => Regex.Replace(
             value,
             $@"(?<![a-z]){Regex.Escape(source)}(?!\d)",

@@ -48,8 +48,8 @@ internal sealed class RaceExportService
     }
 
     // EQDP files keep two bits per slot, in this order: the material flag, then the model flag.
-    internal static readonly string[] EquipmentEqdpSlots = ["Head", "Body", "Hands", "Legs", "Feet"];
-    internal static readonly string[] AccessoryEqdpSlots = ["Ears", "Neck", "Wrists", "RFinger", "LFinger"];
+    private static readonly string[] EquipmentEqdpSlots = ["Head", "Body", "Hands", "Legs", "Feet"];
+    private static readonly string[] AccessoryEqdpSlots = ["Ears", "Neck", "Wrists", "RFinger", "LFinger"];
 
     /// <summary>
     /// Where a race export writes: the race's game path, the file the mod maps there (new or the one it
@@ -59,7 +59,7 @@ internal sealed class RaceExportService
     internal sealed record RaceModelPlan(string GamePath, string RelativePath, JsonObject Meta, IReadOnlyList<string> Containers,
         JsonArray Undo);
 
-    internal const string RaceStateSchema = "instant-edit.race-export";
+    private const string RaceStateSchema = "instant-edit.race-export";
 
     /// <summary>The gender-race code of a player race such as <c>c0801</c> (801), or null.</summary>
     internal static int? PlayerRaceCode(string? race) => EstRaceCode(race);
@@ -78,10 +78,10 @@ internal sealed class RaceExportService
         return ModelSkeletonPaths.WithRace(NormalizeGamePath(gamePath), (ushort)race);
     }
 
-    internal static int EqdpSlotIndex(AttributeModelIdentity identity)
+    private static int EqdpSlotIndex(AttributeModelIdentity identity)
         => Array.IndexOf(identity.ObjectType == "Accessory" ? AccessoryEqdpSlots : EquipmentEqdpSlots, identity.EquipSlot);
 
-    internal static bool MatchesEqdp(JsonObject item, AttributeModelIdentity identity, int genderRace)
+    private static bool MatchesEqdp(JsonObject item, AttributeModelIdentity identity, int genderRace)
     {
         if (!string.Equals(JsonString(item["Type"]), "Eqdp", StringComparison.OrdinalIgnoreCase) ||
             item["Manipulation"] is not JsonObject manipulation)
@@ -101,7 +101,7 @@ internal sealed class RaceExportService
     /// its own model; duplicates collapse into one. The material flag stays as the container had it, else
     /// as the game's file has it (<paramref name="gameBits"/>, the slot's two bits), else on.
     /// </summary>
-    internal static void SetEqdpModel(JsonObject container, AttributeModelIdentity identity, int genderRace, int? gameBits)
+    private static void SetEqdpModel(JsonObject container, AttributeModelIdentity identity, int genderRace, int? gameBits)
     {
         var index = EqdpSlotIndex(identity);
         var manipulations = container["Manipulations"] as JsonArray;
@@ -286,7 +286,7 @@ internal sealed class RaceExportService
     /// Whether every mapping of <paramref name="file"/> in the mod (default data, options and combining
     /// containers) is <paramref name="gamePath"/> in one of <paramref name="containers"/>.
     /// </summary>
-    internal static bool OnlyMappedAt(JsonObject meta, string file, string gamePath, IEnumerable<JsonObject> containers)
+    private static bool OnlyMappedAt(JsonObject meta, string file, string gamePath, IEnumerable<JsonObject> containers)
     {
         var allowed = containers.ToHashSet(ReferenceEqualityComparer.Instance);
         bool MapsElsewhere(JsonNode? node) => node is JsonObject container && container["Files"] is JsonObject files &&
@@ -303,9 +303,9 @@ internal sealed class RaceExportService
     }
 
     /// <summary>The model's slot bits in the game's EQDP file for the race, or null when it can't be read.</summary>
-    internal int? GameEqdpBits(string racePath, int race)
+    private int? GameEqdpBits(string racePath, int race)
     {
-        if (_data is null || ParseAttributeModelIdentity(racePath) is not { } identity)
+        if (ParseAttributeModelIdentity(racePath) is not { } identity)
             return null;
         var index = EqdpSlotIndex(identity);
         if (index < 0)
@@ -468,11 +468,9 @@ internal sealed class RaceExportService
     /// imported model, the one its import lists, carrying what the export changes (the race's file, and
     /// each option's mapping and EQDP entries before it). Restoring that backup undoes the whole export.
     /// </summary>
-    internal string? CreateRaceRestorePoint(string modFolder, string modDirectory, string importedFile, RaceModelPlan plan,
+    private string? CreateRaceRestorePoint(string modFolder, string modDirectory, string importedFile, RaceModelPlan plan,
         string raceFile, string exportedFile, JsonObject? estState)
     {
-        if (_backups is null)
-            return "Managed backup storage is unavailable.";
         if (!File.Exists(importedFile))
             return "The imported model is missing, so no backup could be made.";
         try
@@ -526,7 +524,7 @@ internal sealed class RaceExportService
             string backup;
             try
             {
-                backup = _backups!.Resolve(_backups.Describe(modDirectory, relative).Id, backupName);
+                backup = _backups.Resolve(_backups.Describe(modDirectory, relative).Id, backupName);
             }
             catch (Exception e) when (e is FileNotFoundException or ArgumentException)
             {

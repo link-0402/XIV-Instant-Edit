@@ -192,8 +192,6 @@ internal sealed class PreviewModWriter
     internal async Task<IReadOnlyList<string>> WritePreviewSourcesAsync(IReadOnlyList<(PreviewSource Source, byte[] Bytes)> writes, int objectIndex,
         string recheck, IReadOnlyList<(PreviewSource Material, string GamePath, byte[] Bytes)>? additions = null)
     {
-        if (_backups is null)
-            throw new IOException("Managed backup storage is unavailable, so the source mods can't be changed safely.");
         additions ??= [];
         await _exportGate.WaitAsync().ConfigureAwait(false);
         try
@@ -383,7 +381,7 @@ internal sealed class PreviewModWriter
 
     /// <summary> The managed backups kept of a mod file a preview can write, newest first. </summary>
     internal IReadOnlyList<ManagedBackup> ManagedBackupsFor(PreviewSource source)
-        => _backups is not null && source.IsModFile ? _backups.List(source.ModDirectory, source.RelativePath) : [];
+        => source.IsModFile ? _backups.List(source.ModDirectory, source.RelativePath) : [];
 
     /// <summary>
     /// Puts managed backups back over their mod files. Each file must still sit at its place in its
@@ -394,8 +392,6 @@ internal sealed class PreviewModWriter
     internal async Task<IReadOnlyList<string>> RestorePreviewSourcesAsync(IReadOnlyList<(PreviewSource Source, ManagedBackup Backup)> restores, int objectIndex,
         string recheck)
     {
-        if (_backups is null)
-            throw new IOException("Managed backup storage is unavailable, so nothing can be restored.");
         await _exportGate.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -476,12 +472,12 @@ internal sealed class PreviewModWriter
         return usages;
     }
 
-    internal Task<string?> RedrawPreviewActorAsync(int objectIndex)
+    private Task<string?> RedrawPreviewActorAsync(int objectIndex)
         => _framework.RunOnFrameworkThread(() =>
         {
             try
             {
-                if (_objects?.LocalPlayer?.ObjectIndex != objectIndex)
+                if (_objects.LocalPlayer?.ObjectIndex != objectIndex)
                     _redrawObject.Invoke(objectIndex);
             }
             catch (Exception e)

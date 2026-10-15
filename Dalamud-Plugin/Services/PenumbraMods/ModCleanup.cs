@@ -9,9 +9,9 @@ namespace InstantEdit.Services.PenumbraMods;
 /// <summary> Normalizes a committed mod's file layout and removes duplicate files, all or nothing. </summary>
 internal static class ModCleanup
 {
-    internal const string OwnershipMarkerFile = ".instant-edit-owner.json";
+    private const string OwnershipMarkerFile = ".instant-edit-owner.json";
 
-    internal sealed record CleanupMapping(
+    private sealed record CleanupMapping(
         JsonObject Files,
         string GamePath,
         string OldRelativePath,
@@ -201,7 +201,7 @@ internal static class ModCleanup
         return (result.Warnings, result.PathRemap);
     }
 
-    internal static string? SafeModPathSegment(string? value)
+    private static string? SafeModPathSegment(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
             return null;
@@ -213,7 +213,7 @@ internal static class ModCleanup
         return trimmed;
     }
 
-    internal static string BuildCanonicalModPath(string? group, string? option, string gamePath)
+    private static string BuildCanonicalModPath(string? group, string? option, string gamePath)
     {
         var parts = new List<string> { "Files" };
         if (group is not null)
@@ -224,7 +224,7 @@ internal static class ModCleanup
         return string.Join('/', parts);
     }
 
-    internal static bool TryNormalizeModContentPath(string? path, out string normalized)
+    private static bool TryNormalizeModContentPath(string? path, out string normalized)
     {
         normalized = (path ?? string.Empty).Replace('\\', '/').Trim();
         while (normalized.StartsWith("./", StringComparison.Ordinal))
@@ -236,7 +236,7 @@ internal static class ModCleanup
         return normalized.Split('/').All(segment => segment.Length > 0 && segment is not ("." or ".."));
     }
 
-    internal static string SafeContentPath(string root, string relative)
+    private static string SafeContentPath(string root, string relative)
     {
         var path = Path.GetFullPath(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));
         if (!IsPathWithin(path, root) || HasReparsePointInPath(root, path))
@@ -244,7 +244,7 @@ internal static class ModCleanup
         return path;
     }
 
-    internal static void AddPathRemap(IDictionary<string, string> paths, string oldPath, string newPath)
+    private static void AddPathRemap(IDictionary<string, string> paths, string oldPath, string newPath)
     {
         paths[oldPath] = newPath;
         if (oldPath.StartsWith("Files/", StringComparison.OrdinalIgnoreCase))
@@ -253,7 +253,7 @@ internal static class ModCleanup
             paths["Files/" + oldPath] = newPath;
     }
 
-    internal static bool IsModMetadataFile(string relative)
+    private static bool IsModMetadataFile(string relative)
     {
         var normalized = relative.Replace('\\', '/');
         return normalized.IndexOf('/') < 0 &&
@@ -261,14 +261,14 @@ internal static class ModCleanup
                 normalized.EndsWith(".json", StringComparison.OrdinalIgnoreCase));
     }
 
-    internal static void EnsureNoReparsePoints(string root)
+    private static void EnsureNoReparsePoints(string root)
     {
         foreach (var entry in Directory.EnumerateFileSystemEntries(root, "*", SearchOption.AllDirectories))
             if ((File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0)
                 throw new InvalidDataException($"The mod contains an unsupported linked path: {entry}");
     }
 
-    internal static string CreateCleanupSnapshot(string root)
+    private static string CreateCleanupSnapshot(string root)
     {
         var parent = Path.GetDirectoryName(root)
             ?? throw new InvalidDataException("The mod root has no parent directory.");
@@ -286,7 +286,7 @@ internal static class ModCleanup
         }
     }
 
-    internal static void CopyDirectoryContents(string source, string destination)
+    private static void CopyDirectoryContents(string source, string destination)
     {
         foreach (var entry in Directory.EnumerateFileSystemEntries(source))
         {
@@ -306,7 +306,7 @@ internal static class ModCleanup
         }
     }
 
-    internal static void RestoreCleanupSnapshot(string root, string snapshot)
+    private static void RestoreCleanupSnapshot(string root, string snapshot)
     {
         try
         {
@@ -330,7 +330,7 @@ internal static class ModCleanup
         TryDeleteCleanupSnapshot(snapshot);
     }
 
-    internal static void TryDeleteCleanupSnapshot(string snapshot)
+    private static void TryDeleteCleanupSnapshot(string snapshot)
     {
         try
         {
@@ -343,7 +343,7 @@ internal static class ModCleanup
         }
     }
 
-    internal static void WriteModContentAtomic(string root, string relative, byte[] bytes)
+    private static void WriteModContentAtomic(string root, string relative, byte[] bytes)
     {
         if (!TryNormalizeModContentPath(relative, out var normalized))
             throw new InvalidDataException("A normalized content path is unsafe.");

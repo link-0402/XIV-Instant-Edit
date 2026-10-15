@@ -1,8 +1,8 @@
 using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services;
-using static InstantEdit.TestSupport.Assertions;
 using InstantEdit.Services.PenumbraMods;
+using static InstantEdit.TestSupport.Assertions;
 
 /// <summary>Review fixes (IeSide group): attribute groups of game-model exports whose resource capture failed.</summary>
 internal static class ReviewFixIeSideScenarios

@@ -1,7 +1,7 @@
 using InstantEdit.Services;
+using InstantEdit.Services.PenumbraMods;
 using Penumbra.Api.Enums;
 using static InstantEdit.TestSupport.Assertions;
-using InstantEdit.Services.PenumbraMods;
 
 /// <summary>
 /// New vanilla mods are activated through <see cref="ModActivation.ApplyModToCollection"/> with

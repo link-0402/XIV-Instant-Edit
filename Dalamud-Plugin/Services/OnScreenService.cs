@@ -3,10 +3,10 @@ using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using InstantEdit.Services.Painter;
+using InstantEdit.Services.PenumbraMods;
 using Penumbra.Api.Enums;
 using Penumbra.Api.Helpers;
 using NativeCharacter = FFXIVClientStructs.FFXIV.Client.Game.Character.Character;
-using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services;
 

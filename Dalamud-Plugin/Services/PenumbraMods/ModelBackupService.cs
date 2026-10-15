@@ -72,7 +72,7 @@ internal sealed class ModelBackupService
             await LeaveFrameworkThread();
             if (!string.Equals(Path.GetExtension(originalName), ".mdl", StringComparison.OrdinalIgnoreCase))
                 return new ExportResult(false, "invalid_restore", "The backup target is invalid.");
-            if (_backups is null || targetRelativePath is null)
+            if (targetRelativePath is null)
                 return new ExportResult(false, "backup_unavailable", "Managed backup storage is unavailable.");
             var effectiveRelativePath = targetRelativePath;
             var targetPath = resolved.Target.FilePath;
@@ -186,7 +186,7 @@ internal sealed class ModelBackupService
         string? targetRelativePath, string sourceGamePath, string backupTargetId,
         Guid? sourceModStableId = null)
     {
-        if (_backups is null || targetRelativePath is null)
+        if (targetRelativePath is null)
             return new ExportResult(false, "backup_unavailable", "Managed backup storage is unavailable.");
         await _exportGate.WaitAsync().ConfigureAwait(false);
         try

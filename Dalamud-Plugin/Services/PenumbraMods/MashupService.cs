@@ -1,10 +1,8 @@
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json.Nodes;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using Lumina.Data;
-using Lumina.Data.Files;
 using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
 using static InstantEdit.Services.PenumbraMods.FrameworkThread;
 using static InstantEdit.Services.PenumbraMods.MashupPlanning;
@@ -60,8 +58,6 @@ internal sealed class MashupService
         IReadOnlyDictionary<string, int>? attributeMasks = null,
         IReadOnlyList<EstEntryRequest>? estEntries = null)
     {
-        if (_data is null)
-            return new ExportResult(false, "mashup_unavailable", "Game data access is unavailable.");
         if (!plan.Success || string.IsNullOrWhiteSpace(plan.Fingerprint) ||
             !IsSafeVariantGroupName(name) || exportId.Length is < 8 or > 128 ||
             destination is not ("active_mod" or "new_mod") ||
@@ -144,7 +140,7 @@ internal sealed class MashupService
         }
     }
 
-    internal sealed record PreparedMashup(
+    private sealed record PreparedMashup(
         byte[] ModelBytes,
         Dictionary<string, byte[]> Files,
         Dictionary<string, string> Mappings,
@@ -154,7 +150,7 @@ internal sealed class MashupService
         string? Error = null,
         IReadOnlyList<PreparedMashupEntry>? Entries = null);
 
-    internal sealed record PreparedMashupEntry(
+    private sealed record PreparedMashupEntry(
         MashupContributor Contributor,
         MaterialDependency Material,
         MashupMaterialAssignment Assignment,
@@ -162,7 +158,7 @@ internal sealed class MashupService
         string? RelativeMaterialPath,
         IReadOnlyDictionary<string, string> TextureRewrites);
 
-    internal static ResourceDependencyManifest? BuildMashupResourceManifest(
+    private static ResourceDependencyManifest? BuildMashupResourceManifest(
         PreparedMashup prepared,
         string outputModDirectory,
         string outputModRoot,
@@ -241,7 +237,7 @@ internal sealed class MashupService
         };
     }
 
-    internal static bool TryGetGeneratedTexture(
+    private static bool TryGetGeneratedTexture(
         PreparedMashup prepared,
         TextureDependency texture,
         string effectiveGamePath,
@@ -276,7 +272,7 @@ internal sealed class MashupService
         return false;
     }
 
-    internal static SourceResourceLocator OutputResourceLocator(
+    private static SourceResourceLocator OutputResourceLocator(
         string gamePath,
         string modDirectory,
         string modRoot,
@@ -293,12 +289,12 @@ internal sealed class MashupService
             Sha256 = TextureFiles.Hash(bytes).ToLowerInvariant(),
         };
 
-    internal static string RemapOutputRelativePath(string relativePath, ModPathRemap? pathRemap)
+    private static string RemapOutputRelativePath(string relativePath, ModPathRemap? pathRemap)
         => pathRemap?.RelativePaths.TryGetValue(relativePath, out var remapped) == true
             ? remapped
             : relativePath;
 
-    internal async Task<PreparedMashup> PrepareMashupAsync(
+    private async Task<PreparedMashup> PrepareMashupAsync(
         InstantEditImportContext activeContext,
         IReadOnlyList<MashupContributor> contributors,
         MashupPlanResult plan,
@@ -561,7 +557,7 @@ internal sealed class MashupService
             Entries: preparedEntries);
     }
 
-    internal async Task<IReadOnlyList<string>> ResolveExternalMashupModNamesAsync(
+    private async Task<IReadOnlyList<string>> ResolveExternalMashupModNamesAsync(
         IReadOnlyCollection<string> directories)
     {
         if (directories.Count == 0)
@@ -580,7 +576,7 @@ internal sealed class MashupService
         return names.ToArray();
     }
 
-    internal static void AddExternalMashupDirectory(
+    private static void AddExternalMashupDirectory(
         SourceResourceLocator locator,
         IReadOnlySet<string> participantDirectories,
         ISet<string> externalDirectories)
@@ -616,14 +612,14 @@ internal sealed class MashupService
         return $"Files/xiv-instant-edit/mashups/{exportId[..12]}/materials/{hash}.mtrl";
     }
 
-    internal async Task<byte[]?> ReadManifestResourceAsync(SourceResourceLocator locator)
+    private async Task<byte[]?> ReadManifestResourceAsync(SourceResourceLocator locator)
     {
         byte[]? bytes = null;
         if (locator.Kind == "game")
         {
             try
             {
-                bytes = (await _data!.GetFileAsync<FileResource>(locator.GamePath, CancellationToken.None)
+                bytes = (await _data.GetFileAsync<FileResource>(locator.GamePath, CancellationToken.None)
                     .ConfigureAwait(false))?.Data;
             }
             catch (Exception e)
@@ -680,7 +676,7 @@ internal sealed class MashupService
         return null;
     }
 
-    internal async Task<ExportResult> CommitMashupToActiveModAsync(
+    private async Task<ExportResult> CommitMashupToActiveModAsync(
         SourceModTarget target,
         InstantEditImportContext activeContext,
         PreparedMashup prepared,
@@ -792,7 +788,7 @@ internal sealed class MashupService
         }
     }
 
-    internal async Task<ExportResult> CommitMashupToNewModAsync(
+    private async Task<ExportResult> CommitMashupToNewModAsync(
         InstantEditImportContext activeContext,
         PreparedMashup prepared,
         string exportId,

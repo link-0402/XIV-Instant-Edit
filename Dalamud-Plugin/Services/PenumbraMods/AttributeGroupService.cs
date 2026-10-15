@@ -18,18 +18,18 @@ internal sealed class AttributeGroupService
     internal sealed record AttributeModelIdentity(
         int Id, int RaceCode, string AtrSlot, string ObjectType, string EquipSlot, string BodySlot);
 
-    internal sealed record AttributeGroupWrite(string Path, JsonObject Document);
+    private sealed record AttributeGroupWrite(string Path, JsonObject Document);
 
-    internal const string AttributeGroupDescriptionPrefix = "Managed by XIV Instant Edit attribute group v1: ";
+    private const string AttributeGroupDescriptionPrefix = "Managed by XIV Instant Edit attribute group v1: ";
 
-    internal static readonly string[] AttributeGroupFamilies =
+    private static readonly string[] AttributeGroupFamilies =
         ["mv", "tv", "gv", "dv", "sv", "ev", "nv", "wv", "rv"];
 
     // Every other attribute the game's own gear, accessory, body, hair, face, tail
     // and ear models use, typos included (surveyed from the game data 2026-09-28).
     // The game drives them itself, so they never get a generated group. Keep in
     // sync with GAME_ATTRIBUTE_NAMES in the Blender add-on's materials.py.
-    internal static readonly HashSet<string> GameAttributeNames = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> GameAttributeNames = new(StringComparer.Ordinal)
     {
         "atr_ar", "atr_arm", "atr_arm1", "atr_arm2", "atr_arm3", "atr_armc", "atr_armhh",
         "atr_bak", "atr_bak1", "atr_bak3", "atr_bak4", "atr_bakh", "atr_blt", "atr_bv_a",
@@ -109,9 +109,9 @@ internal sealed class AttributeGroupService
             identity => PlanImcGroupEntry(identity, sourceManipulations, GameImcEntries(resolvedGamePath, identity)));
 
     /// <summary> The entry a generated IMC group starts from; with <see cref="OnlyAttributes"/> Penumbra takes everything but the mask from the game's file. </summary>
-    internal sealed record ImcGroupEntry(JsonObject? Entry, bool OnlyAttributes, string? Error = null);
+    private sealed record ImcGroupEntry(JsonObject? Entry, bool OnlyAttributes, string? Error = null);
 
-    internal static string? WriteAttributeGroupsCore(
+    private static string? WriteAttributeGroupsCore(
         string modFolder,
         string resolvedGamePath,
         IReadOnlyList<string> tags,
@@ -152,7 +152,7 @@ internal sealed class AttributeGroupService
     /// Null <paramref name="sourceManipulations"/> means the import couldn't read the mod's entries: then a model
     /// with variants gets no group, since it could undo entries nobody knows.
     /// </summary>
-    internal static ImcGroupEntry PlanImcGroupEntry(
+    private static ImcGroupEntry PlanImcGroupEntry(
         AttributeModelIdentity identity,
         JsonArray? sourceManipulations,
         IReadOnlyList<JsonObject>? gameEntries)
@@ -181,16 +181,13 @@ internal sealed class AttributeGroupService
             => plan.Entry is not null && JsonIntFlexible(plan.Entry["MaterialId"]) is >= 1 and <= byte.MaxValue ? plan : plan with { Entry = null };
     }
 
-    internal static bool SameImcEntry(JsonObject first, JsonObject second)
+    private static bool SameImcEntry(JsonObject first, JsonObject second)
         => new[] { "MaterialId", "DecalId", "VfxId", "MaterialAnimationId", "SoundId" }
             .All(key => JsonIntFlexible(first[key]) == JsonIntFlexible(second[key]));
 
     /// <summary> The game's IMC entries of the model's part, by variant from 0 to the file's count; null when there's no file. </summary>
-    internal IReadOnlyList<JsonObject>? GameImcEntries(string resolvedGamePath, AttributeModelIdentity identity)
+    private IReadOnlyList<JsonObject>? GameImcEntries(string resolvedGamePath, AttributeModelIdentity identity)
     {
-        if (_data is null)
-            return null;
-
         try
         {
             var path = NormalizeGamePath(resolvedGamePath);
@@ -241,7 +238,7 @@ internal sealed class AttributeGroupService
     }
 
     /// <summary> The mod's own IMC entries for the model's part, by variant; the first one captured for a variant wins, as in Penumbra. </summary>
-    internal static Dictionary<int, JsonObject> SourceImcEntries(
+    private static Dictionary<int, JsonObject> SourceImcEntries(
         AttributeModelIdentity identity,
         JsonArray? sourceManipulations)
     {
@@ -284,13 +281,13 @@ internal sealed class AttributeGroupService
         return result;
     }
 
-    internal static int JsonByteOrZero(JsonNode? node)
+    private static int JsonByteOrZero(JsonNode? node)
     {
         var value = JsonIntFlexible(node);
         return value is >= byte.MinValue and <= byte.MaxValue ? value : 0;
     }
 
-    internal static string? PrepareAttributeGroups(
+    private static string? PrepareAttributeGroups(
         string modFolder,
         string resolvedGamePath,
         IReadOnlyList<string> tags,
@@ -354,7 +351,7 @@ internal sealed class AttributeGroupService
         return null;
     }
 
-    internal static string? CommitAttributeGroups(AttributeGroupWrite prepared)
+    private static string? CommitAttributeGroups(AttributeGroupWrite prepared)
     {
         try
         {
@@ -378,7 +375,7 @@ internal sealed class AttributeGroupService
             modFolder, resolvedGamePath, tags, masks,
             identity => PlanImcGroupEntry(identity, sourceManipulations, gameImcEntries));
 
-    internal static string? NormalizeAttributeGroupInput(
+    private static string? NormalizeAttributeGroupInput(
         string resolvedGamePath,
         IReadOnlyList<string> tags,
         IReadOnlyDictionary<string, int>? masks,
@@ -460,7 +457,7 @@ internal sealed class AttributeGroupService
     }
 
     /// <summary> The variant tag family a gear or accessory slot's IMC entry toggles, and the slot's name for messages. </summary>
-    internal static (string Family, string SlotName) VariantFamily(string atrSlot) => atrSlot switch
+    private static (string Family, string SlotName) VariantFamily(string atrSlot) => atrSlot switch
     {
         "Head" => ("mv", "head"),
         "Body" => ("tv", "body"),
@@ -474,7 +471,7 @@ internal sealed class AttributeGroupService
         _ => ("", atrSlot),
     };
 
-    internal static bool TryGetStandardAttributeSuffix(string tag, out string suffix)
+    private static bool TryGetStandardAttributeSuffix(string tag, out string suffix)
     {
         suffix = "";
         // IMC attribute masks have ten bits, _a to _j.
@@ -568,10 +565,10 @@ internal sealed class AttributeGroupService
         return new AttributeModelIdentity(id, raceCode, atrSlot, objectType, equipSlot, bodySlot);
     }
 
-    internal static string AttributeGroupMarker(string kind, string path)
+    private static string AttributeGroupMarker(string kind, string path)
         => $"{AttributeGroupDescriptionPrefix}{kind}|{path}";
 
-    internal static string GeneratedAttributeGroupName(
+    private static string GeneratedAttributeGroupName(
         AttributeModelIdentity identity, string path, string kind)
     {
         var stem = Path.GetFileNameWithoutExtension(path);
@@ -579,7 +576,7 @@ internal sealed class AttributeGroupService
         return baseName.Length <= 120 ? baseName : baseName[..120].TrimEnd();
     }
 
-    internal static void UpsertAttributeGroup(
+    private static void UpsertAttributeGroup(
         JsonArray groups,
         string marker,
         string requestedName,
@@ -614,7 +611,7 @@ internal sealed class AttributeGroupService
             groups.Add(result);
     }
 
-    internal static void RemoveManagedAttributeGroup(JsonArray groups, string marker)
+    private static void RemoveManagedAttributeGroup(JsonArray groups, string marker)
     {
         for (var index = groups.Count - 1; index >= 0; --index)
         {
@@ -624,7 +621,7 @@ internal sealed class AttributeGroupService
         }
     }
 
-    internal static int NextAttributeGroupPriority(JsonArray groups)
+    private static int NextAttributeGroupPriority(JsonArray groups)
     {
         var highest = groups.OfType<JsonObject>().Select(group => JsonInt(group["Priority"]))
             .DefaultIfEmpty(0).Max();
@@ -633,7 +630,7 @@ internal sealed class AttributeGroupService
         return highest + 1;
     }
 
-    internal static string UniqueAttributeGroupName(JsonArray groups, string requested)
+    private static string UniqueAttributeGroupName(JsonArray groups, string requested)
     {
         var names = groups.OfType<JsonObject>()
             .Select(group => JsonString(group["Name"]))
@@ -652,7 +649,7 @@ internal sealed class AttributeGroupService
         throw new InvalidDataException("Could not allocate a unique Penumbra attribute group name.");
     }
 
-    internal static JsonObject BuildImcAttributeGroup(
+    private static JsonObject BuildImcAttributeGroup(
         JsonObject? existing,
         AttributeModelIdentity identity,
         IReadOnlyDictionary<string, int> suffixMasks,
@@ -708,7 +705,7 @@ internal sealed class AttributeGroupService
             ["SoundId"] = soundId,
         };
 
-    internal static JsonObject BuildAtrAttributeGroup(
+    private static JsonObject BuildAtrAttributeGroup(
         JsonObject? existing,
         AttributeModelIdentity identity,
         IReadOnlyList<string> customTags)
@@ -727,7 +724,7 @@ internal sealed class AttributeGroupService
         return result;
     }
 
-    internal static JsonObject BuildAtrManipulation(
+    private static JsonObject BuildAtrManipulation(
         AttributeModelIdentity identity,
         string tag,
         bool enabled)
@@ -745,7 +742,7 @@ internal sealed class AttributeGroupService
             },
         };
 
-    internal static HashSet<string> ManagedAtrTags(JsonArray groups, string managedMarker)
+    private static HashSet<string> ManagedAtrTags(JsonArray groups, string managedMarker)
     {
         var result = new HashSet<string>(StringComparer.Ordinal);
         var managedGroup = groups.OfType<JsonObject>().FirstOrDefault(group =>
@@ -761,7 +758,7 @@ internal sealed class AttributeGroupService
         return result;
     }
 
-    internal static void UpdateManagedAtrDefaults(
+    private static void UpdateManagedAtrDefaults(
         JsonObject meta,
         AttributeModelIdentity identity,
         IReadOnlySet<string> previousTags,
@@ -830,7 +827,7 @@ internal sealed class AttributeGroupService
         return result;
     }
 
-    internal static bool TryGetAtrManipulation(
+    private static bool TryGetAtrManipulation(
         JsonObject item,
         out JsonObject manipulation,
         out string attribute)
@@ -847,7 +844,7 @@ internal sealed class AttributeGroupService
         return true;
     }
 
-    internal static bool AtrManipulationMatchesIdentity(
+    private static bool AtrManipulationMatchesIdentity(
         JsonObject manipulation,
         AttributeModelIdentity identity)
         => string.Equals(JsonString(manipulation["Slot"]), identity.AtrSlot, StringComparison.Ordinal) &&
@@ -856,7 +853,7 @@ internal sealed class AttributeGroupService
 
     // Before 2.0.0, hair and face exports wrote Slot "Unknown" with the model ID.
     // Penumbra drops that combination as invalid, so these entries never did anything.
-    internal static bool IsLegacyHumanAtrManipulation(
+    private static bool IsLegacyHumanAtrManipulation(
         JsonObject manipulation,
         AttributeModelIdentity identity)
         => identity.ObjectType == "Character" &&
@@ -864,10 +861,10 @@ internal sealed class AttributeGroupService
            JsonIntFlexible(manipulation["Id"]) == identity.Id &&
            JsonIntFlexible(manipulation["GenderRaceCondition"]) == 0;
 
-    internal static bool IsFalse(JsonNode? node)
+    private static bool IsFalse(JsonNode? node)
         => node is JsonValue value && value.TryGetValue<bool>(out var result) && !result;
 
-    internal static bool HasUnmanagedAtrConflict(
+    private static bool HasUnmanagedAtrConflict(
         JsonObject meta,
         string managedMarker,
         AttributeModelIdentity identity,
@@ -908,7 +905,7 @@ internal sealed class AttributeGroupService
         return false;
     }
 
-    internal static IEnumerable<JsonObject> DescendantObjects(JsonNode? node)
+    private static IEnumerable<JsonObject> DescendantObjects(JsonNode? node)
     {
         if (node is JsonObject objectNode)
         {
