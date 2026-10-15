@@ -15,9 +15,9 @@
     "CanUnloadAsync": false,
     "LoadPriority": 0,
     "AcceptsFeedback": false,
-    "DownloadLinkInstall": "https://raw.githubusercontent.com/link-0402/XIV-Instant-Edit/main/Dalamud-Plugin/InstantEdit/latest.zip",
-    "DownloadLinkUpdate": "https://raw.githubusercontent.com/link-0402/XIV-Instant-Edit/main/Dalamud-Plugin/InstantEdit/latest.zip",
-    "DownloadLinkTesting": "https://raw.githubusercontent.com/link-0402/XIV-Instant-Edit/main/Dalamud-Plugin/InstantEdit/latest.zip",
+    "DownloadLinkInstall": "https://github.com/link-0402/XIV-Instant-Edit/releases/latest/download/XIV-Instant-Edit.zip",
+    "DownloadLinkUpdate": "https://github.com/link-0402/XIV-Instant-Edit/releases/latest/download/XIV-Instant-Edit.zip",
+    "DownloadLinkTesting": "https://github.com/link-0402/XIV-Instant-Edit/releases/latest/download/XIV-Instant-Edit.zip",
     "Tags": [
       "Penumbra",
       "Blender",
