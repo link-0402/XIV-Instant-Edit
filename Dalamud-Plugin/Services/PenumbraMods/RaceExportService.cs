@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using Dalamud.Plugin.Services;
+using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Painter;
 using InstantEdit.Services.Skeletons;
@@ -347,12 +348,12 @@ internal sealed class RaceExportService
     {
         resolvedGamePath ??= sourceGamePath;
         if (!IsSafeLocalModelPath(sourceFilePath))
-            return new ExportResult(false, "destination_unsafe", "The original Penumbra model destination is invalid.");
+            return new ExportResult(false, ResultCode.DestinationUnsafe, "The original Penumbra model destination is invalid.");
         var validationError = ValidateExportRequest(sourceModDirectory, sourceGamePath, exportedFile);
         if (validationError is not null)
-            return new ExportResult(false, "invalid_export_file", validationError);
+            return new ExportResult(false, ResultCode.InvalidExportFile, validationError);
         if (RaceModelGamePath(sourceGamePath, race) is not { } racePath)
-            return new ExportResult(false, "race_model_unavailable", "Only gear and accessory models can be saved for another race.");
+            return new ExportResult(false, ResultCode.RaceModelUnavailable, "Only gear and accessory models can be saved for another race.");
 
         await _exportGate.WaitAsync().ConfigureAwait(false);
         string? committedTarget = null;
@@ -383,7 +384,7 @@ internal sealed class RaceExportService
             var planError = PlanRaceModel(resolved.Target.Folder, sourceGamePath, resolved.Target.RelativePath, race,
                 GameEqdpBits(racePath, race), out var plan);
             if (planError is not null)
-                return new ExportResult(false, "race_model_unavailable", planError);
+                return new ExportResult(false, ResultCode.RaceModelUnavailable, planError);
 
             var targetFile = Path.Combine(resolved.Target.Folder, plan!.RelativePath.Replace('/', Path.DirectorySeparatorChar));
             // The backup keeps the model's EST entries too, so restoring it undoes this export's EST change.
@@ -395,14 +396,14 @@ internal sealed class RaceExportService
                 var backupError = CreateRaceRestorePoint(resolved.Target.Folder, resolved.Target.Directory,
                     resolved.Target.FilePath, plan, targetFile, exportedFile, estState);
                 if (backupError is not null)
-                    return new ExportResult(false, "write_failed", backupError);
+                    return new ExportResult(false, ResultCode.WriteFailed, backupError);
             }
             // The restore point already backed up the race's file.
             var writeError = _writer.WriteModelToOriginalLocation(
                 resolved.Target.Folder, targetFile, exportedFile, false,
                 resolved.Target.Directory, plan.RelativePath);
             if (writeError is not null)
-                return new ExportResult(false, "write_failed", writeError);
+                return new ExportResult(false, ResultCode.WriteFailed, writeError);
             committedTarget = targetFile;
 
             var warnings = new List<string>();
@@ -439,7 +440,7 @@ internal sealed class RaceExportService
                     warnings.Add(redrawWarning);
             }
 
-            var code = warnings.Count == 0 ? "race_model_exported" : "race_model_exported_with_warnings";
+            var code = warnings.Count == 0 ? ResultCode.RaceModelExported : ResultCode.RaceModelExportedWithWarnings;
             var message = warnings.Count == 0
                 ? $"Exported to {targetFile} as the c{race:D4} model ({string.Join(", ", plan.Containers)}) and reloaded {resolved.Target.Directory}."
                 : $"Exported to {targetFile} as the c{race:D4} model; {warnings.Count} follow-up warning(s).";
@@ -451,11 +452,11 @@ internal sealed class RaceExportService
             if (committedTarget is not null)
                 return new ExportResult(
                     true,
-                    "race_model_exported_with_warnings",
+                    ResultCode.RaceModelExportedWithWarnings,
                     $"Exported to {committedTarget}; follow-up processing failed.",
                     [$"Follow-up processing failed: {e.Message}"],
                     committedTarget);
-            return new ExportResult(false, "write_failed", $"Failed before the model write could be committed: {e.Message}");
+            return new ExportResult(false, ResultCode.WriteFailed, $"Failed before the model write could be committed: {e.Message}");
         }
         finally
         {

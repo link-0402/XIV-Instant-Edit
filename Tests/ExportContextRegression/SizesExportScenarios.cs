@@ -243,27 +243,27 @@ internal static class SizesExportScenarios
         group.VariantTargetId = "group:00000000-0000-0000-0000-000000000001";
         group.DefaultSize = null;
         Require(ExportServer.ValidateSizesEnvelope(group) is null, "sizes request: an existing group needs no name");
-        var cases = new Dictionary<string, (Action<ExportServer.SizesExportRequest> Change, string Code)>
+        var cases = new Dictionary<string, (Action<ExportServer.SizesExportRequest> Change, ResultCode Code)>
         {
-            ["schema"] = (request => request.Schema = "instant-edit.export", "unsupported_schema"),
-            ["version"] = (request => request.Version = 2, "unsupported_version"),
-            ["in place"] = (request => request.VariantTarget = "option", "invalid_variant_target"),
-            ["no group name"] = (request => request.VariantGroupName = " ", "penumbra_setup_requires_group_name"),
-            ["no group"] = (request => request.VariantTarget = "group", "missing_variant_target"),
-            ["no sizes"] = (request => request.Sizes = [], "invalid_sizes"),
+            ["schema"] = (request => request.Schema = "instant-edit.export", ResultCode.UnsupportedSchema),
+            ["version"] = (request => request.Version = 2, ResultCode.UnsupportedVersion),
+            ["in place"] = (request => request.VariantTarget = "option", ResultCode.InvalidVariantTarget),
+            ["no group name"] = (request => request.VariantGroupName = " ", ResultCode.PenumbraSetupRequiresGroupName),
+            ["no group"] = (request => request.VariantTarget = "group", ResultCode.MissingVariantTarget),
+            ["no sizes"] = (request => request.Sizes = [], ResultCode.InvalidSizes),
             ["too many sizes"] = (request => request.Sizes = Enumerable.Range(0, 65).Select(index =>
                 new ExportServer.SizeFileRequest
                 {
                     Name = $"Size {index}", FilePath = $"C:/Temp/size_{index}.mdl", Size = 1,
                     Sha256 = new string('a', 64),
-                }).ToList(), "invalid_sizes"),
-            ["one name twice"] = (request => request.Sizes![1].Name = "LARGE", "invalid_size_name"),
-            ["a control character"] = (request => request.Sizes![1].Name = "Me\tdium", "invalid_size_name"),
-            ["no file"] = (request => request.Sizes![0].FilePath = "", "missing_field"),
-            ["an empty file"] = (request => request.Sizes![0].Size = 0, "invalid_size"),
-            ["a bad hash"] = (request => request.Sizes![0].Sha256 = new string('g', 64), "invalid_sha256"),
-            ["a default that isn't a size"] = (request => request.DefaultSize = "Small", "invalid_default_size"),
-            ["attribute tags without groups"] = (request => request.AttributeTags = ["atr_tv_a"], "unsupported_field"),
+                }).ToList(), ResultCode.InvalidSizes),
+            ["one name twice"] = (request => request.Sizes![1].Name = "LARGE", ResultCode.InvalidSizeName),
+            ["a control character"] = (request => request.Sizes![1].Name = "Me\tdium", ResultCode.InvalidSizeName),
+            ["no file"] = (request => request.Sizes![0].FilePath = "", ResultCode.MissingField),
+            ["an empty file"] = (request => request.Sizes![0].Size = 0, ResultCode.InvalidSize),
+            ["a bad hash"] = (request => request.Sizes![0].Sha256 = new string('g', 64), ResultCode.InvalidSha256),
+            ["a default that isn't a size"] = (request => request.DefaultSize = "Small", ResultCode.InvalidDefaultSize),
+            ["attribute tags without groups"] = (request => request.AttributeTags = ["atr_tv_a"], ResultCode.UnsupportedField),
         };
         foreach (var (name, (change, code)) in cases)
         {
@@ -281,13 +281,13 @@ internal static class SizesExportScenarios
         var original = Request();
         const string exportId = "sizes-export";
         bool Begin(ExportServer.SizesExportRequest request, out ExportContextRegistry.ExportReservation? reservation,
-            out string code)
+            out ResultCode code)
             => registry.TryBeginExport(registry.PluginInstanceId, context.ContextId, exportId, context.Capability,
                 request.Sizes![0].FilePath!, request.Sizes.Sum(size => size.Size),
                 ExportServer.SizesManifestHash(request.Sizes), out reservation, out code,
                 ExportServer.SizesExportRequestFingerprint(request));
         Require(Begin(original, out var owner, out _) && owner!.IsOwner, "sizes receipt: the export is reserved");
-        var receipt = new ExportReceipt(true, "sizes_exported", "done");
+        var receipt = new ExportReceipt(true, ResultCode.SizesExported, "done");
         registry.CompleteExport(context.ContextId, exportId, receipt);
         Require(Begin(original, out var duplicate, out _) && !duplicate!.IsOwner &&
                 duplicate.Completion.Result == receipt, "sizes receipt: an exact retry gets the receipt back");
@@ -304,7 +304,7 @@ internal static class SizesExportScenarios
         {
             var changed = JsonSerializer.Deserialize<ExportServer.SizesExportRequest>(JsonSerializer.Serialize(original))!;
             change(changed);
-            Require(!Begin(changed, out _, out var code) && code == "duplicate_export_id",
+            Require(!Begin(changed, out _, out var code) && code == ResultCode.DuplicateExportId,
                 $"sizes receipt: another request can't reuse the receipt ({name} changed)");
         }
     }

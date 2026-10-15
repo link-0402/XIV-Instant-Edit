@@ -62,23 +62,23 @@ internal sealed class MashupService
             !IsSafeVariantGroupName(name) || exportId.Length is < 8 or > 128 ||
             destination is not ("active_mod" or "new_mod") ||
             !IsValidMashupContributorCount(destination, contributors.Count))
-            return new ExportResult(false, "invalid_mashup", "The mashup request is invalid.");
+            return new ExportResult(false, ResultCode.InvalidMashup, "The mashup request is invalid.");
         if (contributors.All(item => item.Context.ContextId != activeContext.ContextId))
-            return new ExportResult(false, "invalid_mashup", "The active Context must contribute.");
+            return new ExportResult(false, ResultCode.InvalidMashup, "The active Context must contribute.");
         if (contributors.Any(item => item.Context.ResourceManifest?.Version != ResourceDependencyManifest.CurrentVersion))
-            return new ExportResult(false, "mashup_reimport_required", "Re-import every contributing Context before creating a mashup.");
+            return new ExportResult(false, ResultCode.MashupReimportRequired, "Re-import every contributing Context before creating a mashup.");
         if (destination == "active_mod" &&
             (activeContext.DestinationState != InstantEditImportContext.ReadyDestination ||
              string.IsNullOrWhiteSpace(activeContext.SourceModDirectory) ||
              string.IsNullOrWhiteSpace(activeContext.TargetFilePath)))
-            return new ExportResult(false, "destination_not_ready", "The active Context has no Penumbra mod destination.");
+            return new ExportResult(false, ResultCode.DestinationNotReady, "The active Context has no Penumbra mod destination.");
         if (destination == "new_mod" &&
             activeContext.DestinationState is not (InstantEditImportContext.ReadyDestination or
                 InstantEditImportContext.NewModRequiredDestination))
-            return new ExportResult(false, "destination_not_ready", "The active Context cannot create a Penumbra mashup mod.");
+            return new ExportResult(false, ResultCode.DestinationNotReady, "The active Context cannot create a Penumbra mashup mod.");
         if (contributors.Any(item => item.Context.DestinationState is not (
                 InstantEditImportContext.ReadyDestination or InstantEditImportContext.NewModRequiredDestination)))
-            return new ExportResult(false, "destination_not_ready", "A contributing Context is not ready for mashup export.");
+            return new ExportResult(false, ResultCode.DestinationNotReady, "A contributing Context is not ready for mashup export.");
 
         await _exportGate.WaitAsync().ConfigureAwait(false);
         try
@@ -132,7 +132,7 @@ internal sealed class MashupService
         catch (Exception e)
         {
             _log.Error(e, "Failed to create Penumbra mashup.");
-            return new ExportResult(false, "mashup_failed", e.Message);
+            return new ExportResult(false, ResultCode.MashupFailed, e.Message);
         }
         finally
         {
@@ -146,7 +146,7 @@ internal sealed class MashupService
         Dictionary<string, string> Mappings,
         Dictionary<string, string> FileSwaps,
         IReadOnlyList<string> RequiredExternalMods,
-        string Code = "accepted",
+        ResultCode Code = ResultCode.Accepted,
         string? Error = null,
         IReadOnlyList<PreparedMashupEntry>? Entries = null);
 
@@ -326,26 +326,26 @@ internal sealed class MashupService
             var contributor = contributors.FirstOrDefault(item =>
                 string.Equals(item.Context.ContextId, assignment.ContextId, StringComparison.Ordinal));
             if (contributor is null)
-                return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], "mashup_plan_mismatch",
+                return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], ResultCode.MashupPlanMismatch,
                     "The material plan references an unknown Context.");
             var manifest = contributor.Context.ResourceManifest!;
             var dependency = manifest.Materials.FirstOrDefault(material =>
                 string.Equals(NormalizeModelMaterial(material.ModelMaterial), assignment.ModelMaterial,
                     StringComparison.OrdinalIgnoreCase));
             if (dependency is null)
-                return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], "mashup_reimport_required",
+                return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], ResultCode.MashupReimportRequired,
                     $"Material {assignment.ModelMaterial} is absent from the captured dependency manifest; re-import that Context.");
             if (!IsValidMashupLocator(dependency.Resource, ".mtrl") ||
                 !string.Equals(NormalizeGamePath(dependency.GamePath),
                     NormalizeGamePath(dependency.Resource.GamePath), StringComparison.OrdinalIgnoreCase))
-                return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], "mashup_reimport_required",
+                return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], ResultCode.MashupReimportRequired,
                     $"Material {assignment.ModelMaterial} has invalid captured source metadata; re-import that Context.");
             var bundleMaterialExternalDependencies = CanBundleExternalMashupDependencies(
                 dependency, bundleExternalDependencies);
             foreach (var texture in dependency.Textures)
             {
                 if (!IsValidMashupLocator(texture.Resource, ".tex"))
-                    return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], "mashup_reimport_required",
+                    return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], ResultCode.MashupReimportRequired,
                         $"Texture {texture.EffectiveGamePath} has invalid captured source metadata; re-import that Context.");
                 if (!ShouldBundleMashupDependency(
                         participantDirectories, texture.Resource, bundleMaterialExternalDependencies))
@@ -361,7 +361,7 @@ internal sealed class MashupService
             .Select(NormalizeModelMaterial)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (!expectedAliases.SetEquals(actualAliases))
-            return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], "mashup_model_mismatch",
+            return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], ResultCode.MashupModelMismatch,
                 "The exported MDL material aliases do not match the authenticated mashup plan.");
 
         var texturePhysicalByHash = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -412,7 +412,7 @@ internal sealed class MashupService
                         (fileSwaps.TryGetValue(target, out var existingSwap) &&
                          !string.Equals(existingSwap, source, StringComparison.OrdinalIgnoreCase)))
                         return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [],
-                            "mashup_material_path_conflict", $"A pass-through material conflicts at {target}.");
+                            ResultCode.MashupMaterialPathConflict, $"A pass-through material conflicts at {target}.");
                     fileSwaps[target] = source;
                 }
 
@@ -423,7 +423,7 @@ internal sealed class MashupService
                     var textureError = await BundleTextureAtOriginalPathAsync(texture).ConfigureAwait(false);
                     if (textureError is not null)
                         return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [],
-                            "mashup_texture_conflict", textureError);
+                            ResultCode.MashupTextureConflict, textureError);
                 }
                 preparedEntries.Add(new PreparedMashupEntry(
                     entry.Contributor,
@@ -437,7 +437,7 @@ internal sealed class MashupService
 
             var materialBytes = await ReadManifestResourceAsync(entry.Material.Resource).ConfigureAwait(false);
             if (materialBytes is null)
-                return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], "mashup_source_changed",
+                return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], ResultCode.MashupSourceChanged,
                     $"Material source changed or disappeared: {entry.Material.GamePath}. Re-import the Context.");
 
             var rewrites = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -458,7 +458,7 @@ internal sealed class MashupService
                         var textureError = await BundleTextureAtOriginalPathAsync(item.Texture).ConfigureAwait(false);
                         if (textureError is not null)
                             return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [],
-                                "mashup_texture_conflict", textureError);
+                                ResultCode.MashupTextureConflict, textureError);
                     }
                     continue;
                 }
@@ -468,7 +468,7 @@ internal sealed class MashupService
                 {
                     var textureBytes = await ReadManifestResourceAsync(item.Texture.Resource).ConfigureAwait(false);
                     if (textureBytes is null)
-                        return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], "mashup_source_changed",
+                        return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], ResultCode.MashupSourceChanged,
                             $"Texture source changed or disappeared: {item.Texture.EffectiveGamePath}. Re-import the Context.");
                     var hash = item.Texture.Resource.Sha256.ToLowerInvariant();
                     if (!texturePhysicalByHash.TryGetValue(hash, out var relativeTexture))
@@ -500,7 +500,7 @@ internal sealed class MashupService
                 }
                 catch (Exception e)
                 {
-                    return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], "mashup_texture_conflict",
+                    return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], ResultCode.MashupTextureConflict,
                         $"Could not retarget texture {storedGroup.Key}: {e.Message}");
                 }
 
@@ -509,7 +509,7 @@ internal sealed class MashupService
                     var effective = Dx11TexturePath(storedAlias, item.Texture.Flags);
                     if (textureHashByGamePath.TryGetValue(effective, out var existingHash) &&
                         !string.Equals(existingHash, item.Hash, StringComparison.OrdinalIgnoreCase))
-                        return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], "mashup_texture_conflict",
+                        return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], ResultCode.MashupTextureConflict,
                             $"Generated texture path still conflicts: {effective}.");
                     textureHashByGamePath[effective] = item.Hash;
                     mappings[effective] = item.Relative;
@@ -523,18 +523,18 @@ internal sealed class MashupService
             }
             catch (Exception e)
             {
-                return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], "mashup_material_rewrite_failed",
+                return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], ResultCode.MashupMaterialRewriteFailed,
                     $"Could not rewrite {entry.Material.GamePath}: {e.Message}");
             }
             var relativeMaterial = ContentAddressedMashupMaterialPath(exportId, rewritten);
             if (files.TryGetValue(relativeMaterial, out var existingMaterial) &&
                 !existingMaterial.AsSpan().SequenceEqual(rewritten))
-                return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], "mashup_material_hash_conflict",
+                return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], ResultCode.MashupMaterialHashConflict,
                     "Two rewritten materials produced the same content address with different bytes.");
             files[relativeMaterial] = rewritten;
             if (mappings.TryGetValue(entry.Assignment.GamePath, out var existingMapping) &&
                 !string.Equals(existingMapping, relativeMaterial, StringComparison.Ordinal))
-                return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], "mashup_material_path_conflict",
+                return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], ResultCode.MashupMaterialPathConflict,
                     $"More than one rewritten material targets {entry.Assignment.GamePath}.");
             mappings[entry.Assignment.GamePath] = relativeMaterial;
             preparedEntries.Add(new PreparedMashupEntry(
@@ -550,7 +550,7 @@ internal sealed class MashupService
         files[relativeModel] = modelBytes;
         mappings[NormalizeGamePath(activeContext.GamePath)] = relativeModel;
         if (mappings.Keys.Any(fileSwaps.ContainsKey))
-            return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], "mashup_mapping_conflict",
+            return new PreparedMashup(modelBytes, files, mappings, fileSwaps, [], ResultCode.MashupMappingConflict,
                 "A generated file mapping conflicts with a pass-through FileSwap.");
         var requiredExternalMods = await ResolveExternalMashupModNamesAsync(externalDirectories).ConfigureAwait(false);
         return new PreparedMashup(modelBytes, files, mappings, fileSwaps, requiredExternalMods,
@@ -698,7 +698,7 @@ internal sealed class MashupService
         var namespaceRelative = $"Files/xiv-instant-edit/mashups/{exportId[..12]}";
         var namespaceFolder = Path.Combine(target.Folder, namespaceRelative.Replace('/', Path.DirectorySeparatorChar));
         if (Directory.Exists(namespaceFolder))
-            return new ExportResult(false, "mashup_destination_exists", "The mashup namespace already exists.");
+            return new ExportResult(false, ResultCode.MashupDestinationExists, "The mashup namespace already exists.");
         var committed = false;
         var actualName = requestedName;
         try
@@ -754,7 +754,7 @@ internal sealed class MashupService
                 modelRelative = remappedModel;
             var modelPath = Path.Combine(target.Folder, modelRelative.Replace('/', Path.DirectorySeparatorChar));
             return new ExportResult(true,
-                warnings.Count == 0 ? "mashup_applied" : "mashup_applied_with_warnings",
+                warnings.Count == 0 ? ResultCode.MashupApplied : ResultCode.MashupAppliedWithWarnings,
                 $"Created mashup group {actualName} in {target.Directory}.", warnings, modelPath, actualName,
                 cleanup.PathRemap, prepared.RequiredExternalMods,
                 OutputModDirectory: target.Directory,
@@ -769,14 +769,14 @@ internal sealed class MashupService
             if (!committed)
             {
                 TryDeleteMashupNamespace(target.Folder, namespaceFolder);
-                return new ExportResult(false, "mashup_write_failed", e.Message);
+                return new ExportResult(false, ResultCode.MashupWriteFailed, e.Message);
             }
             var modelRelative = prepared.Mappings[NormalizeGamePath(activeContext.GamePath)];
             var modelPath = Path.Combine(target.Folder, modelRelative.Replace('/', Path.DirectorySeparatorChar));
             var warnings = ExternalMashupWarnings(prepared.RequiredExternalMods)
                 .Append($"The mashup was committed, but Penumbra refresh failed: {e.Message}")
                 .ToArray();
-            return new ExportResult(true, "mashup_applied_with_warnings",
+            return new ExportResult(true, ResultCode.MashupAppliedWithWarnings,
                 $"Created mashup group {actualName} in {target.Directory}.",
                 warnings, modelPath, actualName, RequiredExternalMods: prepared.RequiredExternalMods,
                 OutputModDirectory: target.Directory,
@@ -800,20 +800,20 @@ internal sealed class MashupService
         IReadOnlyList<EstEntryRequest>? estEntries)
     {
         if (!IsSafeNewModName(modName))
-            return new ExportResult(false, "invalid_mod_name", "The Penumbra mod name is invalid.");
+            return new ExportResult(false, ResultCode.InvalidModName, "The Penumbra mod name is invalid.");
         var root = await _framework.RunOnFrameworkThread(_ipc.GetModDirectory).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
-            return new ExportResult(false, "penumbra_root_missing", "The Penumbra mod root is unavailable.");
+            return new ExportResult(false, ResultCode.PenumbraRootMissing, "The Penumbra mod root is unavailable.");
         var modList = await _framework.RunOnFrameworkThread(() =>
             _ipc.TryGetModList(out var mods) ? mods : null).ConfigureAwait(false);
         if (modList is null)
-            return new ExportResult(false, "penumbra_unavailable", "Could not retrieve the Penumbra mod list.");
+            return new ExportResult(false, ResultCode.PenumbraUnavailable, "Could not retrieve the Penumbra mod list.");
         await LeaveFrameworkThread();
         var conflicts = modList.Keys.Any(key =>
             string.Equals(key, modName, StringComparison.OrdinalIgnoreCase));
         var finalFolder = Path.Combine(root, modName);
         if (conflicts || Directory.Exists(finalFolder) || File.Exists(finalFolder))
-            return new ExportResult(false, "mashup_mod_exists", "A Penumbra mod or folder with this name already exists.");
+            return new ExportResult(false, ResultCode.MashupModExists, "A Penumbra mod or folder with this name already exists.");
 
         var outputManipulations = createAttributeGroups && attributeTags is { Count: > 0 }
             ? ManipulationsWithAtrDefaults(
@@ -899,7 +899,7 @@ internal sealed class MashupService
             var modelPath = Path.Combine(finalFolder, modelRelative.Replace('/', Path.DirectorySeparatorChar));
             var stableId = ReadModStableIdentifier(finalFolder);
             return new ExportResult(true,
-                warnings.Count == 0 ? "mashup_mod_created" : "mashup_mod_created_with_warnings",
+                warnings.Count == 0 ? ResultCode.MashupModCreated : ResultCode.MashupModCreatedWithWarnings,
                 $"Created Penumbra mashup mod {modName}.", warnings, modelPath, modName,
                 RequiredExternalMods: prepared.RequiredExternalMods,
                 OutputModDirectory: modName,
@@ -922,7 +922,7 @@ internal sealed class MashupService
                 var warnings = ExternalMashupWarnings(prepared.RequiredExternalMods)
                     .Append($"The mashup mod was committed, but Penumbra setup failed: {e.Message}")
                     .ToArray();
-                return new ExportResult(true, "mashup_mod_created_with_warnings",
+                return new ExportResult(true, ResultCode.MashupModCreatedWithWarnings,
                     $"Created Penumbra mashup mod {modName}.",
                     warnings, modelPath, modName, RequiredExternalMods: prepared.RequiredExternalMods,
                     OutputModDirectory: modName,
@@ -933,7 +933,7 @@ internal sealed class MashupService
                         outputManipulations),
                     OutputModStableId: stableId);
             }
-            return new ExportResult(false, "mashup_mod_create_failed", e.Message);
+            return new ExportResult(false, ResultCode.MashupModCreateFailed, e.Message);
         }
     }
 

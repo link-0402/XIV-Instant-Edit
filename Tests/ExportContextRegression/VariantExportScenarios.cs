@@ -602,7 +602,7 @@ internal static class VariantExportScenarios
         var hash = new string('a', 64);
         Require(registry.TryBeginExport(registry.PluginInstanceId, context.ContextId, exportId, context.Capability,
             file, 3, hash, out var owner, out _, fingerprint) && owner!.IsOwner, "normal export reserves its complete operation");
-        var receipt = new ExportReceipt(true, "complete", "complete");
+        var receipt = new ExportReceipt(true, ResultCode.ExportApplied, "complete");
         registry.CompleteExport(context.ContextId, exportId, receipt);
         Require(registry.TryBeginExport(registry.PluginInstanceId, context.ContextId, exportId, context.Capability,
             file, 3, hash, out var duplicate, out _, fingerprint) && !duplicate!.IsOwner &&
@@ -628,7 +628,7 @@ internal static class VariantExportScenarios
             var changed = JsonSerializer.Deserialize<ExportServer.ExportRequest>(JsonSerializer.Serialize(original))!;
             change(changed);
             Require(!registry.TryBeginExport(registry.PluginInstanceId, context.ContextId, exportId, context.Capability,
-                file, 3, hash, out _, out var code, ExportServer.ExportRequestFingerprint(changed)) && code == "duplicate_export_id",
+                file, 3, hash, out _, out var code, ExportServer.ExportRequestFingerprint(changed)) && code == ResultCode.DuplicateExportId,
                 $"changed {name} cannot reuse an export receipt");
         }
     }

@@ -261,7 +261,7 @@ public sealed class BlenderClient : IDisposable
         catch (HttpRequestException e)
         {
             var failure = BridgeFailure.Create(
-                "blender_addon", "animation_import", "transport", "blender_connection_failed",
+                "blender_addon", "animation_import", "transport", ResultCode.BlenderConnectionFailed.Wire(),
                 "The animation could not reach Blender's XIV Instant Edit listener.",
                 "Start Blender, verify the configured port, and send the animation again.");
             _log?.Error(e, $"Blender bridge failure {failure.DiagnosticId}: animation_import/transport/{failure.Code}.");
@@ -270,7 +270,7 @@ public sealed class BlenderClient : IDisposable
         catch (OperationCanceledException e) when (!cancellationToken.IsCancellationRequested)
         {
             var failure = BridgeFailure.Create(
-                "blender_addon", "animation_import", "transport", "blender_request_timeout",
+                "blender_addon", "animation_import", "transport", ResultCode.BlenderRequestTimeout.Wire(),
                 "Blender did not answer while receiving the animation.",
                 "Check whether Blender is busy, then send the animation again.");
             _log?.Error(e, $"Blender bridge failure {failure.DiagnosticId}: animation_import/transport/{failure.Code}.");
@@ -327,12 +327,12 @@ public sealed class BlenderClient : IDisposable
         catch (JsonException e)
         {
             throw new BlenderBridgeException(BridgeFailure.Create(
-                "blender_addon", "animation_import", "response_parsing", "invalid_success_response",
+                "blender_addon", "animation_import", "response_parsing", ResultCode.InvalidSuccessResponse.Wire(),
                 "Blender accepted the animation but returned an invalid confirmation.",
                 "Update and restart the XIV Instant Edit Blender add-on, then send the animation again.", (int)status), responseBody, e);
         }
         throw new BlenderBridgeException(BridgeFailure.Create(
-            "blender_addon", "animation_import", "response_parsing", "invalid_success_response",
+            "blender_addon", "animation_import", "response_parsing", ResultCode.InvalidSuccessResponse.Wire(),
             "Blender accepted the animation but did not confirm what it did with it.",
             "Update and restart the XIV Instant Edit Blender add-on, then send the animation again.", (int)status), responseBody);
     }
@@ -542,7 +542,7 @@ public sealed class BlenderClient : IDisposable
                     "blender_addon",
                     "import",
                     "transport",
-                    "blender_connection_failed",
+                    ResultCode.BlenderConnectionFailed.Wire(),
                     "The request could not reach Blender's XIV Instant Edit listener.",
                     "Start Blender, verify the configured port, and retry.");
                 var exception = new BlenderBridgeException(transportFailure, inner: e);
@@ -575,7 +575,7 @@ public sealed class BlenderClient : IDisposable
                 "blender_addon",
                 "import",
                 "transport",
-                "blender_connection_failed",
+                ResultCode.BlenderConnectionFailed.Wire(),
                 "The request could not be completed by Blender's XIV Instant Edit listener.",
                 "Start Blender, verify the configured port, and retry.");
             var exception = new BlenderBridgeException(transportFailure, inner: e);
@@ -590,7 +590,7 @@ public sealed class BlenderClient : IDisposable
                 "blender_addon",
                 "import",
                 "transport",
-                "blender_request_timeout",
+                ResultCode.BlenderRequestTimeout.Wire(),
                 "The request to Blender's XIV Instant Edit listener timed out.",
                 "Retry the import and check whether Blender is busy or blocked by local security software.");
             var exception = new BlenderBridgeException(timeoutFailure, inner: e);
@@ -626,7 +626,7 @@ public sealed class BlenderClient : IDisposable
                 "blender_addon",
                 "import",
                 "response_parsing",
-                "invalid_success_response",
+                ResultCode.InvalidSuccessResponse.Wire(),
                 "Blender accepted the request but did not confirm that the model was cached.",
                 "Update and restart the XIV Instant Edit Blender add-on, then retry.",
                 (int)status);
@@ -638,7 +638,7 @@ public sealed class BlenderClient : IDisposable
                 "blender_addon",
                 "import",
                 "response_parsing",
-                "invalid_success_response",
+                ResultCode.InvalidSuccessResponse.Wire(),
                 "Blender accepted the request but returned an invalid confirmation.",
                 "Update and restart the XIV Instant Edit Blender add-on, then retry.",
                 (int)status);
