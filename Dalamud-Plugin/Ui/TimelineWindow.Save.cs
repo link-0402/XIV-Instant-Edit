@@ -86,7 +86,7 @@ public sealed partial class TimelineWindow
         DrawUndoLastSave(current);
 
         var service = animations!;
-        if (saveTask != null || pendingSaveId != null || undoPending || service.Busy && !previewJob)
+        if (saveTask != null || pendingSaveId != null || undoPending || service.Busy && !timelinePreview.Building)
         {
             ImGui.SameLine(0, Theme.Scaled(16));
             Widgets.Spinner();
@@ -184,9 +184,8 @@ public sealed partial class TimelineWindow
         saveMessage = null;
         jobClip = TimelineSession.ClipKey(loaded);
         KeepMotionForSave(target, document, repair);
-        StopPreview();
-        var ending = previewStop ?? Task.CompletedTask;
-        previewStop = null;
+        timelinePreview.Stop();
+        var ending = timelinePreview.TakeStopping();
         saveTask = Task.Run(async () =>
         {
             await ending;
@@ -365,7 +364,7 @@ public sealed partial class TimelineWindow
                 // stretched frames don't fit the file the undo brings back.
                 if (source != null && !current.Document.Motion.IsEmpty && AnimationBakeRules.KeepsLayersOverSave(current.Document, repairTarget))
                     motionCarry = (TimelineSession.ClipKey(source), current.Document.Motion, current.Document.NextMotionKey, true);
-                StopPreview();
+                timelinePreview.Stop();
                 service.Undo(journal);
                 undoPending = true;
                 saveError = null;

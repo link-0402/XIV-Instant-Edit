@@ -161,14 +161,14 @@ public sealed partial class TimelineWindow
     /// <summary> Live and pause, the layer's previous and next key, the layer and the playhead. </summary>
     private void DrawBonesHeader(TimelineEditor current, AnimationTimelineSource loaded, MotionLayer? layer)
     {
-        DrawLiveToggle(current, loaded, "##bones-live");
+        timelinePreview.DrawLiveToggle(current, loaded, "##bones-live");
         ImGui.SameLine(0, Theme.Scaled(2));
-        var shown = previewFingerprint != null;
+        var shown = timelinePreview.Fingerprint != null;
         var playing = playback.Active && !playback.Paused;
         if (Widgets.IconButton("##bones-play", playing ? FontAwesomeIcon.Pause : FontAwesomeIcon.Play,
                 !shown ? "Turn on Live first." : playing ? "Pause" : playback.Active ? "Resume" : "Play",
-                shown && PlaybackAvailable(out _)))
-            TogglePlay();
+                shown && timelinePreview.PlaybackAvailable(out _)))
+            timelinePreview.TogglePlay();
         ImGui.SameLine(0, Theme.Scaled(8));
         var frame = current.Playhead;
         int? previous = null, next = null;

@@ -105,7 +105,7 @@ public sealed partial class TimelineWindow
 
     private Guid StartFaceEdit(AnimationEditService service, AnimationBakeRequest request)
     {
-        StopPreview();
+        timelinePreview.Stop();
         service.Edit(request);
         return request.Id;
     }

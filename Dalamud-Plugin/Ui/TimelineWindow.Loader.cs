@@ -91,7 +91,7 @@ public sealed partial class TimelineWindow
         EnsureLibrary();
         PollLibrary();
         var start = ImGui.GetCursorPosY();
-        var available = PlaybackAvailable(out var reason);
+        var available = timelinePreview.PlaybackAvailable(out var reason);
         ImGui.SetNextItemWidth(-1);
         ImGui.InputTextWithHint("##loader-search", "Search every animation", ref loaderSearch, 128);
         var searching = loaderSearch.Trim().Length > 0;
@@ -214,7 +214,7 @@ public sealed partial class TimelineWindow
     /// </summary>
     private bool PlayFromLoader(AnimationLibraryItem item)
     {
-        StopPreview();
+        timelinePreview.Stop();
         ushort? actor;
         try { actor = playback.ActorIndex(); }
         catch (InvalidOperationException e)

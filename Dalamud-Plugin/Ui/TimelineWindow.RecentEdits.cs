@@ -122,7 +122,7 @@ public sealed partial class TimelineWindow
                 if (open)
                 {
                     jobClip = TimelineSession.ClipKey(source!);
-                    StopPreview();
+                    timelinePreview.Stop();
                     undoPending = true;
                     saveError = null;
                     saveMessage = null;
