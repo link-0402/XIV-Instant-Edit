@@ -1,14 +1,52 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using Dalamud.Plugin.Ipc.Exceptions;
+using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using Penumbra.Api.Enums;
 using Penumbra.Api.IpcSubscribers;
+using static InstantEdit.Services.PenumbraMods.ModFiles;
+using static InstantEdit.Services.PenumbraMods.ModJson;
+using static InstantEdit.Services.PenumbraMods.ModMetadata;
+using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
+using static InstantEdit.Services.PenumbraMods.ModPaths;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService : ITextureEditBackend
+/// <summary>
+/// The Penumbra side of texture editing: opening a texture from a mod or the game, saving it back
+/// into its mod or a new one, texture variants as options of one group, and the refresh after a save.
+/// </summary>
+internal sealed class TextureModBackend : ITextureEditBackend
 {
+    internal const string OriginalTextureOptionName = "Original";
+
+    private readonly PenumbraIpc _ipc;
+    private readonly IFramework _framework;
+    private readonly IObjectTable _objects;
+    private readonly IDataManager _data;
+    private readonly ModelBackupStore _backups;
+    private readonly SemaphoreSlim _exportGate;
+    private readonly SourceMods _sources;
+    private readonly ModActivation _activation;
+    private readonly TrySetModSetting _trySetModSetting;
+    private readonly RedrawObject _redrawObject;
+
+    public TextureModBackend(PenumbraIpc ipc, IFramework framework, IObjectTable objects, IDataManager data,
+        ModelBackupStore backups, SemaphoreSlim exportGate, SourceMods sources, ModActivation activation)
+    {
+        _ipc = ipc;
+        _framework = framework;
+        _objects = objects;
+        _data = data;
+        _backups = backups;
+        _exportGate = exportGate;
+        _sources = sources;
+        _activation = activation;
+        _trySetModSetting = ipc.TrySetModSetting;
+        _redrawObject = ipc.RedrawObject;
+    }
+
     /// <summary>Starts a mapping fingerprint of the game paths mapped to one file; older ones hashed all of meta.json.</summary>
     private const string MappingFingerprintVersion = "paths:";
 
@@ -21,7 +59,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
         if (File.Exists(output)) File.Delete(output);
         Task conversion;
         // Penumbra does the conversion: while it is unloaded a save waits for it, as the checks after this do.
-        try { conversion = new ConvertTextureFile(_pi).Invoke(input, output, format, mipMaps); }
+        try { conversion = _ipc.ConvertTextureFile(input, output, format, mipMaps); }
         catch (IpcNotReadyError) { throw new TextureWaitException("Penumbra isn't available right now."); }
         await conversion.ConfigureAwait(false);
     }
@@ -32,11 +70,11 @@ public sealed partial class PenumbraService : ITextureEditBackend
         var vanilla = string.IsNullOrEmpty(request.ModDirectory);
         var resolvedGamePath = vanilla ? NormalizeGamePath(request.ActualPath) : "";
         var collection = (request.ObjectIndex ?? (vanilla ? request.CollectionObjectIndex : null)) is { } index
-            ? await GetCollectionTargetAsync(index).ConfigureAwait(false)
+            ? await _ipc.GetCollectionTargetAsync(index).ConfigureAwait(false)
             : null;
         var actor = await _framework.RunOnFrameworkThread(() =>
         {
-            var obj = request.ObjectIndex is { } i ? _objects?[i] : null;
+            var obj = request.ObjectIndex is { } i ? _objects[i] : null;
             if (request.ObjectIndex.HasValue && (obj is null || obj.Address.ToInt64() != request.ActorAddress))
                 throw new IOException("The selected actor changed. Refresh the character list.");
             return (Id: obj?.GameObjectId ?? 0UL, Name: obj?.Name.ToString() ?? "");
@@ -51,14 +89,14 @@ public sealed partial class PenumbraService : ITextureEditBackend
             if (!IsSafeGameResourcePath(resolvedGamePath, ".tex")) throw new IOException("The resolved vanilla texture path is invalid.");
             if (!IsSafeNewModName(request.NewModName)) throw new IOException("Enter a valid, unused name for the new texture mod.");
             if (collection is null) throw new IOException("The actor's collection is unavailable. Refresh and try again.");
-            var root = await _framework.RunOnFrameworkThread(GetModDirectory).ConfigureAwait(false);
+            var root = await _framework.RunOnFrameworkThread(_ipc.GetModDirectory).ConfigureAwait(false);
             if (string.IsNullOrEmpty(root)) throw new IOException("Penumbra's mod directory is unavailable.");
             modDirectory = request.NewModName;
             modRoot = Path.Combine(root, modDirectory);
             relative = "Files/" + request.GamePath;
             TextureFiles.EnsureLocalPath(modRoot);
             await EnsureNewTextureModNameAsync(modDirectory, modRoot).ConfigureAwait(false);
-            bytes = await _framework.RunOnFrameworkThread(() => _data?.GetFile(resolvedGamePath)?.Data.ToArray()
+            bytes = await _framework.RunOnFrameworkThread(() => _data.GetFile(resolvedGamePath)?.Data.ToArray()
                 ?? throw new IOException("The resolved vanilla texture could not be read.")).ConfigureAwait(false);
         }
         else
@@ -84,7 +122,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
 
     private async Task EnsureNewTextureModNameAsync(string name, string path)
     {
-        var exists = await _framework.RunOnFrameworkThread(() => GetMods().Any(m =>
+        var exists = await _framework.RunOnFrameworkThread(() => _ipc.GetMods().Any(m =>
             string.Equals(m.Directory, name, StringComparison.OrdinalIgnoreCase) || string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase))).ConfigureAwait(false);
         if (exists || Directory.Exists(path) || File.Exists(path)) throw new TextureConflictException("That mod name is already in use. Start a session with a different name.");
     }
@@ -97,7 +135,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
         if (!PathRules.IsPathWithin(file, root) || !string.Equals(Path.GetFullPath(Path.Combine(root, relative)), Path.GetFullPath(file), StringComparison.OrdinalIgnoreCase))
             throw new TextureConflictException("The texture no longer belongs to its captured mod directory.");
         token.ThrowIfCancellationRequested();
-        var (available, registered) = await _framework.RunOnFrameworkThread(() => (Available, ResolveModScanOnFramework(mod))).ConfigureAwait(false);
+        var (available, registered) = await _framework.RunOnFrameworkThread(() => (_ipc.Available,_sources.ResolveModScanOnFramework(mod))).ConfigureAwait(false);
         // Penumbra lists no mods while it is unavailable, and not every mod while it loads them again.
         if (!available)
             throw new TextureWaitException("Penumbra isn't available right now.");
@@ -113,7 +151,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
 
     private bool MatchesTextureActor(TextureEditSession session)
     {
-        var obj = session.ObjectIndex is { } i ? _objects?[i] : null;
+        var obj = session.ObjectIndex is { } i ? _objects[i] : null;
         return obj is not null && obj.Address.ToInt64() == session.ActorAddress && obj.GameObjectId == session.ActorId &&
             obj.Name.ToString() == session.ActorName;
     }
@@ -142,7 +180,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
                 return;
             }
             // Penumbra has no paths for an actor without a draw object.
-            var shown = GetResourcePaths((ushort)session.ObjectIndex.Value)?
+            var shown = _ipc.GetResourcePaths((ushort)session.ObjectIndex.Value)?
                 .Where(p => p.Value.Contains(session.GamePath, StringComparer.OrdinalIgnoreCase))
                 .Select(p => p.Key)
                 .ToList() ?? [];
@@ -189,7 +227,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
     internal static string TextureMappingFingerprint(string root, string relativePath)
         => MappingFingerprint(TextureGamePaths(root, relativePath));
 
-    private static string MappingFingerprint(IEnumerable<string> gamePaths)
+    internal static string MappingFingerprint(IEnumerable<string> gamePaths)
         => MappingFingerprintVersion + TextureFiles.Hash(Encoding.UTF8.GetBytes(string.Join('\n', gamePaths)));
 
     /// <summary>Penumbra writes a mod's relative paths with backslashes and in lower case; sessions keep them as found on disk.</summary>
@@ -275,7 +313,6 @@ public sealed partial class PenumbraService : ITextureEditBackend
                 await ValidateTextureDestinationAsync(session.ModDirectory, session.ModRoot, session.RelativePath, session.TargetFile, token).ConfigureAwait(false);
                 EnsureTextureMapping(session);
                 await ValidateLiveTextureMappingAsync(session, SessionTextureFiles(session), false).ConfigureAwait(false);
-                if (_backups is null) throw new IOException("Texture backup storage is unavailable.");
                 backup = TextureFiles.Replace(session.TargetFile, session.ModRoot, session.RelativePath,
                     session.ModDirectory, tex, session.LastCommittedHash, _backups, () =>
                     {
@@ -345,11 +382,11 @@ public sealed partial class PenumbraService : ITextureEditBackend
             var mods = items.Select(item => item.Session).GroupBy(s => s.ModDirectory, StringComparer.OrdinalIgnoreCase).ToList();
             // Adding an already registered mod is unnecessary; this also retries registration after a failed first save.
             var registered = await _framework.RunOnFrameworkThread(() =>
-                GetMods().Select(m => m.Directory).ToHashSet(StringComparer.Ordinal)).ConfigureAwait(false);
+                _ipc.GetMods().Select(m => m.Directory).ToHashSet(StringComparer.Ordinal)).ConfigureAwait(false);
             foreach (var mod in mods.Where(mod => !registered.Contains(mod.Key) && mod.Any(s => s.SetupPending)))
             {
                 token.ThrowIfCancellationRequested();
-                var added = await AddNewModAsync(mod.Key).ConfigureAwait(false);
+                var added = await _activation.AddNewModAsync(mod.Key).ConfigureAwait(false);
                 if (added is not null) warnings.Add(added.Message);
             }
             await _framework.RunOnFrameworkThread(() =>
@@ -357,11 +394,11 @@ public sealed partial class PenumbraService : ITextureEditBackend
                 foreach (var mod in mods)
                 {
                     token.ThrowIfCancellationRequested();
-                    var reload = ReloadModOnFramework(mod.Key);
+                    var reload = _activation.ReloadModOnFramework(mod.Key);
                     if (reload is not null) warnings.Add(reload.Message);
                     foreach (var target in mod.Where(s => s.SetupPending && s.CollectionId.HasValue).GroupBy(s => s.CollectionId!.Value))
                     {
-                        var configure = ConfigureModForCollectionOnFramework(mod.Key, target.Key, target.First().CollectionName,
+                        var configure = _activation.ConfigureModForCollectionOnFramework(mod.Key, target.Key, target.First().CollectionName,
                             setPriority: false, priority: 0, redraw: false);
                         if (!configure.Success) warnings.Add(configure.Message);
                         warnings.AddRange(configure.WarningList);
@@ -382,14 +419,14 @@ public sealed partial class PenumbraService : ITextureEditBackend
                     {
                         if (MatchesTextureActor(session))
                         {
-                            if (session.ObjectIndex != _objects?.LocalPlayer?.ObjectIndex && redrawn.Add(session.ObjectIndex!.Value))
+                            if (session.ObjectIndex != _objects.LocalPlayer?.ObjectIndex && redrawn.Add(session.ObjectIndex!.Value))
                                 _redrawObject.Invoke(session.ObjectIndex!.Value);
                         }
                         else if (session.ObjectIndex.HasValue) warnings.Add("Selected actor is no longer present; its redraw was skipped.");
                     }
                     catch (Exception error) { warnings.Add("Selected actor redraw failed: " + error.Message); }
                 }
-                var owned = RedrawPlayerOwnedEntitiesOnFramework();
+                var owned = _activation.RedrawPlayerOwnedEntitiesOnFramework();
                 if (owned is not null) warnings.Add(owned);
             }).ConfigureAwait(false);
         }
@@ -446,13 +483,189 @@ public sealed partial class PenumbraService : ITextureEditBackend
         foreach (var entry in Directory.EnumerateFileSystemEntries(path, "*", SearchOption.AllDirectories)) TextureFiles.EnsureLocalPath(entry);
         Directory.Delete(path, true);
     }
-}
 
-internal sealed class TextureConflictException(string message) : IOException(message);
+    async Task<TextureVariantCommit> ITextureEditBackend.CommitVariantAsync(TextureEditSession session, TextureVariant variant,
+        byte[] tex, Func<bool> stillCurrent, CancellationToken token)
+    {
+        TextureFiles.ValidateCommit(tex, session);
+        if (session.NeedsMod) throw new IOException("The texture mod has not been created yet.");
+        await _exportGate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            await ValidateTextureDestinationAsync(session.ModDirectory, session.ModRoot, session.RelativePath, session.TargetFile, token).ConfigureAwait(false);
+            return CommitTextureVariantFiles(session, variant, tex, _backups, stillCurrent, token);
+        }
+        finally { _exportGate.Release(); }
+    }
 
-/// <summary>A save that can't go through right now, such as while Penumbra loads; the session tries it again.</summary>
-internal sealed class TextureWaitException(string message, bool modUnlisted = false) : IOException(message)
-{
-    /// <summary>Penumbra runs but doesn't list the mod, which may not end; the session pauses after a while.</summary>
-    public bool ModUnlisted { get; } = modUnlisted;
+    /// <summary>
+    /// Writes the variant TEX, then maps it in the session's variant group. A TEX created by this
+    /// call is removed again when the mapping cannot be written, so a retry does not orphan it.
+    /// </summary>
+    internal static TextureVariantCommit CommitTextureVariantFiles(TextureEditSession session, TextureVariant variant,
+        byte[] tex, ModelBackupStore backups, Func<bool> stillCurrent, CancellationToken token)
+    {
+        if (!PathRules.IsSafeVariantName(variant.Name))
+            throw new IOException($"\"{variant.Name}\" cannot be used as a Penumbra option name.");
+        if (string.Equals(variant.Name, OriginalTextureOptionName, StringComparison.OrdinalIgnoreCase))
+            throw new IOException($"\"{OriginalTextureOptionName}\" is reserved for the edited texture. Save the variant under another name.");
+        EnsureTextureMapping(session);
+
+        var owned = variant.LastCommittedHash.Length > 0 && variant.RelativePath.Length > 0;
+        var relative = owned ? variant.RelativePath : ChooseTextureVariantPath(session, variant.Name);
+        var target = Path.Combine(session.ModRoot, relative.Replace('/', Path.DirectorySeparatorChar));
+        TextureFiles.EnsureLocalPath(target);
+        var backup = "";
+        var created = false;
+        token.ThrowIfCancellationRequested();
+        if (owned && File.Exists(target))
+            backup = TextureFiles.Replace(target, session.ModRoot, relative, session.ModDirectory, tex,
+                variant.LastCommittedHash, backups, stillCurrent, token);
+        else
+        {
+            if (!stillCurrent()) throw new OperationCanceledException("A newer save is pending.");
+            WriteBytesAtomic(session.ModRoot, relative, tex);
+            created = true;
+        }
+
+        try
+        {
+            var (groupId, originalId, optionId) = WriteTextureVariantGroup(session, variant, relative);
+            return new TextureVariantCommit(TextureFiles.Hash(tex), backup, relative, groupId, originalId, optionId,
+                TextureMappingFingerprint(session.ModRoot, session.RelativePath));
+        }
+        catch
+        {
+            if (created && File.Exists(target)) File.Delete(target);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// A path beside the session's TEX: <c>&lt;texture&gt;_&lt;variant&gt;.tex</c>, numbered when that file
+    /// already exists, since it then belongs to the mod rather than to this variant.
+    /// </summary>
+    private static string ChooseTextureVariantPath(TextureEditSession session, string name)
+    {
+        var separator = session.RelativePath.LastIndexOf('/');
+        var folder = separator < 0 ? "" : session.RelativePath[..(separator + 1)];
+        var stem = Path.GetFileNameWithoutExtension(session.RelativePath);
+        var taken = session.Variants.Select(v => v.RelativePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        for (var attempt = 1; attempt < 1000; attempt++)
+        {
+            var candidate = attempt == 1 ? $"{folder}{stem}_{name}.tex" : $"{folder}{stem}_{name} ({attempt}).tex";
+            if (!IsSafeGameResourcePath(candidate, ".tex"))
+                throw new IOException($"\"{name}\" does not make a valid texture file name.");
+            if (!taken.Contains(candidate) &&
+                !File.Exists(Path.Combine(session.ModRoot, candidate.Replace('/', Path.DirectorySeparatorChar))))
+                return candidate;
+        }
+        throw new IOException($"No free file name is left for the variant \"{name}\".");
+    }
+
+    /// <summary>
+    /// Maps the session's game path to <paramref name="relative"/> in the variant's option,
+    /// creating the group, its Original option and the variant option as needed. The group and
+    /// options are found by identity first, so renaming them in Penumbra keeps them in use.
+    /// </summary>
+    private static (Guid GroupId, Guid OriginalId, Guid OptionId) WriteTextureVariantGroup(
+        TextureEditSession session, TextureVariant variant, string relative)
+    {
+        var meta = LoadV4ModMetadata(session.ModRoot);
+        if (meta["Groups"] is not JsonArray groups)
+            meta["Groups"] = groups = new JsonArray();
+
+        var group = groups.OfType<JsonObject>().FirstOrDefault(candidate =>
+            session.VariantGroupId is { } id && ReadGuid(candidate["Id"]) == id &&
+            string.Equals(JsonString(candidate["Type"]), "Single", StringComparison.OrdinalIgnoreCase));
+        if (group is null)
+        {
+            var highest = groups.OfType<JsonObject>().Select(candidate => JsonInt(candidate["Priority"])).DefaultIfEmpty(0).Max();
+            if (highest == int.MaxValue) throw new IOException("penumbra_group_priority_exhausted");
+            var name = UniqueGroupName(groups, Path.GetFileNameWithoutExtension(session.GamePath) + " variants");
+            group = new JsonObject
+            {
+                ["Type"] = "Single",
+                ["Id"] = Guid.NewGuid().ToString("D"),
+                ["Name"] = name,
+                ["Description"] = VariantGroupDescriptionPrefix + name + " -> " + session.GamePath,
+                ["Priority"] = highest + 1,
+                // Other collections keep showing the edited texture until a variant is chosen.
+                ["DefaultSettings"] = 0,
+                ["Options"] = new JsonArray { new JsonObject { ["Id"] = Guid.NewGuid().ToString("D"), ["Name"] = OriginalTextureOptionName } },
+            };
+            groups.Add(group);
+        }
+        if (group["Options"] is not JsonArray options)
+            group["Options"] = options = new JsonArray();
+
+        var original = options.OfType<JsonObject>().FirstOrDefault(option =>
+                           session.OriginalOptionId is { } id && ReadGuid(option["Id"]) == id)
+                       ?? options.OfType<JsonObject>().FirstOrDefault(option => !MapsGamePath(option, session.GamePath));
+        if (original is null)
+        {
+            // Appended, not inserted: Single-group settings are option indices.
+            original = new JsonObject { ["Id"] = Guid.NewGuid().ToString("D"), ["Name"] = OriginalTextureOptionName };
+            options.Add(original);
+        }
+
+        var target = options.OfType<JsonObject>().FirstOrDefault(option =>
+                         variant.OptionId is { } id && ReadGuid(option["Id"]) == id && option != original)
+                     ?? options.OfType<JsonObject>().FirstOrDefault(option => option != original &&
+                         string.Equals(JsonString(option["Name"]), variant.Name, StringComparison.OrdinalIgnoreCase));
+        if (target is null)
+        {
+            target = new JsonObject { ["Id"] = Guid.NewGuid().ToString("D"), ["Name"] = variant.Name };
+            options.Add(target);
+        }
+        if (target["Files"] is not JsonObject files)
+            target["Files"] = files = new JsonObject();
+        foreach (var key in files.Select(pair => pair.Key).Where(key => SameGamePath(key, session.GamePath)).ToArray())
+            files.Remove(key);
+        files[session.GamePath] = relative;
+
+        TouchV4ModMetadata(meta);
+        WriteJsonAtomic(Path.Combine(session.ModRoot, "meta.json"), meta);
+        return (ReadGuid(group["Id"])!.Value, EnsureOptionId(original), EnsureOptionId(target));
+
+        static Guid EnsureOptionId(JsonObject option)
+            => ReadGuid(option["Id"]) ?? throw new InvalidDataException("A Penumbra option has no identifier.");
+    }
+
+    private static bool MapsGamePath(JsonObject option, string gamePath)
+        => option["Files"] is JsonObject files && files.Any(pair => SameGamePath(pair.Key, gamePath));
+
+    private static string UniqueGroupName(JsonArray groups, string name)
+    {
+        var used = groups.OfType<JsonObject>().Select(group => JsonString(group["Name"]) ?? "")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var candidate = name;
+        for (var number = 2; used.Contains(candidate); number++)
+            candidate = $"{name} {number}";
+        return candidate;
+    }
+
+    /// <summary>The current group and option names for a variant-group option, or null when either is gone.</summary>
+    private static (string Group, string Option)? ReadTextureVariantSelection(string modRoot, Guid groupId, Guid optionId)
+    {
+        try
+        {
+            var meta = LoadV4ModMetadata(modRoot);
+            var group = (meta["Groups"] as JsonArray ?? []).OfType<JsonObject>()
+                .FirstOrDefault(candidate => ReadGuid(candidate["Id"]) == groupId);
+            var option = (group?["Options"] as JsonArray ?? []).OfType<JsonObject>()
+                .FirstOrDefault(candidate => ReadGuid(candidate["Id"]) == optionId);
+            var groupName = JsonString(group?["Name"]);
+            var optionName = JsonString(option?["Name"]);
+            return groupName is null || optionName is null ? null : (groupName, optionName);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    internal static (string Group, string Option)? ReadTextureVariantSelectionForRegression(string modRoot, Guid groupId, Guid optionId)
+        => ReadTextureVariantSelection(modRoot, groupId, optionId);
 }

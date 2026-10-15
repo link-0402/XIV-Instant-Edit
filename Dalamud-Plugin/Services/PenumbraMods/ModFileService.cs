@@ -1,9 +1,29 @@
 using InstantEdit.Services.PreviewMods;
+using static InstantEdit.Services.PenumbraMods.FrameworkThread;
+using static InstantEdit.Services.PenumbraMods.ModPaths;
+using Dalamud.Plugin.Services;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary>
+/// Rewrites files of registered mods in place, for automatic texture compression and restoring the
+/// originals, then reloads the mods and redraws the player.
+/// </summary>
+internal sealed class ModFileService
 {
+    private readonly IFramework _framework;
+    private readonly SemaphoreSlim _exportGate;
+    private readonly SourceMods _sources;
+    private readonly ModActivation _activation;
+
+    public ModFileService(IFramework framework, SemaphoreSlim exportGate, SourceMods sources, ModActivation activation)
+    {
+        _framework = framework;
+        _exportGate = exportGate;
+        _sources = sources;
+        _activation = activation;
+    }
+
     /// <summary>
     /// Writes new contents over a mod file, for automatic texture compression and restoring its
     /// originals. The mod must still be registered, the file must still sit at its relative path
@@ -15,7 +35,7 @@ public sealed partial class PenumbraService
     {
         if (!source.IsModFile || !IsSafeModName(source.ModDirectory) || !IsSafeRelativeResourcePath(source.RelativePath))
             throw new IOException($"{source.Label} is not a writable mod file.");
-        var scan = await _framework.RunOnFrameworkThread(() => ResolveModScanOnFramework(source.ModDirectory, source.ModStableId)).ConfigureAwait(false);
+        var scan = await _framework.RunOnFrameworkThread(() => _sources.ResolveModScanOnFramework(source.ModDirectory, source.ModStableId)).ConfigureAwait(false);
         await LeaveFrameworkThread();
         if (scan is null)
             throw new TextureConflictException($"The mod {source.ModName} is no longer registered in Penumbra.");
@@ -54,7 +74,7 @@ public sealed partial class PenumbraService
     {
         if (!IsSafeModName(modDirectory))
             return null;
-        var scan = await _framework.RunOnFrameworkThread(() => ResolveModScanOnFramework(modDirectory, stableId)).ConfigureAwait(false);
+        var scan = await _framework.RunOnFrameworkThread(() => _sources.ResolveModScanOnFramework(modDirectory, stableId)).ConfigureAwait(false);
         await LeaveFrameworkThread();
         return scan?.CandidateRoots.FirstOrDefault(root => File.Exists(Path.Combine(root, "meta.json")) &&
                                                           (File.GetAttributes(root) & FileAttributes.ReparsePoint) == 0);
@@ -68,9 +88,9 @@ public sealed partial class PenumbraService
     {
         var warnings = new List<string>();
         foreach (var mod in modDirectories.Distinct(StringComparer.OrdinalIgnoreCase))
-            if (await _framework.RunOnFrameworkThread(() => ReloadModOnFramework(mod)).ConfigureAwait(false) is { } reload)
+            if (await _framework.RunOnFrameworkThread(() => _activation.ReloadModOnFramework(mod)).ConfigureAwait(false) is { } reload)
                 warnings.Add(reload.Message);
-        if (await _framework.RunOnFrameworkThread(RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false) is { } redraw)
+        if (await _framework.RunOnFrameworkThread(_activation.RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false) is { } redraw)
             warnings.Add(redraw);
         await LeaveFrameworkThread();
         return warnings;

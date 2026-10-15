@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using InstantEdit.Models;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Services.Previews;
 
 namespace InstantEdit.Services.Painter;
@@ -95,7 +96,7 @@ internal sealed class PainterJobService : IDisposable
         var selected = draft.SelectedTextures.ToList();
         if (selected.Count == 0)
             return new PainterCreateResult(null, "Select at least one texture to send back.", warnings);
-        if (draft.NeedsModName && !PenumbraService.IsSafeNewModName(draft.NewModName))
+        if (draft.NeedsModName && !ModPaths.IsSafeNewModName(draft.NewModName))
             return new PainterCreateResult(null, "Enter a valid name for the new mod that holds the edited vanilla textures.", warnings);
         if (_store.LoadError.Length > 0)
             return new PainterCreateResult(null, _store.LoadError, warnings);

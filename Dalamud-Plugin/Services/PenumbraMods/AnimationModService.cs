@@ -1,15 +1,49 @@
+using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using Penumbra.Api.Enums;
 using Penumbra.Api.IpcSubscribers;
+using static InstantEdit.Services.PenumbraMods.ModMetadata;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary>
+/// The Penumbra side of animation edits: resolving the player's animation files, the mod an edit
+/// writes, enabling it above every other provider, and the redraws that load the new files.
+/// </summary>
+internal sealed class AnimationModService
 {
+    private readonly PenumbraIpc _ipc;
+    private readonly IFramework _framework;
+    private readonly IObjectTable _objects;
+    private readonly SemaphoreSlim _exportGate;
+    private readonly ModActivation _activation;
+    private readonly GetModDirectory _getModDirectory;
+    private readonly GetModList _getModList;
+    private readonly GetCollectionForObject _getCollectionForObject;
+    private readonly GetCurrentModSettings _getCurrentModSettings;
+    private readonly TrySetMod _trySetMod;
+    private readonly TrySetModPriority _trySetModPriority;
+
+    public AnimationModService(PenumbraIpc ipc, IFramework framework, IObjectTable objects, SemaphoreSlim exportGate,
+        ModActivation activation)
+    {
+        _ipc = ipc;
+        _framework = framework;
+        _objects = objects;
+        _exportGate = exportGate;
+        _activation = activation;
+        _getModDirectory = ipc.ModDirectorySubscriber;
+        _getModList = ipc.ModListSubscriber;
+        _getCollectionForObject = ipc.GetCollectionForObject;
+        _getCurrentModSettings = ipc.GetCurrentModSettings;
+        _trySetMod = ipc.TrySetMod;
+        _trySetModPriority = ipc.TrySetModPriority;
+    }
+
     internal Task<(string Directory, string Root)[]> AnimationSkeletonRootsAsync() => _framework.RunOnFrameworkThread(() =>
     {
-        using var mods = new GetModListAdapter(_pi).Invoke();
+        using var mods = _ipc.GetModListAdapter();
         return mods.Select(m => (m.Identifier, m.ModPath.FullName)).ToArray();
     });
     internal void CheckAnimationCollectionOnFramework(ushort objectIndex, Guid collection)
@@ -24,7 +58,7 @@ public sealed partial class PenumbraService
             throw new InvalidDataException("Invalid animation collection or game path.");
         return await _framework.RunOnFrameworkThread(() =>
         {
-            var result = new ResolvePath(_pi).Invoke(collection, gamePath, out var resolved);
+            var result = _ipc.ResolvePath(collection, gamePath, out var resolved);
             if (result != PenumbraApiEc.Success || string.IsNullOrWhiteSpace(resolved))
                 throw new IOException($"Penumbra could not resolve {gamePath} ({result}).");
             return resolved;
@@ -43,10 +77,10 @@ public sealed partial class PenumbraService
 
     internal Task<string> AnimationMetadataAsync(Guid collection) => _framework.RunOnFrameworkThread(() =>
     {
-        var player = _objects?.LocalPlayer ?? throw new IOException("The player is unavailable.");
+        var player = _objects.LocalPlayer ?? throw new IOException("The player is unavailable.");
         var target = _getCollectionForObject.Invoke(player.ObjectIndex);
         if (!target.ObjectValid || target.EffectiveCollection.Id != collection) throw new IOException("The player collection changed.");
-        return new GetMetaManipulations(_pi).Invoke(player.ObjectIndex);
+        return _ipc.GetMetaManipulations(player.ObjectIndex);
     });
 
     internal async Task CheckAnimationModRootAsync(string mod, string root)
@@ -64,14 +98,14 @@ public sealed partial class PenumbraService
     {
         if (journal.Request.Destination == AnimationDestination.NewMod)
         {
-            var add = await AddNewModAsync(journal.ModDirectory);
+            var add = await _activation.AddNewModAsync(journal.ModDirectory);
             if (add is { Success: false }) throw new IOException(add.Message);
         }
         await _framework.RunOnFrameworkThread(() =>
         {
             foreach (var mod in journal.Files.Select(f => f.ModDirectory).Distinct())
             {
-                var reload = ReloadModOnFramework(mod);
+                var reload = _activation.ReloadModOnFramework(mod);
                 if (reload is { Success: false }) throw new IOException(reload.Message);
             }
             if (journal.Request.Destination == AnimationDestination.NewMod)
@@ -101,7 +135,7 @@ public sealed partial class PenumbraService
     {
         // GetModPath is Penumbra's virtual UI folder/sort path. ModPath from the
         // synchronized mod adapter is the actual registered directory on disk.
-        using var mods = new GetModListAdapter(_pi).Invoke();
+        using var mods = _ipc.GetModListAdapter();
         foreach (var mod in mods)
             if (string.Equals(mod.Identifier, directory, StringComparison.Ordinal)) return mod.ModPath.FullName;
         return null;
@@ -109,7 +143,7 @@ public sealed partial class PenumbraService
 
     internal Task RedrawAnimationAsync() => _framework.RunOnFrameworkThread(() =>
     {
-        if (RedrawPlayerOwnedEntitiesOnFramework() is { } error) throw new IOException(error);
+        if (_activation.RedrawPlayerOwnedEntitiesOnFramework() is { } error) throw new IOException(error);
     });
 
     /// <summary>
@@ -124,10 +158,10 @@ public sealed partial class PenumbraService
             if (index == objectIndex)
                 drawn.TrySetResult();
         }
-        ObjectRedrawn += OnRedrawn;
+        _ipc.ObjectRedrawn += OnRedrawn;
         try
         {
-            if (await RedrawObjectAsync(objectIndex).ConfigureAwait(false) is { } error)
+            if (await _ipc.RedrawObjectAsync(objectIndex).ConfigureAwait(false) is { } error)
                 return error;
             try { await drawn.Task.WaitAsync(timeout, token).ConfigureAwait(false); }
             catch (TimeoutException) { return "The character was not redrawn in time."; }
@@ -135,7 +169,7 @@ public sealed partial class PenumbraService
         }
         finally
         {
-            ObjectRedrawn -= OnRedrawn;
+            _ipc.ObjectRedrawn -= OnRedrawn;
         }
     }
 
@@ -148,13 +182,13 @@ public sealed partial class PenumbraService
         var result = _trySetMod.Invoke(journal.Request.Capture.CollectionId, journal.ModDirectory, false, journal.ModDirectory);
         if (result is not (PenumbraApiEc.Success or PenumbraApiEc.NothingChanged))
             throw new IOException($"Penumbra could not disable the edited mod ({result}).");
-        if (RedrawPlayerOwnedEntitiesOnFramework() is { } error) throw new IOException(error);
+        if (_activation.RedrawPlayerOwnedEntitiesOnFramework() is { } error) throw new IOException(error);
     });
 
     internal Task ReloadAnimationSourcesAsync(IEnumerable<string> mods) => _framework.RunOnFrameworkThread(() =>
     {
         foreach (var mod in mods.Distinct())
-            if (ReloadModOnFramework(mod) is { Success: false } error) throw new IOException(error.Message);
-        if (RedrawPlayerOwnedEntitiesOnFramework() is { } warning) throw new IOException(warning);
+            if (_activation.ReloadModOnFramework(mod) is { Success: false } error) throw new IOException(error.Message);
+        if (_activation.RedrawPlayerOwnedEntitiesOnFramework() is { } warning) throw new IOException(warning);
     });
 }

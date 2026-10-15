@@ -1,12 +1,41 @@
 using System.Text.Json.Nodes;
+using Dalamud.Plugin.Services;
 using InstantEdit.Models;
+using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
+using static InstantEdit.Services.PenumbraMods.FrameworkThread;
+using static InstantEdit.Services.PenumbraMods.ModJson;
+using static InstantEdit.Services.PenumbraMods.ModMetadata;
+using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
+using static InstantEdit.Services.PenumbraMods.ModPaths;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary>
+/// Saves an export at several sizes into one Single group of the source mod, one option per size.
+/// </summary>
+internal sealed class SizesExportService
 {
-    /// <summary>A size's exported model: its option name and the staged file.</summary>
-    public sealed record SizeExportFile(string Name, string ExportedFile);
+    private readonly IFramework _framework;
+    private readonly IPluginLog _log;
+    private readonly SemaphoreSlim _exportGate;
+    private readonly SourceMods _sources;
+    private readonly ModActivation _activation;
+    private readonly ModelFileWriter _writer;
+    private readonly AttributeGroupService _attributes;
+    private readonly EstEntryService _est;
+
+    public SizesExportService(IFramework framework, IPluginLog log, SemaphoreSlim exportGate, SourceMods sources,
+        ModActivation activation, ModelFileWriter writer, AttributeGroupService attributes, EstEntryService est)
+    {
+        _framework = framework;
+        _log = log;
+        _exportGate = exportGate;
+        _sources = sources;
+        _activation = activation;
+        _writer = writer;
+        _attributes = attributes;
+        _est = est;
+    }
 
     /// <summary>
     /// Where a size export writes: the group update, the group's name, each size's option file, and the
@@ -110,27 +139,6 @@ public sealed partial class PenumbraService
         }
     }
 
-    /// <summary>The mod-relative files the default data and every option of the mod map.</summary>
-    private static HashSet<string> MappedModFiles(JsonObject meta)
-    {
-        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        void Add(JsonNode? container)
-        {
-            if (container is JsonObject value && value["Files"] is JsonObject files)
-                foreach (var pair in files)
-                    if (JsonString(pair.Value) is { } path)
-                        used.Add(path.Replace('\\', '/').TrimStart('/'));
-        }
-        Add(meta["DefaultData"]);
-        if (meta["Groups"] is JsonArray groups)
-            foreach (var group in groups.OfType<JsonObject>())
-                foreach (var key in new[] { "Options", "Containers" })
-                    if (group[key] is JsonArray options)
-                        foreach (var option in options)
-                            Add(option);
-        return used;
-    }
-
     /// <summary>
     /// Write an export at several sizes into a Single group of the original Penumbra mod, one option per
     /// size (see PlanSizeGroup): one meta.json write, one reload and one redraw for all of them.
@@ -180,7 +188,7 @@ public sealed partial class PenumbraService
         try
         {
             var resolved = await _framework.RunOnFrameworkThread(
-                () => ResolveSourceModTargetOnFramework(
+                () => _sources.ResolveSourceModTargetOnFramework(
                     sourceModDirectory,
                     sourceFilePath,
                     sourceModRootPath,
@@ -233,9 +241,9 @@ public sealed partial class PenumbraService
                 var (relative, targetFile) = targets[index];
                 // The backup keeps the model's EST entries too, so restoring it undoes this export's EST change.
                 var estState = backupExisting && File.Exists(targetFile)
-                    ? CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, relative, _estEntries)
+                    ? _est.CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, relative)
                     : null;
-                var writeError = WriteModelToOriginalLocation(
+                var writeError = _writer.WriteModelToOriginalLocation(
                     resolved.Target.Folder, targetFile, sizes[index].ExportedFile, backupExisting,
                     resolved.Target.Directory, relative, estState);
                 if (writeError is null)
@@ -259,7 +267,7 @@ public sealed partial class PenumbraService
 
             if (createAttributeGroups && attributeTags is { Count: > 0 })
             {
-                var attributeError = WriteAttributeGroups(
+                var attributeError = _attributes.WriteAttributeGroups(
                     resolved.Target.Folder, resolvedGamePath, attributeTags, attributeMasks,
                     sourceManipulations);
                 if (attributeError is not null)
@@ -267,19 +275,19 @@ public sealed partial class PenumbraService
             }
 
             foreach (var (relative, _) in targets)
-                foreach (var warning in TryUpdateEstEntries(
+                foreach (var warning in _est.TryUpdateEstEntries(
                              resolved.Target.Folder, resolved.Target.Directory, relative, estEntries))
                     if (!warnings.Contains(warning))
                         warnings.Add(warning);
 
             var reloadError = await _framework.RunOnFrameworkThread(
-                () => ReloadModOnFramework(resolved.Target.Directory)).ConfigureAwait(false);
+                () => _activation.ReloadModOnFramework(resolved.Target.Directory)).ConfigureAwait(false);
             if (reloadError is not null)
                 warnings.Add(reloadError.Message);
             else
             {
                 var redrawWarning = await _framework.RunOnFrameworkThread(
-                    RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
+                    _activation.RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
                 if (redrawWarning is not null)
                     warnings.Add(redrawWarning);
             }

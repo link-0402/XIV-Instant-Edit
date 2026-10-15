@@ -1,18 +1,13 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
-using System.Security.Cryptography;
-using System.Text;
-using Dalamud.Game.ClientState.Objects.Enums;
-using Dalamud.Game.ClientState.Objects.Types;
+using System.Text.Json.Serialization;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
+using InstantEdit.Services.PenumbraMods;
+using InstantEdit.Services.PreviewMods;
 using Penumbra.Api.Enums;
 using Penumbra.Api.Helpers;
 using Penumbra.Api.IpcSubscribers;
-using Lumina.Data;
-using Lumina.Data.Files;
 
 namespace InstantEdit.Services;
 
@@ -83,400 +78,516 @@ public sealed record MaterialCoverageResult(
     IReadOnlyList<MaterialCoverageMissing> Missing);
 public sealed record SourceOptionCapture(SourceOptionLocator? Locator, string Status, string? Warning = null);
 
+/// <summary>A size's exported model: its option name and the staged file.</summary>
+public sealed record SizeExportFile(string Name, string ExportedFile);
+
+public sealed record PenumbraMod(string Directory, string Name, Guid? StableId = null);
+
+public sealed record PenumbraModResource(
+    string GamePath,
+    string ActualPath,
+    string RelativePath,
+    string OptionMapping,
+    IReadOnlyList<string> OptionMemberships);
+
+public sealed record PenumbraModSnapshot(
+    string Directory,
+    string Name,
+    string RootPath,
+    IReadOnlyList<PenumbraModResource> Resources,
+    Guid? StableId = null);
+
 /// <summary>
-/// Wraps all Penumbra IPC used by XIV Instant Edit:
-/// reading the resolved model files of on-screen game objects and
-/// writing/updating a persistent mod so the edited model applies in-game.
+/// An EST entry the exported meshes need, from the <c>xiv_est_hair</c>/<c>xiv_est_race</c> tags
+/// Magic Fit's Hair Weights puts on hair it weights: the hair skeleton (<paramref name="Entry"/>,
+/// <c>skl_c0801h0160.sklb</c> for 160) of race <see cref="Race"/> (<c>c0801</c>).
 /// </summary>
-public sealed partial class PenumbraService
+public sealed class EstEntryRequest
 {
-    internal sealed record SourceModTarget(string Directory, string Folder, string FilePath, string RelativePath);
-    internal sealed record SourceTargetResolution(SourceModTarget? Target, string Code, string? Error);
-    private sealed record AttributeModelIdentity(
-        int Id, int RaceCode, string AtrSlot, string ObjectType, string EquipSlot, string BodySlot);
-    private sealed record AttributeGroupWrite(string Path, JsonObject Document);
+    [JsonPropertyName("slot")]
+    public string? Slot { get; set; }
 
-    private const string OwnershipMarkerFile = ".instant-edit-owner.json";
-    private const string VariantGroupDescriptionPrefix = "Managed by XIV Instant Edit variant group: ";
-    private const string AttributeGroupDescriptionPrefix = "Managed by XIV Instant Edit attribute group v1: ";
-    private static readonly string[] AttributeGroupFamilies =
-        ["mv", "tv", "gv", "dv", "sv", "ev", "nv", "wv", "rv"];
-    // Every other attribute the game's own gear, accessory, body, hair, face, tail
-    // and ear models use, typos included (surveyed from the game data 2026-09-28).
-    // The game drives them itself, so they never get a generated group. Keep in
-    // sync with GAME_ATTRIBUTE_NAMES in the Blender add-on's materials.py.
-    private static readonly HashSet<string> GameAttributeNames = new(StringComparer.Ordinal)
-    {
-        "atr_ar", "atr_arm", "atr_arm1", "atr_arm2", "atr_arm3", "atr_armc", "atr_armhh",
-        "atr_bak", "atr_bak1", "atr_bak3", "atr_bak4", "atr_bakh", "atr_blt", "atr_bv_a",
-        "atr_cn_ankle", "atr_cn_neck", "atr_cn_waist", "atr_cn_wrist", "atr_del",
-        "atr_hair", "atr_head", "atr_hig", "atr_hij", "atr_hij1", "atr_hiz", "atr_hiz1", "atr_hrn",
-        "atr_inr", "atr_kam", "atr_kam1", "atr_kam4", "atr_kam23", "atr_kam24",
-        "atr_kao", "atr_kao1", "atr_kao2", "atr_kao3", "atr_kod", "atr_kod1", "atr_kod2",
-        "atr_leg", "atr_leg1", "atr_lod", "atr_lod1", "atr_lod2", "atr_lod12",
-        "atr_lod117", "atr_lod118", "atr_lod119", "atr_lod120", "atr_lpd", "atr_mim", "atr_mv_a1",
-        "atr_nek", "atr_nek2", "atr_sne", "atr_sne1", "atr_st", "atr_sta", "atr_star",
-        "atr_tlh", "atr_tls", "atr_top", "atr_top1", "atr_top3", "atr_tv_h1", "atr_ude", "atr_ude1", "atr_vsr",
-    };
+    [JsonPropertyName("entry")]
+    public int Entry { get; set; }
 
-    private readonly IDalamudPluginInterface  _pi;
-    private readonly GetGameObjectResourcePaths _getPaths;
-    private readonly GetGameObjectResourceTrees _getObjectTrees;
-    private readonly GetPlayerResourceTrees _getPlayerTrees;
-    private readonly GetPlayerResourcePaths _getPlayerPaths;
-    private readonly GetModDirectory           _getModDirectory;
-    private readonly GetModList                 _getModList;
-    private readonly GetModPath                 _getModPath;
-    private readonly AddMod                     _addMod;
-    private readonly ReloadMod                  _reloadMod;
-    private readonly GetCollectionForObject      _getCollectionForObject;
-    private readonly GetCurrentModSettings       _getCurrentModSettings;
-    private readonly TrySetMod                   _trySetMod;
-    private readonly TrySetModPriority            _trySetModPriority;
-    private readonly TrySetModSetting             _trySetModSetting;
-    private readonly RedrawObject               _redrawObject;
-    private readonly IFramework                  _framework;
-    private readonly IPluginLog                 _log;
-    private readonly IObjectTable?              _objects;
-    private readonly IDataManager?              _data;
-    private readonly ModelBackupStore?          _backups;
-    private readonly EstEntryStore?             _estEntries;
-    private readonly SemaphoreSlim              _exportGate = new(1, 1);
+    [JsonPropertyName("race")]
+    public string? Race { get; set; }
+}
+
+/// <summary>
+/// XIV Instant Edit's way into Penumbra. It builds the Penumbra IPC client and the mod services of
+/// InstantEdit.Services.PenumbraMods around one export gate, and keeps the API its callers use by
+/// forwarding to them: the work happens in the services.
+/// </summary>
+public sealed partial class PenumbraService : IDisposable, ITextureEditBackend
+{
+    private readonly PenumbraIpc _ipc;
+    private readonly IFramework _framework;
+    private readonly IPluginLog _log;
+    /// <summary> One mod write at a time, across every service that writes into Penumbra's mods. </summary>
+    private readonly SemaphoreSlim _exportGate = new(1, 1);
+    private readonly ModActivation _activation;
+    private readonly SourceMods _sources;
+    private readonly ModelExportService _exports;
+    private readonly RaceExportService _race;
+    private readonly SizesExportService _sizes;
+    private readonly ModelBackupService _modelBackups;
+    private readonly MashupService _mashups;
+    private readonly ModResourceScanner _scanner;
+    private readonly TextureModBackend _textures;
+    private readonly ModFileService _modFiles;
+    private readonly PreviewModWriter _previews;
+    private readonly AnimationModService _animations;
 
     public PenumbraService(
         IDalamudPluginInterface pi,
         IFramework framework,
         IPluginLog log,
-        IObjectTable? objects = null,
-        IDataManager? data = null,
-        ModelBackupStore? backups = null,
-        EstEntryStore? estEntries = null)
+        IObjectTable objects,
+        IDataManager data,
+        ModelBackupStore backups,
+        EstEntryStore estEntries)
     {
-        _pi               = pi;
-        _log             = log;
-        _framework       = framework;
-        _objects         = objects;
-        _data            = data;
-        _backups         = backups;
-        _estEntries      = estEntries;
-        _getPaths        = new GetGameObjectResourcePaths(pi);
-        _getObjectTrees  = new GetGameObjectResourceTrees(pi);
-        _getPlayerTrees  = new GetPlayerResourceTrees(pi);
-        _getPlayerPaths  = new GetPlayerResourcePaths(pi);
-        _getModDirectory = new GetModDirectory(pi);
-        _getModList      = new GetModList(pi);
-        _getModPath      = new GetModPath(pi);
-        _addMod          = new AddMod(pi);
-        _reloadMod       = new ReloadMod(pi);
-        _getCollectionForObject = new GetCollectionForObject(pi);
-        _getCurrentModSettings = new GetCurrentModSettings(pi);
-        _trySetMod       = new TrySetMod(pi);
-        _trySetModPriority = new TrySetModPriority(pi);
-        _trySetModSetting = new TrySetModSetting(pi);
-        _redrawObject    = new RedrawObject(pi);
-        SubscribeToResourceChanges(pi);
+        _framework = framework;
+        _log = log;
+        _ipc = new PenumbraIpc(pi, framework, log);
+        _activation = new ModActivation(_ipc, framework, log, objects);
+        _sources = new SourceMods(_ipc, framework, log);
+        var writer = new ModelFileWriter(backups);
+        var attributes = new AttributeGroupService(data, log);
+        var est = new EstEntryService(estEntries, log);
+        _race = new RaceExportService(framework, log, _exportGate, data, backups, _sources, _activation, writer, attributes, est);
+        _sizes = new SizesExportService(framework, log, _exportGate, _sources, _activation, writer, attributes, est);
+        _exports = new ModelExportService(_ipc, framework, log, _exportGate, backups, _sources, _activation, writer, attributes,
+            est, _race);
+        _modelBackups = new ModelBackupService(framework, log, _exportGate, backups, _sources, _activation, writer, est, _race);
+        _mashups = new MashupService(_ipc, framework, log, _exportGate, data, _sources, _activation, attributes, est);
+        _scanner = new ModResourceScanner(framework, log, _sources);
+        _textures = new TextureModBackend(_ipc, framework, objects, data, backups, _exportGate, _sources, _activation);
+        _modFiles = new ModFileService(framework, _exportGate, _sources, _activation);
+        _previews = new PreviewModWriter(_ipc, framework, log, objects, backups, _exportGate, _sources, _activation);
+        _animations = new AnimationModService(_ipc, framework, objects, _exportGate, _activation);
     }
 
-    /// <summary> Whether Penumbra is loaded and the resource tree IPC is available. </summary>
-    public bool Available
+    public void Dispose() => _ipc.Dispose();
+
+    // Penumbra's state and events (PenumbraIpc).
+
+    /// <inheritdoc cref="PenumbraIpc.Available"/>
+    public bool Available => _ipc.Available;
+
+    /// <inheritdoc cref="PenumbraIpc.ResourcesChanged"/>
+    public event Action? ResourcesChanged
     {
-        get
-        {
-            try
-            {
-                return _getPlayerTrees.Valid;
-            }
-            catch (Exception e)
-            {
-                _log.Debug($"Could not query Penumbra availability: {e.Message}");
-                return false;
-            }
-        }
+        add => _ipc.ResourcesChanged += value;
+        remove => _ipc.ResourcesChanged -= value;
     }
 
-    /// <summary>
-    /// Get the resolved resource paths for one game object.
-    /// The dictionary maps the resolved local path (mod file on disk, or the game path if unmodded)
-    /// to the set of game paths it serves.
-    /// </summary>
-    public Dictionary<string, HashSet<string>>? GetResourcePaths(ushort gameObjectIndex)
+    /// <inheritdoc cref="PenumbraIpc.ModsChanged"/>
+    public event Action? ModsChanged
     {
-        try
-        {
-            if (!Available)
-                return null;
-
-            var result = _getPaths.Invoke(gameObjectIndex);
-            return result is { Length: > 0 } ? result[0] : null;
-        }
-        catch (Exception e)
-        {
-            _log.Debug($"Could not retrieve Penumbra resource paths: {e.Message}");
-            return null;
-        }
+        add => _ipc.ModsChanged += value;
+        remove => _ipc.ModsChanged -= value;
     }
 
-    /// <summary>Resolve one object's effective resources on Dalamud's framework thread.</summary>
-    public async Task<Dictionary<string, HashSet<string>>?> GetResourcePathsAsync(ushort gameObjectIndex)
-        => await _framework.RunOnFrameworkThread(() => GetResourcePaths(gameObjectIndex)).ConfigureAwait(false);
-
-    public async Task<PenumbraCollectionTarget?> GetCollectionTargetAsync(int gameObjectIndex)
-        => await _framework.RunOnFrameworkThread(() =>
-        {
-            try
-            {
-                var collection = _getCollectionForObject.Invoke(gameObjectIndex);
-                return collection.ObjectValid && collection.EffectiveCollection.Id != Guid.Empty &&
-                       !string.IsNullOrWhiteSpace(collection.EffectiveCollection.Name)
-                    ? new PenumbraCollectionTarget(collection.EffectiveCollection.Id, collection.EffectiveCollection.Name)
-                    : null;
-            }
-            catch (Exception e)
-            {
-                _log.Debug(e, "Could not capture the Penumbra collection for object {ObjectIndex}.", gameObjectIndex);
-                return null;
-            }
-        }).ConfigureAwait(false);
-
-    /// <summary>
-    /// Resumes on the thread pool. An await on RunOnFrameworkThread continues inline on the game
-    /// thread that ran the work, so the file work that usually follows would stall the frame.
-    /// </summary>
-    private static ThreadPoolHop LeaveFrameworkThread() => default;
-
-    private readonly struct ThreadPoolHop : System.Runtime.CompilerServices.ICriticalNotifyCompletion
+    /// <inheritdoc cref="PenumbraIpc.ObjectRedrawn"/>
+    internal event Action<int>? ObjectRedrawn
     {
-        public ThreadPoolHop GetAwaiter() => this;
-        public bool IsCompleted => false;
-        public void GetResult() { }
-        public void OnCompleted(Action continuation)
-            => ThreadPool.QueueUserWorkItem(static run => run(), continuation, preferLocal: false);
-        public void UnsafeOnCompleted(Action continuation)
-            => ThreadPool.UnsafeQueueUserWorkItem(static run => run(), continuation, preferLocal: false);
+        add => _ipc.ObjectRedrawn += value;
+        remove => _ipc.ObjectRedrawn -= value;
     }
 
-    /// <summary>Capture the effective source-mod manipulations for one collection.</summary>
-    public async Task<JsonArray?> CaptureEffectiveManipulationsAsync(
-        Guid collectionId,
+    /// <inheritdoc cref="PenumbraIpc.GetResourcePaths(ushort)"/>
+    public Dictionary<string, HashSet<string>>? GetResourcePaths(ushort gameObjectIndex) => _ipc.GetResourcePaths(gameObjectIndex);
+
+    /// <inheritdoc cref="PenumbraIpc.GetResourcePaths(ushort[])"/>
+    public Dictionary<string, HashSet<string>>?[] GetResourcePaths(ushort[] gameObjectIndices) => _ipc.GetResourcePaths(gameObjectIndices);
+
+    /// <inheritdoc cref="PenumbraIpc.GetResourcePathsAsync"/>
+    public Task<Dictionary<string, HashSet<string>>?> GetResourcePathsAsync(ushort gameObjectIndex)
+        => _ipc.GetResourcePathsAsync(gameObjectIndex);
+
+    /// <inheritdoc cref="PenumbraIpc.GetPlayerResourceTrees"/>
+    public IReadOnlyDictionary<ushort, ResourceTreeDto> GetPlayerResourceTrees() => _ipc.GetPlayerResourceTrees();
+
+    /// <inheritdoc cref="PenumbraIpc.GetPlayerResourcePaths"/>
+    public IReadOnlyDictionary<ushort, Dictionary<string, HashSet<string>>> GetPlayerResourcePaths() => _ipc.GetPlayerResourcePaths();
+
+    /// <inheritdoc cref="PenumbraIpc.GetResourceTrees"/>
+    public ResourceTreeDto?[] GetResourceTrees(ushort[] gameObjectIndices) => _ipc.GetResourceTrees(gameObjectIndices);
+
+    public Task<PenumbraCollectionTarget?> GetCollectionTargetAsync(int gameObjectIndex) => _ipc.GetCollectionTargetAsync(gameObjectIndex);
+
+    public string? GetModDirectory() => _ipc.GetModDirectory();
+
+    public Dictionary<string, string> GetModList() => _ipc.GetModList();
+
+    /// <inheritdoc cref="PenumbraIpc.TryGetModList"/>
+    internal bool TryGetModList(out Dictionary<string, string> modList) => _ipc.TryGetModList(out modList);
+
+    public IReadOnlyList<PenumbraMod> GetMods() => _ipc.GetMods();
+
+    /// <inheritdoc cref="PenumbraIpc.GetRegisteredModPath"/>
+    public string? GetRegisteredModPath(string modDirectory) => _ipc.GetRegisteredModPath(modDirectory);
+
+    /// <inheritdoc cref="PenumbraIpc.OpenModInPenumbra"/>
+    public void OpenModInPenumbra(string modDirectory, string modName) => _ipc.OpenModInPenumbra(modDirectory, modName);
+
+    /// <inheritdoc cref="PenumbraIpc.ResolveCollectionPathsAsync"/>
+    internal Task<string?[]> ResolveCollectionPathsAsync(Guid collection, IReadOnlyList<string> gamePaths)
+        => _ipc.ResolveCollectionPathsAsync(collection, gamePaths);
+
+    /// <inheritdoc cref="PenumbraIpc.MetaManipulationsAsync"/>
+    internal Task<string?> MetaManipulationsAsync(int objectIndex) => _ipc.MetaManipulationsAsync(objectIndex);
+
+    // Temporary mods (PenumbraIpc).
+
+    /// <inheritdoc cref="PenumbraIpc.TemporaryModCollectionOnFramework"/>
+    internal TemporaryModCollection? TemporaryModCollectionOnFramework(int objectIndex)
+        => _ipc.TemporaryModCollectionOnFramework(objectIndex);
+
+    internal Task<TemporaryModCollection?> TemporaryModCollectionAsync(int objectIndex) => _ipc.TemporaryModCollectionAsync(objectIndex);
+
+    /// <inheritdoc cref="PenumbraIpc.AddTemporaryModOnFramework"/>
+    internal PenumbraApiEc AddTemporaryModOnFramework(string tag, Guid collection, IReadOnlyDictionary<string, string> paths, int priority)
+        => _ipc.AddTemporaryModOnFramework(tag, collection, paths, priority);
+
+    /// <inheritdoc cref="PenumbraIpc.AddTemporaryModAllOnFramework"/>
+    internal PenumbraApiEc AddTemporaryModAllOnFramework(string tag, IReadOnlyDictionary<string, string> paths, int priority)
+        => _ipc.AddTemporaryModAllOnFramework(tag, paths, priority);
+
+    /// <inheritdoc cref="PenumbraIpc.ResolveInterfacePathOnFramework"/>
+    internal string ResolveInterfacePathOnFramework(string gamePath) => _ipc.ResolveInterfacePathOnFramework(gamePath);
+
+    /// <inheritdoc cref="PenumbraIpc.RemoveTemporaryModAllOnFramework"/>
+    internal (bool Gone, string? Error) RemoveTemporaryModAllOnFramework(string tag, int priority)
+        => _ipc.RemoveTemporaryModAllOnFramework(tag, priority);
+
+    /// <inheritdoc cref="PenumbraIpc.RemoveTemporaryModOnFramework"/>
+    internal (bool Gone, string? Error) RemoveTemporaryModOnFramework(string tag, Guid collection, int priority)
+        => _ipc.RemoveTemporaryModOnFramework(tag, collection, priority);
+
+    internal Task<(bool Gone, string? Error)> RemoveTemporaryModAsync(string tag, Guid collection, int priority)
+        => _ipc.RemoveTemporaryModAsync(tag, collection, priority);
+
+    /// <inheritdoc cref="PenumbraIpc.RemoveTemporaryModEverywhereOnFramework"/>
+    internal (bool Gone, string? Error) RemoveTemporaryModEverywhereOnFramework(string tag, int priority)
+        => _ipc.RemoveTemporaryModEverywhereOnFramework(tag, priority);
+
+    internal Task<(bool Gone, string? Error)> RemoveTemporaryModEverywhereAsync(string tag, int priority)
+        => _ipc.RemoveTemporaryModEverywhereAsync(tag, priority);
+
+    /// <inheritdoc cref="PenumbraIpc.SubscribePenumbraLifecycle"/>
+    internal IDisposable SubscribePenumbraLifecycle(Action restarted) => _ipc.SubscribePenumbraLifecycle(restarted);
+
+    // Imports (SourceMods, ModResourceScanner).
+
+    /// <inheritdoc cref="SourceMods.CaptureEffectiveManipulationsAsync"/>
+    public Task<JsonArray?> CaptureEffectiveManipulationsAsync(Guid collectionId, string modDirectory, string modRoot)
+        => _sources.CaptureEffectiveManipulationsAsync(collectionId, modDirectory, modRoot);
+
+    /// <inheritdoc cref="SourceMods.CaptureSourceOptionAsync"/>
+    public Task<SourceOptionCapture> CaptureSourceOptionAsync(
+        string sourceModDirectory, string sourceFilePath, string? sourceModRootPath,
+        string? targetRelativePath, string sourceGamePath,
+        IReadOnlyCollection<string>? preferredMemberships = null,
+        Guid? collectionId = null,
+        Guid? sourceModStableId = null)
+        => _sources.CaptureSourceOptionAsync(sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath,
+            sourceGamePath, preferredMemberships, collectionId, sourceModStableId);
+
+    /// <inheritdoc cref="ModResourceScanner.GetModResourcesAsync"/>
+    public Task<PenumbraModSnapshot?> GetModResourcesAsync(
         string modDirectory,
-        string modRoot)
-    {
-        if (collectionId == Guid.Empty || !IsSafeModName(modDirectory) ||
-            string.IsNullOrWhiteSpace(modRoot) || !Directory.Exists(modRoot))
-            return null;
-        try
-        {
-            var selections = await _framework.RunOnFrameworkThread(() =>
-            {
-                var result = _getCurrentModSettings.Invoke(
-                    collectionId, modDirectory, string.Empty, false);
-                if (result.Item1 is not PenumbraApiEc.Success || result.Item2 is null)
-                    return null;
-                return result.Item2.Value.Item3.ToDictionary(
-                    pair => pair.Key,
-                    pair => (IReadOnlyList<string>)pair.Value.ToArray(),
-                    StringComparer.OrdinalIgnoreCase);
-            }).ConfigureAwait(false);
-            await LeaveFrameworkThread();
-            return selections is null
-                ? null
-                : CaptureEffectiveManipulations(modRoot, selections);
-        }
-        catch (Exception e)
-        {
-            _log.Warning(e, "Could not snapshot Meta Manipulations for source mod {ModDirectory}.", modDirectory);
-            return null;
-        }
-    }
+        CancellationToken cancellationToken = default,
+        Guid? stableId = null)
+        => _scanner.GetModResourcesAsync(modDirectory, cancellationToken, stableId);
 
-    internal static JsonArray CaptureEffectiveManipulations(
-        string modFolder,
-        IReadOnlyDictionary<string, IReadOnlyList<string>> enabledOptions)
-    {
-        var meta = LoadV4ModMetadata(modFolder);
-        var groups = ReadAllVariantGroups(modFolder)
-            .Select((group, index) => (Group: group, Index: index))
-            .OrderByDescending(item => JsonInt(item.Group["Priority"]))
-            .ThenBy(item => item.Index)
-            .ToArray();
-        var result = new JsonArray();
-        var identities = new HashSet<string>(StringComparer.Ordinal);
-        var serializedBytes = 2;
+    /// <inheritdoc cref="ModResourceScanner.GetMaterialCoverageAsync"/>
+    public Task<MaterialCoverageResult> GetMaterialCoverageAsync(
+        InstantEditImportContext activeContext,
+        IReadOnlyList<MashupContributor> contributors,
+        CancellationToken cancellationToken = default)
+        => _scanner.GetMaterialCoverageAsync(activeContext, contributors, cancellationToken);
 
-        static string CanonicalJson(JsonNode? node)
-            => node switch
-            {
-                null => "null",
-                JsonObject value => "{" + string.Join(",", value
-                    .OrderBy(pair => pair.Key, StringComparer.Ordinal)
-                    .Select(pair => JsonSerializer.Serialize(pair.Key) + ":" + CanonicalJson(pair.Value))) + "}",
-                JsonArray value => "[" + string.Join(",", value.Select(CanonicalJson)) + "]",
-                _ => node.ToJsonString(),
-            };
+    // Model exports and their backups.
 
-        static string Identity(JsonObject manipulation)
-        {
-            var identity = manipulation.DeepClone().AsObject();
-            if (identity["Manipulation"] is JsonObject payload)
-                payload.Remove("Entry");
-            else
-                identity.Remove("Entry");
-            return CanonicalJson(identity);
-        }
+    /// <inheritdoc cref="ModelExportService.ApplySourceExportAsync"/>
+    public Task<ExportResult> ApplySourceExportAsync(
+        string sourceModDirectory,
+        string sourceFilePath,
+        string? sourceModRootPath,
+        string? targetRelativePath,
+        string sourceGamePath,
+        string exportedFile,
+        string? variantName,
+        string? variantGroupName,
+        string? variantTarget,
+        string? variantTargetId,
+        bool setupVariantInPenumbra,
+        bool backupExisting = false,
+        SourceOptionLocator? sourceOption = null,
+        string sourceOptionStatus = "unknown",
+        Guid? sourceModStableId = null,
+        bool createAttributeGroups = false,
+        IReadOnlyList<string>? attributeTags = null,
+        IReadOnlyDictionary<string, int>? attributeMasks = null,
+        string? resolvedGamePath = null,
+        JsonArray? sourceManipulations = null,
+        IReadOnlyList<EstEntryRequest>? estEntries = null)
+        => _exports.ApplySourceExportAsync(sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath,
+            sourceGamePath, exportedFile, variantName, variantGroupName, variantTarget, variantTargetId,
+            setupVariantInPenumbra, backupExisting, sourceOption, sourceOptionStatus, sourceModStableId,
+            createAttributeGroups, attributeTags, attributeMasks, resolvedGamePath, sourceManipulations, estEntries);
 
-        void Append(JsonNode? container)
-        {
-            if (container?["Manipulations"] is not JsonArray manipulations)
-                return;
-            foreach (var manipulation in manipulations)
-            {
-                if (manipulation is not JsonObject entry)
-                    throw new InvalidDataException("A source manipulation entry is invalid.");
-                var type = JsonString(entry["Type"]);
-                if (type is not ("Eqp" or "Eqdp" or "Imc" or "Est" or "Atr"))
-                    continue;
-                if (!identities.Add(Identity(entry)))
-                    continue;
-                var clone = entry.DeepClone();
-                serializedBytes += Encoding.UTF8.GetByteCount(clone.ToJsonString()) + 1;
-                if (result.Count >= 4096 || serializedBytes > 4 * 1024 * 1024)
-                    throw new InvalidDataException("The source manipulation snapshot is too large.");
-                result.Add(clone);
-            }
-        }
+    /// <inheritdoc cref="ModelExportService.GetVariantTargetsAsync"/>
+    public Task<VariantTargetsResult> GetVariantTargetsAsync(
+        string sourceModDirectory,
+        string sourceFilePath,
+        string? sourceModRootPath,
+        string? targetRelativePath,
+        string sourceGamePath,
+        Guid? sourceModStableId = null)
+        => _exports.GetVariantTargetsAsync(sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath,
+            sourceGamePath, sourceModStableId);
 
-        foreach (var (group, _index) in groups)
-        {
-            var groupName = JsonString(group["Name"]);
-            var selection = enabledOptions.FirstOrDefault(pair =>
-                string.Equals(pair.Key, groupName, StringComparison.OrdinalIgnoreCase));
-            var selected = selection.Value;
-            if (selected is null)
-                continue;
+    /// <inheritdoc cref="ModelExportService.CreateGameModelModAsync"/>
+    public Task<NewModelModResult> CreateGameModelModAsync(
+        InstantEditImportContext context,
+        string exportedFile,
+        string modName,
+        bool createAttributeGroups = false,
+        IReadOnlyList<string>? attributeTags = null,
+        IReadOnlyDictionary<string, int>? attributeMasks = null,
+        IReadOnlyList<EstEntryRequest>? estEntries = null,
+        int? race = null)
+        => _exports.CreateGameModelModAsync(context, exportedFile, modName, createAttributeGroups, attributeTags,
+            attributeMasks, estEntries, race);
 
-            if (string.Equals(JsonString(group["Type"]), "Combining", StringComparison.OrdinalIgnoreCase))
-            {
-                if (group["Options"] is not JsonArray combinationOptions ||
-                    group["Containers"] is not JsonArray combinationContainers)
-                    continue;
-                var containerIndex = 0;
-                for (var optionIndex = 0; optionIndex < combinationOptions.Count && optionIndex < 31; ++optionIndex)
-                    if (combinationOptions[optionIndex] is JsonObject option &&
-                        selected.Contains(JsonString(option["Name"]) ?? "", StringComparer.OrdinalIgnoreCase))
-                        containerIndex |= 1 << optionIndex;
-                if (containerIndex < combinationContainers.Count)
-                    Append(combinationContainers[containerIndex]);
-                continue;
-            }
+    /// <inheritdoc cref="RaceExportService.ApplyRaceExportAsync"/>
+    public Task<ExportResult> ApplyRaceExportAsync(
+        string sourceModDirectory,
+        string sourceFilePath,
+        string? sourceModRootPath,
+        string? targetRelativePath,
+        string sourceGamePath,
+        int race,
+        string exportedFile,
+        bool backupExisting = false,
+        Guid? sourceModStableId = null,
+        bool createAttributeGroups = false,
+        IReadOnlyList<string>? attributeTags = null,
+        IReadOnlyDictionary<string, int>? attributeMasks = null,
+        string? resolvedGamePath = null,
+        JsonArray? sourceManipulations = null,
+        IReadOnlyList<EstEntryRequest>? estEntries = null)
+        => _race.ApplyRaceExportAsync(sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath,
+            sourceGamePath, race, exportedFile, backupExisting, sourceModStableId, createAttributeGroups, attributeTags,
+            attributeMasks, resolvedGamePath, sourceManipulations, estEntries);
 
-            if (selected.Count == 0 || group["Options"] is not JsonArray options)
-                continue;
-            foreach (var selectedName in selected)
-            {
-                var container = options.OfType<JsonObject>().FirstOrDefault(option =>
-                    string.Equals(JsonString(option["Name"]), selectedName, StringComparison.OrdinalIgnoreCase));
-                if (container is not null)
-                    Append(container);
-            }
-        }
+    /// <inheritdoc cref="SizesExportService.ApplySizesExportAsync"/>
+    public Task<ExportResult> ApplySizesExportAsync(
+        string sourceModDirectory,
+        string sourceFilePath,
+        string? sourceModRootPath,
+        string? targetRelativePath,
+        string sourceGamePath,
+        IReadOnlyList<SizeExportFile> sizes,
+        string defaultSize,
+        string variantTarget,
+        string? variantGroupName,
+        string? variantTargetId,
+        bool backupExisting = false,
+        SourceOptionLocator? sourceOption = null,
+        string sourceOptionStatus = "unknown",
+        Guid? sourceModStableId = null,
+        bool createAttributeGroups = false,
+        IReadOnlyList<string>? attributeTags = null,
+        IReadOnlyDictionary<string, int>? attributeMasks = null,
+        string? resolvedGamePath = null,
+        JsonArray? sourceManipulations = null,
+        IReadOnlyList<EstEntryRequest>? estEntries = null)
+        => _sizes.ApplySizesExportAsync(sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath,
+            sourceGamePath, sizes, defaultSize, variantTarget, variantGroupName, variantTargetId, backupExisting,
+            sourceOption, sourceOptionStatus, sourceModStableId, createAttributeGroups, attributeTags, attributeMasks,
+            resolvedGamePath, sourceManipulations, estEntries);
 
-        Append(meta["DefaultData"]);
-        return result;
-    }
+    /// <inheritdoc cref="MashupService.ApplyMashupAsync"/>
+    public Task<ExportResult> ApplyMashupAsync(
+        InstantEditImportContext activeContext,
+        IReadOnlyList<MashupContributor> contributors,
+        MashupPlanResult plan,
+        string exportedFile,
+        string exportId,
+        string destination,
+        string name,
+        bool bundleExternalDependencies = false,
+        bool createAttributeGroups = false,
+        IReadOnlyList<string>? attributeTags = null,
+        IReadOnlyDictionary<string, int>? attributeMasks = null,
+        IReadOnlyList<EstEntryRequest>? estEntries = null)
+        => _mashups.ApplyMashupAsync(activeContext, contributors, plan, exportedFile, exportId, destination, name,
+            bundleExternalDependencies, createAttributeGroups, attributeTags, attributeMasks, estEntries);
 
-    /// <summary>
-    /// Get the resolved resource paths for several game objects in one IPC call. Penumbra
-    /// looks these indices up in Dalamud's object table, which asserts the main thread.
-    /// </summary>
-    public Dictionary<string, HashSet<string>>?[] GetResourcePaths(ushort[] gameObjectIndices)
-    {
-        if (gameObjectIndices.Length == 0)
-            return Array.Empty<Dictionary<string, HashSet<string>>?>();
+    /// <inheritdoc cref="ModelBackupService.RestoreSourceBackupAsync"/>
+    public Task<ExportResult> RestoreSourceBackupAsync(
+        string sourceModDirectory,
+        string sourceFilePath,
+        string? sourceModRootPath,
+        string? targetRelativePath,
+        string sourceGamePath,
+        string backupName,
+        string backupTargetId,
+        Guid? sourceModStableId = null)
+        => _modelBackups.RestoreSourceBackupAsync(sourceModDirectory, sourceFilePath, sourceModRootPath,
+            targetRelativePath, sourceGamePath, backupName, backupTargetId, sourceModStableId);
 
-        try
-        {
-            if (!Available)
-                return EmptyResourceResults(gameObjectIndices.Length);
+    /// <inheritdoc cref="ModelBackupService.ClearManagedBackupsAsync"/>
+    public Task<ExportResult> ClearManagedBackupsAsync(
+        string sourceModDirectory, string sourceFilePath, string? sourceModRootPath,
+        string? targetRelativePath, string sourceGamePath, string backupTargetId,
+        Guid? sourceModStableId = null)
+        => _modelBackups.ClearManagedBackupsAsync(sourceModDirectory, sourceFilePath, sourceModRootPath,
+            targetRelativePath, sourceGamePath, backupTargetId, sourceModStableId);
 
-            var result = _getPaths.Invoke(gameObjectIndices);
-            if (result is null || result.Length != gameObjectIndices.Length)
-                return EmptyResourceResults(gameObjectIndices.Length);
-            return result;
-        }
-        catch (Exception e)
-        {
-            _log.Debug($"Could not retrieve Penumbra resource paths: {e.Message}");
-            return EmptyResourceResults(gameObjectIndices.Length);
-        }
-    }
+    // Texture edits (TextureModBackend) and texture compression (ModFileService).
 
-    /// <summary>
-    /// Gets Penumbra's local-player-owned resource trees, including the public UI
-    /// labels and icons. The returned index is the current object-table index.
-    /// Call it on the framework thread: Penumbra builds the trees on the calling thread and
-    /// reads each character's ObjectIndex there, which Dalamud rejects on other threads.
-    /// </summary>
-    public IReadOnlyDictionary<ushort, ResourceTreeDto> GetPlayerResourceTrees()
-    {
-        try
-        {
-            if (!Available)
-                return new Dictionary<ushort, ResourceTreeDto>();
+    Task<TextureSource> ITextureEditBackend.CaptureAsync(TextureEditRequest request, CancellationToken token)
+        => ((ITextureEditBackend)_textures).CaptureAsync(request, token);
 
-            return _getPlayerTrees.Invoke(withUiData: true);
-        }
-        catch (Exception e)
-        {
-            _log.Warning($"Could not retrieve Penumbra player resource trees: {e.Message}");
-            return new Dictionary<ushort, ResourceTreeDto>();
-        }
-    }
+    Task ITextureEditBackend.CheckAsync(TextureEditSession session, CancellationToken token)
+        => ((ITextureEditBackend)_textures).CheckAsync(session, token);
 
-    /// <summary>
-    /// Gets the resolved resource paths of the local player and their owned objects, keyed
-    /// by object-table index. Like <see cref="GetPlayerResourceTrees"/>, call it on the
-    /// framework thread.
-    /// </summary>
-    public IReadOnlyDictionary<ushort, Dictionary<string, HashSet<string>>> GetPlayerResourcePaths()
-    {
-        try
-        {
-            if (!Available)
-                return new Dictionary<ushort, Dictionary<string, HashSet<string>>>();
+    Task<TextureRebase> ITextureEditBackend.RebaseAsync(TextureEditSession session, CancellationToken token)
+        => ((ITextureEditBackend)_textures).RebaseAsync(session, token);
 
-            return _getPlayerPaths.Invoke() ?? new Dictionary<ushort, Dictionary<string, HashSet<string>>>();
-        }
-        catch (Exception e)
-        {
-            _log.Warning($"Could not retrieve Penumbra player resource paths: {e.Message}");
-            return new Dictionary<ushort, Dictionary<string, HashSet<string>>>();
-        }
-    }
+    Task ITextureEditBackend.ConvertAsync(string input, string output, TextureType format, bool mipMaps)
+        => ((ITextureEditBackend)_textures).ConvertAsync(input, output, format, mipMaps);
 
-    public string? GetModDirectory()
-    {
-        try
-        {
-            var dir = _getModDirectory.Invoke();
-            return string.IsNullOrWhiteSpace(dir) ? null : dir;
-        }
-        catch (Exception e)
-        {
-            _log.Debug($"Could not retrieve Penumbra mod directory: {e.Message}");
-            return null;
-        }
-    }
+    Task<TextureCommit> ITextureEditBackend.CommitAsync(TextureEditSession session, byte[] tex, Func<bool> stillCurrent,
+        CancellationToken token)
+        => ((ITextureEditBackend)_textures).CommitAsync(session, tex, stillCurrent, token);
 
-    public Dictionary<string, string> GetModList()
-    {
-        try
-        {
-            return _getModList.Invoke() ?? new Dictionary<string, string>();
-        }
-        catch (Exception e)
-        {
-            _log.Debug($"Could not retrieve Penumbra mod list: {e.Message}");
-            return new Dictionary<string, string>();
-        }
-    }
+    Task<TextureVariantCommit> ITextureEditBackend.CommitVariantAsync(TextureEditSession session, TextureVariant variant,
+        byte[] tex, Func<bool> stillCurrent, CancellationToken token)
+        => ((ITextureEditBackend)_textures).CommitVariantAsync(session, variant, tex, stillCurrent, token);
+
+    Task<string> ITextureEditBackend.RefreshAsync(IReadOnlyList<TextureRefresh> items, CancellationToken token)
+        => ((ITextureEditBackend)_textures).RefreshAsync(items, token);
+
+    /// <inheritdoc cref="ModFileService.ReplaceModFileAsync"/>
+    internal Task ReplaceModFileAsync(PreviewSource source, string expectedSha256, byte[] bytes, string recheck)
+        => _modFiles.ReplaceModFileAsync(source, expectedSha256, bytes, recheck);
+
+    /// <inheritdoc cref="ModFileService.ModRootAsync"/>
+    internal Task<string?> ModRootAsync(string modDirectory, Guid? stableId) => _modFiles.ModRootAsync(modDirectory, stableId);
+
+    /// <inheritdoc cref="ModFileService.ReloadModsAndRedrawPlayerAsync"/>
+    internal Task<IReadOnlyList<string>> ReloadModsAndRedrawPlayerAsync(IReadOnlyCollection<string> modDirectories)
+        => _modFiles.ReloadModsAndRedrawPlayerAsync(modDirectories);
+
+    // Preview mods (PreviewModWriter).
+
+    /// <inheritdoc cref="PreviewModWriter.CreatePreviewModAsync"/>
+    internal Task<PreviewModResult> CreatePreviewModAsync(string name, string description,
+        IReadOnlyList<PreviewModEntry> files, int objectIndex, string fallbackName, CancellationToken token)
+        => _previews.CreatePreviewModAsync(name, description, files, objectIndex, fallbackName, token);
+
+    internal Task<string?> PreviewModRootAsync() => _previews.PreviewModRootAsync();
+
+    /// <inheritdoc cref="PreviewModWriter.DeletePreviewModAsync"/>
+    internal Task<(bool Removed, string? Warning)> DeletePreviewModAsync(string modDirectory, Guid identifier, int objectIndex)
+        => _previews.DeletePreviewModAsync(modDirectory, identifier, objectIndex);
+
+    /// <inheritdoc cref="PreviewModWriter.WritePreviewSourcesAsync"/>
+    internal Task<IReadOnlyList<string>> WritePreviewSourcesAsync(IReadOnlyList<(PreviewSource Source, byte[] Bytes)> writes,
+        int objectIndex, string recheck, IReadOnlyList<(PreviewSource Material, string GamePath, byte[] Bytes)>? additions = null)
+        => _previews.WritePreviewSourcesAsync(writes, objectIndex, recheck, additions);
+
+    /// <inheritdoc cref="PreviewModWriter.ManagedBackupsFor"/>
+    internal IReadOnlyList<ManagedBackup> ManagedBackupsFor(PreviewSource source) => _previews.ManagedBackupsFor(source);
+
+    /// <inheritdoc cref="PreviewModWriter.RestorePreviewSourcesAsync"/>
+    internal Task<IReadOnlyList<string>> RestorePreviewSourcesAsync(
+        IReadOnlyList<(PreviewSource Source, ManagedBackup Backup)> restores, int objectIndex, string recheck)
+        => _previews.RestorePreviewSourcesAsync(restores, objectIndex, recheck);
+
+    // Animation edits (AnimationModService).
+
+    internal Task<(string Directory, string Root)[]> AnimationSkeletonRootsAsync() => _animations.AnimationSkeletonRootsAsync();
+
+    internal void CheckAnimationCollectionOnFramework(ushort objectIndex, Guid collection)
+        => _animations.CheckAnimationCollectionOnFramework(objectIndex, collection);
+
+    internal Task<string> ResolveAnimationPathAsync(Guid collection, string gamePath)
+        => _animations.ResolveAnimationPathAsync(collection, gamePath);
+
+    internal Task AnimationExportAsync(Func<Task> action, CancellationToken token) => _animations.AnimationExportAsync(action, token);
+
+    internal Task<string> AnimationModRootAsync() => _animations.AnimationModRootAsync();
+
+    internal Task<string> AnimationMetadataAsync(Guid collection) => _animations.AnimationMetadataAsync(collection);
+
+    internal Task CheckAnimationModRootAsync(string mod, string root) => _animations.CheckAnimationModRootAsync(mod, root);
+
+    internal Task ActivateAnimationAsync(AnimationEditJournal journal) => _animations.ActivateAnimationAsync(journal);
+
+    internal Task RedrawAnimationAsync() => _animations.RedrawAnimationAsync();
+
+    /// <inheritdoc cref="AnimationModService.RedrawObjectAndWaitAsync"/>
+    internal Task<string?> RedrawObjectAndWaitAsync(int objectIndex, TimeSpan timeout, CancellationToken token)
+        => _animations.RedrawObjectAndWaitAsync(objectIndex, timeout, token);
+
+    internal Task DisableAnimationModAsync(AnimationEditJournal journal) => _animations.DisableAnimationModAsync(journal);
+
+    internal Task ReloadAnimationSourcesAsync(IEnumerable<string> mods) => _animations.ReloadAnimationSourcesAsync(mods);
+
+    // Helpers the export server and the windows still call here.
+
+    internal static bool IsSafeGamePath(string? gamePath) => ModPaths.IsSafeGamePath(gamePath);
+    internal static bool IsSafeNewModName(string? modName) => ModPaths.IsSafeNewModName(modName);
+    internal static bool IsSafeVariantGroupName(string? value) => ModPaths.IsSafeVariantGroupName(value);
+    internal static IReadOnlyList<string> AnimationMappedFiles(string modRoot, string gamePath)
+        => ModMetadata.AnimationMappedFiles(modRoot, gamePath);
+    internal static JsonArray? KnownManipulations(InstantEditImportContext context)
+        => AttributeGroupService.KnownManipulations(context);
+    internal static string? ValidateEstEntryRequests(IReadOnlyList<EstEntryRequest>? entries)
+        => EstEntryService.ValidateEstEntryRequests(entries);
+    internal static int? PlayerRaceCode(string? race) => RaceExportService.PlayerRaceCode(race);
+    internal static string? RaceModelGamePath(string gamePath, int race) => RaceExportService.RaceModelGamePath(gamePath, race);
+    internal static bool IsSafeSizeName(string? value) => SizesExportService.IsSafeSizeName(value);
+    internal static MashupPlanResult BuildMashupPlan(InstantEditImportContext activeContext,
+        IReadOnlyList<MashupContributor> contributors, bool bundleExternalDependencies = false)
+        => MashupPlanning.BuildMashupPlan(activeContext, contributors, bundleExternalDependencies);
+
+    // PenumbraService.Physics.cs still calls these by their old names, until it moves into a service of its own.
+
+    private TrySetMod _trySetMod => _ipc.TrySetMod;
+    private RedrawObject _redrawObject => _ipc.RedrawObject;
+    internal const int PreviewModPriority = PreviewModWriter.PreviewModPriority;
+    private Task<ExportResult?> AddNewModAsync(string modName) => _activation.AddNewModAsync(modName);
+    private ExportResult? ReloadModOnFramework(string modName) => _activation.ReloadModOnFramework(modName);
+    private ExportResult ConfigureModForCollectionOnFramework(string modName, Guid collectionId, string collectionName,
+        bool setPriority = true, int priority = int.MaxValue, bool redraw = true)
+        => _activation.ConfigureModForCollectionOnFramework(modName, collectionId, collectionName, setPriority, priority, redraw);
+    private static string NormalizeGamePath(string value) => ModPaths.NormalizeGamePath(value);
+    private static bool IsSafeGameResourcePath(string? gamePath, params string[] extensions)
+        => ModPaths.IsSafeGameResourcePath(gamePath, extensions);
+    private static bool IsSafeModName(string? modName) => ModPaths.IsSafeModName(modName);
+    private static bool IsPathWithin(string path, string root) => ModPaths.IsPathWithin(path, root);
+    private static bool HasReparsePointInPath(string root, string path) => ModPaths.HasReparsePointInPath(root, path);
+    private static bool SameGamePath(string left, string right) => ModPaths.SameGamePath(left, right);
+    private static string? JsonString(JsonNode? node) => ModJson.JsonString(node);
+    private static JsonObject LoadV4ModMetadata(string modRoot) => ModMetadata.LoadV4ModMetadata(modRoot);
+    private static void TouchV4ModMetadata(JsonObject meta) => ModMetadata.TouchV4ModMetadata(meta);
+    private static void WriteJsonAtomic(string path, JsonObject value) => ModMetadata.WriteJsonAtomic(path, value);
+    private static Guid? ReadModStableIdentifier(string modRoot) => ModMetadata.ReadModStableIdentifier(modRoot);
+    internal static Guid? ReadModStableIdentifierForRegression(string modRoot) => ModMetadata.ReadModStableIdentifier(modRoot);
+    private static JsonObject CreateV4ModMetadata(string name, string author, string description, string version,
+        JsonObject defaultData)
+        => ModMetadata.CreateV4ModMetadata(name, author, description, version, defaultData);
+    private static FrameworkThread.ThreadPoolHop LeaveFrameworkThread() => FrameworkThread.LeaveFrameworkThread();
+    private static void TryDeleteMashupNamespace(string root, string folder) => ModFiles.TryDeleteMashupNamespace(root, folder);
+    private static string UniqueModName(string name, Func<string, bool> taken, string fallbackName = "XIV Instant Edit Mod")
+        => PreviewModWriter.UniqueModName(name, taken, fallbackName);
 }

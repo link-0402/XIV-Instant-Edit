@@ -1,15 +1,49 @@
 using System.Text.Json.Nodes;
+using Dalamud.Plugin.Services;
 using InstantEdit.Services.PreviewMods;
 using Penumbra.Api.Enums;
 using Penumbra.Api.IpcSubscribers;
+using static InstantEdit.Services.PenumbraMods.FrameworkThread;
+using static InstantEdit.Services.PenumbraMods.ModFiles;
+using static InstantEdit.Services.PenumbraMods.ModJson;
+using static InstantEdit.Services.PenumbraMods.ModMetadata;
+using static InstantEdit.Services.PenumbraMods.ModPaths;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
 /// <summary> How a preview mod's source file is used inside its mod, for the confirmation before applying. </summary>
 internal sealed record ModFileUsage(IReadOnlyList<string> Options, bool SeveralGamePaths);
 
-public sealed partial class PenumbraService
+/// <summary>
+/// Preview mods: new mods holding a preview's files at a high priority, and applying a preview's
+/// files to the source mods they came from, with managed backups to restore.
+/// </summary>
+internal sealed class PreviewModWriter
 {
+    private readonly PenumbraIpc _ipc;
+    private readonly IFramework _framework;
+    private readonly IPluginLog _log;
+    private readonly IObjectTable _objects;
+    private readonly ModelBackupStore _backups;
+    private readonly SemaphoreSlim _exportGate;
+    private readonly SourceMods _sources;
+    private readonly ModActivation _activation;
+    private readonly RedrawObject _redrawObject;
+
+    public PreviewModWriter(PenumbraIpc ipc, IFramework framework, IPluginLog log, IObjectTable objects,
+        ModelBackupStore backups, SemaphoreSlim exportGate, SourceMods sources, ModActivation activation)
+    {
+        _ipc = ipc;
+        _framework = framework;
+        _log = log;
+        _objects = objects;
+        _backups = backups;
+        _exportGate = exportGate;
+        _sources = sources;
+        _activation = activation;
+        _redrawObject = ipc.RedrawObject;
+    }
+
     /// <summary> Preview mods, and the mods holding fixes to game files, win over the mods they patch. </summary>
     internal const int PreviewModPriority = 1_000_000;
 
@@ -32,7 +66,7 @@ public sealed partial class PenumbraService
                 if (!IsSafeGameResourcePath(NormalizeGamePath(gamePath), ".mdl", ".mtrl", ".tex"))
                     throw new InvalidDataException($"The mod file {gamePath} is invalid.");
         }
-        var collection = await GetCollectionTargetAsync(objectIndex).ConfigureAwait(false)
+        var collection = await _ipc.GetCollectionTargetAsync(objectIndex).ConfigureAwait(false)
             ?? throw new IOException("The character's Penumbra collection is unavailable. Refresh and try again.");
 
         await _exportGate.WaitAsync(token).ConfigureAwait(false);
@@ -40,13 +74,13 @@ public sealed partial class PenumbraService
         string folder;
         try
         {
-            var root = await _framework.RunOnFrameworkThread(GetModDirectory).ConfigureAwait(false);
+            var root = await _framework.RunOnFrameworkThread(_ipc.GetModDirectory).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
                 throw new IOException("Penumbra's mod directory is unavailable.");
             root = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
                 throw new IOException("Penumbra's mod directory is an unsupported linked folder.");
-            var modList = await _framework.RunOnFrameworkThread(() => TryGetModList(out var mods) ? mods : null).ConfigureAwait(false)
+            var modList = await _framework.RunOnFrameworkThread(() => _ipc.TryGetModList(out var mods) ? mods : null).ConfigureAwait(false)
                 ?? throw new IOException("Could not retrieve the Penumbra mod list.");
             await LeaveFrameworkThread();
 
@@ -87,12 +121,12 @@ public sealed partial class PenumbraService
 
         var identifier = ReadModStableIdentifier(folder) ?? Guid.Empty;
         var warnings = new List<string>();
-        var added = await AddNewModAsync(modName).ConfigureAwait(false);
+        var added = await _activation.AddNewModAsync(modName).ConfigureAwait(false);
         if (added is not null)
             warnings.Add(added.Message);
         else
         {
-            var configure = await _framework.RunOnFrameworkThread(() => ConfigureModForCollectionOnFramework(
+            var configure = await _framework.RunOnFrameworkThread(() => _activation.ConfigureModForCollectionOnFramework(
                 modName, collection.Id, collection.Name, setPriority: true, priority: PreviewModPriority, redraw: false)).ConfigureAwait(false);
             if (!configure.Success)
                 warnings.Add(configure.Message);
@@ -119,7 +153,7 @@ public sealed partial class PenumbraService
         throw new IOException("Could not find a free mod name.");
     }
 
-    internal Task<string?> PreviewModRootAsync() => _framework.RunOnFrameworkThread(GetModDirectory);
+    internal Task<string?> PreviewModRootAsync() => _framework.RunOnFrameworkThread(_ipc.GetModDirectory);
 
     /// <summary>
     /// Deletes a mod a preview created, after checking its identifier still matches. Removed is true
@@ -130,7 +164,7 @@ public sealed partial class PenumbraService
     {
         if (!IsSafeModName(modDirectory))
             return (true, "The preview mod's folder name is invalid.");
-        var root = await _framework.RunOnFrameworkThread(GetModDirectory).ConfigureAwait(false);
+        var root = await _framework.RunOnFrameworkThread(_ipc.GetModDirectory).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(root))
             return (false, "Penumbra's mod directory is unavailable.");
         var folder = Path.Combine(root, modDirectory);
@@ -138,7 +172,7 @@ public sealed partial class PenumbraService
         {
             if (identifier == Guid.Empty || ReadModStableIdentifier(folder) != identifier)
                 return (true, $"The mod folder {modDirectory} no longer holds the preview mod, so it was left alone.");
-            var result = await _framework.RunOnFrameworkThread(() => new DeleteMod(_pi).Invoke(modDirectory)).ConfigureAwait(false);
+            var result = await _framework.RunOnFrameworkThread(() => _ipc.DeleteMod(modDirectory)).ConfigureAwait(false);
             if (result is not (PenumbraApiEc.Success or PenumbraApiEc.NothingChanged or PenumbraApiEc.ModMissing))
                 return (false, $"Penumbra could not delete the preview mod ({result}); delete {modDirectory} in Penumbra.");
         }
@@ -158,8 +192,6 @@ public sealed partial class PenumbraService
     internal async Task<IReadOnlyList<string>> WritePreviewSourcesAsync(IReadOnlyList<(PreviewSource Source, byte[] Bytes)> writes, int objectIndex,
         string recheck, IReadOnlyList<(PreviewSource Material, string GamePath, byte[] Bytes)>? additions = null)
     {
-        if (_backups is null)
-            throw new IOException("Managed backup storage is unavailable, so the source mods can't be changed safely.");
         additions ??= [];
         await _exportGate.WaitAsync().ConfigureAwait(false);
         try
@@ -168,7 +200,7 @@ public sealed partial class PenumbraService
             {
                 if (!source.IsModFile || !IsSafeModName(source.ModDirectory) || !IsSafeRelativeResourcePath(source.RelativePath))
                     throw new IOException($"{source.Label} is not a writable mod file.");
-                var scan = await _framework.RunOnFrameworkThread(() => ResolveModScanOnFramework(source.ModDirectory, source.ModStableId)).ConfigureAwait(false)
+                var scan = await _framework.RunOnFrameworkThread(() => _sources.ResolveModScanOnFramework(source.ModDirectory, source.ModStableId)).ConfigureAwait(false)
                     ?? throw new TextureConflictException($"The mod {source.ModName} is no longer registered in Penumbra.");
                 var file = Path.GetFullPath(source.ActualPath);
                 var root = scan.CandidateRoots.FirstOrDefault(candidate =>
@@ -226,7 +258,7 @@ public sealed partial class PenumbraService
 
         var warnings = new List<string>();
         foreach (var mod in writes.Select(w => w.Source.ModDirectory).Concat(additions.Select(a => a.Material.ModDirectory)).Distinct(StringComparer.OrdinalIgnoreCase))
-            if (await _framework.RunOnFrameworkThread(() => ReloadModOnFramework(mod)).ConfigureAwait(false) is { } reload)
+            if (await _framework.RunOnFrameworkThread(() => _activation.ReloadModOnFramework(mod)).ConfigureAwait(false) is { } reload)
                 warnings.Add(reload.Message);
         if (await RedrawPreviewActorAsync(objectIndex).ConfigureAwait(false) is { } redraw)
             warnings.Add(redraw);
@@ -349,7 +381,7 @@ public sealed partial class PenumbraService
 
     /// <summary> The managed backups kept of a mod file a preview can write, newest first. </summary>
     internal IReadOnlyList<ManagedBackup> ManagedBackupsFor(PreviewSource source)
-        => _backups is not null && source.IsModFile ? _backups.List(source.ModDirectory, source.RelativePath) : [];
+        => source.IsModFile ? _backups.List(source.ModDirectory, source.RelativePath) : [];
 
     /// <summary>
     /// Puts managed backups back over their mod files. Each file must still sit at its place in its
@@ -360,8 +392,6 @@ public sealed partial class PenumbraService
     internal async Task<IReadOnlyList<string>> RestorePreviewSourcesAsync(IReadOnlyList<(PreviewSource Source, ManagedBackup Backup)> restores, int objectIndex,
         string recheck)
     {
-        if (_backups is null)
-            throw new IOException("Managed backup storage is unavailable, so nothing can be restored.");
         await _exportGate.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -372,7 +402,7 @@ public sealed partial class PenumbraService
                     throw new IOException($"{source.Label} is not a writable mod file.");
                 if (!string.Equals(_backups.Describe(source.ModDirectory, source.RelativePath).Id, backup.TargetId, StringComparison.Ordinal))
                     throw new IOException($"The backup {backup.Name} doesn't belong to {source.Label}.");
-                var scan = await _framework.RunOnFrameworkThread(() => ResolveModScanOnFramework(source.ModDirectory, source.ModStableId)).ConfigureAwait(false)
+                var scan = await _framework.RunOnFrameworkThread(() => _sources.ResolveModScanOnFramework(source.ModDirectory, source.ModStableId)).ConfigureAwait(false)
                     ?? throw new TextureConflictException($"The mod {source.ModName} is no longer registered in Penumbra.");
                 var file = Path.GetFullPath(source.ActualPath);
                 var root = scan.CandidateRoots.FirstOrDefault(candidate =>
@@ -409,7 +439,7 @@ public sealed partial class PenumbraService
 
         var warnings = new List<string>();
         foreach (var mod in restores.Select(r => r.Source.ModDirectory).Distinct(StringComparer.OrdinalIgnoreCase))
-            if (await _framework.RunOnFrameworkThread(() => ReloadModOnFramework(mod)).ConfigureAwait(false) is { } reload)
+            if (await _framework.RunOnFrameworkThread(() => _activation.ReloadModOnFramework(mod)).ConfigureAwait(false) is { } reload)
                 warnings.Add(reload.Message);
         if (await RedrawPreviewActorAsync(objectIndex).ConfigureAwait(false) is { } redraw)
             warnings.Add(redraw);
@@ -447,7 +477,7 @@ public sealed partial class PenumbraService
         {
             try
             {
-                if (_objects?.LocalPlayer?.ObjectIndex != objectIndex)
+                if (_objects.LocalPlayer?.ObjectIndex != objectIndex)
                     _redrawObject.Invoke(objectIndex);
             }
             catch (Exception e)
@@ -455,6 +485,6 @@ public sealed partial class PenumbraService
                 _log.Warning(e, "Could not redraw the character after a preview mod change.");
                 return "The character could not be redrawn; redraw it in Penumbra.";
             }
-            return RedrawPlayerOwnedEntitiesOnFramework();
+            return _activation.RedrawPlayerOwnedEntitiesOnFramework();
         });
 }

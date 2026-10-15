@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
+using InstantEdit.Services.PenumbraMods;
 using Lumina.Data;
 using Lumina.Data.Files;
 using Lumina.Data.Structs;
@@ -1076,7 +1077,7 @@ public sealed partial class MaterialPreviewBundleBuilder
     }
 
     private static bool IsSafeGameResourcePath(string path, params string[] extensions)
-        => PenumbraService.IsSafeGameResourcePath(NormaliseGamePath(path), extensions);
+        => ModPaths.IsSafeGameResourcePath(NormaliseGamePath(path), extensions);
 
     internal static class LooseLuminaFile
     {

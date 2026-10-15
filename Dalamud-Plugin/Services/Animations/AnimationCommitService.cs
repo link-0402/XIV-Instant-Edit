@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using InstantEdit.Models;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services.Animations;
 
@@ -27,7 +28,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
         Directory.CreateDirectory(dir);
         if (request.Destination == AnimationDestination.NewMod)
         {
-            if (!PenumbraService.IsSafeNewModName(request.ModName)) throw new InvalidDataException("Choose a valid, unused mod name.");
+            if (!ModPaths.IsSafeNewModName(request.ModName)) throw new InvalidDataException("Choose a valid, unused mod name.");
             var root = await penumbra.AnimationModRootAsync();
             TextureFiles.EnsureLocalPath(root);
             journal.ModDirectory = request.ModName;
@@ -247,7 +248,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                         // Repoint the owning mod's own Files mapping at the new path so
                         // Penumbra resolves here from now on; ActivateAnimationAsync reloads
                         // the mod afterward to pick this up.
-                        var stillReferenced = PenumbraService.RenameAnimationFileMapping(
+                        var stillReferenced = ModMetadata.RenameAnimationFileMapping(
                             file.ModRoot, file.GamePath, file.RenamedFromRelativePath!, file.RelativePath);
                         if (!stillReferenced)
                             try { File.Delete(preEditTarget); } catch (IOException) { }
@@ -255,7 +256,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                     // An added file plays wherever its owner is: every option that maps the
                     // animation, or the original of a copy, maps it too. A new mod's metadata maps it below.
                     if (file.AddedFor is { } owner && journal.Request.Destination == AnimationDestination.InPlace)
-                        PenumbraService.AddAnimationResourceMapping(file.ModRoot, owner, file.GamePath, file.RelativePath, file.AddedForFile);
+                        ModMetadata.AddAnimationResourceMapping(file.ModRoot, owner, file.GamePath, file.RelativePath, file.AddedForFile);
                 }
                 if (journal.Request.Destination == AnimationDestination.NewMod)
                 {
@@ -318,7 +319,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
             files[change.GamePath] = change.RelativePath.Replace('\\', '/');
         var manipulations = JsonNode.Parse(manipulationsJson) as JsonArray
             ?? throw new InvalidDataException("Animation manipulations are not a JSON array.");
-        return PenumbraService.CreateV4ModMetadata(
+        return ModMetadata.CreateV4ModMetadata(
             modName,
             "XIV Instant Edit",
             description,
@@ -406,7 +407,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
             {
                 if (file.AddedFor is not null)
                 {
-                    PenumbraService.RemoveAnimationResourceMapping(file.ModRoot, file.GamePath, file.RelativePath);
+                    ModMetadata.RemoveAnimationResourceMapping(file.ModRoot, file.GamePath, file.RelativePath);
                     if (File.Exists(file.Target)) File.Delete(file.Target);
                     continue;
                 }
@@ -416,7 +417,7 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
                     var oldTarget = OldTargetPath(file);
                     if (!File.Exists(oldTarget) || HashFile(oldTarget) != file.BeforeHash)
                         AnimationJournalStore.WriteAtomic(oldTarget, File.ReadAllBytes(ResolveBackup(file)));
-                    try { PenumbraService.RenameAnimationFileMapping(file.ModRoot, file.GamePath, file.RelativePath, file.RenamedFromRelativePath!); }
+                    try { ModMetadata.RenameAnimationFileMapping(file.ModRoot, file.GamePath, file.RelativePath, file.RenamedFromRelativePath!); }
                     catch (InvalidDataException) { /* Already points back at the original path. */ }
                     try { File.Delete(file.Target); } catch (IOException) { }
                     continue;
@@ -455,8 +456,8 @@ internal sealed class AnimationCommitService(PenumbraService penumbra, Animation
         var safeRelative = file.AddedFor is null
             ? AnimationResources.SafeModRelativePath(file.RelativePath, file.GamePath)
             : AddedGamePath(file.GamePath) && AnimationDependencies.SafeGamePath(file.AddedFor) &&
-              PenumbraService.IsSafeGameResourcePath(file.RelativePath.Replace('\\', '/'), Path.GetExtension(file.GamePath));
-        if (!PenumbraService.IsSafeModName(file.ModDirectory) || !AnimationDependencies.SafeGamePath(file.GamePath) ||
+              ModPaths.IsSafeGameResourcePath(file.RelativePath.Replace('\\', '/'), Path.GetExtension(file.GamePath));
+        if (!ModPaths.IsSafeModName(file.ModDirectory) || !AnimationDependencies.SafeGamePath(file.GamePath) ||
             !safeRelative ||
             !string.Equals(Path.GetFullPath(Path.Combine(file.ModRoot, file.RelativePath)), Path.GetFullPath(file.Target), StringComparison.OrdinalIgnoreCase) ||
             !PathRules.IsPathWithin(file.Target, file.ModRoot)) throw new InvalidDataException("Invalid animation recovery target.");

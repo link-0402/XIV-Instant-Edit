@@ -1,32 +1,28 @@
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using System.Security.Cryptography;
-using System.Text;
-using Dalamud.Game.ClientState.Objects.Enums;
-using Dalamud.Game.ClientState.Objects.Types;
-using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
-using Penumbra.Api.Enums;
-using Penumbra.Api.Helpers;
-using Penumbra.Api.IpcSubscribers;
-using Lumina.Data;
-using Lumina.Data.Files;
+using static InstantEdit.Services.PenumbraMods.MashupPlanning;
+using static InstantEdit.Services.PenumbraMods.ModMetadata;
+using static InstantEdit.Services.PenumbraMods.ModPaths;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary>
+/// Lists a registered mod's model, material, texture and animation files with the game paths and
+/// options that map them, and checks a mashup's output mod against the materials it needs.
+/// </summary>
+internal sealed class ModResourceScanner
 {
-    public IReadOnlyList<PenumbraMod> GetMods()
-        => GetModList()
-            .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
-            .Select(pair => new PenumbraMod(pair.Key, pair.Value))
-            .OrderBy(mod => mod.Name, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(mod => mod.Directory, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+    private readonly IFramework _framework;
+    private readonly IPluginLog _log;
+    private readonly SourceMods _sources;
 
-    private sealed record ModScanRequest(PenumbraMod Mod, string[] CandidateRoots);
+    public ModResourceScanner(IFramework framework, IPluginLog log, SourceMods sources)
+    {
+        _framework = framework;
+        _log = log;
+        _sources = sources;
+    }
 
     /// <summary>Resolve Penumbra state on the framework thread, then scan files on a worker.</summary>
     public async Task<PenumbraModSnapshot?> GetModResourcesAsync(
@@ -40,7 +36,7 @@ public sealed partial class PenumbraService
         try
         {
             var request = await _framework.RunOnFrameworkThread(
-                () => ResolveModScanOnFramework(modDirectory, stableId)).ConfigureAwait(false);
+                () => _sources.ResolveModScanOnFramework(modDirectory, stableId)).ConfigureAwait(false);
             if (request is null)
                 return null;
             return await Task.Run(() => ScanModResources(request, cancellationToken), cancellationToken)
@@ -228,35 +224,6 @@ public sealed partial class PenumbraService
         => new(false, false, "material_coverage_unavailable",
             "Material coverage could not be verified.", Array.Empty<MaterialCoverageMissing>());
 
-    private ModScanRequest? ResolveModScanOnFramework(string modDirectory, Guid? stableId = null)
-    {
-        if (stableId is not null && TryGetModList(out var modList) &&
-            !TryResolveRegisteredModIdentity(modList, modDirectory, stableId, null, out modDirectory, out _))
-            return null;
-        var mod = GetMods().FirstOrDefault(item =>
-            string.Equals(item.Directory, modDirectory, StringComparison.OrdinalIgnoreCase));
-        if (mod is null)
-            return null;
-
-        var candidateRoots = new List<string>();
-        var pathResult = _getModPath.Invoke(mod.Directory, string.Empty);
-        if (pathResult.Item1 is PenumbraApiEc.Success)
-            AddCandidateRoot(candidateRoots, pathResult.Item2);
-
-        // GetModPath can point at a manually configured location. Keep the
-        // standard Penumbra root as a fallback for older/API-incompatible installs.
-        var modDirectoryRoot = GetModDirectory();
-        if (!string.IsNullOrWhiteSpace(modDirectoryRoot))
-            AddCandidateRoot(candidateRoots, Path.Combine(modDirectoryRoot, mod.Directory));
-        mod = mod with
-        {
-            StableId = candidateRoots
-                .Select(ReadModStableIdentifier)
-                .FirstOrDefault(identifier => identifier.HasValue),
-        };
-        return new ModScanRequest(mod, candidateRoots.ToArray());
-    }
-
     private PenumbraModSnapshot? ScanModResources(ModScanRequest request, CancellationToken cancellationToken)
     {
         var mod = request.Mod;
@@ -360,19 +327,3 @@ public sealed partial class PenumbraService
     }
 
 }
-
-public sealed record PenumbraMod(string Directory, string Name, Guid? StableId = null);
-
-public sealed record PenumbraModResource(
-    string GamePath,
-    string ActualPath,
-    string RelativePath,
-    string OptionMapping,
-    IReadOnlyList<string> OptionMemberships);
-
-public sealed record PenumbraModSnapshot(
-    string Directory,
-    string Name,
-    string RootPath,
-    IReadOnlyList<PenumbraModResource> Resources,
-    Guid? StableId = null);

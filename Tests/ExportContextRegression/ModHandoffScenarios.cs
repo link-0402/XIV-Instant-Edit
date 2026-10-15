@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Studio;
 using InstantEdit.Studio.Services.Project;
 using InstantEdit.Ui;
@@ -61,7 +62,7 @@ internal static class ModHandoffScenarios
 
         // The files as a mod window lists them: one per option and game path.
         var meta = PenumbraModMeta.Load(root);
-        var mod = new ModHandoffMod("Handoff Mod", "HandoffMod", root, PenumbraService.ReadModStableIdentifier(root));
+        var mod = new ModHandoffMod("Handoff Mod", "HandoffMod", root, ModMetadata.ReadModStableIdentifier(root));
         var files = meta.AllFiles()
             .Select(f => ModHandoffBridge.File(meta, f.GamePath, Path.Combine(root, f.RelPath), f.RelPath, f.Option))
             .ToList();
@@ -77,7 +78,7 @@ internal static class ModHandoffScenarios
                 defaultRow.SourceModRootPath == root && defaultRow.SourceModDirectory == "HandoffMod" &&
                 defaultRow.SourceState == ResourceSourceState.LoadedMod && defaultRow.SourceModStableId == modId,
             "a default file is a row of the default files, with its path in the mod in forward slashes");
-        Require(PenumbraService.ReadOptionMembershipsForRegression(root, "Files/textures/top_d.tex").SequenceEqual(defaultRow.OptionMemberships),
+        Require(ModOptionGroups.ReadOptionMembershipsForRegression(root, "Files/textures/top_d.tex").SequenceEqual(defaultRow.OptionMemberships),
             "the default files' membership is the one Instant Edit reads from meta.json");
 
         // The same file in two options: each row names its own option only.
@@ -88,12 +89,12 @@ internal static class ModHandoffScenarios
                 sharedRows.Select(r => r.OptionMemberships.Single()).Order().SequenceEqual(new[] { red, blue }.Order()) &&
                 sharedRows.Select(r => r.OptionMapping).Order().SequenceEqual(new[] { "Style: Blue", "Style: Red" }),
             "a file two options carry is two rows, each with its own single option");
-        Require(PenumbraService.ReadOptionMembershipsForRegression(root, shared).Order()
+        Require(ModOptionGroups.ReadOptionMembershipsForRegression(root, shared).Order()
                     .SequenceEqual(sharedRows.SelectMany(r => r.OptionMemberships).Order()),
             "together the rows have exactly the memberships Instant Edit reads for the file");
         foreach (var row in sharedRows)
         {
-            var resolved = PenumbraService.ResolveSourceOptionForRegression(root, model, shared,
+            var resolved = ModOptionGroups.ResolveSourceOptionForRegression(root, model, shared,
                 new SourceOptionLocator { Membership = row.OptionMemberships.Single(), GroupName = "", OptionName = "" });
             Require(resolved.Error is null && resolved.Membership == row.OptionMemberships.Single(),
                 "each row's option resolves on its own, so an export goes back into that very option");
@@ -107,7 +108,7 @@ internal static class ModHandoffScenarios
                     $"option:{featuresId:D}:{firstId:D}",
                     $"option:{featuresId:D}:{secondId:D}",
                 }.Order()) &&
-                PenumbraService.ReadOptionMembershipsForRegression(root, combined).Order().SequenceEqual(combinedRow.OptionMemberships.Order()),
+                ModOptionGroups.ReadOptionMembershipsForRegression(root, combined).Order().SequenceEqual(combinedRow.OptionMemberships.Order()),
             "a combining container's row names the options it combines, as Instant Edit reads them");
 
         // Groups and options without ids (meta.json before version 4) can't be named to the hand-offs.

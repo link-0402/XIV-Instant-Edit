@@ -1,31 +1,30 @@
-﻿using System.Text.Json;
-using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
-using System.Security.Cryptography;
 using System.Text;
-using Dalamud.Game.ClientState.Objects.Enums;
-using Dalamud.Game.ClientState.Objects.Types;
-using Dalamud.Plugin;
-using Dalamud.Plugin.Services;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using InstantEdit.Models;
-using Penumbra.Api.Enums;
-using Penumbra.Api.Helpers;
-using Penumbra.Api.IpcSubscribers;
-using Lumina.Data;
-using Lumina.Data.Files;
+using static InstantEdit.Services.PenumbraMods.ModJson;
+using static InstantEdit.Services.PenumbraMods.ModMetadata;
+using static InstantEdit.Services.PenumbraMods.ModPaths;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary>
+/// A mod's option groups: finding the option an imported model came from, the Single groups an
+/// export can extend, and building the groups an export writes.
+/// </summary>
+internal static class ModOptionGroups
 {
-    private sealed record VariantOptionResolution(string? FilePath, string Code, string? Error);
-    private sealed record SourceOptionResolution(
+    internal const string VariantGroupDescriptionPrefix = "Managed by XIV Instant Edit variant group: ";
+
+    internal sealed record VariantOptionResolution(string? FilePath, string Code, string? Error);
+
+    internal sealed record SourceOptionResolution(
         JsonObject? Option,
         SourceOptionLocator? Locator,
         string? Error,
         bool DefaultMatches = false);
 
-    private static SourceOptionResolution ResolveSourceOption(
+    internal static SourceOptionResolution ResolveSourceOption(
         string modFolder,
         string sourceGamePath,
         string sourceRelativePath,
@@ -78,97 +77,6 @@ public sealed partial class PenumbraService
                 mapsFromDefault),
         };
     }
-    public async Task<SourceOptionCapture> CaptureSourceOptionAsync(
-        string sourceModDirectory, string sourceFilePath, string? sourceModRootPath,
-        string? targetRelativePath, string sourceGamePath,
-        IReadOnlyCollection<string>? preferredMemberships = null,
-        Guid? collectionId = null,
-        Guid? sourceModStableId = null)
-    {
-        try
-        {
-            var resolved = await _framework.RunOnFrameworkThread(() => ResolveSourceModTargetOnFramework(
-                sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath, sourceModStableId)).ConfigureAwait(false);
-            if (resolved.Target is null)
-                return new SourceOptionCapture(null, "unknown", resolved.Error);
-            await LeaveFrameworkThread();
-            var option = ResolveSourceOption(resolved.Target.Folder, sourceGamePath, resolved.Target.RelativePath);
-            if (preferredMemberships is { Count: > 0 })
-            {
-                var prefersDefault = preferredMemberships.Contains("default", StringComparer.OrdinalIgnoreCase);
-                var preferred = preferredMemberships
-                    .Where(membership => !string.Equals(membership, "default", StringComparison.OrdinalIgnoreCase))
-                    .Select(membership => ResolveSourceOption(resolved.Target.Folder, sourceGamePath,
-                        resolved.Target.RelativePath,
-                        new SourceOptionLocator
-                        {
-                            Membership = membership,
-                            GroupName = "",
-                            OptionName = "",
-                        }))
-                    .Where(candidate => candidate.Error is null && candidate.Locator is not null)
-                    .GroupBy(candidate => candidate.Locator!.Membership, StringComparer.Ordinal)
-                    .Select(group => group.First())
-                    .ToArray();
-                option = (preferred.Length, prefersDefault) switch
-                {
-                    (0, true) => new SourceOptionResolution(null, null, null, true),
-                    (1, false) => preferred[0],
-                    (> 0, _) => new SourceOptionResolution(null, null,
-                        "Multiple clicked option memberships provide the imported model; the active collection selection is required.",
-                        prefersDefault),
-                    _ => option,
-                };
-            }
-            if (option.Error is not null && collectionId is Guid activeCollection && activeCollection != Guid.Empty)
-            {
-                var settings = await _framework.RunOnFrameworkThread(() =>
-                {
-                    var result = _getCurrentModSettings.Invoke(activeCollection, sourceModDirectory, string.Empty, false);
-                    return result.Item1 is PenumbraApiEc.Success && result.Item2 is not null
-                        ? result.Item2.Value.Item3.ToDictionary(pair => pair.Key,
-                            pair => (IReadOnlyList<string>)pair.Value.ToArray(), StringComparer.OrdinalIgnoreCase)
-                        : null;
-                }).ConfigureAwait(false);
-                await LeaveFrameworkThread();
-                if (settings is not null)
-                {
-                    var selectedOptions = new List<SourceOptionResolution>();
-                    foreach (var selection in settings)
-                    foreach (var optionName in selection.Value)
-                    {
-                        var selected = ResolveSourceOption(resolved.Target.Folder, sourceGamePath,
-                            resolved.Target.RelativePath, new SourceOptionLocator
-                            {
-                                Membership = "",
-                                GroupName = selection.Key,
-                                OptionName = optionName,
-                            });
-                        if (selected.Error is null && selected.Locator is not null &&
-                            selectedOptions.All(candidate => !string.Equals(
-                                candidate.Locator!.Membership, selected.Locator.Membership, StringComparison.Ordinal)))
-                            selectedOptions.Add(selected);
-                    }
-                    option = selectedOptions.Count switch
-                    {
-                        1 => selectedOptions[0],
-                        > 1 => new SourceOptionResolution(null, null,
-                            "Multiple active Penumbra options provide the imported model. Re-import it from the intended option, then export again.",
-                            option.DefaultMatches),
-                        _ when option.DefaultMatches => new SourceOptionResolution(null, null, null, true),
-                        _ => option,
-                    };
-                }
-            }
-            return option.Error is not null
-                ? new SourceOptionCapture(null, "ambiguous", option.Error)
-                : new SourceOptionCapture(option.Locator, option.Locator is null ? "default" : "ready");
-        }
-        catch (Exception error)
-        {
-            return new SourceOptionCapture(null, "unknown", error.Message);
-        }
-    }
 
     private static void AddSourceOptionCandidates(
         JsonObject? group, string gamePath, string relativePath,
@@ -195,115 +103,6 @@ public sealed partial class PenumbraService
         }
     }
 
-    private bool TryResolveRegisteredModIdentity(
-        IReadOnlyDictionary<string, string> modList,
-        string requestedDirectory,
-        Guid? expectedStableId,
-        string? capturedRootPath,
-        out string registeredDirectory,
-        out (string Code, string Message) error)
-    {
-        registeredDirectory = string.Empty;
-        error = ("source_mod_missing", "The source mod is no longer registered in Penumbra.");
-        if (!IsSafeModName(requestedDirectory))
-        {
-            error = ("destination_unsafe", "The original Penumbra mod directory is invalid.");
-            return false;
-        }
-
-        var requested = modList.Keys.FirstOrDefault(directory =>
-            string.Equals(directory, requestedDirectory, StringComparison.OrdinalIgnoreCase));
-        if (expectedStableId is null)
-        {
-            if (requested is null)
-                return false;
-            registeredDirectory = requested;
-            return true;
-        }
-
-        if (expectedStableId == Guid.Empty)
-        {
-            error = ("source_mod_identity_unavailable", "The saved Penumbra mod identity is invalid. Re-import the model.");
-            return false;
-        }
-
-        if (requested is not null)
-        {
-            var requestedRoots = RegisteredModRootCandidates(requested, capturedRootPath).ToArray();
-            if (requestedRoots.Select(ReadModStableIdentifier).Any(identifier => identifier == expectedStableId))
-            {
-                registeredDirectory = requested;
-                return true;
-            }
-        }
-
-        var matches = new List<string>();
-        Guid? requestedObserved = null;
-        foreach (var directory in modList.Keys)
-        {
-            var roots = RegisteredModRootCandidates(
-                directory,
-                string.Equals(directory, requestedDirectory, StringComparison.OrdinalIgnoreCase)
-                    ? capturedRootPath
-                    : null).ToArray();
-            for (var rootIndex = 0; rootIndex < roots.Length; rootIndex++)
-            {
-                var observed = ReadModStableIdentifier(roots[rootIndex]);
-                if (string.Equals(directory, requestedDirectory, StringComparison.OrdinalIgnoreCase) &&
-                    rootIndex == 0 && observed is not null)
-                    requestedObserved = observed;
-                if (observed == expectedStableId)
-                {
-                    if (!matches.Contains(directory, StringComparer.OrdinalIgnoreCase))
-                        matches.Add(directory);
-                    break;
-                }
-            }
-        }
-
-        if (requested is not null && requestedObserved is not null && requestedObserved != expectedStableId)
-        {
-            error = ("source_mod_changed", "The registered Penumbra mod no longer matches the mod used for this import.");
-            return false;
-        }
-        if (matches.Count == 1)
-        {
-            registeredDirectory = matches[0];
-            return true;
-        }
-        if (matches.Count > 1)
-        {
-            error = ("source_mod_ambiguous", "More than one Penumbra mod has the saved stable identity.");
-            return false;
-        }
-        error = (requested is null ? "source_mod_missing" : "source_mod_identity_unavailable",
-            requested is null
-                ? "The source mod is no longer registered in Penumbra."
-                : "The saved Penumbra mod identity could not be verified. Reload the mod in Penumbra, then re-import the model.");
-        return false;
-    }
-
-    private IEnumerable<string> RegisteredModRootCandidates(string directory, string? capturedRootPath = null)
-    {
-        var registered = GetRegisteredModPath(directory);
-        if (!string.IsNullOrWhiteSpace(registered))
-        {
-            yield return registered;
-
-            // Penumbra can briefly return the previous search-order path while a
-            // mod reload is settling. Only use the configured root as a recovery
-            // candidate when that registered path no longer exists; an existing
-            // registered root remains authoritative for identity verification.
-            if (Directory.Exists(registered))
-                yield break;
-        }
-        var configured = GetModDirectory();
-        if (!string.IsNullOrWhiteSpace(configured))
-            yield return Path.Combine(configured, directory);
-        if (!string.IsNullOrWhiteSpace(capturedRootPath))
-            yield return capturedRootPath;
-    }
-
     private static bool IsV4OptionMembership(string? membership)
     {
         var parts = membership?.Split(':');
@@ -311,7 +110,7 @@ public sealed partial class PenumbraService
                Guid.TryParse(group, out _) && Guid.TryParse(option, out _);
     }
 
-    private static IReadOnlyList<VariantGroupTarget> ReadVariantTargets(
+    internal static IReadOnlyList<VariantGroupTarget> ReadVariantTargets(
         string modFolder, string sourceGamePath, string? modDirectory = null,
         ModelBackupStore? backups = null)
     {
@@ -355,7 +154,7 @@ public sealed partial class PenumbraService
         return result;
     }
 
-    private static VariantOptionResolution ResolveVariantOptionTarget(
+    internal static VariantOptionResolution ResolveVariantOptionTarget(
         string modFolder, string sourceGamePath, string? targetId)
     {
         try
@@ -382,7 +181,7 @@ public sealed partial class PenumbraService
         }
     }
 
-    private static IReadOnlyList<JsonObject> ReadAllVariantGroups(string modFolder)
+    internal static IReadOnlyList<JsonObject> ReadAllVariantGroups(string modFolder)
     {
         var meta = LoadV4ModMetadata(modFolder);
         return (meta["Groups"] as JsonArray ?? []).OfType<JsonObject>().ToArray();
@@ -402,12 +201,6 @@ public sealed partial class PenumbraService
         groupId = Guid.Empty;
         var parts = value?.Split(':');
         return parts is ["group", var group] && Guid.TryParse(group, out groupId);
-    }
-
-    private static bool TryNormalizeRelativeModPath(string? value, out string path)
-    {
-        path = (value ?? "").Replace('\\', '/');
-        return IsSafeRelativeModPath(path);
     }
 
     internal sealed record VariantGroupWrite(string Path, JsonObject Document);
@@ -518,7 +311,7 @@ public sealed partial class PenumbraService
     /// compatible group named <paramref name="groupName"/>; null when New Group makes a new one. Returns
     /// why it can't be used, if so.
     /// </summary>
-    private static string? FindOptionGroup(
+    internal static string? FindOptionGroup(
         JsonArray groups,
         string sourceGamePath,
         string groupName,
@@ -652,7 +445,7 @@ public sealed partial class PenumbraService
         return result;
     }
 
-    private static JsonObject? FindOption(JsonArray options, string name)
+    internal static JsonObject? FindOption(JsonArray options, string name)
         => options.OfType<JsonObject>().FirstOrDefault(option =>
             string.Equals(JsonString(option["Name"]), name, StringComparison.OrdinalIgnoreCase));
 
@@ -677,11 +470,8 @@ public sealed partial class PenumbraService
         return false;
     }
 
-    private static bool SameGamePath(string left, string right)
-        => string.Equals(left.Replace('\\', '/'), right.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase);
-
     /// <summary>Whether the default data or an option not named <paramref name="optionName"/> maps <paramref name="file"/>.</summary>
-    private static bool IsMappedOutsideOption(JsonObject meta, string modRoot, string file, string optionName)
+    internal static bool IsMappedOutsideOption(JsonObject meta, string modRoot, string file, string optionName)
     {
         var relative = Path.GetRelativePath(modRoot, file).Replace('\\', '/');
         bool Maps(JsonNode? container) => container is JsonObject value && value["Files"] is JsonObject files &&
@@ -701,55 +491,6 @@ public sealed partial class PenumbraService
         return false;
     }
 
-    private static string? JsonString(JsonNode? node)
-        => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
-
-    private static int JsonInt(JsonNode? node)
-        => node is JsonValue value && value.TryGetValue<int>(out var number) ? number : 0;
-
-    private static Guid? ReadGuid(JsonNode? node)
-        => node is JsonValue value && value.TryGetValue<string>(out var text) && Guid.TryParse(text, out var guid)
-            ? guid
-            : null;
-
-    internal static string FormatMashupDescription(
-        IReadOnlyList<MashupContributor> contributors,
-        IReadOnlyList<string>? requiredExternalMods = null)
-    {
-        var names = contributors
-            .Select(item => item.Context.SourceModName)
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Select(name => name!.Replace("\"", "'", StringComparison.Ordinal))
-            .ToArray();
-        var description = $"Mashup created by XIV Instant Edit from {string.Join(" and ", names.Select(name => $"\"{name}\""))}.";
-        return requiredExternalMods is { Count: > 0 }
-            ? $"{description}\n\nRequires external mods: {string.Join(", ", requiredExternalMods)}."
-            : description;
-    }
-
-    private static IReadOnlyList<string> ExternalMashupWarnings(IReadOnlyList<string> requiredExternalMods)
-        => requiredExternalMods.Count == 0
-            ? Array.Empty<string>()
-            : [$"Keep these external mods enabled in the active collection: {string.Join(", ", requiredExternalMods)}."];
-
-    private static bool HasReparsePointInPath(string root, string path)
-    {
-        var current = Path.GetFullPath(path);
-        var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        while (current.Length >= fullRoot.Length)
-        {
-            if (Directory.Exists(current) && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
-                return true;
-            if (string.Equals(current, fullRoot, StringComparison.OrdinalIgnoreCase))
-                break;
-            var parent = Path.GetDirectoryName(current);
-            if (string.IsNullOrEmpty(parent) || string.Equals(parent, current, StringComparison.Ordinal))
-                break;
-            current = parent;
-        }
-
-        return false;
-    }
     internal static JsonObject BuildVariantOptionForRegression(
         JsonObject sourceOption, string sourceGamePath, string relativeVariantPath)
     {
@@ -780,4 +521,98 @@ public sealed partial class PenumbraService
         return (resolution.Locator?.Membership, resolution.Error);
     }
 
+    internal static JsonArray CaptureEffectiveManipulations(
+        string modFolder,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> enabledOptions)
+    {
+        var meta = LoadV4ModMetadata(modFolder);
+        var groups = ReadAllVariantGroups(modFolder)
+            .Select((group, index) => (Group: group, Index: index))
+            .OrderByDescending(item => JsonInt(item.Group["Priority"]))
+            .ThenBy(item => item.Index)
+            .ToArray();
+        var result = new JsonArray();
+        var identities = new HashSet<string>(StringComparer.Ordinal);
+        var serializedBytes = 2;
+
+        static string CanonicalJson(JsonNode? node)
+            => node switch
+            {
+                null => "null",
+                JsonObject value => "{" + string.Join(",", value
+                    .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                    .Select(pair => JsonSerializer.Serialize(pair.Key) + ":" + CanonicalJson(pair.Value))) + "}",
+                JsonArray value => "[" + string.Join(",", value.Select(CanonicalJson)) + "]",
+                _ => node.ToJsonString(),
+            };
+
+        static string Identity(JsonObject manipulation)
+        {
+            var identity = manipulation.DeepClone().AsObject();
+            if (identity["Manipulation"] is JsonObject payload)
+                payload.Remove("Entry");
+            else
+                identity.Remove("Entry");
+            return CanonicalJson(identity);
+        }
+
+        void Append(JsonNode? container)
+        {
+            if (container?["Manipulations"] is not JsonArray manipulations)
+                return;
+            foreach (var manipulation in manipulations)
+            {
+                if (manipulation is not JsonObject entry)
+                    throw new InvalidDataException("A source manipulation entry is invalid.");
+                var type = JsonString(entry["Type"]);
+                if (type is not ("Eqp" or "Eqdp" or "Imc" or "Est" or "Atr"))
+                    continue;
+                if (!identities.Add(Identity(entry)))
+                    continue;
+                var clone = entry.DeepClone();
+                serializedBytes += Encoding.UTF8.GetByteCount(clone.ToJsonString()) + 1;
+                if (result.Count >= 4096 || serializedBytes > 4 * 1024 * 1024)
+                    throw new InvalidDataException("The source manipulation snapshot is too large.");
+                result.Add(clone);
+            }
+        }
+
+        foreach (var (group, _index) in groups)
+        {
+            var groupName = JsonString(group["Name"]);
+            var selection = enabledOptions.FirstOrDefault(pair =>
+                string.Equals(pair.Key, groupName, StringComparison.OrdinalIgnoreCase));
+            var selected = selection.Value;
+            if (selected is null)
+                continue;
+
+            if (string.Equals(JsonString(group["Type"]), "Combining", StringComparison.OrdinalIgnoreCase))
+            {
+                if (group["Options"] is not JsonArray combinationOptions ||
+                    group["Containers"] is not JsonArray combinationContainers)
+                    continue;
+                var containerIndex = 0;
+                for (var optionIndex = 0; optionIndex < combinationOptions.Count && optionIndex < 31; ++optionIndex)
+                    if (combinationOptions[optionIndex] is JsonObject option &&
+                        selected.Contains(JsonString(option["Name"]) ?? "", StringComparer.OrdinalIgnoreCase))
+                        containerIndex |= 1 << optionIndex;
+                if (containerIndex < combinationContainers.Count)
+                    Append(combinationContainers[containerIndex]);
+                continue;
+            }
+
+            if (selected.Count == 0 || group["Options"] is not JsonArray options)
+                continue;
+            foreach (var selectedName in selected)
+            {
+                var container = options.OfType<JsonObject>().FirstOrDefault(option =>
+                    string.Equals(JsonString(option["Name"]), selectedName, StringComparison.OrdinalIgnoreCase));
+                if (container is not null)
+                    Append(container);
+            }
+        }
+
+        Append(meta["DefaultData"]);
+        return result;
+    }
 }

@@ -1,23 +1,52 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
-using System.Security.Cryptography;
-using System.Text;
-using Dalamud.Game.ClientState.Objects.Enums;
-using Dalamud.Game.ClientState.Objects.Types;
-using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
-using Penumbra.Api.Enums;
-using Penumbra.Api.Helpers;
-using Penumbra.Api.IpcSubscribers;
-using Lumina.Data;
-using Lumina.Data.Files;
+using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
+using static InstantEdit.Services.PenumbraMods.FrameworkThread;
+using static InstantEdit.Services.PenumbraMods.MashupPlanning;
+using static InstantEdit.Services.PenumbraMods.ModFiles;
+using static InstantEdit.Services.PenumbraMods.ModMetadata;
+using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
+using static InstantEdit.Services.PenumbraMods.ModPaths;
+using static InstantEdit.Services.PenumbraMods.RaceExportService;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary>
+/// Writes a Blender export back into Penumbra: over the imported model in its source mod, as a new
+/// variant or option of it, or as the first mod of a game model.
+/// </summary>
+internal sealed class ModelExportService
 {
+    private readonly PenumbraIpc _ipc;
+    private readonly IFramework _framework;
+    private readonly IPluginLog _log;
+    private readonly SemaphoreSlim _exportGate;
+    private readonly ModelBackupStore _backups;
+    private readonly SourceMods _sources;
+    private readonly ModActivation _activation;
+    private readonly ModelFileWriter _writer;
+    private readonly AttributeGroupService _attributes;
+    private readonly EstEntryService _est;
+    private readonly RaceExportService _race;
+
+    public ModelExportService(PenumbraIpc ipc, IFramework framework, IPluginLog log, SemaphoreSlim exportGate,
+        ModelBackupStore backups, SourceMods sources, ModActivation activation, ModelFileWriter writer,
+        AttributeGroupService attributes, EstEntryService est, RaceExportService race)
+    {
+        _ipc = ipc;
+        _framework = framework;
+        _log = log;
+        _exportGate = exportGate;
+        _backups = backups;
+        _sources = sources;
+        _activation = activation;
+        _writer = writer;
+        _attributes = attributes;
+        _est = est;
+        _race = race;
+    }
+
     /// <summary>
     /// Write an export back to the resolved file in its original Penumbra mod.
     /// The destination is authoritative while the server-owned import context
@@ -74,7 +103,7 @@ public sealed partial class PenumbraService
         try
         {
             var resolved = await _framework.RunOnFrameworkThread(
-                () => ResolveSourceModTargetOnFramework(
+                () => _sources.ResolveSourceModTargetOnFramework(
                     sourceModDirectory,
                     sourceFilePath,
                     sourceModRootPath,
@@ -143,9 +172,9 @@ public sealed partial class PenumbraService
             var targetRelative = Path.GetRelativePath(resolved.Target.Folder, targetFile).Replace('\\', '/');
             // The backup keeps the model's EST entries too, so restoring it undoes this export's EST change.
             var estState = backupExisting && File.Exists(targetFile)
-                ? CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, targetRelative, _estEntries)
+                ? _est.CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, targetRelative)
                 : null;
-            var writeError = WriteModelToOriginalLocation(
+            var writeError = _writer.WriteModelToOriginalLocation(
                 resolved.Target.Folder,
                 targetFile,
                 exportedFile,
@@ -168,24 +197,24 @@ public sealed partial class PenumbraService
 
             if (createAttributeGroups && attributeTags is { Count: > 0 })
             {
-                var attributeError = WriteAttributeGroups(
+                var attributeError = _attributes.WriteAttributeGroups(
                     resolved.Target.Folder, resolvedGamePath, attributeTags, attributeMasks,
                     sourceManipulations);
                 if (attributeError is not null)
                     warnings.Add($"Penumbra attribute group setup failed: {AttributeGroupErrorMessage(attributeError)}");
             }
 
-            warnings.AddRange(TryUpdateEstEntries(
+            warnings.AddRange(_est.TryUpdateEstEntries(
                 resolved.Target.Folder, resolved.Target.Directory, targetRelative, estEntries));
 
             var reloadError = await _framework.RunOnFrameworkThread(
-                () => ReloadModOnFramework(resolved.Target.Directory)).ConfigureAwait(false);
+                () => _activation.ReloadModOnFramework(resolved.Target.Directory)).ConfigureAwait(false);
             if (reloadError is not null)
                 warnings.Add(reloadError.Message);
             else
             {
                 var redrawWarning = await _framework.RunOnFrameworkThread(
-                    RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
+                    _activation.RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
                 if (redrawWarning is not null)
                     warnings.Add(redrawWarning);
             }
@@ -230,7 +259,7 @@ public sealed partial class PenumbraService
         try
         {
             var resolved = await _framework.RunOnFrameworkThread(
-                () => ResolveSourceModTargetOnFramework(
+                () => _sources.ResolveSourceModTargetOnFramework(
                     sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath, sourceModStableId)).ConfigureAwait(false);
             if (resolved.Target is null)
                 return new VariantTargetsResult(false, resolved.Code,
@@ -284,7 +313,7 @@ public sealed partial class PenumbraService
         await _exportGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            var root = await _framework.RunOnFrameworkThread(GetModDirectory).ConfigureAwait(false);
+            var root = await _framework.RunOnFrameworkThread(_ipc.GetModDirectory).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
                 return new NewModelModResult(new ExportResult(false, "penumbra_root_missing", "The Penumbra mod root is unavailable."));
             root = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
@@ -292,7 +321,7 @@ public sealed partial class PenumbraService
                 return new NewModelModResult(new ExportResult(false, "penumbra_root_unsafe", "The Penumbra mod root is an unsupported linked directory."));
 
             var modList = await _framework.RunOnFrameworkThread(() =>
-                TryGetModList(out var mods) ? mods : null).ConfigureAwait(false);
+                _ipc.TryGetModList(out var mods) ? mods : null).ConfigureAwait(false);
             if (modList is null)
                 return new NewModelModResult(new ExportResult(false, "penumbra_unavailable", "Could not retrieve the Penumbra mod list."));
             await LeaveFrameworkThread();
@@ -315,30 +344,30 @@ public sealed partial class PenumbraService
                     modelGamePath,
                     await File.ReadAllBytesAsync(exportedFile).ConfigureAwait(false));
                 if (race is not null)
-                    AddRaceModelEqdp(staging, modelGamePath, race.Value);
+                    _race.AddRaceModelEqdp(staging, modelGamePath, race.Value);
                 if (createAttributeGroups && attributeTags is { Count: > 0 })
                 {
                     // A new mod of a game model has no variant settings of its own to keep.
-                    var attributeError = WriteAttributeGroups(
+                    var attributeError = _attributes.WriteAttributeGroups(
                         staging, context.ResolvedGamePath, attributeTags, attributeMasks,
                         KnownManipulations(context));
                     if (attributeError is not null)
                         throw new InvalidDataException(attributeError);
                 }
                 // The staged meta.json already has the mod's identifier, which keys the EST records.
-                var estWarnings = TryUpdateEstEntries(staging, modName, relativeModel, estEntries);
+                var estWarnings = _est.TryUpdateEstEntries(staging, modName, relativeModel, estEntries);
                 Directory.Move(staging, finalFolder);
                 committed = true;
 
                 var warnings = new List<string>(estWarnings);
                 try
                 {
-                    var addError = await AddNewModAsync(modName).ConfigureAwait(false);
+                    var addError = await _activation.AddNewModAsync(modName).ConfigureAwait(false);
                     if (addError is not null)
                         warnings.Add(addError.Message);
                     else if (context.TargetCollectionId is { } collectionId && collectionId != Guid.Empty)
                     {
-                        var configure = await _framework.RunOnFrameworkThread(() => ConfigureModForCollectionOnFramework(
+                        var configure = await _framework.RunOnFrameworkThread(() => _activation.ConfigureModForCollectionOnFramework(
                             modName,
                             collectionId,
                             context.TargetCollectionName ?? "captured collection",
@@ -356,7 +385,7 @@ public sealed partial class PenumbraService
                     }
 
                     var redrawWarning = await _framework.RunOnFrameworkThread(
-                        RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
+                        _activation.RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
                     if (redrawWarning is not null)
                         warnings.Add(redrawWarning);
                 }
@@ -397,29 +426,6 @@ public sealed partial class PenumbraService
         finally
         {
             _exportGate.Release();
-        }
-    }
-
-    /// <summary>
-    /// Get resource trees for explicit object-table indices. Penumbra looks these indices
-    /// up in Dalamud's object table, which asserts the main thread.
-    /// </summary>
-    public ResourceTreeDto?[] GetResourceTrees(ushort[] gameObjectIndices)
-    {
-        if (gameObjectIndices.Length == 0)
-            return Array.Empty<ResourceTreeDto?>();
-
-        try
-        {
-            if (!Available)
-                return Array.Empty<ResourceTreeDto?>();
-
-            return _getObjectTrees.Invoke(withUiData: true, gameObjectIndices) ?? Array.Empty<ResourceTreeDto?>();
-        }
-        catch (Exception e)
-        {
-            _log.Debug($"Could not retrieve explicit resource trees: {e.Message}");
-            return Array.Empty<ResourceTreeDto?>();
         }
     }
 
