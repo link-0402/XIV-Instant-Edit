@@ -171,7 +171,7 @@ public sealed partial class TimelineWindow
             {
                 ImGui.TableSetupColumn("##fact", ImGuiTableColumnFlags.WidthFixed);
                 ImGui.TableSetupColumn("##value", ImGuiTableColumnFlags.WidthStretch);
-                Fact("Blend");
+                TimelineUi.Fact("Blend");
                 var frames = blend.Frames;
                 ImGui.SetNextItemWidth(Theme.Scaled(90));
                 using (ImRaii.Disabled(readOnly))
@@ -186,7 +186,7 @@ public sealed partial class TimelineWindow
                 }
                 ImGui.SameLine(0, Theme.Gap);
                 ImGui.TextColored(Theme.Muted, "frames");
-                Fact("Place");
+                TimelineUi.Fact("Place");
                 ImGui.SetNextItemWidth(Theme.Scaled(120));
                 using var combo = ImRaii.Combo("##place", TimelineWindowViews.PlacementName(blend.Placement));
                 if (combo.Success)
@@ -209,7 +209,7 @@ public sealed partial class TimelineWindow
             return;
         ImGui.TableSetupColumn("##fact", ImGuiTableColumnFlags.WidthFixed);
         ImGui.TableSetupColumn("##value", ImGuiTableColumnFlags.WidthStretch);
-        Fact(TimelineWindowViews.EaseLegend);
+        TimelineUi.Fact(TimelineWindowViews.EaseLegend);
         var frames = cuts.Ease;
         ImGui.SetNextItemWidth(Theme.Scaled(90));
         using (ImRaii.Disabled(readOnly))
@@ -228,7 +228,7 @@ public sealed partial class TimelineWindow
         ImGui.TextColored(Theme.Muted, "frames");
         if (cuts.Ease <= 0)
             return;
-        Fact("Side");
+        TimelineUi.Fact("Side");
         var sides = TimelineWindowViews.EaseSides;
         ImGui.SetNextItemWidth(Theme.Scaled(120));
         using var combo = ImRaii.Combo("##ease-side", sides[cuts.EaseEnd ? 1 : 0]);
@@ -288,9 +288,9 @@ public sealed partial class TimelineWindow
         var left = Math.Min(end + Theme.Scaled(6), max.X - size.X - pad * 2 - Theme.Scaled(4));
         var rect = (new Vector2(left, top + Theme.Scaled(3)), new Vector2(left + size.X + pad * 2, bottom - Theme.Scaled(3)));
         var colour = shown == SeamState.Clean ? Theme.Muted : Theme.Warning;
-        drawList.AddRectFilled(rect.Item1, rect.Item2, U32(Theme.WithAlpha(colour, .18f)), Theme.Scaled(3));
-        drawList.AddRect(rect.Item1, rect.Item2, U32(Theme.WithAlpha(colour, .7f)), Theme.Scaled(3));
-        drawList.AddText(new Vector2(left + pad, (top + bottom - size.Y) / 2), U32(colour), text);
+        drawList.AddRectFilled(rect.Item1, rect.Item2, TimelineUi.U32(Theme.WithAlpha(colour, .18f)), Theme.Scaled(3));
+        drawList.AddRect(rect.Item1, rect.Item2, TimelineUi.U32(Theme.WithAlpha(colour, .7f)), Theme.Scaled(3));
+        drawList.AddText(new Vector2(left + pad, (top + bottom - size.Y) / 2), TimelineUi.U32(colour), text);
         seamBadge = rect;
     }
 

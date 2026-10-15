@@ -44,7 +44,7 @@ public sealed partial class TimelineWindow
             }
         }
 
-        Widgets.Icon(LayerIcon(layer.Kind), TimelineWindowViews.LayerColour(layer.Kind));
+        Widgets.Icon(TimelineUi.LayerIcon(layer.Kind), TimelineWindowViews.LayerColour(layer.Kind));
         ImGui.SameLine(0, Theme.Gap);
         using (ImRaii.Disabled(readOnly))
         {
@@ -118,7 +118,7 @@ public sealed partial class TimelineWindow
         }
         ImGui.SameLine();
         if (ImGui.Button("Bones"))
-            ToggleBones();
+            TimelineUi.Toggle(bonesWindow);
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Pick and pose bones on a body map.");
     }
@@ -126,7 +126,7 @@ public sealed partial class TimelineWindow
     /// <summary> A frame number field with its time beside it. </summary>
     private static void FrameField(TimelineEditor current, MotionLayer layer, string label, string id, int value, Func<int, MotionLayer> with)
     {
-        Fact(label);
+        TimelineUi.Fact(label);
         var number = value;
         ImGui.SetNextItemWidth(Theme.Scaled(90));
         var changed = ImGui.InputInt(id, ref number, 0, 0);
@@ -137,7 +137,7 @@ public sealed partial class TimelineWindow
 
     private static void DrawAmount(TimelineEditor current, MotionLayer layer)
     {
-        Fact(layer.Kind switch { MotionLayerKind.Offset => "Strength", MotionLayerKind.Amplitude => "Movement", _ => "Blend" });
+        TimelineUi.Fact(layer.Kind switch { MotionLayerKind.Offset => "Strength", MotionLayerKind.Amplitude => "Movement", _ => "Blend" });
         var percent = layer.Amount * 100;
         ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(90), ImGui.GetContentRegionAvail().X));
         var changed = ImGui.SliderFloat("##layer-amount", ref percent, 0, MotionEdits.MaxAmount(layer.Kind) * 100, "%.0f%%");
@@ -153,7 +153,7 @@ public sealed partial class TimelineWindow
 
     private static void DrawComponents(TimelineEditor current, MotionLayer layer)
     {
-        Fact("Changes");
+        TimelineUi.Fact("Changes");
         PoseComponents[] parts = layer.Kind == MotionLayerKind.Amplitude
             ? [PoseComponents.Rotation, PoseComponents.Position]
             : [PoseComponents.Rotation, PoseComponents.Position, PoseComponents.Scale];
@@ -171,7 +171,7 @@ public sealed partial class TimelineWindow
 
     private static void DrawInterpolation(TimelineEditor current, MotionLayer layer)
     {
-        Fact("Between keys");
+        TimelineUi.Fact("Between keys");
         ImGui.SetNextItemWidth(Theme.Scaled(120));
         using (var combo = ImRaii.Combo("##layer-interpolation", TimelineWindowViews.EaseName(layer.Interpolation)))
         {
@@ -253,13 +253,13 @@ public sealed partial class TimelineWindow
         Vector2 Curve(Vector2 screen) => new(Math.Clamp((screen.X - plotMin.X) / plot.X, 0, 1),
             Math.Clamp(low + (plotMax.Y - screen.Y) / plot.Y * (high - low), low, high));
 
-        drawList.AddRectFilled(origin, origin + new Vector2(width, height), U32(Theme.RowAlt), Theme.Scaled(3));
-        var guide = U32(Theme.WithAlpha(Theme.TreeLine, .6f));
+        drawList.AddRectFilled(origin, origin + new Vector2(width, height), TimelineUi.U32(Theme.RowAlt), Theme.Scaled(3));
+        var guide = TimelineUi.U32(Theme.WithAlpha(Theme.TreeLine, .6f));
         drawList.AddLine(Screen(0, 0), Screen(1, 0), guide);
         drawList.AddLine(Screen(0, 1), Screen(1, 1), guide);
         drawList.AddLine(Screen(0, low), Screen(0, high), guide);
         drawList.AddLine(Screen(1, low), Screen(1, high), guide);
-        var stroke = U32(Theme.Accent);
+        var stroke = TimelineUi.U32(Theme.Accent);
         var thickness = Theme.Scaled(2);
         if (curve == null)
         {
@@ -276,7 +276,7 @@ public sealed partial class TimelineWindow
             previous = next;
         }
         var handles = new[] { Screen(curve.X1, curve.Y1), Screen(curve.X2, curve.Y2) };
-        var handleLine = U32(Theme.WithAlpha(Theme.Text, .5f));
+        var handleLine = TimelineUi.U32(Theme.WithAlpha(Theme.Text, .5f));
         drawList.AddLine(Screen(0, 0), handles[0], handleLine);
         drawList.AddLine(Screen(1, 1), handles[1], handleLine);
         var mouse = ImGui.GetIO().MousePos;
@@ -301,7 +301,7 @@ public sealed partial class TimelineWindow
         for (var index = 0; index < 2; index++)
         {
             var hot = easeHandle == index || easeHandle < 0 && ImGui.IsItemHovered() && Vector2.Distance(mouse, handles[index]) <= reach;
-            drawList.AddCircleFilled(handles[index], Theme.Scaled(hot ? 6 : 5), U32(hot ? Theme.Accent : Theme.Text));
+            drawList.AddCircleFilled(handles[index], Theme.Scaled(hot ? 6 : 5), TimelineUi.U32(hot ? Theme.Accent : Theme.Text));
         }
         if (ImGui.IsItemHovered() && easeHandle < 0 && !readOnly)
             ImGui.SetTooltip("Drag a handle to shape how the bones get to the next key.");
@@ -495,7 +495,7 @@ public sealed partial class TimelineWindow
     private void DrawTurn(TimelineEditor current, MotionLayer layer, PoseTarget primary, IReadOnlyList<PoseTarget> others,
         Func<string, Quaternion> space, int frame, bool pose)
     {
-        Fact("Turn");
+        TimelineUi.Fact("Turn");
         var id = $"{layer.Key}|{primary.Bone}|{frame}";
         var degrees = turnEdit is { } editing && editing.Id == id ? editing.Degrees : MotionAngles.Wrap(MotionAngles.ToEuler(primary.Value.Rotation));
         ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(150), ImGui.GetContentRegionAvail().X));
@@ -530,7 +530,7 @@ public sealed partial class TimelineWindow
     private static void DrawMove(TimelineEditor current, MotionLayer layer, PoseTarget primary, IReadOnlyList<PoseTarget> targets,
         IReadOnlyList<PoseTarget> others, Func<string, Quaternion> space, Func<string, Vector3?> own, int frame, bool pose)
     {
-        Fact("Move");
+        TimelineUi.Fact("Move");
         if (pose)
         {
             // A pose key leaves a bone's position to the motion unless it sets it.
@@ -567,7 +567,7 @@ public sealed partial class TimelineWindow
     private static void DrawScale(TimelineEditor current, MotionLayer layer, PoseTarget primary, IReadOnlyList<PoseTarget> others,
         Func<string, Quaternion> space, int frame, bool pose)
     {
-        Fact("Scale");
+        TimelineUi.Fact("Scale");
         var percent = primary.Value.Scale * 100;
         ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(150), ImGui.GetContentRegionAvail().X));
         var changed = ImGui.DragFloat3("##scale", ref percent, .5f, MotionEvaluator.MinScale * 100, MotionEvaluator.MaxScale * 100, "%.0f%%");

@@ -61,13 +61,6 @@ public sealed partial class TimelineWindow
 
     internal BonesWindow Bones => bonesWindow;
 
-    private void ToggleBones()
-    {
-        bonesWindow.IsOpen = !bonesWindow.IsOpen;
-        if (bonesWindow.IsOpen)
-            bonesWindow.BringToFront();
-    }
-
     /// <summary>The Bones window's whole content; called from its draw.</summary>
     internal void DrawBones()
     {
@@ -201,7 +194,7 @@ public sealed partial class TimelineWindow
         ImGui.SameLine(0, Theme.Scaled(12));
         if (layer != null)
         {
-            Widgets.Icon(LayerIcon(layer.Kind), TimelineWindowViews.LayerColour(layer.Kind));
+            Widgets.Icon(TimelineUi.LayerIcon(layer.Kind), TimelineWindowViews.LayerColour(layer.Kind));
             ImGui.SameLine(0, Theme.Gap);
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Label, layer.Name);
@@ -241,13 +234,13 @@ public sealed partial class TimelineWindow
         ImGui.SameLine(0, Theme.Scaled(2));
         if (bonesPage == BonesPage.Map)
         {
-            if (Toggle("##bones-swap", FontAwesomeIcon.ExchangeAlt, swapSides, swapSides
+            if (TimelineUi.Toggle("##bones-swap", FontAwesomeIcon.ExchangeAlt, swapSides, swapSides
                     ? "The left side's bones show on the right, as seen from the front. Click to show them as in a mirror."
                     : "The left side's bones show on the left, as in a mirror. Click to show them as seen from the front."))
                 swapSides = !swapSides;
             ImGui.SameLine(0, Theme.Scaled(2));
         }
-        if (Toggle("##bones-overlay", FontAwesomeIcon.Crosshairs, showOnCharacter, showOnCharacter
+        if (TimelineUi.Toggle("##bones-overlay", FontAwesomeIcon.Crosshairs, showOnCharacter, showOnCharacter
                 ? "In GPose the bones show on the character, to select them there and pose them with the gizmo. Click to hide them."
                 : "Show the bones on the character in GPose, to select them there and pose them with the gizmo."))
             showOnCharacter = !showOnCharacter;
@@ -582,7 +575,7 @@ public sealed partial class TimelineWindow
             }
             return;
         }
-        Widgets.Icon(LayerIcon(layer.Kind), TimelineWindowViews.LayerColour(layer.Kind));
+        Widgets.Icon(TimelineUi.LayerIcon(layer.Kind), TimelineWindowViews.LayerColour(layer.Kind));
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Label, MotionEdits.KindName(layer.Kind));

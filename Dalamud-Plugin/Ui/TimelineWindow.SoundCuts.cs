@@ -76,7 +76,7 @@ public sealed partial class TimelineWindow
         var doc = current.Document;
         if (!CrossesCut(doc, ev, true))
             return;
-        Fact("Across a cut");
+        TimelineUi.Fact("Across a cut");
         bool? choice = doc.SoundCuts.TryGetValue(ev.Key, out var cut) ? cut : null;
         var choices = TimelineWindowViews.SoundCutChoices;
         using (ImRaii.Disabled(!editable))

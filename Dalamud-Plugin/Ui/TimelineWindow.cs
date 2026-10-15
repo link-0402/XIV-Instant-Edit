@@ -17,7 +17,7 @@ namespace InstantEdit.Ui;
 /// <summary>
 /// The timeline editor for one animation clip: its motion, expressions, lip sync, sounds, effects
 /// and props on lanes like a video editor, its length, a side panel (properties, source, animated
-/// bones, saved edits, recorder), pickers and session.Imports, a loader that plays any animation on the GPose
+/// bones, saved edits, recorder), pickers and imports, a loader that plays any animation on the GPose
 /// actor, a save footer and a GPose preview. Slow work runs on tasks polled every frame, so the draw
 /// path never reads files. Split by concern: each part lives in its own partial file.
 /// </summary>
@@ -27,6 +27,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
 
     private readonly TimelineSession session;
     private readonly MotionDecode decode;
+    private readonly EffectLookEditor effectLooks;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
     private readonly GameSoundPlayer? soundPlayer;
@@ -68,6 +69,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         session = new TimelineSession(animations, catalog, preview, playback, motionDisplay, data, framework, log,
             () => loadTask != null || saveTask != null || pendingSaveId != null || undoPending || soundCheck != null || soundAsk != null);
         decode = new MotionDecode(session);
+        effectLooks = new EffectLookEditor(session);
         this.soundPlayer = soundPlayer;
         this.recorder = recorder;
         this.animationError = animationError;
@@ -207,7 +209,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         catalogKey = null;
         motionBase = null;
         motionCarry = null;
-        ForgetEffects();
+        effectLooks.Forget();
         ForgetSounds();
         // A sound played to listen to stops being served with the window.
         _ = soundPlayer?.StopAsync();
@@ -339,11 +341,11 @@ public sealed partial class TimelineWindow : Window, IDisposable
                    (loaded.Resource.ModName ?? loaded.Resource.ModDirectory ?? "Game Data");
         labelDocument = null;
         pendingLengths.Clear();
-        lookEditing = false;
+        effectLooks.ForgetEdit();
         soundEditing = false;
         if (!sameClip)
         {
-            ForgetEffects();
+            effectLooks.Forget();
             ForgetSounds();
             modName = TimelineWindowViews.DefaultModName(AnimationPresentation.DefaultModName(loaded.Capture));
             destination = AnimationDestination.NewMod;

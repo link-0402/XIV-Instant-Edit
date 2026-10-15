@@ -223,7 +223,7 @@ public sealed partial class TimelineWindow
         var shown = key is { } k && source is { } loaded ? ShownSound(current.Document, k, loaded) : null;
         var sound = key?.Sound ?? 0;
 
-        Fact("Plays");
+        TimelineUi.Fact("Plays");
         var loop = values.GetValueOrDefault(LoopField, 1);
         using (ImRaii.Disabled(!editable))
         {
@@ -232,9 +232,9 @@ public sealed partial class TimelineWindow
             if (combo.Success)
                 foreach (var option in new[] { 1.0, -1.0 })
                     if (ImGui.Selectable(TimelineWindowViews.PlaysText(option), option == loop) && option != loop)
-                        current.Replace(With(ev, LoopField, option));
+                        current.Replace(TimelineUi.With(ev, LoopField, option));
         }
-        Tip("Once plays the sound once. Keep looping keeps it going while the animation loops.");
+        TimelineUi.Tip("Once plays the sound once. Keep looping keeps it going while the animation loops.");
         DrawSoundCutChoice(current, ev, editable);
         if (loop == -1 && shown is { Model: not null } && !TimelineWindowViews.FileLoops(shown.Bytes, sound))
         {
@@ -244,14 +244,14 @@ public sealed partial class TimelineWindow
                 if (ImGui.SmallButton("Add loop points") && EditOf(shown) is { } edit)
                     current.SetSound(key!.Value, edit with { Loop = true });
             }
-            Tip("Marks the sound to loop and loops each of its audio files from start to end.");
+            TimelineUi.Tip("Marks the sound to loop and loops each of its audio files from start to end.");
         }
 
         // A pin is always shown, so one left on a single sound (or a gone one) can be cleared.
         if (shown is { Model: { } model } && sound < model.Sounds.Count &&
             (ev.Pin != null || shown.Ids.Length > 1 && model.Sounds[sound].Type == ScdSound.GroupRandom))
         {
-            Fact("Which sound");
+            TimelineUi.Fact("Which sound");
             using (ImRaii.Disabled(!editable))
             {
                 ImGui.SetNextItemWidth(Theme.Scaled(170));
@@ -265,19 +265,19 @@ public sealed partial class TimelineWindow
                             current.Replace(ev with { Pin = shown.Ids[i] });
                 }
             }
-            Tip("Random plays one of the file's sounds by its chance. Only plays the same one every time, from a copy of the file.");
+            TimelineUi.Tip("Random plays one of the file's sounds by its chance. Only plays the same one every time, from a copy of the file.");
         }
 
         var flags = (long)values.GetValueOrDefault(PositionField);
-        Fact("Distance");
+        TimelineUi.Fact("Distance");
         Flag(current, ev, editable, "Fades with distance", flags, FadesBit, "Off, it plays at the same volume everywhere.");
         Widgets.HintWrapped(TimelineWindowViews.RangeHint(shown?.Model?.MaxRange(sound), shown?.Model?.MinRange(sound)));
 
-        Fact("Ends");
+        TimelineUi.Fact("Ends");
         Flag(current, ev, editable, "Stops with the animation", flags, StopsBit, "Off, it plays to its end.");
         Widgets.HintWrapped("Cut off when the emote ends.");
 
-        Fact("Comes from");
+        TimelineUi.Fact("Comes from");
         Flag(current, ev, editable, "Bind point", flags, BindBit, "A point on the character, such as a hand, by its number.");
         if ((flags & BindBit) != 0)
         {
@@ -287,7 +287,7 @@ public sealed partial class TimelineWindow
             {
                 ImGui.SetNextItemWidth(Theme.Scaled(70));
                 var changed = ImGui.InputInt("##sound-bind", ref bind, 0, 0);
-                TrackField(current, changed, changed ? With(ev, BindField, Math.Clamp(bind, 0, byte.MaxValue)) : null);
+                TimelineUi.TrackField(current, changed, changed ? TimelineUi.With(ev, BindField, Math.Clamp(bind, 0, byte.MaxValue)) : null);
             }
         }
         else
@@ -295,7 +295,7 @@ public sealed partial class TimelineWindow
 
         if (shown?.Model is { Sounds.Count: > 1 } several)
         {
-            Fact("Sound entry");
+            TimelineUi.Fact("Sound entry");
             var index = (int)values.GetValueOrDefault(TimelineSoundKey.SoundIndexField);
             using (ImRaii.Disabled(!editable))
             {
@@ -303,11 +303,11 @@ public sealed partial class TimelineWindow
                 var changed = ImGui.InputInt("##sound-index", ref index, 0, 0);
                 var picked = Math.Clamp(index, 0, several.Sounds.Count - 1);
                 // A pin names an alternative of the sound it was set on, never of another.
-                TrackField(current, changed, changed
-                    ? With(picked != sound ? ev with { Pin = null } : ev, TimelineSoundKey.SoundIndexField, picked)
+                TimelineUi.TrackField(current, changed, changed
+                    ? TimelineUi.With(picked != sound ? ev with { Pin = null } : ev, TimelineSoundKey.SoundIndexField, picked)
                     : null);
             }
-            Tip($"The file has {several.Sounds.Count} sounds. This event plays the one with this number, from 0.");
+            TimelineUi.Tip($"The file has {several.Sounds.Count} sounds. This event plays the one with this number, from 0.");
         }
     }
 
@@ -318,13 +318,10 @@ public sealed partial class TimelineWindow
         using (ImRaii.Disabled(!editable))
         {
             var changed = ImGui.Checkbox(label, ref set);
-            TrackField(current, changed, changed ? With(ev, PositionField, set ? flags | bit : flags & ~bit) : null);
+            TimelineUi.TrackField(current, changed, changed ? TimelineUi.With(ev, PositionField, set ? flags | bit : flags & ~bit) : null);
         }
-        Tip(tooltip);
+        TimelineUi.Tip(tooltip);
     }
-
-    private static TimelineEvent With(TimelineEvent ev, string field, double value) =>
-        ev with { Values = (ev.Values ?? ImmutableDictionary<string, double>.Empty).SetItem(field, value) };
 
     // A Sound file control's changes until no control is active make one undo step.
     private bool soundEditing;
@@ -414,7 +411,7 @@ public sealed partial class TimelineWindow
             {
                 ImGui.TableSetupColumn("##sound-name", ImGuiTableColumnFlags.WidthFixed);
                 ImGui.TableSetupColumn("##sound-value", ImGuiTableColumnFlags.WidthStretch);
-                Fact("Volume");
+                TimelineUi.Fact("Volume");
                 var volume = (edit.Volume ?? target.Volume) * 100;
                 using (ImRaii.Disabled(!editable))
                 {
@@ -422,7 +419,7 @@ public sealed partial class TimelineWindow
                     if (ImGui.SliderFloat("##sound-volume", ref volume, 0, ScdEdits.MaxFileVolume * 100, "%.0f%%", ImGuiSliderFlags.AlwaysClamp))
                         SetSoundEdit(current, key, edit with { Volume = MathF.Round(volume) / 100 });
                 }
-                Tip("The whole sound's volume. Ctrl+click to type.");
+                TimelineUi.Tip("The whole sound's volume. Ctrl+click to type.");
                 if (volume > 100.5f)
                     Widgets.HintWrapped("Above 100% may clip.");
             }
@@ -444,7 +441,7 @@ public sealed partial class TimelineWindow
                 if (ImGui.Button("Add sound"))
                     OpenSoundImport(new TimelineSoundTarget(key, null));
             }
-            Tip(oneShot ? "Turns this into a random set." : "Adds a .wav, .ogg or .scd file as another sound.");
+            TimelineUi.Tip(oneShot ? "Turns this into a random set." : "Adds a .wav, .ogg or .scd file as another sound.");
             if (random)
             {
                 ImGui.SameLine();
@@ -457,7 +454,7 @@ public sealed partial class TimelineWindow
                         Alternatives = [.. edit.Alternatives.Select(a => a with { Share = shown.Ids.IndexOf(a.Id) is >= 0 and var at ? even[at] : 0 })],
                     });
                 }
-                Tip("Gives every sound the same chance.");
+                TimelineUi.Tip("Gives every sound the same chance.");
             }
             ImGui.SameLine();
             if (ImGui.Button("Match lengths"))
@@ -466,7 +463,7 @@ public sealed partial class TimelineWindow
                     Alternatives = [.. edit.Alternatives.Select(a => shown.Ids.IndexOf(a.Id) is >= 0 and var at
                         ? a with { WaitMs = ScdEdits.AudioMilliseconds(model, target.Entries[at].Audio) } : a)],
                 });
-            Tip("Lets every sound's track run as long as its audio.");
+            TimelineUi.Tip("Lets every sound's track run as long as its audio.");
         }
         DrawSoundMore(current, key, model, target, edit, editable);
     }
@@ -540,7 +537,7 @@ public sealed partial class TimelineWindow
                         if (ImGui.InputInt("##chance", ref share, 0, 0, default, ImGuiInputTextFlags.CharsDecimal) && alternative != null)
                             SetSoundEdit(current, key, Changed(edit, alternative with { Share = Math.Clamp(share, 0, 100) }));
                     }
-                    Tip("How often this sound plays, in percent.");
+                    TimelineUi.Tip("How often this sound plays, in percent.");
                 }
                 else
                     ImGui.TextColored(Theme.Muted, "Always");
@@ -553,14 +550,14 @@ public sealed partial class TimelineWindow
                 if (ImGui.SliderInt("##volume", ref volume, 0, 100, "%d%%", ImGuiSliderFlags.AlwaysClamp) && alternative != null)
                     SetSoundEdit(current, key, Changed(edit, alternative with { Volume = volume / 100f }));
             }
-            Tip("This sound's own volume. Ctrl+click to type.");
+            TimelineUi.Tip("This sound's own volume. Ctrl+click to type.");
             ImGui.TableNextColumn();
             var wait = ScdEdits.Wait(model, entry.Track);
             if (wait > 0 && wait < audioMs)
             {
                 ImGui.AlignTextToFramePadding();
                 Widgets.Icon(FontAwesomeIcon.ExclamationTriangle, Theme.Warning);
-                Tip(TimelineWindowViews.EndsEarlyTip(wait, audioMs));
+                TimelineUi.Tip(TimelineWindowViews.EndsEarlyTip(wait, audioMs));
             }
             ImGui.TableNextColumn();
             if (!changes || alternative == null)
@@ -593,18 +590,18 @@ public sealed partial class TimelineWindow
         using var disabled = ImRaii.Disabled(!editable);
         if (model.MaxRange(key.Sound) is { } near && model.MinRange(key.Sound) is { } far)
         {
-            Fact("Full volume within");
+            TimelineUi.Fact("Full volume within");
             ImGui.SetNextItemWidth(Theme.Scaled(110));
             if (ImGui.InputFloat("##sound-near", ref near, 0, 0, "%.1f") && float.IsFinite(near))
                 SetSoundEdit(current, key, edit with { FullWithin = Math.Clamp(near, .1f, Math.Max(.1f, far)), SilentPast = far });
-            Tip("How far from the camera the sound stays at full volume.");
-            Fact("Silent past");
+            TimelineUi.Tip("How far from the camera the sound stays at full volume.");
+            TimelineUi.Fact("Silent past");
             ImGui.SetNextItemWidth(Theme.Scaled(110));
             if (ImGui.InputFloat("##sound-far", ref far, 0, 0, "%.1f") && float.IsFinite(far))
                 SetSoundEdit(current, key, edit with { FullWithin = near, SilentPast = Math.Max(far, near) });
-            Tip("How far from the camera the sound fades out completely.");
+            TimelineUi.Tip("How far from the camera the sound fades out completely.");
         }
-        Fact("Channel");
+        TimelineUi.Fact("Channel");
         var bus = edit.Bus ?? target.Bus;
         ImGui.SetNextItemWidth(Theme.Scaled(170));
         using (var combo = ImRaii.Combo("##sound-channel", TimelineWindowViews.ChannelName(bus)))
@@ -614,15 +611,15 @@ public sealed partial class TimelineWindow
                     if (ImGui.Selectable(TimelineWindowViews.ChannelName(option), option == bus) && option != bus)
                         SetSoundEdit(current, key, edit with { Bus = option });
         }
-        Tip("Which of the game's volume sliders the sound follows.");
-        Fact("Loop");
+        TimelineUi.Tip("Which of the game's volume sliders the sound follows.");
+        TimelineUi.Fact("Loop");
         var loops = edit.Loop ?? (target.Attributes & ScdSound.LoopAttribute) != 0;
         using (ImRaii.Disabled(target.Type == ScdSound.Empty))
         {
             if (ImGui.Checkbox("##sound-loop", ref loops))
                 SetSoundEdit(current, key, edit with { Loop = loops });
         }
-        Tip("Marks the sound to loop. Turning it on also loops each audio file from start to end.");
+        TimelineUi.Tip("Marks the sound to loop. Turning it on also loops each audio file from start to end.");
     }
 
     /// <summary> <paramref name="edit"/> with <paramref name="alternative"/> in place of the one with its id. </summary>

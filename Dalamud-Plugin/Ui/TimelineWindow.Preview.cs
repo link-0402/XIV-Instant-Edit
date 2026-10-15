@@ -189,7 +189,7 @@ public sealed partial class TimelineWindow
     }
 
     /// <summary>
-    /// Builds the edited clip in the service, writes it with the session.Imports it uses into a temporary
+    /// Builds the edited clip in the service, writes it with the imports it uses into a temporary
     /// mod on the GPose actor's collection, then plays the clip's timeline on that actor.
     /// </summary>
     private void StartPreview(TimelineEditor current, AnimationTimelineSource loaded)
@@ -216,16 +216,16 @@ public sealed partial class TimelineWindow
         ImmutableDictionary<string, TimelineEffectEdit> looks;
         try
         {
-            if ((LookMissing(document) ?? SoundMissing(document) ?? SoundCutMissing(document)) is { } missing)
+            if ((effectLooks.LookMissing(document) ?? SoundMissing(document) ?? SoundCutMissing(document)) is { } missing)
                 throw new InvalidDataException(missing);
             // Effect looks point the effect's own path at an edited copy: the game may keep playing the clip's
             // loaded file, which names that path, and later look changes then show without building again.
             (rest, looks) = TimelineEffectLooks.Redirectable(document);
-            lookFiles = TimelineEffectLooks.Redirected(looks, EffectBytes);
+            lookFiles = TimelineEffectLooks.Redirected(looks, effectLooks.EffectBytes);
             // So do changes to a sound file with one sound; pins and other sound changes play from copies.
             (rest, soundFiles) = TimelineSoundEdits.Redirectable(rest, SoundBytes, session.ImportBytes);
             // Looks that differ between events of one effect play from copies, as a save writes them.
-            (shown, var used) = WithLooks(rest);
+            (shown, var used) = effectLooks.WithLooks(rest);
             var sounds = WithSoundCuts(WithSounds(shown, _ => TimelineSoundRoute.Copy, path => soundFiles.GetValueOrDefault(path) ?? SoundBytes(path)),
                 shown, path => soundFiles.GetValueOrDefault(path) ?? SoundBytes(path));
             shown = sounds.Document;
