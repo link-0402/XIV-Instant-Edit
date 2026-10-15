@@ -37,6 +37,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly BonePosing posing;
     private readonly BoneEditor boneEditor;
     private readonly PoseSourcePanel poseSources;
+    private readonly LayerPanel layerPanel;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
     private readonly GameSoundPlayer? soundPlayer;
@@ -76,6 +77,11 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     {
         session = new TimelineSession(animations, catalog, preview, playback, motionDisplay, data, framework, log,
             () => loadTask != null || saveTask != null || pendingSaveId != null || undoPending || soundCheck != null || soundAsk != null);
+        this.soundPlayer = soundPlayer;
+        this.animationError = animationError;
+        this.textures = textures;
+        bonesWindow = new BonesWindow(this);
+        overlayWindow = new BonesOverlay(this);
         decode = new MotionDecode(session);
         effectLooks = new EffectLookEditor(session);
         soundFiles = new SoundFiles(session);
@@ -85,11 +91,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         posing = new BonePosing(session, decode);
         boneEditor = new BoneEditor(session, decode, posing, this);
         poseSources = new PoseSourcePanel(session, decode, posing, recorder);
-        this.soundPlayer = soundPlayer;
-        this.animationError = animationError;
-        this.textures = textures;
-        bonesWindow = new BonesWindow(this);
-        overlayWindow = new BonesOverlay(this);
+        layerPanel = new LayerPanel(session, posing, boneEditor, poseSources, bonesWindow);
 
         Size = new Vector2(1000, 560);
         SizeCondition = ImGuiCond.FirstUseEver;
