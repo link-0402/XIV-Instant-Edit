@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Numerics;
 using System.Text.Json.Nodes;
 using InstantEdit.Services;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Services.Physics;
 using static InstantEdit.TestSupport.Assertions;
 
@@ -411,9 +412,9 @@ internal static class PhysicsScenarios
         var folder = Path.Combine(testRoot, "PhysicsMod");
         Directory.CreateDirectory(folder);
         const string gamePath = "chara/human/c0801/skeleton/base/b0001/phy_c0801b0001.phyb";
-        var first = PenumbraService.CreatePhysicsModFiles(folder, "IE Physics", "test", gamePath, [1, 2, 3]);
+        var first = PhysicsModService.CreatePhysicsModFiles(folder, "IE Physics", "test", gamePath, [1, 2, 3]);
         Require(first == "physics/phy_c0801b0001.1.phyb" && File.ReadAllBytes(Path.Combine(folder, "physics", "phy_c0801b0001.1.phyb")).SequenceEqual(new byte[] { 1, 2, 3 }) &&
-                PenumbraService.PhysicsModFile(folder, gamePath) is { } mapped && mapped.EndsWith("phy_c0801b0001.1.phyb", StringComparison.Ordinal),
+                PhysicsModService.PhysicsModFile(folder, gamePath) is { } mapped && mapped.EndsWith("phy_c0801b0001.1.phyb", StringComparison.Ordinal),
             "physics mod: a new mod maps the body physics to its first file");
 
         // A second race in the same mod, and an option the user added, stay as they are.
@@ -422,24 +423,24 @@ internal static class PhysicsScenarios
         File.WriteAllText(Path.Combine(folder, "meta.json"), meta.ToJsonString());
         File.WriteAllBytes(Path.Combine(folder, "physics", "phy_c1801b0001.1.phyb"), [9]);
 
-        var second = PenumbraService.UpdatePhysicsModFiles(folder, gamePath, [4, 5]);
+        var second = PhysicsModService.UpdatePhysicsModFiles(folder, gamePath, [4, 5]);
         var files = JsonNode.Parse(File.ReadAllText(Path.Combine(folder, "meta.json")))!["DefaultData"]!["Files"]!.AsObject();
         Require(second == "physics/phy_c0801b0001.2.phyb" && (string?)files[gamePath] == "physics\\phy_c0801b0001.2.phyb" &&
                 !File.Exists(Path.Combine(folder, "physics", "phy_c0801b0001.1.phyb")) &&
                 File.Exists(Path.Combine(folder, "physics", "phy_c1801b0001.1.phyb")) && files.Count == 2,
             "physics mod: each save maps a new file name and deletes the old one, leaving other races alone");
-        var third = PenumbraService.UpdatePhysicsModFiles(folder, gamePath.ToUpperInvariant(), [6]);
+        var third = PhysicsModService.UpdatePhysicsModFiles(folder, gamePath.ToUpperInvariant(), [6]);
         files = JsonNode.Parse(File.ReadAllText(Path.Combine(folder, "meta.json")))!["DefaultData"]!["Files"]!.AsObject();
         Require(third.EndsWith(".3.phyb", StringComparison.Ordinal) && files.Count == 2, "physics mod: game paths match whatever their case");
 
         // Renamed in Penumbra, the mod keeps its identifier, and saves follow it.
-        var identifier = PenumbraService.ReadModStableIdentifierForRegression(folder)!.Value;
-        Require(PenumbraService.FindPhysicsModFolder(testRoot, "PhysicsMod", identifier, null) == "PhysicsMod" &&
-                PenumbraService.FindPhysicsModFolder(testRoot, "PhysicsMod", Guid.NewGuid(), ["PhysicsMod"]) is null,
+        var identifier = ModMetadata.ReadModStableIdentifierForRegression(folder)!.Value;
+        Require(PhysicsModService.FindPhysicsModFolder(testRoot, "PhysicsMod", identifier, null) == "PhysicsMod" &&
+                PhysicsModService.FindPhysicsModFolder(testRoot, "PhysicsMod", Guid.NewGuid(), ["PhysicsMod"]) is null,
             "physics mod: the mod is found in its folder while that folder has its identifier");
         Directory.Move(folder, Path.Combine(testRoot, "PhysicsMod Renamed"));
-        Require(PenumbraService.FindPhysicsModFolder(testRoot, "PhysicsMod", identifier, ["Another Mod", "PhysicsMod Renamed"]) == "PhysicsMod Renamed" &&
-                PenumbraService.FindPhysicsModFolder(testRoot, "PhysicsMod", identifier, ["Another Mod"]) is null,
+        Require(PhysicsModService.FindPhysicsModFolder(testRoot, "PhysicsMod", identifier, ["Another Mod", "PhysicsMod Renamed"]) == "PhysicsMod Renamed" &&
+                PhysicsModService.FindPhysicsModFolder(testRoot, "PhysicsMod", identifier, ["Another Mod"]) is null,
             "physics mod: a mod renamed in Penumbra is found by its identifier");
     }
 

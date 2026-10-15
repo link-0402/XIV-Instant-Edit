@@ -97,7 +97,7 @@ internal sealed class FacePage(TimelineSession session, SaveFooter saveFooter, T
             return clip.Resolution?.Reason ?? "Choose the skeleton the face was made for under Source first.";
         if (saveFooter.Destination == AnimationDestination.InPlace && !capture.Sources.Any(s => s.GamePath == clip.GamePath && AnimationResources.CanReplace(s)))
             return "The face has no writable Penumbra source. Choose Create new mod.";
-        if (saveFooter.Destination == AnimationDestination.NewMod && !Services.PenumbraService.IsSafeNewModName(saveFooter.ModName.Trim()))
+        if (saveFooter.Destination == AnimationDestination.NewMod && !Services.PenumbraMods.ModPaths.IsSafeNewModName(saveFooter.ModName.Trim()))
             return "Choose a valid mod name.";
         return null;
     }

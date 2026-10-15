@@ -3,6 +3,7 @@ using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Timeline;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Ui.Timeline;
 
@@ -69,7 +70,7 @@ internal sealed class SoundSaveCheck(TimelineSession session, SoundFiles soundFi
         var data = session.Data;
         // The clip's own PAP counts with its other entries; a game sound the mod replaces is played by the game's own animations too.
         soundCheck = Task.Run(() => candidates.Select(path => new SharedSound(path,
-            TimelineSoundUsage.OtherUsers(root, path, exclude, entry).Count, PenumbraService.AnimationMappedFiles(root, path).Count > 1,
+            TimelineSoundUsage.OtherUsers(root, path, exclude, entry).Count, ModMetadata.AnimationMappedFiles(root, path).Count > 1,
             data.FileExists(path))).ToList());
     }
 

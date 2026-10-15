@@ -1,6 +1,7 @@
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Services.Skeletons;
 
 namespace InstantEdit.Services.Physics;
@@ -50,7 +51,8 @@ internal sealed class PhysicsBuilderService : IDisposable
 
     private const long MaxModelBytes = 256L * 1024 * 1024;
 
-    private readonly PenumbraService penumbra;
+    private readonly PenumbraIpc penumbra;
+    private readonly PhysicsModService physicsMods;
     private readonly IDataManager data;
     private readonly IFramework framework;
     private readonly IObjectTable objects;
@@ -61,11 +63,12 @@ internal sealed class PhysicsBuilderService : IDisposable
     private readonly Configuration config;
     private readonly Action saveConfig;
 
-    public PhysicsBuilderService(IDalamudPluginInterface pi, PenumbraService penumbra, IDataManager data, IFramework framework, IObjectTable objects,
-        IClientState clientState, ModelSkeletonResolver skeletons, IPluginLog log, Configuration config, Action saveConfig,
-        string configDirectory, Func<string> cacheRoot)
+    public PhysicsBuilderService(IDalamudPluginInterface pi, PenumbraIpc penumbra, PhysicsModService physicsMods, PreviewModWriter previewMods,
+        IDataManager data, IFramework framework, IObjectTable objects, IClientState clientState, ModelSkeletonResolver skeletons, IPluginLog log,
+        Configuration config, Action saveConfig, string configDirectory, Func<string> cacheRoot)
     {
         this.penumbra = penumbra;
+        this.physicsMods = physicsMods;
         this.data = data;
         this.framework = framework;
         this.objects = objects;
@@ -75,7 +78,7 @@ internal sealed class PhysicsBuilderService : IDisposable
         this.log = log;
         this.config = config;
         this.saveConfig = saveConfig;
-        Preview = new PhysicsPreviewService(penumbra, framework, log, configDirectory, cacheRoot);
+        Preview = new PhysicsPreviewService(penumbra, previewMods, framework, log, configDirectory, cacheRoot);
         if (config.PhysicsModDirectory.Length > 0 && config.PhysicsModIdentifier != Guid.Empty)
         {
             // The one mod from before saves were named.
@@ -158,7 +161,7 @@ internal sealed class PhysicsBuilderService : IDisposable
                 PhysicsPaths.GameFileLabel(gamePath, resolved, racePath), false, false);
         if (IsPreviewFile(resolved))
             return new PhysicsLoadedFile(gamePath, resolved, "the preview", false, true);
-        var mod = await penumbra.ModOfFileAsync(resolved).ConfigureAwait(false);
+        var mod = await physicsMods.ModOfFileAsync(resolved).ConfigureAwait(false);
         if (mod is { } found && IsMine(found.Directory))
             return new PhysicsLoadedFile(gamePath, resolved, found.Name, true, false, found.Directory);
         return new PhysicsLoadedFile(gamePath, resolved, mod?.Name ?? Path.GetFileName(resolved), false, false);
@@ -249,12 +252,12 @@ internal sealed class PhysicsBuilderService : IDisposable
     public async Task<PhysicsSaveResult> SaveAsync(PhysicsTarget target, byte[] bytes, string name, CancellationToken token)
     {
         name = name.Trim();
-        if (!PenumbraService.IsSafeNewModName(name))
+        if (!ModPaths.IsSafeNewModName(name))
             throw new InvalidDataException($"\"{name}\" can't be a mod name.");
         await FollowModsAsync(lookAgain: true).ConfigureAwait(false);
         var race = target.Character.Race;
         var known = config.PhysicsMods.FirstOrDefault(mod => string.Equals(mod.Directory, name, StringComparison.OrdinalIgnoreCase));
-        var saved = await penumbra.SavePhysicsModAsync(known?.Directory, known?.Identifier ?? Guid.Empty, name, ModDescription,
+        var saved = await physicsMods.SavePhysicsModAsync(known?.Directory, known?.Identifier ?? Guid.Empty, name, ModDescription,
             PhysicsPaths.BodyPhysics(race), bytes, target.Character.ObjectIndex, token).ConfigureAwait(false);
         var others = await framework.RunOnFrameworkThread(() =>
         {
@@ -267,7 +270,7 @@ internal sealed class PhysicsBuilderService : IDisposable
             return rest;
         }).ConfigureAwait(false);
         var warnings = saved.Warnings.ToList();
-        var turnedOff = await penumbra.TurnOffPhysicsModsAsync(others, target.Character.ObjectIndex).ConfigureAwait(false);
+        var turnedOff = await physicsMods.TurnOffPhysicsModsAsync(others, target.Character.ObjectIndex).ConfigureAwait(false);
         try { await Preview.StopAsync(redrawObject: null).ConfigureAwait(false); }
         catch (Exception e) when (e is IOException or InvalidOperationException)
         {
@@ -380,7 +383,7 @@ internal sealed class PhysicsBuilderService : IDisposable
         string? stopProblem = null;
         try { await Preview.StopAsync(redrawObject: null).ConfigureAwait(false); }
         catch (Exception e) when (e is IOException or InvalidOperationException) { stopProblem = e.Message; }
-        var turnedOff = await penumbra.TurnOffPhysicsModsAsync(ModDirectories, target.Character.ObjectIndex).ConfigureAwait(false);
+        var turnedOff = await physicsMods.TurnOffPhysicsModsAsync(ModDirectories, target.Character.ObjectIndex).ConfigureAwait(false);
         var redraw = await penumbra.RedrawObjectAsync(target.Character.ObjectIndex).ConfigureAwait(false);
         if (stopProblem is null)
             return (turnedOff, redraw);
@@ -405,7 +408,7 @@ internal sealed class PhysicsBuilderService : IDisposable
             lock (lostMods)
                 if (!lookAgain && lostMods.Contains(known))
                     continue;
-            var found = await penumbra.FindPhysicsModAsync(known.Directory, known.Identifier).ConfigureAwait(false);
+            var found = await physicsMods.FindPhysicsModAsync(known.Directory, known.Identifier).ConfigureAwait(false);
             lock (lostMods)
                 if (found is null)
                     lostMods.Add(known);

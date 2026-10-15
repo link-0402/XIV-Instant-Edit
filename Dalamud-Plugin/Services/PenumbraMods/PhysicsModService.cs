@@ -1,9 +1,16 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Dalamud.Plugin.Services;
 using Penumbra.Api.Enums;
+using Penumbra.Api.IpcSubscribers;
+using static InstantEdit.Services.PenumbraMods.FrameworkThread;
+using static InstantEdit.Services.PenumbraMods.ModFiles;
+using static InstantEdit.Services.PenumbraMods.ModJson;
+using static InstantEdit.Services.PenumbraMods.ModMetadata;
+using static InstantEdit.Services.PenumbraMods.ModPaths;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
 /// <summary> The physics builder's mod after a save: where it is, the file now mapped, and anything to report. </summary>
 internal sealed record PhysicsModSaved(string Directory, Guid Identifier, string RelativePath, bool Created, string CollectionName,
@@ -14,9 +21,27 @@ internal sealed record PhysicsModSaved(string Directory, Guid Identifier, string
 /// body physics file. Every save writes a new file name (the game never reads a path it already loaded
 /// again) and removes the mod's older ones; the mod is enabled at a high priority in the character's collection.
 /// </summary>
-public sealed partial class PenumbraService
+internal sealed class PhysicsModService
 {
+    private readonly PenumbraIpc _ipc;
+    private readonly IFramework _framework;
+    private readonly IPluginLog _log;
+    private readonly SemaphoreSlim _exportGate;
+    private readonly ModActivation _activation;
+    private readonly TrySetMod _trySetMod;
+
+    public PhysicsModService(PenumbraIpc ipc, IFramework framework, IPluginLog log, SemaphoreSlim exportGate, ModActivation activation)
+    {
+        _ipc = ipc;
+        _framework = framework;
+        _log = log;
+        _exportGate = exportGate;
+        _activation = activation;
+        _trySetMod = ipc.TrySetMod;
+    }
+
     internal const string PhysicsFolder = "physics";
+    private const int PreviewModPriority = PreviewModWriter.PreviewModPriority;
     private static readonly Regex PhysicsFileVersion = new(@"\.(?<n>\d{1,9})\.phyb$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     /// <summary>
@@ -32,7 +57,7 @@ public sealed partial class PenumbraService
         gamePath = NormalizeGamePath(gamePath);
         if (!IsSafeGameResourcePath(gamePath, ".phyb") || bytes.Length == 0)
             throw new InvalidDataException("The physics file to save is invalid.");
-        var collection = await GetCollectionTargetAsync(objectIndex).ConfigureAwait(false)
+        var collection = await _ipc.GetCollectionTargetAsync(objectIndex).ConfigureAwait(false)
             ?? throw new IOException("Your character's Penumbra collection is unavailable. Try again once your character is loaded.");
 
         string? root;
@@ -42,7 +67,7 @@ public sealed partial class PenumbraService
         await _exportGate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            (root, var listed) = await _framework.RunOnFrameworkThread(() => (GetModDirectory(), TryGetModList(out var mods) ? mods : null)).ConfigureAwait(false);
+            (root, var listed) = await _framework.RunOnFrameworkThread(() => (_ipc.GetModDirectory(), _ipc.TryGetModList(out var mods) ? mods : null)).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
                 throw new IOException("Penumbra's mod directory is unavailable.");
             root = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
@@ -97,12 +122,12 @@ public sealed partial class PenumbraService
         var warnings = new List<string>();
         if (created)
         {
-            if (await AddNewModAsync(modDirectory).ConfigureAwait(false) is { } added)
+            if (await _activation.AddNewModAsync(modDirectory).ConfigureAwait(false) is { } added)
                 warnings.Add(added.Message);
         }
-        else if (await _framework.RunOnFrameworkThread(() => ReloadModOnFramework(modDirectory)).ConfigureAwait(false) is { } reload)
+        else if (await _framework.RunOnFrameworkThread(() => _activation.ReloadModOnFramework(modDirectory)).ConfigureAwait(false) is { } reload)
             warnings.Add(reload.Message);
-        var configure = await _framework.RunOnFrameworkThread(() => ConfigureModForCollectionOnFramework(
+        var configure = await _framework.RunOnFrameworkThread(() => _activation.ConfigureModForCollectionOnFramework(
             modDirectory, collection.Id, collection.Name, setPriority: true, priority: PreviewModPriority, redraw: false)).ConfigureAwait(false);
         if (!configure.Success)
             warnings.Add(configure.Message);
@@ -238,13 +263,13 @@ public sealed partial class PenumbraService
     /// <summary> The physics mod's folder now: <paramref name="directory"/>, the folder it was renamed to, or null when it's gone. </summary>
     internal async Task<string?> FindPhysicsModAsync(string directory, Guid identifier)
     {
-        var root = await _framework.RunOnFrameworkThread(GetModDirectory).ConfigureAwait(false);
+        var root = await _framework.RunOnFrameworkThread(_ipc.GetModDirectory).ConfigureAwait(false);
         await LeaveFrameworkThread();
         if (string.IsNullOrWhiteSpace(root))
             return null;
         if (FindPhysicsModFolder(root, directory, identifier, null) is { } same)
             return same;
-        var mods = await _framework.RunOnFrameworkThread(() => TryGetModList(out var list) ? list : null).ConfigureAwait(false);
+        var mods = await _framework.RunOnFrameworkThread(() => _ipc.TryGetModList(out var list) ? list : null).ConfigureAwait(false);
         await LeaveFrameworkThread();
         return FindPhysicsModFolder(root, directory, identifier, mods?.Keys);
     }
@@ -274,7 +299,7 @@ public sealed partial class PenumbraService
     {
         if (directories.Count == 0)
             return [];
-        var collection = await GetCollectionTargetAsync(objectIndex).ConfigureAwait(false)
+        var collection = await _ipc.GetCollectionTargetAsync(objectIndex).ConfigureAwait(false)
             ?? throw new IOException("Your character's Penumbra collection is unavailable.");
         return await _framework.RunOnFrameworkThread(() =>
         {
@@ -296,27 +321,11 @@ public sealed partial class PenumbraService
     {
         if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
             return null;
-        var (root, mods) = await _framework.RunOnFrameworkThread(() => (GetModDirectory(), TryGetModList(out var list) ? list : null)).ConfigureAwait(false);
+        var (root, mods) = await _framework.RunOnFrameworkThread(() => (_ipc.GetModDirectory(), _ipc.TryGetModList(out var list) ? list : null)).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(root) || !IsPathWithin(Path.GetFullPath(path), root))
             return null;
         var relative = Path.GetRelativePath(root, Path.GetFullPath(path));
         var directory = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)[0];
         return (directory, mods?.GetValueOrDefault(directory) is { Length: > 0 } name ? name : directory);
     }
-
-    /// <summary> Redraws one object, so it loads its skeleton and physics again. </summary>
-    internal Task<string?> RedrawObjectAsync(int objectIndex)
-        => _framework.RunOnFrameworkThread(() =>
-        {
-            try
-            {
-                _redrawObject.Invoke(objectIndex);
-                return (string?)null;
-            }
-            catch (Exception e)
-            {
-                _log.Warning(e, "Could not redraw object {ObjectIndex}.", objectIndex);
-                return "Your character could not be redrawn; redraw it in Penumbra.";
-            }
-        });
 }
