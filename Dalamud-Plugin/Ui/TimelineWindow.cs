@@ -26,6 +26,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private enum PendingAction : byte { None, Close, Switch }
 
     private readonly TimelineSession session;
+    private readonly MotionDecode decode;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
     private readonly GameSoundPlayer? soundPlayer;
@@ -66,6 +67,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
     {
         session = new TimelineSession(animations, catalog, preview, playback, motionDisplay, data, framework, log,
             () => loadTask != null || saveTask != null || pendingSaveId != null || undoPending || soundCheck != null || soundAsk != null);
+        decode = new MotionDecode(session);
         this.soundPlayer = soundPlayer;
         this.recorder = recorder;
         this.animationError = animationError;
@@ -193,7 +195,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         bonesWindow.IsOpen = false;
         EndGizmo(true);
         StopPreview();
-        ForgetDecode();
+        decode.Forget();
         DropPose();
         loadCancel?.Cancel();
         loadTask = null;
@@ -219,7 +221,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         loadCancel?.Cancel();
         loadCancel?.Dispose();
         loadCancel = null;
-        ForgetDecode();
+        decode.Forget();
         DropPose();
     }
 

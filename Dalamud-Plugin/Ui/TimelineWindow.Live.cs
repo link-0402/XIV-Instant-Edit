@@ -20,16 +20,6 @@ public sealed partial class TimelineWindow
     private bool liveWanted;
     private bool liveStarted;
     private string? liveError;
-    private Task<MotionClip>? decodeTask;
-    private CancellationTokenSource? decodeCancel;
-    private MotionClip? decoded;
-    private string? decodedKey;
-    private volatile string decodeStatus = "Reading the motion";
-    // Why the last read of this version of the clip failed; it is not read again until Live asks or the clip changes.
-    private string? decodeError;
-    private string? failedDecodeKey;
-    // The decoded motion as the document last cut or stretched it (see OutputMotion).
-    private (MotionClip Decoded, MotionCuts? Cuts, int Length, MotionClip Output)? outputMotion;
     // Until when Live waits for the GPose character to be drawn again, as after the redraw that ends a preview.
     private DateTime? liveDrawWait;
     private static readonly TimeSpan LiveDrawWait = TimeSpan.FromSeconds(10);
@@ -53,31 +43,6 @@ public sealed partial class TimelineWindow
     /// <summary>The length Live plays the motion at: the document's when cut or stretched, else 0 for the clip's own.</summary>
     private static int LiveLength(TimelineDocument doc) => doc.Cut || doc.Stretched ? doc.Length : 0;
 
-    /// <summary>
-    /// <paramref name="clip"/> as the document's cuts and length play it, as Live and a save cut it before the
-    /// bone layers; the clip itself when neither changes it. During a drag the last cut stands until it ends.
-    /// </summary>
-    private MotionClip OutputMotion(TimelineEditor current, MotionClip clip)
-    {
-        var doc = current.Document;
-        if (!doc.Cut && !doc.Stretched)
-            return clip;
-        if (outputMotion is { } cached && ReferenceEquals(cached.Decoded, clip) &&
-            (ReferenceEquals(cached.Cuts, doc.Cuts) && cached.Length == doc.Length || current.Gesture != TimelineGesture.None))
-            return cached.Output;
-        try
-        {
-            var whole = (int)Math.Round(clip.Duration * TimelineDocument.Fps);
-            var output = MotionCutter.Apply(clip, doc.Cuts ?? MotionCuts.WholeOf(whole), doc.Length);
-            outputMotion = (clip, doc.Cuts, doc.Length, output);
-            return output;
-        }
-        catch (InvalidDataException)
-        {
-            return clip;
-        }
-    }
-
     private void StartLive(AnimationTimelineSource loaded)
     {
         StopPreview();
@@ -86,9 +51,8 @@ public sealed partial class TimelineWindow
         liveError = null;
         liveDrawWait = null;
         // Turning Live on reads a clip again whose last read failed.
-        failedDecodeKey = null;
-        decodeError = null;
-        EnsureDecode(Fresh(loaded));
+        decode.ReadAgain();
+        decode.Ensure(Fresh(loaded));
     }
 
     /// <summary>
@@ -120,7 +84,11 @@ public sealed partial class TimelineWindow
     /// <summary>Every frame: starts the display once the motion is decoded, then hands it the document's layers.</summary>
     private void UpdateLive(TimelineEditor current, AnimationTimelineSource loaded)
     {
-        PollDecode();
+        if (decode.Poll() && liveWanted)
+        {
+            StopLive();
+            liveError = "The motion could not be read: " + decode.Error;
+        }
         if (!liveWanted || motionDisplay == null)
             return;
         var fresh = Fresh(loaded);
@@ -132,13 +100,13 @@ public sealed partial class TimelineWindow
             liveError = blocked;
             return;
         }
-        if (decodedKey != null && decodedKey != DecodeKey(fresh))
+        if (decode.DecodedKey != null && decode.DecodedKey != MotionDecode.KeyOf(fresh))
         {
             StopLive();
             liveError = "The clip changed. Turn Live on again.";
             return;
         }
-        if (decoded == null)
+        if (decode.Decoded is not { } decoded)
             return;
         try
         {
@@ -212,61 +180,5 @@ public sealed partial class TimelineWindow
             return false;
         }
         return (liveDrawWait ??= DateTime.UtcNow + LiveDrawWait) > DateTime.UtcNow;
-    }
-
-    /// <summary>Identifies a decode: the clip, its file version, the skeleton it is read on and the motion layers apply to.</summary>
-    private static string DecodeKey(AnimationTimelineSource loaded) =>
-        $"{TimelineSession.ClipKey(loaded)}|{loaded.Resource.Hash}|{loaded.Clip.BindingFingerprint}|{loaded.Clip.Resolution?.Selected?.Skeleton.Fingerprint}|{loaded.BaseHash}";
-
-    /// <summary>Starts decoding the clip's motion unless this version of it is decoded or being decoded.</summary>
-    private void EnsureDecode(AnimationTimelineSource loaded)
-    {
-        if (animations is not { } service)
-            return;
-        var key = DecodeKey(loaded);
-        if (key == decodedKey && (decoded != null || decodeTask != null) || key == failedDecodeKey)
-            return;
-        ForgetDecode();
-        decodedKey = key;
-        decodeStatus = "Reading the motion";
-        decodeCancel = new CancellationTokenSource();
-        var token = decodeCancel.Token;
-        decodeTask = Task.Run(() => service.DecodeMotionAsync(loaded, message => decodeStatus = message, token), token);
-    }
-
-    private void PollDecode()
-    {
-        if (decodeTask is not { IsCompleted: true } task)
-            return;
-        decodeTask = null;
-        if (task.IsCanceled)
-            return;
-        if (task.IsFaulted)
-        {
-            // Remembered so the panels that need the motion say why instead of reading it again every frame.
-            failedDecodeKey = decodedKey;
-            decodeError = TimelineSession.ErrorText(task.Exception);
-            decodedKey = null;
-            if (liveWanted)
-            {
-                StopLive();
-                liveError = "The motion could not be read: " + decodeError;
-            }
-            return;
-        }
-        decoded = task.Result;
-    }
-
-    /// <summary>Drops the decoded motion and any decode still running, when the window closes or the clip goes.</summary>
-    private void ForgetDecode()
-    {
-        decodeCancel?.Cancel();
-        decodeCancel?.Dispose();
-        decodeCancel = null;
-        decodeTask = null;
-        decoded = null;
-        decodedKey = null;
-        failedDecodeKey = null;
-        decodeError = null;
     }
 }
