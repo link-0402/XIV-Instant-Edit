@@ -117,7 +117,7 @@ public sealed partial class TimelineWindow
                 ImGui.TextUnformatted(TimelineWindowViews.KindName(ev.Magic));
                 TimelineUi.Fact("Lane");
                 ImGui.TextUnformatted(TimelineWindowViews.LaneName(ev.Lane));
-                if (TimelineCanvas.FromPack(current, ev))
+                if (TimelinePainter.FromPack(current, ev))
                 {
                     TimelineUi.Fact("Set");
                     ImGui.TextUnformatted(current.Document.FacePack);
