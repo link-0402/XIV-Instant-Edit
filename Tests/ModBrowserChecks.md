@@ -36,7 +36,7 @@ acceptance list, rewritten for the Mod Browser). Use copies of real mods where a
 6e. When Penumbra gives no answer for your collection, "Show: Active" says "Penumbra did not say which
     mods are enabled in <collection>." and lists nothing, not the previous collection's mods.
     (Checked 2026-10-14 through XIV Bridge, with the settings read made to return nothing: the hint
-    named Lucina. 92f245e.)
+    named Lucina. 8441df6.)
 
 ## Check and repair
 

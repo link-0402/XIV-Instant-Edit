@@ -54,7 +54,7 @@ Collision with:
 ## Plain settings and the overlay (2026-10-14, pending)
 
 Checked in game on 2026-10-15 by the XIV Bridge tests `tests/instant-edit/physics/11` to `20`, on a
-copy of the IE Physics mod in the test collection (build 6297dbaa, main 9294771). Colours, the
+copy of the IE Physics mod in the test collection (build 6297dbaa, main 7b74c4f). Colours, the
 jiggle's feel and walking in GPose are left for your eye.
 
 Settings:
