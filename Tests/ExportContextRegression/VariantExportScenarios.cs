@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using static InstantEdit.TestSupport.Assertions;
+using InstantEdit.Services.PenumbraMods;
 
 internal static class VariantExportScenarios
 {
@@ -35,9 +36,9 @@ internal static class VariantExportScenarios
         File.WriteAllText(metaPath, Metadata().ToJsonString());
         for (var option = 1; option <= 2; option++)
         {
-            Require(PenumbraService.PrepareVariantGroup(root, GamePath, $"Files/new{option}.mdl",
+            Require(ModOptionGroups.PrepareVariantGroup(root, GamePath, $"Files/new{option}.mdl",
                     $"New {option}", "New Group", out var prepared) is null &&
-                    PenumbraService.CommitVariantGroup(prepared!) is null,
+                    ModOptionGroups.CommitVariantGroup(prepared!) is null,
                 "v4: New Group creates or reuses a compatible name");
         }
         var meta = JsonNode.Parse(File.ReadAllText(metaPath))!;
@@ -84,10 +85,10 @@ internal static class VariantExportScenarios
         meta["PageNames"] = new JsonObject { ["2"] = "Second" };
         File.WriteAllText(metaPath, meta.ToJsonString());
         var target = $"group:{selectedId:D}";
-        var error = PenumbraService.PrepareVariantGroup(root, GamePath, "Files/new.mdl", "New",
+        var error = ModOptionGroups.PrepareVariantGroup(root, GamePath, "Files/new.mdl", "New",
             "Cached Name", out var prepared, targetId: target);
         Require(error is null && prepared is not null, "v4: renamed group resolves by selected identity");
-        Require(PenumbraService.CommitVariantGroup(prepared!) is null, "v4: selected group commits");
+        Require(ModOptionGroups.CommitVariantGroup(prepared!) is null, "v4: selected group commits");
         var writtenMeta = JsonNode.Parse(File.ReadAllText(metaPath))!;
         var written = writtenMeta["Groups"]![0]!;
         Require(written["Name"]!.GetValue<string>() == "Renamed" &&
@@ -121,7 +122,7 @@ internal static class VariantExportScenarios
             var staleId = stale == "missing"
                 ? $"group:{Guid.NewGuid():D}"
                 : target;
-            Require(PenumbraService.PrepareVariantGroup(root, GamePath, "Files/new.mdl", "New",
+            Require(ModOptionGroups.PrepareVariantGroup(root, GamePath, "Files/new.mdl", "New",
                     "Cached Name", out var rejected, targetId: staleId) is not null && rejected is null &&
                     before.All(pair => File.ReadAllText(pair.Key) == pair.Value),
                 $"v4: {stale} group is rejected without filesystem changes");
@@ -142,17 +143,17 @@ internal static class VariantExportScenarios
         var meta = Metadata(group);
         File.WriteAllText(metaPath, meta.ToJsonString());
         var optionTarget = $"option:{groupId:D}:{selectedId:D}";
-        var exposed = PenumbraService.ReadVariantTargetsForRegression(root, GamePath);
+        var exposed = ModOptionGroups.ReadVariantTargetsForRegression(root, GamePath);
         Require(exposed.Single().Id == $"group:{groupId:D}" && exposed.Single().Options[1].Id == optionTarget,
             "v4: variant target responses expose GUID-only group and option IDs");
 
         group["Name"] = "Renamed";
         group["Options"] = new JsonArray(group["Options"]![1]!.DeepClone(), group["Options"]![0]!.DeepClone());
         File.WriteAllText(metaPath, meta.ToJsonString());
-        Require(PenumbraService.ResolveVariantOptionPathForRegression(root, GamePath, optionTarget)?
+        Require(ModOptionGroups.ResolveVariantOptionPathForRegression(root, GamePath, optionTarget)?
                     .EndsWith(Path.Combine("Files", "selected.mdl"), StringComparison.OrdinalIgnoreCase) == true,
             "v4: option target survives group and option renaming/reordering with duplicate names");
-        Require(PenumbraService.ResolveVariantOptionPathForRegression(root, GamePath,
+        Require(ModOptionGroups.ResolveVariantOptionPathForRegression(root, GamePath,
                     $"option:{groupId:D}:{Guid.NewGuid():D}") is null,
             "v4: stale option GUIDs are rejected");
     }
@@ -166,7 +167,7 @@ internal static class VariantExportScenarios
             var metaPath = Path.Combine(folder, "meta.json");
             File.WriteAllText(metaPath, new JsonObject { ["FileVersion"] = version, ["Groups"] = new JsonArray() }.ToJsonString());
             var before = File.ReadAllText(metaPath);
-            var error = PenumbraService.PrepareVariantGroup(folder, GamePath, "Files/new.mdl", "New", "Group", out var prepared);
+            var error = ModOptionGroups.PrepareVariantGroup(folder, GamePath, "Files/new.mdl", "New", "Group", out var prepared);
             Require(prepared is null && error?.Contains("Penumbra 1.7.1.0", StringComparison.Ordinal) == true &&
                     File.ReadAllText(metaPath) == before,
                 $"v{version}: unsupported metadata fails actionably before mutation");

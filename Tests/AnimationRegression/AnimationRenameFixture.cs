@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.PenumbraMods;
 
 /// <summary>
 /// The game and Penumbra cannot refresh an animation resource from an unchanged
@@ -47,7 +48,7 @@ internal static class AnimationRenameFixture
                 ["FileSwaps"] = new JsonObject(),
                 ["Manipulations"] = new JsonArray(),
             };
-            var meta = PenumbraService.CreateV4ModMetadata("Rename Test", "Author", "Description", "1.0", defaultData);
+            var meta = ModMetadata.CreateV4ModMetadata("Rename Test", "Author", "Description", "1.0", defaultData);
             var optionFiles = new JsonObject { [gamePath] = oldRelative };
             meta["Groups"] = new JsonArray(new JsonObject
             {
@@ -59,7 +60,7 @@ internal static class AnimationRenameFixture
             });
             File.WriteAllText(metaPath, meta.ToJsonString());
 
-            var stillReferenced = PenumbraService.RenameAnimationFileMapping(root, gamePath, oldRelative, newRelative);
+            var stillReferenced = ModMetadata.RenameAnimationFileMapping(root, gamePath, oldRelative, newRelative);
             check(!stillReferenced, "nothing else pointed at the old file, so it is reported safe to delete");
             var updated = JsonNode.Parse(File.ReadAllText(metaPath))!.AsObject();
             check(updated["DefaultData"]!["Files"]![gamePath]!.GetValue<string>() == newRelative,
@@ -67,20 +68,20 @@ internal static class AnimationRenameFixture
             check(updated["Groups"]![0]!["Options"]![0]!["Files"]![gamePath]!.GetValue<string>() == newRelative,
                 "a Single group's option offering the same override is repointed too, since it shares the same physical file");
 
-            reject(() => PenumbraService.RenameAnimationFileMapping(root, gamePath, oldRelative, "files/loop_sp.ieabcdef01.pap"),
+            reject(() => ModMetadata.RenameAnimationFileMapping(root, gamePath, oldRelative, "files/loop_sp.ieabcdef01.pap"),
                 "renaming again from the path it no longer maps to is refused rather than silently doing nothing");
 
             // A second game path sharing the same physical file must stop the old file from being deleted.
             var sharedRoot = Path.Combine(root, "shared");
             Directory.CreateDirectory(sharedRoot);
-            var sharedMeta = PenumbraService.CreateV4ModMetadata("Shared Test", "Author", "Description", "1.0", new JsonObject
+            var sharedMeta = ModMetadata.CreateV4ModMetadata("Shared Test", "Author", "Description", "1.0", new JsonObject
             {
                 ["Files"] = new JsonObject { [gamePath] = oldRelative, [otherGamePath] = oldRelative },
                 ["FileSwaps"] = new JsonObject(),
                 ["Manipulations"] = new JsonArray(),
             });
             File.WriteAllText(Path.Combine(sharedRoot, "meta.json"), sharedMeta.ToJsonString());
-            var sharedStillReferenced = PenumbraService.RenameAnimationFileMapping(sharedRoot, gamePath, oldRelative, newRelative);
+            var sharedStillReferenced = ModMetadata.RenameAnimationFileMapping(sharedRoot, gamePath, oldRelative, newRelative);
             check(sharedStillReferenced, "a different game path still mapped to the old physical file blocks its deletion");
             var sharedUpdated = JsonNode.Parse(File.ReadAllText(Path.Combine(sharedRoot, "meta.json")))!.AsObject();
             check(sharedUpdated["DefaultData"]!["Files"]![gamePath]!.GetValue<string>() == newRelative &&
@@ -91,12 +92,12 @@ internal static class AnimationRenameFixture
             var backslashRoot = Path.Combine(root, "backslash");
             Directory.CreateDirectory(backslashRoot);
             var backslashed = oldRelative.Replace('/', '\\');
-            File.WriteAllText(Path.Combine(backslashRoot, "meta.json"), PenumbraService.CreateV4ModMetadata("Backslash Test", "Author", "Description", "1.0",
+            File.WriteAllText(Path.Combine(backslashRoot, "meta.json"), ModMetadata.CreateV4ModMetadata("Backslash Test", "Author", "Description", "1.0",
                 new JsonObject { ["Files"] = new JsonObject { [gamePath] = backslashed }, ["FileSwaps"] = new JsonObject(), ["Manipulations"] = new JsonArray() })
                 .ToJsonString());
-            PenumbraService.RenameAnimationFileMapping(backslashRoot, gamePath, oldRelative, newRelative);
+            ModMetadata.RenameAnimationFileMapping(backslashRoot, gamePath, oldRelative, newRelative);
             var forward = JsonNode.Parse(File.ReadAllText(Path.Combine(backslashRoot, "meta.json")))!["DefaultData"]!["Files"]![gamePath]!.GetValue<string>();
-            PenumbraService.RenameAnimationFileMapping(backslashRoot, gamePath, newRelative, oldRelative);
+            ModMetadata.RenameAnimationFileMapping(backslashRoot, gamePath, newRelative, oldRelative);
             var back = JsonNode.Parse(File.ReadAllText(Path.Combine(backslashRoot, "meta.json")))!["DefaultData"]!["Files"]![gamePath]!.GetValue<string>();
             check(forward == newRelative.Replace('/', '\\') && back == backslashed,
                 "a rename and its undo keep the mod's backslashes in its mapping");

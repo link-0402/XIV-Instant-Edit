@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using InstantEdit.Services.Previews;
 using InstantEdit.Services.Skeletons;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services.Painter;
 
@@ -242,7 +243,7 @@ internal sealed class PainterProjectBuilder
         return new PainterDraft
         {
             Request = request, Main = main, Siblings = siblings, Sets = sets, Warnings = warnings, Title = request.Model.FileName,
-            NewModName = PenumbraService.IsSafeNewModName(modName) ? modName : "Painter Edit", OutsideTextures = outside,
+            NewModName = ModPaths.IsSafeNewModName(modName) ? modName : "Painter Edit", OutsideTextures = outside,
         };
     }
 

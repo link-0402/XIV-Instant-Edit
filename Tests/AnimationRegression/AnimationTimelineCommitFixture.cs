@@ -2,6 +2,7 @@
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.PenumbraMods;
 
 /// <summary>
 /// A timeline edit can add files, such as an imported sound, next to the animation it edits.
@@ -29,7 +30,7 @@ internal static class AnimationTimelineCommitFixture
             const string sound = "sound/instant_edit/drama_b8124175.scd";
             const string relative = "instant_edit/sound/instant_edit/drama_b8124175.scd";
             var metaPath = Path.Combine(root, "meta.json");
-            var meta = PenumbraService.CreateV4ModMetadata("Timeline Test", "Author", "Description", "1.0", new JsonObject
+            var meta = ModMetadata.CreateV4ModMetadata("Timeline Test", "Author", "Description", "1.0", new JsonObject
             {
                 ["Files"] = new JsonObject { [pap] = "files/laugh.pap" },
                 ["FileSwaps"] = new JsonObject(),
@@ -49,42 +50,42 @@ internal static class AnimationTimelineCommitFixture
             });
             File.WriteAllText(metaPath, meta.ToJsonString());
 
-            PenumbraService.AddAnimationResourceMapping(root, pap, sound, relative);
+            ModMetadata.AddAnimationResourceMapping(root, pap, sound, relative);
             var added = JsonNode.Parse(File.ReadAllText(metaPath))!.AsObject();
             check(added["DefaultData"]!["Files"]![sound]!.GetValue<string>() == relative &&
                   added["Groups"]![0]!["Options"]![0]!["Files"]![sound]!.GetValue<string>() == relative,
                 "an added sound is mapped in the default files and in the option that maps the animation");
             check(added["Groups"]![0]!["Options"]![1]!["Files"]![sound] is null,
                 "an option that does not map the animation does not get the sound");
-            reject(() => PenumbraService.AddAnimationResourceMapping(root, pap, sound, "instant_edit/other.scd"),
+            reject(() => ModMetadata.AddAnimationResourceMapping(root, pap, sound, "instant_edit/other.scd"),
                 "a game path the mod already maps is never mapped twice");
-            reject(() => PenumbraService.AddAnimationResourceMapping(root, "chara/missing.pap", "sound/instant_edit/x_00000000.scd", "instant_edit/x.scd"),
+            reject(() => ModMetadata.AddAnimationResourceMapping(root, "chara/missing.pap", "sound/instant_edit/x_00000000.scd", "instant_edit/x.scd"),
                 "a file can't be added for an animation the mod no longer maps");
 
-            PenumbraService.RemoveAnimationResourceMapping(root, sound, relative);
+            ModMetadata.RemoveAnimationResourceMapping(root, sound, relative);
             var removed = JsonNode.Parse(File.ReadAllText(metaPath))!.AsObject();
             check(removed["DefaultData"]!["Files"]![sound] is null && removed["Groups"]![0]!["Options"]![0]!["Files"]![sound] is null &&
                   removed["DefaultData"]!["Files"]![pap]!.GetValue<string>() == "files/laugh.pap",
                 "undo removes every mapping of the added file and keeps the animation's own");
             var before = File.ReadAllText(metaPath);
-            PenumbraService.RemoveAnimationResourceMapping(root, sound, relative);
+            ModMetadata.RemoveAnimationResourceMapping(root, sound, relative);
             check(File.ReadAllText(metaPath) == before, "removing a mapping that is already gone changes nothing");
 
             // A looping copy of an effect follows its original's toggle, not the animation's options.
             const string copy = "vfx/instant_edit/bgm_loop_0a1b2c3d.avfx";
             const string copyRelative = "instant_edit/vfx/instant_edit/bgm_loop_0a1b2c3d.avfx";
-            check(PenumbraService.ModMapsGamePath(root, "VFX/Mod/BGM.avfx") && !PenumbraService.ModMapsGamePath(root, copy) &&
-                  !PenumbraService.ModMapsGamePath(Path.Combine(root, "missing"), "vfx/mod/bgm.avfx"),
+            check(ModMetadata.ModMapsGamePath(root, "VFX/Mod/BGM.avfx") && !ModMetadata.ModMapsGamePath(root, copy) &&
+                  !ModMetadata.ModMapsGamePath(Path.Combine(root, "missing"), "vfx/mod/bgm.avfx"),
                 "a mod maps a game path when any of its options does");
-            PenumbraService.AddAnimationResourceMapping(root, "vfx/mod/bgm.avfx", copy, copyRelative);
+            ModMetadata.AddAnimationResourceMapping(root, "vfx/mod/bgm.avfx", copy, copyRelative);
             var beside = JsonNode.Parse(File.ReadAllText(metaPath))!.AsObject();
             check(beside["Groups"]![1]!["Options"]![0]!["Files"]![copy]!.GetValue<string>() == copyRelative &&
                   beside["DefaultData"]!["Files"]![copy] is null && beside["Groups"]![0]!["Options"]![0]!["Files"]![copy] is null,
                 "a copy is mapped only in the options that map its original");
-            PenumbraService.RemoveAnimationResourceMapping(root, copy, copyRelative);
+            ModMetadata.RemoveAnimationResourceMapping(root, copy, copyRelative);
             check(JsonNode.Parse(File.ReadAllText(metaPath))!["Groups"]![1]!["Options"]![0]!["Files"]!.AsObject().Count == 1,
                 "undo removes the copy's mapping and keeps the original's");
-            check(PenumbraService.AnimationMappedFiles(root, "vfx/mod/bgm.avfx").SequenceEqual(["toggles/bgm.avfx"]) &&
+            check(ModMetadata.AnimationMappedFiles(root, "vfx/mod/bgm.avfx").SequenceEqual(["toggles/bgm.avfx"]) &&
                   AnimationEditService.OwnCopies(root, "vfx/mod/bgm.avfx", Path.Combine(root, "toggles", "bgm.avfx"), Reverse, _ => { }) == null,
                 "an original the mod maps to one file keeps one copy, mapped wherever it is, as before");
 
@@ -112,7 +113,7 @@ internal static class AnimationTimelineCommitFixture
         const string silver = "instant_edit/vfx/instant_edit/aura_loop_0a1b2c3d_2.avfx";
         File.WriteAllBytes(Path.Combine(root, "fx", "gold.avfx"), [1, 2, 3]);
         File.WriteAllBytes(Path.Combine(root, "fx", "silver.avfx"), [4, 5, 6]);
-        var meta = PenumbraService.CreateV4ModMetadata("Per File", "Author", "Description", "1.0", new JsonObject
+        var meta = ModMetadata.CreateV4ModMetadata("Per File", "Author", "Description", "1.0", new JsonObject
         {
             ["Files"] = new JsonObject(), ["FileSwaps"] = new JsonObject(), ["Manipulations"] = new JsonArray(),
         });
@@ -129,7 +130,7 @@ internal static class AnimationTimelineCommitFixture
 
         var skipped = new List<string>();
         var copies = AnimationEditService.OwnCopies(root, effect, Path.Combine(root, "fx", "gold.avfx"), Reverse, skipped.Add);
-        check(PenumbraService.AnimationMappedFiles(root, effect).SequenceEqual(["fx/gold.avfx", "fx/silver.avfx"]) &&
+        check(ModMetadata.AnimationMappedFiles(root, effect).SequenceEqual(["fx/gold.avfx", "fx/silver.avfx"]) &&
               copies is { From: "fx/gold.avfx" } && copies.Others.Count == 1 &&
               copies.Others["fx/silver.avfx"].SequenceEqual(new byte[] { 6, 5, 4 }) && skipped.Count == 0,
             "a copy made from the gold file is the gold options' own; the silver file gets a copy made the same way");
@@ -137,17 +138,17 @@ internal static class AnimationTimelineCommitFixture
         check(none is { From: "fx/gold.avfx", Others.Count: 0 } && skipped.Single().Contains("fx/silver.avfx"),
             "without a way to make it again, the silver options get no copy rather than the gold one");
 
-        PenumbraService.AddAnimationResourceMapping(root, effect, copy, gold, "fx/gold.avfx");
-        PenumbraService.AddAnimationResourceMapping(root, effect, copy, silver, "fx/silver.avfx");
+        ModMetadata.AddAnimationResourceMapping(root, effect, copy, gold, "fx/gold.avfx");
+        ModMetadata.AddAnimationResourceMapping(root, effect, copy, silver, "fx/silver.avfx");
         var options = JsonNode.Parse(File.ReadAllText(metaPath))!["Groups"]![0]!["Options"]!;
         check(options[0]!["Files"]![copy]!.GetValue<string>() == gold && options[1]!["Files"]![copy]!.GetValue<string>() == silver &&
               options[2]!["Files"]![copy] is null,
             "each option maps the copy's one game path to the copy of its own file; an option without the effect gets none");
-        reject(() => PenumbraService.AddAnimationResourceMapping(root, effect, copy, "instant_edit/other.avfx", "fx/gold.avfx"),
+        reject(() => ModMetadata.AddAnimationResourceMapping(root, effect, copy, "instant_edit/other.avfx", "fx/gold.avfx"),
             "an option that maps the copy already is never mapped twice");
-        reject(() => PenumbraService.AddAnimationResourceMapping(root, effect, "vfx/instant_edit/x_00000000.avfx", "instant_edit/x.avfx", "fx/bronze.avfx"),
+        reject(() => ModMetadata.AddAnimationResourceMapping(root, effect, "vfx/instant_edit/x_00000000.avfx", "instant_edit/x.avfx", "fx/bronze.avfx"),
             "a copy of a file no option maps any more is refused");
-        PenumbraService.RemoveAnimationResourceMapping(root, copy, silver);
+        ModMetadata.RemoveAnimationResourceMapping(root, copy, silver);
         options = JsonNode.Parse(File.ReadAllText(metaPath))!["Groups"]![0]!["Options"]!;
         check(options[0]!["Files"]![copy]!.GetValue<string>() == gold && options[1]!["Files"]![copy] is null,
             "undo removes each option's copy by its own file");

@@ -13,6 +13,13 @@ using Penumbra.Api.Helpers;
 using Penumbra.Api.IpcSubscribers;
 using Lumina.Data;
 using Lumina.Data.Files;
+using InstantEdit.Services.PenumbraMods;
+using static InstantEdit.Services.PenumbraMods.FrameworkThread;
+using static InstantEdit.Services.PenumbraMods.ModCleanup;
+using static InstantEdit.Services.PenumbraMods.ModJson;
+using static InstantEdit.Services.PenumbraMods.ModMetadata;
+using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
+using static InstantEdit.Services.PenumbraMods.ModPaths;
 
 namespace InstantEdit.Services;
 
@@ -889,15 +896,6 @@ public sealed partial class PenumbraService
                 foreach (var child in DescendantObjects(item))
                     yield return child;
         }
-    }
-
-    private static int JsonIntFlexible(JsonNode? node)
-    {
-        if (node is not JsonValue value)
-            return 0;
-        if (value.TryGetValue<int>(out var number))
-            return number;
-        return value.TryGetValue<string>(out var text) && int.TryParse(text, out number) ? number : 0;
     }
 
     private static string AttributeGroupErrorCode(string error)

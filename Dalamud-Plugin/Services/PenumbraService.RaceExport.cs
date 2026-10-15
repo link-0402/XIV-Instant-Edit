@@ -3,6 +3,13 @@ using System.Text.Json.Nodes;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Painter;
 using InstantEdit.Services.Skeletons;
+using InstantEdit.Services.PenumbraMods;
+using static InstantEdit.Services.PenumbraMods.FrameworkThread;
+using static InstantEdit.Services.PenumbraMods.ModCleanup;
+using static InstantEdit.Services.PenumbraMods.ModJson;
+using static InstantEdit.Services.PenumbraMods.ModMetadata;
+using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
+using static InstantEdit.Services.PenumbraMods.ModPaths;
 
 namespace InstantEdit.Services;
 

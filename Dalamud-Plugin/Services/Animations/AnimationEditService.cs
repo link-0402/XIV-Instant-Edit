@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services.Animations;
 
@@ -200,7 +201,7 @@ internal sealed partial class AnimationEditService : IDisposable
     public void Edit(AnimationBakeRequest request) => Launch(async token =>
     {
         native.EnsureAvailable();
-        if (request.Destination == AnimationDestination.NewMod && !PenumbraService.IsSafeNewModName(request.ModName))
+        if (request.Destination == AnimationDestination.NewMod && !ModPaths.IsSafeNewModName(request.ModName))
             throw new InvalidDataException("Choose a valid mod name before baking.");
         if (request.Operation == AnimationOperation.BakeOffsets)
         {

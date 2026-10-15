@@ -6,6 +6,7 @@ using InstantEdit.Services.Painter;
 using Penumbra.Api.Enums;
 using Penumbra.Api.Helpers;
 using NativeCharacter = FFXIVClientStructs.FFXIV.Client.Game.Character.Character;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services;
 
@@ -376,7 +377,7 @@ public sealed class OnScreenService : IDisposable
             var safeModModel = source.State == ResourceSourceState.LoadedMod && Path.IsPathRooted(actualPath);
             var safeGameModel = source.State == ResourceSourceState.GameData &&
                                 !Path.IsPathRooted(normalizedActualPath) &&
-                                PenumbraService.IsSafeGamePath(normalizedActualPath);
+                                ModPaths.IsSafeGamePath(normalizedActualPath);
             if (!safeModModel && !safeGameModel)
                 continue;
             var hidden = hiddenFiles?.Contains(PainterVisibility.NormalizePath(actualPath)) == true;

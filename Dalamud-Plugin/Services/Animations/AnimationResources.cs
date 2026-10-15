@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services.Animations;
 
@@ -167,7 +168,7 @@ internal sealed class AnimationResources(PenumbraService penumbra, IDataManager 
     /// </summary>
     internal static bool SafeModRelativePath(string relativePath, string gamePath) =>
         Path.GetExtension(gamePath).ToLowerInvariant() is ".pap" or ".tmb" or ".scd" &&
-        PenumbraService.IsSafeGameResourcePath(relativePath.Replace('\\', '/'), Path.GetExtension(gamePath));
+        ModPaths.IsSafeGameResourcePath(relativePath.Replace('\\', '/'), Path.GetExtension(gamePath));
 
     /// <summary>
     /// The clips a rebake rewrites, read for the edit and rechecked at commit. A

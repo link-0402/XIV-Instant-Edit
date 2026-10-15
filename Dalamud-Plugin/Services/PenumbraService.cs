@@ -13,6 +13,13 @@ using Penumbra.Api.Helpers;
 using Penumbra.Api.IpcSubscribers;
 using Lumina.Data;
 using Lumina.Data.Files;
+using InstantEdit.Services.PenumbraMods;
+using static InstantEdit.Services.PenumbraMods.FrameworkThread;
+using static InstantEdit.Services.PenumbraMods.ModCleanup;
+using static InstantEdit.Services.PenumbraMods.ModJson;
+using static InstantEdit.Services.PenumbraMods.ModMetadata;
+using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
+using static InstantEdit.Services.PenumbraMods.ModPaths;
 
 namespace InstantEdit.Services;
 
@@ -96,8 +103,6 @@ public sealed partial class PenumbraService
         int Id, int RaceCode, string AtrSlot, string ObjectType, string EquipSlot, string BodySlot);
     private sealed record AttributeGroupWrite(string Path, JsonObject Document);
 
-    private const string OwnershipMarkerFile = ".instant-edit-owner.json";
-    private const string VariantGroupDescriptionPrefix = "Managed by XIV Instant Edit variant group: ";
     private const string AttributeGroupDescriptionPrefix = "Managed by XIV Instant Edit attribute group v1: ";
     private static readonly string[] AttributeGroupFamilies =
         ["mv", "tv", "gv", "dv", "sv", "ev", "nv", "wv", "rv"];
@@ -238,23 +243,6 @@ public sealed partial class PenumbraService
             }
         }).ConfigureAwait(false);
 
-    /// <summary>
-    /// Resumes on the thread pool. An await on RunOnFrameworkThread continues inline on the game
-    /// thread that ran the work, so the file work that usually follows would stall the frame.
-    /// </summary>
-    private static ThreadPoolHop LeaveFrameworkThread() => default;
-
-    private readonly struct ThreadPoolHop : System.Runtime.CompilerServices.ICriticalNotifyCompletion
-    {
-        public ThreadPoolHop GetAwaiter() => this;
-        public bool IsCompleted => false;
-        public void GetResult() { }
-        public void OnCompleted(Action continuation)
-            => ThreadPool.QueueUserWorkItem(static run => run(), continuation, preferLocal: false);
-        public void UnsafeOnCompleted(Action continuation)
-            => ThreadPool.UnsafeQueueUserWorkItem(static run => run(), continuation, preferLocal: false);
-    }
-
     /// <summary>Capture the effective source-mod manipulations for one collection.</summary>
     public async Task<JsonArray?> CaptureEffectiveManipulationsAsync(
         Guid collectionId,
@@ -287,101 +275,6 @@ public sealed partial class PenumbraService
             _log.Warning(e, "Could not snapshot Meta Manipulations for source mod {ModDirectory}.", modDirectory);
             return null;
         }
-    }
-
-    internal static JsonArray CaptureEffectiveManipulations(
-        string modFolder,
-        IReadOnlyDictionary<string, IReadOnlyList<string>> enabledOptions)
-    {
-        var meta = LoadV4ModMetadata(modFolder);
-        var groups = ReadAllVariantGroups(modFolder)
-            .Select((group, index) => (Group: group, Index: index))
-            .OrderByDescending(item => JsonInt(item.Group["Priority"]))
-            .ThenBy(item => item.Index)
-            .ToArray();
-        var result = new JsonArray();
-        var identities = new HashSet<string>(StringComparer.Ordinal);
-        var serializedBytes = 2;
-
-        static string CanonicalJson(JsonNode? node)
-            => node switch
-            {
-                null => "null",
-                JsonObject value => "{" + string.Join(",", value
-                    .OrderBy(pair => pair.Key, StringComparer.Ordinal)
-                    .Select(pair => JsonSerializer.Serialize(pair.Key) + ":" + CanonicalJson(pair.Value))) + "}",
-                JsonArray value => "[" + string.Join(",", value.Select(CanonicalJson)) + "]",
-                _ => node.ToJsonString(),
-            };
-
-        static string Identity(JsonObject manipulation)
-        {
-            var identity = manipulation.DeepClone().AsObject();
-            if (identity["Manipulation"] is JsonObject payload)
-                payload.Remove("Entry");
-            else
-                identity.Remove("Entry");
-            return CanonicalJson(identity);
-        }
-
-        void Append(JsonNode? container)
-        {
-            if (container?["Manipulations"] is not JsonArray manipulations)
-                return;
-            foreach (var manipulation in manipulations)
-            {
-                if (manipulation is not JsonObject entry)
-                    throw new InvalidDataException("A source manipulation entry is invalid.");
-                var type = JsonString(entry["Type"]);
-                if (type is not ("Eqp" or "Eqdp" or "Imc" or "Est" or "Atr"))
-                    continue;
-                if (!identities.Add(Identity(entry)))
-                    continue;
-                var clone = entry.DeepClone();
-                serializedBytes += Encoding.UTF8.GetByteCount(clone.ToJsonString()) + 1;
-                if (result.Count >= 4096 || serializedBytes > 4 * 1024 * 1024)
-                    throw new InvalidDataException("The source manipulation snapshot is too large.");
-                result.Add(clone);
-            }
-        }
-
-        foreach (var (group, _index) in groups)
-        {
-            var groupName = JsonString(group["Name"]);
-            var selection = enabledOptions.FirstOrDefault(pair =>
-                string.Equals(pair.Key, groupName, StringComparison.OrdinalIgnoreCase));
-            var selected = selection.Value;
-            if (selected is null)
-                continue;
-
-            if (string.Equals(JsonString(group["Type"]), "Combining", StringComparison.OrdinalIgnoreCase))
-            {
-                if (group["Options"] is not JsonArray combinationOptions ||
-                    group["Containers"] is not JsonArray combinationContainers)
-                    continue;
-                var containerIndex = 0;
-                for (var optionIndex = 0; optionIndex < combinationOptions.Count && optionIndex < 31; ++optionIndex)
-                    if (combinationOptions[optionIndex] is JsonObject option &&
-                        selected.Contains(JsonString(option["Name"]) ?? "", StringComparer.OrdinalIgnoreCase))
-                        containerIndex |= 1 << optionIndex;
-                if (containerIndex < combinationContainers.Count)
-                    Append(combinationContainers[containerIndex]);
-                continue;
-            }
-
-            if (selected.Count == 0 || group["Options"] is not JsonArray options)
-                continue;
-            foreach (var selectedName in selected)
-            {
-                var container = options.OfType<JsonObject>().FirstOrDefault(option =>
-                    string.Equals(JsonString(option["Name"]), selectedName, StringComparison.OrdinalIgnoreCase));
-                if (container is not null)
-                    Append(container);
-            }
-        }
-
-        Append(meta["DefaultData"]);
-        return result;
     }
 
     /// <summary>
@@ -479,4 +372,32 @@ public sealed partial class PenumbraService
             return new Dictionary<string, string>();
         }
     }
+
+    private static Dictionary<string, HashSet<string>>?[] EmptyResourceResults(int count)
+        => Enumerable.Repeat<Dictionary<string, HashSet<string>>?>(null, count).ToArray();
+
+    // The export server and the windows still call these helpers here.
+    internal static bool IsSafeGamePath(string? gamePath) => ModPaths.IsSafeGamePath(gamePath);
+    internal static bool IsSafeNewModName(string? modName) => ModPaths.IsSafeNewModName(modName);
+    internal static bool IsSafeVariantGroupName(string? value) => ModPaths.IsSafeVariantGroupName(value);
+    internal static IReadOnlyList<string> AnimationMappedFiles(string modRoot, string gamePath)
+        => ModMetadata.AnimationMappedFiles(modRoot, gamePath);
+
+    // PenumbraService.Physics.cs still calls these helpers by their old names.
+    private static string NormalizeGamePath(string value) => ModPaths.NormalizeGamePath(value);
+    private static bool IsSafeGameResourcePath(string? gamePath, params string[] extensions)
+        => ModPaths.IsSafeGameResourcePath(gamePath, extensions);
+    private static bool IsSafeModName(string? modName) => ModPaths.IsSafeModName(modName);
+    private static bool IsPathWithin(string path, string root) => ModPaths.IsPathWithin(path, root);
+    private static bool HasReparsePointInPath(string root, string path) => ModPaths.HasReparsePointInPath(root, path);
+    private static bool SameGamePath(string left, string right) => ModPaths.SameGamePath(left, right);
+    private static string? JsonString(JsonNode? node) => ModJson.JsonString(node);
+    private static JsonObject LoadV4ModMetadata(string modRoot) => ModMetadata.LoadV4ModMetadata(modRoot);
+    private static void TouchV4ModMetadata(JsonObject meta) => ModMetadata.TouchV4ModMetadata(meta);
+    private static void WriteJsonAtomic(string path, JsonObject value) => ModMetadata.WriteJsonAtomic(path, value);
+    private static Guid? ReadModStableIdentifier(string modRoot) => ModMetadata.ReadModStableIdentifier(modRoot);
+    private static JsonObject CreateV4ModMetadata(string name, string author, string description, string version,
+        JsonObject defaultData)
+        => ModMetadata.CreateV4ModMetadata(name, author, description, version, defaultData);
+    private static FrameworkThread.ThreadPoolHop LeaveFrameworkThread() => FrameworkThread.LeaveFrameworkThread();
 }

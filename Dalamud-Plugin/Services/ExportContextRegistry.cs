@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services.Skeletons;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services;
 
@@ -110,17 +111,17 @@ public sealed class ExportContextRegistry : IDisposable
         string? resolvedGamePath = null,
         RacialScalingRecord? racialScaling = null)
     {
-        if (!PenumbraService.IsSafeGamePath(gamePath) ||
-            (resolvedGamePath is not null && !PenumbraService.IsSafeGamePath(resolvedGamePath)) ||
+        if (!ModPaths.IsSafeGamePath(gamePath) ||
+            (resolvedGamePath is not null && !ModPaths.IsSafeGamePath(resolvedGamePath)) ||
             objectIndex is < 0 or > ushort.MaxValue ||
-            !PenumbraService.IsSafeModName(sourceModDirectory) || callbackPort is < 1 or > 65535 ||
+            !ModPaths.IsSafeModName(sourceModDirectory) || callbackPort is < 1 or > 65535 ||
             targetCollectionId == Guid.Empty ||
             sourceModStableId == Guid.Empty ||
             (targetCollectionName is not null && targetCollectionName.Length > 512) ||
             !RacialScaling.IsSafe(racialScaling))
             throw new ArgumentException("The import target is not safe.");
 
-        if (!PenumbraService.IsSafeLocalModelPath(targetFilePath))
+        if (!ModPaths.IsSafeLocalModelPath(targetFilePath))
             throw new ArgumentException("The original model path is not a safe local .mdl file.");
         targetFilePath = Path.GetFullPath(targetFilePath);
         var targetFolder = Path.GetDirectoryName(targetFilePath)
@@ -192,8 +193,8 @@ public sealed class ExportContextRegistry : IDisposable
         ResourceDependencyManifest? resourceManifest = null,
         RacialScalingRecord? racialScaling = null)
     {
-        if (!PenumbraService.IsSafeGamePath(gamePath) ||
-            !PenumbraService.IsSafeGamePath(resolvedGamePath) ||
+        if (!ModPaths.IsSafeGamePath(gamePath) ||
+            !ModPaths.IsSafeGamePath(resolvedGamePath) ||
             objectIndex is < 0 or > ushort.MaxValue || callbackPort is < 1 or > 65535 ||
             targetCollectionId == Guid.Empty ||
             (targetCollectionName is not null && targetCollectionName.Length > 512) ||
@@ -240,9 +241,9 @@ public sealed class ExportContextRegistry : IDisposable
         Guid? sourceModStableId = null)
     {
         context = null;
-        if (!IsSafeId(contextId) || !PenumbraService.IsSafeModName(sourceModDirectory) ||
+        if (!IsSafeId(contextId) || !ModPaths.IsSafeModName(sourceModDirectory) ||
             string.IsNullOrWhiteSpace(sourceModName) || sourceModName.Length > 512 ||
-            !PenumbraService.IsSafeRelativeModelPath(targetRelativePath) ||
+            !ModPaths.IsSafeRelativeModelPath(targetRelativePath) ||
             sourceModStableId == Guid.Empty)
             return false;
 
@@ -254,7 +255,7 @@ public sealed class ExportContextRegistry : IDisposable
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             target = Path.GetFullPath(Path.Combine(root, targetRelativePath.Replace('/', Path.DirectorySeparatorChar)));
             if (!Directory.Exists(root) || !File.Exists(target) || !IsPathWithin(target, root) ||
-                !PenumbraService.IsSafeLocalModelPath(target))
+                !ModPaths.IsSafeLocalModelPath(target))
                 return false;
         }
         catch
@@ -360,7 +361,7 @@ public sealed class ExportContextRegistry : IDisposable
         string modRoot,
         IReadOnlyDictionary<string, string> relativePaths)
     {
-        if (!PenumbraService.IsSafeModName(sourceModDirectory) ||
+        if (!ModPaths.IsSafeModName(sourceModDirectory) ||
             string.IsNullOrWhiteSpace(modRoot) || relativePaths.Count == 0)
             return false;
 
@@ -772,7 +773,7 @@ public sealed class ExportContextRegistry : IDisposable
 
         if (string.IsNullOrWhiteSpace(relative))
             return null;
-        if (!PenumbraService.IsSafeRelativeModelPath(relative))
+        if (!ModPaths.IsSafeRelativeModelPath(relative))
             throw new ArgumentException("The target-relative model path is invalid.", nameof(suppliedRelativePath));
 
         if (sourceModRootPath is not null)
@@ -868,7 +869,7 @@ public sealed class ExportContextRegistry : IDisposable
         if (saved.Version > InstantEditImportContext.CurrentVersion ||
             !IsSafeId(saved.ContextId) || !IsSafeId(saved.ImportId) ||
             !IsValidCapabilityFormat(saved.Capability) ||
-            !PenumbraService.IsSafeGamePath(saved.GamePath) ||
+            !ModPaths.IsSafeGamePath(saved.GamePath) ||
             saved.CallbackPort is < 1 or > 65535 ||
             saved.SourceModStableId == Guid.Empty ||
             saved.SourceOptionStatus is not ("unknown" or "default" or "ready" or "ambiguous") ||
@@ -880,12 +881,12 @@ public sealed class ExportContextRegistry : IDisposable
             !RacialScaling.IsSafe(saved.RacialScaling))
             return false;
         if (saved.Version < 2)
-            return PenumbraService.IsSafeModName(saved.SourceModDirectory) &&
-                   PenumbraService.IsSafeLocalModelPath(saved.TargetFilePath) &&
-                   PenumbraService.IsSafeRelativeModelPath(saved.TargetRelativePath) &&
+            return ModPaths.IsSafeModName(saved.SourceModDirectory) &&
+                   ModPaths.IsSafeLocalModelPath(saved.TargetFilePath) &&
+                   ModPaths.IsSafeRelativeModelPath(saved.TargetRelativePath) &&
                    !string.IsNullOrWhiteSpace(saved.SourceModName) && !string.IsNullOrWhiteSpace(saved.TargetFolder);
         if (saved.SourceKind is not (InstantEditImportContext.ModSource or InstantEditImportContext.GameSource) ||
-            !PenumbraService.IsSafeGamePath(saved.ResolvedGamePath) ||
+            !ModPaths.IsSafeGamePath(saved.ResolvedGamePath) ||
             saved.DestinationState is not (InstantEditImportContext.ReadyDestination or InstantEditImportContext.NewModRequiredDestination) ||
             saved.TargetCollectionId == Guid.Empty ||
             (saved.TargetCollectionName is not null && saved.TargetCollectionName.Length > 512))
@@ -894,9 +895,9 @@ public sealed class ExportContextRegistry : IDisposable
             return saved.SourceKind == InstantEditImportContext.GameSource && saved.TargetFilePath is null &&
                    saved.TargetFolder is null && saved.SourceModDirectory is null && saved.SourceModName is null &&
                    saved.SourceModRootPath is null && saved.TargetRelativePath is null;
-        return PenumbraService.IsSafeModName(saved.SourceModDirectory) &&
-               PenumbraService.IsSafeLocalModelPath(saved.TargetFilePath) &&
-               PenumbraService.IsSafeRelativeModelPath(saved.TargetRelativePath) &&
+        return ModPaths.IsSafeModName(saved.SourceModDirectory) &&
+               ModPaths.IsSafeLocalModelPath(saved.TargetFilePath) &&
+               ModPaths.IsSafeRelativeModelPath(saved.TargetRelativePath) &&
                !string.IsNullOrWhiteSpace(saved.SourceModName) && !string.IsNullOrWhiteSpace(saved.TargetFolder);
     }
 
@@ -915,12 +916,12 @@ public sealed class ExportContextRegistry : IDisposable
         foreach (var material in manifest.Materials)
         {
             if (string.IsNullOrWhiteSpace(material.ModelMaterial) || material.ModelMaterial.Length > 512 ||
-                !PenumbraService.IsSafeGameResourcePath(material.GamePath, ".mtrl") || material.Textures.Count > 1024 ||
+                !ModPaths.IsSafeGameResourcePath(material.GamePath, ".mtrl") || material.Textures.Count > 1024 ||
                 !IsSafeResourceLocator(material.Resource))
                 return false;
             foreach (var texture in material.Textures)
-                if (!PenumbraService.IsSafeGameResourcePath(texture.StoredGamePath, ".tex") ||
-                    !PenumbraService.IsSafeGameResourcePath(texture.EffectiveGamePath, ".tex") ||
+                if (!ModPaths.IsSafeGameResourcePath(texture.StoredGamePath, ".tex") ||
+                    !ModPaths.IsSafeGameResourcePath(texture.EffectiveGamePath, ".tex") ||
                     !IsSafeResourceLocator(texture.Resource))
                     return false;
         }
@@ -930,13 +931,13 @@ public sealed class ExportContextRegistry : IDisposable
     private static bool IsSafeResourceLocator(SourceResourceLocator locator)
     {
         if (locator.Sha256.Length != 64 || locator.Sha256.Any(c => !Uri.IsHexDigit(c)) ||
-            !PenumbraService.IsSafeGameResourcePath(locator.GamePath, ".mtrl", ".tex"))
+            !ModPaths.IsSafeGameResourcePath(locator.GamePath, ".mtrl", ".tex"))
             return false;
         if (locator.Kind == "game")
             return locator.SourceModDirectory is null && locator.SourceModStableId is null && locator.SourceRelativePath is null;
-        return locator.Kind == "mod" && PenumbraService.IsSafeModName(locator.SourceModDirectory) &&
+        return locator.Kind == "mod" && ModPaths.IsSafeModName(locator.SourceModDirectory) &&
                locator.SourceModStableId != Guid.Empty &&
-               PenumbraService.IsSafeRelativeResourcePath(locator.SourceRelativePath);
+               ModPaths.IsSafeRelativeResourcePath(locator.SourceRelativePath);
     }
 
     /// <summary> One context and its exports, as the test tools report them. </summary>

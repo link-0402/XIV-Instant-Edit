@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using InstantEdit.Services;
 using InstantEdit.Services.Physics;
 using static InstantEdit.TestSupport.Assertions;
+using InstantEdit.Services.PenumbraMods;
 
 /// <summary>
 /// The physics builder's pure parts: reading and writing physics files in the game's layout (with
@@ -432,7 +433,7 @@ internal static class PhysicsScenarios
         Require(third.EndsWith(".3.phyb", StringComparison.Ordinal) && files.Count == 2, "physics mod: game paths match whatever their case");
 
         // Renamed in Penumbra, the mod keeps its identifier, and saves follow it.
-        var identifier = PenumbraService.ReadModStableIdentifierForRegression(folder)!.Value;
+        var identifier = ModMetadata.ReadModStableIdentifierForRegression(folder)!.Value;
         Require(PenumbraService.FindPhysicsModFolder(testRoot, "PhysicsMod", identifier, null) == "PhysicsMod" &&
                 PenumbraService.FindPhysicsModFolder(testRoot, "PhysicsMod", Guid.NewGuid(), ["PhysicsMod"]) is null,
             "physics mod: the mod is found in its folder while that folder has its identifier");
