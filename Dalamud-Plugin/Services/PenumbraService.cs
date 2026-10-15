@@ -119,7 +119,7 @@ public sealed class EstEntryRequest
 /// InstantEdit.Services.PenumbraMods around one export gate, and keeps the API its callers use by
 /// forwarding to them: the work happens in the services.
 /// </summary>
-public sealed partial class PenumbraService : IDisposable, ITextureEditBackend
+public sealed class PenumbraService : IDisposable, ITextureEditBackend
 {
     private readonly PenumbraIpc _ipc;
     private readonly IFramework _framework;
@@ -167,7 +167,12 @@ public sealed partial class PenumbraService : IDisposable, ITextureEditBackend
         _modFiles = new ModFileService(framework, _exportGate, _sources, _activation);
         _previews = new PreviewModWriter(_ipc, framework, log, objects, backups, _exportGate, _sources, _activation);
         _animations = new AnimationModService(_ipc, framework, objects, _exportGate, _activation);
+        Physics = new PhysicsModService(_ipc, framework, log, _exportGate, _activation);
     }
+
+    internal PenumbraIpc Ipc => _ipc;
+    internal PreviewModWriter Previews => _previews;
+    internal PhysicsModService Physics { get; }
 
     public void Dispose() => _ipc.Dispose();
 
@@ -559,35 +564,4 @@ public sealed partial class PenumbraService : IDisposable, ITextureEditBackend
     internal static MashupPlanResult BuildMashupPlan(InstantEditImportContext activeContext,
         IReadOnlyList<MashupContributor> contributors, bool bundleExternalDependencies = false)
         => MashupPlanning.BuildMashupPlan(activeContext, contributors, bundleExternalDependencies);
-
-    // PenumbraService.Physics.cs still calls these by their old names, until it moves into a service of its own.
-
-    private TrySetMod _trySetMod => _ipc.TrySetMod;
-    private RedrawObject _redrawObject => _ipc.RedrawObject;
-    internal const int PreviewModPriority = PreviewModWriter.PreviewModPriority;
-    private Task<ExportResult?> AddNewModAsync(string modName) => _activation.AddNewModAsync(modName);
-    private ExportResult? ReloadModOnFramework(string modName) => _activation.ReloadModOnFramework(modName);
-    private ExportResult ConfigureModForCollectionOnFramework(string modName, Guid collectionId, string collectionName,
-        bool setPriority = true, int priority = int.MaxValue, bool redraw = true)
-        => _activation.ConfigureModForCollectionOnFramework(modName, collectionId, collectionName, setPriority, priority, redraw);
-    private static string NormalizeGamePath(string value) => ModPaths.NormalizeGamePath(value);
-    private static bool IsSafeGameResourcePath(string? gamePath, params string[] extensions)
-        => ModPaths.IsSafeGameResourcePath(gamePath, extensions);
-    private static bool IsSafeModName(string? modName) => ModPaths.IsSafeModName(modName);
-    private static bool IsPathWithin(string path, string root) => ModPaths.IsPathWithin(path, root);
-    private static bool HasReparsePointInPath(string root, string path) => ModPaths.HasReparsePointInPath(root, path);
-    private static bool SameGamePath(string left, string right) => ModPaths.SameGamePath(left, right);
-    private static string? JsonString(JsonNode? node) => ModJson.JsonString(node);
-    private static JsonObject LoadV4ModMetadata(string modRoot) => ModMetadata.LoadV4ModMetadata(modRoot);
-    private static void TouchV4ModMetadata(JsonObject meta) => ModMetadata.TouchV4ModMetadata(meta);
-    private static void WriteJsonAtomic(string path, JsonObject value) => ModMetadata.WriteJsonAtomic(path, value);
-    private static Guid? ReadModStableIdentifier(string modRoot) => ModMetadata.ReadModStableIdentifier(modRoot);
-    internal static Guid? ReadModStableIdentifierForRegression(string modRoot) => ModMetadata.ReadModStableIdentifier(modRoot);
-    private static JsonObject CreateV4ModMetadata(string name, string author, string description, string version,
-        JsonObject defaultData)
-        => ModMetadata.CreateV4ModMetadata(name, author, description, version, defaultData);
-    private static FrameworkThread.ThreadPoolHop LeaveFrameworkThread() => FrameworkThread.LeaveFrameworkThread();
-    private static void TryDeleteMashupNamespace(string root, string folder) => ModFiles.TryDeleteMashupNamespace(root, folder);
-    private static string UniqueModName(string name, Func<string, bool> taken, string fallbackName = "XIV Instant Edit Mod")
-        => PreviewModWriter.UniqueModName(name, taken, fallbackName);
 }
