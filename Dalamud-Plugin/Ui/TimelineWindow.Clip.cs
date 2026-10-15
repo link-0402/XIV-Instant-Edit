@@ -60,7 +60,7 @@ public sealed partial class TimelineWindow
         if (!loaded.Standalone)
             SideTab(SidePage.Bones, "Bones", "The bones it animates. Untick one to leave it out of the save.", () => DrawAnimatedBones(current, loaded));
         else
-            SideTab(SidePage.Bones, "Face", "The face's bones and LivePose adjustments, saved into the face's own file.", () => DrawFaceTools(loaded));
+            SideTab(SidePage.Bones, "Face", "The face's bones and LivePose adjustments, saved into the face's own file.", () => facePage.Draw(loaded));
         DrawEditsTab();
         if (drawRecorder != null)
             SideTab(SidePage.Record, "Record", "Record a character's live pose for Blender.", drawRecorder);
@@ -83,7 +83,7 @@ public sealed partial class TimelineWindow
     /// <summary>The Edits tab, marked while an edit did not finish.</summary>
     private void DrawEditsTab()
     {
-        var attention = animations is { } service ? RecoveryAttention(service) : 0;
+        var attention = animations is { } service ? RecentEditsPage.RecoveryAttention(service) : 0;
         bool open;
         using (ImRaii.PushColor(ImGuiCol.Text, Theme.Warning, attention > 0))
             open = ImGui.BeginTabItem(attention > 0 ? $"Edits ({attention})###edits" : "Edits###edits",
@@ -98,7 +98,7 @@ public sealed partial class TimelineWindow
         if (!open)
             return;
         sidePage = SidePage.Edits;
-        DrawPage(DrawRecentEdits);
+        DrawPage(recentEdits.Draw);
         ImGui.EndTabItem();
     }
 

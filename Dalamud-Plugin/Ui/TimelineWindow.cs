@@ -46,6 +46,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly PropertiesPanel properties;
     private readonly SoundSaveCheck soundSave;
     private readonly SaveFooter saveFooter;
+    private readonly FacePage facePage;
+    private readonly RecentEditsPage recentEdits;
     private readonly BonesWindow bonesWindow;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
@@ -112,6 +114,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
                 Load(source!.Capture, source.Startup, true, afterUndo: afterUndo);
             },
             EditAgain);
+        facePage = new FacePage(session, saveFooter, timelinePreview);
+        recentEdits = new RecentEditsPage(session, saveFooter, timelinePreview, () => loadTask != null, EditAgain);
         bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, this, textures);
 
         Size = new Vector2(1000, 560);
@@ -128,6 +132,9 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     }
 
     public void DrawFileDialog() => session.FileDialog.Draw();
+
+    /// <summary>How many recorded edits did not finish and need an undo; none while an edit is still running.</summary>
+    internal static int RecoveryAttention(AnimationEditService service) => RecentEditsPage.RecoveryAttention(service);
 
     internal BonesWindow Bones => bonesWindow;
 

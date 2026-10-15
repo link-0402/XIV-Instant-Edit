@@ -4,16 +4,15 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The Face page of an expression's timeline. The timeline saves only the expression's own file, so
 /// what changes the face's motion runs as an edit of the face's file of its own, with the save
 /// footer's new mod or in place: leaving bones out, and baking your LivePose face adjustments in.
 /// </summary>
-public sealed partial class TimelineWindow
+internal sealed class FacePage(TimelineSession session, SaveFooter saveFooter, TimelinePreview timelinePreview)
 {
     // The face's bones left out of the next face save, by name; another clip starts over.
     private readonly HashSet<string> faceExcluded = new(StringComparer.Ordinal);
@@ -21,11 +20,11 @@ public sealed partial class TimelineWindow
     // The face edit started here, whose result the page shows.
     private Guid? faceJob;
 
-    private void DrawFaceTools(AnimationTimelineSource loaded)
+    public void Draw(AnimationTimelineSource loaded)
     {
-        if (animations is not { } service)
+        if (session.Animations is not { } service)
             return;
-        var fresh = Fresh(loaded);
+        var fresh = session.Fresh(loaded);
         var capture = fresh.Capture;
         var clip = fresh.Clip;
         if (faceClip != TimelineSession.ClipKey(fresh))
@@ -44,7 +43,7 @@ public sealed partial class TimelineWindow
         var adjusted = capture.Pose.Bones.Where(b => b.Id.Slot == 0 && b.Id.Partial == clip.Partial).ToImmutableArray();
         var bakeMissing = problem ?? capture.PoseUnavailableReason ?? (adjusted.IsEmpty ? "Your face has no LivePose adjustments." : null)
             ?? AnimationBones.OffsetConflict(faceExcluded, adjusted.Select(b => b.Id.Name));
-        using (ImRaii.Disabled(service.Busy || ReadOnly || bakeMissing != null))
+        using (ImRaii.Disabled(service.Busy || session.ReadOnly || bakeMissing != null))
         {
             if (ImGui.Button("Bake LivePose into the face"))
                 faceJob = StartFaceEdit(service, new AnimationBakeRequest(Guid.NewGuid(), capture, saveFooter.Destination, saveFooter.ModName.Trim(), false,
@@ -62,7 +61,7 @@ public sealed partial class TimelineWindow
             return;
         }
         var excludeMissing = problem ?? (faceExcluded.Count == 0 ? "Untick at least one bone." : AnimationBones.Problem(clip, faceExcluded));
-        using (ImRaii.Disabled(service.Busy || ReadOnly || excludeMissing != null))
+        using (ImRaii.Disabled(service.Busy || session.ReadOnly || excludeMissing != null))
         {
             if (ImGui.Button("Save the face without them"))
                 faceJob = StartFaceEdit(service, new AnimationBakeRequest(Guid.NewGuid(), capture, saveFooter.Destination, saveFooter.ModName.Trim(), false,
