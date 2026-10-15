@@ -8,6 +8,7 @@ using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
 using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
+using Lumina.Data.Files;
 
 namespace InstantEdit.Services.PenumbraMods;
 
@@ -691,4 +692,70 @@ internal static class MashupPlanning
             (string.Equals(locator.Kind, InstantEditImportContext.ModSource, StringComparison.OrdinalIgnoreCase) &&
              IsSafeModName(locator.SourceModDirectory) &&
              IsSafeRelativeResourcePath(locator.SourceRelativePath)));
+
+    internal static byte[] RewriteMaterialTexturePaths(
+        byte[] materialBytes,
+        IReadOnlyDictionary<string, string> rewrites)
+    {
+        if (rewrites.Count == 0)
+            return materialBytes.ToArray();
+        var mtrl = MaterialPreviewBundleBuilder.LooseLuminaFile.Load<MtrlFile>(materialBytes);
+        var stringTableStart = checked(16 + 4 * (
+            mtrl.FileHeader.TextureCount + mtrl.FileHeader.UvSetCount + mtrl.FileHeader.ColorSetCount));
+        var oldStringTableEnd = checked(stringTableStart + mtrl.FileHeader.StringTableSize);
+        if (oldStringTableEnd > materialBytes.Length)
+            throw new InvalidDataException("the MTRL string table is truncated");
+
+        var offsetMap = new Dictionary<int, int>();
+        using var stringStream = new MemoryStream();
+        for (var cursor = 0; cursor < mtrl.Strings.Length;)
+        {
+            var end = Array.IndexOf(mtrl.Strings, (byte)0, cursor);
+            if (end < 0)
+                end = mtrl.Strings.Length;
+            var oldValue = Encoding.UTF8.GetString(mtrl.Strings, cursor, end - cursor);
+            var value = rewrites.TryGetValue(NormalizeGamePath(oldValue), out var replacement)
+                ? replacement
+                : oldValue;
+            offsetMap[cursor] = checked((int)stringStream.Position);
+            stringStream.Write(Encoding.UTF8.GetBytes(value));
+            if (end < mtrl.Strings.Length)
+                stringStream.WriteByte(0);
+            cursor = end < mtrl.Strings.Length ? end + 1 : end;
+        }
+
+        var newStrings = stringStream.ToArray();
+        if (newStrings.Length > ushort.MaxValue)
+            throw new InvalidDataException("rewritten MTRL string table is too large");
+        var newLength = checked(materialBytes.Length - mtrl.Strings.Length + newStrings.Length);
+        if (newLength > ushort.MaxValue)
+            throw new InvalidDataException("rewritten MTRL is too large");
+        var rewritten = new byte[newLength];
+        materialBytes.AsSpan(0, stringTableStart).CopyTo(rewritten);
+        newStrings.CopyTo(rewritten, stringTableStart);
+        materialBytes.AsSpan(oldStringTableEnd).CopyTo(rewritten.AsSpan(stringTableStart + newStrings.Length));
+
+        static void RewriteOffset(byte[] bytes, int position, IReadOnlyDictionary<int, int> offsets)
+        {
+            var oldOffset = BitConverter.ToUInt16(bytes, position);
+            if (!offsets.TryGetValue(oldOffset, out var newOffset) || newOffset > ushort.MaxValue)
+                throw new InvalidDataException("an MTRL string offset is invalid");
+            BitConverter.TryWriteBytes(bytes.AsSpan(position, sizeof(ushort)), (ushort)newOffset);
+        }
+
+        BitConverter.TryWriteBytes(rewritten.AsSpan(4, sizeof(ushort)), (ushort)newLength);
+        BitConverter.TryWriteBytes(rewritten.AsSpan(8, sizeof(ushort)), (ushort)newStrings.Length);
+        RewriteOffset(rewritten, 10, offsetMap);
+        var entryCount = mtrl.FileHeader.TextureCount + mtrl.FileHeader.UvSetCount + mtrl.FileHeader.ColorSetCount;
+        for (var index = 0; index < entryCount; ++index)
+            RewriteOffset(rewritten, 16 + index * 4, offsetMap);
+
+        var validated = MaterialPreviewBundleBuilder.LooseLuminaFile.Load<MtrlFile>(rewritten);
+        foreach (var replacement in rewrites.Values)
+            if (!validated.TextureOffsets.Any(offset =>
+                    string.Equals(ReadNullTerminated(validated.Strings, offset.Offset), replacement,
+                        StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidDataException("rewritten MTRL did not retain every texture alias");
+        return rewritten;
+    }
 }

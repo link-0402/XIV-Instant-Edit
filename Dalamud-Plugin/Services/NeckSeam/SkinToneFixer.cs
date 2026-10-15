@@ -1,4 +1,5 @@
 using System.Numerics;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services.NeckSeam;
 
@@ -139,7 +140,7 @@ internal static class SkinToneFixer
                 changes.Add($"Skin material {target.FileName}: {NeckSeamFixer.Describe(constants)}");
             }
             if (rewrites.Count > 0)
-                bytes = PenumbraService.RewriteMaterialTexturePaths(bytes, rewrites);
+                bytes = MashupPlanning.RewriteMaterialTexturePaths(bytes, rewrites);
             material = new SeamFileOutput("skin material", target.MaterialPath, bytes);
         }
         return new SkinToneFix

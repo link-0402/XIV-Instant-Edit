@@ -94,6 +94,22 @@ public sealed record SourceOptionCapture(SourceOptionLocator? Locator, string St
 /// <summary>A size's exported model: its option name and the staged file.</summary>
 public sealed record SizeExportFile(string Name, string ExportedFile);
 
+public sealed record PenumbraMod(string Directory, string Name, Guid? StableId = null);
+
+public sealed record PenumbraModResource(
+    string GamePath,
+    string ActualPath,
+    string RelativePath,
+    string OptionMapping,
+    IReadOnlyList<string> OptionMemberships);
+
+public sealed record PenumbraModSnapshot(
+    string Directory,
+    string Name,
+    string RootPath,
+    IReadOnlyList<PenumbraModResource> Resources,
+    Guid? StableId = null);
+
 /// <summary>
 /// An EST entry the exported meshes need, from the <c>xiv_est_hair</c>/<c>xiv_est_race</c> tags
 /// Magic Fit's Hair Weights puts on hair it weights: the hair skeleton (<paramref name="Entry"/>,
@@ -135,6 +151,8 @@ public sealed partial class PenumbraService : IDisposable
     private readonly SizesExportService         _sizes;
     private readonly ModelExportService         _exports;
     private readonly ModelBackupService         _modelBackups;
+    private readonly MashupService              _mashups;
+    private readonly ModResourceScanner         _scanner;
 
     public PenumbraService(
         IDalamudPluginInterface pi,
@@ -163,7 +181,40 @@ public sealed partial class PenumbraService : IDisposable
         _exports         = new ModelExportService(_ipc, framework, log, _exportGate, backups, _sources, _activation, _writer,
             _attributes, _est, _race);
         _modelBackups    = new ModelBackupService(framework, log, _exportGate, backups, _sources, _activation, _writer, _est, _race);
+        _mashups         = new MashupService(_ipc, framework, log, _exportGate, data, _sources, _activation, _attributes, _est);
+        _scanner         = new ModResourceScanner(framework, log, _sources);
     }
+
+    /// <inheritdoc cref="MashupService.ApplyMashupAsync"/>
+    public Task<ExportResult> ApplyMashupAsync(
+        InstantEditImportContext activeContext,
+        IReadOnlyList<MashupContributor> contributors,
+        MashupPlanResult plan,
+        string exportedFile,
+        string exportId,
+        string destination,
+        string name,
+        bool bundleExternalDependencies = false,
+        bool createAttributeGroups = false,
+        IReadOnlyList<string>? attributeTags = null,
+        IReadOnlyDictionary<string, int>? attributeMasks = null,
+        IReadOnlyList<EstEntryRequest>? estEntries = null)
+        => _mashups.ApplyMashupAsync(activeContext, contributors, plan, exportedFile, exportId, destination, name,
+            bundleExternalDependencies, createAttributeGroups, attributeTags, attributeMasks, estEntries);
+
+    /// <inheritdoc cref="ModResourceScanner.GetModResourcesAsync"/>
+    public Task<PenumbraModSnapshot?> GetModResourcesAsync(
+        string modDirectory,
+        CancellationToken cancellationToken = default,
+        Guid? stableId = null)
+        => _scanner.GetModResourcesAsync(modDirectory, cancellationToken, stableId);
+
+    /// <inheritdoc cref="ModResourceScanner.GetMaterialCoverageAsync"/>
+    public Task<MaterialCoverageResult> GetMaterialCoverageAsync(
+        InstantEditImportContext activeContext,
+        IReadOnlyList<MashupContributor> contributors,
+        CancellationToken cancellationToken = default)
+        => _scanner.GetMaterialCoverageAsync(activeContext, contributors, cancellationToken);
 
     /// <inheritdoc cref="ModelExportService.ApplySourceExportAsync"/>
     public Task<ExportResult> ApplySourceExportAsync(

@@ -61,7 +61,7 @@ internal sealed class PreviewModService(PenumbraService penumbra)
             if (!string.Equals(PreviewSource.Hash(bytes), file.PreviewSha256, StringComparison.OrdinalIgnoreCase))
                 throw new IOException($"The preview mod's {file.Kind} was edited. Discard the preview and make a new one.");
             if (file.TextureRewrites.Count > 0)
-                bytes = PenumbraService.RewriteMaterialTexturePaths(bytes, file.TextureRewrites);
+                bytes = MashupPlanning.RewriteMaterialTexturePaths(bytes, file.TextureRewrites);
             if (file.NewFile && file.Source.IsModFile)
                 additions.Add((file.Source, PathRules.NormalizeGamePath(file.GamePath), bytes));
             else if (file.Source.IsModFile)
