@@ -34,7 +34,7 @@ public sealed partial class TimelineWindow
         var readOnly = ReadOnly;
         if (current.SelectedLayerValue is { } layer && source != null)
         {
-            DrawLayerProperties(current, layer, source);
+            layerPanel.Draw(current, layer, source);
             return;
         }
         var primary = current.PrimaryEvent;

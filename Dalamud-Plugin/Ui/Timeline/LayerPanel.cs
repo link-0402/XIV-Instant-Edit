@@ -1,33 +1,32 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
+using Dalamud.Interface.Windowing;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
-using InstantEdit.Ui.Pose;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The selected bone layer in the properties panel: its timing, amount and the parts of a bone it
 /// changes; for offsets and poses the selected bones' values at the playhead, which set the layer's
-/// key there; for amplitudes the bones it is limited to. The bone editor is shared with the Bones
-/// window, and so is the selection. A field's changes until it is left are one undo step, and Live
-/// shows each change as it is made.
+/// key there (<see cref="BoneEditor"/>), and the selected key's ease; for amplitudes the bones it is
+/// limited to. A field's changes until it is left are one undo step, and Live shows each change as it
+/// is made.
 /// </summary>
-public sealed partial class TimelineWindow
+internal sealed class LayerPanel(TimelineSession session, BonePosing posing, BoneEditor boneEditor, PoseSourcePanel poseSources, Window bonesWindow)
 {
     // The layer the selection last started on: a newly chosen layer with nothing selected starts on its first bone.
     private string? selectionLayer;
     // The ease curve handle being dragged: 0 or 1, -1 for none.
     private int easeHandle = -1;
 
-    private void DrawLayerProperties(TimelineEditor current, MotionLayer layer, AnimationTimelineSource loaded)
+    public void Draw(TimelineEditor current, MotionLayer layer, AnimationTimelineSource loaded)
     {
-        var readOnly = ReadOnly;
-        var skeleton = Fresh(loaded).Clip.Resolution?.Selected?.Skeleton;
+        var readOnly = session.ReadOnly;
+        var skeleton = session.Fresh(loaded).Clip.Resolution?.Selected?.Skeleton;
         if (skeleton != null)
         {
             posing.KeepSelection(skeleton);
@@ -82,7 +81,7 @@ public sealed partial class TimelineWindow
         ImGui.Separator();
         ImGui.Spacing();
         if (skeleton == null)
-            Widgets.HintWrapped(Fresh(loaded).Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for under Source to pick bones.");
+            Widgets.HintWrapped(session.Fresh(loaded).Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for under Source to pick bones.");
         else if (layer.Kind == MotionLayerKind.Amplitude)
             boneEditor.DrawLimit(current, layer, skeleton, readOnly, true);
         else
