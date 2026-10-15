@@ -456,7 +456,7 @@ public sealed partial class TimelineWindow
             ImGui.Spacing();
             ImGui.Separator();
             ImGui.Spacing();
-            DrawPoseSources(current, layer, skeleton, loaded, readOnly);
+            poseSources.Draw(current, layer, skeleton, loaded, readOnly);
         }
     }
 

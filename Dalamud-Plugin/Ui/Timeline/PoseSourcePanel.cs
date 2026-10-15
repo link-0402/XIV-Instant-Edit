@@ -8,9 +8,8 @@ using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui.Pose;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// Key pose sources for pose layers: a .pose file from Anamnesis, Ktisis or Brio, the character's pose as
@@ -19,7 +18,7 @@ namespace InstantEdit.Ui;
 /// bones: rotations always, positions for the bones it moves when it was made on a body of the same
 /// proportions. Shared by the properties panel and the Bones window.
 /// </summary>
-public sealed partial class TimelineWindow
+internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode decode, BonePosing posing, AnimationRecorder recorder)
 {
     private enum PoseSourceKind : byte { File, Character, Clip }
 
@@ -43,7 +42,6 @@ public sealed partial class TimelineWindow
     // A whole-body pose leaves these groups out unless they are ticked: physics and gear move them on their own.
     private static readonly string[] PoseGroupsLeftOut = ["Hair", "Skirt", "Armor and weapons"];
 
-    private readonly AnimationRecorder recorder;
     private PoseSource? poseSource;
     private CancellationTokenSource? poseCancel;
     private bool poseSelectedOnly;
@@ -60,7 +58,7 @@ public sealed partial class TimelineWindow
     /// "Key a pose": the menu of pose sources, then the pose waiting to be keyed into <paramref name="layer"/>,
     /// a pose layer.
     /// </summary>
-    private void DrawPoseSources(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, AnimationTimelineSource loaded,
+    public void Draw(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, AnimationTimelineSource loaded,
         bool readOnly)
     {
         PollPoseSource();
@@ -117,7 +115,7 @@ public sealed partial class TimelineWindow
     /// <summary>The animations the listener has seen, loops and startups, without expressions: a frame of any of them can be keyed.</summary>
     private IEnumerable<(AnimationCapture Capture, bool Startup)> PoseClips()
     {
-        if (animations is not { } service)
+        if (session.Animations is not { } service)
             yield break;
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var capture in service.Observer.History)
@@ -134,7 +132,7 @@ public sealed partial class TimelineWindow
     private void OpenPoseFile()
     {
         var folder = lastPoseFolder ?? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-        fileDialog.OpenFileDialog("Choose a pose", "Poses{.pose}", (success, files) =>
+        session.FileDialog.OpenFileDialog("Choose a pose", "Poses{.pose}", (success, files) =>
         {
             if (!success || files.Count == 0)
                 return;
@@ -155,7 +153,7 @@ public sealed partial class TimelineWindow
         var subject = RecordingSubject.Self;
         try
         {
-            if (playback.ActorIndex() is { } index && index != AnimationPlayback.GPosePlayerIndex)
+            if (session.Playback.ActorIndex() is { } index && index != AnimationPlayback.GPosePlayerIndex)
                 subject = RecordingSubject.Target;
         }
         catch (InvalidOperationException)
@@ -169,13 +167,13 @@ public sealed partial class TimelineWindow
     private void ReadClipPose(AnimationCapture capture, bool startup, bool atEnd)
     {
         var staged = new PoseSource { Kind = PoseSourceKind.Clip, Name = AnimationPresentation.AnimationName(capture, startup), AtEnd = atEnd };
-        if (source is { } current && TimelineSession.ClipKey(current) == TimelineSession.ClipKey(capture, startup) && decode.DecodedPose(current) is { } own)
+        if (session.Source is { } current && TimelineSession.ClipKey(current) == TimelineSession.ClipKey(capture, startup) && decode.DecodedPose(current) is { } own)
         {
             staged.Clip = own;
             Stage(staged, null);
             return;
         }
-        if (animations is not { } service)
+        if (session.Animations is not { } service)
             return;
         Stage(staged, token => Task.Run<object>(async () =>
         {
@@ -187,7 +185,7 @@ public sealed partial class TimelineWindow
     /// <summary>Makes <paramref name="staged"/> the waiting pose, starting its reading; the one before is dropped.</summary>
     private void Stage(PoseSource staged, Func<CancellationToken, Task<object>>? read)
     {
-        DropPose();
+        Drop();
         poseCancel = new CancellationTokenSource();
         poseSource = staged;
         posePositions = null;
@@ -197,7 +195,7 @@ public sealed partial class TimelineWindow
     }
 
     /// <summary>Puts the waiting pose away and stops its reading.</summary>
-    private void DropPose()
+    public void Drop()
     {
         poseCancel?.Cancel();
         poseCancel?.Dispose();
@@ -259,7 +257,7 @@ public sealed partial class TimelineWindow
         ImGui.SameLine(0, Theme.Gap);
         if (Widgets.GhostIconButton("##pose-drop", FontAwesomeIcon.Times, "Put the pose away"))
         {
-            DropPose();
+            Drop();
             return;
         }
         if (staged.Reading != null)
@@ -316,7 +314,7 @@ public sealed partial class TimelineWindow
         ImGui.SameLine();
         using (ImRaii.Disabled(posing.Selection.Count == 0))
         {
-            if (ImGui.RadioButton($"Selected bones ({selection.Count})###pose-selected", poseSelectedOnly && posing.Selection.Count > 0))
+            if (ImGui.RadioButton($"Selected bones ({posing.Selection.Count})###pose-selected", poseSelectedOnly && posing.Selection.Count > 0))
                 poseSelectedOnly = true;
         }
         var selectedOnly = poseSelectedOnly && posing.Selection.Count > 0;

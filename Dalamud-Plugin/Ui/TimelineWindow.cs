@@ -36,6 +36,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly TimelinePreview timelinePreview;
     private readonly BonePosing posing;
     private readonly BoneEditor boneEditor;
+    private readonly PoseSourcePanel poseSources;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
     private readonly GameSoundPlayer? soundPlayer;
@@ -83,8 +84,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         timelinePreview = new TimelinePreview(session, decode, effectLooks, soundFiles, () => repairTarget);
         posing = new BonePosing(session, decode);
         boneEditor = new BoneEditor(session, decode, posing, this);
+        poseSources = new PoseSourcePanel(session, decode, posing, recorder);
         this.soundPlayer = soundPlayer;
-        this.recorder = recorder;
         this.animationError = animationError;
         this.textures = textures;
         bonesWindow = new BonesWindow(this);
@@ -235,7 +236,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         EndGizmo(true);
         timelinePreview.Stop();
         decode.Forget();
-        DropPose();
+        poseSources.Drop();
         loadCancel?.Cancel();
         loadTask = null;
         loading = null;
@@ -261,7 +262,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         loadCancel?.Dispose();
         loadCancel = null;
         decode.Forget();
-        DropPose();
+        poseSources.Drop();
     }
 
     private bool Showing(AnimationCapture capture, bool startup)
