@@ -20,6 +20,8 @@ using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
 using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
+using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
+using static InstantEdit.Services.PenumbraMods.EstEntryService;
 
 namespace InstantEdit.Services;
 
@@ -81,7 +83,7 @@ public sealed partial class PenumbraService
         try
         {
             var resolved = await _framework.RunOnFrameworkThread(
-                () => ResolveSourceModTargetOnFramework(
+                () => _sources.ResolveSourceModTargetOnFramework(
                     sourceModDirectory,
                     sourceFilePath,
                     sourceModRootPath,
@@ -150,9 +152,9 @@ public sealed partial class PenumbraService
             var targetRelative = Path.GetRelativePath(resolved.Target.Folder, targetFile).Replace('\\', '/');
             // The backup keeps the model's EST entries too, so restoring it undoes this export's EST change.
             var estState = backupExisting && File.Exists(targetFile)
-                ? CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, targetRelative, _estEntries)
+                ? _est.CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, targetRelative)
                 : null;
-            var writeError = WriteModelToOriginalLocation(
+            var writeError = _writer.WriteModelToOriginalLocation(
                 resolved.Target.Folder,
                 targetFile,
                 exportedFile,
@@ -175,24 +177,24 @@ public sealed partial class PenumbraService
 
             if (createAttributeGroups && attributeTags is { Count: > 0 })
             {
-                var attributeError = WriteAttributeGroups(
+                var attributeError = _attributes.WriteAttributeGroups(
                     resolved.Target.Folder, resolvedGamePath, attributeTags, attributeMasks,
                     sourceManipulations);
                 if (attributeError is not null)
                     warnings.Add($"Penumbra attribute group setup failed: {AttributeGroupErrorMessage(attributeError)}");
             }
 
-            warnings.AddRange(TryUpdateEstEntries(
+            warnings.AddRange(_est.TryUpdateEstEntries(
                 resolved.Target.Folder, resolved.Target.Directory, targetRelative, estEntries));
 
             var reloadError = await _framework.RunOnFrameworkThread(
-                () => ReloadModOnFramework(resolved.Target.Directory)).ConfigureAwait(false);
+                () => _activation.ReloadModOnFramework(resolved.Target.Directory)).ConfigureAwait(false);
             if (reloadError is not null)
                 warnings.Add(reloadError.Message);
             else
             {
                 var redrawWarning = await _framework.RunOnFrameworkThread(
-                    RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
+                    _activation.RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
                 if (redrawWarning is not null)
                     warnings.Add(redrawWarning);
             }
@@ -237,7 +239,7 @@ public sealed partial class PenumbraService
         try
         {
             var resolved = await _framework.RunOnFrameworkThread(
-                () => ResolveSourceModTargetOnFramework(
+                () => _sources.ResolveSourceModTargetOnFramework(
                     sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath, sourceModStableId)).ConfigureAwait(false);
             if (resolved.Target is null)
                 return new VariantTargetsResult(false, resolved.Code,
@@ -326,26 +328,26 @@ public sealed partial class PenumbraService
                 if (createAttributeGroups && attributeTags is { Count: > 0 })
                 {
                     // A new mod of a game model has no variant settings of its own to keep.
-                    var attributeError = WriteAttributeGroups(
+                    var attributeError = _attributes.WriteAttributeGroups(
                         staging, context.ResolvedGamePath, attributeTags, attributeMasks,
                         KnownManipulations(context));
                     if (attributeError is not null)
                         throw new InvalidDataException(attributeError);
                 }
                 // The staged meta.json already has the mod's identifier, which keys the EST records.
-                var estWarnings = TryUpdateEstEntries(staging, modName, relativeModel, estEntries);
+                var estWarnings = _est.TryUpdateEstEntries(staging, modName, relativeModel, estEntries);
                 Directory.Move(staging, finalFolder);
                 committed = true;
 
                 var warnings = new List<string>(estWarnings);
                 try
                 {
-                    var addError = await AddNewModAsync(modName).ConfigureAwait(false);
+                    var addError = await _activation.AddNewModAsync(modName).ConfigureAwait(false);
                     if (addError is not null)
                         warnings.Add(addError.Message);
                     else if (context.TargetCollectionId is { } collectionId && collectionId != Guid.Empty)
                     {
-                        var configure = await _framework.RunOnFrameworkThread(() => ConfigureModForCollectionOnFramework(
+                        var configure = await _framework.RunOnFrameworkThread(() => _activation.ConfigureModForCollectionOnFramework(
                             modName,
                             collectionId,
                             context.TargetCollectionName ?? "captured collection",
@@ -363,7 +365,7 @@ public sealed partial class PenumbraService
                     }
 
                     var redrawWarning = await _framework.RunOnFrameworkThread(
-                        RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
+                        _activation.RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
                     if (redrawWarning is not null)
                         warnings.Add(redrawWarning);
                 }

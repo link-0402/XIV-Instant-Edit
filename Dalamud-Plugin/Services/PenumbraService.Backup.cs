@@ -20,6 +20,9 @@ using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
 using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
+using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
+using static InstantEdit.Services.PenumbraMods.EstEntryService;
+using static InstantEdit.Services.PenumbraMods.ModelFileWriter;
 
 namespace InstantEdit.Services;
 
@@ -45,7 +48,7 @@ public sealed partial class PenumbraService
         try
         {
             var resolved = await _framework.RunOnFrameworkThread(
-                () => ResolveSourceModTargetOnFramework(
+                () => _sources.ResolveSourceModTargetOnFramework(
                     sourceModDirectory,
                     sourceFilePath,
                     sourceModRootPath,
@@ -93,7 +96,7 @@ public sealed partial class PenumbraService
             JsonObject? currentEst = null;
             try
             {
-                currentEst = CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, effectiveRelativePath, _estEntries);
+                currentEst = _est.CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, effectiveRelativePath);
             }
             catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException)
             {
@@ -102,7 +105,7 @@ public sealed partial class PenumbraService
             var restoredEst = _backups.ReadEstState(backupPath);
             // A race export's restore point also undoes what the export changed in the mod's options.
             var raceState = _backups.ReadRaceState(backupPath);
-            var writeError = RestoreModelBackup(targetPath, backupPath, sourceModDirectory, effectiveRelativePath, currentEst);
+            var writeError = _writer.RestoreModelBackup(targetPath, backupPath, sourceModDirectory, effectiveRelativePath, currentEst);
             if (writeError is not null)
                 return new ExportResult(false, "restore_write_failed", writeError);
             committedTarget = targetPath;
@@ -112,7 +115,7 @@ public sealed partial class PenumbraService
             {
                 try
                 {
-                    warnings.AddRange(RestoreEstState(resolved.Target.Folder, resolved.Target.Directory, restoredEst, _estEntries));
+                    warnings.AddRange(_est.RestoreEstState(resolved.Target.Folder, resolved.Target.Directory, restoredEst));
                 }
                 catch (Exception e)
                 {
@@ -134,13 +137,13 @@ public sealed partial class PenumbraService
             }
 
             var reloadError = await _framework.RunOnFrameworkThread(
-                () => ReloadModOnFramework(resolved.Target.Directory)).ConfigureAwait(false);
+                () => _activation.ReloadModOnFramework(resolved.Target.Directory)).ConfigureAwait(false);
             if (reloadError is not null)
                 warnings.Add(reloadError.Message);
             else
             {
                 var redrawWarning = await _framework.RunOnFrameworkThread(
-                    RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
+                    _activation.RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false);
                 if (redrawWarning is not null)
                     warnings.Add(redrawWarning);
             }
@@ -169,246 +172,6 @@ public sealed partial class PenumbraService
         }
     }
 
-    private string? RestoreModelBackup(
-        string targetFile, string backupFile, string modDirectory, string targetRelativePath, JsonObject? estState = null)
-    {
-        try
-        {
-            if (File.Exists(targetFile) && _backups is not null)
-            {
-                var backup = _backups.Create(targetFile, modDirectory, targetRelativePath);
-                if (estState is not null)
-                    _backups.WriteEstState(backup, estState);
-            }
-            var temporary = Path.Combine(Path.GetDirectoryName(targetFile)!, $".instant-edit-restore-{Guid.NewGuid():N}.tmp");
-            try
-            {
-                File.Copy(backupFile, temporary, false);
-                File.Move(temporary, targetFile, true);
-            }
-            finally
-            {
-                if (File.Exists(temporary))
-                    File.Delete(temporary);
-            }
-            return null;
-        }
-        catch (Exception e)
-        {
-            return $"Could not restore the model backup: {e.Message}";
-        }
-    }
-
-    private static bool TryGetBackupOriginal(string? backupName, out string originalName)
-    {
-        originalName = "";
-        if (string.IsNullOrWhiteSpace(backupName) || backupName.Length > 512 ||
-            backupName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || backupName.Contains('/') || backupName.Contains('\\'))
-            return false;
-        var match = Regex.Match(
-            backupName,
-            @"^(?<original>.+\.mdl)\.\d{8}T\d{6}\.\d{6}Z\.bak$",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        if (match.Success)
-            originalName = match.Groups["original"].Value;
-        else if (backupName.EndsWith(".mdl.bak", StringComparison.OrdinalIgnoreCase))
-            originalName = backupName[..^4];
-        else
-            return false;
-        return originalName.Length <= 255 && originalName is not ".mdl" and not "." and not "..";
-    }
-
-    private ExportResult? ReloadModOnFramework(string modName)
-    {
-        PenumbraApiEc modResult;
-        try
-        {
-            modResult = _reloadMod.Invoke(modName);
-        }
-        catch (Exception e)
-        {
-            _log.Error(e, "Penumbra failed while reloading the XIV Instant Edit mod.");
-            return new ExportResult(false, $"Penumbra add/reload failed: {e.Message}");
-        }
-
-        if (modResult is not (PenumbraApiEc.Success or PenumbraApiEc.NothingChanged))
-            return new ExportResult(false, $"Penumbra rejected the mod ({modResult}).");
-
-        return null;
-    }
-
-    private async Task<ExportResult?> AddNewModAsync(string modName)
-    {
-        var added = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        EventSubscriber<string>? subscription = null;
-
-        try
-        {
-            subscription = ModAdded.Subscriber(_pi, directory =>
-            {
-                if (string.Equals(directory, modName, StringComparison.OrdinalIgnoreCase))
-                    added.TrySetResult(directory);
-            });
-            subscription.Enable();
-
-            // AddMod only queues discovery. Do not wait for its event from this
-            // callback; the continuation waits on a thread-pool context instead.
-            var addResult = await _framework.RunOnFrameworkThread(
-                () => AddModOnFramework(modName)).ConfigureAwait(false);
-            if (addResult is not (PenumbraApiEc.Success or PenumbraApiEc.NothingChanged))
-                return new ExportResult(false, $"Penumbra rejected adding the mod ({addResult}).");
-
-            try
-            {
-                await added.Task.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
-            }
-            catch (TimeoutException)
-            {
-                return new ExportResult(false, $"Timed out waiting for Penumbra to add '{modName}'.");
-            }
-
-            return null;
-        }
-        catch (Exception e)
-        {
-            _log.Error(e, "Penumbra failed while adding the XIV Instant Edit mod.");
-            return new ExportResult(false, $"Penumbra add failed: {e.Message}");
-        }
-        finally
-        {
-            if (subscription is not null)
-            {
-                try
-                {
-                    subscription.Disable();
-                }
-                catch (Exception e)
-                {
-                    _log.Debug($"Could not disable Penumbra mod-added subscription: {e.Message}");
-                }
-
-                try
-                {
-                    subscription.Dispose();
-                }
-                catch (Exception e)
-                {
-                    _log.Debug($"Could not dispose Penumbra mod-added subscription: {e.Message}");
-                }
-            }
-        }
-    }
-
-    private PenumbraApiEc AddModOnFramework(string modName)
-        => _addMod.Invoke(modName);
-
-    private ExportResult ConfigureModOnFramework(
-        string modName,
-        int objectIndex,
-        bool setPriority = true,
-        int priority = int.MaxValue)
-    {
-
-        (bool ObjectValid, bool IndividualSet, (Guid Id, string Name) EffectiveCollection) collection;
-        try
-        {
-            collection = _getCollectionForObject.Invoke(objectIndex);
-        }
-        catch (Exception e)
-        {
-            _log.Error(e, "Could not retrieve the target Penumbra collection.");
-            return new ExportResult(false, $"Could not retrieve the target collection: {e.Message}");
-        }
-
-        if (!collection.ObjectValid || collection.EffectiveCollection.Id == Guid.Empty ||
-            string.IsNullOrWhiteSpace(collection.EffectiveCollection.Name))
-            return new ExportResult(false, "The target object has no valid Penumbra collection.");
-
-        return ConfigureModForCollectionOnFramework(
-            modName,
-            collection.EffectiveCollection.Id,
-            collection.EffectiveCollection.Name,
-            setPriority,
-            priority);
-    }
-
-    private ExportResult ConfigureModForCollectionOnFramework(
-        string modName,
-        Guid collectionId,
-        string collectionName,
-        bool setPriority = true,
-        int priority = int.MaxValue,
-        bool redraw = true)
-        => ApplyModToCollection(
-            modName,
-            collectionName,
-            () => _trySetMod.Invoke(collectionId, modName, true, modName),
-            setPriority ? () => _trySetModPriority.Invoke(collectionId, modName, priority, modName) : null,
-            redraw ? RedrawPlayerOwnedEntitiesOnFramework : null,
-            (message, error) => _log.Error(error, message));
-
-    /// <summary>
-    /// Enables a mod in a collection, optionally sets its priority, and optionally redraws the
-    /// player-owned entities afterwards. The steps are delegates so the sequencing can be
-    /// regression-tested without Penumbra: skipping the redraw must never skip the enable.
-    /// </summary>
-    internal static ExportResult ApplyModToCollection(
-        string modName,
-        string collectionName,
-        Func<PenumbraApiEc> enable,
-        Func<PenumbraApiEc>? setPriority,
-        Func<string?>? redraw,
-        Action<string, Exception>? logError = null)
-    {
-        PenumbraApiEc enabledResult;
-        try
-        {
-            enabledResult = enable();
-        }
-        catch (Exception e)
-        {
-            logError?.Invoke("Could not enable the XIV Instant Edit mod in Penumbra.", e);
-            return new ExportResult(false, $"Penumbra enable failed: {e.Message}");
-        }
-
-        if (enabledResult is not (PenumbraApiEc.Success or PenumbraApiEc.NothingChanged))
-            return new ExportResult(false, $"Penumbra rejected enabling the mod ({enabledResult}).");
-
-        if (setPriority is not null)
-        {
-            PenumbraApiEc priorityResult;
-            try
-            {
-                priorityResult = setPriority();
-            }
-            catch (Exception e)
-            {
-                logError?.Invoke("Could not prioritize the XIV Instant Edit mod in Penumbra.", e);
-                return new ExportResult(false, $"Penumbra priority failed: {e.Message}");
-            }
-
-            if (priorityResult is not (PenumbraApiEc.Success or PenumbraApiEc.NothingChanged))
-                return new ExportResult(false, $"Penumbra rejected the mod priority ({priorityResult}).");
-        }
-
-        var applied = $"Applied {modName} to {collectionName}.";
-        if (redraw is null)
-            return new ExportResult(true, applied);
-
-        try
-        {
-            var redrawWarning = redraw();
-            return redrawWarning is null
-                ? new ExportResult(true, applied)
-                : new ExportResult(true, "export_applied_with_warnings", applied, [redrawWarning]);
-        }
-        catch (Exception e)
-        {
-            logError?.Invoke("Penumbra redraw failed after applying export.", e);
-            return new ExportResult(false, $"Penumbra redraw failed: {e.Message}");
-        }
-    }
-
     public async Task<ExportResult> ClearManagedBackupsAsync(
         string sourceModDirectory, string sourceFilePath, string? sourceModRootPath,
         string? targetRelativePath, string sourceGamePath, string backupTargetId,
@@ -419,7 +182,7 @@ public sealed partial class PenumbraService
         await _exportGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            var resolved = await _framework.RunOnFrameworkThread(() => ResolveSourceModTargetOnFramework(
+            var resolved = await _framework.RunOnFrameworkThread(() => _sources.ResolveSourceModTargetOnFramework(
                 sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath, sourceModStableId)).ConfigureAwait(false);
             if (resolved.Target is null)
                 return new ExportResult(false, resolved.Code, resolved.Error ?? "The source mod is unavailable.");

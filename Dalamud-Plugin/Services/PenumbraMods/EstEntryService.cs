@@ -1,54 +1,46 @@
 using System.Text.Json.Nodes;
-using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Dalamud.Plugin.Services;
 using InstantEdit.Services.Animations;
-using InstantEdit.Services.PenumbraMods;
-using static InstantEdit.Services.PenumbraMods.FrameworkThread;
-using static InstantEdit.Services.PenumbraMods.ModCleanup;
+using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
 using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
-using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
-using static InstantEdit.Services.PenumbraMods.ModPaths;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
 /// <summary>
-/// An EST entry the exported meshes need, from the <c>xiv_est_hair</c>/<c>xiv_est_race</c> tags
-/// Magic Fit's Hair Weights puts on hair it weights: the hair skeleton (<paramref name="Entry"/>,
-/// <c>skl_c0801h0160.sklb</c> for 160) of race <see cref="Race"/> (<c>c0801</c>).
+/// The hair EST entries an export sets in the options that use its model, and the records of the
+/// entries XIV Instant Edit owns, so a later export or a restored backup can take them back.
 /// </summary>
-public sealed class EstEntryRequest
+internal sealed partial class EstEntryService
 {
-    [JsonPropertyName("slot")]
-    public string? Slot { get; set; }
+    private readonly EstEntryStore _store;
+    private readonly IPluginLog _log;
 
-    [JsonPropertyName("entry")]
-    public int Entry { get; set; }
+    public EstEntryService(EstEntryStore store, IPluginLog log)
+    {
+        _store = store;
+        _log = log;
+    }
 
-    [JsonPropertyName("race")]
-    public string? Race { get; set; }
-}
-
-public sealed partial class PenumbraService
-{
-    private const string EstStateSchema = "instant-edit.est-state";
+    internal const string EstStateSchema = "instant-edit.est-state";
 
     // Penumbra reads Gender, ModelRace and EstType by name or by number.
-    private static readonly string[] EstGenderNames = ["Unknown", "Male", "Female", "MaleNpc", "FemaleNpc"];
-    private static readonly string[] EstModelRaceNames =
+    internal static readonly string[] EstGenderNames = ["Unknown", "Male", "Female", "MaleNpc", "FemaleNpc"];
+    internal static readonly string[] EstModelRaceNames =
         ["Unknown", "Midlander", "Highlander", "Elezen", "Lalafell", "Miqote", "Roegadyn", "AuRa", "Hrothgar", "Viera"];
 
     /// <summary>A hair EST lookup: the hair's set ID and the gender-race code of its path (801 for c0801).</summary>
-    private sealed record EstIdentity(int SetId, int GenderRace)
+    internal sealed record EstIdentity(int SetId, int GenderRace)
     {
         public const string Slot = "Hair";
     }
 
     /// <summary>A mod's Default data, group option or combining container, keyed as the EST store keys it.</summary>
-    private sealed record EstContainer(string Key, string Label, JsonObject Data);
+    internal sealed record EstContainer(string Key, string Label, JsonObject Data);
 
     /// <summary>A container that maps the written model, with the hair lookups its game paths make.</summary>
-    private sealed record EstTarget(EstContainer Container, IReadOnlyList<EstIdentity> Hair);
+    internal sealed record EstTarget(EstContainer Container, IReadOnlyList<EstIdentity> Hair);
 
     /// <summary>Envelope check for <c>estEntries</c>: hair only, entries 1-9999, player race codes.</summary>
     internal static string? ValidateEstEntryRequests(IReadOnlyList<EstEntryRequest>? entries)
@@ -66,7 +58,7 @@ public sealed partial class PenumbraService
     }
 
     /// <summary>The gender-race code of a player race such as <c>c0801</c> (801), or null.</summary>
-    private static int? EstRaceCode(string? race)
+    internal static int? EstRaceCode(string? race)
     {
         if (race is null || !EstRaceRegex().IsMatch(race) || !int.TryParse(race.AsSpan(1), out var code) ||
             code % 100 != 1 || code / 100 is < 1 or > 18)
@@ -74,15 +66,15 @@ public sealed partial class PenumbraService
         return code;
     }
 
-    private static string EstRaceLabel(int genderRace) => $"c{genderRace:D4}";
+    internal static string EstRaceLabel(int genderRace) => $"c{genderRace:D4}";
 
     /// <summary>Penumbra keeps EST ownership records per mod: its stable identifier, else its directory key.</summary>
-    private static string EstModKey(string modFolder, string modDirectory)
+    internal static string EstModKey(string modFolder, string modDirectory)
         => ReadModStableIdentifier(modFolder) is { } identifier
             ? $"id:{identifier:D}"
             : $"dir:{modDirectory.Trim().ToLowerInvariant()}";
 
-    private static IEnumerable<EstContainer> EstContainers(JsonObject meta)
+    internal static IEnumerable<EstContainer> EstContainers(JsonObject meta)
     {
         if (meta["DefaultData"] is JsonObject defaultData)
             yield return new EstContainer("default", "Default", defaultData);
@@ -104,7 +96,7 @@ public sealed partial class PenumbraService
     }
 
     /// <summary>Every container whose files map <paramref name="modelRelativePath"/>, with the hair paths it maps it at.</summary>
-    private static List<EstTarget> EstTargets(JsonObject meta, string modelRelativePath)
+    internal static List<EstTarget> EstTargets(JsonObject meta, string modelRelativePath)
     {
         var model = modelRelativePath.Replace('\\', '/').Trim().TrimStart('/');
         var result = new List<EstTarget>();
@@ -130,7 +122,7 @@ public sealed partial class PenumbraService
         return result;
     }
 
-    private static bool SameEstName(JsonNode? node, string expected, string[] names)
+    internal static bool SameEstName(JsonNode? node, string expected, string[] names)
     {
         if (node is not JsonValue value)
             return false;
@@ -140,7 +132,7 @@ public sealed partial class PenumbraService
                string.Equals(names[number], expected, StringComparison.Ordinal);
     }
 
-    private static bool MatchesEst(JsonObject item, EstIdentity identity)
+    internal static bool MatchesEst(JsonObject item, EstIdentity identity)
     {
         if (!string.Equals(JsonString(item["Type"]), "Est", StringComparison.OrdinalIgnoreCase) ||
             item["Manipulation"] is not JsonObject manipulation)
@@ -156,7 +148,7 @@ public sealed partial class PenumbraService
     }
 
     /// <summary>The entry a container sets for a lookup, or null. Penumbra keeps the first valid duplicate.</summary>
-    private static int? CurrentEst(JsonObject container, EstIdentity identity)
+    internal static int? CurrentEst(JsonObject container, EstIdentity identity)
     {
         foreach (var item in (container["Manipulations"] as JsonArray ?? []).OfType<JsonObject>())
             if (MatchesEst(item, identity) && item["Manipulation"]!["Entry"] is JsonValue value &&
@@ -166,7 +158,7 @@ public sealed partial class PenumbraService
     }
 
     /// <summary>Set a container's entry for a lookup (null removes it), collapsing duplicates into one.</summary>
-    private static void SetEst(JsonObject container, EstIdentity identity, int? entry)
+    internal static void SetEst(JsonObject container, EstIdentity identity, int? entry)
     {
         var manipulations = container["Manipulations"] as JsonArray;
         if (manipulations is null)
@@ -204,7 +196,7 @@ public sealed partial class PenumbraService
             manipulations.Add(manipulation);
     }
 
-    private static bool SameEstRecord(ManagedEstEntry record, string mod, string container, EstIdentity identity)
+    internal static bool SameEstRecord(ManagedEstEntry record, string mod, string container, EstIdentity identity)
         => string.Equals(record.Mod, mod, StringComparison.Ordinal) &&
            string.Equals(record.Container, container, StringComparison.Ordinal) &&
            string.Equals(record.Slot, EstIdentity.Slot, StringComparison.Ordinal) &&
@@ -216,7 +208,7 @@ public sealed partial class PenumbraService
     /// the entries this plugin set for the model; a hair request sets its entry in every option that
     /// uses the model for the request's race, recording the value it replaced.
     /// </summary>
-    private static List<string> UpdateEstEntries(
+    internal static List<string> UpdateEstEntries(
         string modFolder,
         string modDirectory,
         string modelRelativePath,
@@ -307,12 +299,12 @@ public sealed partial class PenumbraService
     }
 
     /// <summary>EST setup follows a committed model write, so its failure is a warning, not a failed export.</summary>
-    private List<string> TryUpdateEstEntries(
+    internal List<string> TryUpdateEstEntries(
         string modFolder, string modDirectory, string modelRelativePath, IReadOnlyList<EstEntryRequest>? requests)
     {
         try
         {
-            return UpdateEstEntries(modFolder, modDirectory, modelRelativePath, requests, _estEntries);
+            return UpdateEstEntries(modFolder, modDirectory, modelRelativePath, requests, _store);
         }
         catch (Exception e)
         {
@@ -321,11 +313,19 @@ public sealed partial class PenumbraService
         }
     }
 
+    /// <summary><see cref="CaptureEstState(string, string, string, EstEntryStore?)"/> with the plugin's EST records.</summary>
+    internal JsonObject? CaptureEstState(string modFolder, string modDirectory, string modelRelativePath)
+        => CaptureEstState(modFolder, modDirectory, modelRelativePath, _store);
+
+    /// <summary><see cref="RestoreEstState(string, string, JsonObject, EstEntryStore?)"/> with the plugin's EST records.</summary>
+    internal List<string> RestoreEstState(string modFolder, string modDirectory, JsonObject state)
+        => RestoreEstState(modFolder, modDirectory, state, _store);
+
     /// <summary>
     /// The hair EST entries of every option that uses the model, and whether the plugin owns them,
     /// as a model backup carries them; null when the model is used as no hair.
     /// </summary>
-    private static JsonObject? CaptureEstState(
+    internal static JsonObject? CaptureEstState(
         string modFolder, string modDirectory, string modelRelativePath, EstEntryStore? store)
     {
         var meta = LoadV4ModMetadata(modFolder);
@@ -357,7 +357,7 @@ public sealed partial class PenumbraService
     }
 
     /// <summary>Put back the EST entries a model backup carries, with the plugin's ownership of them.</summary>
-    private static List<string> RestoreEstState(
+    internal static List<string> RestoreEstState(
         string modFolder, string modDirectory, JsonObject state, EstEntryStore? store)
     {
         var warnings = new List<string>();
@@ -418,7 +418,7 @@ public sealed partial class PenumbraService
     }
 
     [GeneratedRegex("^c[0-9]{4}$", RegexOptions.CultureInvariant)]
-    private static partial Regex EstRaceRegex();
+    internal static partial Regex EstRaceRegex();
 
     internal static IReadOnlyList<string> UpdateEstEntriesForRegression(
         string modFolder, string modDirectory, string modelRelativePath,

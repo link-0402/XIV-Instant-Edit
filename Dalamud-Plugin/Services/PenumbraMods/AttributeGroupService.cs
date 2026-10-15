@@ -1,31 +1,58 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
-using System.Security.Cryptography;
-using System.Text;
-using Dalamud.Game.ClientState.Objects.Enums;
-using Dalamud.Game.ClientState.Objects.Types;
-using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
-using Penumbra.Api.Enums;
-using Penumbra.Api.Helpers;
-using Penumbra.Api.IpcSubscribers;
-using Lumina.Data;
 using Lumina.Data.Files;
-using InstantEdit.Services.PenumbraMods;
-using static InstantEdit.Services.PenumbraMods.FrameworkThread;
-using static InstantEdit.Services.PenumbraMods.ModCleanup;
 using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
-using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary>
+/// The Penumbra groups an export generates from a model's attributes: an IMC group for the slot's
+/// part toggles (atr_mv_a and the like) and a Multi group of custom atrx_ toggles.
+/// </summary>
+internal sealed class AttributeGroupService
 {
-    private static string? ValidateAttributeGroupRequest(
+    internal sealed record AttributeModelIdentity(
+        int Id, int RaceCode, string AtrSlot, string ObjectType, string EquipSlot, string BodySlot);
+
+    internal sealed record AttributeGroupWrite(string Path, JsonObject Document);
+
+    internal const string AttributeGroupDescriptionPrefix = "Managed by XIV Instant Edit attribute group v1: ";
+
+    internal static readonly string[] AttributeGroupFamilies =
+        ["mv", "tv", "gv", "dv", "sv", "ev", "nv", "wv", "rv"];
+
+    // Every other attribute the game's own gear, accessory, body, hair, face, tail
+    // and ear models use, typos included (surveyed from the game data 2026-09-28).
+    // The game drives them itself, so they never get a generated group. Keep in
+    // sync with GAME_ATTRIBUTE_NAMES in the Blender add-on's materials.py.
+    internal static readonly HashSet<string> GameAttributeNames = new(StringComparer.Ordinal)
+    {
+        "atr_ar", "atr_arm", "atr_arm1", "atr_arm2", "atr_arm3", "atr_armc", "atr_armhh",
+        "atr_bak", "atr_bak1", "atr_bak3", "atr_bak4", "atr_bakh", "atr_blt", "atr_bv_a",
+        "atr_cn_ankle", "atr_cn_neck", "atr_cn_waist", "atr_cn_wrist", "atr_del",
+        "atr_hair", "atr_head", "atr_hig", "atr_hij", "atr_hij1", "atr_hiz", "atr_hiz1", "atr_hrn",
+        "atr_inr", "atr_kam", "atr_kam1", "atr_kam4", "atr_kam23", "atr_kam24",
+        "atr_kao", "atr_kao1", "atr_kao2", "atr_kao3", "atr_kod", "atr_kod1", "atr_kod2",
+        "atr_leg", "atr_leg1", "atr_lod", "atr_lod1", "atr_lod2", "atr_lod12",
+        "atr_lod117", "atr_lod118", "atr_lod119", "atr_lod120", "atr_lpd", "atr_mim", "atr_mv_a1",
+        "atr_nek", "atr_nek2", "atr_sne", "atr_sne1", "atr_st", "atr_sta", "atr_star",
+        "atr_tlh", "atr_tls", "atr_top", "atr_top1", "atr_top3", "atr_tv_h1", "atr_ude", "atr_ude1", "atr_vsr",
+    };
+
+    private readonly IDataManager _data;
+    private readonly IPluginLog _log;
+
+    public AttributeGroupService(IDataManager data, IPluginLog log)
+    {
+        _data = data;
+        _log = log;
+    }
+
+    internal static string? ValidateAttributeGroupRequest(
         string resolvedGamePath,
         IReadOnlyList<string> tags,
         IReadOnlyDictionary<string, int>? masks)
@@ -34,7 +61,7 @@ public sealed partial class PenumbraService
             resolvedGamePath, tags, masks, out _, out _, out _);
     }
 
-    private static string? ValidateAttributeGroups(
+    internal static string? ValidateAttributeGroups(
         string modFolder,
         string resolvedGamePath,
         IReadOnlyList<string> tags,
@@ -71,7 +98,7 @@ public sealed partial class PenumbraService
         => context.ResourceManifest?.Manipulations ??
            (context.SourceKind == InstantEditImportContext.GameSource ? new JsonArray() : null);
 
-    private string? WriteAttributeGroups(
+    internal string? WriteAttributeGroups(
         string modFolder,
         string resolvedGamePath,
         IReadOnlyList<string> tags,
@@ -82,9 +109,9 @@ public sealed partial class PenumbraService
             identity => PlanImcGroupEntry(identity, sourceManipulations, GameImcEntries(resolvedGamePath, identity)));
 
     /// <summary> The entry a generated IMC group starts from; with <see cref="OnlyAttributes"/> Penumbra takes everything but the mask from the game's file. </summary>
-    private sealed record ImcGroupEntry(JsonObject? Entry, bool OnlyAttributes, string? Error = null);
+    internal sealed record ImcGroupEntry(JsonObject? Entry, bool OnlyAttributes, string? Error = null);
 
-    private static string? WriteAttributeGroupsCore(
+    internal static string? WriteAttributeGroupsCore(
         string modFolder,
         string resolvedGamePath,
         IReadOnlyList<string> tags,
@@ -125,7 +152,7 @@ public sealed partial class PenumbraService
     /// Null <paramref name="sourceManipulations"/> means the import couldn't read the mod's entries: then a model
     /// with variants gets no group, since it could undo entries nobody knows.
     /// </summary>
-    private static ImcGroupEntry PlanImcGroupEntry(
+    internal static ImcGroupEntry PlanImcGroupEntry(
         AttributeModelIdentity identity,
         JsonArray? sourceManipulations,
         IReadOnlyList<JsonObject>? gameEntries)
@@ -154,12 +181,12 @@ public sealed partial class PenumbraService
             => plan.Entry is not null && JsonIntFlexible(plan.Entry["MaterialId"]) is >= 1 and <= byte.MaxValue ? plan : plan with { Entry = null };
     }
 
-    private static bool SameImcEntry(JsonObject first, JsonObject second)
+    internal static bool SameImcEntry(JsonObject first, JsonObject second)
         => new[] { "MaterialId", "DecalId", "VfxId", "MaterialAnimationId", "SoundId" }
             .All(key => JsonIntFlexible(first[key]) == JsonIntFlexible(second[key]));
 
     /// <summary> The game's IMC entries of the model's part, by variant from 0 to the file's count; null when there's no file. </summary>
-    private IReadOnlyList<JsonObject>? GameImcEntries(string resolvedGamePath, AttributeModelIdentity identity)
+    internal IReadOnlyList<JsonObject>? GameImcEntries(string resolvedGamePath, AttributeModelIdentity identity)
     {
         if (_data is null)
             return null;
@@ -214,7 +241,7 @@ public sealed partial class PenumbraService
     }
 
     /// <summary> The mod's own IMC entries for the model's part, by variant; the first one captured for a variant wins, as in Penumbra. </summary>
-    private static Dictionary<int, JsonObject> SourceImcEntries(
+    internal static Dictionary<int, JsonObject> SourceImcEntries(
         AttributeModelIdentity identity,
         JsonArray? sourceManipulations)
     {
@@ -257,13 +284,13 @@ public sealed partial class PenumbraService
         return result;
     }
 
-    private static int JsonByteOrZero(JsonNode? node)
+    internal static int JsonByteOrZero(JsonNode? node)
     {
         var value = JsonIntFlexible(node);
         return value is >= byte.MinValue and <= byte.MaxValue ? value : 0;
     }
 
-    private static string? PrepareAttributeGroups(
+    internal static string? PrepareAttributeGroups(
         string modFolder,
         string resolvedGamePath,
         IReadOnlyList<string> tags,
@@ -327,7 +354,7 @@ public sealed partial class PenumbraService
         return null;
     }
 
-    private static string? CommitAttributeGroups(AttributeGroupWrite prepared)
+    internal static string? CommitAttributeGroups(AttributeGroupWrite prepared)
     {
         try
         {
@@ -351,7 +378,7 @@ public sealed partial class PenumbraService
             modFolder, resolvedGamePath, tags, masks,
             identity => PlanImcGroupEntry(identity, sourceManipulations, gameImcEntries));
 
-    private static string? NormalizeAttributeGroupInput(
+    internal static string? NormalizeAttributeGroupInput(
         string resolvedGamePath,
         IReadOnlyList<string> tags,
         IReadOnlyDictionary<string, int>? masks,
@@ -433,7 +460,7 @@ public sealed partial class PenumbraService
     }
 
     /// <summary> The variant tag family a gear or accessory slot's IMC entry toggles, and the slot's name for messages. </summary>
-    private static (string Family, string SlotName) VariantFamily(string atrSlot) => atrSlot switch
+    internal static (string Family, string SlotName) VariantFamily(string atrSlot) => atrSlot switch
     {
         "Head" => ("mv", "head"),
         "Body" => ("tv", "body"),
@@ -447,7 +474,7 @@ public sealed partial class PenumbraService
         _ => ("", atrSlot),
     };
 
-    private static bool TryGetStandardAttributeSuffix(string tag, out string suffix)
+    internal static bool TryGetStandardAttributeSuffix(string tag, out string suffix)
     {
         suffix = "";
         // IMC attribute masks have ten bits, _a to _j.
@@ -461,7 +488,7 @@ public sealed partial class PenumbraService
         return true;
     }
 
-    private static AttributeModelIdentity? ParseAttributeModelIdentity(string gamePath)
+    internal static AttributeModelIdentity? ParseAttributeModelIdentity(string gamePath)
     {
         var path = NormalizeGamePath(gamePath);
         Match match;
@@ -541,10 +568,10 @@ public sealed partial class PenumbraService
         return new AttributeModelIdentity(id, raceCode, atrSlot, objectType, equipSlot, bodySlot);
     }
 
-    private static string AttributeGroupMarker(string kind, string path)
+    internal static string AttributeGroupMarker(string kind, string path)
         => $"{AttributeGroupDescriptionPrefix}{kind}|{path}";
 
-    private static string GeneratedAttributeGroupName(
+    internal static string GeneratedAttributeGroupName(
         AttributeModelIdentity identity, string path, string kind)
     {
         var stem = Path.GetFileNameWithoutExtension(path);
@@ -552,7 +579,7 @@ public sealed partial class PenumbraService
         return baseName.Length <= 120 ? baseName : baseName[..120].TrimEnd();
     }
 
-    private static void UpsertAttributeGroup(
+    internal static void UpsertAttributeGroup(
         JsonArray groups,
         string marker,
         string requestedName,
@@ -587,7 +614,7 @@ public sealed partial class PenumbraService
             groups.Add(result);
     }
 
-    private static void RemoveManagedAttributeGroup(JsonArray groups, string marker)
+    internal static void RemoveManagedAttributeGroup(JsonArray groups, string marker)
     {
         for (var index = groups.Count - 1; index >= 0; --index)
         {
@@ -597,7 +624,7 @@ public sealed partial class PenumbraService
         }
     }
 
-    private static int NextAttributeGroupPriority(JsonArray groups)
+    internal static int NextAttributeGroupPriority(JsonArray groups)
     {
         var highest = groups.OfType<JsonObject>().Select(group => JsonInt(group["Priority"]))
             .DefaultIfEmpty(0).Max();
@@ -606,7 +633,7 @@ public sealed partial class PenumbraService
         return highest + 1;
     }
 
-    private static string UniqueAttributeGroupName(JsonArray groups, string requested)
+    internal static string UniqueAttributeGroupName(JsonArray groups, string requested)
     {
         var names = groups.OfType<JsonObject>()
             .Select(group => JsonString(group["Name"]))
@@ -625,7 +652,7 @@ public sealed partial class PenumbraService
         throw new InvalidDataException("Could not allocate a unique Penumbra attribute group name.");
     }
 
-    private static JsonObject BuildImcAttributeGroup(
+    internal static JsonObject BuildImcAttributeGroup(
         JsonObject? existing,
         AttributeModelIdentity identity,
         IReadOnlyDictionary<string, int> suffixMasks,
@@ -664,7 +691,7 @@ public sealed partial class PenumbraService
         return result;
     }
 
-    private static JsonObject ImcEntry(
+    internal static JsonObject ImcEntry(
         int materialId,
         int decalId,
         int vfxId,
@@ -681,7 +708,7 @@ public sealed partial class PenumbraService
             ["SoundId"] = soundId,
         };
 
-    private static JsonObject BuildAtrAttributeGroup(
+    internal static JsonObject BuildAtrAttributeGroup(
         JsonObject? existing,
         AttributeModelIdentity identity,
         IReadOnlyList<string> customTags)
@@ -700,7 +727,7 @@ public sealed partial class PenumbraService
         return result;
     }
 
-    private static JsonObject BuildAtrManipulation(
+    internal static JsonObject BuildAtrManipulation(
         AttributeModelIdentity identity,
         string tag,
         bool enabled)
@@ -718,7 +745,7 @@ public sealed partial class PenumbraService
             },
         };
 
-    private static HashSet<string> ManagedAtrTags(JsonArray groups, string managedMarker)
+    internal static HashSet<string> ManagedAtrTags(JsonArray groups, string managedMarker)
     {
         var result = new HashSet<string>(StringComparer.Ordinal);
         var managedGroup = groups.OfType<JsonObject>().FirstOrDefault(group =>
@@ -734,7 +761,7 @@ public sealed partial class PenumbraService
         return result;
     }
 
-    private static void UpdateManagedAtrDefaults(
+    internal static void UpdateManagedAtrDefaults(
         JsonObject meta,
         AttributeModelIdentity identity,
         IReadOnlySet<string> previousTags,
@@ -803,7 +830,7 @@ public sealed partial class PenumbraService
         return result;
     }
 
-    private static bool TryGetAtrManipulation(
+    internal static bool TryGetAtrManipulation(
         JsonObject item,
         out JsonObject manipulation,
         out string attribute)
@@ -820,7 +847,7 @@ public sealed partial class PenumbraService
         return true;
     }
 
-    private static bool AtrManipulationMatchesIdentity(
+    internal static bool AtrManipulationMatchesIdentity(
         JsonObject manipulation,
         AttributeModelIdentity identity)
         => string.Equals(JsonString(manipulation["Slot"]), identity.AtrSlot, StringComparison.Ordinal) &&
@@ -829,7 +856,7 @@ public sealed partial class PenumbraService
 
     // Before 2.0.0, hair and face exports wrote Slot "Unknown" with the model ID.
     // Penumbra drops that combination as invalid, so these entries never did anything.
-    private static bool IsLegacyHumanAtrManipulation(
+    internal static bool IsLegacyHumanAtrManipulation(
         JsonObject manipulation,
         AttributeModelIdentity identity)
         => identity.ObjectType == "Character" &&
@@ -837,10 +864,10 @@ public sealed partial class PenumbraService
            JsonIntFlexible(manipulation["Id"]) == identity.Id &&
            JsonIntFlexible(manipulation["GenderRaceCondition"]) == 0;
 
-    private static bool IsFalse(JsonNode? node)
+    internal static bool IsFalse(JsonNode? node)
         => node is JsonValue value && value.TryGetValue<bool>(out var result) && !result;
 
-    private static bool HasUnmanagedAtrConflict(
+    internal static bool HasUnmanagedAtrConflict(
         JsonObject meta,
         string managedMarker,
         AttributeModelIdentity identity,
@@ -881,7 +908,7 @@ public sealed partial class PenumbraService
         return false;
     }
 
-    private static IEnumerable<JsonObject> DescendantObjects(JsonNode? node)
+    internal static IEnumerable<JsonObject> DescendantObjects(JsonNode? node)
     {
         if (node is JsonObject objectNode)
         {
@@ -898,14 +925,14 @@ public sealed partial class PenumbraService
         }
     }
 
-    private static string AttributeGroupErrorCode(string error)
+    internal static string AttributeGroupErrorCode(string error)
         => error.StartsWith("attribute_group_conflict:", StringComparison.Ordinal)
             ? "attribute_group_conflict"
             : error.StartsWith("attribute_group_write_failed:", StringComparison.Ordinal)
                 ? "attribute_group_write_failed"
                 : "invalid_attribute_groups";
 
-    private static string AttributeGroupErrorMessage(string error)
+    internal static string AttributeGroupErrorMessage(string error)
     {
         var separator = error.IndexOf(": ", StringComparison.Ordinal);
         return separator >= 0 ? error[(separator + 2)..] : error;

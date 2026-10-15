@@ -6,6 +6,8 @@ using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
 using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
+using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
+using static InstantEdit.Services.PenumbraMods.EstEntryService;
 
 namespace InstantEdit.Services;
 
@@ -22,7 +24,7 @@ public sealed partial class PenumbraService
     {
         if (!source.IsModFile || !IsSafeModName(source.ModDirectory) || !IsSafeRelativeResourcePath(source.RelativePath))
             throw new IOException($"{source.Label} is not a writable mod file.");
-        var scan = await _framework.RunOnFrameworkThread(() => ResolveModScanOnFramework(source.ModDirectory, source.ModStableId)).ConfigureAwait(false);
+        var scan = await _framework.RunOnFrameworkThread(() => _sources.ResolveModScanOnFramework(source.ModDirectory, source.ModStableId)).ConfigureAwait(false);
         await LeaveFrameworkThread();
         if (scan is null)
             throw new TextureConflictException($"The mod {source.ModName} is no longer registered in Penumbra.");
@@ -61,7 +63,7 @@ public sealed partial class PenumbraService
     {
         if (!IsSafeModName(modDirectory))
             return null;
-        var scan = await _framework.RunOnFrameworkThread(() => ResolveModScanOnFramework(modDirectory, stableId)).ConfigureAwait(false);
+        var scan = await _framework.RunOnFrameworkThread(() => _sources.ResolveModScanOnFramework(modDirectory, stableId)).ConfigureAwait(false);
         await LeaveFrameworkThread();
         return scan?.CandidateRoots.FirstOrDefault(root => File.Exists(Path.Combine(root, "meta.json")) &&
                                                           (File.GetAttributes(root) & FileAttributes.ReparsePoint) == 0);
@@ -75,9 +77,9 @@ public sealed partial class PenumbraService
     {
         var warnings = new List<string>();
         foreach (var mod in modDirectories.Distinct(StringComparer.OrdinalIgnoreCase))
-            if (await _framework.RunOnFrameworkThread(() => ReloadModOnFramework(mod)).ConfigureAwait(false) is { } reload)
+            if (await _framework.RunOnFrameworkThread(() => _activation.ReloadModOnFramework(mod)).ConfigureAwait(false) is { } reload)
                 warnings.Add(reload.Message);
-        if (await _framework.RunOnFrameworkThread(RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false) is { } redraw)
+        if (await _framework.RunOnFrameworkThread(_activation.RedrawPlayerOwnedEntitiesOnFramework).ConfigureAwait(false) is { } redraw)
             warnings.Add(redraw);
         await LeaveFrameworkThread();
         return warnings;

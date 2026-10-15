@@ -227,11 +227,11 @@ internal static class VariantExportScenarios
             },
         });
         var beforeMissingImc = File.ReadAllText(metaPath);
-        var missingImc = PenumbraService.WriteAttributeGroupsForRegression(root, path, tags, masks);
+        var missingImc = AttributeGroupService.WriteAttributeGroupsForRegression(root, path, tags, masks);
         Require(missingImc?.Contains("attribute_group_imc_unavailable", StringComparison.Ordinal) == true &&
                 File.ReadAllText(metaPath) == beforeMissingImc,
             "attribute groups: a missing source IMC entry is rejected instead of guessing a material ID");
-        Require(PenumbraService.WriteAttributeGroupsForRegression(root, path, tags, masks, sourceImc) is null,
+        Require(AttributeGroupService.WriteAttributeGroupsForRegression(root, path, tags, masks, sourceImc) is null,
             "attribute groups: standard and custom groups are generated together");
 
         var written = JsonNode.Parse(File.ReadAllText(metaPath))!.AsObject();
@@ -277,7 +277,7 @@ internal static class VariantExportScenarios
             "attribute groups: unrelated metadata and user groups survive generation");
 
         var imcId = imc["Id"]!.GetValue<string>();
-        Require(PenumbraService.WriteAttributeGroupsForRegression(
+        Require(AttributeGroupService.WriteAttributeGroupsForRegression(
                     root,
                     path,
                     ["atr_tv_a", "atr_tv_b", "atrx_cape"],
@@ -291,7 +291,7 @@ internal static class VariantExportScenarios
                 JsonNode.Parse(File.ReadAllText(metaPath))!["DefaultData"]!["Manipulations"]!.AsArray()
                     .OfType<JsonObject>().Count(item => item["Type"]?.GetValue<string>() == "Atr") == 1,
             "attribute groups: managed group identity is stable across reruns");
-        Require(PenumbraService.WriteAttributeGroupsForRegression(
+        Require(AttributeGroupService.WriteAttributeGroupsForRegression(
                     root,
                     path,
                     ["atr_tv_a"],
@@ -308,7 +308,7 @@ internal static class VariantExportScenarios
         var conflictMetaPath = Path.Combine(conflictRoot, "meta.json");
         File.WriteAllText(conflictMetaPath, Metadata(UserAtrGroup("Body", 1)).ToJsonString());
         var before = File.ReadAllText(conflictMetaPath);
-        var conflict = PenumbraService.WriteAttributeGroupsForRegression(
+        var conflict = AttributeGroupService.WriteAttributeGroupsForRegression(
             conflictRoot, path, ["atrx_new"], new Dictionary<string, int>());
         Require(conflict?.Contains("conflict", StringComparison.OrdinalIgnoreCase) == true &&
                 File.ReadAllText(conflictMetaPath) == before,
@@ -331,7 +331,7 @@ internal static class VariantExportScenarios
             ["DefaultEntry"] = new JsonObject { ["MaterialId"] = 6 },
             ["Options"] = new JsonArray(),
         }).ToJsonString());
-        var hair = PenumbraService.WriteAttributeGroupsForRegression(
+        var hair = AttributeGroupService.WriteAttributeGroupsForRegression(
             hairRoot,
             hairPath,
             ["atr_hv_a", "atr_tv_b", "atr_kam", "atr_bak", "atr_fv_e", "atrx_bangs"],
@@ -350,7 +350,7 @@ internal static class VariantExportScenarios
         var faceRoot = Path.Combine(root, "Face");
         Directory.CreateDirectory(faceRoot);
         File.WriteAllText(Path.Combine(faceRoot, "meta.json"), Metadata().ToJsonString());
-        Require(PenumbraService.WriteAttributeGroupsForRegression(
+        Require(AttributeGroupService.WriteAttributeGroupsForRegression(
                     faceRoot,
                     "chara/human/c0101/obj/face/f0001/model/c0101f0001_fac.mdl",
                     ["atr_fv_a", "atr_fv_g", "atr_mim", "atr_kao", "atrx_scar"],
@@ -367,7 +367,7 @@ internal static class VariantExportScenarios
         var hairConflictMetaPath = Path.Combine(hairConflictRoot, "meta.json");
         File.WriteAllText(hairConflictMetaPath, Metadata(UserAtrGroup("Hair", 154)).ToJsonString());
         var hairConflictBefore = File.ReadAllText(hairConflictMetaPath);
-        Require(PenumbraService.WriteAttributeGroupsForRegression(
+        Require(AttributeGroupService.WriteAttributeGroupsForRegression(
                     hairConflictRoot, hairPath, ["atrx_bangs"], new Dictionary<string, int>())?
                     .Contains("conflict", StringComparison.OrdinalIgnoreCase) == true &&
                 File.ReadAllText(hairConflictMetaPath) == hairConflictBefore,
@@ -395,7 +395,7 @@ internal static class VariantExportScenarios
             ["Manipulations"] = new JsonArray(LegacyHairAtr("atrx_bangs", false)),
         };
         File.WriteAllText(legacyMetaPath, legacyMeta.ToJsonString());
-        Require(PenumbraService.WriteAttributeGroupsForRegression(
+        Require(AttributeGroupService.WriteAttributeGroupsForRegression(
                     legacyRoot, hairPath, ["atrx_bangs"], new Dictionary<string, int>()) is null,
             "attribute groups: a legacy Unknown-slot hair export is not treated as a conflict");
         var migrated = JsonNode.Parse(File.ReadAllText(legacyMetaPath))!;
@@ -405,7 +405,7 @@ internal static class VariantExportScenarios
                 !migrated["DefaultData"]!["Manipulations"]![0]!["Manipulation"]!["Entry"]!.GetValue<bool>(),
             "attribute groups: re-exporting replaces legacy Unknown-slot hair toggles and defaults");
 
-        var captured = PenumbraService.ManipulationsWithAtrDefaults(
+        var captured = AttributeGroupService.ManipulationsWithAtrDefaults(
             new JsonArray(LegacyHairAtr("atrx_bangs", true), LegacyHairAtr("atrx_other", false)),
             hairPath,
             ["atrx_bangs"]);
@@ -419,7 +419,7 @@ internal static class VariantExportScenarios
         var gameAttributesRoot = Path.Combine(root, "GameAttributesOnGear");
         Directory.CreateDirectory(gameAttributesRoot);
         File.WriteAllText(Path.Combine(gameAttributesRoot, "meta.json"), Metadata().ToJsonString());
-        Require(PenumbraService.WriteAttributeGroupsForRegression(
+        Require(AttributeGroupService.WriteAttributeGroupsForRegression(
                     gameAttributesRoot, path, ["atr_hv_a", "atr_fv_b", "atr_nek", "atr_vsr", "atr_lod117"],
                     new Dictionary<string, int> { ["atr_hv_a"] = 1 }) is null &&
                 (JsonNode.Parse(File.ReadAllText(Path.Combine(gameAttributesRoot, "meta.json")))!["Groups"]
@@ -430,7 +430,7 @@ internal static class VariantExportScenarios
         Directory.CreateDirectory(unknownRoot);
         File.WriteAllText(Path.Combine(unknownRoot, "meta.json"), Metadata().ToJsonString());
         var unknownBefore = File.ReadAllText(Path.Combine(unknownRoot, "meta.json"));
-        Require(PenumbraService.WriteAttributeGroupsForRegression(
+        Require(AttributeGroupService.WriteAttributeGroupsForRegression(
                     unknownRoot, path, ["atr_cape"], new Dictionary<string, int>())?
                     .Contains("must use the atrx_ prefix", StringComparison.Ordinal) == true &&
                 File.ReadAllText(Path.Combine(unknownRoot, "meta.json")) == unknownBefore,
@@ -439,7 +439,7 @@ internal static class VariantExportScenarios
         var tenSuffixRoot = Path.Combine(root, "TenSuffixes");
         Directory.CreateDirectory(tenSuffixRoot);
         File.WriteAllText(Path.Combine(tenSuffixRoot, "meta.json"), Metadata().ToJsonString());
-        Require(PenumbraService.WriteAttributeGroupsForRegression(
+        Require(AttributeGroupService.WriteAttributeGroupsForRegression(
                     tenSuffixRoot, path, ["atr_tv_a", "atr_tv_i", "atr_tv_j"],
                     new Dictionary<string, int> { ["atr_tv_a"] = 1, ["atr_tv_i"] = 256, ["atr_tv_j"] = 512 },
                     sourceImc) is null,
@@ -490,7 +490,7 @@ internal static class VariantExportScenarios
                 .OfType<JsonObject>().Single(group => group["Type"]?.GetValue<string>() == "Imc");
 
         var swap = Folder("NecklaceSwap");
-        Require(PenumbraService.WriteAttributeGroupsForRegression(swap, necklace, tags, masks,
+        Require(AttributeGroupService.WriteAttributeGroupsForRegression(swap, necklace, tags, masks,
                     Imc((2, Entry(1)), (3, Entry(1)), (4, Entry(1))), game) is null,
             "accessory attribute groups: a necklace's part toggles are generated");
         var swapGroup = ImcGroup(swap);
@@ -504,7 +504,7 @@ internal static class VariantExportScenarios
             "accessory attribute groups: a swap that gives every variant material 1 keeps it, instead of the game's materials 2 to 4");
 
         var plain = Folder("NecklacePlain");
-        Require(PenumbraService.WriteAttributeGroupsForRegression(plain, necklace, tags, masks, Imc((1, Entry(1))), game) is null &&
+        Require(AttributeGroupService.WriteAttributeGroupsForRegression(plain, necklace, tags, masks, Imc((1, Entry(1))), game) is null &&
                 ImcGroup(plain)["OnlyAttributes"]!.GetValue<bool>() &&
                 ImcGroup(plain)["DefaultEntry"]!["MaterialId"]!.GetValue<int>() == 1,
             "accessory attribute groups: a mod without IMC changes of its own keeps every variant's game entry");
@@ -512,9 +512,9 @@ internal static class VariantExportScenarios
         // An earlier export made an IMC group; now the mod changes one variant's effect, which that group would undo.
         var mixed = Folder("NecklaceMixed");
         string[] mixedTags = [.. tags, "atrx_cape"];
-        Require(PenumbraService.WriteAttributeGroupsForRegression(mixed, necklace, mixedTags, masks, Imc((1, Entry(1))), game) is null,
+        Require(AttributeGroupService.WriteAttributeGroupsForRegression(mixed, necklace, mixedTags, masks, Imc((1, Entry(1))), game) is null,
             "accessory attribute groups: the earlier export's groups are written");
-        Require(PenumbraService.WriteAttributeGroupsForRegression(mixed, necklace, mixedTags, masks, Imc((1, Entry(1, vfx: 7))), game)?
+        Require(AttributeGroupService.WriteAttributeGroupsForRegression(mixed, necklace, mixedTags, masks, Imc((1, Entry(1, vfx: 7))), game)?
                     .StartsWith("attribute_group_imc_mixed:", StringComparison.Ordinal) == true,
             "accessory attribute groups: one group can't keep IMC changes that differ between variants, which is said");
         var mixedGroups = JsonNode.Parse(File.ReadAllText(Path.Combine(mixed, "meta.json")))!["Groups"]!.AsArray().OfType<JsonObject>().ToArray();
@@ -525,7 +525,7 @@ internal static class VariantExportScenarios
 
         // An import whose capture failed read none of the mod's IMC entries: they are unknown, not absent (bridge test 09).
         var unknown = Folder("NecklaceUnknown");
-        Require(PenumbraService.WriteAttributeGroupsForRegression(unknown, necklace, mixedTags, masks, null, game)?
+        Require(AttributeGroupService.WriteAttributeGroupsForRegression(unknown, necklace, mixedTags, masks, null, game)?
                     .StartsWith("attribute_group_imc_unknown:", StringComparison.Ordinal) == true &&
                 JsonNode.Parse(File.ReadAllText(Path.Combine(unknown, "meta.json")))!["Groups"]!.AsArray().OfType<JsonObject>()
                     .All(group => group["Type"]?.GetValue<string>() != "Imc"),
@@ -534,13 +534,13 @@ internal static class VariantExportScenarios
         // The converted cloak still carried the body's atr_tv_ tags, which a necklace's IMC entry never hides.
         var converted = Folder("ConvertedCloak");
         var convertedBefore = File.ReadAllText(Path.Combine(converted, "meta.json"));
-        var refused = PenumbraService.WriteAttributeGroupsForRegression(converted, necklace, ["atr_tv_a", "atr_tv_b", "atr_nv_c"],
+        var refused = AttributeGroupService.WriteAttributeGroupsForRegression(converted, necklace, ["atr_tv_a", "atr_tv_b", "atr_nv_c"],
             new Dictionary<string, int> { ["atr_tv_a"] = 1, ["atr_tv_b"] = 2, ["atr_nv_c"] = 4 }, null, game);
         Require(refused == "attribute_group_invalid: A necklace model only toggles atr_nv_ tags, so atr_tv_a, atr_tv_b would never hide. " +
                            "Rename them to atr_nv_a, atr_nv_b." &&
                 File.ReadAllText(Path.Combine(converted, "meta.json")) == convertedBefore,
             "accessory attribute groups: another slot's part tags are refused with the names to use");
-        Require(PenumbraService.WriteAttributeGroupsForRegression(converted, "chara/accessory/a0064/model/c0101a0064_ear.mdl", ["atr_gv_a"],
+        Require(AttributeGroupService.WriteAttributeGroupsForRegression(converted, "chara/accessory/a0064/model/c0101a0064_ear.mdl", ["atr_gv_a"],
                     new Dictionary<string, int> { ["atr_gv_a"] = 1 })?.Contains("An earring model only toggles atr_ev_ tags", StringComparison.Ordinal) == true,
             "accessory attribute groups: the refusal names the model's own family");
     }

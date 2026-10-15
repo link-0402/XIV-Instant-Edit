@@ -353,7 +353,7 @@ try
     var movedRoot = Path.Combine(testRoot, "MovedCustomRoot");
     var movedParent = Path.Combine(movedRoot, "Files", "models");
     Directory.CreateDirectory(movedParent);
-    var moved = PenumbraService.ResolveSourceModTargetFromRoots(
+    var moved = SourceMods.ResolveSourceModTargetFromRoots(
         "registered-mod", originalTarget, originalRoot, relative, movedRoot, null);
     Require(moved.Target?.FilePath == Path.Combine(movedParent, "item.mdl") && moved.Code == "accepted",
         "a custom or relocated registered root rebases the durable relative target");
@@ -361,26 +361,26 @@ try
         "a missing model file is accepted when its authorized parent still exists");
 
     var staleRegisteredRoot = Path.Combine(testRoot, "StaleRegisteredRoot");
-    var recovered = PenumbraService.ResolveSourceModTargetFromRoots(
+    var recovered = SourceMods.ResolveSourceModTargetFromRoots(
         "registered-mod", originalTarget, originalRoot, relative, staleRegisteredRoot, null);
     Require(recovered.Target?.FilePath == originalTarget && recovered.Code == "accepted",
         "a disappeared registered root can recover through the captured authorized root");
 
     var missingRoot = Path.Combine(testRoot, "MissingParentRoot");
     Directory.CreateDirectory(missingRoot);
-    var missing = PenumbraService.ResolveSourceModTargetFromRoots(
+    var missing = SourceMods.ResolveSourceModTargetFromRoots(
         "registered-mod", originalTarget, originalRoot, relative, missingRoot, null);
     Require(missing.Target is null && missing.Code == "destination_missing",
         "a missing authorized parent directory is rejected");
 
     var fallbackRoot = Path.Combine(testRoot, "FallbackRoot");
     Directory.CreateDirectory(Path.Combine(fallbackRoot, "Files", "models"));
-    var ambiguous = PenumbraService.ResolveSourceModTargetFromRoots(
+    var ambiguous = SourceMods.ResolveSourceModTargetFromRoots(
         "registered-mod", originalTarget, originalRoot, relative, null, fallbackRoot);
     Require(ambiguous.Target is null && ambiguous.Code == "destination_ambiguous",
         "multiple non-authoritative roots are rejected as ambiguous");
 
-    var escaped = PenumbraService.ResolveSourceModTargetFromRoots(
+    var escaped = SourceMods.ResolveSourceModTargetFromRoots(
         "registered-mod", originalTarget, originalRoot, "../outside.mdl", movedRoot, null);
     Require(escaped.Target is null && escaped.Code == "destination_unsafe",
         "relative path escapes are rejected");
@@ -393,7 +393,7 @@ try
     try
     {
         Directory.CreateSymbolicLink(Path.Combine(reparseFiles, "models"), externalModels);
-        var reparse = PenumbraService.ResolveSourceModTargetFromRoots(
+        var reparse = SourceMods.ResolveSourceModTargetFromRoots(
             "registered-mod", originalTarget, originalRoot, relative, reparseRoot, null);
         Require(reparse.Target is null && reparse.Code == "destination_unsafe",
             "reparse-point destinations are rejected");

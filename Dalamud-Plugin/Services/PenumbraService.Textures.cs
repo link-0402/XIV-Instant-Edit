@@ -11,6 +11,8 @@ using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
 using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
+using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
+using static InstantEdit.Services.PenumbraMods.EstEntryService;
 
 namespace InstantEdit.Services;
 
@@ -104,7 +106,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
         if (!PathRules.IsPathWithin(file, root) || !string.Equals(Path.GetFullPath(Path.Combine(root, relative)), Path.GetFullPath(file), StringComparison.OrdinalIgnoreCase))
             throw new TextureConflictException("The texture no longer belongs to its captured mod directory.");
         token.ThrowIfCancellationRequested();
-        var (available, registered) = await _framework.RunOnFrameworkThread(() => (Available, ResolveModScanOnFramework(mod))).ConfigureAwait(false);
+        var (available, registered) = await _framework.RunOnFrameworkThread(() => (Available, _sources.ResolveModScanOnFramework(mod))).ConfigureAwait(false);
         // Penumbra lists no mods while it is unavailable, and not every mod while it loads them again.
         if (!available)
             throw new TextureWaitException("Penumbra isn't available right now.");
@@ -356,7 +358,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
             foreach (var mod in mods.Where(mod => !registered.Contains(mod.Key) && mod.Any(s => s.SetupPending)))
             {
                 token.ThrowIfCancellationRequested();
-                var added = await AddNewModAsync(mod.Key).ConfigureAwait(false);
+                var added = await _activation.AddNewModAsync(mod.Key).ConfigureAwait(false);
                 if (added is not null) warnings.Add(added.Message);
             }
             await _framework.RunOnFrameworkThread(() =>
@@ -364,11 +366,11 @@ public sealed partial class PenumbraService : ITextureEditBackend
                 foreach (var mod in mods)
                 {
                     token.ThrowIfCancellationRequested();
-                    var reload = ReloadModOnFramework(mod.Key);
+                    var reload = _activation.ReloadModOnFramework(mod.Key);
                     if (reload is not null) warnings.Add(reload.Message);
                     foreach (var target in mod.Where(s => s.SetupPending && s.CollectionId.HasValue).GroupBy(s => s.CollectionId!.Value))
                     {
-                        var configure = ConfigureModForCollectionOnFramework(mod.Key, target.Key, target.First().CollectionName,
+                        var configure = _activation.ConfigureModForCollectionOnFramework(mod.Key, target.Key, target.First().CollectionName,
                             setPriority: false, priority: 0, redraw: false);
                         if (!configure.Success) warnings.Add(configure.Message);
                         warnings.AddRange(configure.WarningList);
@@ -396,7 +398,7 @@ public sealed partial class PenumbraService : ITextureEditBackend
                     }
                     catch (Exception error) { warnings.Add("Selected actor redraw failed: " + error.Message); }
                 }
-                var owned = RedrawPlayerOwnedEntitiesOnFramework();
+                var owned = _activation.RedrawPlayerOwnedEntitiesOnFramework();
                 if (owned is not null) warnings.Add(owned);
             }).ConfigureAwait(false);
         }

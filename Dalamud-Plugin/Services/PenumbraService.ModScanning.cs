@@ -20,13 +20,13 @@ using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
 using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
+using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
+using static InstantEdit.Services.PenumbraMods.EstEntryService;
 
 namespace InstantEdit.Services;
 
 public sealed partial class PenumbraService
 {
-    private sealed record ModScanRequest(PenumbraMod Mod, string[] CandidateRoots);
-
     /// <summary>Resolve Penumbra state on the framework thread, then scan files on a worker.</summary>
     public async Task<PenumbraModSnapshot?> GetModResourcesAsync(
         string modDirectory,
@@ -39,7 +39,7 @@ public sealed partial class PenumbraService
         try
         {
             var request = await _framework.RunOnFrameworkThread(
-                () => ResolveModScanOnFramework(modDirectory, stableId)).ConfigureAwait(false);
+                () => _sources.ResolveModScanOnFramework(modDirectory, stableId)).ConfigureAwait(false);
             if (request is null)
                 return null;
             return await Task.Run(() => ScanModResources(request, cancellationToken), cancellationToken)
@@ -226,35 +226,6 @@ public sealed partial class PenumbraService
     private static MaterialCoverageResult MaterialCoverageUnavailable()
         => new(false, false, "material_coverage_unavailable",
             "Material coverage could not be verified.", Array.Empty<MaterialCoverageMissing>());
-
-    private ModScanRequest? ResolveModScanOnFramework(string modDirectory, Guid? stableId = null)
-    {
-        if (stableId is not null && TryGetModList(out var modList) &&
-            !TryResolveRegisteredModIdentity(modList, modDirectory, stableId, null, out modDirectory, out _))
-            return null;
-        var mod = GetMods().FirstOrDefault(item =>
-            string.Equals(item.Directory, modDirectory, StringComparison.OrdinalIgnoreCase));
-        if (mod is null)
-            return null;
-
-        var candidateRoots = new List<string>();
-        var pathResult = _getModPath.Invoke(mod.Directory, string.Empty);
-        if (pathResult.Item1 is PenumbraApiEc.Success)
-            AddCandidateRoot(candidateRoots, pathResult.Item2);
-
-        // GetModPath can point at a manually configured location. Keep the
-        // standard Penumbra root as a fallback for older/API-incompatible installs.
-        var modDirectoryRoot = GetModDirectory();
-        if (!string.IsNullOrWhiteSpace(modDirectoryRoot))
-            AddCandidateRoot(candidateRoots, Path.Combine(modDirectoryRoot, mod.Directory));
-        mod = mod with
-        {
-            StableId = candidateRoots
-                .Select(ReadModStableIdentifier)
-                .FirstOrDefault(identifier => identifier.HasValue),
-        };
-        return new ModScanRequest(mod, candidateRoots.ToArray());
-    }
 
     private PenumbraModSnapshot? ScanModResources(ModScanRequest request, CancellationToken cancellationToken)
     {

@@ -20,6 +20,8 @@ using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
 using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
+using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
+using static InstantEdit.Services.PenumbraMods.EstEntryService;
 
 namespace InstantEdit.Services;
 
@@ -213,9 +215,6 @@ public sealed partial class PenumbraService
                 mappings.ContainsKey(swap.Key))
                 throw new InvalidDataException("A generated mashup FileSwap is unsafe or conflicts with a file mapping.");
     }
-
-    private static JsonArray CloneManipulations(JsonArray? manipulations)
-        => manipulations?.DeepClone() as JsonArray ?? new JsonArray();
 
     internal static string StageGameModelMod(
         string staging,
