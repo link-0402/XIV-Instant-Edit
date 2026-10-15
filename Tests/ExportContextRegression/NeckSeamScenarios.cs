@@ -460,8 +460,8 @@ internal static class NeckSeamScenarios
 
     private static void CheckNames(string testRoot)
     {
-        Require(PenumbraService.UniqueModName("Neck Seam Preview - Luci Xiv", name => name == "Neck Seam Preview - Luci Xiv") == "Neck Seam Preview - Luci Xiv (2)" &&
-                PenumbraService.UniqueModName("a/b:c", _ => false) == "abc",
+        Require(PreviewModWriter.UniqueModName("Neck Seam Preview - Luci Xiv", name => name == "Neck Seam Preview - Luci Xiv") == "Neck Seam Preview - Luci Xiv (2)" &&
+                PreviewModWriter.UniqueModName("a/b:c", _ => false) == "abc",
             "neck seam: mod names are made unique and stripped of characters a folder can't hold");
         Require(NeckSeamService.PreviewTexturePath("chara/x/--y.tex", "0011aabb") == "chara/x/--y_ns0011aabb.tex",
             "neck seam: preview textures sit next to the original with the preview's tag");

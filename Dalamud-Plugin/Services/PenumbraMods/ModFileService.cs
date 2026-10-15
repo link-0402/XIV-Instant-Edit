@@ -1,20 +1,29 @@
 using InstantEdit.Services.PreviewMods;
-using InstantEdit.Services.PenumbraMods;
 using static InstantEdit.Services.PenumbraMods.FrameworkThread;
-using static InstantEdit.Services.PenumbraMods.ModCleanup;
-using static InstantEdit.Services.PenumbraMods.ModJson;
-using static InstantEdit.Services.PenumbraMods.ModMetadata;
-using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
-using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
-using static InstantEdit.Services.PenumbraMods.EstEntryService;
-using static InstantEdit.Services.PenumbraMods.ModFiles;
-using static InstantEdit.Services.PenumbraMods.MashupPlanning;
+using Dalamud.Plugin.Services;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary>
+/// Rewrites files of registered mods in place, for automatic texture compression and restoring the
+/// originals, then reloads the mods and redraws the player.
+/// </summary>
+internal sealed class ModFileService
 {
+    private readonly IFramework _framework;
+    private readonly SemaphoreSlim _exportGate;
+    private readonly SourceMods _sources;
+    private readonly ModActivation _activation;
+
+    public ModFileService(IFramework framework, SemaphoreSlim exportGate, SourceMods sources, ModActivation activation)
+    {
+        _framework = framework;
+        _exportGate = exportGate;
+        _sources = sources;
+        _activation = activation;
+    }
+
     /// <summary>
     /// Writes new contents over a mod file, for automatic texture compression and restoring its
     /// originals. The mod must still be registered, the file must still sit at its relative path

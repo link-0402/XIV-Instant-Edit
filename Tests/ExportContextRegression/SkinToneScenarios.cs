@@ -244,10 +244,10 @@ internal static class SkinToneScenarios
         };
         File.WriteAllText(Path.Combine(mod, "meta.json"), meta.ToJsonString());
         var copy = SkinToneFixer.TonePath(EarMaterialPath, "base");
-        var plan = PenumbraService.PlanFileAdditions(mod, "Ears Mod", material, EarMaterialPath, [(copy, [1, 2, 3])], "Measure again");
+        var plan = PreviewModWriter.PlanFileAdditions(mod, "Ears Mod", material, EarMaterialPath, [(copy, [1, 2, 3])], "Measure again");
         Require(plan.Entries.Count == 1 && plan.Files.Single().RelativePath == "ears a/" + copy,
             "skin tone: a new texture goes in the material's option folder, for the one option that maps the material there");
-        PenumbraService.CommitFileAdditions(plan, null);
+        PreviewModWriter.CommitFileAdditions(plan, null);
         var written = JsonNode.Parse(File.ReadAllText(Path.Combine(mod, "meta.json")))!;
         var options = written["Groups"]![0]!["Options"]!.AsArray();
         Require(File.ReadAllBytes(Path.Combine(mod, "ears a", copy.Replace('/', '\\'))).SequenceEqual(new byte[] { 1, 2, 3 }) &&
@@ -255,15 +255,15 @@ internal static class SkinToneScenarios
                 written["DefaultData"]!["Files"]![copy] is null && (int)written["FileVersion"]! == 4,
             "skin tone: the new texture is written and mapped where the material is, and nowhere else");
 
-        var again = PenumbraService.PlanFileAdditions(mod, "Ears Mod", material, EarMaterialPath, [(copy, [4, 5])], "Measure again");
-        PenumbraService.CommitFileAdditions(again, null);
+        var again = PreviewModWriter.PlanFileAdditions(mod, "Ears Mod", material, EarMaterialPath, [(copy, [4, 5])], "Measure again");
+        PreviewModWriter.CommitFileAdditions(again, null);
         Require(File.ReadAllBytes(Path.Combine(mod, "ears a", copy.Replace('/', '\\'))).SequenceEqual(new byte[] { 4, 5 }),
             "skin tone: applying again replaces the mod's own copy");
 
         options[0]!["Files"]![copy] = "somewhere\\else.tex";
         File.WriteAllText(Path.Combine(mod, "meta.json"), written.ToJsonString());
         var conflict = false;
-        try { PenumbraService.PlanFileAdditions(mod, "Ears Mod", material, EarMaterialPath, [(copy, [1])], "Measure again"); }
+        try { PreviewModWriter.PlanFileAdditions(mod, "Ears Mod", material, EarMaterialPath, [(copy, [1])], "Measure again"); }
         catch (TextureConflictException) { conflict = true; }
         Require(conflict, "skin tone: a game path the material's option maps to another file is never taken over");
 
@@ -275,7 +275,7 @@ internal static class SkinToneScenarios
         File.WriteAllBytes(filesMaterial, [1]);
         File.WriteAllText(Path.Combine(files, "meta.json"), ModMetadata.CreateV4ModMetadata("Files Mod", "A", "", "",
             new JsonObject { ["Files"] = new JsonObject { [EarMaterialPath] = "Files\\" + EarMaterialPath.Replace('/', '\\') } }).ToJsonString());
-        Require(PenumbraService.PlanFileAdditions(files, "Files Mod", filesMaterial, EarMaterialPath, [(copy, [1])], "Measure again").Files.Single().RelativePath == "Files/" + copy,
+        Require(PreviewModWriter.PlanFileAdditions(files, "Files Mod", filesMaterial, EarMaterialPath, [(copy, [1])], "Measure again").Files.Single().RelativePath == "Files/" + copy,
             "skin tone: a mod that keeps its files under Files gets the new texture there too");
     }
 
