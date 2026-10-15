@@ -155,14 +155,38 @@ public sealed class Configuration : IPluginConfiguration
     /// </summary>
     public List<string> QuickActionOrder { get; set; } = [];
 
-    /// <summary> The physics builder's mod folder in Penumbra, empty until the first save. </summary>
+    /// <summary>
+    /// The physics builder's single mod from before it saved under names of your choice. Read once and
+    /// moved into <see cref="PhysicsMods"/>; not written back.
+    /// </summary>
     public string PhysicsModDirectory { get; set; } = "";
 
-    /// <summary> The physics builder's mod's Penumbra identifier, so a mod later put in its folder isn't written over. </summary>
+    /// <summary> The Penumbra identifier of <see cref="PhysicsModDirectory"/>. </summary>
     public Guid PhysicsModIdentifier { get; set; }
+
+    public bool ShouldSerializePhysicsModDirectory() => false;
+    public bool ShouldSerializePhysicsModIdentifier() => false;
+
+    /// <summary>
+    /// The mods the physics builder saved, one per name you gave it. Their identifiers keep a mod later put
+    /// in one of their folders from being written over. Replaced as a whole, never changed in place.
+    /// </summary>
+    public List<Services.Physics.PhysicsSavedMod> PhysicsMods { get; set; } = [];
 
     /// <summary> The physics builder previews every change on your character once you let go of a control. </summary>
     public bool PhysicsAutoPreview { get; set; }
+
+    /// <summary>
+    /// "Fit to my body" puts breast tips in the middle of the breast, sized to fill it, instead of on the
+    /// nipple (<see cref="Services.Physics.PhysicsTipAt"/>).
+    /// </summary>
+    public bool PhysicsFitTipMiddle { get; set; }
+
+    /// <summary> The physics builder draws the area being edited on your character. </summary>
+    public bool PhysicsShowOverlay { get; set; } = true;
+
+    /// <summary> Which parts of the area the physics builder draws on your character (<see cref="Services.Physics.PhysicsOverlayShown"/> flags). </summary>
+    public int PhysicsOverlayShown { get; set; } = (int)Services.Physics.PhysicsOverlayShown.Default;
 
     /// <summary> The Mod Browser: the modpack being built, recent mods, layout and defaults for new content. </summary>
     public Studio.StudioSettings Studio { get; set; } = new();

@@ -5,32 +5,16 @@ namespace InstantEdit.Services.Physics;
 
 /// <summary>
 /// What a step of undo or redo changes, in the words and units of the builder's controls, such as
-/// "Chest: Firmness 0.0200 to 0.0350". It compares two states of a file, so it names a change however
-/// it was made: a slider, a level, the fit or a fix.
+/// "Chest: Firmness 0.0200 to 0.0350" (<see cref="PhysicsKnobs.Describe"/> names and rounds the
+/// sliders). It compares two states of a file, so it names a change however it was made: a slider, the
+/// fit or a fix.
 /// </summary>
 internal static class PhysicsChanges
 {
-    /// <summary> The sliders' settings, named and rounded as the sliders show them. </summary>
-    private static readonly (PhysicsKnob Knob, string Name, int Decimals, string Unit)[] Knobs =
-    [
-        (PhysicsKnob.Firmness, "Firmness", 4, ""),
-        (PhysicsKnob.Damping, "Damping", 3, ""),
-        (PhysicsKnob.Swing, "Swing", 0, "°"),
-        (PhysicsKnob.Weight, "Weight", 2, ""),
-        (PhysicsKnob.Follow, "Follow animation", 3, ""),
-        (PhysicsKnob.Length, "Length", 1, " cm"),
-        (PhysicsKnob.MaxSpeed, "Max speed", 2, ""),
-        (PhysicsKnob.Wind, "Wind", 4, ""),
-        (PhysicsKnob.Size, "Size", 1, " cm"),
-        (PhysicsKnob.Friction, "Friction", 3, ""),
-        (PhysicsKnob.BumpDamping, "Bump damping", 3, ""),
-        (PhysicsKnob.PushBack, "Push back", 3, ""),
-    ];
-
     private static readonly (PhybSimulatorFlags Flag, string Name)[] Flags =
     [
-        (PhybSimulatorFlags.CollisionsHandled, "Bumps"),
-        (PhybSimulatorFlags.ContinuousCollisions, "Fast bumps"),
+        (PhybSimulatorFlags.CollisionsHandled, "Collision"),
+        (PhybSimulatorFlags.ContinuousCollisions, "Fast collision"),
         (PhybSimulatorFlags.UsingGroundPlane, "Ground"),
         (PhybSimulatorFlags.FixedLength, "Fixed length"),
         (PhybSimulatorFlags.Simulating, "Simulating"),
@@ -102,8 +86,9 @@ internal static class PhysicsChanges
         var lines = new List<string>();
         var chains = Math.Min(a.Chains.Count, b.Chains.Count);
         var moving = Enumerable.Range(0, chains).Count(c => b.Chains[c].Nodes.Count >= 2);
-        foreach (var (knob, name, decimals, unit) in Knobs)
+        foreach (var knob in Enum.GetValues<PhysicsKnob>())
         {
+            var (name, decimals, unit) = PhysicsKnobs.Describe(knob);
             var changed = new List<(int Chain, string From, string To)>();
             for (var c = 0; c < chains; c++)
             {
@@ -150,11 +135,11 @@ internal static class PhysicsChanges
                 var p = x.Nodes[n];
                 var q = y.Nodes[n];
                 var where = n == y.Nodes.Count - 1 ? $"{chain} tip" : y.Nodes[n].Bone.IsEmpty ? $"{chain} point {n + 1}" : y.Nodes[n].Bone.Text;
-                Add(changes, "Size", p.Radius * 100, q.Radius * 100, 1, " cm", where);
-                Add(changes, "Follow animation", p.AttractByAnimation, q.AttractByAnimation, 3, "", where);
-                Add(changes, "Wind", p.WindScale, q.WindScale, 4, "", where);
-                Add(changes, "Weight", p.GravityScale, q.GravityScale, 2, "", where);
-                Add(changes, "Swing", PhysicsTemplates.Degrees(p.ConeMaxAngle), PhysicsTemplates.Degrees(q.ConeMaxAngle), 0, "°", where);
+                Add(changes, PhysicsKnobs.Label(PhysicsKnob.Size), p.Radius * 100, q.Radius * 100, 1, " cm", where);
+                Add(changes, PhysicsKnobs.Label(PhysicsKnob.Follow), p.AttractByAnimation, q.AttractByAnimation, 3, "", where);
+                Add(changes, PhysicsKnobs.Label(PhysicsKnob.Wind), p.WindScale, q.WindScale, 4, "", where);
+                Add(changes, PhysicsKnobs.Label(PhysicsKnob.Weight), p.GravityScale, q.GravityScale, 2, "", where);
+                Add(changes, PhysicsKnobs.Label(PhysicsKnob.Swing), PhysicsTemplates.Degrees(p.ConeMaxAngle), PhysicsTemplates.Degrees(q.ConeMaxAngle), 0, "°", where);
                 if (p.ConeAxisOffset != q.ConeAxisOffset)
                     changes.Add(("Axis", Vector(p.ConeAxisOffset, 3, ""), Vector(q.ConeAxisOffset, 3, ""), where));
             }
@@ -186,9 +171,9 @@ internal static class PhysicsChanges
     private static void SimulatorLines(PhybSimulator a, PhybSimulator b, string label, List<string> lines)
     {
         if (a.Gravity != b.Gravity)
-            lines.Add($"{label}: Gravity {Vector(a.Gravity, 2, "")} to {Vector(b.Gravity, 2, "")}");
+            lines.Add($"{label}: Gravity direction {Vector(a.Gravity, 2, "")} to {Vector(b.Gravity, 2, "")}");
         if (a.Wind != b.Wind)
-            lines.Add($"{label}: Wind {Vector(a.Wind, 2, "")} to {Vector(b.Wind, 2, "")}");
+            lines.Add($"{label}: Wind direction {Vector(a.Wind, 2, "")} to {Vector(b.Wind, 2, "")}");
         if (a.ConstraintLoop != b.ConstraintLoop || a.CollisionLoop != b.CollisionLoop)
             lines.Add($"{label}: Steps {a.ConstraintLoop} and {a.CollisionLoop} to {b.ConstraintLoop} and {b.CollisionLoop}");
         foreach (var (flag, name) in Flags)
@@ -267,7 +252,7 @@ internal static class PhysicsChanges
             }
             else if (a.Spheres.FirstOrDefault(shape => shape.Name.Text == name) is { } x && b.Spheres.FirstOrDefault(shape => shape.Name.Text == name) is { } y)
             {
-                Shape(lines, name, "Size", x.Thickness * 100, y.Thickness * 100);
+                Shape(lines, name, "Radius", x.Thickness * 100, y.Thickness * 100);
                 if (x.Offset != y.Offset)
                     lines.Add($"Shape {name}: Place {Vector(x.Offset * 100, 1, " cm")} to {Vector(y.Offset * 100, 1, " cm")}");
                 if (!x.Bone.Equals(y.Bone))

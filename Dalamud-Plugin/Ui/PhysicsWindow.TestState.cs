@@ -21,7 +21,8 @@ internal sealed partial class PhysicsWindow
             ["findProblem"] = findProblem,
             ["loading"] = loading != null,
             ["working"] = working != null,
-            ["fitting"] = fitting != null,
+            ["fitting"] = fitting != null || refitting != null,
+            ["fitTipAt"] = TipAt.ToString(),
             ["message"] = message,
             ["messageSeverity"] = messageSeverity.ToString(),
             ["autoPreview"] = config.PhysicsAutoPreview,
@@ -33,13 +34,18 @@ internal sealed partial class PhysicsWindow
                 ["shared"] = service.Preview.Shared,
                 ["collection"] = service.Preview.CollectionName,
             },
-            ["mod"] = new JsonObject
+            ["mods"] = new JsonArray(config.PhysicsMods.Select(mod => (JsonNode)new JsonObject
             {
-                ["saved"] = service.HasMod,
-                ["directory"] = service.ModDirectory,
-                ["identifier"] = config.PhysicsModIdentifier == Guid.Empty ? null : config.PhysicsModIdentifier.ToString(),
-            },
+                ["directory"] = mod.Directory,
+                ["identifier"] = mod.Identifier.ToString(),
+            }).ToArray()),
+            ["saveName"] = saveName,
             ["moving"] = Moving ? playback.Timeline.ToString() : null,
+            ["overlay"] = OverlayWanted,
+            ["overlayShown"] = config.PhysicsShowOverlay,
+            ["overlayParts"] = ((PhysicsOverlayShown)config.PhysicsOverlayShown).ToString(),
+            ["overlayHover"] = overlayLit.Part?.ToString(),
+            ["overlayHoverShape"] = overlayLit.Shape,
         };
         if (target is { } found)
         {
@@ -63,6 +69,7 @@ internal sealed partial class PhysicsWindow
                 ["source"] = current.Source.Kind.ToString(),
                 ["sourceLabel"] = current.Source.Label,
                 ["sourcePath"] = current.Source.Path,
+                ["sourceMod"] = current.Source.Mod,
                 ["race"] = current.Race,
                 ["dirty"] = current.Dirty,
                 ["revision"] = current.Revision,
@@ -90,6 +97,7 @@ internal sealed partial class PhysicsWindow
         ["resolvedPath"] = file.ResolvedPath,
         ["label"] = file.Label,
         ["mine"] = file.Mine,
+        ["mod"] = file.Mod,
         ["preview"] = file.Preview,
     };
 

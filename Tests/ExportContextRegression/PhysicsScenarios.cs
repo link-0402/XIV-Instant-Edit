@@ -32,6 +32,7 @@ internal static class PhysicsScenarios
         PhysicsBumpScenarios.Run();
         PhysicsTuneScenarios.Run();
         PhysicsHistoryScenarios.Run();
+        PhysicsOverlayScenarios.Run();
     }
 
     private static void CheckNames()

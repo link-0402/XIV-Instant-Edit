@@ -76,7 +76,7 @@ internal static class PhysicsHistoryScenarios
 
         to = from.Clone();
         PhysicsKnobs.Write(to.Simulators[0], 0, PhysicsKnob.Swing, 30);
-        Require(PhysicsChanges.Describe(from, to).SequenceEqual(["Chest (j_mune_l): Swing 8° to 30°"]),
+        Require(PhysicsChanges.Describe(from, to).SequenceEqual(["Chest (j_mune_l): Swing limit 8° to 30°"]),
             "physics history: a change to one side names its chain");
 
         to = from.Clone();
@@ -88,7 +88,7 @@ internal static class PhysicsHistoryScenarios
         to = from.Clone();
         to.Simulators[0].Chains[0].Nodes[1].Radius = 0.02f;
         to.Simulators[0].Chains[1].Nodes[1].Radius = 0.02f;
-        Require(PhysicsChanges.Describe(from, to).SequenceEqual(["Chest, j_mune_l_mid and j_mune_r_mid: Size 1.0 cm to 2.0 cm"]),
+        Require(PhysicsChanges.Describe(from, to).SequenceEqual(["Chest, j_mune_l_mid and j_mune_r_mid: Tip size 1.0 cm to 2.0 cm"]),
             "physics history: a point the sliders don't show is named by its bone");
 
         to = from.Clone();
@@ -107,7 +107,7 @@ internal static class PhysicsHistoryScenarios
         to.Simulators.Insert(0, Area("ya_shiri_phys_l", "ya_shiri_phys_r"));
         PhysicsKnobs.Write(to.Simulators[1], 0, PhysicsKnob.Damping, 0.2f);
         PhysicsKnobs.Write(to.Simulators[1], 1, PhysicsKnob.Damping, 0.2f);
-        Require(PhysicsChanges.Describe(from, to).SequenceEqual(["Adds Butt (YAS)", "Chest: Damping 0.100 to 0.200"]),
+        Require(PhysicsChanges.Describe(from, to).SequenceEqual(["Adds Butt (YAS)", "Chest: Settle 0.100 to 0.200"]),
             "physics history: an area added before another still pairs the other with itself");
 
         to = from.Clone();
@@ -148,7 +148,7 @@ internal static class PhysicsHistoryScenarios
         Require(undone && redo is { Name: "Fit to my body" } && PhysicsKnobs.Read(redo.File.Simulators[0], 0, PhysicsKnob.Damping) == 0.3f &&
                 document.NextUndo() is null,
             "physics history: the step's name moves to redo, with the state redo brings back");
-        Require(redo != null && PhysicsChanges.Describe(document.File, redo.File).SequenceEqual(["Chest (j_mune_l): Damping 0.100 to 0.300"]),
+        Require(redo != null && PhysicsChanges.Describe(document.File, redo.File).SequenceEqual(["Chest (j_mune_l): Settle 0.100 to 0.300"]),
             "physics history: redo's change reads from the state now to the state it brings back");
         document.Redo();
         document.MarkSaved(new PhysicsSource(PhysicsSourceKind.Mine, "Mine", "mine.phyb"), document.OutputBytes());
