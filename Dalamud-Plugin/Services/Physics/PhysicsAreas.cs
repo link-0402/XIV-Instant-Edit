@@ -187,6 +187,25 @@ internal static class PhysicsAreas
         return null;
     }
 
+    /// <summary> Whether two bones sit on opposite sides of the body, one "_l" and the other "_r". </summary>
+    public static bool Opposite(string a, string b)
+        => a.EndsWith("_l", StringComparison.Ordinal) && b.EndsWith("_r", StringComparison.Ordinal) ||
+           a.EndsWith("_r", StringComparison.Ordinal) && b.EndsWith("_l", StringComparison.Ordinal);
+
+    /// <summary>
+    /// An offset in <paramref name="from"/>'s space mirrored into <paramref name="to"/>'s: turned into the
+    /// model's rest pose, flipped left to right (the model's X), and turned into the other bone. The same
+    /// bone works too, for an offset in a middle bone such as the spine. Unchanged when the rest pose
+    /// lacks either bone.
+    /// </summary>
+    public static Vector3 MirrorOffset(Vector3 offset, string from, string to, IReadOnlyDictionary<string, PhysicsFrame> rest)
+    {
+        if (!rest.TryGetValue(from, out var a) || !rest.TryGetValue(to, out var b))
+            return offset;
+        var model = a.Turn(offset);
+        return Vector3.Transform(model with { X = -model.X }, Quaternion.Conjugate(b.Rotation));
+    }
+
     /// <summary> The chain whose bone mirrors this chain's, anywhere in the file, or null. </summary>
     public static (int Simulator, int Chain)? MirrorChain(PhybFile file, int simulator, int chain)
     {

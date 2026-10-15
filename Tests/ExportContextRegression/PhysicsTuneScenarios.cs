@@ -56,6 +56,65 @@ internal static class PhysicsTuneScenarios
                 PhysicsKnobs.Read(simulator, 0, PhysicsKnob.Firmness) == 0.05f && PhysicsKnobs.Read(new PhybSimulator { Chains = [Chain("j_mune_r")] }, 0,
                     PhysicsKnob.Firmness) is null,
             "physics knobs: firmness is the strongest spring on the tip, and none without a spring");
+        Require(PhysicsKnobs.Label(PhysicsKnob.Damping) == "Settle" && PhysicsKnobs.Label(PhysicsKnob.Swing) == "Swing limit" &&
+                PhysicsKnobs.Label(PhysicsKnob.Follow) == "Follow pose" && PhysicsKnobs.Label(PhysicsKnob.Length) == "Tip length" &&
+                PhysicsKnobs.Label(PhysicsKnob.Size) == "Tip size" && Enum.GetValues<PhysicsKnob>().Select(PhysicsKnobs.Label).Distinct().Count() == 12,
+            "physics knobs: every slider has a plain name of its own");
+        CheckSpringAim();
+    }
+
+    /// <summary> c0801's breast bones in their bind pose, from the game's base skeleton, under a root at the floor. </summary>
+    private static PhysicsSkeleton GameChest() => new(
+    [
+        new PhysicsBone("n_root", "", Vector3.Zero, Quaternion.Identity),
+        new PhysicsBone("j_sebo_b", "n_root", new Vector3(0, 1.05f, 0), Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathF.PI / 2)),
+        new PhysicsBone("j_mune_l", "j_sebo_b", new Vector3(0.05731833f, 0.004540924f, 0.033198476f), new Quaternion(-0.72570795f, -0.6785303f, -0.07961082f, 0.08128255f)),
+    ]);
+
+    private static void CheckSpringAim()
+    {
+        var skeleton = GameChest();
+        var chest = new PhybSimulator { Chains = [Chain("j_mune_l", 0.1449f)] };
+        // The game's own spring, on j_sebo_b past where the tip rests.
+        var game = new PhybAttract { Bone = PhybName.From("j_sebo_b"), Offset = new Vector3(0.075f, 0.1929f, 0.077f), Chain = 0, Node = 1, Stiffness = 0.075f };
+        // A preset's spring toward a point a metre above the floor, in the middle of the body.
+        var preset = new PhybAttract { Bone = PhybName.From("n_root"), Offset = new Vector3(0, 1, 0), Chain = 0, Node = 1, Stiffness = 0.0005f };
+        var rest = PhysicsTemplates.RestSpring(chest.Chains[0], 0, skeleton, 0.04f)!;
+        Require(PhysicsKnobs.SpringAim(chest, game, skeleton) is < PhysicsKnobs.SpringAimLimit && PhysicsKnobs.SpringAim(chest, rest, skeleton) is < 0.01f,
+            $"physics knobs: the game's chest spring and a new rest spring pull the tip toward where it rests ({PhysicsKnobs.SpringAim(chest, game, skeleton):F1}°)");
+        Require(PhysicsKnobs.SpringAim(chest, preset, skeleton) is > 60,
+            $"physics knobs: a spring toward the middle of the body pulls the tip far from where it rests ({PhysicsKnobs.SpringAim(chest, preset, skeleton):F0}°)");
+        var pushed = new PhybAttract { Bone = game.Bone, Offset = game.Offset, Chain = 0, Node = 1, Stiffness = -0.075f };
+        Require(PhysicsKnobs.SpringAim(chest, pushed, skeleton) is > 165,
+            "physics knobs: a negative spring pushes the tip away from its point, so aimed past the rest place it pushes the tip off it");
+
+        // A left breast in the game's model space (+Y up, +Z forward), its bone pointing forward.
+        var body = new PhysicsSkeleton(
+        [
+            new PhysicsBone("n_root", "", Vector3.Zero, Quaternion.Identity),
+            new PhysicsBone("j_mune_l", "n_root", new Vector3(0.05f, 1.18f, 0.03f), Quaternion.CreateFromAxisAngle(Vector3.UnitY, -MathF.PI / 2)),
+        ]);
+        var breast = new PhybSimulator { Chains = [Chain("j_mune_l", 0.145f)] };
+        PhybAttract Toward(Vector3 point, float stiffness) => new() { Bone = PhybName.From("n_root"), Offset = point, Chain = 0, Node = 1, Stiffness = stiffness };
+        var down = Toward(new Vector3(0, 1, 0), 0.0005f);
+        var lift = Toward(new Vector3(0, 1, 0), -0.001f);
+        var atRest = Toward(new Vector3(0.05f, 1.18f, 0.3f), 0.05f);
+        var inward = Toward(new Vector3(-0.3f, 1.18f, 0.1f), 0.05f);
+        var behind = Toward(new Vector3(0.05f, 1.18f, -0.5f), 0.05f);
+        Require(PhysicsKnobs.SpringName(breast, down, body) == "Pull down" && PhysicsKnobs.SpringName(breast, lift, body) == "Lift" &&
+                PhysicsKnobs.SpringName(breast, atRest, body) == "Firmness" && PhysicsKnobs.SpringName(breast, inward, body) == "Pull together" &&
+                PhysicsKnobs.SpringName(breast, behind, body) == "Spring" &&
+                PhysicsKnobs.SpringName(breast, new PhybAttract { Bone = PhybName.From("missing"), Chain = 0, Node = 1, Stiffness = 1 }, body) == "Spring",
+            "physics knobs: a spring is named for what it does: firmness toward the rest place, a lift or a pull elsewhere, and plain spring when it can't tell");
+
+        // Tiramisu's lift: a negative spring the slider must not turn into a pull.
+        chest.Attracts.Add(new PhybAttract { Bone = PhybName.From("n_root"), Offset = new Vector3(0, 1, 0), Chain = 0, Node = 1, Stiffness = -0.001f });
+        PhysicsKnobs.Write(chest, 0, PhysicsKnob.Firmness, 0.005f);
+        Require(chest.Attracts[0].Stiffness == -0.005f && PhysicsKnobs.Read(chest, 0, PhysicsKnob.Firmness) == 0.005f,
+            "physics knobs: firmness sets a negative spring's strength and keeps it pushing");
+        Require(PhysicsKnobs.SpringAim(chest, new PhybAttract { Bone = PhybName.From("missing"), Chain = 0, Node = 1 }, skeleton) is null &&
+                PhysicsKnobs.SpringAim(chest, new PhybAttract { Bone = PhybName.From("n_root"), Chain = 1, Node = 1 }, skeleton) is null,
+            "physics knobs: a spring on a bone or chain that isn't there has no aim");
     }
 
     private static void CheckBust()
@@ -204,10 +263,12 @@ internal static class PhysicsTuneScenarios
         var (body, skeleton, simulator) = Wall(0.02f);
         PhysicsKnobs.Write(simulator, 0, PhysicsKnob.Swing, 180);
         var file = new PhybFile { Simulators = [simulator] };
-        var swing = PhysicsFit.Measure(file, body, skeleton).Items.SingleOrDefault(item => item.Target == PhysicsFitTarget.Swing);
+        var items = PhysicsFit.Measure(file, body, skeleton).Items;
+        var swing = items.SingleOrDefault(item => item.Target == PhysicsFitTarget.Swing);
         Require(swing is { Current: 180, Changes: true } && swing.Fitted < 60,
             "physics fit: a swing that would sink into the body gets a lower limit");
-        PhysicsFit.Apply(file, [swing!]);
+        // With everything else the fit found, such as the tip's place: fitting again settles.
+        PhysicsFit.Apply(file, items.Where(item => item.Changes));
         Require(MathF.Abs(PhysicsKnobs.Read(simulator, 0, PhysicsKnob.Swing)!.Value - swing!.Fitted) < 0.01f &&
                 !PhysicsFit.Measure(file, body, skeleton).Items.Any(item => item.Changes),
             "physics fit: applied, the swing fits, and fitting again finds nothing to change");

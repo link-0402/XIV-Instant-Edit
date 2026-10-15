@@ -28,8 +28,11 @@ internal sealed partial class PhysicsWindow
             if (ShapeHeader(current, shape.Name.Text, $"capsule from {shape.StartBone.Text} to {shape.EndBone.Text}", () => collision.Capsules.Remove(shape)))
                 break;
             Drag(current, "Radius", shape.Radius * 100, 0.05f, 0, 100, "%.1f cm", value => shape.Radius = value / 100);
+            Lights(PhysicsOverlayPart.Shape, shape.Name.Text);
             Drag3(current, "Start", shape.StartOffset * 100, value => shape.StartOffset = value / 100);
+            Lights(PhysicsOverlayPart.Shape, shape.Name.Text);
             Drag3(current, "End", shape.EndOffset * 100, value => shape.EndOffset = value / 100);
+            Lights(PhysicsOverlayPart.Shape, shape.Name.Text);
             ImGui.Spacing();
         }
         for (var i = 0; i < collision.Spheres.Count; i++)
@@ -38,8 +41,10 @@ internal sealed partial class PhysicsWindow
             var shape = collision.Spheres[i];
             if (ShapeHeader(current, shape.Name.Text, $"sphere on {shape.Bone.Text}", () => collision.Spheres.Remove(shape)))
                 break;
-            Drag(current, "Size", shape.Thickness * 100, 0.05f, 0, 100, "%.1f cm", value => shape.Thickness = value / 100);
+            Drag(current, "Radius", shape.Thickness * 100, 0.05f, 0, 100, "%.1f cm", value => shape.Thickness = value / 100);
+            Lights(PhysicsOverlayPart.Shape, shape.Name.Text);
             Drag3(current, "Place", shape.Offset * 100, value => shape.Offset = value / 100);
+            Lights(PhysicsOverlayPart.Shape, shape.Name.Text);
             ImGui.Spacing();
         }
         var others = collision.Ellipsoids.Count + collision.NormalPlanes.Count + collision.ThreePointPlanes.Count;
@@ -55,8 +60,10 @@ internal sealed partial class PhysicsWindow
     {
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Text, PhysicsShapeNames.Label(current.File.Collision, name, target?.Character.Skeleton));
+        Lights(PhysicsOverlayPart.Shape, name);
         ImGui.SameLine(0, Theme.Gap);
         ImGui.TextColored(Theme.Muted, detail);
+        Lights(PhysicsOverlayPart.Shape, name);
         var labels = PhysicsAreas.Labels(current.File);
         var users = Enumerable.Range(0, current.File.Simulators.Count).Where(s => UsesShape(current.File.Simulators[s], name)).Select(s => labels[s]).ToList();
         ImGui.SameLine(0, Theme.Gap);
@@ -139,7 +146,7 @@ internal sealed partial class PhysicsWindow
         if (!newShapeSphere)
             BonePicker(found.Character.Skeleton, "To bone", ref newShapeEnd);
         ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Label, newShapeSphere ? "Size" : "Radius");
+        ImGui.TextColored(Theme.Label, "Radius");
         ImGui.SameLine(LabelWidth);
         ImGui.SetNextItemWidth(Theme.Scaled(140));
         ImGui.DragFloat("##shape-size", ref newShapeSize, 0.05f, 0.1f, 100, "%.1f cm");
