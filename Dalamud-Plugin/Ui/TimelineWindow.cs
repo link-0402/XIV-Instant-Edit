@@ -28,6 +28,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private readonly TimelineSession session;
     private readonly MotionDecode decode;
     private readonly EffectLookEditor effectLooks;
+    private readonly SoundFiles soundFiles;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
     private readonly GameSoundPlayer? soundPlayer;
@@ -70,6 +71,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
             () => loadTask != null || saveTask != null || pendingSaveId != null || undoPending || soundCheck != null || soundAsk != null);
         decode = new MotionDecode(session);
         effectLooks = new EffectLookEditor(session);
+        soundFiles = new SoundFiles(session);
         this.soundPlayer = soundPlayer;
         this.recorder = recorder;
         this.animationError = animationError;

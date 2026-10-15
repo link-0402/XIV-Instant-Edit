@@ -476,7 +476,7 @@ public sealed partial class TimelineWindow
             return null;
         var pinned = ev.Pin != null;
         var changed = doc.SoundEdits.ContainsKey(key);
-        if (ShownIfRead(doc, key) is not { Seconds.IsEmpty: false } shown)
+        if (soundFiles.ShownIfRead(doc, key) is not { Seconds.IsEmpty: false } shown)
             return pinned || changed ? new SoundMark(int.MaxValue, pinned, changed, false) : null;
         var span = TimelineWindowViews.SoundSpan(shown.Seconds, ev.Pin is { } pin && shown.Ids.IndexOf(pin) is >= 0 and var index ? index : null);
         var loop = ev.Values?.GetValueOrDefault("Loop", 1) ?? 1;
@@ -856,7 +856,7 @@ public sealed partial class TimelineWindow
                 ImGui.TextColored(Theme.Info, "Plays only under a condition.");
             if (ev.Look != null)
                 ImGui.TextColored(Theme.Accent, "Look changed.");
-            if (CrossesCut(current.Document, ev, false))
+            if (soundFiles.CrossesCut(current.Document, ev, false))
                 ImGui.TextColored(Theme.Warning, TimelineWindowViews.CrossesCutTip);
             return;
         }

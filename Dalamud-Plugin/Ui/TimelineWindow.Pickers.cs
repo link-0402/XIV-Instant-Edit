@@ -520,14 +520,14 @@ public sealed partial class TimelineWindow
         if (TimelineSoundKey.Of(ev) is not { } key || !key.Path.EndsWith(".scd", StringComparison.OrdinalIgnoreCase) ||
             !Services.Animations.AnimationDependencies.SafeGamePath(key.Path))
             return null;
-        var read = SoundFor(key.Path, loaded);
+        var read = soundFiles.SoundFor(key.Path, loaded);
         if (read.Bytes == null)
         {
             if (read.Error == null)
                 pendingLengths.Add(ev.Path);
             return null;
         }
-        if (ShownSound(doc, key, loaded) is not { Seconds.IsEmpty: false } shown)
+        if (soundFiles.ShownSound(doc, key, loaded) is not { Seconds.IsEmpty: false } shown)
             return null;
         return TimelineWindowViews.SoundSpan(shown.Seconds, ev.Pin is { } pin && shown.Ids.IndexOf(pin) is >= 0 and var index ? index : null);
     }
@@ -546,5 +546,5 @@ public sealed partial class TimelineWindow
 
     /// <summary> Whether the inspector's read of the sound at <paramref name="path"/> has ended, so its clip can take its length. </summary>
     private bool SoundReadEnded(string path) =>
-        source is { } loaded && soundReads.ContainsKey(path) && SoundFor(path, loaded) is { } read && (read.Bytes != null || read.Error != null);
+        source is { } loaded && soundFiles.Started(path) && soundFiles.SoundFor(path, loaded) is { } read && (read.Bytes != null || read.Error != null);
 }

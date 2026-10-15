@@ -212,22 +212,22 @@ public sealed partial class TimelineWindow
         var target = Fresh(loaded);
         var clip = target.Clip;
         TimelineDocument rest, shown;
-        ImmutableDictionary<string, byte[]> added, lookFiles, soundFiles;
+        ImmutableDictionary<string, byte[]> added, lookFiles, soundRedirects;
         ImmutableDictionary<string, TimelineEffectEdit> looks;
         try
         {
-            if ((effectLooks.LookMissing(document) ?? SoundMissing(document) ?? SoundCutMissing(document)) is { } missing)
+            if ((effectLooks.LookMissing(document) ?? soundFiles.SoundMissing(document) ?? soundFiles.SoundCutMissing(document)) is { } missing)
                 throw new InvalidDataException(missing);
             // Effect looks point the effect's own path at an edited copy: the game may keep playing the clip's
             // loaded file, which names that path, and later look changes then show without building again.
             (rest, looks) = TimelineEffectLooks.Redirectable(document);
             lookFiles = TimelineEffectLooks.Redirected(looks, effectLooks.EffectBytes);
             // So do changes to a sound file with one sound; pins and other sound changes play from copies.
-            (rest, soundFiles) = TimelineSoundEdits.Redirectable(rest, SoundBytes, session.ImportBytes);
+            (rest, soundRedirects) = TimelineSoundEdits.Redirectable(rest, soundFiles.SoundBytes, session.ImportBytes);
             // Looks that differ between events of one effect play from copies, as a save writes them.
             (shown, var used) = effectLooks.WithLooks(rest);
-            var sounds = WithSoundCuts(WithSounds(shown, _ => TimelineSoundRoute.Copy, path => soundFiles.GetValueOrDefault(path) ?? SoundBytes(path)),
-                shown, path => soundFiles.GetValueOrDefault(path) ?? SoundBytes(path));
+            var sounds = soundFiles.WithSoundCuts(soundFiles.WithSounds(shown, _ => TimelineSoundRoute.Copy, path => soundRedirects.GetValueOrDefault(path) ?? soundFiles.SoundBytes(path)),
+                shown, path => soundRedirects.GetValueOrDefault(path) ?? soundFiles.SoundBytes(path));
             shown = sounds.Document;
             used.AddRange(sounds.Copies);
             added = TimelineWindowViews.AddedFiles(shown, used);
@@ -249,7 +249,7 @@ public sealed partial class TimelineWindow
         animations!.PreviewTimeline(target, shown, async (built, token) =>
         {
             var baseFiles = added.SetItem(built.GamePath, built.Bytes);
-            await preview.ShowAsync(index, baseFiles.SetItems(lookFiles).SetItems(soundFiles), token);
+            await preview.ShowAsync(index, baseFiles.SetItems(lookFiles).SetItems(soundRedirects), token);
             if (generation != previewGeneration)
             {
                 // Stopped or replaced while it was being built: take it down again.
@@ -267,7 +267,7 @@ public sealed partial class TimelineWindow
                     return false;
                 previewBaseFiles = baseFiles;
                 shownLooks = looks;
-                shownSounds = soundFiles;
+                shownSounds = soundRedirects;
                 previewFingerprint = built.BindingFingerprint;
                 previewTimeline = clip.Timeline;
                 previewFace = target.Standalone;

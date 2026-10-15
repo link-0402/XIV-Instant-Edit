@@ -131,7 +131,7 @@ public sealed partial class TimelineWindow
             return "Another edit is running. Wait for it to end.";
         if (destination == AnimationDestination.NewMod && !PenumbraService.IsSafeNewModName(modName.Trim()))
             return "Choose a valid mod name.";
-        return effectLooks.LookMissing(current.Document) ?? SoundMissing(current.Document) ?? SoundCutMissing(current.Document);
+        return effectLooks.LookMissing(current.Document) ?? soundFiles.SoundMissing(current.Document) ?? soundFiles.SoundCutMissing(current.Document);
     }
 
     /// <summary>
@@ -158,13 +158,13 @@ public sealed partial class TimelineWindow
         try
         {
             (saved, var used) = effectLooks.WithLooks(document);
-            var sounds = WithSoundCuts(WithSounds(saved, SoundRoute(place)), saved, SoundBytes);
+            var sounds = soundFiles.WithSoundCuts(soundFiles.WithSounds(saved, SoundRoute(place)), saved, soundFiles.SoundBytes);
             saved = sounds.Document;
             cutSounds = sounds.CutFrom;
             used.AddRange(sounds.Copies);
             replaced = sounds.InPlace;
             // The sounds copies were made from, as read from the collection (an import's own file isn't there yet).
-            copied = sounds.Bases.Where(b => soundReads.TryGetValue(b.Key, out var read) && read is { Resource: not null, Imported: false })
+            copied = sounds.Bases.Where(b => soundFiles.Resource(b.Key) != null)
                 .ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
             added = TimelineWindowViews.AddedFiles(saved, used);
             beside = TimelineWindowViews.AddedBeside(saved, used);

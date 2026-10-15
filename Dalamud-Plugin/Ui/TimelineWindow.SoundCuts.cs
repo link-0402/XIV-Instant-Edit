@@ -12,69 +12,11 @@ namespace InstantEdit.Ui;
 /// </summary>
 public sealed partial class TimelineWindow
 {
-    /// <summary>
-    /// How long sound <paramref name="ev"/> plays: its longest alternative. Null while its file is unread,
-    /// or when it can't be read; with <paramref name="read"/> a read starts.
-    /// </summary>
-    private double? AudioSeconds(TimelineDocument doc, TimelineEvent ev, bool read)
-    {
-        if (ev.Magic != "C063" || TimelineSoundKey.Of(ev) is not { } key)
-            return null;
-        var shown = read ? source is { } loaded ? ShownSound(doc, key, loaded) : null : ShownIfRead(doc, key);
-        return shown is { Seconds.IsEmpty: false } ? shown.Seconds.Max() : null;
-    }
-
-    /// <summary>Whether sound <paramref name="ev"/> plays across a cut, once its file is read.</summary>
-    private bool CrossesCut(TimelineDocument doc, TimelineEvent ev, bool read) =>
-        doc.Cut && AudioSeconds(doc, ev, read) is { } seconds && TimelineSoundCuts.Crosses(doc, ev, seconds);
-
-    /// <summary>
-    /// Why saving or previewing waits for the sounds across a cut: one still being read, or ones without
-    /// a choice. A sound whose file can't be read plays whole.
-    /// </summary>
-    private string? SoundCutMissing(TimelineDocument document)
-    {
-        if (!document.Cut || source is not { } loaded || document.Events.IsDefault)
-            return null;
-        // Only a sound that starts before the last cut can play across one.
-        var cuts = CutEdits.CutsOf(document);
-        var last = cuts.Source > cuts.Parts[^1].To ? document.Length
-            : cuts.Joins.Length > 0 ? cuts.PartEnd(cuts.Joins.Length - 1, document.Length) : -1;
-        var undecided = 0;
-        foreach (var ev in document.Events)
-        {
-            if (ev.Magic != "C063" || ev.Start >= last || document.SoundCuts.ContainsKey(ev.Key) || TimelineSoundKey.Of(ev) is not { } key)
-                continue;
-            var read = SoundFor(key.Path, loaded);
-            if (read.Bytes == null)
-            {
-                if (read.Error == null)
-                    return "Reading the sound files.";
-                continue;
-            }
-            if (CrossesCut(document, ev, true))
-                undecided++;
-        }
-        return undecided == 0 ? null : TimelineWindowViews.SoundCutsFooter(undecided);
-    }
-
-    /// <summary>
-    /// <paramref name="sounds"/> with the sounds chosen to be cut with the motion cut into copies (see
-    /// <see cref="TimelineSoundEdits.BakeCuts"/>), their lengths as <paramref name="before"/> plays them.
-    /// </summary>
-    private TimelineSoundBake WithSoundCuts(TimelineSoundBake sounds, TimelineDocument before, Func<string, byte[]?> sound)
-    {
-        if (!sounds.Document.SoundCuts.ContainsValue(true))
-            return sounds;
-        return TimelineSoundEdits.BakeCuts(sounds, sound, session.ScdTemplate(),
-            ev => TimelineEdits.Find(before, ev.Key) is { } original ? AudioSeconds(before, original, true) ?? 0 : 0);
-    }
-
     /// <summary>In a sound's panel, when it plays across a cut: cut its audio with the motion, or leave it whole.</summary>
     private void DrawSoundCutChoice(TimelineEditor current, TimelineEvent ev, bool editable)
     {
         var doc = current.Document;
-        if (!CrossesCut(doc, ev, true))
+        if (!soundFiles.CrossesCut(doc, ev, true))
             return;
         TimelineUi.Fact("Across a cut");
         bool? choice = doc.SoundCuts.TryGetValue(ev.Key, out var cut) ? cut : null;
