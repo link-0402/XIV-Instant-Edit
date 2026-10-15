@@ -50,6 +50,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly RecentEditsPage recentEdits;
     private readonly TimelineLoader loader;
     private readonly LivePosePanel livePose;
+    private readonly SidePanel sidePanel;
     private readonly BonesWindow bonesWindow;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
@@ -119,7 +120,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         facePage = new FacePage(session, saveFooter, timelinePreview);
         recentEdits = new RecentEditsPage(session, saveFooter, timelinePreview, () => loadTask != null, EditAgain);
         loader = new TimelineLoader(session, timelinePreview, Open);
-        livePose = new LivePosePanel(session, () => sideRequest = SidePage.Properties);
+        sidePanel = new SidePanel(session, properties, facePage, recentEdits, effectLooks, soundInspector, posing, timelinePreview, Open);
+        livePose = new LivePosePanel(session, sidePanel.ShowProperties);
         bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, this, textures);
 
         Size = new Vector2(1000, 560);
@@ -136,6 +138,12 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     }
 
     public void DrawFileDialog() => session.FileDialog.Draw();
+
+    /// <summary>
+    /// What the Timeline window borrows from the main window: Settings, where the skeleton library is
+    /// rebuilt, and the live pose recorder, which sends to Blender through it.
+    /// </summary>
+    internal void AttachTools(Action? settings, Action? recorderPanel) => sidePanel.AttachTools(settings, recorderPanel);
 
     /// <summary>How many recorded edits did not finish and need an undo; none while an edit is still running.</summary>
     internal static int RecoveryAttention(AnimationEditService service) => RecentEditsPage.RecoveryAttention(service);
@@ -418,7 +426,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             effectLooks.Forget();
             ForgetSounds();
             canvas.ResetScroll();
-            animatedBoneFilter = string.Empty;
+            sidePanel.ClearFilter();
             livePose.ForgetNote();
         }
         saveFooter.Loaded(loaded, sameClip, again != null);
@@ -476,10 +484,10 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         if (animations == null)
         {
             Widgets.Banner("##timeline-unavailable", FeedbackSeverity.Warning, animationError ?? "Animation editing is unavailable.");
-            if (drawRecorder != null)
+            if (sidePanel.Recorder is { } recorder)
             {
                 ImGui.Spacing();
-                drawRecorder();
+                recorder();
             }
             return;
         }
@@ -589,10 +597,10 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             loader.Draw(ImGui.GetContentRegionAvail().Y);
             ImGui.EndTabItem();
         }
-        DrawEditsTab();
-        if (drawRecorder != null && ImGui.BeginTabItem("Record live pose"))
+        sidePanel.DrawEditsTab();
+        if (sidePanel.Recorder is { } recorder && ImGui.BeginTabItem("Record live pose"))
         {
-            DrawPage(drawRecorder);
+            SidePanel.DrawPage(recorder);
             ImGui.EndTabItem();
         }
     }
@@ -673,7 +681,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         ImGui.SameLine(0, 0);
         using var panel = ImRaii.Child("##timeline-properties", new Vector2(0, height), true);
         if (panel.Success && source != null)
-            DrawSidePanel(current, source);
+            sidePanel.Draw(current, source);
     }
 
     /// <summary> Forgets the sounds read for another clip. </summary>

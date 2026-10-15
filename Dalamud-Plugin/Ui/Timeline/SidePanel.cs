@@ -1,22 +1,20 @@
-using System.Collections.Immutable;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
-using InstantEdit.Services.Animations.Timeline;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// The side panel's pages beside the properties: Source (where the clip comes from and the skeleton it
-/// was made for), Bones (the bones it animates, ticked off to leave them out of the save and shown live),
-/// Edits (every saved edit with Undo) and Record (a live recording for Blender). The save footer's
-/// skeleton repair choice lives here too.
+/// The side panel beside the lanes: Properties, Source (where the clip comes from and the skeleton it
+/// was made for), Bones (the bones it animates, ticked off to leave them out of the save and shown live)
+/// or an expression's Face, Edits (every saved edit with Undo) and Record (a live recording for Blender).
 /// </summary>
-public sealed partial class TimelineWindow
+/// <param name="open">Opens the timeline of a capture's clip, or of its startup.</param>
+internal sealed class SidePanel(TimelineSession session, PropertiesPanel properties, FacePage facePage, RecentEditsPage recentEdits,
+    EffectLookEditor effectLooks, SoundInspector soundInspector, BonePosing posing, TimelinePreview timelinePreview, Action<AnimationCapture, bool> open)
 {
     private enum SidePage : byte { Properties, Source, Bones, Edits, Record }
 
@@ -29,18 +27,27 @@ public sealed partial class TimelineWindow
     private Action? openSettings;
     private Action? drawRecorder;
 
+    /// <summary>The main window's live pose recorder, which sends to Blender through it; null until attached.</summary>
+    public Action? Recorder => drawRecorder;
+
+    /// <summary> Shows the properties on the next draw, as for a layer just added. </summary>
+    public void ShowProperties() => sideRequest = SidePage.Properties;
+
+    /// <summary> Clears the Bones page's filter, for another clip. </summary>
+    public void ClearFilter() => animatedBoneFilter = string.Empty;
+
     /// <summary>
     /// What the Timeline window borrows from the main window: Settings, where the skeleton library is
     /// rebuilt, and the live pose recorder, which sends to Blender through it.
     /// </summary>
-    internal void AttachTools(Action? settings, Action? recorderPanel)
+    public void AttachTools(Action? settings, Action? recorderPanel)
     {
         openSettings = settings;
         drawRecorder = recorderPanel;
     }
 
     /// <summary>The side panel: a tab per page, the properties first.</summary>
-    private void DrawSidePanel(TimelineEditor current, AnimationTimelineSource loaded)
+    public void Draw(TimelineEditor current, AnimationTimelineSource loaded)
     {
         // A look or sound edit ends once its control lets go, even when another page is shown by then.
         effectLooks.EndEdit(current);
@@ -81,9 +88,9 @@ public sealed partial class TimelineWindow
     }
 
     /// <summary>The Edits tab, marked while an edit did not finish.</summary>
-    private void DrawEditsTab()
+    public void DrawEditsTab()
     {
-        var attention = animations is { } service ? RecentEditsPage.RecoveryAttention(service) : 0;
+        var attention = session.Animations is { } service ? RecentEditsPage.RecoveryAttention(service) : 0;
         bool open;
         using (ImRaii.PushColor(ImGuiCol.Text, Theme.Warning, attention > 0))
             open = ImGui.BeginTabItem(attention > 0 ? $"Edits ({attention})###edits" : "Edits###edits",
@@ -103,7 +110,7 @@ public sealed partial class TimelineWindow
     }
 
     /// <summary>A page's body, which scrolls below the tabs.</summary>
-    private static void DrawPage(Action draw)
+    public static void DrawPage(Action draw)
     {
         using var body = ImRaii.Child("##side-page", Vector2.Zero, false);
         if (!body.Success)
@@ -122,7 +129,7 @@ public sealed partial class TimelineWindow
     /// <summary>The Source page: the mod and file, the model, the startup, and the skeleton the clip was made for.</summary>
     private void DrawClipSource(AnimationTimelineSource loaded)
     {
-        var fresh = Fresh(loaded);
+        var fresh = session.Fresh(loaded);
         var capture = fresh.Capture;
         var clip = fresh.Clip;
         var file = capture.Sources.FirstOrDefault(s => s.GamePath == clip.GamePath);
@@ -179,10 +186,10 @@ public sealed partial class TimelineWindow
     private void DrawStartupLink(AnimationCapture capture)
     {
         var name = AnimationPresentation.AnimationName(capture, true);
-        using (ImRaii.Disabled(ReadOnly))
+        using (ImRaii.Disabled(session.ReadOnly))
         {
             if (ImGui.SmallButton("Open##startup"))
-                Open(capture, true);
+                open(capture, true);
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip("Open the startup's timeline.");
@@ -209,7 +216,7 @@ public sealed partial class TimelineWindow
         if (resolution.Candidates.Length > 1)
         {
             ImGui.SetNextItemWidth(-1);
-            using (ImRaii.Disabled(animations!.Busy || ReadOnly))
+            using (ImRaii.Disabled(session.Animations!.Busy || session.ReadOnly))
             using (var combo = ImRaii.Combo("##made-for", resolution.Selected is null ? "Choose the skeleton it was made for" : AnimationPresentation.SkeletonLabel(chosen)))
             {
                 if (combo.Success)
@@ -244,7 +251,7 @@ public sealed partial class TimelineWindow
     /// </summary>
     private void DrawAnimatedBones(TimelineEditor current, AnimationTimelineSource loaded)
     {
-        var clip = Fresh(loaded).Clip;
+        var clip = session.Fresh(loaded).Clip;
         var bones = AnimationBones.Animated(clip);
         if (bones.IsEmpty)
         {
@@ -253,9 +260,9 @@ public sealed partial class TimelineWindow
         }
         var doc = current.Document;
         var excluded = doc.ExcludedBones;
-        var readOnly = ReadOnly;
+        var readOnly = session.ReadOnly;
         Widgets.HintWrapped("Untick a bone to stop the animation moving it, such as hair or a tail for physics.");
-        if (!liveWanted)
+        if (!timelinePreview.LiveWanted)
         {
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Hint, "Turn on Live to see it in GPose.");
