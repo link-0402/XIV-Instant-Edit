@@ -1,26 +1,49 @@
+using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using Penumbra.Api.Enums;
 using Penumbra.Api.IpcSubscribers;
-using InstantEdit.Services.PenumbraMods;
-using static InstantEdit.Services.PenumbraMods.FrameworkThread;
-using static InstantEdit.Services.PenumbraMods.ModCleanup;
-using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
-using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
-using static InstantEdit.Services.PenumbraMods.ModPaths;
-using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
-using static InstantEdit.Services.PenumbraMods.EstEntryService;
-using static InstantEdit.Services.PenumbraMods.ModFiles;
-using static InstantEdit.Services.PenumbraMods.MashupPlanning;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary>
+/// The Penumbra side of animation edits: resolving the player's animation files, the mod an edit
+/// writes, enabling it above every other provider, and the redraws that load the new files.
+/// </summary>
+internal sealed class AnimationModService
 {
+    private readonly PenumbraIpc _ipc;
+    private readonly IFramework _framework;
+    private readonly IObjectTable _objects;
+    private readonly SemaphoreSlim _exportGate;
+    private readonly ModActivation _activation;
+    private readonly GetModDirectory _getModDirectory;
+    private readonly GetModList _getModList;
+    private readonly GetCollectionForObject _getCollectionForObject;
+    private readonly GetCurrentModSettings _getCurrentModSettings;
+    private readonly TrySetMod _trySetMod;
+    private readonly TrySetModPriority _trySetModPriority;
+
+    public AnimationModService(PenumbraIpc ipc, IFramework framework, IObjectTable objects, SemaphoreSlim exportGate,
+        ModActivation activation)
+    {
+        _ipc = ipc;
+        _framework = framework;
+        _objects = objects;
+        _exportGate = exportGate;
+        _activation = activation;
+        _getModDirectory = ipc.ModDirectorySubscriber;
+        _getModList = ipc.ModListSubscriber;
+        _getCollectionForObject = ipc.GetCollectionForObject;
+        _getCurrentModSettings = ipc.GetCurrentModSettings;
+        _trySetMod = ipc.TrySetMod;
+        _trySetModPriority = ipc.TrySetModPriority;
+    }
+
     internal Task<(string Directory, string Root)[]> AnimationSkeletonRootsAsync() => _framework.RunOnFrameworkThread(() =>
     {
-        using var mods = new GetModListAdapter(_pi).Invoke();
+        using var mods = _ipc.GetModListAdapter();
         return mods.Select(m => (m.Identifier, m.ModPath.FullName)).ToArray();
     });
     internal void CheckAnimationCollectionOnFramework(ushort objectIndex, Guid collection)
@@ -35,7 +58,7 @@ public sealed partial class PenumbraService
             throw new InvalidDataException("Invalid animation collection or game path.");
         return await _framework.RunOnFrameworkThread(() =>
         {
-            var result = new ResolvePath(_pi).Invoke(collection, gamePath, out var resolved);
+            var result = _ipc.ResolvePath(collection, gamePath, out var resolved);
             if (result != PenumbraApiEc.Success || string.IsNullOrWhiteSpace(resolved))
                 throw new IOException($"Penumbra could not resolve {gamePath} ({result}).");
             return resolved;
@@ -57,7 +80,7 @@ public sealed partial class PenumbraService
         var player = _objects?.LocalPlayer ?? throw new IOException("The player is unavailable.");
         var target = _getCollectionForObject.Invoke(player.ObjectIndex);
         if (!target.ObjectValid || target.EffectiveCollection.Id != collection) throw new IOException("The player collection changed.");
-        return new GetMetaManipulations(_pi).Invoke(player.ObjectIndex);
+        return _ipc.GetMetaManipulations(player.ObjectIndex);
     });
 
     internal async Task CheckAnimationModRootAsync(string mod, string root)
@@ -108,11 +131,11 @@ public sealed partial class PenumbraService
         });
     }
 
-    private string? RegisteredAnimationModRootOnFramework(string directory)
+    internal string? RegisteredAnimationModRootOnFramework(string directory)
     {
         // GetModPath is Penumbra's virtual UI folder/sort path. ModPath from the
         // synchronized mod adapter is the actual registered directory on disk.
-        using var mods = new GetModListAdapter(_pi).Invoke();
+        using var mods = _ipc.GetModListAdapter();
         foreach (var mod in mods)
             if (string.Equals(mod.Identifier, directory, StringComparison.Ordinal)) return mod.ModPath.FullName;
         return null;
@@ -135,10 +158,10 @@ public sealed partial class PenumbraService
             if (index == objectIndex)
                 drawn.TrySetResult();
         }
-        ObjectRedrawn += OnRedrawn;
+        _ipc.ObjectRedrawn += OnRedrawn;
         try
         {
-            if (await RedrawObjectAsync(objectIndex).ConfigureAwait(false) is { } error)
+            if (await _ipc.RedrawObjectAsync(objectIndex).ConfigureAwait(false) is { } error)
                 return error;
             try { await drawn.Task.WaitAsync(timeout, token).ConfigureAwait(false); }
             catch (TimeoutException) { return "The character was not redrawn in time."; }
@@ -146,7 +169,7 @@ public sealed partial class PenumbraService
         }
         finally
         {
-            ObjectRedrawn -= OnRedrawn;
+            _ipc.ObjectRedrawn -= OnRedrawn;
         }
     }
 

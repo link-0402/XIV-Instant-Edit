@@ -1,26 +1,14 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
-using System.Security.Cryptography;
-using System.Text;
-using Dalamud.Game.ClientState.Objects.Enums;
-using Dalamud.Game.ClientState.Objects.Types;
+using System.Text.Json.Serialization;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
+using InstantEdit.Services.Animations;
+using InstantEdit.Services.PenumbraMods;
+using InstantEdit.Services.PreviewMods;
 using Penumbra.Api.Enums;
 using Penumbra.Api.Helpers;
 using Penumbra.Api.IpcSubscribers;
-using Lumina.Data;
-using Lumina.Data.Files;
-using InstantEdit.Services.PenumbraMods;
-using static InstantEdit.Services.PenumbraMods.FrameworkThread;
-using static InstantEdit.Services.PenumbraMods.ModCleanup;
-using static InstantEdit.Services.PenumbraMods.ModJson;
-using static InstantEdit.Services.PenumbraMods.ModMetadata;
-using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
-using static InstantEdit.Services.PenumbraMods.ModPaths;
-using System.Text.Json.Serialization;
 
 namespace InstantEdit.Services;
 
@@ -128,31 +116,29 @@ public sealed class EstEntryRequest
 }
 
 /// <summary>
-/// Wraps all Penumbra IPC used by XIV Instant Edit:
-/// reading the resolved model files of on-screen game objects and
-/// writing/updating a persistent mod so the edited model applies in-game.
+/// XIV Instant Edit's way into Penumbra. It builds the Penumbra IPC client and the mod services of
+/// InstantEdit.Services.PenumbraMods around one export gate, and keeps the API its callers use by
+/// forwarding to them: the work happens in the services.
 /// </summary>
-public sealed partial class PenumbraService : IDisposable
+public sealed partial class PenumbraService : IDisposable, ITextureEditBackend
 {
-    private readonly IDalamudPluginInterface  _pi;
-    private readonly PenumbraIpc                _ipc;
-    private readonly IFramework                  _framework;
-    private readonly IPluginLog                 _log;
-    private readonly IObjectTable               _objects;
-    private readonly IDataManager               _data;
-    private readonly ModelBackupStore           _backups;
-    private readonly SemaphoreSlim              _exportGate = new(1, 1);
-    private readonly ModActivation              _activation;
-    private readonly SourceMods                 _sources;
-    private readonly ModelFileWriter            _writer;
-    private readonly AttributeGroupService      _attributes;
-    private readonly EstEntryService            _est;
-    private readonly RaceExportService          _race;
-    private readonly SizesExportService         _sizes;
-    private readonly ModelExportService         _exports;
-    private readonly ModelBackupService         _modelBackups;
-    private readonly MashupService              _mashups;
-    private readonly ModResourceScanner         _scanner;
+    private readonly PenumbraIpc _ipc;
+    private readonly IFramework _framework;
+    private readonly IPluginLog _log;
+    /// <summary> One mod write at a time, across every service that writes into Penumbra's mods. </summary>
+    private readonly SemaphoreSlim _exportGate = new(1, 1);
+    private readonly ModActivation _activation;
+    private readonly SourceMods _sources;
+    private readonly ModelExportService _exports;
+    private readonly RaceExportService _race;
+    private readonly SizesExportService _sizes;
+    private readonly ModelBackupService _modelBackups;
+    private readonly MashupService _mashups;
+    private readonly ModResourceScanner _scanner;
+    private readonly TextureModBackend _textures;
+    private readonly ModFileService _modFiles;
+    private readonly PreviewModWriter _previews;
+    private readonly AnimationModService _animations;
 
     public PenumbraService(
         IDalamudPluginInterface pi,
@@ -163,44 +149,153 @@ public sealed partial class PenumbraService : IDisposable
         ModelBackupStore backups,
         EstEntryStore estEntries)
     {
-        _pi               = pi;
-        _log             = log;
-        _framework       = framework;
-        _objects         = objects;
-        _data            = data;
-        _backups         = backups;
-        _ipc             = new PenumbraIpc(pi, framework, log);
-        _activation      = new ModActivation(_ipc, framework, log, objects);
-        _sources         = new SourceMods(_ipc, framework, log);
-        _writer          = new ModelFileWriter(backups);
-        _attributes      = new AttributeGroupService(data, log);
-        _est             = new EstEntryService(estEntries, log);
-        _race            = new RaceExportService(framework, log, _exportGate, data, backups, _sources, _activation, _writer,
-            _attributes, _est);
-        _sizes           = new SizesExportService(framework, log, _exportGate, _sources, _activation, _writer, _attributes, _est);
-        _exports         = new ModelExportService(_ipc, framework, log, _exportGate, backups, _sources, _activation, _writer,
-            _attributes, _est, _race);
-        _modelBackups    = new ModelBackupService(framework, log, _exportGate, backups, _sources, _activation, _writer, _est, _race);
-        _mashups         = new MashupService(_ipc, framework, log, _exportGate, data, _sources, _activation, _attributes, _est);
-        _scanner         = new ModResourceScanner(framework, log, _sources);
+        _framework = framework;
+        _log = log;
+        _ipc = new PenumbraIpc(pi, framework, log);
+        _activation = new ModActivation(_ipc, framework, log, objects);
+        _sources = new SourceMods(_ipc, framework, log);
+        var writer = new ModelFileWriter(backups);
+        var attributes = new AttributeGroupService(data, log);
+        var est = new EstEntryService(estEntries, log);
+        _race = new RaceExportService(framework, log, _exportGate, data, backups, _sources, _activation, writer, attributes, est);
+        _sizes = new SizesExportService(framework, log, _exportGate, _sources, _activation, writer, attributes, est);
+        _exports = new ModelExportService(_ipc, framework, log, _exportGate, backups, _sources, _activation, writer, attributes,
+            est, _race);
+        _modelBackups = new ModelBackupService(framework, log, _exportGate, backups, _sources, _activation, writer, est, _race);
+        _mashups = new MashupService(_ipc, framework, log, _exportGate, data, _sources, _activation, attributes, est);
+        _scanner = new ModResourceScanner(framework, log, _sources);
+        _textures = new TextureModBackend(_ipc, framework, objects, data, backups, _exportGate, _sources, _activation);
+        _modFiles = new ModFileService(framework, _exportGate, _sources, _activation);
+        _previews = new PreviewModWriter(_ipc, framework, log, objects, backups, _exportGate, _sources, _activation);
+        _animations = new AnimationModService(_ipc, framework, objects, _exportGate, _activation);
     }
 
-    /// <inheritdoc cref="MashupService.ApplyMashupAsync"/>
-    public Task<ExportResult> ApplyMashupAsync(
-        InstantEditImportContext activeContext,
-        IReadOnlyList<MashupContributor> contributors,
-        MashupPlanResult plan,
-        string exportedFile,
-        string exportId,
-        string destination,
-        string name,
-        bool bundleExternalDependencies = false,
-        bool createAttributeGroups = false,
-        IReadOnlyList<string>? attributeTags = null,
-        IReadOnlyDictionary<string, int>? attributeMasks = null,
-        IReadOnlyList<EstEntryRequest>? estEntries = null)
-        => _mashups.ApplyMashupAsync(activeContext, contributors, plan, exportedFile, exportId, destination, name,
-            bundleExternalDependencies, createAttributeGroups, attributeTags, attributeMasks, estEntries);
+    public void Dispose() => _ipc.Dispose();
+
+    // Penumbra's state and events (PenumbraIpc).
+
+    /// <inheritdoc cref="PenumbraIpc.Available"/>
+    public bool Available => _ipc.Available;
+
+    /// <inheritdoc cref="PenumbraIpc.ResourcesChanged"/>
+    public event Action? ResourcesChanged
+    {
+        add => _ipc.ResourcesChanged += value;
+        remove => _ipc.ResourcesChanged -= value;
+    }
+
+    /// <inheritdoc cref="PenumbraIpc.ModsChanged"/>
+    public event Action? ModsChanged
+    {
+        add => _ipc.ModsChanged += value;
+        remove => _ipc.ModsChanged -= value;
+    }
+
+    /// <inheritdoc cref="PenumbraIpc.ObjectRedrawn"/>
+    internal event Action<int>? ObjectRedrawn
+    {
+        add => _ipc.ObjectRedrawn += value;
+        remove => _ipc.ObjectRedrawn -= value;
+    }
+
+    /// <inheritdoc cref="PenumbraIpc.GetResourcePaths(ushort)"/>
+    public Dictionary<string, HashSet<string>>? GetResourcePaths(ushort gameObjectIndex) => _ipc.GetResourcePaths(gameObjectIndex);
+
+    /// <inheritdoc cref="PenumbraIpc.GetResourcePaths(ushort[])"/>
+    public Dictionary<string, HashSet<string>>?[] GetResourcePaths(ushort[] gameObjectIndices) => _ipc.GetResourcePaths(gameObjectIndices);
+
+    /// <inheritdoc cref="PenumbraIpc.GetResourcePathsAsync"/>
+    public Task<Dictionary<string, HashSet<string>>?> GetResourcePathsAsync(ushort gameObjectIndex)
+        => _ipc.GetResourcePathsAsync(gameObjectIndex);
+
+    /// <inheritdoc cref="PenumbraIpc.GetPlayerResourceTrees"/>
+    public IReadOnlyDictionary<ushort, ResourceTreeDto> GetPlayerResourceTrees() => _ipc.GetPlayerResourceTrees();
+
+    /// <inheritdoc cref="PenumbraIpc.GetPlayerResourcePaths"/>
+    public IReadOnlyDictionary<ushort, Dictionary<string, HashSet<string>>> GetPlayerResourcePaths() => _ipc.GetPlayerResourcePaths();
+
+    /// <inheritdoc cref="PenumbraIpc.GetResourceTrees"/>
+    public ResourceTreeDto?[] GetResourceTrees(ushort[] gameObjectIndices) => _ipc.GetResourceTrees(gameObjectIndices);
+
+    public Task<PenumbraCollectionTarget?> GetCollectionTargetAsync(int gameObjectIndex) => _ipc.GetCollectionTargetAsync(gameObjectIndex);
+
+    public string? GetModDirectory() => _ipc.GetModDirectory();
+
+    public Dictionary<string, string> GetModList() => _ipc.GetModList();
+
+    /// <inheritdoc cref="PenumbraIpc.TryGetModList"/>
+    internal bool TryGetModList(out Dictionary<string, string> modList) => _ipc.TryGetModList(out modList);
+
+    public IReadOnlyList<PenumbraMod> GetMods() => _ipc.GetMods();
+
+    /// <inheritdoc cref="PenumbraIpc.GetRegisteredModPath"/>
+    public string? GetRegisteredModPath(string modDirectory) => _ipc.GetRegisteredModPath(modDirectory);
+
+    /// <inheritdoc cref="PenumbraIpc.OpenModInPenumbra"/>
+    public void OpenModInPenumbra(string modDirectory, string modName) => _ipc.OpenModInPenumbra(modDirectory, modName);
+
+    /// <inheritdoc cref="PenumbraIpc.ResolveCollectionPathsAsync"/>
+    internal Task<string?[]> ResolveCollectionPathsAsync(Guid collection, IReadOnlyList<string> gamePaths)
+        => _ipc.ResolveCollectionPathsAsync(collection, gamePaths);
+
+    /// <inheritdoc cref="PenumbraIpc.MetaManipulationsAsync"/>
+    internal Task<string?> MetaManipulationsAsync(int objectIndex) => _ipc.MetaManipulationsAsync(objectIndex);
+
+    // Temporary mods (PenumbraIpc).
+
+    /// <inheritdoc cref="PenumbraIpc.TemporaryModCollectionOnFramework"/>
+    internal TemporaryModCollection? TemporaryModCollectionOnFramework(int objectIndex)
+        => _ipc.TemporaryModCollectionOnFramework(objectIndex);
+
+    internal Task<TemporaryModCollection?> TemporaryModCollectionAsync(int objectIndex) => _ipc.TemporaryModCollectionAsync(objectIndex);
+
+    /// <inheritdoc cref="PenumbraIpc.AddTemporaryModOnFramework"/>
+    internal PenumbraApiEc AddTemporaryModOnFramework(string tag, Guid collection, IReadOnlyDictionary<string, string> paths, int priority)
+        => _ipc.AddTemporaryModOnFramework(tag, collection, paths, priority);
+
+    /// <inheritdoc cref="PenumbraIpc.AddTemporaryModAllOnFramework"/>
+    internal PenumbraApiEc AddTemporaryModAllOnFramework(string tag, IReadOnlyDictionary<string, string> paths, int priority)
+        => _ipc.AddTemporaryModAllOnFramework(tag, paths, priority);
+
+    /// <inheritdoc cref="PenumbraIpc.ResolveInterfacePathOnFramework"/>
+    internal string ResolveInterfacePathOnFramework(string gamePath) => _ipc.ResolveInterfacePathOnFramework(gamePath);
+
+    /// <inheritdoc cref="PenumbraIpc.RemoveTemporaryModAllOnFramework"/>
+    internal (bool Gone, string? Error) RemoveTemporaryModAllOnFramework(string tag, int priority)
+        => _ipc.RemoveTemporaryModAllOnFramework(tag, priority);
+
+    /// <inheritdoc cref="PenumbraIpc.RemoveTemporaryModOnFramework"/>
+    internal (bool Gone, string? Error) RemoveTemporaryModOnFramework(string tag, Guid collection, int priority)
+        => _ipc.RemoveTemporaryModOnFramework(tag, collection, priority);
+
+    internal Task<(bool Gone, string? Error)> RemoveTemporaryModAsync(string tag, Guid collection, int priority)
+        => _ipc.RemoveTemporaryModAsync(tag, collection, priority);
+
+    /// <inheritdoc cref="PenumbraIpc.RemoveTemporaryModEverywhereOnFramework"/>
+    internal (bool Gone, string? Error) RemoveTemporaryModEverywhereOnFramework(string tag, int priority)
+        => _ipc.RemoveTemporaryModEverywhereOnFramework(tag, priority);
+
+    internal Task<(bool Gone, string? Error)> RemoveTemporaryModEverywhereAsync(string tag, int priority)
+        => _ipc.RemoveTemporaryModEverywhereAsync(tag, priority);
+
+    /// <inheritdoc cref="PenumbraIpc.SubscribePenumbraLifecycle"/>
+    internal IDisposable SubscribePenumbraLifecycle(Action restarted) => _ipc.SubscribePenumbraLifecycle(restarted);
+
+    // Imports (SourceMods, ModResourceScanner).
+
+    /// <inheritdoc cref="SourceMods.CaptureEffectiveManipulationsAsync"/>
+    public Task<JsonArray?> CaptureEffectiveManipulationsAsync(Guid collectionId, string modDirectory, string modRoot)
+        => _sources.CaptureEffectiveManipulationsAsync(collectionId, modDirectory, modRoot);
+
+    /// <inheritdoc cref="SourceMods.CaptureSourceOptionAsync"/>
+    public Task<SourceOptionCapture> CaptureSourceOptionAsync(
+        string sourceModDirectory, string sourceFilePath, string? sourceModRootPath,
+        string? targetRelativePath, string sourceGamePath,
+        IReadOnlyCollection<string>? preferredMemberships = null,
+        Guid? collectionId = null,
+        Guid? sourceModStableId = null)
+        => _sources.CaptureSourceOptionAsync(sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath,
+            sourceGamePath, preferredMemberships, collectionId, sourceModStableId);
 
     /// <inheritdoc cref="ModResourceScanner.GetModResourcesAsync"/>
     public Task<PenumbraModSnapshot?> GetModResourcesAsync(
@@ -215,6 +310,8 @@ public sealed partial class PenumbraService : IDisposable
         IReadOnlyList<MashupContributor> contributors,
         CancellationToken cancellationToken = default)
         => _scanner.GetMaterialCoverageAsync(activeContext, contributors, cancellationToken);
+
+    // Model exports and their backups.
 
     /// <inheritdoc cref="ModelExportService.ApplySourceExportAsync"/>
     public Task<ExportResult> ApplySourceExportAsync(
@@ -316,6 +413,23 @@ public sealed partial class PenumbraService : IDisposable
             sourceOption, sourceOptionStatus, sourceModStableId, createAttributeGroups, attributeTags, attributeMasks,
             resolvedGamePath, sourceManipulations, estEntries);
 
+    /// <inheritdoc cref="MashupService.ApplyMashupAsync"/>
+    public Task<ExportResult> ApplyMashupAsync(
+        InstantEditImportContext activeContext,
+        IReadOnlyList<MashupContributor> contributors,
+        MashupPlanResult plan,
+        string exportedFile,
+        string exportId,
+        string destination,
+        string name,
+        bool bundleExternalDependencies = false,
+        bool createAttributeGroups = false,
+        IReadOnlyList<string>? attributeTags = null,
+        IReadOnlyDictionary<string, int>? attributeMasks = null,
+        IReadOnlyList<EstEntryRequest>? estEntries = null)
+        => _mashups.ApplyMashupAsync(activeContext, contributors, plan, exportedFile, exportId, destination, name,
+            bundleExternalDependencies, createAttributeGroups, attributeTags, attributeMasks, estEntries);
+
     /// <inheritdoc cref="ModelBackupService.RestoreSourceBackupAsync"/>
     public Task<ExportResult> RestoreSourceBackupAsync(
         string sourceModDirectory,
@@ -337,140 +451,100 @@ public sealed partial class PenumbraService : IDisposable
         => _modelBackups.ClearManagedBackupsAsync(sourceModDirectory, sourceFilePath, sourceModRootPath,
             targetRelativePath, sourceGamePath, backupTargetId, sourceModStableId);
 
-    private GetModDirectory _getModDirectory => _ipc.ModDirectorySubscriber;
-    private GetModList _getModList => _ipc.ModListSubscriber;
-    private GetModPath _getModPath => _ipc.GetModPath;
-    private AddMod _addMod => _ipc.AddMod;
-    private ReloadMod _reloadMod => _ipc.ReloadMod;
-    private GetCollectionForObject _getCollectionForObject => _ipc.GetCollectionForObject;
-    private GetCurrentModSettings _getCurrentModSettings => _ipc.GetCurrentModSettings;
-    private TrySetMod _trySetMod => _ipc.TrySetMod;
-    private TrySetModPriority _trySetModPriority => _ipc.TrySetModPriority;
-    private TrySetModSetting _trySetModSetting => _ipc.TrySetModSetting;
-    private RedrawObject _redrawObject => _ipc.RedrawObject;
+    // Texture edits (TextureModBackend) and texture compression (ModFileService).
 
-    /// <inheritdoc cref="PenumbraIpc.Available"/>
-    public bool Available => _ipc.Available;
+    Task<TextureSource> ITextureEditBackend.CaptureAsync(TextureEditRequest request, CancellationToken token)
+        => ((ITextureEditBackend)_textures).CaptureAsync(request, token);
 
-    /// <inheritdoc cref="PenumbraIpc.GetResourcePaths(ushort)"/>
-    public Dictionary<string, HashSet<string>>? GetResourcePaths(ushort gameObjectIndex) => _ipc.GetResourcePaths(gameObjectIndex);
+    Task ITextureEditBackend.CheckAsync(TextureEditSession session, CancellationToken token)
+        => ((ITextureEditBackend)_textures).CheckAsync(session, token);
 
-    /// <inheritdoc cref="PenumbraIpc.GetResourcePaths(ushort[])"/>
-    public Dictionary<string, HashSet<string>>?[] GetResourcePaths(ushort[] gameObjectIndices) => _ipc.GetResourcePaths(gameObjectIndices);
+    Task<TextureRebase> ITextureEditBackend.RebaseAsync(TextureEditSession session, CancellationToken token)
+        => ((ITextureEditBackend)_textures).RebaseAsync(session, token);
 
-    /// <inheritdoc cref="PenumbraIpc.GetResourcePathsAsync"/>
-    public Task<Dictionary<string, HashSet<string>>?> GetResourcePathsAsync(ushort gameObjectIndex)
-        => _ipc.GetResourcePathsAsync(gameObjectIndex);
+    Task ITextureEditBackend.ConvertAsync(string input, string output, TextureType format, bool mipMaps)
+        => ((ITextureEditBackend)_textures).ConvertAsync(input, output, format, mipMaps);
 
-    public Task<PenumbraCollectionTarget?> GetCollectionTargetAsync(int gameObjectIndex) => _ipc.GetCollectionTargetAsync(gameObjectIndex);
+    Task<TextureCommit> ITextureEditBackend.CommitAsync(TextureEditSession session, byte[] tex, Func<bool> stillCurrent,
+        CancellationToken token)
+        => ((ITextureEditBackend)_textures).CommitAsync(session, tex, stillCurrent, token);
 
-    /// <inheritdoc cref="PenumbraIpc.GetPlayerResourceTrees"/>
-    public IReadOnlyDictionary<ushort, ResourceTreeDto> GetPlayerResourceTrees() => _ipc.GetPlayerResourceTrees();
+    Task<TextureVariantCommit> ITextureEditBackend.CommitVariantAsync(TextureEditSession session, TextureVariant variant,
+        byte[] tex, Func<bool> stillCurrent, CancellationToken token)
+        => ((ITextureEditBackend)_textures).CommitVariantAsync(session, variant, tex, stillCurrent, token);
 
-    /// <inheritdoc cref="PenumbraIpc.GetPlayerResourcePaths"/>
-    public IReadOnlyDictionary<ushort, Dictionary<string, HashSet<string>>> GetPlayerResourcePaths() => _ipc.GetPlayerResourcePaths();
+    Task<string> ITextureEditBackend.RefreshAsync(IReadOnlyList<TextureRefresh> items, CancellationToken token)
+        => ((ITextureEditBackend)_textures).RefreshAsync(items, token);
 
-    /// <inheritdoc cref="PenumbraIpc.GetResourceTrees"/>
-    public ResourceTreeDto?[] GetResourceTrees(ushort[] gameObjectIndices) => _ipc.GetResourceTrees(gameObjectIndices);
+    /// <inheritdoc cref="ModFileService.ReplaceModFileAsync"/>
+    internal Task ReplaceModFileAsync(PreviewSource source, string expectedSha256, byte[] bytes, string recheck)
+        => _modFiles.ReplaceModFileAsync(source, expectedSha256, bytes, recheck);
 
-    public string? GetModDirectory() => _ipc.GetModDirectory();
+    /// <inheritdoc cref="ModFileService.ModRootAsync"/>
+    internal Task<string?> ModRootAsync(string modDirectory, Guid? stableId) => _modFiles.ModRootAsync(modDirectory, stableId);
 
-    public Dictionary<string, string> GetModList() => _ipc.GetModList();
+    /// <inheritdoc cref="ModFileService.ReloadModsAndRedrawPlayerAsync"/>
+    internal Task<IReadOnlyList<string>> ReloadModsAndRedrawPlayerAsync(IReadOnlyCollection<string> modDirectories)
+        => _modFiles.ReloadModsAndRedrawPlayerAsync(modDirectories);
 
-    /// <inheritdoc cref="PenumbraIpc.TryGetModList"/>
-    internal bool TryGetModList(out Dictionary<string, string> modList) => _ipc.TryGetModList(out modList);
+    // Preview mods (PreviewModWriter).
 
-    /// <inheritdoc cref="PenumbraIpc.GetRegisteredModPath"/>
-    public string? GetRegisteredModPath(string modDirectory) => _ipc.GetRegisteredModPath(modDirectory);
+    /// <inheritdoc cref="PreviewModWriter.CreatePreviewModAsync"/>
+    internal Task<PreviewModResult> CreatePreviewModAsync(string name, string description,
+        IReadOnlyList<PreviewModEntry> files, int objectIndex, string fallbackName, CancellationToken token)
+        => _previews.CreatePreviewModAsync(name, description, files, objectIndex, fallbackName, token);
 
-    public IReadOnlyList<PenumbraMod> GetMods() => _ipc.GetMods();
+    internal Task<string?> PreviewModRootAsync() => _previews.PreviewModRootAsync();
 
-    /// <inheritdoc cref="PenumbraIpc.ResourcesChanged"/>
-    public event Action? ResourcesChanged
-    {
-        add => _ipc.ResourcesChanged += value;
-        remove => _ipc.ResourcesChanged -= value;
-    }
+    /// <inheritdoc cref="PreviewModWriter.DeletePreviewModAsync"/>
+    internal Task<(bool Removed, string? Warning)> DeletePreviewModAsync(string modDirectory, Guid identifier, int objectIndex)
+        => _previews.DeletePreviewModAsync(modDirectory, identifier, objectIndex);
 
-    /// <inheritdoc cref="PenumbraIpc.ModsChanged"/>
-    public event Action? ModsChanged
-    {
-        add => _ipc.ModsChanged += value;
-        remove => _ipc.ModsChanged -= value;
-    }
+    /// <inheritdoc cref="PreviewModWriter.WritePreviewSourcesAsync"/>
+    internal Task<IReadOnlyList<string>> WritePreviewSourcesAsync(IReadOnlyList<(PreviewSource Source, byte[] Bytes)> writes,
+        int objectIndex, string recheck, IReadOnlyList<(PreviewSource Material, string GamePath, byte[] Bytes)>? additions = null)
+        => _previews.WritePreviewSourcesAsync(writes, objectIndex, recheck, additions);
 
-    /// <inheritdoc cref="PenumbraIpc.ObjectRedrawn"/>
-    internal event Action<int>? ObjectRedrawn
-    {
-        add => _ipc.ObjectRedrawn += value;
-        remove => _ipc.ObjectRedrawn -= value;
-    }
+    /// <inheritdoc cref="PreviewModWriter.ManagedBackupsFor"/>
+    internal IReadOnlyList<ManagedBackup> ManagedBackupsFor(PreviewSource source) => _previews.ManagedBackupsFor(source);
 
-    /// <inheritdoc cref="PenumbraIpc.OpenModInPenumbra"/>
-    public void OpenModInPenumbra(string modDirectory, string modName) => _ipc.OpenModInPenumbra(modDirectory, modName);
+    /// <inheritdoc cref="PreviewModWriter.RestorePreviewSourcesAsync"/>
+    internal Task<IReadOnlyList<string>> RestorePreviewSourcesAsync(
+        IReadOnlyList<(PreviewSource Source, ManagedBackup Backup)> restores, int objectIndex, string recheck)
+        => _previews.RestorePreviewSourcesAsync(restores, objectIndex, recheck);
 
-    public void Dispose() => _ipc.Dispose();
+    // Animation edits (AnimationModService).
 
-    /// <inheritdoc cref="PenumbraIpc.TemporaryModCollectionOnFramework"/>
-    internal TemporaryModCollection? TemporaryModCollectionOnFramework(int objectIndex)
-        => _ipc.TemporaryModCollectionOnFramework(objectIndex);
+    internal Task<(string Directory, string Root)[]> AnimationSkeletonRootsAsync() => _animations.AnimationSkeletonRootsAsync();
 
-    internal Task<TemporaryModCollection?> TemporaryModCollectionAsync(int objectIndex) => _ipc.TemporaryModCollectionAsync(objectIndex);
+    internal void CheckAnimationCollectionOnFramework(ushort objectIndex, Guid collection)
+        => _animations.CheckAnimationCollectionOnFramework(objectIndex, collection);
 
-    /// <inheritdoc cref="PenumbraIpc.AddTemporaryModOnFramework"/>
-    internal PenumbraApiEc AddTemporaryModOnFramework(string tag, Guid collection, IReadOnlyDictionary<string, string> paths, int priority)
-        => _ipc.AddTemporaryModOnFramework(tag, collection, paths, priority);
+    internal Task<string> ResolveAnimationPathAsync(Guid collection, string gamePath)
+        => _animations.ResolveAnimationPathAsync(collection, gamePath);
 
-    /// <inheritdoc cref="PenumbraIpc.AddTemporaryModAllOnFramework"/>
-    internal PenumbraApiEc AddTemporaryModAllOnFramework(string tag, IReadOnlyDictionary<string, string> paths, int priority)
-        => _ipc.AddTemporaryModAllOnFramework(tag, paths, priority);
+    internal Task AnimationExportAsync(Func<Task> action, CancellationToken token) => _animations.AnimationExportAsync(action, token);
 
-    /// <inheritdoc cref="PenumbraIpc.ResolveInterfacePathOnFramework"/>
-    internal string ResolveInterfacePathOnFramework(string gamePath) => _ipc.ResolveInterfacePathOnFramework(gamePath);
+    internal Task<string> AnimationModRootAsync() => _animations.AnimationModRootAsync();
 
-    /// <inheritdoc cref="PenumbraIpc.RemoveTemporaryModAllOnFramework"/>
-    internal (bool Gone, string? Error) RemoveTemporaryModAllOnFramework(string tag, int priority)
-        => _ipc.RemoveTemporaryModAllOnFramework(tag, priority);
+    internal Task<string> AnimationMetadataAsync(Guid collection) => _animations.AnimationMetadataAsync(collection);
 
-    /// <inheritdoc cref="PenumbraIpc.RemoveTemporaryModOnFramework"/>
-    internal (bool Gone, string? Error) RemoveTemporaryModOnFramework(string tag, Guid collection, int priority)
-        => _ipc.RemoveTemporaryModOnFramework(tag, collection, priority);
+    internal Task CheckAnimationModRootAsync(string mod, string root) => _animations.CheckAnimationModRootAsync(mod, root);
 
-    internal Task<(bool Gone, string? Error)> RemoveTemporaryModAsync(string tag, Guid collection, int priority)
-        => _ipc.RemoveTemporaryModAsync(tag, collection, priority);
+    internal Task ActivateAnimationAsync(AnimationEditJournal journal) => _animations.ActivateAnimationAsync(journal);
 
-    /// <inheritdoc cref="PenumbraIpc.RemoveTemporaryModEverywhereOnFramework"/>
-    internal (bool Gone, string? Error) RemoveTemporaryModEverywhereOnFramework(string tag, int priority)
-        => _ipc.RemoveTemporaryModEverywhereOnFramework(tag, priority);
+    internal Task RedrawAnimationAsync() => _animations.RedrawAnimationAsync();
 
-    internal Task<(bool Gone, string? Error)> RemoveTemporaryModEverywhereAsync(string tag, int priority)
-        => _ipc.RemoveTemporaryModEverywhereAsync(tag, priority);
+    /// <inheritdoc cref="AnimationModService.RedrawObjectAndWaitAsync"/>
+    internal Task<string?> RedrawObjectAndWaitAsync(int objectIndex, TimeSpan timeout, CancellationToken token)
+        => _animations.RedrawObjectAndWaitAsync(objectIndex, timeout, token);
 
-    /// <inheritdoc cref="PenumbraIpc.SubscribePenumbraLifecycle"/>
-    internal IDisposable SubscribePenumbraLifecycle(Action restarted) => _ipc.SubscribePenumbraLifecycle(restarted);
+    internal Task DisableAnimationModAsync(AnimationEditJournal journal) => _animations.DisableAnimationModAsync(journal);
 
-    /// <inheritdoc cref="PenumbraIpc.ResolveCollectionPathsAsync"/>
-    internal Task<string?[]> ResolveCollectionPathsAsync(Guid collection, IReadOnlyList<string> gamePaths)
-        => _ipc.ResolveCollectionPathsAsync(collection, gamePaths);
+    internal Task ReloadAnimationSourcesAsync(IEnumerable<string> mods) => _animations.ReloadAnimationSourcesAsync(mods);
 
-    /// <inheritdoc cref="PenumbraIpc.MetaManipulationsAsync"/>
-    internal Task<string?> MetaManipulationsAsync(int objectIndex) => _ipc.MetaManipulationsAsync(objectIndex);
+    // Helpers the export server and the windows still call here.
 
-    /// <inheritdoc cref="SourceMods.CaptureEffectiveManipulationsAsync"/>
-    public Task<JsonArray?> CaptureEffectiveManipulationsAsync(Guid collectionId, string modDirectory, string modRoot)
-        => _sources.CaptureEffectiveManipulationsAsync(collectionId, modDirectory, modRoot);
-
-    /// <inheritdoc cref="SourceMods.CaptureSourceOptionAsync"/>
-    public Task<SourceOptionCapture> CaptureSourceOptionAsync(
-        string sourceModDirectory, string sourceFilePath, string? sourceModRootPath,
-        string? targetRelativePath, string sourceGamePath,
-        IReadOnlyCollection<string>? preferredMemberships = null,
-        Guid? collectionId = null,
-        Guid? sourceModStableId = null)
-        => _sources.CaptureSourceOptionAsync(sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath,
-            sourceGamePath, preferredMemberships, collectionId, sourceModStableId);
-
-    // The export server and the windows still call these helpers here.
     internal static bool IsSafeGamePath(string? gamePath) => ModPaths.IsSafeGamePath(gamePath);
     internal static bool IsSafeNewModName(string? modName) => ModPaths.IsSafeNewModName(modName);
     internal static bool IsSafeVariantGroupName(string? value) => ModPaths.IsSafeVariantGroupName(value);
@@ -487,7 +561,11 @@ public sealed partial class PenumbraService : IDisposable
         IReadOnlyList<MashupContributor> contributors, bool bundleExternalDependencies = false)
         => MashupPlanning.BuildMashupPlan(activeContext, contributors, bundleExternalDependencies);
 
-    // PenumbraService.Physics.cs still calls these by their old names.
+    // PenumbraService.Physics.cs still calls these by their old names, until it moves into a service of its own.
+
+    private TrySetMod _trySetMod => _ipc.TrySetMod;
+    private RedrawObject _redrawObject => _ipc.RedrawObject;
+    internal const int PreviewModPriority = PreviewModWriter.PreviewModPriority;
     private Task<ExportResult?> AddNewModAsync(string modName) => _activation.AddNewModAsync(modName);
     private ExportResult? ReloadModOnFramework(string modName) => _activation.ReloadModOnFramework(modName);
     private ExportResult ConfigureModForCollectionOnFramework(string modName, Guid collectionId, string collectionName,
@@ -510,4 +588,6 @@ public sealed partial class PenumbraService : IDisposable
         => ModMetadata.CreateV4ModMetadata(name, author, description, version, defaultData);
     private static FrameworkThread.ThreadPoolHop LeaveFrameworkThread() => FrameworkThread.LeaveFrameworkThread();
     private static void TryDeleteMashupNamespace(string root, string folder) => ModFiles.TryDeleteMashupNamespace(root, folder);
+    private static string UniqueModName(string name, Func<string, bool> taken, string fallbackName = "XIV Instant Edit Mod")
+        => PreviewModWriter.UniqueModName(name, taken, fallbackName);
 }

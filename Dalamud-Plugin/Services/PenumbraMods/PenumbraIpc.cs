@@ -84,6 +84,22 @@ internal sealed class PenumbraIpc : IDisposable
     /// <summary> A new subscription to Penumbra's mod-added event; the caller enables and disposes it. </summary>
     internal EventSubscriber<string> SubscribeModAdded(Action<string> added) => ModAdded.Subscriber(_pi, added);
 
+    /// <summary> Redraws one object, so it loads its skeleton, physics and animations again. </summary>
+    internal Task<string?> RedrawObjectAsync(int objectIndex)
+        => _framework.RunOnFrameworkThread(() =>
+        {
+            try
+            {
+                RedrawObject.Invoke(objectIndex);
+                return (string?)null;
+            }
+            catch (Exception e)
+            {
+                _log.Warning(e, "Could not redraw object {ObjectIndex}.", objectIndex);
+                return "Your character could not be redrawn; redraw it in Penumbra.";
+            }
+        });
+
     /// <summary> Whether Penumbra is loaded and the resource tree IPC is available. </summary>
     public bool Available
     {
