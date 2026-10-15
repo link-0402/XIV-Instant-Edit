@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using InstantEdit.Models;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services;
 
@@ -144,7 +145,7 @@ public sealed partial class ExportServer
                     "the import has no original Penumbra mod destination");
             else
             {
-                var result = await _penumbra.ApplySizesExportAsync(
+                var result = await _sizesExports.ApplySizesExportAsync(
                     target.SourceModDirectory!,
                     target.TargetFilePath!,
                     target.SourceModRootPath,
@@ -164,7 +165,7 @@ public sealed partial class ExportServer
                     export.AttributeTags,
                     export.AttributeMasks,
                     target.ResolvedGamePath,
-                    PenumbraService.KnownManipulations(target),
+                    AttributeGroupService.KnownManipulations(target),
                     export.EstEntries).ConfigureAwait(false);
                 receipt = new ExportReceipt(
                     result.Success, result.Code, result.Message, result.WarningList, result.TargetFilePath,
@@ -198,7 +199,7 @@ public sealed partial class ExportServer
             return "missing_field";
         if (request.VariantTarget is not ("new_group" or "group"))
             return "invalid_variant_target";
-        if (request.VariantTarget == "new_group" && !PenumbraService.IsSafeVariantGroupName(request.VariantGroupName))
+        if (request.VariantTarget == "new_group" && !ModPaths.IsSafeVariantGroupName(request.VariantGroupName))
             return "penumbra_setup_requires_group_name";
         if (request.VariantTarget == "group" && string.IsNullOrWhiteSpace(request.VariantTargetId))
             return "missing_variant_target";
@@ -207,7 +208,7 @@ public sealed partial class ExportServer
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var size in request.Sizes)
         {
-            if (size is null || !PenumbraService.IsSafeSizeName(size.Name) || !names.Add(size.Name!))
+            if (size is null || !SizesExportService.IsSafeSizeName(size.Name) || !names.Add(size.Name!))
                 return "invalid_size_name";
             if (string.IsNullOrWhiteSpace(size.FilePath) || string.IsNullOrWhiteSpace(size.Sha256))
                 return "missing_field";
@@ -220,7 +221,7 @@ public sealed partial class ExportServer
             return "invalid_default_size";
         return ValidateAttributeGroupEnvelope(
                    request.CreateAttributeGroups, request.AttributeTags, request.AttributeMasks) ??
-               PenumbraService.ValidateEstEntryRequests(request.EstEntries);
+               EstEntryService.ValidateEstEntryRequests(request.EstEntries);
     }
 
     internal static string SizesExportRequestFingerprint(SizesExportRequest request)

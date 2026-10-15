@@ -4,6 +4,7 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using InstantEdit.Services.NeckSeam;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Services.PreviewMods;
 using InstantEdit.Ui;
 using Lumina.Data;
@@ -104,7 +105,9 @@ internal sealed class TextureCompressionService : IDisposable
 
     private readonly Configuration _config;
     private readonly Action _saveConfig;
-    private readonly PenumbraService _penumbra;
+    private readonly PenumbraIpc _penumbra;
+    private readonly ModFileService _modFiles;
+    private readonly ITextureEditBackend _textureBackend;
     private readonly OnScreenService _onScreen;
     private readonly TextureEditService _textures;
     private readonly IFramework _framework;
@@ -147,13 +150,15 @@ internal sealed class TextureCompressionService : IDisposable
     private volatile CompressionPhase _phase;
     private volatile string _progress = string.Empty;
 
-    public TextureCompressionService(Configuration config, Action saveConfig, PenumbraService penumbra, OnScreenService onScreen,
+    public TextureCompressionService(Configuration config, Action saveConfig, PenumbraIpc penumbra, ModFileService modFiles, ITextureEditBackend textureBackend, OnScreenService onScreen,
         TextureEditService textures, IFramework framework, IObjectTable objects, IClientState clientState, ICondition condition,
         IDataManager data, IPluginLog log, IDalamudPluginInterface pi, string configDirectory, IReadOnlyList<IPreviewModRegistry> previews)
     {
         _config = config;
         _saveConfig = saveConfig;
         _penumbra = penumbra;
+        _modFiles = modFiles;
+        _textureBackend = textureBackend;
         _onScreen = onScreen;
         _textures = textures;
         _framework = framework;
@@ -490,7 +495,7 @@ internal sealed class TextureCompressionService : IDisposable
         {
             token.ThrowIfCancellationRequested();
             var source = mod.First().Source;
-            var root = await _penumbra.ModRootAsync(source.ModDirectory, source.ModStableId).ConfigureAwait(false);
+            var root = await _modFiles.ModRootAsync(source.ModDirectory, source.ModStableId).ConfigureAwait(false);
             if (root is null)
                 continue;
             var meta = FileStamp.Of(Path.Combine(root, "meta.json"));
@@ -621,7 +626,7 @@ internal sealed class TextureCompressionService : IDisposable
         try
         {
             for (; written < files.Count; written++)
-                await _penumbra.ReplaceModFileAsync(SourceOf(group, files[written], files[written].OriginalSha256), files[written].OriginalSha256,
+                await _modFiles.ReplaceModFileAsync(SourceOf(group, files[written], files[written].OriginalSha256), files[written].OriginalSha256,
                     changes[written].Changed, Recheck).ConfigureAwait(false);
         }
         catch
@@ -631,7 +636,7 @@ internal sealed class TextureCompressionService : IDisposable
             {
                 try
                 {
-                    await _penumbra.ReplaceModFileAsync(SourceOf(group, files[i], files[i].NewSha256), files[i].NewSha256, changes[i].Original,
+                    await _modFiles.ReplaceModFileAsync(SourceOf(group, files[i], files[i].NewSha256), files[i].NewSha256, changes[i].Original,
                         "It was left as it is").ConfigureAwait(false);
                 }
                 catch (Exception e) when (e is not OperationCanceledException)
@@ -698,7 +703,7 @@ internal sealed class TextureCompressionService : IDisposable
             while (await _framework.RunOnFrameworkThread(Occupied).ConfigureAwait(false))
                 await Task.Delay(1000, _lifetime.Token).ConfigureAwait(false);
             _progress = "Reloading the changed mods";
-            tally.Warnings.AddRange(await _penumbra.ReloadModsAndRedrawPlayerAsync(tally.Mods).ConfigureAwait(false));
+            tally.Warnings.AddRange(await _modFiles.ReloadModsAndRedrawPlayerAsync(tally.Mods).ConfigureAwait(false));
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {
@@ -794,7 +799,7 @@ internal sealed class TextureCompressionService : IDisposable
             Backups.Record(entry);
             try
             {
-                await _penumbra.ReplaceModFileAsync(candidate.Source with { Sha256 = sha }, sha, encoded, Recheck).ConfigureAwait(false);
+                await _modFiles.ReplaceModFileAsync(candidate.Source with { Sha256 = sha }, sha, encoded, Recheck).ConfigureAwait(false);
             }
             catch
             {
@@ -847,7 +852,7 @@ internal sealed class TextureCompressionService : IDisposable
     /// </summary>
     private async Task ConvertAsync(string input, string output, TextureType type, bool mipMaps)
     {
-        var conversion = ((ITextureEditBackend)_penumbra).ConvertAsync(input, output, type, mipMaps);
+        var conversion = _textureBackend.ConvertAsync(input, output, type, mipMaps);
         if (await Task.WhenAny(conversion, Task.Delay(ConvertTimeout)).ConfigureAwait(false) != conversion)
             throw new TimeoutException("Penumbra took too long to convert the texture.");
         await conversion.ConfigureAwait(false);
@@ -972,7 +977,7 @@ internal sealed class TextureCompressionService : IDisposable
                         failed.Add($"{entry.Label}: its backup is missing or damaged");
                         return true;
                     }
-                    await _penumbra.ReplaceModFileAsync(SourceOf(entry), entry.CompressedSha256, original, "It was left as it is").ConfigureAwait(false);
+                    await _modFiles.ReplaceModFileAsync(SourceOf(entry), entry.CompressedSha256, original, "It was left as it is").ConfigureAwait(false);
                     ForgetRestored(entry);
                     restored++;
                     mods.Add(entry.ModDirectory);
@@ -1016,7 +1021,7 @@ internal sealed class TextureCompressionService : IDisposable
             if (mods.Count > 0)
             {
                 _progress = "Reloading the changed mods";
-                warnings = await _penumbra.ReloadModsAndRedrawPlayerAsync(mods).ConfigureAwait(false);
+                warnings = await _modFiles.ReloadModsAndRedrawPlayerAsync(mods).ConfigureAwait(false);
             }
         }
         finally
@@ -1063,7 +1068,7 @@ internal sealed class TextureCompressionService : IDisposable
                     remaining.Add(file);
                     continue;
                 }
-                await _penumbra.ReplaceModFileAsync(SourceOf(group, file, file.NewSha256), file.NewSha256, original, "It was left as it is").ConfigureAwait(false);
+                await _modFiles.ReplaceModFileAsync(SourceOf(group, file, file.NewSha256), file.NewSha256, original, "It was left as it is").ConfigureAwait(false);
                 wrote = true;
                 lock (_sessionLock)
                     _refitOriginals.Remove(ContentKey(file.File, file.OriginalSha256));

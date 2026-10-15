@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services.Animations;
 
@@ -18,7 +19,7 @@ internal enum SkeletonLibraryState { NotLoaded, Loading, Building, Ready, Failed
 internal sealed record SkeletonLibraryStatus(SkeletonLibraryState State, int Skeletons = 0, int Files = 0, int Missing = 0,
     int Changed = 0, DateTime? BuiltUtc = null, int Progress = 0, int Total = 0, string? Error = null);
 
-internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, AnimationResources resources, IFramework framework,
+internal sealed class AnimationSkeletonIndex(AnimationModService animationMods, AnimationResources resources, IFramework framework,
     IPluginLog log, Func<string> configuredCacheRoot)
 {
     private readonly Dictionary<string, SkeletonDescription> descriptions = [];
@@ -326,7 +327,7 @@ internal sealed class AnimationSkeletonIndex(PenumbraService penumbra, Animation
         try
         {
             status = new(SkeletonLibraryState.Building);
-            var roots = await penumbra.AnimationSkeletonRootsAsync();
+            var roots = await animationMods.AnimationSkeletonRootsAsync();
             var sources = await Task.Run(() => Scan(roots, token), token);
             var progress = 0;
             status = new(SkeletonLibraryState.Building, Total: sources.Length);

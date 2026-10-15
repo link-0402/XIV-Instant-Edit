@@ -8,7 +8,7 @@ namespace InstantEdit.Services.Painter;
 /// <summary> What a skin lookup asks Penumbra; delegates, so the lookup runs without the game too. </summary>
 /// <param name="Collection">The collection a game object's files come from; null when Penumbra can't tell.</param>
 /// <param name="Meta">The object's collection's metadata manipulations as Penumbra's IPC encodes them; null when unavailable.</param>
-/// <param name="Resolve">The files a collection loads for game paths (<see cref="PenumbraService.ResolveCollectionPathsAsync"/>).</param>
+/// <param name="Resolve">The files a collection loads for game paths (<see cref="PenumbraMods.PenumbraIpc.ResolveCollectionPathsAsync"/>).</param>
 internal sealed record PainterSkinPenumbra(Func<int, Task<Guid?>> Collection, Func<int, Task<string?>> Meta,
     Func<Guid, IReadOnlyList<string>, Task<string?[]>> Resolve);
 
