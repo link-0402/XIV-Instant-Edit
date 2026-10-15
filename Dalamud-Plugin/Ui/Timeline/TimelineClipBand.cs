@@ -3,26 +3,35 @@ using Dalamud.Bindings.ImGui;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The clip band under the ruler: the cut motion's parts, each labelled with the motion's own frames
 /// it keeps and a line of how fast the motion moves, the blends where parts join, the loop seam's,
-/// and on the ruler how many frames each cut took out. Its right-click menu cuts at the pointer.
+/// and on the ruler how many frames each cut took out. Its right-click menu cuts at the pointer, and
+/// the seam's badge at its end selects the seam. The loop seam is measured here for the cut panel too.
 /// </summary>
-public sealed partial class TimelineWindow
+internal sealed class TimelineClipBand(TimelineSession session, MotionDecode decode)
 {
     // The motion's speed per frame for the speed line, from the decode it was read from, and its top speed.
     private float[]? speedLine;
     private string? speedLineKey;
     private float speedLineMax;
+    // The loop seam as the motion has it (cached per decode and range), and as the cut output plays it.
+    private string? rawSeamKey;
+    private SeamReport? rawSeam;
+    private MotionCuts? outputSeamCuts;
+    private int outputSeamLength;
+    private string? outputSeamDecode;
+    private SeamReport? outputSeam;
+    // Where the seam's badge was drawn last, in screen pixels: a click there selects the seam.
+    private (Vector2 Min, Vector2 Max)? seamBadge;
 
     /// <summary>The clip band's height for <paramref name="doc"/>: none on an expression's timeline, which is never cut.</summary>
-    private static float ClipBand(TimelineDocument doc, float row) => doc.Expression ? 0 : row * 1.5f;
+    public static float Height(TimelineDocument doc, float row) => doc.Expression ? 0 : row * 1.5f;
 
-    private void DrawClipBand(ImDrawListPtr drawList, TimelineEditor current, TimelineGeometry geometry, Vector2 min, Vector2 max,
+    public void Draw(ImDrawListPtr drawList, TimelineEditor current, TimelineGeometry geometry, Vector2 min, Vector2 max,
         float trackLeft, TimelineHit hit)
     {
         if (geometry.Clip <= 0)
@@ -39,7 +48,7 @@ public sealed partial class TimelineWindow
         drawList.AddText(new Vector2(min.X + Theme.Scaled(30), top + (geometry.Clip - fontSize) / 2), TimelineUi.U32(Theme.Label), TimelineWindowViews.ClipLegend);
 
         var cuts = CutEdits.CutsOf(doc);
-        var speeds = source is { Standalone: false } loaded ? SpeedLine(loaded) : null;
+        var speeds = session.Source is { Standalone: false } loaded ? SpeedLine(loaded) : null;
         var ease = cuts.Ease > 0 && decode.Decoded is { } decoded && speeds != null ? MotionCutter.EaseOf(decoded, cuts, doc.Length) : (Frames: 0d, Rate: 1d, AtEnd: false);
         var barTop = top + Theme.Scaled(3);
         var barBottom = bottom - Theme.Scaled(3);
@@ -151,7 +160,7 @@ public sealed partial class TimelineWindow
         var colour = Theme.Muted;
         if (decode.Reading)
             text = decode.Status;
-        else if (source != null && decode.FailedFor(source))
+        else if (session.Source != null && decode.FailedFor(session.Source))
             (text, colour) = ("The motion could not be read: " + decode.Error, Theme.Warning);
         if (text == null)
             return;
@@ -197,7 +206,7 @@ public sealed partial class TimelineWindow
     }
 
     /// <summary>The clip band's tooltip: what the part, edge, join or seam under the pointer does.</summary>
-    private static bool DrawClipTooltip(TimelineHit hit, bool readOnly)
+    public static bool DrawTooltip(TimelineHit hit, bool readOnly)
     {
         if (hit.Part is not (TimelinePart.ClipRow or TimelinePart.ClipPart or TimelinePart.ClipLeft or TimelinePart.ClipRight or
                 TimelinePart.Join or TimelinePart.JoinEdge or TimelinePart.Seam or TimelinePart.SeamEdge or TimelinePart.EaseEdge))
@@ -218,15 +227,15 @@ public sealed partial class TimelineWindow
     }
 
     /// <summary>The clip band's right-click menu, at the frame it was opened on.</summary>
-    private void DrawClipMenu(TimelineEditor current, bool readOnly)
+    public void DrawMenu(TimelineEditor current, bool readOnly, int frame)
     {
         var menu = TimelineWindowViews.ClipMenu;
         if (ImGui.MenuItem(menu[0], "C", false, !readOnly))
-            current.CutAt(menuFrame);
+            current.CutAt(frame);
         if (ImGui.MenuItem(menu[1], "", false, !readOnly))
-            current.RemoveAfter(menuFrame);
+            current.RemoveAfter(frame);
         if (ImGui.MenuItem(menu[2], "", false, !readOnly))
-            current.RemoveBefore(menuFrame);
+            current.RemoveBefore(frame);
         var part = current.SelectedCut is { Target: TimelineCutTarget.Part };
         if (ImGui.MenuItem(menu[3], "Del", false, !readOnly && part))
             current.RemoveSelectedPart();
@@ -234,4 +243,56 @@ public sealed partial class TimelineWindow
         if (ImGui.MenuItem("Fit", "F"))
             current.Fit();
     }
+
+    /// <summary>
+    /// The loop seam as the motion has it between the first part's start and the last part's end (what
+    /// a blend absorbs and Fix loop works from), and as the output plays it: with a seam blend or an
+    /// eased start, the cut motion is measured, once per change and never during a drag.
+    /// </summary>
+    public (SeamReport Raw, SeamReport Shown) SeamOf(TimelineEditor current, MotionClip decoded)
+    {
+        var doc = current.Document;
+        var cuts = CutEdits.CutsOf(doc);
+        int from = cuts.Parts[0].From, to = cuts.Parts[^1].To;
+        var key = $"{decode.DecodedKey}|{from}|{to}";
+        if (rawSeam == null || rawSeamKey != key)
+        {
+            rawSeam = LoopSeam.Analyze(decoded, from, to);
+            rawSeamKey = key;
+        }
+        if (cuts.Seam is not { Frames: > 0 } && cuts.Ease <= 0)
+            return (rawSeam, rawSeam);
+        var stale = !ReferenceEquals(outputSeamCuts, doc.Cuts) || outputSeamLength != doc.Length || outputSeamDecode != decode.DecodedKey;
+        if (stale && current.Gesture == TimelineGesture.None)
+        {
+            outputSeam = LoopSeam.Analyze(MotionCutter.Apply(decoded, cuts, doc.Length), 0, doc.Length);
+            (outputSeamCuts, outputSeamLength, outputSeamDecode) = (doc.Cuts, doc.Length, decode.DecodedKey);
+            stale = false;
+        }
+        return (rawSeam, !stale && outputSeam is { } shown ? shown : rawSeam);
+    }
+
+    /// <summary>The seam's badge at the clip band's end, on a loop whose motion is read; a click on it selects the seam.</summary>
+    private void DrawSeamBadge(ImDrawListPtr drawList, TimelineEditor current, Vector2 max, float trackLeft, float top, float bottom)
+    {
+        seamBadge = null;
+        if (!current.Loops || session.Source is not { Standalone: false } loaded || decode.DecodedPose(loaded) is not { } decoded)
+            return;
+        var shown = SeamOf(current, decoded).Shown.State;
+        var text = TimelineWindowViews.SeamBadge(shown);
+        var size = ImGui.CalcTextSize(text);
+        var pad = Theme.Scaled(4);
+        var end = trackLeft + current.View.X(current.Document.Length);
+        var left = Math.Min(end + Theme.Scaled(6), max.X - size.X - pad * 2 - Theme.Scaled(4));
+        var rect = (new Vector2(left, top + Theme.Scaled(3)), new Vector2(left + size.X + pad * 2, bottom - Theme.Scaled(3)));
+        var colour = shown == SeamState.Clean ? Theme.Muted : Theme.Warning;
+        drawList.AddRectFilled(rect.Item1, rect.Item2, TimelineUi.U32(Theme.WithAlpha(colour, .18f)), Theme.Scaled(3));
+        drawList.AddRect(rect.Item1, rect.Item2, TimelineUi.U32(Theme.WithAlpha(colour, .7f)), Theme.Scaled(3));
+        drawList.AddText(new Vector2(left + pad, (top + bottom - size.Y) / 2), TimelineUi.U32(colour), text);
+        seamBadge = rect;
+    }
+
+    /// <summary>Whether a click at <paramref name="mouse"/> (screen pixels) is on the seam's badge.</summary>
+    public bool OnSeamBadge(Vector2 mouse) =>
+        seamBadge is { } badge && mouse.X >= badge.Min.X && mouse.X <= badge.Max.X && mouse.Y >= badge.Min.Y && mouse.Y <= badge.Max.Y;
 }

@@ -67,7 +67,7 @@ public sealed partial class TimelineWindow
         current.SetWidth(Math.Max(1, area.X - legend));
         // Only a clip the game loops has a seam to blend or fix.
         current.Loops = source is { } loaded && Fresh(loaded).Clip.IsLoop && !current.Document.Expression;
-        var clip = ClipBand(current.Document, row);
+        var clip = TimelineClipBand.Height(current.Document, row);
         ClampScroll(current, row, ruler + clip, area.Y);
         var geometry = new TimelineGeometry(legend, ruler, row, Theme.Scaled(5), Theme.Scaled(9), scrollY, Theme.Scaled(18), clip);
 
@@ -81,7 +81,7 @@ public sealed partial class TimelineWindow
 
         HandlePointer(current, hit, local.X - legend, hovered, active, activated, readOnly, row);
         // The input above may have changed the document, the view or the scroll.
-        clip = ClipBand(current.Document, row);
+        clip = TimelineClipBand.Height(current.Document, row);
         ClampScroll(current, row, ruler + clip, area.Y);
         geometry = geometry with { ScrollY = scrollY, Clip = clip };
         if (hovered && !active)
@@ -175,7 +175,7 @@ public sealed partial class TimelineWindow
     {
         var io = ImGui.GetIO();
         // The seam's badge at the clip band's end selects the seam, set or not.
-        if (OnSeamBadge(io.MousePos))
+        if (clipBand.OnSeamBadge(io.MousePos))
         {
             current.SelectCut(new TimelineCutSelection(TimelineCutTarget.Seam, -1));
             return;
@@ -331,7 +331,7 @@ public sealed partial class TimelineWindow
         drawList.PopClipRect();
 
         DrawRuler(drawList, current, doc, geometry, view, min, max, trackLeft, min.Y + geometry.Ruler, major, minor, handleHot);
-        DrawClipBand(drawList, current, geometry, min, max, trackLeft, hovered ? hit : TimelineHit.None());
+        clipBand.Draw(drawList, current, geometry, min, max, trackLeft, hovered ? hit : TimelineHit.None());
 
         // Lines that cross the ruler and the lanes.
         drawList.PushClipRect(new Vector2(trackLeft, min.Y), max, true);
@@ -792,7 +792,7 @@ public sealed partial class TimelineWindow
                 ImGui.TextColored(Theme.Hint, "Click to pick this bone. Ctrl+click adds it.");
             return;
         }
-        if (DrawClipTooltip(hit, readOnly))
+        if (TimelineClipBand.DrawTooltip(hit, readOnly))
             return;
         if (hit.Part == TimelinePart.MotionLane && hit.Layer == null && !readOnly && Widgets.HoverDelay("timeline-bones-lane"))
         {
@@ -887,7 +887,7 @@ public sealed partial class TimelineWindow
         if (menuHit.Part is TimelinePart.ClipRow or TimelinePart.ClipPart or TimelinePart.ClipLeft or TimelinePart.ClipRight or
             TimelinePart.Join or TimelinePart.JoinEdge or TimelinePart.Seam or TimelinePart.SeamEdge)
         {
-            DrawClipMenu(current, readOnly);
+            clipBand.DrawMenu(current, readOnly, menuFrame);
             return;
         }
         if (menuHit.Part is TimelinePart.BoneLane or TimelinePart.Legend && menuHit.Bone is { } bone &&
