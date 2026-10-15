@@ -1,15 +1,14 @@
-﻿using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
-using InstantEdit.Services.Animations.Motion;
+using Dalamud.Interface.Windowing;
 using InstantEdit.Services.Animations.Timeline;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
-/// <summary> The row above the lanes: undo, redo, add, snapping, fit, the length and the playhead, then short messages. </summary>
-public sealed partial class TimelineWindow
+/// <summary> The row above the lanes: undo, redo, add, snapping, fit, the Bones window, load, the length and the playhead, then short messages. </summary>
+internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers pickers, TimelineLoader loader, LivePosePanel livePose,
+    TimelineTexts texts, SaveFooter saveFooter, Window bonesWindow)
 {
     private const string AddMenu = "##timeline-add-menu";
     private const string ControlsHelp =
@@ -27,9 +26,9 @@ public sealed partial class TimelineWindow
     private int readoutFrame = -1;
     private string readout = string.Empty;
 
-    private void DrawToolbar(TimelineEditor current)
+    public void Draw(TimelineEditor current)
     {
-        var readOnly = ReadOnly;
+        var readOnly = session.ReadOnly;
         var history = current.History;
         if (Widgets.IconButton("##timeline-undo", FontAwesomeIcon.Undo, "Undo the last change (Ctrl+Z)", !readOnly && history.CanUndo))
             current.Undo();
@@ -120,14 +119,14 @@ public sealed partial class TimelineWindow
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(TimelineWindowViews.LayerKindHint(kind) + " Covers the whole clip; drag its ends to narrow it.");
         }
-        if (source == null)
+        if (session.Source == null)
             return;
         ImGui.Separator();
-        livePose.DrawItems(source);
+        livePose.DrawItems(session.Source);
     }
 
     /// <summary> One line each for an import running or done, an edit the editor refused and a header length the motion disagrees with. </summary>
-    private void DrawMessages(TimelineEditor current)
+    public void DrawMessages(TimelineEditor current)
     {
         if (texts.HeaderNote != null)
             TimelineUi.Note(null, Theme.Muted, texts.HeaderNote);
@@ -152,7 +151,7 @@ public sealed partial class TimelineWindow
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(string.Join("\n", texts.EffectProblems.Select(p => p.Text)));
         ImGui.SameLine(0, Theme.Gap);
-        using (ImRaii.Disabled(ReadOnly))
+        using (ImRaii.Disabled(session.ReadOnly))
         {
             if (ImGui.SmallButton(texts.EffectEvents == 1 ? "Keep it looping" : "Keep them looping"))
             {
