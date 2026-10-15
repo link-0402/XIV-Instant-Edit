@@ -4,6 +4,7 @@ using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services.NeckSeam;
 using InstantEdit.Services.Painter;
+using InstantEdit.Ui.Main;
 
 namespace InstantEdit.Ui;
 
@@ -19,7 +20,7 @@ public sealed partial class MainWindow
 
     private void DrawPaintSkinAction()
     {
-        if (_painter is null)
+        if (_painter.Service is null)
         {
             Widgets.Hint("Unavailable: the Substance Painter tools did not start.");
             return;
@@ -39,7 +40,7 @@ public sealed partial class MainWindow
             return;
         }
 
-        using (ImRaii.Disabled(Volatile.Read(ref _painterBusy) != 0))
+        using (ImRaii.Disabled(_painter.Busy.IsBusy))
         {
             if (ImGui.Button("Open in Substance Painter##quick-paint-skin"))
                 StartSkinPainter(character, face);
@@ -75,6 +76,6 @@ public sealed partial class MainWindow
         var actor = new ActorView(character, character.PresentationCategory.ToString(), Safe(character.Name), roots, character.ObjectIndex);
         // Models of other races are always shaped for the character here: the body only meets the face
         // at the neck in the shape the game gives it.
-        PreparePainter(actor, ModelRef(face), [], PainterScope.Skin, scale: true, "Reading your character's smallclothes, face, materials and textures");
+        _painter.PreparePainter(actor, PainterPanel.ModelRef(face), [], PainterScope.Skin, scale: true, "Reading your character's smallclothes, face, materials and textures");
     }
 }
