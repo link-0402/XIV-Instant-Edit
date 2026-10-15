@@ -1,34 +1,51 @@
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using System.Security.Cryptography;
 using System.Text;
-using Dalamud.Game.ClientState.Objects.Enums;
-using Dalamud.Game.ClientState.Objects.Types;
-using Dalamud.Plugin;
+using System.Text.Json.Nodes;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
-using Penumbra.Api.Enums;
-using Penumbra.Api.Helpers;
-using Penumbra.Api.IpcSubscribers;
 using Lumina.Data;
 using Lumina.Data.Files;
-using InstantEdit.Services.PenumbraMods;
+using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
 using static InstantEdit.Services.PenumbraMods.FrameworkThread;
+using static InstantEdit.Services.PenumbraMods.MashupPlanning;
 using static InstantEdit.Services.PenumbraMods.ModCleanup;
+using static InstantEdit.Services.PenumbraMods.ModFiles;
 using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
-using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
-using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
-using static InstantEdit.Services.PenumbraMods.EstEntryService;
-using static InstantEdit.Services.PenumbraMods.ModFiles;
-using static InstantEdit.Services.PenumbraMods.MashupPlanning;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary>
+/// Builds a mashup: the exported model with the materials and textures each contributor's import
+/// captured, as a group in the active mod or as a new mod.
+/// </summary>
+internal sealed class MashupService
 {
+    private readonly PenumbraIpc _ipc;
+    private readonly IFramework _framework;
+    private readonly IPluginLog _log;
+    private readonly SemaphoreSlim _exportGate;
+    private readonly IDataManager _data;
+    private readonly SourceMods _sources;
+    private readonly ModActivation _activation;
+    private readonly AttributeGroupService _attributes;
+    private readonly EstEntryService _est;
+
+    public MashupService(PenumbraIpc ipc, IFramework framework, IPluginLog log, SemaphoreSlim exportGate, IDataManager data,
+        SourceMods sources, ModActivation activation, AttributeGroupService attributes, EstEntryService est)
+    {
+        _ipc = ipc;
+        _framework = framework;
+        _log = log;
+        _exportGate = exportGate;
+        _data = data;
+        _sources = sources;
+        _activation = activation;
+        _attributes = attributes;
+        _est = est;
+    }
+
     public async Task<ExportResult> ApplyMashupAsync(
         InstantEditImportContext activeContext,
         IReadOnlyList<MashupContributor> contributors,
@@ -127,7 +144,7 @@ public sealed partial class PenumbraService
         }
     }
 
-    private sealed record PreparedMashup(
+    internal sealed record PreparedMashup(
         byte[] ModelBytes,
         Dictionary<string, byte[]> Files,
         Dictionary<string, string> Mappings,
@@ -137,7 +154,7 @@ public sealed partial class PenumbraService
         string? Error = null,
         IReadOnlyList<PreparedMashupEntry>? Entries = null);
 
-    private sealed record PreparedMashupEntry(
+    internal sealed record PreparedMashupEntry(
         MashupContributor Contributor,
         MaterialDependency Material,
         MashupMaterialAssignment Assignment,
@@ -145,7 +162,7 @@ public sealed partial class PenumbraService
         string? RelativeMaterialPath,
         IReadOnlyDictionary<string, string> TextureRewrites);
 
-    private static ResourceDependencyManifest? BuildMashupResourceManifest(
+    internal static ResourceDependencyManifest? BuildMashupResourceManifest(
         PreparedMashup prepared,
         string outputModDirectory,
         string outputModRoot,
@@ -224,7 +241,7 @@ public sealed partial class PenumbraService
         };
     }
 
-    private static bool TryGetGeneratedTexture(
+    internal static bool TryGetGeneratedTexture(
         PreparedMashup prepared,
         TextureDependency texture,
         string effectiveGamePath,
@@ -259,7 +276,7 @@ public sealed partial class PenumbraService
         return false;
     }
 
-    private static SourceResourceLocator OutputResourceLocator(
+    internal static SourceResourceLocator OutputResourceLocator(
         string gamePath,
         string modDirectory,
         string modRoot,
@@ -276,12 +293,12 @@ public sealed partial class PenumbraService
             Sha256 = TextureFiles.Hash(bytes).ToLowerInvariant(),
         };
 
-    private static string RemapOutputRelativePath(string relativePath, ModPathRemap? pathRemap)
+    internal static string RemapOutputRelativePath(string relativePath, ModPathRemap? pathRemap)
         => pathRemap?.RelativePaths.TryGetValue(relativePath, out var remapped) == true
             ? remapped
             : relativePath;
 
-    private async Task<PreparedMashup> PrepareMashupAsync(
+    internal async Task<PreparedMashup> PrepareMashupAsync(
         InstantEditImportContext activeContext,
         IReadOnlyList<MashupContributor> contributors,
         MashupPlanResult plan,
@@ -544,12 +561,12 @@ public sealed partial class PenumbraService
             Entries: preparedEntries);
     }
 
-    private async Task<IReadOnlyList<string>> ResolveExternalMashupModNamesAsync(
+    internal async Task<IReadOnlyList<string>> ResolveExternalMashupModNamesAsync(
         IReadOnlyCollection<string> directories)
     {
         if (directories.Count == 0)
             return Array.Empty<string>();
-        var mods = await _framework.RunOnFrameworkThread(GetMods).ConfigureAwait(false);
+        var mods = await _framework.RunOnFrameworkThread(_ipc.GetMods).ConfigureAwait(false);
         var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var directory in directories)
         {
@@ -563,7 +580,7 @@ public sealed partial class PenumbraService
         return names.ToArray();
     }
 
-    private static void AddExternalMashupDirectory(
+    internal static void AddExternalMashupDirectory(
         SourceResourceLocator locator,
         IReadOnlySet<string> participantDirectories,
         ISet<string> externalDirectories)
@@ -599,7 +616,7 @@ public sealed partial class PenumbraService
         return $"Files/xiv-instant-edit/mashups/{exportId[..12]}/materials/{hash}.mtrl";
     }
 
-    private async Task<byte[]?> ReadManifestResourceAsync(SourceResourceLocator locator)
+    internal async Task<byte[]?> ReadManifestResourceAsync(SourceResourceLocator locator)
     {
         byte[]? bytes = null;
         if (locator.Kind == "game")
@@ -663,73 +680,7 @@ public sealed partial class PenumbraService
         return null;
     }
 
-    internal static byte[] RewriteMaterialTexturePaths(
-        byte[] materialBytes,
-        IReadOnlyDictionary<string, string> rewrites)
-    {
-        if (rewrites.Count == 0)
-            return materialBytes.ToArray();
-        var mtrl = MaterialPreviewBundleBuilder.LooseLuminaFile.Load<MtrlFile>(materialBytes);
-        var stringTableStart = checked(16 + 4 * (
-            mtrl.FileHeader.TextureCount + mtrl.FileHeader.UvSetCount + mtrl.FileHeader.ColorSetCount));
-        var oldStringTableEnd = checked(stringTableStart + mtrl.FileHeader.StringTableSize);
-        if (oldStringTableEnd > materialBytes.Length)
-            throw new InvalidDataException("the MTRL string table is truncated");
-
-        var offsetMap = new Dictionary<int, int>();
-        using var stringStream = new MemoryStream();
-        for (var cursor = 0; cursor < mtrl.Strings.Length;)
-        {
-            var end = Array.IndexOf(mtrl.Strings, (byte)0, cursor);
-            if (end < 0)
-                end = mtrl.Strings.Length;
-            var oldValue = Encoding.UTF8.GetString(mtrl.Strings, cursor, end - cursor);
-            var value = rewrites.TryGetValue(NormalizeGamePath(oldValue), out var replacement)
-                ? replacement
-                : oldValue;
-            offsetMap[cursor] = checked((int)stringStream.Position);
-            stringStream.Write(Encoding.UTF8.GetBytes(value));
-            if (end < mtrl.Strings.Length)
-                stringStream.WriteByte(0);
-            cursor = end < mtrl.Strings.Length ? end + 1 : end;
-        }
-
-        var newStrings = stringStream.ToArray();
-        if (newStrings.Length > ushort.MaxValue)
-            throw new InvalidDataException("rewritten MTRL string table is too large");
-        var newLength = checked(materialBytes.Length - mtrl.Strings.Length + newStrings.Length);
-        if (newLength > ushort.MaxValue)
-            throw new InvalidDataException("rewritten MTRL is too large");
-        var rewritten = new byte[newLength];
-        materialBytes.AsSpan(0, stringTableStart).CopyTo(rewritten);
-        newStrings.CopyTo(rewritten, stringTableStart);
-        materialBytes.AsSpan(oldStringTableEnd).CopyTo(rewritten.AsSpan(stringTableStart + newStrings.Length));
-
-        static void RewriteOffset(byte[] bytes, int position, IReadOnlyDictionary<int, int> offsets)
-        {
-            var oldOffset = BitConverter.ToUInt16(bytes, position);
-            if (!offsets.TryGetValue(oldOffset, out var newOffset) || newOffset > ushort.MaxValue)
-                throw new InvalidDataException("an MTRL string offset is invalid");
-            BitConverter.TryWriteBytes(bytes.AsSpan(position, sizeof(ushort)), (ushort)newOffset);
-        }
-
-        BitConverter.TryWriteBytes(rewritten.AsSpan(4, sizeof(ushort)), (ushort)newLength);
-        BitConverter.TryWriteBytes(rewritten.AsSpan(8, sizeof(ushort)), (ushort)newStrings.Length);
-        RewriteOffset(rewritten, 10, offsetMap);
-        var entryCount = mtrl.FileHeader.TextureCount + mtrl.FileHeader.UvSetCount + mtrl.FileHeader.ColorSetCount;
-        for (var index = 0; index < entryCount; ++index)
-            RewriteOffset(rewritten, 16 + index * 4, offsetMap);
-
-        var validated = MaterialPreviewBundleBuilder.LooseLuminaFile.Load<MtrlFile>(rewritten);
-        foreach (var replacement in rewrites.Values)
-            if (!validated.TextureOffsets.Any(offset =>
-                    string.Equals(ReadNullTerminated(validated.Strings, offset.Offset), replacement,
-                        StringComparison.OrdinalIgnoreCase)))
-                throw new InvalidDataException("rewritten MTRL did not retain every texture alias");
-        return rewritten;
-    }
-
-    private async Task<ExportResult> CommitMashupToActiveModAsync(
+    internal async Task<ExportResult> CommitMashupToActiveModAsync(
         SourceModTarget target,
         InstantEditImportContext activeContext,
         PreparedMashup prepared,
@@ -841,7 +792,7 @@ public sealed partial class PenumbraService
         }
     }
 
-    private async Task<ExportResult> CommitMashupToNewModAsync(
+    internal async Task<ExportResult> CommitMashupToNewModAsync(
         InstantEditImportContext activeContext,
         PreparedMashup prepared,
         string exportId,
@@ -854,11 +805,11 @@ public sealed partial class PenumbraService
     {
         if (!IsSafeNewModName(modName))
             return new ExportResult(false, "invalid_mod_name", "The Penumbra mod name is invalid.");
-        var root = await _framework.RunOnFrameworkThread(GetModDirectory).ConfigureAwait(false);
+        var root = await _framework.RunOnFrameworkThread(_ipc.GetModDirectory).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
             return new ExportResult(false, "penumbra_root_missing", "The Penumbra mod root is unavailable.");
         var modList = await _framework.RunOnFrameworkThread(() =>
-            TryGetModList(out var mods) ? mods : null).ConfigureAwait(false);
+            _ipc.TryGetModList(out var mods) ? mods : null).ConfigureAwait(false);
         if (modList is null)
             return new ExportResult(false, "penumbra_unavailable", "Could not retrieve the Penumbra mod list.");
         await LeaveFrameworkThread();

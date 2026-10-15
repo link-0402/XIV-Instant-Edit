@@ -1,34 +1,29 @@
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using System.Security.Cryptography;
-using System.Text;
-using Dalamud.Game.ClientState.Objects.Enums;
-using Dalamud.Game.ClientState.Objects.Types;
-using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
-using Penumbra.Api.Enums;
-using Penumbra.Api.Helpers;
-using Penumbra.Api.IpcSubscribers;
-using Lumina.Data;
-using Lumina.Data.Files;
-using InstantEdit.Services.PenumbraMods;
-using static InstantEdit.Services.PenumbraMods.FrameworkThread;
-using static InstantEdit.Services.PenumbraMods.ModCleanup;
-using static InstantEdit.Services.PenumbraMods.ModJson;
-using static InstantEdit.Services.PenumbraMods.ModMetadata;
-using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
-using static InstantEdit.Services.PenumbraMods.ModPaths;
-using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
-using static InstantEdit.Services.PenumbraMods.EstEntryService;
-using static InstantEdit.Services.PenumbraMods.ModFiles;
 using static InstantEdit.Services.PenumbraMods.MashupPlanning;
+using static InstantEdit.Services.PenumbraMods.ModMetadata;
+using static InstantEdit.Services.PenumbraMods.ModPaths;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary>
+/// Lists a registered mod's model, material, texture and animation files with the game paths and
+/// options that map them, and checks a mashup's output mod against the materials it needs.
+/// </summary>
+internal sealed class ModResourceScanner
 {
+    private readonly IFramework _framework;
+    private readonly IPluginLog _log;
+    private readonly SourceMods _sources;
+
+    public ModResourceScanner(IFramework framework, IPluginLog log, SourceMods sources)
+    {
+        _framework = framework;
+        _log = log;
+        _sources = sources;
+    }
+
     /// <summary>Resolve Penumbra state on the framework thread, then scan files on a worker.</summary>
     public async Task<PenumbraModSnapshot?> GetModResourcesAsync(
         string modDirectory,
@@ -225,11 +220,11 @@ public sealed partial class PenumbraService
                 "The output mod is missing one or more captured non-active material or texture dependencies.", missing);
     }
 
-    private static MaterialCoverageResult MaterialCoverageUnavailable()
+    internal static MaterialCoverageResult MaterialCoverageUnavailable()
         => new(false, false, "material_coverage_unavailable",
             "Material coverage could not be verified.", Array.Empty<MaterialCoverageMissing>());
 
-    private PenumbraModSnapshot? ScanModResources(ModScanRequest request, CancellationToken cancellationToken)
+    internal PenumbraModSnapshot? ScanModResources(ModScanRequest request, CancellationToken cancellationToken)
     {
         var mod = request.Mod;
         var scannedRoot = false;
@@ -332,19 +327,3 @@ public sealed partial class PenumbraService
     }
 
 }
-
-public sealed record PenumbraMod(string Directory, string Name, Guid? StableId = null);
-
-public sealed record PenumbraModResource(
-    string GamePath,
-    string ActualPath,
-    string RelativePath,
-    string OptionMapping,
-    IReadOnlyList<string> OptionMemberships);
-
-public sealed record PenumbraModSnapshot(
-    string Directory,
-    string Name,
-    string RootPath,
-    IReadOnlyList<PenumbraModResource> Resources,
-    Guid? StableId = null);

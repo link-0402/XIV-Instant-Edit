@@ -7,6 +7,7 @@ using InstantEdit.Services.NeckSeam;
 using InstantEdit.Services.Skeletons;
 using InstantEdit.Ui;
 using static InstantEdit.TestSupport.Assertions;
+using InstantEdit.Services.PenumbraMods;
 
 /// <summary>
 /// The neck seam fix's pure parts on synthetic data: a face and a body built as two open tubes that
@@ -134,7 +135,7 @@ internal static class NeckSeamScenarios
             "neck seam: constants are overwritten in place or appended, and the others keep their values");
         Require(BinaryPrimitives.ReadUInt16LittleEndian(changed.AsSpan(4)) == changed.Length && reread.Textures.SequenceEqual(FaceTextures),
             "neck seam: the material's size field and texture table stay consistent after a constant change");
-        var rewritten = PenumbraService.RewriteMaterialTexturePaths(changed,
+        var rewritten = MashupPlanning.RewriteMaterialTexturePaths(changed,
             new Dictionary<string, string> { [FaceTextures[2]] = NeckSeamService.PreviewTexturePath(FaceTextures[2], "1a2b3c4d") });
         Require(SkinMaterial.Read(rewritten).TextureFor(SkinMaterial.MaskSampler) == "chara/human/c0801/obj/face/f0001/texture/c0801f0001_fac_mask_ns1a2b3c4d.tex" &&
                 SkinMaterial.Read(rewritten).Constant(SkinMaterial.TileScale).SequenceEqual([25.5f, 25.5f]),

@@ -5,6 +5,7 @@ using InstantEdit.Services.PreviewMods;
 using InstantEdit.Services.Skeletons;
 using Lumina.Data;
 using Penumbra.Api.Enums;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services.NeckSeam;
 
@@ -244,7 +245,7 @@ internal sealed class NeckSeamService
         foreach (var material in plan.Materials)
         {
             var rewrites = SkinSeamPreviewPlan.Rewrites(material.Bytes, changed, tag);
-            var previewMaterial = rewrites.Count > 0 ? PenumbraService.RewriteMaterialTexturePaths(material.Bytes, rewrites) : material.Bytes;
+            var previewMaterial = rewrites.Count > 0 ? MashupPlanning.RewriteMaterialTexturePaths(material.Bytes, rewrites) : material.Bytes;
             files.Add((material.GamePath, previewMaterial));
             records.Add(Record(material.Kind, material.GamePath, material.GamePath, previewMaterial) with
             {

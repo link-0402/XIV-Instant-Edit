@@ -1018,11 +1018,11 @@ try
             manifestPersistence.Any(item => item.ContextId == modManifestContext.ContextId &&
                 item.TargetRelativePath == normalizedModelRelative),
         "in-place cleanup remaps context destinations, manifests and persisted locators");
-    var verifiedManifestSource = await PenumbraService.ReadVerifiedModManifestResourceAsync(
+    var verifiedManifestSource = await MashupService.ReadVerifiedModManifestResourceAsync(
         manifestLocator, [Path.Combine(testRoot, "WrongManifestRoot"), manifestSourceRoot]);
     Require(verifiedManifestSource?.SequenceEqual(manifestSourceBytes) == true,
         "mashup source verification tries every currently authorized Penumbra root");
-    Require(await PenumbraService.ReadVerifiedModManifestResourceAsync(
+    Require(await MashupService.ReadVerifiedModManifestResourceAsync(
             manifestLocator with { Sha256 = new string('0', 64) }, [manifestSourceRoot]) is null,
         "mashup source verification still rejects changed source bytes");
     static MaterialDependency CapturedMaterial(string modelMaterial, string gamePath, char hashCharacter) => new()
@@ -1236,15 +1236,15 @@ try
         SourceModDirectory = null,
         SourceRelativePath = null,
     };
-    Require(PenumbraService.ShouldBundleMashupDependency(
+    Require(MashupService.ShouldBundleMashupDependency(
                 participantDirectories, participantLocator, bundleExternalDependencies: false) &&
-            PenumbraService.ShouldBundleMashupDependency(
+            MashupService.ShouldBundleMashupDependency(
                 participantDirectories, participantLocator, bundleExternalDependencies: true) &&
-            !PenumbraService.ShouldBundleMashupDependency(
+            !MashupService.ShouldBundleMashupDependency(
                 participantDirectories, externalLocator, bundleExternalDependencies: false) &&
-            PenumbraService.ShouldBundleMashupDependency(
+            MashupService.ShouldBundleMashupDependency(
                 participantDirectories, externalLocator, bundleExternalDependencies: true) &&
-            !PenumbraService.ShouldBundleMashupDependency(
+            !MashupService.ShouldBundleMashupDependency(
                 participantDirectories, gameLocator, bundleExternalDependencies: true),
         "mashup dependency classification always bundles participants, optionally bundles external mods, and never bundles game data");
     Require(
@@ -1271,11 +1271,11 @@ try
         "external-body",
         "Files/body.mtrl",
         '9');
-    Require(PenumbraService.CanBundleExternalMashupDependencies(
+    Require(MashupService.CanBundleExternalMashupDependencies(
                 externalGear, bundleExternalDependencies: true) &&
-            !PenumbraService.CanBundleExternalMashupDependencies(
+            !MashupService.CanBundleExternalMashupDependencies(
                 externalGear, bundleExternalDependencies: false) &&
-            !PenumbraService.CanBundleExternalMashupDependencies(
+            !MashupService.CanBundleExternalMashupDependencies(
                 externalBody, bundleExternalDependencies: true),
         "external gear dependencies are opt-in while shared body dependency sets remain pass-through");
     var incompletePlan = MashupPlanning.BuildMashupPlan(sourceBoundaryContext,
@@ -1480,11 +1480,11 @@ try
     Require(!duplicatePathPlan.Success && duplicatePathPlan.Code == "mashup_material_path_conflict",
         "duplicate active virtual material paths remain rejected");
 
-    var materialAddressA = PenumbraService.ContentAddressedMashupMaterialPath(
+    var materialAddressA = MashupService.ContentAddressedMashupMaterialPath(
         "0123456789abcdef", [1, 2, 3]);
-    var materialAddressARepeat = PenumbraService.ContentAddressedMashupMaterialPath(
+    var materialAddressARepeat = MashupService.ContentAddressedMashupMaterialPath(
         "0123456789abcdef", [1, 2, 3]);
-    var materialAddressB = PenumbraService.ContentAddressedMashupMaterialPath(
+    var materialAddressB = MashupService.ContentAddressedMashupMaterialPath(
         "0123456789abcdef", [3, 2, 1]);
     Require(materialAddressA == materialAddressARepeat && materialAddressA != materialAddressB &&
             materialAddressA.EndsWith(".mtrl", StringComparison.Ordinal),
@@ -1548,14 +1548,14 @@ try
         coverageGamePath, coverageOutputPath, "Files/coverage.mtrl", "", []);
     var coverageTextureResource = new PenumbraModResource(
         coverageTextureGamePath, coverageTextureOutputPath, "Files/coverage.tex", "", []);
-    var matchingCoverage = await PenumbraService.EvaluateMaterialCoverageAsync(
+    var matchingCoverage = await ModResourceScanner.EvaluateMaterialCoverageAsync(
         customTopContext,
         [new MashupContributor(coverageContext, ["/mt_coverage.mtrl"])],
         [coverageResource, coverageTextureResource]);
     Require(matchingCoverage.Available && matchingCoverage.Covered && matchingCoverage.Missing.Count == 0,
         "material coverage accepts an effective game path with matching captured bytes");
     File.Delete(coverageOutputPath);
-    var missingCoverage = await PenumbraService.EvaluateMaterialCoverageAsync(
+    var missingCoverage = await ModResourceScanner.EvaluateMaterialCoverageAsync(
         customTopContext,
         [new MashupContributor(coverageContext, ["/mt_coverage.mtrl"])],
         []);
@@ -1563,7 +1563,7 @@ try
             missingCoverage.Missing.Select(item => item.ResourceType).ToHashSet().SetEquals(["material", "texture"]),
         "material coverage reports required material and texture files absent from the output mod");
     File.WriteAllBytes(coverageOutputPath, Encoding.UTF8.GetBytes("different coverage material"));
-    var differingHashCoverage = await PenumbraService.EvaluateMaterialCoverageAsync(
+    var differingHashCoverage = await ModResourceScanner.EvaluateMaterialCoverageAsync(
         customTopContext,
         [new MashupContributor(coverageContext, ["/mt_coverage.mtrl"])],
         [coverageResource, coverageTextureResource]);
@@ -1572,7 +1572,7 @@ try
         "material coverage rejects an output material with the same path but different bytes");
     File.WriteAllBytes(coverageOutputPath, coverageBytes);
     File.Delete(coverageTextureOutputPath);
-    var missingTextureCoverage = await PenumbraService.EvaluateMaterialCoverageAsync(
+    var missingTextureCoverage = await ModResourceScanner.EvaluateMaterialCoverageAsync(
         customTopContext,
         [new MashupContributor(coverageContext, ["/mt_coverage.mtrl"])],
         [coverageResource]);
@@ -1588,7 +1588,7 @@ try
                 "Files/coverage.mtrl", new string('0', 64))],
         },
     };
-    var sameModCoverage = await PenumbraService.EvaluateMaterialCoverageAsync(
+    var sameModCoverage = await ModResourceScanner.EvaluateMaterialCoverageAsync(
         customTopContext,
         [new MashupContributor(sameModCoverageContext, ["/mt_coverage.mtrl"])],
         []);
@@ -1615,7 +1615,7 @@ try
             ],
         },
     };
-    var gameDataCoverage = await PenumbraService.EvaluateMaterialCoverageAsync(
+    var gameDataCoverage = await ModResourceScanner.EvaluateMaterialCoverageAsync(
         customTopContext,
         [new MashupContributor(gameDataCoverageContext, ["/mt_game.mtrl"])],
         []);
@@ -1732,7 +1732,7 @@ try
             "chara/human/c0801/obj/hair/h0004/texture/c0801h0004_hir_a_s.tex",
         "custom preserved materials use slot a for generated texture collision names");
 
-    var retargetedMaterial = PenumbraService.RewriteMaterialTexturePaths(
+    var retargetedMaterial = MashupPlanning.RewriteMaterialTexturePaths(
         MinimalMaterial(sourceMashupTexture, 0x8000, 2176),
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -1768,7 +1768,7 @@ try
         "mashup planning rejects more incoming materials than canonical b through z can hold");
 
     const string rewrittenTexture = "chara/equipment/e0001/texture/c0101e0001_top_b_n.tex";
-    var rewrittenMaterial = PenumbraService.RewriteMaterialTexturePaths(
+    var rewrittenMaterial = MashupPlanning.RewriteMaterialTexturePaths(
         MinimalMaterial("a.tex", 0x8000, 2176),
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -1777,7 +1777,7 @@ try
     Require(Encoding.UTF8.GetString(rewrittenMaterial).Contains(rewrittenTexture, StringComparison.Ordinal) &&
             BitConverter.ToUInt16(rewrittenMaterial, 18) == 0x8000,
         "Dawntrail MTRL rewriting grows short string tables and preserves DX11 texture flags");
-    var rewrittenLegacyMaterial = PenumbraService.RewriteMaterialTexturePaths(
+    var rewrittenLegacyMaterial = MashupPlanning.RewriteMaterialTexturePaths(
         MinimalMaterial("legacy.tex", 0, 512),
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
