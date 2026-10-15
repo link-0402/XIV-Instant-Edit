@@ -76,7 +76,7 @@ internal sealed class BridgeTools : IDisposable
             "inputSchema": { "type": "object", "properties": {
               "mod": { "type": "string", "description": "Keep entries whose mod key contains this text, such as part of the mod's stable id." } } } },
           { "name": "physics",
-            "description": "The Body Physics builder: window, character and loaded physics file, document, message line, automatic preview, the preview itself and the IE Physics mod.",
+            "description": "The Body Physics builder: window, character and loaded physics file, document, message line, automatic preview, the preview itself and the physics mods it saved.",
             "inputSchema": { "type": "object", "properties": {
               "detail": { "type": "string", "enum": ["summary", "areas", "full"], "description": "summary (default); areas adds each simulator; full adds chains, connectors, springs and collision bits." } } } }
         ]

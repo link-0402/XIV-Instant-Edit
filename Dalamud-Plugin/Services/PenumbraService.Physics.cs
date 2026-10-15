@@ -10,9 +10,9 @@ internal sealed record PhysicsModSaved(string Directory, Guid Identifier, string
     IReadOnlyList<string> Warnings);
 
 /// <summary>
-/// The physics builder's own mod: one mod whose default option maps each race's body physics file.
-/// Every save writes a new file name (the game never reads a path it already loaded again) and
-/// removes the mod's older ones; the mod is enabled at a high priority in the character's collection.
+/// The physics builder's own mods, one per name you save under, whose default option maps each race's
+/// body physics file. Every save writes a new file name (the game never reads a path it already loaded
+/// again) and removes the mod's older ones; the mod is enabled at a high priority in the character's collection.
 /// </summary>
 public sealed partial class PenumbraService
 {
@@ -22,7 +22,7 @@ public sealed partial class PenumbraService
     /// <summary>
     /// Writes <paramref name="bytes"/> as the file for <paramref name="gamePath"/> into the physics mod
     /// at <paramref name="directory"/> when it is still the mod with <paramref name="identifier"/>, or
-    /// into a new mod named <paramref name="name"/> otherwise. Then reloads or adds the mod and enables
+    /// into a new mod named <paramref name="name"/> otherwise (refused when another mod has that name). Then reloads or adds the mod and enables
     /// it at <see cref="PreviewModPriority"/> in the collection of the object at <paramref name="objectIndex"/>.
     /// Doesn't redraw.
     /// </summary>
@@ -60,10 +60,14 @@ public sealed partial class PenumbraService
             else
             {
                 var modList = listed ?? throw new IOException("Could not retrieve the Penumbra mod list.");
-                modDirectory = UniqueModName(name, candidate =>
-                    modList.Keys.Any(key => string.Equals(key, candidate, StringComparison.OrdinalIgnoreCase)) ||
-                    modList.Values.Any(value => string.Equals(value, candidate, StringComparison.OrdinalIgnoreCase)) ||
-                    Directory.Exists(Path.Combine(root, candidate)) || File.Exists(Path.Combine(root, candidate)), "IE Physics");
+                if (!IsSafeNewModName(name))
+                    throw new InvalidDataException($"\"{name}\" can't be a mod name.");
+                // The name you typed is the mod's: one another mod has is refused rather than numbered.
+                if (modList.Keys.Any(key => string.Equals(key, name, StringComparison.OrdinalIgnoreCase)) ||
+                    modList.Values.Any(value => string.Equals(value, name, StringComparison.OrdinalIgnoreCase)) ||
+                    Directory.Exists(Path.Combine(root, name)) || File.Exists(Path.Combine(root, name)))
+                    throw new IOException($"Another mod is already called {name}. Pick another name.");
+                modDirectory = name;
                 var target = Path.GetFullPath(Path.Combine(root, modDirectory));
                 if (!IsPathWithin(target, root))
                     throw new IOException("The new mod's folder is outside Penumbra's mod directory.");
@@ -231,20 +235,6 @@ public sealed partial class PenumbraService
         }
     }
 
-    /// <summary> The bytes of the physics mod's file for a game path, when the mod is still the one with <paramref name="identifier"/>. </summary>
-    internal async Task<(byte[]? Bytes, string File)> ReadPhysicsModAsync(string directory, Guid identifier, string gamePath)
-    {
-        var root = await _framework.RunOnFrameworkThread(GetModDirectory).ConfigureAwait(false);
-        await LeaveFrameworkThread();
-        if (string.IsNullOrWhiteSpace(root) || !IsSafeModName(directory))
-            return (null, string.Empty);
-        var folder = Path.Combine(root, directory);
-        if (!Directory.Exists(folder) || ReadModStableIdentifier(folder) != identifier)
-            return (null, string.Empty);
-        var file = PhysicsModFile(folder, NormalizeGamePath(gamePath));
-        return file is null ? (null, string.Empty) : (await File.ReadAllBytesAsync(file).ConfigureAwait(false), file);
-    }
-
     /// <summary> The physics mod's folder now: <paramref name="directory"/>, the folder it was renamed to, or null when it's gone. </summary>
     internal async Task<string?> FindPhysicsModAsync(string directory, Guid identifier)
     {
@@ -276,16 +266,28 @@ public sealed partial class PenumbraService
         return found.Count == 1 ? found[0] : null;
     }
 
-    /// <summary> Turns the physics mod on or off in the object's collection. </summary>
-    internal async Task<string?> SetPhysicsModEnabledAsync(string directory, int objectIndex, bool enabled)
+    /// <summary>
+    /// Turns physics mods off in the object's collection; returns the ones that were on. Mods that are
+    /// gone or already off are left as they are.
+    /// </summary>
+    internal async Task<IReadOnlyList<string>> TurnOffPhysicsModsAsync(IReadOnlyList<string> directories, int objectIndex)
     {
-        var collection = await GetCollectionTargetAsync(objectIndex).ConfigureAwait(false);
-        if (collection is null)
-            return "Your character's Penumbra collection is unavailable.";
+        if (directories.Count == 0)
+            return [];
+        var collection = await GetCollectionTargetAsync(objectIndex).ConfigureAwait(false)
+            ?? throw new IOException("Your character's Penumbra collection is unavailable.");
         return await _framework.RunOnFrameworkThread(() =>
         {
-            var result = _trySetMod.Invoke(collection.Id, directory, enabled, directory);
-            return result is PenumbraApiEc.Success or PenumbraApiEc.NothingChanged ? null : $"Penumbra could not change the mod ({result}).";
+            var off = new List<string>();
+            foreach (var directory in directories.Where(IsSafeModName))
+            {
+                var result = _trySetMod.Invoke(collection.Id, directory, false, directory);
+                if (result == PenumbraApiEc.Success)
+                    off.Add(directory);
+                else if (result is not (PenumbraApiEc.NothingChanged or PenumbraApiEc.ModMissing))
+                    _log.Warning($"Penumbra could not turn {directory} off ({result}).");
+            }
+            return (IReadOnlyList<string>)off;
         }).ConfigureAwait(false);
     }
 

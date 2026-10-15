@@ -13,12 +13,13 @@ namespace InstantEdit.Ui;
 /// <summary>
 /// The physics builder: body physics for your character's skeleton, started from the game's file,
 /// the one your mods load or any file, tuned per body area with plain sliders, previewed on your
-/// character and saved into a mod of its own that can be opened and changed again. In GPose it works
+/// character and saved into a mod named as you like, which loading it again opens. In GPose it works
 /// on your posed character, which can walk or run in place while you watch.
 /// </summary>
 internal sealed partial class PhysicsWindow : Window, IDisposable
 {
     private const string DiscardPopup = "##physics-discard";
+    private const string SavePopup = "##physics-save";
     private const int AutoPreviewDelayMs = 400;
     private const int ShapesView = -2;
 
@@ -49,6 +50,7 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
     private PhysicsDocument? issuesDocument;
     private IReadOnlyList<PhysicsIssue> issues = [];
     private string lastFolder = string.Empty;
+    private string saveName = string.Empty;
 
     internal PhysicsWindow(PhysicsBuilderService service, AnimationPlayback playback, Configuration config, Action saveConfig, IPluginLog log)
         : base("Body Physics##InstantEditPhysics")
@@ -58,6 +60,7 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
         this.config = config;
         this.saveConfig = saveConfig;
         this.log = log;
+        overlayWindow = new PhysicsOverlay(this);
         Size = new Vector2(960, 640);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints { MinimumSize = new Vector2(720, 420), MaximumSize = new Vector2(float.MaxValue, float.MaxValue) };
@@ -106,6 +109,7 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
     public override void Draw()
     {
         Poll();
+        TakeHover();
         DrawHeader();
         ImGui.Separator();
         DrawStart();
@@ -126,6 +130,7 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
         DrawAreas(current, height);
         ImGui.Separator();
         DrawActions(current);
+        DrawSavePopup(current);
         DrawDiscardPopup();
         DrawImportPopup(current);
         DrawFitPopup(current);
@@ -274,13 +279,6 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
                 Start(PhysicsSourceKind.Loaded, null);
             Tip(target is { } found ? $"What your mods load now: {found.Physics.Label}." : "What your mods load now.");
             ImGui.SameLine();
-            using (ImRaii.Disabled(!service.HasMod))
-            {
-                if (ImGui.Button("My physics mod"))
-                    Start(PhysicsSourceKind.Mine, null);
-            }
-            Tip(service.HasMod ? $"What you saved into {service.ModDirectory}." : "You haven't saved a physics mod yet.");
-            ImGui.SameLine();
             if (ImGui.Button("A file"))
                 OpenFileDialog(import: false);
             Tip("Any .phyb file, such as a preset from a physics mod.");
@@ -375,8 +373,10 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
         }
         ImGui.SameLine();
         var history = ImGui.GetFrameHeight() * 2 + ImGui.GetStyle().ItemSpacing.X;
-        var right = FitButtonWidth + Theme.Gap * 3 + MotionsWidth + Theme.Gap * 3 + history;
+        var right = ImGui.GetFrameHeight() + Theme.Gap * 3 + FitButtonWidth + Theme.Gap * 3 + MotionsWidth + Theme.Gap * 3 + history;
         ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetWindowContentRegionMax().X - right));
+        DrawOverlayToggle();
+        ImGui.SameLine(0, Theme.Gap * 3);
         DrawFitButton(current);
         ImGui.SameLine(0, Theme.Gap * 3);
         DrawMotions();
@@ -517,25 +517,22 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
         ImGui.SameLine(0, Theme.Gap * 3);
         using (ImRaii.Disabled(target == null || Busy || errors > 0))
         {
-            if (Widgets.TabButton(FontAwesomeIcon.Save, service.HasMod ? "Save to my mod" : "Save as a new mod", current.Dirty))
-                Save(current);
+            if (Widgets.TabButton(FontAwesomeIcon.Save, "Save", current.Dirty))
+            {
+                saveName = current.Source is { Kind: PhysicsSourceKind.Mine, Mod.Length: > 0 } ? current.Source.Mod : service.FreeModName();
+                ImGui.OpenPopup(SavePopup);
+            }
         }
-        Tip(service.HasMod
-            ? $"Saves into {service.ModDirectory} and turns it on above your other mods. You can come back and change it any time."
-            : $"Makes a mod called {PhysicsBuilderService.ModName}, above your other mods in your collection. You can come back and change it any time.");
+        Tip("Saves into a mod above your other mods. Give each version its own name to keep several.");
         if (service.HasMod)
         {
             ImGui.SameLine();
             using (ImRaii.Disabled(target == null || Busy))
             {
-                if (ImGui.Button("Turn my mod off"))
-                {
-                    var previewing = service.Preview.Active;
-                    Run(() => service.SetModEnabledAsync(target!, false), warning => warning ??
-                        (previewing ? $"Preview off and {service.ModDirectory} off. " : $"{service.ModDirectory} is off. ") + "Your other physics mods apply again.");
-                }
+                if (ImGui.Button("Turn mine off"))
+                    TurnOff();
             }
-            Tip("Stops the preview and turns your physics mod off in your collection. Saving turns it on again.");
+            Tip("Stops the preview and turns off the physics mods you saved here. Your other physics mods apply again.");
         }
         if (working != null || service.Preview.Busy)
         {
@@ -553,19 +550,68 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
         }
     }
 
-    private void Save(PhysicsDocument current)
+    private void DrawSavePopup(PhysicsDocument current)
+    {
+        using var popup = ImRaii.Popup(SavePopup);
+        if (!popup.Success)
+            return;
+        ImGui.TextColored(Theme.Label, "Mod name");
+        ImGui.SetNextItemWidth(Theme.Scaled(320));
+        if (ImGui.IsWindowAppearing())
+            ImGui.SetKeyboardFocusHere();
+        var enter = ImGui.InputText("##physics-save-name", ref saveName, 100, ImGuiInputTextFlags.EnterReturnsTrue);
+        var name = saveName.Trim();
+        var valid = Services.PenumbraService.IsSafeNewModName(name);
+        ImGui.TextColored(valid ? Theme.Muted : Theme.Warning, name.Length == 0 ? "Type a name."
+            : !valid ? "Use a name without \\ / : * ? \" < > |."
+            : service.IsMine(name) ? $"Replaces what you saved in {name}."
+            : "Makes a new mod.");
+        if (service.ModDirectories.Any(mod => !string.Equals(mod, name, StringComparison.OrdinalIgnoreCase)))
+            ImGui.TextColored(Theme.Muted, "Your other saved physics mods turn off.");
+        using (ImRaii.Disabled(!valid))
+        {
+            if ((ImGui.Button("Save##physics-save-yes") || enter) && valid)
+            {
+                Save(current, name);
+                ImGui.CloseCurrentPopup();
+            }
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("Cancel##physics-save-no"))
+            ImGui.CloseCurrentPopup();
+    }
+
+    private void Save(PhysicsDocument current, string name)
     {
         if (target is not { } found || Prepare(current, found) is not { } bytes)
             return;
+        PhysicsSaveResult? result = null;
         Run(async () =>
         {
-            var warnings = await service.SaveAsync(found, bytes, life.Token).ConfigureAwait(false);
-            return warnings.Count == 0 ? null : string.Join(" ", warnings);
+            result = await service.SaveAsync(found, bytes, name, life.Token).ConfigureAwait(false);
+            return result.Warnings.Count == 0 ? null : string.Join(" ", result.Warnings);
         }, warning =>
         {
-            current.MarkSaved(new PhysicsSource(PhysicsSourceKind.Mine, "Your physics mod", service.ModDirectory), bytes);
-            return warning ?? $"Saved into {service.ModDirectory}. Your character uses it now.";
+            var into = result?.Directory ?? name;
+            current.MarkSaved(new PhysicsSource(PhysicsSourceKind.Mine, into, into, into), bytes);
+            var off = result is { TurnedOff.Count: > 0 } ? $" {string.Join(", ", result.TurnedOff)} {(result.TurnedOff.Count == 1 ? "is" : "are")} off." : "";
+            return (warning ?? $"Saved into {into}. Your character uses it now.") + off;
         });
+    }
+
+    private void TurnOff()
+    {
+        if (target is not { } found)
+            return;
+        var previewing = service.Preview.Active;
+        IReadOnlyList<string> turnedOff = [];
+        Run(async () =>
+        {
+            (turnedOff, var warning) = await service.TurnOffModsAsync(found).ConfigureAwait(false);
+            return warning;
+        }, warning => warning ?? (turnedOff.Count == 0
+            ? previewing ? "Preview off. None of your saved physics mods was on." : "None of your saved physics mods was on."
+            : $"{(previewing ? "Preview off. " : "")}{string.Join(", ", turnedOff)} {(turnedOff.Count == 1 ? "is" : "are")} off. Your other physics mods apply again."));
     }
 
     // ---- Shared helpers ----

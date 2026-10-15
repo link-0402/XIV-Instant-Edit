@@ -222,12 +222,8 @@ internal sealed partial class PhysicsWindow
         Widgets.SectionHeader("Collision");
         DrawCollision(current, index, targets);
         ImGui.Spacing();
-        if (ImGui.CollapsingHeader("Points##points"))
-            DrawPoints(current, index);
-        if (ImGui.CollapsingHeader("Springs##springs"))
-            DrawSprings(current, index);
-        if (ImGui.CollapsingHeader("More settings##more"))
-            DrawMore(current, index, targets);
+        if (ImGui.CollapsingHeader("Advanced##advanced"))
+            DrawAdvanced(current, index, targets);
     }
 
     private void DrawGroup(PhysicsDocument current, PhybSimulator simulator)
@@ -347,9 +343,12 @@ internal sealed partial class PhysicsWindow
         var (s0, c0) = targets[0];
         var first = file.Simulators[s0].Chains[c0];
 
-        if (PhysicsKnobs.MainSpring(file.Simulators[s0], c0) is not null)
-            KnobSlider(current, targets, PhysicsKnob.Firmness, "Firmness", "How hard it springs back to rest. Lower is bouncier.", 0, 0.2f, "%.4f",
-                ImGuiSliderFlags.Logarithmic);
+        if (PhysicsKnobs.MainSpring(file.Simulators[s0], c0) is { } spring)
+        {
+            // Presets aim springs elsewhere, as a lift for example; the slider is named for what its spring does.
+            var name = target is { } aimed ? PhysicsKnobs.SpringName(file.Simulators[s0], spring, aimed.Character.Skeleton) : "Firmness";
+            KnobSlider(current, targets, PhysicsKnob.Firmness, SpringTip(name), 0, 0.2f, "%.4f", ImGuiSliderFlags.Logarithmic, name, PhysicsOverlayPart.Spring);
+        }
         else
         {
             ImGui.AlignTextToFramePadding();
@@ -367,28 +366,45 @@ internal sealed partial class PhysicsWindow
                                 PhysicsTemplates.RestSpring(file.Simulators[s].Chains[c], (short)c, found.Character.Skeleton, 0.04f) is { } added)
                                 file.Simulators[s].Attracts.Add(added);
                     });
-                Tip("Adds a spring that pulls the tip back toward where it rests, like the game's breasts.");
+                Tip("Adds a spring that pulls the tip back to where it rests.");
             }
         }
 
-        KnobSlider(current, targets, PhysicsKnob.Damping, "Damping", "How fast the motion calms down.", 0, 1, "%.3f");
-        KnobSlider(current, targets, PhysicsKnob.Swing, "Swing", "How far it can swing away from rest.", 0, 180, "%.0f°");
-        KnobSlider(current, targets, PhysicsKnob.Weight, "Weight", "How much gravity pulls it.", 0, 2, "%.2f");
-        KnobSlider(current, targets, PhysicsKnob.Follow, "Follow animation", "How closely it sticks to the animation. Higher is stiffer.", 0, 1, "%.3f",
-            ImGuiSliderFlags.Logarithmic);
-        KnobSlider(current, targets, PhysicsKnob.Length, "Length", "How far the tip sits from the bone. Longer swings slower and wider.", 0.5f, 50,
-            "%.1f cm");
-        KnobSlider(current, targets, PhysicsKnob.MaxSpeed, "Max speed", "The fastest it may move.", 0, 10, "%.2f");
-        KnobSlider(current, targets, PhysicsKnob.Wind, "Wind", "How much wind moves it.", 0, 0.2f, "%.4f", ImGuiSliderFlags.Logarithmic);
+        KnobSlider(current, targets, PhysicsKnob.Damping, "How fast the jiggle dies out. Higher stops it sooner.", 0, 1, "%.3f", part: PhysicsOverlayPart.Chain);
+        KnobSlider(current, targets, PhysicsKnob.Swing, "The furthest it swings from where it rests.", 0, 180, "%.0f°", part: PhysicsOverlayPart.Cone);
+        KnobSlider(current, targets, PhysicsKnob.Weight, "How hard gravity pulls it.", 0, 2, "%.2f", part: PhysicsOverlayPart.Chain);
+        KnobSlider(current, targets, PhysicsKnob.Follow, "How strongly the animation pulls it back. Higher is stiffer.", 0, 1, "%.3f",
+            ImGuiSliderFlags.Logarithmic, part: PhysicsOverlayPart.Chain);
+        KnobSlider(current, targets, PhysicsKnob.Length, "How far the tip sits from the bone. Longer swings slower and wider.", 0.5f, 50,
+            "%.1f cm", part: PhysicsOverlayPart.Chain);
     }
 
-    /// <summary> A slider for a knob of the edited chains: shows the first's value and sets them all. </summary>
-    private void KnobSlider(PhysicsDocument current, List<(int Simulator, int Chain)> targets, PhysicsKnob knob, string label, string tip,
-        float min, float max, string format, ImGuiSliderFlags flags = ImGuiSliderFlags.None)
+    /// <summary> The tooltip for the spring slider, by what <see cref="PhysicsKnobs.SpringName"/> calls the spring. </summary>
+    private static string SpringTip(string name) => name switch
+    {
+        "Firmness" => "How hard it springs back to where it rests. Higher settles faster.",
+        "Spring" => "How hard its spring pulls it. Where to is under Springs.",
+        _ => $"How hard its spring {name.ToLowerInvariant() switch
+        {
+            "lift" => "lifts it",
+            "pull back" => "pulls it back toward the body",
+            "pull together" => "pulls the sides together",
+            "pull apart" => "pulls the sides apart",
+            var other => other.Replace("pull ", "pulls it "),
+        }}. Follow animation is what springs it back.",
+    };
+
+    /// <summary>
+    /// A slider for a knob of the edited chains: shows the first's value and sets them all. Its id is
+    /// the knob's name, whatever its label says. While hovered, <paramref name="part"/> lights on the
+    /// character.
+    /// </summary>
+    private void KnobSlider(PhysicsDocument current, List<(int Simulator, int Chain)> targets, PhysicsKnob knob, string tip,
+        float min, float max, string format, ImGuiSliderFlags flags = ImGuiSliderFlags.None, string? label = null, PhysicsOverlayPart? part = null)
     {
         var (s0, c0) = targets[0];
         var value = PhysicsKnobs.Read(current.File.Simulators[s0], c0, knob) ?? 0;
-        if (Slider(current, label, tip, ref value, min, max, format, flags, knob))
+        if (Slider(current, label ?? PhysicsKnobs.Label(knob), tip, ref value, min, max, format, flags, knob, part))
             Apply(current, targets, (simulator, _, index) => PhysicsKnobs.Write(simulator, index, knob, value));
     }
 
@@ -397,18 +413,20 @@ internal sealed partial class PhysicsWindow
     /// it shows where the value started. Returns whether the value changed.
     /// </summary>
     private bool Slider(PhysicsDocument current, string label, string tip, ref float value, float min, float max, string format,
-        ImGuiSliderFlags flags = ImGuiSliderFlags.None, PhysicsKnob? knob = null)
+        ImGuiSliderFlags flags = ImGuiSliderFlags.None, PhysicsKnob? knob = null, PhysicsOverlayPart? part = null)
     {
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Label, label);
         Tip(tip);
+        Lights(part);
         ImGui.SameLine(LabelWidth);
         ImGui.SetNextItemWidth(Math.Min(Theme.Scaled(320), ImGui.GetContentRegionAvail().X));
-        var changed = ImGui.SliderFloat($"##{label}", ref value, min, max, format, flags);
+        var changed = ImGui.SliderFloat($"##{knob?.ToString() ?? label}", ref value, min, max, format, flags);
         if (ImGui.IsItemActivated())
             current.Checkpoint();
         if (ImGui.IsItemDeactivatedAfterEdit())
             Edited(current);
+        Lights(part);
         if (knob is { } shown)
             DrawStartMark(shown, min, max, format, (flags & ImGuiSliderFlags.Logarithmic) != 0);
         return changed;
@@ -427,7 +445,7 @@ internal sealed partial class PhysicsWindow
     private void DrawCollision(PhysicsDocument current, int index, List<(int Simulator, int Chain)> targets)
     {
         var file = current.File;
-        KnobSlider(current, targets, PhysicsKnob.Size, "Size", "The tip's size when it collides with the shapes below.", 0, 20, "%.1f cm");
+        KnobSlider(current, targets, PhysicsKnob.Size, "The ball at the tip that bumps into shapes.", 0, 20, "%.1f cm", part: PhysicsOverlayPart.Tip);
 
         var names = file.Collision.Names.Select(name => name.Text).Distinct().ToList();
         if (names.Count == 0)
@@ -468,6 +486,7 @@ internal sealed partial class PhysicsWindow
                             PhysicsCollisions.Remove(file, targets, name);
                     });
             }
+            Lights(PhysicsOverlayPart.Shape, name);
             if (state == PhysicsBumps.Some)
                 Tip($"Only some points collide with it, on: {string.Join(", ", Bumping(file, targets, name))}. Tick to make all of them.");
             // The area's entries for the shape, and the chains' own.
@@ -515,7 +534,7 @@ internal sealed partial class PhysicsWindow
             if (!table.Success)
                 continue;
             ImGui.TableSetupColumn("Point", ImGuiTableColumnFlags.WidthStretch, 2.2f);
-            foreach (var column in new[] { "Size cm", "Follow", "Wind", "Weight", "Swing °" })
+            foreach (var column in new[] { "Tip size cm", "Follow pose", "Wind", "Weight", "Swing limit °" })
                 ImGui.TableSetupColumn(column, ImGuiTableColumnFlags.WidthStretch, 1f);
             ImGui.TableSetupColumn("Axis", ImGuiTableColumnFlags.WidthStretch, 2.4f);
             ImGui.TableHeadersRow();
@@ -547,13 +566,33 @@ internal sealed partial class PhysicsWindow
                 if (changed)
                 {
                     node.ConeAxisOffset = axis;
+                    // The axis is in the parent's space: mirrored from this bone's parent into the twin's.
+                    if (twin != null && RestPose() is { } rest && target?.Character.Skeleton is { } skeleton &&
+                        skeleton.Get(node.Bone.Text)?.Parent is { Length: > 0 } parent && skeleton.Get(twin.Bone.Text)?.Parent is { Length: > 0 } twinParent)
+                        twin.ConeAxisOffset = PhysicsAreas.MirrorOffset(axis, parent, twinParent, rest);
                     current.Changed();
                 }
                 if (ImGui.IsItemDeactivatedAfterEdit())
                     Edited(current);
-                Tip("The direction the swing is measured from, in the space of the bone's parent.");
+                Tip("The direction the swing is measured from, in the space of the bone's parent. With both sides linked, the other side's mirrors it.");
             }
         }
+    }
+
+    private PhysicsSkeleton? restPoseOf;
+    private Dictionary<string, PhysicsFrame>? restPose;
+
+    /// <summary> Your skeleton's rest pose, which mirrors one side's places onto the other; null before your character is read. </summary>
+    private Dictionary<string, PhysicsFrame>? RestPose()
+    {
+        if (target?.Character.Skeleton is not { } skeleton)
+            return null;
+        if (!ReferenceEquals(skeleton, restPoseOf))
+        {
+            restPose = PhysicsBody.RestPose(skeleton);
+            restPoseOf = skeleton;
+        }
+        return restPose;
     }
 
     /// <summary> A drag field in a table cell; one undo step per drag. </summary>
@@ -610,6 +649,7 @@ internal sealed partial class PhysicsWindow
             }
             if (ImGui.IsItemDeactivatedAfterEdit())
                 Edited(current);
+            Tip("The share of the way it moves toward the point each step. Negative pushes it away from the point.");
             ImGui.SameLine();
             var offset = attract.Offset * 100;
             ImGui.SetNextItemWidth(Theme.Scaled(220));
@@ -627,16 +667,20 @@ internal sealed partial class PhysicsWindow
         }
     }
 
-    private void DrawMore(PhysicsDocument current, int index, List<(int Simulator, int Chain)> targets)
+    /// <summary> The settings whose effect is rarely seen, the points table and the springs, under one header. </summary>
+    private void DrawAdvanced(PhysicsDocument current, int index, List<(int Simulator, int Chain)> targets)
     {
         var file = current.File;
         var simulator = file.Simulators[index];
         var (s0, c0) = targets[0];
         var first = file.Simulators[s0].Chains[c0];
 
-        KnobSlider(current, targets, PhysicsKnob.Friction, "Friction", "How much it slows down while sliding along a shape.", 0, 1, "%.3f");
-        KnobSlider(current, targets, PhysicsKnob.BumpDamping, "Bump damping", "How much a bump calms it down.", 0, 1, "%.3f");
-        KnobSlider(current, targets, PhysicsKnob.PushBack, "Push back", "How hard shapes push it out. Higher is snappier.", 0, 2, "%.3f");
+        KnobSlider(current, targets, PhysicsKnob.MaxSpeed, "The fastest it may move. Rarely reached.", 0.1f, 10, "%.1f m/s", part: PhysicsOverlayPart.Chain);
+        KnobSlider(current, targets, PhysicsKnob.Wind, "How much wind moves it. Needs a wind direction below.", 0, 0.2f, "%.4f", ImGuiSliderFlags.Logarithmic,
+            part: PhysicsOverlayPart.Chain);
+        KnobSlider(current, targets, PhysicsKnob.Friction, "Slows it while it slides along a shape.", 0, 1, "%.3f", part: PhysicsOverlayPart.Tip);
+        KnobSlider(current, targets, PhysicsKnob.BumpDamping, "Speed it loses when it hits a shape.", 0, 1, "%.3f", part: PhysicsOverlayPart.Tip);
+        KnobSlider(current, targets, PhysicsKnob.PushBack, "How far a shape pushes it out each step. 1 is all the way.", 0, 1, "%.3f", part: PhysicsOverlayPart.Tip);
 
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Label, "Point shape");
@@ -659,18 +703,30 @@ internal sealed partial class PhysicsWindow
             current.Checkpoint();
         if (moved)
         {
-            first.LastBoneOffset = tipPlace / 100;
+            var rest = RestPose();
+            var from = first.Nodes[^2].Bone.Text;
+            foreach (var (s, c) in targets)
+            {
+                var chain = file.Simulators[s].Chains[c];
+                var to = chain.Nodes[^2].Bone.Text;
+                // The other side's tip goes to the mirrored place; chains on the same side take it as it is.
+                chain.LastBoneOffset = rest != null && PhysicsAreas.Opposite(from, to)
+                    ? PhysicsAreas.MirrorOffset(tipPlace / 100, from, to, rest)
+                    : tipPlace / 100;
+            }
             current.Changed();
         }
         if (ImGui.IsItemDeactivatedAfterEdit())
             Edited(current);
-        Tip("Where the tip sits, in the last bone's space. Only this chain changes.");
+        Tip("Where the tip sits, in the last bone's space. The other side's tip moves to the mirrored place.");
+        Lights(PhysicsOverlayPart.Tip);
 
         ImGui.Spacing();
         Widgets.SectionHeader("Whole area");
         var gravity = simulator.Gravity;
         ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Label, "Gravity");
+        ImGui.TextColored(Theme.Label, "Gravity direction");
+        Tip("Which way and how hard gravity pulls the whole area.");
         ImGui.SameLine(LabelWidth);
         ImGui.SetNextItemWidth(Math.Min(Theme.Scaled(320), ImGui.GetContentRegionAvail().X));
         var changed = ImGui.DragFloat3("##gravity", ref gravity, 0.05f, -50, 50, "%.2f");
@@ -685,7 +741,8 @@ internal sealed partial class PhysicsWindow
             Edited(current);
         var windVector = simulator.Wind;
         ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Label, "Wind");
+        ImGui.TextColored(Theme.Label, "Wind direction");
+        Tip("Which way the wind blows the area. Zero is no wind.");
         ImGui.SameLine(LabelWidth);
         ImGui.SetNextItemWidth(Math.Min(Theme.Scaled(320), ImGui.GetContentRegionAvail().X));
         changed = ImGui.DragFloat3("##wind-vector", ref windVector, 0.05f, -50, 50, "%.2f");
@@ -702,24 +759,32 @@ internal sealed partial class PhysicsWindow
         var steps = (int)simulator.ConstraintLoop;
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Label, "Steps");
-        Tip("How many times per frame the game settles the chains and the bumps. The game uses 2 and 1.");
+        Tip("Settle and bump passes per frame. The game uses 2 and 1.");
         ImGui.SameLine(LabelWidth);
         ImGui.SetNextItemWidth(Theme.Scaled(90));
         if (ImGui.InputInt("##constraint-loop", ref steps) )
-            Change(current, () => simulator.ConstraintLoop = (short)Math.Clamp(steps, 0, 8));
+            Change(current, () => simulator.ConstraintLoop = (short)Math.Clamp(steps, 1, 8));
         ImGui.SameLine();
         var collisionSteps = (int)simulator.CollisionLoop;
         ImGui.SetNextItemWidth(Theme.Scaled(90));
         if (ImGui.InputInt("##collision-loop", ref collisionSteps))
-            Change(current, () => simulator.CollisionLoop = (short)Math.Clamp(collisionSteps, 0, 8));
+            Change(current, () => simulator.CollisionLoop = (short)Math.Clamp(collisionSteps, 1, 8));
 
-        Flag(current, simulator, PhybSimulatorFlags.CollisionsHandled, "Bumps", "Off: it moves through every shape.");
+        Flag(current, simulator, PhybSimulatorFlags.CollisionsHandled, "Collision", "Off: it moves through every shape.");
         ImGui.SameLine();
-        Flag(current, simulator, PhybSimulatorFlags.ContinuousCollisions, "Fast bumps", "Catches bumps between frames when it moves fast. Costs more.");
+        Flag(current, simulator, PhybSimulatorFlags.ContinuousCollisions, "Fast collision", "Catches hits between frames. Costs more.");
         ImGui.SameLine();
-        Flag(current, simulator, PhybSimulatorFlags.UsingGroundPlane, "Ground", "Stays above the ground, such as when lying down.");
-        ImGui.SameLine();
-        Flag(current, simulator, PhybSimulatorFlags.FixedLength, "Fixed length", "Keeps the distances between points. The game always has this on.");
+        Flag(current, simulator, PhybSimulatorFlags.UsingGroundPlane, "Ground", "Stays above the floor.");
+
+        ImGui.Spacing();
+        using (var points = ImRaii.TreeNode("Points##points"))
+        {
+            if (points.Success)
+                DrawPoints(current, index);
+        }
+        using var springs = ImRaii.TreeNode("Springs##springs");
+        if (springs.Success)
+            DrawSprings(current, index);
     }
 
     private void Flag(PhysicsDocument current, PhybSimulator simulator, PhybSimulatorFlags flag, string label, string tip)

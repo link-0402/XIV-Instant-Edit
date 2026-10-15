@@ -1,7 +1,6 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Bindings.ImGuizmo;
-using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
@@ -83,7 +82,7 @@ public sealed partial class TimelineWindow
         }
         var clip = Fresh(loaded).Clip;
         if (clip.Resolution?.Selected?.Skeleton is not { } skeleton || OverlayActor() is not { } actor || !ReadActorPose(actor) ||
-            ReadCamera() is not { } camera)
+            GameCamera.Read() is not { } camera)
         {
             EndGizmo(true);
             return;
@@ -347,30 +346,5 @@ public sealed partial class TimelineWindow
     {
         try { return playback.ReadPose(actor, actorPose); }
         catch (InvalidOperationException) { return false; }
-    }
-
-    /// <summary>The active camera's view and a projection ImGuizmo can use; null without a camera.</summary>
-    private static unsafe (Matrix4x4 View, Matrix4x4 Projection)? ReadCamera()
-    {
-        var manager = CameraManager.Instance();
-        if (manager == null)
-            return null;
-        var camera = manager->GetActiveCamera();
-        if (camera == null)
-            return null;
-        var render = camera->CameraBase.SceneCamera.RenderCamera;
-        if (render == null)
-            return null;
-        Matrix4x4 view = camera->CameraBase.SceneCamera.ViewMatrix;
-        // The game keeps something else in the last element.
-        view.M44 = 1;
-        var near = render->NearPlane;
-        var far = render->FarPlane;
-        if (!float.IsFinite(near) || near <= 0)
-            return null;
-        if (!float.IsFinite(far) || far <= near)
-            far = near * 100000;
-        Matrix4x4 projection = render->ProjectionMatrix;
-        return (view, PoseGizmo.Projection(projection, near, far));
     }
 }

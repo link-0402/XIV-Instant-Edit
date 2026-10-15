@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Text.RegularExpressions;
 using InstantEdit.Services.Physics;
 using InstantEdit.Services.Previews;
 using static InstantEdit.TestSupport.Assertions;
@@ -18,6 +19,8 @@ internal static class PhysicsFitScenarios
         CheckDrawnModels();
         CheckFit();
         CheckFitApply();
+        CheckTipPlace();
+        CheckMirror();
     }
 
     private static void CheckDrawnModels()
@@ -188,7 +191,7 @@ internal static class PhysicsFitScenarios
     {
         var (body, skeleton) = SyntheticBody();
         var fit = PhysicsFit.Measure(SyntheticFile(0.12f), body, skeleton);
-        PhysicsFitItem? Item(string name) => fit.Items.FirstOrDefault(item => item.Name == name);
+        PhysicsFitItem? Item(string name) => fit.Items.FirstOrDefault(item => item.Name == name && item.Target != PhysicsFitTarget.Place);
         Require(Item("forearm_l") is { Target: PhysicsFitTarget.Capsule } forearm && MathF.Abs(forearm.Fitted - 0.03f) <= 0.0015f &&
                 forearm.Label == "Left forearm (forearm_l)",
             "physics fit: a limb's shape becomes the limb's own thickness");
@@ -202,11 +205,12 @@ internal static class PhysicsFitScenarios
             "physics fit: a breast tip fills the breast around its chain, as wide as the breast");
 
         var close = PhysicsFit.Measure(SyntheticFile(0.155f), body, skeleton);
-        Require(close.Items.FirstOrDefault(item => item.Name == "j_mune_l") is { } near && near.Fitted < 0.05f,
+        Require(close.Items.FirstOrDefault(item => item.Target == PhysicsFitTarget.Chain) is { } near && near.Fitted < 0.05f,
             "physics fit: a tip near the front of the skin reaches past it only a little");
         var outside = PhysicsFit.Measure(SyntheticFile(0.25f), body, skeleton);
-        Require(outside.Items.All(item => item.Name != "j_mune_l") && outside.Notes.Any(note => note.Contains("outside your skin", StringComparison.Ordinal)),
-            "physics fit: a tip that sits outside the skin keeps the size its preset gave it");
+        Require(outside.Items.FirstOrDefault(item => item.Target == PhysicsFitTarget.Chain) is { } kept && kept.Fitted == kept.Current &&
+                kept.FittedAtPlace is > 0 && outside.Notes.All(note => !note.Contains("outside your skin", StringComparison.Ordinal)),
+            "physics fit: a tip that sits outside the skin keeps the size its preset gave it, and only gets one with its tip place");
 
         var thick = SyntheticFile(0.12f);
         thick.Collision.Capsules[0].Radius = 0.05f;
@@ -243,7 +247,7 @@ internal static class PhysicsFitScenarios
         file.Simulators[1].Chains[0].Nodes.Insert(1, new PhybNode { Bone = PhybName.From("iv_c_mune_l"), Radius = 0.0215f, CollisionFlags = 3 });
         var fit = PhysicsFit.Measure(file, body, skeleton);
         PhysicsFit.Apply(file, fit.Items);
-        var tip = fit.Items.First(item => item.Name == "j_mune_l").Fitted;
+        var tip = fit.Items.First(item => item.Target == PhysicsFitTarget.Chain).FittedWith(true);
         var chain = file.Simulators[1].Chains[0];
         Require(MathF.Abs(file.Collision.Capsules[1].Radius - fit.Items.First(item => item.Name == "forearm_l").Fitted) < 1e-6f &&
                 MathF.Abs(chain.Nodes[^1].Radius - tip) < 1e-6f && MathF.Abs(chain.Nodes[1].Radius - tip / 2) < 1e-4f &&
@@ -251,6 +255,104 @@ internal static class PhysicsFitScenarios
             "physics fit: applying sets the shapes and tips, middle points keep their share, and the rest is left alone");
         var bytes = file.ToBytes();
         Require(PhybFile.Parse(bytes).ToBytes().AsSpan().SequenceEqual(bytes), "physics fit: a fitted file still writes and reads back the same");
+    }
+
+    private static void CheckTipPlace()
+    {
+        var (body, skeleton) = SyntheticBody();
+        // The dome's front is 16 cm in front of the breast bone; this tip sits 12 cm out and 3 cm up.
+        var file = SyntheticFile(0.12f);
+        var simulator = file.Simulators[1];
+        var chain = simulator.Chains[0];
+        chain.LastBoneOffset = new Vector3(0.12f, 0.03f, 0);
+        chain.Nodes[0].ConeAxisOffset = Vector3.Normalize(chain.LastBoneOffset) * 0.1f;
+        simulator.Attracts.Add(new PhybAttract { Bone = PhybName.From("j_sebo_b"), Offset = chain.LastBoneOffset * 1.34f, Chain = 0, Node = 1, Stiffness = 0.05f });
+        simulator.Attracts.Add(new PhybAttract { Bone = PhybName.From("n_root"), Offset = new Vector3(0, 1, 0), Chain = 0, Node = 1, Stiffness = -0.001f });
+        var fit = PhysicsFit.Measure(file, body, skeleton);
+        var place = fit.Items.FirstOrDefault(item => item.Target == PhysicsFitTarget.Place);
+        Require(place is { Changes: true, Label: "Chest, left: tip place", Move: { } move } && MathF.Abs(move.Offset.X - 0.16f) <= 0.003f &&
+                MathF.Abs(move.Offset.Y) <= 0.002f && MathF.Abs(move.Offset.Z) <= 0.002f,
+            "physics fit: a breast's tip moves onto the front of the breast, along the breast's own centre line");
+        var size = fit.Items.First(item => item.Target == PhysicsFitTarget.Chain);
+        Require(size.FittedAtPlace is > 0.035f and <= 0.041f && !PhysicsFit.MovesPlace([size], size) && PhysicsFit.MovesPlace([size, place!], size) &&
+                size.FittedWith(true) == size.FittedAtPlace && size.FittedWith(false) == size.Fitted,
+            "physics fit: a tip's size has a second value for its new place, used only while the place is chosen");
+
+        var untouched = SyntheticFile(0.12f);
+        PhysicsFit.Apply(untouched, [size]);
+        Require(untouched.Simulators[1].Chains[0].LastBoneOffset == new Vector3(0.12f, 0, 0) &&
+                MathF.Abs(untouched.Simulators[1].Chains[0].Nodes[1].Radius - size.Fitted) < 1e-6f,
+            "physics fit: without its place, a tip stays where it is and takes the size for there");
+
+        PhysicsFit.Apply(file, fit.Items);
+        var newDirection = Vector3.Normalize(chain.LastBoneOffset);
+        Require(chain.LastBoneOffset == place!.Move!.Offset && MathF.Abs(chain.Nodes[^1].Radius - size.FittedAtPlace!.Value) < 1e-6f,
+            "physics fit: applying a tip place moves the tip and sizes it for its new place");
+        Require(Vector3.Distance(Vector3.Normalize(chain.Nodes[0].ConeAxisOffset), newDirection) < 1e-3f &&
+                MathF.Abs(chain.Nodes[0].ConeAxisOffset.Length() - 0.1f) < 1e-4f,
+            "physics fit: a swing cone aimed at the old tip turns to the new one");
+        Require(Vector3.Distance(simulator.Attracts[0].Offset, chain.LastBoneOffset * 1.34f) < 1e-3f,
+            "physics fit: a spring aimed at the old tip turns to the new one, keeping its reach past it");
+        Require(simulator.Attracts[1].Offset == new Vector3(0, 1, 0),
+            "physics fit: a spring aimed somewhere else stays where it is");
+
+        var near = PhysicsFit.Measure(SyntheticFile(0.158f), body, skeleton);
+        Require(near.Items.FirstOrDefault(item => item.Target == PhysicsFitTarget.Place) is { Changes: false },
+            "physics fit: a tip already on the front of the breast stays");
+        var bones = SyntheticFile(0.12f);
+        bones.Simulators[1].Chains[0].Nodes[1].Bone = PhybName.From("iv_c_mune_l");
+        Require(PhysicsFit.Measure(bones, body, skeleton).Items.All(item => item.Target != PhysicsFitTarget.Place),
+            "physics fit: a tip on a bone of its own isn't moved");
+        Require(fit.BreastTips && !PhysicsFit.Measure(bones, body, skeleton).BreastTips,
+            "physics fit: the result says when it has breast tips to place");
+
+        // The dome is a half ball of 6 cm around a point 10 cm in front of the bone.
+        var middleFile = SyntheticFile(0.16f);
+        var middle = PhysicsFit.Measure(middleFile, body, skeleton, PhysicsTipAt.Middle);
+        var middlePlace = middle.Items.FirstOrDefault(item => item.Target == PhysicsFitTarget.Place);
+        Require(middlePlace is { Changes: true, Move: { } inside } && MathF.Abs(inside.Offset.X - 0.10f) <= 0.002f &&
+                MathF.Abs(inside.Offset.Y) <= 0.002f && MathF.Abs(inside.Offset.Z) <= 0.002f,
+            "physics fit: in the middle, a breast's tip moves to the centre of the ball its skin follows");
+        var middleSize = middle.Items.First(item => item.Target == PhysicsFitTarget.Chain);
+        Require(middleSize.FittedAtPlace is > 0.058f and < 0.062f,
+            "physics fit: in the middle, a tip's size fills the breast");
+        // The middle is searched in 2 mm steps, so it lands within a millimetre of 10 cm.
+        Require(Regex.IsMatch(middlePlace!.Detail, @"Tip length 16\.0 to 10\.[01] cm, so the same settings swing the breast about 1\.6x as much\."),
+            $"physics fit: moving a tip says how much more the same settings swing the breast ({middlePlace.Detail})");
+        PhysicsFit.Apply(middleFile, middle.Items);
+        var settled = PhysicsFit.Measure(middleFile, body, skeleton, PhysicsTipAt.Middle);
+        Require(settled.Items.FirstOrDefault(item => item.Target == PhysicsFitTarget.Place) is { Changes: false } &&
+                settled.Items.First(item => item.Target == PhysicsFitTarget.Chain) is { Changes: false },
+            "physics fit: a tip already in the middle keeps its place and the middle's size");
+        Require(PhysicsFit.LeverText(0.17f, 0.168f).StartsWith("Tip length barely changes", StringComparison.Ordinal),
+            "physics fit: a tip that barely moves along says the jiggle stays the same");
+    }
+
+    private static void CheckMirror()
+    {
+        // A left breast bone turned out and down, the right one its mirror image, under a middle spine bone.
+        var left = Quaternion.Normalize(Quaternion.CreateFromYawPitchRoll(0.3f, 0.2f, 0.1f));
+        var right = new Quaternion(left.X, -left.Y, -left.Z, left.W);
+        var skeleton = new PhysicsSkeleton(
+        [
+            new PhysicsBone("j_sebo_b", "", new Vector3(0, 1.2f, 0), Quaternion.Identity),
+            new PhysicsBone("j_mune_l", "j_sebo_b", new Vector3(0.03f, 0, 0), left),
+            new PhysicsBone("j_mune_r", "j_sebo_b", new Vector3(-0.03f, 0, 0), right),
+        ]);
+        var rest = PhysicsBody.RestPose(skeleton);
+        var offset = new Vector3(0.17f, 0.02f, -0.01f);
+        var mirrored = PhysicsAreas.MirrorOffset(offset, "j_mune_l", "j_mune_r", rest);
+        var leftPlace = rest["j_mune_l"].Place(offset);
+        var rightPlace = rest["j_mune_r"].Place(mirrored);
+        Require(Vector3.Distance(rightPlace, leftPlace with { X = -leftPlace.X }) < 1e-5f &&
+                Vector3.Distance(PhysicsAreas.MirrorOffset(mirrored, "j_mune_r", "j_mune_l", rest), offset) < 1e-5f,
+            "physics mirror: a tip place mirrored to the other side lands on the mirror image of this side's, and back again");
+        Require(PhysicsAreas.MirrorOffset(new Vector3(0.1f, 0.2f, 0.3f), "j_sebo_b", "j_sebo_b", rest) == new Vector3(-0.1f, 0.2f, 0.3f) &&
+                PhysicsAreas.MirrorOffset(offset, "j_mune_l", "missing", rest) == offset,
+            "physics mirror: a middle bone's offset flips left to right, and a missing bone leaves it as it is");
+        Require(PhysicsAreas.Opposite("j_mune_l", "j_mune_r") && PhysicsAreas.Opposite("ya_shiri_phys_r", "ya_shiri_phys_l") &&
+                !PhysicsAreas.Opposite("j_mune_l", "j_mune_l") && !PhysicsAreas.Opposite("j_sebo_b", "j_mune_r"),
+            "physics mirror: only a left and a right bone are opposite");
     }
 
     /// <summary> The game's own smallclothes, read with their skin weights and posed through a plain and a scaled skeleton. </summary>
