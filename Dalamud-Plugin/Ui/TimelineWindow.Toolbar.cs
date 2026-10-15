@@ -62,7 +62,7 @@ public sealed partial class TimelineWindow
                 TimelineUi.Toggle(bonesWindow);
         }
         ImGui.SameLine(0, Theme.Scaled(2));
-        DrawLoadButton();
+        loader.DrawButton();
 
         ImGui.SameLine(0, Theme.Scaled(12));
         ImGui.AlignTextToFramePadding();
@@ -123,7 +123,7 @@ public sealed partial class TimelineWindow
         if (source == null)
             return;
         ImGui.Separator();
-        DrawLivePoseItems(source);
+        livePose.DrawItems(source);
     }
 
     /// <summary> One line each for an import running or done, an edit the editor refused and a header length the motion disagrees with. </summary>
@@ -136,8 +136,8 @@ public sealed partial class TimelineWindow
             TimelineUi.Note(null, Theme.Warning, error);
         if (current.LastRemoval is { } removal && TimelineWindowViews.RemovalStatus(removal) is { } removed)
             TimelineUi.Note(null, Theme.Muted, removed);
-        DrawLoaderStatus();
-        DrawLivePoseNote();
+        loader.DrawStatus();
+        livePose.DrawNote();
         DrawEffectProblems(current);
         saveFooter.DrawSavedLayers();
     }

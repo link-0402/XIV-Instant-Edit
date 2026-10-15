@@ -48,6 +48,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly SaveFooter saveFooter;
     private readonly FacePage facePage;
     private readonly RecentEditsPage recentEdits;
+    private readonly TimelineLoader loader;
+    private readonly LivePosePanel livePose;
     private readonly BonesWindow bonesWindow;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
@@ -116,6 +118,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             EditAgain);
         facePage = new FacePage(session, saveFooter, timelinePreview);
         recentEdits = new RecentEditsPage(session, saveFooter, timelinePreview, () => loadTask != null, EditAgain);
+        loader = new TimelineLoader(session, timelinePreview, Open);
+        livePose = new LivePosePanel(session, () => sideRequest = SidePage.Properties);
         bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, this, textures);
 
         Size = new Vector2(1000, 560);
@@ -258,11 +262,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         pending = PendingAction.None;
         pendingOpen = null;
         pendingAgain = null;
-        loaderWaiting = null;
-        loaderMessage = null;
-        livePoseReading = false;
-        livePoseNote = null;
-        livePoseClearable = null;
+        loader.Reset();
+        livePose.Reset();
         // The listener stays on while the Animations tab still shows it.
         if (mainListens?.Invoke() != true)
             animations?.StopObservation();
@@ -418,8 +419,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             ForgetSounds();
             canvas.ResetScroll();
             animatedBoneFilter = string.Empty;
-            livePoseNote = null;
-            livePoseClearable = null;
+            livePose.ForgetNote();
         }
         saveFooter.Loaded(loaded, sameClip, again != null);
         if (loaded.Document is not { } doc)
@@ -490,8 +490,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         pickers.PollImport();
         timelinePreview.Poll();
         pickers.PollLengths();
-        PollLibrary();
-        PollLoader();
+        loader.PollLibrary();
+        loader.Poll();
         // Every frame: the bone rows' order, Live and the save all read the clip's match.
         if (source != null)
             source = Fresh(source);
@@ -509,14 +509,14 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             Widgets.Banner("##timeline-read-only", FeedbackSeverity.Warning,
                 "This timeline can't be edited. " + (source.ReadOnlyReason ?? "Its file could not be read."));
             ImGui.Spacing();
-            DrawLoadButton();
+            loader.DrawButton();
             ImGui.SameLine(0, Theme.Gap);
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Hint, "Load another animation");
-            DrawLoaderStatus();
+            loader.DrawStatus();
             return;
         }
-        PollLivePose(editor, source);
+        livePose.Poll(editor, source);
         if (loadError != null)
             Widgets.Banner("##timeline-reload-error", FeedbackSeverity.Error, "Reading the timeline again failed: " + loadError);
         if (pending == PendingAction.None && ChangedCapture() is { } changed)
@@ -577,7 +577,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
                 (loadErrorAgain ? "The edit could not be opened again. " : "The timeline could not be read: ") + loadError);
             ImGui.Spacing();
         }
-        DrawLoaderStatus();
+        loader.DrawStatus();
         using var tabs = ImRaii.TabBar("##timeline-start");
         if (!tabs.Success)
             return;
@@ -586,7 +586,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             Widgets.HintWrapped("Pick an animation to play on your GPose character and edit it here, " +
                                 "or open one from the Animations tab.");
             ImGui.Spacing();
-            DrawLoader(ImGui.GetContentRegionAvail().Y);
+            loader.Draw(ImGui.GetContentRegionAvail().Y);
             ImGui.EndTabItem();
         }
         DrawEditsTab();
@@ -686,5 +686,13 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         // So is a listen's error.
         soundInspector.Forget();
     }
+
+    private Func<bool>? mainListens;
+
+    /// <summary>Whether the main window keeps the listener running too; the Timeline window leaves it on then.</summary>
+    internal void AttachListening(Func<bool> mainWindowListens) => mainListens = mainWindowListens;
+
+    /// <summary>The Timeline window listens while it is open: the loader and the clip's skeleton choice need it.</summary>
+    internal bool Listens => IsOpen;
 
 }
