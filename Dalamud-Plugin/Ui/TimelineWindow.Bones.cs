@@ -24,9 +24,6 @@ public sealed partial class TimelineWindow
 {
     private enum BonesPage : byte { Map, List }
 
-    /// <summary>How a bone shows on the map and in the list, for the selected layer at the playhead.</summary>
-    private enum BoneState : byte { Still, Animated, Changed, Keyed }
-
     private const string BonesHelp =
         "Click a dot to select a bone. Ctrl+click adds or removes one.\n" +
         "Shift+click selects a bone and every bone below it.\n" +
@@ -39,26 +36,12 @@ public sealed partial class TimelineWindow
 
     private readonly BonesWindow bonesWindow;
     private readonly ITextureProvider textures;
-    private readonly PoseSelection selection = new();
     private BonesPage bonesPage = BonesPage.Map;
     private bool swapSides;
     private bool characterAxes;
     // A drag on the rotation ball is running as one undo step.
     private bool ballEditing;
     private string boneSearch = string.Empty;
-    // Why choosing the source skeleton here failed.
-    private string? skeletonChoiceError;
-    // The skeleton the selection was last checked against.
-    private string? selectionSkeleton;
-    // Bone indices by name and children by parent, for one skeleton.
-    private (SkeletonDescription Skeleton, Dictionary<string, int> Index, int[][] Children)? boneTree;
-    // The bones the clip moves, for one skeleton match.
-    private (SkeletonResolution? Resolution, HashSet<string> Bones)? animatedBones;
-    // The clip's own pose at one frame, local and in model space, while the decode and the frame stay.
-    private (MotionClip Clip, int Frame, MotionTransform[] Local, MotionTransform[] Model)? motionPose;
-    // The bones' frames for one document, layer, frame and decode.
-    private (TimelineDocument Doc, string Layer, int Frame, MotionClip Clip, BoneFrames Frames)? boneFrames;
-
     internal BonesWindow Bones => bonesWindow;
 
     /// <summary>The Bones window's whole content; called from its draw.</summary>
@@ -94,7 +77,7 @@ public sealed partial class TimelineWindow
                     fresh.Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for under Source first.");
             return;
         }
-        KeepSelection(skeleton);
+        posing.KeepSelection(skeleton);
         var layer = current.SelectedLayerValue;
         DrawBonesHeader(current, loaded, layer);
         DrawBonesTools(skeleton, layer);
@@ -139,23 +122,13 @@ public sealed partial class TimelineWindow
                 foreach (var candidate in resolution.Candidates)
                 {
                     if (ImGui.Selectable($"{AnimationPresentation.SkeletonLabel(candidate)} · {Path.GetFileName(candidate.Source.Resource.ResolvedPath)}##{AnimationSkeletonIndex.SelectionId(candidate)}"))
-                    {
-                        try
-                        {
-                            source = fresh with { Clip = animations.Observer.ChooseSkeleton(fresh.Clip, candidate) };
-                            skeletonChoiceError = null;
-                        }
-                        catch (InvalidOperationException e)
-                        {
-                            skeletonChoiceError = e.Message;
-                        }
-                    }
+                        posing.ChooseSkeleton(fresh, candidate);
                     if (ImGui.IsItemHovered())
                         ImGui.SetTooltip(candidate.Rationale + "\n" + candidate.Source.Resource.ResolvedPath);
                 }
         }
-        if (skeletonChoiceError != null)
-            Widgets.HintWrapped(skeletonChoiceError);
+        if (posing.ChoiceError is { } choiceError)
+            Widgets.HintWrapped(choiceError);
     }
 
     /// <summary> Live and pause, the layer's previous and next key, the layer and the playhead. </summary>
@@ -245,14 +218,14 @@ public sealed partial class TimelineWindow
                 : "Show the bones on the character in GPose, to select them there and pose them with the gizmo."))
             showOnCharacter = !showOnCharacter;
         ImGui.SameLine(0, Theme.Scaled(2));
-        if (Widgets.IconButton("##bones-clear", FontAwesomeIcon.Times, "Clear the selection", selection.Count > 0))
-            selection.Clear();
+        if (Widgets.IconButton("##bones-clear", FontAwesomeIcon.Times, "Clear the selection", posing.Selection.Count > 0))
+            posing.Selection.Clear();
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Muted, selection.Count switch
+        ImGui.TextColored(Theme.Muted, posing.Selection.Count switch
         {
             0 => "Nothing selected",
-            1 => AnimationPresentation.BoneName(selection.Primary!),
+            1 => AnimationPresentation.BoneName(posing.Selection.Primary!),
             _ => $"{selection.Count} bones selected",
         });
     }
@@ -270,7 +243,7 @@ public sealed partial class TimelineWindow
             using (ImRaii.Disabled(changed.Length == 0))
             {
                 if (ImGui.MenuItem("Bones this layer changes"))
-                    selection.Set(changed, add);
+                    posing.Selection.Set(changed, add);
             }
             ImGui.Separator();
         }
@@ -278,100 +251,8 @@ public sealed partial class TimelineWindow
         {
             string[] members = [.. bones.Where(group.Contains)];
             if (members.Length > 0 && ImGui.MenuItem(group.Name))
-                selection.Set(members, add);
+                posing.Selection.Set(members, add);
         }
-    }
-
-    /// <summary>Drops selected bones another clip's skeleton does not have.</summary>
-    private void KeepSelection(SkeletonDescription skeleton)
-    {
-        if (selectionSkeleton == skeleton.Fingerprint)
-            return;
-        var index = BoneTree(skeleton).Index;
-        selection.Keep(index.ContainsKey);
-        selectionSkeleton = skeleton.Fingerprint;
-    }
-
-    private (Dictionary<string, int> Index, int[][] Children) BoneTree(SkeletonDescription skeleton)
-    {
-        // The decode's skeleton and the match's are the same one, not always the same instance.
-        if (boneTree is { } cached && (ReferenceEquals(cached.Skeleton, skeleton) ||
-                                       cached.Skeleton.Fingerprint == skeleton.Fingerprint && cached.Skeleton.Bones.Length == skeleton.Bones.Length))
-            return (cached.Index, cached.Children);
-        var index = MotionEvaluator.Index(skeleton);
-        var children = new List<int>[skeleton.Bones.Length];
-        for (var b = 0; b < children.Length; b++)
-            children[b] = [];
-        for (var b = 0; b < skeleton.Bones.Length; b++)
-            if (skeleton.Bones[b].Parent is var parent and >= 0 && parent < children.Length)
-                children[parent].Add(b);
-        var tree = children.Select(list => list.ToArray()).ToArray();
-        boneTree = (skeleton, index, tree);
-        return (index, tree);
-    }
-
-    /// <summary>The bones the clip moves; every bone while that is unknown.</summary>
-    private HashSet<string>? AnimatedBones(AnimationClip clip)
-    {
-        if (animatedBones is { } cached && ReferenceEquals(cached.Resolution, clip.Resolution))
-            return cached.Bones.Count == 0 ? null : cached.Bones;
-        var bones = AnimationBones.Animated(clip).ToHashSet(StringComparer.Ordinal);
-        animatedBones = (clip.Resolution, bones);
-        return bones.Count == 0 ? null : bones;
-    }
-
-    private static BoneState StateOf(string bone, MotionLayer? layer, int frame, HashSet<string>? animated)
-    {
-        if (layer != null)
-        {
-            if (layer.Kind != MotionLayerKind.Amplitude && PoseEdits.Keyed(layer, bone, frame))
-                return BoneState.Keyed;
-            if (PoseEdits.Changes(layer, bone))
-                return BoneState.Changed;
-        }
-        return animated == null || animated.Contains(bone) ? BoneState.Animated : BoneState.Still;
-    }
-
-    private static string StateText(BoneState state, MotionLayer? layer) => state switch
-    {
-        BoneState.Keyed => "Keyed here in this layer.",
-        BoneState.Changed => layer?.Kind == MotionLayerKind.Amplitude ? "This layer scales its movement." : "This layer changes it.",
-        BoneState.Animated => "The clip moves it.",
-        _ => "The clip doesn't move it.",
-    };
-
-    private static Vector4 StateColour(BoneState state, MotionLayer? layer) => state switch
-    {
-        BoneState.Keyed or BoneState.Changed when layer != null => TimelineWindowViews.LayerColour(layer.Kind),
-        BoneState.Still => Theme.Inactive,
-        _ => Theme.Label,
-    };
-
-    /// <summary>
-    /// A click on <paramref name="bone"/> on the map or in the list: alone it selects only the bone,
-    /// Ctrl adds or removes it, Shift selects it with every bone below it (Ctrl+Shift adds them).
-    /// </summary>
-    private void ClickBone(string bone, SkeletonDescription skeleton)
-    {
-        var io = ImGui.GetIO();
-        if (io.KeyShift)
-        {
-            var (index, children) = BoneTree(skeleton);
-            var branch = new List<string>();
-            var stack = new Stack<int>();
-            if (index.TryGetValue(bone, out var start))
-                stack.Push(start);
-            while (stack.Count > 0)
-            {
-                var b = stack.Pop();
-                branch.Add(skeleton.Bones[b].Name);
-                for (var c = children[b].Length - 1; c >= 0; c--)
-                    stack.Push(children[b][c]);
-            }
-            selection.Set(branch, io.KeyCtrl, bone);
-            return;
-        }
-        selection.Click(bone, io.KeyCtrl);
     }
 
     /// <summary>
@@ -381,8 +262,8 @@ public sealed partial class TimelineWindow
     /// </summary>
     private void DrawBoneMap(SkeletonDescription skeleton, MotionLayer? layer, int frame, AnimationClip clip, Vector2 size)
     {
-        var (index, _) = BoneTree(skeleton);
-        var animated = AnimatedBones(clip);
+        var (index, _) = posing.BoneTree(skeleton);
+        var animated = posing.AnimatedBones(clip);
         var origin = ImGui.GetCursorScreenPos();
         size = Vector2.Max(size, new Vector2(1));
         ImGui.InvisibleButton("##bone-map", size);
@@ -426,7 +307,7 @@ public sealed partial class TimelineWindow
         foreach (var dot in dots)
             if (!dot.Handle)
                 placed[(dot.Section, dot.Bone)] = dot.At;
-        var primary = selection.Primary is { } chosen && index.TryGetValue(chosen, out var chosenIndex) ? chosenIndex : -1;
+        var primary = posing.Selection.Primary is { } chosen && index.TryGetValue(chosen, out var chosenIndex) ? chosenIndex : -1;
         var lineColour = ImGui.GetColorU32(Theme.WithAlpha(Theme.Label, .35f));
         var litColour = ImGui.GetColorU32(Theme.WithAlpha(Theme.Accent, .85f));
         var radius = Theme.Scaled(6);
@@ -444,7 +325,7 @@ public sealed partial class TimelineWindow
                 {
                     var step = Vector2.Normalize(along) * radius;
                     // A lit line: the bone moves with the primary bone.
-                    var lit = IsBelow(skeleton, bone, primary);
+                    var lit = BonePosing.IsBelow(skeleton, bone, primary);
                     drawList.AddLine(dot.At + step, above - step, lit ? litColour : lineColour, Theme.Scaled(lit ? 2 : 1));
                 }
                 break;
@@ -458,10 +339,10 @@ public sealed partial class TimelineWindow
 
         foreach (var dot in dots)
         {
-            var state = StateOf(dot.Bone, layer, frame, animated);
-            var colour = ImGui.GetColorU32(StateColour(state, layer));
-            var selected = selection.Contains(dot.Bone);
-            var isPrimary = selected && string.Equals(selection.Primary, dot.Bone, StringComparison.Ordinal);
+            var state = BonePosing.StateOf(dot.Bone, layer, frame, animated);
+            var colour = ImGui.GetColorU32(BonePosing.StateColour(state, layer));
+            var selected = posing.Selection.Contains(dot.Bone);
+            var isPrimary = selected && string.Equals(posing.Selection.Primary, dot.Bone, StringComparison.Ordinal);
             drawList.AddCircleFilled(dot.At, radius + Theme.Scaled(1.5f), 0xC0000000);
             drawList.AddCircleFilled(dot.At, radius, ImGui.GetColorU32(Theme.PanelBg));
             if (selected)
@@ -479,30 +360,19 @@ public sealed partial class TimelineWindow
         {
             ImGui.SetTooltip($"{AnimationPresentation.BoneName(hover)}\n{StateText(StateOf(hover, layer, frame, animated), layer)}");
             if (clicked)
-                ClickBone(hover, skeleton);
+                posing.ClickBone(hover, skeleton);
         }
         else if (clicked && !ImGui.GetIO().KeyCtrl && !ImGui.GetIO().KeyShift)
-            selection.Clear();
+            posing.Selection.Clear();
     }
 
     private static bool Has(Dictionary<string, int> index, string bone) => index.ContainsKey(bone);
 
-    /// <summary>Whether bone <paramref name="bone"/> sits below <paramref name="ancestor"/> in the skeleton.</summary>
-    private static bool IsBelow(SkeletonDescription skeleton, int bone, int ancestor)
-    {
-        if (ancestor < 0)
-            return false;
-        for (var parent = skeleton.Bones[bone].Parent; parent >= 0; parent = skeleton.Bones[parent].Parent)
-            if (parent == ancestor)
-                return true;
-        return false;
-    }
-
     /// <summary>Every bone of the skeleton as a tree, or the ones a search finds as a flat list, coloured like the map's dots.</summary>
     private void DrawBoneList(SkeletonDescription skeleton, MotionLayer? layer, int frame, AnimationClip clip)
     {
-        var (_, children) = BoneTree(skeleton);
-        var animated = AnimatedBones(clip);
+        var (_, children) = posing.BoneTree(skeleton);
+        var animated = posing.AnimatedBones(clip);
         Widgets.SearchBox("##bones-search", ref boneSearch, "Search bones");
         using var list = ImRaii.Child("##bones-list", Vector2.Zero, false);
         if (!list.Success)
@@ -541,17 +411,17 @@ public sealed partial class TimelineWindow
         ImGuiTreeNodeFlags flags)
     {
         var name = skeleton.Bones[bone].Name;
-        var state = StateOf(name, layer, frame, animated);
-        if (selection.Contains(name))
+        var state = BonePosing.StateOf(name, layer, frame, animated);
+        if (posing.Selection.Contains(name))
             flags |= ImGuiTreeNodeFlags.Selected;
         bool open;
-        using (ImRaii.PushColor(ImGuiCol.Text, StateColour(state, layer), state != BoneState.Animated))
+        using (ImRaii.PushColor(ImGuiCol.Text, BonePosing.StateColour(state, layer), state != BoneState.Animated))
             open = ImGui.TreeNodeEx($"{AnimationPresentation.BoneName(name)}{(state == BoneState.Keyed ? "  · key" : "")}##bone-{bone}",
                 flags | ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.SpanAvailWidth);
         if (ImGui.IsItemClicked(ImGuiMouseButton.Left) && !ImGui.IsItemToggledOpen())
-            ClickBone(name, skeleton);
+            posing.ClickBone(name, skeleton);
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(StateText(state, layer));
+            ImGui.SetTooltip(BonePosing.StateText(state, layer));
         return open;
     }
 
@@ -599,7 +469,7 @@ public sealed partial class TimelineWindow
     /// <see cref="PoseEdits.Turned"/>). With several of them the rings are the character's: each bone's
     /// own axes point elsewhere, so only those turn them all the same way.
     /// </summary>
-    private void DrawBall(TimelineEditor current, MotionLayer layer, BoneFrames? frames, IReadOnlyList<PoseTarget> turned,
+    private void DrawBall(TimelineEditor current, MotionLayer layer, BonePosing.BoneFrames? frames, IReadOnlyList<PoseTarget> turned,
         PoseTarget primary, int frame)
     {
         if (CameraRotation() is not { } view)
@@ -674,60 +544,6 @@ public sealed partial class TimelineWindow
             Widgets.HintWrapped(reason);
     }
 
-    /// <summary>
-    /// The bones' frames at the playhead for the selected layer, from the clip with its offset and pose
-    /// layers applied there: what edits made to several bones at once and the rotation ball turn in.
-    /// </summary>
-    private sealed class BoneFrames(SkeletonDescription skeleton, Dictionary<string, int> index, MotionTransform[] before,
-        MotionTransform[] model, bool offset)
-    {
-        /// <summary>
-        /// The rotation from character space to the space a bone's value turns in: for an offset the bone's
-        /// own rotation as the layers before this one leave it, under its parent as all of them do; for a
-        /// pose its parent's.
-        /// </summary>
-        public Quaternion Space(string bone)
-        {
-            if (!index.TryGetValue(bone, out var at))
-                return Quaternion.Identity;
-            var parent = skeleton.Bones[at].Parent;
-            var above = parent >= 0 ? model[parent].Rotation : Quaternion.Identity;
-            return Quaternion.Normalize(offset ? above * before[at].Rotation : above);
-        }
-    }
-
-    /// <summary>
-    /// The bones' frames at <paramref name="frame"/> for <paramref name="layer"/>; null while the clip's motion is
-    /// read, which this starts. Kept while the document, the layer, the frame and the decode stay.
-    /// </summary>
-    private BoneFrames? FramesAt(AnimationTimelineSource loaded, TimelineDocument doc, MotionLayer layer, int frame)
-    {
-        if (MotionPose(loaded, frame) is not { } own || decode.Decoded is not { } clip)
-            return null;
-        if (boneFrames is { } cached && ReferenceEquals(cached.Doc, doc) && cached.Layer == layer.Key && cached.Frame == frame &&
-            ReferenceEquals(cached.Clip, clip))
-            return cached.Frames;
-        var skeleton = clip.Skeleton;
-        var at = Math.Max(0, MotionEdits.IndexOf(doc, layer.Key));
-        MotionTransform[] before, after;
-        try
-        {
-            var loop = LoopFrames(loaded, doc);
-            var end = MotionEnd(loaded, doc);
-            before = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion.Take(at).ToArray(), frame, loop, end);
-            after = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion, frame, loop, end);
-        }
-        catch (InvalidDataException)
-        {
-            // A layer names a bone this skeleton lacks: the clip's own pose still gives frames.
-            before = after = own.Local;
-        }
-        var frames = new BoneFrames(skeleton, BoneTree(skeleton).Index, before, MotionEvaluator.ModelSpace(skeleton, after),
-            layer.Kind == MotionLayerKind.Offset);
-        boneFrames = (doc, layer.Key, frame, clip, frames);
-        return frames;
-    }
-
     /// <summary>The rotation of the game camera's view, for the ball; null without a camera.</summary>
     private static unsafe Quaternion? CameraRotation()
     {
@@ -746,27 +562,6 @@ public sealed partial class TimelineWindow
     {
         try { return playback.ActorRotation(); }
         catch (InvalidOperationException) { return null; }
-    }
-
-    /// <summary>
-    /// The clip's own pose at <paramref name="frame"/>, local and in model space, from the decoded motion
-    /// as the document cuts or stretches it; null while it is read, which this starts.
-    /// </summary>
-    private (MotionTransform[] Local, MotionTransform[] Model)? MotionPose(AnimationTimelineSource loaded, int frame)
-    {
-        var fresh = Fresh(loaded);
-        if (decode.Decoded is not { } decoded || decode.DecodedKey != MotionDecode.KeyOf(fresh))
-        {
-            decode.Ensure(fresh);
-            return null;
-        }
-        var clip = editor is { } current ? decode.OutputMotion(current, decoded) : decoded;
-        if (motionPose is { } cached && ReferenceEquals(cached.Clip, clip) && cached.Frame == frame)
-            return (cached.Local, cached.Model);
-        var local = clip.Pose(frame);
-        var model = MotionEvaluator.ModelSpace(clip.Skeleton, local);
-        motionPose = (clip, frame, local, model);
-        return (local, model);
     }
 
     /// <summary> In the Bones window: undo and redo, and the arrows step the playhead. </summary>

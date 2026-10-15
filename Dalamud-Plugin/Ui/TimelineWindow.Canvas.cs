@@ -205,7 +205,7 @@ public sealed partial class TimelineWindow
         }
         // A bone's row picks that bone for the panel and the Bones window; Ctrl adds it.
         if (hit.Bone is { } bone && hit.Layer != null && hit.Part is TimelinePart.BoneKey or TimelinePart.BoneLane or TimelinePart.Legend)
-            selection.Click(bone, io.KeyCtrl && hit.Part != TimelinePart.BoneKey);
+            posing.Selection.Click(bone, io.KeyCtrl && hit.Part != TimelinePart.BoneKey);
         if (!readOnly)
         {
             current.Press(hit, io.KeyCtrl, io.KeyShift, io.KeyAlt);
@@ -630,7 +630,7 @@ public sealed partial class TimelineWindow
                 drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(max.X, bottom), band);
                 drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(max.X, bottom), TimelineUi.U32(Theme.WithAlpha(colour, .05f)));
                 drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(min.X + Theme.Scaled(3), bottom), TimelineUi.U32(Theme.WithAlpha(colour, .45f)));
-                var picked = current.SelectedLayer == layer.Key && selection.Contains(bone);
+                var picked = current.SelectedLayer == layer.Key && posing.Selection.Contains(bone);
                 var hot = hit.Part == TimelinePart.Legend && hit.Row == row;
                 drawList.PushClipRect(new Vector2(min.X, top), new Vector2(trackLeft - Theme.Scaled(3), bottom), true);
                 drawList.AddText(new Vector2(min.X + Theme.Scaled(22), textY),

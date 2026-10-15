@@ -219,25 +219,15 @@ public sealed partial class TimelineWindow
                     {
                         if (ImGui.Selectable($"{AnimationPresentation.SkeletonLabel(candidate)} · {Path.GetFileName(candidate.Source.Resource.ResolvedPath)}##{AnimationSkeletonIndex.SelectionId(candidate)}",
                                 candidate == resolution.Selected))
-                        {
-                            try
-                            {
-                                source = fresh with { Clip = animations.Observer.ChooseSkeleton(fresh.Clip, candidate) };
-                                skeletonChoiceError = null;
-                            }
-                            catch (InvalidOperationException e)
-                            {
-                                skeletonChoiceError = e.Message;
-                            }
-                        }
+                            posing.ChooseSkeleton(fresh, candidate);
                         if (ImGui.IsItemHovered())
                             ImGui.SetTooltip(candidate.Rationale + "\n" + candidate.Source.Resource.ResolvedPath);
                     }
             }
             if (resolution.Selected is null)
                 Widgets.HintWrapped(resolution.Reason ?? "Several skeletons fit. Choose the one this animation was made for.");
-            if (skeletonChoiceError != null)
-                Widgets.HintWrapped(skeletonChoiceError);
+            if (posing.ChoiceError is { } choiceError)
+                Widgets.HintWrapped(choiceError);
         }
         else
             ImGui.TextWrapped(AnimationPresentation.SkeletonLabel(chosen));
