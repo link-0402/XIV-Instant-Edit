@@ -88,22 +88,22 @@ public sealed partial class TimelineWindow
         if (!live && !previewing)
             return;
         var doc = current.Document;
-        if (previewing && !ReferenceEquals(doc, staleChecked) && SoundMissing(doc) == null)
+        if (previewing && !ReferenceEquals(doc, staleChecked) && soundFiles.SoundMissing(doc) == null)
         {
             staleChecked = doc;
             // Only looks or redirected sound changes changed: the preview shows the document once they are in.
-            try { previewStale = !TimelineEdits.Same(PreviewRest(doc).Document, previewRest!); }
+            try { previewStale = !TimelineEdits.Same(soundFiles.PreviewRest(doc).Document, previewRest!); }
             catch (Exception e) when (e is InvalidDataException or ArgumentException) { previewStale = true; }
             if (!previewStale)
                 previewDocument = doc;
         }
         if (previewing && previewStale || ReferenceEquals(doc, lookChecked) || previewStop is { IsCompleted: false } || preview.Busy ||
-            previewActor is not { } actor || effectLooks.LookMissing(doc) != null || SoundMissing(doc) != null)
+            previewActor is not { } actor || effectLooks.LookMissing(doc) != null || soundFiles.SoundMissing(doc) != null)
             return;
         lookChecked = doc;
         var looks = TimelineEffectLooks.Redirectable(doc).Looks;
         ImmutableDictionary<string, byte[]> sounds;
-        try { sounds = PreviewRest(doc).Sounds; }
+        try { sounds = soundFiles.PreviewRest(doc).Sounds; }
         catch (Exception e) when (e is InvalidDataException or ArgumentException)
         {
             previewError = e.Message;

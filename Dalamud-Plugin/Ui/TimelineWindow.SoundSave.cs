@@ -32,39 +32,6 @@ public sealed partial class TimelineWindow
     private HashSet<string>? soundInPlace;
 
     /// <summary>
-    /// Why the sound changes can't be saved or previewed yet: a file with changes or a pin still being
-    /// read, one that couldn't be, or changes that can't be written.
-    /// </summary>
-    private string? SoundMissing(TimelineDocument document)
-    {
-        if (source is not { } loaded || document.Events.IsDefault)
-            return null;
-        foreach (var ev in document.Events)
-        {
-            if (TimelineSoundKey.Of(ev) is not { } key || !document.SoundEdits.ContainsKey(key) && ev.Pin == null)
-                continue;
-            var file = Path.GetFileName(key.Path);
-            var read = SoundFor(key.Path, loaded);
-            if (read.Bytes == null)
-                return read.Error != null ? $"{file} could not be read, so its changes can't be used." : "Reading the sound files.";
-            if (ShownSound(document, key, loaded) is not { } shown)
-                continue;
-            if (shown.Error is { } error)
-                return $"{file}: {error}";
-            if (TimelineWindowViews.PinGone(ev.Pin, shown.Ids, file) is { } gone)
-                return gone;
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// <paramref name="document"/> with its sound changes and pins written into files (see
-    /// <see cref="TimelineSoundEdits.Bake"/>): the copies to package and the mod files written over in place.
-    /// </summary>
-    private TimelineSoundBake WithSounds(TimelineDocument document, Func<TimelineSoundKey, TimelineSoundRoute> route, Func<string, byte[]?>? sound = null) =>
-        TimelineSoundEdits.Bake(document, sound ?? SoundBytes, session.ImportBytes, route);
-
-    /// <summary>
     /// Save: in place, edited sounds of the clip's own mod are written over unless other animations of
     /// the mod (or of the game, for a game sound the mod replaces) play them too, which asks first;
     /// everything else saves at once.
@@ -100,9 +67,9 @@ public sealed partial class TimelineWindow
         foreach (var key in document.SoundEdits.Keys)
         {
             if (paths.Any(p => string.Equals(p.GamePath, key.Path, StringComparison.OrdinalIgnoreCase)) || !events.Any(ev => TimelineSoundKey.Of(ev) == key) ||
-                !soundReads.TryGetValue(key.Path, out var read) || read.Resource is not { ModDirectory: { } mod } resource ||
+                soundFiles.Resource(key.Path) is not { ModDirectory: { } mod } resource ||
                 mod != loaded.Resource.ModDirectory || !AnimationResources.CanReplace(resource) ||
-                ShownSound(document, key, loaded) is not { } shown || ReferenceEquals(shown.Bytes, shown.Original))
+                soundFiles.ShownSound(document, key, loaded) is not { } shown || ReferenceEquals(shown.Bytes, shown.Original))
                 continue;
             paths.Add((key.Path, resource.ResolvedPath));
         }
@@ -189,20 +156,4 @@ public sealed partial class TimelineWindow
             ImGui.EndPopup();
         }
     }
-
-    /// <summary>
-    /// The document a preview builds once looks and sound changes it shows by redirecting are taken
-    /// off, with the sound files that redirect (see <see cref="TimelineSoundEdits.Redirectable"/>).
-    /// </summary>
-    private (TimelineDocument Document, ImmutableDictionary<string, byte[]> Sounds) PreviewRest(TimelineDocument document)
-    {
-        if (previewRestCache is { } cached && ReferenceEquals(cached.For, document))
-            return cached.Result;
-        var rest = TimelineSoundEdits.Redirectable(TimelineEffectLooks.Redirectable(document).Document, SoundBytes, session.ImportBytes, AppliedSound);
-        previewRestCache = (document, rest);
-        return rest;
-    }
-
-    // The last document PreviewRest was worked out for: the stale check and the sync ask for the same one.
-    private (TimelineDocument For, (TimelineDocument Document, ImmutableDictionary<string, byte[]> Sounds) Result)? previewRestCache;
 }
