@@ -27,7 +27,7 @@ public sealed partial class MainWindow
     private void NotifyOptimized(CompressionRun run)
     {
         if (_config.ShowNotifications)
-            ShowNotification(TextureCompressionViews.Toast(run), NotificationType.Success);
+            _notifications.ShowNotification(TextureCompressionViews.Toast(run), NotificationType.Success);
     }
 
     private QuickAction TextureCompressionCard => new("texture-compression", FontAwesomeIcon.CompressArrowsAlt, "Optimize textures",

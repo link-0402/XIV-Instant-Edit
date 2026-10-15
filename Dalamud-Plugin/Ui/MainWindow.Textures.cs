@@ -4,6 +4,7 @@ using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Ui.Main;
 using DroppedPaths = InstantEdit.Studio.Windows.UI.DroppedPaths;
 using FileDrop = InstantEdit.Studio.Windows.UI.FileDrop;
 using HeldDrop = InstantEdit.Studio.Windows.UI.HeldDrop;
@@ -151,7 +152,7 @@ public sealed partial class MainWindow
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Muted, SessionViews.Caption(s));
 
-        ImGui.TextColored(SessionColour(state), FirstLine(s.Status));
+        ImGui.TextColored(SessionColour(state), StatusStrip.FirstLine(s.Status));
         if (ImGui.IsItemHovered() && s.Status.Length > 0)
             ImGui.SetTooltip(s.Status);
         if (s.NeedsMod)
