@@ -41,5 +41,6 @@ delete the wheels your installed extensions use.
 
 Keep pull requests focused, explain behavior changes, and update the README or
 third-party notices when user-facing behavior or attribution changes. Release
-archives and the Blender repository index should be regenerated together with
-`scripts/prepare-release.ps1` only when preparing a release.
+archives are never committed: `scripts/prepare-release.ps1` builds them into the
+ignored `dist/` folder and updates the Blender repository index, and they ship as
+GitHub release assets. See [release packaging](docs/release-packaging.md).
