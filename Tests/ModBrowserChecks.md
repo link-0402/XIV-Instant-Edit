@@ -33,6 +33,10 @@ acceptance list, rewritten for the Mod Browser). Use copies of real mods where a
 6d. Disk cache: after a Size sort or a changes search, the cache folder holds library-scans.json.
     Reload the plugin and repeat: the "Checking N mods" line passes in moments, since only new or
     changed mods are read. Ctrl+click the refresh button: every mod is read again (the slow pass).
+6e. When Penumbra gives no answer for your collection, "Show: Active" says "Penumbra did not say which
+    mods are enabled in <collection>." and lists nothing, not the previous collection's mods.
+    (Checked 2026-10-14 through XIV Bridge, with the settings read made to return nothing: the hint
+    named Lucina. 92f245e.)
 
 ## Check and repair
 
