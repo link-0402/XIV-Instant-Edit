@@ -31,11 +31,11 @@ public sealed partial class MainWindow : IModHandoff
 
     void IModHandoff.EditTexture(ResourceView row, ActorView mod) => _textureTab.StartTextureEdit(row, mod);
 
-    string? IModHandoff.AnimationBlock(ResourceView row) => AnimationSendBlock(row);
+    string? IModHandoff.AnimationBlock(ResourceView row) => _animationSend.AnimationSendBlock(row);
 
-    void IModHandoff.SendAnimation(ResourceView row, string owner) => OpenAnimationSend(row, owner);
+    void IModHandoff.SendAnimation(ResourceView row, string owner) => _animationSend.OpenAnimationSend(row, owner);
 
-    void IModHandoff.DrawDialogs(string owner) => DrawAnimationSendDialog(owner);
+    void IModHandoff.DrawDialogs(string owner) => _animationSend.Draw(owner);
 
     (DateTimeOffset Time, string Text, FeedbackSeverity Severity)? IModHandoff.LatestMessage
     {

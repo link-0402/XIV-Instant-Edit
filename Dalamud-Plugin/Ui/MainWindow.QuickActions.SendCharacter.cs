@@ -156,9 +156,9 @@ public sealed partial class MainWindow
             return "Another model is being sent to Blender.";
         if (_config.CharacterSendPose == CharacterPose.Current)
         {
-            if (recorder is null)
+            if (_recorder.Recorder is null)
                 return "The live pose recorder is unavailable.";
-            if (recorder.Active)
+            if (_recorder.Recorder.Active)
                 return "A recording is running. Send your character once it is done.";
         }
         if (_config.CharacterSendPose == CharacterPose.Animation)
@@ -311,7 +311,7 @@ public sealed partial class MainWindow
                 _characterSendProgress = "Sending the pose to Blender";
                 try
                 {
-                    poseResult = await DeliverTakeAsync(take, sendId, token).ConfigureAwait(false);
+                    poseResult = await _animationDelivery.DeliverTakeAsync(take, sendId, token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)
                 {
@@ -323,7 +323,7 @@ public sealed partial class MainWindow
                 }
             }
             var summary = CharacterSendPlan.Summary(new CharacterSendOutcome(snapshot.Name, request.Pose, sent, failed,
-                poseResult, poseError, request.Pose == CharacterPose.Current && take is not null ? RecordingWarning(take) : null,
+                poseResult, poseError, request.Pose == CharacterPose.Current && take is not null ? _recorder.RecordingWarning(take) : null,
                 weaponNotes, skeleton.Warnings)
             {
                 LeftOut = leftOut, HiddenParts = hiddenParts, Missing = plan.Missing, External = plan.External, DrawStateKnown = plan.Known,
@@ -371,7 +371,7 @@ public sealed partial class MainWindow
         {
             case CharacterPose.Current:
                 _characterSendProgress = "Capturing your pose";
-                var active = recorder ?? throw new InvalidOperationException("The live pose recorder is unavailable.");
+                var active = _recorder.Recorder ?? throw new InvalidOperationException("The live pose recorder is unavailable.");
                 return await active.CapturePoseAsync(RecordingSubject.Self, token).ConfigureAwait(false);
             case CharacterPose.Animation:
                 if (animations is not { } service || request.Animation is not { } capture)

@@ -9,6 +9,7 @@ using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Services.Animations;
 using InstantEdit.Services.Painter;
 using InstantEdit.Services.Previews;
 using InstantEdit.Services.Skeletons;
@@ -32,6 +33,10 @@ public sealed partial class MainWindow : Window, IDisposable
     private readonly PainterPanel _painter;
     private readonly TextureSessionsTab _textureTab;
     private readonly ResourceHoverCards _hoverCards;
+    private readonly AnimationIntegration _animationHub = new();
+    private readonly AnimationDelivery _animationDelivery;
+    private readonly RecorderPanel _recorder;
+    private readonly AnimationSendDialog _animationSend;
     private readonly PreviewService _previews;
     private readonly string _pluginVersion;
     private readonly ResourceSourceAttributor _resourceSources;
@@ -67,6 +72,9 @@ public sealed partial class MainWindow : Window, IDisposable
         _painter = new PainterPanel(config, log, textures, _models, _feed, _blenderConnection.PluginVersion, _lifetimeCts.Token);
         _textureTab = new TextureSessionsTab(config, textures, previews, _painter, _feed, log, _lifetimeCts.Token);
         _hoverCards = new ResourceHoverCards(previews);
+        _animationDelivery = new AnimationDelivery(config, blender, _blenderConnection);
+        _recorder = new RecorderPanel(config, saveConfig, log, _feed, _animationDelivery, _lifetimeCts.Token);
+        _animationSend = new AnimationSendDialog(_animationHub, _animationDelivery, _feed, _lifetimeCts.Token);
         _kinds = _screenKinds;
         _saveConfig = saveConfig;
         _openChangelog = openChangelog;
@@ -131,6 +139,11 @@ public sealed partial class MainWindow : Window, IDisposable
     public void ReportImportFailure(BridgeFailure failure) => _models.ReportImportFailure(failure);
 
     internal void AttachPainter(PainterJobService painter) => _painter.Attach(painter);
+
+    internal void AttachRecorder(AnimationRecorder? value) => _recorder.Recorder = value;
+
+    /// <summary>The recorder, drawn in the Timeline window's Record page; it sends to Blender through this window.</summary>
+    internal void DrawRecorderPanel() => _recorder.Draw();
 
     internal void AttachSkeletons(ModelSkeletonResolver? value) => _models.Skeletons = value;
 
@@ -250,7 +263,7 @@ public sealed partial class MainWindow : Window, IDisposable
         if (!animationsTabActive && !(activeTab == MainTab.QuickActions && CharacterSendListens) && timelineListens?.Invoke() != true)
             animations?.StopObservation();
         _textureTab.DrawDialogs();
-        DrawAnimationSendDialog(MainOwner);
+        _animationSend.Draw(AnimationSendDialog.MainOwner);
         _painter.DrawDialogs();
         DrawGameFileExportDialog();
         DrawNeckSeamDialog();
