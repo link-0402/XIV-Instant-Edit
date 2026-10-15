@@ -46,7 +46,7 @@ public sealed partial class TimelineWindow
     {
         // A look or sound edit ends once its control lets go, even when another page is shown by then.
         effectLooks.EndEdit(current);
-        EndSoundEdit(current);
+        soundInspector.EndEdit(current);
         var selection = $"{current.Primary}|{current.SelectedLayer}|{current.SelectedKey}";
         if (selection != sideSelection)
         {

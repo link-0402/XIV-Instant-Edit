@@ -30,6 +30,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private readonly EffectLookEditor effectLooks;
     private readonly SoundFiles soundFiles;
     private readonly TimelinePickers pickers;
+    private readonly SoundInspector soundInspector;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
     private readonly GameSoundPlayer? soundPlayer;
@@ -73,6 +74,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         effectLooks = new EffectLookEditor(session);
         soundFiles = new SoundFiles(session);
         pickers = new TimelinePickers(session, soundFiles);
+        soundInspector = new SoundInspector(session, soundFiles, pickers, soundPlayer);
         this.soundPlayer = soundPlayer;
         this.recorder = recorder;
         this.animationError = animationError;
@@ -344,7 +346,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
                    (loaded.Resource.ModName ?? loaded.Resource.ModDirectory ?? "Game Data");
         labelDocument = null;
         effectLooks.ForgetEdit();
-        soundEditing = false;
+        soundInspector.ForgetEdit();
         if (!sameClip)
         {
             effectLooks.Forget();
@@ -621,4 +623,19 @@ public sealed partial class TimelineWindow : Window, IDisposable
         if (panel.Success && source != null)
             DrawSidePanel(current, source);
     }
+
+    /// <summary> Forgets the sounds read for another clip. </summary>
+    private void ForgetSounds()
+    {
+        soundFiles.Forget();
+        pathOrigins.Clear();
+        // A save's check of the mod, or its question, belongs to the clip it was for.
+        soundCheck = null;
+        soundCheckDocument = null;
+        soundAsk = null;
+        soundInPlace = null;
+        // So is a listen's error.
+        soundInspector.Forget();
+    }
+
 }

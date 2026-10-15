@@ -25,7 +25,7 @@ public sealed partial class TimelineWindow
     private void DrawProperties(TimelineEditor current)
     {
         effectLooks.EndEdit(current);
-        EndSoundEdit(current);
+        soundInspector.EndEdit(current);
         if (current.SelectedCut != null)
         {
             DrawCutPanel(current);
@@ -128,7 +128,7 @@ public sealed partial class TimelineWindow
                 DrawPath(current, ev, kind, editable);
                 // A sound's options say what they do instead of showing its raw fields.
                 if (ev.Magic == "C063")
-                    DrawSoundEvent(current, ev, editable);
+                    soundInspector.DrawEvent(current, ev, editable);
                 else if (kind != null)
                     foreach (var field in kind.Fields)
                     {
@@ -162,7 +162,7 @@ public sealed partial class TimelineWindow
                 current.DeleteSelection();
         }
         effectLooks.Draw(current, ev, editable);
-        DrawSoundFile(current, ev, editable);
+        soundInspector.DrawFile(current, ev, editable);
     }
 
     private string LabelOf(TimelineDocument doc, TimelineEvent ev)
