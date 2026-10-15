@@ -1,18 +1,18 @@
-﻿using System.Collections.Immutable;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Services.Animations.Timeline;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The properties panel: the selected event's start, length, file and fields. Each field edit is
 /// one undo step (BeginFieldEdit when it activates, a live Replace per change, EndFieldEdit when it
-/// is left). Locked and move-only events show their reason and read-only values.
+/// is left). Locked and move-only events show their reason and read-only values. A bone layer, a
+/// part of the clip band, an effect's look and a sound's file have panels of their own, drawn here.
 /// </summary>
-public sealed partial class TimelineWindow
+internal sealed class PropertiesPanel(TimelineSession session, EffectLookEditor effectLooks, SoundInspector soundInspector, CutPanel cutPanel,
+    LayerPanel layerPanel, TimelineTexts texts, TimelinePickers pickers)
 {
     // The File field of a sound or effect: its text while typed in, its last refusal, and where
     // the collection gets each path (by collection and path, forgotten with the sounds).
@@ -22,19 +22,22 @@ public sealed partial class TimelineWindow
     private string? pathFieldError;
     private readonly Dictionary<(Guid Collection, string Path), Task<(TimelinePathOrigin Origin, string? ModName)>> pathOrigins = [];
 
-    private void DrawProperties(TimelineEditor current)
+    /// <summary> Forgets where the collection got each path, with the sounds read for another clip. </summary>
+    public void ForgetPathOrigins() => pathOrigins.Clear();
+
+    public void Draw(TimelineEditor current)
     {
-        EndLookEdit(current);
-        EndSoundEdit(current);
+        effectLooks.EndEdit(current);
+        soundInspector.EndEdit(current);
         if (current.SelectedCut != null)
         {
-            DrawCutPanel(current);
+            cutPanel.Draw(current);
             return;
         }
-        var readOnly = ReadOnly;
-        if (current.SelectedLayerValue is { } layer && source != null)
+        var readOnly = session.ReadOnly;
+        if (current.SelectedLayerValue is { } layer && session.Source != null)
         {
-            DrawLayerProperties(current, layer, source);
+            layerPanel.Draw(current, layer, session.Source);
             return;
         }
         var primary = current.PrimaryEvent;
@@ -69,7 +72,7 @@ public sealed partial class TimelineWindow
     {
         Widgets.EmptyState(FontAwesomeIcon.LayerGroup, $"{count} selected", "Drag one of them to move them all.");
         ImGui.Spacing();
-        var (editable, movable) = SelectionAccess(current);
+        var (editable, movable) = TimelineCanvas.SelectionAccess(current);
         using (ImRaii.Disabled(readOnly || !editable))
         {
             if (ImGui.Button("Duplicate"))
@@ -89,10 +92,10 @@ public sealed partial class TimelineWindow
         var editable = !readOnly && TimelineEdits.CanEdit(ev);
         var movable = !readOnly && TimelineEdits.CanMove(ev);
 
-        Widgets.Icon(LaneIcon(ev.Lane), TimelineWindowViews.LaneColour(ev.Lane));
+        Widgets.Icon(TimelineUi.LaneIcon(ev.Lane), TimelineWindowViews.LaneColour(ev.Lane));
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Label, LabelOf(current.Document, ev));
+        ImGui.TextColored(Theme.Label, texts.LabelOf(current.Document, ev));
         if (ev.Access != TimelineAccess.Editable)
         {
             ImGui.SameLine(0, Theme.Gap);
@@ -113,13 +116,13 @@ public sealed partial class TimelineWindow
             {
                 ImGui.TableSetupColumn("##fact", ImGuiTableColumnFlags.WidthFixed);
                 ImGui.TableSetupColumn("##value", ImGuiTableColumnFlags.WidthStretch);
-                Fact("Kind");
+                TimelineUi.Fact("Kind");
                 ImGui.TextUnformatted(TimelineWindowViews.KindName(ev.Magic));
-                Fact("Lane");
+                TimelineUi.Fact("Lane");
                 ImGui.TextUnformatted(TimelineWindowViews.LaneName(ev.Lane));
-                if (FromPack(current, ev))
+                if (TimelinePainter.FromPack(current, ev))
                 {
-                    Fact("Set");
+                    TimelineUi.Fact("Set");
                     ImGui.TextUnformatted(current.Document.FacePack);
                     if (ImGui.IsItemHovered())
                         ImGui.SetTooltip("This face comes from the timeline's expression set. A timeline uses one set.\nIt goes when its last face does.");
@@ -128,11 +131,11 @@ public sealed partial class TimelineWindow
                 DrawPath(current, ev, kind, editable);
                 // A sound's options say what they do instead of showing its raw fields.
                 if (ev.Magic == "C063")
-                    DrawSoundEvent(current, ev, editable);
+                    soundInspector.DrawEvent(current, ev, editable);
                 else if (kind != null)
                     foreach (var field in kind.Fields)
                     {
-                        Fact(field.Label);
+                        TimelineUi.Fact(field.Label);
                         using var id = ImRaii.PushId(field.Name);
                         var value = ev.Values?.GetValueOrDefault(field.Name) ?? 0;
                         if (editable)
@@ -161,20 +164,13 @@ public sealed partial class TimelineWindow
             if (ImGui.Button("Delete"))
                 current.DeleteSelection();
         }
-        DrawLook(current, ev, editable);
-        DrawSoundFile(current, ev, editable);
-    }
-
-    private string LabelOf(TimelineDocument doc, TimelineEvent ev)
-    {
-        if (ReferenceEquals(labelDocument, doc) && TimelineEdits.IndexOf(doc, ev.Key) is var index and >= 0 && index < labels.Length)
-            return labels[index];
-        return TimelineWindowViews.EventLabel(ev);
+        effectLooks.Draw(current, ev, editable);
+        soundInspector.DrawFile(current, ev, editable);
     }
 
     private static void DrawTiming(TimelineEditor current, TimelineEvent ev, bool editable, bool movable)
     {
-        Fact("Start");
+        TimelineUi.Fact("Start");
         if (movable)
         {
             var start = ev.Start;
@@ -191,7 +187,7 @@ public sealed partial class TimelineWindow
                     current.EndFieldEdit();
             }
             else
-                TrackField(current, changed, changed ? ev with { Start = Math.Clamp(start, 0, TimelineDocument.MaxFrames) } : null);
+                TimelineUi.TrackField(current, changed, changed ? ev with { Start = Math.Clamp(start, 0, TimelineDocument.MaxFrames) } : null);
             ImGui.SameLine(0, Theme.Gap);
             ImGui.TextColored(Theme.Muted, TimelineText.Seconds(ev.Start));
         }
@@ -200,7 +196,7 @@ public sealed partial class TimelineWindow
 
         if (ev.Duration <= 0 && !ev.Resizable)
             return;
-        Fact("Length");
+        TimelineUi.Fact("Length");
         if (TimelineDocument.Kept(ev))
         {
             var loops = TimelineDocument.Loops(ev);
@@ -233,7 +229,7 @@ public sealed partial class TimelineWindow
             var duration = ev.Duration;
             ImGui.SetNextItemWidth(Theme.Scaled(90));
             var changed = ImGui.InputInt("##duration", ref duration, 0, 0);
-            TrackField(current, changed, changed ? ev with { Duration = Math.Clamp(duration, 1, TimelineDocument.MaxFrames) } : null);
+            TimelineUi.TrackField(current, changed, changed ? ev with { Duration = Math.Clamp(duration, 1, TimelineDocument.MaxFrames) } : null);
             ImGui.SameLine(0, Theme.Gap);
             ImGui.TextColored(Theme.Muted, TimelineText.Seconds(ev.Duration));
         }
@@ -246,7 +242,7 @@ public sealed partial class TimelineWindow
     /// <summary> The Keep switch of a face: on, the game keeps showing it after the timeline ends. </summary>
     private static void DrawKeep(TimelineEditor current, TimelineEvent ev, bool editable)
     {
-        Fact("Keep");
+        TimelineUi.Fact("Keep");
         // A kept moving face that could loop but holds still (as a Static Infinite option writes)
         // shows unticked, so ticking it makes it loop.
         var loops = TimelineEdits.CanLoop(current.Document, ev, current.MotionFrames);
@@ -268,18 +264,18 @@ public sealed partial class TimelineWindow
         var hasPath = ev.Path.Length > 0 || kind is { StringOffset: >= 0 };
         if (!hasPath && picker != TimelineAddKind.Prop)
             return;
-        Fact(picker == TimelineAddKind.Prop ? "Model" : ev.Lane is TimelineLane.Motion or TimelineLane.Expression or TimelineLane.LipSync ? "Motion" : "File");
+        TimelineUi.Fact(picker == TimelineAddKind.Prop ? "Model" : ev.Lane is TimelineLane.Motion or TimelineLane.Expression or TimelineLane.LipSync ? "Motion" : "File");
         if (editable && picker is { } choose)
         {
             if (ImGui.SmallButton("Choose"))
-                RequestPicker(choose, current.Playhead, ev.Key);
+                pickers.Request(choose, current.Playhead, ev.Key);
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(choose == TimelineAddKind.Prop ? "Pick another prop model." : $"Pick another {TimelineWindowViews.AddKindName(choose).ToLowerInvariant()}.");
             ImGui.SameLine(0, Theme.Gap);
         }
         if (picker == TimelineAddKind.Prop && !hasPath)
         {
-            ImGui.TextUnformatted(LabelOf(current.Document, ev));
+            ImGui.TextUnformatted(texts.LabelOf(current.Document, ev));
             return;
         }
         if (editable && picker is TimelineAddKind.Sound or TimelineAddKind.Effect)
@@ -290,7 +286,7 @@ public sealed partial class TimelineWindow
         if (ev.Path.Length == 0)
             ImGui.TextColored(Theme.Hint, "None");
         else
-            Widgets.PathText(LabelOf(current.Document, ev), ev.Path);
+            Widgets.PathText(texts.LabelOf(current.Document, ev), ev.Path);
     }
 
     /// <summary>
@@ -331,7 +327,7 @@ public sealed partial class TimelineWindow
             using var wrap = ImRaii.TextWrapPos(0f);
             ImGui.TextColored(Theme.Warning, pathFieldError);
         }
-        ImGui.TextColored(Theme.Hint, LabelOf(current.Document, ev));
+        ImGui.TextColored(Theme.Hint, texts.LabelOf(current.Document, ev));
         if (PathOrigin(ev.Path) is { } origin)
             Widgets.MutedWrapped(origin);
     }
@@ -339,18 +335,18 @@ public sealed partial class TimelineWindow
     /// <summary> Where the collection gets <paramref name="gamePath"/>, read once on a task; null until read. </summary>
     private string? PathOrigin(string gamePath)
     {
-        if (source == null || gamePath.Length == 0 || animations is not { } service)
+        if (session.Source == null || gamePath.Length == 0 || session.Animations is not { } service)
             return null;
-        var key = (source.Capture.CollectionId, gamePath.ToLowerInvariant());
+        var key = (session.Source.Capture.CollectionId, gamePath.ToLowerInvariant());
         if (!pathOrigins.TryGetValue(key, out var read))
         {
-            var collection = source.Capture.CollectionId;
+            var collection = session.Source.Capture.CollectionId;
             read = Task.Run(() => service.PathOriginAsync(collection, gamePath, CancellationToken.None));
             pathOrigins[key] = read;
         }
         if (!read.IsCompleted)
             return null;
-        return read.IsCompletedSuccessfully ? TimelineWindowViews.PathOriginText(read.Result.Origin, read.Result.ModName) : ErrorText(read.Exception);
+        return read.IsCompletedSuccessfully ? TimelineWindowViews.PathOriginText(read.Result.Origin, read.Result.ModName) : TimelineSession.ErrorText(read.Exception);
     }
 
     /// <summary> One field's control; its edits until it is left make one undo step. </summary>
@@ -363,7 +359,7 @@ public sealed partial class TimelineWindow
                 var number = (int)Math.Clamp(Math.Round(value), int.MinValue, int.MaxValue);
                 ImGui.SetNextItemWidth(Theme.Scaled(110));
                 var changed = ImGui.InputInt("##value", ref number, 0, 0);
-                TrackField(current, changed, changed ? With(ev, field, Math.Clamp(number, field.Min, field.Max)) : null);
+                TimelineUi.TrackField(current, changed, changed ? TimelineUi.With(ev, field, Math.Clamp(number, field.Min, field.Max)) : null);
                 break;
             }
             case TimelineFieldKind.Float:
@@ -371,14 +367,14 @@ public sealed partial class TimelineWindow
                 var number = (float)value;
                 ImGui.SetNextItemWidth(Theme.Scaled(110));
                 var changed = ImGui.InputFloat("##value", ref number, 0, 0, "%.3f") && float.IsFinite(number);
-                TrackField(current, changed, changed ? With(ev, field, Math.Clamp(number, field.Min, field.Max)) : null);
+                TimelineUi.TrackField(current, changed, changed ? TimelineUi.With(ev, field, Math.Clamp(number, field.Min, field.Max)) : null);
                 break;
             }
             case TimelineFieldKind.Bool:
             {
                 var on = value != 0;
                 var changed = ImGui.Checkbox("##value", ref on);
-                TrackField(current, changed, changed ? With(ev, field, on ? 1 : 0) : null);
+                TimelineUi.TrackField(current, changed, changed ? TimelineUi.With(ev, field, on ? 1 : 0) : null);
                 break;
             }
             case TimelineFieldKind.Choice:
@@ -389,7 +385,7 @@ public sealed partial class TimelineWindow
                     break;
                 foreach (var (label, option) in field.Options)
                     if (ImGui.Selectable(label, option == value) && option != value)
-                        current.Replace(With(ev, field, option));
+                        current.Replace(TimelineUi.With(ev, field, option));
                 break;
             }
             case TimelineFieldKind.Flags:
@@ -400,35 +396,10 @@ public sealed partial class TimelineWindow
                     var bit = (long)option;
                     var set = (bits & bit) != 0;
                     var changed = ImGui.Checkbox(label, ref set);
-                    TrackField(current, changed, changed ? With(ev, field, set ? bits | bit : bits & ~bit) : null);
+                    TimelineUi.TrackField(current, changed, changed ? TimelineUi.With(ev, field, set ? bits | bit : bits & ~bit) : null);
                 }
                 break;
             }
         }
-    }
-
-    private static TimelineEvent With(TimelineEvent ev, TimelineField field, double value) =>
-        ev with { Values = (ev.Values ?? ImmutableDictionary<string, double>.Empty).SetItem(field.Name, value) };
-
-    /// <summary> Makes the last control's changes one undo step: begun when it activates, ended when it is left. </summary>
-    private static void TrackField(TimelineEditor current, bool changed, TimelineEvent? next)
-    {
-        if (ImGui.IsItemActivated())
-            current.BeginFieldEdit();
-        if (changed && next != null)
-            current.Replace(next);
-        if (ImGui.IsItemDeactivated())
-            current.EndFieldEdit();
-    }
-
-    /// <summary> Starts a fact row: its muted label, then the value's cell. </summary>
-    private static void Fact(string label)
-    {
-        ImGui.TableNextRow();
-        ImGui.TableSetColumnIndex(0);
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Muted, label);
-        ImGui.TableSetColumnIndex(1);
-        ImGui.AlignTextToFramePadding();
     }
 }

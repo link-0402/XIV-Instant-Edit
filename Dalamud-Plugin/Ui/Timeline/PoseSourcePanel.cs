@@ -8,9 +8,8 @@ using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui.Pose;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// Key pose sources for pose layers: a .pose file from Anamnesis, Ktisis or Brio, the character's pose as
@@ -19,7 +18,7 @@ namespace InstantEdit.Ui;
 /// bones: rotations always, positions for the bones it moves when it was made on a body of the same
 /// proportions. Shared by the properties panel and the Bones window.
 /// </summary>
-public sealed partial class TimelineWindow
+internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode decode, BonePosing posing, AnimationRecorder recorder)
 {
     private enum PoseSourceKind : byte { File, Character, Clip }
 
@@ -43,7 +42,6 @@ public sealed partial class TimelineWindow
     // A whole-body pose leaves these groups out unless they are ticked: physics and gear move them on their own.
     private static readonly string[] PoseGroupsLeftOut = ["Hair", "Skirt", "Armor and weapons"];
 
-    private readonly AnimationRecorder recorder;
     private PoseSource? poseSource;
     private CancellationTokenSource? poseCancel;
     private bool poseSelectedOnly;
@@ -60,7 +58,7 @@ public sealed partial class TimelineWindow
     /// "Key a pose": the menu of pose sources, then the pose waiting to be keyed into <paramref name="layer"/>,
     /// a pose layer.
     /// </summary>
-    private void DrawPoseSources(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, AnimationTimelineSource loaded,
+    public void Draw(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, AnimationTimelineSource loaded,
         bool readOnly)
     {
         PollPoseSource();
@@ -97,7 +95,7 @@ public sealed partial class TimelineWindow
                 foreach (var (capture, startup) in PoseClips())
                 {
                     any = true;
-                    var mine = ClipKey(loaded) == ClipKey(capture, startup);
+                    var mine = TimelineSession.ClipKey(loaded) == TimelineSession.ClipKey(capture, startup);
                     if (ImGui.MenuItem($"{AnimationPresentation.AnimationName(capture, startup)}{(mine ? " (this one)" : "")}##{capture.Id}-{startup}"))
                         ReadClipPose(capture, startup, false);
                 }
@@ -117,27 +115,24 @@ public sealed partial class TimelineWindow
     /// <summary>The animations the listener has seen, loops and startups, without expressions: a frame of any of them can be keyed.</summary>
     private IEnumerable<(AnimationCapture Capture, bool Startup)> PoseClips()
     {
-        if (animations is not { } service)
+        if (session.Animations is not { } service)
             yield break;
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var capture in service.Observer.History)
         {
             if (capture.ExpressionTimeline != null)
                 continue;
-            if (seen.Add(ClipKey(capture, false)))
+            if (seen.Add(TimelineSession.ClipKey(capture, false)))
                 yield return (capture, false);
-            if (capture.Startup != null && seen.Add(ClipKey(capture, true)))
+            if (capture.Startup != null && seen.Add(TimelineSession.ClipKey(capture, true)))
                 yield return (capture, true);
         }
     }
 
-    private static string ClipKey(AnimationCapture capture, bool startup) =>
-        $"{capture.Id}|{startup}|{(startup ? capture.Startup : capture.Clip)?.GamePath}";
-
     private void OpenPoseFile()
     {
         var folder = lastPoseFolder ?? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-        fileDialog.OpenFileDialog("Choose a pose", "Poses{.pose}", (success, files) =>
+        session.FileDialog.OpenFileDialog("Choose a pose", "Poses{.pose}", (success, files) =>
         {
             if (!success || files.Count == 0)
                 return;
@@ -158,7 +153,7 @@ public sealed partial class TimelineWindow
         var subject = RecordingSubject.Self;
         try
         {
-            if (playback.ActorIndex() is { } index && index != AnimationPlayback.GPosePlayerIndex)
+            if (session.Playback.ActorIndex() is { } index && index != AnimationPlayback.GPosePlayerIndex)
                 subject = RecordingSubject.Target;
         }
         catch (InvalidOperationException)
@@ -172,13 +167,13 @@ public sealed partial class TimelineWindow
     private void ReadClipPose(AnimationCapture capture, bool startup, bool atEnd)
     {
         var staged = new PoseSource { Kind = PoseSourceKind.Clip, Name = AnimationPresentation.AnimationName(capture, startup), AtEnd = atEnd };
-        if (source is { } current && ClipKey(current) == ClipKey(capture, startup) && DecodedPose(current) is { } own)
+        if (session.Source is { } current && TimelineSession.ClipKey(current) == TimelineSession.ClipKey(capture, startup) && decode.DecodedPose(current) is { } own)
         {
             staged.Clip = own;
             Stage(staged, null);
             return;
         }
-        if (animations is not { } service)
+        if (session.Animations is not { } service)
             return;
         Stage(staged, token => Task.Run<object>(async () =>
         {
@@ -190,7 +185,7 @@ public sealed partial class TimelineWindow
     /// <summary>Makes <paramref name="staged"/> the waiting pose, starting its reading; the one before is dropped.</summary>
     private void Stage(PoseSource staged, Func<CancellationToken, Task<object>>? read)
     {
-        DropPose();
+        Drop();
         poseCancel = new CancellationTokenSource();
         poseSource = staged;
         posePositions = null;
@@ -200,7 +195,7 @@ public sealed partial class TimelineWindow
     }
 
     /// <summary>Puts the waiting pose away and stops its reading.</summary>
-    private void DropPose()
+    public void Drop()
     {
         poseCancel?.Cancel();
         poseCancel?.Dispose();
@@ -221,7 +216,7 @@ public sealed partial class TimelineWindow
         }
         if (task.IsFaulted)
         {
-            staged.Error = ErrorText(task.Exception);
+            staged.Error = TimelineSession.ErrorText(task.Exception);
             return;
         }
         switch (task.Result)
@@ -262,7 +257,7 @@ public sealed partial class TimelineWindow
         ImGui.SameLine(0, Theme.Gap);
         if (Widgets.GhostIconButton("##pose-drop", FontAwesomeIcon.Times, "Put the pose away"))
         {
-            DropPose();
+            Drop();
             return;
         }
         if (staged.Reading != null)
@@ -308,7 +303,7 @@ public sealed partial class TimelineWindow
         }
         if (import == null)
         {
-            DrawMotionWait();
+            decode.DrawWait();
             return;
         }
 
@@ -317,12 +312,12 @@ public sealed partial class TimelineWindow
         if (ImGui.RadioButton("Whole body###pose-whole", !poseSelectedOnly))
             poseSelectedOnly = false;
         ImGui.SameLine();
-        using (ImRaii.Disabled(selection.Count == 0))
+        using (ImRaii.Disabled(posing.Selection.Count == 0))
         {
-            if (ImGui.RadioButton($"Selected bones ({selection.Count})###pose-selected", poseSelectedOnly && selection.Count > 0))
+            if (ImGui.RadioButton($"Selected bones ({posing.Selection.Count})###pose-selected", poseSelectedOnly && posing.Selection.Count > 0))
                 poseSelectedOnly = true;
         }
-        var selectedOnly = poseSelectedOnly && selection.Count > 0;
+        var selectedOnly = poseSelectedOnly && posing.Selection.Count > 0;
         if (!selectedOnly)
         {
             var groups = PoseMap.Groups.Where(group => PoseGroupsLeftOut.Contains(group.Name) && available.Any(group.Contains)).ToList();
@@ -347,7 +342,7 @@ public sealed partial class TimelineWindow
             }
         }
         var leftOut = PoseMap.Groups.Where(group => PoseGroupsLeftOut.Contains(group.Name) && !poseGroupsKept.Contains(group.Name));
-        var bones = PoseEdits.PoseBones(available, selectedOnly ? selection.Bones : null, leftOut);
+        var bones = PoseEdits.PoseBones(available, selectedOnly ? posing.Selection.Bones : null, leftOut);
 
         // Positions: off for a pose made on a body of other proportions, unless asked for.
         var moving = bones.Count(import.Moved.Contains);
@@ -365,18 +360,18 @@ public sealed partial class TimelineWindow
             Widgets.HintWrapped("The pose was made on a body with other proportions. Moving bones would reshape this one.");
 
         var inside = frame >= layer.Start && frame <= layer.End;
-        var own = MotionPose(loaded, frame);
+        var own = posing.MotionPose(loaded, frame);
         var blocked = readOnly ? "Wait for the save to finish."
             : !inside ? staged.AtEnd ? "The layer must reach the clip's end." : "Move the playhead into the layer."
             : bones.Count == 0 ? selectedOnly ? "The pose has none of the selected bones." : "The pose has none of this skeleton's bones."
-            : own == null ? decodeStatus
+            : own == null ? decode.Status
             : null;
         using (ImRaii.Disabled(blocked != null))
         {
             if (ImGui.Button((staged.AtEnd ? $"Key at the end ({TimelineWindowViews.FrameText(frame)})" : $"Key at {TimelineWindowViews.FrameText(frame)}") + "###pose-key") &&
                 own is { } clipPose)
             {
-                var index = BoneTree(skeleton).Index;
+                var index = posing.BoneTree(skeleton).Index;
                 current.Commit(PoseEdits.KeyPose(current.Document, layer.Key, frame, import, bones, positions,
                     bone => index.TryGetValue(bone, out var at) ? clipPose.Local[at] : null));
                 current.SelectLayer(layer.Key, frame);
@@ -403,7 +398,7 @@ public sealed partial class TimelineWindow
         PoseImport import;
         if (staged.File is { } file)
         {
-            if (MotionPose(loaded, frame) is not { } own)
+            if (posing.MotionPose(loaded, frame) is not { } own)
                 return null;
             import = PoseImports.FromModel(skeleton, file.Bones, own.Local);
         }

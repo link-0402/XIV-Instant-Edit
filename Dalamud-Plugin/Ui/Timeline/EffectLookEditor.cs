@@ -1,12 +1,10 @@
-﻿using System.Collections.Immutable;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Timeline;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The effect editor under an effect's properties: the whole effect's tint, size, offset and turn,
@@ -14,7 +12,7 @@ namespace InstantEdit.Ui;
 /// read on a task the first time it is shown. The changes stay on the event as its look until a
 /// save or preview writes them into a copy of the effect (see <see cref="TimelineEffectLooks.Bake"/>).
 /// </summary>
-public sealed partial class TimelineWindow
+internal sealed class EffectLookEditor(TimelineSession session)
 {
     private const string SwatchPopup = "##effect-swatch";
     private const int MaxSwatches = 24;
@@ -37,125 +35,8 @@ public sealed partial class TimelineWindow
         public string? Error;
     }
 
-    // Looks shown in game while Preview or Live runs: each effect's own path points at an edited copy in
-    // the preview's temporary mod (see TimelineEffectLooks.Redirectable). The game asks for the path again
-    // whenever the effect starts, so a changed look shows then, without building the clip again.
-    // The preview's files without the looks, and the previewed document without the looks it redirects.
-    private ImmutableDictionary<string, byte[]>? previewBaseFiles;
-    private TimelineDocument? previewRest;
-    private ImmutableDictionary<string, TimelineEffectEdit> shownLooks = ImmutableDictionary<string, TimelineEffectEdit>.Empty;
-    // The same for sound changes: each one-sound file's own path points at the edited file (TimelineSoundEdits.Redirectable).
-    private ImmutableDictionary<string, byte[]> shownSounds = ImmutableDictionary<string, byte[]>.Empty;
-    // Live's temporary mod with looks or sounds is up (Live itself plays the clip's own file and needs none).
-    private bool liveLooks;
-    private Task? lookSync;
-    private (ImmutableDictionary<string, TimelineEffectEdit> Looks, ImmutableDictionary<string, byte[]> Sounds, bool Live, int Generation)? lookSyncing;
-    private int lookGeneration;
-    // The document last compared with the preview, and the one whose looks were last shown or found unshowable.
-    private TimelineDocument? staleChecked;
-    private TimelineDocument? lookChecked;
-    private bool previewStale;
-
-    /// <summary> Forgets the looks shown with a preview that ended or is replaced; a running update is ignored. </summary>
-    private void ForgetPreviewLooks()
-    {
-        lookGeneration++;
-        previewBaseFiles = null;
-        previewRest = null;
-        shownLooks = ImmutableDictionary<string, TimelineEffectEdit>.Empty;
-        shownSounds = ImmutableDictionary<string, byte[]>.Empty;
-        liveLooks = false;
-        staleChecked = null;
-        lookChecked = null;
-        previewStale = false;
-    }
-
-    /// <summary> Ends Live's temporary mod with looks, when it has one. </summary>
-    private void StopLiveLooks()
-    {
-        if (!liveLooks && lookSyncing is not { Live: true })
-            return;
-        ForgetPreviewLooks();
-        StopTemporaryMod();
-    }
-
-    /// <summary>
-    /// Every frame: while Preview or Live runs, puts the document's effect looks into the temporary mod
-    /// when they changed, one update at a time. A preview whose document changed otherwise is stale
-    /// and needs Preview again; Live shows looks over the clip's own file.
-    /// </summary>
-    private void SyncLooks(TimelineEditor current)
-    {
-        if (lookSync != null)
-        {
-            if (!lookSync.IsCompleted)
-                return;
-            var task = lookSync;
-            lookSync = null;
-            if (lookSyncing is { } done && done.Generation == lookGeneration)
-            {
-                if (task.IsCompletedSuccessfully)
-                {
-                    shownLooks = done.Looks;
-                    shownSounds = done.Sounds;
-                    liveLooks = done.Live && (done.Looks.Count > 0 || done.Sounds.Count > 0);
-                }
-                else if (!task.IsCanceled)
-                    previewError = "The effect looks and sound changes could not be shown. " + ErrorText(task.Exception);
-            }
-            lookSyncing = null;
-            lookChecked = null;
-        }
-        var live = liveWanted && liveStarted;
-        var previewing = !liveWanted && previewFingerprint != null && !previewJob && previewBaseFiles != null && previewRest != null;
-        if (!live && !previewing)
-            return;
-        var doc = current.Document;
-        if (previewing && !ReferenceEquals(doc, staleChecked) && SoundMissing(doc) == null)
-        {
-            staleChecked = doc;
-            // Only looks or redirected sound changes changed: the preview shows the document once they are in.
-            try { previewStale = !TimelineEdits.Same(PreviewRest(doc).Document, previewRest!); }
-            catch (Exception e) when (e is InvalidDataException or ArgumentException) { previewStale = true; }
-            if (!previewStale)
-                previewDocument = doc;
-        }
-        if (previewing && previewStale || ReferenceEquals(doc, lookChecked) || previewStop is { IsCompleted: false } || preview.Busy ||
-            previewActor is not { } actor || LookMissing(doc) != null || SoundMissing(doc) != null)
-            return;
-        lookChecked = doc;
-        var looks = TimelineEffectLooks.Redirectable(doc).Looks;
-        ImmutableDictionary<string, byte[]> sounds;
-        try { sounds = PreviewRest(doc).Sounds; }
-        catch (Exception e) when (e is InvalidDataException or ArgumentException)
-        {
-            previewError = e.Message;
-            return;
-        }
-        if (TimelineEffectLooks.SameLooks(looks, shownLooks) && SameFiles(sounds, shownSounds))
-            return;
-        ImmutableDictionary<string, byte[]> files;
-        try
-        {
-            files = (previewing ? previewBaseFiles! : ImmutableDictionary<string, byte[]>.Empty)
-                .SetItems(TimelineEffectLooks.Redirected(looks, EffectBytes)).SetItems(sounds);
-        }
-        catch (InvalidDataException e)
-        {
-            previewError = e.Message;
-            return;
-        }
-        lookSyncing = (looks, sounds, live, lookGeneration);
-        // Live without looks needs no temporary mod.
-        lookSync = files.Count == 0 ? preview.StopAsync() : preview.ShowAsync(actor, files, CancellationToken.None);
-    }
-
-    /// <summary> Whether two sets of files by game path hold the same bytes. </summary>
-    private static bool SameFiles(IReadOnlyDictionary<string, byte[]> a, IReadOnlyDictionary<string, byte[]> b) =>
-        a.Count == b.Count && a.All(pair => b.TryGetValue(pair.Key, out var other) && (ReferenceEquals(pair.Value, other) || pair.Value.AsSpan().SequenceEqual(other)));
-
     /// <summary> Forgets the effects read for another clip. </summary>
-    private void ForgetEffects()
+    public void Forget()
     {
         effectReads.Clear();
         effectsCollection = null;
@@ -173,12 +54,12 @@ public sealed partial class TimelineWindow
         {
             read = new EffectRead();
             effectReads[gamePath] = read;
-            if (imports.TryGetValue(gamePath, out var import) && import.Files.TryGetValue(gamePath, out var bytes))
+            if (session.Imports.TryGetValue(gamePath, out var import) && import.Files.TryGetValue(gamePath, out var bytes))
             {
                 try { (read.Bytes, read.Look) = (bytes, TimelineEffectLooks.Read(bytes)); }
                 catch (InvalidDataException e) { read.Error = e.Message; }
             }
-            else if (animations is { } service)
+            else if (session.Animations is { } service)
             {
                 var collection = current.Capture.CollectionId;
                 read.Task = Task.Run(async () =>
@@ -196,29 +77,29 @@ public sealed partial class TimelineWindow
             if (task.IsCompletedSuccessfully)
                 (read.Bytes, read.Look) = task.Result;
             else
-                read.Error = ErrorText(task.Exception);
+                read.Error = TimelineSession.ErrorText(task.Exception);
         }
         return read;
     }
 
     /// <summary> The bytes of an effect the editor read, or an import's; null when it wasn't read. </summary>
-    private byte[]? EffectBytes(string gamePath) =>
+    public byte[]? EffectBytes(string gamePath) =>
         effectReads.TryGetValue(gamePath, out var read) && read.Bytes != null ? read.Bytes
-        : imports.TryGetValue(gamePath, out var import) && import.Files.TryGetValue(gamePath, out var bytes) ? bytes
+        : session.Imports.TryGetValue(gamePath, out var import) && import.Files.TryGetValue(gamePath, out var bytes) ? bytes
         : null;
 
     /// <summary>
     /// <paramref name="document"/> with its effects' looks written into copies, and the imports a save
     /// or preview packages with those copies among them.
     /// </summary>
-    private (TimelineDocument Document, List<TimelineImport> Imports) WithLooks(TimelineDocument document)
+    public (TimelineDocument Document, List<TimelineImport> Imports) WithLooks(TimelineDocument document)
     {
-        var (baked, copies) = TimelineEffectLooks.Bake(document, EffectBytes, imports);
-        return (baked, [.. imports.Values, .. copies]);
+        var (baked, copies) = TimelineEffectLooks.Bake(document, EffectBytes, session.Imports);
+        return (baked, [.. session.Imports.Values, .. copies]);
     }
 
     /// <summary> Why the looks can't be saved yet: an effect with a look still being read, or one that couldn't be. </summary>
-    private string? LookMissing(TimelineDocument document)
+    public string? LookMissing(TimelineDocument document)
     {
         if (document.Events.IsDefault)
             return null;
@@ -231,13 +112,16 @@ public sealed partial class TimelineWindow
     }
 
     /// <summary> Ends the running look edit once no control is active any more. </summary>
-    private void EndLookEdit(TimelineEditor current)
+    public void EndEdit(TimelineEditor current)
     {
         if (!lookEditing || ImGui.IsAnyItemActive())
             return;
         lookEditing = false;
         current.EndFieldEdit();
     }
+
+    /// <summary> Drops the running look edit when the editor starts over with another document. </summary>
+    public void ForgetEdit() => lookEditing = false;
 
     private void SetLook(TimelineEditor current, TimelineEvent ev, TimelineEffectEdit look)
     {
@@ -249,9 +133,9 @@ public sealed partial class TimelineWindow
         current.Replace(ev with { Look = look });
     }
 
-    private void DrawLook(TimelineEditor current, TimelineEvent ev, bool editable)
+    public void Draw(TimelineEditor current, TimelineEvent ev, bool editable)
     {
-        if (source is not { } loaded || ev.Lane != TimelineLane.Effect || !ev.Path.EndsWith(".avfx", StringComparison.OrdinalIgnoreCase) ||
+        if (session.Source is not { } loaded || ev.Lane != TimelineLane.Effect || !ev.Path.EndsWith(".avfx", StringComparison.OrdinalIgnoreCase) ||
             !AnimationDependencies.SafeGamePath(ev.Path))
             return;
         ImGui.Spacing();
@@ -301,16 +185,16 @@ public sealed partial class TimelineWindow
     {
         if (look.Tint is { } fileTint)
         {
-            Fact("Tint");
+            TimelineUi.Fact("Tint");
             var tint = edit.Tint ?? fileTint;
             ImGui.SetNextItemWidth(-1);
             if (ImGui.ColorEdit3("##tint", ref tint, ImGuiColorEditFlags.Float | ImGuiColorEditFlags.Hdr))
                 SetLook(current, ev, edit with { Tint = Changed(Vector3.Clamp(tint, Vector3.Zero, new Vector3(TimelineEffectEdit.MaxTint)), fileTint) });
-            Tip("Colours the whole effect. Above 1 makes it brighter.");
+            TimelineUi.Tip("Colours the whole effect. Above 1 makes it brighter.");
         }
         if (look.Size is { } fileSize)
         {
-            Fact("Size");
+            TimelineUi.Fact("Size");
             var size = edit.Size ?? fileSize;
             var perAxis = sizePerAxis || size.X != size.Y || size.Y != size.Z;
             var button = ImGui.CalcTextSize("XYZ").X + ImGui.GetStyle().FramePadding.X * 2;
@@ -326,7 +210,7 @@ public sealed partial class TimelineWindow
             }
             if (changed)
                 SetLook(current, ev, edit with { Size = Changed(size, fileSize) });
-            Tip("Scales the whole effect.");
+            TimelineUi.Tip("Scales the whole effect.");
             ImGui.SameLine(0, Theme.Gap);
             // Back to one value only when the axes agree; otherwise it would flatten them.
             var differ = perAxis && !sizePerAxis;
@@ -335,25 +219,25 @@ public sealed partial class TimelineWindow
                 if (ImGui.SmallButton(perAxis ? "All##size-axes" : "XYZ##size-axes"))
                     sizePerAxis = !perAxis;
             }
-            Tip(differ ? "The axes differ, so each is set on its own." : perAxis ? "Set all axes together." : "Set each axis on its own.");
+            TimelineUi.Tip(differ ? "The axes differ, so each is set on its own." : perAxis ? "Set all axes together." : "Set each axis on its own.");
         }
         if (look.Offset is { } fileOffset)
         {
-            Fact("Offset");
+            TimelineUi.Fact("Offset");
             var offset = edit.Offset ?? fileOffset;
             ImGui.SetNextItemWidth(-1);
             if (ImGui.DragFloat3("##offset", ref offset, .01f, -TimelineEffectEdit.MaxOffset, TimelineEffectEdit.MaxOffset, "%.2f", ImGuiSliderFlags.AlwaysClamp))
                 SetLook(current, ev, edit with { Offset = Changed(offset, fileOffset) });
-            Tip("Moves the whole effect.");
+            TimelineUi.Tip("Moves the whole effect.");
         }
         if (look.Turn is { } fileTurn)
         {
-            Fact("Turn");
+            TimelineUi.Fact("Turn");
             var turn = edit.Turn ?? fileTurn;
             ImGui.SetNextItemWidth(-1);
             if (ImGui.DragFloat3("##turn", ref turn, .5f, -TimelineEffectEdit.MaxTurn, TimelineEffectEdit.MaxTurn, "%.0f°", ImGuiSliderFlags.AlwaysClamp))
                 SetLook(current, ev, edit with { Turn = Changed(turn, fileTurn) });
-            Tip("Turns the whole effect, in degrees.");
+            TimelineUi.Tip("Turns the whole effect, in degrees.");
         }
     }
 
@@ -362,7 +246,7 @@ public sealed partial class TimelineWindow
     {
         if (look.Colors.IsEmpty)
             return;
-        Fact("Colours");
+        TimelineUi.Fact("Colours");
         var size = new Vector2(ImGui.GetFrameHeight());
         var right = ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X;
         var shown = Math.Min(look.Colors.Length, MaxSwatches);
@@ -387,7 +271,7 @@ public sealed partial class TimelineWindow
             if (swapped)
                 ImGui.GetWindowDrawList().AddRect(ImGui.GetItemRectMin(), ImGui.GetItemRectMax(), ImGui.GetColorU32(Theme.Accent), 0, ImDrawFlags.None,
                     Theme.Scaled(2));
-            Tip(swapped ? "Changed. Click to pick another colour." : colour.Uses == 1 ? "Used once. Click to change it." : $"Used {colour.Uses} times. Click to change it.");
+            TimelineUi.Tip(swapped ? "Changed. Click to pick another colour." : colour.Uses == 1 ? "Used once. Click to change it." : $"Used {colour.Uses} times. Click to change it.");
             DrawSwatchPopup(current, ev, edit, colour.Rgb);
         }
         if (look.Colors.Length > shown)
@@ -395,22 +279,22 @@ public sealed partial class TimelineWindow
             ImGui.SameLine(0, Theme.Gap);
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Muted, $"+{look.Colors.Length - shown}");
-            Tip("More colours. Hue and Saturation change them too.");
+            TimelineUi.Tip("More colours. Hue and Saturation change them too.");
         }
 
-        Fact("Hue");
+        TimelineUi.Fact("Hue");
         var hue = edit.Hue;
         ImGui.SetNextItemWidth(-1);
         if (ImGui.SliderFloat("##hue", ref hue, -180, 180, "%.0f°", ImGuiSliderFlags.AlwaysClamp))
             SetLook(current, ev, edit with { Hue = MathF.Round(hue) });
-        Tip("Turns every colour around the colour wheel. Ctrl+click to type.");
+        TimelineUi.Tip("Turns every colour around the colour wheel. Ctrl+click to type.");
 
-        Fact("Saturation");
+        TimelineUi.Fact("Saturation");
         var saturation = edit.Saturation * 100;
         ImGui.SetNextItemWidth(-1);
         if (ImGui.SliderFloat("##saturation", ref saturation, 0, TimelineEffectEdit.MaxSaturation * 100, "%.0f%%", ImGuiSliderFlags.AlwaysClamp))
             SetLook(current, ev, edit with { Saturation = MathF.Round(saturation) / 100 });
-        Tip("Makes every colour stronger or greyer.");
+        TimelineUi.Tip("Makes every colour stronger or greyer.");
     }
 
     private void DrawSwatchPopup(TimelineEditor current, TimelineEvent ev, TimelineEffectEdit edit, Vector3 swatch)
@@ -445,20 +329,14 @@ public sealed partial class TimelineWindow
     /// <summary> A row with a percent slider over a factor, in whole percents; the new factor when it changed. </summary>
     private static float? Percent(string label, string id, float factor, float max, string tooltip)
     {
-        Fact(label);
+        TimelineUi.Fact(label);
         var percent = factor * 100;
         ImGui.SetNextItemWidth(-1);
         var changed = ImGui.SliderFloat(id, ref percent, 0, max * 100, "%.0f%%", ImGuiSliderFlags.AlwaysClamp);
-        Tip(tooltip + " Ctrl+click to type.");
+        TimelineUi.Tip(tooltip + " Ctrl+click to type.");
         return changed ? MathF.Round(percent) / 100 : null;
     }
 
     /// <summary> A whole-effect value as the look keeps it: null when it is the file's own again. </summary>
     private static Vector3? Changed(Vector3 value, Vector3 file) => Vector3.DistanceSquared(value, file) < 1e-10f ? null : value;
-
-    private static void Tip(string text)
-    {
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(text);
-    }
 }
