@@ -1,5 +1,6 @@
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Ui;
 
@@ -224,7 +225,7 @@ internal static class ResourceViews
     /// <summary> Whether the Edit action may send this model to Blender. </summary>
     public static bool IsSafeModel(ResourceView node)
     {
-        if (!IsModel(node) || !PenumbraService.IsSafeGamePath(node.GamePath) ||
+        if (!IsModel(node) || !ModPaths.IsSafeGamePath(node.GamePath) ||
             !node.GamePath.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase) ||
             !node.ActualPath.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase))
             return false;
@@ -233,7 +234,7 @@ internal static class ResourceViews
             ResourceSourceState.LoadedMod => Path.IsPathRooted(node.ActualPath) &&
                                              !string.IsNullOrWhiteSpace(node.SourceModDirectory),
             ResourceSourceState.GameData => !Path.IsPathRooted(node.ActualPath) &&
-                                            PenumbraService.IsSafeGamePath(node.ActualPath),
+                                            ModPaths.IsSafeGamePath(node.ActualPath),
             _ => false,
         };
     }

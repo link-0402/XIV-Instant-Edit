@@ -13,6 +13,7 @@ using InstantEdit.Services.GameFiles;
 using InstantEdit.Services.Heels;
 using InstantEdit.Services.NeckSeam;
 using InstantEdit.Services.Painter;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Services.Previews;
 using InstantEdit.Services.Skeletons;
 using InstantEdit.Services.TextureCompression;
@@ -33,7 +34,7 @@ public sealed class MainWindow : Window, IDisposable
     private const int AutoRefreshDelayMs = 1000;
     private const bool ShowAnimationsTab = true;
     private readonly Configuration _config;
-    private readonly PenumbraService _penumbra;
+    private readonly PenumbraIpc _penumbra;
     private readonly OnScreenService _onScreen;
     private readonly IPluginLog _log;
     private readonly PreviewService _previews;
@@ -77,7 +78,7 @@ public sealed class MainWindow : Window, IDisposable
     private MainTab? _pendingTab;
     private long _resourcesChangedTicks;
 
-    public MainWindow(Configuration config, PenumbraService penumbra, OnScreenService onScreen,
+    internal MainWindow(Configuration config, PenumbraIpc penumbra, SourceMods sourceMods, OnScreenService onScreen,
         ResourceSourceAttributor resourceSources, BlenderClient blender,
         IDataManager data, IChatGui chat, IPluginLog log, Action saveConfig, Action restartExportListener, IUiBuilder uiBuilder,
         ITextureProvider textureProvider, TextureEditService textures, INotificationManager notifications,
@@ -97,7 +98,7 @@ public sealed class MainWindow : Window, IDisposable
         _statusStrip = new StatusStrip(_feed);
         _blenderConnection = new BlenderConnection(blender, config, textures, log);
         _pluginVersion = _blenderConnection.PluginVersion;
-        _models = new ModelSender(config, penumbra, blender, _blenderConnection, data, chat, log, resourceSources, _feed, lifetime);
+        _models = new ModelSender(config, penumbra, sourceMods, blender, _blenderConnection, data, chat, log, resourceSources, _feed, lifetime);
         _painter = new PainterPanel(config, log, textures, _models, _feed, _pluginVersion, lifetime);
         _textureTab = new TextureSessionsTab(config, textures, previews, _painter, _feed, log, lifetime);
         _hoverCards = new ResourceHoverCards(previews);

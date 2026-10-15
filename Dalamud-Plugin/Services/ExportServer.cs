@@ -7,6 +7,7 @@ using System.Text.Json.Serialization;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using InstantEdit.Services.GameFiles;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Services.Skeletons;
 
 namespace InstantEdit.Services;
@@ -315,7 +316,12 @@ public sealed partial class ExportServer : IDisposable
     internal sealed record StagedExport(string FilePath, string DirectoryPath);
 
     private readonly Configuration    _config;
-    private readonly PenumbraService  _penumbra;
+    private readonly ModelExportService _modelExports;
+    private readonly RaceExportService _raceExports;
+    private readonly SizesExportService _sizesExports;
+    private readonly ModelBackupService _modelBackups;
+    private readonly MashupService _mashups;
+    private readonly ModResourceScanner _scanner;
     private readonly ExportContextRegistry _contexts;
     private readonly bool _ownsContexts;
     private readonly IPluginLog       _log;
@@ -340,22 +346,35 @@ public sealed partial class ExportServer : IDisposable
 
     internal void AttachPainter(Painter.PainterJobService painter) => _painter = painter;
 
-    public ExportServer(
+    internal ExportServer(
         Configuration config,
-        PenumbraService penumbra,
+        ModelExportService modelExports,
+        RaceExportService raceExports,
+        SizesExportService sizesExports,
+        ModelBackupService modelBackups,
+        MashupService mashups,
+        ModResourceScanner scanner,
         ExportContextRegistry contexts,
         IPluginLog log)
     {
         _config   = config;
-        _penumbra = penumbra;
+        _modelExports = modelExports;
+        _raceExports = raceExports;
+        _sizesExports = sizesExports;
+        _modelBackups = modelBackups;
+        _mashups = mashups;
+        _scanner = scanner;
         _contexts = contexts;
         _ownsContexts = false;
         _log      = log;
     }
 
     /// <summary> Compatibility constructor for hosts that do not provide a shared registry. </summary>
-    public ExportServer(Configuration config, PenumbraService penumbra, IPluginLog log)
-        : this(config, penumbra, new ExportContextRegistry(Guid.NewGuid().ToString("N")), log)
+    internal ExportServer(Configuration config, ModelExportService modelExports, RaceExportService raceExports,
+        SizesExportService sizesExports, ModelBackupService modelBackups, MashupService mashups, ModResourceScanner scanner,
+        IPluginLog log)
+        : this(config, modelExports, raceExports, sizesExports, modelBackups, mashups, scanner,
+            new ExportContextRegistry(Guid.NewGuid().ToString("N")), log)
         => _ownsContexts = true;
 
     public void Start()
@@ -728,7 +747,7 @@ public sealed partial class ExportServer : IDisposable
         if (target.DestinationState != InstantEditImportContext.ReadyDestination)
             return Error(409, "destination_not_ready", "create the Penumbra mod before loading variant targets");
 
-        var result = await _penumbra.GetVariantTargetsAsync(
+        var result = await _modelExports.GetVariantTargetsAsync(
             target.SourceModDirectory!, target.TargetFilePath!, target.SourceModRootPath,
             target.TargetRelativePath, target.GamePath, target.SourceModStableId).ConfigureAwait(false);
         if (!result.Success)
@@ -783,7 +802,7 @@ public sealed partial class ExportServer : IDisposable
             contributors.Add(new MashupContributor(contributorContext, contributor.Materials!));
         }
 
-        var coverage = await _penumbra.GetMaterialCoverageAsync(activeContext, contributors).ConfigureAwait(false);
+        var coverage = await _scanner.GetMaterialCoverageAsync(activeContext, contributors).ConfigureAwait(false);
         return (200, Json(new
         {
             ok = true,
@@ -818,7 +837,7 @@ public sealed partial class ExportServer : IDisposable
         if (target.DestinationState != InstantEditImportContext.ReadyDestination)
             return Error(409, "destination_not_ready", "the import has no Penumbra mod backup destination yet");
 
-        var result = await _penumbra.RestoreSourceBackupAsync(
+        var result = await _modelBackups.RestoreSourceBackupAsync(
             target.SourceModDirectory!,
             target.TargetFilePath!,
             target.SourceModRootPath,
@@ -849,7 +868,7 @@ public sealed partial class ExportServer : IDisposable
             return Error(StatusForCode(registryCode), registryCode, "export context was rejected");
         if (target.DestinationState != InstantEditImportContext.ReadyDestination)
             return Error(409, "destination_not_ready", "the import has no Penumbra mod backup destination yet");
-        var result = await _penumbra.ClearManagedBackupsAsync(
+        var result = await _modelBackups.ClearManagedBackupsAsync(
             target.SourceModDirectory!, target.TargetFilePath!, target.SourceModRootPath,
             target.TargetRelativePath, target.GamePath, clear.BackupTargetId!, target.SourceModStableId).ConfigureAwait(false);
         return ResultResponse(new ExportReceipt(result.Success, result.Code, result.Message));
@@ -889,7 +908,7 @@ public sealed partial class ExportServer : IDisposable
         if (RacialScalingRefusal(contributors.Select(item => item.Context).Prepend(activeContext), GamePathRace(activeContext)) is { } planScaling)
             return Error(StatusForCode(planScaling.Code), planScaling.Code, planScaling.Message);
 
-        var plan = PenumbraService.BuildMashupPlan(
+        var plan = MashupPlanning.BuildMashupPlan(
             activeContext, contributors, requestPlan.BundleExternalDependencies);
         if (!plan.Success)
             return Error(StatusForCode(plan.Code), plan.Code, plan.Message);
@@ -944,7 +963,7 @@ public sealed partial class ExportServer : IDisposable
         if (RacialScalingRefusal(contributors.Select(item => item.Context).Prepend(activeContext), GamePathRace(activeContext)) is { } exportScaling)
             return Error(StatusForCode(exportScaling.Code), exportScaling.Code, exportScaling.Message);
 
-        var plan = PenumbraService.BuildMashupPlan(
+        var plan = MashupPlanning.BuildMashupPlan(
             activeContext, contributors, mashup.BundleExternalDependencies);
         if (!plan.Success)
             return Error(StatusForCode(plan.Code), plan.Code, plan.Message);
@@ -989,7 +1008,7 @@ public sealed partial class ExportServer : IDisposable
                 receipt = new ExportReceipt(false, stageResult.Error.Value.Code, stageResult.Error.Value.Message);
             else
             {
-                var result = await _penumbra.ApplyMashupAsync(
+                var result = await _mashups.ApplyMashupAsync(
                     activeContext,
                     contributors,
                     plan,
@@ -1191,7 +1210,7 @@ public sealed partial class ExportServer : IDisposable
                 string.IsNullOrWhiteSpace(target.SourceModDirectory))
                 return new ExportReceipt(false, "missing_source_target", "the import has no original Penumbra mod destination");
 
-            var result = await _penumbra.ApplySourceExportAsync(
+            var result = await _modelExports.ApplySourceExportAsync(
                 target.SourceModDirectory!,
                 target.TargetFilePath!,
                 target.SourceModRootPath,
@@ -1211,7 +1230,7 @@ public sealed partial class ExportServer : IDisposable
                 attributeTags,
                 attributeMasks,
                 target.ResolvedGamePath,
-                PenumbraService.KnownManipulations(target),
+                AttributeGroupService.KnownManipulations(target),
                 estEntries).ConfigureAwait(false);
             return new ExportReceipt(
                 result.Success,
@@ -1236,7 +1255,7 @@ public sealed partial class ExportServer : IDisposable
         IReadOnlyList<EstEntryRequest>? estEntries,
         int? race = null)
     {
-        var created = await _penumbra.CreateGameModelModAsync(
+        var created = await _modelExports.CreateGameModelModAsync(
                 target, filePath, newModName, createAttributeGroups, attributeTags, attributeMasks, estEntries, race)
             .ConfigureAwait(false);
         if (!created.Result.Success)
@@ -1343,7 +1362,7 @@ public sealed partial class ExportServer : IDisposable
             return "invalid_sha256";
         if (request.Version == 1 && request.NewModName is not null)
             return "unsupported_field";
-        if (request.NewModName is not null && !PenumbraService.IsSafeNewModName(request.NewModName))
+        if (request.NewModName is not null && !ModPaths.IsSafeNewModName(request.NewModName))
             return "invalid_mod_name";
         if (request.VariantName is not null && !IsSafeVariantName(request.VariantName))
             return "invalid_variant_name";
@@ -1351,7 +1370,7 @@ public sealed partial class ExportServer : IDisposable
             if (!string.Equals(request.VariantTarget, "option", StringComparison.Ordinal))
                 return "penumbra_setup_requires_variant";
         if (request.SetupInPenumbra && !string.Equals(request.VariantTarget, "option", StringComparison.Ordinal) &&
-            !PenumbraService.IsSafeVariantGroupName(request.VariantGroupName))
+            !ModPaths.IsSafeVariantGroupName(request.VariantGroupName))
             return "penumbra_setup_requires_group_name";
         if (request.SetupInPenumbra && request.VariantTarget is not ("new_group" or "group" or "option"))
             return "invalid_variant_target";
@@ -1360,7 +1379,7 @@ public sealed partial class ExportServer : IDisposable
             return "missing_variant_target";
         return ValidateAttributeGroupEnvelope(
                    request.CreateAttributeGroups, request.AttributeTags, request.AttributeMasks) ??
-               PenumbraService.ValidateEstEntryRequests(request.EstEntries);
+               EstEntryService.ValidateEstEntryRequests(request.EstEntries);
     }
 
     /// <summary>Shared preamble for envelopes with exactly one supported schema/version pair.</summary>
@@ -1434,7 +1453,7 @@ public sealed partial class ExportServer : IDisposable
             string.IsNullOrWhiteSpace(request.FilePath) || string.IsNullOrWhiteSpace(request.Sha256) ||
             string.IsNullOrWhiteSpace(request.PlanFingerprint) ||
             (request.Destination is not null && request.Destination is not ("active_mod" or "new_mod")) ||
-            !PenumbraService.IsSafeVariantGroupName(request.Name))
+            !ModPaths.IsSafeVariantGroupName(request.Name))
             return "missing_field";
         if (request.Size <= 0 || request.Size > MaxExportBytes || request.Sha256.Length != 64 ||
             request.Sha256.Any(c => !Uri.IsHexDigit(c)) || request.PlanFingerprint.Length != 64 ||
@@ -1451,7 +1470,7 @@ public sealed partial class ExportServer : IDisposable
         }
         return ValidateAttributeGroupEnvelope(
                    request.CreateAttributeGroups, request.AttributeTags, request.AttributeMasks) ??
-               PenumbraService.ValidateEstEntryRequests(request.EstEntries);
+               EstEntryService.ValidateEstEntryRequests(request.EstEntries);
     }
 
     private static string? ValidateAttributeGroupEnvelope(

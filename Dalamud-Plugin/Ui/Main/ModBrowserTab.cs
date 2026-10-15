@@ -1,5 +1,6 @@
 using Dalamud.Interface;
 using InstantEdit.Services;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Studio;
 using InstantEdit.Studio.Windows.Home;
 
@@ -8,12 +9,12 @@ namespace InstantEdit.Ui.Main;
 /// <summary> The Mod Browser: Penumbra's mods as tiles, a window per open mod, and the modpack builder. </summary>
 internal sealed class ModBrowserTab
 {
-    private readonly PenumbraService _penumbra;
+    private readonly PenumbraIpc _penumbra;
     private readonly StatusFeed _feed;
     private StudioHost? _studio;
     private LibraryView? _library;
 
-    public ModBrowserTab(PenumbraService penumbra, StatusFeed feed)
+    public ModBrowserTab(PenumbraIpc penumbra, StatusFeed feed)
     {
         _penumbra = penumbra;
         _feed = feed;

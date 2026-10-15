@@ -5,6 +5,7 @@ using Dalamud.Interface.Utility.Raii;
 using Dalamud.Plugin.Services;
 using InstantEdit.Services;
 using InstantEdit.Services.GameFiles;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Ui.Main;
 
@@ -15,7 +16,7 @@ internal sealed class GameFileExportDialog
     private const int ManyTextureModels = 500;
     private readonly Configuration _config;
     private readonly Action _saveConfig;
-    private readonly PenumbraService _penumbra;
+    private readonly PenumbraIpc _penumbra;
     private readonly IPluginLog _log;
     private readonly StatusFeed _feed;
     private readonly ResourceRows _rows;
@@ -30,7 +31,7 @@ internal sealed class GameFileExportDialog
     private bool _openGameExportDialog;
     private GameExportResult? _dismissedGameExport;
 
-    public GameFileExportDialog(Configuration config, Action saveConfig, PenumbraService penumbra, IPluginLog log, StatusFeed feed, ResourceRows rows)
+    public GameFileExportDialog(Configuration config, Action saveConfig, PenumbraIpc penumbra, IPluginLog log, StatusFeed feed, ResourceRows rows)
     {
         _config = config;
         _saveConfig = saveConfig;

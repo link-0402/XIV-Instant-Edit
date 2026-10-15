@@ -32,7 +32,7 @@ public sealed class ResourceSourceAttributor
     private ModRootIndex _index = ModRootIndex.Empty;
     private long _generation;
 
-    public ResourceSourceAttributor(PenumbraService penumbra, IPluginLog log)
+    internal ResourceSourceAttributor(PenumbraIpc penumbra, IPluginLog log)
         : this(() => ReadModList(penumbra), ModMetadata.ReadModStableIdentifier, message => log.Debug(message))
     {
     }
@@ -117,7 +117,7 @@ public sealed class ResourceSourceAttributor
         }
     }
 
-    private static ModListSnapshot? ReadModList(PenumbraService penumbra)
+    private static ModListSnapshot? ReadModList(PenumbraIpc penumbra)
     {
         var modDirectory = penumbra.GetModDirectory();
         if (modDirectory is null)

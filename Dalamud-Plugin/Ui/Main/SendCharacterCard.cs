@@ -8,6 +8,7 @@ using InstantEdit.Services;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.CharacterSend;
 using InstantEdit.Services.Painter;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Services.Skeletons;
 
 namespace InstantEdit.Ui.Main;
@@ -40,7 +41,7 @@ internal sealed class SendCharacterCard
     private readonly Configuration _config;
     private readonly Action _saveConfig;
     private readonly OnScreenService _onScreen;
-    private readonly PenumbraService _penumbra;
+    private readonly PenumbraIpc _penumbra;
     private readonly BlenderClient _blender;
     private readonly BlenderConnection _blenderConnection;
     private readonly ModelSender _models;
@@ -53,7 +54,7 @@ internal sealed class SendCharacterCard
     private readonly StatusFeed _feed;
     private readonly CancellationToken _lifetime;
 
-    public SendCharacterCard(Configuration config, Action saveConfig, OnScreenService onScreen, PenumbraService penumbra, BlenderClient blender,
+    public SendCharacterCard(Configuration config, Action saveConfig, OnScreenService onScreen, PenumbraIpc penumbra, BlenderClient blender,
         BlenderConnection blenderConnection, ModelSender models, AnimationIntegration animationHub, AnimationDelivery animationDelivery,
         RecorderPanel recorder, ResourceSourceAttributor resourceSources, IChatGui chat, IPluginLog log, StatusFeed feed, CancellationToken lifetime)
     {

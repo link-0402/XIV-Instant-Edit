@@ -42,7 +42,8 @@ internal sealed class PhysicsPreviewService : IDisposable
     private static readonly Regex SessionName = new("^[0-9a-f]{16}$", RegexOptions.CultureInvariant);
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
-    private readonly PenumbraService penumbra;
+    private readonly PenumbraIpc penumbra;
+    private readonly PreviewModWriter previewMods;
     private readonly IFramework framework;
     private readonly IPluginLog log;
     private readonly Func<string> cacheRoot;
@@ -60,9 +61,10 @@ internal sealed class PhysicsPreviewService : IDisposable
     private PhysicsPreviewNotice? notice;
     private volatile bool disposed;
 
-    public PhysicsPreviewService(PenumbraService penumbra, IFramework framework, IPluginLog log, string configDirectory, Func<string> cacheRoot)
+    public PhysicsPreviewService(PenumbraIpc penumbra, PreviewModWriter previewMods, IFramework framework, IPluginLog log, string configDirectory, Func<string> cacheRoot)
     {
         this.penumbra = penumbra;
+        this.previewMods = previewMods;
         this.framework = framework;
         this.log = log;
         this.cacheRoot = cacheRoot;
@@ -119,7 +121,7 @@ internal sealed class PhysicsPreviewService : IDisposable
             var collection = await penumbra.TemporaryModCollectionAsync(objectIndex).ConfigureAwait(false)
                 ?? throw new IOException("Your character's Penumbra collection is unavailable.");
             var root = Path.Combine(Path.GetFullPath(cacheRoot()), CacheFolder);
-            var modRoot = await penumbra.PreviewModRootAsync().ConfigureAwait(false);
+            var modRoot = await previewMods.PreviewModRootAsync().ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(modRoot) && (PathRules.IsPathWithin(root, modRoot) || PathRules.IsPathWithin(modRoot, root)))
                 throw new IOException("The cache folder is inside Penumbra's mod folder. Choose another cache folder in Settings.");
             TextureFiles.EnsureLocalPath(root);

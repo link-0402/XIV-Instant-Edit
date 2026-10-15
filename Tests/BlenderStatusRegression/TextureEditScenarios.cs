@@ -1169,7 +1169,7 @@ internal static partial class TextureEditScenarios
         }
         public Task<TextureSource> CaptureAsync(TextureEditRequest request, CancellationToken token)
         {
-            // As PenumbraService captures: the header of the normalized file, the bytes and hash as stored.
+            // As TextureModBackend captures: the header of the normalized file, the bytes and hash as stored.
             var h = TextureFiles.ReadOriginal(Original).Header;
             // Each game path gets its own file in the mod, so a batch can hold several textures.
             var relative = "Files/" + request.GamePath;
@@ -1187,7 +1187,7 @@ internal static partial class TextureEditScenarios
                 MappingFingerprint = File.Exists(Meta) ? TextureModBackend.TextureMappingFingerprint(ModRoot, relative) : "",
             }));
         }
-        // As PenumbraService checks before encoding, minus Penumbra and the live actor.
+        // As TextureModBackend checks before encoding, minus Penumbra and the live actor.
         public Task CheckAsync(TextureEditSession s, CancellationToken token)
         {
             Checks++;
