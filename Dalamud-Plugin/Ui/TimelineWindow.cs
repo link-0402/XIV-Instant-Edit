@@ -51,6 +51,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly TimelineLoader loader;
     private readonly LivePosePanel livePose;
     private readonly SidePanel sidePanel;
+    private readonly TimelineToolbar toolbar;
     private readonly BonesWindow bonesWindow;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
@@ -122,6 +123,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         loader = new TimelineLoader(session, timelinePreview, Open);
         sidePanel = new SidePanel(session, properties, facePage, recentEdits, effectLooks, soundInspector, posing, timelinePreview, Open);
         livePose = new LivePosePanel(session, sidePanel.ShowProperties);
+        toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow);
         bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, this, textures);
 
         Size = new Vector2(1000, 560);
@@ -542,9 +544,9 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
 
         timelinePreview.Update(editor, source);
         CheckGizmo();
-        DrawToolbar(editor);
+        toolbar.Draw(editor);
         timelinePreview.DrawBar(editor, source);
-        DrawMessages(editor);
+        toolbar.DrawMessages(editor);
 
         var avail = ImGui.GetContentRegionAvail();
         if (footerHeight <= 0)
