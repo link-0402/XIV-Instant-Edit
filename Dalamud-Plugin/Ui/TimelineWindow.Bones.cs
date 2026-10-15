@@ -38,9 +38,6 @@ public sealed partial class TimelineWindow
     private readonly ITextureProvider textures;
     private BonesPage bonesPage = BonesPage.Map;
     private bool swapSides;
-    private bool characterAxes;
-    // A drag on the rotation ball is running as one undo step.
-    private bool ballEditing;
     private string boneSearch = string.Empty;
     internal BonesWindow Bones => bonesWindow;
 
@@ -451,9 +448,9 @@ public sealed partial class TimelineWindow
         ImGui.TextColored(Theme.Label, MotionEdits.KindName(layer.Kind));
         ImGui.Spacing();
         if (layer.Kind == MotionLayerKind.Amplitude)
-            DrawLayerLimit(current, layer, skeleton, readOnly, false);
+            boneEditor.DrawLimit(current, layer, skeleton, readOnly, false);
         else
-            DrawBoneEditor(current, layer, skeleton, loaded, readOnly, true);
+            boneEditor.Draw(current, layer, skeleton, loaded, readOnly, true);
         if (layer.Kind == MotionLayerKind.Pose)
         {
             ImGui.Spacing();
@@ -461,107 +458,6 @@ public sealed partial class TimelineWindow
             ImGui.Spacing();
             DrawPoseSources(current, layer, skeleton, loaded, readOnly);
         }
-    }
-
-    /// <summary>
-    /// The rotation ball over the primary bone: its rings show the bone's own axes as the camera sees
-    /// it, or the character's. A drag is one undo step and turns every bone the edit changes (see
-    /// <see cref="PoseEdits.Turned"/>). With several of them the rings are the character's: each bone's
-    /// own axes point elsewhere, so only those turn them all the same way.
-    /// </summary>
-    private void DrawBall(TimelineEditor current, MotionLayer layer, BonePosing.BoneFrames? frames, IReadOnlyList<PoseTarget> turned,
-        PoseTarget primary, int frame)
-    {
-        if (CameraRotation() is not { } view)
-            return;
-        var actor = ActorRotation() ?? Quaternion.Identity;
-        var several = turned.Count > 1;
-        var character = characterAxes || several;
-        // The primary bone as the layers turn it, in character space.
-        Quaternion? bone = frames is { } known ? Quaternion.Normalize(known.Space(primary.Bone) * Quaternion.Normalize(primary.Value.Rotation)) : null;
-        var ring = character || bone is not { } own ? actor : actor * own;
-        var size = Math.Min(ImGui.GetContentRegionAvail().X, Theme.Scaled(220));
-        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + Math.Max(0, (ImGui.GetContentRegionAvail().X - size) / 2));
-        var result = RotationBall.Draw("##bone-ball", size, ring, view);
-        // Turns need the bones' frames from the motion, which may still be read.
-        if (result.Started && frames != null)
-        {
-            current.BeginFieldEdit();
-            ballEditing = true;
-        }
-        if (result.Turn is { } turn && frames != null && bone is { } axes)
-            current.Change(PoseEdits.Turn(current.Document, layer.Key, frame, turned, character ? turn : PoseEdits.Around(axes, turn), frames.Space));
-        if (result.Ended && ballEditing)
-        {
-            current.EndFieldEdit();
-            ballEditing = false;
-        }
-        if (frames == null)
-            decode.DrawWait();
-        using (ImRaii.Disabled(several))
-        {
-            if (ImGui.RadioButton("Bone axes", !character))
-                characterAxes = false;
-        }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(several
-                ? "Several bones turn about the character's axes: their own axes point different ways."
-                : "The ball and the gizmo use the bone's own axes.");
-        ImGui.SameLine();
-        if (ImGui.RadioButton("Character axes", character))
-            characterAxes = true;
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("The ball and the gizmo use the character's axes: up, forward and to the side.");
-        if (OverlayWanted)
-            DrawGizmoChoice(layer, frame);
-    }
-
-    /// <summary> Whether the gizmo on the character turns or moves, and what it waits for. </summary>
-    private void DrawGizmoChoice(MotionLayer layer, int frame)
-    {
-        var turns = layer.Components.HasFlag(PoseComponents.Rotation);
-        var moves = layer.Components.HasFlag(PoseComponents.Position);
-        var move = moves && (gizmoMove || !turns);
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Muted, "Gizmo");
-        ImGui.SameLine(0, Theme.Gap);
-        using (ImRaii.Disabled(!turns))
-        {
-            if (ImGui.RadioButton("Turn##gizmo-turn", !move))
-                gizmoMove = false;
-        }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(turns ? "The gizmo on the character turns the bones." : "This layer doesn't turn bones.");
-        ImGui.SameLine();
-        using (ImRaii.Disabled(!moves))
-        {
-            if (ImGui.RadioButton("Move##gizmo-move", move))
-                gizmoMove = true;
-        }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(moves ? "The gizmo on the character moves the bones." : "This layer doesn't move bones.");
-        if (GizmoOperation(layer, frame, out var reason) == null && reason != null)
-            Widgets.HintWrapped(reason);
-    }
-
-    /// <summary>The rotation of the game camera's view, for the ball; null without a camera.</summary>
-    private static unsafe Quaternion? CameraRotation()
-    {
-        var manager = CameraManager.Instance();
-        if (manager == null)
-            return null;
-        var camera = manager->GetActiveCamera();
-        if (camera == null)
-            return null;
-        Matrix4x4 view = camera->CameraBase.SceneCamera.ViewMatrix;
-        view.M44 = 1;
-        return Matrix4x4.Decompose(view, out _, out var rotation, out _) ? Quaternion.Normalize(rotation) : null;
-    }
-
-    private Quaternion? ActorRotation()
-    {
-        try { return playback.ActorRotation(); }
-        catch (InvalidOperationException) { return null; }
     }
 
     /// <summary> In the Bones window: undo and redo, and the arrows step the playhead. </summary>
