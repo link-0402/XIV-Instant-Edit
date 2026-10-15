@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Dalamud.Plugin.Services;
+using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
 using static InstantEdit.Services.PenumbraMods.ModJson;
@@ -43,17 +44,17 @@ internal sealed partial class EstEntryService
     private sealed record EstTarget(EstContainer Container, IReadOnlyList<EstIdentity> Hair);
 
     /// <summary>Envelope check for <c>estEntries</c>: hair only, entries 1-9999, player race codes.</summary>
-    internal static string? ValidateEstEntryRequests(IReadOnlyList<EstEntryRequest>? entries)
+    internal static ResultCode? ValidateEstEntryRequests(IReadOnlyList<EstEntryRequest>? entries)
     {
         if (entries is null)
             return null;
         if (entries.Count > 4 || entries.Any(entry => entry is null) ||
             entries.Select(entry => entry.Slot).Distinct(StringComparer.Ordinal).Count() != entries.Count)
-            return "invalid_est_entries";
+            return ResultCode.InvalidEstEntries;
         foreach (var entry in entries)
             if (!string.Equals(entry.Slot, EstIdentity.Slot, StringComparison.Ordinal) ||
                 entry.Entry is < 1 or > 9999 || EstRaceCode(entry.Race) is null)
-                return "invalid_est_entries";
+                return ResultCode.InvalidEstEntries;
         return null;
     }
 

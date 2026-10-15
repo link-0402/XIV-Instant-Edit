@@ -167,21 +167,21 @@ internal sealed class SizesExportService
     {
         resolvedGamePath ??= sourceGamePath;
         if (!IsSafeLocalModelPath(sourceFilePath))
-            return new ExportResult(false, "destination_unsafe", "The original Penumbra model destination is invalid.");
+            return new ExportResult(false, ResultCode.DestinationUnsafe, "The original Penumbra model destination is invalid.");
         if (sizes.Count == 0)
-            return new ExportResult(false, "invalid_sizes", "No sizes to export.");
+            return new ExportResult(false, ResultCode.InvalidSizes, "No sizes to export.");
         foreach (var size in sizes)
         {
             var validationError = ValidateExportRequest(sourceModDirectory, sourceGamePath, size.ExportedFile);
             if (validationError is not null)
-                return new ExportResult(false, "invalid_export_file", validationError);
+                return new ExportResult(false, ResultCode.InvalidExportFile, validationError);
         }
         if (variantTarget is not ("new_group" or "group"))
-            return new ExportResult(false, "invalid_variant_target", "Sizes go into an option group.");
+            return new ExportResult(false, ResultCode.InvalidVariantTarget, "Sizes go into an option group.");
         if (variantTarget == "new_group" && !IsSafeVariantGroupName(variantGroupName))
-            return new ExportResult(false, "invalid_variant_group", "Penumbra variant setup requires an option group name.");
+            return new ExportResult(false, ResultCode.InvalidVariantGroup, "Penumbra variant setup requires an option group name.");
         if (variantTarget == "group" && string.IsNullOrWhiteSpace(variantTargetId))
-            return new ExportResult(false, "stale_variant_target", "The selected Penumbra group is invalid.");
+            return new ExportResult(false, ResultCode.StaleVariantTarget, "The selected Penumbra group is invalid.");
 
         await _exportGate.WaitAsync().ConfigureAwait(false);
         string? committedTarget = null;
@@ -210,7 +210,7 @@ internal sealed class SizesExportService
             }
 
             if (sourceOptionStatus == "ambiguous")
-                return new ExportResult(false, "ambiguous_source_option",
+                return new ExportResult(false, ResultCode.AmbiguousSourceOption,
                     "Multiple Penumbra options provide the imported model. Re-import it from the intended option, then export again.");
             JsonObject? sourceOptionTemplate = null;
             if (sourceOptionStatus != "default")
@@ -218,7 +218,7 @@ internal sealed class SizesExportService
                 var source = ResolveSourceOption(resolved.Target.Folder, sourceGamePath,
                     resolved.Target.RelativePath, sourceOption);
                 if (source.Error is not null)
-                    return new ExportResult(false, "source_option_unavailable", source.Error);
+                    return new ExportResult(false, ResultCode.SourceOptionUnavailable, source.Error);
                 sourceOptionTemplate = source.Option;
             }
             var planError = PlanSizeGroup(
@@ -227,7 +227,7 @@ internal sealed class SizesExportService
                 variantTarget == "group" ? variantTargetId : null, defaultSize, sourceOptionTemplate, out var plan);
             if (planError is not null)
                 return new ExportResult(false,
-                    variantTarget == "group" ? "stale_variant_target" : "invalid_variant_group", planError);
+                    variantTarget == "group" ? ResultCode.StaleVariantTarget : ResultCode.InvalidVariantGroup, planError);
 
             var targets = plan!.Files.Select(file => (file.RelativePath, Path: Path.Combine(
                 resolved.Target.Folder, file.RelativePath.Replace('/', Path.DirectorySeparatorChar)))).ToArray();
@@ -250,7 +250,7 @@ internal sealed class SizesExportService
                     continue;
                 var replacedSizes = order.Take(step).Where(done => plan.Replaced.Contains(targets[done].RelativePath))
                     .Select(done => sizes[done].Name).ToArray();
-                return new ExportResult(false, "write_failed", step == 0
+                return new ExportResult(false, ResultCode.WriteFailed, step == 0
                     ? writeError
                     : replacedSizes.Length == 0
                         ? $"{writeError} {step} of {sizes.Count} sizes were written as new files; the group wasn't changed."
@@ -292,7 +292,7 @@ internal sealed class SizesExportService
                     warnings.Add(redrawWarning);
             }
 
-            var code = warnings.Count == 0 ? "sizes_exported" : "sizes_exported_with_warnings";
+            var code = warnings.Count == 0 ? ResultCode.SizesExported : ResultCode.SizesExportedWithWarnings;
             var message = warnings.Count == 0
                 ? $"Exported {sizes.Count} sizes to {plan.GroupName} and reloaded {resolved.Target.Directory}."
                 : $"Exported {sizes.Count} sizes to {plan.GroupName}; {warnings.Count} follow-up warning(s).";
@@ -304,11 +304,11 @@ internal sealed class SizesExportService
             if (committedTarget is not null)
                 return new ExportResult(
                     true,
-                    "sizes_exported_with_warnings",
+                    ResultCode.SizesExportedWithWarnings,
                     $"Exported {sizes.Count} sizes; follow-up processing failed.",
                     [$"Follow-up processing failed: {e.Message}"],
                     committedTarget);
-            return new ExportResult(false, "write_failed", $"Failed before the sizes could be written: {e.Message}");
+            return new ExportResult(false, ResultCode.WriteFailed, $"Failed before the sizes could be written: {e.Message}");
         }
         finally
         {

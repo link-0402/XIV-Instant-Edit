@@ -75,8 +75,7 @@ public sealed partial class ExportServer
             return parseError.Value;
         var export = parsed!;
 
-        var envelopeError = ValidateRaceEnvelope(export);
-        if (envelopeError is not null)
+        if (ValidateRaceEnvelope(export) is { } envelopeError)
             return Error(StatusForCode(envelopeError), envelopeError, "unsupported or malformed race export envelope");
 
         if (!_contexts.TryBeginExport(
@@ -92,7 +91,7 @@ public sealed partial class ExportServer
                 RaceExportRequestFingerprint(export)))
             return Error(StatusForCode(registryCode), registryCode, "export context was rejected");
         if (reservation is null)
-            return Error(500, "internal_error", "export reservation was not created");
+            return Error(500, ResultCode.InternalError, "export reservation was not created");
         if (!reservation.IsOwner)
             return ResultResponse(await reservation.Completion.ConfigureAwait(false));
 
@@ -111,10 +110,10 @@ public sealed partial class ExportServer
             else if (target.DestinationState == InstantEditImportContext.NewModRequiredDestination)
                 receipt = await CreateRaceModelModAsync(target, staged!.FilePath, race, export).ConfigureAwait(false);
             else if (export.NewModName is not null)
-                receipt = new ExportReceipt(false, "unexpected_new_mod_name", "this import already has a Penumbra destination");
+                receipt = new ExportReceipt(false, ResultCode.UnexpectedNewModName, "this import already has a Penumbra destination");
             else if (string.IsNullOrWhiteSpace(target.TargetFilePath) ||
                      string.IsNullOrWhiteSpace(target.SourceModDirectory))
-                receipt = new ExportReceipt(false, "missing_source_target",
+                receipt = new ExportReceipt(false, ResultCode.MissingSourceTarget,
                     "the import has no original Penumbra mod destination");
             else
             {
@@ -141,7 +140,7 @@ public sealed partial class ExportServer
         catch (Exception e)
         {
             _log.Error(e, "Race export processing failed.");
-            receipt = new ExportReceipt(false, "internal_error", "export processing failed");
+            receipt = new ExportReceipt(false, ResultCode.InternalError, "export processing failed");
         }
         finally
         {
@@ -149,7 +148,7 @@ public sealed partial class ExportServer
         }
 
         _contexts.CompleteExport(export.ContextId!, export.ExportId!, receipt);
-        _log.Information($"Race export {receipt.Code}: {receipt.Message}");
+        _log.Information($"Race export {receipt.Code.Wire()}: {receipt.Message}");
         return ResultResponse(receipt);
     }
 
@@ -158,9 +157,9 @@ public sealed partial class ExportServer
         InstantEditImportContext target, string filePath, ushort race, RaceExportRequest export)
     {
         if (string.IsNullOrWhiteSpace(export.NewModName))
-            return new ExportReceipt(false, "missing_new_mod_name", "enter a name for the new Penumbra mod");
+            return new ExportReceipt(false, ResultCode.MissingNewModName, "enter a name for the new Penumbra mod");
         if (export.BackupExisting)
-            return new ExportReceipt(false, "invalid_pending_export", "a first vanilla export cannot target backups");
+            return new ExportReceipt(false, ResultCode.InvalidPendingExport, "a first vanilla export cannot target backups");
         return await CreateGameModelModAsync(
                 target, filePath, export.NewModName, export.CreateAttributeGroups, export.AttributeTags,
                 export.AttributeMasks, export.EstEntries, race)
@@ -175,19 +174,19 @@ public sealed partial class ExportServer
     internal static ExportReceipt? RaceExportRefusal(InstantEditImportContext context, ushort race)
     {
         if (context.RacialScaling is { } scaling && scaling.CharacterRace != race)
-            return new ExportReceipt(false, "racial_scaling_mismatch",
+            return new ExportReceipt(false, ResultCode.RacialScalingMismatch,
                 $"This model was sent to Blender racially scaled (c{scaling.ModelRace:D4} to {GameRaces.Label(scaling.CharacterRace)}), " +
                 $"so it can't go into a c{race:D4} model.");
         if (GamePathRace(context) == race)
-            return new ExportReceipt(false, "race_model_unavailable",
+            return new ExportReceipt(false, ResultCode.RaceModelUnavailable,
                 $"The imported model already is a c{race:D4} model. Export it in place.");
         if (RaceExportService.RaceModelGamePath(context.GamePath, race) is null)
-            return new ExportReceipt(false, "race_model_unavailable",
+            return new ExportReceipt(false, ResultCode.RaceModelUnavailable,
                 "Only gear and accessory models can be saved for another race.");
         return null;
     }
 
-    internal static string? ValidateRaceEnvelope(RaceExportRequest request)
+    internal static ResultCode? ValidateRaceEnvelope(RaceExportRequest request)
     {
         if (ValidateSchemaVersion(request.Schema, "instant-edit.export-race", request.Version, 1) is { } schemaError)
             return schemaError;
@@ -198,15 +197,15 @@ public sealed partial class ExportServer
             string.IsNullOrWhiteSpace(request.FilePath) ||
             string.IsNullOrWhiteSpace(request.Sha256) ||
             string.IsNullOrWhiteSpace(request.Race))
-            return "missing_field";
+            return ResultCode.MissingField;
         if (RaceExportService.PlayerRaceCode(request.Race) is null)
-            return "invalid_race";
+            return ResultCode.InvalidRace;
         if (request.Size <= 0 || request.Size > MaxExportBytes)
-            return "invalid_size";
+            return ResultCode.InvalidSize;
         if (request.Sha256.Length != 64 || request.Sha256.Any(c => !Uri.IsHexDigit(c)))
-            return "invalid_sha256";
+            return ResultCode.InvalidSha256;
         if (request.NewModName is not null && !ModPaths.IsSafeNewModName(request.NewModName))
-            return "invalid_mod_name";
+            return ResultCode.InvalidModName;
         return ValidateAttributeGroupEnvelope(
                    request.CreateAttributeGroups, request.AttributeTags, request.AttributeMasks) ??
                EstEntryService.ValidateEstEntryRequests(request.EstEntries);

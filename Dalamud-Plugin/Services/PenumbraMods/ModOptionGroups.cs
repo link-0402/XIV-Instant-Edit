@@ -16,7 +16,7 @@ internal static class ModOptionGroups
 {
     internal const string VariantGroupDescriptionPrefix = "Managed by XIV Instant Edit variant group: ";
 
-    internal sealed record VariantOptionResolution(string? FilePath, string Code, string? Error);
+    internal sealed record VariantOptionResolution(string? FilePath, ResultCode Code, string? Error);
 
     internal sealed record SourceOptionResolution(
         JsonObject? Option,
@@ -160,24 +160,24 @@ internal static class ModOptionGroups
         try
         {
             if (!TryParseOptionTargetId(targetId, out var groupId, out var optionId))
-                return new VariantOptionResolution(null, "invalid_variant_target", "The selected Penumbra option is invalid.");
+                return new VariantOptionResolution(null, ResultCode.InvalidVariantTarget, "The selected Penumbra option is invalid.");
             var group = ReadAllVariantGroups(modFolder).FirstOrDefault(candidate => ReadGuid(candidate["Id"]) == groupId);
             var option = group?["Options"] is JsonArray options
                 ? options.OfType<JsonObject>().FirstOrDefault(candidate => ReadGuid(candidate["Id"]) == optionId)
                 : null;
             if (option?["Files"] is not JsonObject files)
-                return new VariantOptionResolution(null, "stale_variant_target", "The selected Penumbra option no longer exists.");
+                return new VariantOptionResolution(null, ResultCode.StaleVariantTarget, "The selected Penumbra option no longer exists.");
             var mapping = files.FirstOrDefault(pair => SameGamePath(pair.Key, sourceGamePath));
             if (!TryNormalizeRelativeModPath(JsonString(mapping.Value), out var relative))
-                return new VariantOptionResolution(null, "stale_variant_target", "The selected option no longer replaces this model.");
+                return new VariantOptionResolution(null, ResultCode.StaleVariantTarget, "The selected option no longer replaces this model.");
             var path = Path.GetFullPath(Path.Combine(modFolder, relative.Replace('/', Path.DirectorySeparatorChar)));
             if (!IsPathWithin(path, modFolder))
-                return new VariantOptionResolution(null, "destination_unsafe", "The selected option has an unsafe model path.");
-            return new VariantOptionResolution(path, "accepted", null);
+                return new VariantOptionResolution(null, ResultCode.DestinationUnsafe, "The selected option has an unsafe model path.");
+            return new VariantOptionResolution(path, ResultCode.Accepted, null);
         }
         catch (Exception e)
         {
-            return new VariantOptionResolution(null, "variant_target_unavailable", $"Could not read the selected Penumbra option: {e.Message}");
+            return new VariantOptionResolution(null, ResultCode.VariantTargetUnavailable, $"Could not read the selected Penumbra option: {e.Message}");
         }
     }
 

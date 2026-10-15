@@ -207,9 +207,9 @@ internal static class MashupPlanning
         if (contributors.Count is < 1 or > 16 ||
             contributors.All(item => !string.Equals(
                 item.Context.ContextId, activeContext.ContextId, StringComparison.Ordinal)))
-            return MashupPlanFailure("invalid_mashup", "The active Context and at least one contributor are required.");
+            return MashupPlanFailure(ResultCode.InvalidMashup, "The active Context and at least one contributor are required.");
         if (contributors.Any(item => item.Context.ResourceManifest?.Version != ResourceDependencyManifest.CurrentVersion))
-            return MashupPlanFailure("mashup_reimport_required", "Re-import every contributing Context before creating a mashup.");
+            return MashupPlanFailure(ResultCode.MashupReimportRequired, "Re-import every contributing Context before creating a mashup.");
 
         var ordered = contributors
             .OrderBy(item => string.Equals(item.Context.ContextId, activeContext.ContextId, StringComparison.Ordinal) ? 0 : 1)
@@ -227,12 +227,12 @@ internal static class MashupPlanning
                     string.Equals(NormalizeModelMaterial(material.ModelMaterial), normalized,
                         StringComparison.OrdinalIgnoreCase));
                 if (dependency is null)
-                    return MashupPlanFailure("mashup_reimport_required",
+                    return MashupPlanFailure(ResultCode.MashupReimportRequired,
                         $"Material {normalized} is absent from the captured dependency manifest for {contributor.Context.SourceModName ?? contributor.Context.ContextId}; re-import that Context.");
                 if (!IsValidMashupLocator(dependency.Resource, ".mtrl") ||
                     !string.Equals(NormalizeGamePath(dependency.GamePath),
                         NormalizeGamePath(dependency.Resource.GamePath), StringComparison.OrdinalIgnoreCase))
-                    return MashupPlanFailure("mashup_reimport_required",
+                    return MashupPlanFailure(ResultCode.MashupReimportRequired,
                         $"Material {normalized} has invalid captured source metadata; re-import that Context.");
                 resolved.Add((contributor, normalized, dependency));
             }
@@ -241,7 +241,7 @@ internal static class MashupPlanning
         var activeMaterials = resolved.Where(item => string.Equals(
             item.Contributor.Context.ContextId, activeContext.ContextId, StringComparison.Ordinal)).ToArray();
         if (activeMaterials.Length == 0)
-            return MashupPlanFailure("mashup_material_missing", "The active Context contributes no captured material.");
+            return MashupPlanFailure(ResultCode.MashupMaterialMissing, "The active Context contributes no captured material.");
         var assignments = new List<MashupMaterialAssignment>(resolved.Count);
         var usedAliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var usedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -249,19 +249,19 @@ internal static class MashupPlanning
         {
             var gamePath = NormalizeGamePath(item.Dependency.GamePath);
             if (!IsSafeGameResourcePath(gamePath, ".mtrl"))
-                return MashupPlanFailure("mashup_material_path_unsafe",
+                return MashupPlanFailure(ResultCode.MashupMaterialPathUnsafe,
                     $"Active material path is unsafe: {item.Dependency.GamePath}.");
             var alias = item.ModelMaterial;
             if (!IsSafeModelMaterialAlias(alias))
-                return MashupPlanFailure("mashup_material_alias_unsafe",
+                return MashupPlanFailure(ResultCode.MashupMaterialAliasUnsafe,
                     $"Active material alias is unsafe: {alias}.");
             var parsed = ParseCanonicalMaterialFamily(Path.GetFileName(gamePath));
             var slot = parsed?.Slot.ToString();
             if (!usedAliases.Add(alias))
-                return MashupPlanFailure("mashup_material_alias_conflict",
+                return MashupPlanFailure(ResultCode.MashupMaterialAliasConflict,
                     $"Active materials conflict at alias {alias}.");
             if (!usedPaths.Add(gamePath))
-                return MashupPlanFailure("mashup_material_path_conflict",
+                return MashupPlanFailure(ResultCode.MashupMaterialPathConflict,
                     $"Active materials conflict at {gamePath}.");
             assignments.Add(new MashupMaterialAssignment(
                 item.Contributor.Context.ContextId, item.ModelMaterial, alias, gamePath, slot));
@@ -274,17 +274,17 @@ internal static class MashupPlanning
             var target = SelectIncomingMashupMaterialDirectory(
                 activeContext.GamePath, activeMaterials.Select(item => item.Dependency));
             if (target.Ambiguous)
-                return MashupPlanFailure("mashup_target_material_directory_ambiguous",
+                return MashupPlanFailure(ResultCode.MashupTargetMaterialDirectoryAmbiguous,
                     "Multiple equally likely model-local material directories are active.");
             if (target.Directory is null || !IsSafeGameResourcePath(
                     $"{target.Directory}/placeholder.mtrl", ".mtrl"))
-                return MashupPlanFailure("mashup_target_material_directory_invalid",
+                return MashupPlanFailure(ResultCode.MashupTargetMaterialDirectoryInvalid,
                     "A safe model-local material directory could not be derived from the active model.");
             var targetDirectory = target.Directory;
             var modelStem = CanonicalTargetModelStem(activeContext.GamePath, targetDirectory);
             if (!Regex.IsMatch(modelStem, @"^[a-z]\d{4}[a-z]\d{4}.*$",
                     RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
-                return MashupPlanFailure("mashup_target_material_family_ambiguous",
+                return MashupPlanFailure(ResultCode.MashupTargetMaterialFamilyAmbiguous,
                     "A canonical incoming material family could not be derived from the active model.");
             var prefix = $"mt_{modelStem}";
             var suffix = CanonicalTargetRaceSuffix(activeContext.GamePath, targetDirectory);
@@ -319,7 +319,7 @@ internal static class MashupPlanning
                     break;
                 }
                 if (allocated is null || gamePath is null || alias is null)
-                    return MashupPlanFailure("mashup_material_slots_exhausted",
+                    return MashupPlanFailure(ResultCode.MashupMaterialSlotsExhausted,
                         "No canonical material slots remain between b and z.");
                 usedSlots.Add(allocated.Value);
                 usedAliases.Add(alias);
@@ -338,10 +338,10 @@ internal static class MashupPlanning
                 $"{item.ContextId}\0{item.ModelMaterial.ToLowerInvariant()}\0{item.Alias.ToLowerInvariant()}\0{item.GamePath.ToLowerInvariant()}"));
         var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintSource)))
             .ToLowerInvariant();
-        return new MashupPlanResult(true, "mashup_plan_ready", "Mashup material plan is ready.", assignments, fingerprint);
+        return new MashupPlanResult(true, ResultCode.MashupPlanReady, "Mashup material plan is ready.", assignments, fingerprint);
     }
 
-    private static MashupPlanResult MashupPlanFailure(string code, string message)
+    private static MashupPlanResult MashupPlanFailure(ResultCode code, string message)
         => new(false, code, message, Array.Empty<MashupMaterialAssignment>());
 
     internal static bool IsValidMashupContributorCount(string destination, int count)
