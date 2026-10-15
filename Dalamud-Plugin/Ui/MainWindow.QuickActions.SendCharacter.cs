@@ -123,7 +123,7 @@ public sealed partial class MainWindow
     /// <summary> With Playing animation chosen, the animation your character plays, named below the choice; otherwise null. </summary>
     private AnimationCapture? DrawCharacterAnimation()
     {
-        if (!CharacterSendListens || animations is not { } service)
+        if (!CharacterSendListens || _animationHub.Service is not { } service)
             return null;
         // The Draw loop keeps the listener running while this card needs it.
         service.StartObservation();
@@ -163,8 +163,8 @@ public sealed partial class MainWindow
         }
         if (_config.CharacterSendPose == CharacterPose.Animation)
         {
-            if (animations is null)
-                return animationError ?? "Animation integration is unavailable.";
+            if (_animationHub.Service is null)
+                return _animationHub.Unavailable;
             if (capture is null)
                 return "No animation is playing.";
             if (!AnimationPresentation.Ready(capture))
@@ -374,7 +374,7 @@ public sealed partial class MainWindow
                 var active = _recorder.Recorder ?? throw new InvalidOperationException("The live pose recorder is unavailable.");
                 return await active.CapturePoseAsync(RecordingSubject.Self, token).ConfigureAwait(false);
             case CharacterPose.Animation:
-                if (animations is not { } service || request.Animation is not { } capture)
+                if (_animationHub.Service is not { } service || request.Animation is not { } capture)
                     throw new InvalidOperationException("No animation is playing. Play an emote, idle or walk, then send again.");
                 _characterSendProgress = "Reading the animation";
                 return await service.SampleForCharacterAsync(capture, message => _characterSendProgress = message, token)
