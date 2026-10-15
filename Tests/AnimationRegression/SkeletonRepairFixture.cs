@@ -227,7 +227,7 @@ internal static class SkeletonRepairFixture
             File.Delete(Path.Combine(temp, "inactive.sklb"));
             check(AnimationSkeletonIndex.Scan(new[] { ("Disabled mod", temp) }, CancellationToken.None).Length == 1, "rescan drops removed skeleton files");
             using var cancel = new CancellationTokenSource(); cancel.Cancel();
-            try { AnimationSkeletonIndex.Scan(new[] { ("Disabled mod", temp) }, cancel.Token); throw new Exception("Expected cancellation"); }
+            try { AnimationSkeletonIndex.Scan(new[] { ("Disabled mod", temp) }, cancel.Token); check(false, "skeleton scan respects cancellation"); }
             catch (OperationCanceledException) { check(true, "skeleton scan respects cancellation"); }
             var journals = new AnimationJournalStore(temp);
             journals.Save(new AnimationEditJournal { Id = repairRequest.Id, Request = AnimationCommitService.RecoveryRequest(repairRequest) });

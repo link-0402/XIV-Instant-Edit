@@ -16,6 +16,12 @@ internal static partial class ModCleanUpScenarios
         GroupFoldersGetStableUniqueSafeNames(testRoot);
         ImagesAndThisPluginsFilesStayWhereTheyAre(testRoot);
         ATargetWithOtherContentStopsTheMove(testRoot);
+        PendingCleanupKeepsAFileMetaJsonUsesAgain(testRoot);
+        PendingCleanupKeepsAFileThatChanged(testRoot);
+        ATopLevelFileIsRemovedAfterItsMove(testRoot);
+        AFileUsedAgainSinceThePlanIsKept(testRoot);
+        AFailedReloadAfterMovingStillLeavesABackup(testRoot);
+        AFailedCopyLeavesNoTempFile(testRoot);
     }
 
     private static TestModFolder SimpleMod(string relPath, string contents)
@@ -131,5 +137,73 @@ internal static partial class ModCleanUpScenarios
         var result = Tidy(mod, testRoot);
         Require(result.Changed == 0 && result.Problems.Count == 1 && mod.ReadMeta() == before && mod.Exists("old/a.bin"),
             "a canonical path already holding other content stops the move before anything changes");
+    }
+
+    private static void PendingCleanupKeepsAFileMetaJsonUsesAgain(string testRoot)
+    {
+        using var mod = SimpleMod("old/a.bin", "payload");
+        var settings = new StudioSettings();
+        PendingCleanup.Add(settings, mod.Path, "old/a.bin", "test");
+        var cleaned = PendingCleanup.RetryAsync(settings, _ => false, CancellationToken.None).GetAwaiter().GetResult();
+        Require(cleaned == 0 && mod.Exists("old/a.bin") && settings.PendingCleanup.Count == 0,
+            "a pending file meta.json points at again is kept, and dropped from the list");
+    }
+
+    private static void PendingCleanupKeepsAFileThatChanged(string testRoot)
+    {
+        using var mod = SimpleMod("chara/a.bin", "payload");
+        mod.File("old/stale.bin", "before"u8.ToArray());
+        var settings = new StudioSettings();
+        PendingCleanup.Add(settings, mod.Path, "old/stale.bin", "test");
+        mod.File("old/stale.bin", "a new file from a reinstall"u8.ToArray());
+        PendingCleanup.RetryAsync(settings, _ => false, CancellationToken.None).GetAwaiter().GetResult();
+        Require(mod.Exists("old/stale.bin") && settings.PendingCleanup.Count == 0, "a pending file that changed since is kept, and dropped from the list");
+    }
+
+    private static void ATopLevelFileIsRemovedAfterItsMove(string testRoot)
+    {
+        using var mod = SimpleMod("a.bin", "payload");
+        var result = Tidy(mod, testRoot);
+        Require(result.Changed == 1 && mod.Exists("chara/a.bin") && !mod.Exists("a.bin"), "a moved file at the mod's top level is removed too");
+    }
+
+    private static void AFileUsedAgainSinceThePlanIsKept(string testRoot)
+    {
+        using var mod = SimpleMod("old/a.bin", "payload");
+        mod.File("old/unused.bin", "spare"u8.ToArray());
+        var (store, cache) = TextureBackups(testRoot);
+        var plan = FileLocations.Plan(PenumbraModMeta.Load(mod.Path), mod.Path, new HashSet<string>());
+        Require(plan.Obsolete.Contains("old/unused.bin"), "the spare file is listed as unused");
+
+        var meta = JObject.Parse(mod.ReadMeta());
+        meta["DefaultData"]!["Files"]!["chara/spare.bin"] = "old/unused.bin";
+        mod.Meta(meta.ToString());
+        var result = FileLocations.ApplyAsync(ModProject.Load(mod.Path), plan, store, cache, new FakeReloader(), new StudioSettings(), CancellationToken.None)
+            .GetAwaiter().GetResult();
+        Require(result.Changed == 1 && mod.Exists("old/unused.bin") && mod.Exists("chara/a.bin"),
+            "a file an option uses again since the list was made is kept");
+    }
+
+    private static void AFailedReloadAfterMovingStillLeavesABackup(string testRoot)
+    {
+        using var mod = SimpleMod("old/a.bin", "payload");
+        var (store, cache) = TextureBackups(testRoot);
+        var plan = FileLocations.Plan(PenumbraModMeta.Load(mod.Path), mod.Path, new HashSet<string>());
+        try
+        {
+            FileLocations.ApplyAsync(ModProject.Load(mod.Path), plan, store, cache, new FakeReloader { Throws = new InvalidOperationException("gone") },
+                new StudioSettings(), CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (InvalidOperationException) { }
+        Require(store.For(mod.Path).Count == 1, "moved files whose reload failed are still in the backups");
+    }
+
+    private static void AFailedCopyLeavesNoTempFile(string testRoot)
+    {
+        using var mod = SimpleMod("old/a.bin", "payload");
+        Directory.CreateDirectory(Path.Combine(mod.Path, "chara", "a.bin"));
+        var result = Tidy(mod, testRoot);
+        Require(result.Changed == 0 && result.Problems.Count == 1 && !mod.Exists("chara/a.bin.instant-edit-tmp") && mod.Exists("old/a.bin"),
+            "a copy that can't be finished leaves no half-written file");
     }
 }

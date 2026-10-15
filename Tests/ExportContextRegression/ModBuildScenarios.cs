@@ -4,22 +4,24 @@ using InstantEdit.Studio.Services;
 using static InstantEdit.TestSupport.Assertions;
 
 /// <summary>
-/// Review fixes of Build mode: a build only makes new mods (writers-1/-2), variant files of different
-/// items never share a file (writers-3), and explicit mesh-part material picks follow their material
-/// when the materials list changes (models-1).
+/// The Mod Browser's Build mode: a build only makes new mods, variant files of different items never
+/// share a file, explicit mesh-part material picks follow their material when the materials list
+/// changes, two items may write one path into different options, and mod folder names Windows can store.
 /// </summary>
-internal static class ReviewFixBuildScenarios
+internal static class ModBuildScenarios
 {
     public static void Run(string testRoot)
     {
-        var root = Path.Combine(testRoot, "ReviewFixBuild");
+        var root = Path.Combine(testRoot, "ModBuild");
         Directory.CreateDirectory(root);
 
-        ExistingFolderIsRefused(root);
+        ExistingFolderIsRefused(root);              // writers-1/-2
         LeftoversAreRemoved(root);
         MetaIsReplacedWhole(root);
-        VariantNamesAreBuildWide();
-        MaterialLinksFollowTheirMaterials();
+        VariantNamesAreBuildWide();                // writers-3
+        MaterialLinksFollowTheirMaterials();        // models-1
+        SamePathInAnotherOptionIsNoConflict();      // models-3
+        FolderNamesWindowsCanStore();               // writers-7
     }
 
     private static void ExistingFolderIsRefused(string root)
@@ -129,5 +131,35 @@ internal static class ReviewFixBuildScenarios
         var plan = ModelMaterialLinks.Plan(referenced, removed.MaterialLinks, written);
         Require(plan[0] == "/c.mtrl" && plan[1] == "/b.mtrl" && plan[2] == null,
             "the build writes the remapped picks onto the right .mtrl files");
+    }
+
+    private static void SamePathInAnotherOptionIsNoConflict()
+    {
+        var race = new RaceGender(PlayerRace.Midlander, PlayerGender.Male);
+        var first  = new PortItem(new FeatureSubject(SubjectKind.Hair, race, 5));
+        var second = new PortItem(new FeatureSubject(SubjectKind.Hair, race, 6));
+        const string path = "chara/human/c0101/obj/hair/h0005/material/v0001/mt_c0101h0005_hir_a.mtrl";
+        var target = new Target(TargetKind.Material, second.Key, 0);
+
+        var writtenBy = new Dictionary<string, PortItem>(StringComparer.OrdinalIgnoreCase);
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var issues = new List<PortIssue>();
+        PortValidator.ValidateAcrossItems(first, [("group/red", path, new Target(TargetKind.Material, first.Key, 0))], writtenBy, paths, issues);
+        PortValidator.ValidateAcrossItems(second, [("group/blue", path, target)], writtenBy, paths, issues);
+        Require(issues.Count == 0 && paths.Contains(path), "two items writing one path into different options don't overwrite each other");
+
+        PortValidator.ValidateAcrossItems(second, [("group/red", path, target)], writtenBy, paths, issues);
+        Require(issues.Count == 1 && issues[0].Severity == Severity.Error, "the same path in the same option is still an error");
+    }
+
+    private static void FolderNamesWindowsCanStore()
+    {
+        Require(PortSession.SanitizeFolderName("Top: Red/Blue") == "Top_ Red_Blue", "invalid characters still become '_'");
+        Require(PortSession.SanitizeFolderName("Bunny Suit Ver. ") == "Bunny Suit Ver" && PortSession.SanitizeFolderName("Name...") == "Name",
+            "trailing dots and spaces go, as Windows would drop them");
+        Require(PortSession.SanitizeFolderName("CON") == "_CON" && PortSession.SanitizeFolderName("nul.txt") == "_nul.txt" && PortSession.SanitizeFolderName("COM1") == "_COM1",
+            "device names get a '_' in front");
+        Require(PortSession.SanitizeFolderName("Console") == "Console" && PortSession.SanitizeFolderName("...") == "Mod",
+            "other names are left alone; a name of only dots falls back");
     }
 }
