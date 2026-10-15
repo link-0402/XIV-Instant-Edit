@@ -1,33 +1,42 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
-using System.Security.Cryptography;
-using System.Text;
-using Dalamud.Game.ClientState.Objects.Enums;
-using Dalamud.Game.ClientState.Objects.Types;
-using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
-using InstantEdit.Models;
-using Penumbra.Api.Enums;
-using Penumbra.Api.Helpers;
-using Penumbra.Api.IpcSubscribers;
-using Lumina.Data;
-using Lumina.Data.Files;
-using InstantEdit.Services.PenumbraMods;
 using static InstantEdit.Services.PenumbraMods.FrameworkThread;
-using static InstantEdit.Services.PenumbraMods.ModCleanup;
-using static InstantEdit.Services.PenumbraMods.ModJson;
-using static InstantEdit.Services.PenumbraMods.ModMetadata;
+using static InstantEdit.Services.PenumbraMods.ModelFileWriter;
 using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
-using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
-using static InstantEdit.Services.PenumbraMods.EstEntryService;
-using static InstantEdit.Services.PenumbraMods.ModelFileWriter;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary>
+/// The managed backups of a source model: restoring one over the model, with the EST entries and race
+/// export changes it carries, and clearing them.
+/// </summary>
+internal sealed class ModelBackupService
 {
+    private readonly IFramework _framework;
+    private readonly IPluginLog _log;
+    private readonly SemaphoreSlim _exportGate;
+    private readonly ModelBackupStore _backups;
+    private readonly SourceMods _sources;
+    private readonly ModActivation _activation;
+    private readonly ModelFileWriter _writer;
+    private readonly EstEntryService _est;
+    private readonly RaceExportService _race;
+
+    public ModelBackupService(IFramework framework, IPluginLog log, SemaphoreSlim exportGate, ModelBackupStore backups,
+        SourceMods sources, ModActivation activation, ModelFileWriter writer, EstEntryService est, RaceExportService race)
+    {
+        _framework = framework;
+        _log = log;
+        _exportGate = exportGate;
+        _backups = backups;
+        _sources = sources;
+        _activation = activation;
+        _writer = writer;
+        _est = est;
+        _race = race;
+    }
+
     /// <summary>Restore a timestamped MDL backup beside an authorized source model.</summary>
     public async Task<ExportResult> RestoreSourceBackupAsync(
         string sourceModDirectory,
@@ -127,7 +136,7 @@ public sealed partial class PenumbraService
             {
                 try
                 {
-                    warnings.AddRange(UndoRaceExport(resolved.Target.Folder, resolved.Target.Directory, raceState));
+                    warnings.AddRange(_race.UndoRaceExport(resolved.Target.Folder, resolved.Target.Directory, raceState));
                 }
                 catch (Exception e)
                 {

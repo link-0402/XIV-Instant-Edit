@@ -91,6 +91,9 @@ public sealed record MaterialCoverageResult(
     IReadOnlyList<MaterialCoverageMissing> Missing);
 public sealed record SourceOptionCapture(SourceOptionLocator? Locator, string Status, string? Warning = null);
 
+/// <summary>A size's exported model: its option name and the staged file.</summary>
+public sealed record SizeExportFile(string Name, string ExportedFile);
+
 /// <summary>
 /// An EST entry the exported meshes need, from the <c>xiv_est_hair</c>/<c>xiv_est_race</c> tags
 /// Magic Fit's Hair Weights puts on hair it weights: the hair skeleton (<paramref name="Entry"/>,
@@ -128,6 +131,10 @@ public sealed partial class PenumbraService : IDisposable
     private readonly ModelFileWriter            _writer;
     private readonly AttributeGroupService      _attributes;
     private readonly EstEntryService            _est;
+    private readonly RaceExportService          _race;
+    private readonly SizesExportService         _sizes;
+    private readonly ModelExportService         _exports;
+    private readonly ModelBackupService         _modelBackups;
 
     public PenumbraService(
         IDalamudPluginInterface pi,
@@ -150,7 +157,134 @@ public sealed partial class PenumbraService : IDisposable
         _writer          = new ModelFileWriter(backups);
         _attributes      = new AttributeGroupService(data, log);
         _est             = new EstEntryService(estEntries, log);
+        _race            = new RaceExportService(framework, log, _exportGate, data, backups, _sources, _activation, _writer,
+            _attributes, _est);
+        _sizes           = new SizesExportService(framework, log, _exportGate, _sources, _activation, _writer, _attributes, _est);
+        _exports         = new ModelExportService(_ipc, framework, log, _exportGate, backups, _sources, _activation, _writer,
+            _attributes, _est, _race);
+        _modelBackups    = new ModelBackupService(framework, log, _exportGate, backups, _sources, _activation, _writer, _est, _race);
     }
+
+    /// <inheritdoc cref="ModelExportService.ApplySourceExportAsync"/>
+    public Task<ExportResult> ApplySourceExportAsync(
+        string sourceModDirectory,
+        string sourceFilePath,
+        string? sourceModRootPath,
+        string? targetRelativePath,
+        string sourceGamePath,
+        string exportedFile,
+        string? variantName,
+        string? variantGroupName,
+        string? variantTarget,
+        string? variantTargetId,
+        bool setupVariantInPenumbra,
+        bool backupExisting = false,
+        SourceOptionLocator? sourceOption = null,
+        string sourceOptionStatus = "unknown",
+        Guid? sourceModStableId = null,
+        bool createAttributeGroups = false,
+        IReadOnlyList<string>? attributeTags = null,
+        IReadOnlyDictionary<string, int>? attributeMasks = null,
+        string? resolvedGamePath = null,
+        JsonArray? sourceManipulations = null,
+        IReadOnlyList<EstEntryRequest>? estEntries = null)
+        => _exports.ApplySourceExportAsync(sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath,
+            sourceGamePath, exportedFile, variantName, variantGroupName, variantTarget, variantTargetId,
+            setupVariantInPenumbra, backupExisting, sourceOption, sourceOptionStatus, sourceModStableId,
+            createAttributeGroups, attributeTags, attributeMasks, resolvedGamePath, sourceManipulations, estEntries);
+
+    /// <inheritdoc cref="ModelExportService.GetVariantTargetsAsync"/>
+    public Task<VariantTargetsResult> GetVariantTargetsAsync(
+        string sourceModDirectory,
+        string sourceFilePath,
+        string? sourceModRootPath,
+        string? targetRelativePath,
+        string sourceGamePath,
+        Guid? sourceModStableId = null)
+        => _exports.GetVariantTargetsAsync(sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath,
+            sourceGamePath, sourceModStableId);
+
+    /// <inheritdoc cref="ModelExportService.CreateGameModelModAsync"/>
+    public Task<NewModelModResult> CreateGameModelModAsync(
+        InstantEditImportContext context,
+        string exportedFile,
+        string modName,
+        bool createAttributeGroups = false,
+        IReadOnlyList<string>? attributeTags = null,
+        IReadOnlyDictionary<string, int>? attributeMasks = null,
+        IReadOnlyList<EstEntryRequest>? estEntries = null,
+        int? race = null)
+        => _exports.CreateGameModelModAsync(context, exportedFile, modName, createAttributeGroups, attributeTags,
+            attributeMasks, estEntries, race);
+
+    /// <inheritdoc cref="RaceExportService.ApplyRaceExportAsync"/>
+    public Task<ExportResult> ApplyRaceExportAsync(
+        string sourceModDirectory,
+        string sourceFilePath,
+        string? sourceModRootPath,
+        string? targetRelativePath,
+        string sourceGamePath,
+        int race,
+        string exportedFile,
+        bool backupExisting = false,
+        Guid? sourceModStableId = null,
+        bool createAttributeGroups = false,
+        IReadOnlyList<string>? attributeTags = null,
+        IReadOnlyDictionary<string, int>? attributeMasks = null,
+        string? resolvedGamePath = null,
+        JsonArray? sourceManipulations = null,
+        IReadOnlyList<EstEntryRequest>? estEntries = null)
+        => _race.ApplyRaceExportAsync(sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath,
+            sourceGamePath, race, exportedFile, backupExisting, sourceModStableId, createAttributeGroups, attributeTags,
+            attributeMasks, resolvedGamePath, sourceManipulations, estEntries);
+
+    /// <inheritdoc cref="SizesExportService.ApplySizesExportAsync"/>
+    public Task<ExportResult> ApplySizesExportAsync(
+        string sourceModDirectory,
+        string sourceFilePath,
+        string? sourceModRootPath,
+        string? targetRelativePath,
+        string sourceGamePath,
+        IReadOnlyList<SizeExportFile> sizes,
+        string defaultSize,
+        string variantTarget,
+        string? variantGroupName,
+        string? variantTargetId,
+        bool backupExisting = false,
+        SourceOptionLocator? sourceOption = null,
+        string sourceOptionStatus = "unknown",
+        Guid? sourceModStableId = null,
+        bool createAttributeGroups = false,
+        IReadOnlyList<string>? attributeTags = null,
+        IReadOnlyDictionary<string, int>? attributeMasks = null,
+        string? resolvedGamePath = null,
+        JsonArray? sourceManipulations = null,
+        IReadOnlyList<EstEntryRequest>? estEntries = null)
+        => _sizes.ApplySizesExportAsync(sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath,
+            sourceGamePath, sizes, defaultSize, variantTarget, variantGroupName, variantTargetId, backupExisting,
+            sourceOption, sourceOptionStatus, sourceModStableId, createAttributeGroups, attributeTags, attributeMasks,
+            resolvedGamePath, sourceManipulations, estEntries);
+
+    /// <inheritdoc cref="ModelBackupService.RestoreSourceBackupAsync"/>
+    public Task<ExportResult> RestoreSourceBackupAsync(
+        string sourceModDirectory,
+        string sourceFilePath,
+        string? sourceModRootPath,
+        string? targetRelativePath,
+        string sourceGamePath,
+        string backupName,
+        string backupTargetId,
+        Guid? sourceModStableId = null)
+        => _modelBackups.RestoreSourceBackupAsync(sourceModDirectory, sourceFilePath, sourceModRootPath,
+            targetRelativePath, sourceGamePath, backupName, backupTargetId, sourceModStableId);
+
+    /// <inheritdoc cref="ModelBackupService.ClearManagedBackupsAsync"/>
+    public Task<ExportResult> ClearManagedBackupsAsync(
+        string sourceModDirectory, string sourceFilePath, string? sourceModRootPath,
+        string? targetRelativePath, string sourceGamePath, string backupTargetId,
+        Guid? sourceModStableId = null)
+        => _modelBackups.ClearManagedBackupsAsync(sourceModDirectory, sourceFilePath, sourceModRootPath,
+            targetRelativePath, sourceGamePath, backupTargetId, sourceModStableId);
 
     private GetModDirectory _getModDirectory => _ipc.ModDirectorySubscriber;
     private GetModList _getModList => _ipc.ModListSubscriber;
@@ -295,6 +429,12 @@ public sealed partial class PenumbraService : IDisposable
         => AttributeGroupService.KnownManipulations(context);
     internal static string? ValidateEstEntryRequests(IReadOnlyList<EstEntryRequest>? entries)
         => EstEntryService.ValidateEstEntryRequests(entries);
+    internal static int? PlayerRaceCode(string? race) => RaceExportService.PlayerRaceCode(race);
+    internal static string? RaceModelGamePath(string gamePath, int race) => RaceExportService.RaceModelGamePath(gamePath, race);
+    internal static bool IsSafeSizeName(string? value) => SizesExportService.IsSafeSizeName(value);
+    internal static MashupPlanResult BuildMashupPlan(InstantEditImportContext activeContext,
+        IReadOnlyList<MashupContributor> contributors, bool bundleExternalDependencies = false)
+        => MashupPlanning.BuildMashupPlan(activeContext, contributors, bundleExternalDependencies);
 
     // PenumbraService.Physics.cs still calls these by their old names.
     private Task<ExportResult?> AddNewModAsync(string modName) => _activation.AddNewModAsync(modName);
@@ -318,4 +458,5 @@ public sealed partial class PenumbraService : IDisposable
         JsonObject defaultData)
         => ModMetadata.CreateV4ModMetadata(name, author, description, version, defaultData);
     private static FrameworkThread.ThreadPoolHop LeaveFrameworkThread() => FrameworkThread.LeaveFrameworkThread();
+    private static void TryDeleteMashupNamespace(string root, string folder) => ModFiles.TryDeleteMashupNamespace(root, folder);
 }

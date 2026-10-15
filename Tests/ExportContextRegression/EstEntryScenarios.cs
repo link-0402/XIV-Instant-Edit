@@ -227,7 +227,7 @@ internal static class EstEntryScenarios
         var store = new EstEntryStore(Path.Combine(root, "config"));
         var staging = Path.Combine(root, "staging");
         Directory.CreateDirectory(staging);
-        PenumbraService.StageGameModelMod(staging, "Vanilla Maeve", MiqoteHair, [1, 2, 3]);
+        MashupPlanning.StageGameModelMod(staging, "Vanilla Maeve", MiqoteHair, [1, 2, 3]);
         var warnings = EstEntryService.UpdateEstEntriesForRegression(
             staging, "Vanilla Maeve", "Files/" + MiqoteHair, [Hair(160)], store);
         var meta = ReadMod(staging);

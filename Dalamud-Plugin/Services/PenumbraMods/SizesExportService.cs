@@ -1,21 +1,41 @@
 using System.Text.Json.Nodes;
+using Dalamud.Plugin.Services;
 using InstantEdit.Models;
-using InstantEdit.Services.PenumbraMods;
+using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
 using static InstantEdit.Services.PenumbraMods.FrameworkThread;
-using static InstantEdit.Services.PenumbraMods.ModCleanup;
 using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
 using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
-using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
-using static InstantEdit.Services.PenumbraMods.EstEntryService;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary>
+/// Saves an export at several sizes into one Single group of the source mod, one option per size.
+/// </summary>
+internal sealed class SizesExportService
 {
-    /// <summary>A size's exported model: its option name and the staged file.</summary>
-    public sealed record SizeExportFile(string Name, string ExportedFile);
+    private readonly IFramework _framework;
+    private readonly IPluginLog _log;
+    private readonly SemaphoreSlim _exportGate;
+    private readonly SourceMods _sources;
+    private readonly ModActivation _activation;
+    private readonly ModelFileWriter _writer;
+    private readonly AttributeGroupService _attributes;
+    private readonly EstEntryService _est;
+
+    public SizesExportService(IFramework framework, IPluginLog log, SemaphoreSlim exportGate, SourceMods sources,
+        ModActivation activation, ModelFileWriter writer, AttributeGroupService attributes, EstEntryService est)
+    {
+        _framework = framework;
+        _log = log;
+        _exportGate = exportGate;
+        _sources = sources;
+        _activation = activation;
+        _writer = writer;
+        _attributes = attributes;
+        _est = est;
+    }
 
     /// <summary>
     /// Where a size export writes: the group update, the group's name, each size's option file, and the

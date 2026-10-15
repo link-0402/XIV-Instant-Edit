@@ -1,32 +1,52 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
-using System.Security.Cryptography;
-using System.Text;
-using Dalamud.Game.ClientState.Objects.Enums;
-using Dalamud.Game.ClientState.Objects.Types;
-using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
-using Penumbra.Api.Enums;
-using Penumbra.Api.Helpers;
-using Penumbra.Api.IpcSubscribers;
-using Lumina.Data;
-using Lumina.Data.Files;
-using InstantEdit.Services.PenumbraMods;
+using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
 using static InstantEdit.Services.PenumbraMods.FrameworkThread;
-using static InstantEdit.Services.PenumbraMods.ModCleanup;
-using static InstantEdit.Services.PenumbraMods.ModJson;
+using static InstantEdit.Services.PenumbraMods.MashupPlanning;
+using static InstantEdit.Services.PenumbraMods.ModFiles;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
 using static InstantEdit.Services.PenumbraMods.ModOptionGroups;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
-using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
-using static InstantEdit.Services.PenumbraMods.EstEntryService;
+using static InstantEdit.Services.PenumbraMods.RaceExportService;
 
-namespace InstantEdit.Services;
+namespace InstantEdit.Services.PenumbraMods;
 
-public sealed partial class PenumbraService
+/// <summary>
+/// Writes a Blender export back into Penumbra: over the imported model in its source mod, as a new
+/// variant or option of it, or as the first mod of a game model.
+/// </summary>
+internal sealed class ModelExportService
 {
+    private readonly PenumbraIpc _ipc;
+    private readonly IFramework _framework;
+    private readonly IPluginLog _log;
+    private readonly SemaphoreSlim _exportGate;
+    private readonly ModelBackupStore _backups;
+    private readonly SourceMods _sources;
+    private readonly ModActivation _activation;
+    private readonly ModelFileWriter _writer;
+    private readonly AttributeGroupService _attributes;
+    private readonly EstEntryService _est;
+    private readonly RaceExportService _race;
+
+    public ModelExportService(PenumbraIpc ipc, IFramework framework, IPluginLog log, SemaphoreSlim exportGate,
+        ModelBackupStore backups, SourceMods sources, ModActivation activation, ModelFileWriter writer,
+        AttributeGroupService attributes, EstEntryService est, RaceExportService race)
+    {
+        _ipc = ipc;
+        _framework = framework;
+        _log = log;
+        _exportGate = exportGate;
+        _backups = backups;
+        _sources = sources;
+        _activation = activation;
+        _writer = writer;
+        _attributes = attributes;
+        _est = est;
+        _race = race;
+    }
+
     /// <summary>
     /// Write an export back to the resolved file in its original Penumbra mod.
     /// The destination is authoritative while the server-owned import context
@@ -293,7 +313,7 @@ public sealed partial class PenumbraService
         await _exportGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            var root = await _framework.RunOnFrameworkThread(GetModDirectory).ConfigureAwait(false);
+            var root = await _framework.RunOnFrameworkThread(_ipc.GetModDirectory).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
                 return new NewModelModResult(new ExportResult(false, "penumbra_root_missing", "The Penumbra mod root is unavailable."));
             root = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
@@ -301,7 +321,7 @@ public sealed partial class PenumbraService
                 return new NewModelModResult(new ExportResult(false, "penumbra_root_unsafe", "The Penumbra mod root is an unsupported linked directory."));
 
             var modList = await _framework.RunOnFrameworkThread(() =>
-                TryGetModList(out var mods) ? mods : null).ConfigureAwait(false);
+                _ipc.TryGetModList(out var mods) ? mods : null).ConfigureAwait(false);
             if (modList is null)
                 return new NewModelModResult(new ExportResult(false, "penumbra_unavailable", "Could not retrieve the Penumbra mod list."));
             await LeaveFrameworkThread();
@@ -324,7 +344,7 @@ public sealed partial class PenumbraService
                     modelGamePath,
                     await File.ReadAllBytesAsync(exportedFile).ConfigureAwait(false));
                 if (race is not null)
-                    AddRaceModelEqdp(staging, modelGamePath, race.Value);
+                    _race.AddRaceModelEqdp(staging, modelGamePath, race.Value);
                 if (createAttributeGroups && attributeTags is { Count: > 0 })
                 {
                     // A new mod of a game model has no variant settings of its own to keep.
