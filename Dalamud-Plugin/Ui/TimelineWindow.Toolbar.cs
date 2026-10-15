@@ -129,8 +129,8 @@ public sealed partial class TimelineWindow
     /// <summary> One line each for an import running or done, an edit the editor refused and a header length the motion disagrees with. </summary>
     private void DrawMessages(TimelineEditor current)
     {
-        if (headerNote != null)
-            TimelineUi.Note(null, Theme.Muted, headerNote);
+        if (texts.HeaderNote != null)
+            TimelineUi.Note(null, Theme.Muted, texts.HeaderNote);
         pickers.DrawImportStatus();
         if (current.LastError is { } error)
             TimelineUi.Note(null, Theme.Warning, error);
@@ -145,25 +145,25 @@ public sealed partial class TimelineWindow
     /// <summary> Effects that stop although the animation goes on, and the button that keeps them going. </summary>
     private void DrawEffectProblems(TimelineEditor current)
     {
-        if (effectWarning is not { } warning || effectProblems.IsEmpty)
+        if (texts.EffectWarning is not { } warning || texts.EffectProblems.IsEmpty)
             return;
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Warning, "⚠ " + warning);
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(string.Join("\n", effectProblems.Select(p => p.Text)));
+            ImGui.SetTooltip(string.Join("\n", texts.EffectProblems.Select(p => p.Text)));
         ImGui.SameLine(0, Theme.Gap);
         using (ImRaii.Disabled(ReadOnly))
         {
-            if (ImGui.SmallButton(effectEvents == 1 ? "Keep it looping" : "Keep them looping"))
+            if (ImGui.SmallButton(texts.EffectEvents == 1 ? "Keep it looping" : "Keep them looping"))
             {
                 // The copies are packaged like imports; the edit's own undo puts the original effects back.
-                foreach (var copy in effectCopies)
+                foreach (var copy in texts.EffectCopies)
                     session.Imports[copy.GamePath] = copy;
-                current.Commit(TimelineEffectCheck.Fix(current.Document, effectProblems));
+                current.Commit(TimelineEffectCheck.Fix(current.Document, texts.EffectProblems));
             }
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(effectCopies.IsEmpty
+            ImGui.SetTooltip(texts.EffectCopies.IsEmpty
                 ? "Sets Loop/wait to -1, which loops an effect until the animation ends. Save to keep the change."
                 : "Sets Loop/wait to -1 and uses copies of the effects that keep going: no kill of their own, sounds that loop. " +
                   "Save to keep the change.");

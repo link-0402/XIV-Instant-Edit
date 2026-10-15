@@ -39,6 +39,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly PoseSourcePanel poseSources;
     private readonly LayerPanel layerPanel;
     private readonly BonesPanel bonesPanel;
+    private readonly TimelineTexts texts;
     private readonly BonesWindow bonesWindow;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
@@ -84,6 +85,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         bonesWindow = new BonesWindow(this);
         overlayWindow = new BonesOverlay(this);
         decode = new MotionDecode(session);
+        texts = new TimelineTexts(session);
         effectLooks = new EffectLookEditor(session);
         soundFiles = new SoundFiles(session);
         pickers = new TimelinePickers(session, soundFiles);
@@ -386,7 +388,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         title = AnimationPresentation.AnimationName(loaded.Capture, loaded.Startup);
         subtitle = $"{AnimationPresentation.AnimationState(loaded.Capture, loaded.Startup)} · " +
                    (loaded.Resource.ModName ?? loaded.Resource.ModDirectory ?? "Game Data");
-        labelDocument = null;
+        texts.Forget();
         effectLooks.ForgetEdit();
         soundInspector.ForgetEdit();
         if (!sameClip)
@@ -597,12 +599,12 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         ImGui.TextColored(Theme.Muted, subtitle);
         if (current.Document == null || editor == null)
             return;
-        RefreshDocumentTexts(editor.Document);
+        texts.Refresh(editor.Document);
         var after = ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X + Theme.Scaled(16);
-        var right = ImGui.GetContentRegionMax().X - ImGui.CalcTextSize(lengthText).X;
+        var right = ImGui.GetContentRegionMax().X - ImGui.CalcTextSize(texts.LengthText).X;
         ImGui.SameLine(Math.Max(after, right));
         ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(editor.Document.LengthChanged ? Theme.Warning : Theme.Muted, lengthText);
+        ImGui.TextColored(editor.Document.LengthChanged ? Theme.Warning : Theme.Muted, texts.LengthText);
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(editor.Document.LengthChanged ? "The new length. Saving resamples the motion to it."
                 : current.Standalone ? "The expression's timeline length." : "The clip's length.");

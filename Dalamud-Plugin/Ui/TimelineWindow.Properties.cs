@@ -92,7 +92,7 @@ public sealed partial class TimelineWindow
         Widgets.Icon(TimelineUi.LaneIcon(ev.Lane), TimelineWindowViews.LaneColour(ev.Lane));
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Label, LabelOf(current.Document, ev));
+        ImGui.TextColored(Theme.Label, texts.LabelOf(current.Document, ev));
         if (ev.Access != TimelineAccess.Editable)
         {
             ImGui.SameLine(0, Theme.Gap);
@@ -163,13 +163,6 @@ public sealed partial class TimelineWindow
         }
         effectLooks.Draw(current, ev, editable);
         soundInspector.DrawFile(current, ev, editable);
-    }
-
-    private string LabelOf(TimelineDocument doc, TimelineEvent ev)
-    {
-        if (ReferenceEquals(labelDocument, doc) && TimelineEdits.IndexOf(doc, ev.Key) is var index and >= 0 && index < labels.Length)
-            return labels[index];
-        return TimelineWindowViews.EventLabel(ev);
     }
 
     private static void DrawTiming(TimelineEditor current, TimelineEvent ev, bool editable, bool movable)
@@ -279,7 +272,7 @@ public sealed partial class TimelineWindow
         }
         if (picker == TimelineAddKind.Prop && !hasPath)
         {
-            ImGui.TextUnformatted(LabelOf(current.Document, ev));
+            ImGui.TextUnformatted(texts.LabelOf(current.Document, ev));
             return;
         }
         if (editable && picker is TimelineAddKind.Sound or TimelineAddKind.Effect)
@@ -290,7 +283,7 @@ public sealed partial class TimelineWindow
         if (ev.Path.Length == 0)
             ImGui.TextColored(Theme.Hint, "None");
         else
-            Widgets.PathText(LabelOf(current.Document, ev), ev.Path);
+            Widgets.PathText(texts.LabelOf(current.Document, ev), ev.Path);
     }
 
     /// <summary>
@@ -331,7 +324,7 @@ public sealed partial class TimelineWindow
             using var wrap = ImRaii.TextWrapPos(0f);
             ImGui.TextColored(Theme.Warning, pathFieldError);
         }
-        ImGui.TextColored(Theme.Hint, LabelOf(current.Document, ev));
+        ImGui.TextColored(Theme.Hint, texts.LabelOf(current.Document, ev));
         if (PathOrigin(ev.Path) is { } origin)
             Widgets.MutedWrapped(origin);
     }
