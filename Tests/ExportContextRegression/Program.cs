@@ -157,6 +157,7 @@ var testRoot = Path.Combine(Path.GetTempPath(), "InstantEditExportContextRegress
 Directory.CreateDirectory(testRoot);
 try
 {
+    Scenarios.Run(ResultCodeScenarios.Run);
     Scenarios.Run(() => VariantExportScenarios.Run(testRoot));
     Scenarios.Run(() => SizesExportScenarios.Run(testRoot));
     Scenarios.Run(() => RaceExportScenarios.Run(testRoot));
