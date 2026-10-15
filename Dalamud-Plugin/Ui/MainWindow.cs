@@ -2,7 +2,6 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.ImGuiNotification;
-using Dalamud.Interface.Textures.TextureWraps;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
@@ -11,22 +10,40 @@ using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.GameFiles;
+using InstantEdit.Services.Heels;
+using InstantEdit.Services.NeckSeam;
 using InstantEdit.Services.Painter;
 using InstantEdit.Services.Previews;
 using InstantEdit.Services.Skeletons;
+using InstantEdit.Services.TextureCompression;
 using InstantEdit.Studio;
 using InstantEdit.Ui.Main;
 
 namespace InstantEdit.Ui;
 
-/// <summary>Compact resource browser for the authoritative Penumbra resource snapshot.</summary>
-public sealed partial class MainWindow : Window, IDisposable
+/// <summary>
+/// The main window: the tab row with the connection dots, the active tab and the status strip. Each tab, card
+/// and dialog is a class of its own in Ui/Main; this window builds them, routes drawing, and passes on what the
+/// plugin attaches once its services have started.
+/// </summary>
+public sealed class MainWindow : Window, IDisposable
 {
     private const string WindowOptionsPopupName = "WindowSystemContextActions";
     private const string KofiUrl = "https://ko-fi.com/luci_xiv";
     private const int AutoRefreshDelayMs = 1000;
-    private readonly Configuration _config; private readonly PenumbraService _penumbra; private readonly OnScreenService _onScreen;
-    private readonly BlenderClient _blender; private readonly IDataManager _data; private readonly IChatGui _chat; private readonly IPluginLog _log;
+    private const bool ShowAnimationsTab = true;
+    private readonly Configuration _config;
+    private readonly PenumbraService _penumbra;
+    private readonly OnScreenService _onScreen;
+    private readonly IPluginLog _log;
+    private readonly PreviewService _previews;
+    private readonly string _pluginVersion;
+    private readonly Action _saveConfig;
+    private readonly Action _openChangelog;
+    private readonly Action _openSettings;
+    private readonly IUiBuilder _uiBuilder;
+    private readonly CancellationTokenSource _lifetimeCts = new();
+    private readonly StatusFeed _feed = new();
     private readonly UiNotifications _notifications;
     private readonly OptionsPopup _options;
     private readonly StatusStrip _statusStrip;
@@ -48,21 +65,17 @@ public sealed partial class MainWindow : Window, IDisposable
     private readonly GameFileExportDialog _gameExportDialog;
     private readonly GameFilesTab _gameFilesTab;
     private readonly AnimationsTab _animationsTab;
+    private readonly SkinSeamDialog _skinSeams;
+    private readonly TextureCompressionCard _compressionCard;
+    private readonly HeelsOffsetCard _heelsCard;
+    private readonly PhysicsCard _physicsCard;
+    private readonly SendCharacterCard _sendCharacterCard;
+    private readonly QuickActionsTab _quickActions;
     // Whether the Timeline window keeps the listener running.
-    private Func<bool>? timelineListens;
-    private readonly PreviewService _previews;
-    private readonly string _pluginVersion;
-    private readonly ResourceSourceAttributor _resourceSources;
-    private readonly Action _saveConfig;
-    private readonly Action _openChangelog;
-    private readonly Action _openSettings;
-    private readonly IUiBuilder _uiBuilder;
-    private readonly object _stateLock = new();
-    private readonly CancellationTokenSource _lifetimeCts = new();
+    private Func<bool>? _timelineListens;
     private MainTab _activeTab = MainTab.OnScreen;
     private MainTab? _pendingTab;
     private long _resourcesChangedTicks;
-    private const bool ShowAnimationsTab = true;
 
     public MainWindow(Configuration config, PenumbraService penumbra, OnScreenService onScreen,
         ResourceSourceAttributor resourceSources, BlenderClient blender,
@@ -71,21 +84,26 @@ public sealed partial class MainWindow : Window, IDisposable
         PreviewService previews, Action openChangelog, Action openSettings)
         : base("XIV Instant Edit##Main")
     {
-        _config = config; _penumbra = penumbra; _onScreen = onScreen; _blender = blender; _data = data; _chat = chat; _log = log;
+        _config = config; _penumbra = penumbra; _onScreen = onScreen; _log = log;
+        _previews = previews;
+        _saveConfig = saveConfig;
+        _openChangelog = openChangelog;
+        _openSettings = openSettings;
+        _uiBuilder = uiBuilder;
+        var lifetime = _lifetimeCts.Token;
+
         _notifications = new UiNotifications(config, notifications, log);
         _options = new OptionsPopup(config, saveConfig);
         _statusStrip = new StatusStrip(_feed);
         _blenderConnection = new BlenderConnection(blender, config, textures, log);
-        _previews = previews;
         _pluginVersion = _blenderConnection.PluginVersion;
-        _resourceSources = resourceSources;
-        _models = new ModelSender(config, penumbra, blender, _blenderConnection, data, chat, log, resourceSources, _feed, _lifetimeCts.Token);
-        _painter = new PainterPanel(config, log, textures, _models, _feed, _blenderConnection.PluginVersion, _lifetimeCts.Token);
-        _textureTab = new TextureSessionsTab(config, textures, previews, _painter, _feed, log, _lifetimeCts.Token);
+        _models = new ModelSender(config, penumbra, blender, _blenderConnection, data, chat, log, resourceSources, _feed, lifetime);
+        _painter = new PainterPanel(config, log, textures, _models, _feed, _pluginVersion, lifetime);
+        _textureTab = new TextureSessionsTab(config, textures, previews, _painter, _feed, log, lifetime);
         _hoverCards = new ResourceHoverCards(previews);
         _animationDelivery = new AnimationDelivery(config, blender, _blenderConnection);
-        _recorder = new RecorderPanel(config, saveConfig, log, _feed, _animationDelivery, _lifetimeCts.Token);
-        _animationSend = new AnimationSendDialog(_animationHub, _animationDelivery, _feed, _lifetimeCts.Token);
+        _recorder = new RecorderPanel(config, saveConfig, log, _feed, _animationDelivery, lifetime);
+        _animationSend = new AnimationSendDialog(_animationHub, _animationDelivery, _feed, lifetime);
         _modBrowser = new ModBrowserTab(penumbra, _feed);
         _handoff = new MainModHandoff(_models, _textureTab, _animationSend, _feed);
         _rows = new ResourceRows(_models, _painter, _textureTab, _animationSend, _modBrowser, penumbra, log, _feed);
@@ -93,11 +111,24 @@ public sealed partial class MainWindow : Window, IDisposable
         _onScreenTab = new OnScreenTab(config, saveConfig, onScreen, _rows, _hoverCards, _textureTab, _slotIcons, _expansion);
         _gameExportDialog = new GameFileExportDialog(config, saveConfig, penumbra, log, _feed, _rows);
         _gameFilesTab = new GameFilesTab(onScreen, _rows, _hoverCards, _gameExportDialog);
-        _animationsTab = new AnimationsTab(onScreen, _animationHub, _animationSend, _recorder, _rows, _expansion, _lifetimeCts.Token);
-        _saveConfig = saveConfig;
-        _openChangelog = openChangelog;
-        _openSettings = openSettings;
-        _uiBuilder = uiBuilder;
+        _animationsTab = new AnimationsTab(onScreen, _animationHub, _animationSend, _recorder, _rows, _expansion, lifetime);
+        _skinSeams = new SkinSeamDialog(onScreen, log, _feed, lifetime);
+        _compressionCard = new TextureCompressionCard(config, log, _notifications, lifetime);
+        _heelsCard = new HeelsOffsetCard(config, saveConfig, _feed);
+        _physicsCard = new PhysicsCard();
+        _sendCharacterCard = new SendCharacterCard(config, saveConfig, onScreen, penumbra, blender, _blenderConnection, _models, _animationHub,
+            _animationDelivery, _recorder, resourceSources, chat, log, _feed, lifetime);
+        // The cards in their built-in order; the user's order and removed cards are applied by the tab.
+        _quickActions = new QuickActionsTab(config, saveConfig,
+        [
+            _compressionCard.Card,
+            _heelsCard.Card,
+            new SkinSeamCard(onScreen, _skinSeams).Card,
+            _physicsCard.Card,
+            new PaintSkinCard(config, onScreen, _painter, openSettings).Card,
+            _sendCharacterCard.Card,
+        ]);
+
         _feed.Reported += _notifications.Notify;
         _penumbra.ResourcesChanged += OnResourcesChanged;
         Size = new Vector2(880, 640);
@@ -134,8 +165,7 @@ public sealed partial class MainWindow : Window, IDisposable
     {
         _penumbra.ResourcesChanged -= OnResourcesChanged;
         _feed.Reported -= _notifications.Notify;
-        if (_compression is not null)
-            _compression.Optimized -= NotifyOptimized;
+        _compressionCard.Detach();
         _painter.Detach();
         _gameExportDialog.Detach();
         _lifetimeCts.Cancel();
@@ -143,27 +173,31 @@ public sealed partial class MainWindow : Window, IDisposable
         _lifetimeCts.Dispose();
     }
 
+    // ---- What the plugin attaches once its services have started ---------------------------------
+
     public void RequestCacheSynchronization() => _blenderConnection.RequestCacheSynchronization();
 
     public void ReportImportFailure(BridgeFailure failure) => _models.ReportImportFailure(failure);
+
+    internal void AttachSkeletons(ModelSkeletonResolver? value) => _models.Skeletons = value;
 
     internal void AttachPainter(PainterJobService painter) => _painter.Attach(painter);
 
     internal void AttachAnimations(AnimationEditService? service, string? error) => _animationHub.Attach(service, error);
 
-    internal void AttachTimeline(Action<AnimationCapture, bool>? open, Action? show = null, Func<bool>? listens = null)
-    {
-        _animationsTab.AttachTimeline(open, show);
-        timelineListens = listens;
-    }
-
-    /// <summary>Whether this window keeps the listener running: its Animations tab is shown, or Send my character waits for it.</summary>
-    internal bool ListensForAnimations => IsOpen && (_activeTab == MainTab.Animations || _activeTab == MainTab.QuickActions && CharacterSendListens);
-
     internal void AttachRecorder(AnimationRecorder? value) => _recorder.Recorder = value;
 
     /// <summary>The recorder, drawn in the Timeline window's Record page; it sends to Blender through this window.</summary>
     internal void DrawRecorderPanel() => _recorder.Draw();
+
+    internal void AttachTimeline(Action<AnimationCapture, bool>? open, Action? show = null, Func<bool>? listens = null)
+    {
+        _animationsTab.AttachTimeline(open, show);
+        _timelineListens = listens;
+    }
+
+    /// <summary>Whether this window keeps the listener running: its Animations tab is shown, or Send my character waits for it.</summary>
+    internal bool ListensForAnimations => IsOpen && (_activeTab == MainTab.Animations || _activeTab == MainTab.QuickActions && _sendCharacterCard.Listens);
 
     /// <summary> The Mod Browser: Penumbra's mods as tiles, a window per open mod, and the modpack builder. </summary>
     internal void AttachStudio(StudioHost studio) => _modBrowser.Attach(studio, _handoff);
@@ -177,7 +211,17 @@ public sealed partial class MainWindow : Window, IDisposable
     /// <summary> Draws the Game Files export folder picker; the plugin hooks it to the UI builder like the setup window's. </summary>
     public void DrawFileDialog() => _gameExportDialog.DrawFileDialog();
 
-    internal void AttachSkeletons(ModelSkeletonResolver? value) => _models.Skeletons = value;
+    internal void AttachNeckSeam(NeckSeamService service) => _skinSeams.Attach(service);
+
+    internal void AttachTextureCompression(TextureCompressionService service) => _compressionCard.Attach(service);
+
+    internal void AttachHeelsOffset(HeelsOffsetService service) => _heelsCard.Attach(service);
+
+    internal void AttachPhysics(Action open) => _physicsCard.Attach(open);
+
+    internal void AttachCharacterDrawState(PainterLiveReader? reader) => _sendCharacterCard.AttachDrawState(reader);
+
+    // ---- The window ------------------------------------------------------------------------------
 
     public void Open() => IsOpen = true;
     public void Close() => IsOpen = false;
@@ -191,7 +235,7 @@ public sealed partial class MainWindow : Window, IDisposable
     public override void OnClose()
     {
         // The Timeline window keeps the listener running while it is open.
-        if (timelineListens?.Invoke() != true)
+        if (_timelineListens?.Invoke() != true)
             _animationHub.Service?.StopObservation();
     }
 
@@ -237,7 +281,7 @@ public sealed partial class MainWindow : Window, IDisposable
         }
     }
 
-    private void RequestRefresh() { try { SetStatus(string.Empty, FeedbackSeverity.Success); _onScreen.RequestRefresh(); } catch (Exception e) { _log.Debug(e.Message); SetStatus("Refresh unavailable. Is Penumbra running?", FeedbackSeverity.Warning); } }
+    private void RequestRefresh() { try { _feed.SetStatus(string.Empty, FeedbackSeverity.Success); _onScreen.RequestRefresh(); } catch (Exception e) { _log.Debug(e.Message); _feed.SetStatus("Refresh unavailable. Is Penumbra running?", FeedbackSeverity.Warning); } }
 
     private void OpenKofiPage()
     {
@@ -279,7 +323,7 @@ public sealed partial class MainWindow : Window, IDisposable
                         _animationsTab.Draw();
                         break;
                     case MainTab.QuickActions:
-                        DrawQuickActionsTab();
+                        _quickActions.Draw();
                         break;
                     default:
                         _onScreenTab.Draw();
@@ -292,13 +336,13 @@ public sealed partial class MainWindow : Window, IDisposable
         // The listener runs only while the Animations tab or the Timeline window is open, or Quick
         // Actions waits to send your character in the animation it plays: until a skeleton library is
         // saved, its first match builds one.
-        if (!animationsTabActive && !(activeTab == MainTab.QuickActions && CharacterSendListens) && timelineListens?.Invoke() != true)
+        if (!animationsTabActive && !(activeTab == MainTab.QuickActions && _sendCharacterCard.Listens) && _timelineListens?.Invoke() != true)
             _animationHub.Service?.StopObservation();
         _textureTab.DrawDialogs();
         _animationSend.Draw(AnimationSendDialog.MainOwner);
         _painter.DrawDialogs();
         _gameExportDialog.Draw();
-        DrawNeckSeamDialog();
+        _skinSeams.Draw();
         DrawStatusStrip(GetFeedback(activeTab));
         DrawWindowOptionsExtension();
     }
@@ -403,16 +447,54 @@ public sealed partial class MainWindow : Window, IDisposable
             _ => Theme.Offline,
         };
 
+    // ---- The status strip ------------------------------------------------------------------------
+
+    private static StatusChannel ChannelOf(MainTab tab)
+        => tab switch
+        {
+            MainTab.TextureEdits => StatusChannel.Textures,
+            MainTab.Animations => StatusChannel.Animations,
+            _ => StatusChannel.Models,
+        };
+
+    private FeedbackState GetFeedback(MainTab tab)
+    {
+        if (tab == MainTab.Animations)
+        {
+            var service = _animationHub.Service;
+            if (service is null)
+                return new FeedbackState(string.Empty, FeedbackSeverity.Error);
+            return new FeedbackState(service.Status, service.LastFailed && !service.Busy
+                ? FeedbackSeverity.Error
+                : FeedbackSeverity.Success);
+        }
+
+        var latest = _feed.Latest(ChannelOf(tab));
+        return latest is null
+            ? new FeedbackState(string.Empty, FeedbackSeverity.Success)
+            : new FeedbackState(latest.Text, latest.Severity);
+    }
+
     /// <summary> The bottom row's inputs: whether anything runs, and what its Cancel button stops. </summary>
     private void DrawStatusStrip(FeedbackState feedback)
     {
         var exporting = _gameExportDialog.Export?.Busy ?? false;
-        var busy = _models.Busy.IsBusy || _textureTab.Busy.IsBusy || Volatile.Read(ref _neckSeamBusy) != 0 ||
+        var busy = _models.Busy.IsBusy || _textureTab.Busy.IsBusy || _skinSeams.Busy.IsBusy ||
                    _onScreen.IsRefreshing || (_animationHub.Service?.Busy ?? false) || exporting;
         var animationCancel = _animationHub.Service is { Busy: true, CanCancel: true };
         // Cancel stops the Game Files export on its own tab, or when no animation work can be cancelled.
         var cancelExport = exporting && (_activeTab == MainTab.GameFiles || !animationCancel);
         Action? cancel = cancelExport ? () => _gameExportDialog.Export!.Cancel() : animationCancel ? () => _animationHub.Service!.Cancel() : null;
         _statusStrip.Draw(feedback, busy, cancel);
+    }
+
+    private enum MainTab
+    {
+        OnScreen,
+        ModBrowser,
+        TextureEdits,
+        Animations,
+        GameFiles,
+        QuickActions,
     }
 }

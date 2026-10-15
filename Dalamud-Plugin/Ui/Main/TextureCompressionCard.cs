@@ -2,13 +2,19 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.ImGuiNotification;
 using Dalamud.Interface.Utility.Raii;
+using Dalamud.Plugin.Services;
 using InstantEdit.Services;
 using InstantEdit.Services.TextureCompression;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Main;
 
-public sealed partial class MainWindow
+/// <summary> Quick Actions' Optimize textures: compresses your character's textures shortly after they load, with backups to restore. </summary>
+internal sealed class TextureCompressionCard
 {
+    private readonly Configuration _config;
+    private readonly IPluginLog _log;
+    private readonly UiNotifications _notifications;
+    private readonly CancellationToken _lifetime;
     private TextureCompressionService? _compression;
     private bool _compressionConfirmRestore;
     private string _compressionMessage = string.Empty;
@@ -17,10 +23,36 @@ public sealed partial class MainWindow
     private (IReadOnlyList<CompressedTexture>? Entries, IReadOnlyList<RefitGroup>? Refits, bool Cleanup, string Totals, string Backups) _compressionTotals;
     private (string? Directory, bool InTemp) _compressionCacheInTemp;
 
-    internal void AttachTextureCompression(TextureCompressionService service)
+    public TextureCompressionCard(Configuration config, IPluginLog log, UiNotifications notifications, CancellationToken lifetime)
+    {
+        _config = config;
+        _log = log;
+        _notifications = notifications;
+        _lifetime = lifetime;
+        Card = new QuickAction("texture-compression", FontAwesomeIcon.CompressArrowsAlt, "Optimize textures",
+            "Automatically optimize your character's textures shortly after they load. Every compression is checked for visual quality impact " +
+            "Originals are backed up for a week and can be easily restored for the current appearance.",
+            DrawTextureCompressionAction,
+            () =>
+            {
+                if (_compression is { Enabled: true } service)
+                    service.SetEnabled(false);
+            },
+            () => _compression is { Enabled: true });
+    }
+
+    public QuickAction Card { get; }
+
+    public void Attach(TextureCompressionService service)
     {
         _compression = service;
         service.Optimized += NotifyOptimized;
+    }
+
+    public void Detach()
+    {
+        if (_compression is not null)
+            _compression.Optimized -= NotifyOptimized;
     }
 
     /// <summary> Runs mostly happen while the window is closed, so each one that changed something shows a toast. </summary>
@@ -29,17 +61,6 @@ public sealed partial class MainWindow
         if (_config.ShowNotifications)
             _notifications.ShowNotification(TextureCompressionViews.Toast(run), NotificationType.Success);
     }
-
-    private QuickAction TextureCompressionCard => new("texture-compression", FontAwesomeIcon.CompressArrowsAlt, "Optimize textures",
-        "Automatically optimize your character's textures shortly after they load. Every compression is checked for visual quality impact " +
-        "Originals are backed up for a week and can be easily restored for the current appearance.",
-        DrawTextureCompressionAction,
-        () =>
-        {
-            if (_compression is { Enabled: true } service)
-                service.SetEnabled(false);
-        },
-        () => _compression is { Enabled: true });
 
     private void DrawTextureCompressionAction()
     {
@@ -106,7 +127,7 @@ public sealed partial class MainWindow
                                 "To keep the backups safe, choose another cache folder in Settings.");
     }
 
-    private void DrawCompressionRun(CompressionRun run)
+    private static void DrawCompressionRun(CompressionRun run)
     {
         if (TextureCompressionViews.LastRun(run) is { Length: > 0 } line)
             Widgets.MutedWrapped(line);
@@ -188,7 +209,7 @@ public sealed partial class MainWindow
                 _compressionDetails = result.Changed.Select(label => $"{label}: changed since it was compressed").Concat(result.Failed).Concat(result.Warnings).ToList();
                 _compressionMessage = TextureCompressionViews.Restored(result);
             }
-            catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
+            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
             catch (Exception error)
             {
                 _log.Warning(error, "Could not restore the original textures.");

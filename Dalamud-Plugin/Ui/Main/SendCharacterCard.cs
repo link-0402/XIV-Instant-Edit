@@ -2,15 +2,15 @@ using System.Diagnostics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
+using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.CharacterSend;
 using InstantEdit.Services.Painter;
 using InstantEdit.Services.Skeletons;
-using InstantEdit.Ui.Main;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Main;
 
 /// <summary>
 /// Quick Actions' Send my character to Blender: your character as the game draws it now goes to
@@ -21,7 +21,7 @@ namespace InstantEdit.Ui;
 /// Models of another race always go over racially scaled for the character, so Quick Export saves those
 /// only as the character's race's own model (Save as c0801 Model), never back into the other race's file.
 /// </summary>
-public sealed partial class MainWindow
+internal sealed class SendCharacterCard
 {
     private sealed record CharacterSendRequest(OnScreenObject Character, CharacterPose Pose, bool Weapons, AnimationCapture? Animation);
 
@@ -37,15 +37,54 @@ public sealed partial class MainWindow
     private volatile CharacterSendMessage? _characterSendMessage;
     private CancellationTokenSource? _characterSendCancellation;
     private PainterLiveReader? _characterDrawState;
+    private readonly Configuration _config;
+    private readonly Action _saveConfig;
+    private readonly OnScreenService _onScreen;
+    private readonly PenumbraService _penumbra;
+    private readonly BlenderClient _blender;
+    private readonly BlenderConnection _blenderConnection;
+    private readonly ModelSender _models;
+    private readonly AnimationIntegration _animationHub;
+    private readonly AnimationDelivery _animationDelivery;
+    private readonly RecorderPanel _recorder;
+    private readonly ResourceSourceAttributor _resourceSources;
+    private readonly IChatGui _chat;
+    private readonly IPluginLog _log;
+    private readonly StatusFeed _feed;
+    private readonly CancellationToken _lifetime;
 
-    internal void AttachCharacterDrawState(PainterLiveReader? reader) => _characterDrawState = reader;
+    public SendCharacterCard(Configuration config, Action saveConfig, OnScreenService onScreen, PenumbraService penumbra, BlenderClient blender,
+        BlenderConnection blenderConnection, ModelSender models, AnimationIntegration animationHub, AnimationDelivery animationDelivery,
+        RecorderPanel recorder, ResourceSourceAttributor resourceSources, IChatGui chat, IPluginLog log, StatusFeed feed, CancellationToken lifetime)
+    {
+        _config = config;
+        _saveConfig = saveConfig;
+        _onScreen = onScreen;
+        _penumbra = penumbra;
+        _blender = blender;
+        _blenderConnection = blenderConnection;
+        _models = models;
+        _animationHub = animationHub;
+        _animationDelivery = animationDelivery;
+        _recorder = recorder;
+        _resourceSources = resourceSources;
+        _chat = chat;
+        _log = log;
+        _feed = feed;
+        _lifetime = lifetime;
+        Card = BuildCard();
+    }
+
+    public QuickAction Card { get; }
+
+    public void AttachDrawState(PainterLiveReader? reader) => _characterDrawState = reader;
 
     private const string SendCharacterKey = "send-character";
 
     /// <summary> Whether the card keeps the Animations tab's listener running, to see the animation your character plays. </summary>
-    private bool CharacterSendListens => _config.CharacterSendPose == CharacterPose.Animation && QuickActionShown(SendCharacterKey);
+    public bool Listens => _config.CharacterSendPose == CharacterPose.Animation && QuickActionsTab.Shown(_config, SendCharacterKey);
 
-    private QuickAction SendCharacterCard => new(SendCharacterKey, FontAwesomeIcon.Cubes, "Send my character to Blender",
+    private QuickAction BuildCard() => new(SendCharacterKey, FontAwesomeIcon.Cubes, "Send my character to Blender",
         "Sends your character to Blender as the game shows it now. " +
         "Each model keeps its own context, so Quick Export still writes it back whole. " +
         "Models made for another race, such as the c0201 gear most female races wear, are reshaped for yours as the game " +
@@ -123,7 +162,7 @@ public sealed partial class MainWindow
     /// <summary> With Playing animation chosen, the animation your character plays, named below the choice; otherwise null. </summary>
     private AnimationCapture? DrawCharacterAnimation()
     {
-        if (!CharacterSendListens || _animationHub.Service is not { } service)
+        if (!Listens || _animationHub.Service is not { } service)
             return null;
         // The Draw loop keeps the listener running while this card needs it.
         service.StartObservation();
@@ -196,7 +235,7 @@ public sealed partial class MainWindow
         }
         Volatile.Write(ref _characterSendRunning, 1);
         _characterSendCancellation?.Dispose();
-        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime);
         _characterSendCancellation = cancellation;
         _characterSendMessage = null;
         _characterSendProgress = "Checking Blender";
@@ -333,7 +372,7 @@ public sealed partial class MainWindow
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            if (!_lifetimeCts.IsCancellationRequested)
+            if (!_lifetime.IsCancellationRequested)
                 ReportCharacterSend("Sending your character was cancelled. Models that reached Blender stay there.", FeedbackSeverity.Warning);
         }
         catch (Exception e)
@@ -434,12 +473,12 @@ public sealed partial class MainWindow
 
     /// <summary> The character as the model sends see it: its On Screen entry and every resource it shows. </summary>
     private static ActorView CharacterActor(OnScreenObject character)
-        => new(character, character.PresentationCategory.ToString(), Safe(character.Name),
+        => new(character, character.PresentationCategory.ToString(), UiText.Safe(character.Name),
             character.ResourceRoots.Select(ResourceViews.FromNode).ToList(), character.ObjectIndex);
 
     private void ReportCharacterSend(string text, FeedbackSeverity severity)
     {
         _characterSendMessage = new CharacterSendMessage(text, severity);
-        SetStatus(text, severity);
+        _feed.SetStatus(text, severity);
     }
 }
