@@ -7,9 +7,11 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Services.Audio;
+using InstantEdit.Ui.Pose;
 using InstantEdit.Ui.Timeline;
 
 namespace InstantEdit.Ui;
@@ -32,6 +34,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private readonly TimelinePickers pickers;
     private readonly SoundInspector soundInspector;
     private readonly TimelinePreview timelinePreview;
+    private readonly BonePosing posing;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
     private readonly GameSoundPlayer? soundPlayer;
@@ -77,6 +80,7 @@ public sealed partial class TimelineWindow : Window, IDisposable
         pickers = new TimelinePickers(session, soundFiles);
         soundInspector = new SoundInspector(session, soundFiles, pickers, soundPlayer);
         timelinePreview = new TimelinePreview(session, decode, effectLooks, soundFiles, () => repairTarget);
+        posing = new BonePosing(session, decode);
         this.soundPlayer = soundPlayer;
         this.recorder = recorder;
         this.animationError = animationError;
@@ -109,6 +113,21 @@ public sealed partial class TimelineWindow : Window, IDisposable
     private bool liveWanted => timelinePreview.LiveWanted;
     private bool liveStarted => timelinePreview.LiveStarted;
     private ushort? previewActor => timelinePreview.Actor;
+    private PoseSelection selection => posing.Selection;
+    private void KeepSelection(SkeletonDescription skeleton) => posing.KeepSelection(skeleton);
+    private (Dictionary<string, int> Index, int[][] Children) BoneTree(SkeletonDescription skeleton) => posing.BoneTree(skeleton);
+    private HashSet<string>? AnimatedBones(AnimationClip clip) => posing.AnimatedBones(clip);
+    private void ClickBone(string bone, SkeletonDescription skeleton) => posing.ClickBone(bone, skeleton);
+    private BonePosing.BoneFrames? FramesAt(AnimationTimelineSource loaded, TimelineDocument doc, MotionLayer layer, int frame) =>
+        posing.FramesAt(loaded, doc, layer, frame);
+    private (MotionTransform[] Local, MotionTransform[] Model)? MotionPose(AnimationTimelineSource loaded, int frame) => posing.MotionPose(loaded, frame);
+    private List<PoseTarget>? Targets(MotionLayer layer, int frame, SkeletonDescription skeleton, AnimationTimelineSource loaded, TimelineDocument doc) =>
+        posing.Targets(layer, frame, skeleton, loaded, doc);
+    private static BoneState StateOf(string bone, MotionLayer? layer, int frame, HashSet<string>? animated) => BonePosing.StateOf(bone, layer, frame, animated);
+    private static string StateText(BoneState state, MotionLayer? layer) => BonePosing.StateText(state, layer);
+    private static Vector4 StateColour(BoneState state, MotionLayer? layer) => BonePosing.StateColour(state, layer);
+    private static bool IsBelow(SkeletonDescription skeleton, int bone, int ancestor) => BonePosing.IsBelow(skeleton, bone, ancestor);
+    private static float MotionEnd(AnimationTimelineSource loaded, TimelineDocument doc) => BonePosing.MotionEnd(loaded, doc);
     private bool ReadOnly => session.ReadOnly;
     private AnimationTimelineSource Fresh(AnimationTimelineSource current) => session.Fresh(current);
 

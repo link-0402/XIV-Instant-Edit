@@ -34,13 +34,13 @@ public sealed partial class TimelineWindow
         var skeleton = Fresh(loaded).Clip.Resolution?.Selected?.Skeleton;
         if (skeleton != null)
         {
-            KeepSelection(skeleton);
+            posing.KeepSelection(skeleton);
             if (selectionLayer != layer.Key)
             {
                 selectionLayer = layer.Key;
-                if (selection.Count == 0 && (layer.Keys.SelectMany(key => key.Bones.Keys).FirstOrDefault() ?? layer.Bones.FirstOrDefault()) is { } first &&
-                    BoneTree(skeleton).Index.ContainsKey(first))
-                    selection.Only(first);
+                if (posing.Selection.Count == 0 && (layer.Keys.SelectMany(key => key.Bones.Keys).FirstOrDefault() ?? layer.Bones.FirstOrDefault()) is { } first &&
+                    posing.BoneTree(skeleton).Index.ContainsKey(first))
+                    posing.Selection.Only(first);
             }
         }
 
@@ -316,8 +316,8 @@ public sealed partial class TimelineWindow
     private void DrawBoneEditor(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, AnimationTimelineSource loaded,
         bool readOnly, bool ball)
     {
-        var (index, _) = BoneTree(skeleton);
-        if (selection.Primary is not { } bone || !index.ContainsKey(bone))
+        var (index, _) = posing.BoneTree(skeleton);
+        if (posing.Selection.Primary is not { } bone || !index.ContainsKey(bone))
         {
             Widgets.HintWrapped(ball ? "Click a bone on the map to set its value at the playhead." : "Choose a bone to set its value at the playhead.");
             return;
@@ -325,7 +325,7 @@ public sealed partial class TimelineWindow
         var frame = current.Playhead;
         var inside = frame >= layer.Start && frame <= layer.End;
         var pose = layer.Kind == MotionLayerKind.Pose;
-        if (Targets(layer, frame, skeleton, loaded, current.Document) is not { Count: > 0 } targets)
+        if (posing.Targets(layer, frame, skeleton, loaded, current.Document) is not { Count: > 0 } targets)
         {
             decode.DrawWait();
             return;
@@ -334,7 +334,7 @@ public sealed partial class TimelineWindow
         // Several bones change the way the primary one does, as the character sees it, which needs
         // their frames from the motion; so does the ball. One bone alone changes in its own space.
         var turned = targets.Count > 1 ? PoseEdits.Turned(targets, bone, skeleton) : targets;
-        var frames = ball || turned.Count > 1 ? FramesAt(loaded, current.Document, layer, frame) : null;
+        var frames = ball || turned.Count > 1 ? posing.FramesAt(loaded, current.Document, layer, frame) : null;
         if (turned.Count > 1 && frames == null)
         {
             decode.DrawWait();
@@ -343,7 +343,7 @@ public sealed partial class TimelineWindow
         Func<string, Quaternion> space = frames != null ? frames.Space : _ => Quaternion.Identity;
         List<PoseTarget> others = [.. turned.Where(target => target.Bone != bone)];
         // A pose bone whose key only turned it starts a move from the clip's own position here.
-        var motion = pose ? MotionPose(loaded, frame) : null;
+        var motion = pose ? posing.MotionPose(loaded, frame) : null;
         Func<string, Vector3?> own = name => motion is { } known && index.TryGetValue(name, out var at) ? known.Local[at].Position : null;
 
         ImGui.AlignTextToFramePadding();
@@ -390,7 +390,7 @@ public sealed partial class TimelineWindow
         List<PoseTarget> targets, int frame, bool readOnly, bool inside)
     {
         var pose = layer.Kind == MotionLayerKind.Pose;
-        var (index, _) = BoneTree(skeleton);
+        var (index, _) = posing.BoneTree(skeleton);
         string[] bones = [.. targets.Select(target => target.Bone)];
         var several = bones.Length > 1;
         using (ImRaii.Disabled(readOnly || !inside))
@@ -415,7 +415,7 @@ public sealed partial class TimelineWindow
         {
             if (ImGui.Button("Reset"))
             {
-                var motion = pose ? MotionPose(loaded, frame) : null;
+                var motion = pose ? posing.MotionPose(loaded, frame) : null;
                 current.Commit(PoseEdits.Reset(current.Document, layer.Key, frame, bones, pose,
                     bone => motion is { } known && index.TryGetValue(bone, out var at) ? known.Local[at] : null));
             }
@@ -423,7 +423,7 @@ public sealed partial class TimelineWindow
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(pose ? "Key the clip's own pose at the playhead." : "Key no change at the playhead, so the clip's own motion shows there.");
 
-        var pairs = PoseEdits.MirrorPairs(selection.Bones, selection.Primary, index.ContainsKey)
+        var pairs = PoseEdits.MirrorPairs(posing.Selection.Bones, posing.Selection.Primary, index.ContainsKey)
             .Where(pair => layer.Keys.Any(key => key.Bones.ContainsKey(pair.From))).ToList();
         var mirrorReady = pairs.Count == 0 || decode.DecodedPose(loaded) != null;
         FlowLine("Mirror");
@@ -456,37 +456,6 @@ public sealed partial class TimelineWindow
         if (ImGui.GetContentRegionAvail().X < width)
             ImGui.NewLine();
     }
-
-    /// <summary>
-    /// The selected bones the skeleton has, primary first, each with its value in the layer at
-    /// <paramref name="frame"/>; null while a pose layer waits for the clip's own motion.
-    /// </summary>
-    private List<PoseTarget>? Targets(MotionLayer layer, int frame, SkeletonDescription skeleton, AnimationTimelineSource loaded, TimelineDocument doc)
-    {
-        var loop = LoopFrames(loaded, doc);
-        var (index, _) = BoneTree(skeleton);
-        (MotionTransform[] Local, MotionTransform[] Model)? motion = null;
-        if (layer.Kind == MotionLayerKind.Pose && (motion = MotionPose(loaded, frame)) == null)
-            return null;
-        var targets = new List<PoseTarget>();
-        foreach (var bone in selection.Primary is { } primary ? selection.Bones.Where(name => name != primary).Prepend(primary) : selection.Bones)
-        {
-            if (!index.TryGetValue(bone, out var at) || PoseEdits.Value(layer, bone, frame, motion?.Local[at], loop) is not { } value)
-                continue;
-            targets.Add(new PoseTarget(bone, value, PoseEdits.Moved(layer, bone, frame)));
-        }
-        return targets;
-    }
-
-    /// <summary>The motion's length in frames when the game loops it, which layers covering it wrap their keys round; else 0.</summary>
-    private static float LoopFrames(AnimationTimelineSource loaded, TimelineDocument doc) => loaded.Clip.IsLoop && !doc.Expression ? MotionEnd(loaded, doc) : 0;
-
-    /// <summary>
-    /// The motion's length in frames, as the bake and Live sample it: the clip's own, which the timeline's may
-    /// be a frame off; when cut or stretched, the new one.
-    /// </summary>
-    private static float MotionEnd(AnimationTimelineSource loaded, TimelineDocument doc) =>
-        !doc.Stretched && !doc.Cut && loaded.Clip.Duration > 0 ? loaded.Clip.Duration * TimelineDocument.Fps : doc.Length;
 
     /// <summary>
     /// Turn: an offset's extra rotation about the bone's own axes, or a pose's whole local rotation, in
@@ -586,9 +555,9 @@ public sealed partial class TimelineWindow
     /// <summary> The bone the value fields edit: the layer's own bones first, then the whole skeleton, searchable. Picking one selects only it. </summary>
     private void DrawBonePicker(SkeletonDescription skeleton, MotionLayer layer)
     {
-        var primary = selection.Primary;
+        var primary = posing.Selection.Primary;
         var preview = primary == null ? "Choose a bone"
-            : selection.Count > 1 ? $"{AnimationPresentation.BoneName(primary)} and {selection.Count - 1} more"
+            : posing.Selection.Count > 1 ? $"{AnimationPresentation.BoneName(primary)} and {selection.Count - 1} more"
             : AnimationPresentation.BoneName(primary);
         ImGui.SetNextItemWidth(-1);
         using var combo = ImRaii.Combo("##layer-bone", preview, ImGuiComboFlags.HeightLarge);
@@ -604,9 +573,9 @@ public sealed partial class TimelineWindow
             var label = AnimationPresentation.BoneName(bone);
             if (boneFilter.Length > 0 && !label.Contains(boneFilter, StringComparison.OrdinalIgnoreCase))
                 continue;
-            if (ImGui.Selectable($"{label}##{bone}", selection.Contains(bone)))
+            if (ImGui.Selectable($"{label}##{bone}", posing.Selection.Contains(bone)))
             {
-                selection.Only(bone);
+                posing.Selection.Only(bone);
                 boneFilter = string.Empty;
             }
             if (own.Contains(bone) && ImGui.IsItemHovered())
@@ -668,8 +637,8 @@ public sealed partial class TimelineWindow
         }
         if (picker)
             DrawBonePicker(skeleton, layer);
-        var index = BoneTree(skeleton).Index;
-        string[] chosen = [.. selection.Bones.Where(index.ContainsKey)];
+        var index = posing.BoneTree(skeleton).Index;
+        string[] chosen = [.. posing.Selection.Bones.Where(index.ContainsKey)];
         using (ImRaii.Disabled(readOnly || chosen.Length == 0 || chosen.All(layer.Bones.Contains)))
         {
             if (ImGui.Button(chosen.Length > 1 ? "Limit to selected" : "Limit to this bone"))

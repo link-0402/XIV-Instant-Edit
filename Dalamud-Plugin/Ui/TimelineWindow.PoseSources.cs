@@ -314,12 +314,12 @@ public sealed partial class TimelineWindow
         if (ImGui.RadioButton("Whole body###pose-whole", !poseSelectedOnly))
             poseSelectedOnly = false;
         ImGui.SameLine();
-        using (ImRaii.Disabled(selection.Count == 0))
+        using (ImRaii.Disabled(posing.Selection.Count == 0))
         {
-            if (ImGui.RadioButton($"Selected bones ({selection.Count})###pose-selected", poseSelectedOnly && selection.Count > 0))
+            if (ImGui.RadioButton($"Selected bones ({selection.Count})###pose-selected", poseSelectedOnly && posing.Selection.Count > 0))
                 poseSelectedOnly = true;
         }
-        var selectedOnly = poseSelectedOnly && selection.Count > 0;
+        var selectedOnly = poseSelectedOnly && posing.Selection.Count > 0;
         if (!selectedOnly)
         {
             var groups = PoseMap.Groups.Where(group => PoseGroupsLeftOut.Contains(group.Name) && available.Any(group.Contains)).ToList();
@@ -344,7 +344,7 @@ public sealed partial class TimelineWindow
             }
         }
         var leftOut = PoseMap.Groups.Where(group => PoseGroupsLeftOut.Contains(group.Name) && !poseGroupsKept.Contains(group.Name));
-        var bones = PoseEdits.PoseBones(available, selectedOnly ? selection.Bones : null, leftOut);
+        var bones = PoseEdits.PoseBones(available, selectedOnly ? posing.Selection.Bones : null, leftOut);
 
         // Positions: off for a pose made on a body of other proportions, unless asked for.
         var moving = bones.Count(import.Moved.Contains);
@@ -362,7 +362,7 @@ public sealed partial class TimelineWindow
             Widgets.HintWrapped("The pose was made on a body with other proportions. Moving bones would reshape this one.");
 
         var inside = frame >= layer.Start && frame <= layer.End;
-        var own = MotionPose(loaded, frame);
+        var own = posing.MotionPose(loaded, frame);
         var blocked = readOnly ? "Wait for the save to finish."
             : !inside ? staged.AtEnd ? "The layer must reach the clip's end." : "Move the playhead into the layer."
             : bones.Count == 0 ? selectedOnly ? "The pose has none of the selected bones." : "The pose has none of this skeleton's bones."
@@ -373,7 +373,7 @@ public sealed partial class TimelineWindow
             if (ImGui.Button((staged.AtEnd ? $"Key at the end ({TimelineWindowViews.FrameText(frame)})" : $"Key at {TimelineWindowViews.FrameText(frame)}") + "###pose-key") &&
                 own is { } clipPose)
             {
-                var index = BoneTree(skeleton).Index;
+                var index = posing.BoneTree(skeleton).Index;
                 current.Commit(PoseEdits.KeyPose(current.Document, layer.Key, frame, import, bones, positions,
                     bone => index.TryGetValue(bone, out var at) ? clipPose.Local[at] : null));
                 current.SelectLayer(layer.Key, frame);
@@ -400,7 +400,7 @@ public sealed partial class TimelineWindow
         PoseImport import;
         if (staged.File is { } file)
         {
-            if (MotionPose(loaded, frame) is not { } own)
+            if (posing.MotionPose(loaded, frame) is not { } own)
                 return null;
             import = PoseImports.FromModel(skeleton, file.Bones, own.Local);
         }
