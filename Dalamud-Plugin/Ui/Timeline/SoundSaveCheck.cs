@@ -1,18 +1,16 @@
-using System.Collections.Immutable;
 using Dalamud.Bindings.ImGui;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Timeline;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// Sound changes in a save and a preview: what must be read first, which mod files a save writes
-/// over in place, and the question when other animations of the mod play one of them too.
+/// Sound changes in a save: which mod files a save in place writes over, and the question when other
+/// animations of the mod play one of them too. The answer holds for that save.
 /// </summary>
-public sealed partial class TimelineWindow
+internal sealed class SoundSaveCheck(TimelineSession session, SoundFiles soundFiles)
 {
     private const string SoundAskPopup = "Change the sound everywhere?###timeline-sound-ask";
 
@@ -31,12 +29,30 @@ public sealed partial class TimelineWindow
     private List<SharedSound>? soundAsk;
     private HashSet<string>? soundInPlace;
 
+    /// <summary>The mod is being checked for other animations playing the sounds.</summary>
+    public bool Checking => soundCheck != null;
+
+    /// <summary>The question about the sounds waits for an answer.</summary>
+    public bool Asking => soundAsk != null;
+
+    /// <summary> Forgets a check or a question, which belongs to the clip it was for. </summary>
+    public void Forget()
+    {
+        soundCheck = null;
+        soundCheckDocument = null;
+        soundAsk = null;
+        soundInPlace = null;
+    }
+
+    /// <summary> The save started: the sound files it writes over in place are its own now. </summary>
+    public void SaveStarted() => soundInPlace = null;
+
     /// <summary>
     /// Save: in place, edited sounds of the clip's own mod are written over unless other animations of
     /// the mod (or of the game, for a game sound the mod replaces) play them too, which asks first;
-    /// everything else saves at once.
+    /// everything else saves at once (<paramref name="startSave"/>).
     /// </summary>
-    private void BeginSave(TimelineEditor current, AnimationTimelineSource loaded)
+    public void Begin(TimelineEditor current, AnimationTimelineSource loaded, AnimationDestination destination, Action startSave)
     {
         soundAsk = null;
         var candidates = destination == AnimationDestination.InPlace ? InPlaceSounds(current.Document, loaded) : [];
@@ -44,12 +60,13 @@ public sealed partial class TimelineWindow
         if (candidates.Count == 0 || loaded.Resource.ModRoot is not { } root)
         {
             soundInPlace.Clear();
-            StartSave(current, loaded);
+            startSave();
             return;
         }
         var exclude = loaded.Resource.ResolvedPath;
         var entry = loaded.EntryIndex;
         soundCheckDocument = current.Document;
+        var data = session.Data;
         // The clip's own PAP counts with its other entries; a game sound the mod replaces is played by the game's own animations too.
         soundCheck = Task.Run(() => candidates.Select(path => new SharedSound(path,
             TimelineSoundUsage.OtherUsers(root, path, exclude, entry).Count, PenumbraService.AnimationMappedFiles(root, path).Count > 1,
@@ -77,8 +94,8 @@ public sealed partial class TimelineWindow
         return [.. paths.Where(p => !shared.Contains(p.GamePath)).Select(p => p.GamePath)];
     }
 
-    /// <summary> Where a save puts each edited sound: over the mod's file when <see cref="BeginSave"/> found it can, else a copy. </summary>
-    private Func<TimelineSoundKey, TimelineSoundRoute> SoundRoute(AnimationDestination place)
+    /// <summary> Where a save puts each edited sound: over the mod's file when <see cref="Begin"/> found it can, else a copy. </summary>
+    public Func<TimelineSoundKey, TimelineSoundRoute> Route(AnimationDestination place)
     {
         var inPlace = place == AnimationDestination.InPlace && soundInPlace is { } paths
             ? new HashSet<string>(paths, StringComparer.OrdinalIgnoreCase)
@@ -88,9 +105,10 @@ public sealed partial class TimelineWindow
 
     /// <summary>
     /// After Save's check of the mod: saves when no other animation plays the sounds, else asks whether
-    /// to change each one everywhere (the mod's file) or only here (a copy). The answer holds for that save.
+    /// to change each one everywhere (the mod's file) or only here (a copy). <paramref name="fail"/> says
+    /// why the save can't go on.
     /// </summary>
-    private void DrawSoundAsk(TimelineEditor current, AnimationTimelineSource loaded)
+    public void Draw(TimelineEditor current, Action startSave, Action<string> fail)
     {
         if (soundCheck is { IsCompleted: true } task)
         {
@@ -99,19 +117,19 @@ public sealed partial class TimelineWindow
             soundCheckDocument = null;
             if (!task.IsCompletedSuccessfully)
             {
-                saveError = "The mod could not be checked for other animations playing its sounds. " + TimelineSession.ErrorText(task.Exception);
+                fail("The mod could not be checked for other animations playing its sounds. " + TimelineSession.ErrorText(task.Exception));
                 soundInPlace = null;
                 return;
             }
             if (!ReferenceEquals(checkedDocument, current.Document))
             {
-                saveError = "The timeline changed while the mod was checked. Save again.";
+                fail("The timeline changed while the mod was checked. Save again.");
                 soundInPlace = null;
                 return;
             }
             var shared = task.Result.Where(s => s.Users > 0 || s.Game).ToList();
             if (shared.Count == 0)
-                StartSave(current, loaded);
+                startSave();
             else
                 soundAsk = shared;
         }
@@ -130,7 +148,7 @@ public sealed partial class TimelineWindow
             {
                 soundAsk = null;
                 ImGui.CloseCurrentPopup();
-                StartSave(current, loaded);
+                startSave();
             }
             TimelineUi.Tip("Change the mod's own file, for every animation that plays it.");
             ImGui.SameLine();
@@ -140,7 +158,7 @@ public sealed partial class TimelineWindow
                     soundInPlace?.Remove(sound.Path);
                 soundAsk = null;
                 ImGui.CloseCurrentPopup();
-                StartSave(current, loaded);
+                startSave();
             }
             TimelineUi.Tip("Save a copy that only this animation plays.");
             ImGui.SameLine();

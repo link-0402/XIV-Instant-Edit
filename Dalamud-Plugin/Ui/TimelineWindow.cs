@@ -44,6 +44,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly CutPanel cutPanel;
     private readonly TimelineCanvas canvas;
     private readonly PropertiesPanel properties;
+    private readonly SoundSaveCheck soundSave;
+    private readonly SaveFooter saveFooter;
     private readonly BonesWindow bonesWindow;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
@@ -62,7 +64,6 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private bool loadErrorAgain;
     private string title = string.Empty;
     private string subtitle = string.Empty;
-    private bool canReplace;
 
     private PendingAction pending;
     private (AnimationCapture Capture, bool Startup)? pendingOpen;
@@ -83,7 +84,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         : base("Timeline###XIVInstantEditTimeline")
     {
         session = new TimelineSession(animations, catalog, preview, playback, motionDisplay, data, framework, log,
-            () => loadTask != null || saveTask != null || pendingSaveId != null || undoPending || soundCheck != null || soundAsk != null);
+            () => loadTask != null || saveFooter.Busy);
         this.soundPlayer = soundPlayer;
         this.animationError = animationError;
         bonesWindow = new BonesWindow(this);
@@ -96,13 +97,21 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         soundFiles = new SoundFiles(session);
         pickers = new TimelinePickers(session, soundFiles);
         soundInspector = new SoundInspector(session, soundFiles, pickers, soundPlayer);
-        timelinePreview = new TimelinePreview(session, decode, effectLooks, soundFiles, () => repairTarget);
+        timelinePreview = new TimelinePreview(session, decode, effectLooks, soundFiles, () => saveFooter.RepairTarget);
         posing = new BonePosing(session, decode);
         boneEditor = new BoneEditor(session, decode, posing, this);
         poseSources = new PoseSourcePanel(session, decode, posing, recorder);
         layerPanel = new LayerPanel(session, posing, boneEditor, poseSources, bonesWindow);
         canvas = new TimelineCanvas(session, posing, clipBand, pickers, soundFiles, texts);
         properties = new PropertiesPanel(session, effectLooks, soundInspector, cutPanel, layerPanel, texts, pickers);
+        soundSave = new SoundSaveCheck(session, soundFiles);
+        saveFooter = new SaveFooter(session, timelinePreview, effectLooks, soundFiles, soundSave, texts, () => loadTask != null,
+            afterUndo =>
+            {
+                ForgetSounds();
+                Load(source!.Capture, source.Startup, true, afterUndo: afterUndo);
+            },
+            EditAgain);
         bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, this, textures);
 
         Size = new Vector2(1000, 560);
@@ -264,8 +273,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         loadError = null;
         source = null;
         session.CatalogKey = null;
-        motionBase = null;
-        motionCarry = null;
+        saveFooter.ForgetMotion();
         effectLooks.Forget();
         ForgetSounds();
         // A sound played to listen to stops being served with the window.
@@ -304,8 +312,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     /// </summary>
     private AnimationCapture? ChangedCapture()
     {
-        if (animations == null || source is not { } current || loadTask != null || saveTask != null || pendingSaveId != null ||
-            undoPending || preview.Active || preview.Busy || timelinePreview.Building)
+        if (animations == null || source is not { } current || loadTask != null || saveFooter.Working ||
+            preview.Active || preview.Busy || timelinePreview.Building)
             return null;
         return TimelineWindowViews.ChangedCapture(animations.Observer.History, current);
     }
@@ -343,8 +351,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             session.CatalogKey = null;
             title = AnimationPresentation.AnimationName(capture, startup);
             // Another clip, or this one opened afresh: its own file is the motion to edit.
-            motionBase = null;
-            motionCarry = null;
+            saveFooter.ForgetMotion();
         }
         // The preview's temporary mod must be gone first, or the read would get the previewed file.
         var ending = timelinePreview.Stopping ?? Task.CompletedTask;
@@ -384,14 +391,13 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         var sameClip = source != null && TimelineSession.ClipKey(source) == TimelineSession.ClipKey(loaded);
         // Edit again, or an undo back to a layered edit: the saved layers apply to the motion from before
         // their edit while this clip stays open.
-        if ((again != null || afterUndo) && loaded.BaseMotion is { } kept && loaded.BaseHash is { } keptHash)
-            motionBase = (TimelineSession.ClipKey(loaded), kept, loaded.BaseFingerprint ?? string.Empty, keptHash);
+        if (again != null || afterUndo)
+            saveFooter.KeepBaseOf(loaded);
         // A clip read again after this window saved bone layers into it keeps editing them on the motion
         // from before: the carried layers come back, and the base stays the motion they apply to.
-        loaded = WithMotionBase(loaded);
+        loaded = saveFooter.WithMotionBase(loaded);
         source = loaded;
         pickers.ClipLoaded();
-        canReplace = AnimationResources.CanReplace(loaded.Resource);
         session.CatalogKey = TimelineWindowViews.CatalogKey(loaded.Capture.LoadedResourcePaths, loaded.Clip.GamePath, loaded.Resource.ModRoot);
         title = AnimationPresentation.AnimationName(loaded.Capture, loaded.Startup);
         subtitle = $"{AnimationPresentation.AnimationState(loaded.Capture, loaded.Startup)} · " +
@@ -403,26 +409,15 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         {
             effectLooks.Forget();
             ForgetSounds();
-            modName = TimelineWindowViews.DefaultModName(AnimationPresentation.DefaultModName(loaded.Capture));
-            destination = AnimationDestination.NewMod;
-            saveError = null;
-            saveMessage = null;
-            lastSaveId = null;
             canvas.ResetScroll();
-            repairTarget = null;
             animatedBoneFilter = string.Empty;
             livePoseNote = null;
             livePoseClearable = null;
         }
-        if (again != null && loaded.BaseMotion != null)
-        {
-            // Saving again writes over the edit's file; the new save's journal keeps it for Undo.
-            destination = canReplace ? AnimationDestination.InPlace : AnimationDestination.NewMod;
-            saveMessage = "The saved layers are back.";
-        }
+        saveFooter.Loaded(loaded, sameClip, again != null);
         if (loaded.Document is not { } doc)
             return;
-        var carried = TakeCarriedLayers(loaded);
+        var carried = saveFooter.TakeCarriedLayers(loaded);
         if (carried is { Unsaved: false } saved)
             doc = saved.Document;
         if (editor == null)
@@ -484,7 +479,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         // The listener runs while this window is open: the loader and the clip's skeleton choice read it.
         animations.StartObservation();
         PollLoad();
-        PollSave();
+        saveFooter.Poll();
         pickers.PollImport();
         timelinePreview.Poll();
         pickers.PollLengths();
@@ -546,7 +541,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             return;
 
         var footerStart = ImGui.GetCursorPosY();
-        DrawSaveFooter(editor, source);
+        saveFooter.Draw(editor, source);
         footerHeight = Math.Max(1, ImGui.GetCursorPosY() - footerStart);
 
         pickers.Draw(editor);
@@ -680,10 +675,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         soundFiles.Forget();
         properties.ForgetPathOrigins();
         // A save's check of the mod, or its question, belongs to the clip it was for.
-        soundCheck = null;
-        soundCheckDocument = null;
-        soundAsk = null;
-        soundInPlace = null;
+        soundSave.Forget();
         // So is a listen's error.
         soundInspector.Forget();
     }

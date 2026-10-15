@@ -139,7 +139,7 @@ public sealed partial class TimelineWindow
         DrawLoaderStatus();
         DrawLivePoseNote();
         DrawEffectProblems(current);
-        DrawSavedLayers();
+        saveFooter.DrawSavedLayers();
     }
 
     /// <summary> Effects that stop although the animation goes on, and the button that keeps them going. </summary>
