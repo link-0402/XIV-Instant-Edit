@@ -181,6 +181,7 @@ try
     Scenarios.Run(MaterialEditorScenarios.RunLabels);
     Scenarios.Run(MaterialEditorScenarios.RunDocument);
     Scenarios.Run(MaterialEditorScenarios.RunSession);
+    Scenarios.Run(MaterialEditorScenarios.RunRowEditing);
     Scenarios.Run(() => SimsImportScenarios.Run(testRoot));
     Scenarios.Run(() => PackageImportScenarios.Run(testRoot));
     Scenarios.Run(() => AnimationPackScenarios.Run(testRoot));
