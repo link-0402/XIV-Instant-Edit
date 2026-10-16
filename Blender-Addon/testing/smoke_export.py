@@ -1193,7 +1193,7 @@ def assert_links_menu(addon):
     if links != [
         ("XIV Mod Archive", "PACKAGE", "https://www.xivmodarchive.com/user/124593"),
         ("GitHub", "SCRIPT", "https://github.com/link-0402/XIV-Instant-Edit"),
-        ("Bluesky", "COMMUNITY", "https://bsky.app/profile/xiv-luci.bsky.social"),
+        ("Discord", "COMMUNITY", "https://discord.gg/w5vzsPXsE7"),
         ("Ko-fi", "FUND", "https://ko-fi.com/luci_xiv"),
     ] or any(idname != "wm.url_open" for idname, *_rest in owner.layout.items):
         raise AssertionError(f"Unexpected links menu: {owner.layout.items}")

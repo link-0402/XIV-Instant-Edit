@@ -787,13 +787,13 @@ def _draw_scope_summary(layout, props, ref, size_names: list[str] | None = None,
 LINKS = (
     ("XIV Mod Archive", "PACKAGE", "https://www.xivmodarchive.com/user/124593"),
     ("GitHub", "SCRIPT", "https://github.com/link-0402/XIV-Instant-Edit"),
-    ("Bluesky", "COMMUNITY", "https://bsky.app/profile/xiv-luci.bsky.social"),
+    ("Discord", "COMMUNITY", "https://discord.gg/w5vzsPXsE7"),
     ("Ko-fi", "FUND", "https://ko-fi.com/luci_xiv"),
 )
 
 
 class XIVIE_MT_links(Menu):
-    """XIV Instant Edit on GitHub, and Luci_xiv's mods, Bluesky and Ko-fi"""
+    """XIV Instant Edit on GitHub and Discord, and Luci_xiv's mods and Ko-fi"""
 
     bl_idname = "XIVIE_MT_links"
     bl_label = "Links"

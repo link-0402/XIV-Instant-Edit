@@ -31,6 +31,7 @@ public sealed class MainWindow : Window, IDisposable
 {
     private const string WindowOptionsPopupName = "WindowSystemContextActions";
     private const string KofiUrl = "https://ko-fi.com/luci_xiv";
+    private const string DiscordUrl = "https://discord.gg/w5vzsPXsE7";
     private const int AutoRefreshDelayMs = 1000;
     private const bool ShowAnimationsTab = true;
     private readonly Configuration _config;
@@ -145,8 +146,14 @@ public sealed class MainWindow : Window, IDisposable
         TitleBarButtons.Add(new TitleBarButton
         {
             Icon = FontAwesomeIcon.Heart,
-            Click = _ => OpenKofiPage(),
+            Click = _ => OpenPage(KofiUrl, "Ko-fi"),
             ShowTooltip = () => ImGui.SetTooltip("♥ Support me on Ko-fi"),
+        });
+        TitleBarButtons.Add(new TitleBarButton
+        {
+            Icon = FontAwesomeIcon.Comments,
+            Click = _ => OpenPage(DiscordUrl, "Discord"),
+            ShowTooltip = () => ImGui.SetTooltip("Join the Discord"),
         });
         TitleBarButtons.Add(new TitleBarButton
         {
@@ -284,15 +291,15 @@ public sealed class MainWindow : Window, IDisposable
 
     private void RequestRefresh() { try { _feed.SetStatus(string.Empty, FeedbackSeverity.Success); _onScreen.RequestRefresh(); } catch (Exception e) { _log.Debug(e.Message); _feed.SetStatus("Refresh unavailable. Is Penumbra running?", FeedbackSeverity.Warning); } }
 
-    private void OpenKofiPage()
+    private void OpenPage(string url, string name)
     {
         try
         {
-            Util.OpenLink(KofiUrl);
+            Util.OpenLink(url);
         }
         catch (Exception e)
         {
-            _log.Error(e, "Could not open the XIV Instant Edit Ko-fi page.");
+            _log.Error(e, $"Could not open the XIV Instant Edit {name} page.");
         }
     }
 

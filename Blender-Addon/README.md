@@ -172,7 +172,7 @@ The globe at the right end of the **Instant Edit** header opens these pages:
 
 - [Luci_xiv on XIV Mod Archive](https://www.xivmodarchive.com/user/124593)
 - [XIV Instant Edit on GitHub](https://github.com/link-0402/XIV-Instant-Edit)
-- [Bluesky](https://bsky.app/profile/xiv-luci.bsky.social)
+- [Discord](https://discord.gg/w5vzsPXsE7)
 - [Ko-fi](https://ko-fi.com/luci_xiv)
 
 ## Credits and license
