@@ -43,6 +43,23 @@ internal sealed class BrowsePanel : IStagePanel
         bool inPack = _session.IsInModpack(subject.Key);
         Gui.SectionHeader(subject.DisplayName, inPack ? "Already in the modpack." : null);
 
+        if (subject is AnimationSubject animation)
+        {
+            if (animation.Target.Command.Length > 0)
+                Gui.LabeledValue("Command", animation.Target.Command);
+            ImGui.Spacing();
+            ImGui.TextColored(Theme.Muted, "Animations");
+            foreach (var timeline in animation.Target.Timelines)
+            {
+                Gui.Icon(timeline.Editable ? FontAwesomeIcon.Check : FontAwesomeIcon.Minus, timeline.Editable ? Theme.Good : Theme.Faint);
+                ImGui.SameLine();
+                ImGui.TextColored(timeline.Editable ? Theme.Muted : Theme.Faint, $"{timeline.Label}: {timeline.Key}");
+                if (timeline.Reason != null)
+                    Gui.Tooltip(timeline.Reason);
+            }
+            return;
+        }
+
         if (subject is GearSubject gear)
         {
             Gui.LabeledValue("Slot", SlotInfo.DisplayLabelMap[gear.Item.Slot]);

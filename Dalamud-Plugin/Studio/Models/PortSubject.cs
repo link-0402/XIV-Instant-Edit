@@ -103,6 +103,8 @@ internal abstract class PortSubject
                 return gameData.GetWeapon(key, offHand: false) is { } main ? new WeaponSubject(main) : null;
             case KeyTagKind.OffHand:
                 return gameData.GetWeapon(key & ~WeaponSubject.OffHandBit, offHand: true) is { } off ? new WeaponSubject(off) : null;
+            case KeyTagKind.Emote or KeyTagKind.Timeline:
+                return gameData.GetAnimationTarget(key) is { } target ? new AnimationSubject(target) : null;
             default:
                 return null;
         }

@@ -23,6 +23,22 @@ internal static class AnimationPackScenarios
         NoFilesNoPlans();
         OldSettingsHaveNoAnimations();
         AnimationSubjectKeys();
+        TimelineRefsSayWhatCanBeReplaced();
+    }
+
+    private static void TimelineRefsSayWhatCanBeReplaced()
+    {
+        var body = EmoteCatalog.Ref(1, "emote/joy", 0);
+        Require(body is { Editable: true, Reason: null, Label: "joy" }, "a body timeline under bt_common can be replaced");
+        Require(EmoteCatalog.Ref(4, "emote/x_ground", 2).Editable, "load type 2 timelines read bt_common too");
+        var face = EmoteCatalog.Ref(2, "facial/pose/smile", 0);
+        Require(!face.Editable && face.Reason == "Face animations live per face; not supported yet.", "an expression's face is not replaceable here, and says why");
+        var weapon = EmoteCatalog.Ref(3, "emote/x", 1);
+        Require(!weapon.Editable && weapon.Reason == "Weapon-specific animation; not supported yet.", "a weapon-stance timeline is not replaceable here, and says why");
+        Require(EmoteCatalog.LabelFor("emote/sit_start") == "Start" && EmoteCatalog.LabelFor("emote/dance12_loop") == "Loop" &&
+                EmoteCatalog.LabelFor("emote/sit_end") == "End" && EmoteCatalog.LabelFor("emote/joy") == "joy",
+            "rows are labelled Start, Loop and End, or by the key's last part");
+        Require(EmoteCatalog.Ref(5, "", 0) is { Editable: false }, "a timeline without a key can't be replaced");
     }
 
     private static readonly Func<string, string> Identity = p => p;
