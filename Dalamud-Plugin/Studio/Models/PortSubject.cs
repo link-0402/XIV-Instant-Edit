@@ -1,11 +1,15 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using InstantEdit.Studio.Services;
 
 namespace InstantEdit.Studio.Models;
 
-/// <summary>What a port replaces.</summary>
-public enum SubjectKind { Gear, Hair, Face, Tail, Ear }
+/// <summary>What an item of the modpack replaces.</summary>
+public enum SubjectKind { Gear, Hair, Face, Tail, Ear, Weapon }
+
+/// <summary>What a saved item key names, by its top bits (see <see cref="PortSubject.KeyTag"/>).</summary>
+public enum KeyTagKind { Gear, OffHand, Emote, Timeline, Feature, Unknown }
 
 /// <summary>
 /// The thing a port replaces — a piece of gear, or a character feature — and the answer to
@@ -59,18 +63,90 @@ internal abstract class PortSubject
     public abstract bool UsesEqdp { get; }
     public abstract bool UsesImc  { get; }
 
-    public string KindLabel => Kind == SubjectKind.Gear ? "Item" : FeatureNaming.KindLabel(Kind);
+    /// <summary>Whether models are set up per race (false for weapons, which have one model for everyone).</summary>
+    public virtual bool HasRaces => true;
+
+    public virtual string KindLabel => Kind == SubjectKind.Gear ? "Item" : FeatureNaming.KindLabel(Kind);
+
+    /// <summary>
+    /// What a saved key names. Feature keys set the top bit; below it, the top byte tags the rest:
+    /// 0 for an item row (gear, or a main-hand weapon), 0x40 an off-hand weapon, 0x20 an emote,
+    /// 0x21 another animation timeline. Any other tag names nothing this version knows.
+    /// </summary>
+    public static KeyTagKind KeyTag(uint key)
+    {
+        if ((key & 0x8000_0000) != 0)
+            return KeyTagKind.Feature;
+        return (key >> 24) switch
+        {
+            0x00 => KeyTagKind.Gear,
+            0x40 => KeyTagKind.OffHand,
+            0x20 => KeyTagKind.Emote,
+            0x21 => KeyTagKind.Timeline,
+            _    => KeyTagKind.Unknown,
+        };
+    }
 
     /// <summary>Recreates a subject from a saved key, or null if it no longer resolves.</summary>
     public static PortSubject? FromKey(uint key, GameDataService gameData)
     {
         if (key == 0)
             return null;
-        if (FeatureSubject.TryDecode(key, out var feature))
-            return feature;
-        var item = gameData.GetItemByRowId(key);
-        return item != null ? new GearSubject(item) : null;
+        switch (KeyTag(key))
+        {
+            case KeyTagKind.Feature:
+                return FeatureSubject.TryDecode(key, out var feature) ? feature : null;
+            case KeyTagKind.Gear:
+                var item = gameData.GetItemByRowId(key);
+                return item != null ? new GearSubject(item) : null;
+            default:
+                return null;
+        }
     }
+}
+
+/// <summary>
+/// A weapon model: the main or off hand of a weapon item. One model for every race, its materials
+/// and textures in the weapon's own folder, and IMC overrides pointing every variant at them.
+/// </summary>
+internal sealed class WeaponSubject : PortSubject
+{
+    public const uint OffHandBit = 0x4000_0000;
+
+    public WeaponSubject(WeaponModel model) => Model = model;
+
+    public WeaponModel Model { get; }
+
+    public override uint        Key         => Model.OffHand ? OffHandBit | Model.RowId : Model.RowId;
+    public override SubjectKind Kind        => SubjectKind.Weapon;
+    public override string      DisplayName => Model.OffHand ? $"{Model.Name} (off hand)" : Model.Name;
+    public override string      IdDisplay   => Model.IdDisplay;
+    public override bool        MultiRace   => false;
+    public override RaceGender? BaseRace    => null;
+    public override bool        UsesEqdp    => false;
+    public override bool        UsesImc     => true;
+    public override bool        HasRaces    => false;
+    public override string      KindLabel   => "Weapon";
+
+    public override string ModelGamePath(RaceGender rg) => WeaponNaming.ModelGamePath(Model.Id, Model.Body);
+
+    public override string MaterialGamePath(string materialName, RaceGender? race)
+        => WeaponNaming.MaterialGamePath(Model.Id, Model.Body, materialName);
+
+    public override string TextureGamePath(string textureName) => WeaponNaming.TextureGamePath(Model.Id, Model.Body, textureName);
+
+    public override string MaterialFolder(RaceGender? race) => WeaponNaming.MaterialFolder(Model.Id, Model.Body);
+    public override string TextureFolder => WeaponNaming.TextureFolder(Model.Id, Model.Body);
+
+    public override string DefaultMaterialName(int letter, RaceGender? race = null)
+        => WeaponNaming.DefaultMaterialName(Model.Id, Model.Body, letter);
+
+    private static readonly IReadOnlyList<RaceGender?> Shared = new RaceGender?[] { null };
+
+    public override IReadOnlyList<RaceGender?> MaterialRaces(IReadOnlyList<RaceModelEntry> models) => Shared;
+
+    public override string VanillaMaterialPath(string referencedName, RaceGender race)
+        => WeaponNaming.VanillaMaterialGamePath(Model.Id, Model.Body, Math.Max(Model.Variant, (ushort)1), referencedName.TrimStart('/'));
 }
 
 /// <summary>A piece of gear: everything delegates to the existing equipment path helpers.</summary>

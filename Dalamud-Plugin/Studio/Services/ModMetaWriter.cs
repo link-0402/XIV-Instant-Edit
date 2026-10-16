@@ -54,6 +54,9 @@ public sealed class ModEqdpOverride
     public required ushort     Entry      { get; init; }
 }
 
+/// <summary>What an IMC override is for: an equipment or accessory slot, or one hand of a weapon.</summary>
+public enum ImcObject { Equipment, MainHand, OffHand }
+
 /// <summary>
 /// An Imc override: forces a single dye/recolor variant's MaterialId back to 1 (the
 /// "v0001" material folder this tool always writes to), while preserving every other
@@ -63,8 +66,11 @@ public sealed class ModEqdpOverride
 /// </summary>
 public sealed class ModImcOverride
 {
-    public required EquipSlot Slot                { get; init; }
+    /// <summary>Gear or a weapon hand. Weapons ignore <see cref="Slot"/> and carry their body in <see cref="SecondaryId"/>.</summary>
+    public ImcObject          Object               { get; init; } = ImcObject.Equipment;
+    public EquipSlot          Slot                 { get; init; }
     public required ushort    SetId                { get; init; }
+    public ushort             SecondaryId          { get; init; }
     public required byte      Variant              { get; init; }
     public required byte      DecalId              { get; init; }
     public required byte      VfxId                { get; init; }
@@ -265,11 +271,17 @@ public static class ModMetaWriter
             j.WriteStartObject();
             j.WriteString("Type", "Imc");
             j.WriteStartObject("Manipulation");
+            bool weapon = o.Object != ImcObject.Equipment;
             j.WriteNumber("PrimaryId", o.SetId);
-            j.WriteNumber("SecondaryId", 0);
+            j.WriteNumber("SecondaryId", weapon ? o.SecondaryId : 0);
             j.WriteNumber("Variant", o.Variant);
-            j.WriteString("ObjectType", SlotInfo.IsAccessory(o.Slot) ? "Accessory" : "Equipment");
-            j.WriteString("EquipSlot", SlotInfo.LabelMap[o.Slot]);
+            j.WriteString("ObjectType", weapon ? "Weapon" : SlotInfo.IsAccessory(o.Slot) ? "Accessory" : "Equipment");
+            j.WriteString("EquipSlot", o.Object switch
+            {
+                ImcObject.MainHand => "MainHand",
+                ImcObject.OffHand  => "OffHand",
+                _                  => SlotInfo.LabelMap[o.Slot],
+            });
             j.WriteString("BodySlot", "Unknown");
             j.WriteStartObject("Entry");
             j.WriteNumber("MaterialId", 1); // always force the v0001 folder this tool writes to

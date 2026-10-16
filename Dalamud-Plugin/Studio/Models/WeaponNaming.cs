@@ -1,0 +1,39 @@
+namespace InstantEdit.Studio.Models;
+
+/// <summary>
+/// One weapon model of an item: the item's row, name and icon, its class category, and the model
+/// the main or off hand shows (weapon id, body, variant). An item with both a main-hand and an
+/// off-hand model (dual wield, shields drawn with the weapon) is listed once per hand.
+/// </summary>
+internal sealed record WeaponModel(uint RowId, string Name, uint Icon, string Category, ushort Id, ushort Body, ushort Variant, bool OffHand)
+{
+    public string IdDisplay => $"w{Id:D4}b{Body:D4}";
+}
+
+/// <summary>Game paths of weapon files, e.g. "chara/weapon/w0201/obj/body/b0001/model/w0201b0001.mdl".</summary>
+internal static class WeaponNaming
+{
+    public static string Folder(ushort id, ushort body) => $"chara/weapon/w{id:D4}/obj/body/b{body:D4}";
+
+    public static string ModelGamePath(ushort id, ushort body) => $"{Folder(id, body)}/model/w{id:D4}b{body:D4}.mdl";
+
+    /// <summary>The build always writes into v0001; IMC overrides point every variant at it, as for gear.</summary>
+    public static string MaterialFolder(ushort id, ushort body) => $"{Folder(id, body)}/material/v0001";
+
+    public static string MaterialGamePath(ushort id, ushort body, string name)
+        => $"{MaterialFolder(id, body)}/{MaterialNaming.SanitizeFileName(name)}.mtrl";
+
+    /// <summary>Where the game keeps a variant's own vanilla material.</summary>
+    public static string VanillaMaterialGamePath(ushort id, ushort body, ushort variant, string name)
+        => $"{Folder(id, body)}/material/v{variant:D4}/{MaterialNaming.SanitizeFileName(name)}.mtrl";
+
+    public static string TextureFolder(ushort id, ushort body) => $"{Folder(id, body)}/texture";
+
+    public static string TextureGamePath(ushort id, ushort body, string name)
+        => $"{TextureFolder(id, body)}/{MaterialNaming.SanitizeFileName(name)}.tex";
+
+    public static string DefaultMaterialName(ushort id, ushort body, int letter)
+        => $"mt_w{id:D4}b{body:D4}_{(char)('a' + System.Math.Max(letter, 1) - 1)}";
+
+    public static string ImcGamePath(ushort id, ushort body) => $"{Folder(id, body)}/b{body:D4}.imc";
+}
