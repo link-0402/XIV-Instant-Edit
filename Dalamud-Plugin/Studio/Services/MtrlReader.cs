@@ -77,6 +77,17 @@ public sealed class MtrlInfo
     public MtrlNamedSet[] ColorSets = Array.Empty<MtrlNamedSet>();
     public string ShaderPackageName = string.Empty;
 
+    /// <summary>
+    /// The string block as read (with its padding and order), and where each name sat in it. The
+    /// writer reuses the block while every name is unchanged, so an unedited file writes back byte
+    /// for byte.
+    /// </summary>
+    public byte[] StringsRaw = Array.Empty<byte>();
+    public ushort[] TextureNameOffsets = Array.Empty<ushort>();
+    public ushort[] UvSetNameOffsets = Array.Empty<ushort>();
+    public ushort[] ColorSetNameOffsets = Array.Empty<ushort>();
+    public ushort ShaderPackageNameOffset;
+
     /// <summary>Everything from just after the strings block to EOF, as read.</summary>
     public byte[] Tail = Array.Empty<byte>();
 
@@ -117,6 +128,11 @@ public sealed class MtrlInfo
         UvColorSets        = UvColorSets.ToArray(),
         ColorSets          = ColorSets.ToArray(),
         ShaderPackageName  = ShaderPackageName,
+        StringsRaw         = StringsRaw.ToArray(),
+        TextureNameOffsets = TextureNameOffsets.ToArray(),
+        UvSetNameOffsets   = UvSetNameOffsets.ToArray(),
+        ColorSetNameOffsets = ColorSetNameOffsets.ToArray(),
+        ShaderPackageNameOffset = ShaderPackageNameOffset,
         Tail               = Tail.ToArray(),
         ShaderDataParsed   = ShaderDataParsed,
         AdditionalData     = AdditionalData.ToArray(),
@@ -198,6 +214,12 @@ public static class MtrlReader
 
         info.ShaderPackageName = ReadCString(strings, shaderPackageNameOffset);
 
+        info.StringsRaw = strings;
+        info.TextureNameOffsets = rawTextureOffsets.Select(raw => (ushort)raw).ToArray();
+        info.UvSetNameOffsets = rawUvSets.Select(set => set.NameOffset).ToArray();
+        info.ColorSetNameOffsets = rawColorSets.Select(set => set.NameOffset).ToArray();
+        info.ShaderPackageNameOffset = shaderPackageNameOffset;
+
         int tailStart = HeaderSize + info.TextureCount * 4 + info.UvSetCount * 4 + info.ColorSetCount * 4 + stringTableSize;
         info.Tail = tailStart < data.Length ? data[tailStart..] : Array.Empty<byte>();
 
@@ -247,7 +269,7 @@ public static class MtrlReader
         }
     }
 
-    private static string ReadCString(byte[] strings, uint offset)
+    internal static string ReadCString(byte[] strings, uint offset)
     {
         if (offset >= strings.Length) return string.Empty;
         int end = (int)offset;
