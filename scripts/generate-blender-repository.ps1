@@ -54,7 +54,9 @@ if (-not (Test-Path -LiteralPath $packagePath -PathType Leaf)) {
     throw "Blender package creation did not produce the expected archive: $packagePath"
 }
 
-& $blenderExecutable --background --command extension server-generate "--repo-dir=$resolvedRepository" --html
+# --factory-startup keeps the user's add-ons out of this run: they print startup errors, and a
+# second XIV Instant Edit listener clashes with an open Blender on the same port.
+& $blenderExecutable --factory-startup --background --command extension server-generate "--repo-dir=$resolvedRepository" --html
 if ($LASTEXITCODE -ne 0) {
     throw "Blender extension repository generation failed with exit code $LASTEXITCODE."
 }
