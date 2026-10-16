@@ -10,6 +10,12 @@ internal enum EditClass
     Structural,
 }
 
+/// <summary>What one live edit has to write into the loaded material.</summary>
+internal sealed record LiveDiff(uint[] Constants, uint[] Keys, bool Flags, uint[] Samplers, bool Table)
+{
+    public bool Empty => Constants.Length == 0 && Keys.Length == 0 && !Flags && Samplers.Length == 0 && !Table;
+}
+
 /// <summary>Shows edited files on a character through a temporary mod and a redraw (the structural preview).</summary>
 internal interface IMaterialPreview
 {
@@ -166,6 +172,35 @@ internal sealed class MaterialSession
         }
         return EditClass.Live;
     }
+
+    /// <summary>
+    /// What a live edit writes into the loaded material: the constants whose values changed (a
+    /// removed one goes back to the package default), the keys whose values changed, whether the
+    /// shader flags changed, the samplers whose settings changed, and whether the colour table did.
+    /// </summary>
+    public static LiveDiff LiveDiff(MaterialDocument before, MaterialDocument after)
+    {
+        var constants = before.Constants.Select(constant => constant.Id).Union(after.Constants.Select(constant => constant.Id))
+            .Where(id => !SameValues(before.Constant(id)?.Values, after.Constant(id)?.Values))
+            .ToArray();
+        var facts = ShaderPackages.Get(after.ShaderPackage);
+        var keys = before.Keys.Select(key => key.Id).Union(after.Keys.Select(key => key.Id))
+            .Where(id => (before.KeyValue(id) ?? facts?.Key(id)?.Default) != (after.KeyValue(id) ?? facts?.Key(id)?.Default))
+            .ToArray();
+        var samplers = before.Slots.Zip(after.Slots)
+            .Where(pair => pair.First.SamplerId == pair.Second.SamplerId && pair.First.SamplerSettings != pair.Second.SamplerSettings)
+            .Select(pair => pair.Second.SamplerId)
+            .Distinct()
+            .ToArray();
+        var table = !ReferenceEquals(before.Table, after.Table) && (before.Table == null) == (after.Table == null)
+                    && !before.Table!.WriteDataSet().AsSpan().SequenceEqual(after.Table!.WriteDataSet());
+        return new LiveDiff(constants, keys, before.ShaderFlags != after.ShaderFlags, samplers, table);
+    }
+
+    private static bool SameValues(float[]? a, float[]? b)
+        => a != null && b != null && MemoryMarshalBits(a).SequenceEqual(MemoryMarshalBits(b));
+
+    private static ReadOnlySpan<byte> MemoryMarshalBits(float[] values) => System.Runtime.InteropServices.MemoryMarshal.AsBytes(values.AsSpan());
 
     private static (ColorTableKind, bool) TableShape(ColorTable? table)
         => table == null ? (ColorTableKind.None, false) : (table.Kind, table.Dye != null || table.LegacyDye != null);

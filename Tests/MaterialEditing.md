@@ -49,3 +49,22 @@ Saving:
 - [ ] A legacy material (characterlegacy.shpk) shows the 16-row table; the dots menu's "Convert to
   Dawntrail" moves it to character.shpk with 32 rows, and the character still looks the same.
 - [ ] A character.shpk material with an old 16-row table shows the warning and Convert button.
+
+## Live preview in memory (Task 8, pending; needs XIV Bridge with automation on)
+
+The `material` Bridge tool shows the window's state, the live binding and, with
+`{"constant": "0x29AC0223"}`, that value as the loaded material holds it.
+- [ ] Open a gear material from On Screen: the toolbar reads "Live"; `material` lists a binding
+  (Character model N material M) and a snapshot of 416 bytes or so.
+- [ ] Drag Alpha cutoff: the model changes while dragging, with no redraw; `material` with the
+  constant shows the loaded value equal to the document's.
+- [ ] Change Translucent, Hide backfaces and a texture's wrap mode: each shows at once.
+- [ ] Change "Face decal" on a material with a decal: does it show at once? If not, keys need a
+  redraw; note it here.
+- [ ] Close the window: the character looks as before; reopening and checking `material` shows
+  matchesSnapshot true right after binding.
+- [ ] Redraw the character (Penumbra) while bound: no crash; the toolbar shows Live again within a
+  second and the edits are back on the character.
+- [ ] Enter and leave GPose, and change zones, while bound: no crash; Live comes back.
+- [ ] Reload the plugin while bound with unsaved edits: no crash; the character shows its own
+  material after the reload.
