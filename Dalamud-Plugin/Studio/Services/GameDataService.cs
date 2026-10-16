@@ -901,11 +901,13 @@ public sealed class GameDataService : IItemNames, Check.IItemVariants
     /// <summary>
     /// The weapon's IMC overrides, one per variant, each forcing the variant's material back to the
     /// v0001 folder the build writes while keeping every other field (see <see cref="GetImcOverridesForcingV1"/>).
-    /// Null when the IMC file can't be read.
+    /// Null when the IMC file can't be read. A dual-wield off hand reads its main hand's IMC
+    /// (<see cref="WeaponNaming.ImcOwnerId"/>), so its overrides are that file's and change the main hand too.
     /// </summary>
     internal List<ModImcOverride>? GetWeaponImcOverridesForcingV1(WeaponModel weapon)
     {
-        var path = WeaponNaming.ImcGamePath(weapon.Id, weapon.Body);
+        var owner = WeaponNaming.ImcOwnerId(weapon.Id);
+        var path = WeaponNaming.ImcGamePath(owner, weapon.Body);
         try
         {
             var imc = _data.GetFile<ImcFile>(path);
@@ -921,7 +923,7 @@ public sealed class GameDataService : IItemNames, Check.IItemVariants
                 overrides.Add(new ModImcOverride
                 {
                     Object              = weapon.OffHand ? ImcObject.OffHand : ImcObject.MainHand,
-                    SetId               = weapon.Id,
+                    SetId               = owner,
                     SecondaryId         = weapon.Body,
                     Variant             = (byte)v,
                     DecalId             = entry.DecalId,

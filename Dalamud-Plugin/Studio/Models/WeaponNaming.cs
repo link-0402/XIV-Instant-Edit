@@ -36,4 +36,15 @@ internal static class WeaponNaming
         => $"mt_w{id:D4}b{body:D4}_{(char)('a' + System.Math.Max(letter, 1) - 1)}";
 
     public static string ImcGamePath(ushort id, ushort body) => $"{Folder(id, body)}/b{body:D4}.imc";
+
+    /// <summary>
+    /// The weapon id whose IMC file the game reads for <paramref name="id"/>. Off hands of the dual-wield
+    /// classes (ids 51-99 within the 03xx, 16xx, 18xx, 26xx, 30xx and 31xx ranges) read their main hand's
+    /// (id - 50); Penumbra refuses IMC entries for the off-hand ids themselves (ItemData.AdaptOffhandImc).
+    /// </summary>
+    public static ushort ImcOwnerId(ushort id)
+    {
+        var category = id / 100;
+        return category is 3 or 16 or 18 or 26 or 30 or 31 && id - category * 100 > 50 ? (ushort)(id - 50) : id;
+    }
 }

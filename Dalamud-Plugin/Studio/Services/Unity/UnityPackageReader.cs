@@ -48,7 +48,14 @@ internal static class UnityPackageReader
             {
                 case "pathname":
                     if (ReadText(entry, 64 * 1024) is { } text)
+                    {
                         pathnames[guid] = FirstLine(text);
+                        // Text read before its path was known (an animation clip, a scene) that turns
+                        // out not to be a material or prefab is let go of at once.
+                        if (UnityAsset.KindOf(pathnames[guid]) is not (UnityAssetKind.Material or UnityAssetKind.Prefab)
+                            && yaml.Remove(guid, out var dropped))
+                            result.BufferedAssetBytes -= System.Text.Encoding.UTF8.GetByteCount(dropped);
+                    }
                     break;
                 case "asset.meta":
                     if (ReadText(entry, MaxMetaBytes) is { } meta)

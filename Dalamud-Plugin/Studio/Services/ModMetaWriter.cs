@@ -276,13 +276,9 @@ public static class ModMetaWriter
             j.WriteNumber("SecondaryId", weapon ? o.SecondaryId : 0);
             j.WriteNumber("Variant", o.Variant);
             j.WriteString("ObjectType", weapon ? "Weapon" : SlotInfo.IsAccessory(o.Slot) ? "Accessory" : "Equipment");
-            j.WriteString("EquipSlot", o.Object switch
-            {
-                ImcObject.MainHand => "MainHand",
-                ImcObject.OffHand  => "OffHand",
-                _                  => SlotInfo.LabelMap[o.Slot],
-            });
-            j.WriteString("BodySlot", "Unknown");
+            // As Penumbra writes them: a weapon entry has no equipment slot and the Body body slot.
+            j.WriteString("EquipSlot", weapon ? "Unknown" : SlotInfo.LabelMap[o.Slot]);
+            j.WriteString("BodySlot", weapon ? "Body" : "Unknown");
             j.WriteStartObject("Entry");
             j.WriteNumber("MaterialId", 1); // always force the v0001 folder this tool writes to
             j.WriteNumber("DecalId", o.DecalId);

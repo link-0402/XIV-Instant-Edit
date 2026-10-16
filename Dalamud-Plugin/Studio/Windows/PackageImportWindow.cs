@@ -73,6 +73,10 @@ public sealed class PackageImportWindow : Window, IDisposable
     private string _errorMessage = string.Empty;
     private string _applyMessage = string.Empty;
 
+    /// <summary>The last extraction's result, shown above the stash it opened; a problem when files failed or were refused.</summary>
+    private string _extractNote = string.Empty;
+    private bool _extractNoteIsProblem;
+
     private static readonly string[] RoleLabels =
     {
         "Unknown", "Diffuse", "Normal", "Specular", "Shadow", "Emission", "Region map",
@@ -212,7 +216,31 @@ public sealed class PackageImportWindow : Window, IDisposable
             ImGui.AlignTextToFramePadding();
             Gui.Hint(_applyMessage);
         }
+        if (!string.IsNullOrEmpty(_extractNote) && string.Equals(_stash.Folder, _extractNoteFolder, StringComparison.OrdinalIgnoreCase))
+        {
+            Gui.Icon(_extractNoteIsProblem ? FontAwesomeIcon.ExclamationTriangle : FontAwesomeIcon.CheckCircle, _extractNoteIsProblem ? Theme.Warn : Theme.Good);
+            ImGui.SameLine();
+            ImGui.TextColored(_extractNoteIsProblem ? Theme.Warn : Theme.Muted, _extractNote);
+            if (_extractNoteIsProblem)
+            {
+                ImGui.SameLine();
+                if (ImGui.SmallButton("Open the report##ExtractReport"))
+                    StashView.Reveal(Path.Combine(_extractNoteFolder, "extract-report.txt"));
+            }
+        }
         ImGui.Spacing();
+    }
+
+    private string _extractNoteFolder = string.Empty;
+
+    /// <summary>Notes what an extraction did, for the stash bar.</summary>
+    private void NoteExtraction(string folder, int written, int failed, int refused)
+    {
+        _extractNoteFolder = folder;
+        _extractNoteIsProblem = failed + refused > 0;
+        _extractNote = refused > 0
+            ? $"{written} file(s) written, {failed} failed, {refused} refused: their paths lead outside the output folder."
+            : $"{written} file(s) written, {failed} failed.";
     }
 
     private void DrawSource(bool busy)
@@ -747,6 +775,7 @@ public sealed class PackageImportWindow : Window, IDisposable
                 _status     = $"Done: {result.Extracted} file(s) written, {result.Failed} failed.";
                 StudioServices.Log.Information("[Studio] Sims extraction: {0} written, {1} failed, into {2}",
                     result.Extracted, result.Failed, result.RootFolder);
+                NoteExtraction(result.RootFolder, result.Extracted, result.Failed, 0);
                 OpenStash(result.RootFolder);
             }
             else
@@ -768,6 +797,7 @@ public sealed class PackageImportWindow : Window, IDisposable
                 _status = $"Done: {result.WrittenFiles.Count} file(s) written, {result.Failed} failed, {result.Refused.Count} refused.";
                 StudioServices.Log.Information("[Studio] Unity extraction: {0} written, {1} failed, {2} refused, into {3}",
                     result.WrittenFiles.Count, result.Failed, result.Refused.Count, result.RootFolder);
+                NoteExtraction(result.RootFolder, result.WrittenFiles.Count, result.Failed, result.Refused.Count);
                 OpenStash(result.RootFolder);
             }
             else

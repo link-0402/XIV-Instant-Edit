@@ -26,6 +26,34 @@ internal static class AnimationPackScenarios
         TimelineRefsSayWhatCanBeReplaced();
         AnimationFileCheckReadsMagic(root);
         AnimationItemIsCopiedToEveryPath(root);
+        UnsafeKeysPlanNothing();
+        PathsTheGameLacksAreFound();
+        UntickedRacesSharingAFileAreNamed();
+    }
+
+    private static void UnsafeKeysPlanNothing()
+    {
+        Require(AnimationPathPlanner.Plan(Setup("../../evil", @"C:\a\x.pap", @"C:\a\x.tmb"), new[] { "0101" }, Identity).Count == 0,
+            "a timeline key that is no safe game path plans nothing");
+    }
+
+    private static void PathsTheGameLacksAreFound()
+    {
+        var plans = AnimationPathPlanner.Plan(Setup("emote/joy", @"C:\a\x.pap", @"C:\a\x.tmb", "0101", "0201"), new[] { "0101", "0201" }, Identity);
+        var missing = AnimationPathPlanner.MissingFromGame(plans, path => path.Contains("/c0101/", StringComparison.Ordinal));
+        Require(missing.Select(p => p.GamePath).SequenceEqual(new[] { "chara/human/c0201/animation/a0001/bt_common/emote/joy.pap" }),
+            "a PAP path the game has no file at is found; TMBs and existing paths are not");
+    }
+
+    private static void UntickedRacesSharingAFileAreNamed()
+    {
+        string Resolve(string path) => path.Replace("/c0801/", "/c0101/", StringComparison.Ordinal);
+        var plans = AnimationPathPlanner.Plan(Setup("emote/joy", @"C:\a\x.pap", "", "0801"), new[] { "0101", "0201", "0801" }, Resolve);
+        Require(plans.Single() is { GamePath: "chara/human/c0101/animation/a0001/bt_common/emote/joy.pap" } plan &&
+                plan.Races.SequenceEqual(new[] { "0801" }) && plan.AlsoServes.SequenceEqual(new[] { "0101" }),
+            "a file written for a ticked race that borrows another's copy names the unticked races that play it too");
+        var all = AnimationPathPlanner.Plan(Setup("emote/joy", @"C:\a\x.pap"), new[] { "0101", "0801" }, Resolve);
+        Require(all.Single().AlsoServes.Count == 0, "with every race ticked no other race is affected");
     }
 
     private static void AnimationFileCheckReadsMagic(string root)

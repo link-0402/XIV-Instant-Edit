@@ -101,7 +101,7 @@ internal static class PortValidator
 
         if (item.Animation is { } animation)
         {
-            ValidateAnimation(item, animation, itemTarget, issues);
+            ValidateAnimation(item, animation, session.AnimationPlan(animation), gameData, itemTarget, issues);
             ValidateAcrossItems(item, WrittenFiles(session, item, gameData), writtenBy, writtenPaths, issues);
             return;
         }
@@ -118,6 +118,10 @@ internal static class PortValidator
             return;
         }
 
+        if (subject is WeaponSubject weapon && item.Materials.Count > 0 && WeaponNaming.ImcOwnerId(weapon.Model.Id) != weapon.Model.Id)
+            issues.Add(new(Severity.Info, itemTarget,
+                $"{subject.DisplayName}: this off hand shares its main hand's variants, so the main hand also loads its materials from v0001."));
+
         if (item.Models.Count == 0)
             issues.Add(new(Severity.Info, itemTarget,
                 $"{subject.DisplayName}: no race models — the mod will only replace this {subject.KindLabel.ToLowerInvariant()}'s materials and textures."));
@@ -130,13 +134,20 @@ internal static class PortValidator
     }
 
     /// <summary>An animation item: something to write, and every file it names is the kind its row takes.</summary>
-    private static void ValidateAnimation(PortItem item, AnimationSetup animation, Target itemTarget, List<PortIssue> issues)
+    private static void ValidateAnimation(PortItem item, AnimationSetup animation, IReadOnlyList<Animation.AnimationFilePlan> plans,
+        GameDataService gameData, Target itemTarget, List<PortIssue> issues)
     {
         if (!animation.HasWork)
         {
             issues.Add(new(Severity.Warning, itemTarget, $"{item.Subject.DisplayName}: drop a .pap on at least one animation."));
             return;
         }
+        foreach (var missing in Animation.AnimationPathPlanner.MissingFromGame(plans, gameData.Exists))
+            issues.Add(new(Severity.Warning, itemTarget,
+                $"{item.Subject.DisplayName}: the game has no file at {missing.GamePath}, so it may never load this one."));
+        foreach (var shared in plans.Where(p => p.AlsoServes.Count > 0))
+            issues.Add(new(Severity.Info, itemTarget,
+                $"{item.Subject.DisplayName}: {string.Join(", ", shared.AlsoServes.Select(r => $"c{r}"))} play the same file as the ticked races, so they change too."));
         foreach (var timeline in animation.Timelines)
         {
             if (!string.IsNullOrWhiteSpace(timeline.PapSource) && Animation.AnimationFileCheck.Problem(timeline.PapSource, tmb: false) is { } pap)

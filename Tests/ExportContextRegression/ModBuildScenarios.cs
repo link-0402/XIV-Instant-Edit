@@ -128,10 +128,16 @@ internal static class ModBuildScenarios
         ModMetaWriter.Write(mod, "Weapon Imc", defaults, Array.Empty<ModGroupOut>());
         var meta = JsonNode.Parse(File.ReadAllText(Path.Combine(mod, "meta.json")))!;
         var m = meta["DefaultData"]?["Manipulations"]?[0]?["Manipulation"];
-        Require(m != null && (string?)m["ObjectType"] == "Weapon" && (string?)m["EquipSlot"] == "OffHand" &&
+        Require(m != null && (string?)m["ObjectType"] == "Weapon" && (string?)m["EquipSlot"] == "Unknown" && (string?)m["BodySlot"] == "Body" &&
                 (int?)m["PrimaryId"] == 201 && (int?)m["SecondaryId"] == 1 && (int?)m["Variant"] == 3 &&
                 (int?)m["Entry"]?["MaterialId"] == 1 && (int?)m["Entry"]?["VfxId"] == 2,
-            "a weapon's IMC entry is written with the weapon's object type, hand, body and variant");
+            "a weapon's IMC entry is written as Penumbra writes one: weapon object type, body and variant, no equipment slot");
+
+        Require(WeaponNaming.ImcOwnerId(351) == 301 && WeaponNaming.ImcOwnerId(1651) == 1601 && WeaponNaming.ImcOwnerId(3151) == 3101,
+            "off hands of dual-wield classes use their main hand's IMC (id - 50), as the game and Penumbra do");
+        Require(WeaponNaming.ImcOwnerId(301) == 301 && WeaponNaming.ImcOwnerId(1650) == 1650 && WeaponNaming.ImcOwnerId(251) == 251 &&
+                WeaponNaming.ImcOwnerId(201) == 201,
+            "every other weapon uses its own IMC");
     }
 
     private static void UnknownKeyTagsResolveToNothing()
