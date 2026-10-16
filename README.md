@@ -29,13 +29,7 @@ Penumbra mods.
   - Optimize your character textures automatically: uncompressed mod textures get get evaluated as they load and only get compressed if there is no loss in visual quality, reducing the VRAM requirements by 75% and keeping your character nice and slim at all times for sync plugins. Hair mods whose texture layouts only use a small section of its textures, like many Sims 4 hair\
     Sims 4 ports, automatically have it's textures and UVs cropped to save memory at no impact to visuals. The originals are backed up and can be restored for loaded models at any time.
   - Automatically fix your [Simple Heels](https://github.com/Caraxi/SimpleHeels) offset: measure how far shoes reach below the\
-    ground and write the offset into the model file through an attribute, so heels stand on the ground instead of sinking into it. It can fix\
-    every pair it puts on automatically.
-  - Send it to Blender in one click, as the game draws it now: every model it shows on one armature with its skeleton,
-    in its rest pose, the pose it stands in or the animation it plays. Parts it hides come over hidden, and each model
-    still exports back whole on its own.
-- **Racial scaling**: preview gear made for another race shaped for yours in Blender and Painter.
-  [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Racial-Scaling)
+    ground and write the offset into the model file through an attribute, so heels stand on the ground instead of sinking into it.
 
 ## Requirements
 
