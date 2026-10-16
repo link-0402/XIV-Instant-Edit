@@ -70,6 +70,8 @@ internal sealed class StashView
         _manifest = StashManifest.Read(folder) ?? SafeScan(folder);
         _listedFrom = string.Empty;   // the list may have gained it
         _message = string.Empty;
+        _exists.Clear();
+        _imageCounts.Clear();
         _thumbnails.ForgetMemoryEntries();
         if (_manifest != null && _manifest.Entries.All(e => e.Kind != _tab) && !(_tab == StashKind.Material && _manifest.Materials.Count > 0))
             _tab = _manifest.Entries.Any(e => e.Kind == StashKind.Texture) ? StashKind.Texture : StashKind.Model;
@@ -273,7 +275,7 @@ internal sealed class StashView
                 foreach (var shared in group.GroupBy(t => Path.GetDirectoryName(Full(folder, t.Path)) ?? folder, StringComparer.OrdinalIgnoreCase)
                              .Where(g => g.Count() > 1))
                 {
-                    int images = StashFolders.CountImages(shared.Key);
+                    int images = Images(shared.Key);
                     if (images < 2) continue;
                     DrawRow($"{Path.GetFileName(shared.Key)} (folder)", $"{images} images, drops as a variant group",
                         DroppedPaths.Folder(shared.Key), shared.Key, true, FontAwesomeIcon.Folder, false);
@@ -312,7 +314,7 @@ internal sealed class StashView
         bool warn, string? id = null)
     {
         var target = paths.Folders.Concat(paths.Files).First();
-        bool exists = previewIsFolder ? Directory.Exists(target) : File.Exists(target);
+        bool exists = Exists(target, previewIsFolder);
         ImGui.PushID(id ?? target);
 
         float thumb = ImGui.GetFrameHeight() * 1.6f;
@@ -388,6 +390,32 @@ internal sealed class StashView
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+
+    // What the rows show of the disk, read again every couple of seconds rather than every frame:
+    // an extraction can hold hundreds of files.
+    private static readonly TimeSpan RecheckEvery = TimeSpan.FromSeconds(2);
+    private readonly Dictionary<(string Path, bool Folder), (DateTime At, bool Exists)> _exists = new();
+    private readonly Dictionary<string, (DateTime At, int Count)> _imageCounts = new(StringComparer.OrdinalIgnoreCase);
+
+    private bool Exists(string path, bool folder)
+    {
+        var now = DateTime.UtcNow;
+        if (_exists.TryGetValue((path, folder), out var known) && now - known.At < RecheckEvery)
+            return known.Exists;
+        bool exists = folder ? Directory.Exists(path) : File.Exists(path);
+        _exists[(path, folder)] = (now, exists);
+        return exists;
+    }
+
+    private int Images(string folder)
+    {
+        var now = DateTime.UtcNow;
+        if (_imageCounts.TryGetValue(folder, out var known) && now - known.At < RecheckEvery)
+            return known.Count;
+        int count = StashFolders.CountImages(folder);
+        _imageCounts[folder] = (now, count);
+        return count;
+    }
 
     private static string Full(string folder, string relative) => Path.Combine(folder, relative.Replace('/', Path.DirectorySeparatorChar));
 

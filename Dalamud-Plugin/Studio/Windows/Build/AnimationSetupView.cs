@@ -36,7 +36,8 @@ internal sealed class AnimationSetupView
         DrawHeader(item, subject, animation);
         ImGui.Spacing();
 
-        Gui.SectionHeader("Races", "The .pap files are written for these races. Races the game sends to another race's file share that file.");
+        Gui.SectionHeader("Races", "The .pap files are written for these races. The game sends some races to another race's file, so " +
+                                   "unticked races sharing that file change too; the inspector lists them.");
         if (DrawRaces("item", animation.Races))
             _session.MarkDirty();
         ImGui.Spacing();
@@ -260,6 +261,8 @@ internal sealed class AnimationSetupView
                 : $"  {string.Join(", ", plan.Races.Select(r => $"c{r}"))} · {Path.GetFileName(plan.Source)}");
             if (borrowers.Count > 0)
                 ImGui.TextColored(Theme.Faint, $"  {string.Join(", ", borrowers.Select(r => $"c{r}"))} play c{owner}'s file");
+            if (plan.AlsoServes.Count > 0)
+                ImGui.TextColored(Theme.Warn, $"  also changes {string.Join(", ", plan.AlsoServes.Select(r => $"c{r}"))}: not ticked, but the game loads this file for them too");
             ImGui.Spacing();
         }
     }

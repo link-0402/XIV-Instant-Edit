@@ -47,15 +47,20 @@ internal static class PackageImportScenarios
         var older = Directory.CreateDirectory(Path.Combine(output, "older")).FullName;
         var newer = Directory.CreateDirectory(Path.Combine(output, "newer")).FullName;
         Directory.CreateDirectory(Path.Combine(output, "empty"));
+        var user = Directory.CreateDirectory(Path.Combine(output, "my project")).FullName;
         File.WriteAllBytes(Path.Combine(older, "a.png"), PngBytes);
+        File.WriteAllText(Path.Combine(older, "extract-report.txt"), "report");
         File.WriteAllBytes(Path.Combine(newer, "b.png"), PngBytes);
         File.WriteAllBytes(Path.Combine(newer, "c.png"), PngBytes);
         File.WriteAllText(Path.Combine(newer, "notes.txt"), "x");
+        File.WriteAllText(Path.Combine(newer, "stash.json"), "{}");
+        File.WriteAllBytes(Path.Combine(user, "texture.png"), PngBytes);
         Directory.SetLastWriteTimeUtc(older, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
         Directory.SetLastWriteTimeUtc(newer, new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc));
 
         var listed = StashFolders.ListExtractions(output);
-        Require(listed.Select(Path.GetFileName).SequenceEqual(new[] { "newer", "older" }), "extractions are listed newest first; empty folders are left out");
+        Require(listed.Select(Path.GetFileName).SequenceEqual(new[] { "newer", "older" }),
+            "extractions are listed newest first; empty folders and folders no extraction made are left out");
         Require(StashFolders.CountImages(newer) == 2, "a folder's images are counted, other files not");
         Require(StashFolders.ListExtractions(Path.Combine(root, "missing")).Count == 0, "a missing output folder lists nothing");
     }
@@ -65,8 +70,14 @@ internal static class PackageImportScenarios
         var output = Path.Combine(root, "removal");
         var inside = Directory.CreateDirectory(Path.Combine(output, "pkg")).FullName;
         File.WriteAllBytes(Path.Combine(inside, "a.png"), PngBytes);
+        File.WriteAllText(Path.Combine(inside, "stash.json"), "{}");
         var outside = Directory.CreateDirectory(Path.Combine(root, "removal-sibling")).FullName;
+        File.WriteAllText(Path.Combine(outside, "stash.json"), "{}");
+        var foreign = Directory.CreateDirectory(Path.Combine(output, "my project")).FullName;
+        File.WriteAllBytes(Path.Combine(foreign, "a.png"), PngBytes);
 
+        Require(StashFolders.Remove(output, foreign) != null && Directory.Exists(foreign),
+            "a folder inside the output folder that no extraction made is never removed");
         Require(StashFolders.Remove(output, outside) != null && Directory.Exists(outside), "a folder outside the output folder is never removed");
         Require(StashFolders.Remove(output, output) != null && Directory.Exists(output), "the output folder itself is never removed");
         Require(StashFolders.Remove(output, inside) == null && !Directory.Exists(inside), "an extraction inside the output folder is removed");
@@ -376,7 +387,14 @@ internal static class PackageImportScenarios
 
     private static void UnwantedAssetBytesAreNotKept(string root)
     {
-        var scan = UnityPackageReader.Scan(BasicPackage(root, "bytes"), _ => { }, CancellationToken.None);
+        // An animation clip is Unity YAML too, and its asset comes before its pathname here: it must not stay buffered.
+        var path = Path.Combine(root, "bytes.unitypackage");
+        var clip = System.Text.Encoding.UTF8.GetBytes("%YAML 1.1\n--- !u!74 &7400000\nAnimationClip:\n  m_Name: Wave\n" + new string('x', 4096));
+        WriteUnityPackage(path,
+            (GuidTex, "Assets/A/Tex/body_d.png", PngBytes, TextureMeta(GuidTex, 0)),
+            (GuidMat, "Assets/A/M/skin.mat", System.Text.Encoding.UTF8.GetBytes(MaterialText("Skin", GuidTex, GuidNormal)), null),
+            ("66666666666666666666666666666666", "Assets/A/Anim/wave.anim", clip, null));
+        var scan = UnityPackageReader.Scan(path, _ => { }, CancellationToken.None);
         var material = System.Text.Encoding.UTF8.GetByteCount(MaterialText("Skin", GuidTex, GuidNormal));
         Require(scan.BufferedAssetBytes == material,
             $"a scan reads only material and prefab text into memory, never images or models (read {scan.BufferedAssetBytes}, material is {material})");
