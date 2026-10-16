@@ -8,7 +8,7 @@ namespace InstantEdit.Ui.Timeline;
 
 /// <summary> The row above the lanes: undo, redo, add, snapping, fit, the Bones window, load, the length and the playhead, then short messages. </summary>
 internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers pickers, TimelineLoader loader, LivePosePanel livePose,
-    TimelineTexts texts, SaveFooter saveFooter, Window bonesWindow)
+    TimelineTexts texts, SaveFooter saveFooter, Window bonesWindow, BlenderMotionPanel blenderMotion)
 {
     private const string AddMenu = "##timeline-add-menu";
     private const string ControlsHelp =
@@ -59,6 +59,8 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
                     ? "Close the Bones window."
                     : "Open the Bones window: pick bones on a body map and pose them in the selected bone layer."))
                 TimelineUi.Toggle(bonesWindow);
+            ImGui.SameLine(0, Theme.Scaled(2));
+            blenderMotion.DrawButton(current);
         }
         ImGui.SameLine(0, Theme.Scaled(2));
         loader.DrawButton();
@@ -138,6 +140,7 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
         loader.DrawStatus();
         livePose.DrawNote();
         DrawEffectProblems(current);
+        blenderMotion.DrawStatus(current);
         saveFooter.DrawSavedLayers();
     }
 

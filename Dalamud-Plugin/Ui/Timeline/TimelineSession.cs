@@ -66,9 +66,38 @@ internal sealed class TimelineSession
     /// The source with the clip's latest skeleton match: choosing a skeleton under Source after
     /// opening the timeline must still allow a length change. Only a capture of the same file counts:
     /// the Live preview plays a copy under the same capture, and its match knows no choice. The
-    /// capture gets the match too, since saves, face edits and reloads send it.
+    /// capture gets the match too, since saves, face edits and reloads send it. With a motion from Blender in
+    /// the document, that motion is the source's base motion.
     /// </summary>
     public AnimationTimelineSource Fresh(AnimationTimelineSource current)
+    {
+        // A motion from Blender in the document is the motion everything edits, previews and saves. The
+        // same source and motion give the same instance, so per-frame callers don't churn.
+        var matched = Matched(current);
+        var replacement = Editor?.Document.Replacement;
+        if (replacement == null)
+            return matched;
+        if (freshCache is { } cached && ReferenceEquals(cached.Source, matched) && ReferenceEquals(cached.Replacement, replacement))
+            return cached.Result;
+        var result = matched.WithReplacement(replacement);
+        freshCache = (matched, replacement, result);
+        return result;
+    }
+
+    private (AnimationTimelineSource Source, MotionReplacement Replacement, AnimationTimelineSource Result)? freshCache;
+
+    /// <summary>
+    /// Every frame: keeps the open clip's latest skeleton match in <see cref="Source"/>. A motion from Blender
+    /// is never kept there: it is the document's, so undo takes it away, and <see cref="Fresh"/> adds it.
+    /// </summary>
+    public void KeepMatch()
+    {
+        if (Source is { } current)
+            Source = Matched(current);
+    }
+
+    /// <summary><paramref name="current"/> with the clip's latest skeleton match, without the document's motion from Blender (see <see cref="Fresh"/>).</summary>
+    public AnimationTimelineSource Matched(AnimationTimelineSource current)
     {
         if (Animations == null)
             return current;

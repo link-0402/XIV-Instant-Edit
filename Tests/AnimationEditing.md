@@ -1420,3 +1420,28 @@ Spec: docs/superpowers/specs/2026-10-14-timeline-cuts-and-loop-seams-design.md. 
   layer, save again. After the first save the window shows the saved file with the "Saved with edits
   you can open again" line; the second save keeps the cut and the song stays in step. Edit again then
   shows the song's whole file chosen as "Cut with the motion", and saving cuts it once.
+
+## Motion from Blender (pending)
+
+Sending a clip's motion from the Timeline to Blender and bringing the edited action back as the
+clip's motion. Spec: docs/superpowers/specs/2026-10-16-motion-from-blender-design.md. Needs the
+Blender add-on of the same version, with the listener running.
+
+- [ ] 1 Round trip: open a body animation in the Timeline, press the arrows button next to the Bones
+  button, Send motion to Blender, then Motion from Blender without editing. The line under the toolbar
+  says "Blender's motion matches the clip's. Nothing changed." Then add a bone layer, send it again and
+  read it back without editing: the line names the action, the layer is gone, the length is unchanged
+  and Preview looks the same. Skirt and hair still swing.
+- [ ] 2 Turn an arm in Blender (keyed over the clip) and read it back: Live and Preview show the turn.
+- [ ] 3 Extend the scene End by 30 frames, key a pose there and read it back, once with Scale events
+  off and once on. Sounds and faces stay where they were, or move with the new length.
+- [ ] 4 Ctrl+Z and "Use the clip's motion" both go back to the animation's own motion.
+- [ ] 5 Save to a new mod and in place; the saved animation plays the Blender motion. Undo the save.
+- [ ] 6 Add a bone layer on the Blender motion, save, then Edit again: the layer comes back on the
+  Blender motion, not stacked on the saved file.
+- [ ] 7 Errors: Blender closed; the armature in Rest Position; an armature with no animation. Each
+  shows a short message on the line under the toolbar.
+- [ ] 8 Press Motion from Blender, then Cancel on the progress line: it says "Reading stopped." and the
+  timeline is unchanged.
+- [ ] 9 With Key bone scale off, send, scale a bone in Blender (keyed) and read it back: the line under
+  the toolbar ends with "Its scale was left out: Key bone scale was off when it was sent."

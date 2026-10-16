@@ -63,6 +63,13 @@ internal sealed record AnimationTimelineSource(AnimationCapture Capture, bool St
     public AnimationClip MotionClip => BaseMotion != null ? Clip with { BindingFingerprint = BaseFingerprint ?? string.Empty }
         : FileFingerprint.Length > 0 && FileFingerprint != Clip.BindingFingerprint ? Clip with { BindingFingerprint = FileFingerprint }
         : Clip;
+
+    /// <summary>
+    /// This source with <paramref name="replacement"/>, a motion from Blender, as the motion it edits: everything
+    /// that reads the base motion (decode, Live, preview, save) then reads it. This source itself without one.
+    /// </summary>
+    public AnimationTimelineSource WithReplacement(MotionReplacement? replacement) =>
+        replacement == null ? this : this with { BaseMotion = replacement.Pap, BaseFingerprint = replacement.Fingerprint, BaseHash = replacement.Hash };
 }
 
 /// <summary>
@@ -305,6 +312,39 @@ internal sealed partial class AnimationEditService
     }
 
     /// <summary>
+    /// Builds a motion from Blender (Motion from Blender) into the clip: <paramref name="read"/>, what Blender read,
+    /// goes onto <paramref name="playing"/>, the motion as the timeline plays it now (see <see cref="BlenderMotion"/>),
+    /// and is written in place of the clip's motion in <paramref name="source"/>'s motion source. Returns null, with
+    /// nothing built, when that changes nothing for <paramref name="document"/>, the timeline as it was when the read
+    /// began (see <see cref="BlenderMotion.ChangesNothing"/>). Nothing is saved and nothing in game changes.
+    /// </summary>
+    public async Task<MotionReplacement?> ReplaceMotionAsync(AnimationTimelineSource source, MotionClip playing, AnimationRead read,
+        TimelineDocument document, Action<string> status, CancellationToken token)
+    {
+        if (source.Standalone) throw new InvalidOperationException("An expression's face has no motion to replace.");
+        var clip = source.Clip;
+        if (clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: { } selected })
+            throw new InvalidOperationException(clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for first.");
+        status("Putting the motion together");
+        var (motion, report) = await Task.Run(() => BlenderMotion.Build(BlenderMotion.Fill(playing, read), read, clip.GamePath, clip.Name), token);
+        if (BlenderMotion.ChangesNothing(report, motion.Duration, playing.Duration, document))
+            return null;
+        if (TimelineDocument.MotionFrames(motion.Duration) is not { } frames || frames < TimelineDocument.MinLength || frames > TimelineDocument.MaxLength)
+            throw new InvalidDataException("The motion from Blender is too long or too short.");
+        var skeleton = (await resources.ReadSkeletonAsync(source.Capture.CollectionId, selected.Source, token)).Bytes;
+        var work = Path.Combine(Path.GetTempPath(), "XIV Instant Edit motion", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(work);
+        byte[] pap;
+        try { pap = await baker.ReplaceAsync(source.MotionSource, skeleton, source.MotionClip, source.Capture, motion, work, status, token); }
+        finally
+        {
+            try { Directory.Delete(work, true); } catch (IOException) { }
+        }
+        var fingerprint = await framework.RunOnFrameworkThread(() => AnimationRuntime.InspectPap(pap).GetValueOrDefault(clip.BindingIndex, string.Empty));
+        return new MotionReplacement(pap, fingerprint, AnimationPap.Hash(pap), frames, read.Action, read.Armature, report);
+    }
+
+    /// <summary>
     /// Builds the edited clip and hands it to <paramref name="show"/>, whose message becomes the
     /// status: the GPose preview. A changed length bakes the motion first. Nothing is saved.
     /// <paramref name="motionFrames"/> are facial motions' own lengths (see <see cref="TimelineConvert.Apply"/>).
@@ -402,7 +442,7 @@ internal sealed partial class AnimationEditService
             await commits.CommitAsync(journal, manifest, async () =>
             {
                 await CheckActorAsync(capture, false);
-                if (AnimationBakeRules.ChangesMotion(document, request.RepairTarget)) await resources.CheckSkeletonsAsync(capture, [source.Clip], token);
+                if (AnimationBakeRules.NewMotion(document, request.RepairTarget)) await resources.CheckSkeletonsAsync(capture, [source.Clip], token);
                 await framework.RunOnFrameworkThread(() => CheckIdentityOnFramework(capture, false));
             }, message =>
             {
@@ -422,7 +462,7 @@ internal sealed partial class AnimationEditService
                 await framework.RunOnFrameworkThread(() => Observer.UpdateSources(capture.Id, updated));
             }
             journal.State = "Completed"; journal.PoseClearOutcome = "NotApplicable";
-            journal.Message = AnimationBakeRules.ChangesMotion(document, request.RepairTarget) ? "Animation saved." : "Timeline saved.";
+            journal.Message = AnimationBakeRules.NewMotion(document, request.RepairTarget) ? "Animation saved." : "Timeline saved.";
             journals.Save(journal); Status = journal.Message;
         }, request.Id, source.Clip);
         return request.Id;

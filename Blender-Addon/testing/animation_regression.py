@@ -501,6 +501,339 @@ def run_scale_cases(animation):
         require(worst < 2e-4, f"bones below a hidden bone keep their places (head error {worst:.2e})")
 
 
+def inverse_error(animation, take, rig, key_scale):
+    """How far the inverse of the send math lands from each matched bone's game transform relative
+    to its matched ancestor (model space without one): position, angle and scale, the worst of all."""
+    matched = animation.match_bones(rig, take.bones)
+    bones = [(bone.matrix_local, index, ancestor) for bone, index, ancestor in matched]
+    bases = np.stack([basis for basis, _inherited in
+                      animation.pose_bases(take, take.samples, rig.matrix_world, bones, key_scale=key_scale)])
+    values = animation.game_from_bases(take, bases, rig.matrix_world, bones, key_scale)
+    worst = 0.0
+    for frame in range(len(take.times)):
+        models = havok_models(take.samples[frame])
+        for slot, (_rest, index, ancestor) in enumerate(bones):
+            if ancestor == PARENTS[index]:
+                expected = split(take.samples[frame][index])
+            elif ancestor < 0:
+                expected = models[index]
+            else:
+                expected = havok_relative(models[ancestor], models[index])
+            actual = split(values[frame, slot])
+            worst = max(worst, (expected[0] - actual[0]).length, angle_between(expected[1], actual[1]),
+                        (expected[2] - actual[2]).length)
+    return worst
+
+
+def run_inverse_cases(animation):
+    scene = bpy.context.scene
+    scene.render.fps, scene.render.fps_base = 30, 1.0
+    scene.frame_start = 1
+    times, frames = moving_frames(31)
+    take = animation.parse_take(take_body(times=times, frames=frames, name="Inverse"))
+    world = Matrix.Translation((2.0, -1.0, 0.5)) @ Euler((0.3, -0.2, 1.1)).to_matrix().to_4x4() @ Matrix.Scale(0.01, 4)
+
+    with temporary_scene_data():
+        rig = build_armature(world=world)
+        error = inverse_error(animation, take, rig, False)
+        require(error < 1e-5, f"the inverse of the send math gives back every bone's game transform (error {error:.2e})")
+
+    with temporary_scene_data():
+        rig = build_armature(world=world, bones=[n for n in NAMES if n != "j_sebo_a"], parents={"j_mune_l": "j_kosi"})
+        matched = {bone.name: ancestor for bone, _index, ancestor in animation.match_bones(rig, take.bones)}
+        error = inverse_error(animation, take, rig, False)
+        require(matched["j_mune_l"] == NAMES.index("j_kosi") and error < 1e-5,
+                f"a bone under a bone the armature lacks comes back relative to its matched ancestor (error {error:.2e})")
+
+    customized = [customize(havok_models(frame), CUSTOMIZE) for frame in frames]
+    scaled = animation.parse_take(take_body(times=times, frames=[recorded(models) for models in customized],
+                                            name="Scaled inverse", key_scale=True))
+    with temporary_scene_data():
+        rig = build_armature(world=world)
+        error = inverse_error(animation, scaled, rig, True)
+        require(error < 1e-5, f"with keyed scale, positions under a scaled ancestor come back unscaled (error {error:.2e})")
+
+    # Keyed scale over samples that all have scale one, on a skeleton whose hips are scaled in the
+    # reference pose: the send divides no position, so the read multiplies none.
+    references = [list(reference) for _, _, reference in SKELETON]
+    references[NAMES.index("j_kosi")][7:10] = [1.2, 1.2, 1.2]
+    grown = animation.parse_take(take_body(references=references, times=times, frames=frames,
+                                           name="Scaled reference", key_scale=True))
+    with temporary_scene_data():
+        rig = build_armature(world=world)
+        error = inverse_error(animation, grown, rig, True)
+        require(error < 1e-5, f"with keyed scale but unscaled samples, a scaled reference bone moves no child (error {error:.2e})")
+
+    with temporary_scene_data():
+        rig = build_armature()
+        result = animation.apply_take(take)
+        metadata = rig.animation_data.action[animation.METADATA_PROPERTY]
+        require(abs(metadata["duration"] - take.duration) < 1e-9 and metadata["frameStart"] == result["frameStart"]
+                and metadata["frameEnd"] == result["frameEnd"],
+                "a send records its duration and frame range on the action")
+
+
+def read_request(names=NAMES, parents=PARENTS, rate=30.0, target="Skeleton", **changes):
+    """A read request as the plugin writes it, for the suite's skeleton."""
+    payload = {
+        "schema": "instant-edit.animation-read-request",
+        "version": 1,
+        "pluginVersion": "1.2.4",
+        "targetObject": target,
+        "rate": rate,
+        "clip": {"gamePath": "chara/human/c0101/animation/a0001/bt_common/emote/regression.pap", "clip": "cbem_regression"},
+        "bones": [{"name": n, "parent": p, "reference": list(r)} for n, p, (_, _, r) in zip(names, parents, SKELETON)],
+    }
+    payload.update(changes)
+    return json.dumps(payload).encode("utf-8")
+
+
+def read_body(body):
+    """A read reply's header and its (frames, bones, 10) samples."""
+    require(body[:4] == b"XIEA" and struct.unpack_from("<I", body, 4)[0] == 1, "a read reply is an XIEA container")
+    length = struct.unpack_from("<I", body, 8)[0]
+    header = json.loads(body[12:12 + length])
+    offset = 12 + length
+    offset += (-offset) % 4
+    samples = np.frombuffer(body, dtype="<f4", offset=offset).reshape(len(header["times"]), len(header["bones"]), 10)
+    return header, samples
+
+
+def read_error(header, samples, frames, names=None):
+    """How far each read bone (or only ``names``) is from the take's frames, relative to its ancestor as
+    the reply holds it."""
+    worst = 0.0
+    for frame, values in zip(frames, samples):
+        models = havok_models(frame)
+        for slot, bone in enumerate(header["bones"]):
+            index, ancestor = bone["index"], bone["ancestor"]
+            if names is not None and NAMES[index] not in names:
+                continue
+            if ancestor == PARENTS[index]:
+                expected = split(frame[index])
+            elif ancestor < 0:
+                expected = models[index]
+            else:
+                expected = havok_relative(models[ancestor], models[index])
+            actual = split(values[slot].tolist())
+            worst = max(worst, (expected[0] - actual[0]).length, angle_between(expected[1], actual[1]),
+                        (expected[2] - actual[2]).length)
+    return worst
+
+
+def refuses_read(reader, request, code, message):
+    try:
+        reader.read_motion(request)
+    except reader.AnimationApplyError as error:
+        require(error.code == code, f"{message} ({error.code})")
+        return
+    raise AssertionError(f"Expected refusal: {message}")
+
+
+def run_read_cases(animation, reader):
+    scene = bpy.context.scene
+    scene.render.fps, scene.render.fps_base = 30, 1.0
+    scene.frame_start = 1
+    times, frames = moving_frames(31)
+    take = animation.parse_take(take_body(times=times, frames=frames, name="Read back"))
+    request = reader.parse_read_request(read_request())
+
+    with temporary_scene_data():
+        rig = build_armature()
+        rig.pose.bones["j_asi_b_l"].rotation_mode = "YXZ"
+        animation.apply_take(take)
+        _summary, body = reader.read_motion(request)
+        header, samples = read_body(body)
+        error = read_error(header, samples, frames)
+        require(header["schema"] == "instant-edit.animation-read" and header["kind"] == "blender"
+                and header["evaluated"] == "keys" and len(header["times"]) == 31 and error < 1e-5,
+                f"an unedited action reads back as the take, from its keys (error {error:.2e})")
+
+        constraint = rig.pose.bones["j_asi_c_l"].constraints.new("COPY_LOCATION")
+        constraint.influence = 0.0
+        header, samples = read_body(reader.read_motion(request)[1])
+        error = read_error(header, samples, frames)
+        require(header["evaluated"] == "scene" and error < 1e-5, f"the scene path reads the same motion (error {error:.2e})")
+
+        target = bpy.data.objects.new("Offset", None)
+        scene.collection.objects.link(target)
+        target.location = (0.1, 0.0, 0.0)
+        constraint.target = target
+        constraint.use_offset = True
+        constraint.influence = 1.0
+        header, samples = read_body(reader.read_motion(request)[1])
+        bone = NAMES.index("j_asi_c_l")
+        shifts = [havok_models(values.tolist())[bone][0] - havok_models(frame)[bone][0]
+                  for frame, values in zip(frames, samples)]
+        worst = max((shift - Vector((0.1, 0.0, 0.0))).length for shift in shifts)
+        require(worst < 1e-4, f"a constraint's effect is read back (error {worst:.2e})")
+
+    with temporary_scene_data():
+        scene.render.fps = 24
+        rig = build_armature()
+        animation.apply_take(take)
+        header, samples = read_body(reader.read_motion(request)[1])
+        require(abs(header["duration"] - 1.0) < 1e-9 and len(header["times"]) == 31,
+                "a 24 fps scene keeps the sent length")
+        scene.render.fps = 30
+
+    with temporary_scene_data():
+        rig = build_armature()
+        animation.apply_take(take)
+        scene.render.fps_base = 1.001
+        scene.frame_end = 30
+        header, _samples = read_body(reader.read_motion(request)[1])
+        # Blender keeps fps_base in single precision: 1.001 reads back as 1.00100005.
+        expected = 29 / (30 / scene.render.fps_base)
+        require(abs(header["duration"] - expected) < 1e-9 and len(header["times"]) == round(expected * 30) + 1,
+                "the scene's real frame rate times the read")
+        scene.render.fps_base = 1.0
+
+    with temporary_scene_data():
+        rig = build_armature()
+        animation.apply_take(take)
+        scene.frame_start, scene.frame_end = 5, 40
+        header, samples = read_body(reader.read_motion(request)[1])
+        first = read_error(header, samples[:1], frames[4:5])
+        last = read_error(header, samples[-1:], frames[-1:])
+        require(header["frameStart"] == 5 and len(header["times"]) == 36 and first < 1e-5 and last < 1e-5,
+                f"the read starts at Start and holds the last key past the action (errors {first:.2e}, {last:.2e})")
+        scene.frame_start, scene.frame_end = 1, 31
+
+    with temporary_scene_data():
+        rig = build_armature()
+        animation.apply_take(take)
+        rig.pose.bones["j_kosi"].constraints.new("COPY_ROTATION").influence = 0.0
+        action = rig.animation_data.action
+        bpy.ops.object.mode_set(mode="POSE")
+        scene.frame_set(7, subframe=0.25)
+        actions, objects = len(bpy.data.actions), len(bpy.data.objects)
+        header, _samples = read_body(reader.read_motion(request)[1])
+        state = (scene.frame_current, round(scene.frame_subframe, 6), rig.mode, rig.animation_data.action,
+                 len(bpy.data.actions), len(bpy.data.objects))
+        require(header["evaluated"] == "scene" and state == (7, 0.25, "POSE", action, actions, objects),
+                "reading leaves Blender as it was")
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+    with temporary_scene_data():
+        # A control bone the game doesn't have, between the knee and the foot.
+        rig = build_armature()
+        bpy.ops.object.mode_set(mode="EDIT")
+        bones = rig.data.edit_bones
+        control = bones.new("ctrl_foot")
+        control.head = bones["j_asi_c_l"].head
+        control.tail = control.head + Vector((0.0, 0.05, 0.0))
+        control.parent = bones["j_asi_b_l"]
+        bones["j_asi_c_l"].parent = control
+        bpy.ops.object.mode_set(mode="OBJECT")
+        animation.apply_take(take)
+        header, samples = read_body(reader.read_motion(request)[1])
+        error = read_error(header, samples, frames)
+        require(header["evaluated"] == "keys" and error < 1e-5,
+                f"a control bone at rest between game bones is read from the keys (error {error:.2e})")
+        pose_control = rig.pose.bones["ctrl_foot"]
+        pose_control.rotation_quaternion = Quaternion(Vector((1.0, 0.0, 0.0)), math.radians(20))
+        pose_control.keyframe_insert("rotation_quaternion", frame=1)
+        header, samples = read_body(reader.read_motion(request)[1])
+        moved = read_error(header, samples, frames, {"j_asi_c_l"})
+        others = read_error(header, samples, frames, set(NAMES) - {"j_asi_c_l"})
+        require(header["evaluated"] == "scene" and moved > math.radians(10) and others < 1e-5,
+                f"an animated control bone between game bones is read from the scene (foot turned {math.degrees(moved):.1f} deg)")
+
+    with temporary_scene_data():
+        scene.render.fps = 24
+        rig = build_armature()
+        animation.apply_take(take)
+        scene.render.fps = 30
+        header, _samples = read_body(reader.read_motion(request)[1])
+        require(abs(header["duration"] - (scene.frame_end - scene.frame_start) / 30) < 1e-9,
+                "a scene frame rate changed after the send times the read as Blender now plays it")
+
+    with temporary_scene_data():
+        rig = build_armature()
+        animation.apply_take(take)
+        bob = next(curve for curve in _fcurves(rig.animation_data.action)
+                   if curve.data_path == 'pose.bones["j_kosi"].location' and curve.array_index == 1)
+        bob.mute = True
+        scene.frame_set(1)
+        from_keys = read_body(reader.read_motion(request)[1])
+        rig.pose.bones["n_root"].constraints.new("COPY_ROTATION").influence = 0.0
+        from_scene = read_body(reader.read_motion(request)[1])
+        difference = float(np.abs(from_keys[1] - from_scene[1]).max())
+        require(from_keys[0]["evaluated"] == "keys" and from_scene[0]["evaluated"] == "scene" and difference < 1e-5,
+                f"a muted curve is left out, as Blender leaves it out (difference {difference:.2e})")
+
+    with temporary_scene_data():
+        # The chest hangs from the thigh in Blender, which the game skeleton doesn't have it under.
+        build_armature(parents={"j_mune_l": "j_asi_a_l"})
+        animation.apply_take(take)
+        try:
+            reader.read_motion(request)
+        except reader.AnimationApplyError as error:
+            require(error.code == "animation_hierarchy_mismatch"
+                    and error.cause == 'Bone "j_mune_l" sits under "j_asi_a_l" in Blender, but not in the game skeleton.'
+                    and error.remedy == "Parent it as in the game skeleton, then read the animation again.",
+                    f"a bone parented unlike the game skeleton is refused, naming both bones ({error.code})")
+        else:
+            raise AssertionError("a bone parented unlike the game skeleton was read")
+
+    with temporary_scene_data():
+        rig = build_armature()
+        animation.apply_take(take)
+        header, _samples = read_body(reader.read_motion(request)[1])
+        require(header.get("scaleIgnored") is False, "a motion without scale reads back with nothing left out")
+        hips = rig.pose.bones["j_kosi"]
+        hips.scale = (1.2, 1.2, 1.2)
+        hips.keyframe_insert("scale", frame=1)
+        header, _samples = read_body(reader.read_motion(request)[1])
+        require(header["keyedScale"] is False and header.get("scaleIgnored") is True,
+                "a scale keyed onto a motion sent without scale is left out, and the reply says so")
+
+    with temporary_scene_data():
+        rig = build_armature()
+        rig.pose.bones["j_asi_b_l"].rotation_mode = "YXZ"
+        animation.apply_take(take)
+        rig.pose.bones["n_root"].constraints.new("COPY_ROTATION").influence = 0.0
+        bpy.ops.object.mode_set(mode="POSE")
+        scene.frame_set(4)
+        # Pose changes the user hasn't keyed, on channels the action animates.
+        hips, knee = rig.pose.bones["j_kosi"], rig.pose.bones["j_asi_b_l"]
+        hips.location = Vector(hips.location) + Vector((0.05, -0.02, 0.01))
+        hips.rotation_quaternion = Quaternion(Vector((0.0, 1.0, 0.0)), math.radians(15)) @ hips.rotation_quaternion
+        knee.rotation_euler = Euler((0.3, -0.1, 0.2), "YXZ")
+        tweaks = (tuple(hips.location), tuple(hips.rotation_quaternion), tuple(knee.rotation_euler))
+        header, _samples = read_body(reader.read_motion(request)[1])
+        after = (tuple(hips.location), tuple(hips.rotation_quaternion), tuple(knee.rotation_euler))
+        drift = max(abs(a - b) for kept, now in zip(tweaks, after) for a, b in zip(kept, now))
+        require(header["evaluated"] == "scene" and drift < 1e-6,
+                f"reading from the scene keeps pose changes that aren't keyed (drift {drift:.2e})")
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+    with temporary_scene_data():
+        rig = build_armature()
+        refuses_read(reader, request, "animation_none", "an armature without animation is refused")
+        animation.apply_take(take)
+        rig.data.pose_position = "REST"
+        refuses_read(reader, request, "animation_rest_position", "an armature showing its rest position is refused")
+        rig.data.pose_position = "POSE"
+        bpy.ops.object.mode_set(mode="EDIT")
+        refuses_read(reader, request, "animation_armature_edit_mode", "an armature in Edit Mode is refused")
+        bpy.ops.object.mode_set(mode="OBJECT")
+        others = reader.parse_read_request(read_request(names=[f"other_{n}" for n in NAMES]))
+        refuses_read(reader, others, "animation_no_matching_bones", "a skeleton the armature has none of is refused")
+        scene.frame_end = scene.frame_start
+        refuses_read(reader, request, "animation_read_too_short", "a scene range without length is refused")
+        scene.frame_end = 31
+
+    rejects(reader.parse_read_request, b"{", "invalid_read_request", "a read request that is not JSON is refused")
+    rejects(reader.parse_read_request, b"[]", "invalid_read_request", "a read request that is not an object is refused")
+    rejects(reader.parse_read_request, read_request(schema="instant-edit.animation"), "unsupported_read_schema",
+            "a read request with another schema is refused")
+    rejects(reader.parse_read_request, read_request(rate=0), "invalid_read_rate", "a read rate of zero is refused")
+    rejects(reader.parse_read_request, read_request(parents=[-1, 0, 1, 2, 5, 4, 5]), "invalid_animation_hierarchy",
+            "a read request listing a bone before its parent is refused")
+
+
 def run_failure_cases(animation):
     times, frames = moving_frames(3)
     take = animation.parse_take(take_body(times=times, frames=frames, name="Interrupted take"))
@@ -622,6 +955,58 @@ def run_endpoint_cases(server):
             require(missing.get("status") == 422 and missing["body"]["code"] == "animation_no_matching_bones"
                     and missing["body"]["stage"] == "animation_processing",
                     "a take the scene cannot use reports why from the main thread")
+
+            def post_read(body, content_type="application/json"):
+                outcome = {}
+
+                def send():
+                    request = urllib.request.Request(
+                        f"http://127.0.0.1:{listener.server_address[1]}/animation/read", data=body, method="POST",
+                        headers={"Content-Type": content_type})
+                    try:
+                        with urllib.request.urlopen(request, timeout=30) as response:
+                            outcome["status"], outcome["type"] = response.status, response.headers.get_content_type()
+                            outcome["body"] = response.read()
+                    except urllib.error.HTTPError as error:
+                        outcome["status"], outcome["type"] = error.code, error.headers.get_content_type()
+                        outcome["body"] = error.read()
+
+                sender = threading.Thread(target=send, daemon=True)
+                sender.start()
+                deadline = time.monotonic() + 30
+                while sender.is_alive() and time.monotonic() < deadline:
+                    server.process_animation_queue()
+                    time.sleep(0.01)
+                sender.join(1)
+                return outcome
+
+            require(server.ANIMATION_READ_CAPABILITY in status["capabilities"], "the add-on advertises animation reads")
+            read = post_read(read_request())
+            header, _samples = read_body(read.get("body", b""))
+            require(read.get("status") == 200 and read["type"] == "application/octet-stream" and header["action"] == "Endpoint take"
+                    and bpy.context.scene.xiv_ie_instant_edit_props.last_status.startswith('Motion read: "Endpoint take"'),
+                    "the endpoint reads the motion on Blender's main thread and returns it")
+            unmatched = post_read(read_request(names=[f"other_{n}" for n in NAMES]))
+            failure = json.loads(unmatched.get("body", b"{}"))
+            require(unmatched.get("status") == 422 and failure["code"] == "animation_no_matching_bones"
+                    and failure["operation"] == "animation_read" and failure["stage"] == "animation_processing",
+                    "a read the scene cannot answer reports why from the main thread")
+            bad = post_read(b"{")
+            require(bad.get("status") == 400 and json.loads(bad["body"])["code"] == "invalid_read_request",
+                    "a malformed read request is refused with a structured failure")
+            wrong = post_read(read_request(), content_type="application/octet-stream")
+            require(wrong.get("status") == 415, "a read request must be JSON")
+            import http.client
+            connection = http.client.HTTPConnection("127.0.0.1", listener.server_address[1], timeout=30)
+            connection.putrequest("POST", "/animation/read")
+            connection.putheader("Content-Type", "application/json")
+            connection.putheader("Content-Length", str(4 * 1024 * 1024 + 1))
+            connection.endheaders()
+            response = connection.getresponse()
+            too_large = json.loads(response.read())
+            connection.close()
+            require(response.status == 413 and too_large["code"] == "request_body_too_large",
+                    "a read request over 4 MiB is refused before it is read")
         finally:
             listener.shutdown()
             listener.server_close()
@@ -641,6 +1026,8 @@ if __name__ == "__main__":
         run_parse_cases(animation_module)
         run_conversion_cases(animation_module)
         run_scale_cases(animation_module)
+        run_inverse_cases(animation_module)
+        run_read_cases(animation_module, importlib.import_module(f"{PACKAGE}.instant_edit.animation_read"))
         run_failure_cases(animation_module)
         run_target_cases(animation_module)
         run_endpoint_cases(server_module)

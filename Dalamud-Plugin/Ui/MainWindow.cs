@@ -202,6 +202,9 @@ public sealed class MainWindow : Window, IDisposable
     /// <summary>The recorder, drawn in the Timeline window's Record page; it sends to Blender through this window.</summary>
     internal void DrawRecorderPanel() => _recorder.Draw();
 
+    /// <summary>The connection animations go to Blender through; the Timeline window sends and reads motion with it.</summary>
+    internal AnimationDelivery AnimationDelivery => _animationDelivery;
+
     internal void AttachTimeline(Action<AnimationCapture, bool>? open, Action? show = null, Func<bool>? listens = null)
     {
         _animationsTab.AttachTimeline(open, show);

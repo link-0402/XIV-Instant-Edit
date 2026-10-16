@@ -43,7 +43,8 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     {
         try
         {
-            session.Source = fresh with { Clip = session.Animations!.Observer.ChooseSkeleton(fresh.Clip, candidate) };
+            // Kept without the document's motion from Blender, which undo must be able to take away.
+            session.Source = session.Matched(session.Source ?? fresh) with { Clip = session.Animations!.Observer.ChooseSkeleton(fresh.Clip, candidate) };
             skeletonChoiceError = null;
         }
         catch (InvalidOperationException e)
@@ -259,5 +260,8 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     /// be a frame off; when cut or stretched, the new one.
     /// </summary>
     public static float MotionEnd(AnimationTimelineSource loaded, TimelineDocument doc) =>
-        !doc.Stretched && !doc.Cut && loaded.Clip.Duration > 0 ? loaded.Clip.Duration * TimelineDocument.Fps : doc.Length;
+        doc.Stretched || doc.Cut ? doc.Length
+        // A motion from Blender has its own length, in whole frames.
+        : doc.Replacement is { } replacement ? replacement.Frames
+        : loaded.Clip.Duration > 0 ? loaded.Clip.Duration * TimelineDocument.Fps : doc.Length;
 }

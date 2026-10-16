@@ -48,6 +48,8 @@ public sealed class BlenderClient : IDisposable
     public const string ImportSkeletonCapability = "instant-edit.import-skeleton.v1";
     /// <summary> Imports of a whole-character send share one armature, animations can name it, and /status counts pending imports. </summary>
     public const string CharacterImportCapability = "instant-edit.character-import.v1";
+    /// <summary> The Timeline can read an armature's motion back (Motion from Blender). </summary>
+    public const string AnimationReadCapability = "instant-edit.animation-read.v1";
 
     private readonly HttpClient _http;
     private readonly IPluginLog _log;
@@ -242,6 +244,82 @@ public sealed class BlenderClient : IDisposable
     /// <summary>Returns whether the connected add-on binds a whole-character send to one armature.</summary>
     public async Task<bool> SupportsCharacterImportAsync(int port, CancellationToken cancellationToken = default)
         => await SupportsCapabilityAsync(port, CharacterImportCapability, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>Returns whether the connected add-on can read an armature's motion back.</summary>
+    public async Task<bool> SupportsAnimationReadAsync(int port, CancellationToken cancellationToken = default)
+        => await SupportsCapabilityAsync(port, AnimationReadCapability, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// Asks Blender to read its armature's motion (see <c>AnimationReadFormat</c>): <paramref name="request"/>
+    /// is the JSON body written from <paramref name="parsed"/>, which the reply is checked against.
+    /// </summary>
+    internal async Task<Animations.AnimationRead> ReadAnimationAsync(int port, byte[] request, Animations.AnimationReadRequest parsed,
+        CancellationToken cancellationToken = default)
+    {
+        if (port is < 1 or > 65535)
+            throw new ArgumentOutOfRangeException(nameof(port));
+        using var content = new ByteArrayContent(request);
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+        HttpResponseMessage response;
+        try
+        {
+            response = await _http.PostAsync($"http://127.0.0.1:{port}/animation/read", content, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRequestException e)
+        {
+            var failure = BridgeFailure.Create(
+                "blender_addon", "animation_read", "transport", ResultCode.BlenderConnectionFailed.Wire(),
+                "The plugin could not reach Blender's XIV Instant Edit listener.",
+                "Start Blender, verify the configured port, and read the motion again.");
+            _log?.Error(e, $"Blender bridge failure {failure.DiagnosticId}: animation_read/transport/{failure.Code}.");
+            throw new BlenderBridgeException(failure, inner: e);
+        }
+        catch (OperationCanceledException e) when (!cancellationToken.IsCancellationRequested)
+        {
+            var failure = BridgeFailure.Create(
+                "blender_addon", "animation_read", "transport", ResultCode.BlenderRequestTimeout.Wire(),
+                "Blender did not answer while reading the motion.",
+                "Check whether Blender is busy, then read the motion again.");
+            _log?.Error(e, $"Blender bridge failure {failure.DiagnosticId}: animation_read/transport/{failure.Code}.");
+            throw new BlenderBridgeException(failure, inner: e);
+        }
+
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
+            {
+                var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                var exception = new BlenderBridgeException(BridgeFailure.FromResponse(response.StatusCode, text, "animation_read"), text);
+                _log?.Error(exception, $"Blender bridge failure {exception.Failure.DiagnosticId}: HTTP {(int)response.StatusCode}; " +
+                    $"{exception.Failure.Operation}/{exception.Failure.Stage}/{exception.Failure.Code}; response={text}");
+                throw exception;
+            }
+            if (response.Content.Headers.ContentLength is > Animations.AnimationReadFormat.MaximumBytes)
+                throw Unparsable(response.StatusCode, "Blender's reply is larger than the plugin accepts.");
+            var body = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                return Animations.AnimationReadFormat.Parse(body, parsed);
+            }
+            catch (InvalidDataException e)
+            {
+                throw Unparsable(response.StatusCode, e.Message, e);
+            }
+        }
+
+        BlenderBridgeException Unparsable(HttpStatusCode status, string cause, Exception? inner = null)
+        {
+            var failure = BridgeFailure.Create(
+                "blender_addon", "animation_read", "response_parsing", ResultCode.InvalidSuccessResponse.Wire(), cause,
+                "Update and restart the XIV Instant Edit Blender add-on, then read the motion again.", (int)status);
+            var message = $"Blender bridge failure {failure.DiagnosticId}: animation_read/response_parsing/{failure.Code}.";
+            if (inner != null)
+                _log?.Error(inner, message);
+            else
+                _log?.Error(message);
+            return new BlenderBridgeException(failure, inner: inner);
+        }
+    }
 
     /// <summary>
     /// Sends an encoded take (see <c>AnimationTakeFormat</c>) to Blender, which keys it onto a

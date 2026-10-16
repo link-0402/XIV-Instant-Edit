@@ -38,6 +38,26 @@ internal static partial class TimelineWindowViews
     /// <summary>The bone layer rows' legend when there is no layer yet.</summary>
     public const string BonesLaneName = "Bones";
 
+    /// <summary>The line under the toolbar while the clip plays a motion from Blender: where it came from and what it kept.</summary>
+    public static string BlenderMotionLine(MotionReplacement replacement)
+    {
+        var report = replacement.Report;
+        var line = $"Motion from Blender: \"{replacement.Action}\" on \"{replacement.Armature}\", {report.FromBlender} bones, {replacement.Frames} frames.";
+        if (report.Kept > 0)
+            line += report.Kept == 1 ? " 1 bone kept the clip's motion." : $" {report.Kept} bones kept the clip's motion.";
+        if (report.OtherClip)
+            line += " Made from another animation.";
+        if (report.ScaleIgnored)
+            line += ScaleLeftOut;
+        return line;
+    }
+
+    /// <summary>The note when a motion from Blender changes nothing, so none was built; it says too when Blender's scale was left out.</summary>
+    public static string BlenderUnchangedLine(bool scaleIgnored) =>
+        "Blender's motion matches the clip's. Nothing changed." + (scaleIgnored ? ScaleLeftOut : "");
+
+    private const string ScaleLeftOut = " Its scale was left out: Key bone scale was off when it was sent.";
+
     public static Vector4 LayerColour(MotionLayerKind kind) => kind switch
     {
         MotionLayerKind.Offset => Theme.Info,

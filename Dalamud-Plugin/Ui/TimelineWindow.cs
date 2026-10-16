@@ -54,6 +54,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly LivePosePanel livePose;
     private readonly SidePanel sidePanel;
     private readonly TimelineToolbar toolbar;
+    private readonly BlenderMotionPanel blenderMotion;
     private readonly BonesWindow bonesWindow;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
@@ -115,9 +116,10 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         loader = new TimelineLoader(session, timelinePreview, Open);
         sidePanel = new SidePanel(session, properties, facePage, recentEdits, effectLooks, soundInspector, posing, timelinePreview, Open);
         livePose = new LivePosePanel(session, sidePanel.ShowProperties);
-        toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow);
+        blenderMotion = new BlenderMotionPanel(session, decode);
+        toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow, blenderMotion);
         bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, this, textures);
-        session.KeepReadOnlyWhile(() => reader.Busy || saveFooter.Busy);
+        session.KeepReadOnlyWhile(() => reader.Busy || saveFooter.Busy || blenderMotion.Working);
 
         Size = new Vector2(1000, 560);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -139,6 +141,9 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     /// rebuilt, and the live pose recorder, which sends to Blender through it.
     /// </summary>
     internal void AttachTools(Action? settings, Action? recorderPanel) => sidePanel.AttachTools(settings, recorderPanel);
+
+    /// <summary>The main window's connection to Blender, which Send motion to Blender and Motion from Blender go through.</summary>
+    internal void AttachBlender(Main.AnimationDelivery delivery) => blenderMotion.Attach(delivery);
 
     /// <summary>How many recorded edits did not finish and need an undo; none while an edit is still running.</summary>
     internal static int RecoveryAttention(AnimationEditService service) => RecentEditsPage.RecoveryAttention(service);
@@ -275,6 +280,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         bonesWindow.IsOpen = false;
         EndGizmo(true);
         timelinePreview.Stop();
+        blenderMotion.Forget();
         decode.Forget();
         poseSources.Drop();
         reader.Stop();
@@ -348,6 +354,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             title = AnimationPresentation.AnimationName(capture, startup);
             // Another clip, or this one opened afresh: its own file is the motion to edit.
             saveFooter.ForgetMotion();
+            blenderMotion.Forget();
         }
         // The preview's temporary mod must be gone first, or the read would get the previewed file.
         reader.Start(service, capture, startup, keepView, again, afterUndo, timelinePreview.Stopping ?? Task.CompletedTask);
@@ -458,8 +465,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         loader.PollLibrary();
         loader.Poll();
         // Every frame: the bone rows' order, Live and the save all read the clip's match.
-        if (source != null)
-            source = Fresh(source);
+        session.KeepMatch();
 
         DrawPendingBanner();
         if (source == null)

@@ -58,4 +58,30 @@ internal sealed class AnimationDelivery
             throw new InvalidOperationException(e.Failure.UserMessage);
         }
     }
+
+    /// <summary>
+    /// Reads the motion of the armature animations are sent to back from Blender (Motion from Blender).
+    /// Returns Blender's reply, checked against <paramref name="request"/>, or throws with a user-facing message.
+    /// </summary>
+    public async Task<AnimationRead> ReadMotionAsync(AnimationReadRequest request, CancellationToken token)
+    {
+        var pluginVersion = _blenderConnection.PluginVersion;
+        var port = _config.BlenderPort;
+        var status = await _blenderConnection.CheckStatusAsync(port, token).ConfigureAwait(false);
+        if (!status.Reachable)
+            throw new InvalidOperationException("Blender is offline. Start Blender with the XIV Instant Edit add-on, then try again.");
+        if (status.Classify(pluginVersion) != BlenderConnectionState.Online)
+            throw new InvalidOperationException(BlenderClient.VersionMismatchMessage(pluginVersion));
+        if (!await _blender.SupportsAnimationReadAsync(port, token).ConfigureAwait(false))
+            throw new InvalidOperationException("The XIV Instant Edit add-on is too old to send animations back. Update the add-on and restart Blender.");
+        var body = AnimationReadFormat.WriteRequest(request, AnimationArmature, null, pluginVersion);
+        try
+        {
+            return await _blender.ReadAnimationAsync(port, body, request, token).ConfigureAwait(false);
+        }
+        catch (BlenderBridgeException e)
+        {
+            throw new InvalidOperationException(e.Failure.UserMessage);
+        }
+    }
 }
