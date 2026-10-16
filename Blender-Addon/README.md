@@ -89,7 +89,9 @@ Everything is in the **IE - Instant Edit** tab of the 3D Viewport's sidebar (pre
 - **Pose** shows an armature in any of its actions at the timeline's frame, or in its rest pose,
   for checking clipping or painting weights in a pose. Animations sent from the plugin's
   **Animations** tab arrive as actions: recordings of your character's live pose (bone physics
-  included) or a mod's animation file.
+  included) or a mod's animation file. The Timeline window's **Send motion to Blender** sends
+  an animation to edit; its **Motion from Blender** reads the edited action back into the
+  Timeline, which saves it into the animation.
 - **Simple Export / Import** reads and writes MDL, FBX and glTF files without the plugin.
 - **Backups**: tick the header box to keep a copy of a model before an export replaces it. The
   list imports or restores them.

@@ -11,7 +11,7 @@ Penumbra mods.
 
 - **Models in Blender**: send any model on your character (or minions, mounts, summons) to Blender with one click, then export it back in place, into another mod option, a new mod or automatically creating a mashup of several mods. Imports automatically generate a compatible skeleton.\
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-a-Model-in-Blender)
-- **Textures**: edit textures in Photoshop, GIMP, Krita, Paint.NET or any TGA editor, including saving texture variants and directly setting them up as as Penumbra option groups. \
+- **Textures**: edit textures in Photoshop, GIMP, Krita, Paint.NET or any TGA editor, including saving texture variants and directly setting them up as Penumbra option groups. \
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-Textures)
 - **Substance Painter**: paint directly on any model with the exact textures you're currently using and save your edits back to the game with just one click. "Paint my Skin" under quick actions sends your entire character with your configured small clothes body, letting you easily create custom skin, tattoo and makeup mods.\
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Painting-in-Substance-Painter)
@@ -23,13 +23,24 @@ Penumbra mods.
   [In Blender](https://github.com/link-0402/XIV-Instant-Edit/wiki/Animations-in-Blender)
 - **Game Files**: browse the game's own models, edit them, or batch-export their files and skeletons.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Game-Files)
+- **Mod Browser**: open any Penumbra mod in its own window to see its options, models, textures, animations, effects and
+  sounds. Drop your own files on anything to replace it, send its files to your editors, check it for problems and
+  clean it up, with every change backed up.\
+  [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/The-Mod-Browser)
+- **Build a mod** (Beta): make a new mod from gear, weapons or animations of another game. Import Sims 4 and Unity
+  packages or folders of loose files, drag their models and textures onto the game item you replace, and build it into
+  Penumbra.\
+  [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Building-a-New-Mod)
 - **Quick Actions**: tasks for your whole character.
   - Fix skin seams between models, such as on your neck or between different face parts, like face and ears. Textures and materials are automatically blended into each other, getting rid of visible seams between models and parts.  \
     [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Fixing-the-Neck-Seam)
-  - Optimize your character textures automatically: uncompressed mod textures get get evaluated as they load and only get compressed if there is no loss in visual quality, reducing the VRAM requirements by 75% and keeping your character nice and slim at all times for sync plugins. Hair mods whose texture layouts only use a small section of its textures, like many Sims 4 hair\
-    Sims 4 ports, automatically have it's textures and UVs cropped to save memory at no impact to visuals. The originals are backed up and can be restored for loaded models at any time.
+  - Optimize your character textures automatically: uncompressed mod textures get evaluated as they load and only get compressed if there is no loss in visual quality, reducing the VRAM requirements by 75% and keeping your character nice and slim at all times for sync plugins. Hair mods whose texture layouts only use a small section of their textures, like many Sims 4 hair\
+    ports, automatically have their textures and UVs cropped to save memory at no impact to visuals. The originals are backed up and can be restored for loaded models at any time.
   - Automatically fix your [Simple Heels](https://github.com/Caraxi/SimpleHeels) offset: measure how far shoes reach below the\
     ground and write the offset into the model file through an attribute, so heels stand on the ground instead of sinking into it.
+  - Build body physics (Beta) for your chest and the areas your IVCS or YAS skeleton adds bones for, fitted to your
+    body and previewed on your character before you save.\
+    [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Body-Physics)
 
 ## Requirements
 
