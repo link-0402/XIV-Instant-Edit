@@ -114,7 +114,7 @@ internal static class UnityPackageReader
     public static UnityExtraction Extract(UnityScanResult scan, string outputDir, Action<string> progress, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        var root = Path.Combine(outputDir, PathNormalizer.SafeSegment(scan.PackageName));
+        var root = ClaimFolder(outputDir, PathNormalizer.SafeSegment(scan.PackageName), scan.PackagePath);
         var result = new UnityExtraction { RootFolder = root };
         var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
 
@@ -134,39 +134,100 @@ internal static class UnityPackageReader
         var report = new StringBuilder();
         report.AppendLine($"Extracted from {scan.PackagePath} on {DateTime.Now:yyyy-MM-dd HH:mm}");
         int done = 0;
-        ForEachEntry(scan.PackagePath, ct, (guid, file, entry) =>
-        {
-            if (file != "asset" || !targets.TryGetValue(guid, out var target) || entry.DataStream == null)
-                return;
-            progress($"Writing {Path.GetFileName(target)} ({++done} of {targets.Count})");
-            try
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                using (var output = File.Create(target))
-                    entry.DataStream.CopyTo(output);
-                result.WrittenFiles.Add(target);
-                result.FileByGuid[guid] = target;
-                report.AppendLine($"written  {target}");
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                result.Failed++;
-                report.AppendLine($"FAILED   {target}: {ex.Message}");
-            }
-        });
-
-        foreach (var refused in result.Refused)
-            report.AppendLine($"refused  {refused} (its path leads outside the output folder)");
         try
         {
             Directory.CreateDirectory(root);
-            File.WriteAllText(Path.Combine(root, "extract-report.txt"), report.ToString());
+            ForEachEntry(scan.PackagePath, ct, (guid, file, entry) =>
+            {
+                if (file != "asset" || !targets.TryGetValue(guid, out var target) || entry.DataStream == null)
+                    return;
+                progress($"Writing {Path.GetFileName(target)} ({++done} of {targets.Count})");
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                    // Listed before it is written, so even a half-written file is known to be ours.
+                    result.FileByGuid[guid] = target;
+                    using (var output = File.Create(target))
+                        entry.DataStream.CopyTo(output);
+                    result.WrittenFiles.Add(target);
+                    report.AppendLine($"written  {target}");
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    result.Failed++;
+                    report.AppendLine($"FAILED   {target}: {ex.Message}");
+                    try { File.Delete(target); result.FileByGuid.Remove(guid); }
+                    catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { /* stays listed, so the next run removes it */ }
+                }
+            });
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        finally
         {
-            // The report is a convenience; the files are what matter.
+            // Written even when the run stops part-way: the next run of this package then knows
+            // every file here is its own and replaces them.
+            foreach (var refused in result.Refused)
+                report.AppendLine($"refused  {refused} (its path leads outside the output folder)");
+            try
+            {
+                File.WriteAllText(Path.Combine(root, "extract-report.txt"), report.ToString());
+                Stash.StashManifest.ForUnity(scan, result).Write(root);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Without them the next run treats the folder as someone else's and uses a new one.
+            }
         }
         return result;
+    }
+
+    /// <summary>
+    /// The folder a run writes into: <c>outputDir/name</c> when it is new or holds only an earlier
+    /// extraction of this same package (whose files are deleted), else the first free
+    /// <c>name_2</c>, <c>name_3</c>, and so on. Files someone else put there are never touched.
+    /// </summary>
+    private static string ClaimFolder(string outputDir, string name, string packagePath)
+    {
+        var source = Path.GetFullPath(packagePath);
+        for (int n = 1; n < 1000; n++)
+        {
+            var folder = Path.GetFullPath(Path.Combine(outputDir, n == 1 ? name : $"{name}_{n}"));
+            if (!Directory.Exists(folder) || TryReuse(folder, source))
+                return folder;
+        }
+        throw new IOException($"No free output folder for {name} in {outputDir}.");
+    }
+
+    private static bool TryReuse(string folder, string source)
+    {
+        try
+        {
+            var manifest = Stash.StashManifest.Read(folder);
+            if (manifest == null || !string.Equals(manifest.Source, source, StringComparison.OrdinalIgnoreCase))
+                return false;
+            var prefix = Path.TrimEndingDirectorySeparator(folder) + Path.DirectorySeparatorChar;
+            var owned = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                Path.Combine(folder, Stash.StashManifest.FileName),
+                Path.Combine(folder, "extract-report.txt"),
+            };
+            foreach (var entry in manifest.Entries)
+            {
+                var path = Path.GetFullPath(Path.Combine(folder, entry.Path));
+                if (path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    owned.Add(path);
+            }
+            foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
+                if (!owned.Contains(Path.GetFullPath(file)))
+                    return false;
+            foreach (var file in owned)
+                if (File.Exists(file))
+                    File.Delete(file);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

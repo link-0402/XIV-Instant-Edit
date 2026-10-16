@@ -25,6 +25,153 @@ internal static class PackageImportScenarios
         ExtractKeepsLayout(root);
         UnwantedAssetBytesAreNotKept(root);
         UnityWorkStopsWhenCancelled(root);
+
+        PurposeFromUnityProperties();
+        PurposeFromFileNames();
+        PropertyBeatsFileName();
+        UnityManifestGroupsTexturesByMaterial(root);
+        SimsManifestUsesCasRoles(root);
+        ManifestRoundTrips(root);
+        LegacyFolderIsScanned(root);
+        ReExtractReplacesManifest(root);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Purposes and the stash manifest
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private static void PurposeFromUnityProperties()
+    {
+        Require(TexturePurposes.FromUnityProperty("_MainTex") == TexturePurpose.Diffuse, "_MainTex is a diffuse");
+        Require(TexturePurposes.FromUnityProperty("_BaseMap") == TexturePurpose.Diffuse, "_BaseMap is a diffuse");
+        Require(TexturePurposes.FromUnityProperty("_BumpMap") == TexturePurpose.Normal, "_BumpMap is a normal map");
+        Require(TexturePurposes.FromUnityProperty("_MetallicGlossMap") == TexturePurpose.Mask, "_MetallicGlossMap is a mask");
+        Require(TexturePurposes.FromUnityProperty("_MaskMap") == TexturePurpose.Mask, "_MaskMap is a mask");
+        Require(TexturePurposes.FromUnityProperty("_OcclusionMap") == TexturePurpose.Occlusion, "_OcclusionMap is occlusion");
+        Require(TexturePurposes.FromUnityProperty("_EmissionMap") == TexturePurpose.Emission, "_EmissionMap is emission");
+        Require(TexturePurposes.FromUnityProperty("_Foo") == null, "an unknown property says nothing");
+    }
+
+    private static void PurposeFromFileNames()
+    {
+        (string Name, TexturePurpose Expected)[] cases =
+        {
+            ("UV1_Normal.png", TexturePurpose.Normal), ("body_n.png", TexturePurpose.Normal), ("UV1_Normal2.png", TexturePurpose.Normal),
+            ("UV1_AO.png", TexturePurpose.Occlusion), ("Glow_Emissive.png", TexturePurpose.Emission),
+            ("skin_mask.png", TexturePurpose.Mask), ("Z.UV1_Pattern mask.png", TexturePurpose.Mask),
+            ("skin_d.png", TexturePurpose.Diffuse), ("Albedo.png", TexturePurpose.Diffuse),
+            ("UV1_Black.png", TexturePurpose.Other),
+        };
+        foreach (var (name, expected) in cases)
+            Require(TexturePurposes.FromFileName(name) == expected, $"{name} is read as {expected} (got {TexturePurposes.FromFileName(name)})");
+    }
+
+    private static void PropertyBeatsFileName()
+    {
+        Require(TexturePurposes.Classify(null, TexturePurpose.Diffuse, -1, "x_normal.png") == TexturePurpose.Diffuse,
+            "the material property a texture is used by beats its file name");
+        Require(TexturePurposes.Classify(null, null, 1, "x.png") == TexturePurpose.Normal, "Unity's normal-map flag beats the file name");
+        Require(TexturePurposes.Classify(TexturePurpose.Mask, TexturePurpose.Diffuse, 1, "x_n.png") == TexturePurpose.Mask,
+            "the source's own role beats everything");
+        Require(TexturePurposes.FromSimsRole(InstantEdit.Studio.Services.Sims.SimsTextureRole.Specular) == TexturePurpose.Mask &&
+                TexturePurposes.FromSimsRole(InstantEdit.Studio.Services.Sims.SimsTextureRole.Unknown) == null,
+            "Sims roles map onto purposes; an unknown role says nothing");
+    }
+
+    private static void UnityManifestGroupsTexturesByMaterial(string root)
+    {
+        var scan = UnityPackageReader.Scan(BasicPackage(root, "manifest"), _ => { }, CancellationToken.None);
+        scan.Prefabs.Add(new UnityPrefab("77777777777777777777777777777777", "Black Gold", new[] { GuidMat }));
+        var output = Path.Combine(root, "manifest-out");
+        var extraction = UnityPackageReader.Extract(scan, output, _ => { }, CancellationToken.None);
+        var manifest = StashManifest.ForUnity(scan, extraction);
+
+        Require(manifest.SourceKind == "unity" && manifest.Materials.Count == 1 && manifest.Materials[0].Name == "Skin",
+            "each material with a written texture is listed");
+        var skin = manifest.Materials[0];
+        Require(skin.Textures.GetValueOrDefault(TexturePurpose.Diffuse) == "A/Tex/body_d.png" &&
+                skin.Textures.GetValueOrDefault(TexturePurpose.Normal) == "A/Tex/body_n.png",
+            "a material's textures are listed by purpose, as paths relative to the extraction");
+        var diffuse = manifest.Entries.First(e => e.Path == "A/Tex/body_d.png");
+        Require(diffuse.Kind == StashKind.Texture && diffuse.Purpose == TexturePurpose.Diffuse, "a texture entry carries its purpose");
+        Require(diffuse.Groups.Contains("Skin") && diffuse.Groups.Contains("Black Gold"),
+            "a texture is grouped under its material and the prefabs that use that material");
+        Require(manifest.Entries.First(e => e.Path == "A/FBX/m.fbx") is { Kind: StashKind.Model, NeedsConversion: true },
+            "an .fbx is a model that needs converting");
+        Require(StashManifest.Read(extraction.RootFolder) != null, "the extraction writes stash.json");
+    }
+
+    private static void SimsManifestUsesCasRoles(string root)
+    {
+        var folder = Path.Combine(root, "sims-manifest");
+        Directory.CreateDirectory(Path.Combine(folder, "textures", "other"));
+        var file = Path.Combine(folder, "textures", "other", "Dress_other.png");
+        File.WriteAllBytes(file, PngBytes);
+        var extraction = new InstantEdit.Studio.Services.Sims.SimsPackageInspector.ExtractionResult { RootFolder = folder };
+        extraction.WrittenFiles.Add(file);
+        extraction.Textures.Add((file, InstantEdit.Studio.Services.Sims.SimsTextureRole.Normal, "Dress"));
+        var manifest = StashManifest.ForSims(@"C:\p\dress.package", extraction);
+        var entry = manifest.Entries.Single();
+        Require(entry.Purpose == TexturePurpose.Normal && entry.Groups.SequenceEqual(new[] { "Dress" }),
+            "a Sims texture takes its purpose from the CAS role, not its folder or name, and is grouped under its CAS part");
+        Require(manifest.Materials.Single().Name == "Dress" && manifest.Materials[0].Textures[TexturePurpose.Normal] == "textures/other/Dress_other.png",
+            "each CAS part is listed as a material with its textures");
+    }
+
+    private static void ManifestRoundTrips(string root)
+    {
+        var folder = Path.Combine(root, "roundtrip");
+        Directory.CreateDirectory(folder);
+        var manifest = new StashManifest { Source = @"C:\p\x.unitypackage", SourceKind = "unity", ExtractedUtc = new DateTime(2026, 10, 16, 12, 0, 0, DateTimeKind.Utc) };
+        manifest.Entries.Add(new StashEntry { Path = "a/b.png", Kind = StashKind.Texture, Purpose = TexturePurpose.Normal, Groups = { "Skin" }, Detail = "normal map" });
+        manifest.Materials.Add(new StashMaterial { Name = "Skin", Textures = { [TexturePurpose.Normal] = "a/b.png" } });
+        manifest.Write(folder);
+        var read = StashManifest.Read(folder);
+        Require(read != null && read.Source == manifest.Source && read.ExtractedUtc == manifest.ExtractedUtc &&
+                read.Entries.Single() is { Path: "a/b.png", Kind: StashKind.Texture, Purpose: TexturePurpose.Normal, Detail: "normal map" } e &&
+                e.Groups.SequenceEqual(new[] { "Skin" }) && read.Materials.Single().Textures[TexturePurpose.Normal] == "a/b.png",
+            "stash.json reads back what was written");
+        File.WriteAllText(Path.Combine(folder, StashManifest.FileName), "{ not json");
+        Require(StashManifest.Read(folder) == null, "a damaged stash.json reads as none");
+    }
+
+    private static void LegacyFolderIsScanned(string root)
+    {
+        var folder = Path.Combine(root, "legacy");
+        Directory.CreateDirectory(Path.Combine(folder, "textures", "normal"));
+        Directory.CreateDirectory(Path.Combine(folder, "model"));
+        File.WriteAllBytes(Path.Combine(folder, "textures", "normal", "x.png"), PngBytes);
+        File.WriteAllBytes(Path.Combine(folder, "model", "a.glb"), new byte[] { 1 });
+        File.WriteAllText(Path.Combine(folder, "extract-report.txt"), "report");
+        var manifest = StashManifest.Scan(folder);
+        Require(manifest.Entries.Count == 2, $"a folder without stash.json is scanned, its report left out (got {manifest.Entries.Count})");
+        Require(manifest.Entries.Any(e => e.Path == "textures/normal/x.png" && e.Purpose == TexturePurpose.Normal),
+            "a texture in a Sims role folder takes that role");
+        Require(manifest.Entries.Any(e => e.Path == "model/a.glb" && e is { Kind: StashKind.Model, NeedsConversion: true }),
+            "a .glb is a model that needs converting");
+    }
+
+    private static void ReExtractReplacesManifest(string root)
+    {
+        var output = Path.Combine(root, "reextract-out");
+        var package = BasicPackage(root, "again");
+        var first = UnityPackageReader.Scan(package, _ => { }, CancellationToken.None);
+        UnityPackageReader.Extract(first, output, _ => { }, CancellationToken.None);
+
+        var second = UnityPackageReader.Scan(package, _ => { }, CancellationToken.None);
+        second.Assets.First(a => a.Guid == GuidModel).Selected = false;
+        var result = UnityPackageReader.Extract(second, output, _ => { }, CancellationToken.None);
+
+        Require(result.RootFolder == Path.Combine(output, "again"), "extracting the same package again reuses its folder");
+        Require(!File.Exists(Path.Combine(output, "again", "A", "FBX", "m.fbx")), "files of the earlier run that this run left out are gone");
+        var manifest = StashManifest.Read(result.RootFolder);
+        Require(manifest != null && manifest.Entries.All(e => e.Path != "A/FBX/m.fbx") && manifest.Entries.Count == 2,
+            "stash.json describes only the latest run");
+
+        File.WriteAllText(Path.Combine(output, "again", "mine.txt"), "user file");
+        var third = UnityPackageReader.Extract(second, output, _ => { }, CancellationToken.None);
+        Require(third.RootFolder == Path.Combine(output, "again_2") && File.Exists(Path.Combine(output, "again", "mine.txt")),
+            "a folder holding someone else's files is left alone and a numbered folder is used");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
