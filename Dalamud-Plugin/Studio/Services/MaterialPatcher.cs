@@ -349,13 +349,17 @@ public static class MaterialPatcher
     }
 
     /// <summary>For a material whose shader section could not be parsed: swaps texture paths, copies the rest verbatim.</summary>
-    private static byte[] WritePathsOnly(MtrlInfo m)
+    internal static byte[] WritePathsOnly(MtrlInfo m)
     {
         var (strings, textureOffsets, uvSets, colorSets, shpkOffset) = BuildStrings(m);
 
+        // An unchanged string block keeps the stated size as read; a rebuilt one states the real size.
+        var fileSize = ReusesStrings(m)
+            ? m.FileSize
+            : (uint)(16 + 4 * (textureOffsets.Length + uvSets.Length + colorSets.Length) + strings.Count + m.Tail.Length) & 0xFFFF;
         var output = new List<byte>();
         WriteU32(output, m.Version);
-        WriteU32(output, m.FileSize | ((uint)m.DataSetSize << 16));
+        WriteU32(output, fileSize | ((uint)m.DataSetSize << 16));
         WriteU16(output, (ushort)strings.Count);
         WriteU16(output, shpkOffset);
         output.Add((byte)m.TextureOffsets.Length);
@@ -373,6 +377,13 @@ public static class MaterialPatcher
     private static (List<byte> Strings, uint[] TextureOffsets, (ushort, byte, byte)[] UvSets, (ushort, byte, byte)[] ColorSets, ushort ShpkOffset)
         BuildStrings(MtrlInfo m)
     {
+        if (ReusesStrings(m))
+            return (m.StringsRaw.ToList(),
+                m.TextureNameOffsets.Select((offset, i) => offset | ((uint)m.TextureOffsets[i].Flags << 16)).ToArray(),
+                m.UvSetNameOffsets.Select((offset, i) => (offset, m.UvColorSets[i].Index, m.UvColorSets[i].Unknown1)).ToArray(),
+                m.ColorSetNameOffsets.Select((offset, i) => (offset, m.ColorSets[i].Index, m.ColorSets[i].Unknown1)).ToArray(),
+                m.ShaderPackageNameOffset);
+
         var strings = new List<byte>();
 
         var textureOffsets = new uint[m.TextureOffsets.Length];
@@ -406,6 +417,28 @@ public static class MaterialPatcher
             strings.Add(0);
 
         return (strings, textureOffsets, uvSets, colorSets, shpkOffset);
+    }
+
+    /// <summary>True while every name still reads back from the string block as it was read, in the same number of entries.</summary>
+    private static bool ReusesStrings(MtrlInfo m)
+    {
+        var raw = m.StringsRaw;
+        if (raw.Length == 0
+            || m.TextureNameOffsets.Length != m.TextureOffsets.Length
+            || m.UvSetNameOffsets.Length != m.UvColorSets.Length
+            || m.ColorSetNameOffsets.Length != m.ColorSets.Length
+            || MtrlReader.ReadCString(raw, m.ShaderPackageNameOffset) != m.ShaderPackageName)
+            return false;
+        for (var i = 0; i < m.TextureOffsets.Length; i++)
+            if (MtrlReader.ReadCString(raw, m.TextureNameOffsets[i]) != m.TextureOffsets[i].Path)
+                return false;
+        for (var i = 0; i < m.UvColorSets.Length; i++)
+            if (MtrlReader.ReadCString(raw, m.UvSetNameOffsets[i]) != m.UvColorSets[i].Name)
+                return false;
+        for (var i = 0; i < m.ColorSets.Length; i++)
+            if (MtrlReader.ReadCString(raw, m.ColorSetNameOffsets[i]) != m.ColorSets[i].Name)
+                return false;
+        return true;
     }
 
     private static void AppendCString(List<byte> b, string s)

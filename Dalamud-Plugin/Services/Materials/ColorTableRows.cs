@@ -382,16 +382,15 @@ public sealed class ColorTable
     };
 
     /// <summary>The flags this table needs in the material's additional data; bits the editor does not know are kept.</summary>
-    public TableFlags Flags()
+    public TableFlags Flags() => ApplyTo(baseFlags);
+
+    /// <summary>A material's flags with this table's bits (table, dye table, size) set and the rest left alone.</summary>
+    public TableFlags ApplyTo(TableFlags flags) => Kind switch
     {
-        var flags = baseFlags.WithTable(true);
-        return Kind switch
-        {
-            ColorTableKind.Dawntrail => flags.WithDyeTable(Dye != null).WithLogs(3, 5),
-            ColorTableKind.Legacy => flags.WithDyeTable(LegacyDye != null).WithLogs(baseFlags.WidthLog == 2 ? 2 : 0, baseFlags.HeightLog == 4 ? 4 : 0),
-            _ => baseFlags,
-        };
-    }
+        ColorTableKind.Dawntrail => flags.WithTable(true).WithDyeTable(Dye != null).WithLogs(3, 5),
+        ColorTableKind.Legacy => flags.WithTable(true).WithDyeTable(LegacyDye != null).WithLogs(baseFlags.WidthLog == 2 ? 2 : 0, baseFlags.HeightLog == 4 ? 4 : 0),
+        _ => new TableFlags((flags.Raw & ~0xFFCu) | (baseFlags.Raw & 0xFFC)),
+    };
 
     /// <summary>The material's data set: the rows, then the dye rows when the table is dyeable.</summary>
     public byte[] WriteDataSet()
