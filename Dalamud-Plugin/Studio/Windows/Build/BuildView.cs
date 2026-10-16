@@ -259,8 +259,9 @@ internal sealed class BuildView
         BuildCategory.Model    => "Models",
         BuildCategory.Texture  => "Textures",
         BuildCategory.Variant  => "Variants",
-        BuildCategory.Material => "Materials",
-        _                      => "Mod metadata",
+        BuildCategory.Material  => "Materials",
+        BuildCategory.Animation => "Animations",
+        _                       => "Mod metadata",
     };
 
     private void OpenFolder(string path)

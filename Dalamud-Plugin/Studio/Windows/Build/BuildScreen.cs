@@ -37,6 +37,7 @@ internal sealed class BuildScreen
     private readonly BrowsePanel _browse;
     private readonly BuildView _buildView;
     private readonly PackStructureView _structure;
+    private readonly AnimationSetupView _animation;
 
     private int _validatedRevision = -1;
     private readonly Stopwatch _sinceValidated = new();
@@ -58,7 +59,11 @@ internal sealed class BuildScreen
         _inspector = new ModelInspector(host, _session, textures, _editor);
         _browse    = new BrowsePanel(host, _session);
         _buildView = new BuildView(host, _session, _builds);
+        _animation = new AnimationSetupView(_session, _editor);
     }
+
+    /// <summary>The item picked on the left when it is an animation: those have a set-up of their own instead of models and materials.</summary>
+    private PortItem? AnimationItem => _session.Loaded && _session.CurrentItem is { Animation: not null } item ? item : null;
 
     private static readonly (StageId Stage, string Label, FontAwesomeIcon Icon, string Help)[] Views =
     {
@@ -200,6 +205,7 @@ internal sealed class BuildScreen
                 case StageId.Build:   _buildView.DrawCanvas(); break;
                 default:
                     if (_structure.Shows(_session.Selection)) _structure.DrawCanvas();
+                    else if (AnimationItem is { } animation)  _animation.Draw(animation);
                     else                                      _setup.Draw();
                     break;
             }
@@ -222,6 +228,7 @@ internal sealed class BuildScreen
                 case StageId.Build:   _buildView.DrawInspector(); break;
                 default:
                     if (_structure.Shows(_session.Selection)) _structure.DrawInspector();
+                    else if (AnimationItem is { } animation)  _animation.DrawInspector(animation);
                     else                                      _inspector.Draw();
                     break;
             }

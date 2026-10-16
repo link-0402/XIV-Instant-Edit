@@ -106,7 +106,6 @@ internal sealed class ItemSetupView
     {
         var subject = item.Subject;
         var target  = new Target(TargetKind.Item, item.Key);
-        int textures = item.Materials.Sum(m => m.Textures.Count);
 
         var badges = new List<Badge>();
         if (!item.HasWork)
@@ -120,7 +119,7 @@ internal sealed class ItemSetupView
             Id        = "header",
             Title     = subject.DisplayName,
             Subtitle  = $"{subject.KindLabel} · {subject.IdDisplay}",
-            Detail    = $"{item.Models.Count} {(subject.HasRaces ? "race model(s)" : "model(s)")} · {item.Materials.Count} material(s) · {textures} texture(s)",
+            Detail    = item.Summary(withTextures: true),
             Icon      = GameIcons.Glyph(subject),
             IconColor = Theme.Accent,
             DrawThumb = icon != 0 ? side => GameIcons.Draw(icon, side) : null,

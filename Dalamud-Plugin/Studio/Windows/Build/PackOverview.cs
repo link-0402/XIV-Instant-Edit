@@ -122,7 +122,6 @@ internal sealed class PackOverview
         var target  = new Target(TargetKind.Item, item.Key);
         var worst   = PortValidator.WorstUnder(_session.Issues, target);
         uint icon   = GameIcons.Of(subject);
-        int textures = item.Materials.Sum(m => m.Textures.Count);
 
         var badges = new List<Badge>();
         if (!item.HasWork)
@@ -133,7 +132,7 @@ internal sealed class PackOverview
             Id        = $"item{item.Key}",
             Title     = subject.DisplayName,
             Subtitle  = $"{subject.KindLabel} · {subject.IdDisplay}",
-            Detail    = $"{item.Models.Count} race model(s) · {item.Materials.Count} material(s) · {textures} texture(s)",
+            Detail    = item.Summary(withTextures: true),
             Icon      = GameIcons.Glyph(subject),
             IconColor = item.HasWork ? Theme.Accent : Theme.Muted,
             DrawThumb = icon != 0 ? side => GameIcons.Draw(icon, side) : null,
