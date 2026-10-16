@@ -24,7 +24,7 @@ Penumbra mods.
 - **Game Files**: browse the game's own models, edit them, or batch-export their files and skeletons.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Game-Files)
 - **Quick Actions**: tasks for your whole character.
-  - Fix skin seams between models, such as on your neck or between different face parts, like face and ears. Textures are automatically blended and \
+  - Fix skin seams between models, such as on your neck or between different face parts, like face and ears. Textures are automatically blended into each other, getting rid of visible seams between models.  \
     [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Fixing-the-Neck-Seam)
   - Optimize its textures automatically: the uncompressed mod textures it wears are compressed as they load, and ones
     that hold a single color shrink to 32 × 32 pixels, so Lightless, PlayerSync and other sync plugins count less
