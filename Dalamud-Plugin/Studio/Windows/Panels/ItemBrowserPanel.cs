@@ -39,6 +39,12 @@ internal sealed class ItemBrowserPanel
     private int _weaponCategory;
     private List<WeaponModel> _filteredWeapons = new();
 
+    // ── Animations ───────────────────────────────────────────────────────────
+    private static readonly string[] AnimationLists = { "Emotes", "Other animations" };
+    private int _animationList;
+    private List<AnimationTarget> _filteredAnimations = new();
+    private object? _animationsFrom;
+
     // ── Gear ─────────────────────────────────────────────────────────────────
     private readonly EquipSlot[] _allSlots = SlotInfo.AllSlots.ToArray();
     private readonly string[]    _slotLabels;
@@ -67,7 +73,7 @@ internal sealed class ItemBrowserPanel
 
         bool build = session is PortSession;
         _kinds = build
-            ? new[] { SubjectKind.Gear, SubjectKind.Weapon, SubjectKind.Hair, SubjectKind.Face, SubjectKind.Tail, SubjectKind.Ear }
+            ? new[] { SubjectKind.Gear, SubjectKind.Weapon, SubjectKind.Hair, SubjectKind.Face, SubjectKind.Tail, SubjectKind.Ear, SubjectKind.Animation }
             : new[] { SubjectKind.Gear, SubjectKind.Hair, SubjectKind.Face, SubjectKind.Tail, SubjectKind.Ear };
         _kindLabels = _kinds.Select(KindTab).ToArray();
 
@@ -99,9 +105,10 @@ internal sealed class ItemBrowserPanel
 
         bool listReady = _kind switch
         {
-            SubjectKind.Gear   => DrawGearFilters(),
-            SubjectKind.Weapon => DrawWeaponFilters(),
-            _                  => DrawFeatureFilters(),
+            SubjectKind.Gear      => DrawGearFilters(),
+            SubjectKind.Weapon    => DrawWeaponFilters(),
+            SubjectKind.Animation => DrawAnimationFilters(),
+            _                     => DrawFeatureFilters(),
         };
         if (!listReady)
             return;
@@ -115,18 +122,20 @@ internal sealed class ItemBrowserPanel
         {
             switch (_kind)
             {
-                case SubjectKind.Gear:   DrawGearList();    break;
-                case SubjectKind.Weapon: DrawWeaponList();  break;
-                default:                 DrawFeatureList(); break;
+                case SubjectKind.Gear:      DrawGearList();      break;
+                case SubjectKind.Weapon:    DrawWeaponList();    break;
+                case SubjectKind.Animation: DrawAnimationList(); break;
+                default:                    DrawFeatureList();   break;
             }
         }
         ImGui.EndChild();
 
         var (shown, total) = _kind switch
         {
-            SubjectKind.Gear   => (_filtered.Count, _allItems.Count),
-            SubjectKind.Weapon => (_filteredWeapons.Count, WeaponsInCategory().Count()),
-            _                  => (_featureIds.Count, AllIdsForRace().Count),
+            SubjectKind.Gear      => (_filtered.Count, _allItems.Count),
+            SubjectKind.Weapon    => (_filteredWeapons.Count, WeaponsInCategory().Count()),
+            SubjectKind.Animation => (_filteredAnimations.Count, _host.GameData.AnimationTargets(_animationList == 0)?.Count ?? 0),
+            _                     => (_featureIds.Count, AllIdsForRace().Count),
         };
         Gui.Hint(shown == total ? $"{total} {Noun(total)}" : $"{shown} of {total} {Noun(total)}");
         ImGui.SameLine();
@@ -145,17 +154,19 @@ internal sealed class ItemBrowserPanel
 
     private string Noun(int n) => _kind switch
     {
-        SubjectKind.Gear   => "items",
-        SubjectKind.Weapon => "weapon models",
-        _                  => $"{FeatureNaming.KindLabel(_kind).ToLowerInvariant()} ids",
+        SubjectKind.Gear      => "items",
+        SubjectKind.Weapon    => "weapon models",
+        SubjectKind.Animation => _animationList == 0 ? "emotes" : "animations",
+        _                     => $"{FeatureNaming.KindLabel(_kind).ToLowerInvariant()} ids",
     };
 
     private static string KindTab(SubjectKind kind) => kind switch
     {
-        SubjectKind.Gear   => "Gear",
-        SubjectKind.Weapon => "Weapons",
-        SubjectKind.Ear    => "Ears",
-        _                  => FeatureNaming.KindLabel(kind),
+        SubjectKind.Gear      => "Gear",
+        SubjectKind.Weapon    => "Weapons",
+        SubjectKind.Ear       => "Ears",
+        SubjectKind.Animation => "Animations",
+        _                     => FeatureNaming.KindLabel(kind),
     };
 
     private static void Waiting(string text)
@@ -212,6 +223,28 @@ internal sealed class ItemBrowserPanel
         return true;
     }
 
+    /// <summary>Emotes or every other animation. Returns false while the game's sheets are still being read.</summary>
+    private bool DrawAnimationFilters()
+    {
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.Combo("##AnimationList", ref _animationList, AnimationLists, AnimationLists.Length))
+            ApplyFilter();
+        Gui.Tooltip("Emotes come with their start and end. Other animations are every other action timeline the game has, by name.");
+
+        var targets = _host.GameData.AnimationTargets(_animationList == 0);
+        if (targets == null)
+        {
+            Waiting("Reading the game's emotes and animations");
+            return false;
+        }
+        if (!ReferenceEquals(targets, _animationsFrom))
+        {
+            _animationsFrom = targets;
+            ApplyFilter();
+        }
+        return true;
+    }
+
     /// <summary>Race picker for features. Returns false while the game's files are still being scanned.</summary>
     private bool DrawFeatureFilters()
     {
@@ -258,7 +291,12 @@ internal sealed class ItemBrowserPanel
 
     private void DrawSearchRow()
     {
-        var hint = _kind is SubjectKind.Gear or SubjectKind.Weapon ? "Search name or model id" : "Search id";
+        var hint = _kind switch
+        {
+            SubjectKind.Gear or SubjectKind.Weapon => "Search name or model id",
+            SubjectKind.Animation                  => "Search name, command or animation key",
+            _                                      => "Search id",
+        };
         ImGui.SetNextItemWidth(-(ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.X));
         if (ImGui.InputTextWithHint("##Search", hint, ref _search, 256))
         {
@@ -322,6 +360,28 @@ internal sealed class ItemBrowserPanel
                 $"{(weapon.Category.Length > 0 ? weapon.Category : "Weapon")} · {weapon.IdDisplay}{(weapon.OffHand ? " · off hand" : "")}",
                 _session.HasWork(subject.Key), () => subject, weapon.Icon,
                 $"{subject.DisplayName}\n{subject.ModelGamePath(default)}");
+        });
+    }
+
+    private void DrawAnimationList()
+    {
+        if (_filteredAnimations.Count == 0)
+        {
+            Gui.Hint(_configuredOnly ? "(nothing set up here)" : "(nothing matches)");
+            return;
+        }
+
+        int selected = _scrollToSelection ? _filteredAnimations.FindIndex(t => t.Key == SelectedKey) : -1;
+        DrawTiles(_filteredAnimations.Count, selected, i =>
+        {
+            var target = _filteredAnimations[i];
+            int editable = target.Timelines.Count(t => t.Editable);
+            var subtitle = target.Command.Length > 0
+                ? $"{target.Command} · {editable} animation(s)"
+                : editable > 0 ? target.Timelines[0].Key : target.Timelines[0].Reason ?? "can't be replaced";
+            var lines = target.Timelines.Select(t => t.Editable ? t.Key : $"{t.Key}  ({t.Reason})");
+            DrawTile(target.Key, target.Name, subtitle, _session.HasWork(target.Key), () => new AnimationSubject(target), target.Icon,
+                $"{target.Name}\n{string.Join("\n", lines)}");
         });
     }
 
@@ -395,7 +455,13 @@ internal sealed class ItemBrowserPanel
             Title       = name,
             TitleColor  = configured && !inPack ? Theme.Accent : null,
             Subtitle    = subtitle,
-            Icon        = _kind switch { SubjectKind.Gear => FontAwesomeIcon.Tshirt, SubjectKind.Weapon => FontAwesomeIcon.ShieldAlt, _ => FontAwesomeIcon.User },
+            Icon        = _kind switch
+            {
+                SubjectKind.Gear      => FontAwesomeIcon.Tshirt,
+                SubjectKind.Weapon    => FontAwesomeIcon.ShieldAlt,
+                SubjectKind.Animation => FontAwesomeIcon.Running,
+                _                     => FontAwesomeIcon.User,
+            },
             IconColor   = inPack ? Theme.Good : Theme.Muted,
             DrawThumb   = icon != 0 ? side => GameIcons.Draw(icon, side) : null,
             Badges      = badges,
@@ -436,6 +502,10 @@ internal sealed class ItemBrowserPanel
                 break;
             case WeaponSubject when Array.IndexOf(_kinds, SubjectKind.Weapon) >= 0:
                 _kind = SubjectKind.Weapon;
+                break;
+            case AnimationSubject animation when Array.IndexOf(_kinds, SubjectKind.Animation) >= 0:
+                _kind = SubjectKind.Animation;
+                _animationList = PortSubject.KeyTag(animation.Key) == KeyTagKind.Emote ? 0 : 1;
                 break;
         }
 
@@ -484,6 +554,20 @@ internal sealed class ItemBrowserPanel
     {
         var cfg = _host.Configuration;
         var q = _search.Trim();
+
+        if (_kind == SubjectKind.Animation)
+        {
+            IEnumerable<AnimationTarget> targets = _host.GameData.AnimationTargets(_animationList == 0) ?? Array.Empty<AnimationTarget>();
+            if (_configuredOnly)
+                targets = targets.Where(t => _session.HasWork(t.Key));
+            if (q.Length > 0)
+                targets = targets.Where(t => t.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
+                                          || t.Command.Contains(q, StringComparison.OrdinalIgnoreCase)
+                                          || t.Timelines.Any(l => l.Key.Contains(q, StringComparison.OrdinalIgnoreCase)))
+                                 .OrderBy(t => t.Name.StartsWith(q, StringComparison.OrdinalIgnoreCase) ? 0 : 1);
+            _filteredAnimations = targets.ToList();
+            return;
+        }
 
         if (_kind == SubjectKind.Weapon)
         {

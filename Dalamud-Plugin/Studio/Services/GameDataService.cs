@@ -734,6 +734,114 @@ public sealed class GameDataService : IItemNames, Check.IItemVariants
         return bySlot;
     }
 
+    // ── Animations ───────────────────────────────────────────────────────────
+
+    private readonly object _animationLock = new();
+    private System.Threading.Tasks.Task<(IReadOnlyList<AnimationTarget> Emotes, IReadOnlyList<AnimationTarget> Others)>? _animationScan;
+    private Dictionary<uint, AnimationTarget>? _animationsByKey;
+    private Func<string, string>? _papResolver;
+
+    /// <summary>
+    /// Emotes (with their start and end timelines) or every other action timeline, for the browser.
+    /// Read from the sheets once, on a worker; null until that has finished.
+    /// </summary>
+    internal IReadOnlyList<AnimationTarget>? AnimationTargets(bool emotes)
+    {
+        var scan = StartAnimationScan();
+        return scan.IsCompletedSuccessfully ? (emotes ? scan.Result.Emotes : scan.Result.Others) : null;
+    }
+
+    /// <summary>The emote or timeline a saved key names, or null. Waits for the sheets to be read if they are not yet.</summary>
+    internal AnimationTarget? GetAnimationTarget(uint key)
+    {
+        var scan = StartAnimationScan();
+        try { scan.Wait(); }
+        catch (AggregateException) { return null; }
+        lock (_animationLock)
+        {
+            _animationsByKey ??= scan.Result.Emotes.Concat(scan.Result.Others).GroupBy(t => t.Key).ToDictionary(g => g.Key, g => g.First());
+            return _animationsByKey.TryGetValue(key, out var target) ? target : null;
+        }
+    }
+
+    /// <summary>The path the game loads for a requested body PAP path, through its PAP load table; identity when the table can't be read.</summary>
+    internal Func<string, string> PapResolver()
+    {
+        lock (_animationLock)
+        {
+            if (_papResolver != null)
+                return _papResolver;
+            try
+            {
+                var bytes = _data.GetFile(InstantEdit.Services.Animations.PapLoadTable.GamePath)?.Data;
+                var table = bytes != null ? new InstantEdit.Services.Animations.PapLoadTable(bytes) : null;
+                _papResolver = table != null ? table.Resolve : p => p;
+            }
+            catch (Exception ex) when (ex is System.IO.InvalidDataException or System.IO.IOException)
+            {
+                _log.Warning(ex, "[Studio] Could not read the PAP load table; every race writes its own path");
+                _papResolver = p => p;
+            }
+            return _papResolver;
+        }
+    }
+
+    private System.Threading.Tasks.Task<(IReadOnlyList<AnimationTarget> Emotes, IReadOnlyList<AnimationTarget> Others)> StartAnimationScan()
+    {
+        lock (_animationLock)
+            return _animationScan ??= System.Threading.Tasks.Task.Run(ReadAnimationTargets);
+    }
+
+    private (IReadOnlyList<AnimationTarget> Emotes, IReadOnlyList<AnimationTarget> Others) ReadAnimationTargets()
+    {
+        var timelines = new Dictionary<ushort, (string Key, byte LoadType)>();
+        foreach (var row in _data.GetExcelSheet<ActionTimeline>())
+            if (row.RowId is > 0 and <= ushort.MaxValue)
+                timelines[(ushort)row.RowId] = (row.Key.ExtractText(), row.LoadType);
+
+        AnimationTimelineRef? Ref(uint id)
+            => id is > 0 and <= ushort.MaxValue && timelines.TryGetValue((ushort)id, out var t) && t.Key.Length > 0
+                ? Animation.EmoteCatalog.Ref((ushort)id, t.Key, t.LoadType)
+                : null;
+
+        var emotes = new List<AnimationTarget>();
+        var used = new HashSet<ushort>();
+        foreach (var emote in _data.GetExcelSheet<Emote>())
+        {
+            var name = emote.Name.ExtractText();
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            // The emote's own timelines, then its mode's start and end (sitting, dozing), as AnimationCatalog groups them.
+            var ids = emote.ActionTimeline.Select(t => t.RowId).ToList();
+            if (emote.EmoteMode.RowId > 0 && emote.EmoteMode.IsValid)
+            {
+                var mode = emote.EmoteMode.Value;
+                if (mode.StartEmote.RowId > 0 && mode.StartEmote.IsValid)
+                    ids.InsertRange(0, mode.StartEmote.Value.ActionTimeline.Select(t => t.RowId));
+                if (mode.EndEmote.RowId > 0 && mode.EndEmote.IsValid)
+                    ids.AddRange(mode.EndEmote.Value.ActionTimeline.Select(t => t.RowId));
+            }
+            var refs = ids.Distinct().Select(Ref).OfType<AnimationTimelineRef>().GroupBy(r => r.Key).Select(g => g.First()).ToList();
+            if (refs.Count == 0)
+                continue;
+            foreach (var r in refs) used.Add(r.Id);
+
+            var command = emote.TextCommand.IsValid ? emote.TextCommand.Value.Command.ExtractText() : string.Empty;
+            emotes.Add(new AnimationTarget(AnimationSubject.EmoteTag | emote.RowId, name, emote.Icon, command, refs));
+        }
+
+        var others = timelines.Where(t => !used.Contains(t.Key) && t.Value.Key.Length > 0)
+            .Select(t => new AnimationTarget(AnimationSubject.TimelineTag | t.Key, t.Value.Key, 0, string.Empty,
+                new[] { Animation.EmoteCatalog.Ref(t.Key, t.Value.Key, t.Value.LoadType) }))
+            .OrderBy(t => t.Name, StringComparer.Ordinal)
+            .ToList();
+
+        emotes.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+        _log.Information("[Studio] Animation targets: {0} emotes, {1} other timelines", emotes.Count, others.Count);
+        return (emotes, others);
+    }
+
     // ── Weapons ──────────────────────────────────────────────────────────────
 
     private IReadOnlyList<WeaponModel> _weapons = Array.Empty<WeaponModel>();

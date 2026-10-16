@@ -33,15 +33,17 @@ internal static class GameIcons
     public static uint Of(PortSubject subject) => subject switch
     {
         GearSubject gear     => gear.Item.Icon,
-        WeaponSubject weapon => weapon.Model.Icon,
-        _                    => 0,
+        WeaponSubject weapon       => weapon.Model.Icon,
+        AnimationSubject animation => animation.Target.Icon,
+        _                          => 0,
     };
 
     /// <summary>The glyph shown for a kind of subject where it has no game icon.</summary>
     public static Dalamud.Interface.FontAwesomeIcon Glyph(PortSubject subject) => subject.Kind switch
     {
         SubjectKind.Gear   => Dalamud.Interface.FontAwesomeIcon.Tshirt,
-        SubjectKind.Weapon => Dalamud.Interface.FontAwesomeIcon.ShieldAlt,
-        _                  => Dalamud.Interface.FontAwesomeIcon.User,
+        SubjectKind.Weapon    => Dalamud.Interface.FontAwesomeIcon.ShieldAlt,
+        SubjectKind.Animation => Dalamud.Interface.FontAwesomeIcon.Running,
+        _                     => Dalamud.Interface.FontAwesomeIcon.User,
     };
 }
