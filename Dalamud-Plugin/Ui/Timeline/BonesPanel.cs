@@ -267,6 +267,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         var placements = PoseMap.Layout(size, Theme.Gap,
             PoseMap.Armor.Spots.Any(spot => Has(index, spot.Bone)),
             PoseMap.Toes.Spots.Any(spot => spot.Bone.StartsWith("iv_", StringComparison.Ordinal) && Has(index, spot.Bone)),
+            PoseMap.Groin.Spots.Any(spot => Has(index, spot.Bone)),
             PoseMap.Tail.Spots.Any(spot => Has(index, spot.Bone)));
         var dots = new List<(string Bone, Vector2 At, int Section, bool Handle)>();
         for (var p = 0; p < placements.Count; p++)

@@ -101,12 +101,19 @@ internal static class PoseEditorFixture
               PoseMap.Sections.Where(section => section.Mirrored).All(section => section.Spots.All(spot => PoseMap.Side(spot.Bone) != 'r')),
             "every dot lies on its picture, once, and mirrored pictures list only the left side and the middle");
         check(PoseMap.Placed.Contains("j_ude_a_l") && PoseMap.Placed.Contains("j_ude_a_r") && PoseMap.Placed.Contains("n_sippo_e") &&
-              PoseMap.Placed.Contains("iv_asi_ko_b_r") && !PoseMap.Placed.Contains("j_f_ago"),
+              PoseMap.Placed.Contains("iv_asi_ko_b_r") && PoseMap.Placed.Contains("iv_ochinko_f") && PoseMap.Placed.Contains("iv_inshin_r") &&
+              !PoseMap.Placed.Contains("j_f_ago"),
             "the map places both sides of the body's bones and no face bones");
         check(AnimationPresentation.BoneName("j_asi_b_l") == "Left Knee (j_asi_b_l)" && AnimationPresentation.BoneName("j_asi_d_r") == "Right Foot (j_asi_d_r)" &&
               AnimationPresentation.BoneName("iv_ko_c_r") == "Right Pinky C (iv_ko_c_r)" && AnimationPresentation.BoneName("n_hara") == "Body (n_hara)" &&
               AnimationPresentation.BoneName(Hand) == "Left Hand (j_te_l)" && AnimationPresentation.BoneName("j_sk_f_b_l") == "Left Skirt Front B (j_sk_f_b_l)",
             "the map's bones have the game's body part names, with their side in front");
+        check(AnimationPresentation.BoneName("iv_kuritto") == "Clitoris (iv_kuritto)" && AnimationPresentation.BoneName("iv_inshin_r") == "Right Labia (iv_inshin_r)" &&
+              AnimationPresentation.BoneName("j_f_mabup_02out_l") == "Left Upper Eyelid Outer (j_f_mabup_02out_l)" &&
+              AnimationPresentation.BoneName("j_f_hana") == "Nose (j_f_hana)" && AnimationPresentation.BoneName("j_f_hana_r") == "Right Nostril (j_f_hana_r)" &&
+              AnimationPresentation.BoneName("ya_daitai_phys_l") == "Left Front Thigh (ya_daitai_phys_l)" &&
+              AnimationPresentation.BoneName("j_zerb_b_l") == "Left Ear B Tip (j_zerb_b_l)",
+            "IVCS, YAS, face and gear bones have plain names too");
         var resources = typeof(PoseMap).Assembly.GetManifestResourceNames();
         check(PoseMap.Resource(PoseMap.Body) == "InstantEdit.Pose.PoseBody.png" && PoseMap.Sections.All(section => resources.Contains(PoseMap.Resource(section))),
             "every picture is embedded in the plugin under the name the map asks for");
@@ -115,18 +122,18 @@ internal static class PoseEditorFixture
     private static void Layout(Action<bool, string> check)
     {
         var area = new Vector2(900, 600);
-        var full = PoseMap.Layout(area, 6, true, true, true);
+        var full = PoseMap.Layout(area, 6, true, true, true, true);
         bool Inside(PosePlacement placement) => placement.Origin.X >= -1e-3f && placement.Origin.Y >= -1e-3f &&
             placement.Origin.X + placement.Section.Size.X * placement.Scale <= area.X + 1e-3f &&
             placement.Origin.Y + placement.Section.Size.Y * placement.Scale <= area.Y + 1e-3f;
-        check(full.Select(placement => placement.Section).SequenceEqual([PoseMap.Body, PoseMap.Armor, PoseMap.Hands, PoseMap.Toes, PoseMap.Tail]) &&
+        check(full.Select(placement => placement.Section).SequenceEqual([PoseMap.Body, PoseMap.Armor, PoseMap.Hands, PoseMap.Toes, PoseMap.Groin, PoseMap.Tail]) &&
               full.All(Inside),
-            "the body, the armor and the hands with toes and tail fill three columns inside the area");
+            "the body, the armor and the hands with toes, groin and tail fill three columns inside the area");
         static float Centre(PosePlacement placement) => placement.Origin.X + placement.Section.Size.X * placement.Scale / 2;
-        check(full[2].Origin.Y < full[3].Origin.Y && full[3].Origin.Y < full[4].Origin.Y &&
-              Math.Abs(Centre(full[2]) - Centre(full[3])) < 1e-3f && Math.Abs(Centre(full[3]) - Centre(full[4])) < 1e-3f,
-            "the hands, the toes and the tail stack down their column, centred in it");
-        var plain = PoseMap.Layout(area, 6, false, false, false);
+        check(full[2].Origin.Y < full[3].Origin.Y && full[3].Origin.Y < full[4].Origin.Y && full[4].Origin.Y < full[5].Origin.Y &&
+              Enumerable.Range(3, 3).All(i => Math.Abs(Centre(full[2]) - Centre(full[i])) < 1e-3f),
+            "the hands, the toes, the groin and the tail stack down their column, centred in it");
+        var plain = PoseMap.Layout(area, 6, false, false, false, false);
         check(plain.Count == 2 && plain[1].Section == PoseMap.Hands && plain.All(Inside) && plain[1].Origin.X > area.X / 2 - 6,
             "without armor, toes or a tail the body and the hands share two columns");
         check(Math.Abs(plain[0].Section.Size.Y * plain[0].Scale - area.Y) < 1e-3f, "the body fills the area's height when its column is wide enough");
@@ -144,7 +151,8 @@ internal static class PoseEditorFixture
         check(Group("Right leg").Contains("j_asi_c_r") && Group("Right leg").Contains("iv_asi_oya_a_r") && !Group("Right leg").Contains("j_asi_c_l") &&
               Group("Spine").Contains("j_sebo_b") && Group("Neck and head").Contains(Neck) && Group("Tail").Contains("n_sippo_c") &&
               Group("Hair").Contains("j_kami_a") && Group("Skirt").Contains("j_sk_f_a_l") &&
-              Group("Armor and weapons").Contains("n_buki_l") && Group("Armor and weapons").Contains("j_buki_sebo_r"),
+              Group("Armor and weapons").Contains("n_buki_l") && Group("Armor and weapons").Contains("j_buki_sebo_r") &&
+              Group("Groin").Contains("iv_ochinko_c") && Group("Groin").Contains("iv_koumon_r") && !Group("Groin").Contains("iv_shiri_l"),
             "the other groups take their bones by name");
     }
 

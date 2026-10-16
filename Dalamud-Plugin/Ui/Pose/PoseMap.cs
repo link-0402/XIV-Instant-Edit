@@ -110,6 +110,26 @@ internal static class PoseMap
         new("iv_asi_ko_b_l", new(160, 460)),
     ]);
 
+    /// <summary>
+    /// The groin bones IVCS adds, on the hips from the front. Laid out to be told apart rather than where
+    /// they sit: the penis chain runs up the belly, the female bones down between the legs, front to back.
+    /// </summary>
+    public static readonly PoseSection Groin = new("groin", "PoseGroin", new Vector2(500, 420), true,
+    [
+        new("iv_ochinko_a", new(250, 235)),
+        new("iv_ochinko_b", new(250, 195)),
+        new("iv_ochinko_c", new(250, 155)),
+        new("iv_ochinko_d", new(250, 115)),
+        new("iv_ochinko_e", new(250, 75)),
+        new("iv_ochinko_f", new(250, 35)),
+        new("iv_kougan_l", new(190, 250)),
+        new("iv_kuritto", new(250, 290)),
+        new("iv_omanko", new(250, 340)),
+        new("iv_inshin_l", new(195, 340)),
+        new("iv_koumon", new(250, 390)),
+        new("iv_koumon_l", new(195, 390)),
+    ]);
+
     /// <summary>A tail from the side.</summary>
     public static readonly PoseSection Tail = new("tail", "PoseTail", new Vector2(1892, 1949), false,
     [
@@ -120,7 +140,7 @@ internal static class PoseMap
         new("n_sippo_e", new(1727, 1807)),
     ]);
 
-    public static readonly ImmutableArray<PoseSection> Sections = [Body, Armor, Hands, Toes, Tail];
+    public static readonly ImmutableArray<PoseSection> Sections = [Body, Armor, Hands, Toes, Groin, Tail];
 
     /// <summary>Every bone a picture shows, both sides.</summary>
     public static readonly ImmutableHashSet<string> Placed =
@@ -159,10 +179,10 @@ internal static class PoseMap
 
     /// <summary>
     /// Where each picture goes in an area of <paramref name="area"/> pixels, in columns like Brio's: the
-    /// body, the armor picture when the skeleton has its bones, then the hands with the toes and the
-    /// tail below them when it has those. Pictures keep their proportions and sit at the top.
+    /// body, the armor picture when the skeleton has its bones, then the hands with the toes, the groin
+    /// and the tail below them when it has those. Pictures keep their proportions and sit at the top.
     /// </summary>
-    public static List<PosePlacement> Layout(Vector2 area, float gap, bool armor, bool toes, bool tail)
+    public static List<PosePlacement> Layout(Vector2 area, float gap, bool armor, bool toes, bool groin, bool tail)
     {
         var columns = armor ? 3 : 2;
         var width = Math.Max(1, (area.X - gap * (columns - 1)) / columns);
@@ -177,6 +197,8 @@ internal static class PoseMap
         List<PoseSection> stack = [Hands];
         if (toes)
             stack.Add(Toes);
+        if (groin)
+            stack.Add(Groin);
         if (tail)
             stack.Add(Tail);
         // As wide as the column, or all of them smaller together when they would be too tall.
@@ -216,6 +238,7 @@ internal static class PoseMap
         new("Left leg", bone => Sided(LegName, bone, 'l')),
         new("Right leg", bone => Sided(LegName, bone, 'r')),
         new("Tail", bone => bone.StartsWith("n_sippo_", StringComparison.Ordinal)),
+        new("Groin", bone => Groin.Spots.Any(spot => spot.Bone == bone || Mirror(spot.Bone) == bone)),
         new("Hair", bone => bone.StartsWith("j_kami_", StringComparison.Ordinal) || bone.StartsWith("j_ex_h", StringComparison.Ordinal)),
         new("Skirt", bone => bone.StartsWith("j_sk_", StringComparison.Ordinal)),
         new("Armor and weapons", bone => bone.StartsWith("n_kataarmor_", StringComparison.Ordinal) ||
