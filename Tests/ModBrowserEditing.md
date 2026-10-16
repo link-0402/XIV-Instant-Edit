@@ -59,5 +59,21 @@ interactive checks have not been performed by the implementation agent.
   Penumbra, and Edit the built mod opens it in a mod window.
 - Close and reopen the plugin: the modpack is still there (Continue building).
 - Import a Sims 4 package from the build window, apply it to a material and build.
+- Import package: drop a `.unitypackage` on the window, scan, untick a few rows and
+  extract. The files land in the cache folder's package-imports folder, and the
+  window shows the stash with Models and Textures tabs, textures grouped by purpose.
+- Drag a texture from the stash onto a texture tile in Set-up, and a diffuse
+  folder row onto a diffuse tile (it becomes a variant group). On the Materials
+  tab, Apply to the selected material fills its diffuse, normal and mask slots.
+- Remove an extraction from the stash's list. Its folder is gone; other
+  extractions stay.
+- Start over (top right) clears the modpack after its confirmation.
+- Weapons: add a weapon from Add from game > Weapons, drop a model and a texture,
+  and build. The weapon shows the mod in game, whichever dye variant it has. An
+  off-hand model (a shield, or a dual-wield off hand) builds into the off hand.
+- Animations: add an emote from Add from game > Animations, drop a `.pap` on its
+  loop row and build. The emote plays the new motion in game for every ticked
+  race, including races the inspector says play another race's file. A `.tmb`
+  dropped on the row changes timing, sounds or effects.
 - Material presets and placeholder textures (Flat normal, Metal) are found in the
   installed plugin: a material made from a preset builds without a missing-file error.
