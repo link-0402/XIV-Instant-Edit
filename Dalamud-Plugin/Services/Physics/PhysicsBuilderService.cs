@@ -246,8 +246,8 @@ internal sealed class PhysicsBuilderService : IDisposable
     /// <summary>
     /// Saves a prepared file into the mod called <paramref name="name"/>: one the builder saved before
     /// gets the new file, any other name makes a new mod (a name another mod has is refused). Turns
-    /// your other builder mods off in your collection, since they replace the same file at the same
-    /// priority, ends the preview and redraws your character.
+    /// your other builder mods for the same race off in your collection, since they replace the same
+    /// file at the same priority, ends the preview and redraws your character.
     /// </summary>
     public async Task<PhysicsSaveResult> SaveAsync(PhysicsTarget target, byte[] bytes, string name, CancellationToken token)
     {
@@ -270,7 +270,17 @@ internal sealed class PhysicsBuilderService : IDisposable
             return rest;
         }).ConfigureAwait(false);
         var warnings = saved.Warnings.ToList();
-        var turnedOff = await physicsMods.TurnOffPhysicsModsAsync(others, target.Character.ObjectIndex).ConfigureAwait(false);
+        // The file is saved by now: a problem turning the others off is reported, and the preview
+        // still ends so your character shows the saved mod.
+        IReadOnlyList<string> turnedOff = [];
+        try
+        {
+            turnedOff = await physicsMods.TurnOffPhysicsModsAsync(others, target.Character.ObjectIndex, PhysicsPaths.BodyPhysics(race)).ConfigureAwait(false);
+        }
+        catch (Exception e) when (e is IOException or InvalidOperationException or Dalamud.Plugin.Ipc.Exceptions.IpcError)
+        {
+            warnings.Add($"Your other body physics mods are still on: {e.Message}");
+        }
         try { await Preview.StopAsync(redrawObject: null).ConfigureAwait(false); }
         catch (Exception e) when (e is IOException or InvalidOperationException)
         {
@@ -373,7 +383,7 @@ internal sealed class PhysicsBuilderService : IDisposable
     }
 
     /// <summary>
-    /// Turns every mod the builder saved off in your collection, so your other physics mods apply
+    /// Turns every mod the builder saved for your character's race off in your collection, so your other physics mods apply
     /// again, and redraws your character. Stops the preview first, which sits above every mod and
     /// would still show. Returns the folders turned off and a warning, or null.
     /// </summary>
@@ -383,7 +393,8 @@ internal sealed class PhysicsBuilderService : IDisposable
         string? stopProblem = null;
         try { await Preview.StopAsync(redrawObject: null).ConfigureAwait(false); }
         catch (Exception e) when (e is IOException or InvalidOperationException) { stopProblem = e.Message; }
-        var turnedOff = await physicsMods.TurnOffPhysicsModsAsync(ModDirectories, target.Character.ObjectIndex).ConfigureAwait(false);
+        var turnedOff = await physicsMods.TurnOffPhysicsModsAsync(ModDirectories, target.Character.ObjectIndex,
+            PhysicsPaths.BodyPhysics(target.Character.Race)).ConfigureAwait(false);
         var redraw = await penumbra.RedrawObjectAsync(target.Character.ObjectIndex).ConfigureAwait(false);
         if (stopProblem is null)
             return (turnedOff, redraw);

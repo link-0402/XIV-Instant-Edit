@@ -476,7 +476,8 @@ class ShapeExports:
         if normals is not None:
             data.normals_split_custom_set(normals.reshape(-1, 3)[source["corners"]])
         if weights is not None:
-            self._write_weights(copy, weights, source["vertices"])
+            self._write_weights(copy, weights, source["vertices"],
+                                armature_for_object(copy) or armature_for_object(original))
         self._transform(data, source["matrix"])
         data.update()
 
@@ -492,11 +493,11 @@ class ShapeExports:
                 for vertex in mesh.vertices]
 
     @staticmethod
-    def _write_weights(copy, weights: list, vertices) -> None:
+    def _write_weights(copy, weights: list, vertices, armature) -> None:
         """Give ``copy`` the ``weights`` of the vertices it was split from (``vertices``), in their
-        order, as a fresh copy would have them: in the groups of its skeleton's bones."""
+        order, as a fresh copy would have them: in the groups of its skeleton's (``armature``) bones,
+        found through an Armature modifier or the parent."""
         groups = copy.vertex_groups
-        armature = copy.parent if copy.parent is not None and copy.parent.type == 'ARMATURE' else None
         bones = armature.data.bones if armature is not None else {}
         everything = list(range(len(copy.data.vertices)))
         for group in groups:

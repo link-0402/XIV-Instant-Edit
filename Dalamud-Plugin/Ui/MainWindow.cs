@@ -330,7 +330,7 @@ public sealed class MainWindow : Window, IDisposable
         }
     }
 
-    private void RequestRefresh() { try { _feed.SetStatus(string.Empty, FeedbackSeverity.Success); _onScreen.RequestRefresh(); } catch (Exception e) { _log.Debug(e.Message); _feed.SetStatus("Refresh unavailable. Is Penumbra running?", FeedbackSeverity.Warning); } }
+    private void RequestRefresh(bool fresh = false) { try { _feed.SetStatus(string.Empty, FeedbackSeverity.Success); _onScreen.RequestRefresh(fresh); } catch (Exception e) { _log.Debug(e.Message); _feed.SetStatus("Refresh unavailable. Is Penumbra running?", FeedbackSeverity.Warning); } }
 
     private void OpenPage(string url, string name)
     {
@@ -480,7 +480,7 @@ public sealed class MainWindow : Window, IDisposable
         }
         var refreshing = _onScreen.IsRefreshing;
         if (Widgets.IconButton("##refresh", FontAwesomeIcon.Sync, refreshing ? "Refreshing the on-screen resource list" : "Refresh the on-screen resource list", !refreshing))
-            RequestRefresh();
+            RequestRefresh(fresh: true);
         ImGui.SameLine();
         if (Widgets.IconButton("##options", FontAwesomeIcon.SlidersH, "Model import, texture and animation export options"))
             _options.Open();

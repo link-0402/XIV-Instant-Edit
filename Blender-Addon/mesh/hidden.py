@@ -27,10 +27,11 @@ height past the vertex. The rules follow how the game draws a model:
 - Surfaces closer to a vertex than a small tolerance do not cover it, so a
   mesh lying on a copy of itself (a mannequin, a Backfaces duplicate) survives.
 - The test uses each mesh in the rest pose, without modifiers, with its shape
-  keys mixed at their current values: a devkit body is tested in the shape it
-  shows, not its basis. Each shp_ shape key is another state of the scene,
-  with the key blended in fully on every mesh that has it; a vertex must be
-  covered in every state.
+  keys mixed as Blender shows them: a devkit body is tested in the shape it
+  shows, not its basis. Keys an export turns off (kept shp_ keys, keys a send
+  turned on for the game) are left out, as the exported model has them off.
+  Each shp_ shape key is another state of the scene, with the key blended in
+  fully on every mesh that has it; a vertex must be covered in every state.
 
 A covered vertex is deleted with the faces that use it, unless one of those
 faces has an uncovered corner: that face stays whole, so the edge of a covered
@@ -52,7 +53,6 @@ from mathutils.geometry import barycentric_transform
 
 from ..instant_edit.context import try_mesh_ids_from_name
 from ..instant_edit.material_preview import drawn_solid
-from .shapes import get_shape_mix
 
 
 CONE_DEGREES = 70.0
@@ -102,25 +102,103 @@ def _cone(degrees: float, rings: int) -> np.ndarray:
     return np.array(vectors)
 
 
-def shape_positions(obj, extra_key: str = "") -> np.ndarray:
-    """The object's local vertex positions with its shape keys mixed at their
-    current values, and ``extra_key`` blended in fully."""
+def export_off_keys(obj) -> frozenset[str]:
+    """The shape keys an export turns off before it writes the mesh (see
+    SceneHandler.prepare_scene): the shp_ keys it keeps, which the game applies
+    itself, and the keys a character send turned on because the game had them on."""
+    from ..instant_edit.character import game_shape_keys
+    from ..io.model import exportable_shape_keys
+    from ..properties import get_settings
+    off = {key.name for key in game_shape_keys(obj)}
+    if obj.data.shape_keys is not None and get_settings().keep_shapekeys:
+        off.update(key.name for key in exportable_shape_keys(obj))
+    return frozenset(off)
+
+
+def _key_weights(obj, key) -> np.ndarray | None:
+    """Per vertex, the weight of the vertex group that limits ``key``, or None
+    when no group does."""
+    group = obj.vertex_groups.get(key.vertex_group) if key.vertex_group else None
+    if group is None:
+        return None
+    weights = np.zeros(len(obj.data.vertices))
+    index = group.index
+    for vertex in obj.data.vertices:
+        for element in vertex.groups:
+            if element.group == index:
+                weights[vertex.index] = element.weight
+                break
+    return weights
+
+
+def shape_positions(obj, extra_key: str = "", off: frozenset[str] = frozenset()) -> np.ndarray:
+    """The object's local vertex positions as Blender shows them from its shape
+    keys (each key's value, mute, relative key and vertex group, or the pinned
+    key alone), the keys in ``off`` left out and ``extra_key`` blended in fully."""
     keys = obj.data.shape_keys
+    count = len(obj.data.vertices)
     if keys is None or not keys.use_relative:
-        count = len(obj.data.vertices)
         co = np.empty(count * 3, dtype=np.float64)
         obj.data.vertices.foreach_get("co", co)
         return co.reshape(-1, 3)
-    return get_shape_mix(obj, extra_key).astype(np.float64).reshape(-1, 3)
+    blocks = keys.key_blocks
+    coordinates = {}
+
+    def co(block):
+        if block.name not in coordinates:
+            values = np.empty(count * 3, dtype=np.float64)
+            block.data.foreach_get("co", values)
+            coordinates[block.name] = values.reshape(-1, 3)
+        return coordinates[block.name]
+
+    pinned = obj.active_shape_key if obj.show_only_shape_key else None
+    if pinned is not None and not extra_key:
+        return co(pinned if pinned.name not in off else blocks[0]).copy()
+    mix = co(blocks[0]).copy()
+    for key in blocks[1:]:
+        if key.name == extra_key:
+            blend = 1.0
+        elif key.mute or key.name in off:
+            continue
+        else:
+            blend = key.value
+        if blend == 0.0:
+            continue
+        offset = (co(key) - co(key.relative_key)) * blend
+        weights = _key_weights(obj, key)
+        mix += offset if weights is None else offset * weights[:, None]
+    return mix
 
 
-def shape_key_states(obj) -> dict[str, np.ndarray]:
+def _unit(vectors: np.ndarray) -> np.ndarray:
+    lengths = np.linalg.norm(vectors, axis=1, keepdims=True)
+    return np.divide(vectors, lengths, out=np.zeros_like(vectors), where=lengths > 0)
+
+
+def _surface_normals(positions: np.ndarray, triangles: np.ndarray, count: int) -> np.ndarray:
+    """Per vertex, the area-weighted normal of its triangles at ``positions``."""
+    corners = positions[triangles]
+    faces = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])
+    normals = np.zeros((count, 3))
+    for corner in range(3):
+        np.add.at(normals, triangles[:, corner], faces)
+    return _unit(normals)
+
+
+def _turned(normals: np.ndarray, before: np.ndarray, after: np.ndarray) -> np.ndarray:
+    """``normals`` turned by how each vertex's surface normal turned from
+    ``before`` to ``after``, keeping their lengths."""
+    lengths = np.linalg.norm(normals, axis=1, keepdims=True)
+    return _unit(_unit(normals) + after - before) * lengths
+
+
+def shape_key_states(obj, off: frozenset[str] = frozenset()) -> dict[str, np.ndarray]:
     """The object's shp_ shape keys, which the game applies, as local vertex
-    positions: the current mix with that key blended in fully."""
+    positions: the exported shape (``off`` left out) with that key blended in fully."""
     keys = obj.data.shape_keys
     if keys is None or not keys.use_relative:
         return {}
-    return {key.name: shape_positions(obj, key.name)
+    return {key.name: shape_positions(obj, key.name, off)
             for key in keys.key_blocks[1:] if key.name.startswith("shp")}
 
 
@@ -296,7 +374,8 @@ class _Mesh:
         mesh = obj.data
         mesh.calc_loop_triangles()
         count = len(mesh.vertices)
-        basis = shape_positions(obj)
+        off = export_off_keys(obj)
+        basis = shape_positions(obj, off=off)
         triangles = np.empty(len(mesh.loop_triangles) * 3, dtype=np.int64)
         mesh.loop_triangles.foreach_get("vertices", triangles)
         triangles = triangles.reshape(-1, 3)
@@ -318,6 +397,14 @@ class _Mesh:
         mesh.corner_normals.foreach_get("vector", corner_normals)
         normals = np.zeros((count, 3))
         np.add.at(normals, loop_vertices, corner_normals.reshape(-1, 3))
+        stored = np.empty(count * 3, dtype=np.float64)
+        mesh.vertices.foreach_get("co", stored)
+        stored = stored.reshape(-1, 3)
+        if not np.array_equal(basis, stored):
+            # The corner normals are the stored shape's: turn each by how the
+            # shape keys turn its surface, so the cone faces out of the shape tested.
+            normals = _turned(normals, _surface_normals(stored, triangles, count),
+                              _surface_normals(basis, triangles, count))
         # Normals follow the inverse transpose, which keeps them pointing out
         # of a scaled or mirrored mesh. The pseudo-inverse also takes a mesh
         # scaled flat to zero, which a plain inverse refuses.
@@ -369,7 +456,7 @@ class _Mesh:
         slot_culled = np.array([material is not None and material.use_backface_culling for material in slots])
         two_sided = np.zeros(count, dtype=bool)
         two_sided[loop_vertices[~slot_culled[np.repeat(polygon_material, polygon_sizes)]]] = True
-        return cls(obj, matrix, basis, shape_key_states(obj), normals, two_sided, triangles,
+        return cls(obj, matrix, basis, shape_key_states(obj, off), normals, two_sided, triangles,
                    loop_vertices, polygon_starts, polygon_sizes, edges.reshape(-1, 2),
                    slot_blocks[material_index], [slot_keys[index] for index in material_index.tolist()],
                    np.array(slot_opacity, dtype=np.int64)[material_index], opacities)

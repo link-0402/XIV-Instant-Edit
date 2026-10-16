@@ -55,8 +55,14 @@ internal sealed class AnimationObserver : IDisposable
     private const long ResourcePathsMaxAgeMs = 10_000;
     // A new timeline's files load over the first moments: until then each observation asks again.
     private const long ResourcesSettleMs = 2_000;
-    private (ushort Index, Guid Collection, int Key, bool Settled, long At, Dictionary<string, HashSet<string>> Paths)? resourcePaths;
+    // One object, swapped whole: the worker, the framework thread and Penumbra's event thread all touch it.
+    private sealed record CachedPaths(ushort Index, Guid Collection, int Key, bool Settled, long At, int Generation,
+        Dictionary<string, HashSet<string>> Paths);
+    private volatile CachedPaths? resourcePaths;
     private volatile bool resourcePathsStale;
+    // When something last changed what the character loads besides its timelines: a redraw, a mod
+    // setting, another character. Paths read sooner than ResourcesSettleMs after it aren't settled.
+    private long resourcesChangedAt;
     // The stamp's timelines and skeletons, which decide what is loaded, and since when they are as they are.
     private int resourceKey;
     private long resourceKeySince;
@@ -91,12 +97,16 @@ internal sealed class AnimationObserver : IDisposable
         framework.Update += Update;
     }
 
-    private void MarkResourcePathsStale() => resourcePathsStale = true;
+    private void MarkResourcePathsStale()
+    {
+        resourcePathsStale = true;
+        Volatile.Write(ref resourcesChangedAt, Environment.TickCount64);
+    }
 
     private void OnObjectRedrawn(int index)
     {
         if (resourcePaths is not { } cached || cached.Index == index)
-            resourcePathsStale = true;
+            MarkResourcePathsStale();
     }
 
     /// <summary>
@@ -107,13 +117,17 @@ internal sealed class AnimationObserver : IDisposable
     private async Task<Dictionary<string, HashSet<string>>> ResourcePathsAsync(ushort index, Guid collection, int key, long keySince)
     {
         var now = Environment.TickCount64;
-        if (!resourcePathsStale && resourcePaths is { } cached && cached.Index == index && cached.Collection == collection &&
-            cached.Key == key && cached.Settled && now - cached.At < ResourcePathsMaxAgeMs)
+        var asked = Volatile.Read(ref generation);
+        if (!resourcePathsStale && resourcePaths is { } cached && cached.Generation == asked && cached.Index == index &&
+            cached.Collection == collection && cached.Key == key && cached.Settled && now - cached.At < ResourcePathsMaxAgeMs)
             return cached.Paths;
         // Cleared before asking, so a change while Penumbra answers asks again next time.
         resourcePathsStale = false;
         var paths = await penumbra.GetResourcePathsAsync(index) ?? throw new IOException("Penumbra's player resource snapshot is unavailable.");
-        resourcePaths = (index, collection, key, now - keySince >= ResourcesSettleMs, now, paths);
+        var since = Math.Max(keySince, Volatile.Read(ref resourcesChangedAt));
+        // An observation of a character followed before isn't kept for the one followed now.
+        if (asked == Volatile.Read(ref generation))
+            resourcePaths = new CachedPaths(index, collection, key, now - since >= ResourcesSettleMs, now, asked, paths);
         return paths;
     }
     public void Stop()
@@ -167,6 +181,7 @@ internal sealed class AnimationObserver : IDisposable
             resolutions.Clear(); manualChoices.Clear(); operationErrors.Clear();
             runtimeCache.Clear(); resourceCache.Clear(); parsedPaps.Clear(); motionCache.Clear(); durations.Clear();
             resourceCollection = Guid.Empty; resourceMapKey = null; resourcePaths = null;
+            Volatile.Write(ref resourcesChangedAt, Environment.TickCount64);
         }
         if (current == 0) { Status = "Log in to observe player emotes, idles, and movement."; return; }
         var changed = !lastStamp.HasValue || stamp is null || !lastStamp.Value.SameAs(stamp.Value);

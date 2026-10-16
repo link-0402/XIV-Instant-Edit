@@ -109,7 +109,7 @@ internal sealed class ModWriter
         public required string GamePath { get; init; }
         public required OptionRef Option { get; init; }
         public required string RelPath { get; init; }
-        public required string Intent { get; init; }
+        public required string Intent { get; set; }
         public LedgerFile? Previous { get; init; }
 
         /// <summary>The file the last update wrote is gone from the folder, while the mod still points at it.</summary>
@@ -182,6 +182,9 @@ internal sealed class ModWriter
     private string _modPath = string.Empty;
     private int _done;
     private int _total;
+
+    /// <summary>The last Auto texture was written uncompressed without being checked; <see cref="Provide"/> takes it.</summary>
+    private bool _autoUnchecked;
 
     /// <summary>Stops the update between steps, before it writes anything.</summary>
     private CancellationToken _cancel;
@@ -315,6 +318,14 @@ internal sealed class ModWriter
     {
         plan.Content = content;
         plan.Detail  = detail;
+
+        // Auto wrote it uncompressed without checking (no Penumbra, or it failed): kept under an
+        // intent no plan asks for, so the next update tries Auto again.
+        if (_autoUnchecked)
+        {
+            _autoUnchecked = false;
+            plan.Intent    = $"{plan.Intent}#unchecked";
+        }
 
         if (plan.Previous is { Intent: null } previous && !plan.Missing && previous.Sha256.Length > 0
             && SameHash(previous.Sha256, content.Sha256))
@@ -822,10 +833,12 @@ internal sealed class ModWriter
     private bool AutoTexture(string sourcePath, IReadOnlyList<TextureUse> uses, string label, out Content content, out string error, out string detail)
     {
         var name = Path.GetFileName(sourcePath);
+        _autoUnchecked = false;
         string Uncompressed(string why, out Content plain, out string failure)
         {
             if (!ConvertTexture(sourcePath, TextureCompression.None, label, out plain, out failure, out bool reused))
                 return string.Empty;
+            _autoUnchecked = true;
             return $"{name}, uncompressed (Auto: {why}){(reused ? " (converted before, reused)" : string.Empty)}";
         }
 
@@ -840,7 +853,8 @@ internal sealed class ModWriter
         {
             content = Content.FromFile(hit);
             error   = string.Empty;
-            detail  = AutoCompression.Describe(name, AutoCompression.FormatOf(ReadHead(hit)), string.Empty, " (converted before, reused)");
+            var head = ReadHead(hit);
+            detail  = AutoCompression.Describe(name, AutoCompression.FormatOf(head), AutoCompression.KeptReason(head), " (converted before, reused)");
             return true;
         }
 

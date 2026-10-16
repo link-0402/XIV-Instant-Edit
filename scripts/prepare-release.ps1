@@ -3,7 +3,8 @@ param(
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release',
     [string]$BlenderPath = '',
-    # The GitHub release tag the Blender package is attached to. Defaults to the add-on version.
+    # The GitHub release tag the packages are attached to. Defaults to the plugin version, the tag
+    # the release steps create.
     [string]$Tag = '',
     [switch]$SkipPlugin,
     [switch]$SkipBlender,
@@ -69,15 +70,48 @@ function Assert-DalamudPackage {
     Write-Host "Verified Dalamud package: $PackagePath"
 }
 
-function Get-ManifestVersion {
-    param([string]$ManifestPath)
+function Get-PluginVersion {
+    param([string]$ProjectPath)
 
-    foreach ($line in Get-Content -LiteralPath $ManifestPath) {
-        if ($line -match '^\s*version\s*=\s*"([^"]+)"') {
-            return $Matches[1]
-        }
+    $match = Select-String -LiteralPath $ProjectPath -Pattern '<Version>([^<]+)</Version>' | Select-Object -First 1
+    if ($null -eq $match) {
+        throw "No <Version> found in $ProjectPath"
     }
-    throw "No version found in $ManifestPath"
+    return $match.Matches[0].Groups[1].Value
+}
+
+# Points the in-repo repo.json's download links at this version's release, not "latest": its
+# AssemblyVersion ships with main, so a pinned link always hands out the version it names, even
+# when main is pushed before the release exists.
+function Update-RepoJson {
+    param([string]$RepoJsonPath, [string]$Version, [string]$ReleaseTag)
+
+    $text = [System.IO.File]::ReadAllText($RepoJsonPath)
+    $listed = [regex]::Match($text, '"AssemblyVersion"\s*:\s*"([^"]+)"')
+    if (-not $listed.Success -or $listed.Groups[1].Value -ne $Version) {
+        throw "Dalamud-Plugin\repo.json lists AssemblyVersion '$($listed.Groups[1].Value)', but the plugin is $Version. Bump repo.json first."
+    }
+    $url = "https://github.com/link-0402/XIV-Instant-Edit/releases/download/$ReleaseTag/XIV-Instant-Edit.zip"
+    $updated = [regex]::Replace($text, '("DownloadLink(?:Install|Update|Testing)"\s*:\s*")[^"]*(")', "`${1}$url`${2}")
+    if ($updated -ne $text) {
+        [System.IO.File]::WriteAllText($RepoJsonPath, $updated, [System.Text.UTF8Encoding]::new($false))
+    }
+    return $url
+}
+
+# Refuses a tag whose GitHub release already holds this asset: the new build's bytes would not
+# match the uploaded one, so the index (or repo.json) would name a file that fails its check.
+function Assert-AssetFree {
+    param([string]$ReleaseTag, [string]$AssetName)
+
+    if ($null -eq (Get-Command gh -ErrorAction SilentlyContinue)) {
+        Write-Warning "gh not found; can't check that release $ReleaseTag has no $AssetName yet."
+        return
+    }
+    $names = & gh release view $ReleaseTag --repo link-0402/XIV-Instant-Edit --json assets --jq '.assets[].name' 2>$null
+    if ($LASTEXITCODE -eq 0 -and @($names) -contains $AssetName) {
+        throw "Release $ReleaseTag already has $AssetName. Pass the new release's -Tag (or -SkipBlender / -SkipPlugin)."
+    }
 }
 
 $pluginProject = Join-Path $repoRoot 'Dalamud-Plugin\InstantEdit.csproj'
@@ -106,23 +140,38 @@ if (-not $AllowDirty) {
     }
 }
 
+$pluginVersion = Get-PluginVersion $pluginProject
+if ([string]::IsNullOrWhiteSpace($Tag)) {
+    $Tag = $pluginVersion
+}
+$repoJson = Join-Path $repoRoot 'Dalamud-Plugin\repo.json'
+if (-not $SkipPlugin -and $Configuration -eq 'Release') {
+    Assert-AssetFree $Tag 'XIV-Instant-Edit.zip'
+}
+if (-not $SkipBlender) {
+    Assert-AssetFree $Tag 'XIV-Instant-Edit-Blender.zip'
+}
+
 New-Item -ItemType Directory -Path $releaseAssets -Force | Out-Null
 $assets = @()
+$pluginUrl = $null
 
 if (-not $SkipPlugin) {
+    # A clean output folder, so files the project no longer has can't end up in the package.
+    if (Test-Path -LiteralPath $pluginBuildOutput) {
+        Remove-Item -LiteralPath $pluginBuildOutput -Recurse -Force
+    }
     Invoke-Checked 'dotnet' @('build', $pluginProject, '-c', $Configuration, "-p:OutputPath=$pluginBuildOutput")
     if ($Configuration -eq 'Release') {
         Assert-DalamudPackage $pluginPackage
         $pluginAsset = Join-Path $releaseAssets 'XIV-Instant-Edit.zip'
         Copy-Item -LiteralPath $pluginPackage -Destination $pluginAsset -Force
         $assets += $pluginAsset
+        $pluginUrl = Update-RepoJson $repoJson $pluginVersion $Tag
     }
 }
 
 if (-not $SkipBlender) {
-    if ([string]::IsNullOrWhiteSpace($Tag)) {
-        $Tag = Get-ManifestVersion $blenderManifest
-    }
     $archiveUrl = "https://github.com/link-0402/XIV-Instant-Edit/releases/download/$Tag/XIV-Instant-Edit-Blender.zip"
 
     if (Test-Path -LiteralPath $blenderStaging) {
@@ -151,7 +200,10 @@ foreach ($asset in $assets) {
     $hash = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLowerInvariant()
     Write-Host "  $(Split-Path -Leaf $asset)  $((Get-Item -LiteralPath $asset).Length) bytes  sha256:$hash"
 }
+if ($pluginUrl) {
+    Write-Host "Dalamud-Plugin\repo.json now downloads $pluginUrl"
+}
 if (-not $SkipBlender) {
     Write-Host "Blender-Addon\blender_repo\index.json now points at $archiveUrl"
 }
-Write-Host 'Next (docs/release-packaging.md): commit, create the GitHub release with these assets, then push main.'
+Write-Host "Next (docs/release-packaging.md): commit, create the GitHub release $Tag with these assets, then push main."

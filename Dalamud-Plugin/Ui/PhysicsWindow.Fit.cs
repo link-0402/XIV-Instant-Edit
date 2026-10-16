@@ -13,6 +13,8 @@ internal sealed partial class PhysicsWindow
 
     private Task<(PhysicsFitResult Fit, IReadOnlyList<string> Warnings, string Note, PhysicsBodyMeasure Measure, PhybFile File)>? fitting;
     private Task<PhysicsFitResult>? refitting;
+    // The file the running refit measures: a result for another fit's file is dropped.
+    private PhybFile? refitFile;
     private PhysicsFitResult? fit;
     // The body and file the fit measured, kept so a new tip place is measured on the same ones.
     private PhysicsBodyMeasure? fitMeasure;
@@ -72,7 +74,7 @@ internal sealed partial class PhysicsWindow
             refitting = null;
             if (!refitted.IsCompletedSuccessfully)
                 Say(FeedbackSeverity.Error, Unwrap(refitted.Exception));
-            else if (fit is { } before)
+            else if (fit is { } before && ReferenceEquals(refitFile, fitFile))
             {
                 // Settings you unticked stay unticked; the new tip places start ticked.
                 var unticked = Enumerable.Range(0, before.Items.Count).Where(i => before.Items[i].Changes && !fitChosen.Contains(i))
@@ -230,6 +232,7 @@ internal sealed partial class PhysicsWindow
         config.PhysicsFitTipMiddle = middle;
         saveConfig();
         var tipAt = TipAt;
+        refitFile = file;
         refitting = Task.Run(() => PhysicsFit.Measure(file, measured.Body, measured.Skeleton, tipAt));
     }
 

@@ -128,6 +128,12 @@ public sealed class PenumbraService : IDisposable
         ModelBackupStore backups,
         EstEntryStore estEntries)
     {
+        // The services no longer check for these on each call, as the old optional ones were: a
+        // missing one fails here, not halfway through an export.
+        ArgumentNullException.ThrowIfNull(objects);
+        ArgumentNullException.ThrowIfNull(data);
+        ArgumentNullException.ThrowIfNull(backups);
+        ArgumentNullException.ThrowIfNull(estEntries);
         Ipc = new PenumbraIpc(pi, framework, log);
         var activation = new ModActivation(Ipc, framework, log, objects);
         Sources = new SourceMods(Ipc, framework, log);

@@ -33,6 +33,8 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
 
     private PhysicsTarget? target;
     private Task<PhysicsTarget>? finding;
+    // A read asked for while one ran, which may have read before what changed.
+    private bool findAgain;
     private string? findProblem;
     private PhysicsDocument? document;
     private Task<PhysicsDocument>? loading;
@@ -96,12 +98,18 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
         life.Dispose();
     }
 
-    private bool Busy => finding != null || loading != null || importing != null || working != null || fitting != null || service.Preview.Busy;
+    private bool Busy => finding != null || loading != null || importing != null || working != null || fitting != null || refitting != null ||
+                         service.Preview.Busy;
 
     private void Find()
     {
         if (finding != null)
+        {
+            // The one running may have read before a preview or save landed: read again after it.
+            findAgain = true;
             return;
+        }
+        findAgain = false;
         findProblem = null;
         finding = Task.Run(service.FindAsync);
     }
@@ -152,6 +160,8 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
                 target = found.Result;
             else
                 findProblem = Unwrap(found.Exception);
+            if (findAgain)
+                Find();
         }
         if (loading is { IsCompleted: true } loaded)
         {
@@ -519,7 +529,7 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
         {
             if (Widgets.TabButton(FontAwesomeIcon.Save, "Save", current.Dirty))
             {
-                saveName = current.Source is { Kind: PhysicsSourceKind.Mine, Mod.Length: > 0 } ? current.Source.Mod : service.FreeModName();
+                saveName = SuggestedName(current);
                 ImGui.OpenPopup(SavePopup);
             }
         }
@@ -568,9 +578,13 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
             : "Makes a new mod.");
         if (service.ModDirectories.Any(mod => !string.Equals(mod, name, StringComparison.OrdinalIgnoreCase)))
             ImGui.TextColored(Theme.Muted, "Your other saved physics mods turn off.");
-        using (ImRaii.Disabled(!valid))
+        // A save waits for a running preview, which Run would otherwise drop it for.
+        var waiting = working != null;
+        if (waiting)
+            ImGui.TextColored(Theme.Muted, "Waiting for the preview to finish.");
+        using (ImRaii.Disabled(!valid || waiting))
         {
-            if ((ImGui.Button("Save##physics-save-yes") || enter) && valid)
+            if ((ImGui.Button("Save##physics-save-yes") || enter) && valid && !waiting)
             {
                 Save(current, name);
                 ImGui.CloseCurrentPopup();
@@ -579,6 +593,19 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
         ImGui.SameLine();
         if (ImGui.Button("Cancel##physics-save-no"))
             ImGui.CloseCurrentPopup();
+    }
+
+    /// <summary>
+    /// The name the save offers: the builder mod the file came from, followed to its new folder when it
+    /// was renamed in Penumbra (what loads now, if that is one of yours), else a free name.
+    /// </summary>
+    private string SuggestedName(PhysicsDocument current)
+    {
+        if (current.Source is not { Kind: PhysicsSourceKind.Mine, Mod.Length: > 0 } source)
+            return service.FreeModName();
+        if (service.IsMine(source.Mod))
+            return source.Mod;
+        return target?.Physics is { Mine: true, Mod.Length: > 0 } loaded && service.IsMine(loaded.Mod) ? loaded.Mod : service.FreeModName();
     }
 
     private void Save(PhysicsDocument current, string name)

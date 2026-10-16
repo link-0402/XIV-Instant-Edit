@@ -35,6 +35,9 @@ public sealed class OnScreenService : IDisposable
     private readonly CancellationTokenSource _lifetime = new();
     private readonly ResourceUiNames _uiNames = new();
 
+    /// <summary> The object-table slots the game puts GPose actors in. </summary>
+    private const int GPoseFirstIndex = 201, GPoseLastIndex = 242;
+
     private IReadOnlyList<OnScreenObject> _items = Array.Empty<OnScreenObject>();
     private bool _refreshing;
 
@@ -85,6 +88,10 @@ public sealed class OnScreenService : IDisposable
     {
         if (Items.Any(item => item.ObjectIndex == objectIndex))
             return true;
+        // GPose actors (Penumbra lists the posed copies with the player's trees): one that just
+        // appeared isn't listed or owned yet. Only posing tools redraw them, so it stays rare.
+        if (_clientState.IsGPosing && objectIndex is >= GPoseFirstIndex and <= GPoseLastIndex)
+            return true;
         if (_objects.LocalPlayer is not { } player)
             return false;
         if (objectIndex == player.ObjectIndex)
@@ -94,7 +101,8 @@ public sealed class OnScreenService : IDisposable
                IsSupportedOwnedObject(candidate) && IsOwnedByLocalPlayer(candidate, player);
     }
 
-    public void RequestRefresh()
+    /// <summary> Collects a new snapshot; <paramref name="fresh"/> (a refresh you asked for) also asks Penumbra for every UI name again. </summary>
+    public void RequestRefresh(bool fresh = false)
     {
         lock (_lock)
         {
@@ -102,6 +110,8 @@ public sealed class OnScreenService : IDisposable
                 return;
             _refreshing = true;
         }
+        if (fresh)
+            _uiNames.Forget();
 
         try
         {

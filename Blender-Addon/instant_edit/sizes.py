@@ -226,6 +226,12 @@ def _resizing(api, objects, picked):
         return resize, objects, {}
     try:
         resizer = api.Resizer(objects, picked, substitute=True)
+        substitutes = dict(resizer.substitutes)
+        if len(set(substitutes.values())) < len(substitutes):
+            # Two meshes stand for one part (a LOD0 and a LOD1 copy): the part can be exported as
+            # only one of them, so the copies are resized themselves, as before substitutes.
+            resizer = api.Resizer(objects, picked, substitute=False)
+            substitutes = {}
     except api.ResizeError as error:
         raise ValueError(str(error)) from error
 
@@ -234,7 +240,6 @@ def _resizing(api, objects, picked):
             return resizer.resize(size)
         except api.ResizeError as error:
             raise ValueError(str(error)) from error
-    substitutes = dict(resizer.substitutes)
     return (resize, [substitutes.get(obj, obj) for obj in objects],
             {part: obj for obj, part in substitutes.items()})
 
@@ -257,12 +262,32 @@ def _layer_path(layer, collection) -> list:
     return []
 
 
+# What a model's mesh is called while a devkit part takes its name.
+_STEPPED_ASIDE = "XIV IE stepped aside"
+
+
+def _export_setting(key) -> bool:
+    """Whether custom property ``key`` is one the MDL export reads from a mesh: its attributes,
+    transparency and heels offsets (xiv_material is handled on its own)."""
+    from ..mesh.heels import is_heels_offset_attribute
+    from ..xivpy.model import is_model_attribute_name
+    return is_model_attribute_name(key) or key == "xiv_transparency" or is_heels_offset_attribute(key)
+
+
+def _put_settings(part, kept) -> None:
+    """Give ``part`` back its own export settings ``kept``, dropping the ones it was lent."""
+    for key in [key for key in part.keys() if _export_setting(key)]:
+        del part[key]
+    for key, value in kept.items():
+        part[key] = value
+
+
 @contextmanager
 def _standing_in(stand_ins):
     """For the block, export each devkit part of ``stand_ins`` ({part: the model's mesh it's exported in
     place of}) as that mesh: shown in the viewport, so the export can copy it with its modifiers (a
-    devkit hides its parts in excluded collections), and with that mesh's material. Everything is put
-    back afterwards."""
+    devkit hides its parts in excluded collections), under that mesh's name and with its material,
+    attributes, transparency and heels offsets. Everything is put back afterwards."""
     undo = []
     view_layer = bpy.context.view_layer
 
@@ -290,6 +315,20 @@ def _standing_in(stand_ins):
                 part["xiv_material"] = material
                 undo.append(lambda part=part, had=had, old=old: part.__setitem__("xiv_material", old)
                             if had else part.pop("xiv_material", None))
+            # The mesh's other export settings: attributes, transparency, heels offsets.
+            kept = {key: part[key] for key in part.keys() if _export_setting(key)}
+            for key in kept:
+                del part[key]
+            for key in [key for key in obj.keys() if _export_setting(key)]:
+                part[key] = obj[key]
+            undo.append(lambda part=part, kept=kept: _put_settings(part, kept))
+            # The writer reads the mesh's group and part (and LOD) from its name, so the part takes
+            # the mesh's name; the mesh steps aside meanwhile.
+            mesh_name, part_name = obj.name, part.name
+            obj.name = _STEPPED_ASIDE
+            undo.append(lambda obj=obj, mesh_name=mesh_name: setattr(obj, "name", mesh_name))
+            part.name = mesh_name
+            undo.append(lambda part=part, part_name=part_name: setattr(part, "name", part_name))
         yield
     finally:
         for restore in reversed(undo):

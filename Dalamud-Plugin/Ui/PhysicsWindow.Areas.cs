@@ -709,16 +709,20 @@ internal sealed partial class PhysicsWindow
             {
                 var chain = file.Simulators[s].Chains[c];
                 var to = chain.Nodes[^2].Bone.Text;
-                // The other side's tip goes to the mirrored place; chains on the same side take it as it is.
-                chain.LastBoneOffset = rest != null && PhysicsAreas.Opposite(from, to)
-                    ? PhysicsAreas.MirrorOffset(tipPlace / 100, from, to, rest)
-                    : tipPlace / 100;
+                // The offset is in the last bone's space: chains ending in the same bone take it as it
+                // is, the other side's twin the mirrored place, and chains of other bones (a skirt's
+                // other panels, other hair strands) keep their own.
+                if (string.Equals(from, to, StringComparison.Ordinal))
+                    chain.LastBoneOffset = tipPlace / 100;
+                else if (rest != null && PhysicsAreas.Opposite(from, to))
+                    chain.LastBoneOffset = PhysicsAreas.MirrorOffset(tipPlace / 100, from, to, rest);
             }
             current.Changed();
         }
         if (ImGui.IsItemDeactivatedAfterEdit())
             Edited(current);
-        Tip("Where the tip sits, in the last bone's space. The other side's tip moves to the mirrored place.");
+        Tip("Where the tip sits, in the last bone's space. The other side's tip moves to the mirrored place. " +
+            "Chains ending in other bones keep their own. Pick one to change it.");
         Lights(PhysicsOverlayPart.Tip);
 
         ImGui.Spacing();

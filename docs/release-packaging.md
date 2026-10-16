@@ -10,7 +10,7 @@ release: `Dalamud-Plugin/InstantEdit/latest.zip` (67 revisions, 61 MB packed) an
 | Channel | URL the user added (unchanged) | Package URL before | Package URL after |
 | --- | --- | --- | --- |
 | Dalamud, shared repo | `https://raw.githubusercontent.com/link-0402/DalamudPlugins/main/repo.json` | `https://github.com/link-0402/XIV-Instant-Edit/releases/latest/download/XIV-Instant-Edit.zip` | unchanged |
-| Dalamud, in-repo `Dalamud-Plugin/repo.json` | `https://raw.githubusercontent.com/link-0402/XIV-Instant-Edit/main/Dalamud-Plugin/repo.json` | `https://raw.githubusercontent.com/link-0402/XIV-Instant-Edit/main/Dalamud-Plugin/InstantEdit/latest.zip` | `https://github.com/link-0402/XIV-Instant-Edit/releases/latest/download/XIV-Instant-Edit.zip` |
+| Dalamud, in-repo `Dalamud-Plugin/repo.json` | `https://raw.githubusercontent.com/link-0402/XIV-Instant-Edit/main/Dalamud-Plugin/repo.json` | `https://raw.githubusercontent.com/link-0402/XIV-Instant-Edit/main/Dalamud-Plugin/InstantEdit/latest.zip` | `https://github.com/link-0402/XIV-Instant-Edit/releases/download/<ver>/XIV-Instant-Edit.zip`, pinned to its `AssemblyVersion` |
 | Blender, raw index (setup wizard, README) | `https://raw.githubusercontent.com/link-0402/XIV-Instant-Edit/main/Blender-Addon/blender_repo/index.json` | `./XIV-Instant-Edit.zip`, the committed ZIP | `https://github.com/link-0402/XIV-Instant-Edit/releases/download/<tag>/XIV-Instant-Edit-Blender.zip` |
 | Blender, Pages index | `https://link-0402.github.io/XIV-Instant-Edit/index.json` | `./XIV-Instant-Edit.zip`, rebuilt by CI from every push to main | same `index.json` as the raw index |
 
@@ -33,7 +33,7 @@ for Blender, which names the local extension folder after the repository URL.
 
 | Script | Output |
 | --- | --- |
-| `scripts/prepare-release.ps1` | Refuses to run with uncommitted add-on, plugin or `Tools` changes (`-AllowDirty` overrides). Builds the plugin with `-p:OutputPath=dist/plugin-build/`. Copies both assets to `dist/release/` and rewrites the tracked `index.json` for `-Tag` (default: the add-on version). `-SkipPlugin` and `-SkipBlender` work as before. |
+| `scripts/prepare-release.ps1` | Refuses to run with uncommitted add-on, plugin or `Tools` changes (`-AllowDirty` overrides). Builds the plugin with `-p:OutputPath=dist/plugin-build/`. Empties `dist/plugin-build/` first. Copies both assets to `dist/release/`, points the in-repo `repo.json` download links and the tracked `index.json` at release `-Tag` (default: the plugin version), and refuses a tag whose release already holds that asset. `repo.json`'s `AssemblyVersion` must match the csproj. `-SkipPlugin` and `-SkipBlender` work as before. |
 | `scripts/generate-blender-repository.ps1` | `dist/blender_repo/` holds the package, `index.json` and `index.html`. `-ArchiveUrl` swaps the relative URL for an absolute one. |
 | `scripts/package-blender-addon.ps1` | `dist/blender_repo/XIV-Instant-Edit-Blender.zip` |
 | `scripts/verify-blender-repository.ps1` | Checks size and hash against a local `./` file, `-ArchivePath`, or by downloading an `https` `archive_url`. |
@@ -58,7 +58,7 @@ dev-plugin location with automatic reloading, so building there would hot-reload
 
 1. Bump the versions as before (csproj, `repo.json`, `blender_manifest.toml`, changelog).
 2. Commit, then run `./scripts/prepare-release.ps1` on the clean tree.
-3. Commit the rewritten `Blender-Addon/blender_repo/index.json`.
+3. Commit the rewritten `Blender-Addon/blender_repo/index.json` and `Dalamud-Plugin/repo.json`.
 4. Push the tag before main, so the asset exists before the index that names it ships:
    `git tag <ver>` then `git push origin <ver>`.
 5. Create the release:
@@ -70,10 +70,10 @@ For a plugin-only hotfix, use `-SkipBlender` and attach only the plugin ZIP.
 
 ## Migration (each step needs the user's go-ahead)
 
-Local `main` has a pre-existing problem. Its committed Blender ZIP (291037 bytes,
-`sha256:da1636a3…`) was repackaged after 2.1.0, but `index.json` still describes the released one
-(262837 bytes, `sha256:c9d6cc6b…`). Pushing main as it is would give every Blender user a
-checksum error. Step 2 below removes that risk.
+f964f72 recommitted a repackaged Blender ZIP (290671 bytes) while `index.json` still described
+the released one (262837 bytes, `sha256:c9d6cc6b…`), and that reached origin/main, so installs
+from the raw index failed the checksum. The 2026-10-16 review put the 2.1.0 bytes back (taken from
+the `2.1.0` tag). Keep the committed ZIP at those bytes until step 2 is done.
 
 1. **Attach the 2.1.0 add-on package to the 2.1.0 release.** Use the exact bytes the index
    describes. In PowerShell:

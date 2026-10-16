@@ -15,9 +15,9 @@
     "CanUnloadAsync": false,
     "LoadPriority": 0,
     "AcceptsFeedback": false,
-    "DownloadLinkInstall": "https://github.com/link-0402/XIV-Instant-Edit/releases/latest/download/XIV-Instant-Edit.zip",
-    "DownloadLinkUpdate": "https://github.com/link-0402/XIV-Instant-Edit/releases/latest/download/XIV-Instant-Edit.zip",
-    "DownloadLinkTesting": "https://github.com/link-0402/XIV-Instant-Edit/releases/latest/download/XIV-Instant-Edit.zip",
+    "DownloadLinkInstall": "https://github.com/link-0402/XIV-Instant-Edit/releases/download/2.2.0/XIV-Instant-Edit.zip",
+    "DownloadLinkUpdate": "https://github.com/link-0402/XIV-Instant-Edit/releases/download/2.2.0/XIV-Instant-Edit.zip",
+    "DownloadLinkTesting": "https://github.com/link-0402/XIV-Instant-Edit/releases/download/2.2.0/XIV-Instant-Edit.zip",
     "Tags": [
       "Penumbra",
       "Blender",
