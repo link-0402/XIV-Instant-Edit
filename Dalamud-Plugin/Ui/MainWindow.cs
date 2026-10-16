@@ -251,6 +251,13 @@ public sealed class MainWindow : Window, IDisposable
 
     internal void AttachPhysics(Action open) => _physicsCard.Attach(open);
 
+    /// <summary> Material rows of On Screen, Game Files and the mod windows open the Material window. </summary>
+    internal void AttachMaterials(Action<ResourceView, ActorView> edit, Func<ResourceView, string?> block)
+    {
+        _rows.AttachMaterials(edit, block);
+        _handoff.AttachMaterials(edit, block);
+    }
+
     internal void AttachCharacterDrawState(PainterLiveReader? reader) => _sendCharacterCard.AttachDrawState(reader);
 
     // ---- The window ------------------------------------------------------------------------------

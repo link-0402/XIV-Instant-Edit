@@ -44,6 +44,18 @@ internal sealed class ResourceRows
         _feed = feed;
     }
 
+    private Action<ResourceView, ActorView>? _editMaterial;
+    private Func<ResourceView, string?>? _materialBlock;
+
+    /// <summary> The Material window's open and its reasons not to; material rows offer it once attached. </summary>
+    public void AttachMaterials(Action<ResourceView, ActorView> edit, Func<ResourceView, string?> block)
+    {
+        _editMaterial = edit;
+        _materialBlock = block;
+    }
+
+    private bool IsMaterialRow(ResourceView node) => _editMaterial is not null && (node.Kinds & ResourceKinds.Material) != 0;
+
     /// <summary> One tree column: an arrow or slot icon and the gap after it. </summary>
     public static float TreeStep => ImGui.GetFrameHeight() + Theme.Gap;
 
@@ -176,6 +188,13 @@ internal sealed class ResourceRows
                 _animationSend.OpenAnimationSend(node);
             ImGui.SameLine(0, Theme.Scaled(2));
         }
+        else if (IsMaterialRow(node))
+        {
+            var blocked = _materialBlock!(node);
+            if (Widgets.IconButton("##edit-material", FontAwesomeIcon.Palette, blocked ?? "Edit this material", blocked is null))
+                _editMaterial!(node, actor);
+            ImGui.SameLine(0, Theme.Scaled(2));
+        }
 
         if (Widgets.GhostIconButton("##more", FontAwesomeIcon.EllipsisH, "More actions"))
             ImGui.OpenPopup(RowMenuPopup);
@@ -223,8 +242,18 @@ internal sealed class ResourceRows
             if (ImGui.MenuItem("Send animation to Blender"))
                 _animationSend.OpenAnimationSend(node);
         }
+        var material = IsMaterialRow(node);
+        if (material)
+        {
+            var blocked = _materialBlock!(node);
+            using (ImRaii.Disabled(blocked is not null))
+                if (ImGui.MenuItem("Edit material"))
+                    _editMaterial!(node, actor);
+            if (blocked is not null && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(blocked);
+        }
         extraItems?.Invoke();
-        if (safeModel || texture || animation || extraItems is not null)
+        if (safeModel || texture || animation || material || extraItems is not null)
             ImGui.Separator();
 
         using (ImRaii.Disabled(node.GamePath.Length == 0))

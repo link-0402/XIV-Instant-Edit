@@ -44,6 +44,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly Services.Heels.HeelsOffsetService _heels;
     private readonly Services.Physics.PhysicsBuilderService _physics;
     private readonly PhysicsWindow           _physicsWindow;
+    private readonly Services.Materials.MaterialPreviewService _materialPreview;
+    private readonly Ui.Material.MaterialWindow _materialWindow;
     private readonly Services.Testing.BridgeTools? _bridgeTools;
     private readonly Services.TextureCompression.TextureCompressionService _compression;
     private readonly Studio.StudioHost       _studio;
@@ -263,6 +265,12 @@ public sealed class Plugin : IDalamudPlugin
         // In GPose your posed character walks or runs for the builder through the Timeline preview's playback.
         _physicsWindow = new PhysicsWindow(_physics, _animationPlayback, _config, SaveConfiguration, log);
         _window.AttachPhysics(_physicsWindow.Open);
+        // The Material window: every setting of a material named, shown on the character through a temporary mod, saved with a backup.
+        _materialPreview = new Services.Materials.MaterialPreviewService(_penumbra.Ipc, _penumbra.Previews, framework, log, configDirectory,
+            () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory));
+        _materialWindow = new Ui.Material.MaterialWindow(new Services.PreviewMods.PreviewModService(_penumbra.Previews), _materialPreview, _penumbra.Ipc,
+            _previews, data, log);
+        _window.AttachMaterials(_materialWindow.Open, Ui.Material.MaterialWindow.EditBlock);
         // Test tools for XIV Bridge (Tests/*.md checks), only when running as a dev plugin.
         if (pi.IsDev)
             _bridgeTools = new Services.Testing.BridgeTools(pi, framework, log, _config, _contexts, _backups, estEntries, _physicsWindow);
@@ -320,6 +328,7 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.AddWindow(_timelineWindow.Overlay);
         _windowSystem.AddWindow(_physicsWindow.Overlay);
         _windowSystem.AddWindow(_physicsWindow);
+        _windowSystem.AddWindow(_materialWindow);
 
         _pi.UiBuilder.Draw += _windowSystem.Draw;
         _pi.UiBuilder.Draw += _studio.Draw;
@@ -459,6 +468,7 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.RemoveWindow(_timelineWindow.Overlay);
         _windowSystem.RemoveWindow(_physicsWindow.Overlay);
         _windowSystem.RemoveWindow(_physicsWindow);
+        _windowSystem.RemoveWindow(_materialWindow);
         _glamourer.AppearanceChanged -= _window.OnGlamourerAppearanceChanged;
         _glamourer.Dispose();
         _recorder.Dispose();
@@ -480,6 +490,9 @@ public sealed class Plugin : IDalamudPlugin
         _heels.Dispose();
         // Removes the physics preview's temporary mod, so it goes before Penumbra.
         _physicsWindow.Dispose();
+        // The material preview's temporary mod goes before Penumbra too.
+        _materialWindow.Dispose();
+        _materialPreview.Dispose();
         _physics.Dispose();
         _gameFiles.Dispose();
         _textures.FileChanged -= _previews.Invalidate;

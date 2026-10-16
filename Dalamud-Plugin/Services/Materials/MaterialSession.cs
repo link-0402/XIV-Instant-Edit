@@ -118,13 +118,23 @@ internal sealed class MaterialSession
         return warning;
     }
 
-    /// <summary>Takes the temporary-mod preview down and redraws the object as it is without it.</summary>
-    public async Task DiscardAsync(IMaterialPreview preview)
+    /// <summary>Takes the temporary-mod preview down and, unless told not to, redraws the object as it is without it.</summary>
+    public async Task DiscardAsync(IMaterialPreview preview, bool redraw = true)
     {
         if (!PreviewShown)
             return;
-        await preview.StopAsync(Source.ObjectIndex).ConfigureAwait(false);
+        await preview.StopAsync(redraw ? Source.ObjectIndex : null).ConfigureAwait(false);
         PreviewShown = false;
+    }
+
+    /// <summary>Puts the document back to how it was last saved or opened, as one undo step.</summary>
+    public Task Revert() => Apply(_ => History.Saved, "Discard changes");
+
+    /// <summary>Starts over from a document read again from the file, with no undo steps.</summary>
+    public void Reload(MaterialSource source, MaterialDocument doc)
+    {
+        Source = source;
+        History.Reset(doc);
     }
 
     // ── Rules ────────────────────────────────────────────────────────────────
