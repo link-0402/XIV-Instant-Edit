@@ -2,6 +2,7 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
+using InstantEdit.Services.Animations;
 using InstantEdit.Services.Physics;
 
 namespace InstantEdit.Ui;
@@ -191,7 +192,7 @@ internal sealed partial class PhysicsWindow
         ImGui.TextColored(Theme.Label, label);
         ImGui.SameLine(LabelWidth);
         ImGui.SetNextItemWidth(Theme.Scaled(220));
-        using var combo = ImRaii.Combo($"##{label}", bone.Length == 0 ? "Pick a bone" : bone, ImGuiComboFlags.HeightLarge);
+        using var combo = ImRaii.Combo($"##{label}", bone.Length == 0 ? "Pick a bone" : AnimationPresentation.BoneName(bone), ImGuiComboFlags.HeightLarge);
         if (!combo.Success)
             return;
         ImGui.SetNextItemWidth(-1);
@@ -200,9 +201,10 @@ internal sealed partial class PhysicsWindow
         ImGui.InputTextWithHint("##filter", "Search", ref boneFilter, 64);
         foreach (var candidate in skeleton.Body)
         {
-            if (boneFilter.Length > 0 && !candidate.Name.Contains(boneFilter, StringComparison.OrdinalIgnoreCase))
+            var name = AnimationPresentation.BoneName(candidate.Name);
+            if (boneFilter.Length > 0 && !name.Contains(boneFilter, StringComparison.OrdinalIgnoreCase))
                 continue;
-            if (ImGui.Selectable(candidate.Name, candidate.Name == bone))
+            if (ImGui.Selectable(name, candidate.Name == bone))
                 bone = candidate.Name;
         }
     }
