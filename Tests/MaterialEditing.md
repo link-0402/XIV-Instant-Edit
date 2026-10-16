@@ -68,3 +68,17 @@ The `material` Bridge tool shows the window's state, the live binding and, with
 - [ ] Enter and leave GPose, and change zones, while bound: no crash; Live comes back.
 - [ ] Reload the plugin while bound with unsaved edits: no crash; the character shows its own
   material after the reload.
+
+## Colour rows live, and the pair highlight (Task 9, pending; XIV Bridge)
+
+- [ ] Change a row's base colour or roughness: the character changes the same frame, with no
+  redraw; `material` shows "tableSlots" with the bound slots showing edited rows.
+- [ ] Hover a pair's swatch: its rows pulse on the character (top yellow, bottom blue); moving off
+  puts the edited rows back.
+- [ ] Close the window: the character's own colours are back (the game's table texture is in the
+  slot again; no crash).
+- [ ] On dyed gear: the edited rows show undyed until preview dyes exist (Task 12); saving and
+  redrawing shows the dye again. Change the dye in Glamourer while bound: no crash, and the live
+  rows come back within a second.
+- [ ] A redraw, GPose enter/leave and a zone change while rows are edited: no crash; the edited
+  rows come back.

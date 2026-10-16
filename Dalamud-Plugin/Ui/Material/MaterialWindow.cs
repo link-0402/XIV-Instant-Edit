@@ -36,6 +36,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
     private readonly IObjectTable objects;
     private readonly IPluginLog log;
     private readonly LiveMaterial live;
+    private readonly LiveColorTable liveTable;
     private readonly CancellationTokenSource life = new();
 
     private MaterialSession? session;
@@ -68,6 +69,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         this.objects = objects;
         this.log = log;
         live = new LiveMaterial(objects, log);
+        liveTable = new LiveColorTable(objects, log);
         Size = new Vector2(1020, 680);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints { MinimumSize = new Vector2(760, 420), MaximumSize = new Vector2(float.MaxValue, float.MaxValue) };
@@ -243,6 +245,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             current.History.EndGesture();
         PumpLive(current);
         PumpPreview(current);
+        liveTable.Update((float)ImGui.GetTime());
     }
 
     /// <summary>The main column: the values, and the colour rows when the shader reads them.</summary>
