@@ -78,6 +78,8 @@ public sealed class MainWindow : Window, IDisposable
     private MainTab _activeTab = MainTab.OnScreen;
     private MainTab? _pendingTab;
     private long _resourcesChangedTicks;
+    // Objects Penumbra redrew since the last frame; whether they concern the snapshot is checked in Draw.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, byte> _redrawn = new();
 
     internal MainWindow(Configuration config, PenumbraIpc penumbra, SourceMods sourceMods, OnScreenService onScreen,
         ResourceSourceAttributor resourceSources, BlenderClient blender,
@@ -133,6 +135,7 @@ public sealed class MainWindow : Window, IDisposable
 
         _feed.Reported += _notifications.Notify;
         _penumbra.ResourcesChanged += OnResourcesChanged;
+        _penumbra.ObjectRedrawn += OnObjectRedrawn;
         Size = new Vector2(880, 640);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints
@@ -172,6 +175,7 @@ public sealed class MainWindow : Window, IDisposable
     public void Dispose()
     {
         _penumbra.ResourcesChanged -= OnResourcesChanged;
+        _penumbra.ObjectRedrawn -= OnObjectRedrawn;
         _feed.Reported -= _notifications.Notify;
         _compressionCard.Detach();
         _painter.Detach();
@@ -217,7 +221,24 @@ public sealed class MainWindow : Window, IDisposable
     }
 
     /// <summary> Draws the Game Files export folder picker; the plugin hooks it to the UI builder like the setup window's. </summary>
-    public void DrawFileDialog() => _gameExportDialog.DrawFileDialog();
+    // When the window was last drawn; 0 once its previews were let go.
+    private long _drawnAt;
+    private const long ReleasePreviewsAfterMs = 120_000;
+
+    /// <summary>
+    /// Every frame, open or not: the export file dialog, and letting go of what only the window shows once it
+    /// hasn't for a while: Game Files' data, and the hover cards' previews two minutes after the window closed.
+    /// </summary>
+    public void DrawFileDialog()
+    {
+        _gameExportDialog.DrawFileDialog();
+        _gameFilesTab.ReleaseWhenUnused();
+        if (_drawnAt != 0 && !IsOpen && Environment.TickCount64 - _drawnAt >= ReleasePreviewsAfterMs)
+        {
+            _drawnAt = 0;
+            _previews.Release();
+        }
+    }
 
     internal void AttachNeckSeam(NeckSeamService service) => _skinSeams.Attach(service);
 
@@ -247,9 +268,13 @@ public sealed class MainWindow : Window, IDisposable
             _animationHub.Service?.StopObservation();
     }
 
-    /// <summary> Penumbra reported a mod-setting change or a redraw; refresh once things settle. </summary>
+    /// <summary> Penumbra reported a mod-setting change, or a redraw that concerns the snapshot; refresh once things settle. </summary>
     private void OnResourcesChanged()
         => Volatile.Write(ref _resourcesChangedTicks, Math.Max(1, Environment.TickCount64));
+
+    /// <summary> Penumbra redrew an object, on its thread; <see cref="PumpAutoRefresh"/> checks whose. </summary>
+    private void OnObjectRedrawn(int objectIndex)
+        => _redrawn.TryAdd(objectIndex, 0);
 
     /// <summary>
     /// Glamourer changed an actor in place, which Penumbra does not report as a redraw.
@@ -267,6 +292,19 @@ public sealed class MainWindow : Window, IDisposable
     /// </summary>
     private void PumpAutoRefresh()
     {
+        // Only redraws of your character, what it owns or what is listed refresh the snapshot: each
+        // refresh costs a framework visit, and other players redraw constantly where sync plugins run.
+        if (!_redrawn.IsEmpty)
+        {
+            var concerns = false;
+            foreach (var index in _redrawn.Keys)
+            {
+                _redrawn.TryRemove(index, out _);
+                concerns |= _onScreen.Concerns(index);
+            }
+            if (concerns)
+                OnResourcesChanged();
+        }
         var changed = Volatile.Read(ref _resourcesChangedTicks);
         if (changed == 0)
             return;
@@ -305,6 +343,7 @@ public sealed class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
+        _drawnAt = Math.Max(1, Environment.TickCount64);
         PumpAutoRefresh();
         _previews.Pump();
         var activeTab = DrawToolbar();

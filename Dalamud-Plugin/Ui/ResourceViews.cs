@@ -97,7 +97,17 @@ internal sealed record ResourceView(
     /// <summary> The name shown in the browser: the resource name or, failing that, its file name. </summary>
     public string DisplayName => _displayName ??= ResourceViews.DisplayName(Name, ActualPath);
 
+    private string? _labelId;
+
+    /// <summary> The row's selectable label and id, "name##label", made once rather than every frame. </summary>
+    public string LabelId => _labelId ??= $"{UiText.Safe(DisplayName, "Unnamed resource")}##label";
+
     public bool IsModel => ResourceViews.IsModel(this);
+
+    private bool? _safeModel;
+
+    /// <summary> Whether the Edit action may send this model to Blender; worked out once, as rows ask every frame. </summary>
+    public bool SafeModel => _safeModel ??= ResourceViews.ComputeSafeModel(this);
 }
 
 /// <summary> Pure helpers that build and classify resource views. No ImGui or Dalamud dependencies. </summary>
@@ -223,7 +233,9 @@ internal static class ResourceViews
         || node.ActualPath.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase);
 
     /// <summary> Whether the Edit action may send this model to Blender. </summary>
-    public static bool IsSafeModel(ResourceView node)
+    public static bool IsSafeModel(ResourceView node) => node.SafeModel;
+
+    internal static bool ComputeSafeModel(ResourceView node)
     {
         if (!IsModel(node) || !ModPaths.IsSafeGamePath(node.GamePath) ||
             !node.GamePath.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase) ||

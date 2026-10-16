@@ -188,19 +188,20 @@ internal sealed class PenumbraIpc : IDisposable
     }
 
     /// <summary>
-    /// Gets Penumbra's local-player-owned resource trees, including the public UI
-    /// labels and icons. The returned index is the current object-table index.
+    /// Gets Penumbra's local-player-owned resource trees, with <paramref name="withUiData"/> including the
+    /// public UI labels and icons. The returned index is the current object-table index.
     /// Call it on the framework thread: Penumbra builds the trees on the calling thread and
     /// reads each character's ObjectIndex there, which Dalamud rejects on other threads.
+    /// UI data costs about 150 ms there (Penumbra re-reads the shader packages each call); see <see cref="ResourceUiNames"/>.
     /// </summary>
-    public IReadOnlyDictionary<ushort, ResourceTreeDto> GetPlayerResourceTrees()
+    public IReadOnlyDictionary<ushort, ResourceTreeDto> GetPlayerResourceTrees(bool withUiData)
     {
         try
         {
             if (!Available)
                 return new Dictionary<ushort, ResourceTreeDto>();
 
-            return _getPlayerTrees.Invoke(withUiData: true);
+            return _getPlayerTrees.Invoke(withUiData);
         }
         catch (Exception e)
         {
@@ -310,9 +311,10 @@ internal sealed class PenumbraIpc : IDisposable
 
     /// <summary>
     /// Get resource trees for explicit object-table indices. Penumbra looks these indices
-    /// up in Dalamud's object table, which asserts the main thread.
+    /// up in Dalamud's object table, which asserts the main thread. UI data is as costly as in
+    /// <see cref="GetPlayerResourceTrees"/>.
     /// </summary>
-    public ResourceTreeDto?[] GetResourceTrees(ushort[] gameObjectIndices)
+    public ResourceTreeDto?[] GetResourceTrees(ushort[] gameObjectIndices, bool withUiData)
     {
         if (gameObjectIndices.Length == 0)
             return Array.Empty<ResourceTreeDto?>();
@@ -322,7 +324,7 @@ internal sealed class PenumbraIpc : IDisposable
             if (!Available)
                 return Array.Empty<ResourceTreeDto?>();
 
-            return _getObjectTrees.Invoke(withUiData: true, gameObjectIndices) ?? Array.Empty<ResourceTreeDto?>();
+            return _getObjectTrees.Invoke(withUiData, gameObjectIndices) ?? Array.Empty<ResourceTreeDto?>();
         }
         catch (Exception e)
         {
@@ -385,8 +387,9 @@ internal sealed class PenumbraIpc : IDisposable
     private EventSubscriber<string, string>? _modMoved;
 
     /// <summary>
-    /// Raised, on Penumbra's thread, when a mod setting changed in any collection or a game
-    /// object was redrawn. Handlers must be cheap and must not call back into Penumbra.
+    /// Raised, on Penumbra's thread, when a mod setting changed in any collection. Redraws
+    /// come through <see cref="ObjectRedrawn"/>, which says whose. Handlers must be cheap and
+    /// must not call back into Penumbra.
     /// </summary>
     public event Action? ResourcesChanged;
 
@@ -406,11 +409,7 @@ internal sealed class PenumbraIpc : IDisposable
     {
         _openMainWindow = new OpenMainWindow(pi);
         _modSettingChanged = ModSettingChanged.Subscriber(pi, (_, _, _, _) => RaiseResourcesChanged());
-        _gameObjectRedrawn = GameObjectRedrawn.Subscriber(pi, (_, index) =>
-        {
-            ObjectRedrawn?.Invoke(index);
-            RaiseResourcesChanged();
-        });
+        _gameObjectRedrawn = GameObjectRedrawn.Subscriber(pi, (_, index) => ObjectRedrawn?.Invoke(index));
         _modAdded = ModAdded.Subscriber(pi, _ => RaiseModsChanged());
         _modDeleted = ModDeleted.Subscriber(pi, _ => RaiseModsChanged());
         _modMoved = ModMoved.Subscriber(pi, (_, _) => RaiseModsChanged());

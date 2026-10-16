@@ -118,6 +118,16 @@ public sealed class AsyncPreviewCache<T> : IDisposable where T : class
         }
     }
 
+    /// <summary> Drops every entry; the loaded values are disposed on the next <see cref="Pump"/>. Safe from any thread. </summary>
+    public void Clear()
+    {
+        lock (_lock)
+        {
+            foreach (var (key, entry) in _entries.ToArray())
+                RemoveLocked(key, entry);
+        }
+    }
+
     /// <summary> Disposes values that were evicted or invalidated since the last call. Call from the draw thread. </summary>
     public void Pump()
     {

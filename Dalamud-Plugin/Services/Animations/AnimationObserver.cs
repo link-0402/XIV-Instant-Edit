@@ -49,6 +49,17 @@ internal sealed class AnimationObserver : IDisposable
     private DateTime nextFallback;
     private Guid resourceCollection;
     private string? resourceMapKey;
+    // Penumbra's resource paths of the followed character, reused while nothing that changes them happened:
+    // the query takes over a millisecond on the framework thread, and observations come every 1.5 s or
+    // more often (blinks and blends change the stamp's controls every couple of seconds).
+    private const long ResourcePathsMaxAgeMs = 10_000;
+    // A new timeline's files load over the first moments: until then each observation asks again.
+    private const long ResourcesSettleMs = 2_000;
+    private (ushort Index, Guid Collection, int Key, bool Settled, long At, Dictionary<string, HashSet<string>> Paths)? resourcePaths;
+    private volatile bool resourcePathsStale;
+    // The stamp's timelines and skeletons, which decide what is loaded, and since when they are as they are.
+    private int resourceKey;
+    private long resourceKeySince;
     private Task pending = Task.CompletedTask;
     private ulong actor;
     private int generation;
@@ -74,13 +85,45 @@ internal sealed class AnimationObserver : IDisposable
         listening = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         lastStamp = null;
         nextFallback = DateTime.MinValue;
+        resourcePaths = null;
+        penumbra.ResourcesChanged += MarkResourcePathsStale;
+        penumbra.ObjectRedrawn += OnObjectRedrawn;
         framework.Update += Update;
+    }
+
+    private void MarkResourcePathsStale() => resourcePathsStale = true;
+
+    private void OnObjectRedrawn(int index)
+    {
+        if (resourcePaths is not { } cached || cached.Index == index)
+            resourcePathsStale = true;
+    }
+
+    /// <summary>
+    /// The followed character's resource paths: the last ones while its timelines and skeletons are as they
+    /// were when those settled, no mod setting changed, it wasn't redrawn and they are less than 10 s old;
+    /// otherwise Penumbra's again.
+    /// </summary>
+    private async Task<Dictionary<string, HashSet<string>>> ResourcePathsAsync(ushort index, Guid collection, int key, long keySince)
+    {
+        var now = Environment.TickCount64;
+        if (!resourcePathsStale && resourcePaths is { } cached && cached.Index == index && cached.Collection == collection &&
+            cached.Key == key && cached.Settled && now - cached.At < ResourcePathsMaxAgeMs)
+            return cached.Paths;
+        // Cleared before asking, so a change while Penumbra answers asks again next time.
+        resourcePathsStale = false;
+        var paths = await penumbra.GetResourcePathsAsync(index) ?? throw new IOException("Penumbra's player resource snapshot is unavailable.");
+        resourcePaths = (index, collection, key, now - keySince >= ResourcesSettleMs, now, paths);
+        return paths;
     }
     public void Stop()
     {
         if (!listeningEnabled) return;
         listeningEnabled = false;
         framework.Update -= Update;
+        penumbra.ResourcesChanged -= MarkResourcePathsStale;
+        penumbra.ObjectRedrawn -= OnObjectRedrawn;
+        resourcePaths = null;
         observation?.Cancel();
         observation?.Dispose();
         observation = null;
@@ -123,10 +166,16 @@ internal sealed class AnimationObserver : IDisposable
             actor = current; generation++; history = []; CharacterChanged?.Invoke();
             resolutions.Clear(); manualChoices.Clear(); operationErrors.Clear();
             runtimeCache.Clear(); resourceCache.Clear(); parsedPaps.Clear(); motionCache.Clear(); durations.Clear();
-            resourceCollection = Guid.Empty; resourceMapKey = null;
+            resourceCollection = Guid.Empty; resourceMapKey = null; resourcePaths = null;
         }
         if (current == 0) { Status = "Log in to observe player emotes, idles, and movement."; return; }
         var changed = !lastStamp.HasValue || stamp is null || !lastStamp.Value.SameAs(stamp.Value);
+        var key = stamp is { } loaded ? HashCode.Combine(loaded.TimelineFingerprint, loaded.PartialCount, loaded.SkeletonFingerprint) : 0;
+        if (key != resourceKey)
+        {
+            resourceKey = key;
+            resourceKeySince = Environment.TickCount64;
+        }
         var now = DateTime.UtcNow;
         // Leave the last scheduled stamp untouched while work is in flight. If
         // the player changes during a capture, the next framework tick after
@@ -138,17 +187,25 @@ internal sealed class AnimationObserver : IDisposable
         nextFallback = now.AddMilliseconds(1500);
         observation?.Dispose();
         observation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token, listeningToken.Token);
-        pending = ObserveAsync(generation, observation.Token);
+        // On a worker: started here, the observation would run inline on the framework thread up to its
+        // first real wait, Penumbra's queries and the timeline reading included. From a worker only the
+        // capture and the queries visit the framework thread.
+        var expected = generation;
+        var token = observation.Token;
+        var keySince = resourceKeySince;
+        pending = Task.Run(() => ObserveAsync(expected, key, keySince, token));
     }
 
-    private async Task ObserveAsync(int expectedGeneration, CancellationToken token)
+    private async Task ObserveAsync(int expectedGeneration, int resourcesKey, long resourcesKeySince, CancellationToken token)
     {
         var observationStarted = Stopwatch.GetTimestamp();
         try
         {
-            var frameworkStarted = Stopwatch.GetTimestamp();
+            // Timed inside the visit: from a worker, the wait for the next frame isn't framework time.
+            var frameworkMillis = 0.0;
             var pair = await framework.RunOnFrameworkThread(() =>
             {
+                var frameworkStarted = Stopwatch.GetTimestamp();
                 token.ThrowIfCancellationRequested();
                 var subject = Subject();
                 var runtime = AnimationRuntime.Capture(subject, runtimeCache);
@@ -170,9 +227,9 @@ internal sealed class AnimationObserver : IDisposable
                     error = e.Message;
                     pose = new(0, 0, 0, false, [], DateTime.UtcNow, "");
                 }
+                frameworkMillis = Stopwatch.GetElapsedTime(frameworkStarted).TotalMilliseconds;
                 return (Runtime: runtime, Pose: pose, PoseError: error);
             });
-            var frameworkMillis = Stopwatch.GetElapsedTime(frameworkStarted).TotalMilliseconds;
             if (frameworkMillis >= 2)
                 log.Debug($"Animation observation framework capture took {frameworkMillis:F2} ms.");
             token.ThrowIfCancellationRequested();
@@ -182,7 +239,7 @@ internal sealed class AnimationObserver : IDisposable
             if (active.Length == 0) { MarkNotPlaying(); Status = "No eligible emote, idle, or movement is playing."; return; }
             var collection = await penumbra.GetCollectionTargetAsync(runtime.ObjectIndex) ?? throw new IOException("The player collection is unavailable.");
             token.ThrowIfCancellationRequested();
-            var paths = await penumbra.GetResourcePathsAsync(runtime.ObjectIndex) ?? throw new IOException("Penumbra's player resource snapshot is unavailable.");
+            var paths = await ResourcePathsAsync(runtime.ObjectIndex, collection.Id, resourcesKey, resourcesKeySince);
             token.ThrowIfCancellationRequested();
             var mapKey = AnimationResources.ResourceMapKey(paths);
             var aliases = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(StringComparer.OrdinalIgnoreCase);

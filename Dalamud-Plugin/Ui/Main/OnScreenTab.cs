@@ -217,13 +217,25 @@ internal sealed class OnScreenTab
             foreach (var root in ordered)
                 foreach (var resource in root.Flattened)
                     if (_kinds.Admits(resource) && (!filterBySearch || _search.Matches(resource)))
-                        DrawFlatNode(actor, root, resource, $"{key}:flat:{row++}");
+                        DrawFlatNode(actor, root, resource, Key(key, row++, ":flat:"));
         }
         else
         {
             for (var i = 0; i < ordered.Count; i++)
-                DrawNode(actor, ordered[i], $"{key}:{i}", new TreeGuide(Theme.TreeIndent, 0, 0, false), filterBySearch, searchActive);
+                DrawNode(actor, ordered[i], Key(key, i), new TreeGuide(Theme.TreeIndent, 0, 0, false), filterBySearch, searchActive);
         }
+    }
+
+    // Row keys ("parent:index"), made once: every visible row needs one every frame.
+    private readonly Dictionary<(string Parent, int Index, string Separator), string> _keys = new();
+
+    private string Key(string parent, int index, string separator = ":")
+    {
+        if (_keys.TryGetValue((parent, index, separator), out var key))
+            return key;
+        if (_keys.Count >= 8192)
+            _keys.Clear();
+        return _keys[(parent, index, separator)] = $"{parent}{separator}{index}";
     }
 
     /// <summary> One row of the flattened (kind-filtered) view: the resource itself, with its parent item as context. </summary>
@@ -242,7 +254,7 @@ internal sealed class OnScreenTab
         var name = UiText.Safe(resource.DisplayName, "Unnamed resource");
         var context = ReferenceEquals(item, resource) ? string.Empty : UiText.Safe(item.DisplayName);
         var labelWidth = context.Length == 0 ? 0 : ImGui.CalcTextSize(name).X + Theme.Gap;
-        ImGui.Selectable($"{name}##label", false, ImGuiSelectableFlags.None, new Vector2(labelWidth, ImGui.GetFrameHeight()));
+        ImGui.Selectable(resource.LabelId, false, ImGuiSelectableFlags.None, new Vector2(labelWidth, ImGui.GetFrameHeight()));
         var hovered = ImGui.IsItemHovered();
         ImGui.OpenPopupOnItemClick(ResourceRows.RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
         if (hovered)
@@ -341,7 +353,7 @@ internal sealed class OnScreenTab
         ImGui.SetCursorPosX(start + TreeGlyphOffset(guide.Level));
         ResourceRows.DrawRowGlyph(node);
         ImGui.SameLine(0, Theme.Gap);
-        if (ImGui.Selectable($"{UiText.Safe(node.DisplayName, "Unnamed resource")}##label", false, ImGuiSelectableFlags.None, new Vector2(0, ImGui.GetFrameHeight())) && hasChildren)
+        if (ImGui.Selectable(node.LabelId, false, ImGuiSelectableFlags.None, new Vector2(0, ImGui.GetFrameHeight())) && hasChildren)
             _expansion.Toggle(key, expanded, false);
         var hovered = ImGui.IsItemHovered();
         ImGui.OpenPopupOnItemClick(ResourceRows.RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
@@ -366,7 +378,7 @@ internal sealed class OnScreenTab
                 continue;
             var i = childIndex++;
             if (!filterBySearch || _search.Matches(child))
-                DrawNode(actor, child, $"{scope}:{i}", guide.Child(++drawn == visible), filterBySearch, autoExpandSearch);
+                DrawNode(actor, child, Key(scope, i), guide.Child(++drawn == visible), filterBySearch, autoExpandSearch);
         }
     }
 

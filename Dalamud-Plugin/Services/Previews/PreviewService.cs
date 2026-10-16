@@ -209,6 +209,20 @@ public sealed class PreviewService : IDisposable
         _modelCache.Pump();
     }
 
+    /// <summary>
+    /// Lets go of every cached preview (up to 64 MB of textures and 32 MB of model thumbnails), to be loaded
+    /// again when next hovered. Call from the draw thread.
+    /// </summary>
+    public void Release()
+    {
+        lock (_keys)
+            _keys.Clear();
+        _textureCache.Clear();
+        _materialCache.Clear();
+        _modelCache.Clear();
+        Pump();
+    }
+
     public void Dispose()
     {
         _textureCache.Dispose();

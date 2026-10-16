@@ -225,9 +225,10 @@ internal static class Tile
         if (badges == null || badges.Count == 0)
             return 0;
         float w = 0;
-        foreach (var badge in badges)
+        // Indexed: a foreach over the interface boxes an enumerator per tile per frame.
+        for (int i = 0; i < badges.Count; i++)
         {
-            float bw = ResourceStyle.BadgeWidth(badge) + Theme.S(4);
+            float bw = ResourceStyle.BadgeWidth(badges[i]) + Theme.S(4);
             if (w + bw > limit)
                 break;
             w += bw;
@@ -239,8 +240,9 @@ internal static class Tile
     {
         float x = pos.X;
         float limit = pos.X + width;
-        foreach (var badge in badges)
+        for (int i = 0; i < badges.Count; i++)
         {
+            var badge = badges[i];
             float bw = ResourceStyle.BadgeWidth(badge);
             if (x + bw > limit)
                 break;

@@ -33,17 +33,22 @@ internal static class ModPaths
         }
     }
 
+    // Path.GetInvalidFileNameChars returns a new array every call.
+    private static readonly char[] InvalidFileNameChars = Path.GetInvalidFileNameChars();
+
+    /// <summary> A safe relative .mdl game path. Allocation-free: table rows ask every frame. </summary>
     internal static bool IsSafeGamePath(string? gamePath)
     {
         if (string.IsNullOrWhiteSpace(gamePath) || gamePath.Length > 1024 ||
             gamePath.Contains('\0') || Path.IsPathRooted(gamePath) || gamePath.Contains('\\') ||
-            !string.Equals(Path.GetExtension(gamePath), ".mdl", StringComparison.OrdinalIgnoreCase))
+            !Path.GetExtension(gamePath.AsSpan()).Equals(".mdl", StringComparison.OrdinalIgnoreCase))
             return false;
 
-        var invalid = Path.GetInvalidFileNameChars();
-        foreach (var segment in gamePath.Split('/'))
+        var path = gamePath.AsSpan();
+        foreach (var range in path.Split('/'))
         {
-            if (segment.Length == 0 || segment is "." or ".." || segment.IndexOfAny(invalid) >= 0)
+            var segment = path[range];
+            if (segment.Length == 0 || segment is "." or ".." || segment.IndexOfAny(InvalidFileNameChars) >= 0)
                 return false;
         }
 

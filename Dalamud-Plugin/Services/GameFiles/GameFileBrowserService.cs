@@ -14,8 +14,8 @@ internal sealed record GameFileDependencyState(bool Loading, GameModelDependenci
 
 /// <summary>
 /// The Game Files browser's data: each category's vanilla model files, found in the background the
-/// first time it is shown and kept for the session; item and hairstyle names from the game's sheets;
-/// and the materials and textures of the models opened in the browser.
+/// first time it is shown and kept until <see cref="Release"/>; item and hairstyle names from the game's
+/// sheets; and the materials and textures of the models opened in the browser.
 /// </summary>
 internal sealed class GameFileBrowserService : IDisposable
 {
@@ -27,7 +27,7 @@ internal sealed class GameFileBrowserService : IDisposable
     private readonly Dictionary<GameFileCategory, GameFileCategoryState> categories = [];
     private readonly Dictionary<GameFileCategory, CancellationTokenSource> scans = [];
     private readonly Dictionary<string, GameFileDependencyState> dependencies = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Lazy<(GameFileNames Names, IReadOnlyCollection<(ushort, ushort)> WeaponModels)> sheets;
+    private Lazy<(GameFileNames Names, IReadOnlyCollection<(ushort, ushort)> WeaponModels)> sheets;
     private int sheetsStarted;
     private int dependencyVersion;
 
@@ -37,6 +37,25 @@ internal sealed class GameFileBrowserService : IDisposable
         this.log = log;
         sheets = new(ReadSheets, LazyThreadSafetyMode.ExecutionAndPublication);
         SkeletonFiles = new VanillaSkeletonFiles(Read);
+    }
+
+    /// <summary>
+    /// Forgets the found model files, the names and the models' materials: about 10 MB once the browser has
+    /// been used, found again in well under a second the next time they are shown. Running scans are cancelled.
+    /// </summary>
+    public void Release()
+    {
+        lock (sync)
+        {
+            foreach (var scan in scans.Values)
+                scan.Cancel();
+            scans.Clear();
+            categories.Clear();
+            dependencies.Clear();
+            sheets = new(ReadSheets, LazyThreadSafetyMode.ExecutionAndPublication);
+            Volatile.Write(ref sheetsStarted, 0);
+        }
+        Interlocked.Increment(ref dependencyVersion);
     }
 
     /// <summary>The skeleton files vanilla models use, from the game's own EST tables.</summary>
