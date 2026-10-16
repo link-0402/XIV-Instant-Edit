@@ -26,10 +26,8 @@ Penumbra mods.
 - **Quick Actions**: tasks for your whole character.
   - Fix skin seams between models, such as on your neck or between different face parts, like face and ears. Textures and materials are automatically blended into each other, getting rid of visible seams between models and parts.  \
     [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Fixing-the-Neck-Seam)
-  - Optimize its textures automatically: the uncompressed mod textures it wears are compressed as they load, and ones
-    that hold a single color shrink to 32 × 32 pixels, so Lightless, PlayerSync and other sync plugins count less
-    texture memory, unless a check finds they'd look different. Hair whose UVs use only part of its textures, like
-    Sims 4 ports, can be refit onto that part with its textures cut down to it. The originals are backed up and can be
+  - Optimize your character textures automatically: uncompressed mod textures get get evaluated as they load. If they can safely be compressed Hair whose UVs use only part of its textures, like\
+    Sims 4 ports, can be refit onto that part with its textures cut down to it. The originals are backed up and can be\
     restored.
   - Paint its whole skin in Substance Painter.
   - Fix its [Simple Heels](https://github.com/Caraxi/SimpleHeels) offset: measure how far its shoes reach below the
