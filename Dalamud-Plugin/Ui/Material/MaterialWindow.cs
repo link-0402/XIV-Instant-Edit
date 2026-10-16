@@ -464,9 +464,11 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             _ = current.Redo();
         Tip(current.History.RedoLabel.Length > 0 ? $"Redo (Ctrl+Y): {current.History.RedoLabel}" : "Redo (Ctrl+Y)");
         ImGui.SameLine();
-        using (ImRaii.Disabled(true))
-            Widgets.IconButton("##material-presets", FontAwesomeIcon.Magic, null, false);
-        Tip("Presets come in a later step.");
+        var presets = doc.Editable && ShaderPackages.Get(doc.ShaderPackage) != null;
+        if (Widgets.IconButton("##material-presets", FontAwesomeIcon.Magic, null, presets && working == null))
+            OpenPresets(current);
+        Tip(presets ? "Presets: metal, glow, a scrolling pattern, glass and more in one click." : "Presets need a character shader.");
+        DrawPresets(current);
         ImGui.SameLine();
         if (Widgets.GhostIconButton("##material-more", FontAwesomeIcon.EllipsisH, "More"))
             ImGui.OpenPopup(MenuPopup);

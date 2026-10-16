@@ -91,3 +91,15 @@ The `material` Bridge tool shows the window's state, the live binding and, with
 - [ ] "Show where" draws the index texture with the selected pair's texels lit (top yellow, bottom
   blue), and follows when another pair is picked.
 - [ ] A material whose index slot points at a missing file greys nothing and says so.
+
+## Presets (Task 11, pending)
+
+- [ ] Presets button: ten cards; ones that don't fit the material are disabled with the reason.
+- [ ] Metal on a plain gear material (Used rows): the used rows turn metallic the same frame; the
+  message names the rows changed and warns if the mask's green channel is rough.
+- [ ] Scrolling pattern: the character redraws on the scroll shader and the pattern visibly moves;
+  the new `_fx.tex` sits beside the material after Save (in the mod, or in the new mod).
+- [ ] Glass, See-through and Matcap each look right after their redraw; Undo takes each back in one
+  step.
+- [ ] Dyeable adds a dye table (the rows' Dye section appears); Clean up's hover lists what it
+  removes.

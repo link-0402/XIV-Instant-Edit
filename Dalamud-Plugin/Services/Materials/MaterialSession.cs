@@ -38,6 +38,7 @@ internal sealed class MaterialSession
     private const uint IndexSampler = 0x565F8FD8;
 
     private readonly Func<MaterialDocument, EditClass, Task> onEdit;
+    private readonly Dictionary<string, byte[]> newFiles = new(StringComparer.OrdinalIgnoreCase);
 
     public MaterialSession(MaterialSource source, MaterialDocument initial, Func<MaterialDocument, EditClass, Task> onEdit)
     {
@@ -58,6 +59,15 @@ internal sealed class MaterialSession
 
     /// <summary>A structural preview (temporary mod) is shown for this material.</summary>
     public bool PreviewShown { get; private set; }
+
+    /// <summary>Textures a preset added, by game path; previewed and saved while a slot of the material reads them.</summary>
+    public IReadOnlyDictionary<string, byte[]> NewFiles => newFiles;
+
+    public void AddNewFile(string gamePath, byte[] bytes) => newFiles[PathRules.NormalizeGamePath(gamePath)] = bytes;
+
+    /// <summary>The new files the document reads.</summary>
+    public IReadOnlyList<(string GamePath, byte[] Bytes)> NewFilesFor(MaterialDocument doc)
+        => newFiles.Where(file => doc.TexturePaths.Contains(file.Key, StringComparer.OrdinalIgnoreCase)).Select(file => (file.Key, file.Value)).ToList();
 
     /// <summary>Applies an edit as one undo step (or part of the running gesture) and passes it on to the preview.</summary>
     public Task Apply(Func<MaterialDocument, MaterialDocument> edit, string label)
@@ -89,8 +99,10 @@ internal sealed class MaterialSession
         var saved = Current;
         var bytes = saved.Write();
         var entry = PreviewModEntry.At(Source.GamePath, bytes);
+        var added = NewFilesFor(saved);
+        var addedEntries = added.Select(file => PreviewModEntry.At(file.GamePath, file.Bytes)).ToList();
         var created = await previews.CreateAsync($"Material Save - {Source.FileName}", "Material written by XIV Instant Edit.",
-            [entry], Source.ObjectIndex, FallbackModName, CancellationToken.None).ConfigureAwait(false);
+            [entry, .. addedEntries], Source.ObjectIndex, FallbackModName, CancellationToken.None).ConfigureAwait(false);
         var preview = new PreviewMod
         {
             Id = Guid.NewGuid(), ModDirectory = created.ModDirectory, ModIdentifier = created.Identifier, CollectionId = created.CollectionId,
@@ -102,6 +114,11 @@ internal sealed class MaterialSession
                     Kind = "material", GamePath = Source.GamePath, PreviewRelativePath = entry.RelativePath, PreviewSha256 = PreviewSource.Hash(bytes),
                     Source = Source.ToPreviewSource(),
                 },
+                .. added.Select((file, i) => new PreviewModFile
+                {
+                    Kind = "texture", GamePath = file.GamePath, PreviewRelativePath = addedEntries[i].RelativePath, PreviewSha256 = PreviewSource.Hash(file.Bytes),
+                    Source = Source.ToPreviewSource(), NewFile = true,
+                }),
             ],
         };
         var result = await previews.ApplyAsync(preview, newModName, "Material written by XIV Instant Edit.", FallbackModName, "Open the material again")
@@ -110,6 +127,8 @@ internal sealed class MaterialSession
             Source = Source.SavedInto(root, mod, PreviewSource.Hash(bytes));
         else if (!Source.IsGameData)
             Source = Source with { Sha256 = PreviewSource.Hash(bytes) };
+        foreach (var file in added)
+            newFiles.Remove(file.GamePath);
         if (ReferenceEquals(History.Current, saved))
             History.MarkSaved();
         return result;
@@ -118,8 +137,11 @@ internal sealed class MaterialSession
     /// <summary>Shows the current document through the temporary-mod preview and redraws the object.</summary>
     public async Task<string?> PreviewStructuralAsync(IMaterialPreview preview, CancellationToken token)
     {
-        var warning = await preview.ShowAsync(Source.ObjectIndex, new Dictionary<string, byte[]> { [Source.GamePath] = Current.Write() }, token)
-            .ConfigureAwait(false);
+        var doc = Current;
+        var files = new Dictionary<string, byte[]> { [Source.GamePath] = doc.Write() };
+        foreach (var (gamePath, bytes) in NewFilesFor(doc))
+            files[gamePath] = bytes;
+        var warning = await preview.ShowAsync(Source.ObjectIndex, files, token).ConfigureAwait(false);
         PreviewShown = true;
         return warning;
     }
