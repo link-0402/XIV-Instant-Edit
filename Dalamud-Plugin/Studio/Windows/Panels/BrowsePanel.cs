@@ -53,7 +53,7 @@ internal sealed class BrowsePanel : IStagePanel
             Gui.LabeledValue("Race", feature.Race.DisplayName);
             Gui.LabeledValue("Id", feature.IdDisplay);
         }
-        Gui.LabeledValue("Materials", subject.MaterialFolder(subject.BaseRace), "Every .mtrl a port of this writes goes here.");
+        Gui.LabeledValue("Materials", subject.MaterialFolder(subject.BaseRace), "Every .mtrl the mod writes for this goes here.");
         Gui.LabeledValue("Textures", subject.TextureFolder);
 
         ImGui.Spacing();

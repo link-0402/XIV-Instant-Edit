@@ -152,7 +152,7 @@ public static class ModMetaWriter
         j.WriteString("LastWrite", DateTime.UtcNow);
         j.WriteString("Name", modName);
         j.WriteString("Author", info.Author);
-        j.WriteString("Description", string.IsNullOrWhiteSpace(info.Description) ? $"Port of {modName}" : info.Description);
+        j.WriteString("Description", info.Description);
         j.WriteString("Version", info.Version);
         j.WriteString("Website", info.Website);
 

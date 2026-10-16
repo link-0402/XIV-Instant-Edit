@@ -206,7 +206,7 @@ public sealed class SimsImportWindow : Window, IDisposable
             if (_scan.AvailableLods.Count > 0)
             {
                 if (Gui.LabeledCombo("Detail", "##SimsLod", ref _lodChoice, _lodOptions,
-                        "Which detail levels to export. LOD 0 is the full-quality mesh and the only one a port needs, so it is " +
+                        "Which detail levels to export. LOD 0 is the full-quality mesh and the only one a mod needs, so it is " +
                         "selected by default; the lower levels are the game's reduced-detail copies. Individual meshes can still be " +
                         "ticked or unticked below.", Theme.S(220)))
                     ApplyLodChoice(_scan);

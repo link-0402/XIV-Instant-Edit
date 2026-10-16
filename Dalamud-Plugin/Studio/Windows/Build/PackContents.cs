@@ -84,7 +84,7 @@ internal sealed class PackContents
 
         float spacing = ImGui.GetStyle().ItemSpacing.X;
         float w = (ImGui.GetContentRegionAvail().X - spacing) * 0.5f;
-        if (Gui.IconTextButton(FontAwesomeIcon.Tshirt, "Add from the game", "Find gear or a character feature to port onto, and add it to the modpack.", w))
+        if (Gui.IconTextButton(FontAwesomeIcon.Tshirt, "Add from the game", "Find what your files replace, and add it to the modpack.", w))
             _session.GoToStage(StageId.Browse);
         ImGui.SameLine();
         if (Gui.IconTextButton(FontAwesomeIcon.FolderPlus, "New group", "Add a group of options to the mod: players pick one of its options, or any number.", w))

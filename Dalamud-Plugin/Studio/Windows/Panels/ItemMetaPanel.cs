@@ -44,7 +44,7 @@ internal sealed class ItemMetaPanel
         }
         else
         {
-            Gui.Hint($"A {item.Subject.KindLabel.ToLowerInvariant()} port needs no metadata — its files replace the game's directly.");
+            Gui.Hint($"A {item.Subject.KindLabel.ToLowerInvariant()} needs no metadata — its files replace the game's directly.");
         }
     }
 
@@ -60,7 +60,7 @@ internal sealed class ItemMetaPanel
 
         Heading("EQDP", "race deformer parameters", "automatic");
         Gui.Tooltip("Per race, the game records whether it has a model and a material of its own for this item. " +
-                   "A race this port writes files for needs those bits, or the game keeps loading another race's. " +
+                   "A race this item writes files for needs those bits, or the game keeps loading another race's. " +
                    "Follows the race models and materials — nothing to set here.");
 
         if (item.Models.Count == 0 && item.Materials.Count == 0)
@@ -104,7 +104,7 @@ internal sealed class ItemMetaPanel
             ImGui.SameLine();
             ImGui.TextColored(Theme.Muted, hasMaterial
                 ? $"{race.DisplayName}: the game already looks its material up here"
-                : $"{race.DisplayName}: material entry added, so this port's .mtrl is found");
+                : $"{race.DisplayName}: material entry added, so this item's .mtrl is found");
             Gui.Tooltip($"Materials are written as mt_c{race.RaceCode} materials for this gender, and every race of it " +
                        "that has no material of its own looks here.");
         }
