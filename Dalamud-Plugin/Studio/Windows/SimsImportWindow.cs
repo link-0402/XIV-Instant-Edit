@@ -11,6 +11,7 @@ using Dalamud.Interface;
 using Dalamud.Interface.Windowing;
 using InstantEdit.Studio.Services;
 using InstantEdit.Studio.Services.Sims;
+using InstantEdit.Studio.Services.Stash;
 using InstantEdit.Studio.Windows.UI;
 
 namespace InstantEdit.Studio.Windows;
@@ -81,10 +82,15 @@ public sealed class SimsImportWindow : Window, IDisposable
 
         var cfg = host.Configuration;
         _packagePath = cfg.LastSimsPackagePath;
-        _outputDir   = cfg.LastSimsOutputDir;
-
-        if (string.IsNullOrWhiteSpace(_outputDir))
-            _outputDir = Path.Combine(Path.GetTempPath(), "InstantEdit", "sims-import");
+        // A cache that can't be set up (a non-empty folder it doesn't own) leaves the old default.
+        var cacheRoot = Services.Backups.BackupFolder.TryResolve(() => host.CacheRoot, out _)
+                        ?? Path.Combine(Path.GetTempPath(), "InstantEdit");
+        _outputDir   = PackageImportPaths.ChooseOutput(cfg.LastSimsOutputDir, cacheRoot, Path.GetTempPath());
+        if (_outputDir != cfg.LastSimsOutputDir && !string.IsNullOrWhiteSpace(cfg.LastSimsOutputDir))
+        {
+            cfg.LastSimsOutputDir = _outputDir;
+            cfg.Save();
+        }
     }
 
     public void Dispose()
