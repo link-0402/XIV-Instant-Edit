@@ -14,7 +14,7 @@ Penumbra mods.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-a-Model-in-Blender)
 - **Textures**: edit textures in Photoshop, GIMP, Krita, Paint.NET or any TGA editor, including variants as Penumbra
   options. [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-Textures)
-- **Substance Painter**: paint direclty on any model with the exact textures your character uses and save your edits back to the game.\
+- **Substance Painter**: paint directly on any model with the exact textures you're currently using and save your edits back to the game with just one click. "Paint my Skin" under quick actions sends your entire character with your configured small clothes body \
   \
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Painting-in-Substance-Painter)
 - **Animations**: the listener finds what your character plays; open it in the timeline, or load any emote, idle,
