@@ -53,6 +53,12 @@ internal sealed class BrowsePanel : IStagePanel
             Gui.LabeledValue("Race", feature.Race.DisplayName);
             Gui.LabeledValue("Id", feature.IdDisplay);
         }
+        else if (subject is WeaponSubject weapon)
+        {
+            Gui.LabeledValue("Class", weapon.Model.Category.Length > 0 ? weapon.Model.Category : "Weapon");
+            Gui.LabeledValue("Model", weapon.Model.OffHand ? $"{weapon.IdDisplay}, off hand" : weapon.IdDisplay, "Weapon id and body.");
+            Gui.LabeledValue("Game path", weapon.ModelGamePath(default));
+        }
         Gui.LabeledValue("Materials", subject.MaterialFolder(subject.BaseRace), "Every .mtrl the mod writes for this goes here.");
         Gui.LabeledValue("Textures", subject.TextureFolder);
 

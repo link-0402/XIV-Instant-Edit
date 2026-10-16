@@ -236,7 +236,7 @@ internal sealed class PortEditor
         {
             SubjectKind.Hair => ShaderType.Hair,
             SubjectKind.Face => ShaderType.Skin,
-            SubjectKind.Gear => ShaderType.Character,
+            SubjectKind.Gear or SubjectKind.Weapon => ShaderType.Character,
             _ => subject.BaseRace is { } race
                 ? _host.GameData.ReadVanillaMaterialLayout(subject, race)?.FirstOrDefault()?.ShaderType
                 : null,

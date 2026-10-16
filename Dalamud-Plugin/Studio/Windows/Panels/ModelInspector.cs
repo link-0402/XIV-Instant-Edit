@@ -82,6 +82,11 @@ internal sealed class ModelInspector
             Gui.LabeledValue("Race", feature.Race.DisplayName);
             Gui.LabeledValue("Id", feature.IdDisplay);
         }
+        else if (subject is WeaponSubject weapon)
+        {
+            Gui.LabeledValue("Class", weapon.Model.Category.Length > 0 ? weapon.Model.Category : "Weapon");
+            Gui.LabeledValue("Model", $"{weapon.IdDisplay}-{weapon.Model.Variant}{(weapon.Model.OffHand ? ", off hand" : "")}", "Weapon id, body and variant.");
+        }
         Gui.LabeledValue("Materials", subject.MaterialFolder(subject.BaseRace), "Every .mtrl this item writes goes here.");
         Gui.LabeledValue("Textures", subject.TextureFolder);
         PackPlaceUi.Row(_session, "##itemplace", item.Meta.Option ?? PackPlace.Default, null, p => _session.SetPlace(item, p ?? PackPlace.Default),
@@ -89,7 +94,7 @@ internal sealed class ModelInspector
 
         ImGui.Spacing();
         Gui.Label("Set up");
-        ImGui.TextUnformatted($"{item.Models.Count} race model(s), {item.Materials.Count} material(s), {item.Materials.Sum(m => m.Textures.Count)} texture(s)");
+        ImGui.TextUnformatted($"{item.Models.Count} {(subject.HasRaces ? "race model(s)" : "model(s)")}, {item.Materials.Count} material(s), {item.Materials.Sum(m => m.Textures.Count)} texture(s)");
 
         ImGui.Spacing();
         ImGui.PushStyleColor(ImGuiCol.Text, Theme.Bad);
@@ -107,10 +112,12 @@ internal sealed class ModelInspector
         ImGui.Spacing();
         Gui.SectionHeader("In the game", "What the vanilla game already ships.");
 
-        if (subject is GearSubject g)
+        if (subject is GearSubject or WeaponSubject)
         {
             if (!_dyeVariants.TryGetValue(item.Key, out var dyes))
-                _dyeVariants[item.Key] = dyes = _host.GameData.GetImcOverridesForcingV1(g.Item.Slot, g.Item.ModelId)?.Count ?? 0;
+                _dyeVariants[item.Key] = dyes = (subject is GearSubject g
+                    ? _host.GameData.GetImcOverridesForcingV1(g.Item.Slot, g.Item.ModelId)
+                    : _host.GameData.GetWeaponImcOverridesForcingV1(((WeaponSubject)subject).Model))?.Count ?? 0;
             Gui.Label("Dye variants");
             ImGui.TextUnformatted(dyes > 0 ? dyes.ToString() : "—");
             Gui.Tooltip("Each variant gets an Imc override pointing it at your material, so the mod shows whichever one is equipped.");
@@ -192,7 +199,7 @@ internal sealed class ModelInspector
     {
         var subject = item.Subject;
         var model = item.Models[index];
-        Gui.SectionHeader($"{subject.DisplayName} · {model.RaceGender.DisplayName}");
+        Gui.SectionHeader(subject.HasRaces ? $"{subject.DisplayName} · {model.RaceGender.DisplayName}" : $"{subject.DisplayName} · model");
 
         Gui.LabeledValue("Game path", subject.ModelGamePath(model.RaceGender), "Where this model is placed in the mod.");
 

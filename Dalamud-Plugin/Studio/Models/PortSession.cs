@@ -257,6 +257,18 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
     /// </summary>
     private static void EnsureFixedModel(PortItem item)
     {
+        // A weapon has one model for everyone: always exactly one row, kept under a placeholder race.
+        if (!item.Subject.HasRaces)
+        {
+            var only = GameDataService.WeaponRace;
+            var keep = item.Models.FirstOrDefault() ?? new RaceModelEntry();
+            keep.Race = only.Race;
+            keep.Gender = only.Gender;
+            item.Models.Clear();
+            item.Models.Add(keep);
+            return;
+        }
+
         if (item.Subject.BaseRace is not { } race)
             return;   // gear belongs to no race: every model is added by hand
 
@@ -807,6 +819,8 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
             List<ModImcOverride>? imc = null;
             if (subject is GearSubject gear && materials.Count > 0)
                 imc = gameData.GetImcOverridesForcingV1(gear.Item.Slot, gear.Item.ModelId);
+            else if (subject is WeaponSubject weapon && materials.Count > 0)
+                imc = gameData.GetWeaponImcOverridesForcingV1(weapon.Model);
 
             // Metadata the user set on this item, as manipulations. Both are overrides of what
             // the game ships, so only what differs is carried into the build.
@@ -966,6 +980,7 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
     private static string SubjectModName(PortSubject subject) => subject switch
     {
         GearSubject gear       => $"XIV Instant Edit - {SanitizeFolderName(gear.Item.Name)}",
+        WeaponSubject weapon   => $"XIV Instant Edit - {SanitizeFolderName(weapon.DisplayName)}",
         FeatureSubject feature => $"XIV Instant Edit - {FeatureNaming.KindLabel(feature.Kind)} {feature.Id} ({SanitizeFolderName(feature.Race.DisplayName)})",
         _                      => "XIV Instant Edit - Mod",
     };

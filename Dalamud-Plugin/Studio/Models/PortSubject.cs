@@ -98,7 +98,11 @@ internal abstract class PortSubject
                 return FeatureSubject.TryDecode(key, out var feature) ? feature : null;
             case KeyTagKind.Gear:
                 var item = gameData.GetItemByRowId(key);
-                return item != null ? new GearSubject(item) : null;
+                if (item != null)
+                    return new GearSubject(item);
+                return gameData.GetWeapon(key, offHand: false) is { } main ? new WeaponSubject(main) : null;
+            case KeyTagKind.OffHand:
+                return gameData.GetWeapon(key & ~WeaponSubject.OffHandBit, offHand: true) is { } off ? new WeaponSubject(off) : null;
             default:
                 return null;
         }
