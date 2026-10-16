@@ -36,6 +36,10 @@ internal sealed class ResourceInspector
     private string? _typedFor;
     private int _preset;
 
+    /// <summary>The texture slot whose path is being typed, and the text so far, until it is taken.</summary>
+    private TextureSlot? _pathSlot;
+    private string _pathText = string.Empty;
+
     /// <summary>What is being typed into a model's material slot, by node and slot, until it is taken.</summary>
     private readonly Dictionary<string, string> _slotText = new(StringComparer.Ordinal);
 
@@ -539,6 +543,19 @@ internal sealed class ResourceInspector
         if (clones)
             Gui.HintWrapped("Another shader starts it from a bundled preset instead: the colour table and settings of the original are not kept.");
 
+        // A preset: its shader and any slots it has that this material lacks; the textures stay.
+        Gui.Label("Preset", "Load a preset's shader and texture slots. Its textures and their paths are kept.");
+        float loadW = Dalamud.Interface.Components.ImGuiComponents.GetIconButtonWithTextWidth(FontAwesomeIcon.FileImport, "Load");
+        ImGui.SetNextItemWidth(-(loadW + ImGui.GetStyle().ItemSpacing.X));
+        ImGui.Combo("##loadpreset", ref _preset, MaterialPresets.Names, MaterialPresets.Names.Length);
+        ImGui.SameLine();
+        if (Gui.IconTextButton(FontAwesomeIcon.FileImport, "Load", "Switch to this preset. Texture slots and their paths are kept; missing slots are added."))
+        {
+            _session.LoadPreset(replacement, MaterialPresets.All[Math.Clamp(_preset, 0, MaterialPresets.All.Count - 1)]);
+            if (clones)
+                _session.Notify("The colour table and settings of the original are not kept.", Severity.Warning);
+        }
+
         bool edited = false;
         float removeW = ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.X;
         int remove = -1;
@@ -565,12 +582,13 @@ internal sealed class ResourceInspector
                 ImGui.AlignTextToFramePadding();
                 ImGui.TextUnformatted(TextureTypeInfo.DisplayName(tex.Type));
                 ImGui.SameLine();
-                ImGui.TextColored(Theme.Faint, Path.GetFileName(ResourceNaming.AuthoredTexturePath(node.GamePath, tex.Postfix)));
+                ImGui.TextColored(Theme.Faint, Path.GetFileName(ResourceNaming.SlotTexturePath(node.GamePath, tex)));
                 edited |= _textures.DrawCompact(tex, removeW);
             }
             ImGui.SameLine();
             if (Gui.IconButton(FontAwesomeIcon.Trash, "removeslot", "Take this texture slot out of the material", danger: true))
                 remove = i;
+            DrawTexturePath(node.GamePath, tex);
             ImGui.PopID();
         }
         if (remove >= 0)
@@ -587,6 +605,33 @@ internal sealed class ResourceInspector
         ImGui.Spacing();
         if (Gui.IconTextButton(FontAwesomeIcon.Undo, node.Origin == OriginKind.ModFile ? "Keep the mod's own material" : "Don't make it here"))
             _actions.ClearReplacement(node);
+    }
+
+    /// <summary>
+    /// The game path a slot's texture is at, editable: a kept slot reads the texture there, a slot with
+    /// an image of its own is written there. Taken when the field is left or Enter is pressed.
+    /// </summary>
+    private void DrawTexturePath(string materialGamePath, TextureSlot tex)
+    {
+        var path = _pathSlot == tex ? _pathText : tex.IsShared ? tex.SharedGamePath : ResourceNaming.SlotTexturePath(materialGamePath, tex);
+        ImGui.SetNextItemWidth(-1);
+        ImGui.InputText("##texpath", ref path, 512);
+        bool active = ImGui.IsItemActive();
+        bool done = ImGui.IsItemDeactivatedAfterEdit();
+        Gui.Tooltip(tex.IsShared
+            ? "The texture this slot reads. Type another game path to point it there."
+            : "Where this slot's image is written in the mod. Leave it empty for the usual path.");
+        if (active)
+        {
+            _pathSlot = tex;
+            _pathText = path;
+        }
+        else if (_pathSlot == tex)
+        {
+            _pathSlot = null;
+            if (done)
+                _session.SetTexturePath(materialGamePath, tex, path);
+        }
     }
 
     private static string StartsFrom(ResourceReplacement replacement)

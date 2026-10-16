@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using InstantEdit.Studio.Models;
+using InstantEdit.Studio.Services.Project;
 
 namespace InstantEdit.Studio.Services.Resources;
 
@@ -274,6 +275,12 @@ internal static class ResourceNaming
         var safe = new string(file.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) || c is '_' or '-' ? c : '_').ToArray());
         return folder.Length > 0 ? $"{folder}/{safe}.tex" : $"{safe}.tex";
     }
+
+    /// <summary>Where a slot of a material made here writes its own texture: the path typed in for it, else <see cref="AuthoredTexturePath"/>.</summary>
+    public static string SlotTexturePath(string materialGamePath, TextureSlot slot)
+        => string.IsNullOrWhiteSpace(slot.GamePath)
+            ? AuthoredTexturePath(materialGamePath, slot.Postfix)
+            : PathNormalizer.GamePath(slot.GamePath);
 
     /// <summary>The title and subtitle of a model set's entry.</summary>
     public static (string Title, string Subtitle) SetTitle(string setKey, IEnumerable<string> gamePaths, IItemNames? names)

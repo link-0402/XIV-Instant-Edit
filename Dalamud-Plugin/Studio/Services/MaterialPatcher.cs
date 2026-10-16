@@ -86,6 +86,9 @@ public static class MaterialPatcher
     /// </summary>
     private const string MatcapLibraryPrefix = "chara/common/texture/matcaplib_";
 
+    /// <summary>The MatCap Library texture a matcap material reads until an image of the user's own replaces it (slot A).</summary>
+    public const string MatcapLibraryDefault = MatcapLibraryPrefix + "a.tex";
+
     // ── character.shpk keys ──────────────────────────────────────────────────
     private const uint KeyTextureMode        = 0xB616DC5A;
     private const uint TextureModeDefault    = 0x5CC605B5;
@@ -251,7 +254,7 @@ public static class MaterialPatcher
     public static IEnumerable<TextureType> TextureTypes(MtrlInfo m)
         => Enumerable.Range(0, m.TextureOffsets.Length).Select(i => TypeOf(m, i)).OfType<TextureType>().Distinct();
 
-    private static bool IsMatcapLibraryTexture(string path)
+    internal static bool IsMatcapLibraryTexture(string path)
         => path.StartsWith(MatcapLibraryPrefix, StringComparison.OrdinalIgnoreCase);
 
     private static void RemoveTexture(MtrlInfo m, List<MtrlTextureOffset> textures, int index)

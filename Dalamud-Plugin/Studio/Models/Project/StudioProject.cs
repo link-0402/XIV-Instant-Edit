@@ -106,7 +106,7 @@ public class StudioProject
             owned.Add(WriteConflict.KeyFor(option, replacement.GamePath));
             if (replacement.Authored is { } material)
                 foreach (var tex in material.Textures)
-                    owned.Add(WriteConflict.KeyFor(option, ResourceNaming.AuthoredTexturePath(replacement.GamePath, tex.Postfix)));
+                    owned.Add(WriteConflict.KeyFor(option, ResourceNaming.SlotTexturePath(replacement.GamePath, tex)));
         }
         Ledger.Files.RemoveAll(f => !owned.Contains(WriteConflict.KeyFor(OptionRef.Parse(f.Option), f.GamePath)));
         FormatVersion = 2;

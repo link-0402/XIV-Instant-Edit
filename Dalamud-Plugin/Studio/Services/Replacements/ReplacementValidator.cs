@@ -162,6 +162,9 @@ internal static class ReplacementValidator
         foreach (var tex in material.Textures)
         {
             var slot = $"{who} / {TextureTypeInfo.DisplayName(tex.Type)}";
+            if (tex.IsShared && MaterialPatcher.IsMatcapLibraryTexture(tex.SharedGamePath))
+                issues.Add(new(Severity.Info, target,
+                    $"{slot}: reads {tex.SharedGamePath} from the MatCap Library mod, which players need installed. Pick an image to ship your own instead."));
             if (tex.UseWhiteDummy || tex.IsShared)
                 continue;
             if (!replacement.CloneGameMaterial && !replacement.CloneModMaterial && PortValidator.UsesMatcapLibrary(material, tex))
