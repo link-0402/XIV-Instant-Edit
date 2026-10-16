@@ -101,6 +101,9 @@ internal sealed class PreviewModService(PreviewModWriter writer)
     public Task<IReadOnlyList<string>> RestoreAsync(PreviewBackupGroup group, int objectIndex, string recheck)
         => writer.RestorePreviewSourcesAsync(group.Files.Select(f => (f.Source, f.Backup)).ToList(), objectIndex, recheck);
 
+    /// <summary> Penumbra's mod folder, or null while Penumbra is unavailable. </summary>
+    public Task<string?> ModRootAsync() => writer.PreviewModRootAsync();
+
     public async Task<PreviewDiscardResult> DiscardAsync(PreviewMod preview)
     {
         var (removed, warning) = await writer.DeletePreviewModAsync(preview.ModDirectory, preview.ModIdentifier, preview.ObjectIndex).ConfigureAwait(false);
