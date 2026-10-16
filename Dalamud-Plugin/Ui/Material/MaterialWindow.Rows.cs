@@ -75,6 +75,9 @@ internal sealed partial class MaterialWindow
             var half = height / 2;
             DrawSwatches(draw, position, new Vector2(width, half), a);
             DrawSwatches(draw, position + new Vector2(0, half), new Vector2(width, half), b);
+            // Pairs the index texture never selects are drawn at 40%.
+            if (usage != null && !usage.PairUsed(pair))
+                draw.AddRectFilled(position, position + new Vector2(width, height), ImGui.GetColorU32(Theme.WithAlpha(Theme.PanelBg, 0.6f)));
             var outline = pair == selectedPair ? Theme.Accent : hovered ? Theme.Label : Theme.WithAlpha(Theme.Muted, .5f);
             draw.AddRect(position, position + new Vector2(width, height), ImGui.GetColorU32(outline), Theme.Scaled(3), ImDrawFlags.None, pair == selectedPair ? 2 : 1);
             var number = (pair + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -82,7 +85,7 @@ internal sealed partial class MaterialWindow
             draw.AddRectFilled(position + new Vector2(2, 2), position + new Vector2(text.X + 6, text.Y + 2), ImGui.GetColorU32(new Vector4(0, 0, 0, .55f)), Theme.Scaled(2));
             draw.AddText(position + new Vector2(4, 2), ImGui.GetColorU32(Theme.Text), number);
             if (hovered)
-                ImGui.SetTooltip($"Pair {pair + 1}: rows {pair * 2 + 1} and {pair * 2 + 2}.\nTop: row {pair * 2 + 1}. Bottom: row {pair * 2 + 2}.\nBase, shine and glow colours.\nThe pair pulses on the character, top yellow, bottom blue.");
+                ImGui.SetTooltip($"Pair {pair + 1}: rows {pair * 2 + 1} and {pair * 2 + 2}.\n{UsageText(pair)}\nTop: row {pair * 2 + 1}. Bottom: row {pair * 2 + 2}.\nBase, shine and glow colours.\nThe pair pulses on the character, top yellow, bottom blue.");
         }
         return hoveredPair;
     }
@@ -101,6 +104,14 @@ internal sealed partial class MaterialWindow
     private void DrawPairEditors(MaterialSession current, MaterialDocument doc, ColorTable table)
     {
         selectedPair = Math.Clamp(selectedPair, 0, PairCount - 1);
+        if (usage != null)
+        {
+            ImGui.TextColored(usage.PairUsed(selectedPair) ? Theme.Muted : Theme.Warning, $"Pair {selectedPair + 1}: {UsageText(selectedPair)}");
+            ImGui.SameLine(0, Theme.Gap * 2);
+            DrawWhere();
+        }
+        else
+            ImGui.TextColored(Theme.Hint, usageNote + " Every pair may be in use.");
         using var editors = ImRaii.Table("##pair-editors", 2, ImGuiTableFlags.SizingStretchSame | ImGuiTableFlags.BordersInnerV);
         if (!editors.Success)
             return;
@@ -359,7 +370,10 @@ internal sealed partial class MaterialWindow
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
             ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, (row + 1).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            var unused = usage is { RowUsed.Length: ColorTable.LegacyRowCount } && !usage.RowUsed[row];
+            ImGui.TextColored(unused ? Theme.Inactive : Theme.Muted, (row + 1).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(usage == null ? usageNote : unused ? "Not used by the index texture." : $"Used by {usage.RowShare[row] * 100:0.#}% of the index texture.");
             LegacyColour(current, row, "base", values.Diffuse, colour => values with { Diffuse = colour }, name);
             LegacyColour(current, row, "shine", values.Specular, colour => values with { Specular = colour }, name);
             LegacyFloat(current, row, "strength", values.SpecularMask, v => values with { SpecularMask = v }, name);

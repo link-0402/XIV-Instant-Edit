@@ -32,6 +32,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
     private readonly PenumbraIpc penumbra;
     private readonly PreviewService previews;
     private readonly IDataManager data;
+    private readonly ITextureProvider textures;
     private readonly IFramework framework;
     private readonly IObjectTable objects;
     private readonly IPluginLog log;
@@ -57,7 +58,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
     private sealed record Opened(MaterialSource Source, MaterialDocument Document, Guid? Collection, bool CustomShader);
 
     internal MaterialWindow(PreviewModService previewMods, MaterialPreviewService preview, PenumbraIpc penumbra, PreviewService previews,
-        IDataManager data, IFramework framework, IObjectTable objects, IPluginLog log)
+        IDataManager data, ITextureProvider textures, IFramework framework, IObjectTable objects, IPluginLog log)
         : base("Material###InstantEditMaterial")
     {
         this.previewMods = previewMods;
@@ -65,6 +66,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         this.penumbra = penumbra;
         this.previews = previews;
         this.data = data;
+        this.textures = textures;
         this.framework = framework;
         this.objects = objects;
         this.log = log;
@@ -188,6 +190,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         {
             log.Warning(e, "Could not put the material's own values back while unloading.");
         }
+        ReleaseUsage();
         life.Dispose();
     }
 
@@ -308,6 +311,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             }
         }
         PollTextures();
+        PollUsage();
     }
 
     /// <summary>Makes a freshly read material the open one; the last one's preview comes down first.</summary>
@@ -331,6 +335,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             session = new MaterialSession(opened.Source, opened.Document, OnEdit);
             selectedPair = 0;
             pathEdits.Clear();
+            ReleaseUsage();
         }
         collection = opened.Collection;
         customShader = opened.CustomShader;
