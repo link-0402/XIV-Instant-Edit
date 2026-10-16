@@ -37,7 +37,7 @@ internal sealed partial class MaterialWindow
         switch (table.Kind)
         {
             case ColorTableKind.Dawntrail:
-                DrawPairs(table);
+                HighlightPair(doc, DrawPairs(table));
                 ImGui.Spacing();
                 DrawPairEditors(current, doc, table);
                 break;
@@ -52,8 +52,10 @@ internal sealed partial class MaterialWindow
 
     // ---- Pairs ----
 
-    private void DrawPairs(ColorTable table)
+    /// <summary>The pair swatches; returns the hovered pair, or -1.</summary>
+    private int DrawPairs(ColorTable table)
     {
+        var hoveredPair = -1;
         var spacing = Theme.Scaled(4);
         var width = (ImGui.GetContentRegionAvail().X - spacing * 7) / 8;
         var height = ImGui.GetFrameHeight() * 1.6f;
@@ -66,6 +68,8 @@ internal sealed partial class MaterialWindow
             if (ImGui.InvisibleButton($"##pair-{pair}", new Vector2(width, height)))
                 selectedPair = pair;
             var hovered = ImGui.IsItemHovered();
+            if (hovered)
+                hoveredPair = pair;
             var a = table.Rows[pair * 2];
             var b = table.Rows[pair * 2 + 1];
             var half = height / 2;
@@ -78,8 +82,9 @@ internal sealed partial class MaterialWindow
             draw.AddRectFilled(position + new Vector2(2, 2), position + new Vector2(text.X + 6, text.Y + 2), ImGui.GetColorU32(new Vector4(0, 0, 0, .55f)), Theme.Scaled(2));
             draw.AddText(position + new Vector2(4, 2), ImGui.GetColorU32(Theme.Text), number);
             if (hovered)
-                ImGui.SetTooltip($"Pair {pair + 1}: rows {pair * 2 + 1} and {pair * 2 + 2}.\nTop: row {pair * 2 + 1}. Bottom: row {pair * 2 + 2}.\nBase, shine and glow colours.");
+                ImGui.SetTooltip($"Pair {pair + 1}: rows {pair * 2 + 1} and {pair * 2 + 2}.\nTop: row {pair * 2 + 1}. Bottom: row {pair * 2 + 2}.\nBase, shine and glow colours.\nThe pair pulses on the character, top yellow, bottom blue.");
         }
+        return hoveredPair;
     }
 
     private static void DrawSwatches(ImDrawListPtr draw, Vector2 position, Vector2 size, DtColorRow row)

@@ -273,7 +273,7 @@ internal sealed unsafe class LiveMaterial : IDisposable
         return new Target(binding, (nint)characterBase, (nint)material, (nint)handle, (nint)package);
     }
 
-    private static CharacterBase* DrawObject(IObjectTable objects, int objectIndex, DrawObjectKind kind)
+    internal static CharacterBase* DrawObject(IObjectTable objects, int objectIndex, DrawObjectKind kind)
     {
         if (objectIndex < 0 || objectIndex >= objects.Length || objects[objectIndex] is not ICharacter character || character.Address == 0)
             return null;

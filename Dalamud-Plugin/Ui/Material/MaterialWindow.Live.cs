@@ -12,6 +12,10 @@ namespace InstantEdit.Ui.Material;
 internal sealed partial class MaterialWindow
 {
     private const int LiveCheckMs = 500;
+    private static readonly System.Numerics.Vector3 HighlightTop = new(1f, 0.85f, 0.2f);
+    private static readonly System.Numerics.Vector3 HighlightBottom = new(0.2f, 0.75f, 1f);
+
+    private int highlighted = -1;
 
     // What the game loaded for the material: the opened or saved file, or the last structural preview.
     private MaterialDocument? loadedDoc;
@@ -25,7 +29,7 @@ internal sealed partial class MaterialWindow
     {
         nextLiveCheck = Environment.TickCount64 + LiveCheckMs;
         var found = LiveMaterial.Find(objects, current.Source.ObjectIndex, current.Source.GamePath);
-        var added = live.Bind(found);
+        var added = live.Bind(found) + liveTable.Bind(found);
         if (!live.Bound)
             return false;
         everBound = true;
@@ -45,7 +49,7 @@ internal sealed partial class MaterialWindow
         if (!live.IsValid() && !BindLive(current))
             return false;
         var from = shownDoc ?? loadedDoc ?? doc;
-        if (MaterialSession.LiveDiff(from, doc).Table)
+        if (MaterialSession.LiveDiff(from, doc).Table && !liveTable.Bound)
             return false;
         WriteDiff(from, doc);
         shownDoc = doc;
@@ -66,6 +70,8 @@ internal sealed partial class MaterialWindow
             live.SetFlags(to.ShaderFlags);
         foreach (var id in diff.Samplers)
             live.SetSamplerFlags(id, to.Slots.First(slot => slot.SamplerId == id).SamplerSettings);
+        if (diff.Table && to.Table is { Kind: ColorTableKind.Dawntrail or ColorTableKind.Legacy } table)
+            liveTable.Set(table, null);
     }
 
     /// <summary>Every half second: finds the material again after a redraw, GPose or zone change.</summary>
@@ -80,7 +86,20 @@ internal sealed partial class MaterialWindow
     private void RestoreLive()
     {
         live.Restore();
+        liveTable.Restore();
         shownDoc = null;
+        highlighted = -1;
+    }
+
+    /// <summary>Pulses a pair's rows on the character while its swatch is hovered; puts the plain rows back after.</summary>
+    private void HighlightPair(MaterialDocument doc, int pair)
+    {
+        if (pair == highlighted && pair < 0)
+            return;
+        highlighted = pair;
+        if (!liveTable.Bound || doc.Table is not { Kind: ColorTableKind.Dawntrail } table)
+            return;
+        liveTable.Set(table, pair < 0 ? null : new RowHighlight(pair * 2, pair * 2 + 1, HighlightTop, HighlightBottom));
     }
 
     private string LiveState(out System.Numerics.Vector4 colour)
@@ -150,6 +169,9 @@ internal sealed partial class MaterialWindow
             ["lastWrite"] = live.LastWrite,
             ["matchesSnapshot"] = valid && live.MatchesSnapshot(),
             ["shownIsCurrent"] = ReferenceEquals(shownDoc, current.Current),
+            ["tableSlots"] = liveTable.Bound ? liveTable.Swapped + " of bound slots show edited rows" : "none bound",
+            ["tableUpdate"] = liveTable.LastUpdate,
+            ["highlightedPair"] = highlighted < 0 ? null : highlighted + 1,
         };
         if (constant is { } id && valid && live.ReadConstant(id) is { } values)
         {
