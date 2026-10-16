@@ -19,6 +19,10 @@ internal static class ModBuildScenarios
         LeftoversAreRemoved(root);
         MetaIsReplacedWhole(root);
         EmptyDescriptionStaysEmpty(root);
+        WeaponPaths();
+        WeaponKeys();
+        WeaponImcIsWrittenAsWeapon(root);
+        UnknownKeyTagsResolveToNothing();
         VariantNamesAreBuildWide();              // writers-3
         MaterialLinksFollowTheirMaterials();        // models-1
         SamePathInAnotherOptionIsNoConflict();      // models-3
@@ -81,6 +85,63 @@ internal static class ModBuildScenarios
         ModMetaWriter.Write(mod, "No Description", new ModCarrier(), Array.Empty<ModGroupOut>(), new ModMetaInfo { Description = "" });
         var meta = JsonNode.Parse(File.ReadAllText(Path.Combine(mod, "meta.json")))!;
         Require((string?)meta["Description"] == "", "an empty pack description is written empty, not as \"Port of ...\"");
+    }
+
+    private static void WeaponPaths()
+    {
+        Require(WeaponNaming.ModelGamePath(201, 1) == "chara/weapon/w0201/obj/body/b0001/model/w0201b0001.mdl", "a weapon's model path");
+        Require(WeaponNaming.MaterialGamePath(201, 1, "mt_w0201b0001_a") == "chara/weapon/w0201/obj/body/b0001/material/v0001/mt_w0201b0001_a.mtrl",
+            "a weapon's material path, in the v0001 folder the build always writes");
+        Require(WeaponNaming.ImcGamePath(201, 1) == "chara/weapon/w0201/obj/body/b0001/b0001.imc", "a weapon's IMC path");
+        Require(WeaponNaming.DefaultMaterialName(201, 1, 2) == "mt_w0201b0001_b", "a weapon's second material is named _b");
+        Require(WeaponNaming.TextureGamePath(201, 1, "mt_w0201b0001_a_n") == "chara/weapon/w0201/obj/body/b0001/texture/mt_w0201b0001_a_n.tex",
+            "a weapon's texture path");
+
+        var subject = new WeaponSubject(new WeaponModel(4321, "Bronze Gladius", 0, "Gladiator's Arm", 201, 1, 3, false));
+        Require(subject.ModelGamePath(RaceInfo.BaseFor(PlayerGender.Female)) == WeaponNaming.ModelGamePath(201, 1),
+            "a weapon has one model whatever the race");
+        Require(subject is { Kind: SubjectKind.Weapon, UsesEqdp: false, UsesImc: true, MultiRace: false, HasRaces: false, IdDisplay: "w0201b0001" },
+            "a weapon uses IMC but no EQDP and no races");
+        Require(subject.MaterialRaces(new List<RaceModelEntry>()).SequenceEqual(new RaceGender?[] { null }), "a weapon writes one race-shared material set");
+    }
+
+    private static void WeaponKeys()
+    {
+        var main = new WeaponSubject(new WeaponModel(4321, "Bronze Gladius", 0, "Gladiator's Arm", 201, 1, 3, false));
+        var off  = new WeaponSubject(new WeaponModel(4321, "Bronze Gladius", 0, "Gladiator's Arm", 201, 1, 3, true));
+        Require(main.Key == 4321u, "a main-hand weapon is keyed by its item row id, like gear");
+        Require(off.Key == (0x4000_0000u | 4321u), "an off-hand model sets the off-hand bit");
+        Require((main.Key & 0x8000_0000u) == 0 && (off.Key & 0x8000_0000u) == 0, "weapon keys never look like feature keys");
+        Require(off.DisplayName == "Bronze Gladius (off hand)", "an off-hand model says so in its name");
+    }
+
+    private static void WeaponImcIsWrittenAsWeapon(string root)
+    {
+        var mod = Path.Combine(root, "Weapon Imc");
+        Directory.CreateDirectory(mod);
+        var defaults = new ModCarrier();
+        defaults.Imc.Add(new ModImcOverride
+        {
+            Object = ImcObject.OffHand, SetId = 201, SecondaryId = 1, Variant = 3,
+            DecalId = 0, VfxId = 2, MaterialAnimationId = 0, AttributeMask = 0x3FF, SoundId = 0,
+        });
+        ModMetaWriter.Write(mod, "Weapon Imc", defaults, Array.Empty<ModGroupOut>());
+        var meta = JsonNode.Parse(File.ReadAllText(Path.Combine(mod, "meta.json")))!;
+        var m = meta["DefaultData"]?["Manipulations"]?[0]?["Manipulation"];
+        Require(m != null && (string?)m["ObjectType"] == "Weapon" && (string?)m["EquipSlot"] == "OffHand" &&
+                (int?)m["PrimaryId"] == 201 && (int?)m["SecondaryId"] == 1 && (int?)m["Variant"] == 3 &&
+                (int?)m["Entry"]?["MaterialId"] == 1 && (int?)m["Entry"]?["VfxId"] == 2,
+            "a weapon's IMC entry is written with the weapon's object type, hand, body and variant");
+    }
+
+    private static void UnknownKeyTagsResolveToNothing()
+    {
+        Require(PortSubject.KeyTag(12345) == KeyTagKind.Gear, "a plain row id is gear or a main-hand weapon");
+        Require(PortSubject.KeyTag(0x4000_3039) == KeyTagKind.OffHand, "the off-hand bit marks an off-hand weapon");
+        Require(PortSubject.KeyTag(0x2000_0010) == KeyTagKind.Emote, "0x20 marks an emote");
+        Require(PortSubject.KeyTag(0x2100_0010) == KeyTagKind.Timeline, "0x21 marks another animation timeline");
+        Require(PortSubject.KeyTag(0x8000_0000 | 0x1001_0005) == KeyTagKind.Feature, "the top bit marks a character feature");
+        Require(PortSubject.KeyTag(0x1000_0001) == KeyTagKind.Unknown, "any other tag is unknown, not an item");
     }
 
     private static void VariantNamesAreBuildWide()
