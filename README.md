@@ -17,10 +17,7 @@ Penumbra mods.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Painting-in-Substance-Painter)
 - **Animations**: the listener finds the animation your character currently plays. Open them in the timeline, or load any emote, idle,\
   sit, movement track or expression onto your GPose character from there. Edit the animations length, sounds, expressions,\
-  lip sync, effects and props, with a preview in GPose. Change how the animation moves your character through bone layers, shown live on your\
-  character in GPose, from LivePose adjustments, .livepose and .pose files, your posed character or other\
-  animations. Give bones back to physics, repair the skeleton when you save, and send animations or a recorded live\
-  pose to Blender.\
+  lip sync, effects and props, with a preview in GPose. Change how the animation moves your character through various editing layers: offsets work similar to LivePose bone offsets, but can be applied more granular over a limited time range of the animation to fix clipping etc. \
   [Editing](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-Animations) ·
   [Timeline](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-the-Timeline) ·
   [In Blender](https://github.com/link-0402/XIV-Instant-Edit/wiki/Animations-in-Blender)
