@@ -5,6 +5,7 @@ using Dalamud.Plugin.Ipc;
 using Dalamud.Plugin.Ipc.Exceptions;
 using Dalamud.Plugin.Services;
 using InstantEdit.Ui;
+using InstantEdit.Ui.Material;
 
 namespace InstantEdit.Services.Testing;
 
@@ -29,12 +30,13 @@ internal sealed class BridgeTools : IDisposable
     private readonly ModelBackupStore backups;
     private readonly EstEntryStore estEntries;
     private readonly PhysicsWindow physics;
+    private readonly MaterialWindow material;
     private readonly ICallGateProvider<string, string, string> invoke;
     private readonly ICallGateSubscriber<object> ready;
     private readonly Dictionary<string, Func<JsonObject, JsonNode?>> tools;
 
     public BridgeTools(IDalamudPluginInterface pi, IFramework framework, IPluginLog log, Configuration config, ExportContextRegistry contexts,
-        ModelBackupStore backups, EstEntryStore estEntries, PhysicsWindow physics)
+        ModelBackupStore backups, EstEntryStore estEntries, PhysicsWindow physics, MaterialWindow material)
     {
         this.pi = pi;
         this.framework = framework;
@@ -44,12 +46,14 @@ internal sealed class BridgeTools : IDisposable
         this.backups = backups;
         this.estEntries = estEntries;
         this.physics = physics;
+        this.material = material;
         tools = new Dictionary<string, Func<JsonObject, JsonNode?>>(StringComparer.Ordinal)
         {
             ["state"] = State,
             ["contexts"] = Contexts,
             ["est_entries"] = EstEntries,
             ["physics"] = Physics,
+            ["material"] = Material,
         };
 
         invoke = pi.GetIpcProvider<string, string, string>($"{Owner}.XivBridge.Invoke");
@@ -78,7 +82,11 @@ internal sealed class BridgeTools : IDisposable
           { "name": "physics",
             "description": "The Body Physics builder: window, character and loaded physics file, document, message line, automatic preview, the preview itself and the physics mods it saved.",
             "inputSchema": { "type": "object", "properties": {
-              "detail": { "type": "string", "enum": ["summary", "areas", "full"], "description": "summary (default); areas adds each simulator; full adds chains, connectors, springs and collision bits." } } } }
+              "detail": { "type": "string", "enum": ["summary", "areas", "full"], "description": "summary (default); areas adds each simulator; full adds chains, connectors, springs and collision bits." } } } },
+          { "name": "material",
+            "description": "The Material window: the open material's source and document, the temporary-mod preview, and the live binding (where the material sits on the character, snapshot size, last write, whether the loaded material still holds its bind-time values).",
+            "inputSchema": { "type": "object", "properties": {
+              "constant": { "type": "string", "description": "A constant id in hex (such as 0x29AC0223): also read its value from the loaded material and from the document." } } } }
         ]
         """;
 
@@ -229,6 +237,16 @@ internal sealed class BridgeTools : IDisposable
     {
         var detail = String(arguments, "detail") ?? "summary";
         return framework.RunOnFrameworkThread(() => physics.TestState(detail)).GetAwaiter().GetResult();
+    }
+
+    private JsonNode Material(JsonObject arguments)
+    {
+        uint? constant = String(arguments, "constant") is { } text
+                         && uint.TryParse(text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? text[2..] : text,
+                             System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out var id)
+            ? id
+            : null;
+        return framework.RunOnFrameworkThread(() => material.TestState(constant)).GetAwaiter().GetResult();
     }
 
     // ---- Arguments ----

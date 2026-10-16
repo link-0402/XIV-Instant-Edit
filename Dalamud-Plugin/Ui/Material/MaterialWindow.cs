@@ -32,7 +32,10 @@ internal sealed partial class MaterialWindow : Window, IDisposable
     private readonly PenumbraIpc penumbra;
     private readonly PreviewService previews;
     private readonly IDataManager data;
+    private readonly IFramework framework;
+    private readonly IObjectTable objects;
     private readonly IPluginLog log;
+    private readonly LiveMaterial live;
     private readonly CancellationTokenSource life = new();
 
     private MaterialSession? session;
@@ -53,7 +56,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
     private sealed record Opened(MaterialSource Source, MaterialDocument Document, Guid? Collection, bool CustomShader);
 
     internal MaterialWindow(PreviewModService previewMods, MaterialPreviewService preview, PenumbraIpc penumbra, PreviewService previews,
-        IDataManager data, IPluginLog log)
+        IDataManager data, IFramework framework, IObjectTable objects, IPluginLog log)
         : base("Material###InstantEditMaterial")
     {
         this.previewMods = previewMods;
@@ -61,7 +64,10 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         this.penumbra = penumbra;
         this.previews = previews;
         this.data = data;
+        this.framework = framework;
+        this.objects = objects;
         this.log = log;
+        live = new LiveMaterial(objects, log);
         Size = new Vector2(1020, 680);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints { MinimumSize = new Vector2(760, 420), MaximumSize = new Vector2(float.MaxValue, float.MaxValue) };
@@ -155,17 +161,31 @@ internal sealed partial class MaterialWindow : Window, IDisposable
     public override void OnClose()
     {
         previewDue = 0;
-        // The preview shows unsaved edits; closing puts the character's own look back. The edits stay until another material opens.
+        // The previews show unsaved edits; closing puts the character's own look back. The edits stay until another material opens.
+        RestoreLive();
         if (session is not { PreviewShown: true } current)
             return;
+        loadedDoc = current.History.Saved;
         var stop = working ?? Task.FromResult<string?>(null);
         _ = stop.ContinueWith(_ => IsOpen ? Task.CompletedTask : current.DiscardAsync(preview), TaskScheduler.Default).Unwrap()
             .ContinueWith(task => log.Warning(task.Exception!, "Could not stop the material preview."), TaskContinuationOptions.OnlyOnFaulted);
     }
 
+    /// <summary>Puts the loaded material's own values back (on the framework thread, waiting briefly when called elsewhere).</summary>
     public void Dispose()
     {
         life.Cancel();
+        try
+        {
+            if (framework.IsInFrameworkUpdateThread)
+                RestoreLive();
+            else
+                framework.RunOnFrameworkThread(RestoreLive).Wait(TimeSpan.FromSeconds(2));
+        }
+        catch (Exception e)
+        {
+            log.Warning(e, "Could not put the material's own values back while unloading.");
+        }
         life.Dispose();
     }
 
@@ -221,6 +241,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         // A control that went away while held never reports letting go.
         if (current.History.InGesture && !ImGui.IsAnyItemActive())
             current.History.EndGesture();
+        PumpLive(current);
         PumpPreview(current);
     }
 
@@ -298,6 +319,8 @@ internal sealed partial class MaterialWindow : Window, IDisposable
                 await old.DiscardAsync(preview).ConfigureAwait(false);
                 return null;
             }, _ => $"Opened {opened.Source.FileName}.");
+        if (!reload)
+            RestoreLive();
         if (reload && old != null)
             old.Reload(opened.Source, opened.Document);
         else
@@ -308,17 +331,29 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         }
         collection = opened.Collection;
         customShader = opened.CustomShader;
+        loadedDoc = opened.Document;
+        shownDoc = null;
+        everBound = false;
+        RestoreLive();
+        BindLive(session!);
         ResolveTextures(session!.Current);
         if (!reload)
             Say(FeedbackSeverity.Info, $"Opened {opened.Source.FileName} from {(opened.Source.IsGameData ? "the game's files" : opened.Source.ModName)}.");
     }
 
-    /// <summary>Every edit, undo and redo lands here. Until the live preview exists, both kinds redraw once the controls let go.</summary>
+    /// <summary>
+    /// Every edit, undo and redo lands here. Value edits are written into the loaded material at
+    /// once; edits that change what the game loads (or values it can't take live) redraw through a
+    /// temporary mod once the controls let go.
+    /// </summary>
     private Task OnEdit(MaterialDocument doc, EditClass kind)
     {
         if (kind == EditClass.Structural)
             ResolveTextures(doc);
-        previewDue = Environment.TickCount64 + PreviewDelayMs;
+        else if (WriteLive(doc))
+            return Task.CompletedTask;
+        if (kind == EditClass.Structural || everBound)
+            previewDue = Environment.TickCount64 + PreviewDelayMs;
         return Task.CompletedTask;
     }
 
@@ -329,10 +364,18 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         previewDue = 0;
         if (!current.Current.Editable && current.Current.Slots.Count == 0)
             return;
+        var shown = current.Current;
         Run(() => current.PreviewStructuralAsync(preview, life.Token),
-            warning => warning ?? (preview.Shared
-                ? $"Shown on the character. Others using {preview.CollectionName} see it too. Nothing is saved yet."
-                : "Shown on the character. Nothing is saved yet."));
+            warning =>
+            {
+                // The redraw loads the preview's file; the live binding finds it again and adds what changed since.
+                loadedDoc = shown;
+                shownDoc = null;
+                nextLiveCheck = Environment.TickCount64 + LiveCheckMs;
+                return warning ?? (preview.Shared
+                    ? $"Shown on the character. Others using {preview.CollectionName} see it too. Nothing is saved yet."
+                    : "Shown on the character. Nothing is saved yet.");
+            });
     }
 
     private void Run(Func<Task<string?>> action, Func<string?, string> done)
@@ -380,11 +423,23 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             Widgets.Badge("Unsaved", Theme.Warning);
         }
 
-        var buttons = ImGui.GetFrameHeight() * 4 + ImGui.GetStyle().ItemSpacing.X * 4 + Theme.Gap * 4
-                      + ImGui.CalcTextSize("Save").X + ImGui.GetStyle().FramePadding.X * 2 + ImGui.CalcTextSize(PreviewState()).X;
+        var state = LiveState(out var stateColour);
+        var reload = !live.Bound;
+        var buttons = ImGui.GetFrameHeight() * (reload ? 5 : 4) + ImGui.GetStyle().ItemSpacing.X * (reload ? 5 : 4) + Theme.Gap * 4
+                      + ImGui.CalcTextSize("Save").X + ImGui.GetStyle().FramePadding.X * 2 + ImGui.CalcTextSize(state).X;
         ImGui.SameLine();
         ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetWindowContentRegionMax().X - buttons));
-        ImGui.TextColored(preview.Active ? Theme.Success : Theme.Muted, PreviewState());
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(stateColour, state);
+        Tip(live.Bound ? "Value edits show on the character at once. Nothing is saved yet."
+            : everBound ? "The material was redrawn or left the screen. Reload finds it again."
+            : "This material isn't drawn on the character. Edits still save.");
+        if (reload)
+        {
+            ImGui.SameLine();
+            if (Widgets.IconButton("##material-reload-live", FontAwesomeIcon.Sync, "Reload live preview", working == null))
+                BindLive(current);
+        }
         ImGui.SameLine(0, Theme.Gap * 2);
         using (ImRaii.Disabled(Busy || !current.History.Dirty))
         {
@@ -414,11 +469,6 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             Widgets.Spinner();
         }
     }
-
-    private string PreviewState()
-        => working != null && previewDue == 0 && session?.PreviewShown != true ? "Redrawing"
-            : preview.Active ? "Shown on the character"
-            : "Not shown yet";
 
     private void DrawMenu(MaterialSession current, MaterialDocument doc)
     {
@@ -507,6 +557,8 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         }, warning =>
         {
             previews.Invalidate(current.Source.ActualPath);
+            loadedDoc = current.History.Saved;
+            shownDoc = null;
             return warning ?? result?.Describe("Saved") ?? "Saved.";
         });
     }
