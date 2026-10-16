@@ -53,7 +53,7 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
     private string saveName = string.Empty;
 
     internal PhysicsWindow(PhysicsBuilderService service, AnimationPlayback playback, Configuration config, Action saveConfig, IPluginLog log)
-        : base("Body Physics##InstantEditPhysics")
+        : base("Body Physics (Beta)###InstantEditPhysics")
     {
         this.service = service;
         this.playback = playback;

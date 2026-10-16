@@ -18,7 +18,7 @@ internal sealed class BuildWindow : Window, IDisposable
     private readonly BuildScreen _screen;
 
     internal BuildWindow(StudioHost host, TextureThumbnailCache thumbnails)
-        : base("Build a mod###ie-build", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
+        : base("Build a mod (Beta)###ie-build", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
         _host   = host;
         _screen = new BuildScreen(host, thumbnails);
