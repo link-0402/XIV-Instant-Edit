@@ -259,6 +259,7 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
         {
             var material = MaterialSetup.FromPreset(preset, Path.GetFileNameWithoutExtension(gamePath));
             ApplyTextureDefaults(material.Textures);
+            PointMatcapAtLibrary(material);
             var made = PutMaterial(gamePath, option, material, isNew, MaterialStart.Preset, string.Empty);
             Notify($"{Path.GetFileName(gamePath)} is made here now — give its texture slots images of your own.", Severity.Info);
             return made;
@@ -310,6 +311,7 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
         {
             var material = MaterialSetup.FromPreset(preset ?? MaterialPresets.All[0], Path.GetFileNameWithoutExtension(gamePath));
             ApplyTextureDefaults(material.Textures);
+            PointMatcapAtLibrary(material);
             return PutMaterial(gamePath, option, material, isNew: true, MaterialStart.Preset, string.Empty);
         }
 
@@ -402,7 +404,7 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
         {
             var postfix = n == 1 ? first : $"{first}{n}";
             var path = ResourceNaming.AuthoredTexturePath(materialGamePath, postfix);
-            bool taken = material.Textures.Any(t => t != self && (t.IsShared ? PathNormalizer.SameGamePath(t.SharedGamePath, path) : t.Postfix == postfix))
+            bool taken = material.Textures.Any(t => t != self && PathNormalizer.SameGamePath(t.IsShared ? t.SharedGamePath : ResourceNaming.SlotTexturePath(materialGamePath, t), path))
                       || Graph.FindAll(path).Any(node => node.AuthoredSlot != self)
                       || _host.GameData.VanillaFiles.Exists(path);
             if (!taken)
@@ -415,7 +417,10 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
     public void SwapKeptTexture(string materialGamePath, MaterialSetup material, TextureSlot slot, string image)
     {
         if (slot.IsShared)
-            slot.Postfix = FreePostfix(materialGamePath, slot.Type, material, slot);
+        {
+            slot.Postfix  = FreePostfix(materialGamePath, slot.Type, material, slot);
+            slot.GamePath = string.Empty;
+        }
         slot.SourcePath     = image;
         slot.SharedGamePath = string.Empty;
         slot.UseVariants    = slot.UseWhiteDummy = false;
@@ -444,6 +449,103 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
         replacement.CloneGameMaterial  = false;
         replacement.CloneModMaterial   = false;
         replacement.TemplatePath       = string.Empty;
+        PointMatcapAtLibrary(material);
+        TouchReplacements();
+    }
+
+    /// <summary>
+    /// Loads a preset onto a material made here: its shader, plus a slot for each of its texture roles
+    /// the material has none of yet. Slots it has already keep their textures and paths. Like another
+    /// shader, the colour table and settings of what it started from are not carried over.
+    /// </summary>
+    public void LoadPreset(ResourceReplacement replacement, MaterialPreset preset)
+    {
+        if (replacement.Authored is not { } material)
+            return;
+        material.ShaderType           = preset.Shader;
+        replacement.CloneGameMaterial = false;
+        replacement.CloneModMaterial  = false;
+        replacement.TemplatePath      = string.Empty;
+
+        var added = new List<string>();
+        foreach (var type in preset.Textures)
+        {
+            if (material.Textures.Any(t => t.Type == type))
+                continue;
+            if (type == TextureType.Reflection && preset.Shader == ShaderType.CharacterReflection)
+                continue;   // PointMatcapAtLibrary adds it
+            AddTextureSlot(replacement.GamePath, material, type);
+            added.Add(TextureTypeInfo.DisplayName(type));
+        }
+        if (PointMatcapAtLibrary(material))
+            added.Add($"{TextureTypeInfo.DisplayName(TextureType.Reflection)} (MatCap Library)");
+
+        var unusual = material.Textures.Select(t => t.Type).Distinct()
+            .Where(t => !ShaderInfo.SupportedTextures(preset.Shader).Contains(t))
+            .Select(TextureTypeInfo.DisplayName).ToList();
+        var note = $"{Path.GetFileName(replacement.GamePath)} uses the {preset.Name} preset now; its textures are kept.";
+        if (added.Count > 0)
+            note += $" New slots: {string.Join(", ", added)}.";
+        if (unusual.Count > 0)
+            note += $" {ShaderInfo.DisplayName(preset.Shader)} doesn't normally use {string.Join(", ", unusual)}.";
+        Notify(note, Severity.Info);
+        TouchReplacements();
+    }
+
+    /// <summary>
+    /// A matcap material (Character (Reflection)) reads the MatCap Library mod's shared texture until an
+    /// image of the user's own replaces it: an empty matcap slot points at it, and one is added if it has
+    /// none. True when a slot was added.
+    /// </summary>
+    private static bool PointMatcapAtLibrary(MaterialSetup material)
+    {
+        if (material.ShaderType != ShaderType.CharacterReflection)
+            return false;
+        var slots = material.Textures.Where(t => t.Type == TextureType.Reflection).ToList();
+        foreach (var slot in slots)
+            if (!slot.IsShared && !slot.UseWhiteDummy && !slot.UseVariants && string.IsNullOrWhiteSpace(slot.SourcePath))
+                slot.SharedGamePath = MaterialPatcher.MatcapLibraryDefault;
+        if (slots.Count > 0)
+            return false;
+        material.Textures.Add(new TextureSlot
+        {
+            Type           = TextureType.Reflection,
+            Postfix        = MaterialNaming.DefaultPostfix(TextureType.Reflection),
+            SharedGamePath = MaterialPatcher.MatcapLibraryDefault,
+            Compression    = TextureCompression.Auto,
+        });
+        return true;
+    }
+
+    /// <summary>
+    /// Points a texture slot of a material made here at another game path: a kept slot reads the
+    /// texture there, a slot with an image of its own is written there. Empty gives an own slot its
+    /// usual path back.
+    /// </summary>
+    public void SetTexturePath(string materialGamePath, TextureSlot slot, string path)
+    {
+        path = path.Trim();
+        if (path.Length > 0)
+        {
+            path = PathNormalizer.GamePath(path);
+            if (!path.EndsWith(".tex", StringComparison.OrdinalIgnoreCase))
+            {
+                Notify("A texture path ends in .tex.", Severity.Warning);
+                return;
+            }
+        }
+        if (slot.IsShared)
+        {
+            if (path.Length == 0)
+                return;   // a kept slot always points somewhere
+            slot.SharedGamePath = path;
+        }
+        else
+        {
+            slot.GamePath = PathNormalizer.SameGamePath(path, ResourceNaming.AuthoredTexturePath(materialGamePath, slot.Postfix)) ? string.Empty : path;
+            if (path.Length > 0 && _host.GameData.VanillaFiles.Exists(path))
+                Notify($"{Path.GetFileName(path)} is a game texture: writing it changes it for everything else that uses it too.", Severity.Warning);
+        }
         TouchReplacements();
     }
 

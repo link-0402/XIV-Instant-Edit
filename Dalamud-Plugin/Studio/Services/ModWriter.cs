@@ -700,7 +700,7 @@ internal sealed class ModWriter
                 continue;
             }
 
-            var texPath = ResourceNaming.AuthoredTexturePath(gamePath, tex.Postfix);
+            var texPath = ResourceNaming.SlotTexturePath(gamePath, tex);
             var texLabel = Path.GetFileName(texPath);
 
             if (tex.UseVariants)

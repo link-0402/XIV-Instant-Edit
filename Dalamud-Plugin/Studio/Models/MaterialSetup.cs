@@ -136,6 +136,12 @@ public class TextureSlot
 
     public bool IsShared => !string.IsNullOrEmpty(SharedGamePath);
 
+    /// <summary>
+    /// Studio: the game path this slot's own texture is written at, typed in by the user. Empty
+    /// derives it from the material's path and <see cref="Postfix"/>.
+    /// </summary>
+    public string GamePath { get; set; } = string.Empty;
+
     /// <summary>Build mode: where the texture goes in the mod — see <see cref="PackPlace"/>. Null goes with its material.</summary>
     public string? Option { get; set; }
 
@@ -147,6 +153,7 @@ public class TextureSlot
         Option         = Option,
         VariantGroup   = VariantGroup,
         SharedGamePath = SharedGamePath,
+        GamePath       = GamePath,
         Type           = Type,
         Postfix        = Postfix,
         SourcePath     = SourcePath,

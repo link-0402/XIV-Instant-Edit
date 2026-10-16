@@ -494,7 +494,7 @@ internal static class ResourceGraphBuilder
                         continue;
                     }
 
-                    var path = ResourceNaming.AuthoredTexturePath(node.GamePath, slot.Postfix);
+                    var path = ResourceNaming.SlotTexturePath(node.GamePath, slot);
                     var id = NodeId(option, path);
                     if (!Nodes.TryGetValue(id, out var child))
                     {
