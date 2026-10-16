@@ -17,7 +17,7 @@ internal static partial class Widgets
     {
         bool clicked;
         using (ImRaii.Disabled(!enabled))
-            clicked = ImGuiComponents.IconButton(id, icon);
+            clicked = PlainIconButton(id, icon);
         if (tooltip is not null && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(tooltip);
         return clicked && enabled;
@@ -54,10 +54,37 @@ internal static partial class Widgets
     public static bool GhostIconButton(string id, FontAwesomeIcon icon, string? tooltip = null, Vector2? size = null)
     {
         using var colour = ImRaii.PushColor(ImGuiCol.Button, Vector4.Zero);
-        var clicked = size is { } box ? ImGuiComponents.IconButton(id, icon, box) : ImGuiComponents.IconButton(id, icon);
+        var clicked = PlainIconButton(id, icon, size);
         if (tooltip is not null && ImGui.IsItemHovered())
             ImGui.SetTooltip(tooltip);
         return clicked;
+    }
+
+    // Icon button labels by icon and id, made once: Dalamud's ImGuiComponents.IconButton allocates a few
+    // hundred bytes a call, and table rows draw several every frame.
+    private static readonly Dictionary<(FontAwesomeIcon Icon, string Id), string> IconLabels = new();
+
+    /// <summary>
+    /// ImGuiComponents.IconButton without its allocations: the same "glyph##id" label, so the same ImGui
+    /// id, and the same size, drawn in the icon font.
+    /// </summary>
+    private static bool PlainIconButton(string id, FontAwesomeIcon icon, Vector2? size = null)
+    {
+        if (!IconLabels.TryGetValue((icon, id), out var label))
+        {
+            if (IconLabels.Count >= 1024)
+                IconLabels.Clear();
+            IconLabels[(icon, id)] = label = $"{icon.ToIconString()}##{id}";
+        }
+        ImGui.PushFont(UiBuilder.IconFont);
+        try
+        {
+            return size is { } box ? ImGui.Button(label, box) : ImGui.Button(label);
+        }
+        finally
+        {
+            ImGui.PopFont();
+        }
     }
 
     /// <summary>

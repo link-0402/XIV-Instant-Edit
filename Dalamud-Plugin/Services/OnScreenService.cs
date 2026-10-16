@@ -33,6 +33,7 @@ public sealed class OnScreenService : IDisposable
     private readonly Lock _lock = new();
     private readonly HashSet<string> _reportedAmbiguities = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _lifetime = new();
+    private readonly ResourceUiNames _uiNames = new();
 
     private IReadOnlyList<OnScreenObject> _items = Array.Empty<OnScreenObject>();
     private bool _refreshing;
@@ -73,6 +74,24 @@ public sealed class OnScreenService : IDisposable
     {
         var items = Items;
         return items.Count == 0 || items.Any(item => item.Address == address);
+    }
+
+    /// <summary>
+    /// Whether a redraw of the object at this index can change the snapshot: your character, an object
+    /// it owns, or one listed now. Other players' redraws, which sync plugins cause all the time, can't.
+    /// Call on the framework thread: it reads the object table.
+    /// </summary>
+    public bool Concerns(int objectIndex)
+    {
+        if (Items.Any(item => item.ObjectIndex == objectIndex))
+            return true;
+        if (_objects.LocalPlayer is not { } player)
+            return false;
+        if (objectIndex == player.ObjectIndex)
+            return true;
+        var candidate = _objects[objectIndex];
+        return candidate is not null && candidate.Address != nint.Zero &&
+               IsSupportedOwnedObject(candidate) && IsOwnedByLocalPlayer(candidate, player);
     }
 
     public void RequestRefresh()
@@ -159,7 +178,7 @@ public sealed class OnScreenService : IDisposable
             _objects.LocalPlayer is not { Address: not 0 } localPlayer)
             return null;
         ushort[] index = [localPlayer.ObjectIndex];
-        if (_penumbra.GetResourceTrees(index) is not [{ } tree])
+        if (NamedTrees(index) is not [{ } tree])
             return null;
         var paths = _penumbra.GetResourcePaths(index);
         return new JoinedTree(localPlayer.ObjectIndex, localPlayer.Address, localPlayer.Name.TextValue ?? "Unknown",
@@ -206,7 +225,7 @@ public sealed class OnScreenService : IDisposable
             _objects.LocalPlayer is not { Address: not 0 } localPlayer)
             return [];
 
-        var trees = _penumbra.GetPlayerResourceTrees();
+        var trees = NamedPlayerTrees();
         var resolvedPaths = _penumbra.GetPlayerResourcePaths();
 
         var treeEntries = trees
@@ -271,7 +290,7 @@ public sealed class OnScreenService : IDisposable
         // Penumbra's per-object tree and path IPCs index Dalamud's object table, so these
         // rare recoveries (usually one mount or minion) stay in the framework visit.
         var indices = missing.ToArray();
-        var recovered = _penumbra.GetResourceTrees(indices);
+        var recovered = NamedTrees(indices);
         var recoveredPaths = _penumbra.GetResourcePaths(indices);
         for (var i = 0; i < missing.Count && i < recovered.Length; i++)
         {
@@ -279,6 +298,65 @@ public sealed class OnScreenService : IDisposable
             if (recoveredTree is not null)
                 treeEntries.Add(new TreeEntry(missing[i], recoveredTree, i < recoveredPaths.Length ? recoveredPaths[i] : null));
         }
+    }
+
+    /// <summary>
+    /// The player's trees with their UI names: fetched without them, named from earlier snapshots, and only
+    /// trees not seen before fetched again with them (see <see cref="ResourceUiNames"/>). Call on the framework thread.
+    /// </summary>
+    private IReadOnlyDictionary<ushort, ResourceTreeDto> NamedPlayerTrees()
+    {
+        var named = new Dictionary<ushort, ResourceTreeDto>();
+        var unnamedTrees = new Dictionary<ushort, ResourceTreeDto>();
+        foreach (var (index, tree) in _penumbra.GetPlayerResourceTrees(withUiData: false))
+        {
+            if (_uiNames.Named(tree) is { } withNames)
+                named[index] = withNames;
+            else
+                unnamedTrees[index] = tree;
+        }
+        if (unnamedTrees.Count == 0)
+            return named;
+        // Kept unnamed if Penumbra fails to name them.
+        foreach (var (index, tree) in unnamedTrees)
+            named[index] = tree;
+        var unnamed = unnamedTrees.Keys.ToArray();
+        var fetched = _penumbra.GetResourceTrees(unnamed, withUiData: true);
+        for (var i = 0; i < unnamed.Length && i < fetched.Length; i++)
+        {
+            if (fetched[i] is not { } tree)
+                continue;
+            _uiNames.Learn(tree);
+            named[unnamed[i]] = tree;
+        }
+        return named;
+    }
+
+    /// <summary> <see cref="NamedPlayerTrees"/> for explicit object-table indices. Call on the framework thread. </summary>
+    private ResourceTreeDto?[] NamedTrees(ushort[] indices)
+    {
+        var trees = _penumbra.GetResourceTrees(indices, withUiData: false);
+        var unnamed = new List<int>();
+        for (var i = 0; i < trees.Length; i++)
+        {
+            if (trees[i] is not { } tree)
+                continue;
+            if (_uiNames.Named(tree) is { } withNames)
+                trees[i] = withNames;
+            else
+                unnamed.Add(i);
+        }
+        if (unnamed.Count == 0)
+            return trees;
+        var fetched = _penumbra.GetResourceTrees(unnamed.Select(i => indices[i]).ToArray(), withUiData: true);
+        for (var i = 0; i < unnamed.Count && i < fetched.Length; i++)
+        {
+            if (fetched[i] is not { } tree)
+                continue;
+            _uiNames.Learn(tree);
+            trees[unnamed[i]] = tree;
+        }
+        return trees;
     }
 
     /// <summary> The gear models other gear hides on a character; none when it isn't drawn as a person. Call on the framework thread. </summary>

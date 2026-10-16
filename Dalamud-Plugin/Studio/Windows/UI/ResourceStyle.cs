@@ -140,11 +140,14 @@ internal static class ResourceStyle
             return string.Empty;
         if (ImGui.CalcTextSize(text).X <= width)
             return text;
+        var key = FitKey(text, width, path: false);
+        if (Fitted.TryGetValue(key, out var fitted))
+            return fitted;
 
         int len = text.Length;
         while (len > 1 && ImGui.CalcTextSize(text[..len]).X > width)
             len = Math.Max(1, len * 9 / 10);
-        return text[..len].TrimEnd();
+        return Remember(key, text[..len].TrimEnd());
     }
 
     /// <summary>Shortens a path from the left, so its file name stays readable.</summary>
@@ -154,10 +157,28 @@ internal static class ResourceStyle
             return string.Empty;
         if (ImGui.CalcTextSize(path).X <= width)
             return path;
+        var key = FitKey(path, width, path: true);
+        if (Fitted.TryGetValue(key, out var fitted))
+            return fitted;
 
         int start = 0;
         while (start < path.Length - 1 && ImGui.CalcTextSize(path[start..]).X > width)
             start = Math.Min(path.Length - 1, start + Math.Max(1, (path.Length - start) / 10));
-        return path[start..];
+        return Remember(key, path[start..]);
+    }
+
+    // Shortened texts by text, width, font and side: lists shorten the same long names every frame,
+    // and each try of a shorter length is a new string. Only touched on the draw thread.
+    private static readonly Dictionary<(string Text, int Width, nint Font, bool Path), string> Fitted = new();
+
+    private static unsafe (string, int, nint, bool) FitKey(string text, float width, bool path)
+        => (text, (int)width, (nint)ImGui.GetFont().Handle, path);
+
+    private static string Remember((string, int, nint, bool) key, string fitted)
+    {
+        if (Fitted.Count >= 4096)
+            Fitted.Clear();
+        Fitted[key] = fitted;
+        return fitted;
     }
 }

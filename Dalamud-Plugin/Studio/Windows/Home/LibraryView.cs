@@ -372,10 +372,14 @@ internal sealed class LibraryView
         float tileW = (width - spacing * (columns - 1)) / columns;
         float tileH = Tile.Height(detail: true);
         int rowCount = (_shown.Count + columns - 1) / columns;
-        var heights = Enumerable.Repeat(tileH, rowCount).ToList();
+        if (_rowHeights.Count != rowCount || rowCount > 0 && _rowHeights[0] != tileH)
+        {
+            _rowHeights.Clear();
+            _rowHeights.AddRange(Enumerable.Repeat(tileH, rowCount));
+        }
         var shown = _shown;
 
-        VirtualRows.Draw(heights, row =>
+        VirtualRows.Draw(_rowHeights, row =>
         {
             for (int c = 0; c < columns; c++)
             {
@@ -422,35 +426,23 @@ internal sealed class LibraryView
     /// <summary>The tile hovered last frame: its mod's changed items are asked of Penumbra (once).</summary>
     private string? _hovered;
 
-    private void DrawMod(InstalledMod mod, Vector2 size, ModUsage? usage, IReadOnlySet<string>? active, string? collection,
-        IReadOnlyDictionary<string, IReadOnlyList<string>>? duplicates, IReadOnlyDictionary<string, IReadOnlyList<ChangeTag>>? changes,
-        IReadOnlyDictionary<string, long>? sizes, SearchIn kind, string search)
-    {
-        var folder = mod.Folder;
-        var badges = new List<Badge>();
-        if (active != null && active.Contains(mod.FolderName))
-            badges.Add(new Badge("Active", Theme.Good, $"Enabled in {collection ?? "your collection"}."));
-        if (_host.IsModOpen(mod.FullPath))
-            badges.Add(new Badge("Open", Theme.Good, "Open in a window."));
-        if (mod.HasProject)
-            badges.Add(new Badge("Your files", Theme.Accent, "Has files of your own that are kept in step with their sources."));
-        if (usage != null && !usage.Used.Contains(mod.FolderName))
-            badges.Add(new Badge("Unused", Theme.Warn, "Not enabled in any collection."));
-        if (duplicates != null && duplicates.TryGetValue(mod.FolderName, out var copies))
-            badges.Add(new Badge("Duplicate", Theme.Accent, $"Same files as: {string.Join(", ", copies)}"));
+    // Every row of the library is one tile high; kept between frames.
+    private readonly List<float> _rowHeights = [];
 
-        // With a changes search, the tooltip lists what the mod changes and marks what matched.
-        var changed = changes != null && changes.TryGetValue(mod.FolderName, out var tags)
-            ? ChangesText(tags, kind, search)
-            : _library.ChangedItems(mod, fetch: mod.FolderName == _hovered);
-        var detail = mod.Tags.Count > 0 ? string.Join(", ", mod.Tags) : folder;
-        long? bytes = sizes != null && sizes.TryGetValue(mod.FolderName, out var known) ? known : null;
-        // The sort's own value leads the detail line, so the order can be read off the tiles.
-        if (_sort == SortSize && bytes is { } sorted)
-            detail = detail.Length > 0 ? $"{ResourceTreeView.FormatSize(sorted)} · {detail}" : ResourceTreeView.FormatSize(sorted);
-        else if (_sort == SortAdded && mod.Added != default)
-            detail = $"Added {mod.Added.ToLocalTime():yyyy-MM-dd}{(detail.Length > 0 ? $" · {detail}" : string.Empty)}";
-        var result = Tile.Draw(new TileSpec
+    /// <summary>
+    /// What a tile shows besides its hover text, by mod folder: rebuilt when what it depends on changes, not
+    /// every frame, since a page of tiles draws every frame.
+    /// </summary>
+    private readonly Dictionary<string, (InstalledMod Mod, TileKey Key, TileSpec Spec)> _tiles = new(StringComparer.Ordinal);
+
+    private readonly record struct TileKey(bool Active, bool Open, bool Unused, IReadOnlyList<string>? Copies, string? Collection, long? Bytes,
+        int Sort, bool Thumbnails);
+
+    // The hovered tile with its hover text, kept while the tile and its changes stay the same.
+    private (TileSpec Base, string? Changed, TileSpec Spec)? _tooltip;
+
+    private static TileSpec Spec(InstalledMod mod, string detail, IReadOnlyList<Badge> badges, Action<float>? thumb, string? tooltip)
+        => new()
         {
             Id        = mod.FolderName,
             Title     = mod.Name,
@@ -458,14 +450,39 @@ internal sealed class LibraryView
             Detail    = detail,
             Icon      = FontAwesomeIcon.BoxOpen,
             IconColor = Theme.Muted,
-            DrawThumb = Image(mod),
+            DrawThumb = thumb,
             Badges    = badges,
-            Tooltip   = $"{mod.Name}\n{mod.FullPath}{(folder.Length > 0 ? $"\nIn Penumbra: {folder}" : string.Empty)}"
-                      + (bytes is { } total ? $"\nSize: {ResourceTreeView.FormatSize(total)}" : string.Empty)
-                      + (mod.Added != default ? $"\nAdded: {mod.Added.ToLocalTime():yyyy-MM-dd HH:mm}" : string.Empty)
-                      + (!string.IsNullOrEmpty(changed) ? $"\n\nChanges:\n{changed}" : string.Empty)
-                      + "\n\nClick to open it in a window.",
-        }, size);
+            Tooltip   = tooltip,
+        };
+
+    private void DrawMod(InstalledMod mod, Vector2 size, ModUsage? usage, IReadOnlySet<string>? active, string? collection,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? duplicates, IReadOnlyDictionary<string, IReadOnlyList<ChangeTag>>? changes,
+        IReadOnlyDictionary<string, long>? sizes, SearchIn kind, string search)
+    {
+        long? bytes = sizes != null && sizes.TryGetValue(mod.FolderName, out var known) ? known : null;
+        IReadOnlyList<string>? copies = duplicates != null && duplicates.TryGetValue(mod.FolderName, out var found) ? found : null;
+        var key = new TileKey(active != null && active.Contains(mod.FolderName), _host.IsModOpen(mod.FullPath),
+            usage != null && !usage.Used.Contains(mod.FolderName), copies, collection, bytes, _sort, _host.Configuration.ShowThumbnails);
+        if (!_tiles.TryGetValue(mod.FolderName, out var tile) || !ReferenceEquals(tile.Mod, mod) || tile.Key != key)
+        {
+            if (_tiles.Count >= 2048)
+                _tiles.Clear();
+            _tiles[mod.FolderName] = tile = (mod, key, Spec(mod, Detail(mod, bytes), Badges(mod, key), Image(mod), tooltip: null));
+        }
+
+        // Only the hovered tile shows its hover text, so only it builds one (and a spec of its own).
+        var spec = tile.Spec;
+        if (mod.FolderName == _hovered)
+        {
+            // With a changes search, the tooltip lists what the mod changes and marks what matched.
+            var changed = changes != null && changes.TryGetValue(mod.FolderName, out var tags)
+                ? ChangesText(tags, kind, search)
+                : _library.ChangedItems(mod, fetch: true);
+            if (_tooltip is not { } kept || !ReferenceEquals(kept.Base, spec) || kept.Changed != changed)
+                _tooltip = kept = (spec, changed, Spec(mod, spec.Detail!, spec.Badges!, spec.DrawThumb, Tooltip(mod, bytes, changed)));
+            spec = kept.Spec;
+        }
+        var result = Tile.Draw(spec, size);
 
         if (result.Hovered)
             _hovered = mod.FolderName;
@@ -477,6 +494,41 @@ internal sealed class LibraryView
             _openMenu = true;
         }
     }
+
+    /// <summary>The tile's third line: the mod's tags or Penumbra folder, led by the sort's own value.</summary>
+    private string Detail(InstalledMod mod, long? bytes)
+    {
+        var detail = mod.Tags.Count > 0 ? string.Join(", ", mod.Tags) : mod.Folder;
+        // The sort's own value leads the detail line, so the order can be read off the tiles.
+        if (_sort == SortSize && bytes is { } sorted)
+            return detail.Length > 0 ? $"{ResourceTreeView.FormatSize(sorted)} · {detail}" : ResourceTreeView.FormatSize(sorted);
+        if (_sort == SortAdded && mod.Added != default)
+            return $"Added {mod.Added.ToLocalTime():yyyy-MM-dd}{(detail.Length > 0 ? $" · {detail}" : string.Empty)}";
+        return detail;
+    }
+
+    private static IReadOnlyList<Badge> Badges(InstalledMod mod, TileKey key)
+    {
+        var badges = new List<Badge>();
+        if (key.Active)
+            badges.Add(new Badge("Active", Theme.Good, $"Enabled in {key.Collection ?? "your collection"}."));
+        if (key.Open)
+            badges.Add(new Badge("Open", Theme.Good, "Open in a window."));
+        if (mod.HasProject)
+            badges.Add(new Badge("Your files", Theme.Accent, "Has files of your own that are kept in step with their sources."));
+        if (key.Unused)
+            badges.Add(new Badge("Unused", Theme.Warn, "Not enabled in any collection."));
+        if (key.Copies is { } copies)
+            badges.Add(new Badge("Duplicate", Theme.Accent, $"Same files as: {string.Join(", ", copies)}"));
+        return badges;
+    }
+
+    private static string Tooltip(InstalledMod mod, long? bytes, string? changed)
+        => $"{mod.Name}\n{mod.FullPath}{(mod.Folder.Length > 0 ? $"\nIn Penumbra: {mod.Folder}" : string.Empty)}"
+           + (bytes is { } total ? $"\nSize: {ResourceTreeView.FormatSize(total)}" : string.Empty)
+           + (mod.Added != default ? $"\nAdded: {mod.Added.ToLocalTime():yyyy-MM-dd HH:mm}" : string.Empty)
+           + (!string.IsNullOrEmpty(changed) ? $"\n\nChanges:\n{changed}" : string.Empty)
+           + "\n\nClick to open it in a window.";
 
     /// <summary>A mod's changes one per line, the ones the search matched first and marked "> ", the first ten.</summary>
     private static string ChangesText(IReadOnlyList<ChangeTag> tags, SearchIn kind, string search)

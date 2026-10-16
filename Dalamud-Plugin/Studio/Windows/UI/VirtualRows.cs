@@ -25,8 +25,22 @@ internal static class VirtualRows
         float startY = ImGui.GetCursorPosY();
         float spacing = ImGui.GetStyle().ItemSpacing.Y;
 
-        // Prefix sums: where each row starts, relative to the list's top.
-        var offsets = new float[count + 1];
+        // Prefix sums: where each row starts, relative to the list's top. Pooled, as lists draw every frame.
+        var offsets = System.Buffers.ArrayPool<float>.Shared.Rent(count + 1);
+        try
+        {
+            Draw(heights, drawRow, reveal, keepInView, count, startY, spacing, offsets);
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<float>.Shared.Return(offsets);
+        }
+    }
+
+    private static void Draw(IReadOnlyList<float> heights, Action<int> drawRow, int reveal, bool keepInView, int count, float startY,
+        float spacing, float[] offsets)
+    {
+        offsets[0] = 0;
         for (int i = 0; i < count; i++)
             offsets[i + 1] = offsets[i] + heights[i] + spacing;
 
@@ -47,7 +61,7 @@ internal static class VirtualRows
         float top    = ImGui.GetScrollY() - startY;
         float bottom = top + ImGui.GetWindowHeight();
 
-        int first = LowerBound(offsets, top) - 1;
+        int first = LowerBound(offsets, count + 1, top) - 1;
         if (first < 0) first = 0;
         int last = first;
         while (last < count && offsets[last] < bottom)
@@ -64,9 +78,9 @@ internal static class VirtualRows
     }
 
     /// <summary>The first index whose offset is greater than <paramref name="value"/>.</summary>
-    private static int LowerBound(float[] offsets, float value)
+    private static int LowerBound(float[] offsets, int length, float value)
     {
-        int lo = 0, hi = offsets.Length;
+        int lo = 0, hi = length;
         while (lo < hi)
         {
             int mid = (lo + hi) / 2;

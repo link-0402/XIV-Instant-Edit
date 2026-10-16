@@ -16,6 +16,8 @@ internal sealed class SlotIcons : IDisposable
     private readonly IPluginLog _log;
     private readonly object _stateLock = new();
     private IReadOnlyDictionary<string, IDalamudTextureWrap> _slotIcons = new Dictionary<string, IDalamudTextureWrap>();
+    // Icon keys by slot, Penumbra icon and section: working one out builds strings, and rows draw every frame.
+    private readonly Dictionary<(string Slot, string Icon, string Section), string> _keys = new();
 
     public SlotIcons(IUiBuilder uiBuilder, ITextureProvider textureProvider, IDataManager data, IPluginLog log)
     {
@@ -40,9 +42,15 @@ internal sealed class SlotIcons : IDisposable
     public void Draw(string slot, string resourceIcon, string section)
     {
         IDalamudTextureWrap? icon;
-        var key = string.Equals(section, ResourceSection.CharacterFeatures.ToString(), StringComparison.OrdinalIgnoreCase)
-            ? "Unknown"
-            : ResourceViews.NormalizeSlotIcon(slot, resourceIcon);
+        if (!_keys.TryGetValue((slot, resourceIcon, section), out var key))
+        {
+            if (_keys.Count >= 1024)
+                _keys.Clear();
+            _keys[(slot, resourceIcon, section)] = key =
+                string.Equals(section, ResourceSection.CharacterFeatures.ToString(), StringComparison.OrdinalIgnoreCase)
+                    ? "Unknown"
+                    : ResourceViews.NormalizeSlotIcon(slot, resourceIcon);
+        }
         lock (_stateLock)
             _slotIcons.TryGetValue(key, out icon);
 

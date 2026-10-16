@@ -46,9 +46,36 @@ internal sealed class GameFilesTab
 
     public void Attach(GameFileBrowserService browser) => _gameFiles = browser;
 
+    // When the tab was last drawn; 0 once its data was let go.
+    private long _shownAt;
+    private const long ReleaseAfterMs = 120_000;
+
+    /// <summary>
+    /// Call every frame, shown or not. Two minutes after the tab was last shown, lets go of the game's model
+    /// lists and names and what the table built from them (about 10 MB), until it is shown again; reading them
+    /// again takes well under a second. The filters, the opened models and the ticked ones stay. A running
+    /// export keeps them.
+    /// </summary>
+    public void ReleaseWhenUnused()
+    {
+        if (_shownAt == 0 || Environment.TickCount64 - _shownAt < ReleaseAfterMs || _export.Export is { Busy: true })
+            return;
+        _shownAt = 0;
+        _gameFilter.Forget();
+        _gameRows.Forget();
+        _gameViews.Clear();
+        _rowText.Clear();
+        _rowTextRows = null;
+        _rowTextNames = null;
+        _gameSlotCountSource = default;
+        _gameSlotCounts = [];
+        _gameFiles?.Release();
+    }
+
     /// <summary> Master/detail: the categories on the left, a category's vanilla models on the right. </summary>
     public void Draw()
     {
+        _shownAt = Math.Max(1, Environment.TickCount64);
         ImGui.Spacing();
         if (_gameFiles is not { } browser)
         {
@@ -323,7 +350,7 @@ internal sealed class GameFilesTab
             clipper.Begin(rows.Count, -1);
             while (clipper.Step())
                 for (var index = clipper.DisplayStart; index < clipper.DisplayEnd; index++)
-                    DrawGameRow(actor, names, visible, rows[index]);
+                    DrawGameRow(actor, names, visible, rows, rows[index]);
             clipper.End();
         }
         finally
@@ -332,17 +359,46 @@ internal sealed class GameFilesTab
         }
     }
 
-    private void DrawGameRow(ActorView actor, GameFileNames names, IReadOnlyList<GameModelEntry> visible, GameFileRow row)
+    /// <summary> A row's id, title, selectable label and ID column, made once per row list: the visible rows draw every frame. </summary>
+    private readonly record struct RowText(string Id, string Title, string Label, string IdColumn, string More);
+
+    private readonly Dictionary<GameFileRow, RowText> _rowText = new(ReferenceEqualityComparer.Instance);
+    private IReadOnlyList<GameFileRow>? _rowTextRows;
+    private GameFileNames? _rowTextNames;
+
+    private RowText TextOf(GameFileRow row, GameFileNames names, IReadOnlyList<GameFileRow> rows)
     {
-        using var id = ImRaii.PushId(UiText.SafeId($"{row.Entry.GamePath}|{row.Kind}|{row.GamePath}|{row.Label}"));
-        ImGui.TableNextRow();
-        if (row.Kind == GameFileRowKind.Model)
-            DrawGameModelRow(actor, names, visible, row.Entry);
-        else
-            DrawGameDetailRow(actor, row);
+        if (!ReferenceEquals(rows, _rowTextRows) || !ReferenceEquals(names, _rowTextNames))
+        {
+            _rowText.Clear();
+            _rowTextRows = rows;
+            _rowTextNames = names;
+        }
+        if (_rowText.TryGetValue(row, out var text))
+            return text;
+        var id = row.Entry.Id;
+        var itemNames = row.Kind == GameFileRowKind.Model ? names.For(id) : [];
+        var title = row.Kind == GameFileRowKind.Model ? GameModelTitle(id, itemNames) : row.Label;
+        return _rowText[row] = new RowText(
+            UiText.SafeId($"{row.Entry.GamePath}|{row.Kind}|{row.GamePath}|{row.Label}"),
+            title,
+            $"{title}##label",
+            id.Category is GameFileCategory.Equipment or GameFileCategory.Accessory ? $"{id.IdLabel} {id.Slot}" : id.IdLabel,
+            itemNames.Length > 1 ? $"+{itemNames.Length - 1}" : string.Empty);
     }
 
-    private void DrawGameModelRow(ActorView actor, GameFileNames names, IReadOnlyList<GameModelEntry> visible, GameModelEntry entry)
+    private void DrawGameRow(ActorView actor, GameFileNames names, IReadOnlyList<GameModelEntry> visible, IReadOnlyList<GameFileRow> rows, GameFileRow row)
+    {
+        var text = TextOf(row, names, rows);
+        using var id = ImRaii.PushId(text.Id);
+        ImGui.TableNextRow();
+        if (row.Kind == GameFileRowKind.Model)
+            DrawGameModelRow(actor, names, visible, row.Entry, text);
+        else
+            DrawGameDetailRow(actor, row, text);
+    }
+
+    private void DrawGameModelRow(ActorView actor, GameFileNames names, IReadOnlyList<GameModelEntry> visible, GameModelEntry entry, RowText text)
     {
         var view = GameFileView(entry.GamePath);
         var frame = ImGui.GetFrameHeight();
@@ -366,9 +422,9 @@ internal sealed class GameFilesTab
         ResourceRows.DrawRowGlyph(view);
         ImGui.SameLine(0, Theme.Gap);
         var itemNames = names.For(entry.Id);
-        var title = GameModelTitle(entry.Id, itemNames);
+        var title = text.Title;
         var labelWidth = itemNames.Length > 1 ? ImGui.CalcTextSize(title).X : 0;
-        if (ImGui.Selectable($"{title}##label", false, ImGuiSelectableFlags.None, new Vector2(labelWidth, frame)))
+        if (ImGui.Selectable(text.Label, false, ImGuiSelectableFlags.None, new Vector2(labelWidth, frame)))
             _gameRows.Toggle(entry);
         var hovered = ImGui.IsItemHovered();
         ImGui.OpenPopupOnItemClick(ResourceRows.RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
@@ -378,7 +434,7 @@ internal sealed class GameFilesTab
         {
             ImGui.SameLine(0, Theme.Gap);
             ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Hint, $"+{itemNames.Length - 1}");
+            ImGui.TextColored(Theme.Hint, text.More);
             if (ImGui.IsItemHovered())
             {
                 using var tooltip = ImRaii.Tooltip();
@@ -395,13 +451,14 @@ internal sealed class GameFilesTab
             ImGui.TextColored(names.PlayerModel(entry.Id) ? Theme.Text : Theme.Muted, GameRaces.Label(entry.Id.Race));
         ImGui.TableSetColumnIndex(3);
         ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Muted, entry.Id.Category is GameFileCategory.Equipment or GameFileCategory.Accessory
-            ? $"{entry.Id.IdLabel} {entry.Id.Slot}"
-            : entry.Id.IdLabel);
+        ImGui.TextColored(Theme.Muted, text.IdColumn);
         ImGui.TableSetColumnIndex(4);
         Widgets.PathText(entry.GamePath, entry.GamePath);
         ImGui.TableSetColumnIndex(5);
         _rows.DrawRowActions(actor, view);
+        // The menu's extra items are a closure: made only while the menu is open.
+        if (!ImGui.IsPopupOpen(ResourceRows.RowMenuPopup))
+            return;
         _rows.DrawRowMenu(actor, view, () =>
         {
             using (ImRaii.Disabled(_export.Export is not { Busy: false }))
@@ -414,7 +471,7 @@ internal sealed class GameFilesTab
         });
     }
 
-    private void DrawGameDetailRow(ActorView actor, GameFileRow row)
+    private void DrawGameDetailRow(ActorView actor, GameFileRow row, RowText text)
     {
         var frame = ImGui.GetFrameHeight();
         ImGui.TableSetColumnIndex(1);
@@ -431,7 +488,7 @@ internal sealed class GameFilesTab
             ResourceRows.TintRow(view);
             ResourceRows.DrawRowGlyph(view);
             ImGui.SameLine(0, Theme.Gap);
-            ImGui.Selectable($"{row.Label}##label", false, ImGuiSelectableFlags.None, new Vector2(0, frame));
+            ImGui.Selectable(text.Label, false, ImGuiSelectableFlags.None, new Vector2(0, frame));
             var hovered = ImGui.IsItemHovered();
             ImGui.OpenPopupOnItemClick(ResourceRows.RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
             if (hovered)

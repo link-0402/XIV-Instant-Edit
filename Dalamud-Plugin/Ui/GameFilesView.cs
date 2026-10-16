@@ -35,6 +35,17 @@ internal sealed class GameFileFilter
     /// <summary>Changes whenever the filtered list does.</summary>
     public int Version { get; private set; }
 
+    /// <summary> Drops the model list, its search text and the filtered list; the settings stay. Rebuilt on the next <see cref="Apply"/>. </summary>
+    public void Forget()
+    {
+        source = default;
+        sourceNames = null;
+        searchText = [];
+        settings = null;
+        result = [];
+        Version++;
+    }
+
     public IReadOnlyList<GameModelEntry> Apply(ImmutableArray<GameModelEntry> entries, GameFileNames names)
     {
         var current = (UiText.Safe(Text).Trim(), Races, Race, Slot, SelectableOnly, NamedOnly);
@@ -192,6 +203,13 @@ internal sealed class GameFileRowList
     private int version;
 
     public bool IsOpen(GameModelEntry entry) => opened.Contains(entry.GamePath);
+
+    /// <summary> Drops the built rows; which models are opened stays. Rebuilt on the next <see cref="Build"/>. </summary>
+    public void Forget()
+    {
+        models = null;
+        rows = [];
+    }
 
     public void Toggle(GameModelEntry entry)
     {
