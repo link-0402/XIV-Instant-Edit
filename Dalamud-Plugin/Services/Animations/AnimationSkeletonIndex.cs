@@ -70,6 +70,27 @@ internal sealed class AnimationSkeletonIndex(AnimationModService animationMods, 
     internal static string? ModelCode(ushort modelId)
         => modelId is > 0 and <= 9999 ? $"c{modelId:D4}" : null;
 
+    /// <summary>
+    /// Whether a skeleton file sits in a folder named Posing. YAS ships its posing variant
+    /// there: the same bones as "Animation_General Usage", but the IVCS toe and genital bones
+    /// rest up to 2 cm elsewhere. An animation sampled on it bakes those rests into every
+    /// track that leaves the bone at its reference pose, so it is never a source or a standard.
+    /// </summary>
+    internal static bool IsPosingFile(AnimationResource resource)
+        => new[] { resource.ResolvedPath, resource.RelativePath }.Any(path => !string.IsNullOrEmpty(path) &&
+            path.Replace('\\', '/').Split('/').SkipLast(1).Any(folder => string.Equals(folder.Trim(), "Posing", StringComparison.OrdinalIgnoreCase)));
+
+    /// <summary>
+    /// The fingerprints of posing skeletons (see <see cref="IsPosingFile"/>): a skeleton is one
+    /// when any of its files is, so byte-identical copies elsewhere (a synced character's
+    /// folder, a file renamed by another mod) count too.
+    /// </summary>
+    internal static ImmutableHashSet<string> PosingSkeletons(IEnumerable<SkeletonCandidate> candidates)
+        => candidates.Where(c => IsPosingFile(c.Source.Resource)).Select(c => c.Skeleton.Fingerprint).ToImmutableHashSet(StringComparer.Ordinal);
+
+    private static bool IsPosing(SkeletonCandidate candidate, IReadOnlySet<string>? posing)
+        => IsPosingFile(candidate.Source.Resource) || posing?.Contains(candidate.Skeleton.Fingerprint) == true;
+
     internal static int ModelDepth(string model)
     {
         var depth = 0;
@@ -518,7 +539,7 @@ internal sealed class AnimationSkeletonIndex(AnimationModService animationMods, 
 
     internal static SkeletonResolution Rank(AnimationChannels channels, IEnumerable<SkeletonCandidate> candidates,
         SkeletonDescription? baseline, string expectedPath, string? selectedIdentity = null,
-        AnimationSourceIdentity? sourceIdentity = null)
+        AnimationSourceIdentity? sourceIdentity = null, IReadOnlySet<string>? posing = null)
     {
         var normalizedExpected = expectedPath.Replace('\\', '/');
         var parts = normalizedExpected.Split('/');
@@ -599,17 +620,26 @@ internal sealed class AnimationSkeletonIndex(AnimationModService animationMods, 
             }).GroupBy(c => c.Skeleton.Fingerprint).Select(g => g.OrderByDescending(c => c.Rank).ThenBy(c => c.Source.Resource.ResolvedPath, StringComparer.Ordinal).First())
                 .OrderByDescending(c => c.Rank).ThenBy(c => c.Source.Resource.ResolvedPath, StringComparer.Ordinal).ToImmutableArray();
         }
-        var fitting = candidates.Where(Fits);
-        if (exactReferenceModel != null)
-            fitting = fitting.Where(candidate =>
-                (candidate.Source.CanonicalModel ?? ModelFromPath(candidate.Source.Resource.GamePath)) == exactReferenceModel);
-        var ranked = RankCandidates(fitting);
-        // A predictive animation made before a skeleton mod appended bones declares fewer
-        // reference bones than the mod's skeletons now have. When no whole skeleton fits,
-        // the first bones of a longer one are the skeleton it was made for. Quantized data
-        // stays with its exact model's whole skeleton.
-        if (ranked.IsEmpty && channels is { ExactReferenceModel: false, ReferenceBones: { } leading })
-            ranked = RankCandidates(candidates.Select(c => Leading(c, leading)).OfType<SkeletonCandidate>().Where(Fits));
+        ImmutableArray<SkeletonCandidate> RankFitting(IEnumerable<SkeletonCandidate> pool)
+        {
+            var fitting = pool.Where(Fits);
+            if (exactReferenceModel != null)
+                fitting = fitting.Where(candidate =>
+                    (candidate.Source.CanonicalModel ?? ModelFromPath(candidate.Source.Resource.GamePath)) == exactReferenceModel);
+            var found = RankCandidates(fitting);
+            // A predictive animation made before a skeleton mod appended bones declares fewer
+            // reference bones than the mod's skeletons now have. When no whole skeleton fits,
+            // the first bones of a longer one are the skeleton it was made for. Quantized data
+            // stays with its exact model's whole skeleton.
+            if (found.IsEmpty && channels is { ExactReferenceModel: false, ReferenceBones: { } leading })
+                found = RankCandidates(pool.Select(c => Leading(c, leading)).OfType<SkeletonCandidate>().Where(Fits));
+            return found;
+        }
+        // Posing skeletons are left out while any other skeleton fits (see IsPosingFile).
+        var all = candidates.ToArray();
+        var plain = all.Where(c => !IsPosing(c, posing)).ToArray();
+        var ranked = RankFitting(plain);
+        if (ranked.IsEmpty && plain.Length < all.Length) ranked = RankFitting(all);
         if (ranked.IsEmpty)
             return new(SkeletonResolutionState.Incompatible, [], Reason: channels.ReferenceBones is { } bones
                 ? channels.ExactReferenceModel
@@ -693,10 +723,12 @@ internal sealed class AnimationSkeletonIndex(AnimationModService animationMods, 
         var baseline = candidates.FirstOrDefault(c => c.Source.Kind == SkeletonSourceKind.Game && c.Source.Resource.GamePath == expected)?.Skeleton;
         // Repair targets: the live path's own skeleton files, and every library file mapped to it.
         var mapped = candidates.Where(c => c.Source.Kind == SkeletonSourceKind.Collection).Concat(library.SelectMany(entry =>
-            entry.Sources.Select(s => new SkeletonCandidate(s, entry.Skeleton, 0, ""))));
+            entry.Sources.Select(s => new SkeletonCandidate(s, entry.Skeleton, 0, "")))).ToArray();
+        // Every file of a library skeleton, not only the one a candidate names, can show it is a posing variant.
+        var posing = PosingSkeletons(mapped.Concat(candidates));
         // Keep which bones the clip animates; the selected source names them.
-        return Rank(channels, candidates, baseline, expected, manual, sourceIdentity) with
-            { TrackBones = channels.Bones, Standards = Standards(baseline, mapped, expected) };
+        return Rank(channels, candidates, baseline, expected, manual, sourceIdentity, posing) with
+            { TrackBones = channels.Bones, Standards = Standards(baseline, mapped, expected, posing) };
     }
 
     /// <summary>
@@ -705,14 +737,17 @@ internal sealed class AnimationSkeletonIndex(AnimationModService animationMods, 
     /// several, the one keeping the most game bones at the game's indices wins, then the one
     /// with the most game bones, then the one whose game bones rest most like the game's, then
     /// the one the most files share, then the first by file path. None without the game's own
-    /// skeleton.
+    /// skeleton. Posing skeletons (see <see cref="IsPosingFile"/>) are never standards.
     /// </summary>
-    internal static ImmutableArray<StandardSkeleton> Standards(SkeletonDescription? game, IEnumerable<SkeletonCandidate> mapped, string expectedPath)
+    internal static ImmutableArray<StandardSkeleton> Standards(SkeletonDescription? game, IEnumerable<SkeletonCandidate> mapped, string expectedPath,
+        IReadOnlySet<string>? posing = null)
     {
         if (game == null) return [];
         var reference = game.Bones.ToDictionary(b => b.Name, b => b.Reference, StringComparer.Ordinal);
         int Leading(SkeletonDescription s) => s.Bones.Zip(game.Bones).TakeWhile(pair => pair.First.Name == pair.Second.Name).Count();
-        var usable = mapped.Where(c => SameGamePath(c.Source.Resource.GamePath, expectedPath))
+        var all = mapped.ToArray();
+        var excluded = PosingSkeletons(all).Union(posing ?? ImmutableHashSet<string>.Empty);
+        var usable = all.Where(c => SameGamePath(c.Source.Resource.GamePath, expectedPath) && !excluded.Contains(c.Skeleton.Fingerprint))
             .GroupBy(c => c.Skeleton.Fingerprint, StringComparer.Ordinal)
             .Select(g => (g.First().Skeleton, Sources: g.Select(c => c.Source.Resource).OrderBy(r => r.ResolvedPath, StringComparer.Ordinal).ToArray()))
             .ToArray();

@@ -17,6 +17,7 @@ Scenarios.Run(() => AnimationFramesFixture.Run(Check, Reject));
 Scenarios.Run(() => AnimationSlotFixture.Run(Check));
 Scenarios.Run(() => AnimationRenameFixture.Run(Check, Reject));
 Scenarios.Run(() => AnimationBonesFixture.Run(Check));
+Scenarios.Run(() => ReferenceChannelsFixture.Run(Check));
 Scenarios.Run(() => ChartSkeletonFixture.Run(Check));
 Scenarios.Run(() => MainSkeletonFixture.Run(Check, Reject));
 Scenarios.Run(() => AnimationExportFixture.Run(Check, Reject));
