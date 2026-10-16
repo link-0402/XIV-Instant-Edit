@@ -292,11 +292,18 @@ internal sealed class PhysicsModService
     }
 
     /// <summary>
-    /// Turns physics mods off in the object's collection; returns the ones that were on. Mods that are
-    /// gone or already off are left as they are.
+    /// Turns the physics mods that map <paramref name="gamePath"/> off in the object's collection;
+    /// returns the ones that were on. Mods that are gone or already off are left as they are.
     /// </summary>
-    internal async Task<IReadOnlyList<string>> TurnOffPhysicsModsAsync(IReadOnlyList<string> directories, int objectIndex)
+    internal async Task<IReadOnlyList<string>> TurnOffPhysicsModsAsync(IReadOnlyList<string> directories, int objectIndex, string gamePath)
     {
+        if (directories.Count == 0)
+            return [];
+        // Only the mods that replace the same file: another race's physics mod stays on.
+        var root = await _framework.RunOnFrameworkThread(() => _ipc.GetModDirectory()).ConfigureAwait(false);
+        await LeaveFrameworkThread();
+        if (!string.IsNullOrWhiteSpace(root))
+            directories = directories.Where(directory => !IsSafeModName(directory) || ModMapsGamePath(Path.Combine(root, directory), gamePath)).ToList();
         if (directories.Count == 0)
             return [];
         var collection = await _ipc.GetCollectionTargetAsync(objectIndex).ConfigureAwait(false)

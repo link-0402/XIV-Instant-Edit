@@ -929,7 +929,7 @@ internal sealed class ModBuilder
         {
             texData = hit;
             error   = string.Empty;
-            detail  = AutoCompression.Describe(name, AutoCompression.FormatOf(hit), string.Empty, " (unchanged, reused)");
+            detail  = AutoCompression.Describe(name, AutoCompression.FormatOf(hit), AutoCompression.KeptReason(hit), " (unchanged, reused)");
             return true;
         }
 

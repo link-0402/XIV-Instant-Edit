@@ -555,13 +555,16 @@ def run_substitutes(addon) -> None:
     medium.data.foreach_set("co", (_positions(top) + (0.0, -0.02, 0.0)).astype(np.float32).ravel())
     skin = _grid(armature, "1.0 Skin", (0.0, 0.05, 0.0))
     skin["xiv_material"] = SKIN_MATERIAL
+    skin["atr_tv_a"] = True
     # Resized as clothing by an older Magic Fit.
     skin.shape_key_add(name="Basis", from_mix=False)
     skin.shape_key_add(name="Medium", from_mix=False).value = 0.0
     devkit = bpy.data.collections.new("Devkit")
     bpy.context.scene.collection.children.link(devkit)
-    part = _grid(armature, "1.0 Torso", (0.0, 0.3, 0.0))
+    # A devkit name the writer can't read a group and part from: the part takes the copy's name.
+    part = _grid(armature, "Torso", (0.0, 0.3, 0.0))
     del part["xiv_material"]
+    part["atr_devkit"] = True
     bpy.context.scene.collection.objects.unlink(part)
     devkit.objects.link(part)
     layer = next(layer for layer in bpy.context.view_layer.layer_collection.children if layer.collection == devkit)
@@ -580,10 +583,14 @@ def run_substitutes(addon) -> None:
 
         def write(_sized, _index, name):
             seen["shown"].append(part.visible_get() and part.get("xiv_material") == SKIN_MATERIAL)
+            seen.setdefault("named", []).append(part.name == "1.0 Skin" and part.get("atr_tv_a") is not None
+                                                and "atr_devkit" not in part)
             exports.write(folder / name)
 
-        sizes.export_each([top, skin], write, session)
+        sizes.export_each(objects, write, session)
         return seen
+
+    objects = [top, skin]
 
     with tempfile.TemporaryDirectory(prefix="xiv-ie-substitutes-") as folder, installed(fake_api(version=3)) as api:
         folder = Path(folder)
@@ -596,8 +603,15 @@ def run_substitutes(addon) -> None:
         _require(seen["objects"] == [top, part] and seen["shown"] == [True, True],
                  "the devkit part is exported in place of the model's copy, shown and with the copy's material",
                  str(seen))
-        _require(layer.exclude and "xiv_material" not in part and not part.hide_viewport,
+        _require(seen["named"] == [True, True],
+                 "the devkit part is written under the copy's name with the copy's attributes", str(seen))
+        _require(layer.exclude and "xiv_material" not in part and not part.hide_viewport and
+                 part.name == "Torso" and skin.name == "1.0 Skin" and "atr_tv_a" not in part and
+                 part.get("atr_devkit") is not None,
                  "afterwards the devkit part is as it was")
+        model = model_module.XIVModel.from_file(str(folder / "Medium.mdl"))
+        _require(any("tv_a" in str(attribute) for attribute in getattr(model, "attributes", [])),
+                 "the size's model keeps the copy's attribute", str(getattr(model, "attributes", None)))
         found = _model_positions(addon, folder / "Medium.mdl")
         materials = model_module.XIVModel.from_file(str(folder / "Medium.mdl")).materials
         _require(_distance(found, part_co) < 1e-4 and _distance(found, skin_co) > 0.01 and
@@ -610,6 +624,17 @@ def run_substitutes(addon) -> None:
         seen = run(api, Path(folder))
         _require(seen["objects"] == [top, skin] and len(api.calls) == 2 and not api.resizers,
                  "an older Magic Fit resizes a size at a time as before, the copy exported as it is")
+
+    other = _grid(armature, "1.1 Skin", (0.0, 0.1, 0.0))
+    other["xiv_material"] = SKIN_MATERIAL
+    other.shape_key_add(name="Basis", from_mix=False)
+    other.shape_key_add(name="Medium", from_mix=False).value = 0.0
+    objects = [top, skin, other]
+    with tempfile.TemporaryDirectory(prefix="xiv-ie-substitutes-twice-") as folder, installed(fake_api(version=3)) as api:
+        api.substitutes = {skin: part, other: part}
+        seen = run(api, Path(folder))
+        _require(seen["objects"] == [top, skin, other] and not api.resizers[-1].substitute,
+                 "two meshes standing for one devkit part are resized themselves", str(seen))
 
 
 # ---- Magic Fit itself ---------------------------------------------------------------------------

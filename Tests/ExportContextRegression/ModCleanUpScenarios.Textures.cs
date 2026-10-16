@@ -337,16 +337,21 @@ internal static partial class ModCleanUpScenarios
         Require(normal is { Role: TextureRole.Normal, ShaderPackage: "character.shpk", AlphaThreshold: 0.3f, Translucent: true, OpacityChannel: 2 },
             "a slot's use takes the shader, threshold and translucency of its material");
 
-        var unknown = AutoCompression.UsesFor(StudioModels.TextureType.Normal, StudioModels.ShaderType.Hair, null).Single();
-        Require(unknown is { ShaderPackage: "hair.shpk", CutsOut: true, OpacityChannel: 3 },
-            "with no material yet, an opacity channel is checked as a cut-out");
-        Require(AutoCompression.UsesFor(StudioModels.TextureType.Index, StudioModels.ShaderType.Character, null).Single().Role == TextureRole.Index,
+        var unknown = AutoCompression.UsesFor(StudioModels.TextureType.Normal, StudioModels.ShaderType.Hair, null);
+        Require(unknown.Count == 2 && unknown.All(use => use is { ShaderPackage: "hair.shpk", OpacityChannel: 3, AlphaThreshold: 0.5f })
+                && unknown.Any(use => use.CutsOut) && unknown.Any(use => use.Translucent),
+            "with no material yet, an opacity channel is checked both as a cut-out and as blended");
+        Require(AutoCompression.UsesFor(StudioModels.TextureType.Index, StudioModels.ShaderType.Character, null).All(use => use.Role == TextureRole.Index),
             "an index slot is checked as an index map");
 
-        var hair = AutoCompression.UsesFor("chara/human/c0101/obj/hair/h0001/texture/c0101h0001_hir_norm.tex", "hair.png").Single();
-        var gear = AutoCompression.UsesFor("chara/equipment/e0005/texture/v01_c0201e0005_top_id.tex", "id.png").Single();
+        var hair = AutoCompression.UsesFor("chara/human/c0101/obj/hair/h0001/texture/c0101h0001_hir_norm.tex", "hair.png")[0];
+        var gear = AutoCompression.UsesFor("chara/equipment/e0005/texture/v01_c0201e0005_top_id.tex", "id.png")[0];
         Require(hair is { Role: TextureRole.Normal, ShaderPackage: "hair.shpk" } && gear is { Role: TextureRole.Index, ShaderPackage: "character.shpk" },
             "a replaced texture is checked as its path and kind of model say");
+        var lashes = AutoCompression.UsesFor("chara/human/c0101/obj/face/f0001/texture/c0101f0001_etc_norm.tex", "etc.png")[0];
+        var face = AutoCompression.UsesFor("chara/human/c0101/obj/face/f0001/texture/c0101f0001_fac_norm.tex", "fac.png")[0];
+        Require(lashes.ShaderPackage == "hair.shpk" && face.ShaderPackage == "skin.shpk",
+            "a face's _etc_ textures are checked as hair.shpk reads them, the rest as skin");
         Require(AutoCompression.KeyOf([BaseUse]) != AutoCompression.KeyOf([IndexUse]), "different uses are cached apart");
     }
 }

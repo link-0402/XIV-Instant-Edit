@@ -167,14 +167,15 @@ internal static class ResourceStyle
         return Remember(key, path[start..]);
     }
 
-    // Shortened texts by text, width, font and side: lists shorten the same long names every frame,
-    // and each try of a shorter length is a new string. Only touched on the draw thread.
-    private static readonly Dictionary<(string Text, int Width, nint Font, bool Path), string> Fitted = new();
+    // Shortened texts by text, width, font, font size (window and global scale included) and side:
+    // lists shorten the same long names every frame, and each try of a shorter length is a new string.
+    // Only touched on the draw thread.
+    private static readonly Dictionary<(string Text, int Width, nint Font, float Size, bool Path), string> Fitted = new();
 
-    private static unsafe (string, int, nint, bool) FitKey(string text, float width, bool path)
-        => (text, (int)width, (nint)ImGui.GetFont().Handle, path);
+    private static unsafe (string, int, nint, float, bool) FitKey(string text, float width, bool path)
+        => (text, (int)width, (nint)ImGui.GetFont().Handle, ImGui.GetFontSize(), path);
 
-    private static string Remember((string, int, nint, bool) key, string fitted)
+    private static string Remember((string, int, nint, float, bool) key, string fitted)
     {
         if (Fitted.Count >= 4096)
             Fitted.Clear();

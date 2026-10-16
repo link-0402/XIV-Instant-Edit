@@ -205,11 +205,12 @@ internal static class ResultCodeScenarios
         Path.Combine("Tools", "SubstancePainter", "xiv_instant_edit"),
     ];
 
-    // code == "x", code != "x", .get("code") == "x" and code in {"x", "y"}.
+    // code == "x", code != "x", .get("code") == "x" and code in {"x", "y"}, also through names ending
+    // in code (error_code, failure_code).
     private static readonly Regex Comparison = new(
-        """\bcode\b["'\])]*\s*(?:==|!=)\s*["']([a-z0-9_]+)["']""", RegexOptions.Compiled);
+        """\b\w*code\b["'\])]*\s*(?:==|!=)\s*["']([a-z0-9_]+)["']""", RegexOptions.Compiled);
     private static readonly Regex Membership = new(
-        """\bcode\b["'\])]*\s+(?:not\s+)?in\s*[(\[{]([^)\]}]*)[)\]}]""", RegexOptions.Compiled);
+        """\b\w*code\b["'\])]*\s+(?:not\s+)?in\s*[(\[{]([^)\]}]*)[)\]}]""", RegexOptions.Compiled);
     private static readonly Regex Quoted = new("""["']([a-z0-9_]+)["']""", RegexOptions.Compiled);
 
     public static void Run()

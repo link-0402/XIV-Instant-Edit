@@ -359,7 +359,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         if (args.Trim().Equals("refresh", StringComparison.OrdinalIgnoreCase))
         {
-            _onScreen.RequestRefresh();
+            _onScreen.RequestRefresh(fresh: true);
             return;
         }
         if (args.Trim().Equals("physics", StringComparison.OrdinalIgnoreCase))

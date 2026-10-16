@@ -371,6 +371,27 @@ def check_remove_hidden_vertices() -> None:
                     "a shp_ key that changes nothing against its relative key adds no state")
 
         with temporary_scene_data():
+            # A plane above a slab, with a kept shp_ key previewed at 1.0 that
+            # lowers it under the slab: the export writes the key off, so the
+            # default shape shows the plane and nothing is deleted.
+            settings = bpy.context.scene.xiv_ie_settings
+            keep = settings.keep_shapekeys
+            settings.keep_shapekeys = True
+            try:
+                plane = mesh_object("0.1 Plane", grid(0.2), surface=opaque)
+                mesh_object("0.0 Slab", box((0.0, 0.0, 0.1), (1.5, 1.5, 0.001)), surface=gear)
+                plane.shape_key_add(name="Basis")
+                lowered = plane.shape_key_add(name="shp_low_", from_mix=False)
+                for point in lowered.data:
+                    point.co.z -= 0.2
+                lowered.value = 1.0
+                remove_hidden(plane)
+                require(len(plane.data.vertices) == 121,
+                        "a kept shp_ key previewed at 1.0 is tested off, as the export writes it")
+            finally:
+                settings.keep_shapekeys = keep
+
+        with temporary_scene_data():
             shell = mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=gear)
             inner = mesh_object("0.1 Inner", box((0, 0, 0), 0.3), surface=opaque)
             require(remove_hidden(inner, hidden_by="SELF") == {"FINISHED"} and len(inner.data.vertices) == 8,

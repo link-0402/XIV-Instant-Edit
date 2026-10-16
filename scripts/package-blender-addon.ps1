@@ -36,6 +36,7 @@ $archive = $null
 # Entries get one fixed timestamp and a fixed order, so the same checkout packs to the same
 # bytes (on the same PowerShell runtime) and the index hash only changes with the files.
 $entryTimestamp = [System.DateTimeOffset]::new(2000, 1, 1, 0, 0, 0, [System.TimeSpan]::Zero)
+$textExtensions = @('.py', '.toml', '.md', '.txt', '.json', '.cfg', '.ini', '.yml', '.yaml', '.osl', '.glsl')
 
 try {
     $archive = [System.IO.Compression.ZipFile]::Open(
@@ -70,8 +71,12 @@ try {
     foreach ($entry in $sortedEntries) {
         $bytes = [System.IO.File]::ReadAllBytes($entry.Path)
         # Text files go in with LF endings, as git stores them, so a Windows checkout's CRLF
-        # copies pack the same as a Linux one. Files with a NUL byte are binary and left alone.
-        if ([System.Array]::IndexOf($bytes, [byte]0) -lt 0) {
+        # copies pack the same as a Linux one. Only known text types (and LICENSE) are rewritten;
+        # anything else, images and other binaries, goes in byte for byte.
+        $extension = [System.IO.Path]::GetExtension($entry.Name).ToLowerInvariant()
+        $isText = $extension -in $textExtensions -or
+            ($extension -eq '' -and [System.IO.Path]::GetFileName($entry.Name) -eq 'LICENSE')
+        if ($isText -and [System.Array]::IndexOf($bytes, [byte]0) -lt 0) {
             $latin1 = [System.Text.Encoding]::GetEncoding(28591)
             $bytes = $latin1.GetBytes($latin1.GetString($bytes).Replace("`r`n", "`n"))
         }

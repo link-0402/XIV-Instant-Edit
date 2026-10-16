@@ -13,24 +13,30 @@ namespace InstantEdit.Services;
 /// <remarks>
 /// A tree is matched by every node's type, paths and place in the hierarchy. Names are not cached per
 /// node: an item's name follows its variant, which only the materials' paths tell apart, so any change
-/// to the tree asks Penumbra again.
+/// to the tree asks Penumbra again. Names are learned again after <see cref="MaxAgeMs"/> and on a
+/// manual refresh (<see cref="Forget"/>), since a tree can keep its paths while its names change: one
+/// read while a shader package was still loading, or a material edited in place.
 /// </remarks>
 internal sealed class ResourceUiNames
 {
     /// <summary> Trees remembered: the player, minion and mount, through a few outfit changes. </summary>
     private const int Capacity = 16;
 
+    /// <summary> How long learned names are used before Penumbra is asked again. </summary>
+    private const long MaxAgeMs = 120_000;
+
     private readonly Lock _lock = new();
-    private readonly Dictionary<string, (string? Name, ChangedItemIcon Icon)[]> _byTree = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ((string? Name, ChangedItemIcon Icon)[] Names, long Learned)> _byTree = new(StringComparer.Ordinal);
     private readonly Queue<string> _order = new();
 
     /// <summary> A tree fetched without UI data, with the names of the same tree seen before; null when it is new. </summary>
     public ResourceTreeDto? Named(ResourceTreeDto tree)
     {
         var signature = Signature(tree);
-        (string? Name, ChangedItemIcon Icon)[]? names;
+        (string? Name, ChangedItemIcon Icon)[]? names = null;
         lock (_lock)
-            _byTree.TryGetValue(signature, out names);
+            if (_byTree.TryGetValue(signature, out var entry) && Environment.TickCount64 - entry.Learned < MaxAgeMs)
+                names = entry.Names;
         if (names is null)
             return null;
         var next = 0;
@@ -73,7 +79,17 @@ internal sealed class ResourceUiNames
                 while (_order.Count > Capacity)
                     _byTree.Remove(_order.Dequeue());
             }
-            _byTree[signature] = names;
+            _byTree[signature] = (names, Environment.TickCount64);
+        }
+    }
+
+    /// <summary> Drops every learned name, so the next snapshot asks Penumbra for all of them. </summary>
+    public void Forget()
+    {
+        lock (_lock)
+        {
+            _byTree.Clear();
+            _order.Clear();
         }
     }
 

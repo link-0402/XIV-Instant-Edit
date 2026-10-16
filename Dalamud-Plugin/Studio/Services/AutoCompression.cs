@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using InstantEdit.Services;
 using InstantEdit.Services.TextureCompression;
 using InstantEdit.Studio.Models;
@@ -34,23 +35,37 @@ internal static class AutoCompression
     public static IReadOnlyList<TextureUse> UsesFor(TextureType type, ShaderType shader, MtrlInfo? material)
     {
         var package = material is { ShaderPackageName.Length: > 0 } ? material.ShaderPackageName : ShaderInfo.ShaderPackName(shader);
-        var (threshold, translucent) = material is { ShaderDataParsed: true } ? Transparency(material) : (AssumedAlphaThreshold, false);
+        if (material is not { ShaderDataParsed: true })
+            return Unknown(RoleOf(type), package);
+        var (threshold, translucent) = Transparency(material);
         return new[] { new TextureUse { Role = RoleOf(type), ShaderPackage = package, AlphaThreshold = threshold, Translucent = translucent } };
     }
 
     /// <summary>
     /// How an image replacing the texture at <paramref name="gamePath"/> is read, when its materials
-    /// are not looked at: the role from its path, the shader its kind of model uses.
+    /// are not looked at: the role from its path, the shader its kind of model uses. A face's
+    /// <c>_etc_</c> textures belong to its brows and lashes, which hair.shpk draws.
     /// </summary>
     public static IReadOnlyList<TextureUse> UsesFor(string gamePath, string sourcePath)
     {
         var path = PathNormalizer.GamePath(gamePath);
         var role = TextureRoleClassifier.Classify(InstantEdit.Ui.ResourceKinds.Texture, null, path, sourcePath);
         var package = path.Contains("/obj/hair/") || path.Contains("/obj/tail/") || path.Contains("/obj/zear/") ? "hair.shpk"
+            : path.Contains("/obj/face/") && Path.GetFileName(path).Contains("_etc_") ? "hair.shpk"
             : path.Contains("/obj/body/") || path.Contains("/obj/face/") ? "skin.shpk"
             : "character.shpk";
-        return new[] { new TextureUse { Role = role, ShaderPackage = package, AlphaThreshold = AssumedAlphaThreshold } };
+        return Unknown(role, package);
     }
+
+    /// <summary>
+    /// A texture whose material isn't read: any opacity channel is checked both as a cut-out at
+    /// <see cref="AssumedAlphaThreshold"/> and as blended at it, since either may be what draws it.
+    /// </summary>
+    private static IReadOnlyList<TextureUse> Unknown(TextureRole role, string package) => new[]
+    {
+        new TextureUse { Role = role, ShaderPackage = package, AlphaThreshold = AssumedAlphaThreshold },
+        new TextureUse { Role = role, ShaderPackage = package, AlphaThreshold = AssumedAlphaThreshold, Translucent = true },
+    };
 
     /// <summary>What a set of uses is cached and planned under: a change to any of them, or to the check, encodes the texture again.</summary>
     public static string KeyOf(IReadOnlyList<TextureUse> uses)
@@ -64,28 +79,61 @@ internal static class AutoCompression
     {
         var work = Path.Combine(Path.GetTempPath(), "InstantEdit", "auto-compression", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(work);
+        Task? inFlight = null;
+        // Each conversion stops waiting when the token does; Penumbra's own work runs on.
+        var penumbra = convert;
+        TexConvert watched = (source, output, type, mipMaps) =>
+        {
+            var task = penumbra(source, output, type, mipMaps);
+            inFlight = task;
+            return task.WaitAsync(token);
+        };
         try
         {
             var plainPath = Path.Combine(work, "source.tex");
-            convert(input, plainPath, PenumbraTextureType.RgbaTex, true).GetAwaiter().GetResult();
+            watched(input, plainPath, PenumbraTextureType.RgbaTex, true).GetAwaiter().GetResult();
             token.ThrowIfCancellationRequested();
             var plain = TextureFiles.NormalizeMipOffsets(File.ReadAllBytes(plainPath));
             var info = TextureCost.Read(plain) ?? throw new InvalidDataException("Penumbra wrote a texture this plugin can't read.");
-            var result = VerifiedEncode.RunAsync(new VerifiedEncodeRequest(plain, info, uses, null, null, AllowSingleColor: false), convert, work, token)
+            var result = VerifiedEncode.RunAsync(new VerifiedEncodeRequest(plain, info, uses, null, null, AllowSingleColor: false), watched, work, token)
                 .GetAwaiter().GetResult();
             return result.Outcome switch
             {
                 VerifiedEncodeOutcome.Encoded     => new(result.Encoded!, result.Target == TextureCost.Bc5 ? TextureCompression.Bc5 : TextureCompression.Bc7, string.Empty),
                 VerifiedEncodeOutcome.FailedCheck => new(plain, TextureCompression.None, result.Check!.Problem),
-                _                                 => new(plain, TextureCompression.None, "it is too small or an odd size to compress"),
+                _                                 => new(plain, TextureCompression.None, NotCompressibleReason(info)),
             };
         }
         finally
         {
-            try { Directory.Delete(work, recursive: true); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* a temp folder that outlives us is harmless */ }
+            // A conversion a stop left running still writes into the folder: delete it once that ends.
+            if (inFlight is { IsCompleted: false } pending)
+                pending.ContinueWith(_ => DeleteWork(work), TaskScheduler.Default);
+            else
+                DeleteWork(work);
         }
     }
+
+    private static void DeleteWork(string work)
+    {
+        try { Directory.Delete(work, recursive: true); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* a temp folder that outlives us is harmless */ }
+    }
+
+    /// <summary>Why a texture Penumbra could not compress stayed uncompressed.</summary>
+    private static string NotCompressibleReason(TexInfo info)
+        => Math.Max(info.Width, info.Height) > TextureFiles.MaxDimension
+            ? $"it is larger than {TextureFiles.MaxDimension} pixels"
+            : "it is too small or an odd size to compress";
+
+    /// <summary>
+    /// Why a cached Auto texture of this header stayed uncompressed: what the first encode said, as
+    /// far as the file tells it (a texture that could be compressed failed the check).
+    /// </summary>
+    public static string KeptReason(ReadOnlySpan<byte> head)
+        => TextureCost.Read(head) is not { } info || FormatOf(head) != TextureCompression.None ? string.Empty
+            : CompressionCapture.Compressible(info) ? "compressing it would change how it looks"
+            : NotCompressibleReason(info);
 
     /// <summary>The format a .tex was written in, from its header: what a cached Auto texture came out as.</summary>
     public static TextureCompression FormatOf(ReadOnlySpan<byte> head)

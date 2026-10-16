@@ -27,6 +27,7 @@ on:
       - 'Tests/**'
       - 'Tools/**'
       - 'Blender-Addon/blender_manifest.toml'
+      - 'Blender-Addon/instant_edit/**'
       - '.github/workflows/csharp-regression.yml'
   pull_request:
     paths:
@@ -34,6 +35,7 @@ on:
       - 'Tests/**'
       - 'Tools/**'
       - 'Blender-Addon/blender_manifest.toml'
+      - 'Blender-Addon/instant_edit/**'
       - '.github/workflows/csharp-regression.yml'
   workflow_dispatch:
 
