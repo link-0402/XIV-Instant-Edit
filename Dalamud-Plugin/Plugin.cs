@@ -269,7 +269,7 @@ public sealed class Plugin : IDalamudPlugin
         _materialPreview = new Services.Materials.MaterialPreviewService(_penumbra.Ipc, _penumbra.Previews, framework, log, configDirectory,
             () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory));
         _materialWindow = new Ui.Material.MaterialWindow(new Services.PreviewMods.PreviewModService(_penumbra.Previews), _materialPreview, _penumbra.Ipc,
-            _previews, data, framework, objects, log);
+            _previews, data, textureProvider, framework, objects, log);
         _window.AttachMaterials(_materialWindow.Open, Ui.Material.MaterialWindow.EditBlock);
         // Test tools for XIV Bridge (Tests/*.md checks), only when running as a dev plugin.
         if (pi.IsDev)

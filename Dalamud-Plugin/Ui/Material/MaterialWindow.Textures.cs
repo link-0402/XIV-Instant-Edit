@@ -31,6 +31,7 @@ internal sealed partial class MaterialWindow
         if (collection is not { } id)
         {
             resolvedTextures = paths.ToDictionary(path => path, path => (string?)path, StringComparer.OrdinalIgnoreCase);
+            RefreshUsage(doc);
             return;
         }
         resolving = Task.Run(async () =>
@@ -51,6 +52,8 @@ internal sealed partial class MaterialWindow
             log.Debug(done.Exception!, "Could not resolve the material's textures.");
         if (resolveWanted.Any(path => !resolvedTextures.ContainsKey(path)) && session != null)
             ResolveTextures(session.Current);
+        else if (session != null)
+            RefreshUsage(session.Current);
     }
 
     private void DrawTextures(MaterialSession current, MaterialDocument doc)

@@ -82,3 +82,12 @@ The `material` Bridge tool shows the window's state, the live binding and, with
   rows come back within a second.
 - [ ] A redraw, GPose enter/leave and a zone change while rows are edited: no crash; the edited
   rows come back.
+
+## Index usage (Task 10, pending)
+
+- [ ] A Stellar Blade-style mod with a 32 x 32 one-colour index texture: two pairs at most are
+  bright, the rest greyed; hovering a greyed pair says "Not used by the index texture".
+- [ ] A vanilla gear material: the pairs its index uses are bright, with their share in the tooltip.
+- [ ] "Show where" draws the index texture with the selected pair's texels lit (top yellow, bottom
+  blue), and follows when another pair is picked.
+- [ ] A material whose index slot points at a missing file greys nothing and says so.
