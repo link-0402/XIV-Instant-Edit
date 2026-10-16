@@ -696,7 +696,7 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
         {
             Type        = type,
             Postfix     = MaterialNaming.DefaultPostfix(type),
-            Compression = _host.Configuration.DefaultCompression,
+            Compression = TextureCompression.Auto,
         });
         Focus(new Target(TargetKind.Texture, item.Key, materialIndex, mat.Textures.Count - 1));
         MarkDirty();
@@ -712,12 +712,11 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
         MarkDirty();
     }
 
-    private void ApplyTextureDefaults(IEnumerable<TextureSlot> slots)
+    /// <summary>New slots start on Auto: compressed unless the check finds it would change how the texture looks.</summary>
+    private static void ApplyTextureDefaults(IEnumerable<TextureSlot> slots)
     {
-        var compression = _host.Configuration.DefaultCompression;
-        if (compression == TextureCompression.None) return;
         foreach (var slot in slots)
-            slot.Compression = compression;
+            slot.Compression = TextureCompression.Auto;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -783,7 +782,7 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
         if (existing != null)
             return existing;
 
-        var slot = new TextureSlot { Type = type, Postfix = MaterialNaming.DefaultPostfix(type) };
+        var slot = new TextureSlot { Type = type, Postfix = MaterialNaming.DefaultPostfix(type), Compression = TextureCompression.Auto };
         mat.Textures.Add(slot);
         return slot;
     }
@@ -943,6 +942,7 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
             PluginDirectory = _host.PluginDirectory,
             CacheDirectory  = _host.TextureCacheDirectory,
             ConvertTexture  = _host.PenumbraTextures.Available ? _host.PenumbraTextures.Convert : null,
+            CheckTexture    = _host.PenumbraTextures.Available ? _host.PenumbraTextures.ConvertChecked : null,
             Meta = new ModMetaInfo
             {
                 Identifier  = GetOrCreateModId(),

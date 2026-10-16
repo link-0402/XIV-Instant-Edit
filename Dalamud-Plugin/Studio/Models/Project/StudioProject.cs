@@ -133,7 +133,7 @@ public class ResourceReplacement
     public string SourcePath { get; set; } = string.Empty;
 
     /// <summary>What an image is compressed to. Ignored for a .tex source and for anything that is not a texture.</summary>
-    public TextureCompression Compression { get; set; } = TextureCompression.Bc7;
+    public TextureCompression Compression { get; set; } = TextureCompression.Auto;
 
     /// <summary>True when the option did not have this game path before: it is added rather than repointed.</summary>
     public bool IsNew { get; set; }

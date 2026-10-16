@@ -111,7 +111,9 @@ public static class ShaderInfo
 /// channels (red and green) at full precision each, which is what the game's own index textures use —
 /// their blue and alpha channels go unused, so BC5 holds the two that matter (row and blend) more
 /// precisely than BC7 or BC3 would, for about the same compression cost as BC3. None writes the raw
-/// pixels, which costs nothing to convert and four times the memory in game.
+/// pixels, which costs nothing to convert and four times the memory in game. Auto lets the write
+/// decide: BC5 for an index map, BC7 otherwise, unless the check Optimize textures uses finds that
+/// compressing would change how the texture looks, which leaves it uncompressed.
 /// </summary>
 public enum TextureCompression
 {
@@ -119,6 +121,22 @@ public enum TextureCompression
     Bc3,
     Bc7,
     Bc5,
+    Auto,
+}
+
+/// <summary>The texture formats as the format pickers list them.</summary>
+public static class TextureCompressionInfo
+{
+    public static readonly TextureCompression[] Order =
+        { TextureCompression.Auto, TextureCompression.Bc7, TextureCompression.Bc5, TextureCompression.Bc3, TextureCompression.None };
+
+    public static readonly string[] Labels = { "Auto", "BC7", "BC5", "BC3", "None" };
+
+    public static int IndexOf(TextureCompression compression) => Math.Max(0, Array.IndexOf(Order, compression));
+
+    /// <summary>A generated placeholder is one colour, which BC7 keeps exactly, so Auto writes it as BC7.</summary>
+    public static TextureCompression ForPlaceholder(TextureCompression compression)
+        => compression == TextureCompression.Auto ? TextureCompression.Bc7 : compression;
 }
 
 public enum TextureType

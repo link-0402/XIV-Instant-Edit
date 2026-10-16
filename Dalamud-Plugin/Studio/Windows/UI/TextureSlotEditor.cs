@@ -237,26 +237,25 @@ internal sealed class TextureSlotEditor
     // Shared pieces
     // ─────────────────────────────────────────────────────────────────────────
 
-    private static readonly string[] CompressionLabels = { "None", "BC3", "BC7", "BC5" };
-
     /// <summary>
-    /// What the texture is written as. The choice costs conversion time rather than anything else: BC7 is
-    /// what the game uses for its own modern textures and holds up best, but compressing a large
-    /// image with it takes the better part of a minute; BC3 is the older format the game also reads
-    /// and is around twenty times quicker; None skips compression entirely and ships four times the
-    /// bytes, which the game then carries in memory.
+    /// What the texture is written as. Auto, the default, compresses it unless the check Optimize
+    /// textures uses finds that would change how it looks. Otherwise the choice costs conversion time
+    /// rather than anything else: BC7 is what the game uses for its own modern textures and holds up
+    /// best, but compressing a large image with it takes the better part of a minute; BC3 is the older
+    /// format the game also reads and is around twenty times quicker; None skips compression entirely
+    /// and ships four times the bytes, which the game then carries in memory.
     /// </summary>
     private static bool DrawCompression(TextureSlot tex)
     {
         bool bundled = tex.UseWhiteDummy && !DummyTextureLibrary.Resolve(tex.Type, tex.DummyPreset).IsGenerated;
         bool edited = false;
-        int index = (int)tex.Compression;
+        int index = TextureCompressionInfo.IndexOf(tex.Compression);
 
         using (Gui.Disabled(bundled))
         {
-            if (ImGui.Combo("##format", ref index, CompressionLabels, CompressionLabels.Length))
+            if (ImGui.Combo("##format", ref index, TextureCompressionInfo.Labels, TextureCompressionInfo.Labels.Length))
             {
-                tex.Compression = (TextureCompression)index;
+                tex.Compression = TextureCompressionInfo.Order[index];
                 edited = true;
             }
         }
@@ -264,6 +263,7 @@ internal sealed class TextureSlotEditor
         Gui.Tooltip(bundled
             ? "Not applicable — this bundled placeholder is copied in as-is."
             : "How this texture is compressed in the mod.\n\n"
+            + "Auto — compressed, unless that would visibly change it. Then it stays uncompressed.\n"
             + "BC7 — what the game uses itself, and the best quality. Slow to compress: a 4096×4096 image "
             + "takes the better part of a minute, even across every core.\n"
             + "BC3 — the older block format, around twenty times quicker to compress, a little softer on "

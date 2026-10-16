@@ -351,7 +351,7 @@ public sealed class GameDataService : IItemNames, Check.IItemVariants
                 var info = mtrl.Value.Material;
                 setup.ShaderType = ShaderInfo.FromShaderPack(info.ShaderPackageName) ?? setup.ShaderType;
                 foreach (var type in MaterialPatcher.TextureTypes(info))
-                    setup.Textures.Add(new TextureSlot { Type = type, Postfix = MaterialNaming.DefaultPostfix(type) });
+                    setup.Textures.Add(new TextureSlot { Type = type, Postfix = MaterialNaming.DefaultPostfix(type), Compression = TextureCompression.Auto });
             }
 
             result.Add(setup);
