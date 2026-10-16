@@ -9,7 +9,7 @@ Penumbra mods.
 
 ## Features
 
-- **Models in Blender**: send any model on your character (or minions, mounts, summons) to Blender with one click, then export it back in place, into another mod option, a new mod or a mashup of several mods. Imports come with the game's skeleton.\
+- **Models in Blender**: send any model on your character (or minions, mounts, summons) to Blender with one click, then export it back in place, into another mod option, a new mod or automatically creating a mashup of several mods. Imports automatically generate a compatible skeleton.\
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-a-Model-in-Blender)
 - **Textures**: edit textures in Photoshop, GIMP, Krita, Paint.NET or any TGA editor, including saving texture variants and directly setting them up as as Penumbra option groups. \
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-Textures)
