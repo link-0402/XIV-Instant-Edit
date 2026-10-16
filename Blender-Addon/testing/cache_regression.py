@@ -49,6 +49,7 @@ def run() -> None:
         (root / "texture-backups" / f"{'A' * 64}.tex").write_bytes(b"original")
         (root / "mod-backups").mkdir()
         (root / "mod-backups" / ("B" * 64)).write_bytes(b"original")
+        (root / "package-imports" / "Some Package").mkdir(parents=True)
         (root / "TextureSessions.json").write_text("[]", encoding="utf-8")
         (root / f".pending-context-revocations.json.{uuid.uuid4().hex}.tmp").write_text("{", encoding="utf-8")
         assert cache.ensure_cache_root() == root
