@@ -60,6 +60,16 @@ internal abstract class PortSubject
     /// <summary>Where the vanilla game keeps the material a vanilla model references by this name.</summary>
     public abstract string VanillaMaterialPath(string referencedName, RaceGender race);
 
+    /// <summary>Every place the vanilla material may be, best first; the first that exists is used.</summary>
+    public virtual IEnumerable<string> VanillaMaterialPaths(string referencedName, RaceGender race)
+    {
+        yield return VanillaMaterialPath(referencedName, race);
+    }
+
+    /// <summary>Why a model without a vanilla counterpart may never be loaded, for its badge.</summary>
+    public virtual string NoVanillaModelHint
+        => $"This race does not ship this {KindLabel.ToLowerInvariant()}, so the game may never ask for the file.";
+
     public abstract bool UsesEqdp { get; }
     public abstract bool UsesImc  { get; }
 
@@ -189,7 +199,12 @@ internal sealed class WeaponSubject : PortSubject
     public override IReadOnlyList<RaceGender?> MaterialRaces(IReadOnlyList<RaceModelEntry> models) => Shared;
 
     public override string VanillaMaterialPath(string referencedName, RaceGender race)
-        => WeaponNaming.VanillaMaterialGamePath(Model.Id, Model.Body, Math.Max(Model.Variant, (ushort)1), referencedName.TrimStart('/'));
+        => VanillaMaterialPaths(referencedName, race).First();
+
+    public override IEnumerable<string> VanillaMaterialPaths(string referencedName, RaceGender race)
+        => WeaponNaming.VanillaMaterialCandidates(Model.Id, Model.Body, Model.Variant, referencedName.TrimStart('/'));
+
+    public override string NoVanillaModelHint => "The game has no model for this weapon, so it may never ask for the file.";
 }
 
 /// <summary>A piece of gear: everything delegates to the existing equipment path helpers.</summary>

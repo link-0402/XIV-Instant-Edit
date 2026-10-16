@@ -867,10 +867,12 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
             return existing;
         }
 
-        IEnumerable<RaceGender> races = subject.MultiRace
-            ? _host.GameData.GetNativeRaces(subject).OrderBy(r => r.RaceCode, StringComparer.Ordinal)
-            : subject.BaseRace is { } race ? new[] { race } : Array.Empty<RaceGender>();
-        var models = races.Select(subject.ModelGamePath).Select(PathNormalizer.GamePath).Distinct(StringComparer.Ordinal).ToList();
+        if (AddedItemModels.WhyNot(subject) is { } whyNot)
+        {
+            Notify(whyNot, Severity.Info);
+            return null;
+        }
+        var models = AddedItemModels.Paths(subject, subject.MultiRace ? _host.GameData.GetNativeRaces(subject) : Array.Empty<RaceGender>());
         if (models.Count == 0 && subject is GearSubject)
             models = new[] { PlayerGender.Male, PlayerGender.Female }.Select(g => PathNormalizer.GamePath(subject.ModelGamePath(RaceInfo.BaseFor(g)))).ToList();
         if (models.Count == 0)

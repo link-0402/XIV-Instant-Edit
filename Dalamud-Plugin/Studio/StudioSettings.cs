@@ -128,6 +128,9 @@ public sealed class StudioSettings
     /// <summary>Last folder the Sims 4 importer extracted into.</summary>
     public string LastSimsOutputDir { get; set; } = string.Empty;
 
+    /// <summary>Folders of loose files opened in the import window's stash; remembered only, never written to.</summary>
+    public List<string> StashOpenedFolders { get; set; } = new();
+
     [JsonIgnore]
     private Action? _save;
 

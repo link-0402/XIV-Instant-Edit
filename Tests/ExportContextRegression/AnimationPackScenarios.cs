@@ -29,6 +29,41 @@ internal static class AnimationPackScenarios
         UnsafeKeysPlanNothing();
         PathsTheGameLacksAreFound();
         UntickedRacesSharingAFileAreNamed();
+        EmptyRowsSayWhatPlays();
+        AnimationKeysWaitForTheEmoteList();
+    }
+
+    private static void EmptyRowsSayWhatPlays()
+    {
+        var setup = Setup("emote/sit_start", @"C:\a\x.pap");
+        var empty = new AnimationTimelineSetup { Key = "emote/sit_loop", Label = "Loop" };
+        var timingOnly = new AnimationTimelineSetup { Key = "emote/sit_end", Label = "End", TmbSource = @"C:\a\x.tmb" };
+        setup.Timelines.Add(empty);
+        setup.Timelines.Add(timingOnly);
+        Require(AnimationSetup.RowHint(setup, setup.Timelines[0]) == null, "a row with a .pap needs no hint");
+        var hint = AnimationSetup.RowHint(setup, empty) ?? "";
+        Require(hint.Contains("game's own", StringComparison.Ordinal), "an empty row of an item with files says the game's own animation plays there");
+        var timing = AnimationSetup.RowHint(setup, timingOnly) ?? "";
+        Require(timing.Contains("motion", StringComparison.Ordinal), "a row with only a .tmb says the game's own motion plays with it");
+        var nothing = Setup("emote/joy", "");
+        Require(AnimationSetup.RowHint(nothing, nothing.Timelines[0]) == null, "an item with no files at all leaves the hint to its own warning");
+        Require(!(hint + timing).Contains('…'), "the hints have no ellipsis character");
+    }
+
+    private static void AnimationKeysWaitForTheEmoteList()
+    {
+        uint gear = 4321, emote = 0x2000_0005, timeline = 0x2100_0007, feature = 0x8000_1234;
+        Require(ModpackLoading.IsAnimationKey(emote) && ModpackLoading.IsAnimationKey(timeline) && !ModpackLoading.IsAnimationKey(gear)
+                && !ModpackLoading.IsAnimationKey(feature), "emote and timeline keys are animation keys, gear and feature keys are not");
+        Require(!ModpackLoading.CanResolve(new[] { gear, emote }, AnimationScanState.Pending),
+            "a pack holding an animation item waits while the emote list is still being read, rather than blocking for it");
+        Require(ModpackLoading.CanResolve(new[] { gear, feature }, AnimationScanState.Pending), "a pack without animation items never waits for it");
+        Require(ModpackLoading.CanResolve(new[] { emote }, AnimationScanState.Ready) && ModpackLoading.CanResolve(new[] { emote }, AnimationScanState.Failed),
+            "once the emote list is read, or failed to read, the pack loads");
+        Require(!ModpackLoading.IsGone(emote, AnimationScanState.Failed),
+            "an animation item is kept in the pack when the emote list could not be read");
+        Require(ModpackLoading.IsGone(emote, AnimationScanState.Ready), "an animation the read emote list doesn't have is gone");
+        Require(ModpackLoading.IsGone(gear, AnimationScanState.Failed), "a gear item that resolves to nothing is gone whatever the emote list did");
     }
 
     private static void UnsafeKeysPlanNothing()

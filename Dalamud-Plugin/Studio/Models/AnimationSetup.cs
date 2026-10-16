@@ -40,6 +40,19 @@ public class AnimationSetup
 
     public bool HasWork => Timelines.Any(t => t.HasFiles);
 
+    /// <summary>
+    /// What a row without a .pap leaves to the game, once the item has files elsewhere (an item with
+    /// none has its own warning). Null for a row with a .pap.
+    /// </summary>
+    public static string? RowHint(AnimationSetup setup, AnimationTimelineSetup row)
+    {
+        if (!string.IsNullOrWhiteSpace(row.PapSource) || !setup.HasWork)
+            return null;
+        return string.IsNullOrWhiteSpace(row.TmbSource)
+            ? "Not replaced: the game's own animation plays here."
+            : "Only the timeline changes: the game's own motion plays with it.";
+    }
+
     public AnimationSetup Clone() => new()
     {
         Timelines = Timelines.Select(t => t.Clone()).ToList(),

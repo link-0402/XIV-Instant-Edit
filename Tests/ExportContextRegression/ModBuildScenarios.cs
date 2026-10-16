@@ -23,6 +23,9 @@ internal static class ModBuildScenarios
         WeaponKeys();
         WeaponImcIsWrittenAsWeapon(root);
         UnknownKeyTagsResolveToNothing();
+        WeaponVanillaMaterialFallsBackToV1();
+        WeaponHintsDontMentionRaces();
+        ModWindowsTakeWeaponsNotAnimations();
         VariantNamesAreBuildWide();              // writers-3
         MaterialLinksFollowTheirMaterials();        // models-1
         SamePathInAnotherOptionIsNoConflict();      // models-3
@@ -103,6 +106,43 @@ internal static class ModBuildScenarios
         Require(subject is { Kind: SubjectKind.Weapon, UsesEqdp: false, UsesImc: true, MultiRace: false, HasRaces: false, IdDisplay: "w0201b0001" },
             "a weapon uses IMC but no EQDP and no races");
         Require(subject.MaterialRaces(new List<RaceModelEntry>()).SequenceEqual(new RaceGender?[] { null }), "a weapon writes one race-shared material set");
+    }
+
+    private static void WeaponVanillaMaterialFallsBackToV1()
+    {
+        Require(WeaponNaming.VanillaMaterialCandidates(201, 1, 3, "mt_w0201b0001_a").SequenceEqual(new[]
+            {
+                "chara/weapon/w0201/obj/body/b0001/material/v0003/mt_w0201b0001_a.mtrl",
+                "chara/weapon/w0201/obj/body/b0001/material/v0001/mt_w0201b0001_a.mtrl",
+            }), "a weapon's vanilla material is looked for in its variant's folder, then in v0001, where most variants keep theirs");
+        Require(WeaponNaming.VanillaMaterialCandidates(201, 1, 1, "mt_w0201b0001_a").Count == 1, "variant 1 looks in v0001 once");
+        Require(WeaponNaming.VanillaMaterialCandidates(201, 1, 0, "mt_w0201b0001_a").Single().Contains("/v0001/", StringComparison.Ordinal),
+            "a variant of 0 counts as 1");
+        var subject = new WeaponSubject(new WeaponModel(4321, "Bronze Gladius", 0, "Gladiator's Arm", 201, 1, 3, false));
+        Require(subject.VanillaMaterialPaths("/mt_w0201b0001_a.mtrl", RaceInfo.BaseFor(PlayerGender.Male)).Count() == 2,
+            "the weapon subject offers both folders");
+    }
+
+    private static void WeaponHintsDontMentionRaces()
+    {
+        var weapon = new WeaponSubject(new WeaponModel(4321, "Bronze Gladius", 0, "Gladiator's Arm", 201, 1, 3, false));
+        Require(!weapon.NoVanillaModelHint.Contains("race", StringComparison.OrdinalIgnoreCase) && weapon.NoVanillaModelHint.Contains("weapon", StringComparison.Ordinal),
+            "a weapon without a vanilla model is described without races");
+        var hair = new FeatureSubject(SubjectKind.Hair, RaceInfo.BaseFor(PlayerGender.Female), 5);
+        Require(hair.NoVanillaModelHint.Contains("race", StringComparison.Ordinal), "a feature without a vanilla model still names the race");
+    }
+
+    private static void ModWindowsTakeWeaponsNotAnimations()
+    {
+        var weapon = new WeaponSubject(new WeaponModel(4321, "Bronze Gladius", 0, "Gladiator's Arm", 201, 1, 3, false));
+        Require(AddedItemModels.WhyNot(weapon) == null && AddedItemModels.Paths(weapon, Array.Empty<RaceGender>()).SequenceEqual(new[] { WeaponNaming.ModelGamePath(201, 1) }),
+            "a weapon dropped on a mod window is added with its one model");
+        var emote = new AnimationSubject(new AnimationTarget(0x2000_0010, "Joy", 0, "/joy", new[] { new AnimationTimelineRef(3, "emote/joy", "joy", true, null) }));
+        Require(AddedItemModels.WhyNot(emote) is { } why && why.Contains("Build", StringComparison.Ordinal) && !why.Contains("no model", StringComparison.Ordinal),
+            "an animation dropped on a mod window says it is set up in the Build window, not that the game has no model");
+        var race = RaceInfo.BaseFor(PlayerGender.Female);
+        var hair = new FeatureSubject(SubjectKind.Hair, race, 5);
+        Require(AddedItemModels.Paths(hair, new[] { race }).SequenceEqual(new[] { hair.ModelGamePath(race) }), "a hairstyle is added for its native races");
     }
 
     private static void WeaponKeys()

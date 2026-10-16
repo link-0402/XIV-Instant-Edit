@@ -432,20 +432,37 @@ public static class SimsPackageInspector
     /// material editor consumes: one folder of diffuse images to point a variant slot
     /// at, and single files for the remaining roles.
     ///
-    /// Each run starts from a folder holding nothing but its own earlier output: the files
-    /// a previous extraction of this same package listed in its manifest are deleted first.
-    /// When the folder holds anything else (another package with the same file name, files
-    /// the user put there, or output from before manifests existed) nothing is deleted and
-    /// a fresh numbered folder is used instead, so the diffuse variant folder only ever
-    /// holds this run's swatches.
+    /// Each run starts from an empty folder: a previous extraction of this same package (every
+    /// file in it listed in its manifest) is set aside, and only deleted once this run finishes;
+    /// a run that stops or fails is removed and the previous one put back. When the folder holds
+    /// anything else (another package with the same file name, files the user put there, or
+    /// output from before manifests existed) nothing is touched and a fresh numbered folder is
+    /// used instead, so the diffuse variant folder only ever holds this run's swatches.
     /// </summary>
     public static ExtractionResult Extract(SimsScanResult scan, string outputRoot,
         SimsHalfCrop crop = default, Action<string>? progress = null, CancellationToken cancel = default)
     {
         cancel.ThrowIfCancellationRequested();
         var packageName = MakeSafeName(Path.GetFileNameWithoutExtension(scan.PackagePath), "sims_package");
-        var root = ClaimOutputFolder(outputRoot, packageName, scan.PackagePath, out bool newFolder);
+        var source = Path.GetFullPath(scan.PackagePath);
+        var claim = Stash.ExtractionFolder.Claim(outputRoot, packageName, folder => IsOwnRun(folder, source));
+        bool finished = false;
+        try
+        {
+            var extraction = Write(scan, claim.Path, packageName, claim.Numbered, crop, progress, cancel);
+            finished = true;
+            return extraction;
+        }
+        finally
+        {
+            if (finished) claim.Finish();
+            else          claim.Abandon();
+        }
+    }
 
+    private static ExtractionResult Write(SimsScanResult scan, string root, string packageName, bool newFolder,
+        SimsHalfCrop crop, Action<string>? progress, CancellationToken cancel)
+    {
         var result = new ExtractionResult
         {
             RootFolder    = root,
@@ -520,8 +537,8 @@ public static class SimsPackageInspector
         }
         finally
         {
-            // Written even when the run fails part-way, so whatever it did write is still
-            // known to be ours next time.
+            // Written whatever happened, so the folder is known to be ours next time. (A run that
+            // stops is removed whole by Extract.)
             WriteManifest(root, scan.PackagePath, result.OwnedFiles);
         }
 
@@ -537,33 +554,11 @@ public static class SimsPackageInspector
     }
 
     /// <summary>
-    /// Picks the folder this run writes into: <c>outputRoot/name</c> when it is new or
-    /// holds only this package's earlier output (which is deleted), otherwise the first
-    /// <c>name_2</c>, <c>name_3</c> and so on that qualifies.
+    /// Whether every file in <paramref name="folder"/> is one an earlier extraction of
+    /// <paramref name="source"/> listed in its manifest. False when the manifest names another
+    /// package or any other file is there.
     /// </summary>
-    private static string ClaimOutputFolder(string outputRoot, string name, string packagePath, out bool newFolder)
-    {
-        var source = Path.GetFullPath(packagePath);
-        for (int n = 1; n < 1000; n++)
-        {
-            var folder = Path.GetFullPath(Path.Combine(outputRoot, n == 1 ? name : $"{name}_{n}"));
-            if (!Directory.Exists(folder) || TryReuseFolder(folder, source))
-            {
-                newFolder = n > 1;
-                return folder;
-            }
-        }
-
-        throw new IOException($"No free output folder for {name} in {outputRoot}.");
-    }
-
-    /// <summary>
-    /// Clears <paramref name="folder"/> for a new run when every file in it is one an
-    /// earlier extraction of <paramref name="source"/> listed in its manifest. Returns false
-    /// (deleting nothing) when the manifest names another package or any other file is
-    /// there.
-    /// </summary>
-    private static bool TryReuseFolder(string folder, string source)
+    private static bool IsOwnRun(string folder, string source)
     {
         try
         {
@@ -594,10 +589,6 @@ public static class SimsPackageInspector
             foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
                 if (!owned.Contains(Path.GetFullPath(file)))
                     return false;
-
-            foreach (var file in owned)
-                if (File.Exists(file))
-                    File.Delete(file);
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)

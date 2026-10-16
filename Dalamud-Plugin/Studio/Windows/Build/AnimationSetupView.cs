@@ -145,6 +145,8 @@ internal sealed class AnimationSetupView
         DrawFile(timeline, tmb: false, size);
         ImGui.SameLine();
         DrawFile(timeline, tmb: true, size);
+        if (AnimationSetup.RowHint(animation, timeline) is { } hint)
+            Gui.Hint(hint);
 
         bool own = timeline.Races != null;
         if (ImGui.Checkbox("Races of its own##own", ref own))

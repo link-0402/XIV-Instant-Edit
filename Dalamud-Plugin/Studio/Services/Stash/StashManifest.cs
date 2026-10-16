@@ -90,20 +90,163 @@ internal sealed class StashManifest
         }
     }
 
-    /// <summary>The files an extraction folder holds, for one without a manifest: kinds by extension, purposes by folder and name.</summary>
-    public static StashManifest Scan(string folder)
+    /// <summary>How many files a folder scan lists at most.</summary>
+    public const int MaxScanFiles = 5000;
+
+    /// <summary>Unity text larger than this (a huge prefab or scene) is not read for material references.</summary>
+    private const long MaxYamlBytes = 8 * 1024 * 1024;
+
+    /// <summary>Set when a folder scan stopped at its cap; not saved.</summary>
+    [JsonIgnore]
+    public bool Truncated { get; private set; }
+
+    /// <summary>
+    /// The files a folder holds, for one without a manifest (an older extraction, or a folder of loose
+    /// files the user opened): kinds by extension, purposes by folder and name. Hidden folders are
+    /// skipped. Where Unity's .meta files sit beside the files, as in a VRChat avatar's resources, its
+    /// .mat materials and prefabs are read too, so textures take the purpose their material gives them.
+    /// </summary>
+    public static StashManifest Scan(string folder, int maxFiles = MaxScanFiles)
     {
         var manifest = new StashManifest { Source = folder, SourceKind = "folder", ExtractedUtc = Directory.GetLastWriteTimeUtc(folder) };
-        foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories).Order(StringComparer.OrdinalIgnoreCase))
+        var files = new List<string>();
+        var metas = new List<string>();
+        foreach (var file in EnumerateVisible(folder).Order(StringComparer.OrdinalIgnoreCase))
         {
-            if (IsBookkeeping(System.IO.Path.GetFileName(file)))
+            var name = System.IO.Path.GetFileName(file);
+            if (name.EndsWith(".meta", StringComparison.OrdinalIgnoreCase))
+            {
+                metas.Add(file);
                 continue;
+            }
+            if (IsBookkeeping(name))
+                continue;
+            if (files.Count == maxFiles)
+            {
+                manifest.Truncated = true;
+                break;
+            }
+            files.Add(file);
+        }
+
+        var unity = metas.Count > 0 ? UnityFolder.Read(files, metas) : null;
+        foreach (var file in files)
+        {
             var entry = NewEntry(folder, file);
+            var used = unity?.UsesOf(file) ?? new List<(string Group, TexturePurpose? Purpose)>();
+            foreach (var (group, _) in used)
+                if (!entry.Groups.Contains(group))
+                    entry.Groups.Add(group);
             if (entry.Kind == StashKind.Texture)
-                entry.Purpose = FromFolder(System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(file)) ?? "") ?? TexturePurposes.FromFileName(file);
+            {
+                var fromProperty = used.Select(u => u.Purpose).FirstOrDefault(p => p != null);
+                entry.Purpose = unity != null
+                    ? TexturePurposes.Classify(null, fromProperty, unity.TextureTypeOf(file), file)
+                    : FromFolder(System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(file)) ?? "") ?? TexturePurposes.FromFileName(file);
+            }
             manifest.Entries.Add(entry);
         }
+        if (unity != null)
+            manifest.Materials.AddRange(unity.Materials(folder));
         return manifest;
+    }
+
+    /// <summary>Every file under <paramref name="folder"/>, skipping folders whose name starts with a dot (.git and the like).</summary>
+    private static IEnumerable<string> EnumerateVisible(string folder)
+    {
+        var options = new EnumerationOptions { RecurseSubdirectories = false, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint };
+        var pending = new Stack<string>();
+        pending.Push(folder);
+        while (pending.Count > 0)
+        {
+            var current = pending.Pop();
+            foreach (var file in Directory.EnumerateFiles(current, "*", options))
+                yield return file;
+            foreach (var sub in Directory.EnumerateDirectories(current, "*", options))
+                if (!System.IO.Path.GetFileName(sub).StartsWith('.'))
+                    pending.Push(sub);
+        }
+    }
+
+    /// <summary>The Unity side of a folder scan: GUIDs from .meta files, then the materials and prefabs that use them.</summary>
+    private sealed class UnityFolder
+    {
+        private readonly Dictionary<string, string> _fileByGuid = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, int> _textureType = new(StringComparer.OrdinalIgnoreCase);
+        private readonly List<UnityMaterial> _materials = new();
+        private readonly Dictionary<string, List<(string Group, TexturePurpose? Purpose)>> _uses = new(StringComparer.OrdinalIgnoreCase);
+
+        public static UnityFolder Read(IReadOnlyList<string> files, IReadOnlyList<string> metas)
+        {
+            var unity = new UnityFolder();
+            foreach (var meta in metas)
+            {
+                var (guid, type) = UnityYaml.ReadMeta(ReadSmall(meta, 64 * 1024) ?? "");
+                var file = System.IO.Path.GetFullPath(meta[..^".meta".Length]);
+                if (guid == null || !File.Exists(file))
+                    continue;
+                unity._fileByGuid[guid] = file;
+                unity._textureType[file] = type;
+            }
+            var guidOf = unity._fileByGuid.ToDictionary(p => p.Value, p => p.Key, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var file in files.Where(f => System.IO.Path.GetExtension(f).Equals(".mat", StringComparison.OrdinalIgnoreCase)))
+                if (ReadSmall(file, MaxYamlBytes) is { } text
+                    && UnityYaml.ReadMaterial(guidOf.GetValueOrDefault(System.IO.Path.GetFullPath(file)) ?? file, text) is { } material)
+                    unity._materials.Add(material);
+
+            var prefabsOf = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var file in files.Where(f => System.IO.Path.GetExtension(f).Equals(".prefab", StringComparison.OrdinalIgnoreCase)))
+            {
+                if (ReadSmall(file, MaxYamlBytes) is not { } text)
+                    continue;
+                var name = System.IO.Path.GetFileNameWithoutExtension(file);
+                foreach (var material in UnityYaml.ReadPrefabMaterials(text))
+                {
+                    if (!prefabsOf.TryGetValue(material, out var names))
+                        prefabsOf[material] = names = new();
+                    if (!names.Contains(name))
+                        names.Add(name);
+                }
+            }
+
+            foreach (var material in unity._materials)
+                foreach (var (property, texture) in material.Textures)
+                {
+                    if (!unity._fileByGuid.TryGetValue(texture, out var file))
+                        continue;
+                    if (!unity._uses.TryGetValue(file, out var list))
+                        unity._uses[file] = list = new();
+                    list.Add((material.Name, TexturePurposes.FromUnityProperty(property)));
+                    foreach (var prefab in prefabsOf.GetValueOrDefault(material.Guid) ?? new())
+                        list.Add((prefab, null));
+                }
+            return unity;
+        }
+
+        public List<(string Group, TexturePurpose? Purpose)> UsesOf(string file)
+            => _uses.GetValueOrDefault(System.IO.Path.GetFullPath(file)) ?? new();
+
+        public int TextureTypeOf(string file) => _textureType.GetValueOrDefault(System.IO.Path.GetFullPath(file), -1);
+
+        public IEnumerable<StashMaterial> Materials(string root)
+        {
+            foreach (var material in _materials)
+            {
+                var listed = new StashMaterial { Name = material.Name };
+                foreach (var (property, texture) in material.Textures)
+                    if (TexturePurposes.FromUnityProperty(property) is { } purpose && _fileByGuid.TryGetValue(texture, out var file))
+                        listed.Textures.TryAdd(purpose, Relative(root, file));
+                if (listed.Textures.Count > 0)
+                    yield return listed;
+            }
+        }
+
+        private static string? ReadSmall(string path, long max)
+        {
+            try { return new FileInfo(path).Length <= max ? File.ReadAllText(path) : null; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+        }
     }
 
     /// <summary>A Unity extraction: textures by the material properties that use them, grouped under materials and prefabs.</summary>

@@ -67,13 +67,26 @@ interactive checks have not been performed by the implementation agent.
   tab, Apply to the selected material fills its diffuse, normal and mask slots.
 - Remove an extraction from the stash's list. Its folder is gone; other
   extractions stay.
+- Extract a package a second time and press Stop part-way. The stash still shows
+  the first extraction with all its files, and no `.previous` or numbered folder
+  is left beside it.
+- Open a folder (Import package window, or the folder icon above the stash list),
+  pick a VRChat avatar's resource folder. It shows under "opened folders"; its
+  textures take the purpose their Unity material gives them, and its materials
+  are listed on the Materials tab. Dropping a folder from Explorer on the window
+  opens it too. The X takes it out of the stash and leaves its files alone.
+- Type a path into the Output field letter by letter: the window doesn't stutter.
 - Start over (top right) clears the modpack after its confirmation.
 - Weapons: add a weapon from Add from game > Weapons, drop a model and a texture,
   and build. The weapon shows the mod in game, whichever dye variant it has. An
   off-hand model (a shield, or a dual-wield off hand) builds into the off hand.
+  Dragging a weapon from the build window's browser onto a mod window adds it
+  there; dragging an emote says to set it up in the build window.
 - Animations: add an emote from Add from game > Animations, drop a `.pap` on its
   loop row and build. The emote plays the new motion in game for every ticked
   race, including races the inspector says play another race's file. A `.tmb`
-  dropped on the row changes timing, sounds or effects.
+  dropped on the row changes timing, sounds or effects. Rows left empty say the
+  game's own animation plays there. With an emote in the modpack, reopening the
+  plugin opens the build window without a stall.
 - Material presets and placeholder textures (Flat normal, Metal) are found in the
   installed plugin: a material made from a preset builds without a missing-file error.

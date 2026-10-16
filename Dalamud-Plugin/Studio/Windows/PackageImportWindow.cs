@@ -18,7 +18,8 @@ using InstantEdit.Studio.Windows.UI;
 namespace InstantEdit.Studio.Windows;
 
 /// <summary>
-/// Imports a Sims 4 .package or a Unity .unitypackage, then serves as the file stash.
+/// Imports a Sims 4 .package or a Unity .unitypackage, then serves as the file stash. Folders of
+/// loose files (a VRChat avatar's resources, say) can be opened in the stash too, without importing.
 ///
 /// A scan lists what the package holds; the user unticks what they don't want and extracts the
 /// rest into a folder of its own under the output folder (the cache's package-imports by
@@ -117,7 +118,7 @@ public sealed class PackageImportWindow : Window, IDisposable
     public override void OnOpen()
     {
         if (!Busy && _scan == null && _unityScan == null)
-            _showStash = _stash.HasExtractions(_outputDir);
+            _showStash = _stash.HasFolders(_outputDir);
     }
 
     /// <summary>Closed: what runs is stopped, and whatever it would still have found is dropped.</summary>
@@ -128,7 +129,9 @@ public sealed class PackageImportWindow : Window, IDisposable
         _cts?.Cancel();
         _cts?.Dispose();
         _cts = null;
-        if (Busy)
+        if (_extractTask is { IsCompleted: false } || _unityExtractTask is { IsCompleted: false })
+            _status = "Stopped: nothing was kept, and an earlier extraction of this package stays as it was.";
+        else if (Busy)
             _status = "Stopped.";
         _scanTask         = null;
         _extractTask      = null;
@@ -256,11 +259,22 @@ public sealed class PackageImportWindow : Window, IDisposable
             Gui.PathPicker("PackagePath", ref _packagePath, "path to a .package or .unitypackage file", PathKind.File,
                 "Packages{.package,.unitypackage}",
                 picked => { _packagePath = picked; SaveSettings(); }, reserveRight: scanW + ImGui.GetStyle().ItemSpacing.X);
-            if (FileDrop.Target(p => p.Files.Count == 1 && p.Folders.Count == 0 && IsPackage(p.Files[0]) ? null : "Drop one .package or .unitypackage file.",
+            if (FileDrop.Target(p => p.Files.Count == 1 && p.Folders.Count == 0 && IsPackage(p.Files[0]) ? null
+                                   : p.Folders.Count > 0 && p.Files.Count == 0 ? null
+                                   : "Drop one .package or .unitypackage file, or folders to open in the stash.",
                     out var dropped))
             {
-                _packagePath = dropped.Files[0];
-                StartScan();
+                if (dropped.Folders.Count > 0)
+                {
+                    foreach (var folder in dropped.Folders)
+                        if (_stash.OpenFolder(folder) == null)
+                            _showStash = true;
+                }
+                else
+                {
+                    _packagePath = dropped.Files[0];
+                    StartScan();
+                }
             }
 
             ImGui.SameLine();
@@ -272,11 +286,15 @@ public sealed class PackageImportWindow : Window, IDisposable
                 picked => { _outputDir = picked; SaveSettings(); },
                 "A subfolder named after the package is created here.");
 
-            if (_stash.HasExtractions(_outputDir))
+            if (_stash.HasFolders(_outputDir))
             {
-                if (Gui.IconTextButton(FontAwesomeIcon.BoxOpen, "Open the stash", "Every package extracted into the output folder, ready to drag from."))
+                if (Gui.IconTextButton(FontAwesomeIcon.BoxOpen, "Open the stash", "Every package extracted into the output folder, and every folder opened, ready to drag from."))
                     _showStash = true;
+                ImGui.SameLine();
             }
+            if (Gui.IconTextButton(FontAwesomeIcon.FolderPlus, "Open a folder",
+                    "Show a folder of loose files in the stash, such as a VRChat avatar's textures, models and materials. Nothing is written into it."))
+                _stash.BrowseFolder(() => _showStash = true);
         }
     }
 
