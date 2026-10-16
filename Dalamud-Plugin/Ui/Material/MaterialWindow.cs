@@ -232,7 +232,24 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             Widgets.EmptyState(FontAwesomeIcon.Lock, "Read only", "This material's shader data can't be read. Only its texture paths can change.");
             return;
         }
-        DrawValues(current, doc);
+        if (!ShowsRows(doc))
+        {
+            DrawValues(current, doc);
+            return;
+        }
+        using var tabs = ImRaii.TabBar("##material-tabs");
+        if (!tabs.Success)
+            return;
+        if (ImGui.BeginTabItem("Colour rows###material-rows"))
+        {
+            DrawRows(current, doc);
+            ImGui.EndTabItem();
+        }
+        if (ImGui.BeginTabItem("Values###material-values"))
+        {
+            DrawValues(current, doc);
+            ImGui.EndTabItem();
+        }
     }
 
     // ---- Tasks ----
@@ -284,7 +301,11 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         if (reload && old != null)
             old.Reload(opened.Source, opened.Document);
         else
+        {
             session = new MaterialSession(opened.Source, opened.Document, OnEdit);
+            selectedPair = 0;
+            pathEdits.Clear();
+        }
         collection = opened.Collection;
         customShader = opened.CustomShader;
         ResolveTextures(session!.Current);
@@ -411,6 +432,16 @@ internal sealed partial class MaterialWindow : Window, IDisposable
                 previewDue = 0;
                 _ = current.Revert();
             }
+        }
+        if (doc.Table is { Kind: ColorTableKind.Legacy })
+        {
+            using (ImRaii.Disabled(Busy || !doc.Editable))
+            {
+                if (ImGui.MenuItem("Convert to Dawntrail"))
+                    ConvertToDawntrail(current, doc);
+            }
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip("Moves the material to character.shpk with 32 Dawntrail rows. Each old row fills both rows of its pair.");
         }
         IReadOnlyList<PreviewBackupGroup> backups = current.Source.IsGameData ? [] : previewMods.Backups([current.Source.ToPreviewSource()]);
         using (ImRaii.Disabled(backups.Count == 0 || Busy))

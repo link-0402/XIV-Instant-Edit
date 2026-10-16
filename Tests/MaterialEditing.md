@@ -36,3 +36,16 @@ Saving:
   appears in Penumbra, enabled in the character's collection, and the character wears it.
 - [ ] Save again after that: it writes into the new mod (with a backup), not a second new mod.
 - [ ] Discard changes (dots menu) puts the values back as last saved.
+
+## Colour rows (Task 7, pending)
+
+- [ ] A gear material on character.shpk shows a "Colour rows" tab with 16 pairs of swatches (base,
+  shine, glow); clicking a pair shows its two rows side by side with named fields.
+- [ ] Change row 1's base colour and let go: the character redraws with the new colour where the
+  index texture picks pair 1.
+- [ ] Detail scale, rotation and shear change the pattern; Advanced shows the stored matrix.
+- [ ] Copy a row and paste it onto another (Everything, Colours only, Surface only): only the
+  chosen fields change, and Undo takes it back in one step.
+- [ ] A legacy material (characterlegacy.shpk) shows the 16-row table; the dots menu's "Convert to
+  Dawntrail" moves it to character.shpk with 32 rows, and the character still looks the same.
+- [ ] A character.shpk material with an old 16-row table shows the warning and Convert button.
