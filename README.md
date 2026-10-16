@@ -17,15 +17,14 @@ Penumbra mods.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Painting-in-Substance-Painter)
 - **Animations**: the listener finds the animation your character currently plays. Open them in the timeline, or load any emote, idle,\
   sit, movement track or expression onto your GPose character from there. Edit the animations length, sounds, expressions,\
-  lip sync, effects and props, with a preview in GPose. Change how the animation moves your character through various editing layers: offsets work similar to LivePose bone offsets, but can be applied more granular over a limited time range of the animation to fix clipping. Amplitude layers let you easily control the strength of motions, while Pose Layers let you create your own animation from Poses,  \
+  lip sync, effects and props, with a preview in GPose. Change how the animation moves your character through various editing layers: offsets work similar to LivePose bone offsets, but can be applied more granular over a limited time range of the animation to fix clipping. Amplitude layers let you easily control the strength of motions, while Pose Layers let you create your own animation from Poses, smoothly blending between them. \
   [Editing](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-Animations) ·
   [Timeline](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-the-Timeline) ·
   [In Blender](https://github.com/link-0402/XIV-Instant-Edit/wiki/Animations-in-Blender)
 - **Game Files**: browse the game's own models, edit them, or batch-export their files and skeletons.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Game-Files)
 - **Quick Actions**: tasks for your whole character.
-  - Fix the skin seams where its models meet: the face and body at the neck, and the top, gloves, legs and shoes at the
-    wrists, waist and ankles. Match one skin part's tone to another, such as a face mod's ears to the face.
+  - Fix skin seams between models, such as on your neck or between different face parts, like face and ears. Textures are automatically blended and \
     [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Fixing-the-Neck-Seam)
   - Optimize its textures automatically: the uncompressed mod textures it wears are compressed as they load, and ones
     that hold a single color shrink to 32 × 32 pixels, so Lightless, PlayerSync and other sync plugins count less
